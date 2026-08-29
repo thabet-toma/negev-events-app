@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>مناسبات النقب | المنصة الأولى لأعراس وأفراح النقب</title>
+  
+  <!-- Web App Manifest Meta -->
+  <meta name="theme-color" content="#061a12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Amiri:ital,wght@0,700;1,700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
+  
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Leaflet CSS for Interactive Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  
+  <!-- Chart.js for Nokoot Analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- App Styles -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Top Broadcast Announcement Banner -->
+  <div id="broadcastBanner" class="broadcast-banner" style="display: none;">
+    <div class="banner-content">
+      <i class="fa-solid fa-bullhorn banner-icon"></i>
+      <span id="broadcastText">تنبيه عام من إدارة مناسبات النقب</span>
+    </div>
+    <button class="close-banner" onclick="dismissBanner()"><i class="fa-solid fa-xmark"></i></button>
+  </div>
+
+  <!-- Main Luxury Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="logo-area">
+        <div class="logo-badge">
+          <span class="logo-moon">🌙</span>
+        </div>
+        <div class="logo-text">
+          <h1>مناسبات النقب <span class="pro-tag">PRO</span></h1>
+          <p>دياركم عامرة بالأفراح والمسرات</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="aiPoemBtn" class="ai-magic-btn" onclick="openAIPoemModal()" title="مولد قصائد وشيلات التهنئة بالذكاء الاصطناعي">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+          <span>شعر AI</span>
+        </button>
+        <button id="userAuthBtn" class="auth-pill-btn" onclick="openAuthModal()">
+          <i class="fa-solid fa-user-lock"></i>
+          <span id="userAuthLabel">تسجيل الدخول</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- STORIES & LIVE SNAPS BAR (قصص وسنابات الأفراح) -->
+  <section class="stories-section">
+    <div class="stories-slider" id="storiesContainer">
+      <!-- Injected via JS -->
+    </div>
+  </section>
+
+  <!-- Main Container -->
+  <main class="app-main">
+
+    <!-- TAB 1: HOME FEED (الأفراح والمناسبات) -->
+    <section id="tabHome" class="tab-content active-tab">
+      
+      <!-- Town Filter Slider -->
+      <div class="town-filter-wrapper">
+        <div class="town-slider" id="townPills">
+          <button class="town-pill active" data-town="الكل">الكل</button>
+          <button class="town-pill" data-town="رهط">رهط</button>
+          <button class="town-pill" data-town="حورة">حورة</button>
+          <button class="town-pill" data-town="تل السبع">تل السبع</button>
+          <button class="town-pill" data-town="كسيفة">كسيفة</button>
+          <button class="town-pill" data-town="شقيب السلام">شقيب السلام</button>
+          <button class="town-pill" data-town="اللقية">اللقية</button>
+          <button class="town-pill" data-town="عرعرة النقب">عرعرة النقب</button>
+          <button class="town-pill" data-town="القرى والتجمعات">القرى والتجمعات</button>
+        </div>
+      </div>
+
+      <!-- Quick Search Bar -->
+      <div class="search-bar-container">
+        <div class="search-input-box">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+          <input type="text" id="eventSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleSearch()">
+          <button id="clearSearchBtn" class="clear-btn" style="display:none;" onclick="clearSearch()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+
+      <!-- Events List Feed -->
+      <div id="eventsContainer" class="events-feed">
+        <div class="loading-spinner">
+          <div class="spinner"></div>
+          <p>جاري جلب أحدث مناسبات النقب...</p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- TAB 2: INTERACTIVE DESERT MAP & RADAR (خريطة النقب التفاعلية) -->
+    <section id="tabMap" class="tab-content">
+      <div class="map-view-card">
+        <div class="map-header-bar">
+          <div>
+            <h3><i class="fa-solid fa-map-location-dot"></i> رادار وخريطة أفراح النقب</h3>
+            <p>شاهد جميع مواقع الأعراس المفتوحة والدواوين مباشرة على الخريطة</p>
+          </div>
+          <button class="map-refresh-btn" onclick="initLeafletMap()"><i class="fa-solid fa-rotate"></i> تحديث</button>
+        </div>
+        <div id="negevEventsMap" class="leaflet-map-canvas"></div>
+      </div>
+    </section>
+
+    <!-- TAB 3: ADD EVENT & AI CARD SCANNER (إعلان مناسبة جديدة) -->
+    <section id="tabAdd" class="tab-content">
+      <div class="page-title-box">
+        <h2><i class="fa-solid fa-calendar-plus"></i> إعلان مناسبة جديدة</h2>
+        <p>انشر كرت الدعوة والموقع والشيلة ليصل لجميع أهالي وشباب النقب</p>
+      </div>
+
+      <!-- AI Smart OCR Card Scanner Button -->
+      <div class="ai-scan-banner" onclick="simulateAICardScan()">
+        <div class="ai-scan-icon"><i class="fa-solid fa-camera-retro"></i></div>
+        <div class="ai-scan-info">
+          <h4>🤖 مسح كرت الدعوة بالذكاء الاصطناعي (AI OCR)</h4>
+          <p>اضغط لرفع الكرت وسيقوم النظام بتعبئة اسم العريس والبلدة والموعد تلقائياً!</p>
+        </div>
+        <span class="ai-spark-tag">ذكي وسريع</span>
+      </div>
+
+      <form id="addEventForm" class="app-form" onsubmit="handleEventSubmit(event)">
+        
+        <!-- Live Collision Alert Box -->
+        <div id="collisionAlert" class="collision-box" style="display: none;"></div>
+
+        <div class="form-group">
+          <label>اسم العريس الكريم *</label>
+          <input type="text" id="addGroomName" placeholder="مثال: طارق سالم الهزيل" required oninput="checkDateCollisionLive()">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>البلدة / المنطقة *</label>
+            <select id="addTown" required onchange="checkDateCollisionLive()">
+              <option value="رهط">رهط</option>
+              <option value="حورة">حورة</option>
+              <option value="تل السبع">تل السبع</option>
+              <option value="كسيفة">كسيفة</option>
+              <option value="شقيب السلام">شقيب السلام</option>
+              <option value="اللقية">اللقية</option>
+              <option value="عرعرة النقب">عرعرة النقب</option>
+              <option value="القرى والتجمعات">القرى والتجمعات</option>
+            </select>
+          </div>
+
+          <div class="form-group half">
+            <label>العشيرة / العائلة</label>
+            <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>تاريخ الفرح *</label>
+            <input type="date" id="addEventDate" required onchange="checkDateCollisionLive()">
+          </div>
+          <div class="form-group half">
+            <label>سهرة الشباب والدحة (اختياري)</label>
+            <input type="date" id="addYouthDate">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>وقت طعام العشاء</label>
+            <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً" value="الساعة 8:00 مساءً">
+          </div>
+          <div class="form-group half">
+            <label>رقم هاتف المعلن (للتواصل)</label>
+            <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>وصف المكان والديوان (لخرائط Waze و Google) *</label>
+          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان - رهط بالقرب من الدوار الشرقي" required>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>إحداثيات خط العرض (Latitude اختياري)</label>
+            <input type="number" step="any" id="addLat" placeholder="31.3925">
+          </div>
+          <div class="form-group half">
+            <label>إحداثيات خط الطول (Longitude اختياري)</label>
+            <input type="number" step="any" id="addLng" placeholder="34.7554">
+          </div>
+        </div>
+
+        <!-- File Uploads -->
+        <div class="upload-section">
+          <div class="upload-box">
+            <i class="fa-solid fa-image upload-icon"></i>
+            <h4>صورة كرت الدعوة المعلن</h4>
+            <p>اختر صورة الكرت من الهاتف</p>
+            <input type="file" id="addPosterFile" accept="image/*">
+          </div>
+
+          <div class="upload-box audio-upload">
+            <i class="fa-solid fa-music upload-icon"></i>
+            <h4>مقطع صوتي / شيلة الفرح (اختياري)</h4>
+            <p>أرفق شيلة الترحيب أو قصيدة العرس (MP3/M4A)</p>
+            <input type="file" id="addAudioFile" accept="audio/*">
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn" id="submitEventBtn">
+          <i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة
+        </button>
+      </form>
+    </section>
+
+    <!-- TAB 4: NOKOOT SECRET LEDGER & FINANCIAL ANALYTICS (دفتر النقوط المالي والتحليلات) -->
+    <section id="tabNokoot" class="tab-content">
+      
+      <!-- Locked State Banner if Not Logged In -->
+      <div id="nokootLockedView" class="vault-locked-card">
+        <div class="vault-icon"><i class="fa-solid fa-vault"></i></div>
+        <h2>سجل النقوط المالي المشفر</h2>
+        <p>احفظ مبالغ الواجب والنقوط التي أديتها في الأعراس مع رسوم بيانية وتحليلات دقيقة وتذكيرات "رد الواجب" الخاصة بك.</p>
+        <button class="gold-action-btn" onclick="openAuthModal()"><i class="fa-solid fa-key"></i> تسجيل الدخول لفتح سجلك السري</button>
+      </div>
+
+      <!-- Unlocked Nokoot Dashboard -->
+      <div id="nokootUnlockedView" style="display: none;">
+        
+        <!-- Summary Stats Cards -->
+        <div class="nokoot-stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon"><i class="fa-solid fa-wallet"></i></div>
+            <div class="stat-info">
+              <span class="stat-title">إجمالي ما دفعت</span>
+              <h3 id="nokootTotalAmount">0 ₪</h3>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i class="fa-solid fa-handshake"></i></div>
+            <div class="stat-info">
+              <span class="stat-title">المناسبات المسجلة</span>
+              <h3 id="nokootCount">0</h3>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon"><i class="fa-solid fa-chart-line"></i></div>
+            <div class="stat-info">
+              <span class="stat-title">متوسط النقوط للمناسبة</span>
+              <h3 id="nokootAverage">0 ₪</h3>
+            </div>
+          </div>
+        </div>
+
+        <!-- Financial Chart Card -->
+        <div class="chart-card-box">
+          <div class="chart-header">
+            <h4><i class="fa-solid fa-chart-pie"></i> توزيع النقوط حسب البلدات</h4>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="nokootChartCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Actions Bar -->
+        <div class="nokoot-actions-bar">
+          <button class="add-nokoot-btn" onclick="openAddNokootModal()">
+            <i class="fa-solid fa-plus-circle"></i> تسجيل نقوط جديد
+          </button>
+          <button class="export-nokoot-btn" onclick="exportNokootData()">
+            <i class="fa-solid fa-file-arrow-down"></i> تصدير السجل
+          </button>
+        </div>
+
+        <!-- Nokoot Records List -->
+        <div class="nokoot-ledger-list" id="nokootList">
+          <!-- Populated by JS -->
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- TAB 5: PRO STICKER & CARD STUDIO (استوديو الستيكرات والبطاقات المتقدم) -->
+    <section id="tabStickers" class="tab-content">
+      <div class="page-title-box">
+        <h2><i class="fa-solid fa-wand-magic-sparkles"></i> استوديو ملصقات وبطاقات التهاني PRO</h2>
+        <p>صمم ملصق تبريكات وبطاقة خطية فخمة باسمك واسم عائلتك بضغطة زر وشاركها فوراً عبر واتساب</p>
+      </div>
+
+      <div class="sticker-studio-card">
+        
+        <div class="form-group">
+          <label>اسمك أو اسم العائلة (الذي سيظهر على الملصق) *</label>
+          <input type="text" id="stickerSenderName" placeholder="مثال: أخوك فهد النعامي / آل أبو فلان" value="أخوك أحمد" oninput="renderStickerCanvas()">
+        </div>
+
+        <div class="form-group">
+          <label>عبارة التهنئة المختارة</label>
+          <select id="stickerPhrase" onchange="renderStickerCanvas()">
+            <option value="ألف ألف مبارك يا عريس وعسى دياركم عامرة">ألف ألف مبارك يا عريس وعسى دياركم عامرة</option>
+            <option value="بارك الله لكما وبارك عليكما وجمع بينكما في خير">بارك الله لكما وبارك عليكما وجمع بينكما في خير</option>
+            <option value="تهانينا القلبية الحارة لآل العريس الكرام">تهانينا القلبية الحارة لآل العريس الكرام</option>
+            <option value="عسى الفرح فالكم والسعادة ما تفارقكم">عسى الفرح فالكم والسعادة ما تفارقكم</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>طابع التصميم الملكي</label>
+          <div class="theme-selector-pills">
+            <button class="theme-pill active" onclick="setStickerTheme('royal-gold')">👑 ملكي ذهبي</button>
+            <button class="theme-pill" onclick="setStickerTheme('bedouin-green')">🌴 تراثي أصيل</button>
+            <button class="theme-pill" onclick="setStickerTheme('modern-dark')">✨ عصري فاخر</button>
+          </div>
+        </div>
+
+        <!-- Live Canvas Preview -->
+        <div class="sticker-preview-wrapper">
+          <canvas id="stickerCanvas" width="600" height="400"></canvas>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="sticker-actions-row">
+          <button class="whatsapp-share-btn" onclick="shareStickerToWhatsApp()">
+            <i class="fa-brands fa-whatsapp"></i> مشاركة عبر واتساب
+          </button>
+          <button class="download-sticker-btn" onclick="downloadStickerImage()">
+            <i class="fa-solid fa-download"></i> حفظ كصورة
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="bottom-navbar">
+    <button class="nav-btn active" onclick="switchTab('tabHome')">
+      <i class="fa-solid fa-house"></i>
+      <span>الأفراح</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('tabMap')">
+      <i class="fa-solid fa-map-location-dot"></i>
+      <span>الخريطة</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('tabAdd')">
+      <i class="fa-solid fa-circle-plus"></i>
+      <span>إعلان عرس</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('tabNokoot')">
+      <i class="fa-solid fa-book-bookmark"></i>
+      <span>دفتر النقوط</span>
+    </button>
+    <button class="nav-btn" onclick="switchTab('tabStickers')">
+      <i class="fa-solid fa-palette"></i>
+      <span>الستيكرات</span>
+    </button>
+    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--text-muted);">
+      <i class="fa-solid fa-crown" style="color: var(--gold-primary);"></i>
+      <span>الإدارة</span>
+    </a>
+  </nav>
+
+  <!-- MODAL 1: AI SMART NABATI POETRY GENERATOR (مولد قصائد الذكاء الاصطناعي) -->
+  <div id="aiPoemModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--gold-primary);"></i> مولد قصائد وشيلات التهنئة AI</h3>
+          <span class="modal-sub">يولد أبيات شعر نبطي فخمة مخصصة لاسم العريس وعشيرته</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeAIPoemModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <div class="form-group">
+        <label>اسم العريس الكريم</label>
+        <input type="text" id="aiGroomInput" placeholder="مثال: عيسى أبو معمر" value="عيسى أبو معمر">
+      </div>
+      <div class="form-group">
+        <label>اسم العشيرة / العائلة</label>
+        <input type="text" id="aiClanInput" placeholder="مثال: آل أبو معمر" value="آل أبو معمر">
+      </div>
+
+      <button class="admin-btn-primary" style="margin-bottom: 14px;" onclick="generateAIPoem()">
+        <i class="fa-solid fa-sparkles"></i> توليد أبيات التهنئة الآن
+      </button>
+
+      <div id="aiPoemResult" class="ai-poem-result-card" style="display:none;">
+        <div class="poem-tag" id="poemCategory">شيلة فخر نبطية</div>
+        <p class="poem-line" id="poemLine1"></p>
+        <p class="poem-line" id="poemLine2"></p>
+        <div class="poem-actions">
+          <button class="copy-poem-btn" onclick="copyAIPoem()"><i class="fa-solid fa-copy"></i> نسخ الأبيات</button>
+          <button class="wa-poem-btn" onclick="sharePoemToWhatsApp()"><i class="fa-brands fa-whatsapp"></i> إرسال لواتساب</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: CONGRATULATIONS & LIVE CHAT -->
+  <div id="chatModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card chat-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="chatModalTitle">تبريكات ودردشة الفرح</h3>
+          <span id="chatModalSubtitle" class="modal-sub">غرفة المباركة الحية</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeChatModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <!-- Quick Call / WhatsApp Host Bar -->
+      <div id="chatHostBar" class="chat-host-bar"></div>
+
+      <!-- Live Messages Stream -->
+      <div id="chatMessagesStream" class="chat-messages-container"></div>
+
+      <!-- Quick Emoji Bar -->
+      <div class="quick-emoji-bar">
+        <button class="emoji-chip" onclick="insertEmojiToChat('☕ فنجان قهوة وكرم')">☕ دلة</button>
+        <button class="emoji-chip" onclick="insertEmojiToChat('🗡️ سيف النخوة')">🗡️ سيف</button>
+        <button class="emoji-chip" onclick="insertEmojiToChat('🐎 خيل أصيل')">🐎 خيل</button>
+        <button class="emoji-chip" onclick="insertEmojiToChat('⛺ ديار عامرة')">⛺ بيت شعر</button>
+        <button class="emoji-chip" onclick="insertEmojiToChat('💐 ألف مبارك')">💐 ورد</button>
+      </div>
+
+      <!-- Chat Input Area -->
+      <form id="chatForm" class="chat-input-row" onsubmit="sendCongratulation(event)">
+        <input type="text" id="chatSenderName" placeholder="اسمك الكريم" required style="max-width: 110px;">
+        <input type="text" id="chatInputMessage" placeholder="اكتب تبريكتك للعريس..." required>
+        <button type="submit" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 3: USER AUTH (LOGIN / REGISTER) -->
+  <div id="authModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card auth-modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-lock"></i> الحساب ودفتر النقوط السري</h3>
+        <button class="close-modal-btn" onclick="closeAuthModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      
+      <div class="auth-tabs">
+        <button id="authTabLogin" class="auth-tab-btn active" onclick="switchAuthMode('login')">تسجيل الدخول</button>
+        <button id="authTabRegister" class="auth-tab-btn" onclick="switchAuthMode('register')">حساب جديد</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="auth-form" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label>رقم الهاتف *</label>
+          <input type="tel" id="loginPhone" placeholder="05XXXXXXXX" required>
+        </div>
+        <div class="form-group">
+          <label>رمز PIN السري (4-6 أرقام) *</label>
+          <input type="password" id="loginPin" placeholder="••••" required maxlength="6">
+        </div>
+        <button type="submit" class="submit-btn"><i class="fa-solid fa-right-to-bracket"></i> دخول</button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" class="auth-form" style="display:none;" onsubmit="handleRegister(event)">
+        <div class="form-group">
+          <label>الاسم الكامل *</label>
+          <input type="text" id="regName" placeholder="مثال: خالد سالم الهزيل" required>
+        </div>
+        <div class="form-group">
+          <label>رقم الهاتف *</label>
+          <input type="tel" id="regPhone" placeholder="05XXXXXXXX" required>
+        </div>
+        <div class="form-group">
+          <label>البلدة / العشيرة</label>
+          <input type="text" id="regClan" placeholder="مثال: رهط - آل فلان">
+        </div>
+        <div class="form-group">
+          <label>رمز PIN السري (لحماية دفتر نقوطك) *</label>
+          <input type="password" id="regPin" placeholder="••••" required maxlength="6">
+        </div>
+        <button type="submit" class="submit-btn"><i class="fa-solid fa-user-plus"></i> إنشاء الحساب وتفعيل السجل</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 4: ADD NOKOOT ENTRY -->
+  <div id="addNokootModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-hand-holding-dollar"></i> تسجيل قيد نقوط</h3>
+        <button class="close-modal-btn" onclick="closeAddNokootModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form id="addNokootForm" class="app-form" onsubmit="handleAddNokoot(event)">
+        <div class="form-group">
+          <label>اسم صاحب الفرح / العريس *</label>
+          <input type="text" id="nokootRecipient" placeholder="مثال: عيسى أبو معمر" required>
+        </div>
+        <div class="form-row">
+          <div class="form-group half">
+            <label>مبلغ النقوط (بالشيكل ₪) *</label>
+            <input type="number" id="nokootAmount" placeholder="500" required min="1">
+          </div>
+          <div class="form-group half">
+            <label>تاريخ الفرح *</label>
+            <input type="date" id="nokootDate" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>البلدة أو العائلة</label>
+          <input type="text" id="nokootClan" placeholder="مثال: رهط">
+        </div>
+        <div class="form-group">
+          <label>ملاحظات (مثال: عرس أخوه / رد واجب)</label>
+          <input type="text" id="nokootNotes" placeholder="مثال: كان قد نقّطني 500 في عرس أخي">
+        </div>
+        <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ في السجل المالي</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

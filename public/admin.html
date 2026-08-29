@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>مركز القيادة | لوحة السوبر أدمن لمناسبات النقب</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&family=Amiri:wght@700&display=swap" rel="stylesheet">
+  
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Admin Styles -->
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+
+  <!-- ADMIN LOGIN VIEW -->
+  <div id="adminLoginScreen" class="admin-login-wrapper">
+    <div class="admin-login-card">
+      <div class="admin-logo">
+        <span class="crown-icon">👑</span>
+        <h2>مركز تحكم السوبر أدمن</h2>
+        <p>المنصة العالمية لمناسبات وأعراس النقب</p>
+      </div>
+
+      <form id="adminLoginForm" onsubmit="handleAdminLogin(event)">
+        <div class="form-group">
+          <label>رقم هاتف الإدارة</label>
+          <input type="tel" id="adminPhone" placeholder="05XXXXXXXX" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label>رمز PIN السوبر أدمن الرئيسي</label>
+          <input type="password" id="adminPin" placeholder="••••" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="admin-btn-primary" id="adminLoginBtn">
+          <i class="fa-solid fa-shield-halved"></i> دخول مركز القيادة
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ADMIN DASHBOARD WRAPPER -->
+  <div id="adminDashboardScreen" class="admin-dashboard-wrapper" style="display: none;">
+    
+    <!-- Top Header -->
+    <header class="admin-header">
+      <div class="header-content">
+        <div class="admin-brand">
+          <span class="crown-badge">👑 سوبر أدمن</span>
+          <h1>مركز إدارة مناسبات النقب</h1>
+        </div>
+        <div class="header-right">
+          <a href="/" target="_blank" class="preview-app-btn">
+            <i class="fa-solid fa-mobile-screen"></i> معاينة التطبيق
+          </a>
+          <button class="logout-btn" onclick="handleAdminLogout()">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i> خروج
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="admin-main-container">
+      
+      <!-- KPI Stats Grid -->
+      <section class="stats-grid">
+        <div class="stat-card pending-card" onclick="filterEventsByStatus('pending')">
+          <div class="stat-icon"><i class="fa-solid fa-clock"></i></div>
+          <div class="stat-info">
+            <span class="stat-label">طلبات بانتظار الاعتماد</span>
+            <h2 id="kpiPending">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card approved-card" onclick="filterEventsByStatus('approved')">
+          <div class="stat-icon"><i class="fa-solid fa-circle-check"></i></div>
+          <div class="stat-info">
+            <span class="stat-label">المناسبات المنشورة</span>
+            <h2 id="kpiApproved">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card users-card" onclick="switchAdminTab('tabUsers')">
+          <div class="stat-icon"><i class="fa-solid fa-users"></i></div>
+          <div class="stat-info">
+            <span class="stat-label">المستخدمين المسجلين</span>
+            <h2 id="kpiUsers">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card comments-card" onclick="switchAdminTab('tabComments')">
+          <div class="stat-icon"><i class="fa-solid fa-comments"></i></div>
+          <div class="stat-info">
+            <span class="stat-label">إجمالي التبريكات</span>
+            <h2 id="kpiComments">0</h2>
+          </div>
+        </div>
+      </section>
+
+      <!-- Navigation Tabs -->
+      <nav class="admin-nav-tabs">
+        <button class="admin-tab-btn active" onclick="switchAdminTab('tabEvents')">
+          <i class="fa-solid fa-list-check"></i> إدارة ومراجعة المناسبات
+        </button>
+        <button class="admin-tab-btn" onclick="switchAdminTab('tabDirectAdd')">
+          <i class="fa-solid fa-plus-circle"></i> نشر مناسبة معتمدة فوراً
+        </button>
+        <button class="admin-tab-btn" onclick="switchAdminTab('tabBroadcast')">
+          <i class="fa-solid fa-bullhorn"></i> البث والإشعارات العامة
+        </button>
+        <button class="admin-tab-btn" onclick="switchAdminTab('tabComments')">
+          <i class="fa-solid fa-comment-dots"></i> مراقبة التبريكات
+        </button>
+        <button class="admin-tab-btn" onclick="switchAdminTab('tabUsers')">
+          <i class="fa-solid fa-user-gear"></i> إدارة المستخدمين
+        </button>
+      </nav>
+
+      <!-- TAB 1: EVENTS REVIEW & MANAGEMENT -->
+      <section id="tabEvents" class="admin-tab-pane active-pane">
+        <div class="pane-controls-bar">
+          <div class="status-filter-group">
+            <button class="filter-chip active" onclick="filterEventsByStatus('all', this)">جميع المناسبات</button>
+            <button class="filter-chip" onclick="filterEventsByStatus('pending', this)">
+              🟡 بانتظار الموافقة <span id="pendingBadgeCount" class="badge-pill">0</span>
+            </button>
+            <button class="filter-chip" onclick="filterEventsByStatus('approved', this)">🟢 المعتمدة والمنشورة</button>
+            <button class="filter-chip" onclick="filterEventsByStatus('rejected', this)">🔴 المرفوضة</button>
+          </div>
+
+          <div class="admin-search-box">
+            <input type="text" id="adminEventSearch" placeholder="بحث باسم العريس، العشيرة، البلدة..." oninput="handleAdminEventSearch()">
+          </div>
+        </div>
+
+        <div id="adminEventsList" class="admin-events-grid"></div>
+      </section>
+
+      <!-- TAB 2: DIRECT ADMIN ADD -->
+      <section id="tabDirectAdd" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-bullhorn"></i> نشر مناسبة معتمدة مباشرة من الإدارة</h2>
+            <p>المناسبات التي تضاف من هنا ستنشر فوراً على التطبيق دون الحاجة للمراجعة</p>
+          </div>
+
+          <form id="adminDirectAddForm" class="admin-form" onsubmit="handleDirectAdd(event)">
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم العريس الكريم *</label>
+                <input type="text" id="dirGroom" placeholder="مثال: سالم عودة النعامي" required>
+              </div>
+              <div class="form-group half">
+                <label>البلدة / المنطقة *</label>
+                <select id="dirTown" required>
+                  <option value="رهط">رهط</option>
+                  <option value="حورة">حورة</option>
+                  <option value="تل السبع">تل السبع</option>
+                  <option value="كسيفة">كسيفة</option>
+                  <option value="شقيب السلام">شقيب السلام</option>
+                  <option value="اللقية">اللقية</option>
+                  <option value="عرعرة النقب">عرعرة النقب</option>
+                  <option value="القرى والتجمعات">القرى والتجمعات</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>العشيرة / العائلة</label>
+                <input type="text" id="dirClan" placeholder="مثال: آل النعامي">
+              </div>
+              <div class="form-group half">
+                <label>تاريخ الفرح *</label>
+                <input type="date" id="dirDate" required>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>سهرة الشباب والدحة (اختياري)</label>
+                <input type="date" id="dirYouthDate">
+              </div>
+              <div class="form-group half">
+                <label>طعام العشاء</label>
+                <input type="text" id="dirDinner" value="الساعة 8:00 مساءً">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>وصف المكان والديوان (لـ Waze و Google Maps) *</label>
+              <input type="text" id="dirLocation" placeholder="مثال: ديوان آل فلان - رهط بالقرب من..." required>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>صورة كرت الدعوة</label>
+                <input type="file" id="dirPoster" accept="image/*">
+              </div>
+              <div class="form-group half">
+                <label>مقطع صوتي / شيلة الفرح</label>
+                <input type="file" id="dirAudio" accept="audio/*">
+              </div>
+            </div>
+
+            <button type="submit" class="admin-btn-primary" id="dirSubmitBtn">
+              <i class="fa-solid fa-check-double"></i> اعتماد ونشر المناسبة فوراً
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 3: BROADCAST NOTIFICATIONS -->
+      <section id="tabBroadcast" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-tower-broadcast"></i> بث إشعار وتنبيه عاجل لجميع المستخدمين</h2>
+            <p>سيظهر الإشعار فوراً في أعلى شاشات جميع المستخدمين المتصلين بالتطبيق</p>
+          </div>
+
+          <form id="broadcastForm" class="admin-form" onsubmit="handleSendBroadcast(event)">
+            <div class="form-group">
+              <label>عنوان التنبيه</label>
+              <input type="text" id="broadcastTitleInput" value="📢 تنبيه من إدارة مناسبات النقب" required>
+            </div>
+            <div class="form-group">
+              <label>نص الرسالة أو الإشعار *</label>
+              <textarea id="broadcastMessageInput" rows="4" style="width:100%; background:#071510; border:1px solid var(--admin-card-border); color:#fff; padding:12px; border-radius:8px; font-family:Tajawal;" placeholder="اكتب نص الإشعار هنا..." required></textarea>
+            </div>
+            <button type="submit" class="admin-btn-primary" id="sendBroadcastBtn">
+              <i class="fa-solid fa-paper-plane"></i> إرسال البث لجميع الشاشات الآن
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 4: COMMENTS MODERATION -->
+      <section id="tabComments" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-shield-halved"></i> مراقبة التبريكات والدردشة الحية</h2>
+            <p>مراجعة وحذف أي رسالة غير ملائمة بنقرة واحدة</p>
+          </div>
+          <div id="adminCommentsList" class="admin-comments-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB 5: USERS MANAGEMENT -->
+      <section id="tabUsers" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-users-gear"></i> المستخدمين المسجلين في المنصة</h2>
+            <p>قائمة بأصحاب الحسابات ودفاتر النقوط في النقب</p>
+          </div>
+          <div id="adminUsersList" class="admin-users-table-wrapper"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

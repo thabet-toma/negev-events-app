@@ -1,0 +1,62 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: negev_events_mysql
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:-negev_events}
+      MYSQL_USER: ${DB_USER:-negev}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - negev_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Not published to the host by default — only the app container reaches it.
+    expose:
+      - "3306"
+    networks:
+      - negev_net
+
+  app:
+    build: .
+    container_name: negev_events_app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-negev_events}
+      DB_USER: ${DB_USER:-negev}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ADMIN_PHONE: ${ADMIN_PHONE:-0500000000}
+      ADMIN_PIN: ${ADMIN_PIN:?set ADMIN_PIN in .env}
+      ADMIN_NAME: ${ADMIN_NAME:-مدير عام المنصة}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-30}
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - negev_uploads:/app/uploads
+    networks:
+      - negev_net
+
+volumes:
+  negev_mysql_data:
+  negev_uploads:
+
+networks:
+  negev_net:
+    driver: bridge

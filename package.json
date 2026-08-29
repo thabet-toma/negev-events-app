@@ -1,0 +1,32 @@
+{
+  "name": "negev-events-app",
+  "version": "2.0.0",
+  "description": "منصة وتطبيق مناسبات وأعراس النقب — Negev Events Platform",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:migrate": "node src/db/migrate.js",
+    "db:seed": "node src/db/seed.js",
+    "db:import-legacy": "node scripts/import-legacy-json.js",
+    "test": "node test/smoke.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.5",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.11.5",
+    "socket.io": "^4.8.1"
+  },
+  "license": "MIT"
+}
