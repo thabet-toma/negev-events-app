@@ -1,15 +1,16 @@
 'use strict';
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
-const { authenticate, ADMIN_ROLES } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
-  cleanString, requireFields, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, MAX_HONOREES
+  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, MAX_HONOREES
 } = require('../middleware/validate');
 const { TOWNS, REACTION_TYPES } = require('../constants');
 
@@ -57,9 +58,16 @@ router.get('/towns', asyncHandler(async (req, res) => {
   res.json({ success: true, towns: ['الكل', ...TOWNS], stats: await events.townStats() });
 }));
 
-router.get('/events/:id', asyncHandler(async (req, res) => {
+// `optionalAuthenticate`: an anonymous caller still gets the event (public
+// read, unchanged), but a logged-in one also sees their own pending
+// congratulation tagged, never anyone else's (#20 step 5, decision 4).
+router.get('/events/:id', optionalAuthenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
-  res.json({ success: true, event: await events.getEventDetails(eventId, { legacyOnly: isLegacyClient(req) }) });
+  const event = await events.getEventDetails(eventId, {
+    legacyOnly: isLegacyClient(req),
+    userId: req.user ? req.user.id : null
+  });
+  res.json({ success: true, event });
 }));
 
 // --- Event submission ---------------------------------------------
@@ -298,19 +306,107 @@ router.post('/events/:id/react', asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-router.post('/events/:id/congratulate', asyncHandler(async (req, res) => {
+// Ten congratulations per user per ten minutes — generous for a genuine
+// well-wisher, tight enough to blunt a repeat offender who used to just
+// resubmit after a delete. Keyed by the authenticated user, not the IP,
+// since accountability (not address) is the point of requiring a login here
+// (#20 step 5, decision ١).
+const congratulateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => `congratulate:${req.user.id}`,
+  message: { success: false, message: 'عدد التبريكات تجاوز الحد المسموح — يرجى المحاولة لاحقاً' }
+});
+
+/**
+ * Requires a login (#20 step 5, decision ١): accountability, the ability to
+ * block a repeat offender, and a per-person rate limit all need an identity
+ * a delete-and-resubmit can't shed. `sender_name` is derived from the account
+ * — never the request body — for the same reason; an admin may override it
+ * (useful when relaying a message on someone's behalf), everyone else cannot.
+ */
+router.post('/events/:id/congratulate', authenticate, congratulateLimiter, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
-  requireFields(req.body, ['sender_name', 'message']);
+  const message = cleanString(req.body.message, 2000);
+  if (!message) throw ApiError.badRequest('نص التبريكة مطلوب');
+
+  const isAdmin = ADMIN_ROLES.includes(req.user.role);
+  const senderNameOverride = isAdmin ? cleanString(req.body.sender_name, 120) : null;
 
   const comment = await events.addCongratulation(eventId, {
-    sender_name: cleanString(req.body.sender_name, 120),
-    badge_title: cleanString(req.body.badge_title, 80),
-    message: cleanString(req.body.message, 2000),
-    sticker_url: cleanString(req.body.sticker_url, 2000)
+    userId: req.user.id,
+    senderName: senderNameOverride || req.user.full_name,
+    badgeTitleOverride: cleanString(req.body.badge_title, 80),
+    message,
+    stickerUrl: cleanString(req.body.sticker_url, 2000)
   });
 
-  realtime.emit(`new_congratulation_${eventId}`, comment);
+  // A pending تعزية is the harm itself if it broadcasts — only an approved
+  // one reaches every connected client (#20 step 5, decision ٢).
+  if (comment.status === 'approved') {
+    realtime.emit(`new_congratulation_${eventId}`, comment);
+  }
+
   res.status(201).json({ success: true, comment });
+}));
+
+const CONGRATULATION_STATUSES = ['pending', 'approved', 'hidden'];
+
+/** Owner/admin moderation queue for one event's congratulations, optionally filtered by `?status=`. */
+router.get('/events/:id/congratulations', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const existing = await events.getEventForEdit(eventId);
+  assertCanManageEvent(req, existing);
+
+  const status = cleanString(req.query.status, 20);
+  if (status && !CONGRATULATION_STATUSES.includes(status)) {
+    throw ApiError.badRequest('حالة غير صالحة');
+  }
+
+  res.json({ success: true, comments: await events.listCongratulationsForModeration(eventId, status) });
+}));
+
+/** Owner or admin approves/rejects a pending (or previously hidden) congratulation — same ownership rule as editing the event. */
+router.patch('/events/:id/congratulations/:cid', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const congratulationId = parseId(req.params.cid, 'معرّف التبريكة');
+  const existing = await events.getEventForEdit(eventId);
+  assertCanManageEvent(req, existing);
+
+  const action = cleanString(req.body.action, 20);
+  if (!['approve', 'reject'].includes(action)) {
+    throw ApiError.badRequest('إجراء غير صالح — approve أو reject فقط');
+  }
+
+  const comment = await events.moderateCongratulation(eventId, congratulationId, { action, moderatedBy: req.user.id });
+
+  if (action === 'approve') {
+    realtime.emit(`new_congratulation_${eventId}`, comment);
+  }
+
+  res.json({ success: true, comment });
+}));
+
+/** Owner or admin deletes a congratulation on their own event — an ownership right, in every occasion type, not an admin-only power (#20 step 5, decision ٥). */
+router.delete('/events/:id/congratulations/:cid', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const congratulationId = parseId(req.params.cid, 'معرّف التبريكة');
+  const existing = await events.getEventForEdit(eventId);
+  assertCanManageEvent(req, existing);
+
+  await events.deleteCongratulation(eventId, congratulationId);
+  res.json({ success: true, message: 'تم حذف التبريكة بنجاح' });
+}));
+
+/** Any logged-in user may report a congratulation once; past the threshold it auto-hides pending human review. */
+router.post('/events/:id/congratulations/:cid/report', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const congratulationId = parseId(req.params.cid, 'معرّف التبريكة');
+
+  const result = await events.reportCongratulation(eventId, congratulationId, req.user.id);
+  res.json({ success: true, ...result });
 }));
 
 module.exports = router;

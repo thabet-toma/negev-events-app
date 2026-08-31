@@ -17,7 +17,7 @@ function absoluteMediaUrl(value) {
   return config.publicUrl + value;
 }
 
-const MEDIA_FIELDS = ['poster_url', 'audio_url', 'image'];
+const MEDIA_FIELDS = ['poster_url', 'audio_url', 'image', 'sticker_url'];
 
 /** Returns a copy of the row with its media columns made absolute. */
 function withAbsoluteMedia(row) {

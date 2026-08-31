@@ -3,7 +3,7 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
-const { REACTION_TYPES, TOWN_COORDINATES } = require('../constants');
+const { REACTION_TYPES, TOWN_COORDINATES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
@@ -70,7 +70,7 @@ async function congratulationsForEvents(eventIds) {
                 ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS rn,
                 COUNT(*) OVER (PARTITION BY event_id) AS cnt
            FROM congratulations
-          WHERE event_id IN (${placeholders})
+          WHERE event_id IN (${placeholders}) AND status = 'approved'
        ) ranked
       WHERE rn = 1`,
     eventIds
@@ -244,8 +244,14 @@ async function listPublicEvents({
  * caller cannot render, instead of handing it data it would mislabel — the
  * same wedding-only understanding `listPublicEvents`/`listMapPoints` apply
  * (#20 step 4, decision و).
+ *
+ * Congratulations returned here are every `approved` row plus, when `userId`
+ * is set, that same caller's own still-`pending` rows — the sender sees
+ * their own submission tagged as pending, nobody else does (#20 step 5,
+ * decision 4). A pending/hidden row belonging to someone else, and the full
+ * moderation queue, are what `GET /events/:id/congratulations` is for.
  */
-async function getEventDetails(eventId, { legacyOnly = false } = {}) {
+async function getEventDetails(eventId, { legacyOnly = false, userId = null } = {}) {
   const event = await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
 
@@ -259,7 +265,12 @@ async function getEventDetails(eventId, { legacyOnly = false } = {}) {
   await db.execute('UPDATE events SET views_count = views_count + 1 WHERE id = ?', [eventId]);
 
   const [congratulations, reactionRows, [withRelations]] = await Promise.all([
-    db.query('SELECT * FROM congratulations WHERE event_id = ? ORDER BY created_at DESC', [eventId]),
+    db.query(
+      `SELECT * FROM congratulations
+        WHERE event_id = ? AND (status = 'approved' OR (user_id = ? AND status = 'pending'))
+        ORDER BY created_at DESC`,
+      [eventId, userId]
+    ),
     db.query(
       'SELECT reaction_type, COUNT(*) AS count FROM reactions WHERE event_id = ? GROUP BY reaction_type',
       [eventId]
@@ -274,7 +285,7 @@ async function getEventDetails(eventId, { legacyOnly = false } = {}) {
     ...withRelations,
     views_count: event.views_count + 1,
     reactions,
-    congratulations
+    congratulations: congratulations.map(withAbsoluteMedia)
   };
 }
 
@@ -607,26 +618,127 @@ async function addReaction(eventId, reactionType, userIdentifier) {
   );
 }
 
-async function addCongratulation(eventId, { sender_name, badge_title, message, sticker_url }) {
-  const event = await db.queryOne('SELECT id FROM events WHERE id = ?', [eventId]);
+/**
+ * Writes a congratulation/تعزية. Status is decided by the occasion type's own
+ * `premoderate_messages` flag, never by name — عزا carries it today, nothing
+ * else does (#20 step 5, decision ٢). The badge falls back to the type's own
+ * `default_badge_title`, and to an empty string (never a festive placeholder
+ * like the old hardcoded 'صديق العريس') when the type has none — `badge_title`
+ * stays NOT NULL in the schema on purpose (an already-published APK reads
+ * it), so "no badge" is an empty string, not NULL (#20 step 5, decision ٨).
+ */
+async function addCongratulation(eventId, { userId, senderName, badgeTitleOverride, message, stickerUrl }) {
+  const event = await db.queryOne('SELECT id, occasion_type_id FROM events WHERE id = ?', [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
 
-  const badge = badge_title || 'صديق العريس';
+  const type = event.occasion_type_id ? await occasionTypes.getTypeById(event.occasion_type_id) : null;
+  const status = type?.premoderate_messages ? 'pending' : 'approved';
+  const badge = badgeTitleOverride || type?.default_badge_title || '';
+
   const { insertId } = await db.execute(
-    `INSERT INTO congratulations (event_id, sender_name, badge_title, message, sticker_url)
-     VALUES (?, ?, ?, ?, ?)`,
-    [eventId, sender_name, badge, message, sticker_url]
+    `INSERT INTO congratulations (event_id, sender_name, badge_title, message, sticker_url, user_id, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [eventId, senderName, badge, message, stickerUrl, userId, status]
   );
 
   return {
     id: insertId,
     event_id: eventId,
-    sender_name,
+    sender_name: senderName,
     badge_title: badge,
     message,
-    sticker_url: sticker_url || null,
+    sticker_url: stickerUrl || null,
+    status,
+    user_id: userId,
+    reports_count: 0,
     created_at: new Date().toISOString()
   };
+}
+
+/** Every congratulation on an event, optionally filtered by status — the owner/admin moderation queue. */
+async function listCongratulationsForModeration(eventId, status = null) {
+  const rows = status
+    ? await db.query(
+      'SELECT * FROM congratulations WHERE event_id = ? AND status = ? ORDER BY created_at DESC',
+      [eventId, status]
+    )
+    : await db.query('SELECT * FROM congratulations WHERE event_id = ? ORDER BY created_at DESC', [eventId]);
+  return rows.map(withAbsoluteMedia);
+}
+
+/**
+ * A human review decision — approve or reject — always recorded with who and
+ * when. There is no 'rejected' status in this domain (only pending/approved/
+ * hidden), so 'reject' lands on 'hidden': not shown to anyone, same outcome
+ * as an auto-hide from reports, but this one was a deliberate human call.
+ */
+async function moderateCongratulation(eventId, congratulationId, { action, moderatedBy }) {
+  const nextStatus = action === 'approve' ? 'approved' : 'hidden';
+  const { affectedRows } = await db.execute(
+    `UPDATE congratulations SET status = ?, moderated_by = ?, moderated_at = NOW()
+      WHERE id = ? AND event_id = ?`,
+    [nextStatus, moderatedBy, congratulationId, eventId]
+  );
+  if (!affectedRows) throw ApiError.notFound('التعليق غير موجود');
+
+  return db.queryOne('SELECT * FROM congratulations WHERE id = ?', [congratulationId]);
+}
+
+/** The owner or admin deletes a congratulation on their own event — an ownership right, in every occasion type. */
+async function deleteCongratulation(eventId, congratulationId) {
+  const { affectedRows } = await db.execute(
+    'DELETE FROM congratulations WHERE id = ? AND event_id = ?',
+    [congratulationId, eventId]
+  );
+  if (!affectedRows) throw ApiError.notFound('التعليق غير موجود');
+}
+
+/**
+ * Records one report (the UNIQUE key on congratulation_reports rejects a
+ * second report from the same person outright) and, past the threshold,
+ * auto-hides the message — but only one nobody has reviewed yet. A message a
+ * human already approved on purpose (`moderated_by` set) is left alone:
+ * reports are a substitute for review, not a veto over a review that already
+ * happened, otherwise a pile-on could silence something a human already
+ * judged fine (#20 step 5, decision ٩).
+ */
+async function reportCongratulation(eventId, congratulationId, userId) {
+  return db.transaction(async connection => {
+    const [rows] = await connection.execute(
+      'SELECT id, status, moderated_by FROM congratulations WHERE id = ? AND event_id = ?',
+      [congratulationId, eventId]
+    );
+    if (!rows.length) throw ApiError.notFound('التعليق غير موجود');
+
+    try {
+      await connection.execute(
+        'INSERT INTO congratulation_reports (congratulation_id, user_id) VALUES (?, ?)',
+        [congratulationId, userId]
+      );
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') throw ApiError.conflict('لقد أبلغت عن هذه الرسالة مسبقاً');
+      throw err;
+    }
+
+    await connection.execute(
+      'UPDATE congratulations SET reports_count = reports_count + 1 WHERE id = ?',
+      [congratulationId]
+    );
+
+    const [updatedRows] = await connection.execute(
+      'SELECT reports_count, status, moderated_by FROM congratulations WHERE id = ?',
+      [congratulationId]
+    );
+    const updated = updatedRows[0];
+
+    let status = updated.status;
+    if (updated.reports_count >= CONGRATULATION_REPORT_THRESHOLD && status === 'approved' && updated.moderated_by === null) {
+      await connection.execute("UPDATE congratulations SET status = 'hidden' WHERE id = ?", [congratulationId]);
+      status = 'hidden';
+    }
+
+    return { reports_count: updated.reports_count, status };
+  });
 }
 
 /** Per-town counts of approved events, for the filter chips. */
@@ -654,5 +766,9 @@ module.exports = {
   findCollisions,
   addReaction,
   addCongratulation,
+  listCongratulationsForModeration,
+  moderateCongratulation,
+  deleteCongratulation,
+  reportCongratulation,
   townStats
 };

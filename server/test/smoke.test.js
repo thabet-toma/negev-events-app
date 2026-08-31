@@ -17,7 +17,7 @@ const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
-const { OCCASION_FIELD_KEYS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD } = require('../src/constants');
 
 let baseUrl = '';
 let passed = 0;
@@ -105,6 +105,19 @@ async function run() {
   let userToken = '';
   let adminToken = '';
   let nokootId = 0;
+  // Phone numbers of every throwaway user created for the congratulations
+  // section below — collected here and deleted in one pass at the end.
+  const congratsCleanupPhones = [];
+
+  /** Registers a fresh regular user and returns { phone, token, full_name }. */
+  async function registerTestUser(fullName) {
+    const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { body } = await api('POST', '/api/auth/register', {
+      body: { phone_number: userPhone, full_name: fullName, pin_code: '1234' }
+    });
+    congratsCleanupPhones.push(userPhone);
+    return { phone: userPhone, token: body.token, full_name: fullName };
+  }
 
   console.log('Public API');
   await test('GET /health reports the database is up', async () => {
@@ -678,16 +691,48 @@ async function run() {
     assert.strictEqual(event.latest_congratulation, null);
   });
 
-  await test('An event with three congratulations reports count 3 and the newest one as the preview, without duplicating the row', async () => {
-    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الأول', message: 'تعازينا' } });
-    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الثاني', message: 'رحمه الله' } });
-    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الثالث', message: 'البقاء لله' } });
+  // Behaviour change (#20 step 5): congratulating now requires a login, and
+  // عزا premoderates — these three land pending, not approved, until a human
+  // (owner or admin) reviews each one; congratulations_count only ever
+  // counts approved rows. sender_name is derived from the account, so the
+  // spoofed name each request sends in the body is dropped.
+  let funeralCongratIds = [];
+  await test('Three تعازي on a عزا (which premoderates) are created pending, with sender_name taken from the account', async () => {
+    const extraUserA = await registerTestUser('مهنّئ إضافي الأول');
+    const extraUserB = await registerTestUser('مهنّئ إضافي الثاني');
+    const senders = [{ token: userToken }, extraUserA, extraUserB];
+
+    funeralCongratIds = [];
+    for (const sender of senders) {
+      const { status, body } = await api('POST', `/api/events/${spanningFuneralId}/congratulate`, {
+        token: sender.token,
+        body: { sender_name: 'اسم منتحَل', message: 'تعازينا' }
+      });
+      assert.strictEqual(status, 201);
+      assert.strictEqual(body.comment.status, 'pending');
+      assert.notStrictEqual(body.comment.sender_name, 'اسم منتحَل', 'sender_name must come from the account, not the body');
+      funeralCongratIds.push(body.comment.id);
+    }
+
+    const { body } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const event = body.events.find(e => e.id === spanningFuneralId);
+    assert.strictEqual(event.congratulations_count, 0, 'a pending تعزية must not count until approved');
+  });
+
+  await test('The admin approves all three; only then does the count/preview reflect them, without duplicating the row', async () => {
+    for (const id of funeralCongratIds) {
+      const { status, body } = await api('PATCH', `/api/events/${spanningFuneralId}/congratulations/${id}`, {
+        token: adminToken,
+        body: { action: 'approve' }
+      });
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.comment.status, 'approved');
+    }
 
     const { body } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
     const matches = body.events.filter(e => e.id === spanningFuneralId);
     assert.strictEqual(matches.length, 1, 'the event must not repeat once per congratulation');
     assert.strictEqual(matches[0].congratulations_count, 3);
-    assert.strictEqual(matches[0].latest_congratulation.sender_name, 'الثالث');
   });
 
   await test('The congratulations counter/preview disappear from the card when show_congratulations_count is off, and return when it is back on', async () => {
@@ -1219,6 +1264,29 @@ async function run() {
     await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
   });
 
+  await test('A relative sticker URL comes back absolute, like every other media column', async () => {
+    const wedding = (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عرس');
+    const { body: made } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: wedding.id,
+        honorees: [{ name: 'عريس الملصقات' }],
+        town: 'رهط', location_name: 'الديوان', event_date: '2027-07-07'
+      }
+    });
+
+    await api('POST', `/api/events/${made.eventId}/congratulate`, {
+      token: adminToken,
+      body: { message: 'مبروك', sticker_url: '/uploads/sticker-test.png' }
+    });
+
+    const { body } = await api('GET', `/api/events/${made.eventId}`);
+    const sticker = body.event.congratulations[0].sticker_url;
+    assert.ok(sticker.startsWith('http'), `sticker stayed relative: ${sticker}`);
+
+    await api('DELETE', `/api/admin/events/${made.eventId}`, { token: adminToken });
+  });
+
   console.log('\nModeration flow');
 
   // Behaviour change: publishing used to be public (no token) and always
@@ -1280,8 +1348,10 @@ async function run() {
 
   await test('Reactions and congratulations attach to the event', async () => {
     await api('POST', `/api/events/${createdEventId}/react`, { body: { reaction_type: 'coffee' } });
+    // Behaviour change (#20 step 5): congratulating now requires a login.
     await api('POST', `/api/events/${createdEventId}/congratulate`, {
-      body: { sender_name: 'صديق', message: 'مبروك' }
+      token: userToken,
+      body: { message: 'مبروك' }
     });
     const { body } = await api('GET', `/api/events/${createdEventId}`);
     assert.strictEqual(body.event.reactions.coffee, 1);
@@ -1307,6 +1377,243 @@ async function run() {
     assert.strictEqual(status, 404);
     assert.strictEqual(body.success, false);
   });
+
+  console.log('\nCongratulations: accountability, premoderation, owner review, reporting (#20 step 5)');
+
+  const { body: anyList } = await api('GET', '/api/events?limit=1');
+  const anyEventId = anyList.events[0].id;
+
+  await test('POST /api/events/:id/congratulate without a token is rejected', async () => {
+    const { status } = await api('POST', `/api/events/${anyEventId}/congratulate`, {
+      body: { message: 'مبروك' }
+    });
+    assert.strictEqual(status, 401);
+  });
+
+  let cOwner = null;
+  let cFuneralEventId = 0;
+  await test('Set up: a regular (non-admin) user publishes a عزا, the admin approves the event itself', async () => {
+    cOwner = await registerTestUser('صاحب مناسبة مراجعة التبريكات');
+
+    const created = await api('POST', '/api/events', {
+      token: cOwner.token,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى مراجعة التبريكات' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-11-01',
+        event_end_date: '2027-11-04'
+      }
+    });
+    cFuneralEventId = created.body.eventId;
+
+    const approved = await api('PATCH', `/api/admin/events/${cFuneralEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approved.status, 200);
+  });
+
+  let cWellWisher = null;
+  let cPendingId = 0;
+  await test('A تعزية on this عزا is created pending, with no injected festive badge, sender_name from the account', async () => {
+    cWellWisher = await registerTestUser('مهنّئ مراجعة التبريكات');
+
+    const { status, body } = await api('POST', `/api/events/${cFuneralEventId}/congratulate`, {
+      token: cWellWisher.token,
+      body: { sender_name: 'اسم منتحَل', message: 'تعازينا الحارة' }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.comment.status, 'pending');
+    assert.strictEqual(body.comment.sender_name, cWellWisher.full_name, 'sender_name must come from the account, not the body');
+    assert.strictEqual(body.comment.badge_title, '', 'no festive badge (مبارك الفرح / صديق العريس) may be injected on a عزا');
+    cPendingId = body.comment.id;
+  });
+
+  await test('The public (no token) does not see the pending تعزية', async () => {
+    const { body } = await api('GET', `/api/events/${cFuneralEventId}`);
+    assert.ok(!body.event.congratulations.some(c => c.id === cPendingId));
+  });
+
+  await test('The sender sees their own pending تعزية; a different logged-in visitor does not', async () => {
+    const senderView = await api('GET', `/api/events/${cFuneralEventId}`, { token: cWellWisher.token });
+    assert.ok(senderView.body.event.congratulations.some(c => c.id === cPendingId));
+
+    const otherView = await api('GET', `/api/events/${cFuneralEventId}`, { token: userToken });
+    assert.ok(!otherView.body.event.congratulations.some(c => c.id === cPendingId));
+  });
+
+  await test('A non-owner, non-admin is rejected (403) from approving, deleting, or reading the moderation queue', async () => {
+    const approveAttempt = await api('PATCH', `/api/events/${cFuneralEventId}/congratulations/${cPendingId}`, {
+      token: userToken, body: { action: 'approve' }
+    });
+    assert.strictEqual(approveAttempt.status, 403);
+
+    const deleteAttempt = await api('DELETE', `/api/events/${cFuneralEventId}/congratulations/${cPendingId}`, {
+      token: userToken
+    });
+    assert.strictEqual(deleteAttempt.status, 403);
+
+    const readAttempt = await api('GET', `/api/events/${cFuneralEventId}/congratulations`, { token: userToken });
+    assert.strictEqual(readAttempt.status, 403);
+  });
+
+  await test('GET .../congratulations rejects an unknown ?status= filter', async () => {
+    const { status } = await api('GET', `/api/events/${cFuneralEventId}/congratulations?status=bogus`, { token: cOwner.token });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('The owner approves the pending تعزية — no admin involved — and it is now publicly visible', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${cFuneralEventId}/congratulations/${cPendingId}`, {
+      token: cOwner.token, body: { action: 'approve' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.comment.status, 'approved');
+
+    const publicView = await api('GET', `/api/events/${cFuneralEventId}`);
+    assert.ok(publicView.body.event.congratulations.some(c => c.id === cPendingId));
+  });
+
+  await test('A second تعزية is approved by an admin instead of the owner', async () => {
+    const posted = await api('POST', `/api/events/${cFuneralEventId}/congratulate`, {
+      token: userToken, body: { message: 'رحمه الله وأسكنه فسيح جناته' }
+    });
+    assert.strictEqual(posted.body.comment.status, 'pending');
+
+    const { status, body } = await api('PATCH', `/api/events/${cFuneralEventId}/congratulations/${posted.body.comment.id}`, {
+      token: adminToken, body: { action: 'approve' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.comment.status, 'approved');
+  });
+
+  await test('The owner can also reject a pending تعزية — it becomes hidden, not shown publicly', async () => {
+    const posted = await api('POST', `/api/events/${cFuneralEventId}/congratulate`, {
+      token: userToken, body: { message: 'رسالة سيتم رفضها' }
+    });
+    const rejectId = posted.body.comment.id;
+
+    const { status, body } = await api('PATCH', `/api/events/${cFuneralEventId}/congratulations/${rejectId}`, {
+      token: cOwner.token, body: { action: 'reject' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.comment.status, 'hidden');
+
+    const publicView = await api('GET', `/api/events/${cFuneralEventId}`);
+    assert.ok(!publicView.body.event.congratulations.some(c => c.id === rejectId));
+  });
+
+  let cWeddingEventId = 0;
+  let cWeddingCongratId = 0;
+  await test('The same owner also publishes an approved عرس — ownership is not type-bound', async () => {
+    const created = await api('POST', '/api/events', {
+      token: cOwner.token,
+      body: weddingEventBody({ honorees: [{ name: 'عريس مراجعة التبريكات' }], town: 'رهط', event_date: '2027-11-05' })
+    });
+    cWeddingEventId = created.body.eventId;
+
+    const approved = await api('PATCH', `/api/admin/events/${cWeddingEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approved.status, 200);
+  });
+
+  await test('A congratulation on this عرس publishes immediately — no premoderation outside عزا', async () => {
+    const { status, body } = await api('POST', `/api/events/${cWeddingEventId}/congratulate`, {
+      token: userToken, body: { message: 'ألف مبروك' }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.comment.status, 'approved');
+    cWeddingCongratId = body.comment.id;
+
+    const publicView = await api('GET', `/api/events/${cWeddingEventId}`);
+    assert.ok(publicView.body.event.congratulations.some(c => c.id === cWeddingCongratId));
+  });
+
+  await test('The owner (a non-admin) deletes it — an ownership right, not an admin-only power, even in a type that never premoderates', async () => {
+    const { status } = await api('DELETE', `/api/events/${cWeddingEventId}/congratulations/${cWeddingCongratId}`, {
+      token: cOwner.token
+    });
+    assert.strictEqual(status, 200);
+
+    const publicView = await api('GET', `/api/events/${cWeddingEventId}`);
+    assert.ok(!publicView.body.event.congratulations.some(c => c.id === cWeddingCongratId));
+  });
+
+  console.log('\nCongratulations: reporting');
+
+  let cReportEventId = 0;
+  let cReportCongratId = 0;
+  await test('Set up: a fresh, never-reviewed (auto-approved) congratulation to report', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس اختبار الإبلاغ' }], town: 'رهط', event_date: '2027-11-06' })
+    });
+    cReportEventId = created.body.eventId;
+
+    const posted = await api('POST', `/api/events/${cReportEventId}/congratulate`, {
+      token: userToken, body: { message: 'رسالة سيتم الإبلاغ عنها' }
+    });
+    assert.strictEqual(posted.body.comment.status, 'approved');
+    cReportCongratId = posted.body.comment.id;
+  });
+
+  const cReporters = [];
+  await test(`Set up: ${CONGRATULATION_REPORT_THRESHOLD} distinct reporter accounts`, async () => {
+    for (let i = 0; i < CONGRATULATION_REPORT_THRESHOLD; i += 1) {
+      cReporters.push(await registerTestUser(`مبلّغ ${i + 1}`));
+    }
+  });
+
+  await test('Reports under the threshold do not hide the message', async () => {
+    for (let i = 0; i < CONGRATULATION_REPORT_THRESHOLD - 1; i += 1) {
+      const { status, body } = await api(
+        'POST', `/api/events/${cReportEventId}/congratulations/${cReportCongratId}/report`,
+        { token: cReporters[i].token }
+      );
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.status, 'approved');
+    }
+
+    const publicView = await api('GET', `/api/events/${cReportEventId}`);
+    assert.ok(publicView.body.event.congratulations.some(c => c.id === cReportCongratId), 'still visible below the threshold');
+  });
+
+  await test('The same person reporting twice is rejected (409) and does not double the count', async () => {
+    const { status } = await api(
+      'POST', `/api/events/${cReportEventId}/congratulations/${cReportCongratId}/report`,
+      { token: cReporters[0].token }
+    );
+    assert.strictEqual(status, 409);
+  });
+
+  await test('The report that crosses the threshold auto-hides the message', async () => {
+    const last = cReporters[CONGRATULATION_REPORT_THRESHOLD - 1];
+    const { status, body } = await api(
+      'POST', `/api/events/${cReportEventId}/congratulations/${cReportCongratId}/report`,
+      { token: last.token }
+    );
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.status, 'hidden');
+
+    const publicView = await api('GET', `/api/events/${cReportEventId}`);
+    assert.ok(!publicView.body.event.congratulations.some(c => c.id === cReportCongratId), 'hidden once past the threshold');
+  });
+
+  await test('DELETE /api/admin/comments/:id still works', async () => {
+    const { status } = await api('DELETE', `/api/admin/comments/${cReportCongratId}`, { token: adminToken });
+    assert.strictEqual(status, 200);
+    const row = await db.queryOne('SELECT id FROM congratulations WHERE id = ?', [cReportCongratId]);
+    assert.strictEqual(row, null);
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?)',
+    [cFuneralEventId, cWeddingEventId, cReportEventId]
+  );
+  for (const p of congratsCleanupPhones) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [p]);
+  }
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

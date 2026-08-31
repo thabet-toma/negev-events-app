@@ -171,17 +171,44 @@ CREATE TABLE IF NOT EXISTS reactions (
   CONSTRAINT fk_reactions_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- status defaults to 'approved' so a fresh install (and the pre-#20 step 5
+-- rows an ALTER backfills) never goes silent; only a type with
+-- premoderate_messages on (عزا) ever inserts 'pending'. user_id is the
+-- accountability #20 step 5 exists for — NULL only for rows written before
+-- congratulating required a login.
 CREATE TABLE IF NOT EXISTS congratulations (
-  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  event_id    INT UNSIGNED NOT NULL,
-  sender_name VARCHAR(120) NOT NULL,
-  badge_title VARCHAR(80)  NOT NULL DEFAULT 'مبارك الفرح',
-  message     TEXT         NOT NULL,
-  sticker_url TEXT,
-  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id      INT UNSIGNED NOT NULL,
+  sender_name   VARCHAR(120) NOT NULL,
+  badge_title   VARCHAR(80)  NOT NULL DEFAULT 'مبارك الفرح',
+  message       TEXT         NOT NULL,
+  sticker_url   TEXT,
+  status        ENUM('pending','approved','hidden') NOT NULL DEFAULT 'approved',
+  user_id       INT UNSIGNED DEFAULT NULL,
+  reports_count INT UNSIGNED NOT NULL DEFAULT 0,
+  moderated_by  INT UNSIGNED DEFAULT NULL,
+  moderated_at  TIMESTAMP    NULL DEFAULT NULL,
+  created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_congrats_event (event_id),
-  CONSTRAINT fk_congrats_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+  KEY idx_congrats_status (status),
+  CONSTRAINT fk_congrats_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_congrats_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_congrats_moderator FOREIGN KEY (moderated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per (congratulation, reporter) — the UNIQUE key is what stops one
+-- person reporting the same message ten times to force it into hiding alone.
+CREATE TABLE IF NOT EXISTS congratulation_reports (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  congratulation_id INT UNSIGNED NOT NULL,
+  user_id           INT UNSIGNED NOT NULL,
+  created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_congrats_reports (congratulation_id, user_id),
+  KEY idx_congrats_reports_congrats (congratulation_id),
+  CONSTRAINT fk_congrats_reports_congrats FOREIGN KEY (congratulation_id) REFERENCES congratulations(id) ON DELETE CASCADE,
+  CONSTRAINT fk_congrats_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS stories (

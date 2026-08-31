@@ -445,6 +445,83 @@ const steps = [
       `);
       logger.info('[migrations] create-event-amendments-table-2026-08: table created.');
     }
+  },
+  {
+    // Additive only, per #20 step 5: sender_name/badge_title/message are
+    // untouched — an already-published APK still reads them. status defaults
+    // to 'approved' so every existing row stays visible; only a fresh insert
+    // on a premoderated type ever lands on 'pending'.
+    name: 'add-congratulation-moderation-columns-2026-08',
+    async run(connection) {
+      if (!(await columnExists(connection, 'congratulations', 'status'))) {
+        await connection.query(
+          "ALTER TABLE congratulations ADD COLUMN status ENUM('pending','approved','hidden') NOT NULL DEFAULT 'approved' AFTER sticker_url"
+        );
+      }
+      if (!(await columnExists(connection, 'congratulations', 'user_id'))) {
+        await connection.query(
+          'ALTER TABLE congratulations ADD COLUMN user_id INT UNSIGNED DEFAULT NULL AFTER status'
+        );
+      }
+      if (!(await columnExists(connection, 'congratulations', 'reports_count'))) {
+        await connection.query(
+          'ALTER TABLE congratulations ADD COLUMN reports_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER user_id'
+        );
+      }
+      if (!(await columnExists(connection, 'congratulations', 'moderated_by'))) {
+        await connection.query(
+          'ALTER TABLE congratulations ADD COLUMN moderated_by INT UNSIGNED DEFAULT NULL AFTER reports_count'
+        );
+      }
+      if (!(await columnExists(connection, 'congratulations', 'moderated_at'))) {
+        await connection.query(
+          'ALTER TABLE congratulations ADD COLUMN moderated_at TIMESTAMP NULL DEFAULT NULL AFTER moderated_by'
+        );
+      }
+      if (!(await indexExists(connection, 'congratulations', 'idx_congrats_status'))) {
+        await connection.query('ALTER TABLE congratulations ADD INDEX idx_congrats_status (status)');
+      }
+      if (!(await constraintExists(connection, 'congratulations', 'fk_congrats_user'))) {
+        await connection.query(
+          `ALTER TABLE congratulations ADD CONSTRAINT fk_congrats_user
+             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL`
+        );
+      }
+      if (!(await constraintExists(connection, 'congratulations', 'fk_congrats_moderator'))) {
+        await connection.query(
+          `ALTER TABLE congratulations ADD CONSTRAINT fk_congrats_moderator
+             FOREIGN KEY (moderated_by) REFERENCES users(id) ON DELETE SET NULL`
+        );
+      }
+      logger.info('[migrations] add-congratulation-moderation-columns-2026-08: ensured columns, index and FKs.');
+    }
+  },
+  {
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — same guarded pattern as
+    // create-event-amendments-table-2026-08 above.
+    name: 'create-congratulation-reports-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'congratulation_reports')) {
+        logger.info('[migrations] create-congratulation-reports-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE congratulation_reports (
+          id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          congratulation_id INT UNSIGNED NOT NULL,
+          user_id           INT UNSIGNED NOT NULL,
+          created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_congrats_reports (congratulation_id, user_id),
+          KEY idx_congrats_reports_congrats (congratulation_id),
+          CONSTRAINT fk_congrats_reports_congrats FOREIGN KEY (congratulation_id) REFERENCES congratulations(id) ON DELETE CASCADE,
+          CONSTRAINT fk_congrats_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-congratulation-reports-table-2026-08: table created.');
+    }
   }
 ];
 

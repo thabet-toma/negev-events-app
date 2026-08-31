@@ -218,7 +218,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/towns` | البلدات وإحصاءاتها |
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
-| `POST` | `/api/events/:id/congratulate` | إضافة تبريكة |
+| `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
 | `GET` | `/api/occasion-types` | أنواع المناسبات النشِطة، مرتّبة، مع حقولها الظاهرة وتفاعلاتها |
 
 ⚠️ **تغيّر سلوك:** `POST /api/events` كان عاماً (بلا رمز) ويدخل قائمة المراجعة؛ صار يتطلب
@@ -251,6 +251,31 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
   تعد في صفوف هذه القائمة (لا يعرضها أي عميل) — كل حقل تقرؤه الواجهات الحالية
   (`groom_name`, `title`, `family_clan`, `dinner_time`, `poster_url`, `audio_url`, …) ما زال
   موجوداً. `GET /api/events/:id` غير متأثر ويعيد كل الأعمدة كما كان.
+
+⚠️ **تغيّر سلوك `POST /api/events/:id/congratulate` (#20 خطوة 5):** صار يتطلب رمز دخول
+صالح 🔒 — طلب بلا رمز يُرفض بـ401 (كان عاماً). `sender_name` صار يُشتقّ من الحساب دائماً،
+لا من جسم الطلب (إدارة فقط تقدر على تجاوزه عبر `sender_name` في الجسم). الحالة الابتدائية
+(`pending` أو `approved`) تُقرَّر من علَم `premoderate_messages` على نوع المناسبة — عزاء
+اليوم، بلا شرط على اسم النوع في الكود. رسالة `pending` **لا تُبثّ لحظياً** ولا يراها إلا
+مُرسِلها (والمالك/الإدارة عبر طابور المراجعة)؛ الجمهور والبحث والعدّاد (`congratulations_count`)
+لا يحسبون إلا `approved`. الشارة الافتراضية من `default_badge_title` لنوع المناسبة، وليست
+نصاً ثابتاً — نوع بلا شارة افتراضية (كالعزاء) يعطي شارة فارغة، لا «مبارك الفرح» ولا «صديق
+العريس». حدّ معدّل: **10 تبريكات لكل مستخدم كل 10 دقائق** (`express-rate-limit`، بالمستخدم
+لا بعنوان IP).
+
+### مراجعة التبريكات/التعازي (مالك المناسبة أو إدارة) 🔒
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `GET` | `/api/events/:id/congratulations` | طابور المراجعة لهذه المناسبة (`?status=pending\|approved\|hidden` اختياري) |
+| `PATCH` | `/api/events/:id/congratulations/:cid` | اعتماد أو رفض (`{ action: 'approve' \| 'reject' }`) — الرفض يضع الحالة `hidden` (لا حالة `rejected` منفصلة) |
+| `DELETE` | `/api/events/:id/congratulations/:cid` | حذف تبريكة/تعزية — حقّ نابع من ملكية المناسبة، في كل الأنواع، وليس امتيازاً إدارياً حصرياً |
+
+### الإبلاغ عن تبريكة/تعزية 🔒
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `POST` | `/api/events/:id/congratulations/:cid/report` | إبلاغ واحد لكل مستخدم (يُرفض بـ409 عند التكرار) — عند بلوغ العتبة تصير الحالة `hidden` تلقائياً، إلا إذا كانت رسالة اعتمدها بشرٌ صراحةً |
 
 ⚠️ **تغيّر عقد `POST /api/check-collision`:** الكشف صار مدى-إلى-مدى
 (`COALESCE(event_end_date, event_date)`) لا مساواة على تاريخ واحد، واتجاهياً عبر
@@ -308,6 +333,10 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 `new_event_created` · `admin_new_pending_event` · `event_reaction_<id>` ·
 `new_congratulation_<id>` · `system_broadcast`
+
+⚠️ `new_congratulation_<id>` (#20 خطوة 5): يُبثّ فقط حين تصير التبريكة/التعزية `approved` —
+عند النشر المباشر (نوع لا يراجع مسبقاً)، أو عند اعتماد المالك/الإدارة لاحقاً. رسالة `pending`
+لا تُبثّ لأحد.
 
 ---
 

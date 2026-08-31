@@ -62,6 +62,16 @@ const OCCASION_FIELDS = [
 const OCCASION_FIELD_KEYS = OCCASION_FIELDS.map(field => field.key);
 const CORE_OCCASION_FIELDS = OCCASION_FIELDS.filter(field => field.core).map(field => field.key);
 
+/**
+ * Reports a single congratulation/تعزية needs before it auto-hides itself
+ * pending human review (#20 step 5). No keyword filter exists in this domain
+ * — reports plus a human are the only signal — so this threshold has to
+ * stand on its own: low enough that a small town's real reaction to a
+ * genuine insult clears it fast, high enough that one annoyed person alone
+ * can't silence someone else's message.
+ */
+const CONGRATULATION_REPORT_THRESHOLD = 3;
+
 module.exports = {
   TOWNS,
   TOWN_COORDINATES,
@@ -70,5 +80,6 @@ module.exports = {
   DEFAULT_POSTER,
   OCCASION_FIELDS,
   OCCASION_FIELD_KEYS,
-  CORE_OCCASION_FIELDS
+  CORE_OCCASION_FIELDS,
+  CONGRATULATION_REPORT_THRESHOLD
 };
