@@ -480,16 +480,27 @@ async function run() {
 
   console.log('\nOccasion type migration backfill');
 
-  await test('Every pre-existing event was backfilled to عرس with one event_honorees row', async () => {
-    const { body: publicEvents } = await api('GET', '/api/events');
-    const sample = publicEvents.events[0];
-    const row = await db.queryOne('SELECT occasion_type_id FROM events WHERE id = ?', [sample.id]);
+  await test('A legacy-shaped event row is backfilled to عرس with one event_honorees row', async () => {
+    // The legacy shape is created here rather than sampled from the list: the
+    // first row in the public list is whatever sorts earliest, which stopped
+    // being a wedding the moment any other occasion type existed.
+    const { insertId } = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, town, location_name, event_date, status, occasion_type_id)
+       VALUES (?, ?, ?, ?, ?, ?, 'approved', NULL)`,
+      ['مناسبة قديمة', 'عريس ما قبل الأنواع', 'آل فلان', 'رهط', 'الديوان', '2027-04-04']
+    );
+
+    await migrate();
+
+    const row = await db.queryOne('SELECT occasion_type_id FROM events WHERE id = ?', [insertId]);
     const wedding = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عرس'");
     assert.strictEqual(row.occasion_type_id, wedding.id);
 
-    const honorees = await db.query('SELECT * FROM event_honorees WHERE event_id = ?', [sample.id]);
+    const honorees = await db.query('SELECT * FROM event_honorees WHERE event_id = ?', [insertId]);
     assert.strictEqual(honorees.length, 1);
-    assert.strictEqual(honorees[0].name, sample.groom_name);
+    assert.strictEqual(honorees[0].name, 'عريس ما قبل الأنواع');
+
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
   });
 
   await test('Running the migration twice does not duplicate occasion types or honorees', async () => {
