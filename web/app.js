@@ -23,6 +23,15 @@ let occasionTypesCache = null;
 let selectedOccasionType = null;
 let myEventsCache = [];
 
+// Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
+let currentPage = 1;
+const EVENTS_PAGE_SIZE = 30;
+let currentPagination = null;
+let selectedOccasionTypeId = null; // null = "الكل"
+let showArchive = false;
+let notificationsList = [];
+let congratsQueueEventId = null;
+
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
 // back up exactly what the visitor was trying to do (#20 step 9).
@@ -37,11 +46,13 @@ document.addEventListener('DOMContentLoaded', () => {
   initSocket();
   setupTownFilters();
   updateAuthUI();
+  initOccasionTypeTabs();
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
   initAppDownload();
-  
+  fetchNotifications();
+
   const today = new Date().toISOString().split('T')[0];
 
   const nokootDateInput = document.getElementById('nokootDate');
@@ -118,9 +129,27 @@ function initSocket() {
         banner.style.display = 'flex';
       }
     });
+
+    subscribeToNotificationSocket();
   } catch (e) {
     console.log('Socket initialization note:', e);
   }
+}
+
+/**
+ * قناة الإشعارات بمعرّف المستخدم لا معرّف المناسبة — تُبثّ فقط لمن كان متصلاً
+ * فعلاً تلك اللحظة (#20 step 7). تُستدعى عند تحميل الصفحة (إن كان الحساب
+ * محفوظاً في localStorage) وبعد كل دخول/تسجيل ناجح.
+ */
+function subscribeToNotificationSocket() {
+  if (!socket || !currentUser) return;
+  socket.off(`new_notification_${currentUser.id}`);
+  socket.on(`new_notification_${currentUser.id}`, (data) => {
+    notificationsList.unshift(data);
+    renderNotificationsList();
+    updateNotificationsBadge();
+    showToast(`🔔 ${data.title}`);
+  });
 }
 
 function dismissBanner() {
@@ -151,18 +180,35 @@ async function fetchStories() {
 }
 
 // 3. Fetch Events from API
-async function fetchEvents() {
+//
+// مرقّمة، مفلترة على الخادم دائماً (البلدة/البحث/النوع/الأرشيف تُمرَّر كوسائط
+// استعلام — لا ترشيح في العميل، وإلا انكسر الترقيم) (#20 step 10).
+async function fetchEvents(options = {}) {
+  const { append = false } = options;
   const container = document.getElementById('eventsContainer');
+  if (!append) {
+    currentPage = 1;
+    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب أحدث مناسبات النقب...</p></div>`;
+  }
+
   try {
-    let url = `/api/events?town=${encodeURIComponent(selectedTown)}`;
-    if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
-    
-    const res = await apiFetch(url);
+    const params = new URLSearchParams();
+    params.set('town', selectedTown);
+    if (searchQuery) params.set('search', searchQuery);
+    if (selectedOccasionTypeId) params.set('occasion_type_id', selectedOccasionTypeId);
+    if (showArchive) params.set('archive', '1');
+    params.set('page', currentPage);
+    params.set('limit', EVENTS_PAGE_SIZE);
+
+    const res = await apiFetch(`/api/events?${params.toString()}`);
     const data = await res.json();
 
     if (data.success) {
-      allEvents = data.events;
+      allEvents = append ? allEvents.concat(data.events) : data.events;
+      currentPagination = data.pagination || null;
       renderEvents(allEvents);
+      renderAnnouncements(data.announcements);
+      renderLoadMoreButton();
     } else {
       container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>تعذر جلب المناسبات حالياً</p></div>`;
     }
@@ -172,7 +218,109 @@ async function fetchEvents() {
   }
 }
 
+/** زرّ «عرض المزيد» — يحافظ على الفلاتر النشِطة (يستخدم fetchEvents نفسها بصفحة تالية). */
+function loadMoreEvents() {
+  if (!currentPagination || currentPagination.page >= currentPagination.totalPages) return;
+  currentPage = currentPagination.page + 1;
+  fetchEvents({ append: true });
+}
+
+function renderLoadMoreButton() {
+  const wrapper = document.getElementById('loadMoreWrapper');
+  if (!wrapper) return;
+  const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
+  wrapper.style.display = hasMore ? 'block' : 'none';
+}
+
+/** المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط عبر ?archive=1 (#20 step 10). */
+function toggleArchive() {
+  showArchive = !showArchive;
+  const btn = document.getElementById('archiveToggleBtn');
+  if (btn) btn.classList.toggle('active', showArchive);
+  fetchEvents();
+}
+
+/**
+ * إعلانات تعديل التاريخ — خبر عن مناسبة قائمة لا مناسبة جديدة، فتُعرَض ككرت
+ * مميّز بعرض القائمة، بالحقيقة الحالية فقط (من كذا إلى كذا) (#20 step 10).
+ * الخادم يرسل الحيّ وحده ضمن `announcements` — لا فلترة ولا منطق انتهاء هنا.
+ */
+function renderAnnouncements(announcements) {
+  const container = document.getElementById('announcementsContainer');
+  if (!container) return;
+  if (!announcements || !announcements.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = announcements.map(a => `
+    <div class="event-card announcement-card">
+      <div class="card-header-bar">
+        <div class="card-clan-town">
+          <span class="town-badge">${escapeHtml(a.event.town)}</span>
+        </div>
+        <span class="countdown-badge"><i class="fa-solid fa-bullhorn"></i> إعلان تعديل موعد</span>
+      </div>
+      <div class="card-body">
+        <h2 class="event-main-title">${escapeHtml(a.event.title || a.event.groom_name || '')}</h2>
+        <p style="color:var(--text-secondary); margin-top:6px;">
+          تغيّر موعد المناسبة من <strong>${escapeHtml(String(a.old_value))}</strong> إلى <strong>${escapeHtml(String(a.new_value))}</strong>.
+        </p>
+      </div>
+    </div>
+  `).join('');
+}
+
 // 4. Render Event Cards
+/** الحقول الظاهرة والتفاعلات تأتيان من إعداد النوع على الخادم — لا جدول ثابت هنا. */
+function typeVisibleFields(evt) {
+  return (evt.occasion_type && evt.occasion_type.fields) || null;
+}
+
+/**
+ * نوع لم ترسله القائمة (صفّ أقدم من الأنواع) يعرض كل شيء كما كان — إخفاءُ
+ * حقلٍ لا نعرف إعداده يخفي بياناتٍ حقيقية بلا سبب.
+ */
+function typeShowsField(evt, fieldKey) {
+  const fields = typeVisibleFields(evt);
+  if (!fields) return true;
+  return fields.some(f => f.field_key === fieldKey);
+}
+
+function typeFieldLabel(evt, fieldKey, fallback) {
+  const fields = typeVisibleFields(evt);
+  const field = fields && fields.find(f => f.field_key === fieldKey);
+  return (field && field.label) || fallback;
+}
+
+const REACTION_EMOJI = { coffee: '☕', horse: '🐎', fireworks: '🎆', rose: '🌹', hand: '🤝' };
+
+/**
+ * شريط التفاعلات من قائمة النوع لا من قائمة ثابتة في العميل. والعزاء مضبوط
+ * على صفر تفاعلات: أيّ عدّاد بجانب وفاة يخلق مقارنة بين الوفيات، والألعاب
+ * النارية على نعيٍ إساءة. صفر تفاعلات ⇒ لا شريط إطلاقاً.
+ */
+function renderReactionBarHtml(evt) {
+  const allowed = evt.occasion_type
+    ? (evt.occasion_type.reactions || [])
+    : Object.keys(REACTION_EMOJI);
+  if (!allowed.length) return '';
+
+  const buttons = allowed.filter(type => REACTION_EMOJI[type]).map(type => `
+            <button class="reaction-btn" onclick="sendReaction(${evt.id}, '${type}', this)">
+              <span class="emoji">${REACTION_EMOJI[type]}</span>
+              <span class="react-count">${(evt.reactions && evt.reactions[type]) || 0}</span>
+            </button>`).join('');
+
+  return `<div class="reaction-bar">${buttons}
+          </div>`;
+}
+
+/** «تبريكات» أم «تعازي» — من إعداد النوع لا من نصّ ثابت؛ اللغة تقول للناس أين هم. */
+function congratulationsLabel(evt) {
+  return (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
+}
+
 function renderEvents(events) {
   const container = document.getElementById('eventsContainer');
   if (!events || events.length === 0) {
@@ -193,11 +341,12 @@ function renderEvents(events) {
     const diffTime = eventDate - today;
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
+    // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
     let countdownText = '';
-    if (diffDays === 0) countdownText = '🔥 اليوم الفرح';
-    else if (diffDays === 1) countdownText = '⏳ غداً الفرح';
-    else if (diffDays > 1) countdownText = `⏳ باقي ${diffDays} أيام`;
-    else countdownText = '✨ مناسبة سابقة';
+    if (diffDays === 0) countdownText = 'اليوم';
+    else if (diffDays === 1) countdownText = 'غداً';
+    else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
+    else countdownText = 'مناسبة سابقة';
 
     const formattedDate = new Intl.DateTimeFormat('ar-EG', {
       weekday: 'long',
@@ -241,15 +390,17 @@ function renderEvents(events) {
       <div class="event-card" id="eventCard-${evt.id}">
         <div class="card-header-bar">
           <div class="card-clan-town">
+            ${occasionTypeBadgeHtml(evt.occasion_type)}
             <span class="town-badge">${escapeHtml(evt.town)}</span>
             <span class="clan-text">${escapeHtml(evt.family_clan || '')}</span>
           </div>
           <span class="countdown-badge">${countdownText}</span>
         </div>
 
+        ${evt.poster_url ? `
         <div class="card-poster-wrapper">
-          <img src="${evt.poster_url}" alt="${escapeHtml(evt.groom_name)}" class="card-poster-img" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80'">
-        </div>
+          <img src="${evt.poster_url}" alt="${escapeHtml(evt.groom_name)}" class="card-poster-img" loading="lazy">
+        </div>` : ''}
 
         ${audioBlock}
 
@@ -261,15 +412,16 @@ function renderEvents(events) {
               <i class="fa-solid fa-calendar-day"></i>
               <span><strong>التاريخ:</strong> ${formattedDate}</span>
             </div>
-            ${evt.youth_party_date ? `
+            ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
             <div class="detail-item">
               <i class="fa-solid fa-fire"></i>
-              <span><strong>سهرة الشباب والدحة:</strong> ${evt.youth_party_date}</span>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
             </div>` : ''}
+            ${typeShowsField(evt, 'dinner_time') ? `
             <div class="detail-item">
               <i class="fa-solid fa-utensils"></i>
-              <span><strong>طعام العشاء:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
-            </div>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+            </div>` : ''}
             <div class="detail-item">
               <i class="fa-solid fa-location-dot"></i>
               <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
@@ -286,34 +438,15 @@ function renderEvents(events) {
             </a>
           </div>
 
-          <!-- Quick Reaction Bar -->
-          <div class="reaction-bar">
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'coffee', this)">
-              <span class="emoji">☕</span>
-              <span class="react-count">${evt.reactions?.coffee || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'horse', this)">
-              <span class="emoji">🐎</span>
-              <span class="react-count">${evt.reactions?.horse || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'fireworks', this)">
-              <span class="emoji">🎆</span>
-              <span class="react-count">${evt.reactions?.fireworks || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'rose', this)">
-              <span class="emoji">🌹</span>
-              <span class="react-count">${evt.reactions?.rose || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'hand', this)">
-              <span class="emoji">🤝</span>
-              <span class="react-count">${evt.reactions?.hand || 0}</span>
-            </button>
-          </div>
+          ${renderReactionBarHtml(evt)}
+
+          ${renderCongratsPreviewHtml(evt)}
+          ${renderReminderButtonHtml(evt)}
 
           <!-- Action Buttons Footer -->
           <div class="card-footer-actions">
             <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
-              <i class="fa-regular fa-comments"></i> تبريكات ودردشة
+              <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
             </button>
             <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
               <i class="fa-solid fa-wallet"></i> تسجيل نقوط
@@ -324,6 +457,75 @@ function renderEvents(events) {
       </div>
     `;
   }).join('');
+}
+
+/** أيقونة ولون نوع المناسبة من الخادم كما هما — لا لون جديد يُصمَّم هنا (#20 step 10). */
+function occasionTypeBadgeHtml(occasionType) {
+  if (!occasionType) return '';
+  const color = occasionType.color && occasionType.color.startsWith('#') ? occasionType.color : (occasionType.color ? `#${occasionType.color}` : null);
+  const style = color ? `style="background:${color}26; color:${color}; border-color:${color};"` : '';
+  return `<span class="town-badge" ${style}>${occasionType.icon ? escapeHtml(occasionType.icon) + ' ' : ''}${escapeHtml(occasionType.name)}</span>`;
+}
+
+/**
+ * العدّاد وسطر المعاينة — يفتحان ورقة التبريكات نفسها (الفتح على المودال
+ * القائم، لا صفحة تفاصيل). `congratulations_count` قد يغيب كلياً حين يكون
+ * `show_congratulations_count` مطفأً على النوع — غيابه يعني لا شيء يُعرَض،
+ * لا صفراً (#20 step 10).
+ */
+function renderCongratsPreviewHtml(evt) {
+  if (evt.congratulations_count === undefined) return '';
+  const label = (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
+  const latest = evt.latest_congratulation;
+  const preview = latest ? ` — ${escapeHtml(latest.sender_name)}: ${escapeHtml(truncateText(latest.message, 40))}` : '';
+  return `
+    <button class="chat-trigger-btn" style="width:100%; margin-bottom:10px;" onclick="openChatModal(${evt.id})">
+      <i class="fa-regular fa-comment-dots"></i> ${evt.congratulations_count} ${escapeHtml(label)}${preview}
+    </button>`;
+}
+
+/**
+ * «ذكّرني» — متابعة لا تعهّد حضور، ونفس التسمية في كل الأنواع (#20 step 10).
+ * `followers_count` قد يغيب (مخفيّ على نوع كالعزاء) — غيابه لا يُعرَض كصفر.
+ */
+function renderReminderButtonHtml(evt) {
+  const isReminded = !!evt.is_reminded;
+  const icon = isReminded ? 'fa-bell-slash' : 'fa-bell';
+  const label = isReminded ? 'إلغاء التذكير' : 'ذكّرني';
+  const followers = evt.followers_count !== undefined
+    ? ` <span style="opacity:.75; font-size:.8rem;">(${evt.followers_count} متابع)</span>`
+    : '';
+  return `
+    <button class="record-nokoot-btn" style="width:100%; margin-bottom:10px;" onclick="toggleReminder(${evt.id}, ${isReminded}, this)">
+      <i class="fa-solid ${icon}"></i> ${label}${followers}
+    </button>`;
+}
+
+function truncateText(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.slice(0, len) + '…' : str;
+}
+
+/** يبدّل حالة «ذكّرني» — فعل كتابة، خلف حساب مثل النشر والتبريك (#20 step 10). */
+async function toggleReminder(eventId, isReminded, btnElement) {
+  if (!requireAuth({ type: 'remind', eventId })) return;
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/remind`, { method: isReminded ? 'DELETE' : 'POST', auth: true });
+    const data = await res.json();
+    if (data.success) {
+      const evt = allEvents.find(e => e.id === eventId);
+      if (evt) evt.is_reminded = !isReminded;
+      renderEvents(allEvents);
+      showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
+    } else {
+      alert(data.message || 'تعذر تنفيذ الطلب');
+    }
+  } catch (e) {
+    alert('تعذر تنفيذ الطلب — تحقق من الاتصال بالخادم');
+  } finally {
+    if (btnElement) btnElement.disabled = false;
+  }
 }
 
 // 5. Audio Player Controller
@@ -735,6 +937,37 @@ function clearSearch() {
   document.getElementById('eventSearchInput').value = '';
   searchQuery = '';
   document.getElementById('clearSearchBtn').style.display = 'none';
+  fetchEvents();
+}
+
+// 11b. Occasion Type Tabs — "الكل" أوّلاً، ثم كل نوع من GET /api/occasion-types
+// بترتيب position؛ لا قائمة ثابتة، فأي نوع يضيفه الأدمن يظهر تبويبه بلا نشر
+// واجهة جديد (#20 step 10). الفلتر يُرسَل إلى الخادم ويُعيد الترقيم للصفحة ١.
+async function initOccasionTypeTabs() {
+  const wrapper = document.getElementById('occasionTypeTabsWrapper');
+  const container = document.getElementById('occasionTypeTabs');
+  if (!wrapper || !container) return;
+
+  const types = await loadOccasionTypes();
+  if (!types.length) return;
+
+  const allTab = `<button class="town-pill active" data-type-id="" onclick="selectOccasionTypeTab(null)">الكل</button>`;
+  const typeTabs = types.map(t => `
+    <button class="town-pill" data-type-id="${t.id}" onclick="selectOccasionTypeTab(${t.id})">
+      ${t.icon ? escapeHtml(t.icon) + ' ' : ''}${escapeHtml(t.name)}
+    </button>
+  `).join('');
+
+  container.innerHTML = allTab + typeTabs;
+  wrapper.style.display = 'block';
+}
+
+function selectOccasionTypeTab(typeId) {
+  selectedOccasionTypeId = typeId;
+  document.querySelectorAll('#occasionTypeTabs .town-pill').forEach(pill => {
+    const pillId = pill.dataset.typeId ? Number(pill.dataset.typeId) : null;
+    pill.classList.toggle('active', pillId === typeId);
+  });
   fetchEvents();
 }
 
@@ -1196,12 +1429,107 @@ function renderMyEvents(events) {
           <i class="fa-solid fa-calendar-day"></i>
           <span>${evt.event_date}</span>
         </div>
-        <button class="record-nokoot-btn" style="width:100%; margin-top:10px;" onclick="openEditEventModal(${evt.id})">
-          <i class="fa-solid fa-pen"></i> تعديل
-        </button>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="record-nokoot-btn" style="flex:1;" onclick="openEditEventModal(${evt.id})">
+            <i class="fa-solid fa-pen"></i> تعديل
+          </button>
+          <button class="record-nokoot-btn" style="flex:1;" onclick="openCongratsQueueModal(${evt.id})">
+            <i class="fa-solid fa-list-check"></i> مراجعة الرسائل
+          </button>
+        </div>
       </div>
     </div>
   `).join('');
+}
+
+// 14b. مراجعة التبريكات/التعازي — طابور مناسبة يملكها المستخدم الحالي (#20 step 10).
+// GET .../congratulations?status=pending، والمفتاح في الاستجابة هو `comments`.
+async function openCongratsQueueModal(eventId) {
+  congratsQueueEventId = eventId;
+  const modal = document.getElementById('congratsQueueModal');
+  const list = document.getElementById('congratsQueueList');
+  modal.style.display = 'flex';
+  list.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/congratulations?status=pending`, { auth: true });
+    const data = await res.json();
+    if (data.success) {
+      renderCongratsQueue(data.comments);
+    } else {
+      list.innerHTML = `<div class="empty-state" style="padding:20px;"><p>${escapeHtml(data.message || 'تعذر جلب الطابور')}</p></div>`;
+    }
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p>تعذر جلب الطابور</p></div>';
+  }
+}
+
+function renderCongratsQueue(comments) {
+  const list = document.getElementById('congratsQueueList');
+  if (!comments || !comments.length) {
+    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا توجد رسائل قيد المراجعة</p></div>';
+    return;
+  }
+
+  list.innerHTML = comments.map(c => `
+    <div class="chat-bubble">
+      <div class="chat-bubble-header">
+        <span class="sender-name">${escapeHtml(c.sender_name)}</span>
+        ${c.badge_title ? `<span class="sender-badge">${escapeHtml(c.badge_title)}</span>` : ''}
+      </div>
+      <div class="chat-msg-text">${escapeHtml(c.message)}</div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button class="record-nokoot-btn" onclick="moderateCongratsItem(${c.id}, 'approve')"><i class="fa-solid fa-check"></i> اعتماد</button>
+        <button class="nokoot-del-btn" onclick="moderateCongratsItem(${c.id}, 'reject')"><i class="fa-solid fa-xmark"></i> رفض</button>
+        <button class="nokoot-del-btn" onclick="deleteCongratsItem(${c.id})"><i class="fa-solid fa-trash"></i> حذف</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function moderateCongratsItem(congratulationId, action) {
+  if (!congratsQueueEventId) return;
+  try {
+    const res = await apiFetch(`/api/events/${congratsQueueEventId}/congratulations/${congratulationId}`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(action === 'approve' ? 'تم اعتماد الرسالة' : 'تم رفض الرسالة');
+      openCongratsQueueModal(congratsQueueEventId);
+    } else {
+      alert(data.message || 'تعذر تنفيذ الإجراء');
+    }
+  } catch (e) {
+    alert('تعذر تنفيذ الإجراء');
+  }
+}
+
+async function deleteCongratsItem(congratulationId) {
+  if (!congratsQueueEventId) return;
+  if (!confirm('هل تريد حذف هذه الرسالة؟')) return;
+  try {
+    const res = await apiFetch(`/api/events/${congratsQueueEventId}/congratulations/${congratulationId}`, {
+      method: 'DELETE',
+      auth: true
+    });
+    const data = await res.json();
+    if (data.success) {
+      openCongratsQueueModal(congratsQueueEventId);
+    } else {
+      alert(data.message || 'تعذر الحذف');
+    }
+  } catch (e) {
+    alert('تعذر الحذف');
+  }
+}
+
+function closeCongratsQueueModal() {
+  document.getElementById('congratsQueueModal').style.display = 'none';
+  congratsQueueEventId = null;
 }
 
 /**
@@ -1350,7 +1678,7 @@ async function openChatModal(eventId) {
 
     if (data.success) {
       const evt = data.event;
-      document.getElementById('chatModalTitle').textContent = `تبريكات: ${evt.groom_name}`;
+      document.getElementById('chatModalTitle').textContent = `${congratulationsLabel(evt)}: ${evt.groom_name}`;
       document.getElementById('chatModalSubtitle').textContent = `${evt.town} - ${evt.event_date}`;
 
       if (evt.host_phone) {
@@ -1370,10 +1698,16 @@ async function openChatModal(eventId) {
   }
 }
 
+/**
+ * رسالة `pending` لا يراها إلا مُرسِلها — الخادم أصلاً لا يعيد لهذا الطالب سوى
+ * رسائله المعلَّقة هو، فأي صفّ status==='pending' هنا هو صفّ الزائر نفسه
+ * (#20 step 10). شارة فارغة (`badge_title` غائب) لا تُعرَض كـ«مبارك» ثابتة —
+ * نوع بلا شارة افتراضية (كالعزاء) يبقى بلا شارة، لا نصّاً مُخترَعاً هنا.
+ */
 function renderChatMessages(congrats) {
   const stream = document.getElementById('chatMessagesStream');
   if (!congrats || congrats.length === 0) {
-    stream.innerHTML = '<div class="empty-state" style="padding: 20px;"><p>كن أول المهنئين والمباركين للعريس!</p></div>';
+    stream.innerHTML = '<div class="empty-state" style="padding: 20px;"><p>كن أول من يكتب هنا!</p></div>';
     return;
   }
 
@@ -1381,13 +1715,41 @@ function renderChatMessages(congrats) {
     <div class="chat-bubble">
       <div class="chat-bubble-header">
         <span class="sender-name">${escapeHtml(c.sender_name)}</span>
-        <span class="sender-badge">${escapeHtml(c.badge_title || 'مبارك')}</span>
+        ${c.badge_title ? `<span class="sender-badge">${escapeHtml(c.badge_title)}</span>` : ''}
+        ${c.status === 'pending' ? '<span class="status-tag pending">قيد المراجعة</span>' : ''}
       </div>
       <div class="chat-msg-text">${escapeHtml(c.message)}</div>
+      ${c.status !== 'pending' ? `
+        <button class="nokoot-del-btn" style="margin-top:6px;" onclick="reportCongratulation(${currentChatEventId}, ${c.id}, this)">
+          <i class="fa-solid fa-flag"></i> إبلاغ
+        </button>` : ''}
     </div>
   `).join('');
 
   stream.scrollTop = stream.scrollHeight;
+}
+
+/** إبلاغ واحد لكل مستخدم — الخادم يرفض التكرار بـ409 ويعيد رسالة عربية جاهزة (#20 step 10). */
+async function reportCongratulation(eventId, congratulationId, btnElement) {
+  if (!requireAuth({ type: 'report' })) return;
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/congratulations/${congratulationId}/report`, {
+      method: 'POST',
+      auth: true
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      showToast('تم إرسال الإبلاغ');
+      if (btnElement) btnElement.innerHTML = '<i class="fa-solid fa-check"></i> تم الإبلاغ';
+    } else {
+      alert(data.message || 'تعذر إرسال الإبلاغ');
+      if (btnElement) btnElement.disabled = false;
+    }
+  } catch (e) {
+    alert('تعذر إرسال الإبلاغ');
+    if (btnElement) btnElement.disabled = false;
+  }
 }
 
 function closeChatModal() {
@@ -1654,6 +2016,8 @@ async function handleLogin(e) {
       closeAuthModal();
       showToast(`مرحباً بك يا ${currentUser.full_name}`);
       loadNokootView();
+      subscribeToNotificationSocket();
+      fetchNotifications();
       resumePendingIntent();
     } else {
       alert(data.message || 'بيانات الدخول غير صحيحة');
@@ -1687,6 +2051,8 @@ async function handleRegister(e) {
       closeAuthModal();
       showToast(`تم إنشاء حسابك وتفعيل السجل بنجاح!`);
       loadNokootView();
+      subscribeToNotificationSocket();
+      fetchNotifications();
       resumePendingIntent();
     } else {
       alert(data.message || 'حدث خطأ في التسجيل');
@@ -1696,9 +2062,81 @@ async function handleRegister(e) {
   }
 }
 
+// 17b. Notifications Center — in-page only, no browser push (#20 step 10)
+async function fetchNotifications() {
+  if (!currentUser || !authToken) return;
+  try {
+    const res = await apiFetch('/api/notifications', { auth: true });
+    const data = await res.json();
+    if (data.success) {
+      notificationsList = data.notifications;
+      renderNotificationsList();
+      updateNotificationsBadge();
+    }
+  } catch (e) {
+    console.error('Notifications error:', e);
+  }
+}
+
+function updateNotificationsBadge() {
+  const btn = document.getElementById('notificationsBtn');
+  const badge = document.getElementById('notificationsBadge');
+  if (!btn || !badge) return;
+  btn.style.display = currentUser ? 'inline-flex' : 'none';
+  const unread = notificationsList.filter(n => !n.is_read).length;
+  if (unread > 0) {
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderNotificationsList() {
+  const container = document.getElementById('notificationsList');
+  if (!container) return;
+  if (!notificationsList.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا توجد إشعارات بعد</p></div>';
+    return;
+  }
+  container.innerHTML = notificationsList.map(n => `
+    <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${n.id})">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <strong style="color:${n.is_read ? 'var(--text-secondary)' : 'var(--gold-primary)'};">${escapeHtml(n.title)}</strong>
+        ${!n.is_read ? '<span class="status-tag pending">جديد</span>' : ''}
+      </div>
+      <p style="margin-top:6px; color:var(--text-secondary); font-size:0.88rem;">${escapeHtml(n.body)}</p>
+    </div>
+  `).join('');
+}
+
+function toggleNotificationsPanel() {
+  document.getElementById('notificationsModal').style.display = 'flex';
+}
+
+function closeNotificationsModal() {
+  document.getElementById('notificationsModal').style.display = 'none';
+}
+
+async function markNotificationRead(notificationId) {
+  const notification = notificationsList.find(n => n.id === notificationId);
+  if (!notification || notification.is_read) return;
+  try {
+    const res = await apiFetch(`/api/notifications/${notificationId}/read`, { method: 'PATCH', auth: true });
+    if (res.ok) {
+      notification.is_read = true;
+      renderNotificationsList();
+      updateNotificationsBadge();
+    }
+  } catch (e) {
+    console.error('Mark notification read error:', e);
+  }
+}
+
 function updateAuthUI() {
   const label = document.getElementById('userAuthLabel');
   const btn = document.getElementById('userAuthBtn');
+  updateNotificationsBadge();
   if (currentUser) {
     if (currentUser.role === 'super_admin' || currentUser.phone_number === '0500000000') {
       label.innerHTML = `👑 لوحة الإدارة`;

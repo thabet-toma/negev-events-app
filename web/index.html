@@ -59,6 +59,11 @@
           <i class="fa-solid fa-wand-magic-sparkles"></i>
           <span>شعر AI</span>
         </button>
+        <!-- مركز الإشعارات داخل الصفحة — لا push متصفّح (#20 خطوة 10) -->
+        <button id="notificationsBtn" class="ai-magic-btn" onclick="toggleNotificationsPanel()" title="الإشعارات" style="display:none; position:relative;">
+          <i class="fa-solid fa-bell"></i>
+          <span id="notificationsBadge" class="status-tag pending" style="display:none; position:absolute; top:-8px; left:-8px; padding:1px 6px;">0</span>
+        </button>
         <button id="userAuthBtn" class="auth-pill-btn" onclick="openAuthModal()">
           <i class="fa-solid fa-user-lock"></i>
           <span id="userAuthLabel">تسجيل الدخول</span>
@@ -89,7 +94,12 @@
 
     <!-- TAB 1: HOME FEED (الأفراح والمناسبات) -->
     <section id="tabHome" class="tab-content active-tab">
-      
+
+      <!-- Occasion Type Tabs — "الكل" ثم كل نوع من GET /api/occasion-types بترتيب position (#20 خطوة 10) -->
+      <div class="town-filter-wrapper" id="occasionTypeTabsWrapper" style="display:none;">
+        <div class="town-slider" id="occasionTypeTabs"></div>
+      </div>
+
       <!-- Town Filter Slider -->
       <div class="town-filter-wrapper">
         <div class="town-slider" id="townPills">
@@ -106,13 +116,20 @@
       </div>
 
       <!-- Quick Search Bar -->
-      <div class="search-bar-container">
-        <div class="search-input-box">
+      <div class="search-bar-container" style="display:flex; gap:8px; align-items:center;">
+        <div class="search-input-box" style="flex:1;">
           <i class="fa-solid fa-magnifying-glass search-icon"></i>
           <input type="text" id="eventSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleSearch()">
           <button id="clearSearchBtn" class="clear-btn" style="display:none;" onclick="clearSearch()"><i class="fa-solid fa-xmark"></i></button>
         </div>
+        <!-- المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط (#20 خطوة 10) -->
+        <button id="archiveToggleBtn" class="town-pill" onclick="toggleArchive()" title="عرض المناسبات المنتهية">
+          <i class="fa-solid fa-box-archive"></i> الأرشيف
+        </button>
       </div>
+
+      <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
+      <div id="announcementsContainer"></div>
 
       <!-- Events List Feed -->
       <div id="eventsContainer" class="events-feed">
@@ -120,6 +137,10 @@
           <div class="spinner"></div>
           <p>جاري جلب أحدث مناسبات النقب...</p>
         </div>
+      </div>
+
+      <div id="loadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
+        <button id="loadMoreBtn" class="town-pill" onclick="loadMoreEvents()">عرض المزيد</button>
       </div>
 
     </section>
@@ -566,6 +587,33 @@
 
         <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ التعديل</button>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL 6: NOTIFICATIONS CENTER (#20 step 10) -->
+  <div id="notificationsModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-bell"></i> الإشعارات</h3>
+        </div>
+        <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="notificationsList" class="events-feed" style="gap:10px;"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 7: OWNER'S CONGRATULATIONS/CONDOLENCES REVIEW QUEUE (#20 step 10) -->
+  <div id="congratsQueueModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card chat-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-list-check"></i> مراجعة الرسائل</h3>
+          <span id="congratsQueueSubtitle" class="modal-sub">طابور المراجعة</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeCongratsQueueModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="congratsQueueList" class="chat-messages-container"></div>
     </div>
   </div>
 

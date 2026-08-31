@@ -1546,3 +1546,9 @@ body {
 .status-tag.pending { background: rgba(243, 199, 104, 0.2); color: var(--gold-primary); }
 .status-tag.approved { background: rgba(16, 231, 157, 0.2); color: var(--emerald-neon); }
 .status-tag.rejected { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+/* إعلان تعديل التاريخ — خبر عن مناسبة قائمة لا مناسبة جديدة، فيميَّز بلون
+   الشريط العلوي فقط (نفس بطاقة المناسبة، بلا بنية جديدة) (#20 step 10) */
+.announcement-card::before {
+  background: linear-gradient(90deg, transparent, var(--emerald-neon), transparent);
+}
