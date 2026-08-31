@@ -147,18 +147,29 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
 
 // --- Event edit (owner or admin) -----------------------------------
 
-router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
-  const eventId = parseId(req.params.id, 'معرّف المناسبة');
-  const existing = await events.getEventForEdit(eventId);
-
+/** Owner or admin only — governs both editing an event and reading its amendment log. */
+function assertCanManageEvent(req, existing) {
   const isAdmin = ADMIN_ROLES.includes(req.user.role);
   if (existing.created_by === null) {
     if (!isAdmin) {
-      throw ApiError.forbidden('هذه المناسبة غير مرتبطة بأي حساب — التعديل عليها متاح للإدارة فقط حتى يطالب بها صاحبها');
+      throw ApiError.forbidden('هذه المناسبة غير مرتبطة بأي حساب — الوصول إليها متاح للإدارة فقط حتى يطالب بها صاحبها');
     }
-  } else if (existing.created_by !== req.user.id && !isAdmin) {
-    throw ApiError.forbidden('لا تملك صلاحية تعديل هذه المناسبة');
+    return;
   }
+  if (existing.created_by !== req.user.id && !isAdmin) {
+    throw ApiError.forbidden('لا تملك صلاحية الوصول إلى هذه المناسبة');
+  }
+}
+
+/** Arabic warning naming the conflicting event and its date — shared by the standalone check and the post-edit recheck. */
+function buildCollisionMessage(conflict) {
+  return `تعارض محتمل مع مناسبة "${conflict.title}" بتاريخ ${conflict.event_date}${conflict.town ? ` في ${conflict.town}` : ''}`;
+}
+
+router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const existing = await events.getEventForEdit(eventId);
+  assertCanManageEvent(req, existing);
 
   const body = req.body || {};
   const changes = {};
@@ -197,13 +208,23 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 
-  const result = await events.updateEvent(eventId, existing, { changes, honorees });
+  const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });
 
-  const message = result.amendment === 'critical'
+  let message = result.amendment === 'critical'
     ? 'تم حفظ التعديل، ولأنه يمسّ تاريخ أو مكان المناسبة أُعيدت إلى قائمة المراجعة حتى تُعتمد مجدداً'
     : 'تم حفظ التعديل، والمناسبة تبقى منشورة كما هي';
 
-  res.json({ success: true, message, amendment: result.amendment, status: result.status });
+  if (result.collision?.hasCollision) {
+    message += ` — تنبيه: ${buildCollisionMessage(result.collision.conflicts[0])}`;
+  }
+
+  res.json({
+    success: true,
+    message,
+    amendment: result.amendment,
+    status: result.status,
+    collision: result.collision
+  });
 }));
 
 // --- "My events" (owner only) ---------------------------------------
@@ -212,18 +233,33 @@ router.get('/my-events', authenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, events: await events.listMyEvents(req.user.id) });
 }));
 
+// --- Amendment log (owner or admin) ---------------------------------
+
+router.get('/events/:id/amendments', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const existing = await events.getEventForEdit(eventId);
+  assertCanManageEvent(req, existing);
+
+  res.json({ success: true, amendments: await events.listAmendments(eventId) });
+}));
+
 // --- Date collision check -----------------------------------------
 
 router.post('/check-collision', asyncHandler(async (req, res) => {
   const date = requireDate(req.body.date, 'التاريخ');
   const town = cleanString(req.body.town, 100);
+  const endDate = optionalDate(req.body.event_end_date);
+  const occasionTypeId = req.body.occasion_type_id === undefined || req.body.occasion_type_id === null || req.body.occasion_type_id === ''
+    ? null
+    : parseId(req.body.occasion_type_id, 'نوع المناسبة');
 
-  const conflicts = await events.findCollisions({ date, town });
+  const conflicts = await events.findCollisions({ date, endDate, town, occasionTypeId });
   res.json({
     success: true,
     hasCollision: conflicts.length > 0,
     count: conflicts.length,
-    conflicts
+    conflicts,
+    message: conflicts.length ? buildCollisionMessage(conflicts[0]) : null
   });
 }));
 

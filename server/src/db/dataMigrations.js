@@ -40,6 +40,15 @@ async function constraintExists(connection, table, constraintName) {
   return rows[0].cnt > 0;
 }
 
+async function tableExists(connection, table) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS cnt FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [table]
+  );
+  return rows[0].cnt > 0;
+}
+
 /**
  * Builds the full occasion_type_fields row set for a seed type from
  * OCCASION_FIELDS (so position/order and default labels stay in one place),
@@ -363,6 +372,39 @@ const steps = [
           WHERE NOT EXISTS (SELECT 1 FROM event_honorees eh WHERE eh.event_id = e.id)`
       );
       logger.info(`[migrations] backfill-event-honorees-2026-08: ${result.affectedRows} row(s) backfilled.`);
+    }
+  },
+  {
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — kept anyway as the guarded
+    // step every other schema addition in this file gets, and as the one
+    // place that documents when the table arrived for an existing database.
+    name: 'create-event-amendments-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'event_amendments')) {
+        logger.info('[migrations] create-event-amendments-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE event_amendments (
+          id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          event_id       INT UNSIGNED NOT NULL,
+          field          VARCHAR(60)  NOT NULL,
+          old_value      TEXT         DEFAULT NULL,
+          new_value      TEXT         DEFAULT NULL,
+          changed_by     INT UNSIGNED DEFAULT NULL,
+          classification ENUM('critical','cosmetic') NOT NULL,
+          status         ENUM('pending','approved','rejected') NOT NULL DEFAULT 'approved',
+          created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_event_amendments_event (event_id),
+          KEY idx_event_amendments_status (status),
+          CONSTRAINT fk_event_amendments_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_amendments_user FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-event-amendments-table-2026-08: table created.');
     }
   }
 ];

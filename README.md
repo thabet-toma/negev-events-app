@@ -212,7 +212,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze |
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات وإحصاءاتها |
-| `POST` | `/api/check-collision` | فحص تعارض تاريخ |
+| `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة |
 | `GET` | `/api/occasion-types` | أنواع المناسبات النشِطة، مرتّبة، مع حقولها الظاهرة وتفاعلاتها |
@@ -223,12 +223,20 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 الأقل) بدل `groom_name` مفرد، إضافة إلى `event_end_date` و`secondary_location_name`.
 أيّ حقل غير ظاهر في النوع المختار يُتجاهَل بصمت إن أُرسل.
 
+⚠️ **تغيّر عقد `POST /api/check-collision`:** الكشف صار مدى-إلى-مدى
+(`COALESCE(event_end_date, event_date)`) لا مساواة على تاريخ واحد، واتجاهياً عبر
+علَمي `creates_collision` / `warns_others` على نوع المناسبة: نوع لا يفحص (كالعزاء)
+لا يُنتج تحذيراً على منشئه أبداً، لكنه يظهر كتحذير لمن ينشر مناسبة أخرى (كعرس) في
+بلدته ضمن أيامه. تمرير `occasion_type_id` اختياري — الشكل القديم (`date` + `town`
+فقط) ما زال يعمل بسلوكه الأصلي بلا فلترة اتجاهية.
+
 ### مناسباتي 🔒
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/my-events` | كل ما نشره المستخدم الحالي، بكل حالاته |
-| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة |
+| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة ويعيد فحص التعارض على القيم الجديدة (`collision` في الاستجابة) |
+| `GET` | `/api/events/:id/amendments` | سجلّ تعديلات مناسبة يملكها المستخدم (أو أي مناسبة للإدارة)، الأحدث أولاً |
 
 ### الحساب
 
@@ -253,7 +261,8 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/login` | دخول الإدارة |
 | `GET` | `/api/admin/stats` | مؤشرات اللوحة |
 | `GET` | `/api/admin/events` | كل المناسبات (`?status=`) |
-| `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض |
+| `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض — يحسم أيضاً صفوف سجلّ التعديل المعلّقة لهذه المناسبة |
+| `GET` | `/api/admin/events/:id/amendments` | سجلّ تعديلات مناسبة كاملاً، الأحدث أولاً |
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |
 | `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |

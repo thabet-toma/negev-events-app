@@ -38,10 +38,28 @@ async function listEvents(status) {
   return rows.map(withAbsoluteMedia);
 }
 
+/**
+ * Approving or rejecting also settles this event's pending amendment rows —
+ * otherwise the log keeps saying "بانتظار المراجعة" for a decision that was
+ * already made, and the audit trail lies. Both writes share one transaction.
+ */
 async function updateEventStatus(eventId, status) {
-  const { affectedRows } = await db.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
-  if (!affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
-  return withAbsoluteMedia(await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]));
+  const event = await db.transaction(async connection => {
+    const [result] = await connection.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
+    if (!result.affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
+
+    if (status === 'approved' || status === 'rejected') {
+      await connection.execute(
+        "UPDATE event_amendments SET status = ? WHERE event_id = ? AND status = 'pending'",
+        [status, eventId]
+      );
+    }
+
+    const [rows] = await connection.execute('SELECT * FROM events WHERE id = ?', [eventId]);
+    return rows[0];
+  });
+
+  return withAbsoluteMedia(event);
 }
 
 /** Deleting an event cascades to its reactions and congratulations. */

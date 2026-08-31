@@ -4,6 +4,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const admin = require('../services/admin.service');
+const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const realtime = require('../realtime');
 const { requireAdmin } = require('../middleware/auth');
@@ -59,6 +60,11 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
 
   const label = { approved: 'معتمدة ومنشورة', rejected: 'مرفوضة', pending: 'بانتظار المراجعة' }[status];
   res.json({ success: true, message: `تم تحديث حالة المناسبة إلى (${label})`, event });
+}));
+
+router.get('/admin/events/:id/amendments', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  res.json({ success: true, amendments: await events.listAmendments(eventId) });
 }));
 
 router.delete('/admin/events/:id', asyncHandler(async (req, res) => {

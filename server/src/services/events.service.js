@@ -283,8 +283,16 @@ async function getEventForEdit(eventId) {
  * transaction as the event row update, same invariant as createEvent. A
  * critical column change drops an approved event back to pending; honoree
  * spelling edits are always cosmetic, per the domain's own classification.
+ *
+ * Every column that actually changed also gets an event_amendments row, in
+ * the same transaction as the event write — either both exist or neither
+ * does, so the log is never read as complete when it silently isn't. Each
+ * row is classified on its own field (`classifyAmendment([column])`, the
+ * same function reused rather than a second rule) so a cosmetic field
+ * travelling alongside a critical one in one request is still logged
+ * `approved` immediately — it never went through review either.
  */
-async function updateEvent(eventId, existing, { changes = {}, honorees = null } = {}) {
+async function updateEvent(eventId, existing, { changes = {}, honorees = null, changedBy = null } = {}) {
   // Only columns whose value actually differs count towards the
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
@@ -324,9 +332,60 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null } 
       params.push(eventId);
       await connection.execute(`UPDATE events SET ${assignments.join(', ')} WHERE id = ?`, params);
     }
+
+    for (const column of changedColumns) {
+      const fieldClassification = classifyAmendment([column]);
+      const rowStatus = fieldClassification === 'critical' ? 'pending' : 'approved';
+      const oldValue = existing[column];
+      const newValue = changes[column];
+      await connection.execute(
+        `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          eventId,
+          column,
+          oldValue === null || oldValue === undefined ? null : String(oldValue),
+          newValue === null || newValue === undefined ? null : String(newValue),
+          changedBy,
+          fieldClassification,
+          rowStatus
+        ]
+      );
+    }
   });
 
-  return { amendment, status: nextStatus };
+  // A critical edit that moves the date or the town has to be re-checked on
+  // the values it lands on, not the ones it was created with — otherwise the
+  // collision check stays frozen at publish time (#20 step 3, decision 5).
+  let collision = null;
+  if (amendment === 'critical' && ('event_date' in changes || 'town' in changes)) {
+    const checkDate = 'event_date' in changes ? changes.event_date : existing.event_date;
+    const checkEndDate = 'event_end_date' in changes ? changes.event_end_date : existing.event_end_date;
+    const checkTown = 'town' in changes ? changes.town : existing.town;
+    const conflicts = await findCollisions({
+      date: checkDate,
+      endDate: checkEndDate,
+      town: checkTown,
+      occasionTypeId: existing.occasion_type_id,
+      excludeEventId: eventId
+    });
+    collision = { hasCollision: conflicts.length > 0, count: conflicts.length, conflicts };
+  }
+
+  return { amendment, status: nextStatus, collision };
+}
+
+/** Every logged change to this event, newest first, with the name of who made it. */
+async function listAmendments(eventId) {
+  return db.query(
+    `SELECT a.id, a.event_id, a.field, a.old_value, a.new_value, a.classification, a.status, a.created_at,
+            u.full_name AS changed_by_name
+       FROM event_amendments a
+       LEFT JOIN users u ON u.id = a.changed_by
+      WHERE a.event_id = ?
+      ORDER BY a.created_at DESC, a.id DESC`,
+    [eventId]
+  );
 }
 
 /** Everything a given user has published, any status — the "my events" screen ownership implies. */
@@ -335,21 +394,50 @@ async function listMyEvents(userId) {
   return attachHonoreesAndTypes(rows.map(withAbsoluteMedia));
 }
 
-/** Events already booked on a given date (optionally within one town). */
-async function findCollisions({ date, town }) {
-  const conditions = ["event_date = ?", "status <> 'rejected'"];
-  const params = [date];
+/**
+ * Events whose date range overlaps the given range (optionally within one
+ * town) — an end-less event is a one-day range, via COALESCE(event_end_date,
+ * event_date) on both sides of the intersection test, so a wedding landing
+ * on day two of a four-day عزا is still caught (#20 step 3, decision 4/9).
+ *
+ * Direction is read off the occasion types themselves, never off a type's
+ * name: `occasionTypeId` (the event asking) must have `creates_collision`
+ * or the check is skipped outright — a عزا asking never gets a warning,
+ * because a death is never rescheduled around another death. Every match
+ * returned must have `warns_others` — a عزا never checks, but it always
+ * counts as a conflict when something else (typically a عرس) checks against
+ * it. A caller with no `occasionTypeId` (the pre-#20 request shape) gets the
+ * old, type-blind behaviour untouched — any non-rejected overlap counts.
+ */
+async function findCollisions({ date, endDate = null, town = null, occasionTypeId = null, excludeEventId = null }) {
+  if (occasionTypeId) {
+    const type = await occasionTypes.getTypeById(occasionTypeId);
+    if (!type || !type.creates_collision) return [];
+  }
+
+  const rangeEnd = endDate || date;
+  const conditions = ["e.status <> 'rejected'", 'e.event_date <= ?', 'COALESCE(e.event_end_date, e.event_date) >= ?'];
+  const params = [rangeEnd, date];
 
   if (town && town !== 'الكل') {
-    conditions.push('town = ?');
+    conditions.push('e.town = ?');
     params.push(town);
+  }
+  if (excludeEventId) {
+    conditions.push('e.id <> ?');
+    params.push(excludeEventId);
+  }
+  if (occasionTypeId) {
+    conditions.push('ot.warns_others = 1');
   }
 
   return db.query(
-    `SELECT id, title, groom_name, family_clan, town, location_name, event_date, dinner_time
-       FROM events
+    `SELECT e.id, e.title, e.groom_name, e.family_clan, e.town, e.location_name,
+            e.event_date, e.event_end_date, e.dinner_time
+       FROM events e
+       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE ${conditions.join(' AND ')}
-      ORDER BY town ASC`,
+      ORDER BY e.town ASC, e.event_date ASC`,
     params
   );
 }
@@ -406,6 +494,7 @@ module.exports = {
   getEventForEdit,
   updateEvent,
   classifyAmendment,
+  listAmendments,
   listMyEvents,
   findCollisions,
   addReaction,

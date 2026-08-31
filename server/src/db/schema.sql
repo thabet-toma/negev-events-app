@@ -118,6 +118,28 @@ CREATE TABLE IF NOT EXISTS event_honorees (
   CONSTRAINT fk_event_honorees_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- One row per changed field, not per edit: an admin reads "التاريخ تغيّر من
+-- X إلى Y", not a compressed diff blob. Values are stored as text so the log
+-- stays readable after the row underneath changes again. Also the substrate
+-- a later public "amendment announcement" feature reuses without a rewrite
+-- (#20 step 4) — this step only owns the internal audit read.
+CREATE TABLE IF NOT EXISTS event_amendments (
+  id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id       INT UNSIGNED NOT NULL,
+  field          VARCHAR(60)  NOT NULL,
+  old_value      TEXT         DEFAULT NULL,
+  new_value      TEXT         DEFAULT NULL,
+  changed_by     INT UNSIGNED DEFAULT NULL,
+  classification ENUM('critical','cosmetic') NOT NULL,
+  status         ENUM('pending','approved','rejected') NOT NULL DEFAULT 'approved',
+  created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_event_amendments_event (event_id),
+  KEY idx_event_amendments_status (status),
+  CONSTRAINT fk_event_amendments_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_amendments_user FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS nokoot_ledger (
   id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   user_id        INT UNSIGNED  NOT NULL,

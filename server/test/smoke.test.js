@@ -710,6 +710,256 @@ async function run() {
   // Clean up every event created for this section.
   await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [honoreeSearchEventId, funeralEventId, userEventId]);
 
+  console.log('\nAmendment log');
+
+  let logEventId = 0;
+  await test('Set up: user publishes and admin approves a wedding for amendment-log tests', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس سجل التعديلات' }], town: 'رهط', event_date: '2027-06-01' })
+    });
+    logEventId = created.eventId;
+    const approve = await api('PATCH', `/api/admin/events/${logEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+  });
+
+  await test('A cosmetic edit is logged and the event stays approved', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${logEventId}`, {
+      token: userToken,
+      body: { title: 'عنوان سجل تجميلي' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic');
+    assert.strictEqual(body.status, 'approved');
+
+    const rows = await db.query("SELECT * FROM event_amendments WHERE event_id = ? AND field = 'title'", [logEventId]);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].classification, 'cosmetic');
+    assert.strictEqual(rows[0].status, 'approved');
+    assert.strictEqual(rows[0].new_value, 'عنوان سجل تجميلي');
+  });
+
+  await test('A critical edit produces a pending amendment row and sends the event back to pending', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${logEventId}`, {
+      token: userToken,
+      body: { event_date: '2027-06-25' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+
+    const rows = await db.query("SELECT * FROM event_amendments WHERE event_id = ? AND field = 'event_date'", [logEventId]);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].classification, 'critical');
+    assert.strictEqual(rows[0].status, 'pending');
+  });
+
+  await test('Editing two fields in one request produces two amendment rows', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ?', [logEventId]);
+    const { status } = await api('PATCH', `/api/events/${logEventId}`, {
+      token: userToken,
+      body: { title: 'عنوان مزدوج', family_clan: 'عائلة مزدوجة' }
+    });
+    assert.strictEqual(status, 200);
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ?', [logEventId]);
+    assert.strictEqual(Number(after.total) - Number(before.total), 2);
+  });
+
+  await test('Resubmitting the same value produces no new amendment row and no status change', async () => {
+    const current = await db.queryOne('SELECT title, status FROM events WHERE id = ?', [logEventId]);
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ?', [logEventId]);
+    const { status, body } = await api('PATCH', `/api/events/${logEventId}`, {
+      token: userToken,
+      body: { title: current.title }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.status, current.status);
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ?', [logEventId]);
+    assert.strictEqual(Number(after.total), Number(before.total));
+  });
+
+  await test('Approving the event resolves every pending amendment row', async () => {
+    const pendingBefore = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND status = 'pending'", [logEventId]
+    );
+    assert.ok(Number(pendingBefore.total) > 0, 'expected at least one pending row before approval');
+
+    const approve = await api('PATCH', `/api/admin/events/${logEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const pendingAfter = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND status = 'pending'", [logEventId]
+    );
+    assert.strictEqual(Number(pendingAfter.total), 0);
+  });
+
+  await test('An admin reads the amendment log', async () => {
+    const { status, body } = await api('GET', `/api/admin/events/${logEventId}/amendments`, { token: adminToken });
+    assert.strictEqual(status, 200);
+    assert.ok(body.amendments.length >= 4);
+  });
+
+  await test('The owner reads their own event amendment log', async () => {
+    const { status, body } = await api('GET', `/api/events/${logEventId}/amendments`, { token: userToken });
+    assert.strictEqual(status, 200);
+    assert.ok(body.amendments.length >= 4);
+  });
+
+  await test('A non-owner is rejected from reading the amendment log', async () => {
+    const otherPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { body: registered } = await api('POST', '/api/auth/register', {
+      body: { phone_number: otherPhone, full_name: 'قارئ غير مصرَّح', pin_code: '2222' }
+    });
+    const { status } = await api('GET', `/api/events/${logEventId}/amendments`, { token: registered.token });
+    assert.strictEqual(status, 403);
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [otherPhone]);
+  });
+
+  await test('The public cannot read the amendment log at all', async () => {
+    const { status } = await api('GET', `/api/events/${logEventId}/amendments`);
+    assert.strictEqual(status, 401);
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [logEventId]);
+
+  console.log('\nCollision detection (range + directional flags)');
+
+  const collisionTown = 'شقيب السلام';
+  let funeralA = 0;
+  let funeralB = 0;
+  let longFuneralId = 0;
+  let recheckEventId = 0;
+
+  await test('Set up: two funerals published in the same town on the same day', async () => {
+    const f1 = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى أ' }],
+        town: collisionTown,
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-07-01',
+        event_end_date: '2027-07-02'
+      }
+    });
+    funeralA = f1.body.eventId;
+
+    const f2 = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى ب' }],
+        town: collisionTown,
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-07-01',
+        event_end_date: '2027-07-01'
+      }
+    });
+    funeralB = f2.body.eventId;
+  });
+
+  await test('عزا checking against an overlapping عزا in the same town produces no warning (funerals never collision-check)', async () => {
+    const { status, body } = await api('POST', '/api/check-collision', {
+      body: {
+        date: '2027-07-01',
+        event_end_date: '2027-07-02',
+        town: collisionTown,
+        occasion_type_id: funeralType.id
+      }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.hasCollision, false);
+  });
+
+  await test('Checking a عرس against an existing عزا in the same town warns of a collision', async () => {
+    const { status, body } = await api('POST', '/api/check-collision', {
+      body: { date: '2027-07-01', town: collisionTown, occasion_type_id: weddingType.id }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.hasCollision, true);
+    assert.ok(body.conflicts.some(c => c.id === funeralA || c.id === funeralB));
+    assert.ok(body.message.includes('تعارض'));
+  });
+
+  await test('Set up: a funeral spanning four days', async () => {
+    const { body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى الأربعة أيام' }],
+        town: collisionTown,
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-08-01',
+        event_end_date: '2027-08-04'
+      }
+    });
+    longFuneralId = body.eventId;
+  });
+
+  await test('A عرس on day two of a four-day عزا is detected — range intersection, not date equality', async () => {
+    const { body } = await api('POST', '/api/check-collision', {
+      body: { date: '2027-08-02', town: collisionTown, occasion_type_id: weddingType.id }
+    });
+    assert.strictEqual(body.hasCollision, true);
+    assert.ok(body.conflicts.some(c => c.id === longFuneralId));
+  });
+
+  await test('A عرس does not collide with a عرس in a different town on the same day', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس بلدة الاختبار' }], town: 'اللقية', event_date: '2028-02-20' })
+    });
+    const eventId = created.body.eventId;
+
+    const { body } = await api('POST', '/api/check-collision', {
+      body: { date: '2028-02-20', town: 'تل السبع', occasion_type_id: weddingType.id }
+    });
+    assert.strictEqual(body.hasCollision, false);
+
+    await api('DELETE', `/api/admin/events/${eventId}`, { token: adminToken });
+  });
+
+  await test('Set up: a wedding published on a free day', async () => {
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس إعادة الفحص' }], town: collisionTown, event_date: '2027-10-01' })
+    });
+    recheckEventId = created.body.eventId;
+    const approve = await api('PATCH', `/api/admin/events/${recheckEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+  });
+
+  await test('Changing the date to a day now booked by a عزا produces a fresh collision warning not seen at creation', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${recheckEventId}`, {
+      token: userToken,
+      body: { event_date: '2027-08-02' } // inside the four-day funeral window set up above
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.ok(body.collision, 'expected a collision object in the response');
+    assert.strictEqual(body.collision.hasCollision, true);
+    assert.ok(body.collision.conflicts.some(c => c.id === longFuneralId));
+  });
+
+  await test('The legacy check-collision shape (date + town only, no occasion_type_id) still works', async () => {
+    const { status, body } = await api('POST', '/api/check-collision', {
+      body: { date: '2027-07-01', town: collisionTown }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.hasCollision, true);
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?, ?, ?)', [funeralA, funeralB, longFuneralId, recheckEventId]);
+
   console.log('\nCoordinate migration');
   const insertWithCoords = async (town, lat, lng, eventDate) => {
     const { insertId } = await db.execute(
