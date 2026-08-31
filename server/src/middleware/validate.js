@@ -44,11 +44,22 @@ function isValidPhone(value) {
   return PHONE_PATTERN.test(String(value || '').replace(/[\s-]/g, ''));
 }
 
-/** Parses a coordinate, returning null when absent or out of range. */
-function parseCoordinate(value, max) {
+/**
+ * Parses a coordinate. Absent (undefined/null/empty string) → `null`, same as
+ * before a pin was the only way to set one. Present but not a valid number,
+ * or outside ±max, now throws instead of silently becoming `null` — once a
+ * coordinate comes from a dragged pin, a bad value is a bug worth surfacing,
+ * not a value worth swallowing (#20 step 6, decision ٣).
+ */
+function parseCoordinate(value, max, label = 'الإحداثية') {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed) || Math.abs(parsed) > max) return null;
+  if (Number.isNaN(parsed) || Math.abs(parsed) > max) {
+    // "قيمة" carries the agreement so the sentence stays correct whatever the
+    // label is — 'خط العرض' is masculine, 'الإحداثية' feminine, and a type's
+    // field label is admin-supplied text whose gender we cannot know.
+    throw ApiError.badRequest(`قيمة ${label} غير صالحة`);
+  }
   return parsed;
 }
 

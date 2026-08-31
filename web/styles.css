@@ -877,6 +877,44 @@ body {
   background: #020704;
 }
 
+/* Publish-form location picker (#20 step 6) */
+.location-picker-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.use-location-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(243, 199, 104, 0.15);
+  border: 1px solid var(--gold-primary);
+  color: var(--gold-primary);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.location-picker-map {
+  width: 100%;
+  height: 320px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: #020704;
+}
+
+.location-picker-hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
 /* AI OCR Scanner Banner */
 .ai-scan-banner {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.18) 0%, rgba(99, 102, 241, 0.28) 100%);

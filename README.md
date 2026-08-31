@@ -215,7 +215,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze |
 | `GET` | `/api/stories` | القصص المباشرة |
-| `GET` | `/api/towns` | البلدات وإحصاءاتها |
+| `GET` | `/api/towns` | البلدات وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة |
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
@@ -226,6 +226,16 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 النموذج صار يقبل `occasion_type_id` (إلزامي) و`honorees[]` (`{name, role}`، واحد على
 الأقل) بدل `groom_name` مفرد، إضافة إلى `event_end_date` و`secondary_location_name`.
 أيّ حقل غير ظاهر في النوع المختار يُتجاهَل بصمت إن أُرسل.
+
+⚠️ **منتقي خريطة بدل خطوط الطول والعرض المكتوبة يدوياً (#20 خطوة 6):** `latitude`/`longitude`
+في `POST /api/events` و `PATCH /api/events/:id` باقيان بنفس الاسم والشكل، لكن `parseCoordinate`
+صار يرفض قيمة **مرسَلة وغير صالحة** (خارج المدى أو ليست رقماً) برسالة عربية بدل ابتلاعها
+بصمت إلى `null` — الغياب التام للحقل ما زال يُقبل ويُحفَظ `null` (أو مركز البلدة الاحتياطي)
+كما كان دائماً. كلا المسارين يحسبان أيضاً **تنبيهاً ليّناً** على الخادم (Haversine، بلا
+تبعية خارجية): إن كان أقرب مركز بلدة للإحداثية المُرسَلة غير البلدة التي اختارها المستخدم،
+تحمل الاستجابة `location_warning: { nearest_town, message }` — **بلا رفض وبلا تصحيح تلقائي
+للبلدة**؛ تطابق ⇒ `location_warning: null`. البلدة `'القرى والتجمعات'` بلا مركز في
+`TOWN_COORDINATES` عمداً فلا تُنتج تنبيهاً أبداً بهذا الاتجاه.
 
 ⚠️ **تغيّر عقد `GET /api/events` جذرياً (#20 خطوة 4):**
 
@@ -289,7 +299,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/my-events` | كل ما نشره المستخدم الحالي، بكل حالاته |
-| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة ويعيد فحص التعارض على القيم الجديدة (`collision` في الاستجابة) |
+| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة ويعيد فحص التعارض على القيم الجديدة (`collision` في الاستجابة)، وأي تعديل يمسّ الموقع (`latitude`/`longitude`/`town`) يعيد حساب `location_warning` |
 | `GET` | `/api/events/:id/amendments` | سجلّ تعديلات مناسبة يملكها المستخدم (أو أي مناسبة للإدارة)، الأحدث أولاً |
 
 ### الحساب

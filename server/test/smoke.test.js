@@ -161,6 +161,18 @@ async function run() {
     assert.ok(Array.isArray(body.stats));
   });
 
+  await test('GET /api/towns carries a map centre for every real town, and none for القرى والتجمعات (#20 step 6)', async () => {
+    const { body } = await api('GET', '/api/towns');
+    for (const town of body.towns) {
+      if (town === 'الكل' || town === 'القرى والتجمعات') continue;
+      const coords = body.town_coordinates[town];
+      assert.ok(coords, `expected map coordinates for ${town}`);
+      assert.strictEqual(typeof coords.lat, 'number');
+      assert.strictEqual(typeof coords.lng, 'number');
+    }
+    assert.strictEqual(body.town_coordinates['القرى والتجمعات'], undefined);
+  });
+
   await test('GET /api/app/version announces the mobile release', async () => {
     const { body } = await api('GET', '/api/app/version');
     assert.strictEqual(body.success, true);
@@ -1261,6 +1273,97 @@ async function run() {
     const { body } = await api('GET', `/api/events/${created.eventId}`);
     assert.strictEqual(body.event.latitude, null);
     assert.strictEqual(body.event.longitude, null);
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+  });
+
+  console.log('\nMap picker: server-side town mismatch warning + coordinate validation (#20 step 6)');
+
+  await test('A pin inside the chosen town gets no location_warning on publish', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس داخل بلدته' }],
+        town: 'حورة',
+        latitude: 31.298567,
+        longitude: 34.926782,
+        event_date: '2027-02-01'
+      })
+    });
+    assert.strictEqual(created.status, 'approved');
+    assert.strictEqual(created.location_warning, null);
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+  });
+
+  let mismatchEventId = 0;
+  await test('A pin nearer another town gets a location_warning, but publishes with the chosen town untouched (no rejection, no auto-correction)', async () => {
+    const { status, body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس بعيد عن بلدته' }],
+        town: 'حورة',
+        // Exactly عرعرة النقب's own centre — unmistakably nearer to it than to حورة.
+        latitude: 31.157671,
+        longitude: 35.013021,
+        event_date: '2027-02-02'
+      })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(created.status, 'approved');
+    assert.ok(created.location_warning, 'expected a location_warning');
+    assert.strictEqual(created.location_warning.nearest_town, 'عرعرة النقب');
+
+    const { body } = await api('GET', `/api/events/${created.eventId}`);
+    assert.strictEqual(body.event.town, 'حورة', 'the chosen town must not be auto-corrected');
+    mismatchEventId = created.eventId;
+  });
+
+  await test('The same mismatch is re-detected on an edit that moves the pin further from the chosen town', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${mismatchEventId}`, {
+      token: adminToken,
+      body: { latitude: 31.157671, longitude: 35.013021 }
+    });
+    assert.strictEqual(status, 200);
+    assert.ok(body.location_warning, 'expected a location_warning on edit');
+    assert.strictEqual(body.location_warning.nearest_town, 'عرعرة النقب');
+  });
+
+  await test('An edit that does not touch latitude/longitude/town carries no location_warning', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${mismatchEventId}`, {
+      token: adminToken,
+      body: { dinner_time: 'الساعة 9:00 مساءً' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.location_warning, null);
+    await api('DELETE', `/api/admin/events/${mismatchEventId}`, { token: adminToken });
+  });
+
+  await test('An explicit but out-of-range latitude is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'إحداثية غير صالحة' }], latitude: 999, event_date: '2027-02-03' })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), 'expected an Arabic error message');
+  });
+
+  await test('An explicit, non-numeric longitude is rejected the same way', async () => {
+    const { status } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'خط طول غير رقمي' }], longitude: 'abc', event_date: '2027-02-04' })
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('Publishing with no coordinates at all is still accepted, falling back to the town centre as before', async () => {
+    const { status, body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس بلا إحداثيات صريحة' }], town: 'حورة', event_date: '2027-02-05' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(created.location_warning, null);
+    const { body } = await api('GET', `/api/events/${created.eventId}`);
+    assert.strictEqual(Number(body.event.latitude), 31.298567);
+    assert.strictEqual(Number(body.event.longitude), 34.926782);
     await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
   });
 

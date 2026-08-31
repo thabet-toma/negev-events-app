@@ -12,7 +12,7 @@ const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middlewa
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, MAX_HONOREES
 } = require('../middleware/validate');
-const { TOWNS, REACTION_TYPES } = require('../constants');
+const { TOWNS, TOWN_COORDINATES, REACTION_TYPES } = require('../constants');
 
 const router = express.Router();
 
@@ -54,8 +54,21 @@ router.get('/map/events', asyncHandler(async (req, res) => {
   res.json({ success: true, points: await events.listMapPoints({ legacyOnly: isLegacyClient(req) }) });
 }));
 
+/**
+ * `town_coordinates` lives on this same endpoint (not a new one) — the map
+ * picker already calls `GET /api/towns` to fill the town dropdown, so it
+ * opens on the right centre from that one response instead of a second
+ * round trip or a copy of `TOWN_COORDINATES` hardcoded into the web bundle
+ * (#20 step 6, decision ١). 'القرى والتجمعات' has no key here on purpose —
+ * it is a catch-all bucket, not a place a map can centre on.
+ */
 router.get('/towns', asyncHandler(async (req, res) => {
-  res.json({ success: true, towns: ['الكل', ...TOWNS], stats: await events.townStats() });
+  res.json({
+    success: true,
+    towns: ['الكل', ...TOWNS],
+    town_coordinates: TOWN_COORDINATES,
+    stats: await events.townStats()
+  });
 }));
 
 // `optionalAuthenticate`: an anonymous caller still gets the event (public
@@ -117,13 +130,20 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
 
   const town = cleanString(req.body.town, 100);
   if (!town || !TOWNS.includes(town)) {
-    throw ApiError.badRequest(`${labelOf('town', 'البلدة')} غير صالحة`);
+    throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
   const eventDate = requireDate(req.body.event_date, labelOf('event_date', 'تاريخ المناسبة'));
 
   const posterFile = req.files?.poster?.[0];
   const audioFile = req.files?.audio?.[0];
+
+  const latitude = parseCoordinate(req.body.latitude, 90, 'خط العرض');
+  const longitude = parseCoordinate(req.body.longitude, 180, 'خط الطول');
+  // Computed on the values as submitted, before createEvent falls back to the
+  // town's own centre for a missing pin — that fallback obviously agrees with
+  // the chosen town, so it would never have anything to warn about anyway.
+  const locationWarning = events.checkTownMismatch(town, latitude, longitude);
 
   const payload = {
     occasion_type_id: occasionTypeId,
@@ -132,8 +152,8 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     honorees,
     town,
     event_date: eventDate,
-    latitude: parseCoordinate(req.body.latitude, 90),
-    longitude: parseCoordinate(req.body.longitude, 180)
+    latitude,
+    longitude
   };
 
   const formatters = buildOptionalFieldFormatters(req, posterFile, audioFile);
@@ -168,7 +188,8 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
       ? 'تم نشر المناسبة فوراً بنجاح!'
       : 'تم استلام طلب المناسبة بنجاح! سيتم مراجعته واعتماده من قبل الإدارة خلال دقائق.',
     eventId: created.id,
-    status: created.status
+    status: created.status,
+    location_warning: locationWarning
   });
 }));
 
@@ -214,8 +235,8 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
   if (body.secondary_location_name !== undefined) {
     changes.secondary_location_name = cleanString(body.secondary_location_name, 1000);
   }
-  if (body.latitude !== undefined) changes.latitude = parseCoordinate(body.latitude, 90);
-  if (body.longitude !== undefined) changes.longitude = parseCoordinate(body.longitude, 180);
+  if (body.latitude !== undefined) changes.latitude = parseCoordinate(body.latitude, 90, 'خط العرض');
+  if (body.longitude !== undefined) changes.longitude = parseCoordinate(body.longitude, 180, 'خط الطول');
   if (body.event_date !== undefined) changes.event_date = requireDate(body.event_date, 'تاريخ المناسبة');
   if (body.event_end_date !== undefined) changes.event_end_date = optionalDate(body.event_end_date);
   if (body.youth_party_date !== undefined) changes.youth_party_date = optionalDate(body.youth_party_date);
@@ -235,6 +256,18 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 
+  // Same check as on publish, run on the values this edit actually lands on
+  // — the field(s) that didn't change fall back to what's already on the row
+  // — but only when the edit touches location at all, so an edit that never
+  // mentions latitude/longitude/town never has anything new to warn about.
+  let locationWarning = null;
+  if (body.latitude !== undefined || body.longitude !== undefined || body.town !== undefined) {
+    const finalTown = changes.town !== undefined ? changes.town : existing.town;
+    const finalLatitude = changes.latitude !== undefined ? changes.latitude : existing.latitude;
+    const finalLongitude = changes.longitude !== undefined ? changes.longitude : existing.longitude;
+    locationWarning = events.checkTownMismatch(finalTown, finalLatitude, finalLongitude);
+  }
+
   const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });
 
   let message = result.amendment === 'critical'
@@ -250,7 +283,8 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
     message,
     amendment: result.amendment,
     status: result.status,
-    collision: result.collision
+    collision: result.collision,
+    location_warning: locationWarning
   });
 }));
 

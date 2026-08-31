@@ -168,7 +168,7 @@
         <div class="form-row">
           <div class="form-group half">
             <label>البلدة / المنطقة *</label>
-            <select id="addTown" required onchange="checkDateCollisionLive()">
+            <select id="addTown" required onchange="checkDateCollisionLive(); recenterLocationPicker();">
               <option value="رهط">رهط</option>
               <option value="حورة">حورة</option>
               <option value="تل السبع">تل السبع</option>
@@ -213,15 +213,17 @@
           <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان - رهط بالقرب من الدوار الشرقي" required>
         </div>
 
-        <div class="form-row">
-          <div class="form-group half">
-            <label>إحداثيات خط العرض (Latitude اختياري)</label>
-            <input type="number" step="any" id="addLat" placeholder="31.3925">
+        <div class="form-group">
+          <div class="location-picker-toolbar">
+            <label>حدّد موقع القاعة أو الديوان على الخريطة *</label>
+            <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
+              <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
+            </button>
           </div>
-          <div class="form-group half">
-            <label>إحداثيات خط الطول (Longitude اختياري)</label>
-            <input type="number" step="any" id="addLng" placeholder="34.7554">
-          </div>
+          <div id="addLocationPickerMap" class="location-picker-map"></div>
+          <p class="location-picker-hint">اسحب الدبّوس إلى موقع القاعة بدقة، أو انقر على المكان الصحيح على الخريطة</p>
+          <input type="hidden" id="addLat">
+          <input type="hidden" id="addLng">
         </div>
 
         <!-- File Uploads -->

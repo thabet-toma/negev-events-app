@@ -10,6 +10,13 @@ let stickerTheme = 'royal-gold';
 let leafletMap = null;
 let nokootChart = null;
 
+// Publish-form location picker (#20 step 6)
+let locationPickerMap = null;
+let locationPickerMarker = null;
+let pickerPinPlacedByUser = false;
+let townCoordinates = {};
+const NEGEV_NEUTRAL_CENTER = [31.2858, 34.8431];
+
 // Auth State
 let currentUser = JSON.parse(localStorage.getItem('negev_user') || 'null');
 let authToken = localStorage.getItem('negev_token') || null;
@@ -390,6 +397,139 @@ async function initLeafletMap() {
   setTimeout(() => { leafletMap.invalidateSize(); }, 300);
 }
 
+// 6b. Interactive map picker for the publish form (#20 step 6)
+//
+// خط الطول وخط العرض لا يُكتَبان يدوياً بعد اليوم — المستخدم يسحب دبّوساً فوق
+// موقع القاعة الفعلي على الخريطة. زر «موقعي الآن» يوسّط الخريطة فقط ولا يحفظ
+// أي نقطة: من يملأ هذا النموذج غالباً في بيته قبل أسابيع من المناسبة، لا في
+// القاعة نفسها، فموقعه الحالي ليس موقع المناسبة.
+
+/** يجلب مراكز البلدات من الخادم مرة واحدة فقط، عند أول فتح لمنتقي الخريطة. */
+async function loadTownCoordinates() {
+  if (Object.keys(townCoordinates).length) return;
+  try {
+    const res = await apiFetch('/api/towns');
+    const data = await res.json();
+    if (data.success && data.town_coordinates) townCoordinates = data.town_coordinates;
+  } catch (e) {
+    console.error('Town coordinates error:', e);
+  }
+}
+
+function setPickerCoordinates(lat, lng) {
+  document.getElementById('addLat').value = lat != null ? lat : '';
+  document.getElementById('addLng').value = lng != null ? lng : '';
+}
+
+/** يضع الدبّوس على نقطة (أو ينقله إن كان موضوعاً أصلاً) ويملأ الحقلين المخفيَّين. */
+function placePickerMarker(lat, lng) {
+  if (!locationPickerMap) return;
+
+  if (locationPickerMarker) {
+    locationPickerMarker.setLatLng([lat, lng]);
+  } else {
+    locationPickerMarker = L.marker([lat, lng], { draggable: true }).addTo(locationPickerMap);
+    locationPickerMarker.on('dragend', () => {
+      const pos = locationPickerMarker.getLatLng();
+      pickerPinPlacedByUser = true;
+      setPickerCoordinates(pos.lat, pos.lng);
+    });
+  }
+  setPickerCoordinates(lat, lng);
+}
+
+/** يزيل الدبّوس الحالي بلا استبدال — يُستعمَل عند تفريغ النموذج بعد النشر. */
+function clearPickerMarker() {
+  if (locationPickerMarker && locationPickerMap) {
+    locationPickerMap.removeLayer(locationPickerMarker);
+  }
+  locationPickerMarker = null;
+  pickerPinPlacedByUser = false;
+  setPickerCoordinates(null, null);
+}
+
+/**
+ * يوسّط الخريطة على مركز البلدة المختارة، ويضع دبّوساً افتراضياً هناك ما دام
+ * المستخدم لم يحرّك الدبّوس بنفسه بعد — أول تحريك يدوي (سحب أو نقر) يوقف هذا
+ * التتبّع التلقائي نهائياً حتى لا يمحو تصحيحاً تعمّده المستخدم. «القرى
+ * والتجمعات» بلا مركز معروف عمداً (#20 step 6, decision ٨): الخريطة تُفتح على
+ * منظر عام للنقب بلا دبّوس، والمستخدم مطالَب بوضعه بنفسه.
+ */
+function recenterLocationPicker() {
+  if (!locationPickerMap) return;
+  const town = document.getElementById('addTown').value;
+  const coords = townCoordinates[town];
+
+  if (coords) {
+    locationPickerMap.setView([coords.lat, coords.lng], 14);
+    if (!pickerPinPlacedByUser) placePickerMarker(coords.lat, coords.lng);
+  } else {
+    locationPickerMap.setView(NEGEV_NEUTRAL_CENTER, 9);
+  }
+}
+
+async function initLocationPickerMap() {
+  const mapElement = document.getElementById('addLocationPickerMap');
+  if (!mapElement) return;
+
+  await loadTownCoordinates();
+
+  if (!locationPickerMap) {
+    locationPickerMap = L.map('addLocationPickerMap').setView(NEGEV_NEUTRAL_CENTER, 9);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      maxZoom: 19
+    }).addTo(locationPickerMap);
+
+    locationPickerMap.on('click', e => {
+      pickerPinPlacedByUser = true;
+      placePickerMarker(e.latlng.lat, e.latlng.lng);
+    });
+
+    // موقع المتصفح يتطلّب سياقاً آمناً (HTTPS، أو localhost أثناء التطوير) —
+    // خارج ذلك يفشل باستمرار، فزر معطوب أسوأ من زر غائب (#20 step 6, decision ٧).
+    const locateBtn = document.getElementById('useMyLocationBtn');
+    if (locateBtn && window.isSecureContext && navigator.geolocation) {
+      locateBtn.style.display = 'inline-flex';
+    }
+  }
+
+  recenterLocationPicker();
+  setTimeout(() => { locationPickerMap.invalidateSize(); }, 300);
+}
+
+/**
+ * «موقعي الآن» يوسّط الخريطة فقط — لا يضع دبّوساً ولا يُرسِل أي إحداثية إلى
+ * الخادم أبداً (#20 step 6, decision ٣). مهلة صريحة على `getCurrentPosition`
+ * حتى لا يُعلَّق الزر إلى الأبد (افتراض المتصفح بلا مهلة).
+ */
+function centerPickerOnMyLocation() {
+  if (!window.isSecureContext || !navigator.geolocation) return;
+
+  const btn = document.getElementById('useMyLocationBtn');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري تحديد موقعك...';
+
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      locationPickerMap.setView([position.coords.latitude, position.coords.longitude], 15);
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    },
+    () => {
+      // رمز الخطأ 1 (PERMISSION_DENIED) يجمع ثلاث حالات: رفض المستخدم، سياق
+      // غير آمن، وحجب بسياسة الأذونات — لا فرق بينها من هنا، فالرسالة تصدق
+      // على الثلاث معاً بدل تخمين أيّها وقع.
+      alert('تعذّر تحديد موقعك — يمكنك سحب الدبّوس يدوياً إلى موقع القاعة على الخريطة.');
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+}
+
 // 7. AI Smart Nabati Poetry Generator
 function openAIPoemModal() {
   document.getElementById('aiPoemModal').style.display = 'flex';
@@ -455,6 +595,7 @@ async function simulateAICardScan() {
       document.getElementById('addLocationName').value = ext.location_name;
 
       checkDateCollisionLive();
+      recenterLocationPicker();
       showToast(`✅ تم استخراج بيانات كرت ${ext.groom_name} بنجاح! دقة: ${ext.confidence}`);
     }
   } catch (e) {
@@ -501,6 +642,7 @@ function switchTab(tabId) {
   if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
+  else if (tabId === 'tabAdd') initLocationPickerMap();
 }
 
 // 11. Town Filter & Search
@@ -604,8 +746,14 @@ async function handleEventSubmit(e) {
       } else {
         showToast('🎉 تم نشر المناسبة بنجاح!');
       }
+      // تنبيه ليّن من الخادم — البلدة والإحداثيات كما اختارها المستخدم بالضبط،
+      // هذا إعلام لا رفض، والنشر أعلاه مضى فعلاً (#20 step 6, decision ٦).
+      if (data.location_warning) {
+        alert(`⚠️ ${data.location_warning.message}`);
+      }
       document.getElementById('addEventForm').reset();
       document.getElementById('collisionAlert').style.display = 'none';
+      clearPickerMarker();
       switchTab('tabHome');
       fetchEvents();
     } else {

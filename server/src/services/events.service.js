@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const { REACTION_TYPES, TOWN_COORDINATES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
+const { haversineDistanceKm } = require('../utils/geo');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
@@ -338,6 +339,40 @@ function buildDefaultTitle(occasionTypeName, honorees, familyClan, town) {
   const place = familyClan || town;
   const prefix = occasionTypeName ? `${occasionTypeName} ` : '';
   return `${prefix}${names}${place ? ` — ${place}` : ''}`.trim();
+}
+
+/** The Negev town whose centre sits closest to a coordinate pair — 'القرى والتجمعات' has none, so it can never win. */
+function nearestTownTo(latitude, longitude) {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const [town, coords] of Object.entries(TOWN_COORDINATES)) {
+    const distance = haversineDistanceKm({ lat: latitude, lng: longitude }, coords);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = town;
+    }
+  }
+  return nearest;
+}
+
+/**
+ * Soft mismatch check (#20 step 6, decision ٦), run on publish and on edit.
+ * A wedding hall commonly sits outside its own town's boundary, and the town
+ * is a social identity as much as a place — so a pin nearer another town's
+ * centre only ever warns; it never rejects the submission or rewrites the
+ * town the publisher chose. Returns `null` when there is nothing to warn
+ * about (no explicit coordinate, or it agrees with the chosen town).
+ */
+function checkTownMismatch(town, latitude, longitude) {
+  if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
+    return null;
+  }
+  const nearest = nearestTownTo(latitude, longitude);
+  if (!nearest || nearest === town) return null;
+  return {
+    nearest_town: nearest,
+    message: `المكان الذي حدّدته على الخريطة أقرب إلى بلدة "${nearest}" منه إلى "${town}" — تم الحفظ بالبلدة التي اخترتها كما هي`
+  };
 }
 
 /**
@@ -757,6 +792,7 @@ module.exports = {
   getEventDetails,
   listMapPoints,
   listStories,
+  checkTownMismatch,
   createEvent,
   getEventForEdit,
   updateEvent,
