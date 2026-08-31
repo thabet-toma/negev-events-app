@@ -65,6 +65,32 @@ async function listPublicTypes() {
   return attachFieldsAndReactions(types, { visibleFieldsOnly: true });
 }
 
+/**
+ * A single type with its visible fields and reactions, or null. Used by the
+ * event-publish flow to confirm the chosen type exists/is active and to
+ * drive per-type required-field checks — never by branching on `name`.
+ */
+async function getTypeById(id) {
+  const type = await db.queryOne('SELECT * FROM occasion_types WHERE id = ?', [id]);
+  if (!type) return null;
+  const [withRelations] = await attachFieldsAndReactions([type], { visibleFieldsOnly: true });
+  return withRelations;
+}
+
+/** Batched id -> type-with-fields lookup, for attaching a type to a list of events. */
+async function getTypesByIds(ids) {
+  const uniqueIds = [...new Set(ids)].filter(Boolean);
+  if (!uniqueIds.length) return {};
+
+  const placeholders = uniqueIds.map(() => '?').join(',');
+  const types = await db.query(`SELECT * FROM occasion_types WHERE id IN (${placeholders})`, uniqueIds);
+  const withRelations = await attachFieldsAndReactions(types, { visibleFieldsOnly: true });
+
+  const map = {};
+  for (const type of withRelations) map[type.id] = type;
+  return map;
+}
+
 /** Every occasion type (active and disabled), with its published-event count, for the admin panel. */
 async function listAllTypesForAdmin() {
   const types = await db.query(
@@ -202,4 +228,12 @@ async function deleteType(id) {
   throw ApiError.conflict('لا يمكن حذف هذا النوع لوجود مناسبات مرتبطة به — تم تعطيله بدلاً من حذفه');
 }
 
-module.exports = { listPublicTypes, listAllTypesForAdmin, createType, updateType, deleteType };
+module.exports = {
+  listPublicTypes,
+  getTypeById,
+  getTypesByIds,
+  listAllTypesForAdmin,
+  createType,
+  updateType,
+  deleteType
+};

@@ -66,6 +66,14 @@ router.delete('/admin/events/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'تم حذف المناسبة بالكامل' });
 }));
 
+router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const newOwnerId = parseId(req.body.user_id, 'معرّف المستخدم الجديد');
+
+  const event = await admin.transferEventOwnership(eventId, newOwnerId);
+  res.json({ success: true, message: 'تم نقل ملكية المناسبة بنجاح', event });
+}));
+
 router.get('/admin/comments', asyncHandler(async (req, res) => {
   res.json({ success: true, comments: await admin.listComments() });
 }));

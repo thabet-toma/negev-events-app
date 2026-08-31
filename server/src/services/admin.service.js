@@ -50,6 +50,21 @@ async function deleteEvent(eventId) {
   if (!affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
 }
 
+/**
+ * Reassigns an orphaned or disputed event to another user. No automatic
+ * kinship proof exists in this domain and none is attempted — this is
+ * always a deliberate human decision by an admin, never inferred.
+ */
+async function transferEventOwnership(eventId, newOwnerId) {
+  const owner = await db.queryOne('SELECT id FROM users WHERE id = ?', [newOwnerId]);
+  if (!owner) throw ApiError.notFound('المستخدم غير موجود');
+
+  const { affectedRows } = await db.execute('UPDATE events SET created_by = ? WHERE id = ?', [newOwnerId, eventId]);
+  if (!affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
+
+  return withAbsoluteMedia(await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]));
+}
+
 async function listComments() {
   return db.query(
     `SELECT c.*, e.title AS event_title
@@ -85,6 +100,7 @@ module.exports = {
   listEvents,
   updateEventStatus,
   deleteEvent,
+  transferEventOwnership,
   listComments,
   deleteComment,
   listUsers,

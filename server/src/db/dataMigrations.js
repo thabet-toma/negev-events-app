@@ -11,7 +11,7 @@
  */
 
 const logger = require('../utils/logger');
-const { TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS } = require('../constants');
+const { TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
 
 async function columnExists(connection, table, column) {
   const [rows] = await connection.execute(
@@ -70,6 +70,7 @@ function buildSeedFields(overrides) {
 const OCCASION_TYPE_SEEDS = [
   {
     name: 'عرس',
+    default_poster_url: DEFAULT_POSTER,
     icon: '💍',
     color: '#8f6a20',
     position: 1,
@@ -90,6 +91,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'عزا',
+    default_poster_url: null,
     icon: '🕊️',
     color: '#475569',
     position: 2,
@@ -115,6 +117,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'خطوبة',
+    default_poster_url: DEFAULT_POSTER,
     icon: '💐',
     color: '#0369a1',
     position: 3,
@@ -136,6 +139,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'نجاح',
+    default_poster_url: DEFAULT_POSTER,
     icon: '🎓',
     color: '#0e7490',
     position: 4,
@@ -157,6 +161,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'حج وعمرة',
+    default_poster_url: DEFAULT_POSTER,
     icon: '🕋',
     color: '#155e75',
     position: 5,
@@ -269,13 +274,13 @@ const steps = [
           `INSERT INTO occasion_types
              (name, icon, color, position, is_active, creates_collision, warns_others,
               premoderate_messages, show_congratulations_count, show_followers_count,
-              show_views_count, congratulations_label, default_badge_title)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              show_views_count, congratulations_label, default_badge_title, default_poster_url)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             seed.name, seed.icon, seed.color, seed.position,
             seed.creates_collision, seed.warns_others, seed.premoderate_messages,
             seed.show_congratulations_count, seed.show_followers_count, seed.show_views_count,
-            seed.congratulations_label, seed.default_badge_title
+            seed.congratulations_label, seed.default_badge_title, seed.default_poster_url
           ]
         );
         const typeId = result.insertId;
@@ -299,6 +304,33 @@ const steps = [
       }
 
       logger.info(`[migrations] seed-occasion-types-2026-08: ${created} type(s) created.`);
+    }
+  },
+  {
+    // A stock wedding photo on a death notice is the same harm as a wedding
+    // word on one, so the default image belongs to the occasion type, not to
+    // the platform. Adding the column and completing the seed happen together
+    // here: the backfill is the column's own arrival, so it runs exactly once
+    // and a later admin who deliberately clears a poster is never overruled.
+    name: 'add-occasion-type-default-poster-2026-08',
+    async run(connection) {
+      if (await columnExists(connection, 'occasion_types', 'default_poster_url')) {
+        logger.info('[migrations] add-occasion-type-default-poster-2026-08: already present.');
+        return;
+      }
+
+      await connection.query('ALTER TABLE occasion_types ADD COLUMN default_poster_url TEXT DEFAULT NULL');
+
+      let filled = 0;
+      for (const seed of OCCASION_TYPE_SEEDS) {
+        if (!seed.default_poster_url) continue;
+        const [result] = await connection.execute(
+          'UPDATE occasion_types SET default_poster_url = ? WHERE name = ? AND default_poster_url IS NULL',
+          [seed.default_poster_url, seed.name]
+        );
+        filled += result.affectedRows;
+      }
+      logger.info(`[migrations] add-occasion-type-default-poster-2026-08: column added, ${filled} seeded type(s) filled.`);
     }
   },
   {

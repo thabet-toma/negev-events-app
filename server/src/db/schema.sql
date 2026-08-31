@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   show_views_count            TINYINT(1)   NOT NULL DEFAULT 1,
   congratulations_label       VARCHAR(40)  NOT NULL DEFAULT 'تبريكات',
   default_badge_title         VARCHAR(80)  DEFAULT NULL,
+  default_poster_url          TEXT         DEFAULT NULL,
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

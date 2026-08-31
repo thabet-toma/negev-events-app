@@ -206,9 +206,9 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/events` | المناسبات المعتمدة (`?town=` `?date=` `?search=`) |
-| `GET` | `/api/events/:id` | تفاصيل مناسبة + التفاعلات والتبريكات |
-| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة) |
+| `GET` | `/api/events` | المناسبات المعتمدة (`?town=` `?date=` `?search=` — البحث يمسك أيضاً كل اسم في أصحاب المناسبة) |
+| `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات |
+| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze |
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات وإحصاءاتها |
@@ -216,6 +216,19 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة |
 | `GET` | `/api/occasion-types` | أنواع المناسبات النشِطة، مرتّبة، مع حقولها الظاهرة وتفاعلاتها |
+
+⚠️ **تغيّر سلوك:** `POST /api/events` كان عاماً (بلا رمز) ويدخل قائمة المراجعة؛ صار يتطلب
+رمز دخول صالح 🔒 — طلب بلا رمز يُرفض بـ401. القراءة العامة (`GET`) بلا حساب لم تتغيّر.
+النموذج صار يقبل `occasion_type_id` (إلزامي) و`honorees[]` (`{name, role}`، واحد على
+الأقل) بدل `groom_name` مفرد، إضافة إلى `event_end_date` و`secondary_location_name`.
+أيّ حقل غير ظاهر في النوع المختار يُتجاهَل بصمت إن أُرسل.
+
+### مناسباتي 🔒
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `GET` | `/api/my-events` | كل ما نشره المستخدم الحالي، بكل حالاته |
+| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة |
 
 ### الحساب
 
@@ -242,6 +255,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/admin/events` | كل المناسبات (`?status=`) |
 | `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض |
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |
+| `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `POST` | `/api/admin/broadcast` | بث إشعار عام |

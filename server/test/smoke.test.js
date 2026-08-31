@@ -78,6 +78,22 @@ async function run() {
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   console.log(`\nSmoke tests against ${baseUrl}\n`);
 
+  // Seeded by dataMigrations.js before this suite even boots the app.
+  const weddingType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عرس'");
+  const funeralType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عزا'");
+
+  /** A minimal, valid عرس publish body — one honoree, no token attached by the caller. */
+  function weddingEventBody(overrides = {}) {
+    return {
+      occasion_type_id: weddingType.id,
+      honorees: [{ name: 'أحمد الاختبار', role: 'العريس' }],
+      town: 'حورة',
+      location_name: 'ديوان الاختبار',
+      event_date: '2026-12-31',
+      ...overrides
+    };
+  }
+
   const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
   let userToken = '';
   let adminToken = '';
@@ -453,6 +469,247 @@ async function run() {
     assert.strictEqual(Number(beforeTypes.total), Number(afterTypes.total));
   });
 
+  console.log('\nOccasion-aware publishing');
+
+  await test('A default poster belongs to the occasion type: عرس gets one, عزا gets none', async () => {
+    const types = (await api('GET', '/api/occasion-types')).body.types;
+
+    const posterFor = async typeName => {
+      const type = types.find(t => t.name === typeName);
+      const { body } = await api('POST', '/api/events', {
+        token: adminToken,
+        body: {
+          occasion_type_id: type.id,
+          honorees: [{ name: 'صاحب المناسبة' }],
+          town: 'رهط',
+          location_name: 'الديوان',
+          event_date: '2027-05-01',
+          event_end_date: '2027-05-04'
+        }
+      });
+      const detail = (await api('GET', `/api/events/${body.eventId}`)).body.event;
+      await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+      return detail.poster_url;
+    };
+
+    assert.ok(await posterFor('عرس'), 'عرس falls back to its own type default poster');
+    assert.strictEqual(await posterFor('عزا'), null, 'عزا must never be handed a stock image');
+  });
+
+  let honoreeSearchEventId = 0;
+  await test('Publishing with five honorees, then searching by the fifth name, returns the event exactly once', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [
+          { name: 'حاج فريد الاختبار الأول' },
+          { name: 'حاج فريد الاختبار الثاني' },
+          { name: 'حاج فريد الاختبار الثالث' },
+          { name: 'حاج فريد الاختبار الرابع' },
+          { name: 'فاطمة الاختبار الخامسة' }
+        ]
+      })
+    });
+    assert.strictEqual(status, 201);
+    honoreeSearchEventId = body.eventId;
+
+    const { body: search } = await api('GET', `/api/events?search=${encodeURIComponent('فاطمة الاختبار الخامسة')}`);
+    const matches = search.events.filter(e => e.id === honoreeSearchEventId);
+    assert.strictEqual(matches.length, 1, 'expected exactly one match, not one row per honoree');
+  });
+
+  await test('groom_name is filled with the first honoree by position, written in the same transaction', async () => {
+    const { body } = await api('GET', `/api/events/${honoreeSearchEventId}`);
+    assert.strictEqual(body.event.groom_name, 'حاج فريد الاختبار الأول');
+    assert.strictEqual(body.event.honorees.length, 5);
+    assert.strictEqual(body.event.honorees[0].position, 0);
+  });
+
+  await test('A wedding without a second honoree (bride) is accepted — the second name is optional', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس بلا عروس', role: 'العريس' }] })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('A funeral (عزا) without event_end_date is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى الاختبار' }],
+        town: 'حورة',
+        location_name: 'ديوان الاختبار',
+        event_date: '2026-12-31'
+      }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('مطلوب'));
+  });
+
+  await test('The rejection message names the field by its label in this type — المتوفَّى, not العريس', async () => {
+    const { body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [], // missing the one required field this test is about
+        town: 'حورة',
+        location_name: 'ديوان الاختبار',
+        event_date: '2026-12-31',
+        event_end_date: '2027-01-02'
+      }
+    });
+    assert.ok(body.message.includes('المتوفَّى'), `expected the عزا-specific label, got: ${body.message}`);
+  });
+
+  await test('A wedding (عرس) without event_end_date is accepted — only عزا requires it', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس بلا نهاية' }] })
+    });
+    assert.strictEqual(status, 201);
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  let funeralEventId = 0;
+  await test('A field hidden for this type (youth_party_date on عزا) is silently ignored, not rejected', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى الحقل المخفي' }],
+        town: 'حورة',
+        location_name: 'ديوان الاختبار',
+        event_date: '2026-12-31',
+        event_end_date: '2027-01-02',
+        youth_party_date: '2026-12-25' // not a field on عزا — must be dropped, not rejected
+      }
+    });
+    assert.strictEqual(status, 201);
+    funeralEventId = body.eventId;
+
+    const row = await db.queryOne('SELECT youth_party_date FROM events WHERE id = ?', [funeralEventId]);
+    assert.strictEqual(row.youth_party_date, null);
+  });
+
+  await test('The default title generated for a funeral contains no festive wording', async () => {
+    const { body } = await api('GET', `/api/events/${funeralEventId}`);
+    const festiveWords = ['فرح', 'زفاف', 'مبارك'];
+    assert.ok(
+      festiveWords.every(word => !body.event.title.includes(word)),
+      `unexpected festive word in funeral title: ${body.event.title}`
+    );
+  });
+
+  console.log('\nEditing (ownership + amendment classification)');
+
+  let userEventId = 0;
+  await test('Set up: a logged-in user publishes an event (used for the edit-permission tests below)', async () => {
+    const { body } = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس ملكية الاختبار' }] })
+    });
+    userEventId = body.eventId;
+  });
+
+  await test('The owner can edit their own event', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: userToken,
+      body: { title: 'عنوان محدَّث من صاحب المناسبة' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic');
+  });
+
+  await test('A non-owner is rejected with 403', async () => {
+    const otherPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { body: registered } = await api('POST', '/api/auth/register', {
+      body: { phone_number: otherPhone, full_name: 'مستخدم آخر', pin_code: '1111' }
+    });
+    const { status } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: registered.token,
+      body: { title: 'محاولة تعديل غير مصرَّح بها' }
+    });
+    assert.strictEqual(status, 403);
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [otherPhone]);
+  });
+
+  await test('An admin can edit any event, including one it does not own', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: adminToken,
+      body: { family_clan: 'آل الاختبار المعدَّل' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic');
+  });
+
+  await test('An orphaned event (created_by IS NULL) can only be edited by an admin', async () => {
+    const seeded = await db.queryOne('SELECT id, title FROM events WHERE created_by IS NULL LIMIT 1');
+    assert.ok(seeded, 'expected at least one legacy orphaned event from the seed');
+
+    const rejected = await api('PATCH', `/api/events/${seeded.id}`, {
+      token: userToken,
+      body: { title: 'محاولة تعديل مناسبة يتيمة' }
+    });
+    assert.strictEqual(rejected.status, 403);
+
+    const accepted = await api('PATCH', `/api/events/${seeded.id}`, {
+      token: adminToken,
+      body: { title: seeded.title }
+    });
+    assert.strictEqual(accepted.status, 200);
+  });
+
+  await test('A cosmetic edit (title) keeps an approved event approved', async () => {
+    await api('PATCH', `/api/admin/events/${userEventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: userToken,
+      body: { title: 'عنوان تجميلي آخر' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic');
+    assert.strictEqual(body.status, 'approved');
+  });
+
+  await test('A critical edit (event_date) sends an approved event back to pending', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: userToken,
+      body: { event_date: '2027-03-01' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+  });
+
+  await test('GET /api/my-events returns what this user published, across all statuses', async () => {
+    const { status, body } = await api('GET', '/api/my-events', { token: userToken });
+    assert.strictEqual(status, 200);
+    assert.ok(body.events.some(e => e.id === userEventId));
+  });
+
+  await test('Ownership transfer works for an admin, and is rejected for anyone else', async () => {
+    const adminUser = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [config.admin.phone]);
+
+    const rejected = await api('PATCH', `/api/admin/events/${userEventId}/owner`, {
+      token: userToken,
+      body: { user_id: adminUser.id }
+    });
+    assert.strictEqual(rejected.status, 403);
+
+    const accepted = await api('PATCH', `/api/admin/events/${userEventId}/owner`, {
+      token: adminToken,
+      body: { user_id: adminUser.id }
+    });
+    assert.strictEqual(accepted.status, 200);
+    assert.strictEqual(accepted.body.event.created_by, adminUser.id);
+  });
+
+  // Clean up every event created for this section.
+  await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [honoreeSearchEventId, funeralEventId, userEventId]);
+
   console.log('\nCoordinate migration');
   const insertWithCoords = async (town, lat, lng, eventDate) => {
     const { insertId } = await db.execute(
@@ -506,12 +763,11 @@ async function run() {
   await test("An event in 'القرى والتجمعات' with no explicit coordinates gets no pin", async () => {
     const { body: created } = await api('POST', '/api/events', {
       token: adminToken,
-      body: {
-        groom_name: 'عريس بلا إحداثيات',
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس بلا إحداثيات' }],
         town: 'القرى والتجمعات',
-        location_name: 'ديوان الاختبار',
         event_date: '2027-01-04'
-      }
+      })
     });
     assert.strictEqual(created.status, 'approved');
     const { body } = await api('GET', `/api/events/${created.eventId}`);
@@ -521,15 +777,21 @@ async function run() {
   });
 
   console.log('\nModeration flow');
+
+  // Behaviour change: publishing used to be public (no token) and always
+  // landed in the moderation queue. It now requires authentication —
+  // ownership is built from the publish itself — so an anonymous submission
+  // is rejected outright instead of queued.
+  await test('POST /api/events without a token is rejected (publishing now requires an account)', async () => {
+    const { status } = await api('POST', '/api/events', { body: weddingEventBody() });
+    assert.strictEqual(status, 401);
+  });
+
   let createdEventId = 0;
-  await test('A public submission lands in the pending queue', async () => {
+  await test('A logged-in (non-admin) submission lands in the pending queue', async () => {
     const { status, body } = await api('POST', '/api/events', {
-      body: {
-        groom_name: 'عريس الاختبار',
-        town: 'حورة',
-        location_name: 'ديوان الاختبار',
-        event_date: '2026-12-31'
-      }
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس الاختبار' }] })
     });
     assert.strictEqual(status, 201);
     assert.strictEqual(body.status, 'pending');
@@ -544,12 +806,12 @@ async function run() {
   await test('An admin submission publishes immediately', async () => {
     const { body } = await api('POST', '/api/events', {
       token: adminToken,
-      body: {
-        groom_name: 'عريس الإدارة',
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس الإدارة' }],
         town: 'كسيفة',
         location_name: 'ديوان الإدارة',
         event_date: '2026-12-30'
-      }
+      })
     });
     assert.strictEqual(body.status, 'approved');
     await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
@@ -557,7 +819,8 @@ async function run() {
 
   await test('An unknown town is rejected', async () => {
     const { status } = await api('POST', '/api/events', {
-      body: { groom_name: 'س', town: 'مدينة وهمية', location_name: 'x', event_date: '2026-12-31' }
+      token: userToken,
+      body: weddingEventBody({ town: 'مدينة وهمية' })
     });
     assert.strictEqual(status, 400);
   });

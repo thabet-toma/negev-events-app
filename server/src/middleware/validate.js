@@ -69,6 +69,39 @@ function parseAmount(value) {
   return Math.round(amount * 100) / 100;
 }
 
+/**
+ * Ceiling on how many honorees one publish/edit request may carry. "1..N" in
+ * the domain (a حج group, say) is a real range, not an invitation to accept
+ * an unbounded array — a few dozen covers any realistic group of pilgrims or
+ * a wedding couple with room to spare, while still refusing a payload of
+ * thousands of rows in a single INSERT loop.
+ */
+const MAX_HONOREES = 50;
+
+/**
+ * Cleans a submitted honorees array into `{ name, role }` pairs, dropping any
+ * entry whose name is empty after trimming (this is how an optional slot,
+ * like the bride's name on a wedding, ends up simply absent instead of
+ * needing a dedicated branch). Whether the resulting list must be non-empty
+ * is a caller decision — it depends on the occasion type's field label, which
+ * this module knows nothing about.
+ */
+function parseHonorees(raw, { max = MAX_HONOREES } = {}) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw ApiError.badRequest('صيغة أصحاب المناسبة غير صالحة');
+  }
+  if (raw.length > max) {
+    throw ApiError.badRequest(`عدد أصحاب المناسبة يتجاوز الحد المسموح (${max})`);
+  }
+  return raw
+    .map(item => ({
+      name: cleanString(item && item.name, 150),
+      role: cleanString(item && item.role, 60)
+    }))
+    .filter(honoree => honoree.name);
+}
+
 module.exports = {
   cleanString,
   requireFields,
@@ -78,5 +111,7 @@ module.exports = {
   isValidPhone,
   parseCoordinate,
   parseId,
-  parseAmount
+  parseAmount,
+  parseHonorees,
+  MAX_HONOREES
 };
