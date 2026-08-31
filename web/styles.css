@@ -1515,3 +1515,34 @@ body {
   color: var(--gold-primary);
   margin-bottom: 12px;
 }
+
+/* Occasion type picker & dynamic honoree list — write path (#20 step 9) */
+.type-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.honoree-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.honoree-row input {
+  flex: 1;
+}
+
+/* "مناسباتي" status tag — same colour language as the pending/approved/rejected badges elsewhere */
+.status-tag {
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-tag.pending { background: rgba(243, 199, 104, 0.2); color: var(--gold-primary); }
+.status-tag.approved { background: rgba(16, 231, 157, 0.2); color: var(--emerald-neon); }
+.status-tag.rejected { background: rgba(239, 68, 68, 0.2); color: #ef4444; }

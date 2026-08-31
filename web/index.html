@@ -156,97 +156,32 @@
       </div>
 
       <form id="addEventForm" class="app-form" onsubmit="handleEventSubmit(event)">
-        
+
         <!-- Live Collision Alert Box -->
         <div id="collisionAlert" class="collision-box" style="display: none;"></div>
 
+        <!-- Occasion type — first step; the rest of the form is built from it (#20 step 9) -->
         <div class="form-group">
-          <label>اسم العريس الكريم *</label>
-          <input type="text" id="addGroomName" placeholder="مثال: طارق سالم الهزيل" required oninput="checkDateCollisionLive()">
-        </div>
-
-        <div class="form-row">
-          <div class="form-group half">
-            <label>البلدة / المنطقة *</label>
-            <select id="addTown" required onchange="checkDateCollisionLive(); recenterLocationPicker();">
-              <option value="رهط">رهط</option>
-              <option value="حورة">حورة</option>
-              <option value="تل السبع">تل السبع</option>
-              <option value="كسيفة">كسيفة</option>
-              <option value="شقيب السلام">شقيب السلام</option>
-              <option value="اللقية">اللقية</option>
-              <option value="عرعرة النقب">عرعرة النقب</option>
-              <option value="القرى والتجمعات">القرى والتجمعات</option>
-            </select>
-          </div>
-
-          <div class="form-group half">
-            <label>العشيرة / العائلة</label>
-            <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
+          <label>نوع المناسبة *</label>
+          <div id="occasionTypePicker" class="type-picker-row">
+            <div class="loading-spinner"><div class="spinner"></div></div>
           </div>
         </div>
 
-        <div class="form-row">
-          <div class="form-group half">
-            <label>تاريخ الفرح *</label>
-            <input type="date" id="addEventDate" required onchange="checkDateCollisionLive()">
-          </div>
-          <div class="form-group half">
-            <label>سهرة الشباب والدحة (اختياري)</label>
-            <input type="date" id="addYouthDate">
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group half">
-            <label>وقت طعام العشاء</label>
-            <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً" value="الساعة 8:00 مساءً">
-          </div>
-          <div class="form-group half">
-            <label>رقم هاتف المعلن (للتواصل)</label>
-            <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label>وصف المكان والديوان (لخرائط Waze و Google) *</label>
-          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان - رهط بالقرب من الدوار الشرقي" required>
-        </div>
-
-        <div class="form-group">
-          <div class="location-picker-toolbar">
-            <label>حدّد موقع القاعة أو الديوان على الخريطة *</label>
-            <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
-              <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
-            </button>
-          </div>
-          <div id="addLocationPickerMap" class="location-picker-map"></div>
-          <p class="location-picker-hint">اسحب الدبّوس إلى موقع القاعة بدقة، أو انقر على المكان الصحيح على الخريطة</p>
-          <input type="hidden" id="addLat">
-          <input type="hidden" id="addLng">
-        </div>
-
-        <!-- File Uploads -->
-        <div class="upload-section">
-          <div class="upload-box">
-            <i class="fa-solid fa-image upload-icon"></i>
-            <h4>صورة كرت الدعوة المعلن</h4>
-            <p>اختر صورة الكرت من الهاتف</p>
-            <input type="file" id="addPosterFile" accept="image/*">
-          </div>
-
-          <div class="upload-box audio-upload">
-            <i class="fa-solid fa-music upload-icon"></i>
-            <h4>مقطع صوتي / شيلة الفرح (اختياري)</h4>
-            <p>أرفق شيلة الترحيب أو قصيدة العرس (MP3/M4A)</p>
-            <input type="file" id="addAudioFile" accept="audio/*">
-          </div>
-        </div>
+        <!-- Populated by JS from the chosen occasion type's own field config -->
+        <div id="dynamicFormFields"></div>
 
         <button type="submit" class="submit-btn" id="submitEventBtn">
           <i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة
         </button>
       </form>
+
+      <!-- "مناسباتي" — every event this account published, with its current status (#20 step 9) -->
+      <div class="page-title-box" style="margin-top: 26px;">
+        <h2><i class="fa-solid fa-list-check"></i> مناسباتي</h2>
+        <p>كل مناسبة نشرتها من هذا الحساب، بحالتها الحالية</p>
+      </div>
+      <div id="myEventsList" class="events-feed"></div>
     </section>
 
     <!-- TAB 4: NOKOOT SECRET LEDGER & FINANCIAL ANALYTICS (دفتر النقوط المالي والتحليلات) -->
@@ -462,7 +397,7 @@
 
       <!-- Chat Input Area -->
       <form id="chatForm" class="chat-input-row" onsubmit="sendCongratulation(event)">
-        <input type="text" id="chatSenderName" placeholder="اسمك الكريم" required style="max-width: 110px;">
+        <input type="text" id="chatSenderName" placeholder="سجّل الدخول لإرسال تبريكة" readonly style="max-width: 130px;">
         <input type="text" id="chatInputMessage" placeholder="اكتب تبريكتك للعريس..." required>
         <button type="submit" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
       </form>
@@ -550,6 +485,86 @@
           <input type="text" id="nokootNotes" placeholder="مثال: كان قد نقّطني 500 في عرس أخي">
         </div>
         <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ في السجل المالي</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 5: EDIT MY EVENT (#20 step 9) -->
+  <div id="editEventModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-pen"></i> تعديل المناسبة</h3>
+          <span class="modal-sub">تعديل الاسم أو الوصف أو الصورة يُحفظ فوراً وتبقى المناسبة منشورة — أما تعديل التاريخ أو البلدة أو المكان فيُعيدها لمراجعة الإدارة قبل نشرها مجدداً</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeEditEventModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form id="editEventForm" class="app-form" onsubmit="handleEventEditSubmit(event)">
+        <input type="hidden" id="editEventId">
+
+        <div class="form-group">
+          <label>أصحاب المناسبة</label>
+          <div id="editHonoreesList"></div>
+          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('editHonoreesList')">
+            <i class="fa-solid fa-plus"></i> إضافة اسم
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label>العنوان</label>
+          <input type="text" id="editTitle">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>البلدة</label>
+            <select id="editTown"></select>
+          </div>
+          <div class="form-group half">
+            <label>العائلة / العشيرة</label>
+            <input type="text" id="editFamily">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>تاريخ المناسبة</label>
+            <input type="date" id="editEventDate">
+          </div>
+          <div class="form-group half">
+            <label>تاريخ الانتهاء (إن وجد)</label>
+            <input type="date" id="editEventEndDate">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>سهرة الشباب والدحة (إن وجدت)</label>
+          <input type="date" id="editYouthDate">
+        </div>
+
+        <div class="form-group">
+          <label>وصف المكان والديوان</label>
+          <input type="text" id="editLocationName">
+        </div>
+
+        <div class="form-group">
+          <label>مكان إضافي (اختياري)</label>
+          <input type="text" id="editSecondaryLocationName">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>وقت طعام العشاء</label>
+            <input type="text" id="editDinnerTime">
+          </div>
+          <div class="form-group half">
+            <label>رقم هاتف المعلن</label>
+            <input type="tel" id="editHostPhone">
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ التعديل</button>
       </form>
     </div>
   </div>

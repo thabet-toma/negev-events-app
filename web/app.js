@@ -15,7 +15,18 @@ let locationPickerMap = null;
 let locationPickerMarker = null;
 let pickerPinPlacedByUser = false;
 let townCoordinates = {};
+let townsList = [];
 const NEGEV_NEUTRAL_CENTER = [31.2858, 34.8431];
+
+// Publish form — occasion type drives the rest of the form (#20 step 9)
+let occasionTypesCache = null;
+let selectedOccasionType = null;
+let myEventsCache = [];
+
+// Write actions (publish, congratulate) require login; browsing never does.
+// Set right before openAuthModal() so a successful login/register can pick
+// back up exactly what the visitor was trying to do (#20 step 9).
+let pendingIntent = null;
 
 // Auth State
 let currentUser = JSON.parse(localStorage.getItem('negev_user') || 'null');
@@ -32,9 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initAppDownload();
   
   const today = new Date().toISOString().split('T')[0];
-  const dateInput = document.getElementById('addEventDate');
-  if (dateInput) dateInput.value = today;
-  
+
   const nokootDateInput = document.getElementById('nokootDate');
   if (nokootDateInput) nokootDateInput.value = today;
 });
@@ -404,16 +413,27 @@ async function initLeafletMap() {
 // أي نقطة: من يملأ هذا النموذج غالباً في بيته قبل أسابيع من المناسبة، لا في
 // القاعة نفسها، فموقعه الحالي ليس موقع المناسبة.
 
-/** يجلب مراكز البلدات من الخادم مرة واحدة فقط، عند أول فتح لمنتقي الخريطة. */
+/** يجلب مراكز البلدات وقائمة البلدات نفسها من الخادم مرة واحدة فقط. */
 async function loadTownCoordinates() {
   if (Object.keys(townCoordinates).length) return;
   try {
     const res = await apiFetch('/api/towns');
     const data = await res.json();
-    if (data.success && data.town_coordinates) townCoordinates = data.town_coordinates;
+    if (data.success) {
+      if (data.town_coordinates) townCoordinates = data.town_coordinates;
+      if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
+    }
   } catch (e) {
     console.error('Town coordinates error:', e);
   }
+}
+
+/** يملأ قائمة بلدات منسدلة من townsList (مجلوبة من الخادم، لا قائمة مثبَّتة). */
+function populateTownSelect(selectId, selectedValue) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = townsList.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  if (selectedValue) select.value = selectedValue;
 }
 
 function setPickerCoordinates(lat, lng) {
@@ -587,12 +607,20 @@ async function simulateAICardScan() {
 
     if (data.success && data.extracted) {
       const ext = data.extracted;
-      document.getElementById('addGroomName').value = ext.groom_name;
-      document.getElementById('addFamily').value = ext.family_clan;
-      document.getElementById('addTown').value = ext.town;
-      document.getElementById('addEventDate').value = ext.event_date;
-      document.getElementById('addDinnerTime').value = ext.dinner_time;
-      document.getElementById('addLocationName').value = ext.location_name;
+      // النموذج لم يعد يملك حقل «اسم العريس» مستقلاً — أول صاحب مناسبة في
+      // القائمة الديناميكية هو ما يُملأ الآن (#20 step 9).
+      const firstHonoreeName = document.querySelector('#addHonoreesList .honoree-row .honoree-name');
+      if (firstHonoreeName) firstHonoreeName.value = ext.groom_name;
+      const familyInput = document.getElementById('addFamily');
+      if (familyInput) familyInput.value = ext.family_clan;
+      const townInput = document.getElementById('addTown');
+      if (townInput) townInput.value = ext.town;
+      const dateInput = document.getElementById('addEventDate');
+      if (dateInput) dateInput.value = ext.event_date;
+      const dinnerInput = document.getElementById('addDinnerTime');
+      if (dinnerInput) dinnerInput.value = ext.dinner_time;
+      const locationInput = document.getElementById('addLocationName');
+      if (locationInput) locationInput.value = ext.location_name;
 
       checkDateCollisionLive();
       recenterLocationPicker();
@@ -626,7 +654,13 @@ async function sendReaction(eventId, type, btnElement) {
 }
 
 // 10. Navigation Tabs Switcher
+//
+// «إعلان مناسبة» هو أول لحظة كتابة، فالدخول يُطلَب هنا فقط — القراءة (باقي
+// التبويبات) تبقى مفتوحة بلا حساب (#20 step 9). طلب الدخول يحفظ النيّة
+// (pendingIntent) ليعود الزائر لهذا التبويب نفسه بعد الدخول، لا أن يضيع طلبه.
 function switchTab(tabId) {
+  if (tabId === 'tabAdd' && !requireAuth({ type: 'publish' })) return;
+
   document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active-tab'));
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
 
@@ -642,7 +676,38 @@ function switchTab(tabId) {
   if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
-  else if (tabId === 'tabAdd') initLocationPickerMap();
+  else if (tabId === 'tabAdd') {
+    if (!occasionTypesCache) initPublishForm();
+    fetchMyEvents();
+  }
+}
+
+/**
+ * يحرس أي فعل كتابة (نشر، تبريك). زائر بلا حساب يُحوَّل إلى شاشة الدخول
+ * الموجودة أصلاً بدل شاشة جديدة، ونيّته (pendingIntent) تُستأنف تلقائياً بعد
+ * نجاح الدخول أو التسجيل — القراءة نفسها لا تمرّ من هنا أبداً (#20 step 9).
+ */
+function requireAuth(intent) {
+  if (currentUser && authToken) return true;
+  pendingIntent = intent;
+  showToast('🔒 يرجى تسجيل الدخول أو إنشاء حساب أولاً للمتابعة');
+  openAuthModal();
+  return false;
+}
+
+/** يُستدعى بعد نجاح الدخول/التسجيل — يعيد الزائر إلى ما كان يحاول فعله بالضبط. */
+function resumePendingIntent() {
+  if (!pendingIntent) return;
+  const intent = pendingIntent;
+  pendingIntent = null;
+
+  if (intent.type === 'publish') {
+    switchTab('tabAdd');
+  } else if (intent.type === 'congratulate') {
+    // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
+    const senderInput = document.getElementById('chatSenderName');
+    if (senderInput && currentUser) senderInput.value = currentUser.full_name;
+  }
 }
 
 // 11. Town Filter & Search
@@ -673,11 +738,255 @@ function clearSearch() {
   fetchEvents();
 }
 
-// 12. Add Event & Collision Check
+// 12. Occasion Type Picker & Dynamic Publish Form (#20 step 9)
+//
+// النموذج لم يعد ثابتاً — نوع المناسبة (من GET /api/occasion-types، لا قائمة
+// مكتوبة هنا) يقرّر أي الحقول تظهر، بأي تسمية، وأيّها إجباري. أضف الخادم
+// نوعاً جديداً غداً فسيظهر هنا بلا أي تغيير في هذا الملف.
+
+/** يجلب أنواع المناسبات مرة واحدة فقط ويخزّنها. */
+async function loadOccasionTypes() {
+  if (occasionTypesCache) return occasionTypesCache;
+  try {
+    const res = await apiFetch('/api/occasion-types');
+    const data = await res.json();
+    occasionTypesCache = (data.success && data.types) ? data.types : [];
+  } catch (e) {
+    console.error('Occasion types error:', e);
+    occasionTypesCache = [];
+  }
+  return occasionTypesCache;
+}
+
+/** يبني منتقي الأنواع (خطوة أولى في النموذج) ويختار أول نوع نشِط تلقائياً. */
+async function initPublishForm() {
+  await loadTownCoordinates();
+  const picker = document.getElementById('occasionTypePicker');
+  const types = await loadOccasionTypes();
+
+  if (!types.length) {
+    picker.innerHTML = '<p class="location-picker-hint">لا توجد أنواع مناسبات متاحة حالياً</p>';
+    return;
+  }
+
+  picker.innerHTML = types.map(t => `
+    <button type="button" class="town-pill occasion-type-pill" data-type-id="${t.id}" onclick="selectOccasionType(${t.id})">
+      ${t.icon ? escapeHtml(t.icon) + ' ' : ''}${escapeHtml(t.name)}
+    </button>
+  `).join('');
+
+  selectOccasionType(types[0].id);
+}
+
+function selectOccasionType(typeId) {
+  const type = occasionTypesCache.find(t => t.id === typeId);
+  if (!type) return;
+
+  document.querySelectorAll('#occasionTypePicker .occasion-type-pill').forEach(pill => {
+    pill.classList.toggle('active', Number(pill.dataset.typeId) === typeId);
+  });
+
+  renderOccasionForm(type);
+}
+
+/** يبني بقية النموذج من حقول هذا النوع تحديداً — الظاهر فقط، بتسميته هو. */
+function renderOccasionForm(type) {
+  selectedOccasionType = type;
+  const orderedFields = [...type.fields].sort((a, b) => a.position - b.position);
+  const uploadFields = orderedFields.filter(f => f.field_key === 'poster_url' || f.field_key === 'audio_url');
+  const otherFields = orderedFields.filter(f => f.field_key !== 'poster_url' && f.field_key !== 'audio_url');
+
+  const container = document.getElementById('dynamicFormFields');
+  let html = otherFields.map(renderFieldHtml).join('');
+  if (uploadFields.length) {
+    html += `<div class="upload-section">${uploadFields.map(renderFieldHtml).join('')}</div>`;
+  }
+  container.innerHTML = html;
+
+  const fieldsByKey = {};
+  for (const f of type.fields) fieldsByKey[f.field_key] = f;
+
+  if (fieldsByKey.town) populateTownSelect('addTown');
+
+  const dateInput = document.getElementById('addEventDate');
+  if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+
+  if (fieldsByKey.honorees) addHonoreeRow('addHonoreesList');
+
+  // الخريطة مرتبطة بعنصر DOM أُعيد إنشاؤه للتو — أي مرجع قديم لها أصبح ميتاً.
+  locationPickerMap = null;
+  locationPickerMarker = null;
+  pickerPinPlacedByUser = false;
+  if (fieldsByKey.location_name) initLocationPickerMap();
+
+  document.getElementById('collisionAlert').style.display = 'none';
+}
+
+/** حقول المناسبة المعروفة (server/src/constants.js) — كل نوع يختار الظاهر منها فقط، هذا الجدول لا يخترع حقلاً جديداً. */
+function renderFieldHtml(field) {
+  const req = field.is_required ? ' *' : '';
+  const label = escapeHtml(field.label);
+
+  switch (field.field_key) {
+    case 'honorees':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <div id="addHonoreesList"></div>
+          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('addHonoreesList')">
+            <i class="fa-solid fa-plus"></i> إضافة اسم
+          </button>
+        </div>`;
+    case 'town':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <select id="addTown" onchange="checkDateCollisionLive(); recenterLocationPicker();"></select>
+        </div>`;
+    case 'event_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addEventDate" onchange="checkDateCollisionLive()">
+        </div>`;
+    case 'event_end_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addEventEndDate" onchange="checkDateCollisionLive()">
+        </div>`;
+    case 'youth_party_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addYouthDate">
+        </div>`;
+    case 'dinner_time':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً">
+        </div>`;
+    case 'host_phone':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
+        </div>`;
+    case 'title':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addTitle" placeholder="اتركه فارغاً ليُولَّد تلقائياً">
+        </div>`;
+    case 'family_clan':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
+        </div>`;
+    case 'location_name':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان بالقرب من الدوار الشرقي">
+        </div>
+        <div class="form-group">
+          <div class="location-picker-toolbar">
+            <label>حدّد الموقع على الخريطة</label>
+            <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
+              <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
+            </button>
+          </div>
+          <div id="addLocationPickerMap" class="location-picker-map"></div>
+          <p class="location-picker-hint">اسحب الدبّوس إلى الموقع الصحيح، أو انقر على المكان على الخريطة</p>
+          <input type="hidden" id="addLat">
+          <input type="hidden" id="addLng">
+        </div>`;
+    case 'secondary_location_name':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addSecondaryLocationName" placeholder="مكان إضافي (اختياري)">
+        </div>`;
+    case 'poster_url':
+      return `
+        <div class="upload-box">
+          <i class="fa-solid fa-image upload-icon"></i>
+          <h4>${label}${req}</h4>
+          <p>اختر صورة من الهاتف</p>
+          <input type="file" id="addPosterFile" accept="image/*">
+        </div>`;
+    case 'audio_url':
+      return `
+        <div class="upload-box audio-upload">
+          <i class="fa-solid fa-music upload-icon"></i>
+          <h4>${label}${req}</h4>
+          <p>أرفق شيلة أو مقطعاً صوتياً (MP3/M4A)</p>
+          <input type="file" id="addAudioFile" accept="audio/*">
+        </div>`;
+    case 'audio_title':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addAudioTitle" placeholder="مثال: شيلة الترحيب">
+        </div>`;
+    default:
+      return '';
+  }
+}
+
+// أصحاب المناسبة ١..N — مُدخل ديناميكي مشترك بين نموذج النشر ونافذة التعديل.
+/** يضيف صفّاً جديداً (اسم + صفة اختيارية) إلى قائمة أصحاب مناسبة. */
+function addHonoreeRow(containerId, name = '', role = '') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'honoree-row';
+  row.innerHTML = `
+    <input type="text" class="honoree-name" placeholder="الاسم" value="${escapeHtml(name)}">
+    <input type="text" class="honoree-role" placeholder="الصفة (اختياري)" value="${escapeHtml(role)}">
+    <button type="button" class="nokoot-del-btn" onclick="this.parentElement.remove()"><i class="fa-solid fa-trash"></i></button>
+  `;
+  container.appendChild(row);
+}
+
+/** يقرأ كل صفوف القائمة الحالية، ويُسقط أي صفّ بلا اسم — نفس منطق الخادم بالضبط. */
+function collectHonorees(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.honoree-row'))
+    .map(row => ({
+      name: row.querySelector('.honoree-name').value.trim(),
+      role: row.querySelector('.honoree-role').value.trim()
+    }))
+    .filter(h => h.name);
+}
+
+/**
+ * يُرفق أصحاب المناسبة داخل FormData بصيغة `honorees[i][name]` —
+ * تحقّقنا فعلياً (اختبار مباشر على multer المُثبَّت في server/) أن هذه
+ * الصيغة، وحدها من بين الصيغ الممكنة عبر multipart، تصل إلى الخادم كمصفوفة
+ * كائنات `{name, role}` كما يتوقعها `parseHonorees` — لا JSON.stringify ولا
+ * تكرار الحقل باسم واحد (ذاك يصل كمصفوفة نصوص، فيُسقَط بالكامل).
+ */
+function appendHonoreesToFormData(formData, honorees) {
+  honorees.forEach((h, i) => {
+    formData.append(`honorees[${i}][name]`, h.name);
+    if (h.role) formData.append(`honorees[${i}][role]`, h.role);
+  });
+}
+
+// 13. Add Event & Collision Check
 async function checkDateCollisionLive() {
-  const date = document.getElementById('addEventDate').value;
-  const town = document.getElementById('addTown').value;
+  const dateInput = document.getElementById('addEventDate');
+  const townInput = document.getElementById('addTown');
   const alertBox = document.getElementById('collisionAlert');
+  if (!dateInput || !alertBox) return;
+
+  const date = dateInput.value;
+  const town = townInput ? townInput.value : null;
+  const endDateInput = document.getElementById('addEventEndDate');
 
   if (!date) {
     alertBox.style.display = 'none';
@@ -688,7 +997,12 @@ async function checkDateCollisionLive() {
     const res = await apiFetch('/api/check-collision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, town })
+      body: JSON.stringify({
+        date,
+        town,
+        event_end_date: endDateInput ? endDateInput.value : undefined,
+        occasion_type_id: selectedOccasionType ? selectedOccasionType.id : undefined
+      })
     });
     const data = await res.json();
 
@@ -714,30 +1028,93 @@ async function checkDateCollisionLive() {
 
 async function handleEventSubmit(e) {
   e.preventDefault();
+  if (!requireAuth({ type: 'publish' })) return;
+
+  const type = selectedOccasionType;
+  if (!type) {
+    alert('يرجى اختيار نوع المناسبة أولاً');
+    return;
+  }
+
+  const fieldsByKey = {};
+  for (const f of type.fields) fieldsByKey[f.field_key] = f;
+  const labelOf = key => (fieldsByKey[key] && fieldsByKey[key].label) || key;
+
+  const honorees = collectHonorees('addHonoreesList');
+  if (!honorees.length) {
+    alert(`${labelOf('honorees')} مطلوب`);
+    return;
+  }
+
+  const town = document.getElementById('addTown').value;
+  const eventDate = document.getElementById('addEventDate').value;
+  if (!eventDate) {
+    alert(`${labelOf('event_date')} مطلوب`);
+    return;
+  }
+
+  // نفس تحقّق الإجبارية الذي يطبّقه الخادم من إعداد النوع نفسه — قبل الإرسال
+  // لا بعده، برسالة تحمل تسمية الحقل في هذا النوع تحديداً.
+  const textFieldGetters = {
+    title: () => document.getElementById('addTitle')?.value.trim(),
+    family_clan: () => document.getElementById('addFamily')?.value.trim(),
+    location_name: () => document.getElementById('addLocationName')?.value.trim(),
+    secondary_location_name: () => document.getElementById('addSecondaryLocationName')?.value.trim(),
+    event_end_date: () => document.getElementById('addEventEndDate')?.value,
+    youth_party_date: () => document.getElementById('addYouthDate')?.value,
+    dinner_time: () => document.getElementById('addDinnerTime')?.value.trim(),
+    host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
+    audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
+    poster_url: () => document.getElementById('addPosterFile')?.files[0],
+    audio_url: () => document.getElementById('addAudioFile')?.files[0]
+  };
+
+  for (const [key, field] of Object.entries(fieldsByKey)) {
+    if (!field.is_required || key === 'honorees' || key === 'town' || key === 'event_date') continue;
+    const getter = textFieldGetters[key];
+    const value = getter ? getter() : null;
+    if (!value) {
+      alert(`${field.label} مطلوب`);
+      return;
+    }
+  }
+
   const btn = document.getElementById('submitEventBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
 
   const formData = new FormData();
-  formData.append('groom_name', document.getElementById('addGroomName').value);
-  formData.append('town', document.getElementById('addTown').value);
-  formData.append('family_clan', document.getElementById('addFamily').value);
-  formData.append('event_date', document.getElementById('addEventDate').value);
-  formData.append('youth_party_date', document.getElementById('addYouthDate').value);
-  formData.append('dinner_time', document.getElementById('addDinnerTime').value);
-  formData.append('host_phone', document.getElementById('addHostPhone').value);
-  formData.append('location_name', document.getElementById('addLocationName').value);
-  formData.append('latitude', document.getElementById('addLat').value);
-  formData.append('longitude', document.getElementById('addLng').value);
+  formData.append('occasion_type_id', type.id);
+  appendHonoreesToFormData(formData, honorees);
+  formData.append('town', town);
+  formData.append('event_date', eventDate);
 
-  const posterFile = document.getElementById('addPosterFile').files[0];
-  if (posterFile) formData.append('poster', posterFile);
+  const latInput = document.getElementById('addLat');
+  const lngInput = document.getElementById('addLng');
+  if (latInput && latInput.value) formData.append('latitude', latInput.value);
+  if (lngInput && lngInput.value) formData.append('longitude', lngInput.value);
 
-  const audioFile = document.getElementById('addAudioFile').files[0];
-  if (audioFile) formData.append('audio', audioFile);
+  if (fieldsByKey.title) formData.append('title', document.getElementById('addTitle').value);
+  if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('addFamily').value);
+  if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('addLocationName').value);
+  if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('addSecondaryLocationName').value);
+  if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('addEventEndDate').value);
+  if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('addYouthDate').value);
+  if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('addDinnerTime').value);
+  if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('addHostPhone').value);
+  if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('addAudioTitle').value);
+
+  if (fieldsByKey.poster_url) {
+    const posterFile = document.getElementById('addPosterFile').files[0];
+    if (posterFile) formData.append('poster', posterFile);
+  }
+  if (fieldsByKey.audio_url) {
+    const audioFile = document.getElementById('addAudioFile').files[0];
+    if (audioFile) formData.append('audio', audioFile);
+  }
 
   try {
-    const res = await apiFetch('/api/events', { method: 'POST', body: formData });
+    const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
     const data = await res.json();
 
     if (data.success) {
@@ -754,6 +1131,12 @@ async function handleEventSubmit(e) {
       document.getElementById('addEventForm').reset();
       document.getElementById('collisionAlert').style.display = 'none';
       clearPickerMarker();
+      const honoreesList = document.getElementById('addHonoreesList');
+      if (honoreesList) {
+        honoreesList.innerHTML = '';
+        addHonoreeRow('addHonoreesList');
+      }
+      fetchMyEvents();
       switchTab('tabHome');
       fetchEvents();
     } else {
@@ -767,7 +1150,183 @@ async function handleEventSubmit(e) {
   }
 }
 
-// 13. Live Chat & Congratulations Modal
+// 14. "مناسباتي" — ownership & editing (#20 step 9)
+const MY_EVENT_STATUS_LABELS = { approved: 'منشورة', pending: 'قيد المراجعة', rejected: 'مرفوضة' };
+
+async function fetchMyEvents() {
+  const container = document.getElementById('myEventsList');
+  if (!container || !currentUser || !authToken) return;
+
+  container.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب مناسباتك...</p></div>';
+
+  try {
+    const res = await apiFetch('/api/my-events', { auth: true });
+    const data = await res.json();
+    if (!data.success) {
+      container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+      return;
+    }
+    myEventsCache = data.events;
+    renderMyEvents(myEventsCache);
+  } catch (e) {
+    console.error('My events error:', e);
+    container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+  }
+}
+
+function renderMyEvents(events) {
+  const container = document.getElementById('myEventsList');
+  if (!events || !events.length) {
+    container.innerHTML = '<div class="empty-state"><p>لم تنشر أي مناسبة بعد</p></div>';
+    return;
+  }
+
+  container.innerHTML = events.map(evt => `
+    <div class="event-card">
+      <div class="card-header-bar">
+        <div class="card-clan-town">
+          <span class="town-badge">${escapeHtml(evt.town)}</span>
+          <span class="clan-text">${escapeHtml(evt.occasion_type?.name || '')}</span>
+        </div>
+        <span class="status-tag ${evt.status}">${MY_EVENT_STATUS_LABELS[evt.status] || evt.status}</span>
+      </div>
+      <div class="card-body">
+        <h2 class="event-main-title">${escapeHtml(evt.title || evt.groom_name)}</h2>
+        <div class="detail-item">
+          <i class="fa-solid fa-calendar-day"></i>
+          <span>${evt.event_date}</span>
+        </div>
+        <button class="record-nokoot-btn" style="width:100%; margin-top:10px;" onclick="openEditEventModal(${evt.id})">
+          <i class="fa-solid fa-pen"></i> تعديل
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+/**
+ * يطبّق إعداد النوع على نموذج التعديل الثابت: يخفي ما لا يخصّ هذا النوع
+ * ويعيد تسمية ما يبقى بتسميته فيه. بدون هذا يعرض تعديلُ عزاءٍ حقلَ «سهرة
+ * الشباب والدحة» — وهو نفس الأذى الذي بُني نموذج النشر كلّه لتجنّبه.
+ */
+function applyOccasionTypeToEditForm(evt) {
+  const EDIT_FIELD_INPUTS = {
+    honorees: 'editHonoreesList',
+    title: 'editTitle',
+    town: 'editTown',
+    family_clan: 'editFamily',
+    event_date: 'editEventDate',
+    event_end_date: 'editEventEndDate',
+    youth_party_date: 'editYouthDate',
+    location_name: 'editLocationName',
+    secondary_location_name: 'editSecondaryLocationName',
+    dinner_time: 'editDinnerTime',
+    host_phone: 'editHostPhone'
+  };
+
+  const typeId = evt.occasion_type && evt.occasion_type.id;
+  const type = occasionTypesCache.find(t => t.id === typeId);
+
+  const fieldsByKey = {};
+  if (type) for (const f of type.fields) fieldsByKey[f.field_key] = f;
+
+  for (const [fieldKey, elementId] of Object.entries(EDIT_FIELD_INPUTS)) {
+    const el = document.getElementById(elementId);
+    if (!el) continue;
+    const group = el.closest('.form-group');
+    if (!group) continue;
+
+    // نوع غير معروف للواجهة (نسخة أقدم من الأنواع) — أظهر كل شيء بدل إخفاء
+    // حقل يحمل بيانات حقيقية.
+    const field = type ? fieldsByKey[fieldKey] : { label: null, is_required: false };
+    if (!field) {
+      group.style.display = 'none';
+      continue;
+    }
+
+    group.style.display = '';
+    const label = group.querySelector('label');
+    if (label && field.label) label.textContent = field.label + (field.is_required ? ' *' : '');
+  }
+}
+
+function openEditEventModal(eventId) {
+  const evt = myEventsCache.find(e => e.id === eventId);
+  if (!evt) return;
+
+  document.getElementById('editEventId').value = evt.id;
+  document.getElementById('editTitle').value = evt.title || '';
+  document.getElementById('editFamily').value = evt.family_clan || '';
+  populateTownSelect('editTown', evt.town);
+  document.getElementById('editEventDate').value = evt.event_date || '';
+  document.getElementById('editEventEndDate').value = evt.event_end_date || '';
+  document.getElementById('editYouthDate').value = evt.youth_party_date || '';
+  document.getElementById('editLocationName').value = evt.location_name || '';
+  document.getElementById('editSecondaryLocationName').value = evt.secondary_location_name || '';
+  document.getElementById('editDinnerTime').value = evt.dinner_time || '';
+  document.getElementById('editHostPhone').value = evt.host_phone || '';
+
+  const honoreesList = document.getElementById('editHonoreesList');
+  honoreesList.innerHTML = '';
+  const honorees = (evt.honorees && evt.honorees.length) ? evt.honorees : [{ name: evt.groom_name || '', role: '' }];
+  honorees.forEach(h => addHonoreeRow('editHonoreesList', h.name, h.role || ''));
+
+  applyOccasionTypeToEditForm(evt);
+  document.getElementById('editEventModal').style.display = 'flex';
+}
+
+function closeEditEventModal() {
+  document.getElementById('editEventModal').style.display = 'none';
+}
+
+async function handleEventEditSubmit(e) {
+  e.preventDefault();
+  const eventId = document.getElementById('editEventId').value;
+
+  const honorees = collectHonorees('editHonoreesList');
+  if (!honorees.length) {
+    alert('يجب إدخال اسم واحد على الأقل لأصحاب المناسبة');
+    return;
+  }
+
+  const payload = {
+    title: document.getElementById('editTitle').value,
+    family_clan: document.getElementById('editFamily').value,
+    town: document.getElementById('editTown').value,
+    event_date: document.getElementById('editEventDate').value,
+    event_end_date: document.getElementById('editEventEndDate').value,
+    youth_party_date: document.getElementById('editYouthDate').value,
+    location_name: document.getElementById('editLocationName').value,
+    secondary_location_name: document.getElementById('editSecondaryLocationName').value,
+    dinner_time: document.getElementById('editDinnerTime').value,
+    host_phone: document.getElementById('editHostPhone').value,
+    honorees
+  };
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      // الرسالة تفرّق أصلاً بين التجميلي والحرِج — نعرضها كما هي، ونضيف تنبيه
+      // الموقع إن جاء (#20 step 9).
+      alert(data.message + (data.location_warning ? `\n\n⚠️ ${data.location_warning.message}` : ''));
+      closeEditEventModal();
+      fetchMyEvents();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء حفظ التعديل');
+    }
+  } catch (err) {
+    alert('تعذر حفظ التعديل — تحقق من الاتصال بالخادم');
+  }
+}
+
+// 15. Live Chat & Congratulations Modal
 async function openChatModal(eventId) {
   currentChatEventId = eventId;
   const modal = document.getElementById('chatModal');
@@ -777,8 +1336,12 @@ async function openChatModal(eventId) {
   const stream = document.getElementById('chatMessagesStream');
   stream.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب التبريكات...</p></div>';
 
+  const senderInput = document.getElementById('chatSenderName');
   if (currentUser) {
-    document.getElementById('chatSenderName').value = currentUser.full_name;
+    senderInput.value = currentUser.full_name;
+  } else {
+    senderInput.value = '';
+    senderInput.placeholder = 'سجّل الدخول لإرسال تبريكة';
   }
 
   try {
@@ -841,33 +1404,33 @@ function insertEmojiToChat(text) {
 async function sendCongratulation(e) {
   e.preventDefault();
   if (!currentChatEventId) return;
+  // التبريك فعل كتابة كالنشر — خلف authenticate على الخادم أيضاً، والاسم يُبنى
+  // من الحساب لا من الحقل (#20 step 9).
+  if (!requireAuth({ type: 'congratulate', eventId: currentChatEventId })) return;
 
-  const senderName = document.getElementById('chatSenderName').value.trim();
   const message = document.getElementById('chatInputMessage').value.trim();
-
-  if (!senderName || !message) return;
+  if (!message) return;
 
   try {
     const res = await apiFetch(`/api/events/${currentChatEventId}/congratulate`, {
       method: 'POST',
+      auth: true,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sender_name: senderName,
-        badge_title: 'مبارك الفرح',
-        message: message
-      })
+      body: JSON.stringify({ message })
     });
     const data = await res.json();
     if (data.success) {
       document.getElementById('chatInputMessage').value = '';
       openChatModal(currentChatEventId);
+    } else {
+      alert(data.message || 'تعذر إرسال التهنئة');
     }
   } catch (e) {
     alert('تعذر إرسال التهنئة');
   }
 }
 
-// 14. Nokoot Ledger & Financial Chart
+// 16. Nokoot Ledger & Financial Chart
 function loadNokootView() {
   const lockedView = document.getElementById('nokootLockedView');
   const unlockedView = document.getElementById('nokootUnlockedView');
@@ -1046,7 +1609,7 @@ async function deleteNokoot(id) {
   }
 }
 
-// 15. Auth Modal & Controller
+// 17. Auth Modal & Controller
 function openAuthModal() {
   document.getElementById('authModal').style.display = 'flex';
 }
@@ -1091,6 +1654,7 @@ async function handleLogin(e) {
       closeAuthModal();
       showToast(`مرحباً بك يا ${currentUser.full_name}`);
       loadNokootView();
+      resumePendingIntent();
     } else {
       alert(data.message || 'بيانات الدخول غير صحيحة');
     }
@@ -1123,6 +1687,7 @@ async function handleRegister(e) {
       closeAuthModal();
       showToast(`تم إنشاء حسابك وتفعيل السجل بنجاح!`);
       loadNokootView();
+      resumePendingIntent();
     } else {
       alert(data.message || 'حدث خطأ في التسجيل');
     }
@@ -1150,7 +1715,7 @@ function updateAuthUI() {
   }
 }
 
-// 16. Sticker Canvas Studio
+// 18. Sticker Canvas Studio
 function setStickerTheme(theme) {
   stickerTheme = theme;
   document.querySelectorAll('.theme-pill').forEach(p => p.classList.remove('active'));
