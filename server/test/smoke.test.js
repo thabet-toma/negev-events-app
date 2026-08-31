@@ -44,7 +44,29 @@ async function api(method, path, { body, token } = {}) {
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
+/**
+ * This suite WRITES to whatever database it is pointed at: it applies the
+ * schema, seeds, and creates users and events. Running it against production
+ * would pollute real data, so refuse unless explicitly overridden.
+ */
+function assertNotProduction() {
+  if (!config.isProduction || process.env.ALLOW_TESTS_ON_PRODUCTION === 'true') {
+    return;
+  }
+
+  const target = `${config.db.host}:${config.db.port}/${config.db.database}`;
+  console.error('');
+  console.error('✖ رُفض التشغيل: NODE_ENV=production.');
+  console.error(`  هذا الاختبار يكتب في ${target} (migrate + seed + صفوف تجريبية).`);
+  console.error('  شغّله على قاعدة تطوير أو حاوية مؤقتة.');
+  console.error('  للتجاوز عن قصد: ALLOW_TESTS_ON_PRODUCTION=true');
+  console.error('');
+  process.exit(1);
+}
+
 async function run() {
+  assertNotProduction();
+
   await db.waitForConnection();
   await migrate();
   await seed();

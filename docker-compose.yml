@@ -46,11 +46,17 @@ services:
       ADMIN_NAME: ${ADMIN_NAME:-مدير عام المنصة}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      APP_LATEST_VERSION: ${APP_LATEST_VERSION:-}
+      APP_MIN_VERSION: ${APP_MIN_VERSION:-}
+      APP_APK_URL: ${APP_APK_URL:-}
+      APP_RELEASE_NOTES: ${APP_RELEASE_NOTES:-}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-30}
     ports:
-      - "${PORT:-3000}:3000"
+      - "${BIND_HOST:-127.0.0.1}:${PORT:-3000}:3000"
     volumes:
       - negev_uploads:/app/uploads
+      # ملفات التوزيع من القرص لا من الصورة: تحديث APK لا يتطلب إعادة بناء.
+      - ./server/downloads:/app/downloads
     networks:
       - negev_net
 
@@ -65,7 +71,7 @@ services:
     volumes:
       - ./web:/usr/share/nginx/html:ro
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${BIND_HOST:-127.0.0.1}:${WEB_PORT:-8080}:80"
     networks:
       - negev_net
 
