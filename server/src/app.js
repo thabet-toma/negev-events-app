@@ -1,6 +1,5 @@
 'use strict';
 
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -13,8 +12,6 @@ const routes = require('./routes');
 const db = require('./db/pool');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
-
-const publicDir = path.join(__dirname, '..', 'public');
 
 function createApp() {
   const app = express();
@@ -60,14 +57,19 @@ function createApp() {
 
   app.use('/api', routes);
 
-  app.use(express.static(publicDir, { maxAge: config.isProduction ? '1h' : 0 }));
+  // Root gives a machine-readable identity instead of a web page: the UI is a
+  // separate deliverable (see ../web) and any number of clients share this API.
+  app.get('/', (req, res) => {
+    res.json({ name: 'negev-events-api', status: 'ok', api: '/api', health: '/health' });
+  });
+
   app.use('/uploads', express.static(uploadsDir, {
     maxAge: '7d',
     // Uploaded files are served as attachments-in-place, never executed.
     setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff')
   }));
 
-  app.use('/api', notFound);
+  app.use(notFound);
   app.use(errorHandler);
 
   return app;

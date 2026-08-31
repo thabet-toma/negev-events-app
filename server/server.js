@@ -31,10 +31,11 @@ async function start() {
 
   server.listen(config.port, config.host, () => {
     logger.info('====================================================');
-    logger.info('🌟 منصة وتطبيق مناسبات النقب — جاهزة للعمل');
-    logger.info(`📱 الواجهة الرئيسية:   http://localhost:${config.port}`);
-    logger.info(`👑 لوحة التحكم:        http://localhost:${config.port}/admin.html`);
+    logger.info('🌟 خادم منصة مناسبات النقب — جاهز للعمل');
+    logger.info(`🔌 الـAPI:              http://localhost:${config.port}/api`);
     logger.info(`❤️  فحص الصحة:          http://localhost:${config.port}/health`);
+    logger.info(`🖼️  الوسائط:            ${config.publicUrl}/uploads`);
+    logger.info('🖥️  الواجهة تُشغَّل بشكل منفصل من مجلد ../web');
     logger.info(`⚙️  البيئة: ${config.env} | قاعدة البيانات: ${config.db.host}:${config.db.port}/${config.db.database}`);
     logger.info('====================================================');
   });

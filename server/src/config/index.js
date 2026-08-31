@@ -17,6 +17,12 @@ function toInt(value, fallback) {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+function stripTrailingSlash(value) {
+  let out = value;
+  while (out.endsWith('/')) out = out.slice(0, -1);
+  return out;
+}
+
 const env = process.env.NODE_ENV || 'development';
 const isProduction = env === 'production';
 
@@ -30,6 +36,12 @@ const config = {
   isProduction,
   port: toInt(process.env.PORT, 3000),
   host: process.env.HOST || '0.0.0.0',
+
+  // The absolute origin this API is reachable at. Stored media paths are
+  // relative (/uploads/...), which only resolves for a client served from the
+  // same origin — every other client (web on its own host, Flutter, native)
+  // needs them absolute. Set PUBLIC_URL in production.
+  publicUrl: stripTrailingSlash(process.env.PUBLIC_URL || `http://localhost:${toInt(process.env.PORT, 3000)}`),
 
   jwt: {
     secret: jwtSecret,

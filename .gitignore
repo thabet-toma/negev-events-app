@@ -7,9 +7,9 @@ node_modules/
 !.env.example
 
 # Runtime data
-uploads/*
-!uploads/.gitkeep
-database/
+server/uploads/*
+!server/uploads/.gitkeep
+server/database/
 *.log
 logs/
 

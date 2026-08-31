@@ -2,6 +2,7 @@
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
+const { withAbsoluteMedia } = require('../utils/mediaUrl');
 
 /** Headline counters for the admin dashboard, in a single round trip each. */
 async function stats() {
@@ -31,16 +32,16 @@ async function stats() {
 }
 
 async function listEvents(status) {
-  if (status) {
-    return db.query('SELECT * FROM events WHERE status = ? ORDER BY created_at DESC', [status]);
-  }
-  return db.query('SELECT * FROM events ORDER BY created_at DESC');
+  const rows = status
+    ? await db.query('SELECT * FROM events WHERE status = ? ORDER BY created_at DESC', [status])
+    : await db.query('SELECT * FROM events ORDER BY created_at DESC');
+  return rows.map(withAbsoluteMedia);
 }
 
 async function updateEventStatus(eventId, status) {
   const { affectedRows } = await db.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
   if (!affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
-  return db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
+  return withAbsoluteMedia(await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]));
 }
 
 /** Deleting an event cascades to its reactions and congratulations. */

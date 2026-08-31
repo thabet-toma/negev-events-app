@@ -3,6 +3,7 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const { REACTION_TYPES, TOWN_COORDINATES, DEFAULT_POSTER } = require('../constants');
+const { withAbsoluteMedia } = require('../utils/mediaUrl');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
@@ -64,7 +65,7 @@ async function listPublicEvents({ town, date, search } = {}) {
 
   const reactionMap = await reactionsForEvents(events.map(e => e.id));
   return events.map(event => ({
-    ...event,
+    ...withAbsoluteMedia(event),
     reactions: reactionMap[event.id] || EMPTY_REACTIONS()
   }));
 }
@@ -88,7 +89,7 @@ async function getEventDetails(eventId) {
   for (const row of reactionRows) reactions[row.reaction_type] = Number(row.count);
 
   return {
-    ...event,
+    ...withAbsoluteMedia(event),
     views_count: event.views_count + 1,
     reactions,
     congratulations
@@ -105,7 +106,7 @@ async function listMapPoints() {
   );
 
   return rows.map(row => ({
-    ...row,
+    ...withAbsoluteMedia(row),
     waze_url: `https://waze.com/ul?ll=${row.latitude},${row.longitude}&navigate=yes`
   }));
 }
@@ -113,7 +114,7 @@ async function listMapPoints() {
 async function listStories() {
   const rows = await db.query('SELECT * FROM stories ORDER BY is_live DESC, id ASC');
   // The UI reads `isLive`; keep `is_live` too so API consumers see the raw column.
-  return rows.map(row => ({ ...row, isLive: Boolean(row.is_live) }));
+  return rows.map(row => ({ ...withAbsoluteMedia(row), isLive: Boolean(row.is_live) }));
 }
 
 /**

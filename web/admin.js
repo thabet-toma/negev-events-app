@@ -26,7 +26,7 @@ async function handleAdminLogin(e) {
   btn.disabled = true;
 
   try {
-    const res = await fetch('/api/admin/login', {
+    const res = await apiFetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone_number: phone, pin_code: pin })
@@ -77,9 +77,7 @@ async function loadAdminDashboard() {
 
 async function fetchKPIStats() {
   try {
-    const res = await fetch('/api/admin/stats', {
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch('/api/admin/stats');
     const data = await res.json();
 
     if (data.success) {
@@ -98,9 +96,7 @@ async function fetchKPIStats() {
 
 async function fetchAdminEvents() {
   try {
-    const res = await fetch('/api/admin/events', {
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch('/api/admin/events');
     const data = await res.json();
 
     if (data.success) {
@@ -200,12 +196,9 @@ function renderAdminEvents() {
 // 3. Status Actions (Approve / Reject / Delete)
 async function updateEventStatus(id, newStatus) {
   try {
-    const res = await fetch(`/api/admin/events/${id}/status`, {
+    const res = await adminFetch(`/api/admin/events/${id}/status`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${adminToken}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus })
     });
     const data = await res.json();
@@ -224,10 +217,7 @@ async function updateEventStatus(id, newStatus) {
 async function deleteAdminEvent(id) {
   if (!confirm('هل أنت متأكد من حذف هذه المناسبة نهائياً؟ لا يمكن التراجع عن ذلك.')) return;
   try {
-    const res = await fetch(`/api/admin/events/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch(`/api/admin/events/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchKPIStats();
       fetchAdminEvents();
@@ -261,9 +251,8 @@ async function handleDirectAdd(e) {
 
   try {
     // The admin JWT is what authorises immediate publishing.
-    const res = await fetch('/api/events', {
+    const res = await adminFetch('/api/events', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${adminToken}` },
       body: formData
     });
     const data = await res.json();
@@ -296,12 +285,9 @@ async function handleSendBroadcast(e) {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري البث...';
 
   try {
-    const res = await fetch('/api/admin/broadcast', {
+    const res = await adminFetch('/api/admin/broadcast', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${adminToken}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, message })
     });
     const data = await res.json();
@@ -323,9 +309,7 @@ async function handleSendBroadcast(e) {
 // 6. Comments Moderation
 async function fetchAdminComments() {
   try {
-    const res = await fetch('/api/admin/comments', {
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch('/api/admin/comments');
     const data = await res.json();
 
     if (data.success) {
@@ -372,10 +356,7 @@ async function fetchAdminComments() {
 async function deleteAdminComment(id) {
   if (!confirm('حذف هذا التعليق نهائياً؟')) return;
   try {
-    const res = await fetch(`/api/admin/comments/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch(`/api/admin/comments/${id}`, { method: 'DELETE' });
     if (res.ok) {
       fetchAdminComments();
       fetchKPIStats();
@@ -388,9 +369,7 @@ async function deleteAdminComment(id) {
 // 7. Users List
 async function fetchAdminUsers() {
   try {
-    const res = await fetch('/api/admin/users', {
-      headers: { 'Authorization': `Bearer ${adminToken}` }
-    });
+    const res = await adminFetch('/api/admin/users');
     const data = await res.json();
 
     if (data.success) {

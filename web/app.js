@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // 1. Socket.io Realtime Setup
 function initSocket() {
   try {
-    socket = io();
+    socket = io(API_BASE || undefined);
     socket.on('new_event_created', (data) => {
       showToast(`🎉 تم نشر مناسبة جديدة في ${data.town}: ${data.title}`);
       fetchEvents();
@@ -61,7 +61,7 @@ function dismissBanner() {
 // 2. Stories / Snaps Loader
 async function fetchStories() {
   try {
-    const res = await fetch('/api/stories');
+    const res = await apiFetch('/api/stories');
     const data = await res.json();
     const container = document.getElementById('storiesContainer');
 
@@ -87,7 +87,7 @@ async function fetchEvents() {
     let url = `/api/events?town=${encodeURIComponent(selectedTown)}`;
     if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
     
-    const res = await fetch(url);
+    const res = await apiFetch(url);
     const data = await res.json();
 
     if (data.success) {
@@ -306,7 +306,7 @@ async function initLeafletMap() {
   }
 
   try {
-    const res = await fetch('/api/map/events');
+    const res = await apiFetch('/api/map/events');
     const data = await res.json();
 
     if (data.success && data.points) {
@@ -350,7 +350,7 @@ async function generateAIPoem() {
   const clan = document.getElementById('aiClanInput').value.trim();
 
   try {
-    const res = await fetch('/api/ai/generate-poem', {
+    const res = await apiFetch('/api/ai/generate-poem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ groom_name: groom, clan: clan })
@@ -388,7 +388,7 @@ async function simulateAICardScan() {
   showToast('🔍 جاري مسح كرت الدعوة واستخراج البيانات بالذكاء الاصطناعي...');
   
   try {
-    const res = await fetch('/api/ai/scan-card', { method: 'POST' });
+    const res = await apiFetch('/api/ai/scan-card', { method: 'POST' });
     const data = await res.json();
 
     if (data.success && data.extracted) {
@@ -411,7 +411,7 @@ async function simulateAICardScan() {
 // 9. Reactions Controller
 async function sendReaction(eventId, type, btnElement) {
   try {
-    const res = await fetch(`/api/events/${eventId}/react`, {
+    const res = await apiFetch(`/api/events/${eventId}/react`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -489,7 +489,7 @@ async function checkDateCollisionLive() {
   }
 
   try {
-    const res = await fetch('/api/check-collision', {
+    const res = await apiFetch('/api/check-collision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date, town })
@@ -541,7 +541,7 @@ async function handleEventSubmit(e) {
   if (audioFile) formData.append('audio', audioFile);
 
   try {
-    const res = await fetch('/api/events', { method: 'POST', body: formData });
+    const res = await apiFetch('/api/events', { method: 'POST', body: formData });
     const data = await res.json();
 
     if (data.success) {
@@ -580,7 +580,7 @@ async function openChatModal(eventId) {
   }
 
   try {
-    const res = await fetch(`/api/events/${eventId}`);
+    const res = await apiFetch(`/api/events/${eventId}`);
     const data = await res.json();
 
     if (data.success) {
@@ -646,7 +646,7 @@ async function sendCongratulation(e) {
   if (!senderName || !message) return;
 
   try {
-    const res = await fetch(`/api/events/${currentChatEventId}/congratulate`, {
+    const res = await apiFetch(`/api/events/${currentChatEventId}/congratulate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -682,9 +682,7 @@ function loadNokootView() {
 
 async function fetchNokootRecords() {
   try {
-    const res = await fetch('/api/nokoot', {
-      headers: { 'Authorization': `Bearer ${authToken}` }
-    });
+    const res = await apiFetch('/api/nokoot', { auth: true });
     const data = await res.json();
 
     if (data.success) {
@@ -764,7 +762,7 @@ function renderNokootChart(townData) {
 }
 
 function exportNokootData() {
-  fetch('/api/nokoot', { headers: { 'Authorization': `Bearer ${authToken}` } })
+  apiFetch('/api/nokoot', { auth: true })
     .then(res => res.json())
     .then(data => {
       if (!data.success || !data.records || data.records.length === 0) {
@@ -811,12 +809,10 @@ async function handleAddNokoot(e) {
   const notes = document.getElementById('nokootNotes').value;
 
   try {
-    const res = await fetch('/api/nokoot', {
+    const res = await apiFetch('/api/nokoot', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}`
-      },
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         recipient_name: recipient,
         amount: amount,
@@ -841,10 +837,7 @@ async function handleAddNokoot(e) {
 async function deleteNokoot(id) {
   if (!confirm('هل أنت متأكد من حذف هذا القيد؟')) return;
   try {
-    const res = await fetch(`/api/nokoot/${id}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${authToken}` }
-    });
+    const res = await apiFetch(`/api/nokoot/${id}`, { method: 'DELETE', auth: true });
     if (res.ok) fetchNokootRecords();
   } catch (e) {
     console.error('Delete error:', e);
@@ -880,7 +873,7 @@ async function handleLogin(e) {
   const pin = document.getElementById('loginPin').value.trim();
 
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await apiFetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone_number: phone, pin_code: pin })
@@ -912,7 +905,7 @@ async function handleRegister(e) {
   const pin = document.getElementById('regPin').value.trim();
 
   try {
-    const res = await fetch('/api/auth/register', {
+    const res = await apiFetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ full_name: name, phone_number: phone, clan_town: clan, pin_code: pin })

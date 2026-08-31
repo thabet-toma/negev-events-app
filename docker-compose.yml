@@ -26,7 +26,7 @@ services:
       - negev_net
 
   app:
-    build: .
+    build: ./server
     container_name: negev_events_app
     restart: unless-stopped
     depends_on:
@@ -44,12 +44,28 @@ services:
       ADMIN_PHONE: ${ADMIN_PHONE:-0500000000}
       ADMIN_PIN: ${ADMIN_PIN:?set ADMIN_PIN in .env}
       ADMIN_NAME: ${ADMIN_NAME:-مدير عام المنصة}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-30}
     ports:
       - "${PORT:-3000}:3000"
     volumes:
       - negev_uploads:/app/uploads
+    networks:
+      - negev_net
+
+  # The web UI is a separate deployment that only talks to `app` over HTTP.
+  # Swap it for a CDN/static host in production; nothing here couples it to the API.
+  web:
+    image: nginx:alpine
+    container_name: negev_events_web
+    restart: unless-stopped
+    depends_on:
+      - app
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    ports:
+      - "${WEB_PORT:-8080}:80"
     networks:
       - negev_net
 
