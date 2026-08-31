@@ -156,7 +156,7 @@ class _SearchBar extends StatelessWidget {
         onChanged: onChanged,
         textInputAction: TextInputAction.search,
         decoration: InputDecoration(
-          hintText: 'ابحث باسم العريس أو العائلة أو البلدة…',
+          hintText: 'ابحث بالاسم أو العائلة أو البلدة…',
           prefixIcon: const Icon(Icons.search, color: AppTheme.gold),
           suffixIcon: controller.text.isEmpty
               ? null

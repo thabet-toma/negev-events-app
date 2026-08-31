@@ -58,9 +58,7 @@ class _MapScreenState extends State<MapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              point.title.isEmpty
-                  ? 'زفاف العريس ${point.groomName}'
-                  : point.title,
+              point.displayTitle,
               style: const TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,

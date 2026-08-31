@@ -1,13 +1,19 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
+import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
+import 'package:negev_events/screens/event_details_screen.dart';
+import 'package:negev_events/state/auth_store.dart';
+import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
+import 'package:negev_events/widgets/event_card.dart';
 
 /// عميل وهمي يرد بجسم ثابت — يختبر منطق العميل دون خادم حقيقي.
 NegevApi apiReturning(
@@ -163,6 +169,154 @@ void main() {
       expect(compareVersions('', '1.0.0'), lessThan(0));
       expect(compareVersions('abc', '1.0.0'), lessThan(0));
     });
+  });
+
+  group('مناسبة من نوع عزا — لا نصّ فرح، شرط إطلاق #20 (issue #11)', () {
+    // نوع «عزا»: solemn، بلا تفاعلات، وبلا حقول dinner_time/youth_party_date/audio_url —
+    // ونصوص أتت من إعداد النوع، لا من ثابت في العميل.
+    final solemnTypeJson = {
+      'id': 2,
+      'name': 'عزا',
+      'icon': '🕯️',
+      'color': '#4b5563',
+      'position': 2,
+      'is_active': true,
+      'creates_collision': false,
+      'warns_others': true,
+      'premoderate_messages': true,
+      'show_congratulations_count': true,
+      'show_followers_count': false,
+      'show_views_count': true,
+      'congratulations_label': 'تعازي',
+      'default_badge_title': null,
+      'default_poster_url': null,
+      'legacy_client_supported': false,
+      'tone': 'solemn',
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'المتوفَّى',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        {
+          'field_key': 'family_clan',
+          'label': 'العائلة',
+          'is_visible': true,
+          'is_required': false,
+          'position': 2,
+        },
+        {
+          'field_key': 'location_name',
+          'label': 'مكان العزاء',
+          'is_visible': true,
+          'is_required': true,
+          'position': 3,
+        },
+        {
+          'field_key': 'event_date',
+          'label': 'تاريخ الوفاة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 4,
+        },
+      ],
+      'reactions': <String>[],
+    };
+
+    final solemnEventJson = {
+      'id': 9,
+      'title': '',
+      'groom_name': '',
+      'family_clan': 'آل فلان',
+      'town': 'رهط',
+      'location_name': 'بيت العزاء',
+      'event_date': '2026-09-01',
+      'dinner_time': '',
+      'occasion_type': solemnTypeJson,
+      'honorees': [
+        {'name': 'سالم أبو فلان', 'role': null, 'position': 1},
+      ],
+      'congratulations_count': 3,
+      'congratulations': <Map<String, dynamic>>[],
+    };
+
+    testWidgets('كرت المناسبة لا يعرض عنوان زفاف ولا شريط تفاعلات', (tester) async {
+      final event = Event.fromJson(solemnEventJson);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(body: EventCard(event: event, onTap: () {})),
+          ),
+        ),
+      );
+
+      // الضرر المؤكَّد في #11: "زفاف العريس ‹اسم المتوفَّى›" فوق بطاقة عزاء.
+      expect(find.textContaining('زفاف العريس'), findsNothing);
+      // نوع بلا تفاعلات (عزا) لا يعرض أي شريط تفاعل إطلاقاً.
+      expect(find.textContaining('☕'), findsNothing);
+      expect(find.textContaining('🐎'), findsNothing);
+
+      // العنوان البديل جاء من النوع وأصحاب المناسبة، لا نص ثابت.
+      expect(find.textContaining('سالم أبو فلان'), findsOneWidget);
+      expect(find.textContaining('عزا'), findsWidgets);
+    });
+
+    testWidgets(
+      'تفاصيل مناسبة عزا: كل تسمية من النوع، ولا "شارك فرحتهم" ولا "العريس" ولا "تاريخ العرس"',
+      (tester) async {
+        final client = MockClient((request) async {
+          return http.Response(
+            jsonEncode({'success': true, 'event': solemnEventJson}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+        final auth = AuthStore(api);
+        final realtime = RealtimeService();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: AppServices(
+                api: api,
+                auth: auth,
+                realtime: realtime,
+                child: const EventDetailsScreen(eventId: 9),
+              ),
+            ),
+          ),
+        );
+
+        // تحميل: مؤشر انتظار قبل استجابة MockClient.
+        await tester.pump();
+        // استقرار بعد اكتمال الـFuture — لا pumpAndSettle لأنّ مؤشر التحميل متحرّك بلا نهاية.
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // الضرر المؤكَّد في #11 — نصوص فرح ثابتة يجب أن تغيب كلها في نوع عزا.
+        expect(find.textContaining('زفاف العريس'), findsNothing);
+        expect(find.text('شارك فرحتهم'), findsNothing);
+        expect(find.textContaining('العريس'), findsNothing);
+        expect(find.textContaining('تاريخ العرس'), findsNothing);
+
+        // بدلاً منها: التسميات جاءت من إعداد النوع نفسه.
+        expect(find.textContaining('المتوفَّى'), findsWidgets);
+        expect(find.textContaining('تاريخ الوفاة'), findsWidgets);
+        expect(find.textContaining('تعازي'), findsWidgets);
+
+        // نوع بلا تفاعلات: لا عنوان تفاعل ولا شريط تفاعلات إطلاقاً.
+        expect(find.text('تفاعل مع المناسبة'), findsNothing);
+
+        // dinner_time وyouth_party_date وaudio_url غير ظاهرة في هذا النوع.
+        expect(find.textContaining('موعد العشاء'), findsNothing);
+        expect(find.textContaining('سهرة الشباب'), findsNothing);
+      },
+    );
   });
 
   group('دفتر النقوط', () {

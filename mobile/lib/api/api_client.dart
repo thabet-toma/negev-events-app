@@ -38,8 +38,16 @@ class ApiClient {
     );
   }
 
+  /// وجودها وحده يخبر الخادم أنّ هذا عميل يعرف أنواع المناسبات — طلب بلا هذه
+  /// الترويسة لا يرى إلا النوع المدعوم للعملاء القدامى (عرس). القيمة نفسها
+  /// لا تُقارَن على الخادم، فرقم ثابت كافٍ (events.routes.js: isLegacyClient).
+  static const String _appVersionHeader = '1';
+
   Map<String, String> _headers({bool auth = false, bool json = false}) {
-    final headers = <String, String>{'Accept': 'application/json'};
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      'X-App-Version': _appVersionHeader,
+    };
     if (json) headers['Content-Type'] = 'application/json; charset=utf-8';
     if (auth && token != null && token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';

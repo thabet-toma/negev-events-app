@@ -5,6 +5,18 @@ import '../config.dart';
 import '../models/event.dart';
 import '../theme.dart';
 
+/// يحوّل لون النوع (`#RRGGBB` من الخادم) إلى [Color]، ويسقط إلى لون محايد
+/// إن فشل التحويل — نوع جديد بلون غير متوقّع لا يجب أن يُسقِط الواجهة.
+Color occasionTypeColor(String? hex) {
+  if (hex == null || hex.isEmpty) return AppTheme.gold;
+  var value = hex.trim();
+  if (value.startsWith('#')) value = value.substring(1);
+  if (value.length == 6) value = 'FF$value';
+  if (value.length != 8) return AppTheme.gold;
+  final parsed = int.tryParse(value, radix: 16);
+  return parsed == null ? AppTheme.gold : Color(parsed);
+}
+
 /// بطاقة مناسبة في القائمة.
 class EventCard extends StatelessWidget {
   const EventCard({super.key, required this.event, required this.onTap});
@@ -14,6 +26,13 @@ class EventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final type = event.occasionType;
+    final typeColor = occasionTypeColor(type?.color);
+    final showDinnerTime = type?.showsField('dinner_time') ?? true;
+    final showYouthParty = type?.showsField('youth_party_date') ?? true;
+    final showViews = type?.showViewsCount ?? true;
+    final reactionKeys = type?.reactions ?? const <String>[];
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -27,10 +46,12 @@ class EventCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (type != null) ...[
+                    _TypeBadge(type: type, color: typeColor),
+                    const SizedBox(height: 6),
+                  ],
                   Text(
-                    event.title.isEmpty
-                        ? 'زفاف العريس ${event.groomName}'
-                        : event.title,
+                    event.displayTitle,
                     style: const TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
@@ -47,18 +68,26 @@ class EventCard extends StatelessWidget {
                   ),
                   _IconLine(
                     icon: Icons.event_outlined,
-                    text: '${event.eventDate}  •  ${event.dinnerTime}',
+                    text: showDinnerTime && event.dinnerTime.isNotEmpty
+                        ? '${event.eventDate}  •  ${event.dinnerTime}'
+                        : event.eventDate,
                   ),
+                  if (showYouthParty && event.youthPartyDate != null)
+                    _IconLine(
+                      icon: Icons.nightlife_outlined,
+                      text: event.youthPartyDate!,
+                    ),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      ...AppConfig.reactions.entries.map((entry) {
-                        final count = event.reactions[entry.key] ?? 0;
+                      ...reactionKeys.map((key) {
+                        final count = event.reactions[key] ?? 0;
                         if (count == 0) return const SizedBox.shrink();
+                        final emoji = AppConfig.reactions[key] ?? key;
                         return Padding(
                           padding: const EdgeInsetsDirectional.only(end: 10),
                           child: Text(
-                            '${entry.value} $count',
+                            '$emoji $count',
                             style: const TextStyle(
                               fontSize: 13,
                               color: AppTheme.textSecondary,
@@ -67,19 +96,21 @@ class EventCard extends StatelessWidget {
                         );
                       }),
                       const Spacer(),
-                      const Icon(
-                        Icons.visibility_outlined,
-                        size: 15,
-                        color: AppTheme.textMuted,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${event.viewsCount}',
-                        style: const TextStyle(
-                          fontSize: 12.5,
+                      if (showViews) ...[
+                        const Icon(
+                          Icons.visibility_outlined,
+                          size: 15,
                           color: AppTheme.textMuted,
                         ),
-                      ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${event.viewsCount}',
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],
@@ -87,6 +118,43 @@ class EventCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// شارة نوع المناسبة — أيقونة ولون من الخادم، لا جدول ثابت في العميل.
+class _TypeBadge extends StatelessWidget {
+  const _TypeBadge({required this.type, required this.color});
+
+  final OccasionType type;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (type.icon.isNotEmpty) ...[
+            Text(type.icon, style: const TextStyle(fontSize: 13)),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            type.name,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -15,17 +15,33 @@ class NegevApi {
 
   // --- عام ---------------------------------------------------------
 
-  Future<List<Event>> listEvents({String? town, String? search}) async {
+  Future<List<Event>> listEvents({
+    String? town,
+    String? search,
+    int? occasionTypeId,
+  }) async {
     final query = <String, String>{};
     if (town != null && town.isNotEmpty && town != 'الكل') query['town'] = town;
     if (search != null && search.trim().isNotEmpty) {
       query['search'] = search.trim();
     }
+    if (occasionTypeId != null) query['occasion_type_id'] = '$occasionTypeId';
 
     final data = await _client.get('/api/events', query: query);
     final list = data['events'];
     if (list is! List) return const [];
     return list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList();
+  }
+
+  /// أنواع المناسبات النشِطة، مرتّبة، وبحقول كل نوع وتفاعلاته — لا قائمة ثابتة.
+  Future<List<OccasionType>> listOccasionTypes() async {
+    final data = await _client.get('/api/occasion-types');
+    final list = data['types'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(OccasionType.fromJson)
+        .toList();
   }
 
   Future<Event> eventDetails(int id) async {
@@ -61,19 +77,12 @@ class NegevApi {
     );
   }
 
-  Future<Congratulation> congratulate(
-    int eventId, {
-    required String senderName,
-    required String message,
-    String badgeTitle = 'مبارك الفرح',
-  }) async {
+  /// الهوية تُبنى من الحساب على الخادم — لا اسم ولا شارة يُرسَلان من العميل.
+  Future<Congratulation> congratulate(int eventId, {required String message}) async {
     final data = await _client.post(
       '/api/events/$eventId/congratulate',
-      body: {
-        'sender_name': senderName,
-        'message': message,
-        'badge_title': badgeTitle,
-      },
+      auth: true,
+      body: {'message': message},
     );
     final comment = data['comment'];
     if (comment is! Map<String, dynamic>) {
@@ -96,16 +105,38 @@ class NegevApi {
     return list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList();
   }
 
-  /// تقديم مناسبة. تدخل قائمة المراجعة ما لم يكن المُرسِل مديراً.
+  /// تقديم مناسبة. تدخل قائمة المراجعة ما لم يكن المُرسِل مديراً. تتطلب حساباً
+  /// (`events.created_by`) — `honorees` تُرسَل بصيغة الأقواس (`honorees[i][name]`)
+  /// التي يفهمها الخادم حصراً.
   Future<String> submitEvent({
+    required int occasionTypeId,
+    required List<Map<String, String>> honorees,
     required Map<String, String> fields,
     http.MultipartFile? poster,
     http.MultipartFile? audio,
   }) async {
+    final allFields = <String, String>{
+      'occasion_type_id': '$occasionTypeId',
+      ...fields,
+    };
+
+    var index = 0;
+    for (final honoree in honorees) {
+      final name = honoree['name']?.trim() ?? '';
+      if (name.isEmpty) continue;
+      allFields['honorees[$index][name]'] = name;
+      final role = honoree['role']?.trim();
+      if (role != null && role.isNotEmpty) {
+        allFields['honorees[$index][role]'] = role;
+      }
+      index++;
+    }
+
     final data = await _client.postMultipart(
       '/api/events',
-      fields: fields,
+      fields: allFields,
       files: [?poster, ?audio],
+      auth: true,
     );
     final message = data['message'];
     return message is String
