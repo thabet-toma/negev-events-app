@@ -10,6 +10,7 @@ import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
+import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
@@ -76,20 +77,25 @@ void main() {
         ],
       });
 
-      final events = await api.listEvents();
-      expect(events, hasLength(1));
-      expect(events.first.groomName, 'أحمد');
+      final page = await api.listEvents();
+      expect(page.events, hasLength(1));
+      expect(page.events.first.groomName, 'أحمد');
     });
 
-    test('يمرّر فلتر البلدة ويتجاهل "الكل"', () async {
+    test('يمرّر فلتر البلدة ويتجاهل "الكل"، ويرسل page/limit دائماً', () async {
       String? capturedQuery;
       final api = apiReturning(
-        {'success': true, 'events': []},
+        {
+          'success': true,
+          'events': [],
+          'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+        },
         onRequest: (request) => capturedQuery = request.url.query,
       );
 
       await api.listEvents(town: 'الكل');
-      expect(capturedQuery, isEmpty);
+      expect(capturedQuery, isNot(contains('town=')));
+      expect(capturedQuery, contains('page=1'));
 
       await api.listEvents(town: 'رهط');
       expect(capturedQuery, contains('town='));
@@ -350,6 +356,161 @@ void main() {
       expect(ledger.records.first.amount, 1000);
       expect(ledger.townBreakdown['رهط'], 1000);
       expect(ledger.averageNokoot, 750);
+    });
+  });
+
+  group('عدّادات التبريكات والمتابعين — الغياب لا يصير صفراً (سطح القراءة #20 خطوة ١٣)', () {
+    testWidgets('النموذج والكرت: الغياب لا يُقرأ ولا يُرسم كصفر، والصفر الحقيقي يُقرأ ويُرسم', (tester) async {
+      final missing = Event.fromJson({'id': 1, 'groom_name': 'م', 'town': 'رهط'});
+      // النموذج: مفتاح غائب من الـJSON يُقرأ null، لا صفراً.
+      expect(missing.congratulationsCount, isNull);
+      expect(missing.followersCount, isNull);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(
+              body: EventCard(
+                event: missing,
+                onTap: () {},
+                onCongratulationsTap: () {},
+                onRemindTap: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // النوع مطفئ العدّادين (بلا congratulations_count ولا followers_count
+      // في الـJSON إطلاقاً) — لا يظهر أي عدّاد، لا صفراً ولا شرطة.
+      expect(find.textContaining('تبريكات ('), findsNothing);
+      expect(find.textContaining('متابعون:'), findsNothing);
+
+      final zeroed = Event.fromJson({
+        'id': 2,
+        'groom_name': 'م',
+        'town': 'رهط',
+        'congratulations_count': 0,
+        'followers_count': 0,
+      });
+      // بالمقابل: صفر حقيقي من الخادم يُقرأ كصفر فعلاً في النموذج أيضاً.
+      expect(zeroed.congratulationsCount, 0);
+      expect(zeroed.followersCount, 0);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(
+              body: EventCard(
+                event: zeroed,
+                onTap: () {},
+                onCongratulationsTap: () {},
+                onRemindTap: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // وعلى الكرت: يُرسم كصفر فعلاً.
+      expect(find.text('تبريكات (0)'), findsOneWidget);
+      expect(find.text('متابعون: 0'), findsOneWidget);
+    });
+  });
+
+  group('شاشة المناسبات — تبويبات الأنواع (سطح القراءة #20 خطوة ١٣)', () {
+    testWidgets('تغيير التبويب يعيد الترقيم لصفحة ١ ويمرّر occasion_type_id للخادم', (tester) async {
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+
+        if (request.url.path.endsWith('/api/occasion-types')) {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'types': [
+                {
+                  'id': 5,
+                  'name': 'عزا',
+                  'icon': '🕯️',
+                  'color': '#4b5563',
+                  'position': 1,
+                  'is_active': true,
+                  'creates_collision': false,
+                  'warns_others': true,
+                  'premoderate_messages': true,
+                  'show_congratulations_count': true,
+                  'show_followers_count': false,
+                  'show_views_count': true,
+                  'congratulations_label': 'تعازي',
+                  'default_badge_title': null,
+                  'default_poster_url': null,
+                  'legacy_client_supported': false,
+                  'tone': 'solemn',
+                  'fields': <Map<String, dynamic>>[],
+                  'reactions': <String>[],
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+
+        if (request.url.path.endsWith('/api/stories')) {
+          return http.Response(
+            jsonEncode({'success': true, 'stories': <Map<String, dynamic>>[]}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'events': <Map<String, dynamic>>[],
+            'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+            'announcements': <Map<String, dynamic>>[],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: const EventsScreen(),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // نُصفّر السجلّ بعد التحميل الأول — يحمل هو نفسه page=1 أصلاً، والمطلوب
+      // إثباته هو ما يُرسَل بعد الضغط على التبويب تحديداً.
+      requests.clear();
+
+      await tester.tap(find.text('🕯️ عزا'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final eventsRequest = requests.firstWhere((uri) => uri.path.endsWith('/api/events'));
+      expect(eventsRequest.queryParameters['page'], '1');
+      expect(eventsRequest.queryParameters['occasion_type_id'], '5');
     });
   });
 }

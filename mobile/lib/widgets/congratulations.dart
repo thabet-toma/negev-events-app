@@ -1,0 +1,545 @@
+import 'package:flutter/material.dart';
+
+import '../main.dart';
+import '../models/event.dart';
+import '../screens/account_screen.dart';
+import '../theme.dart';
+import 'async_view.dart';
+
+/// حاجز دخول موحّد — نفس النمط المستعمل في شاشة التفاصيل وإضافة مناسبة.
+Future<void> openSignInGate(BuildContext context, String message) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: AppTheme.bgSecondary,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (sheetContext) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 30),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_outline, size: 40, color: AppTheme.textMuted),
+          const SizedBox(height: 14),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15.5,
+              color: AppTheme.textSecondary,
+              height: 1.6,
+            ),
+          ),
+          const SizedBox(height: 18),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(sheetContext).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SignInScreen()),
+              );
+            },
+            icon: const Icon(Icons.login),
+            label: const Text('تسجيل الدخول'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// ورقة كتابة تبريكة/تعزية — نفس منطق شاشة التفاصيل، مستخرَج هنا ليعاد
+/// استعماله من ورقة عرض الرسائل التي يفتحها الكرت مباشرةً.
+Future<void> openCongratulateSheet(
+  BuildContext context, {
+  required int eventId,
+  required String label,
+  required VoidCallback onSuccess,
+}) async {
+  final auth = AppServices.of(context).auth;
+  if (!auth.isSignedIn) {
+    await openSignInGate(context, 'سجّل الدخول لإرسال $label');
+    return;
+  }
+
+  final messageController = TextEditingController();
+  var sending = false;
+
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppTheme.bgSecondary,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 20,
+        bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
+      ),
+      child: StatefulBuilder(
+        builder: (sbContext, setSheetState) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'أضف $label',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.textGold,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: messageController,
+                maxLines: 3,
+                decoration: InputDecoration(labelText: label),
+              ),
+              const SizedBox(height: 18),
+              ElevatedButton(
+                onPressed: sending
+                    ? null
+                    : () async {
+                        final message = messageController.text.trim();
+                        if (message.isEmpty) {
+                          showMessage(sbContext, '$label مطلوبة', isError: true);
+                          return;
+                        }
+
+                        setSheetState(() => sending = true);
+                        try {
+                          await AppServices.of(sbContext)
+                              .api
+                              .congratulate(eventId, message: message);
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                          onSuccess();
+                        } catch (error) {
+                          if (sbContext.mounted) {
+                            showMessage(sbContext, '$error', isError: true);
+                          }
+                        } finally {
+                          setSheetState(() => sending = false);
+                        }
+                      },
+                child: Text(sending ? 'جارٍ الإرسال…' : 'إرسال $label'),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  messageController.dispose();
+}
+
+/// بطاقة رسالة واحدة — مشتركة بين شاشة التفاصيل وورقة عرض الرسائل السريعة.
+/// `onReport == null` يخفي زرّ الإبلاغ (يُستعمل في طابور المراجعة مثلاً).
+class CongratulationTile extends StatelessWidget {
+  const CongratulationTile({super.key, required this.comment, this.onReport});
+
+  final Congratulation comment;
+  final VoidCallback? onReport;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppTheme.bgCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.person, size: 15, color: AppTheme.gold),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  comment.senderName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              if (comment.badgeTitle != null && comment.badgeTitle!.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.goldDark.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    comment.badgeTitle!,
+                    style: const TextStyle(fontSize: 10.5, color: AppTheme.textGold),
+                  ),
+                ),
+              ],
+              if (comment.isPending) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.textMuted.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'قيد المراجعة',
+                    style: TextStyle(fontSize: 10.5, color: AppTheme.textMuted),
+                  ),
+                ),
+              ],
+              if (onReport != null)
+                IconButton(
+                  icon: const Icon(Icons.flag_outlined, size: 16, color: AppTheme.textMuted),
+                  tooltip: 'إبلاغ',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: onReport,
+                ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text(
+            comment.message,
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ورقة سفلية تعرض رسائل مناسبة وتتيح كتابة واحدة جديدة — هذا ما يفتحه
+/// الضغط على عدّاد التبريكات في الكرت مباشرةً (لا شاشة التفاصيل).
+Future<void> showCongratulationsListSheet(
+  BuildContext context, {
+  required int eventId,
+  required VoidCallback onChanged,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppTheme.bgSecondary,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (_) => _CongratulationsListSheetBody(eventId: eventId, onChanged: onChanged),
+  );
+}
+
+class _CongratulationsListSheetBody extends StatefulWidget {
+  const _CongratulationsListSheetBody({required this.eventId, required this.onChanged});
+
+  final int eventId;
+  final VoidCallback onChanged;
+
+  @override
+  State<_CongratulationsListSheetBody> createState() =>
+      _CongratulationsListSheetBodyState();
+}
+
+class _CongratulationsListSheetBodyState extends State<_CongratulationsListSheetBody> {
+  Future<Event>? _future;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _future ??= AppServices.of(context).api.eventDetails(widget.eventId);
+  }
+
+  void _refresh() {
+    if (!mounted) return;
+    setState(() => _future = AppServices.of(context).api.eventDetails(widget.eventId));
+    widget.onChanged();
+  }
+
+  Future<void> _report(int commentId) async {
+    try {
+      await AppServices.of(context).api.reportCongratulation(widget.eventId, commentId);
+      if (mounted) showMessage(context, 'تم إرسال البلاغ، شكراً لك');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: FutureBuilder<Event>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const SizedBox(
+              height: 160,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasError || snapshot.data == null) {
+            return SizedBox(
+              height: 160,
+              child: ErrorView(message: '${snapshot.error}', onRetry: _refresh),
+            );
+          }
+
+          final event = snapshot.data!;
+          final label = event.occasionType?.congratulationsLabel ?? 'تبريكات';
+
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textGold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 14),
+                if (event.congratulations.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    child: Text(
+                      'كن أول من يضيف $label',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: AppTheme.textMuted),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: event.congratulations
+                          .map((comment) => CongratulationTile(
+                                comment: comment,
+                                onReport: () => _report(comment.id),
+                              ))
+                          .toList(),
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  onPressed: () => openCongratulateSheet(
+                    context,
+                    eventId: widget.eventId,
+                    label: label,
+                    onSuccess: _refresh,
+                  ),
+                  icon: const Icon(Icons.add_comment_outlined),
+                  label: Text('أضف $label'),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// طابور مراجعة رسائل مناسبة — للمالك أو الإدارة فقط. الخادم يعيد 403 لغيرهما،
+/// والمُستدعي (شاشة التفاصيل) هو من يقرّر إظهار مدخل هذه الورقة أصلاً.
+Future<void> showModerationQueueSheet(
+  BuildContext context, {
+  required int eventId,
+  required VoidCallback onChanged,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppTheme.bgSecondary,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (_) => _ModerationQueueSheetBody(eventId: eventId, onChanged: onChanged),
+  );
+}
+
+class _ModerationQueueSheetBody extends StatefulWidget {
+  const _ModerationQueueSheetBody({required this.eventId, required this.onChanged});
+
+  final int eventId;
+  final VoidCallback onChanged;
+
+  @override
+  State<_ModerationQueueSheetBody> createState() => _ModerationQueueSheetBodyState();
+}
+
+class _ModerationQueueSheetBodyState extends State<_ModerationQueueSheetBody> {
+  Future<List<Congratulation>>? _future;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _future ??=
+        AppServices.of(context).api.moderationQueue(widget.eventId, status: 'pending');
+  }
+
+  void _refresh() {
+    if (!mounted) return;
+    setState(() {
+      _future =
+          AppServices.of(context).api.moderationQueue(widget.eventId, status: 'pending');
+    });
+    widget.onChanged();
+  }
+
+  Future<void> _moderate(int congratulationId, bool approve) async {
+    try {
+      await AppServices.of(context)
+          .api
+          .moderateCongratulation(widget.eventId, congratulationId, approve: approve);
+      _refresh();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  Future<void> _delete(int congratulationId) async {
+    try {
+      await AppServices.of(context).api.deleteCongratulation(widget.eventId, congratulationId);
+      _refresh();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: FutureBuilder<List<Congratulation>>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const SizedBox(
+              height: 160,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          final queue = snapshot.data ?? const <Congratulation>[];
+
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'طابور المراجعة',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textGold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 14),
+                if (queue.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 18),
+                    child: Text(
+                      'لا توجد رسائل قيد المراجعة',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppTheme.textMuted),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: queue.length,
+                      itemBuilder: (context, index) {
+                        final comment = queue[index];
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(13),
+                          decoration: BoxDecoration(
+                            color: AppTheme.bgCard,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.borderSubtle),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                comment.senderName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                comment.message,
+                                style: const TextStyle(color: AppTheme.textSecondary),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: () => _moderate(comment.id, true),
+                                      child: const Text('قبول'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: () => _moderate(comment.id, false),
+                                      child: const Text('رفض'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    tooltip: 'حذف',
+                                    onPressed: () => _delete(comment.id),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}

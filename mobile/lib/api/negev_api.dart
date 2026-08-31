@@ -2,6 +2,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/event.dart';
 import '../models/nokoot.dart';
+import '../models/notification.dart';
 import '../models/user.dart';
 import 'api_client.dart';
 
@@ -15,22 +16,44 @@ class NegevApi {
 
   // --- عام ---------------------------------------------------------
 
-  Future<List<Event>> listEvents({
+  /// صفحة من المناسبات العامة — القادمة افتراضياً، `archive: true` للمنتهية.
+  /// الترشيح كله على الخادم؛ لا تُرشَّح النتيجة ثانيةً في العميل.
+  Future<EventsPage> listEvents({
     String? town,
     String? search,
     int? occasionTypeId,
+    bool archive = false,
+    int page = 1,
+    int limit = 30,
   }) async {
-    final query = <String, String>{};
+    final query = <String, String>{'page': '$page', 'limit': '$limit'};
     if (town != null && town.isNotEmpty && town != 'الكل') query['town'] = town;
     if (search != null && search.trim().isNotEmpty) {
       query['search'] = search.trim();
     }
     if (occasionTypeId != null) query['occasion_type_id'] = '$occasionTypeId';
+    if (archive) query['archive'] = '1';
 
     final data = await _client.get('/api/events', query: query);
     final list = data['events'];
-    if (list is! List) return const [];
-    return list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList();
+    final events = list is List
+        ? list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList()
+        : <Event>[];
+
+    final rawPagination = data['pagination'];
+    final pagination = rawPagination is Map<String, dynamic>
+        ? Pagination.fromJson(rawPagination)
+        : Pagination(page: page, limit: limit, total: events.length, totalPages: 1);
+
+    final rawAnnouncements = data['announcements'];
+    final announcements = rawAnnouncements is List
+        ? rawAnnouncements
+            .whereType<Map<String, dynamic>>()
+            .map(Announcement.fromJson)
+            .toList()
+        : <Announcement>[];
+
+    return EventsPage(events: events, pagination: pagination, announcements: announcements);
   }
 
   /// أنواع المناسبات النشِطة، مرتّبة، وبحقول كل نوع وتفاعلاته — لا قائمة ثابتة.
@@ -89,6 +112,76 @@ class NegevApi {
       throw const ApiException('تعذّر حفظ التبريكة');
     }
     return Congratulation.fromJson(comment);
+  }
+
+  /// «ذكّرني» — متابعة، لا حضور ولا "لن أحضر". يتطلب حساباً.
+  Future<void> remind(int eventId) async {
+    await _client.post('/api/events/$eventId/remind', auth: true);
+  }
+
+  Future<void> unremind(int eventId) async {
+    await _client.delete('/api/events/$eventId/remind', auth: true);
+  }
+
+  /// طابور مراجعة رسائل مناسبة — للمالك أو الإدارة فقط (403 لغيرهم).
+  Future<List<Congratulation>> moderationQueue(int eventId, {String? status}) async {
+    final query = status == null ? null : {'status': status};
+    final data = await _client.get(
+      '/api/events/$eventId/congratulations',
+      query: query,
+      auth: true,
+    );
+    final list = data['comments'];
+    if (list is! List) return const [];
+    return list.whereType<Map<String, dynamic>>().map(Congratulation.fromJson).toList();
+  }
+
+  Future<Congratulation> moderateCongratulation(
+    int eventId,
+    int congratulationId, {
+    required bool approve,
+  }) async {
+    final data = await _client.patch(
+      '/api/events/$eventId/congratulations/$congratulationId',
+      auth: true,
+      body: {'action': approve ? 'approve' : 'reject'},
+    );
+    final comment = data['comment'];
+    if (comment is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر تحديث حالة التبريكة');
+    }
+    return Congratulation.fromJson(comment);
+  }
+
+  Future<void> deleteCongratulation(int eventId, int congratulationId) async {
+    await _client.delete(
+      '/api/events/$eventId/congratulations/$congratulationId',
+      auth: true,
+    );
+  }
+
+  /// إبلاغ عن رسالة — صف واحد لكل مستخدم؛ التكرار يعيد 409 برسالة عربية من الخادم.
+  Future<void> reportCongratulation(int eventId, int congratulationId) async {
+    await _client.post(
+      '/api/events/$eventId/congratulations/$congratulationId/report',
+      auth: true,
+    );
+  }
+
+  // --- الإشعارات (يتطلب تسجيل دخول) ---------------------------------
+
+  Future<List<AppNotification>> notifications() async {
+    final data = await _client.get('/api/notifications', auth: true);
+    final list = data['notifications'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(AppNotification.fromJson)
+        .toList();
+  }
+
+  Future<void> markNotificationRead(int id) async {
+    await _client.patch('/api/notifications/$id/read', auth: true);
   }
 
   /// فحص تعارض التاريخ قبل تقديم المناسبة.
@@ -234,6 +327,19 @@ class NegevApi {
     final data = await _client.get('/api/app/version');
     return AppRelease.fromJson(data);
   }
+}
+
+/// صفحة مناسبات — من GET /api/events. الترقيم والإعلانات تصلان مع نفس الاستدعاء.
+class EventsPage {
+  final List<Event> events;
+  final Pagination pagination;
+  final List<Announcement> announcements;
+
+  const EventsPage({
+    required this.events,
+    required this.pagination,
+    required this.announcements,
+  });
 }
 
 /// إعلان الإصدار من GET /api/app/version.

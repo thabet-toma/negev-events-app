@@ -19,10 +19,22 @@ Color occasionTypeColor(String? hex) {
 
 /// بطاقة مناسبة في القائمة.
 class EventCard extends StatelessWidget {
-  const EventCard({super.key, required this.event, required this.onTap});
+  const EventCard({
+    super.key,
+    required this.event,
+    required this.onTap,
+    this.onCongratulationsTap,
+    this.onRemindTap,
+  });
 
   final Event event;
   final VoidCallback onTap;
+
+  /// `null` يخفي كامل صفّ التبريكات — لا حاجة له خارج شاشة القائمة الفعلية.
+  final VoidCallback? onCongratulationsTap;
+
+  /// `null` يخفي زرّ «ذكّرني» بالكامل.
+  final VoidCallback? onRemindTap;
 
   @override
   Widget build(BuildContext context) {
@@ -113,12 +125,114 @@ class EventCard extends StatelessWidget {
                       ],
                     ],
                   ),
+                  // `congratulationsCount == null` يعني أنّ الخادم أخفى العدّاد على هذا
+                  // النوع — لا يُرسم شيء، لا صفراً ولا شرطة.
+                  if (event.congratulationsCount != null) ...[
+                    const SizedBox(height: 8),
+                    _CongratulationsRow(event: event, onTap: onCongratulationsTap),
+                  ],
+                  if (onRemindTap != null) ...[
+                    const SizedBox(height: 8),
+                    _RemindRow(event: event, onTap: onRemindTap!),
+                  ],
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// عدّاد التبريكات وسطر معاينة آخر رسالة — الضغط يفتح ورقة الرسائل مباشرةً،
+/// لا شاشة التفاصيل (هذا هو الإصلاح الفعلي، لا مجرّد رقم).
+class _CongratulationsRow extends StatelessWidget {
+  const _CongratulationsRow({required this.event, required this.onTap});
+
+  final Event event;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = event.occasionType?.congratulationsLabel ?? 'تبريكات';
+    final latest = event.latestCongratulation;
+
+    final content = Row(
+      children: [
+        const Icon(Icons.forum_outlined, size: 15, color: AppTheme.gold),
+        const SizedBox(width: 6),
+        Text(
+          '$label (${event.congratulationsCount})',
+          style: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.textSecondary,
+          ),
+        ),
+        if (latest != null) ...[
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '${latest.senderName}: ${latest.message}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            ),
+          ),
+        ],
+        if (onTap != null)
+          const Icon(Icons.chevron_left, size: 16, color: AppTheme.textMuted),
+      ],
+    );
+
+    if (onTap == null) return content;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: content),
+    );
+  }
+}
+
+/// زرّ «ذكّرني» — نفس الكلمة في كل الأنواع (لا اشتقاق من النوع)، وعدّاد متابعين
+/// اختياري بجانبه. لا زرّ حضور ولا "لن أحضر" هنا إطلاقاً.
+class _RemindRow extends StatelessWidget {
+  const _RemindRow({required this.event, required this.onTap});
+
+  final Event event;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isReminded = event.isReminded;
+    return Row(
+      children: [
+        OutlinedButton.icon(
+          onPressed: onTap,
+          icon: Icon(
+            isReminded ? Icons.notifications_active : Icons.notifications_none,
+            size: 16,
+          ),
+          label: const Text('ذكّرني'),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            foregroundColor: isReminded ? AppTheme.gold : AppTheme.textSecondary,
+            side: BorderSide(color: isReminded ? AppTheme.gold : AppTheme.borderSubtle),
+          ),
+        ),
+        // `followersCount == null` يعني أنّ النوع أخفى العدّاد — لا يُرسم شيء.
+        if (event.followersCount != null) ...[
+          const SizedBox(width: 8),
+          Text(
+            'متابعون: ${event.followersCount}',
+            style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+          ),
+        ],
+      ],
     );
   }
 }

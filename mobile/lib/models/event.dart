@@ -66,6 +66,37 @@ class Event {
   int get totalReactions =>
       reactions.values.fold(0, (sum, value) => sum + value);
 
+  /// نسخة بحالة تذكير محدَّثة — تحدّث محلياً بعد نجاح POST/DELETE .../remind
+  /// دون إعادة جلب الصفحة كاملة فتفقد ما تراكم من "عرض المزيد".
+  Event copyWithReminder({required bool isReminded, int? followersCount}) => Event(
+        id: id,
+        title: title,
+        groomName: groomName,
+        familyClan: familyClan,
+        town: town,
+        locationName: locationName,
+        secondaryLocationName: secondaryLocationName,
+        latitude: latitude,
+        longitude: longitude,
+        eventDate: eventDate,
+        dinnerTime: dinnerTime,
+        eventEndDate: eventEndDate,
+        youthPartyDate: youthPartyDate,
+        posterUrl: posterUrl,
+        audioUrl: audioUrl,
+        audioTitle: audioTitle,
+        hostPhone: hostPhone,
+        viewsCount: viewsCount,
+        reactions: reactions,
+        congratulations: congratulations,
+        occasionType: occasionType,
+        honorees: honorees,
+        congratulationsCount: congratulationsCount,
+        latestCongratulation: latestCongratulation,
+        followersCount: followersCount,
+        isReminded: isReminded,
+      );
+
   /// عنوان بديل حين لا عنوان مخصّص — من النوع وأصحاب المناسبة، لا نص فرح ثابت.
   String get displayTitle {
     if (title.isNotEmpty) return title;
@@ -402,6 +433,102 @@ class Story {
         town: _nullableString(json['town']),
         image: _nullableString(json['image']),
         isLive: json['isLive'] == true || _toInt(json['is_live']) == 1,
+      );
+}
+
+/// معلومات ترقيم صفحات — من `pagination` في GET /api/events.
+class Pagination {
+  final int page;
+  final int limit;
+  final int total;
+  final int totalPages;
+
+  const Pagination({
+    required this.page,
+    required this.limit,
+    required this.total,
+    required this.totalPages,
+  });
+
+  bool get hasMore => page < totalPages;
+
+  factory Pagination.fromJson(Map<String, dynamic> json) => Pagination(
+        page: _toInt(json['page']),
+        limit: _toInt(json['limit']),
+        total: _toInt(json['total']),
+        totalPages: _toInt(json['totalPages']),
+      );
+}
+
+/// إعلان تعديل تاريخ/مكان مناسبة — من `announcements` في GET /api/events.
+/// بلا نوع مناسبة كامل (`occasion_type_id` وحده) — فلا شارة نوع تُبنى عليه.
+class Announcement {
+  final int id;
+  final int eventId;
+  final String oldValue;
+  final String newValue;
+  final String? publishedAt;
+  final AnnouncementEvent event;
+
+  const Announcement({
+    required this.id,
+    required this.eventId,
+    required this.oldValue,
+    required this.newValue,
+    required this.event,
+    this.publishedAt,
+  });
+
+  factory Announcement.fromJson(Map<String, dynamic> json) {
+    final rawEvent = json['event'];
+    return Announcement(
+      id: _toInt(json['id']),
+      eventId: _toInt(json['event_id']),
+      oldValue: '${json['old_value'] ?? ''}',
+      newValue: '${json['new_value'] ?? ''}',
+      publishedAt: _nullableString(json['published_at']),
+      event: rawEvent is Map<String, dynamic>
+          ? AnnouncementEvent.fromJson(rawEvent)
+          : AnnouncementEvent.fromJson(const {}),
+    );
+  }
+}
+
+/// المناسبة المرفقة بإعلان — حقول مختصرة فقط، بلا نوع مناسبة كامل.
+class AnnouncementEvent {
+  final int id;
+  final String title;
+  final String groomName;
+  final String town;
+  final String eventDate;
+  final String? eventEndDate;
+  final int? occasionTypeId;
+  final String? posterUrl;
+
+  const AnnouncementEvent({
+    required this.id,
+    required this.title,
+    required this.groomName,
+    required this.town,
+    required this.eventDate,
+    this.eventEndDate,
+    this.occasionTypeId,
+    this.posterUrl,
+  });
+
+  String get displayTitle => title.isEmpty ? groomName : title;
+
+  factory AnnouncementEvent.fromJson(Map<String, dynamic> json) => AnnouncementEvent(
+        id: _toInt(json['id']),
+        title: '${json['title'] ?? ''}',
+        groomName: '${json['groom_name'] ?? ''}',
+        town: '${json['town'] ?? ''}',
+        eventDate: _toDate(json['event_date']),
+        eventEndDate:
+            json['event_end_date'] == null ? null : _toDate(json['event_end_date']),
+        occasionTypeId:
+            json['occasion_type_id'] == null ? null : _toInt(json['occasion_type_id']),
+        posterUrl: _nullableString(json['poster_url']),
       );
 }
 

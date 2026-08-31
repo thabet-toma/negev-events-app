@@ -74,6 +74,17 @@ class RealtimeService {
     return () => _socket?.off(channel, listener);
   }
 
+  /// يستمع لإشعارات مستخدم بعينه — مركز الإشعارات داخل التطبيق (لا push نظام).
+  VoidCallback onNewNotification(int userId, void Function(Map<String, dynamic>) handler) {
+    final channel = 'new_notification_$userId';
+    void listener(dynamic data) {
+      if (data is Map) handler(Map<String, dynamic>.from(data));
+    }
+
+    _socket?.on(channel, listener);
+    return () => _socket?.off(channel, listener);
+  }
+
   void dispose() {
     _socket?.dispose();
     _socket = null;

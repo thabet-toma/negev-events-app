@@ -81,6 +81,20 @@ class ApiClient {
     return _send(() => _client.delete(_uri(path), headers: _headers(auth: auth)));
   }
 
+  Future<Map<String, dynamic>> patch(
+    String path, {
+    Map<String, dynamic>? body,
+    bool auth = false,
+  }) async {
+    return _send(
+      () => _client.patch(
+        _uri(path),
+        headers: _headers(auth: auth, json: true),
+        body: jsonEncode(body ?? const {}),
+      ),
+    );
+  }
+
   /// إرسال متعدد الأجزاء — لرفع البوستر والصوت مع المناسبة.
   Future<Map<String, dynamic>> postMultipart(
     String path, {
