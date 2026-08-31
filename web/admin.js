@@ -152,7 +152,7 @@ function renderAdminEvents() {
           <span style="font-size: 0.78rem; color: var(--gold-main);">${escapeHtml(evt.town)}</span>
         </div>
 
-        <img src="${evt.poster_url}" class="admin-card-poster" alt="poster" onerror="this.src='https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80'">
+        ${evt.poster_url ? `<img src="${evt.poster_url}" class="admin-card-poster" alt="poster">` : ''}
 
         <div class="admin-card-content">
           <h3>${escapeHtml(evt.title)}</h3>

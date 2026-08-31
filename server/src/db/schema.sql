@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   default_badge_title         VARCHAR(80)  DEFAULT NULL,
   default_poster_url          TEXT         DEFAULT NULL,
   legacy_client_supported     TINYINT(1)   NOT NULL DEFAULT 0,
+  tone                        VARCHAR(20)  NOT NULL DEFAULT 'festive',
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

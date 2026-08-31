@@ -6,7 +6,7 @@ const ApiError = require('../utils/ApiError');
 const occasionTypes = require('../services/occasionTypes.service');
 const { requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId } = require('../middleware/validate');
-const { REACTION_TYPES, OCCASION_FIELD_KEYS, CORE_OCCASION_FIELDS } = require('../constants');
+const { REACTION_TYPES, OCCASION_FIELD_KEYS, CORE_OCCASION_FIELDS, OCCASION_TONES } = require('../constants');
 
 const router = express.Router();
 
@@ -14,6 +14,15 @@ const router = express.Router();
 // instead of being re-typed in every client.
 const UNPUBLISHED_TYPE_NOTICE =
   'هذا النوع لن يظهر في نسخ التطبيق المنشورة حالياً. يظهر بعد إصدار نسخة تدعمه.';
+
+/** النغمة من مفردات الكود وحدها — الأدمن يختار منها ولا يخترع واحدة. */
+function parseTone(value) {
+  const tone = cleanString(value, 20) || 'festive';
+  if (!OCCASION_TONES.includes(tone)) {
+    throw ApiError.badRequest('نغمة نوع المناسبة غير معروفة');
+  }
+  return tone;
+}
 
 /** Validates and normalises a submitted field-config array. Route-layer: no DB access. */
 function parseFields(rawFields) {
@@ -109,6 +118,7 @@ router.post('/admin/occasion-types', asyncHandler(async (req, res) => {
     // by a build already on people's phones. It is flipped when a build
     // that understands it ships — which is what the standing notice says.
     legacy_client_supported: Boolean(req.body.legacy_client_supported),
+    tone: parseTone(req.body.tone),
     congratulations_label: cleanString(req.body.congratulations_label, 40) || 'تبريكات',
     default_badge_title: cleanString(req.body.default_badge_title, 80),
     fields: parseFields(req.body.fields),
@@ -140,6 +150,7 @@ router.patch('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
   if (body.legacy_client_supported !== undefined) {
     payload.legacy_client_supported = Boolean(body.legacy_client_supported);
   }
+  if (body.tone !== undefined) payload.tone = parseTone(body.tone);
   if (body.congratulations_label !== undefined) payload.congratulations_label = cleanString(body.congratulations_label, 40);
   if (body.default_badge_title !== undefined) payload.default_badge_title = cleanString(body.default_badge_title, 80);
   if (body.fields !== undefined) payload.fields = parseFields(body.fields);

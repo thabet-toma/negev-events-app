@@ -28,6 +28,14 @@ const TOWN_COORDINATES = {
   'عرعرة النقب': { lat: 31.157671, lng: 35.013021 }
 };
 
+/**
+ * نغمة النوع — تحكم العرض لا المنطق: الاحتفالية تحمل صورة وشارة تاريخ فوقها،
+ * والوقورة بطاقة هادئة. علَم صريح لأن كل تمييز بين الأنواع يمرّ بعلَم، ولأن
+ * استنتاجها من تسمية يكتبها الأدمن يجعل إعادةَ تسميةٍ تقلبُ بطاقة نعي إلى
+ * بطاقة فرح بصمت.
+ */
+const OCCASION_TONES = ['festive', 'solemn'];
+
 const REACTION_TYPES = ['coffee', 'horse', 'fireworks', 'rose', 'hand'];
 
 const EVENT_STATUSES = ['pending', 'approved', 'rejected'];
@@ -81,5 +89,6 @@ module.exports = {
   OCCASION_FIELDS,
   OCCASION_FIELD_KEYS,
   CORE_OCCASION_FIELDS,
-  CONGRATULATION_REPORT_THRESHOLD
+  CONGRATULATION_REPORT_THRESHOLD,
+  OCCASION_TONES
 };

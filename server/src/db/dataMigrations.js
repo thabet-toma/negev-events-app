@@ -79,6 +79,7 @@ function buildSeedFields(overrides) {
 const OCCASION_TYPE_SEEDS = [
   {
     name: 'عرس',
+    tone: 'festive',
     legacy_client_supported: 1,
     default_poster_url: DEFAULT_POSTER,
     icon: '💍',
@@ -101,6 +102,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'عزا',
+    tone: 'solemn',
     legacy_client_supported: 0,
     default_poster_url: null,
     icon: '🕊️',
@@ -128,6 +130,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'خطوبة',
+    tone: 'festive',
     legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '💐',
@@ -151,6 +154,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'نجاح',
+    tone: 'festive',
     legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '🎓',
@@ -174,6 +178,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'حج وعمرة',
+    tone: 'festive',
     legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '🕋',
@@ -289,14 +294,14 @@ const steps = [
              (name, icon, color, position, is_active, creates_collision, warns_others,
               premoderate_messages, show_congratulations_count, show_followers_count,
               show_views_count, congratulations_label, default_badge_title, default_poster_url,
-              legacy_client_supported)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              legacy_client_supported, tone)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             seed.name, seed.icon, seed.color, seed.position,
             seed.creates_collision, seed.warns_others, seed.premoderate_messages,
             seed.show_congratulations_count, seed.show_followers_count, seed.show_views_count,
             seed.congratulations_label, seed.default_badge_title, seed.default_poster_url,
-            seed.legacy_client_supported
+            seed.legacy_client_supported, seed.tone
           ]
         );
         const typeId = result.insertId;
@@ -411,6 +416,32 @@ const steps = [
         marked += result.affectedRows;
       }
       logger.info(`[migrations] add-occasion-type-legacy-support-flag-2026-08: column added, ${marked} type(s) marked.`);
+    }
+  },
+  {
+    // النغمة عرضٌ لا منطق، لكنها كانت تُستنتج في الواجهة من تسمية التبريكات —
+    // فإعادةُ تسميةٍ من اللوحة كانت تقلب بطاقة النعي إلى بطاقة فرح بصمت.
+    name: 'add-occasion-type-tone-2026-08',
+    async run(connection) {
+      if (await columnExists(connection, 'occasion_types', 'tone')) {
+        logger.info('[migrations] add-occasion-type-tone-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(
+        "ALTER TABLE occasion_types ADD COLUMN tone VARCHAR(20) NOT NULL DEFAULT 'festive'"
+      );
+
+      let marked = 0;
+      for (const seed of OCCASION_TYPE_SEEDS) {
+        if (seed.tone === 'festive') continue;
+        const [result] = await connection.execute(
+          'UPDATE occasion_types SET tone = ? WHERE name = ?',
+          [seed.tone, seed.name]
+        );
+        marked += result.affectedRows;
+      }
+      logger.info(`[migrations] add-occasion-type-tone-2026-08: column added, ${marked} type(s) marked solemn.`);
     }
   },
   {

@@ -43,6 +43,7 @@ let authToken = localStorage.getItem('negev_token') || null;
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   initSocket();
   setupTownFilters();
   updateAuthUI();
@@ -58,6 +59,40 @@ document.addEventListener('DOMContentLoaded', () => {
   const nokootDateInput = document.getElementById('nokootDate');
   if (nokootDateInput) nokootDateInput.value = today;
 });
+
+// -1. Light/dark theme — data-theme on <html>, persisted in localStorage.
+// Absence of a saved choice means "follow the system" (#20 step 11): styles.css
+// already reacts to prefers-color-scheme on its own, so with nothing stored we
+// simply never set data-theme and let that media query decide.
+function initTheme() {
+  const saved = localStorage.getItem('negev_theme');
+  if (saved === 'dark' || saved === 'light') {
+    document.documentElement.setAttribute('data-theme', saved);
+  }
+  updateThemeToggleIcon();
+}
+
+function toggleTheme() {
+  const isDark = currentThemeIsDark();
+  const next = isDark ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('negev_theme', next);
+  updateThemeToggleIcon();
+}
+
+function currentThemeIsDark() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return true;
+  if (attr === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function updateThemeToggleIcon() {
+  const btn = document.getElementById('themeToggleBtn');
+  if (!btn) return;
+  const icon = btn.querySelector('i');
+  if (icon) icon.className = currentThemeIsDark() ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+}
 
 // 0. Android app download entry
 //
@@ -321,6 +356,16 @@ function congratulationsLabel(evt) {
   return (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
 }
 
+/**
+ * الهدوء البصري للعزاء — لا حقل «نوع» صريح في البيانات، فنستدل من نفس
+ * الإعداد الذي يميّز العزاء فعلياً على الخادم (congratulations_label 'تعازي'،
+ * seed بيانات dataMigrations.js) بدل مطابقة اسم النوع حرفياً (#20 خطوة 11، قرار ٥).
+ */
+function isMourningTone(evt) {
+  // علَم صريح من الخادم — لا مقارنة بتسمية يكتبها الأدمن ويستطيع تغييرها.
+  return !!(evt.occasion_type && evt.occasion_type.tone === 'solemn');
+}
+
 function renderEvents(events) {
   const container = document.getElementById('eventsContainer');
   if (!events || events.length === 0) {
@@ -386,27 +431,51 @@ function renderEvents(events) {
       </div>
     ` : '';
 
-    return `
-      <div class="event-card" id="eventCard-${evt.id}">
-        <div class="card-header-bar">
-          <div class="card-clan-town">
-            ${occasionTypeBadgeHtml(evt.occasion_type)}
-            <span class="town-badge">${escapeHtml(evt.town)}</span>
-            <span class="clan-text">${escapeHtml(evt.family_clan || '')}</span>
-          </div>
-          <span class="countdown-badge">${countdownText}</span>
-        </div>
+    // بنية الكرت الموصى بها: صورة أولاً بتركيب مضغوط — تاريخ فوق الصورة،
+    // نوع المناسبة كشارة فوقها، وسطر عشيرة/بلدة بلون النوع تحت الاسم. العزاء
+    // بلا صورة افتراضية أبداً؛ صورة المتوفَّى حين تُرفع تبقى أهدأ — بلا شارة
+    // تاريخ فوقها، فالتاريخ ينزل للكتلة النصية دائماً في العزاء (#20 خطوة 11).
+    const isMourning = isMourningTone(evt);
+    const toneColor = evt.occasion_type && evt.occasion_type.color
+      ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
+      : null;
+    const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
+    // hasShot يتّكئ فقط على وجود الصورة الفعلي — لا على النوع. الخادم يحقن
+    // default_poster_url لكل نوع غير العزاء عند النشر، فهذا نادراً ما يغيب
+    // إلا في العزاء أو صفّ قديم سابق لتلك القاعدة؛ وفي الحالتين يجب أن يبقى
+    // شارة النوع والتاريخ ظاهرَين من مكان ما (#20 خطوة 11).
+    const hasShot = !!evt.poster_url;
 
-        ${evt.poster_url ? `
-        <div class="card-poster-wrapper">
-          <img src="${evt.poster_url}" alt="${escapeHtml(evt.groom_name)}" class="card-poster-img" loading="lazy">
-        </div>` : ''}
+    const shotHtml = !hasShot ? '' : `
+      <div class="card-shot">
+        <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}">
+          <img src="${evt.poster_url}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">
+        </div>
+        ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
+        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+      </div>`;
+
+    const topRowHtml = (hasShot && !isMourning) ? '' : `
+      <div class="card-toprow">
+        ${hasShot ? '' : occasionTypeBadgeHtml(evt.occasion_type)}
+        <span class="card-meta">${escapeHtml(countdownText)}</span>
+      </div>`;
+
+    const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
+    const clanLineHtml = clanTownParts.length
+      ? `<div class="card-clan-line">${clanTownParts.join(' — ')}</div>` : '';
+
+    return `
+      <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
+        ${shotHtml}
 
         ${audioBlock}
 
         <div class="card-body">
+          ${topRowHtml}
           <h2 class="event-main-title">${escapeHtml(evt.title)}</h2>
-          
+          ${clanLineHtml}
+
           <div class="event-details-grid">
             <div class="detail-item">
               <i class="fa-solid fa-calendar-day"></i>
@@ -584,19 +653,19 @@ async function initLeafletMap() {
     if (data.success && data.points) {
       data.points.forEach(pt => {
         const customIcon = L.divIcon({
-          className: 'custom-gold-marker',
-          html: `<div style="background:#dfb15b; color:#06150f; font-weight:800; font-size:12px; padding:4px 8px; border-radius:12px; border:2px solid #ffffff; box-shadow:0 4px 10px rgba(0,0,0,0.5); white-space:nowrap;">💍 ${escapeHtml(pt.groom_name)}</div>`,
+          className: 'map-marker-wrap',
+          html: `<div class="map-marker-badge">💍 ${escapeHtml(pt.groom_name)}</div>`,
           iconSize: [80, 30]
         });
 
         L.marker([pt.latitude, pt.longitude], { icon: customIcon })
           .addTo(leafletMap)
           .bindPopup(`
-            <div style="text-align:right; font-family:Tajawal, sans-serif;">
-              <h4 style="color:#dfb15b; margin-bottom:4px;">${escapeHtml(pt.title)}</h4>
-              <p style="font-size:12px; margin-bottom:4px;"><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
-              <p style="font-size:12px; margin-bottom:8px;"><strong>التاريخ:</strong> ${pt.event_date}</p>
-              <a href="${pt.waze_url}" target="_blank" style="background:#33ccff; color:#000; padding:4px 10px; border-radius:6px; text-decoration:none; font-weight:bold; font-size:12px; display:inline-block;">الملاحة عبر Waze</a>
+            <div class="map-popup">
+              <h4>${escapeHtml(pt.title)}</h4>
+              <p><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
+              <p><strong>التاريخ:</strong> ${pt.event_date}</p>
+              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn">الملاحة عبر Waze</a>
             </div>
           `);
       });
@@ -1871,7 +1940,7 @@ function renderNokootChart(townData) {
       labels: labels,
       datasets: [{
         data: values,
-        backgroundColor: ['#dfb15b', '#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'],
+        backgroundColor: ['#0369a1', '#38bdf8', '#075985', '#15803d', '#9a7222', '#7c3aed'],
         borderWidth: 0
       }]
     },
@@ -1881,7 +1950,7 @@ function renderNokootChart(townData) {
       plugins: {
         legend: {
           position: 'bottom',
-          labels: { color: '#94a3b8', font: { family: 'Tajawal' } }
+          labels: { color: currentThemeIsDark() ? '#9fb6c9' : '#47617a', font: { family: 'Cairo' } }
         }
       }
     }
@@ -2102,10 +2171,10 @@ function renderNotificationsList() {
   container.innerHTML = notificationsList.map(n => `
     <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${n.id})">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <strong style="color:${n.is_read ? 'var(--text-secondary)' : 'var(--gold-primary)'};">${escapeHtml(n.title)}</strong>
+        <strong style="color:${n.is_read ? 'var(--ink-soft)' : 'var(--sky)'};">${escapeHtml(n.title)}</strong>
         ${!n.is_read ? '<span class="status-tag pending">جديد</span>' : ''}
       </div>
-      <p style="margin-top:6px; color:var(--text-secondary); font-size:0.88rem;">${escapeHtml(n.body)}</p>
+      <p style="margin-top:6px; color:var(--ink-soft); font-size:0.88rem;">${escapeHtml(n.body)}</p>
     </div>
   `).join('');
 }
@@ -2141,8 +2210,8 @@ function updateAuthUI() {
     if (currentUser.role === 'super_admin' || currentUser.phone_number === '0500000000') {
       label.innerHTML = `👑 لوحة الإدارة`;
       btn.onclick = () => { window.location.href = '/admin.html'; };
-      btn.style.borderColor = 'var(--gold-primary)';
-      btn.style.background = 'rgba(223, 177, 91, 0.25)';
+      btn.style.borderColor = 'var(--sky)';
+      btn.style.background = 'var(--sky-wash)';
     } else {
       label.textContent = currentUser.full_name.split(' ')[0];
       btn.onclick = () => { switchTab('tabNokoot'); };
@@ -2234,22 +2303,6 @@ function shareStickerToWhatsApp() {
 function showToast(msg) {
   const toast = document.createElement('div');
   toast.className = 'app-toast';
-  toast.style.cssText = `
-    position: fixed;
-    top: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #dfb15b;
-    color: #06150f;
-    font-weight: 800;
-    padding: 10px 22px;
-    border-radius: 20px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-    z-index: 9999;
-    font-family: Tajawal, sans-serif;
-    font-size: 0.86rem;
-    animation: fadeIn 0.2s;
-  `;
   toast.textContent = msg;
   document.body.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 3500);

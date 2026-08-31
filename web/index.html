@@ -6,15 +6,15 @@
   <title>مناسبات النقب | المنصة الأولى لأعراس وأفراح النقب</title>
   
   <!-- Web App Manifest Meta -->
-  <meta name="theme-color" content="#061a12">
+  <meta name="theme-color" content="#eef2f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
 
-  <!-- Google Fonts -->
+  <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11)؛ Tajawal/Amiri تبقى لاستوديو الملصقات (canvas) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Amiri:ital,wght@0,700;1,700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Tajawal:wght@300;400;500;700;900&family=Amiri:ital,wght@0,700;1,700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
   
   <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -67,6 +67,10 @@
         <button id="userAuthBtn" class="auth-pill-btn" onclick="openAuthModal()">
           <i class="fa-solid fa-user-lock"></i>
           <span id="userAuthLabel">تسجيل الدخول</span>
+        </button>
+        <!-- مبدّل فاتح/داكن — غياب اختيار محفوظ يعني اتّباع النظام (#20 خطوة 11) -->
+        <button id="themeToggleBtn" class="theme-toggle-btn" onclick="toggleTheme()" title="تبديل المظهر الفاتح/الداكن">
+          <i class="fa-solid fa-moon"></i>
         </button>
         <!--
           مخفي حتى يؤكّد الخادم وجود إصدار منشور (‎/api/app/version‎). الرابط
@@ -348,8 +352,8 @@
       <i class="fa-solid fa-palette"></i>
       <span>الستيكرات</span>
     </button>
-    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--text-muted);">
-      <i class="fa-solid fa-crown" style="color: var(--gold-primary);"></i>
+    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--ink-faint);">
+      <i class="fa-solid fa-crown" style="color: var(--sky);"></i>
       <span>الإدارة</span>
     </a>
   </nav>

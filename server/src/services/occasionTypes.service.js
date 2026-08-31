@@ -134,13 +134,14 @@ async function createType(data) {
       `INSERT INTO occasion_types
          (name, icon, color, position, is_active, creates_collision, warns_others,
           premoderate_messages, show_congratulations_count, show_followers_count,
-          show_views_count, congratulations_label, default_badge_title)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          show_views_count, congratulations_label, default_badge_title, tone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.name, data.icon, data.color, data.position, data.is_active ? 1 : 0,
         data.creates_collision ? 1 : 0, data.warns_others ? 1 : 0, data.premoderate_messages ? 1 : 0,
         data.show_congratulations_count ? 1 : 0, data.show_followers_count ? 1 : 0,
-        data.show_views_count ? 1 : 0, data.congratulations_label, data.default_badge_title || null
+        data.show_views_count ? 1 : 0, data.congratulations_label, data.default_badge_title || null,
+        data.tone
       ]
     );
     const typeId = result.insertId;
@@ -182,7 +183,7 @@ async function updateType(id, data) {
     'name', 'icon', 'color', 'position', 'is_active', 'creates_collision', 'warns_others',
     'premoderate_messages', 'show_congratulations_count', 'show_followers_count',
     'show_views_count', 'congratulations_label', 'default_badge_title',
-    'default_poster_url', 'legacy_client_supported'
+    'default_poster_url', 'legacy_client_supported', 'tone'
   ];
 
   await db.transaction(async connection => {

@@ -818,6 +818,48 @@ async function run() {
     }
   });
 
+  await test('An occasion type carries an explicit tone, and a renamed label never changes it', async () => {
+    const types = (await api('GET', '/api/occasion-types')).body.types;
+    const funeral = types.find(t => t.name === 'عزا');
+    const wedding = types.find(t => t.name === 'عرس');
+
+    assert.strictEqual(funeral.tone, 'solemn');
+    assert.strictEqual(wedding.tone, 'festive');
+
+    // The quiet mourning card used to be inferred from this very label, so
+    // renaming it silently turned a death notice into a festive card.
+    await api('PATCH', `/api/admin/occasion-types/${funeral.id}`, {
+      token: superAdminToken, body: { congratulations_label: 'تعزية' }
+    });
+    try {
+      const after = (await api('GET', '/api/occasion-types')).body.types.find(t => t.id === funeral.id);
+      assert.strictEqual(after.congratulations_label, 'تعزية');
+      assert.strictEqual(after.tone, 'solemn', 'tone must not follow the label');
+    } finally {
+      await api('PATCH', `/api/admin/occasion-types/${funeral.id}`, {
+        token: superAdminToken, body: { congratulations_label: 'تعازي' }
+      });
+    }
+  });
+
+  await test('An unknown tone is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: {
+        name: 'نغمة مجهولة', icon: '❓', color: '#0e7490', tone: 'chaotic',
+        fields: [
+          { field_key: 'honorees', label: 'صاحب المناسبة', is_visible: true, is_required: true },
+          { field_key: 'town', label: 'البلدة', is_visible: true, is_required: true },
+          { field_key: 'event_date', label: 'التاريخ', is_visible: true, is_required: true }
+        ],
+        reactions: []
+      }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/نغمة/.test(body.message), body.message);
+  });
+
+
   await test('A type created from the panel is not sent to already-published clients', async () => {
     const { body: created } = await api('POST', '/api/admin/occasion-types', {
       token: superAdminToken,
