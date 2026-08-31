@@ -28,3 +28,8 @@ coverage/
 mobile/.dart_tool/
 mobile/build/
 mobile/.flutter-plugins-dependencies
+
+# ملفات التوزيع (APK) — كبيرة، تُبنى ولا تُلتزم
+server/downloads/*
+!server/downloads/.gitkeep
+mobile/android/.kotlin/

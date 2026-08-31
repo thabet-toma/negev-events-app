@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -12,6 +14,10 @@ const routes = require('./routes');
 const db = require('./db/pool');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
+
+// مجلد التوزيع يُنشأ عند الإقلاع حتى لا يفشل express.static على تنصيب جديد.
+const downloadsDir = path.join(__dirname, '..', 'downloads');
+fs.mkdirSync(downloadsDir, { recursive: true });
 
 function createApp() {
   const app = express();
@@ -62,6 +68,12 @@ function createApp() {
   app.get('/', (req, res) => {
     res.json({ name: 'negev-events-api', status: 'ok', api: '/api', health: '/health' });
   });
+
+  // ملفات التوزيع (APK) — يخدمها الخادم نفسه ليقصد التطبيق رابطاً واحداً.
+  app.use('/downloads', express.static(downloadsDir, {
+    maxAge: '5m',
+    setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff')
+  }));
 
   app.use('/uploads', express.static(uploadsDir, {
     maxAge: '7d',

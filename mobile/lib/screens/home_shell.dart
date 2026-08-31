@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../state/update_checker.dart';
 import '../theme.dart';
+import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart';
 import 'events_screen.dart';
@@ -22,6 +24,7 @@ class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   StreamSubscription<Map<String, dynamic>>? _broadcastSub;
   String? _banner;
+  bool _updateChecked = false;
 
   @override
   void didChangeDependencies() {
@@ -30,6 +33,23 @@ class _HomeShellState extends State<HomeShell> {
         AppServices.of(context).realtime.onBroadcast.listen((data) {
       if (!mounted) return;
       setState(() => _banner = '${data['message'] ?? data['title'] ?? ''}');
+    });
+
+    if (!_updateChecked) {
+      _updateChecked = true;
+      _checkForUpdate();
+    }
+  }
+
+  /// فحص التحديث عند الإقلاع. صامت تماماً عند الفشل — التطبيق يعمل بدونه.
+  Future<void> _checkForUpdate() async {
+    final checker = UpdateChecker(AppServices.of(context).api);
+    final status = await checker.check();
+    if (status == null || !mounted) return;
+
+    // ننتظر انتهاء أول إطار حتى لا نفتح حواراً أثناء البناء.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateDialog.show(context, status);
     });
   }
 

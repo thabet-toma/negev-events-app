@@ -9,6 +9,7 @@ const authRoutes = require('./auth.routes');
 const nokootRoutes = require('./nokoot.routes');
 const adminRoutes = require('./admin.routes');
 const aiRoutes = require('./ai.routes');
+const appRoutes = require('./app.routes');
 
 const router = express.Router();
 
@@ -28,5 +29,6 @@ router.use(authRoutes);
 router.use(nokootRoutes);
 router.use(adminRoutes);
 router.use(aiRoutes);
+router.use(appRoutes);
 
 module.exports = router;

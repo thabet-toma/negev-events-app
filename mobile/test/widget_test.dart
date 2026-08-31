@@ -7,6 +7,7 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
+import 'package:negev_events/state/update_checker.dart';
 
 /// عميل وهمي يرد بجسم ثابت — يختبر منطق العميل دون خادم حقيقي.
 NegevApi apiReturning(
@@ -135,6 +136,32 @@ void main() {
       authHeader = null;
       await api.listEvents();
       expect(authHeader, isNull);
+    });
+  });
+
+  group('مقارنة النسخ', () {
+    test('ترتّب النسخ ترتيباً صحيحاً', () {
+      expect(compareVersions('1.0.0', '1.0.1'), lessThan(0));
+      expect(compareVersions('1.2.0', '1.10.0'), lessThan(0));
+      expect(compareVersions('2.0.0', '1.9.9'), greaterThan(0));
+      expect(compareVersions('1.0.0', '1.0.0'), 0);
+    });
+
+    test('تعامل الأجزاء الناقصة كأصفار', () {
+      expect(compareVersions('1.2', '1.2.0'), 0);
+      expect(compareVersions('1.2', '1.2.1'), lessThan(0));
+      expect(compareVersions('1', '1.0.0'), 0);
+    });
+
+    test('تتجاهل لاحقة البناء والوسم', () {
+      expect(compareVersions('1.0.0+5', '1.0.0+9'), 0);
+      expect(compareVersions('1.0.0-beta', '1.0.0'), 0);
+      expect(compareVersions('1.0.0+1', '1.0.1'), lessThan(0));
+    });
+
+    test('لا ترمي على مدخل غير متوقع', () {
+      expect(compareVersions('', '1.0.0'), lessThan(0));
+      expect(compareVersions('abc', '1.0.0'), lessThan(0));
     });
   });
 

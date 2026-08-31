@@ -101,6 +101,15 @@ async function run() {
     assert.ok(Array.isArray(body.stats));
   });
 
+  await test('GET /api/app/version announces the mobile release', async () => {
+    const { body } = await api('GET', '/api/app/version');
+    assert.strictEqual(body.success, true);
+    // الحقول تُعلَن دائماً حتى لو لم تُضبط، فلا يحتاج التطبيق حالة خاصة.
+    assert.ok('latest_version' in body);
+    assert.ok('min_version' in body);
+    assert.ok('apk_url' in body);
+  });
+
   await test('POST /api/check-collision detects a booked date', async () => {
     const { body: list } = await api('GET', '/api/events');
     const { body } = await api('POST', '/api/check-collision', { body: { date: list.events[0].event_date } });

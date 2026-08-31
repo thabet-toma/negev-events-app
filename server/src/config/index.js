@@ -71,6 +71,17 @@ const config = {
     maxFileSizeMb: toInt(process.env.UPLOAD_MAX_MB, 30)
   },
 
+  // إعلان نسخة تطبيق الموبايل. التطبيق يستعلم عنها عند الإقلاع ويعرض تنبيه
+  // تحديث. تُضبط عند كل إصدار جديد — لا تتطلب تعديل كود.
+  app: {
+    latestVersion: process.env.APP_LATEST_VERSION || null,
+    // أقل نسخة مسموح بها؛ ما دونها يُلزَم المستخدم بالتحديث قبل المتابعة.
+    minVersion: process.env.APP_MIN_VERSION || null,
+    // مسار نسبي (/downloads/...) يُحوَّل إلى مطلق، أو رابط خارجي كما هو.
+    apkUrl: process.env.APP_APK_URL || null,
+    releaseNotes: process.env.APP_RELEASE_NOTES || ''
+  },
+
   cors: {
     // Comma-separated list, or "*" for any origin.
     origins: (process.env.CORS_ORIGINS || '*').split(',').map(o => o.trim()).filter(Boolean)

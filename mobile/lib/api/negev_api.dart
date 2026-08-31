@@ -195,4 +195,42 @@ class NegevApi {
   Future<void> deleteNokoot(int id) async {
     await _client.delete('/api/nokoot/$id', auth: true);
   }
+
+  // --- تحديثات التطبيق ----------------------------------------------
+
+  /// النسخة المنشورة كما يعلنها الخادم. المقارنة تجري في العميل.
+  Future<AppRelease> appRelease() async {
+    final data = await _client.get('/api/app/version');
+    return AppRelease.fromJson(data);
+  }
+}
+
+/// إعلان الإصدار من GET /api/app/version.
+class AppRelease {
+  final String? latestVersion;
+  final String? minVersion;
+  final String? apkUrl;
+  final String releaseNotes;
+
+  const AppRelease({
+    this.latestVersion,
+    this.minVersion,
+    this.apkUrl,
+    this.releaseNotes = '',
+  });
+
+  factory AppRelease.fromJson(Map<String, dynamic> json) {
+    String? text(dynamic value) {
+      if (value == null) return null;
+      final trimmed = '$value'.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+
+    return AppRelease(
+      latestVersion: text(json['latest_version']),
+      minVersion: text(json['min_version']),
+      apkUrl: text(json['apk_url']),
+      releaseNotes: text(json['release_notes']) ?? '',
+    );
+  }
 }
