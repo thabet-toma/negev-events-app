@@ -202,11 +202,15 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 ## واجهة API
 
+⚠️ **ترويسة `X-App-Version`**: أرسِلها بأي قيمة على كل طلب لـ `GET /api/events` و
+`GET /api/map/events` و `GET /api/events/:id` لرؤية كل أنواع المناسبات. طلب بلا هذه الترويسة
+يُعامَل كعميل قديم لا يعرف سوى «عرس» — يُرشَّح إلى هذا النوع وحده، بلا رسالة ولا خطأ (#20 خطوة 4).
+
 ### عام
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/events` | المناسبات المعتمدة (`?town=` `?date=` `?search=` — البحث يمسك أيضاً كل اسم في أصحاب المناسبة) |
+| `GET` | `/api/events` | المناسبات المعتمدة **القادمة** فقط، مرقّمة (`?town=` `?date=` `?search=` `?occasion_type_id=` `?archive=1` `?page=` `?limit=`) |
 | `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات |
 | `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze |
@@ -222,6 +226,31 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 النموذج صار يقبل `occasion_type_id` (إلزامي) و`honorees[]` (`{name, role}`، واحد على
 الأقل) بدل `groom_name` مفرد، إضافة إلى `event_end_date` و`secondary_location_name`.
 أيّ حقل غير ظاهر في النوع المختار يُتجاهَل بصمت إن أُرسل.
+
+⚠️ **تغيّر عقد `GET /api/events` جذرياً (#20 خطوة 4):**
+
+- **يعرض القادم فقط**: شرط `COALESCE(event_end_date, event_date) >= CURDATE()` — مناسبة منتهية
+  غائبة، ومناسبة (كعزاء) بدأت أمس وتمتد اليوم تبقى ظاهرة. للوصول إلى المنتهي: `?archive=1`
+  (يقلب الشرط ويرتّب الأحدث انتهاءً أولاً).
+- **مرقّمة**: `?page=` (افتراضي 1) و `?limit=` (افتراضي 30، سقف أعلى صلب 100 — طلب أكبر
+  يُقصّ لا يُرفض). الاستجابة تحمل `pagination: { page, limit, total, totalPages }` إلى جانب
+  `events`.
+- **فلتر نوع صريح**: `?occasion_type_id=` يُطبَّق على الخادم لا العميل، حتى لا ينكسر الترقيم.
+- **حقلان جديدان على كل صف**: `congratulations_count` (عدد صحيح، صفر لا غياب) و
+  `latest_congratulation` (`{sender_name, message, created_at}` أو `null`، الأحدث فقط) —
+  محسوبان باستعلام نافذة واحد (`ROW_NUMBER` + `COUNT` عبر `PARTITION BY event_id`)، لا
+  `JOIN`. يختفي الحقلان معاً من الصف حين يكون `show_congratulations_count` مطفأً على نوع
+  المناسبة — لا حسب اسم النوع.
+- **ترشيح حسب نسخة العميل** (#11): طلب بلا ترويسة `X-App-Version` (كل تطبيق منشور اليوم)
+  يستلم من `GET /api/events` و `GET /api/map/events` **مناسبات النوع الأول بالترتيب
+  (`position`) فقط** — وهو «عرس» حالياً، لكن الاشتقاق بالبيانات لا بالاسم. طلب تفاصيل مناسبة
+  من نوع آخر (`GET /api/events/:id`) بلا الترويسة نفسها يُرفض بـ404 ورسالة «هذه المناسبة
+  تحتاج نسخة أحدث من التطبيق». طلب يحمل الترويسة (أي قيمة) يرى كل الأنواع بلا تغيير — قيمتها
+  الفعلية غير مقروءة، وجودها فقط هو ما يُعلن عميلاً حديثاً.
+- **أعمدة صريحة**: `secondary_location_name` و `created_by` و `updated_at` و `status` لم
+  تعد في صفوف هذه القائمة (لا يعرضها أي عميل) — كل حقل تقرؤه الواجهات الحالية
+  (`groom_name`, `title`, `family_clan`, `dinner_time`, `poster_url`, `audio_url`, …) ما زال
+  موجوداً. `GET /api/events/:id` غير متأثر ويعيد كل الأعمدة كما كان.
 
 ⚠️ **تغيّر عقد `POST /api/check-collision`:** الكشف صار مدى-إلى-مدى
 (`COALESCE(event_end_date, event_date)`) لا مساواة على تاريخ واحد، واتجاهياً عبر

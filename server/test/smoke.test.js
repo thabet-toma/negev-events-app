@@ -34,9 +34,16 @@ async function test(name, fn) {
   }
 }
 
-async function api(method, path, { body, token } = {}) {
+/**
+ * `legacy: true` omits `X-App-Version` entirely, simulating a pre-#20 client
+ * (#20 step 4, decision و). Every other call gets one by default so the rest
+ * of this suite keeps seeing every occasion type, matching its pre-#20
+ * behaviour.
+ */
+async function api(method, path, { body, token, legacy = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (!legacy) headers['X-App-Version'] = '2.0.0';
 
   const res = await fetch(`${baseUrl}${path}`, {
     method,
@@ -603,6 +610,192 @@ async function run() {
       `unexpected festive word in funeral title: ${body.event.title}`
     );
   });
+
+  console.log('\nUpcoming list, pagination, congratulations, legacy filtering (#20 step 4)');
+
+  let pastEventId = 0;
+  await test('An event whose date has passed is absent from the list and present in the archive', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس منتهٍ' }], town: 'كسيفة', event_date: '2020-01-15' })
+    });
+    pastEventId = created.eventId;
+
+    const { body: list } = await api('GET', '/api/events?limit=100');
+    assert.ok(!list.events.some(e => e.id === pastEventId), 'a past event must not appear in the upcoming list');
+
+    const { body: archiveList } = await api('GET', '/api/events?archive=1&limit=100');
+    assert.ok(archiveList.events.some(e => e.id === pastEventId), 'a past event must appear in the archive');
+  });
+
+  let spanningFuneralId = 0;
+  await test('A عزا that started yesterday and spans today is still shown — COALESCE(event_end_date, event_date), not event_date alone', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const inTwoDays = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى ما زال العزاء قائماً' }],
+        town: 'كسيفة',
+        location_name: 'ديوان الاختبار',
+        event_date: yesterday,
+        event_end_date: inTwoDays
+      }
+    });
+    spanningFuneralId = created.eventId;
+
+    const { body: list } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    assert.ok(list.events.some(e => e.id === spanningFuneralId), 'expected the spanning funeral to still be listed today');
+  });
+
+  await test('Default page size is 30, and the hard ceiling on ?limit= is enforced', async () => {
+    const { body: defaultList } = await api('GET', '/api/events');
+    assert.strictEqual(defaultList.pagination.limit, 30);
+
+    const { body: cappedList } = await api('GET', '/api/events?limit=99999');
+    assert.ok(cappedList.pagination.limit < 99999, `expected a hard ceiling, got limit=${cappedList.pagination.limit}`);
+  });
+
+  await test('?page= returns a different page than page 1', async () => {
+    const { body: page1 } = await api('GET', '/api/events?limit=2&page=1');
+    const { body: page2 } = await api('GET', '/api/events?limit=2&page=2');
+    assert.strictEqual(page1.events.length, 2);
+    assert.notDeepStrictEqual(page1.events.map(e => e.id), page2.events.map(e => e.id));
+  });
+
+  await test('?occasion_type_id= filters on the server, not the client', async () => {
+    const { body } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    assert.ok(body.events.length > 0, 'expected at least the funerals set up above');
+    assert.ok(body.events.every(e => e.occasion_type.id === funeralType.id));
+  });
+
+  await test('congratulations_count is always present (zero when there are none), and latest_congratulation is null', async () => {
+    const { body } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const event = body.events.find(e => e.id === spanningFuneralId);
+    assert.strictEqual(event.congratulations_count, 0);
+    assert.strictEqual(event.latest_congratulation, null);
+  });
+
+  await test('An event with three congratulations reports count 3 and the newest one as the preview, without duplicating the row', async () => {
+    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الأول', message: 'تعازينا' } });
+    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الثاني', message: 'رحمه الله' } });
+    await api('POST', `/api/events/${spanningFuneralId}/congratulate`, { body: { sender_name: 'الثالث', message: 'البقاء لله' } });
+
+    const { body } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const matches = body.events.filter(e => e.id === spanningFuneralId);
+    assert.strictEqual(matches.length, 1, 'the event must not repeat once per congratulation');
+    assert.strictEqual(matches[0].congratulations_count, 3);
+    assert.strictEqual(matches[0].latest_congratulation.sender_name, 'الثالث');
+  });
+
+  await test('The congratulations counter/preview disappear from the card when show_congratulations_count is off, and return when it is back on', async () => {
+    const { body: adminList } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    const funeralAdmin = adminList.types.find(t => t.id === funeralType.id);
+    assert.strictEqual(funeralAdmin.show_congratulations_count, true);
+
+    await api('PATCH', `/api/admin/occasion-types/${funeralType.id}`, {
+      token: superAdminToken,
+      body: { show_congratulations_count: false }
+    });
+
+    const { body: hiddenList } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const hiddenEvent = hiddenList.events.find(e => e.id === spanningFuneralId);
+    assert.ok(!('congratulations_count' in hiddenEvent), 'expected the counter to be dropped entirely, not just zeroed');
+    assert.ok(!('latest_congratulation' in hiddenEvent));
+
+    await api('PATCH', `/api/admin/occasion-types/${funeralType.id}`, {
+      token: superAdminToken,
+      body: { show_congratulations_count: true }
+    });
+
+    const { body: restoredList } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const restoredEvent = restoredList.events.find(e => e.id === spanningFuneralId);
+    assert.strictEqual(restoredEvent.congratulations_count, 3);
+  });
+
+  await test('A request with no X-App-Version header only sees weddings from GET /api/events', async () => {
+    const { body } = await api('GET', '/api/events?limit=100', { legacy: true });
+    assert.ok(body.events.length > 0, 'expected at least the seeded weddings');
+    assert.ok(body.events.every(e => e.occasion_type.id === weddingType.id));
+  });
+
+  await test('A request with no X-App-Version header only sees weddings from GET /api/map/events', async () => {
+    const { body: legacyPoints } = await api('GET', '/api/map/events', { legacy: true });
+    const { body: modernFunerals } = await api('GET', `/api/events?limit=100&occasion_type_id=${funeralType.id}`);
+    const funeralIds = new Set(modernFunerals.events.map(e => e.id));
+    assert.ok(!legacyPoints.points.some(p => funeralIds.has(p.id)), 'a funeral pin leaked to a legacy client');
+  });
+
+  await test('Reordering the type tabs does not change what a legacy client receives', async () => {
+    const types = (await api('GET', '/api/occasion-types')).body.types;
+    const funeral = types.find(t => t.name === 'عزا');
+    const wedding = types.find(t => t.name === 'عرس');
+
+    // A super_admin reordering tabs is a display choice, and must never
+    // decide which occasions reach a build that cannot render them.
+    await api('PATCH', `/api/admin/occasion-types/${funeral.id}`, {
+      token: superAdminToken, body: { position: 0 }
+    });
+    try {
+      const { body } = await api('GET', '/api/events?limit=100', { legacy: true });
+      const nonWedding = body.events.filter(e => e.occasion_type && e.occasion_type.id !== wedding.id);
+      assert.strictEqual(nonWedding.length, 0, 'reordering leaked a type a legacy client cannot render');
+    } finally {
+      await api('PATCH', `/api/admin/occasion-types/${funeral.id}`, {
+        token: superAdminToken, body: { position: 2 }
+      });
+    }
+  });
+
+  await test('A type created from the panel is not sent to already-published clients', async () => {
+    const { body: created } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: {
+        name: 'ختان', icon: '🎈', color: '#0e7490', position: 90,
+        fields: [
+          { field_key: 'honorees', label: 'صاحب المناسبة', is_visible: true, is_required: true },
+          { field_key: 'town', label: 'البلدة', is_visible: true, is_required: true },
+          { field_key: 'event_date', label: 'التاريخ', is_visible: true, is_required: true }
+        ],
+        reactions: []
+      }
+    });
+
+    const admin = (await api('GET', '/api/admin/occasion-types', { token: superAdminToken })).body.types;
+    const fresh = admin.find(t => t.id === created.typeId);
+    assert.strictEqual(fresh.legacy_client_supported, false, 'a new type must default to unsupported');
+
+    await api('DELETE', `/api/admin/occasion-types/${created.typeId}`, { token: superAdminToken });
+  });
+
+  await test('A request with a modern X-App-Version header sees every occasion type', async () => {
+    const { body } = await api('GET', '/api/events?limit=100');
+    assert.ok(body.events.some(e => e.occasion_type.id === weddingType.id));
+    assert.ok(body.events.some(e => e.occasion_type.id === funeralType.id));
+  });
+
+  await test('A legacy client requesting the details of an unsupported occasion type gets 404 with the fixed Arabic message', async () => {
+    const { status, body } = await api('GET', `/api/events/${spanningFuneralId}`, { legacy: true });
+    assert.strictEqual(status, 404);
+    assert.strictEqual(body.message, 'هذه المناسبة تحتاج نسخة أحدث من التطبيق');
+  });
+
+  await test('A modern client requesting the same event passes through', async () => {
+    const { status } = await api('GET', `/api/events/${spanningFuneralId}`);
+    assert.strictEqual(status, 200);
+  });
+
+  await test('Explicit list columns still include every field a legacy client reads: groom_name, title, family_clan, dinner_time', async () => {
+    const { body } = await api('GET', '/api/events?limit=1');
+    const event = body.events[0];
+    for (const field of ['groom_name', 'title', 'family_clan', 'dinner_time']) {
+      assert.ok(field in event, `expected "${field}" on the list row`);
+    }
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?)', [pastEventId, spanningFuneralId]);
 
   console.log('\nEditing (ownership + amendment classification)');
 

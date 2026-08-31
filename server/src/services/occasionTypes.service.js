@@ -5,7 +5,8 @@ const ApiError = require('../utils/ApiError');
 
 const BOOLEAN_COLUMNS = [
   'is_active', 'creates_collision', 'warns_others', 'premoderate_messages',
-  'show_congratulations_count', 'show_followers_count', 'show_views_count'
+  'show_congratulations_count', 'show_followers_count', 'show_views_count',
+  'legacy_client_supported'
 ];
 
 function castBooleans(type) {
@@ -75,6 +76,20 @@ async function getTypeById(id) {
   if (!type) return null;
   const [withRelations] = await attachFieldsAndReactions([type], { visibleFieldsOnly: true });
   return withRelations;
+}
+
+/**
+ * The one occasion type a client with no `X-App-Version` header understands
+ * — every pre-#20 client was built around a single, wedding-shaped occasion,
+ * before occasion types existed at all. Derived from `position` (the type
+ * placed first among active types), never from `name`, so renaming or
+ * relabeling عرس never breaks this — only reordering it would (#20 step 4).
+ */
+async function getLegacyTypeIds() {
+  const rows = await db.query(
+    'SELECT id FROM occasion_types WHERE is_active = 1 AND legacy_client_supported = 1'
+  );
+  return rows.map(row => row.id);
 }
 
 /** Batched id -> type-with-fields lookup, for attaching a type to a list of events. */
@@ -166,7 +181,8 @@ async function updateType(id, data) {
   const columns = [
     'name', 'icon', 'color', 'position', 'is_active', 'creates_collision', 'warns_others',
     'premoderate_messages', 'show_congratulations_count', 'show_followers_count',
-    'show_views_count', 'congratulations_label', 'default_badge_title'
+    'show_views_count', 'congratulations_label', 'default_badge_title',
+    'default_poster_url', 'legacy_client_supported'
   ];
 
   await db.transaction(async connection => {
@@ -232,6 +248,7 @@ module.exports = {
   listPublicTypes,
   getTypeById,
   getTypesByIds,
+  getLegacyTypeIds,
   listAllTypesForAdmin,
   createType,
   updateType,

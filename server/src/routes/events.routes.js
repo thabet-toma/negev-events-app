@@ -17,13 +17,32 @@ const router = express.Router();
 
 // --- Public reads -------------------------------------------------
 
+/**
+ * No `X-App-Version` header at all → a pre-#20 client. Its presence, not its
+ * value, is what matters: the platform only needs to know whether the caller
+ * declared itself, not compare versions (that comparison is ADR-0004's, and
+ * stays client-side) (#20 step 4, decision و).
+ */
+function isLegacyClient(req) {
+  return !req.get('X-App-Version');
+}
+
 router.get('/events', asyncHandler(async (req, res) => {
   const town = cleanString(req.query.town, 100);
   const search = cleanString(req.query.search, 100);
   const date = optionalDate(req.query.date);
+  const occasionTypeId = req.query.occasion_type_id === undefined || req.query.occasion_type_id === null || req.query.occasion_type_id === ''
+    ? null
+    : parseId(req.query.occasion_type_id, 'نوع المناسبة');
+  const archive = req.query.archive === '1' || req.query.archive === 'true';
 
-  const list = await events.listPublicEvents({ town, search, date });
-  res.json({ success: true, events: list });
+  const result = await events.listPublicEvents({
+    town, search, date, occasionTypeId, archive,
+    legacyOnly: isLegacyClient(req),
+    page: req.query.page,
+    limit: req.query.limit
+  });
+  res.json({ success: true, ...result });
 }));
 
 router.get('/stories', asyncHandler(async (req, res) => {
@@ -31,7 +50,7 @@ router.get('/stories', asyncHandler(async (req, res) => {
 }));
 
 router.get('/map/events', asyncHandler(async (req, res) => {
-  res.json({ success: true, points: await events.listMapPoints() });
+  res.json({ success: true, points: await events.listMapPoints({ legacyOnly: isLegacyClient(req) }) });
 }));
 
 router.get('/towns', asyncHandler(async (req, res) => {
@@ -40,7 +59,7 @@ router.get('/towns', asyncHandler(async (req, res) => {
 
 router.get('/events/:id', asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
-  res.json({ success: true, event: await events.getEventDetails(eventId) });
+  res.json({ success: true, event: await events.getEventDetails(eventId, { legacyOnly: isLegacyClient(req) }) });
 }));
 
 // --- Event submission ---------------------------------------------

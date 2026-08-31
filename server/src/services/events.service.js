@@ -8,6 +8,23 @@ const { withAbsoluteMedia } = require('../utils/mediaUrl');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
+/** Default and hard-ceiling page sizes for `GET /api/events` (#20 step 4, decision ب). */
+const DEFAULT_PAGE_SIZE = 30;
+const MAX_PAGE_SIZE = 100;
+
+/**
+ * Columns the public list actually needs — a card's fields plus whatever the
+ * relations/filtering steps below need (`occasion_type_id`, `event_end_date`).
+ * `secondary_location_name`, `created_by`, `updated_at` and `status` are
+ * dropped: no client displays them from this endpoint. `GET /api/events/:id`
+ * is unaffected and still returns every column (#20 step 4, decision هـ).
+ */
+const LIST_COLUMNS = [
+  'id', 'title', 'groom_name', 'family_clan', 'occasion_type_id', 'town', 'location_name',
+  'latitude', 'longitude', 'event_date', 'event_end_date', 'youth_party_date', 'dinner_time',
+  'poster_url', 'audio_url', 'audio_title', 'host_phone', 'views_count'
+].join(', ');
+
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
   return term.replace(/[\\%_]/g, char => `\\${char}`);
@@ -30,6 +47,41 @@ async function reactionsForEvents(eventIds) {
   for (const row of rows) {
     if (!map[row.event_id]) map[row.event_id] = EMPTY_REACTIONS();
     map[row.event_id][row.reaction_type] = Number(row.count);
+  }
+  return map;
+}
+
+/**
+ * Groups congratulation count + newest one by event id, in a single query:
+ * { [eventId]: { congratulations_count, latest_congratulation: { sender_name, message, created_at } } }.
+ * One window-function pass over `congratulations` (COUNT as a partition
+ * aggregate, ROW_NUMBER to pick the newest row per event) instead of a JOIN
+ * that would multiply event rows by their congratulation count (#20 step 4,
+ * decision د).
+ */
+async function congratulationsForEvents(eventIds) {
+  if (!eventIds.length) return {};
+
+  const placeholders = eventIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT event_id, sender_name, message, created_at, cnt
+       FROM (
+         SELECT event_id, sender_name, message, created_at,
+                ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY created_at DESC, id DESC) AS rn,
+                COUNT(*) OVER (PARTITION BY event_id) AS cnt
+           FROM congratulations
+          WHERE event_id IN (${placeholders})
+       ) ranked
+      WHERE rn = 1`,
+    eventIds
+  );
+
+  const map = {};
+  for (const row of rows) {
+    map[row.event_id] = {
+      congratulations_count: Number(row.cnt),
+      latest_congratulation: { sender_name: row.sender_name, message: row.message, created_at: row.created_at }
+    };
   }
   return map;
 }
@@ -69,10 +121,50 @@ async function attachHonoreesAndTypes(rows) {
   }));
 }
 
-/** Approved events, optionally filtered by town, date and free-text search. */
-async function listPublicEvents({ town, date, search } = {}) {
+/**
+ * Approved events, optionally filtered by town, date, occasion type and
+ * free-text search — paginated, upcoming-first (or archived-first when
+ * `archive` is set), with per-card congratulation stats attached.
+ *
+ * `archive`: false (default) shows only what has not finished yet —
+ * `COALESCE(event_end_date, event_date) >= CURDATE()`, so a multi-day عزا
+ * that started yesterday still shows today. `archive: true` flips to what
+ * already ended, newest-ended first, reached only on explicit request so it
+ * never crowds out what's upcoming (#20 step 4, decision أ).
+ *
+ * `legacyOnly` forces the result to the occasion types a client with no
+ * `X-App-Version` header understands, overriding any `occasionTypeId` filter
+ * — that filter is a tab a legacy client's UI cannot even render (#20 step 4,
+ * decision و).
+ */
+async function listPublicEvents({
+  town, date, search, occasionTypeId = null, legacyOnly = false, archive = false,
+  page = 1, limit = DEFAULT_PAGE_SIZE
+} = {}) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
+
   const conditions = ["status = 'approved'"];
   const params = [];
+
+  conditions.push(archive
+    ? 'COALESCE(event_end_date, event_date) < CURDATE()'
+    : 'COALESCE(event_end_date, event_date) >= CURDATE()');
+
+  if (legacyOnly) {
+    // A client that does not announce itself only ever sees the types a
+    // published build knows how to render. None marked means none sent —
+    // silence beats a funeral drawn as a wedding.
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    if (!legacyTypeIds.length) {
+      return { events: [], pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 } };
+    }
+    conditions.push(`occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    params.push(...legacyTypeIds);
+  } else if (occasionTypeId) {
+    conditions.push('occasion_type_id = ?');
+    params.push(occasionTypeId);
+  }
 
   if (town && town !== 'الكل') {
     conditions.push('town = ?');
@@ -101,23 +193,68 @@ async function listPublicEvents({ town, date, search } = {}) {
     params.push(term, term, term, term, term, term);
   }
 
+  const whereClause = conditions.join(' AND ');
+
+  const { total } = await db.queryOne(`SELECT COUNT(*) AS total FROM events WHERE ${whereClause}`, params);
+
+  const offset = (safePage - 1) * safeLimit;
+  const orderClause = archive ? 'event_date DESC, id DESC' : 'event_date ASC, id ASC';
+
+  // LIMIT/OFFSET as bound parameters, not string-concatenated — same
+  // parameterization rule as every other value in this query.
   const rows = await db.query(
-    `SELECT * FROM events WHERE ${conditions.join(' AND ')} ORDER BY event_date ASC, id ASC`,
-    params
+    `SELECT ${LIST_COLUMNS} FROM events WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
+    [...params, safeLimit, offset]
   );
 
-  const reactionMap = await reactionsForEvents(rows.map(e => e.id));
-  const withRelations = await attachHonoreesAndTypes(rows.map(withAbsoluteMedia));
-  return withRelations.map(event => ({
-    ...event,
-    reactions: reactionMap[event.id] || EMPTY_REACTIONS()
-  }));
+  const eventIds = rows.map(e => e.id);
+  const [reactionMap, congratsMap, withRelations] = await Promise.all([
+    reactionsForEvents(eventIds),
+    congratulationsForEvents(eventIds),
+    attachHonoreesAndTypes(rows.map(withAbsoluteMedia))
+  ]);
+
+  const events = withRelations.map(event => {
+    const shaped = { ...event, reactions: reactionMap[event.id] || EMPTY_REACTIONS() };
+
+    // Hidden by type flag, not by name — the counter/preview never appears
+    // for an occasion type whose admin turned it off (#20 step 4, decision د).
+    if (event.occasion_type?.show_congratulations_count !== false) {
+      const congrats = congratsMap[event.id] || { congratulations_count: 0, latest_congratulation: null };
+      shaped.congratulations_count = congrats.congratulations_count;
+      shaped.latest_congratulation = congrats.latest_congratulation;
+    }
+    return shaped;
+  });
+
+  return {
+    events,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total: Number(total),
+      totalPages: Math.ceil(Number(total) / safeLimit)
+    }
+  };
 }
 
-/** A single event with its reactions and congratulations. View count is bumped. */
-async function getEventDetails(eventId) {
+/**
+ * A single event with its reactions and congratulations. View count is
+ * bumped. `legacyOnly` (no `X-App-Version` header) 404s an occasion type the
+ * caller cannot render, instead of handing it data it would mislabel — the
+ * same wedding-only understanding `listPublicEvents`/`listMapPoints` apply
+ * (#20 step 4, decision و).
+ */
+async function getEventDetails(eventId, { legacyOnly = false } = {}) {
   const event = await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+
+  if (legacyOnly) {
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    if (!legacyTypeIds.includes(event.occasion_type_id)) {
+      throw ApiError.notFound('هذه المناسبة تحتاج نسخة أحدث من التطبيق');
+    }
+  }
 
   await db.execute('UPDATE events SET views_count = views_count + 1 WHERE id = ?', [eventId]);
 
@@ -141,13 +278,31 @@ async function getEventDetails(eventId) {
   };
 }
 
-/** Approved events that carry coordinates, shaped for the map view. */
-async function listMapPoints() {
+/**
+ * Approved, upcoming events that carry coordinates, shaped for the map view.
+ * Same upcoming cutoff and legacy-client type filter as `listPublicEvents`
+ * (#20 step 4, decisions أ and و).
+ */
+async function listMapPoints({ legacyOnly = false } = {}) {
+  const conditions = [
+    "status = 'approved'", 'latitude IS NOT NULL', 'longitude IS NOT NULL',
+    'COALESCE(event_end_date, event_date) >= CURDATE()'
+  ];
+  const params = [];
+
+  if (legacyOnly) {
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    if (!legacyTypeIds.length) return [];
+    conditions.push(`occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    params.push(...legacyTypeIds);
+  }
+
   const rows = await db.query(
     `SELECT id, title, groom_name, town, event_date, location_name, poster_url, latitude, longitude
        FROM events
-      WHERE status = 'approved' AND latitude IS NOT NULL AND longitude IS NOT NULL
-      ORDER BY event_date ASC`
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY event_date ASC`,
+    params
   );
 
   return rows.map(row => ({

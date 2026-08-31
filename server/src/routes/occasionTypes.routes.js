@@ -105,6 +105,10 @@ router.post('/admin/occasion-types', asyncHandler(async (req, res) => {
     show_congratulations_count: req.body.show_congratulations_count !== false,
     show_followers_count: req.body.show_followers_count !== false,
     show_views_count: req.body.show_views_count !== false,
+    // Defaults to false on purpose: a type created today cannot be rendered
+    // by a build already on people's phones. It is flipped when a build
+    // that understands it ships — which is what the standing notice says.
+    legacy_client_supported: Boolean(req.body.legacy_client_supported),
     congratulations_label: cleanString(req.body.congratulations_label, 40) || 'تبريكات',
     default_badge_title: cleanString(req.body.default_badge_title, 80),
     fields: parseFields(req.body.fields),
@@ -133,6 +137,9 @@ router.patch('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
   }
   if (body.show_followers_count !== undefined) payload.show_followers_count = Boolean(body.show_followers_count);
   if (body.show_views_count !== undefined) payload.show_views_count = Boolean(body.show_views_count);
+  if (body.legacy_client_supported !== undefined) {
+    payload.legacy_client_supported = Boolean(body.legacy_client_supported);
+  }
   if (body.congratulations_label !== undefined) payload.congratulations_label = cleanString(body.congratulations_label, 40);
   if (body.default_badge_title !== undefined) payload.default_badge_title = cleanString(body.default_badge_title, 80);
   if (body.fields !== undefined) payload.fields = parseFields(body.fields);

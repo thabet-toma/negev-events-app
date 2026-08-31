@@ -79,6 +79,7 @@ function buildSeedFields(overrides) {
 const OCCASION_TYPE_SEEDS = [
   {
     name: 'عرس',
+    legacy_client_supported: 1,
     default_poster_url: DEFAULT_POSTER,
     icon: '💍',
     color: '#8f6a20',
@@ -100,6 +101,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'عزا',
+    legacy_client_supported: 0,
     default_poster_url: null,
     icon: '🕊️',
     color: '#475569',
@@ -126,6 +128,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'خطوبة',
+    legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '💐',
     color: '#0369a1',
@@ -148,6 +151,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'نجاح',
+    legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '🎓',
     color: '#0e7490',
@@ -170,6 +174,7 @@ const OCCASION_TYPE_SEEDS = [
   },
   {
     name: 'حج وعمرة',
+    legacy_client_supported: 0,
     default_poster_url: DEFAULT_POSTER,
     icon: '🕋',
     color: '#155e75',
@@ -283,13 +288,15 @@ const steps = [
           `INSERT INTO occasion_types
              (name, icon, color, position, is_active, creates_collision, warns_others,
               premoderate_messages, show_congratulations_count, show_followers_count,
-              show_views_count, congratulations_label, default_badge_title, default_poster_url)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              show_views_count, congratulations_label, default_badge_title, default_poster_url,
+              legacy_client_supported)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             seed.name, seed.icon, seed.color, seed.position,
             seed.creates_collision, seed.warns_others, seed.premoderate_messages,
             seed.show_congratulations_count, seed.show_followers_count, seed.show_views_count,
-            seed.congratulations_label, seed.default_badge_title, seed.default_poster_url
+            seed.congratulations_label, seed.default_badge_title, seed.default_poster_url,
+            seed.legacy_client_supported
           ]
         );
         const typeId = result.insertId;
@@ -372,6 +379,38 @@ const steps = [
           WHERE NOT EXISTS (SELECT 1 FROM event_honorees eh WHERE eh.event_id = e.id)`
       );
       logger.info(`[migrations] backfill-event-honorees-2026-08: ${result.affectedRows} row(s) backfilled.`);
+    }
+  },
+  {
+    // Which occasion types a published APK can render is a fact about that
+    // APK, not about display order. Deriving it from `position` — which a
+    // super_admin reorders on purpose — meant that moving عزا to the top
+    // would silently start feeding funerals to every phone that renders them
+    // as "زفاف العريس", the exact harm this filter exists to prevent. So it
+    // gets its own column, defaulting to 0: a newly created type is by
+    // definition not understood by an already-published client, which is
+    // precisely what the panel's standing notice tells the admin.
+    name: 'add-occasion-type-legacy-support-flag-2026-08',
+    async run(connection) {
+      if (await columnExists(connection, 'occasion_types', 'legacy_client_supported')) {
+        logger.info('[migrations] add-occasion-type-legacy-support-flag-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(
+        'ALTER TABLE occasion_types ADD COLUMN legacy_client_supported TINYINT(1) NOT NULL DEFAULT 0'
+      );
+
+      let marked = 0;
+      for (const seed of OCCASION_TYPE_SEEDS) {
+        if (!seed.legacy_client_supported) continue;
+        const [result] = await connection.execute(
+          'UPDATE occasion_types SET legacy_client_supported = 1 WHERE name = ?',
+          [seed.name]
+        );
+        marked += result.affectedRows;
+      }
+      logger.info(`[migrations] add-occasion-type-legacy-support-flag-2026-08: column added, ${marked} type(s) marked.`);
     }
   },
   {
