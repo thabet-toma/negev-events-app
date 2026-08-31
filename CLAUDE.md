@@ -49,7 +49,8 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | رفع صورة أو صوت | `server/src/middleware/upload.js` |
 | بث لحظي | `server/src/realtime/index.js` + `realtime.emit` من طبقة المسارات |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
-| أي شيء في الواجهة | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
+| أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
+| أي شيء في تطبيق الموبايل | `mobile/lib/screens/` ثم `mobile/lib/api/negev_api.dart` |
 | بلدة جديدة | `server/src/constants.js` — `TOWNS` و `TOWN_COORDINATES` معاً |
 
 ---
@@ -70,18 +71,20 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 
 ---
 
-## البنية — وحدتا نشر منفصلتان
+## البنية — ثلاث وحدات منفصلة
 
 ```
 server/   خادم JSON فقط — لا يخدم أي HTML
 web/      واجهة الويب — تُنشر على استضافة ثابتة مستقلة
+mobile/   تطبيق فلاتر — يستهلك نفس الخادم
 ```
 
-الخادم عديم الحالة (JWT، بلا كوكيز) ويخدم أي عدد من العملاء: واجهة الويب،
-وتطبيق فلاتر لاحقاً، وأي عميل آخر. **لا تُعِد ربط الاثنين**: أي `express.static`
-للواجهة داخل `server/` يلغي الفصل.
+الخادم عديم الحالة (JWT، بلا كوكيز) ويخدم العملاء الثلاثة وأي عميل جديد.
+**لا تُعِد ربط الطبقات**: أي `express.static` للواجهة داخل `server/` يلغي الفصل،
+وأي منطق أعمال داخل `web/` أو `mobile/` يكرّر ما هو في الخدمات.
 
-الأوامر تُنفَّذ من داخل `server/`. الواجهة: `node web/serve.js` (تطوير).
+أوامر الخادم من داخل `server/` · الويب `node web/serve.js` · الموبايل
+`flutter run` من داخل `mobile/`.
 
 ## Tech Stack
 
@@ -141,7 +144,15 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 
 ---
 
-## قواعد الواجهة (`web/`)
+## قواعد تطبيق الموبايل (`mobile/`)
+
+- **كل نداء عبر `mobile/lib/api/negev_api.dart`** — لا `http` مباشر في الشاشات
+- الرمز يُرفق عند `auth: true` فقط — نفس سبب الويب: `POST /api/events` ينشر فوراً برمز مدير
+- البلدات في `mobile/lib/config.dart` تطابق `server/src/constants.js` حرفياً — أي بلدة جديدة تُضاف في الاثنين
+- `flutter test` قبل أي commit يلمس `mobile/`، و`flutter analyze` يجب أن يكون نظيفاً
+- كل نص يراه المستخدم بالعربية، مثل باقي المشروع
+
+## قواعد واجهة الويب (`web/`)
 
 - ملفات ثابتة يخدمها Express — لا خطوة بناء. أي `import`/`export` أو JSX سيكسر الصفحة
 - الحالة متغيرات عامة أعلى `app.js`، والرمز في `localStorage` تحت `negev_token` و `negev_user`

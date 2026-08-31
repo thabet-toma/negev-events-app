@@ -23,3 +23,8 @@ Thumbs.db
 # Build / coverage
 dist/
 coverage/
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins-dependencies
