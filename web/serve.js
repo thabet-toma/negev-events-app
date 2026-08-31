@@ -60,12 +60,18 @@ function proxy(req, res) {
       headers: { ...req.headers, host: target.host }
     },
     upstreamRes => {
+      // خطأ أثناء تدفّق الرد (كأن يسقط الخادم في منتصفه).
+      upstreamRes.on('error', () => res.destroy());
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
       upstreamRes.pipe(res);
     }
   );
 
   upstream.on('error', () => {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(
       JSON.stringify({
@@ -74,6 +80,11 @@ function proxy(req, res) {
       })
     );
   });
+
+  // بدون هذين، أي ECONNRESET — وإعادة تشغيل الخادم تسبّبه — يرمي استثناءً
+  // غير ملتقَط فيُسقط خادم التطوير بأكمله.
+  req.on('error', () => upstream.destroy());
+  res.on('error', () => upstream.destroy());
 
   req.pipe(upstream);
 }
@@ -122,7 +133,17 @@ server.on('upgrade', (req, socket, head) => {
     headers: { ...req.headers, host: target.host }
   });
 
+  // مقبس WebSocket مفتوح طويلاً، وسقوط الخادم يقطعه بـECONNRESET. بدون معالج
+  // هنا يخرج الاستثناء غير ملتقَط فيُسقط خادم التطوير — وإعادة تشغيل الخادم
+  // أثناء العمل تفعل ذلك في كل مرة.
+  socket.on('error', () => socket.destroy());
+
   upstream.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+    upstreamSocket.on('error', () => {
+      upstreamSocket.destroy();
+      socket.destroy();
+    });
+
     const headers = Object.entries(upstreamRes.headers)
       .map(([key, value]) => `${key}: ${value}`)
       .join('\r\n');

@@ -63,6 +63,16 @@
           <i class="fa-solid fa-user-lock"></i>
           <span id="userAuthLabel">تسجيل الدخول</span>
         </button>
+        <!--
+          مخفي حتى يؤكّد الخادم وجود إصدار منشور (‎/api/app/version‎). الرابط
+          والإصدار والحجم كلها تُملأ وقت التشغيل — لا شيء منها مثبَّت هنا.
+        -->
+        <a id="appDownloadBtn" class="app-download-btn" hidden
+           href="#" rel="noopener" download>
+          <i class="fa-brands fa-android"></i>
+          <span>تطبيق أندرويد</span>
+          <span id="appDownloadSize" class="app-download-size" hidden></span>
+        </a>
       </div>
     </div>
   </header>

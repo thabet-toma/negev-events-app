@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
+  initAppDownload();
   
   const today = new Date().toISOString().split('T')[0];
   const dateInput = document.getElementById('addEventDate');
@@ -30,6 +31,59 @@ document.addEventListener('DOMContentLoaded', () => {
   const nokootDateInput = document.getElementById('nokootDate');
   if (nokootDateInput) nokootDateInput.value = today;
 });
+
+// 0. Android app download entry
+//
+// كل الحقائق تأتي من ‎GET /api/app/version‎ — الرابط والإصدار — والحجم من
+// ترويسة الملف نفسه. لا شيء مثبَّت هنا، فإصدار نسخة جديدة يبقى تغيير متغيّر
+// بيئة على الخادم دون لمس الواجهة.
+async function initAppDownload() {
+  const btn = document.getElementById('appDownloadBtn');
+  if (!btn) return;
+
+  // ملف APK لا يعمل على iOS إطلاقاً. عرضه لمستخدم آيفون وعدٌ كاذب، فنخفيه.
+  // على سطح المكتب نُبقيه: الزائر قد ينزّله لينقله إلى هاتفه، ووسم «أندرويد»
+  // في النص يمنع اللبس.
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return;
+
+  try {
+    const res = await apiFetch('/api/app/version');
+    if (!res.ok) return;
+
+    const data = await res.json();
+    // الإعلان معطَّل (متغيرات فارغة) → لا يظهر شيء. لا زر بلا وجهة.
+    if (!data.success || !data.apk_url) return;
+
+    btn.href = data.apk_url;
+    btn.title = data.latest_version
+      ? `تطبيق مناسبات النقب — الإصدار ${data.latest_version}`
+      : 'تطبيق مناسبات النقب لأجهزة أندرويد';
+
+    const size = await fetchDownloadSize(data.apk_url);
+    if (size) {
+      const label = document.getElementById('appDownloadSize');
+      label.textContent = size;
+      label.hidden = false;
+    }
+
+    btn.hidden = false;
+  } catch (e) {
+    // الخادم متوقف أو النداء فشل: الزائر لا يرى زراً ولا خطأ.
+    console.debug('App download entry unavailable:', e);
+  }
+}
+
+/** حجم الملف من ترويسة HEAD — يعود فارغاً بهدوء إن تعذّر. */
+async function fetchDownloadSize(url) {
+  try {
+    const res = await fetch(url, { method: 'HEAD' });
+    const bytes = parseInt(res.headers.get('content-length'), 10);
+    if (!bytes || Number.isNaN(bytes)) return '';
+    return `${Math.round(bytes / (1024 * 1024))} م.ب`;
+  } catch (e) {
+    return '';
+  }
+}
 
 // 1. Socket.io Realtime Setup
 function initSocket() {

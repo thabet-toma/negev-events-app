@@ -232,6 +232,43 @@ body {
   box-shadow: 0 0 12px rgba(243, 199, 104, 0.3);
 }
 
+/* تنزيل تطبيق أندرويد — نفس لغة الحبّات أعلاه بلون أخضر أندرويد */
+.app-download-btn {
+  background: rgba(16, 231, 157, 0.12);
+  color: var(--emerald-neon);
+  border: 1px solid rgba(16, 231, 157, 0.35);
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-family: var(--font-main);
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.app-download-btn:hover {
+  background: rgba(16, 231, 157, 0.22);
+  border-color: var(--emerald-neon);
+  box-shadow: 0 0 12px rgba(16, 231, 157, 0.3);
+}
+
+/* الحجم معلومة ثانوية، لكنها ظاهرة قبل الضغط لا بعده */
+.app-download-size {
+  font-size: 0.68rem;
+  font-weight: 600;
+  opacity: 0.75;
+  padding-inline-start: 2px;
+}
+
+.app-download-btn[hidden],
+.app-download-size[hidden] {
+  display: none;
+}
+
 /* Stories & Live Snaps Bar */
 .stories-section {
   max-width: 650px;
