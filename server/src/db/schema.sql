@@ -17,16 +17,67 @@ CREATE TABLE IF NOT EXISTS users (
   KEY idx_users_role (role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Occasion types are runtime data, not an ENUM: a super_admin adds one from
+-- the admin panel with no deploy and no migration. occasion_type_fields and
+-- occasion_type_reactions cap what an admin controls per type — the field_key
+-- values are only ever drawn from OCCASION_FIELDS in src/constants.js.
+CREATE TABLE IF NOT EXISTS occasion_types (
+  id                          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name                        VARCHAR(60)  NOT NULL,
+  icon                        VARCHAR(60)  NOT NULL,
+  color                       VARCHAR(20)  NOT NULL,
+  position                    INT          NOT NULL DEFAULT 0,
+  is_active                   TINYINT(1)   NOT NULL DEFAULT 1,
+  creates_collision           TINYINT(1)   NOT NULL DEFAULT 0,
+  warns_others                TINYINT(1)   NOT NULL DEFAULT 0,
+  premoderate_messages        TINYINT(1)   NOT NULL DEFAULT 0,
+  show_congratulations_count  TINYINT(1)   NOT NULL DEFAULT 1,
+  show_followers_count        TINYINT(1)   NOT NULL DEFAULT 1,
+  show_views_count            TINYINT(1)   NOT NULL DEFAULT 1,
+  congratulations_label       VARCHAR(40)  NOT NULL DEFAULT 'تبريكات',
+  default_badge_title         VARCHAR(80)  DEFAULT NULL,
+  created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_occasion_types_name (name),
+  KEY idx_occasion_types_position (position)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS occasion_type_fields (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  occasion_type_id  INT UNSIGNED NOT NULL,
+  field_key         VARCHAR(60)  NOT NULL,
+  label             VARCHAR(80)  NOT NULL,
+  is_visible        TINYINT(1)   NOT NULL DEFAULT 1,
+  is_required       TINYINT(1)   NOT NULL DEFAULT 0,
+  position           INT         NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_occasion_type_fields (occasion_type_id, field_key),
+  CONSTRAINT fk_occasion_type_fields_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS occasion_type_reactions (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  occasion_type_id  INT UNSIGNED NOT NULL,
+  reaction_type     ENUM('coffee','horse','fireworks','rose','hand') NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_occasion_type_reactions (occasion_type_id, reaction_type),
+  CONSTRAINT fk_occasion_type_reactions_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS events (
   id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
   title            VARCHAR(255) NOT NULL,
   groom_name       VARCHAR(150) NOT NULL,
   family_clan      VARCHAR(150) NOT NULL,
+  occasion_type_id INT UNSIGNED DEFAULT NULL,
   town             VARCHAR(100) NOT NULL,
   location_name    TEXT         NOT NULL,
+  secondary_location_name TEXT  DEFAULT NULL,
   latitude         DECIMAL(10,7) DEFAULT NULL,
   longitude        DECIMAL(10,7) DEFAULT NULL,
   event_date       DATE         NOT NULL,
+  event_end_date   DATE         DEFAULT NULL,
   youth_party_date DATE         DEFAULT NULL,
   dinner_time      VARCHAR(100) NOT NULL DEFAULT 'الساعة 8:00 مساءً',
   poster_url       TEXT,
@@ -45,7 +96,25 @@ CREATE TABLE IF NOT EXISTS events (
   KEY idx_events_status_date (status, event_date),
   KEY idx_events_groom (groom_name),
   KEY idx_events_clan (family_clan),
-  CONSTRAINT fk_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+  KEY idx_events_occasion_type (occasion_type_id),
+  CONSTRAINT fk_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_events_occasion_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Honorees are a 1..N relation so search can match every name on an event
+-- (e.g. the fifth pilgrim on a حج wedge, not just whichever name lived on
+-- events.groom_name before this table existed).
+CREATE TABLE IF NOT EXISTS event_honorees (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id   INT UNSIGNED NOT NULL,
+  name       VARCHAR(150) NOT NULL,
+  role       VARCHAR(60)  DEFAULT NULL,
+  position   INT          NOT NULL DEFAULT 0,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_event_honorees_event (event_id),
+  KEY idx_event_honorees_name (name),
+  CONSTRAINT fk_event_honorees_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS nokoot_ledger (

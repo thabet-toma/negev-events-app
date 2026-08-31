@@ -49,8 +49,30 @@ function requireAdmin(req, res, next) {
   });
 }
 
+/**
+ * Requires the super_admin role specifically — plain admins are rejected.
+ * Reserved for structural changes (like occasion types) that reshape what
+ * every client sees, as opposed to day-to-day moderation.
+ */
+function requireSuperAdmin(req, res, next) {
+  authenticate(req, res, err => {
+    if (err) return next(err);
+    if (req.user.role !== 'super_admin') {
+      return next(ApiError.forbidden('صلاحيات المدير العام مطلوبة'));
+    }
+    return next();
+  });
+}
+
 function signToken(payload, expiresIn) {
   return jwt.sign(payload, config.jwt.secret, { expiresIn });
 }
 
-module.exports = { authenticate, optionalAuthenticate, requireAdmin, signToken, ADMIN_ROLES };
+module.exports = {
+  authenticate,
+  optionalAuthenticate,
+  requireAdmin,
+  requireSuperAdmin,
+  signToken,
+  ADMIN_ROLES
+};

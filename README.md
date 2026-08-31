@@ -215,6 +215,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة |
+| `GET` | `/api/occasion-types` | أنواع المناسبات النشِطة، مرتّبة، مع حقولها الظاهرة وتفاعلاتها |
 
 ### الحساب
 
@@ -244,8 +245,12 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `POST` | `/api/admin/broadcast` | بث إشعار عام |
+| `GET` | `/api/admin/occasion-types` | كل أنواع المناسبات (نشِطة ومعطَّلة) مع عدد المناسبات لكل نوع 🛡️ |
+| `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
+| `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه) 🛡️ |
+| `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
 
-🔒 يتطلب رمز مستخدم · 👑 يتطلب رمز إدارة
+🔒 يتطلب رمز مستخدم · 👑 يتطلب رمز إدارة · 🛡️ يتطلب رمز مدير عام (`super_admin`)
 
 ### أحداث Socket.IO
 

@@ -11,7 +11,173 @@
  */
 
 const logger = require('../utils/logger');
-const { TOWN_COORDINATES } = require('../constants');
+const { TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS } = require('../constants');
+
+async function columnExists(connection, table, column) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  return rows[0].cnt > 0;
+}
+
+async function indexExists(connection, table, indexName) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [table, indexName]
+  );
+  return rows[0].cnt > 0;
+}
+
+async function constraintExists(connection, table, constraintName) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS cnt FROM information_schema.TABLE_CONSTRAINTS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?`,
+    [table, constraintName]
+  );
+  return rows[0].cnt > 0;
+}
+
+/**
+ * Builds the full occasion_type_fields row set for a seed type from
+ * OCCASION_FIELDS (so position/order and default labels stay in one place),
+ * applying only the per-type overrides that differ from the sensible
+ * default (visible, not required unless core).
+ */
+function buildSeedFields(overrides) {
+  return OCCASION_FIELDS.map((field, index) => {
+    const override = overrides[field.key] || {};
+    return {
+      field_key: field.key,
+      label: override.label || field.label,
+      is_visible: 'is_visible' in override ? override.is_visible : 1,
+      is_required: 'is_required' in override ? override.is_required : (field.core ? 1 : 0),
+      position: index + 1
+    };
+  });
+}
+
+// Colours come from the design system, not from a generic palette: the type
+// colour is what makes the occasion readable before a letter of it is —
+// mourning slate for عزا, a celebration gold for عرس, and the sky family
+// for the rest. Every one clears 4.5:1 against white text, since that is
+// exactly where these are used (badges, chips, card accents).
+// The five occasion types the platform ships with. Only used by this
+// migration step (data, not logic) — nothing outside db/ may branch on a
+// type's name like this.
+const OCCASION_TYPE_SEEDS = [
+  {
+    name: 'عرس',
+    icon: '💍',
+    color: '#8f6a20',
+    position: 1,
+    creates_collision: 1,
+    warns_others: 1,
+    premoderate_messages: 0,
+    show_congratulations_count: 1,
+    show_followers_count: 1,
+    show_views_count: 1,
+    congratulations_label: 'تبريكات',
+    default_badge_title: 'مبارك الفرح',
+    reactions: REACTION_TYPES,
+    fields: buildSeedFields({
+      honorees: { label: 'العريس/العروس' },
+      secondary_location_name: { is_visible: 0 },
+      event_end_date: { is_visible: 0 }
+    })
+  },
+  {
+    name: 'عزا',
+    icon: '🕊️',
+    color: '#475569',
+    position: 2,
+    creates_collision: 0,
+    warns_others: 1,
+    premoderate_messages: 1,
+    show_congratulations_count: 1,
+    show_followers_count: 0,
+    show_views_count: 0,
+    congratulations_label: 'تعازي',
+    default_badge_title: null,
+    reactions: [],
+    fields: buildSeedFields({
+      honorees: { label: 'المتوفَّى' },
+      event_end_date: { is_visible: 1, is_required: 1 },
+      secondary_location_name: { is_visible: 1, label: 'مكان إضافي (مثل بيت عزاء النساء)' },
+      youth_party_date: { is_visible: 0 },
+      dinner_time: { is_visible: 0 },
+      audio_url: { is_visible: 0 },
+      audio_title: { is_visible: 0 },
+      poster_url: { is_visible: 1, is_required: 0 }
+    })
+  },
+  {
+    name: 'خطوبة',
+    icon: '💐',
+    color: '#0369a1',
+    position: 3,
+    creates_collision: 1,
+    warns_others: 1,
+    premoderate_messages: 0,
+    show_congratulations_count: 1,
+    show_followers_count: 1,
+    show_views_count: 1,
+    congratulations_label: 'تبريكات',
+    default_badge_title: 'مبارك الخطوبة',
+    reactions: REACTION_TYPES,
+    fields: buildSeedFields({
+      honorees: { label: 'العريس/العروس' },
+      secondary_location_name: { is_visible: 0 },
+      event_end_date: { is_visible: 0 },
+      youth_party_date: { is_visible: 0 }
+    })
+  },
+  {
+    name: 'نجاح',
+    icon: '🎓',
+    color: '#0e7490',
+    position: 4,
+    creates_collision: 0,
+    warns_others: 1,
+    premoderate_messages: 0,
+    show_congratulations_count: 1,
+    show_followers_count: 1,
+    show_views_count: 1,
+    congratulations_label: 'تبريكات',
+    default_badge_title: 'مبارك النجاح',
+    reactions: REACTION_TYPES,
+    fields: buildSeedFields({
+      honorees: { label: 'الناجح' },
+      secondary_location_name: { is_visible: 0 },
+      event_end_date: { is_visible: 0 },
+      youth_party_date: { is_visible: 0 }
+    })
+  },
+  {
+    name: 'حج وعمرة',
+    icon: '🕋',
+    color: '#155e75',
+    position: 5,
+    creates_collision: 0,
+    warns_others: 1,
+    premoderate_messages: 0,
+    show_congratulations_count: 1,
+    show_followers_count: 1,
+    show_views_count: 1,
+    congratulations_label: 'تبريكات',
+    default_badge_title: 'حج مبرور وذنب مغفور',
+    reactions: REACTION_TYPES,
+    fields: buildSeedFields({
+      honorees: { label: 'الحاج/المعتمر' },
+      event_date: { label: 'تاريخ الاستقبال' },
+      secondary_location_name: { is_visible: 0 },
+      event_end_date: { is_visible: 0 },
+      youth_party_date: { is_visible: 0 }
+    })
+  }
+];
 
 // Coordinates as they were stored before the fix below. Kept here (not in
 // constants.js, which now only holds the corrected values) purely as the
@@ -53,6 +219,118 @@ const steps = [
       }
 
       logger.info(`[migrations] fix-town-coordinates-2026-08: ${totalAffected} row(s) updated.`);
+    }
+  },
+  {
+    name: 'add-occasion-type-columns-to-events-2026-08',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'occasion_type_id'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN occasion_type_id INT UNSIGNED DEFAULT NULL AFTER family_clan'
+        );
+      }
+      if (!(await columnExists(connection, 'events', 'secondary_location_name'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN secondary_location_name TEXT DEFAULT NULL AFTER location_name'
+        );
+      }
+      if (!(await columnExists(connection, 'events', 'event_end_date'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN event_end_date DATE DEFAULT NULL AFTER event_date'
+        );
+      }
+      if (!(await indexExists(connection, 'events', 'idx_events_occasion_type'))) {
+        await connection.execute('ALTER TABLE events ADD INDEX idx_events_occasion_type (occasion_type_id)');
+      }
+      if (!(await constraintExists(connection, 'events', 'fk_events_occasion_type'))) {
+        await connection.execute(
+          `ALTER TABLE events ADD CONSTRAINT fk_events_occasion_type
+             FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE RESTRICT`
+        );
+      }
+      logger.info('[migrations] add-occasion-type-columns-to-events-2026-08: ensured columns, index and FK.');
+    }
+  },
+  {
+    name: 'seed-occasion-types-2026-08',
+    async run(connection) {
+      let created = 0;
+
+      for (const seed of OCCASION_TYPE_SEEDS) {
+        const [existingRows] = await connection.execute(
+          'SELECT id FROM occasion_types WHERE name = ?',
+          [seed.name]
+        );
+        // Never touch a type that already exists — an admin may have edited
+        // it on purpose, and re-running the migration must not clobber that.
+        if (existingRows.length) continue;
+
+        const [result] = await connection.execute(
+          `INSERT INTO occasion_types
+             (name, icon, color, position, is_active, creates_collision, warns_others,
+              premoderate_messages, show_congratulations_count, show_followers_count,
+              show_views_count, congratulations_label, default_badge_title)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            seed.name, seed.icon, seed.color, seed.position,
+            seed.creates_collision, seed.warns_others, seed.premoderate_messages,
+            seed.show_congratulations_count, seed.show_followers_count, seed.show_views_count,
+            seed.congratulations_label, seed.default_badge_title
+          ]
+        );
+        const typeId = result.insertId;
+
+        for (const field of seed.fields) {
+          await connection.execute(
+            `INSERT INTO occasion_type_fields (occasion_type_id, field_key, label, is_visible, is_required, position)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [typeId, field.field_key, field.label, field.is_visible, field.is_required, field.position]
+          );
+        }
+
+        for (const reactionType of seed.reactions) {
+          await connection.execute(
+            'INSERT INTO occasion_type_reactions (occasion_type_id, reaction_type) VALUES (?, ?)',
+            [typeId, reactionType]
+          );
+        }
+
+        created += 1;
+      }
+
+      logger.info(`[migrations] seed-occasion-types-2026-08: ${created} type(s) created.`);
+    }
+  },
+  {
+    name: 'backfill-events-occasion-type-2026-08',
+    async run(connection) {
+      // Every row that predates occasion types is a wedding — no exceptions,
+      // no guessing. New rows always carry an explicit type going forward.
+      const [weddingRows] = await connection.execute(
+        "SELECT id FROM occasion_types WHERE name = 'عرس' LIMIT 1"
+      );
+      if (!weddingRows.length) {
+        logger.warn('[migrations] backfill-events-occasion-type-2026-08: عرس type missing — skipped.');
+        return;
+      }
+
+      const [result] = await connection.execute(
+        'UPDATE events SET occasion_type_id = ? WHERE occasion_type_id IS NULL',
+        [weddingRows[0].id]
+      );
+      logger.info(`[migrations] backfill-events-occasion-type-2026-08: ${result.affectedRows} row(s) backfilled.`);
+    }
+  },
+  {
+    name: 'backfill-event-honorees-2026-08',
+    async run(connection) {
+      const [result] = await connection.execute(
+        `INSERT INTO event_honorees (event_id, name, role, position)
+         SELECT e.id, e.groom_name, 'العريس/العروس', 0
+           FROM events e
+          WHERE NOT EXISTS (SELECT 1 FROM event_honorees eh WHERE eh.event_id = e.id)`
+      );
+      logger.info(`[migrations] backfill-event-honorees-2026-08: ${result.affectedRows} row(s) backfilled.`);
     }
   }
 ];

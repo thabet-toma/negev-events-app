@@ -35,4 +35,40 @@ const EVENT_STATUSES = ['pending', 'approved', 'rejected'];
 const DEFAULT_POSTER =
   'https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80';
 
-module.exports = { TOWNS, TOWN_COORDINATES, REACTION_TYPES, EVENT_STATUSES, DEFAULT_POSTER };
+/**
+ * Hard ceiling on what an occasion type may show, hide or relabel. A type's
+ * field configuration may only pick keys from this list — never invent one —
+ * so the UI/search/migrations never have to deal with an unknown field.
+ * `core: true` marks the three fields no occasion type may hide: honorees,
+ * town, event_date. Keys match existing/new `events` columns.
+ */
+const OCCASION_FIELDS = [
+  { key: 'honorees', label: 'أصحاب المناسبة', core: true },
+  { key: 'title', label: 'العنوان', core: false },
+  { key: 'family_clan', label: 'العائلة/العشيرة', core: false },
+  { key: 'town', label: 'البلدة', core: true },
+  { key: 'location_name', label: 'المكان', core: false },
+  { key: 'secondary_location_name', label: 'مكان إضافي', core: false },
+  { key: 'event_date', label: 'تاريخ المناسبة', core: true },
+  { key: 'event_end_date', label: 'تاريخ الانتهاء', core: false },
+  { key: 'youth_party_date', label: 'سهرة الشباب', core: false },
+  { key: 'dinner_time', label: 'وقت العشاء', core: false },
+  { key: 'poster_url', label: 'صورة الملصق', core: false },
+  { key: 'audio_url', label: 'الملف الصوتي', core: false },
+  { key: 'audio_title', label: 'عنوان المقطع الصوتي', core: false },
+  { key: 'host_phone', label: 'رقم التواصل', core: false }
+];
+
+const OCCASION_FIELD_KEYS = OCCASION_FIELDS.map(field => field.key);
+const CORE_OCCASION_FIELDS = OCCASION_FIELDS.filter(field => field.core).map(field => field.key);
+
+module.exports = {
+  TOWNS,
+  TOWN_COORDINATES,
+  REACTION_TYPES,
+  EVENT_STATUSES,
+  DEFAULT_POSTER,
+  OCCASION_FIELDS,
+  OCCASION_FIELD_KEYS,
+  CORE_OCCASION_FIELDS
+};

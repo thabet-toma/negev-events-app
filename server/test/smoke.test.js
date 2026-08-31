@@ -10,12 +10,14 @@
 
 const http = require('http');
 const assert = require('assert');
+const bcrypt = require('bcryptjs');
 
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
+const { OCCASION_FIELD_KEYS } = require('../src/constants');
 
 let baseUrl = '';
 let passed = 0;
@@ -243,6 +245,214 @@ async function run() {
     assert.strictEqual(status, 200);
   });
 
+  console.log('\nOccasion types (public read)');
+
+  await test('GET /api/occasion-types returns the five seeded types ordered by position, عرس first', async () => {
+    const { status, body } = await api('GET', '/api/occasion-types');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.types.length, 5);
+    assert.strictEqual(body.types[0].name, 'عرس');
+    const positions = body.types.map(t => t.position);
+    assert.deepStrictEqual(positions, [...positions].sort((a, b) => a - b));
+  });
+
+  await test('عزا carries zero reactions while عرس carries all five', async () => {
+    const { body } = await api('GET', '/api/occasion-types');
+    const wedding = body.types.find(t => t.name === 'عرس');
+    const funeral = body.types.find(t => t.name === 'عزا');
+    assert.strictEqual(funeral.reactions.length, 0);
+    assert.strictEqual(wedding.reactions.length, 5);
+  });
+
+  console.log('\nOccasion types (admin)');
+
+  // config.admin's seeded account is super_admin (see seed.js), so adminToken
+  // from the Admin section above already carries that role.
+  const superAdminToken = adminToken;
+  let plainAdminToken = '';
+  const plainAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+
+  /** A minimal, valid field config covering every master field key. */
+  function buildFieldSet(overrides = {}) {
+    return OCCASION_FIELD_KEYS.map((key, index) => ({
+      field_key: key,
+      label: key,
+      is_visible: overrides[key]?.is_visible ?? true,
+      is_required: overrides[key]?.is_required ?? ['honorees', 'town', 'event_date'].includes(key),
+      position: index + 1
+    }));
+  }
+
+  await test('Seed a plain admin directly via the DB (no API creates that role)', async () => {
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [plainAdminPhone, 'مشرف عادي', hashedPin, 'رهط']
+    );
+    const { status, body } = await api('POST', '/api/admin/login', {
+      body: { phone_number: plainAdminPhone, pin_code: '1234' }
+    });
+    assert.strictEqual(status, 200);
+    plainAdminToken = body.token;
+  });
+
+  await test('A plain admin is rejected (403) on all four occasion-type admin routes', async () => {
+    const getAll = await api('GET', '/api/admin/occasion-types', { token: plainAdminToken });
+    assert.strictEqual(getAll.status, 403);
+    const create = await api('POST', '/api/admin/occasion-types', { token: plainAdminToken, body: {} });
+    assert.strictEqual(create.status, 403);
+    const patch = await api('PATCH', '/api/admin/occasion-types/1', { token: plainAdminToken, body: {} });
+    assert.strictEqual(patch.status, 403);
+    const del = await api('DELETE', '/api/admin/occasion-types/1', { token: plainAdminToken });
+    assert.strictEqual(del.status, 403);
+  });
+
+  await test('A super_admin passes GET /api/admin/occasion-types and gets the unpublished-type notice', async () => {
+    const { status, body } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    assert.strictEqual(status, 200);
+    assert.ok(body.types.length >= 5);
+    assert.ok(body.notice.includes('لن يظهر'));
+  });
+
+  let createdTypeId = 0;
+  await test('Creating a type from the admin panel appears immediately in the public list — no deploy, no migration', async () => {
+    const { status, body } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: {
+        name: `نوع اختبار ${Date.now()}`,
+        icon: '✨',
+        color: '#123456',
+        fields: buildFieldSet(),
+        reactions: ['coffee']
+      }
+    });
+    assert.strictEqual(status, 201);
+    createdTypeId = body.typeId;
+
+    const { body: publicList } = await api('GET', '/api/occasion-types');
+    assert.ok(publicList.types.some(t => t.id === createdTypeId));
+  });
+
+  await test('Creating a type without honorees/town/event_date visible is rejected', async () => {
+    const fields = buildFieldSet().filter(f => f.field_key !== 'honorees');
+    const { status, body } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: { name: `نوع ناقص ${Date.now()}`, icon: '❌', color: '#000000', fields, reactions: [] }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('أصحاب المناسبة'));
+  });
+
+  await test('Creating a type with a field_key outside the master set is rejected', async () => {
+    const fields = [
+      ...buildFieldSet(),
+      { field_key: 'made_up_field', label: 'مخترع', is_visible: true, is_required: false, position: 99 }
+    ];
+    const { status } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: { name: `نوع مخترع ${Date.now()}`, icon: '❌', color: '#000000', fields, reactions: [] }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('A type with an event attached cannot be deleted — refused and disabled instead', async () => {
+    const { body: created } = await api('POST', '/api/admin/occasion-types', {
+      token: superAdminToken,
+      body: {
+        name: `نوع محذوف ${Date.now()}`,
+        icon: '🧪',
+        color: '#abcdef',
+        fields: buildFieldSet(),
+        reactions: []
+      }
+    });
+    const typeId = created.typeId;
+
+    const { insertId: eventId } = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, location_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'approved')`,
+      ['اختبار الحذف', 'صاحب المناسبة', 'عائلة الاختبار', typeId, 'رهط', 'مكان الاختبار', '2027-02-01']
+    );
+
+    const del = await api('DELETE', `/api/admin/occasion-types/${typeId}`, { token: superAdminToken });
+    assert.strictEqual(del.status, 409);
+
+    const row = await db.queryOne('SELECT is_active FROM occasion_types WHERE id = ?', [typeId]);
+    assert.strictEqual(Number(row.is_active), 0);
+
+    // Clean up: dropping the event lets a second delete attempt succeed for real.
+    await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+    const del2 = await api('DELETE', `/api/admin/occasion-types/${typeId}`, { token: superAdminToken });
+    assert.strictEqual(del2.status, 200);
+    assert.strictEqual(del2.body.deleted, true);
+  });
+
+  await test('A type with no events is deleted outright', async () => {
+    const del = await api('DELETE', `/api/admin/occasion-types/${createdTypeId}`, { token: superAdminToken });
+    assert.strictEqual(del.status, 200);
+    assert.strictEqual(del.body.deleted, true);
+  });
+
+  await test('Hiding a field on عرس hides it from the type config but does not touch existing event data', async () => {
+    const { body: adminList } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    const wedding = adminList.types.find(t => t.name === 'عرس');
+    const before = wedding.fields.find(f => f.field_key === 'dinner_time');
+    assert.strictEqual(before.is_visible, true);
+
+    const { body: publicEvents } = await api('GET', '/api/events');
+    const sampleEvent = publicEvents.events.find(e => e.dinner_time);
+    assert.ok(sampleEvent, 'expected a seeded event with a dinner_time value');
+    const originalDinnerTime = sampleEvent.dinner_time;
+
+    const hiddenFields = wedding.fields.map(f =>
+      f.field_key === 'dinner_time' ? { ...f, is_visible: false, is_required: false } : f
+    );
+    await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+      token: superAdminToken,
+      body: { fields: hiddenFields }
+    });
+
+    const row = await db.queryOne('SELECT dinner_time FROM events WHERE id = ?', [sampleEvent.id]);
+    assert.strictEqual(row.dinner_time, originalDinnerTime);
+
+    const { body: afterList } = await api('GET', '/api/occasion-types');
+    const weddingAfter = afterList.types.find(t => t.name === 'عرس');
+    assert.ok(!weddingAfter.fields.some(f => f.field_key === 'dinner_time'));
+
+    // Restore visibility so later runs/tests don't inherit a mutated seed type.
+    await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+      token: superAdminToken,
+      body: { fields: wedding.fields }
+    });
+
+    const row2 = await db.queryOne('SELECT dinner_time FROM events WHERE id = ?', [sampleEvent.id]);
+    assert.strictEqual(row2.dinner_time, originalDinnerTime);
+  });
+
+  console.log('\nOccasion type migration backfill');
+
+  await test('Every pre-existing event was backfilled to عرس with one event_honorees row', async () => {
+    const { body: publicEvents } = await api('GET', '/api/events');
+    const sample = publicEvents.events[0];
+    const row = await db.queryOne('SELECT occasion_type_id FROM events WHERE id = ?', [sample.id]);
+    const wedding = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عرس'");
+    assert.strictEqual(row.occasion_type_id, wedding.id);
+
+    const honorees = await db.query('SELECT * FROM event_honorees WHERE event_id = ?', [sample.id]);
+    assert.strictEqual(honorees.length, 1);
+    assert.strictEqual(honorees[0].name, sample.groom_name);
+  });
+
+  await test('Running the migration twice does not duplicate occasion types or honorees', async () => {
+    const beforeHonorees = await db.queryOne('SELECT COUNT(*) AS total FROM event_honorees');
+    const beforeTypes = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_types');
+    await migrate();
+    const afterHonorees = await db.queryOne('SELECT COUNT(*) AS total FROM event_honorees');
+    const afterTypes = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_types');
+    assert.strictEqual(Number(beforeHonorees.total), Number(afterHonorees.total));
+    assert.strictEqual(Number(beforeTypes.total), Number(afterTypes.total));
+  });
+
   console.log('\nCoordinate migration');
   const insertWithCoords = async (town, lat, lng, eventDate) => {
     const { insertId } = await db.execute(
@@ -392,8 +602,9 @@ async function run() {
     assert.strictEqual(body.success, false);
   });
 
-  // Clean up the throwaway account.
+  // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
+  await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);
 
   await new Promise(resolve => server.close(resolve));
   await db.close();
