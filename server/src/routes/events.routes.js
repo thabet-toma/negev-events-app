@@ -28,7 +28,10 @@ function isLegacyClient(req) {
   return !req.get('X-App-Version');
 }
 
-router.get('/events', asyncHandler(async (req, res) => {
+// `optionalAuthenticate`: an anonymous caller sees the list unchanged, but a
+// logged-in one also gets `is_reminded` on every card, so the client knows
+// which button state ("ذكّرني" on/off) to render without a second request.
+router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const town = cleanString(req.query.town, 100);
   const search = cleanString(req.query.search, 100);
   const date = optionalDate(req.query.date);
@@ -36,14 +39,18 @@ router.get('/events', asyncHandler(async (req, res) => {
     ? null
     : parseId(req.query.occasion_type_id, 'نوع المناسبة');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
+  const legacyOnly = isLegacyClient(req);
 
-  const result = await events.listPublicEvents({
-    town, search, date, occasionTypeId, archive,
-    legacyOnly: isLegacyClient(req),
-    page: req.query.page,
-    limit: req.query.limit
-  });
-  res.json({ success: true, ...result });
+  const [result, announcements] = await Promise.all([
+    events.listPublicEvents({
+      town, search, date, occasionTypeId, archive, legacyOnly,
+      page: req.query.page,
+      limit: req.query.limit,
+      userId: req.user ? req.user.id : null
+    }),
+    events.listLiveAnnouncements({ legacyOnly })
+  ]);
+  res.json({ success: true, ...result, announcements });
 }));
 
 router.get('/stories', asyncHandler(async (req, res) => {
@@ -292,6 +299,24 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
 
 router.get('/my-events', authenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, events: await events.listMyEvents(req.user.id) });
+}));
+
+// --- "ذكّرني" (follow, not RSVP — no attendance, no "لن أحضر") -----
+
+router.post('/events/:id/remind', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  await events.setReminder(eventId, req.user.id);
+  res.json({ success: true, message: 'تم تفعيل التذكير' });
+}));
+
+router.delete('/events/:id/remind', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  await events.removeReminder(eventId, req.user.id);
+  res.json({ success: true, message: 'تم إلغاء التذكير' });
+}));
+
+router.get('/my-reminders', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, events: await events.listMyReminders(req.user.id) });
 }));
 
 // --- Amendment log (owner or admin) ---------------------------------

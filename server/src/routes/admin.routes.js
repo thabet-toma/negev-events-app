@@ -47,7 +47,7 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
     throw ApiError.badRequest('حالة غير صالحة');
   }
 
-  const event = await admin.updateEventStatus(eventId, status);
+  const { event, notifications } = await admin.updateEventStatus(eventId, status);
   if (status === 'approved') {
     realtime.emit('new_event_created', {
       id: event.id,
@@ -56,6 +56,12 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
       town: event.town,
       event_date: event.event_date
     });
+  }
+
+  // One channel per recipient — only whoever is connected right now ever
+  // sees this; everyone else only has the notifications row until FCM (#19).
+  for (const notification of notifications) {
+    realtime.emit(`new_notification_${notification.user_id}`, notification);
   }
 
   const label = { approved: 'معتمدة ومنشورة', rejected: 'مرفوضة', pending: 'بانتظار المراجعة' }[status];

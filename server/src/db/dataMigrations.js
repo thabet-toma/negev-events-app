@@ -522,6 +522,89 @@ const steps = [
       `);
       logger.info('[migrations] create-congratulation-reports-table-2026-08: table created.');
     }
+  },
+  {
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — same guarded pattern as
+    // every table addition above.
+    name: 'create-event-reminders-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'event_reminders')) {
+        logger.info('[migrations] create-event-reminders-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE event_reminders (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_id    INT UNSIGNED NOT NULL,
+          event_id   INT UNSIGNED NOT NULL,
+          created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_event_reminders (user_id, event_id),
+          KEY idx_event_reminders_event (event_id),
+          CONSTRAINT fk_event_reminders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_reminders_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-event-reminders-table-2026-08: table created.');
+    }
+  },
+  {
+    name: 'create-event-announcements-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'event_announcements')) {
+        logger.info('[migrations] create-event-announcements-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE event_announcements (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          event_id     INT UNSIGNED NOT NULL,
+          amendment_id INT UNSIGNED DEFAULT NULL,
+          old_value    TEXT         DEFAULT NULL,
+          new_value    TEXT         DEFAULT NULL,
+          published_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          is_current   TINYINT(1)   NOT NULL DEFAULT 1,
+          PRIMARY KEY (id),
+          KEY idx_event_announcements_event (event_id),
+          KEY idx_event_announcements_current (event_id, is_current),
+          CONSTRAINT fk_event_announcements_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_announcements_amendment FOREIGN KEY (amendment_id) REFERENCES event_amendments(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-event-announcements-table-2026-08: table created.');
+    }
+  },
+  {
+    name: 'create-notifications-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'notifications')) {
+        logger.info('[migrations] create-notifications-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE notifications (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_id      INT UNSIGNED NOT NULL,
+          event_id     INT UNSIGNED DEFAULT NULL,
+          type         VARCHAR(40)  NOT NULL,
+          title        VARCHAR(200) NOT NULL,
+          body         TEXT         NOT NULL,
+          is_read      TINYINT(1)   NOT NULL DEFAULT 0,
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          delivered_at TIMESTAMP    NULL DEFAULT NULL,
+          PRIMARY KEY (id),
+          KEY idx_notifications_user (user_id),
+          KEY idx_notifications_user_read (user_id, is_read),
+          CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_notifications_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-notifications-table-2026-08: table created.');
+    }
   }
 ];
 

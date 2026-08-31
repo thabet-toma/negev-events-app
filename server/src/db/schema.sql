@@ -141,6 +141,62 @@ CREATE TABLE IF NOT EXISTS event_amendments (
   CONSTRAINT fk_event_amendments_user FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- "ذكّرني" is a follow, never an RSVP: no attendance is implied and no "لن
+-- أحضر" exists anywhere in this domain. UNIQUE (user_id, event_id) is what
+-- makes toggling the button on twice a no-op instead of a duplicate row.
+CREATE TABLE IF NOT EXISTS event_reminders (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    INT UNSIGNED NOT NULL,
+  event_id   INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_event_reminders (user_id, event_id),
+  KEY idx_event_reminders_event (event_id),
+  CONSTRAINT fk_event_reminders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_reminders_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The public trace of a critical date amendment, written only once an admin
+-- approves it — never before. is_current = 1 marks the one announcement shown
+-- per event; publishing a newer one flips the older row's flag off, but
+-- neither row is ever deleted, so the table stays a full audit trail (#20
+-- step 7).
+CREATE TABLE IF NOT EXISTS event_announcements (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id     INT UNSIGNED NOT NULL,
+  amendment_id INT UNSIGNED DEFAULT NULL,
+  old_value    TEXT         DEFAULT NULL,
+  new_value    TEXT         DEFAULT NULL,
+  published_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  is_current   TINYINT(1)   NOT NULL DEFAULT 1,
+  PRIMARY KEY (id),
+  KEY idx_event_announcements_event (event_id),
+  KEY idx_event_announcements_current (event_id, is_current),
+  CONSTRAINT fk_event_announcements_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_announcements_amendment FOREIGN KEY (amendment_id) REFERENCES event_amendments(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per person notified: a follower or the event's owner, never the
+-- person who made the edit themself. delivered_at stays NULL until FCM
+-- delivery lands (#19 — see README) — this table only ever records who
+-- earned a notification and when, not whether a device actually received it.
+CREATE TABLE IF NOT EXISTS notifications (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED NOT NULL,
+  event_id     INT UNSIGNED DEFAULT NULL,
+  type         VARCHAR(40)  NOT NULL,
+  title        VARCHAR(200) NOT NULL,
+  body         TEXT         NOT NULL,
+  is_read      TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delivered_at TIMESTAMP    NULL DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_notifications_user (user_id),
+  KEY idx_notifications_user_read (user_id, is_read),
+  CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_notifications_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS nokoot_ledger (
   id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   user_id        INT UNSIGNED  NOT NULL,

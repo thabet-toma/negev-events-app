@@ -109,14 +109,14 @@ async function run() {
   // section below — collected here and deleted in one pass at the end.
   const congratsCleanupPhones = [];
 
-  /** Registers a fresh regular user and returns { phone, token, full_name }. */
+  /** Registers a fresh regular user and returns { phone, token, full_name, id }. */
   async function registerTestUser(fullName) {
     const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
     const { body } = await api('POST', '/api/auth/register', {
       body: { phone_number: userPhone, full_name: fullName, pin_code: '1234' }
     });
     congratsCleanupPhones.push(userPhone);
-    return { phone: userPhone, token: body.token, full_name: fullName };
+    return { phone: userPhone, token: body.token, full_name: fullName, id: body.user.id };
   }
 
   console.log('Public API');
@@ -1716,6 +1716,323 @@ async function run() {
   );
   for (const p of congratsCleanupPhones) {
     await db.execute('DELETE FROM users WHERE phone_number = ?', [p]);
+  }
+
+  console.log('\nذكّرني، إعلانات تعديل التاريخ، وسجلّ الإشعارات (#20 خطوة 7)');
+
+  let reminderOwner = null;
+  let reminderFollower = null;
+  let reminderOther = null;
+  let reminderEventId = 0;
+
+  await test('Set up: an owner publishes an approved wedding for the reminder/announcement/notification tests', async () => {
+    reminderOwner = await registerTestUser('مالك مناسبة التذكير');
+    reminderFollower = await registerTestUser('متابع مناسبة التذكير');
+    reminderOther = await registerTestUser('مستخدم بلا علاقة بالتذكير');
+
+    const created = await api('POST', '/api/events', {
+      token: reminderOwner.token,
+      body: weddingEventBody({ honorees: [{ name: 'عريس التذكير' }], town: 'رهط', event_date: '2027-09-01' })
+    });
+    reminderEventId = created.body.eventId;
+
+    const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+  });
+
+  await test('POST/DELETE .../remind toggles "ذكّرني", and re-pressing an active reminder does not duplicate the row', async () => {
+    const first = await api('POST', `/api/events/${reminderEventId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(first.status, 200);
+    const again = await api('POST', `/api/events/${reminderEventId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(again.status, 200);
+
+    const rows = await db.query(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [reminderEventId, reminderFollower.id]
+    );
+    assert.strictEqual(rows.length, 1, 'a repeated remind must not duplicate the row');
+
+    const removed = await api('DELETE', `/api/events/${reminderEventId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(removed.status, 200);
+    const afterDelete = await db.query(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [reminderEventId, reminderFollower.id]
+    );
+    assert.strictEqual(afterDelete.length, 0);
+
+    // Leave the reminder active for the tests below.
+    await api('POST', `/api/events/${reminderEventId}/remind`, { token: reminderFollower.token });
+  });
+
+  await test('followers_count shows on a عرس event and disappears when show_followers_count is off — by the flag, not the type name', async () => {
+    const before = await api('GET', `/api/events/${reminderEventId}`);
+    assert.ok('followers_count' in before.body.event, 'expected followers_count on عرس');
+
+    await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
+      token: superAdminToken, body: { show_followers_count: false }
+    });
+    const hidden = await api('GET', `/api/events/${reminderEventId}`);
+    assert.ok(!('followers_count' in hidden.body.event), 'expected the counter dropped entirely, not zeroed');
+
+    await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
+      token: superAdminToken, body: { show_followers_count: true }
+    });
+    const restored = await api('GET', `/api/events/${reminderEventId}`);
+    assert.ok('followers_count' in restored.body.event);
+  });
+
+  await test('عزا is seeded with show_followers_count off, so it never carries followers_count — one death is never compared to another', async () => {
+    const { body: types } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    const funeralAdmin = types.types.find(t => t.id === funeralType.id);
+    assert.strictEqual(funeralAdmin.show_followers_count, false);
+
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى اختبار المتابعين' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-09-30',
+        event_end_date: '2027-10-01'
+      }
+    });
+    assert.strictEqual(created.body.status, 'approved');
+
+    const { body } = await api('GET', `/api/events/${created.body.eventId}`);
+    assert.ok(!('followers_count' in body.event));
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
+  await test('is_reminded is true for the following user, false for a stranger, and false/absent for a guest', async () => {
+    const followerView = await api('GET', `/api/events/${reminderEventId}`, { token: reminderFollower.token });
+    assert.strictEqual(followerView.body.event.is_reminded, true);
+
+    const strangerView = await api('GET', `/api/events/${reminderEventId}`, { token: reminderOther.token });
+    assert.strictEqual(strangerView.body.event.is_reminded, false);
+
+    const guestView = await api('GET', `/api/events/${reminderEventId}`);
+    assert.ok(guestView.body.event.is_reminded === false || guestView.body.event.is_reminded === undefined);
+  });
+
+  await test('GET /api/my-reminders returns what this user is following', async () => {
+    const { status, body } = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    assert.strictEqual(status, 200);
+    assert.ok(body.events.some(e => e.id === reminderEventId));
+  });
+
+  await test('Set up: the owner also reminds their own event — tests self-exclusion even when editor is both owner and follower', async () => {
+    const res = await api('POST', `/api/events/${reminderEventId}/remind`, { token: reminderOwner.token });
+    assert.strictEqual(res.status, 200);
+  });
+
+  await test('A critical event_date edit produces no live announcement until an admin approves it', async () => {
+    const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
+      token: reminderOwner.token, body: { event_date: '2027-09-15' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'critical');
+    assert.strictEqual(edit.body.status, 'pending');
+
+    const { body } = await api('GET', '/api/events?limit=1');
+    assert.ok(!body.announcements.some(a => a.event_id === reminderEventId), 'no announcement before approval');
+  });
+
+  await test('Approving that edit publishes the announcement, naming the old and new date', async () => {
+    const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const { body } = await api('GET', '/api/events?limit=1');
+    const announcement = body.announcements.find(a => a.event_id === reminderEventId);
+    assert.ok(announcement, 'expected a live announcement after approval');
+    assert.strictEqual(announcement.old_value, '2027-09-01');
+    assert.strictEqual(announcement.new_value, '2027-09-15');
+    assert.strictEqual(announcement.event.id, reminderEventId);
+  });
+
+  await test('The follower is notified; the owner who edited it themself is not, even though they also follow it', async () => {
+    const followerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_date_changed'",
+      [reminderFollower.id, reminderEventId]
+    );
+    assert.strictEqual(followerNotifs.length, 1);
+    assert.ok(followerNotifs[0].body.includes('2027-09-15'));
+
+    const ownerNotifs = await db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOwner.id, reminderEventId]
+    );
+    assert.strictEqual(ownerNotifs.length, 0, 'the person who made the edit must never be notified of it');
+
+    const strangerNotifs = await db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOther.id, reminderEventId]
+    );
+    assert.strictEqual(strangerNotifs.length, 0);
+  });
+
+  await test('A second critical date edit — this time by an admin, not the owner — supersedes the first announcement; both rows stay in the table', async () => {
+    const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
+      token: adminToken, body: { event_date: '2027-09-20' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'critical');
+
+    const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const rows = await db.query(
+      'SELECT * FROM event_announcements WHERE event_id = ? ORDER BY id ASC', [reminderEventId]
+    );
+    assert.strictEqual(rows.length, 2, 'expected both announcement rows to remain for audit');
+    assert.strictEqual(Number(rows[0].is_current), 0, 'the older announcement must no longer be current');
+    assert.strictEqual(Number(rows[1].is_current), 1);
+
+    const { body } = await api('GET', '/api/events?limit=1');
+    const matches = body.announcements.filter(a => a.event_id === reminderEventId);
+    assert.strictEqual(matches.length, 1, 'only the current announcement is shown, not both');
+    assert.strictEqual(matches[0].new_value, '2027-09-20');
+  });
+
+  await test('This time both the follower and the owner (neither of them the editor) are notified', async () => {
+    const followerNotifs = await db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderFollower.id, reminderEventId]
+    );
+    assert.strictEqual(followerNotifs.length, 2, 'one from each of the two approved date edits');
+
+    const ownerNotifs = await db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOwner.id, reminderEventId]
+    );
+    assert.strictEqual(ownerNotifs.length, 1, 'the owner is notified this time — the edit was not their own');
+  });
+
+  await test('GET /api/notifications returns only this user\'s own rows, and PATCH marks one read', async () => {
+    const { status, body } = await api('GET', '/api/notifications', { token: reminderFollower.token });
+    assert.strictEqual(status, 200);
+    assert.ok(body.notifications.length >= 2);
+    assert.ok(body.notifications.every(n => n.user_id === reminderFollower.id));
+
+    const unread = body.notifications.find(n => !n.is_read);
+    assert.ok(unread, 'expected at least one unread notification');
+    const marked = await api('PATCH', `/api/notifications/${unread.id}/read`, { token: reminderFollower.token });
+    assert.strictEqual(marked.status, 200);
+
+    const { body: after } = await api('GET', '/api/notifications', { token: reminderFollower.token });
+    assert.ok(after.notifications.find(n => n.id === unread.id).is_read, 'expected the notification marked read');
+  });
+
+  await test('A user cannot read or mark-read another user\'s notification — secrecy at the query itself', async () => {
+    const followerNotifs = await db.query('SELECT id FROM notifications WHERE user_id = ? LIMIT 1', [reminderFollower.id]);
+    const notifId = followerNotifs[0].id;
+
+    const { status } = await api('PATCH', `/api/notifications/${notifId}/read`, { token: reminderOther.token });
+    assert.strictEqual(status, 404, "marking someone else's notification must be indistinguishable from it not existing");
+
+    const strangerList = await api('GET', '/api/notifications', { token: reminderOther.token });
+    assert.ok(!strangerList.body.notifications.some(n => n.id === notifId));
+  });
+
+  await test('A cosmetic edit produces no announcement and no notification', async () => {
+    const beforeAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
+    const beforeNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
+
+    const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
+      token: adminToken, body: { title: 'عنوان تجميلي لمناسبة التذكير' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'cosmetic');
+
+    const afterAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
+    const afterNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
+    assert.strictEqual(Number(afterAnnouncements.total), Number(beforeAnnouncements.total));
+    assert.strictEqual(Number(afterNotifs.total), Number(beforeNotifs.total));
+  });
+
+  await test('A critical edit that is NOT a date change (location) is approved normally but never publishes an announcement or a notification', async () => {
+    const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
+      token: adminToken, body: { location_name: 'قاعة جديدة لاختبار التذكير' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'critical');
+    assert.strictEqual(edit.body.status, 'pending');
+
+    const beforeAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
+    const beforeNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
+
+    const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const afterAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
+    const afterNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
+    assert.strictEqual(Number(afterAnnouncements.total), Number(beforeAnnouncements.total), 'a location amendment must never publish a date announcement');
+    assert.strictEqual(Number(afterNotifs.total), Number(beforeNotifs.total));
+  });
+
+  let legacyAnnouncementEventId = 0;
+  await test('An announcement about an occasion type a legacy client cannot render never reaches it', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى إعلان قديم' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-10-01',
+        event_end_date: '2027-10-03'
+      }
+    });
+    legacyAnnouncementEventId = created.body.eventId;
+    assert.strictEqual(created.body.status, 'approved');
+
+    const edit = await api('PATCH', `/api/events/${legacyAnnouncementEventId}`, {
+      token: adminToken, body: { event_date: '2027-10-05' }
+    });
+    assert.strictEqual(edit.body.amendment, 'critical');
+
+    const approve = await api('PATCH', `/api/admin/events/${legacyAnnouncementEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const legacyView = await api('GET', '/api/events?limit=100', { legacy: true });
+    assert.ok(!legacyView.body.announcements.some(a => a.event_id === legacyAnnouncementEventId));
+
+    const modernView = await api('GET', '/api/events?limit=100');
+    assert.ok(modernView.body.announcements.some(a => a.event_id === legacyAnnouncementEventId));
+
+    await api('DELETE', `/api/admin/events/${legacyAnnouncementEventId}`, { token: adminToken });
+  });
+
+  await test("views_count stays a bare counter — repeated views by different identities never write a per-viewer row, and no such table exists", async () => {
+    const firstView = await api('GET', `/api/events/${reminderEventId}`, { token: reminderFollower.token });
+    const secondView = await api('GET', `/api/events/${reminderEventId}`, { token: reminderOther.token });
+    assert.strictEqual(
+      secondView.body.event.views_count, firstView.body.event.views_count + 1,
+      'each request increments the bare counter regardless of who is viewing'
+    );
+
+    const columns = await db.query(
+      `SELECT TABLE_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'user_id'`
+    );
+    const viewTables = columns.map(c => c.TABLE_NAME).filter(name => /view/i.test(name));
+    assert.strictEqual(viewTables.length, 0, 'expected no per-user "views" table anywhere in the schema');
+  });
+
+  await test('The live announcement disappears once its event\'s (new) date has passed', async () => {
+    await db.execute('UPDATE events SET event_date = ? WHERE id = ?', ['2020-01-01', reminderEventId]);
+    const { body } = await api('GET', '/api/events?limit=1');
+    assert.ok(!body.announcements.some(a => a.event_id === reminderEventId));
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [reminderEventId]);
+  for (const u of [reminderOwner, reminderFollower, reminderOther]) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
   }
 
   // Clean up the throwaway accounts.

@@ -87,6 +87,142 @@ async function congratulationsForEvents(eventIds) {
   return map;
 }
 
+/** Groups follower counts by event id: { [eventId]: count }. */
+async function followersCountsForEvents(eventIds) {
+  if (!eventIds.length) return {};
+
+  const placeholders = eventIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT event_id, COUNT(*) AS count FROM event_reminders
+      WHERE event_id IN (${placeholders})
+      GROUP BY event_id`,
+    eventIds
+  );
+
+  const map = {};
+  for (const row of rows) map[row.event_id] = Number(row.count);
+  return map;
+}
+
+/** Which of these events the given user has an active "ذكّرني" on — empty for an anonymous caller. */
+async function remindedEventIdsForUser(userId, eventIds) {
+  if (!userId || !eventIds.length) return new Set();
+
+  const placeholders = eventIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT event_id FROM event_reminders WHERE user_id = ? AND event_id IN (${placeholders})`,
+    [userId, ...eventIds]
+  );
+  return new Set(rows.map(row => row.event_id));
+}
+
+/**
+ * Attaches `is_reminded` (always) and `followers_count` (only when the
+ * event's occasion type has `show_followers_count` on — absent entirely
+ * otherwise, never zero, since a hidden count must not be inferable from a
+ * suspicious zero) to a list of events already carrying `occasion_type`.
+ */
+async function attachReminderState(events, userId) {
+  if (!events.length) return events;
+
+  const eventIds = events.map(event => event.id);
+  const [followersMap, remindedSet] = await Promise.all([
+    followersCountsForEvents(eventIds),
+    remindedEventIdsForUser(userId, eventIds)
+  ]);
+
+  return events.map(event => {
+    const shaped = { ...event, is_reminded: remindedSet.has(event.id) };
+    if (event.occasion_type?.show_followers_count !== false) {
+      shaped.followers_count = followersMap[event.id] || 0;
+    }
+    return shaped;
+  });
+}
+
+/** Toggles a "ذكّرني" on — a follow, not an RSVP. Re-pressing an active reminder is a silent no-op (UNIQUE key). */
+async function setReminder(eventId, userId) {
+  const event = await db.queryOne('SELECT id FROM events WHERE id = ?', [eventId]);
+  if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+
+  try {
+    await db.execute('INSERT INTO event_reminders (user_id, event_id) VALUES (?, ?)', [userId, eventId]);
+  } catch (err) {
+    if (err.code !== 'ER_DUP_ENTRY') throw err;
+  }
+}
+
+async function removeReminder(eventId, userId) {
+  await db.execute('DELETE FROM event_reminders WHERE user_id = ? AND event_id = ?', [userId, eventId]);
+}
+
+/** Every event this user is following, newest reminder first. */
+async function listMyReminders(userId) {
+  const rows = await db.query(
+    `SELECT e.* FROM event_reminders r
+       JOIN events e ON e.id = r.event_id
+      WHERE r.user_id = ?
+      ORDER BY r.created_at DESC`,
+    [userId]
+  );
+  const withRelations = await attachHonoreesAndTypes(rows.map(withAbsoluteMedia));
+  return attachReminderState(withRelations, userId);
+}
+
+/**
+ * Live date-change announcements (#20 step 7): the current one per event,
+ * still relevant (its event hasn't finished), shaped as a card pointing back
+ * at the original event. `legacyOnly` applies the same occasion-type filter
+ * as the list/map/detail endpoints — an announcement about a type an old
+ * client cannot render must not leak through this door either.
+ */
+async function listLiveAnnouncements({ legacyOnly = false } = {}) {
+  const conditions = [
+    'a.is_current = 1', "e.status = 'approved'",
+    'COALESCE(e.event_end_date, e.event_date) >= CURDATE()'
+  ];
+  const params = [];
+
+  if (legacyOnly) {
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    if (!legacyTypeIds.length) return [];
+    conditions.push(`e.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    params.push(...legacyTypeIds);
+  }
+
+  const rows = await db.query(
+    `SELECT a.id, a.event_id, a.old_value, a.new_value, a.published_at,
+            e.title, e.groom_name, e.town, e.event_date, e.event_end_date,
+            e.occasion_type_id, e.poster_url
+       FROM event_announcements a
+       JOIN events e ON e.id = a.event_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY a.published_at DESC`,
+    params
+  );
+
+  return rows.map(row => {
+    const media = withAbsoluteMedia(row);
+    return {
+      id: row.id,
+      event_id: row.event_id,
+      old_value: row.old_value,
+      new_value: row.new_value,
+      published_at: row.published_at,
+      event: {
+        id: row.event_id,
+        title: row.title,
+        groom_name: row.groom_name,
+        town: row.town,
+        event_date: row.event_date,
+        event_end_date: row.event_end_date,
+        occasion_type_id: row.occasion_type_id,
+        poster_url: media.poster_url
+      }
+    };
+  });
+}
+
 /** Groups honorees by event id, ordered by position: { [eventId]: [{ name, role, position }] }. */
 async function honoreesForEvents(eventIds) {
   if (!eventIds.length) return {};
@@ -140,7 +276,7 @@ async function attachHonoreesAndTypes(rows) {
  */
 async function listPublicEvents({
   town, date, search, occasionTypeId = null, legacyOnly = false, archive = false,
-  page = 1, limit = DEFAULT_PAGE_SIZE
+  page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -228,8 +364,10 @@ async function listPublicEvents({
     return shaped;
   });
 
+  const withReminderState = await attachReminderState(events, userId);
+
   return {
-    events,
+    events: withReminderState,
     pagination: {
       page: safePage,
       limit: safeLimit,
@@ -282,8 +420,10 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
   const reactions = EMPTY_REACTIONS();
   for (const row of reactionRows) reactions[row.reaction_type] = Number(row.count);
 
+  const [withReminderState] = await attachReminderState([withRelations], userId);
+
   return {
-    ...withRelations,
+    ...withReminderState,
     views_count: event.views_count + 1,
     reactions,
     congratulations: congratulations.map(withAbsoluteMedia)
@@ -800,6 +940,10 @@ module.exports = {
   listAmendments,
   listMyEvents,
   findCollisions,
+  setReminder,
+  removeReminder,
+  listMyReminders,
+  listLiveAnnouncements,
   addReaction,
   addCongratulation,
   listCongratulationsForModeration,
