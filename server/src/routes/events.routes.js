@@ -53,10 +53,6 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, ...result, announcements });
 }));
 
-router.get('/stories', asyncHandler(async (req, res) => {
-  res.json({ success: true, stories: await events.listStories() });
-}));
-
 router.get('/map/events', asyncHandler(async (req, res) => {
   res.json({ success: true, points: await events.listMapPoints({ legacyOnly: isLegacyClient(req) }) });
 }));

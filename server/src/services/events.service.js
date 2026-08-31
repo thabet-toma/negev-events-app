@@ -463,12 +463,6 @@ async function listMapPoints({ legacyOnly = false } = {}) {
   }));
 }
 
-async function listStories() {
-  const rows = await db.query('SELECT * FROM stories ORDER BY is_live DESC, id ASC');
-  // The UI reads `isLive`; keep `is_live` too so API consumers see the raw column.
-  return rows.map(row => ({ ...withAbsoluteMedia(row), isLive: Boolean(row.is_live) }));
-}
-
 /**
  * Builds the default title when the publisher leaves it blank. Derived from
  * the occasion type's own name and its honorees' names — never a hardcoded
@@ -931,7 +925,6 @@ module.exports = {
   listPublicEvents,
   getEventDetails,
   listMapPoints,
-  listStories,
   checkTownMismatch,
   createEvent,
   getEventForEdit,

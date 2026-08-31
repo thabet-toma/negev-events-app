@@ -605,6 +605,113 @@ const steps = [
       `);
       logger.info('[migrations] create-notifications-table-2026-08: table created.');
     }
+  },
+  {
+    // Additive only (#20 step 8): title/clan/town/image/is_live/event_id are
+    // untouched, so an already-published client reading GET /api/stories
+    // keeps working unmodified.
+    name: 'add-story-ad-columns-2026-08',
+    async run(connection) {
+      if (!(await columnExists(connection, 'stories', 'expires_at'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN expires_at DATETIME DEFAULT NULL');
+      }
+      if (!(await columnExists(connection, 'stories', 'advertiser_name'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN advertiser_name VARCHAR(150) DEFAULT NULL');
+      }
+      if (!(await columnExists(connection, 'stories', 'is_ad'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN is_ad TINYINT(1) NOT NULL DEFAULT 0');
+      }
+      if (!(await columnExists(connection, 'stories', 'target_url'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN target_url TEXT DEFAULT NULL');
+      }
+      if (!(await columnExists(connection, 'stories', 'slide_duration_seconds'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN slide_duration_seconds INT UNSIGNED NOT NULL DEFAULT 5');
+      }
+      if (!(await indexExists(connection, 'stories', 'idx_stories_expires'))) {
+        await connection.query('ALTER TABLE stories ADD INDEX idx_stories_expires (expires_at)');
+      }
+      logger.info('[migrations] add-story-ad-columns-2026-08: ensured columns and index.');
+    }
+  },
+  {
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — same guarded pattern as
+    // every table addition above. See schema.sql for why viewer_key (a
+    // STORED generated column) is what the UNIQUE key is built on, not a
+    // raw (user_id, device_id) pair.
+    name: 'create-story-views-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'story_views')) {
+        logger.info('[migrations] create-story-views-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE story_views (
+          id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          story_id    INT UNSIGNED NOT NULL,
+          user_id     INT UNSIGNED DEFAULT NULL,
+          device_id   VARCHAR(100) DEFAULT NULL,
+          viewer_town VARCHAR(100) DEFAULT NULL,
+          viewed_on   DATE         NOT NULL,
+          viewer_key  VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) STORED,
+          created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_story_views_identity (story_id, viewer_key, viewed_on),
+          KEY idx_story_views_story (story_id),
+          CONSTRAINT fk_story_views_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-story-views-table-2026-08: table created.');
+    }
+  },
+  {
+    name: 'create-story-clicks-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'story_clicks')) {
+        logger.info('[migrations] create-story-clicks-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE story_clicks (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          story_id   INT UNSIGNED NOT NULL,
+          user_id    INT UNSIGNED DEFAULT NULL,
+          device_id  VARCHAR(100) DEFAULT NULL,
+          created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_story_clicks_story (story_id),
+          CONSTRAINT fk_story_clicks_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+          CONSTRAINT fk_story_clicks_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-story-clicks-table-2026-08: table created.');
+    }
+  },
+  {
+    name: 'create-story-reports-table-2026-08',
+    async run(connection) {
+      if (await tableExists(connection, 'story_reports')) {
+        logger.info('[migrations] create-story-reports-table-2026-08: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE story_reports (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          story_id   INT UNSIGNED NOT NULL,
+          user_id    INT UNSIGNED NOT NULL,
+          created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_story_reports (story_id, user_id),
+          KEY idx_story_reports_story (story_id),
+          CONSTRAINT fk_story_reports_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+          CONSTRAINT fk_story_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-story-reports-table-2026-08: table created.');
+    }
   }
 ];
 

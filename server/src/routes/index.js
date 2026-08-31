@@ -12,6 +12,7 @@ const aiRoutes = require('./ai.routes');
 const appRoutes = require('./app.routes');
 const occasionTypesRoutes = require('./occasionTypes.routes');
 const notificationsRoutes = require('./notifications.routes');
+const storiesRoutes = require('./stories.routes');
 
 const router = express.Router();
 
@@ -34,5 +35,6 @@ router.use(aiRoutes);
 router.use(appRoutes);
 router.use(occasionTypesRoutes);
 router.use(notificationsRoutes);
+router.use(storiesRoutes);
 
 module.exports = router;

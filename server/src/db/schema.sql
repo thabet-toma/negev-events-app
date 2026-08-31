@@ -267,18 +267,85 @@ CREATE TABLE IF NOT EXISTS congratulation_reports (
   CONSTRAINT fk_congrats_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Additive over the pre-#20-step-8 shape: title/clan/town/image/is_live/event_id
+-- are untouched, so an already-published client reading GET /api/stories keeps
+-- working unmodified. expires_at NULL means "never expires" — the ad columns
+-- (advertiser_name/is_ad/target_url) exist on every row, not just ads, since a
+-- non-ad story simply leaves them NULL/0 (#20 step 8).
 CREATE TABLE IF NOT EXISTS stories (
-  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  title      VARCHAR(200) NOT NULL,
-  clan       VARCHAR(150) DEFAULT NULL,
-  town       VARCHAR(100) DEFAULT NULL,
-  image      TEXT,
-  is_live    TINYINT(1)   NOT NULL DEFAULT 0,
-  event_id   INT UNSIGNED DEFAULT NULL,
-  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  id                     INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  title                  VARCHAR(200) NOT NULL,
+  clan                   VARCHAR(150) DEFAULT NULL,
+  town                   VARCHAR(100) DEFAULT NULL,
+  image                  TEXT,
+  is_live                TINYINT(1)   NOT NULL DEFAULT 0,
+  event_id               INT UNSIGNED DEFAULT NULL,
+  expires_at             DATETIME     DEFAULT NULL,
+  advertiser_name        VARCHAR(150) DEFAULT NULL,
+  is_ad                  TINYINT(1)   NOT NULL DEFAULT 0,
+  target_url             TEXT         DEFAULT NULL,
+  slide_duration_seconds INT UNSIGNED NOT NULL DEFAULT 5,
+  created_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_stories_live (is_live),
+  KEY idx_stories_expires (expires_at),
   CONSTRAINT fk_stories_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per (story, person, day). `viewer_key` is a STORED generated column
+-- — COALESCE(u:<user_id>, d:<device_id>) — so the UNIQUE key below treats a
+-- registered viewer and an anonymous device identically, which a plain
+-- UNIQUE(story_id, user_id, device_id, viewed_on) could not do: MySQL treats
+-- every NULL in a unique index as distinct from every other NULL, so two
+-- views by the same logged-in user (user_id set, device_id always NULL) on
+-- the same day would never collide on that column pair alone. The 'u:'/'d:'
+-- prefixes keep a user id and a device id that happen to share the same raw
+-- value from ever colliding with each other (#20 step 8, decision ٥).
+-- user_id carries no FK on purpose: InnoDB refuses ON DELETE SET NULL (or
+-- CASCADE) on a column a generated column depends on, and CASCADE would
+-- quietly undercount a story's already-recorded, already-reported view
+-- history the moment a viewer's account is deleted — the opposite of the
+-- honest counting this table exists for.
+CREATE TABLE IF NOT EXISTS story_views (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  story_id    INT UNSIGNED NOT NULL,
+  user_id     INT UNSIGNED DEFAULT NULL,
+  device_id   VARCHAR(100) DEFAULT NULL,
+  viewer_town VARCHAR(100) DEFAULT NULL,
+  viewed_on   DATE         NOT NULL,
+  viewer_key  VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) STORED,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_story_views_identity (story_id, viewer_key, viewed_on),
+  KEY idx_story_views_story (story_id),
+  CONSTRAINT fk_story_views_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Clicks are not deduplicated — every tap-through is a real advertiser event,
+-- unlike a view which the once-per-day rule exists to keep honest.
+CREATE TABLE IF NOT EXISTS story_clicks (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  story_id   INT UNSIGNED NOT NULL,
+  user_id    INT UNSIGNED DEFAULT NULL,
+  device_id  VARCHAR(100) DEFAULT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_story_clicks_story (story_id),
+  CONSTRAINT fk_story_clicks_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+  CONSTRAINT fk_story_clicks_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One report per (story, user) — same UNIQUE-key pattern as congratulation_reports.
+CREATE TABLE IF NOT EXISTS story_reports (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  story_id   INT UNSIGNED NOT NULL,
+  user_id    INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_story_reports (story_id, user_id),
+  KEY idx_story_reports_story (story_id),
+  CONSTRAINT fk_story_reports_story FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE CASCADE,
+  CONSTRAINT fk_story_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS broadcasts (

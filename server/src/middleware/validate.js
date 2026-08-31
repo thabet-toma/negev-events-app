@@ -40,6 +40,23 @@ function optionalDate(value) {
   return isValidDate(cleaned) ? cleaned : null;
 }
 
+/**
+ * Parses an optional ISO datetime string (a story's `expires_at`). Absent
+ * (undefined/null/empty string) → `null`, same as "never expires". Present
+ * but unparsable throws instead of silently discarding it — same reasoning as
+ * parseCoordinate: a value an admin typed on purpose deserves a clear
+ * rejection, not a swallow to null (#20 step 8).
+ */
+function optionalDateTime(value, label = 'التاريخ والوقت') {
+  if (value === undefined || value === null || value === '') return null;
+  const cleaned = cleanString(value, 40);
+  const parsed = cleaned ? new Date(cleaned) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    throw ApiError.badRequest(`${label} غير صالح`);
+  }
+  return parsed;
+}
+
 function isValidPhone(value) {
   return PHONE_PATTERN.test(String(value || '').replace(/[\s-]/g, ''));
 }
@@ -119,6 +136,7 @@ module.exports = {
   isValidDate,
   requireDate,
   optionalDate,
+  optionalDateTime,
   isValidPhone,
   parseCoordinate,
   parseId,

@@ -17,6 +17,7 @@ const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
+const { signToken } = require('../src/middleware/auth');
 const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD } = require('../src/constants');
 
 let baseUrl = '';
@@ -2020,8 +2021,16 @@ async function run() {
       `SELECT TABLE_NAME FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'user_id'`
     );
-    const viewTables = columns.map(c => c.TABLE_NAME).filter(name => /view/i.test(name));
-    assert.strictEqual(viewTables.length, 0, 'expected no per-user "views" table anywhere in the schema');
+    // story_views is a deliberate, documented exception (#20 step 8): a
+    // story's honest once-per-day view count is a different domain with
+    // different requirements than an event's bare views_count. The
+    // invariant this assertion guards is specifically about *events* — so
+    // only a per-user view table that also carries an event_id column would
+    // violate it, and story_views carries no such column.
+    const eventViewTables = columns
+      .map(c => c.TABLE_NAME)
+      .filter(name => /view/i.test(name) && name !== 'story_views');
+    assert.strictEqual(eventViewTables.length, 0, 'expected no per-user "views" table for events anywhere in the schema');
   });
 
   await test('The live announcement disappears once its event\'s (new) date has passed', async () => {
@@ -2034,6 +2043,204 @@ async function run() {
   for (const u of [reminderOwner, reminderFollower, reminderOther]) {
     await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
   }
+
+  console.log('\nStories — ad separation, honest views, town breakdown (#20 step 8)');
+
+  let activeStoryId = 0;
+  await test('Admin creates a plain (non-ad) story', async () => {
+    const { status, body } = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'قصة اختبار عادية', town: 'رهط', image: '/uploads/story-test.jpg' }
+    });
+    assert.strictEqual(status, 201);
+    activeStoryId = body.story.id;
+    assert.strictEqual(body.story.is_ad, false);
+    assert.ok(body.story.image.startsWith('http'), 'expected an absolute image URL');
+  });
+
+  await test('A regular user is rejected (403) from every /api/admin/stories route', async () => {
+    const list = await api('GET', '/api/admin/stories', { token: userToken });
+    assert.strictEqual(list.status, 403);
+    const create = await api('POST', '/api/admin/stories', { token: userToken, body: { title: 'محاولة' } });
+    assert.strictEqual(create.status, 403);
+    const patch = await api('PATCH', `/api/admin/stories/${activeStoryId}`, { token: userToken, body: { title: 'محاولة' } });
+    assert.strictEqual(patch.status, 403);
+    const del = await api('DELETE', `/api/admin/stories/${activeStoryId}`, { token: userToken });
+    assert.strictEqual(del.status, 403);
+    const metrics = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: userToken });
+    assert.strictEqual(metrics.status, 403);
+  });
+
+  await test('An ad story with no advertiser_name is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'قصة إعلانية ناقصة', is_ad: true }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('المعلن'));
+  });
+
+  let adStoryId = 0;
+  await test('An ad story with advertiser_name is accepted and carries the ad fields', async () => {
+    const { status, body } = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'إعلان مطعم محلي', is_ad: true, advertiser_name: 'مطعم الاختبار', target_url: 'https://example.com' }
+    });
+    assert.strictEqual(status, 201);
+    adStoryId = body.story.id;
+    assert.strictEqual(body.story.is_ad, true);
+    assert.strictEqual(body.story.advertiser_name, 'مطعم الاختبار');
+    assert.strictEqual(body.story.slide_duration_seconds, 5);
+  });
+
+  await test('Turning an existing story into an ad without an advertiser_name is rejected the same way on PATCH', async () => {
+    const { status, body } = await api('PATCH', `/api/admin/stories/${activeStoryId}`, {
+      token: adminToken,
+      body: { is_ad: true }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('المعلن'));
+  });
+
+  await test('The four ready-made expiry presets come from the server', async () => {
+    const { body } = await api('GET', '/api/admin/stories', { token: adminToken });
+    const keys = body.expiry_presets.map(p => p.key);
+    assert.deepStrictEqual(keys, ['day', '3_days', 'week', 'month']);
+  });
+
+  let expiredStoryId = 0;
+  let neverExpiresStoryId = 0;
+  await test('An expired story is excluded from GET /api/stories; a not-yet-expired one and a never-expiring one both remain', async () => {
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    const expired = await api('POST', '/api/admin/stories', {
+      token: adminToken, body: { title: 'قصة منتهية', expires_at: past }
+    });
+    expiredStoryId = expired.body.story.id;
+
+    const futureCreated = await api('POST', '/api/admin/stories', {
+      token: adminToken, body: { title: 'قصة لم تنتهِ بعد', expires_at: future }
+    });
+    const futureStoryId = futureCreated.body.story.id;
+
+    const neverExpires = await api('POST', '/api/admin/stories', {
+      token: adminToken, body: { title: 'قصة بلا انتهاء' }
+    });
+    neverExpiresStoryId = neverExpires.body.story.id;
+
+    const { body: publicList } = await api('GET', '/api/stories');
+    const ids = publicList.stories.map(s => s.id);
+    assert.ok(!ids.includes(expiredStoryId), 'an expired story must not appear on the strip');
+    assert.ok(ids.includes(futureStoryId), 'a story that has not expired yet must still appear');
+    assert.ok(ids.includes(neverExpiresStoryId), 'a story with no expiry must still appear');
+
+    await api('DELETE', `/api/admin/stories/${futureStoryId}`, { token: adminToken });
+  });
+
+  await test('An invalid expires_at is rejected instead of silently becoming null', async () => {
+    const { status, body } = await api('POST', '/api/admin/stories', {
+      token: adminToken, body: { title: 'قصة تاريخ فاسد', expires_at: 'not-a-date' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('غير صالح'));
+  });
+
+  const storyViewerAPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const storyViewerBPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  let storyViewerA = null;
+  let storyViewerB = null;
+
+  // Inserted straight into the DB and signed locally, not through
+  // /api/auth/register — the suite has already spent most of its shared
+  // authLimiter budget (20 requests/window across register+login+admin/login)
+  // by this point, and these two accounts exist only to carry a distinct
+  // clan_town each; they need no password flow of their own.
+  await test('Set up: two registered viewers from two different towns', async () => {
+    const insertViewer = async (phoneNumber, fullName, clanTown) => {
+      const { insertId } = await db.execute(
+        `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+        [phoneNumber, fullName, 'x', clanTown]
+      );
+      const token = signToken({ id: insertId, phone_number: phoneNumber, full_name: fullName, role: 'user' }, '1h');
+      return { token, id: insertId };
+    };
+
+    storyViewerA = await insertViewer(storyViewerAPhone, 'مشاهد رهط', 'رهط');
+    storyViewerB = await insertViewer(storyViewerBPhone, 'مشاهد حورة', 'حورة');
+  });
+
+  await test('A registered viewer watching the same story twice today is counted once', async () => {
+    const first = await api('POST', `/api/stories/${activeStoryId}/view`, { token: storyViewerA.token });
+    assert.strictEqual(first.status, 200);
+    const second = await api('POST', `/api/stories/${activeStoryId}/view`, { token: storyViewerA.token });
+    assert.strictEqual(second.status, 200);
+
+    const { body } = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: adminToken });
+    assert.strictEqual(body.metrics.views, 1);
+    assert.strictEqual(body.metrics.distinct_viewers, 1);
+  });
+
+  await test('An anonymous viewer watching with the same device_id twice today is counted once', async () => {
+    const deviceId = `device-${Date.now()}`;
+    await api('POST', `/api/stories/${activeStoryId}/view`, { body: { device_id: deviceId } });
+    await api('POST', `/api/stories/${activeStoryId}/view`, { body: { device_id: deviceId } });
+
+    const { body } = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: adminToken });
+    assert.strictEqual(body.metrics.views, 2, 'one registered view + one anonymous device view = two, not three');
+    assert.strictEqual(body.metrics.distinct_viewers, 2);
+  });
+
+  await test('A view with no token and no device_id is rejected', async () => {
+    const { status, body } = await api('POST', `/api/stories/${activeStoryId}/view`, { body: {} });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('معرّف الجهاز'));
+  });
+
+  await test('A second, different registered viewer is counted as a third distinct view/viewer overall', async () => {
+    await api('POST', `/api/stories/${activeStoryId}/view`, { token: storyViewerB.token });
+
+    const { body } = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: adminToken });
+    assert.strictEqual(body.metrics.views, 3);
+    assert.strictEqual(body.metrics.distinct_viewers, 3);
+  });
+
+  await test('Town breakdown reports one count per registered viewer\'s town, and a bucket for the anonymous device view', async () => {
+    const { body } = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: adminToken });
+    const byTown = Object.fromEntries(body.metrics.town_breakdown.map(row => [row.town, row.views]));
+    assert.strictEqual(byTown['رهط'], 1);
+    assert.strictEqual(byTown['حورة'], 1);
+    assert.strictEqual(byTown['غير معروفة'], 1, 'the anonymous device view has no known town');
+  });
+
+  await test('Clicks are counted, and CPM/eCPM/frequency never appear in the metrics response', async () => {
+    await api('POST', `/api/stories/${activeStoryId}/click`, { token: storyViewerA.token });
+    await api('POST', `/api/stories/${activeStoryId}/click`, { body: { device_id: `click-device-${Date.now()}` } });
+
+    const { body } = await api('GET', `/api/admin/stories/${activeStoryId}/metrics`, { token: adminToken });
+    assert.strictEqual(body.metrics.clicks, 2);
+    for (const forbiddenKey of ['cpm', 'ecpm', 'eCPM', 'CPM', 'frequency']) {
+      assert.ok(!(forbiddenKey in body.metrics), `metrics must never carry "${forbiddenKey}"`);
+    }
+  });
+
+  await test('A report is recorded once per person; a second report from the same person is rejected', async () => {
+    const first = await api('POST', `/api/stories/${activeStoryId}/report`, { token: storyViewerA.token });
+    assert.strictEqual(first.status, 200);
+    const second = await api('POST', `/api/stories/${activeStoryId}/report`, { token: storyViewerA.token });
+    assert.strictEqual(second.status, 409);
+  });
+
+  await test('Reporting a story requires a login', async () => {
+    const { status } = await api('POST', `/api/stories/${activeStoryId}/report`);
+    assert.strictEqual(status, 401);
+  });
+
+  await db.execute(
+    'DELETE FROM stories WHERE id IN (?, ?, ?, ?)',
+    [activeStoryId, adStoryId, expiredStoryId, neverExpiresStoryId]
+  );
+  await db.execute('DELETE FROM users WHERE phone_number IN (?, ?)', [storyViewerAPhone, storyViewerBPhone]);
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
