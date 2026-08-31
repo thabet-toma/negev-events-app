@@ -243,6 +243,73 @@ async function run() {
     assert.strictEqual(status, 200);
   });
 
+  console.log('\nCoordinate migration');
+  const insertWithCoords = async (town, lat, lng, eventDate) => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events
+         (title, groom_name, family_clan, town, location_name, latitude, longitude, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
+      ['اختبار الترحيل', 'عريس الترحيل', 'عائلة الترحيل', town, 'ديوان الاختبار', lat, lng, eventDate]
+    );
+    return insertId;
+  };
+
+  await test('Migration moves a row still carrying the old placeholder coordinates', async () => {
+    const insertId = await insertWithCoords('كسيفة', 31.2980, 35.0310, '2027-01-01');
+    await migrate();
+    const row = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [insertId]);
+    assert.strictEqual(Number(row.latitude), 31.245249);
+    assert.strictEqual(Number(row.longitude), 35.095151);
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
+  });
+
+  await test('Migration does not touch a row with a human-chosen coordinate', async () => {
+    const insertId = await insertWithCoords('كسيفة', 31.25, 35.1, '2027-01-02');
+    await migrate();
+    const row = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [insertId]);
+    assert.strictEqual(Number(row.latitude), 31.25);
+    assert.strictEqual(Number(row.longitude), 35.1);
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
+  });
+
+  await test("Migration drops the pin for a 'القرى والتجمعات' row carrying the old placeholder", async () => {
+    const insertId = await insertWithCoords('القرى والتجمعات', 31.2600, 34.8800, '2027-01-05');
+    await migrate();
+    const row = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [insertId]);
+    assert.strictEqual(row.latitude, null);
+    assert.strictEqual(row.longitude, null);
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
+  });
+
+  await test('Running the migration twice is safe and converges to the same result', async () => {
+    const insertId = await insertWithCoords('كسيفة', 31.2980, 35.0310, '2027-01-03');
+    await migrate();
+    const first = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [insertId]);
+    await migrate();
+    const second = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [insertId]);
+    assert.strictEqual(Number(first.latitude), Number(second.latitude));
+    assert.strictEqual(Number(first.longitude), Number(second.longitude));
+    assert.strictEqual(Number(second.latitude), 31.245249);
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
+  });
+
+  await test("An event in 'القرى والتجمعات' with no explicit coordinates gets no pin", async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        groom_name: 'عريس بلا إحداثيات',
+        town: 'القرى والتجمعات',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-01-04'
+      }
+    });
+    assert.strictEqual(created.status, 'approved');
+    const { body } = await api('GET', `/api/events/${created.eventId}`);
+    assert.strictEqual(body.event.latitude, null);
+    assert.strictEqual(body.event.longitude, null);
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+  });
+
   console.log('\nModeration flow');
   let createdEventId = 0;
   await test('A public submission lands in the pending queue', async () => {

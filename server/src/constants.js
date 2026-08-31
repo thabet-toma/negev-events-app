@@ -12,16 +12,20 @@ const TOWNS = [
   'القرى والتجمعات'
 ];
 
-/** Fallback map coordinates used when an event has no explicit location. */
+/**
+ * Fallback map coordinates used when an event has no explicit location.
+ * 'القرى والتجمعات' is deliberately absent: it is a catch-all bucket, not a
+ * place, so no geocoder can resolve it — events filed under it get no pin
+ * unless the publisher supplies explicit coordinates.
+ */
 const TOWN_COORDINATES = {
-  'رهط': { lat: 31.3925, lng: 34.7554 },
-  'حورة': { lat: 31.2858, lng: 34.9312 },
-  'تل السبع': { lat: 31.2483, lng: 34.8431 },
-  'كسيفة': { lat: 31.2980, lng: 35.0310 },
-  'شقيب السلام': { lat: 31.2062, lng: 34.8210 },
-  'اللقية': { lat: 31.3260, lng: 34.8720 },
-  'عرعرة النقب': { lat: 31.1890, lng: 35.0120 },
-  'القرى والتجمعات': { lat: 31.2600, lng: 34.8800 }
+  'رهط': { lat: 31.393364, lng: 34.754678 },
+  'حورة': { lat: 31.298567, lng: 34.926782 },
+  'تل السبع': { lat: 31.245649, lng: 34.857768 },
+  'كسيفة': { lat: 31.245249, lng: 35.095151 },
+  'شقيب السلام': { lat: 31.194398, lng: 34.840581 },
+  'اللقية': { lat: 31.324231, lng: 34.863202 },
+  'عرعرة النقب': { lat: 31.157671, lng: 35.013021 }
 };
 
 const REACTION_TYPES = ['coffee', 'horse', 'fireworks', 'rose', 'hand'];

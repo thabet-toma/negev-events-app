@@ -145,7 +145,9 @@ async function seedEvents() {
   }
 
   for (const event of DEMO_EVENTS) {
-    const coords = TOWN_COORDINATES[event.town] || TOWN_COORDINATES['رهط'];
+    // No fallback to another town's coordinates: a town missing from
+    // TOWN_COORDINATES (e.g. 'القرى والتجمعات') gets no pin, not a wrong one.
+    const coords = TOWN_COORDINATES[event.town] || {};
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, town, location_name, latitude, longitude,
@@ -154,7 +156,7 @@ async function seedEvents() {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 245)`,
       [
         event.title, event.groom_name, event.family_clan, event.town, event.location_name,
-        coords.lat, coords.lng, event.event_date, event.youth_party_date, event.dinner_time,
+        coords.lat ?? null, coords.lng ?? null, event.event_date, event.youth_party_date, event.dinner_time,
         event.poster_url, event.audio_url, event.audio_title, event.host_phone
       ]
     );
