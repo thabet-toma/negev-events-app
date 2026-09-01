@@ -11,6 +11,7 @@ import '../widgets/async_view.dart' show showMessage;
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import 'event_details_screen.dart';
+import 'story_viewer_screen.dart';
 
 /// الشاشة الرئيسية: القصص + بحث + فلترة بلدة ونوع + إعلانات + قائمة المناسبات
 /// المرقّمة.
@@ -607,58 +608,66 @@ class _StoriesStrip extends StatelessWidget {
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
               final story = stories[index];
-              return SizedBox(
-                width: 66,
-                child: Column(
-                  children: [
-                    Container(
-                      width: 54,
-                      height: 54,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: story.isLive
-                              ? context.c.success
-                              : context.c.line,
-                          width: 2,
+              return GestureDetector(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        StoryViewerScreen(stories: stories, initialIndex: index),
+                  ),
+                ),
+                child: SizedBox(
+                  width: 66,
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: story.isLive
+                                ? context.c.success
+                                : context.c.line,
+                            width: 2,
+                          ),
                         ),
-                      ),
-                      child: ClipOval(
-                        child: story.image == null
-                            ? ColoredBox(
-                                color: context.c.surface,
-                                child: Icon(
-                                  Icons.celebration,
-                                  size: 22,
-                                  color: context.c.sky,
-                                ),
-                              )
-                            : Image.network(
-                                story.image!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => ColoredBox(
+                        child: ClipOval(
+                          child: story.image == null
+                              ? ColoredBox(
                                   color: context.c.surface,
                                   child: Icon(
                                     Icons.celebration,
                                     size: 22,
                                     color: context.c.sky,
                                   ),
+                                )
+                              : Image.network(
+                                  story.image!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => ColoredBox(
+                                    color: context.c.surface,
+                                    child: Icon(
+                                      Icons.celebration,
+                                      size: 22,
+                                      color: context.c.sky,
+                                    ),
+                                  ),
                                 ),
-                              ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      story.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: context.c.inkSoft,
+                      const SizedBox(height: 5),
+                      Text(
+                        story.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: context.c.inkSoft,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },

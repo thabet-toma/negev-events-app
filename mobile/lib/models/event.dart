@@ -416,6 +416,10 @@ class Story {
   final String? town;
   final String? image;
   final bool isLive;
+  final bool isAd;
+  final String? advertiserName;
+  final String? targetUrl;
+  final int slideDurationSeconds;
 
   const Story({
     required this.id,
@@ -424,7 +428,16 @@ class Story {
     this.town,
     this.image,
     this.isLive = false,
+    this.isAd = false,
+    this.advertiserName,
+    this.targetUrl,
+    this.slideDurationSeconds = _defaultSlideDurationSeconds,
   });
+
+  /// سقوط وحيد حين يغيب `slide_duration_seconds` من ردّ قديم — الخادم يرسل
+  /// القيمة الفعلية دائماً لكل قصة على حدة (افتراضه هناك أيضاً ٥)، فهذا
+  /// الرقم لا يُستعمل إلا حين يغيب المفتاح نفسه من الاستجابة.
+  static const int _defaultSlideDurationSeconds = 5;
 
   factory Story.fromJson(Map<String, dynamic> json) => Story(
         id: _toInt(json['id']),
@@ -433,7 +446,21 @@ class Story {
         town: _nullableString(json['town']),
         image: _nullableString(json['image']),
         isLive: json['isLive'] == true || _toInt(json['is_live']) == 1,
+        isAd: json['is_ad'] == true,
+        advertiserName: _nullableString(json['advertiser_name']),
+        targetUrl: _nullableString(json['target_url']),
+        slideDurationSeconds: _slideDuration(json['slide_duration_seconds']),
       );
+
+  /// مدّة غير موجبة تجعل `AnimationController` يكتمل فور انطلاقه، فيقفز
+  /// العارض عبر كل القصص ويُغلق نفسه — عطلٌ كامل لا تدهور. الخادم لا ينتج
+  /// هذه القيمة اليوم (`parseId` يرفضها والعمود `NOT NULL DEFAULT 5`)، لكن
+  /// العارض لا يجب أن يتوقّف سلامته على ذلك.
+  static int _slideDuration(Object? raw) {
+    if (raw == null) return _defaultSlideDurationSeconds;
+    final seconds = _toInt(raw);
+    return seconds > 0 ? seconds : _defaultSlideDurationSeconds;
+  }
 }
 
 /// معلومات ترقيم صفحات — من `pagination` في GET /api/events.

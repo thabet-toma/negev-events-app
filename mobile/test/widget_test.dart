@@ -12,11 +12,13 @@ import 'package:negev_events/models/nokoot.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
+import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// عميل وهمي يرد بجسم ثابت — يختبر منطق العميل دون خادم حقيقي.
 NegevApi apiReturning(
@@ -763,6 +765,103 @@ void main() {
           composeEventSubmitMessage(resultWithoutWarning),
           'تم نشر المناسبة فوراً بنجاح!',
         );
+      },
+    );
+  });
+
+  group('عارض الستوري — مناطق النقر بالـRTL (issue #20 خطوة ١٧)', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    // شرط الإطلاق: النقر يسار الشاشة = التالي، ويمينها = السابق — معاكس
+    // للافتراض الغربي عمداً. اختبار يمرّ لو كان الاتجاهان معكوسين لا قيمة له،
+    // فهو يثبت الاتجاه صراحةً في الاتجاهين معاً، لا وجود الانتقال فقط.
+    testWidgets(
+      'النقر يسار الشاشة يتقدّم للتالية، والنقر يمينها يرجع للسابقة',
+      (tester) async {
+        const stories = [
+          Story(id: 1, title: 'قصة أولى', slideDurationSeconds: 30),
+          Story(id: 2, title: 'قصة ثانية', slideDurationSeconds: 30),
+          Story(id: 3, title: 'قصة ثالثة', slideDurationSeconds: 30),
+        ];
+
+        final api = apiReturning({'success': true});
+        final auth = AuthStore(api);
+        final realtime = RealtimeService();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: const StoryViewerScreen(stories: stories, initialIndex: 1),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('قصة ثانية'), findsOneWidget);
+
+        // يسار الشاشة (dx أصغر من نصف العرض، ٨٠٠ منطقي افتراضياً) = التالي.
+        await tester.tapAt(const Offset(100, 300));
+        await tester.pump();
+        expect(find.text('قصة ثالثة'), findsOneWidget);
+
+        // يمين الشاشة (dx أكبر من نصف العرض) = السابق.
+        await tester.tapAt(const Offset(700, 300));
+        await tester.pump();
+        expect(find.text('قصة ثانية'), findsOneWidget);
+      },
+    );
+  });
+
+  group('عارض الستوري — عتبة الثانيتين للمشاهدة (issue #20 خطوة ١٧)', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    testWidgets(
+      'POST .../view لا يُرسَل قبل ثانيتين من العرض الفعلي، ويُرسَل بعدهما',
+      (tester) async {
+        final requests = <Uri>[];
+        final client = MockClient((request) async {
+          requests.add(request.url);
+          return http.Response(
+            jsonEncode({'success': true}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+        final auth = AuthStore(api);
+        final realtime = RealtimeService();
+
+        const stories = [Story(id: 11, title: 'قصة', slideDurationSeconds: 10)];
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: const StoryViewerScreen(stories: stories, initialIndex: 0),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // قبل الثانيتين — لا مشاهدة، بصرف النظر عن مدة الشريحة الكلية (١٠ ثوانٍ هنا).
+        await tester.pump(const Duration(milliseconds: 1500));
+        expect(requests.where((u) => u.path.endsWith('/view')), isEmpty);
+
+        // تجاوز العتبة — العارض يستدعي view تلقائياً بلا أي فعل من المستخدم.
+        await tester.pump(const Duration(milliseconds: 700));
+        // فسحة لإتمام سلسلة async (DeviceIdStore.get ثم POST) بلا مؤقّت حقيقي.
+        await tester.pump();
+        await tester.pump();
+        expect(requests.where((u) => u.path.endsWith('/view')), isNotEmpty);
       },
     );
   });

@@ -116,6 +116,32 @@ class NegevApi {
     return list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList();
   }
 
+  /// تسجيل مشاهدة شريحة ستوري — عتبة "شوهدت" (ثانيتان) يقيسها العارض على
+  /// الجهاز، لا هذا النداء نفسه؛ يُستدعى فقط بعدما بقيت الشريحة ظاهرة فعلاً.
+  /// `auth: true` لتُنسَب لحساب المستخدم إن كان مسجَّلاً (الخادم يفضّله على
+  /// device_id)، و`deviceId` يُرسَل دائماً لتغطية الزائر أيضاً.
+  Future<void> viewStory(int storyId, {required String deviceId}) async {
+    await _client.post(
+      '/api/stories/$storyId/view',
+      auth: true,
+      body: {'device_id': deviceId},
+    );
+  }
+
+  /// تسجيل نقرة على قصة — بلا حدّ تكرار على الخادم، كل نقرة حقيقية.
+  Future<void> clickStory(int storyId, {required String deviceId}) async {
+    await _client.post(
+      '/api/stories/$storyId/click',
+      auth: true,
+      body: {'device_id': deviceId},
+    );
+  }
+
+  /// إبلاغ عن قصة — مرّة واحدة لكل مستخدم، يتطلّب حساباً.
+  Future<void> reportStory(int storyId) async {
+    await _client.post('/api/stories/$storyId/report', auth: true);
+  }
+
   Future<void> react(int eventId, String type, String identifier) async {
     await _client.post(
       '/api/events/$eventId/react',
