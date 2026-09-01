@@ -2,6 +2,11 @@
     <!-- التطبيق واجهة فقط: كل بياناته من خادم بعيد، فبدون هذا الإذن لا يعمل
          إصدار release إطلاقاً (قالب فلاتر يضيفه في debug/profile فقط). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- لزرّ "موقعي الآن" في منتقي خريطة النشر فقط — لالتقاط لمرّة واحدة
+         والتطبيق مفتوح. لا تتبّع خلفي ولا خدمة أمامية، فلا إذن ثالث. أندرويد
+         12+ يتجاهل FINE بلا COARSE معه في نفس الطلب. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <application
         android:label="مناسبات النقب"

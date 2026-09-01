@@ -3,12 +3,30 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
+import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/location_picker_map.dart';
 import 'account_screen.dart';
+
+/// رسالة النشر النهائية — التحذير (إن وُجد) يُلحَق بنص الخادم كما هو، بلا
+/// إعادة صياغة. دالة عامة صِرفة لتبقى قابلة للاختبار دون تركيب الشاشة كاملة.
+String composeEventSubmitMessage(EventSubmissionResult result) {
+  return result.locationWarning == null
+      ? result.message
+      : '${result.message}\n${result.locationWarning}';
+}
+
+/// حقلا الإحداثيات المرسَلان مع النشر — غائبان تماماً بلا دبّوس، لا صفرَين:
+/// الخادم يقع حينها على مركز البلدة المختارة بنفسه (events.service.js
+/// createEvent). دالة عامة صِرفة لنفس سبب التي فوقها.
+Map<String, String> buildLocationFields({double? latitude, double? longitude}) {
+  if (latitude == null || longitude == null) return const {};
+  return {'latitude': '$latitude', 'longitude': '$longitude'};
+}
 
 /// صف اسم/صفة واحد من أصحاب المناسبة — عرس له عريس (وربما عروس)، عزاء له
 /// متوفَّى، وهكذا. اسم واحد على الأقل مطلوب أياً كان النوع.
@@ -35,6 +53,7 @@ class AddEventScreen extends StatefulWidget {
 
 class _AddEventScreenState extends State<AddEventScreen> {
   Future<List<OccasionType>>? _typesFuture;
+  Future<Map<String, TownCoordinate>>? _townCoordsFuture;
   OccasionType? _type;
 
   final Map<String, TextEditingController> _controllers = {};
@@ -44,6 +63,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
+  double? _latitude;
+  double? _longitude;
+  // يتغيّر بعد كل نشر ناجح ليُجبر منتقي الخريطة على إعادة بناء كاملة —
+  // وإلا بقي دبّوسه الداخلي معروضاً رغم تصفير _latitude/_longitude هنا.
+  int _locationPickerGeneration = 0;
 
   XFile? _poster;
   PlatformFile? _audio;
@@ -68,6 +92,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _typesFuture ??= AppServices.of(context).api.listOccasionTypes();
+    _townCoordsFuture ??= AppServices.of(context).api.townCoordinates();
   }
 
   @override
@@ -208,6 +233,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         final value = _controllerFor(key).text.trim();
         if (value.isNotEmpty) fields[key] = value;
       }
+      fields.addAll(buildLocationFields(latitude: _latitude, longitude: _longitude));
       if (type.showsField('event_end_date') && _eventEndDate != null) {
         fields['event_end_date'] = _format(_eventEndDate!);
       }
@@ -240,7 +266,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
               })
           .toList();
 
-      final message = await api.submitEvent(
+      final result = await api.submitEvent(
         occasionTypeId: type.id,
         honorees: honorees,
         fields: fields,
@@ -249,7 +275,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
       );
 
       if (!mounted) return;
-      showMessage(context, message);
+      // التحذير ليّن وغير حاجب — المناسبة حُفظت فعلاً بالبلدة التي اختارها
+      // المستخدم، ونصّه يصل كما أرسله الخادم دون إعادة صياغة.
+      showMessage(context, composeEventSubmitMessage(result));
       _reset();
     } catch (error) {
       if (mounted) showMessage(context, '$error', isError: true);
@@ -277,6 +305,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _audio = null;
       _conflicts = const [];
       _town = AppConfig.towns.first;
+      _latitude = null;
+      _longitude = null;
+      _locationPickerGeneration++;
     });
   }
 
@@ -349,6 +380,21 @@ class _AddEventScreenState extends State<AddEventScreen> {
             if (value == null) return;
             setState(() => _town = value);
             _checkCollision();
+          },
+        ),
+        const SizedBox(height: 12),
+        FutureBuilder<Map<String, TownCoordinate>>(
+          future: _townCoordsFuture,
+          builder: (context, snapshot) {
+            return LocationPickerMap(
+              key: ValueKey(_locationPickerGeneration),
+              town: _town,
+              townCoordinates: snapshot.data ?? const {},
+              onChanged: (lat, lng) => setState(() {
+                _latitude = lat;
+                _longitude = lng;
+              }),
+            );
           },
         ),
         const SizedBox(height: 12),

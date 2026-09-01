@@ -56,6 +56,29 @@ class NegevApi {
     return EventsPage(events: events, pagination: pagination, announcements: announcements);
   }
 
+  /// مراكز البلدات — من GET /api/towns. `lib/config.dart` يحمل أسماء البلدات
+  /// فقط؛ الإحداثيات من الخادم حصراً (كانت مغلوطة حتى ٨.٤ كم حين عاشت في
+  /// العميل — نسخة ثانية تعني عطلاً يُصحَّح مرّتين). 'القرى والتجمعات' سلّة
+  /// تجميع لا مكان، فلا مدخل لها هنا عمداً.
+  Future<Map<String, TownCoordinate>> townCoordinates() async {
+    final data = await _client.get('/api/towns');
+    final raw = data['town_coordinates'];
+    final result = <String, TownCoordinate>{};
+    if (raw is Map) {
+      raw.forEach((key, value) {
+        if (value is! Map) return;
+        final lat = value['lat'];
+        final lng = value['lng'];
+        final latD = lat is num ? lat.toDouble() : double.tryParse('$lat');
+        final lngD = lng is num ? lng.toDouble() : double.tryParse('$lng');
+        if (latD != null && lngD != null) {
+          result['$key'] = TownCoordinate(lat: latD, lng: lngD);
+        }
+      });
+    }
+    return result;
+  }
+
   /// أنواع المناسبات النشِطة، مرتّبة، وبحقول كل نوع وتفاعلاته — لا قائمة ثابتة.
   Future<List<OccasionType>> listOccasionTypes() async {
     final data = await _client.get('/api/occasion-types');
@@ -201,7 +224,7 @@ class NegevApi {
   /// تقديم مناسبة. تدخل قائمة المراجعة ما لم يكن المُرسِل مديراً. تتطلب حساباً
   /// (`events.created_by`) — `honorees` تُرسَل بصيغة الأقواس (`honorees[i][name]`)
   /// التي يفهمها الخادم حصراً.
-  Future<String> submitEvent({
+  Future<EventSubmissionResult> submitEvent({
     required int occasionTypeId,
     required List<Map<String, String>> honorees,
     required Map<String, String> fields,
@@ -232,9 +255,16 @@ class NegevApi {
       auth: true,
     );
     final message = data['message'];
-    return message is String
-        ? message
-        : 'تم استلام طلب المناسبة بنجاح';
+    final rawWarning = data['location_warning'];
+    String? locationWarning;
+    if (rawWarning is Map<String, dynamic>) {
+      final text = rawWarning['message'];
+      if (text is String && text.isNotEmpty) locationWarning = text;
+    }
+    return EventSubmissionResult(
+      message: message is String ? message : 'تم استلام طلب المناسبة بنجاح',
+      locationWarning: locationWarning,
+    );
   }
 
   // --- الحساب ------------------------------------------------------
@@ -340,6 +370,22 @@ class EventsPage {
     required this.pagination,
     required this.announcements,
   });
+}
+
+/// مركز بلدة واحد — من `town_coordinates` في GET /api/towns.
+class TownCoordinate {
+  final double lat;
+  final double lng;
+
+  const TownCoordinate({required this.lat, required this.lng});
+}
+
+/// ردّ POST /api/events — الرسالة إلزامية، والتحذير اللين اختياري.
+class EventSubmissionResult {
+  final String message;
+  final String? locationWarning;
+
+  const EventSubmissionResult({required this.message, this.locationWarning});
 }
 
 /// إعلان الإصدار من GET /api/app/version.

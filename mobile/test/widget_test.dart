@@ -9,6 +9,7 @@ import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
+import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
@@ -512,5 +513,139 @@ void main() {
       expect(eventsRequest.queryParameters['page'], '1');
       expect(eventsRequest.queryParameters['occasion_type_id'], '5');
     });
+  });
+
+  group('منتقي خريطة النشر — الإحداثيات (issue #20 خطوة ١٤)', () {
+    test(
+      'الدبّوس المختار يصل الخادم بقيمته، ويغيب الحقلان تماماً بلا دبّوس — لا صفرَين',
+      () async {
+        // منطق الشاشة نفسه: بلا دبّوس لا يُبنى أي مفتاح إحداثي إطلاقاً.
+        expect(buildLocationFields(latitude: null, longitude: null), isEmpty);
+        expect(
+          buildLocationFields(latitude: 31.4, longitude: 34.8),
+          {'latitude': '31.4', 'longitude': '34.8'},
+        );
+
+        String? capturedBody;
+        final client = MockClient((request) async {
+          capturedBody = utf8.decode(request.bodyBytes);
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': 'تم نشر المناسبة فوراً بنجاح!',
+              'eventId': 1,
+              'status': 'approved',
+              'location_warning': null,
+            }),
+            201,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+
+        // المستخدم وضع دبّوساً: القيمتان تصلان كما هما.
+        await api.submitEvent(
+          occasionTypeId: 1,
+          honorees: [
+            {'name': 'محمد'},
+          ],
+          fields: {
+            'town': 'رهط',
+            'event_date': '2026-09-01',
+            'latitude': '31.4',
+            'longitude': '34.8',
+          },
+        );
+        expect(capturedBody, contains('name="latitude"'));
+        expect(capturedBody, contains('31.4'));
+        expect(capturedBody, contains('name="longitude"'));
+        expect(capturedBody, contains('34.8'));
+
+        // بلا دبّوس: الحقلان غائبان تماماً عن الحمولة — لا "0" ولا سلسلة فارغة.
+        capturedBody = null;
+        await api.submitEvent(
+          occasionTypeId: 1,
+          honorees: [
+            {'name': 'محمد'},
+          ],
+          fields: {'town': 'رهط', 'event_date': '2026-09-01'},
+        );
+        expect(capturedBody, isNot(contains('name="latitude"')));
+        expect(capturedBody, isNot(contains('name="longitude"')));
+      },
+    );
+  });
+
+  group('تحذير عدم توافق البلدة بعد النشر (issue #20 خطوة ١٤)', () {
+    test(
+      'location_warning يُقرأ من ردّ الخادم ويُنتج رسالته على الشاشة، وغيابه لا يُنتج شيئاً',
+      () async {
+        final withWarning = MockClient((request) async {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': 'تم نشر المناسبة فوراً بنجاح!',
+              'eventId': 1,
+              'status': 'approved',
+              'location_warning': {
+                'nearest_town': 'حورة',
+                'message':
+                    'المكان الذي حدّدته على الخريطة أقرب إلى بلدة "حورة" منه إلى "رهط" — تم الحفظ بالبلدة التي اخترتها كما هي',
+              },
+            }),
+            201,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final resultWithWarning = await NegevApi(ApiClient(client: withWarning)).submitEvent(
+          occasionTypeId: 1,
+          honorees: [
+            {'name': 'محمد'},
+          ],
+          fields: {
+            'town': 'رهط',
+            'event_date': '2026-09-01',
+            'latitude': '31.29',
+            'longitude': '34.92',
+          },
+        );
+        expect(
+          resultWithWarning.locationWarning,
+          'المكان الذي حدّدته على الخريطة أقرب إلى بلدة "حورة" منه إلى "رهط" — تم الحفظ بالبلدة التي اخترتها كما هي',
+        );
+        // العرض يُلحق النصّ كما وصل من الخادم، بلا إعادة صياغة.
+        expect(
+          composeEventSubmitMessage(resultWithWarning),
+          'تم نشر المناسبة فوراً بنجاح!\nالمكان الذي حدّدته على الخريطة أقرب إلى بلدة "حورة" منه إلى "رهط" — تم الحفظ بالبلدة التي اخترتها كما هي',
+        );
+
+        final withoutWarning = MockClient((request) async {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'message': 'تم نشر المناسبة فوراً بنجاح!',
+              'eventId': 2,
+              'status': 'approved',
+              'location_warning': null,
+            }),
+            201,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final resultWithoutWarning = await NegevApi(ApiClient(client: withoutWarning)).submitEvent(
+          occasionTypeId: 1,
+          honorees: [
+            {'name': 'محمد'},
+          ],
+          fields: {'town': 'رهط', 'event_date': '2026-09-01'},
+        );
+        expect(resultWithoutWarning.locationWarning, isNull);
+        // لا شيء يُلحق حين لا تحذير — الرسالة كما هي بلا زيادة.
+        expect(
+          composeEventSubmitMessage(resultWithoutWarning),
+          'تم نشر المناسبة فوراً بنجاح!',
+        );
+      },
+    );
   });
 }
