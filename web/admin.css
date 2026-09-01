@@ -299,3 +299,79 @@ body {
 .admin-table th { background: var(--surface-sunk); color: var(--text-main); padding: 14px 16px; border-bottom: 1.5px solid var(--admin-card-border); font-weight: 800; }
 .admin-table td { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); color: var(--text-main); font-variant-numeric: tabular-nums; }
 .admin-table tr:hover td { background: var(--sky-wash); }
+
+/* Occasion Types (#20 خطوة 16) */
+.occasion-type-new-btn { width: auto; margin-top: 0; }
+
+.occasion-types-notice {
+  background: var(--warn-wash);
+  color: var(--warn-yellow);
+  border: 1px solid var(--warn-yellow);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ot-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.86rem;
+  color: var(--text-main);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ot-check input { cursor: pointer; }
+
+.occasion-type-flags { flex-wrap: wrap; gap: 14px 22px; margin-bottom: 18px; }
+
+.occasion-type-legacy-box {
+  background: var(--surface-sunk);
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.occasion-type-fields-editor { display: flex; flex-direction: column; gap: 8px; }
+
+.ot-field-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(140px, 1.6fr) auto auto 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+}
+
+.ot-field-key { font-size: 0.86rem; color: var(--text-main); font-weight: 700; }
+
+.ot-core-badge {
+  background: var(--sky-wash);
+  color: var(--gold-main);
+  border: 1px solid var(--gold-main);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  margin-inline-start: 4px;
+}
+
+.ot-field-label, .ot-field-position {
+  padding: 8px 10px;
+  background: var(--admin-card);
+  border: 1px solid var(--admin-card-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  font-family: var(--font-tajawal);
+  font-size: 0.84rem;
+}
+
+.occasion-type-reactions-editor { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+.ot-reaction-check { font-size: 0.92rem; }
