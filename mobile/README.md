@@ -27,8 +27,15 @@ flutter run --dart-define=API_BASE=http://192.168.1.20:3000
 ```
 
 ```bash
-flutter build apk --release --dart-define=API_BASE=https://api.example.com
+flutter build apk --release --dart-define=API_BASE=https://munasbat.ktra-pro.tech
+bash scripts/sign-release.sh
 ```
+
+**الخطوتان معاً أو لا شيء.** `--dart-define` منسيّة تعني APK يبني ويوقّع ويثبَّت
+سليماً ثم لا يصل الخادمَ منه طلب واحد — يقع على العنوان الاحتياطي في
+`lib/config.dart` وهو عنوان محاكي لا وجود له على هاتف. و`sign-release.sh` بلا
+البناء الصحيح لا يُوقّع أصلاً: يقرأ العنوان من الثنائي المبنيّ ويرفض ما لا
+يحمل العنوان الحقيقي.
 
 ## البنية
 
