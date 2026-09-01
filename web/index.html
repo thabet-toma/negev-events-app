@@ -621,6 +621,31 @@
     </div>
   </div>
 
+  <!-- MODAL 8: STORY VIEWER (#20 step 18) -->
+  <div id="storyViewerOverlay" class="story-viewer-overlay" style="display:none;">
+    <div class="story-viewer-stage">
+      <div class="story-progress-row" id="storyProgressRow"></div>
+      <div class="story-viewer-header">
+        <div class="story-viewer-meta">
+          <strong id="storyViewerTitle"></strong>
+          <span id="storyViewerSubtitle" class="story-viewer-subtitle"></span>
+        </div>
+        <span id="storyViewerAdBadge" class="story-viewer-ad-badge" hidden>إعلان</span>
+        <button class="story-viewer-close" onclick="closeStoryViewer()" aria-label="إغلاق القصة"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="story-viewer-media"
+           onpointerdown="pauseStorySlide()"
+           onpointerup="resumeStorySlide()"
+           onpointerleave="resumeStorySlide()"
+           onpointercancel="resumeStorySlide()">
+        <img id="storyViewerImage" class="story-viewer-img" alt="">
+      </div>
+      <button class="story-viewer-nav story-viewer-nav-prev" onclick="storyViewerGoPrev()" aria-label="القصة السابقة"><i class="fa-solid fa-chevron-right"></i></button>
+      <button class="story-viewer-nav story-viewer-nav-next" onclick="storyViewerGoNext()" aria-label="القصة التالية"><i class="fa-solid fa-chevron-left"></i></button>
+      <div class="story-viewer-footer" id="storyViewerFooter"></div>
+    </div>
+  </div>
+
   <!-- Scripts -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script src="config.js"></script>

@@ -32,6 +32,17 @@ let showArchive = false;
 let notificationsList = [];
 let congratsQueueEventId = null;
 
+// Story viewer (#20 step 18) — the strip's own stories list, plus the
+// viewer's playback state; opened by index into this same array.
+let allStories = [];
+let storyViewerIndex = 0;
+let storyViewerElapsedMs = 0;
+let storyViewerViewRecorded = false;
+let storyViewerPaused = false;
+let storyViewerLastTickTs = 0;
+let storyViewerRafId = null;
+let storyViewerDeviceId = null;
+
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
 // back up exactly what the visitor was trying to do (#20 step 9).
@@ -200,8 +211,9 @@ async function fetchStories() {
     const container = document.getElementById('storiesContainer');
 
     if (data.success && data.stories) {
-      container.innerHTML = data.stories.map(s => `
-        <div class="story-item" onclick="showToast('📹 جاري فتح قصة: ${escapeHtml(s.title)}')">
+      allStories = data.stories;
+      container.innerHTML = allStories.map((s, i) => `
+        <div class="story-item" onclick="openStoryViewer(${i})">
           <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
             <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
           </div>
@@ -211,6 +223,261 @@ async function fetchStories() {
     }
   } catch (e) {
     console.error('Stories error:', e);
+  }
+}
+
+// 2.5 Story Viewer (#20 step 18) — full-screen viewer opened from the strip
+// above. Explicit prev/next/close controls, not implicit tap zones — a
+// deliberate deviation from touch conventions for a mouse-driven UI (README,
+// "الويب": أسهم وزرّ إغلاق صريحة). Matches
+// mobile/lib/screens/story_viewer_screen.dart's behaviour, not its gestures.
+
+// السقف الاحتياطي الوحيد لمدة الشريحة — يُستعمل فقط حين لا يرسل الخادم
+// slide_duration_seconds لهذه القصة تحديداً؛ الرقم الحقيقي يأتي من الخادم
+// دائماً (README: «مدة الشريحة تخرج من الخادم … حتى لا تُنسَخ كرقم ثابت»).
+const STORY_FALLBACK_SLIDE_MS = 5000;
+
+// عتبة «شوهدت» (README، جدول الستوريات؛ stories.routes.js): ثانيتان تُقاس
+// على جهاز المشاهد لا الخادم. تُقاس من نفس ساعة التقدّم (storyViewerElapsedMs)
+// لا مؤقّت ثانٍ منفصل، فتتوقّف تلقائياً مع الضغط المطوّل أو تبويب مخفي —
+// نفس مبدأ الموبايل (`_onTick` في story_viewer_screen.dart).
+const STORY_WATCHED_THRESHOLD_MS = 2000;
+
+/**
+ * معرّف عشوائي بحت لتمييز جهاز غير مسجَّل بين مشاهدتين — لا يُشتقّ من أي
+ * بصمة متصفّح (لا user-agent، لا مقاسات شاشة، لا canvas fingerprint)، بنفس
+ * سبب mobile/lib/state/device_id_store.dart: المطلوب تمييز مشاهدَين لا
+ * معرفة من هو. يُولَّد مرّة واحدة عبر crypto.randomUUID (أو
+ * crypto.getRandomValues احتياطاً) ويُحفظ في localStorage.
+ */
+function getStoryDeviceId() {
+  if (storyViewerDeviceId) return storyViewerDeviceId;
+  let id = localStorage.getItem('negev_device_id');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem('negev_device_id', id);
+  }
+  storyViewerDeviceId = id;
+  return id;
+}
+
+function openStoryViewer(index) {
+  if (!allStories.length) return;
+  storyViewerIndex = index;
+  storyViewerPaused = false;
+  document.getElementById('storyViewerOverlay').style.display = 'flex';
+  document.addEventListener('keydown', handleStoryViewerKeydown);
+  document.addEventListener('visibilitychange', handleStoryViewerVisibilityChange);
+  renderStoryProgressBars();
+  startStorySlide();
+}
+
+function closeStoryViewer() {
+  document.getElementById('storyViewerOverlay').style.display = 'none';
+  if (storyViewerRafId) cancelAnimationFrame(storyViewerRafId);
+  storyViewerRafId = null;
+  storyViewerPaused = false;
+  document.removeEventListener('keydown', handleStoryViewerKeydown);
+  document.removeEventListener('visibilitychange', handleStoryViewerVisibilityChange);
+}
+
+function renderStoryProgressBars() {
+  document.getElementById('storyProgressRow').innerHTML = allStories
+    .map(() => '<div class="story-progress-bar"><div class="story-progress-fill"></div></div>')
+    .join('');
+}
+
+/** يبدأ (أو يعيد بدء) الشريحة الحالية — يصفّر ساعة التقدّم ويحدّث كل ما يُعرض. */
+function startStorySlide() {
+  const story = allStories[storyViewerIndex];
+  storyViewerElapsedMs = 0;
+  storyViewerViewRecorded = false;
+  storyViewerLastTickTs = performance.now();
+
+  const img = document.getElementById('storyViewerImage');
+  img.src = story.image || '';
+  img.alt = story.title || '';
+  document.getElementById('storyViewerTitle').textContent = story.title || '';
+  document.getElementById('storyViewerSubtitle').textContent = [story.clan, story.town].filter(Boolean).join(' · ');
+  document.getElementById('storyViewerAdBadge').hidden = !story.is_ad;
+
+  renderStoryFooter(story);
+  updateStoryProgressBarsForIndex();
+
+  if (storyViewerRafId) cancelAnimationFrame(storyViewerRafId);
+  storyViewerRafId = requestAnimationFrame(tickStorySlide);
+}
+
+/** فصل الإعلان ثلاث طبقات (README): شارة «إعلان» (في الرأس)، اسم المعلن حرفياً هنا، وزرّ الإبلاغ. */
+function renderStoryFooter(story) {
+  const footer = document.getElementById('storyViewerFooter');
+  const hasTarget = isSafeHttpUrl(story.target_url);
+
+  if (story.is_ad) {
+    footer.innerHTML = `
+      <span class="story-viewer-advertiser">${escapeHtml(story.advertiser_name || '')}</span>
+      <div class="story-viewer-actions">
+        ${hasTarget ? '<button class="story-viewer-visit-btn" onclick="handleStoryTargetClick()">زيارة</button>' : ''}
+        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
+      </div>
+    `;
+  } else {
+    footer.innerHTML = `
+      <div class="story-viewer-actions">
+        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
+      </div>
+    `;
+  }
+}
+
+/** target_url قادم من قاعدة بيانات يديرها أدمن، ويُوضع في href/window.open — يُرفض أي مخطَّط غير http/https (مثل javascript:). */
+function isSafeHttpUrl(url) {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (e) {
+    return false;
+  }
+}
+
+function updateStoryProgressBarsForIndex() {
+  const fills = document.querySelectorAll('#storyProgressRow .story-progress-fill');
+  fills.forEach((fill, i) => {
+    fill.style.width = i < storyViewerIndex ? '100%' : '0%';
+  });
+}
+
+function tickStorySlide(now) {
+  const story = allStories[storyViewerIndex];
+  const delta = now - storyViewerLastTickTs;
+  storyViewerLastTickTs = now;
+
+  if (!storyViewerPaused && !document.hidden) {
+    storyViewerElapsedMs += delta;
+  }
+
+  const durationMs = story.slide_duration_seconds
+    ? story.slide_duration_seconds * 1000
+    : STORY_FALLBACK_SLIDE_MS;
+
+  const fills = document.querySelectorAll('#storyProgressRow .story-progress-fill');
+  const activeFill = fills[storyViewerIndex];
+  if (activeFill) activeFill.style.width = Math.min(100, (storyViewerElapsedMs / durationMs) * 100) + '%';
+
+  if (!storyViewerViewRecorded && storyViewerElapsedMs >= STORY_WATCHED_THRESHOLD_MS) {
+    storyViewerViewRecorded = true;
+    recordStoryView(story);
+  }
+
+  if (storyViewerElapsedMs >= durationMs) {
+    storyViewerGoNext();
+    return;
+  }
+
+  storyViewerRafId = requestAnimationFrame(tickStorySlide);
+}
+
+function storyViewerGoNext() {
+  if (storyViewerIndex >= allStories.length - 1) {
+    closeStoryViewer();
+    return;
+  }
+  storyViewerIndex++;
+  startStorySlide();
+}
+
+function storyViewerGoPrev() {
+  if (storyViewerIndex === 0) {
+    startStorySlide();
+    return;
+  }
+  storyViewerIndex--;
+  startStorySlide();
+}
+
+function pauseStorySlide() {
+  storyViewerPaused = true;
+}
+
+function resumeStorySlide() {
+  storyViewerPaused = false;
+}
+
+/**
+ * الأسهم تتنقّل، لكن ليس بالافتراض الغربي: بالعربية RTL السهم المتّجه بصرياً
+ * يميناً يعيد للخلف (نفس جهة زرّ «السابق» على يمين الشاشة)، والمتّجه يساراً
+ * يقدّم (نفس جهة زرّ «التالي» على يسارها) — طابِق زوج أزرار التنقّل، لا اتجاه
+ * القراءة الغربي المعتاد لأسهم لوحة المفاتيح.
+ */
+function handleStoryViewerKeydown(e) {
+  if (e.key === 'Escape') { closeStoryViewer(); return; }
+  if (e.key === 'ArrowRight') storyViewerGoPrev();
+  else if (e.key === 'ArrowLeft') storyViewerGoNext();
+}
+
+/**
+ * rAF يتوقف أو يُبطَّأ فعلياً في تبويب مخفي، فـ storyViewerLastTickTs يبقى
+ * قديماً. بلا هذا التصحيح، أول نبضة بعد العودة تحسب delta ضخماً (كل مدة
+ * الإخفاء) وتُضيفه لزمن المشاهدة رغم أن التبويب لم يكن مرئياً — وهذا بالضبط
+ * ما يمنعه شرط document.hidden في tickStorySlide، بشرط أن تبدأ الساعة من
+ * جديد لا من رصيد قديم.
+ */
+function handleStoryViewerVisibilityChange() {
+  if (!document.hidden) {
+    storyViewerLastTickTs = performance.now();
+  }
+}
+
+/** تسجيل مشاهدة تحسين صامت — فشله لا يوقف العرض ولا يزعج المستخدم (مطابق للموبايل). */
+async function recordStoryView(story) {
+  try {
+    await apiFetch(`/api/stories/${story.id}/view`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: getStoryDeviceId() })
+    });
+  } catch (e) {
+    console.error('Story view error:', e);
+  }
+}
+
+async function handleStoryTargetClick() {
+  const story = allStories[storyViewerIndex];
+  if (!isSafeHttpUrl(story.target_url)) return;
+  try {
+    await apiFetch(`/api/stories/${story.id}/click`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: getStoryDeviceId() })
+    });
+  } catch (e) {
+    // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه (مطابق للموبايل).
+  }
+  window.open(story.target_url, '_blank', 'noopener');
+}
+
+/** إبلاغ يتطلّب حساباً — زائر بلا حساب يُوجَّه لمسار الدخول القائم، لا لرسالة خطأ (نفس نمط reportCongratulation). */
+async function handleStoryReport() {
+  if (!requireAuth({ type: 'report' })) return;
+  const story = allStories[storyViewerIndex];
+  pauseStorySlide();
+  try {
+    const res = await apiFetch(`/api/stories/${story.id}/report`, { method: 'POST', auth: true });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      showToast(data.message || 'تم استلام بلاغك');
+    } else {
+      alert(data.message || 'تعذر إرسال الإبلاغ');
+    }
+  } catch (e) {
+    alert('تعذر إرسال الإبلاغ');
+  } finally {
+    resumeStorySlide();
   }
 }
 
