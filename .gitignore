@@ -33,3 +33,8 @@ mobile/.flutter-plugins-dependencies
 server/downloads/*
 !server/downloads/.gitkeep
 mobile/android/.kotlin/
+
+# مفتاح توقيع الإصدار وكلمة سرّه — ضياعهما يمنع تحديث كل نسخة مثبَّتة
+mobile/android/key.properties
+*.jks
+*.keystore
