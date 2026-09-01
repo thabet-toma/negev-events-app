@@ -10,6 +10,11 @@ import '../widgets/async_view.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 
+/// ارتفاع بوستر التفاصيل — عادي مقابل نبرة `solemn`، بنفس نسبة كرت القائمة
+/// (#20 خطوة ١٥).
+const double _detailsPosterHeight = 250;
+const double _detailsPosterHeightSolemn = 194;
+
 /// تفاصيل مناسبة: البوستر، المعلومات، الشيلة، التفاعلات، التبريكات — كلها
 /// مقادة بإعداد نوع المناسبة (`occasion_type`)، لا نص فرح ثابت.
 class EventDetailsScreen extends StatefulWidget {
@@ -254,10 +259,17 @@ class _EventDetailsBody extends StatelessWidget {
     final reactionKeys = type?.reactions ?? const <String>[];
     final congratulationsLabel = type?.congratulationsLabel ?? 'تبريكات';
 
+    final isSolemn = type?.isSolemn ?? false;
+
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
-        EventPoster(url: event.posterUrl, height: 250),
+        if (event.posterUrl != null && event.posterUrl!.isNotEmpty)
+          EventPoster(
+            url: event.posterUrl,
+            height: isSolemn ? _detailsPosterHeightSolemn : _detailsPosterHeight,
+            isSolemn: isSolemn,
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: Column(
@@ -269,10 +281,10 @@ class _EventDetailsBody extends StatelessWidget {
               ],
               Text(
                 event.displayTitle,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 21,
                   fontWeight: FontWeight.bold,
-                  color: AppTheme.textGold,
+                  color: context.c.ink,
                 ),
               ),
               const SizedBox(height: 14),
@@ -373,9 +385,9 @@ class _EventDetailsBody extends StatelessWidget {
                     label: const Text('ذكّرني'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor:
-                          event.isReminded ? AppTheme.gold : AppTheme.textSecondary,
+                          event.isReminded ? context.c.sky : context.c.inkSoft,
                       side: BorderSide(
-                        color: event.isReminded ? AppTheme.gold : AppTheme.borderSubtle,
+                        color: event.isReminded ? context.c.sky : context.c.line,
                       ),
                     ),
                   ),
@@ -383,19 +395,19 @@ class _EventDetailsBody extends StatelessWidget {
                     const SizedBox(width: 10),
                     Text(
                       'متابعون: ${event.followersCount}',
-                      style: const TextStyle(color: AppTheme.textMuted, fontSize: 12.5),
+                      style: TextStyle(color: context.c.inkFaint, fontSize: 12.5),
                     ),
                   ],
                 ],
               ),
               if (reactionKeys.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                const Text(
+                Text(
                   'تفاعل مع المناسبة',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.textGold,
+                    color: context.c.ink,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -418,16 +430,16 @@ class _EventDetailsBody extends StatelessWidget {
                 children: [
                   Text(
                     congratulationsLabel,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: AppTheme.textGold,
+                      color: context.c.ink,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     '(${event.congratulations.length})',
-                    style: const TextStyle(color: AppTheme.textMuted),
+                    style: TextStyle(color: context.c.inkFaint),
                   ),
                   const Spacer(),
                   TextButton.icon(
@@ -447,7 +459,7 @@ class _EventDetailsBody extends StatelessWidget {
                         ? 'كن أول من يضيف $congratulationsLabel'
                         : 'كن أول من يضيف $congratulationsLabel 🌹',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: AppTheme.textMuted),
+                    style: TextStyle(color: context.c.inkFaint),
                   ),
                 )
               else
@@ -472,7 +484,7 @@ class _TypeHeaderBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = occasionTypeColor(type.color);
+    final color = occasionTypeColor(type.color, context.c.sky);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -517,20 +529,20 @@ class _InfoRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 17, color: AppTheme.gold),
+          Icon(icon, size: 17, color: context.c.sky),
           const SizedBox(width: 9),
           Text(
             '$label: ',
-            style: const TextStyle(
-              color: AppTheme.textMuted,
+            style: TextStyle(
+              color: context.c.inkFaint,
               fontSize: 14,
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
+              style: TextStyle(
+                color: context.c.ink,
                 fontSize: 14.5,
                 height: 1.45,
               ),
@@ -557,25 +569,25 @@ class _AudioTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.bgSurface,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: AppTheme.gold,
+          backgroundColor: context.c.sky,
           child: Icon(
             isPlaying ? Icons.pause : Icons.play_arrow,
-            color: AppTheme.bgPrimary,
+            color: context.c.onSky,
           ),
         ),
         title: Text(
           title,
-          style: const TextStyle(fontSize: 14.5, color: AppTheme.textPrimary),
+          style: TextStyle(fontSize: 14.5, color: context.c.ink),
         ),
         subtitle: Text(
           isPlaying ? 'قيد التشغيل…' : 'اضغط للاستماع',
-          style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+          style: TextStyle(fontSize: 12, color: context.c.inkFaint),
         ),
         onTap: onToggle,
       ),
@@ -604,9 +616,9 @@ class _ReactionButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: AppTheme.bgSurface,
+          color: context.c.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.borderSubtle),
+          border: Border.all(color: context.c.line),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -615,9 +627,9 @@ class _ReactionButton extends StatelessWidget {
             const SizedBox(width: 7),
             Text(
               '$label $count',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: AppTheme.textSecondary,
+                color: context.c.inkSoft,
               ),
             ),
           ],

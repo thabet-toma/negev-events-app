@@ -43,36 +43,36 @@ class UpdateDialog extends StatelessWidget {
     return PopScope(
       canPop: !status.required_,
       child: AlertDialog(
-        backgroundColor: AppTheme.bgSecondary,
-        icon: const Icon(
+        backgroundColor: context.c.surfaceSunk,
+        icon: Icon(
           Icons.system_update,
-          color: AppTheme.gold,
+          color: context.c.sky,
           size: 34,
         ),
         title: Text(
           status.required_ ? 'تحديث مطلوب' : 'يتوفر تحديث جديد',
           textAlign: TextAlign.center,
-          style: const TextStyle(color: AppTheme.textGold, fontSize: 18),
+          style: TextStyle(color: context.c.ink, fontSize: 18),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (status.required_)
-              const Text(
+              Text(
                 'نسختك لم تعد مدعومة، ولا يمكن متابعة الاستخدام قبل التحديث.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: AppTheme.textSecondary,
+                  color: context.c.inkSoft,
                   height: 1.6,
                 ),
               )
             else
-              const Text(
+              Text(
                 'نسخة أحدث من التطبيق متاحة الآن.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: AppTheme.textSecondary,
+                  color: context.c.inkSoft,
                   height: 1.6,
                 ),
               ),
@@ -80,32 +80,32 @@ class UpdateDialog extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: AppTheme.bgSurface,
+                color: context.c.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.borderSubtle),
+                border: Border.all(color: context.c.line),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
                     status.currentVersion,
-                    style: const TextStyle(
-                      color: AppTheme.textMuted,
+                    style: TextStyle(
+                      color: context.c.inkFaint,
                       fontSize: 13.5,
                     ),
                   ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 10),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
                     child: Icon(
                       Icons.arrow_back,
                       size: 15,
-                      color: AppTheme.textMuted,
+                      color: context.c.inkFaint,
                     ),
                   ),
                   Text(
                     status.latestVersion ?? '',
-                    style: const TextStyle(
-                      color: AppTheme.gold,
+                    style: TextStyle(
+                      color: context.c.sky,
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
                     ),
@@ -117,8 +117,8 @@ class UpdateDialog extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 status.releaseNotes,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
+                style: TextStyle(
+                  color: context.c.inkSoft,
                   fontSize: 13,
                   height: 1.6,
                 ),
@@ -130,9 +130,9 @@ class UpdateDialog extends StatelessWidget {
           if (!status.required_)
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text(
+              child: Text(
                 'لاحقاً',
-                style: TextStyle(color: AppTheme.textMuted),
+                style: TextStyle(color: context.c.inkFaint),
               ),
             ),
           ElevatedButton.icon(

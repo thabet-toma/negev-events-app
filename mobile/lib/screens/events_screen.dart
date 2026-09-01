@@ -261,12 +261,12 @@ class _EventsScreenState extends State<EventsScreen> {
                   Icon(
                     Icons.archive_outlined,
                     size: 17,
-                    color: _archive ? AppTheme.gold : AppTheme.textMuted,
+                    color: _archive ? context.c.sky : context.c.inkFaint,
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'عرض المناسبات المنتهية',
-                    style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                    style: TextStyle(fontSize: 13, color: context.c.inkSoft),
                   ),
                   const Spacer(),
                   Switch(value: _archive, onChanged: _onArchiveToggled),
@@ -293,12 +293,12 @@ class _EventsScreenState extends State<EventsScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.cloud_off, size: 46, color: AppTheme.textMuted),
+              Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
               const SizedBox(height: 14),
               Text(
                 '$_error',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppTheme.textSecondary, height: 1.6),
+                style: TextStyle(color: context.c.inkSoft, height: 1.6),
               ),
               const SizedBox(height: 18),
               ElevatedButton.icon(
@@ -319,10 +319,10 @@ class _EventsScreenState extends State<EventsScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.celebration_outlined,
                 size: 46,
-                color: AppTheme.textMuted,
+                color: context.c.inkFaint,
               ),
               const SizedBox(height: 14),
               Text(
@@ -332,7 +332,7 @@ class _EventsScreenState extends State<EventsScreen> {
                         ? 'لا توجد مناسبات منتهية في $_town'
                         : 'لا توجد مناسبات معتمدة في $_town حالياً',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppTheme.textMuted, fontSize: 15),
+                style: TextStyle(color: context.c.inkFaint, fontSize: 15),
               ),
             ],
           ),
@@ -396,7 +396,7 @@ class _SearchBar extends StatelessWidget {
         textInputAction: TextInputAction.search,
         decoration: InputDecoration(
           hintText: 'ابحث بالاسم أو العائلة أو البلدة…',
-          prefixIcon: const Icon(Icons.search, color: AppTheme.gold),
+          prefixIcon: Icon(Icons.search, color: context.c.sky),
           suffixIcon: controller.text.isEmpty
               ? null
               : IconButton(
@@ -438,14 +438,14 @@ class _TownFilter extends StatelessWidget {
             selected: isSelected,
             onSelected: (_) => onSelected(town),
             showCheckmark: false,
-            backgroundColor: AppTheme.bgSurface,
-            selectedColor: AppTheme.gold,
+            backgroundColor: context.c.surface,
+            selectedColor: context.c.sky,
             labelStyle: TextStyle(
               fontSize: 13,
-              color: isSelected ? AppTheme.bgPrimary : AppTheme.textSecondary,
+              color: isSelected ? context.c.onSky : context.c.inkSoft,
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
-            side: const BorderSide(color: AppTheme.borderSubtle),
+            side: BorderSide(color: context.c.line),
           );
         },
       ),
@@ -485,30 +485,30 @@ class _OccasionTypeTabs extends StatelessWidget {
               selected: isSelected,
               onSelected: (_) => onSelected(null),
               showCheckmark: false,
-              backgroundColor: AppTheme.bgSurface,
-              selectedColor: AppTheme.gold,
+              backgroundColor: context.c.surface,
+              selectedColor: context.c.sky,
               labelStyle: TextStyle(
                 fontSize: 12.5,
-                color: isSelected ? AppTheme.bgPrimary : AppTheme.textSecondary,
+                color: isSelected ? context.c.onSky : context.c.inkSoft,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
               ),
-              side: const BorderSide(color: AppTheme.borderSubtle),
+              side: BorderSide(color: context.c.line),
             );
           }
 
           final type = types[index - 1];
           final isSelected = selectedId == type.id;
-          final color = occasionTypeColor(type.color);
+          final color = occasionTypeColor(type.color, context.c.sky);
           return ChoiceChip(
             label: Text(type.icon.isEmpty ? type.name : '${type.icon} ${type.name}'),
             selected: isSelected,
             onSelected: (_) => onSelected(type.id),
             showCheckmark: false,
-            backgroundColor: AppTheme.bgSurface,
+            backgroundColor: context.c.surface,
             selectedColor: color,
             labelStyle: TextStyle(
               fontSize: 12.5,
-              color: isSelected ? AppTheme.bgPrimary : color,
+              color: isSelected ? context.c.onSky : color,
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
             side: BorderSide(color: color.withValues(alpha: 0.6)),
@@ -532,7 +532,7 @@ class _AnnouncementCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final event = announcement.event;
     return Card(
-      color: AppTheme.bgSurface,
+      color: context.c.surface,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
@@ -540,18 +540,18 @@ class _AnnouncementCard extends StatelessWidget {
           padding: const EdgeInsets.all(14),
           child: Row(
             children: [
-              const Icon(Icons.campaign_outlined, color: AppTheme.gold, size: 22),
+              Icon(Icons.campaign_outlined, color: context.c.sky, size: 22),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'تغيّر موعد المناسبة',
                       style: TextStyle(
                         fontSize: 13.5,
                         fontWeight: FontWeight.bold,
-                        color: AppTheme.textGold,
+                        color: context.c.ink,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -559,7 +559,7 @@ class _AnnouncementCard extends StatelessWidget {
                       event.displayTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                      style: TextStyle(fontSize: 13, color: context.c.inkSoft),
                     ),
                     const SizedBox(height: 4),
                     // ما تغيّر هو كل قيمة هذا الكرت: من رتّب وقته على الموعد
@@ -571,12 +571,12 @@ class _AnnouncementCard extends StatelessWidget {
                           ? '${event.town} — ${event.eventDate}'
                           : '${event.town} — من ${announcement.oldValue}'
                               ' إلى ${announcement.newValue}',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      style: TextStyle(fontSize: 12, color: context.c.inkFaint),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_left, color: AppTheme.textMuted),
+              Icon(Icons.chevron_left, color: context.c.inkFaint),
             ],
           ),
         ),
@@ -618,30 +618,30 @@ class _StoriesStrip extends StatelessWidget {
                         shape: BoxShape.circle,
                         border: Border.all(
                           color: story.isLive
-                              ? AppTheme.emerald
-                              : AppTheme.borderSubtle,
+                              ? context.c.success
+                              : context.c.line,
                           width: 2,
                         ),
                       ),
                       child: ClipOval(
                         child: story.image == null
-                            ? const ColoredBox(
-                                color: AppTheme.bgSurface,
+                            ? ColoredBox(
+                                color: context.c.surface,
                                 child: Icon(
                                   Icons.celebration,
                                   size: 22,
-                                  color: AppTheme.gold,
+                                  color: context.c.sky,
                                 ),
                               )
                             : Image.network(
                                 story.image!,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => const ColoredBox(
-                                  color: AppTheme.bgSurface,
+                                errorBuilder: (_, _, _) => ColoredBox(
+                                  color: context.c.surface,
                                   child: Icon(
                                     Icons.celebration,
                                     size: 22,
-                                    color: AppTheme.gold,
+                                    color: context.c.sky,
                                   ),
                                 ),
                               ),
@@ -653,9 +653,9 @@ class _StoriesStrip extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
-                        color: AppTheme.textSecondary,
+                        color: context.c.inkSoft,
                       ),
                     ),
                   ],
@@ -718,7 +718,7 @@ class _NotificationBellState extends State<_NotificationBell> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: context.c.surfaceSunk,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -736,23 +736,23 @@ class _NotificationBellState extends State<_NotificationBell> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'الإشعارات',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: AppTheme.textGold,
+                  color: sheetContext.c.ink,
                 ),
               ),
               const SizedBox(height: 14),
               if (_notifications.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
                   child: Text(
                     'لا توجد إشعارات بعد',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppTheme.textMuted),
+                    style: TextStyle(color: sheetContext.c.inkFaint),
                   ),
                 )
               else
@@ -766,18 +766,18 @@ class _NotificationBellState extends State<_NotificationBell> {
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(
                           n.isRead ? Icons.notifications_none : Icons.notifications_active,
-                          color: n.isRead ? AppTheme.textMuted : AppTheme.gold,
+                          color: n.isRead ? context.c.inkFaint : context.c.sky,
                         ),
                         title: Text(
                           n.title,
                           style: TextStyle(
                             fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold,
-                            color: AppTheme.textPrimary,
+                            color: context.c.ink,
                           ),
                         ),
                         subtitle: Text(
                           n.body,
-                          style: const TextStyle(color: AppTheme.textSecondary),
+                          style: TextStyle(color: context.c.inkSoft),
                         ),
                         onTap: () async {
                           Navigator.of(sheetContext).pop();

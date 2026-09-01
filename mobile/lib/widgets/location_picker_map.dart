@@ -155,10 +155,10 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
                 'موقع القاعة على الخريطة (اختياري)',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                style: TextStyle(color: context.c.inkSoft, fontSize: 13),
               ),
             ),
             if (_pin != null)
@@ -181,12 +181,12 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
           ],
         ),
         if (!_hasKnownCenter)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 8),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
             child: Text(
               'هذه المجموعة بلا مركز واحد على الخريطة — الرجاء تحديد موقع '
               'القاعة يدوياً بالنقر عليه',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 12.5),
+              style: TextStyle(color: context.c.inkFaint, fontSize: 12.5),
             ),
           ),
         ClipRRect(
@@ -214,9 +214,9 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
                         point: _pin!,
                         width: 40,
                         height: 40,
-                        child: const Icon(
+                        child: Icon(
                           Icons.location_on,
-                          color: AppTheme.gold,
+                          color: context.c.sky,
                           size: 38,
                         ),
                       ),

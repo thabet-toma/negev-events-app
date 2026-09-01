@@ -10,7 +10,7 @@ import 'async_view.dart';
 Future<void> openSignInGate(BuildContext context, String message) async {
   await showModalBottomSheet<void>(
     context: context,
-    backgroundColor: AppTheme.bgSecondary,
+    backgroundColor: context.c.surfaceSunk,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
     ),
@@ -19,14 +19,14 @@ Future<void> openSignInGate(BuildContext context, String message) async {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.lock_outline, size: 40, color: AppTheme.textMuted),
+          Icon(Icons.lock_outline, size: 40, color: sheetContext.c.inkFaint),
           const SizedBox(height: 14),
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15.5,
-              color: AppTheme.textSecondary,
+              color: sheetContext.c.inkSoft,
               height: 1.6,
             ),
           ),
@@ -67,7 +67,7 @@ Future<void> openCongratulateSheet(
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppTheme.bgSecondary,
+    backgroundColor: context.c.surfaceSunk,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
     ),
@@ -86,10 +86,10 @@ Future<void> openCongratulateSheet(
             children: [
               Text(
                 'أضف $label',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: AppTheme.textGold,
+                  color: sbContext.c.ink,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -153,23 +153,23 @@ class CongratulationTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
-        color: AppTheme.bgCard,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.person, size: 15, color: AppTheme.gold),
+              Icon(Icons.person, size: 15, color: context.c.sky),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   comment.senderName,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.textPrimary,
+                    color: context.c.ink,
                     fontSize: 14,
                   ),
                 ),
@@ -179,12 +179,12 @@ class CongratulationTile extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: AppTheme.goldDark.withValues(alpha: 0.28),
+                    color: context.c.skyWash,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     comment.badgeTitle!,
-                    style: const TextStyle(fontSize: 10.5, color: AppTheme.textGold),
+                    style: TextStyle(fontSize: 10.5, color: context.c.skyDeep),
                   ),
                 ),
               ],
@@ -193,18 +193,18 @@ class CongratulationTile extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: AppTheme.textMuted.withValues(alpha: 0.22),
+                    color: context.c.inkFaint.withValues(alpha: 0.22),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text(
+                  child: Text(
                     'قيد المراجعة',
-                    style: TextStyle(fontSize: 10.5, color: AppTheme.textMuted),
+                    style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
                   ),
                 ),
               ],
               if (onReport != null)
                 IconButton(
-                  icon: const Icon(Icons.flag_outlined, size: 16, color: AppTheme.textMuted),
+                  icon: Icon(Icons.flag_outlined, size: 16, color: context.c.inkFaint),
                   tooltip: 'إبلاغ',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
@@ -216,7 +216,7 @@ class CongratulationTile extends StatelessWidget {
           const SizedBox(height: 7),
           Text(
             comment.message,
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14, height: 1.5),
+            style: TextStyle(color: context.c.inkSoft, fontSize: 14, height: 1.5),
           ),
         ],
       ),
@@ -234,7 +234,7 @@ Future<void> showCongratulationsListSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppTheme.bgSecondary,
+    backgroundColor: context.c.surfaceSunk,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
     ),
@@ -313,10 +313,10 @@ class _CongratulationsListSheetBodyState extends State<_CongratulationsListSheet
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.textGold,
+                    color: context.c.ink,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -327,7 +327,7 @@ class _CongratulationsListSheetBodyState extends State<_CongratulationsListSheet
                     child: Text(
                       'كن أول من يضيف $label',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppTheme.textMuted),
+                      style: TextStyle(color: context.c.inkFaint),
                     ),
                   )
                 else
@@ -372,7 +372,7 @@ Future<void> showModerationQueueSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppTheme.bgSecondary,
+    backgroundColor: context.c.surfaceSunk,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
     ),
@@ -456,23 +456,23 @@ class _ModerationQueueSheetBodyState extends State<_ModerationQueueSheetBody> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Text(
                   'طابور المراجعة',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.textGold,
+                    color: context.c.ink,
                   ),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 14),
                 if (queue.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 18),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
                     child: Text(
                       'لا توجد رسائل قيد المراجعة',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: AppTheme.textMuted),
+                      style: TextStyle(color: context.c.inkFaint),
                     ),
                   )
                 else
@@ -486,24 +486,24 @@ class _ModerationQueueSheetBodyState extends State<_ModerationQueueSheetBody> {
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.all(13),
                           decoration: BoxDecoration(
-                            color: AppTheme.bgCard,
+                            color: context.c.surface,
                             borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: AppTheme.borderSubtle),
+                            border: Border.all(color: context.c.line),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 comment.senderName,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: AppTheme.textPrimary,
+                                  color: context.c.ink,
                                 ),
                               ),
                               const SizedBox(height: 6),
                               Text(
                                 comment.message,
-                                style: const TextStyle(color: AppTheme.textSecondary),
+                                style: TextStyle(color: context.c.inkSoft),
                               ),
                               const SizedBox(height: 10),
                               Row(

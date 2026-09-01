@@ -489,7 +489,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       children: [
         Text(
           '$label *',
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          style: TextStyle(color: context.c.inkSoft, fontSize: 13),
         ),
         const SizedBox(height: 8),
         ..._honorees.asMap().entries.map((entry) {
@@ -519,9 +519,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
                 ),
                 if (_honorees.length > 1)
                   IconButton(
-                    icon: const Icon(
+                    icon: Icon(
                       Icons.remove_circle_outline,
-                      color: AppTheme.textMuted,
+                      color: context.c.inkFaint,
                     ),
                     tooltip: 'حذف',
                     onPressed: () => setState(() => _honorees.removeAt(index).dispose()),
@@ -573,20 +573,20 @@ class _Note extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
-        color: AppTheme.bgSurface,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: Row(
         children: [
-          const Icon(Icons.info_outline, size: 18, color: AppTheme.gold),
+          Icon(Icons.info_outline, size: 18, color: context.c.sky),
           const SizedBox(width: 9),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: AppTheme.textSecondary,
+                color: context.c.inkSoft,
                 height: 1.5,
               ),
             ),
@@ -621,7 +621,7 @@ class _DateField extends StatelessWidget {
         child: Text(
           value ?? 'اختر التاريخ',
           style: TextStyle(
-            color: value == null ? AppTheme.textMuted : AppTheme.textPrimary,
+            color: value == null ? context.c.inkFaint : context.c.ink,
           ),
         ),
       ),
@@ -640,21 +640,21 @@ class _CollisionWarning extends StatelessWidget {
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
-        color: const Color(0xFF3B2A08),
+        color: context.c.warnWash,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.goldDark),
+        border: Border.all(color: context.c.warn),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber, size: 18, color: AppTheme.gold),
+              Icon(Icons.warning_amber, size: 18, color: context.c.warn),
               const SizedBox(width: 8),
               Text(
                 'تنبيه: ${conflicts.length} مناسبة في نفس التاريخ',
-                style: const TextStyle(
-                  color: AppTheme.textGold,
+                style: TextStyle(
+                  color: context.c.warn,
                   fontWeight: FontWeight.bold,
                   fontSize: 13.5,
                 ),
@@ -667,9 +667,9 @@ class _CollisionWarning extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Text(
                     '• ${event.displayTitle} — ${event.town}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12.5,
-                      color: AppTheme.textSecondary,
+                      color: context.c.inkSoft,
                     ),
                   ),
                 ),
@@ -699,27 +699,27 @@ class _FilePickTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.bgSurface,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: ListTile(
-        leading: Icon(icon, color: AppTheme.gold),
+        leading: Icon(icon, color: context.c.sky),
         title: Text(label, style: const TextStyle(fontSize: 14.5)),
         subtitle: Text(
           value ?? 'لم يُختر ملف',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+          style: TextStyle(fontSize: 12, color: context.c.inkFaint),
         ),
         trailing: value == null
             ? IconButton(
-                icon: const Icon(Icons.upload_file, color: AppTheme.gold),
+                icon: Icon(Icons.upload_file, color: context.c.sky),
                 onPressed: onPick,
                 tooltip: 'اختيار',
               )
             : IconButton(
-                icon: const Icon(Icons.close, color: AppTheme.textMuted),
+                icon: Icon(Icons.close, color: context.c.inkFaint),
                 onPressed: onClear,
                 tooltip: 'إزالة',
               ),

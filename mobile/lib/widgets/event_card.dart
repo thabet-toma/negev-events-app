@@ -5,17 +5,32 @@ import '../config.dart';
 import '../models/event.dart';
 import '../theme.dart';
 
-/// يحوّل لون النوع (`#RRGGBB` من الخادم) إلى [Color]، ويسقط إلى لون محايد
+/// يحوّل لون النوع (`#RRGGBB` من الخادم) إلى [Color]، ويسقط إلى [fallback]
 /// إن فشل التحويل — نوع جديد بلون غير متوقّع لا يجب أن يُسقِط الواجهة.
-Color occasionTypeColor(String? hex) {
-  if (hex == null || hex.isEmpty) return AppTheme.gold;
+Color occasionTypeColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
   var value = hex.trim();
   if (value.startsWith('#')) value = value.substring(1);
   if (value.length == 6) value = 'FF$value';
-  if (value.length != 8) return AppTheme.gold;
+  if (value.length != 8) return fallback;
   final parsed = int.tryParse(value, radix: 16);
-  return parsed == null ? AppTheme.gold : Color(parsed);
+  return parsed == null ? fallback : Color(parsed);
 }
+
+/// ارتفاع صورة الكرت — عادي مقابل نبرة `solemn` (#20 خطوة ١٥، قرار ٦):
+/// الأردوازي أقصر لا مساوٍ، بنفس نسبة الويب (96/124 ≈ 0.774) مطبَّقة على
+/// ارتفاع كرت الموبايل الأوسع نسبياً.
+const double _cardPosterHeight = 190;
+const double _cardPosterHeightSolemn = 147;
+
+/// تدرّج صورة العزاء حين تُحمَّل أو تفشل — أردوازي ثابت لا يتبع الوضع، مطابقاً
+/// لـ`.card-poster-wrapper.tone-mourning` في `web/styles.css` (ليس متغيّر CSS
+/// بل تدرّج ثابت بذاته هناك أيضاً).
+const _mourningGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF334155), Color(0xFF64748B)],
+);
 
 /// بطاقة مناسبة في القائمة.
 class EventCard extends StatelessWidget {
@@ -39,7 +54,8 @@ class EventCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final type = event.occasionType;
-    final typeColor = occasionTypeColor(type?.color);
+    final typeColor = occasionTypeColor(type?.color, context.c.sky);
+    final isSolemn = type?.isSolemn ?? false;
     final showDinnerTime = type?.showsField('dinner_time') ?? true;
     final showYouthParty = type?.showsField('youth_party_date') ?? true;
     final showViews = type?.showViewsCount ?? true;
@@ -52,7 +68,12 @@ class EventCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            EventPoster(url: event.posterUrl, height: 190),
+            if (event.posterUrl != null && event.posterUrl!.isNotEmpty)
+              EventPoster(
+                url: event.posterUrl,
+                height: isSolemn ? _cardPosterHeightSolemn : _cardPosterHeight,
+                isSolemn: isSolemn,
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
               child: Column(
@@ -64,10 +85,10 @@ class EventCard extends StatelessWidget {
                   ],
                   Text(
                     event.displayTitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
-                      color: AppTheme.textGold,
+                      color: context.c.ink,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -100,26 +121,26 @@ class EventCard extends StatelessWidget {
                           padding: const EdgeInsetsDirectional.only(end: 10),
                           child: Text(
                             '$emoji $count',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
-                              color: AppTheme.textSecondary,
+                              color: context.c.inkSoft,
                             ),
                           ),
                         );
                       }),
                       const Spacer(),
                       if (showViews) ...[
-                        const Icon(
+                        Icon(
                           Icons.visibility_outlined,
                           size: 15,
-                          color: AppTheme.textMuted,
+                          color: context.c.inkFaint,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           '${event.viewsCount}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12.5,
-                            color: AppTheme.textMuted,
+                            color: context.c.inkFaint,
                           ),
                         ),
                       ],
@@ -160,14 +181,14 @@ class _CongratulationsRow extends StatelessWidget {
 
     final content = Row(
       children: [
-        const Icon(Icons.forum_outlined, size: 15, color: AppTheme.gold),
+        Icon(Icons.forum_outlined, size: 15, color: context.c.sky),
         const SizedBox(width: 6),
         Text(
           '$label (${event.congratulationsCount})',
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12.5,
             fontWeight: FontWeight.bold,
-            color: AppTheme.textSecondary,
+            color: context.c.inkSoft,
           ),
         ),
         if (latest != null) ...[
@@ -177,12 +198,12 @@ class _CongratulationsRow extends StatelessWidget {
               '${latest.senderName}: ${latest.message}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              style: TextStyle(fontSize: 12, color: context.c.inkFaint),
             ),
           ),
         ],
         if (onTap != null)
-          const Icon(Icons.chevron_left, size: 16, color: AppTheme.textMuted),
+          Icon(Icons.chevron_left, size: 16, color: context.c.inkFaint),
       ],
     );
 
@@ -220,8 +241,8 @@ class _RemindRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             minimumSize: Size.zero,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            foregroundColor: isReminded ? AppTheme.gold : AppTheme.textSecondary,
-            side: BorderSide(color: isReminded ? AppTheme.gold : AppTheme.borderSubtle),
+            foregroundColor: isReminded ? context.c.sky : context.c.inkSoft,
+            side: BorderSide(color: isReminded ? context.c.sky : context.c.line),
           ),
         ),
         // `followersCount == null` يعني أنّ النوع أخفى العدّاد — لا يُرسم شيء.
@@ -229,7 +250,7 @@ class _RemindRow extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             'متابعون: ${event.followersCount}',
-            style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            style: TextStyle(fontSize: 12, color: context.c.inkFaint),
           ),
         ],
       ],
@@ -275,15 +296,26 @@ class _TypeBadge extends StatelessWidget {
 }
 
 /// بوستر المناسبة. الرابط يصل مطلقاً من الخادم، فلا نبني عنواناً هنا.
+///
+/// بلا رابط لا يُرسم شيء إطلاقاً — لا مربع بديل (#20 خطوة ١٥، قرار ٥): كرت
+/// عزاء بلا صورة يجب ألا يحجز مساحة فارغة توحي بأنّ صورة "ينبغي أن تكون هناك".
+/// `isSolemn` يلوّن التحميل/الفشل بأردوازي هادئ لا سماوي، مطابقاً لصورة
+/// المتوفَّى في الويب.
 class EventPoster extends StatelessWidget {
-  const EventPoster({super.key, required this.url, this.height});
+  const EventPoster({
+    super.key,
+    required this.url,
+    this.height,
+    this.isSolemn = false,
+  });
 
   final String? url;
   final double? height;
+  final bool isSolemn;
 
   @override
   Widget build(BuildContext context) {
-    if (url == null || url!.isEmpty) return _placeholder();
+    if (url == null || url!.isEmpty) return const SizedBox.shrink();
 
     return CachedNetworkImage(
       imageUrl: url!,
@@ -292,7 +324,9 @@ class EventPoster extends StatelessWidget {
       fit: BoxFit.cover,
       placeholder: (_, _) => Container(
         height: height,
-        color: AppTheme.bgSurface,
+        decoration: isSolemn
+            ? const BoxDecoration(gradient: _mourningGradient)
+            : BoxDecoration(color: context.c.surfaceSunk),
         child: const Center(
           child: SizedBox(
             width: 26,
@@ -301,20 +335,20 @@ class EventPoster extends StatelessWidget {
           ),
         ),
       ),
-      errorWidget: (_, _, _) => _placeholder(),
-    );
-  }
-
-  Widget _placeholder() => Container(
+      errorWidget: (_, _, _) => Container(
         height: height,
         width: double.infinity,
-        color: AppTheme.bgSurface,
-        child: const Icon(
+        decoration: isSolemn
+            ? const BoxDecoration(gradient: _mourningGradient)
+            : BoxDecoration(color: context.c.surfaceSunk),
+        child: Icon(
           Icons.image_not_supported_outlined,
-          color: AppTheme.textMuted,
+          color: isSolemn ? Colors.white70 : context.c.inkFaint,
           size: 38,
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _IconLine extends StatelessWidget {
@@ -332,14 +366,14 @@ class _IconLine extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 15, color: AppTheme.gold),
+          Icon(icon, size: 15, color: context.c.sky),
           const SizedBox(width: 7),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13.5,
-                color: AppTheme.textSecondary,
+                color: context.c.inkSoft,
                 height: 1.4,
               ),
               maxLines: 2,

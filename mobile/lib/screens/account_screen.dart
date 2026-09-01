@@ -33,26 +33,26 @@ class AccountScreen extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(
+                        Icon(
                           Icons.person_outline,
                           size: 52,
-                          color: AppTheme.textMuted,
+                          color: context.c.inkFaint,
                         ),
                         const SizedBox(height: 16),
-                        const Text(
+                        Text(
                           'لم تسجّل الدخول بعد',
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.textGold,
+                            color: context.c.ink,
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const Text(
+                        Text(
                           'سجّل الدخول لحفظ دفتر نقوطك ومتابعة مناسباتك.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: AppTheme.textSecondary,
+                            color: context.c.inkSoft,
                             height: 1.6,
                           ),
                         ),
@@ -66,6 +66,8 @@ class AccountScreen extends StatelessWidget {
                           icon: const Icon(Icons.login),
                           label: const Text('تسجيل الدخول / إنشاء حساب'),
                         ),
+                        const SizedBox(height: 26),
+                        const _ThemeModeTile(),
                       ],
                     ),
                   ),
@@ -76,43 +78,43 @@ class AccountScreen extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: AppTheme.bgSurface,
+                        color: context.c.surface,
                         borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: AppTheme.borderSubtle),
+                        border: Border.all(color: context.c.line),
                       ),
                       child: Column(
                         children: [
-                          const CircleAvatar(
+                          CircleAvatar(
                             radius: 34,
-                            backgroundColor: AppTheme.gold,
+                            backgroundColor: context.c.sky,
                             child: Icon(
                               Icons.person,
                               size: 36,
-                              color: AppTheme.bgPrimary,
+                              color: context.c.onSky,
                             ),
                           ),
                           const SizedBox(height: 14),
                           Text(
                             user.fullName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 19,
                               fontWeight: FontWeight.bold,
-                              color: AppTheme.textGold,
+                              color: context.c.ink,
                             ),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             user.phoneNumber,
-                            style: const TextStyle(
-                              color: AppTheme.textSecondary,
+                            style: TextStyle(
+                              color: context.c.inkSoft,
                             ),
                           ),
                           if (user.clanTown != null) ...[
                             const SizedBox(height: 4),
                             Text(
                               user.clanTown!,
-                              style: const TextStyle(
-                                color: AppTheme.textMuted,
+                              style: TextStyle(
+                                color: context.c.inkFaint,
                                 fontSize: 13,
                               ),
                             ),
@@ -125,14 +127,14 @@ class AccountScreen extends StatelessWidget {
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: AppTheme.goldDark,
+                                color: context.c.sky,
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Text(
+                              child: Text(
                                 'حساب إدارة',
                                 style: TextStyle(
                                   fontSize: 11.5,
-                                  color: Colors.white,
+                                  color: context.c.onSky,
                                 ),
                               ),
                             ),
@@ -141,6 +143,8 @@ class AccountScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 22),
+                    const _ThemeModeTile(),
+                    const SizedBox(height: 14),
                     OutlinedButton.icon(
                       onPressed: () async {
                         await auth.signOut();
@@ -155,14 +159,71 @@ class AccountScreen extends StatelessWidget {
                     Center(
                       child: Text(
                         'الخادم: ${AppConfig.apiBase}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
-                          color: AppTheme.textMuted,
+                          color: context.c.inkFaint,
                         ),
                       ),
                     ),
                   ],
                 ),
+        );
+      },
+    );
+  }
+}
+
+/// مفتاح المظهر — ثلاث حالات صريحة (نظام/فاتح/داكن) لا مفتاح ثنائي، فالمفتاح
+/// الثنائي لا يستطيع التعبير عن "اتّبع النظام".
+class _ThemeModeTile extends StatelessWidget {
+  const _ThemeModeTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final themeStore = AppServices.of(context).themeStore;
+
+    return AnimatedBuilder(
+      animation: themeStore,
+      builder: (context, _) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: context.c.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: context.c.line),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'مظهر التطبيق',
+                style: TextStyle(color: context.c.inkSoft, fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('تلقائي'),
+                    icon: Icon(Icons.brightness_auto),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('فاتح'),
+                    icon: Icon(Icons.light_mode_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('داكن'),
+                    icon: Icon(Icons.dark_mode_outlined),
+                  ),
+                ],
+                selected: {themeStore.mode},
+                onSelectionChanged: (selection) =>
+                    themeStore.setMode(selection.first),
+              ),
+            ],
+          ),
         );
       },
     );

@@ -15,6 +15,7 @@ import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
+import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
 
 /// عميل وهمي يرد بجسم ثابت — يختبر منطق العميل دون خادم حقيقي.
@@ -513,6 +514,123 @@ void main() {
       expect(eventsRequest.queryParameters['page'], '1');
       expect(eventsRequest.queryParameters['occasion_type_id'], '5');
     });
+  });
+
+  group('كرت المناسبة — منطقة الصورة بناءٌ لا وسام (#20 خطوة ١٥)', () {
+    testWidgets(
+      'نوع solemn بلا poster_url لا يرسم أي منطقة صورة، ونوع عادي بـ poster_url يرسمها',
+      (tester) async {
+        final solemnNoPoster = Event.fromJson({
+          'id': 30,
+          'groom_name': '',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'بيت العزاء',
+          'event_date': '2026-09-01',
+          'dinner_time': '',
+          'occasion_type': {
+            'id': 2,
+            'name': 'عزا',
+            'icon': '🕯️',
+            'color': '#4b5563',
+            'position': 2,
+            'is_active': true,
+            'creates_collision': false,
+            'warns_others': true,
+            'premoderate_messages': true,
+            'show_congratulations_count': false,
+            'show_followers_count': false,
+            'show_views_count': false,
+            'congratulations_label': 'تعازي',
+            'default_badge_title': null,
+            'default_poster_url': null,
+            'legacy_client_supported': false,
+            'tone': 'solemn',
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+          'honorees': [
+            {'name': 'سالم أبو فلان', 'role': null, 'position': 1},
+          ],
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: solemnNoPoster, onTap: () {})),
+            ),
+          ),
+        );
+
+        expect(find.byType(EventPoster), findsNothing);
+
+        final normalWithPoster = Event.fromJson({
+          'id': 31,
+          'groom_name': 'محمد',
+          'town': 'رهط',
+          'poster_url': 'https://api.example.com/uploads/a.jpg',
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: normalWithPoster, onTap: () {})),
+            ),
+          ),
+        );
+
+        expect(find.byType(EventPoster), findsOneWidget);
+      },
+    );
+
+    // الاختبار أعلاه يغيّر متغيّرين معاً (النبرة والصورة)، فلا يميّز «بلا صورة
+    // لا منطقة» عن «العزاء بلا صورة أبداً» — وخطأ يُخفي صورة كل مناسبة solemn
+    // كان سيمرّ فيه. هنا الصورة موجودة في الحالتين والنبرة وحدها تتغيّر.
+    testWidgets(
+      'نوع solemn بصورة يرسمها فعلاً، لكن أقصر من نوع عادي بصورة',
+      (tester) async {
+        Future<double?> posterHeightFor({required bool solemn}) async {
+          final event = Event.fromJson({
+            'id': solemn ? 32 : 33,
+            'groom_name': 'سالم أبو فلان',
+            'town': 'رهط',
+            'poster_url': 'https://api.example.com/uploads/a.jpg',
+            'occasion_type': {
+              'id': solemn ? 2 : 1,
+              'name': solemn ? 'عزا' : 'عرس',
+              'icon': solemn ? '🕯️' : '💍',
+              'color': '#4b5563',
+              'tone': solemn ? 'solemn' : 'festive',
+              'fields': <Map<String, dynamic>>[],
+              'reactions': <String>[],
+            },
+          });
+
+          await tester.pumpWidget(
+            MaterialApp(
+              theme: AppTheme.light(),
+              home: Directionality(
+                textDirection: TextDirection.rtl,
+                child: Scaffold(body: EventCard(event: event, onTap: () {})),
+              ),
+            ),
+          );
+
+          expect(find.byType(EventPoster), findsOneWidget);
+          return tester.widget<EventPoster>(find.byType(EventPoster)).height;
+        }
+
+        final solemnHeight = await posterHeightFor(solemn: true);
+        final festiveHeight = await posterHeightFor(solemn: false);
+
+        expect(solemnHeight, isNotNull);
+        expect(festiveHeight, isNotNull);
+        // العلاقة هي المقصودة، لا الرقمان: صورة العزاء أقصر، لا مساوية ولا غائبة.
+        expect(solemnHeight! < festiveHeight!, isTrue);
+      },
+    );
   });
 
   group('منتقي خريطة النشر — الإحداثيات (issue #20 خطوة ١٤)', () {
