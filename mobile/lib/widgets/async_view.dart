@@ -56,12 +56,12 @@ class ErrorView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.cloud_off, size: 46, color: AppTheme.textMuted),
+            Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
             const SizedBox(height: 14),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTheme.textSecondary, height: 1.6),
+              style: TextStyle(color: context.c.inkSoft, height: 1.6),
             ),
             const SizedBox(height: 18),
             ElevatedButton.icon(
@@ -89,16 +89,16 @@ class EmptyView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
+            Icon(
               Icons.celebration_outlined,
               size: 46,
-              color: AppTheme.textMuted,
+              color: context.c.inkFaint,
             ),
             const SizedBox(height: 14),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTheme.textMuted, fontSize: 15),
+              style: TextStyle(color: context.c.inkFaint, fontSize: 15),
             ),
           ],
         ),
@@ -108,13 +108,19 @@ class EmptyView extends StatelessWidget {
 }
 
 /// يعرض رسالة قصيرة أسفل الشاشة.
+///
+/// خلفية الخطأ ثابتة لا تتبع الوضع — نفس منطق راية النظام في `home_shell.dart`
+/// (تحذير مستقل عن هوية المناسبات)، ونصّها أبيض ثابت بنفس السبب.
 void showMessage(BuildContext context, String message, {bool isError = false}) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? const Color(0xFF7F1D1D) : AppTheme.bgSurface,
+        content: Text(
+          message,
+          style: isError ? const TextStyle(color: Colors.white) : null,
+        ),
+        backgroundColor: isError ? const Color(0xFF7F1D1D) : context.c.surface,
         duration: const Duration(seconds: 3),
       ),
     );

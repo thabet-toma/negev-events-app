@@ -6,15 +6,15 @@
   <title>مناسبات النقب | المنصة الأولى لأعراس وأفراح النقب</title>
   
   <!-- Web App Manifest Meta -->
-  <meta name="theme-color" content="#061a12">
+  <meta name="theme-color" content="#eef2f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
 
-  <!-- Google Fonts -->
+  <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11)؛ Tajawal/Amiri تبقى لاستوديو الملصقات (canvas) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Amiri:ital,wght@0,700;1,700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Tajawal:wght@300;400;500;700;900&family=Amiri:ital,wght@0,700;1,700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
   
   <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -59,9 +59,18 @@
           <i class="fa-solid fa-wand-magic-sparkles"></i>
           <span>شعر AI</span>
         </button>
+        <!-- مركز الإشعارات داخل الصفحة — لا push متصفّح (#20 خطوة 10) -->
+        <button id="notificationsBtn" class="ai-magic-btn" onclick="toggleNotificationsPanel()" title="الإشعارات" style="display:none; position:relative;">
+          <i class="fa-solid fa-bell"></i>
+          <span id="notificationsBadge" class="status-tag pending" style="display:none; position:absolute; top:-8px; left:-8px; padding:1px 6px;">0</span>
+        </button>
         <button id="userAuthBtn" class="auth-pill-btn" onclick="openAuthModal()">
           <i class="fa-solid fa-user-lock"></i>
           <span id="userAuthLabel">تسجيل الدخول</span>
+        </button>
+        <!-- مبدّل فاتح/داكن — غياب اختيار محفوظ يعني اتّباع النظام (#20 خطوة 11) -->
+        <button id="themeToggleBtn" class="theme-toggle-btn" onclick="toggleTheme()" title="تبديل المظهر الفاتح/الداكن">
+          <i class="fa-solid fa-moon"></i>
         </button>
         <!--
           مخفي حتى يؤكّد الخادم وجود إصدار منشور (‎/api/app/version‎). الرابط
@@ -89,7 +98,12 @@
 
     <!-- TAB 1: HOME FEED (الأفراح والمناسبات) -->
     <section id="tabHome" class="tab-content active-tab">
-      
+
+      <!-- Occasion Type Tabs — "الكل" ثم كل نوع من GET /api/occasion-types بترتيب position (#20 خطوة 10) -->
+      <div class="town-filter-wrapper" id="occasionTypeTabsWrapper" style="display:none;">
+        <div class="town-slider" id="occasionTypeTabs"></div>
+      </div>
+
       <!-- Town Filter Slider -->
       <div class="town-filter-wrapper">
         <div class="town-slider" id="townPills">
@@ -106,13 +120,20 @@
       </div>
 
       <!-- Quick Search Bar -->
-      <div class="search-bar-container">
-        <div class="search-input-box">
+      <div class="search-bar-container" style="display:flex; gap:8px; align-items:center;">
+        <div class="search-input-box" style="flex:1;">
           <i class="fa-solid fa-magnifying-glass search-icon"></i>
           <input type="text" id="eventSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleSearch()">
           <button id="clearSearchBtn" class="clear-btn" style="display:none;" onclick="clearSearch()"><i class="fa-solid fa-xmark"></i></button>
         </div>
+        <!-- المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط (#20 خطوة 10) -->
+        <button id="archiveToggleBtn" class="town-pill" onclick="toggleArchive()" title="عرض المناسبات المنتهية">
+          <i class="fa-solid fa-box-archive"></i> الأرشيف
+        </button>
       </div>
+
+      <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
+      <div id="announcementsContainer"></div>
 
       <!-- Events List Feed -->
       <div id="eventsContainer" class="events-feed">
@@ -120,6 +141,10 @@
           <div class="spinner"></div>
           <p>جاري جلب أحدث مناسبات النقب...</p>
         </div>
+      </div>
+
+      <div id="loadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
+        <button id="loadMoreBtn" class="town-pill" onclick="loadMoreEvents()">عرض المزيد</button>
       </div>
 
     </section>
@@ -156,95 +181,32 @@
       </div>
 
       <form id="addEventForm" class="app-form" onsubmit="handleEventSubmit(event)">
-        
+
         <!-- Live Collision Alert Box -->
         <div id="collisionAlert" class="collision-box" style="display: none;"></div>
 
+        <!-- Occasion type — first step; the rest of the form is built from it (#20 step 9) -->
         <div class="form-group">
-          <label>اسم العريس الكريم *</label>
-          <input type="text" id="addGroomName" placeholder="مثال: طارق سالم الهزيل" required oninput="checkDateCollisionLive()">
-        </div>
-
-        <div class="form-row">
-          <div class="form-group half">
-            <label>البلدة / المنطقة *</label>
-            <select id="addTown" required onchange="checkDateCollisionLive()">
-              <option value="رهط">رهط</option>
-              <option value="حورة">حورة</option>
-              <option value="تل السبع">تل السبع</option>
-              <option value="كسيفة">كسيفة</option>
-              <option value="شقيب السلام">شقيب السلام</option>
-              <option value="اللقية">اللقية</option>
-              <option value="عرعرة النقب">عرعرة النقب</option>
-              <option value="القرى والتجمعات">القرى والتجمعات</option>
-            </select>
-          </div>
-
-          <div class="form-group half">
-            <label>العشيرة / العائلة</label>
-            <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
+          <label>نوع المناسبة *</label>
+          <div id="occasionTypePicker" class="type-picker-row">
+            <div class="loading-spinner"><div class="spinner"></div></div>
           </div>
         </div>
 
-        <div class="form-row">
-          <div class="form-group half">
-            <label>تاريخ الفرح *</label>
-            <input type="date" id="addEventDate" required onchange="checkDateCollisionLive()">
-          </div>
-          <div class="form-group half">
-            <label>سهرة الشباب والدحة (اختياري)</label>
-            <input type="date" id="addYouthDate">
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group half">
-            <label>وقت طعام العشاء</label>
-            <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً" value="الساعة 8:00 مساءً">
-          </div>
-          <div class="form-group half">
-            <label>رقم هاتف المعلن (للتواصل)</label>
-            <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label>وصف المكان والديوان (لخرائط Waze و Google) *</label>
-          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان - رهط بالقرب من الدوار الشرقي" required>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group half">
-            <label>إحداثيات خط العرض (Latitude اختياري)</label>
-            <input type="number" step="any" id="addLat" placeholder="31.3925">
-          </div>
-          <div class="form-group half">
-            <label>إحداثيات خط الطول (Longitude اختياري)</label>
-            <input type="number" step="any" id="addLng" placeholder="34.7554">
-          </div>
-        </div>
-
-        <!-- File Uploads -->
-        <div class="upload-section">
-          <div class="upload-box">
-            <i class="fa-solid fa-image upload-icon"></i>
-            <h4>صورة كرت الدعوة المعلن</h4>
-            <p>اختر صورة الكرت من الهاتف</p>
-            <input type="file" id="addPosterFile" accept="image/*">
-          </div>
-
-          <div class="upload-box audio-upload">
-            <i class="fa-solid fa-music upload-icon"></i>
-            <h4>مقطع صوتي / شيلة الفرح (اختياري)</h4>
-            <p>أرفق شيلة الترحيب أو قصيدة العرس (MP3/M4A)</p>
-            <input type="file" id="addAudioFile" accept="audio/*">
-          </div>
-        </div>
+        <!-- Populated by JS from the chosen occasion type's own field config -->
+        <div id="dynamicFormFields"></div>
 
         <button type="submit" class="submit-btn" id="submitEventBtn">
           <i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة
         </button>
       </form>
+
+      <!-- "مناسباتي" — every event this account published, with its current status (#20 step 9) -->
+      <div class="page-title-box" style="margin-top: 26px;">
+        <h2><i class="fa-solid fa-list-check"></i> مناسباتي</h2>
+        <p>كل مناسبة نشرتها من هذا الحساب، بحالتها الحالية</p>
+      </div>
+      <div id="myEventsList" class="events-feed"></div>
     </section>
 
     <!-- TAB 4: NOKOOT SECRET LEDGER & FINANCIAL ANALYTICS (دفتر النقوط المالي والتحليلات) -->
@@ -390,8 +352,8 @@
       <i class="fa-solid fa-palette"></i>
       <span>الستيكرات</span>
     </button>
-    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--text-muted);">
-      <i class="fa-solid fa-crown" style="color: var(--gold-primary);"></i>
+    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--ink-faint);">
+      <i class="fa-solid fa-crown" style="color: var(--sky);"></i>
       <span>الإدارة</span>
     </a>
   </nav>
@@ -460,7 +422,7 @@
 
       <!-- Chat Input Area -->
       <form id="chatForm" class="chat-input-row" onsubmit="sendCongratulation(event)">
-        <input type="text" id="chatSenderName" placeholder="اسمك الكريم" required style="max-width: 110px;">
+        <input type="text" id="chatSenderName" placeholder="سجّل الدخول لإرسال تبريكة" readonly style="max-width: 130px;">
         <input type="text" id="chatInputMessage" placeholder="اكتب تبريكتك للعريس..." required>
         <button type="submit" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
       </form>
@@ -549,6 +511,138 @@
         </div>
         <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ في السجل المالي</button>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL 5: EDIT MY EVENT (#20 step 9) -->
+  <div id="editEventModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-pen"></i> تعديل المناسبة</h3>
+          <span class="modal-sub">تعديل الاسم أو الوصف أو الصورة يُحفظ فوراً وتبقى المناسبة منشورة — أما تعديل التاريخ أو البلدة أو المكان فيُعيدها لمراجعة الإدارة قبل نشرها مجدداً</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeEditEventModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form id="editEventForm" class="app-form" onsubmit="handleEventEditSubmit(event)">
+        <input type="hidden" id="editEventId">
+
+        <div class="form-group">
+          <label>أصحاب المناسبة</label>
+          <div id="editHonoreesList"></div>
+          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('editHonoreesList')">
+            <i class="fa-solid fa-plus"></i> إضافة اسم
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label>العنوان</label>
+          <input type="text" id="editTitle">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>البلدة</label>
+            <select id="editTown"></select>
+          </div>
+          <div class="form-group half">
+            <label>العائلة / العشيرة</label>
+            <input type="text" id="editFamily">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>تاريخ المناسبة</label>
+            <input type="date" id="editEventDate">
+          </div>
+          <div class="form-group half">
+            <label>تاريخ الانتهاء (إن وجد)</label>
+            <input type="date" id="editEventEndDate">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>سهرة الشباب والدحة (إن وجدت)</label>
+          <input type="date" id="editYouthDate">
+        </div>
+
+        <div class="form-group">
+          <label>وصف المكان والديوان</label>
+          <input type="text" id="editLocationName">
+        </div>
+
+        <div class="form-group">
+          <label>مكان إضافي (اختياري)</label>
+          <input type="text" id="editSecondaryLocationName">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group half">
+            <label>وقت طعام العشاء</label>
+            <input type="text" id="editDinnerTime">
+          </div>
+          <div class="form-group half">
+            <label>رقم هاتف المعلن</label>
+            <input type="tel" id="editHostPhone">
+          </div>
+        </div>
+
+        <button type="submit" class="submit-btn"><i class="fa-solid fa-check"></i> حفظ التعديل</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 6: NOTIFICATIONS CENTER (#20 step 10) -->
+  <div id="notificationsModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-bell"></i> الإشعارات</h3>
+        </div>
+        <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="notificationsList" class="events-feed" style="gap:10px;"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 7: OWNER'S CONGRATULATIONS/CONDOLENCES REVIEW QUEUE (#20 step 10) -->
+  <div id="congratsQueueModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card chat-modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-list-check"></i> مراجعة الرسائل</h3>
+          <span id="congratsQueueSubtitle" class="modal-sub">طابور المراجعة</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeCongratsQueueModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="congratsQueueList" class="chat-messages-container"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 8: STORY VIEWER (#20 step 18) -->
+  <div id="storyViewerOverlay" class="story-viewer-overlay" style="display:none;">
+    <div class="story-viewer-stage">
+      <div class="story-progress-row" id="storyProgressRow"></div>
+      <div class="story-viewer-header">
+        <div class="story-viewer-meta">
+          <strong id="storyViewerTitle"></strong>
+          <span id="storyViewerSubtitle" class="story-viewer-subtitle"></span>
+        </div>
+        <span id="storyViewerAdBadge" class="story-viewer-ad-badge" hidden>إعلان</span>
+        <button class="story-viewer-close" onclick="closeStoryViewer()" aria-label="إغلاق القصة"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="story-viewer-media"
+           onpointerdown="pauseStorySlide()"
+           onpointerup="resumeStorySlide()"
+           onpointerleave="resumeStorySlide()"
+           onpointercancel="resumeStorySlide()">
+        <img id="storyViewerImage" class="story-viewer-img" alt="">
+      </div>
+      <button class="story-viewer-nav story-viewer-nav-prev" onclick="storyViewerGoPrev()" aria-label="القصة السابقة"><i class="fa-solid fa-chevron-right"></i></button>
+      <button class="story-viewer-nav story-viewer-nav-next" onclick="storyViewerGoNext()" aria-label="القصة التالية"><i class="fa-solid fa-chevron-left"></i></button>
+      <div class="story-viewer-footer" id="storyViewerFooter"></div>
     </div>
   </div>
 

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../state/update_checker.dart';
-import '../theme.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart';
@@ -116,6 +115,12 @@ class _HomeShellState extends State<HomeShell> {
   }
 }
 
+/// خلفية ثابتة مستقلة عن الوضع الفاتح/الداكن — تنبيه نظام لا هوية مناسبة،
+/// مطابقة لتدرّج `.broadcast-banner` في `web/styles.css`: الويب تعمّد تدرّجاً
+/// أغمق (لا `var(--warn)`) لأنّ الرمز يهتزّ تباينه مع نص أبيض بين الوضعين،
+/// فنفس القرار هنا (#20 خطوة ١٥).
+const _broadcastBannerColor = Color(0xFF78350F);
+
 class _BroadcastBanner extends StatelessWidget {
   const _BroadcastBanner({required this.message, required this.onDismiss});
 
@@ -125,7 +130,7 @@ class _BroadcastBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: AppTheme.goldDark,
+      color: _broadcastBannerColor,
       child: SafeArea(
         bottom: false,
         child: Padding(

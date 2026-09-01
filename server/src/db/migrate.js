@@ -1,8 +1,10 @@
 'use strict';
 
 /**
- * Creates the database (if missing) and applies src/db/schema.sql.
- * Safe to run repeatedly — every statement is CREATE TABLE IF NOT EXISTS.
+ * Creates the database (if missing), applies src/db/schema.sql, then runs
+ * the explicit steps in dataMigrations.js (ALTERs/UPDATEs schema.sql cannot
+ * express). Safe to run repeatedly — every schema.sql statement is CREATE
+ * TABLE IF NOT EXISTS, and every data-migration step is idempotent on its own.
  *
  *   npm run db:migrate
  */
@@ -12,6 +14,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 const config = require('../config');
 const logger = require('../utils/logger');
+const dataMigrations = require('./dataMigrations');
 
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
@@ -43,9 +46,13 @@ async function migrate() {
   for (const statement of statements) {
     await connection.query(statement);
   }
-  await connection.end();
-
   logger.info(`Schema applied — ${statements.length} statement(s) executed.`);
+
+  for (const step of dataMigrations) {
+    await step.run(connection);
+  }
+
+  await connection.end();
 }
 
 if (require.main === module) {

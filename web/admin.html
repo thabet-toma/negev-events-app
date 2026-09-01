@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>مركز القيادة | لوحة السوبر أدمن لمناسبات النقب</title>
   
-  <!-- Google Fonts -->
+  <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&family=Amiri:wght@700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;700;900&family=Tajawal:wght@400;500;700;900&family=Amiri:wght@700&display=swap" rel="stylesheet">
   
   <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -121,6 +121,9 @@
         <button class="admin-tab-btn" onclick="switchAdminTab('tabUsers')">
           <i class="fa-solid fa-user-gear"></i> إدارة المستخدمين
         </button>
+        <button class="admin-tab-btn" id="tabOccasionTypesBtn" onclick="switchAdminTab('tabOccasionTypes')" style="display:none;">
+          <i class="fa-solid fa-sitemap"></i> أنواع المناسبات
+        </button>
       </nav>
 
       <!-- TAB 1: EVENTS REVIEW & MANAGEMENT -->
@@ -232,7 +235,7 @@
             </div>
             <div class="form-group">
               <label>نص الرسالة أو الإشعار *</label>
-              <textarea id="broadcastMessageInput" rows="4" style="width:100%; background:#071510; border:1px solid var(--admin-card-border); color:#fff; padding:12px; border-radius:8px; font-family:Tajawal;" placeholder="اكتب نص الإشعار هنا..." required></textarea>
+              <textarea id="broadcastMessageInput" rows="4" style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:12px; border-radius:8px; font-family:var(--font-tajawal);" placeholder="اكتب نص الإشعار هنا..." required></textarea>
             </div>
             <button type="submit" class="admin-btn-primary" id="sendBroadcastBtn">
               <i class="fa-solid fa-paper-plane"></i> إرسال البث لجميع الشاشات الآن
@@ -260,6 +263,112 @@
             <p>قائمة بأصحاب الحسابات ودفاتر النقوط في النقب</p>
           </div>
           <div id="adminUsersList" class="admin-users-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB 6: OCCASION TYPES (super_admin only) -->
+      <section id="tabOccasionTypes" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-sitemap"></i> أنواع المناسبات</h2>
+            <p>كل نوع مناسبة نشِط أو معطَّل — من هنا وحده يُنشأ نوع جديد أو يُعدَّل قائم</p>
+          </div>
+
+          <div id="occasionTypesNotice" class="occasion-types-notice" style="display:none;"></div>
+
+          <div class="pane-controls-bar">
+            <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openOccasionTypeForm()">
+              <i class="fa-solid fa-plus"></i> نوع مناسبة جديد
+            </button>
+          </div>
+
+          <div id="occasionTypesList" class="occasion-types-table-wrapper"></div>
+        </div>
+
+        <div class="pane-box" id="occasionTypeFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="occasionTypeFormTitle"><i class="fa-solid fa-pen"></i> نوع مناسبة جديد</h2>
+            <p>الحقول الثلاثة الأساسية (أصحاب المناسبة، البلدة، تاريخ المناسبة) لا يمكن إخفاؤها — الخادم يرفض ذلك</p>
+          </div>
+
+          <form id="occasionTypeForm" class="admin-form" onsubmit="handleOccasionTypeSubmit(event)">
+            <input type="hidden" id="otId">
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم النوع *</label>
+                <input type="text" id="otName" placeholder="مثال: عرس" required>
+              </div>
+              <div class="form-group half">
+                <label>الأيقونة (إيموجي) *</label>
+                <input type="text" id="otIcon" placeholder="مثال: 💍" required>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اللون *</label>
+                <input type="color" id="otColor" value="#0369a1" required>
+              </div>
+              <div class="form-group half">
+                <label>الترتيب</label>
+                <input type="number" id="otPosition" value="0" step="1">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>النغمة *</label>
+                <select id="otTone" required>
+                  <option value="festive">احتفالية</option>
+                  <option value="solemn">وقورة</option>
+                </select>
+              </div>
+              <div class="form-group half">
+                <label>تسمية التبريكات</label>
+                <input type="text" id="otCongratsLabel" placeholder="مثال: تبريكات">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>الشارة الافتراضية للمُهنِّئ (اختياري — تركها فارغة صحيح، لا بديل يُحقن)</label>
+              <input type="text" id="otBadgeTitle" placeholder="مثال: صديق العريس">
+            </div>
+
+            <div class="form-row occasion-type-flags">
+              <label class="ot-check"><input type="checkbox" id="otIsActive" checked> نشِط</label>
+              <label class="ot-check"><input type="checkbox" id="otCreatesCollision"> يمنع تعارض التاريخ/المكان مع نوع آخر</label>
+              <label class="ot-check"><input type="checkbox" id="otWarnsOthers"> يُحذّر أصحاب مناسبات أخرى بنفس التاريخ</label>
+              <label class="ot-check"><input type="checkbox" id="otPremoderate"> مراجعة بشرية إلزامية قبل نشر أي تبريكة/تعزية</label>
+            </div>
+            <div class="form-row occasion-type-flags">
+              <label class="ot-check"><input type="checkbox" id="otShowCongrats" checked> إظهار عدد التبريكات</label>
+              <label class="ot-check"><input type="checkbox" id="otShowFollowers" checked> إظهار عدد المتابعين</label>
+              <label class="ot-check"><input type="checkbox" id="otShowViews" checked> إظهار عدد المشاهدات</label>
+            </div>
+
+            <div class="form-group occasion-type-legacy-box">
+              <label class="ot-check"><input type="checkbox" id="otLegacySupported"> يظهر على نسخ التطبيق المنشورة حالياً (legacy_client_supported)</label>
+              <span class="hint-text">افتراضه مطفأ عمداً عند الإنشاء — لا يظهر على أي تطبيق منشور اليوم إلا بعد إصدار نسخة تدعمه.</span>
+            </div>
+
+            <div class="form-group">
+              <label>الحقول</label>
+              <div id="occasionTypeFieldsEditor" class="occasion-type-fields-editor"></div>
+            </div>
+
+            <div class="form-group">
+              <label>التفاعلات (قائمة فارغة صالحة تماماً — مثال: عزا بلا تفاعلات)</label>
+              <div id="occasionTypeReactionsEditor" class="occasion-type-reactions-editor"></div>
+            </div>
+
+            <div class="form-row">
+              <button type="submit" class="admin-btn-primary" id="otSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ نوع المناسبة
+              </button>
+              <button type="button" class="btn-reject" onclick="closeOccasionTypeForm()">إلغاء</button>
+            </div>
+          </form>
         </div>
       </section>
 

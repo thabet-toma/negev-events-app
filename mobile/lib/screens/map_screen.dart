@@ -47,7 +47,7 @@ class _MapScreenState extends State<MapScreen> {
   void _showPoint(MapPoint point) {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: context.c.surfaceSunk,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -58,24 +58,22 @@ class _MapScreenState extends State<MapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              point.title.isEmpty
-                  ? 'زفاف العريس ${point.groomName}'
-                  : point.title,
-              style: const TextStyle(
+              point.displayTitle,
+              style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,
-                color: AppTheme.textGold,
+                color: sheetContext.c.ink,
               ),
             ),
             const SizedBox(height: 10),
             Text(
               '${point.town} — ${point.locationName}',
-              style: const TextStyle(color: AppTheme.textSecondary),
+              style: TextStyle(color: sheetContext.c.inkSoft),
             ),
             const SizedBox(height: 6),
             Text(
               point.eventDate,
-              style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+              style: TextStyle(color: sheetContext.c.inkFaint, fontSize: 13),
             ),
             const SizedBox(height: 18),
             Row(
@@ -161,17 +159,17 @@ class _MapScreenState extends State<MapScreen> {
                             onTap: () => _showPoint(point),
                             child: Container(
                               decoration: BoxDecoration(
-                                color: AppTheme.gold,
+                                color: context.c.sky,
                                 shape: BoxShape.circle,
                                 border: Border.all(
-                                  color: AppTheme.bgPrimary,
+                                  color: context.c.onSky,
                                   width: 2,
                                 ),
                               ),
-                              child: const Icon(
+                              child: Icon(
                                 Icons.celebration,
                                 size: 22,
-                                color: AppTheme.bgPrimary,
+                                color: context.c.onSky,
                               ),
                             ),
                           ),

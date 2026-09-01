@@ -40,15 +40,43 @@ function optionalDate(value) {
   return isValidDate(cleaned) ? cleaned : null;
 }
 
+/**
+ * Parses an optional ISO datetime string (a story's `expires_at`). Absent
+ * (undefined/null/empty string) → `null`, same as "never expires". Present
+ * but unparsable throws instead of silently discarding it — same reasoning as
+ * parseCoordinate: a value an admin typed on purpose deserves a clear
+ * rejection, not a swallow to null (#20 step 8).
+ */
+function optionalDateTime(value, label = 'التاريخ والوقت') {
+  if (value === undefined || value === null || value === '') return null;
+  const cleaned = cleanString(value, 40);
+  const parsed = cleaned ? new Date(cleaned) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    throw ApiError.badRequest(`${label} غير صالح`);
+  }
+  return parsed;
+}
+
 function isValidPhone(value) {
   return PHONE_PATTERN.test(String(value || '').replace(/[\s-]/g, ''));
 }
 
-/** Parses a coordinate, returning null when absent or out of range. */
-function parseCoordinate(value, max) {
+/**
+ * Parses a coordinate. Absent (undefined/null/empty string) → `null`, same as
+ * before a pin was the only way to set one. Present but not a valid number,
+ * or outside ±max, now throws instead of silently becoming `null` — once a
+ * coordinate comes from a dragged pin, a bad value is a bug worth surfacing,
+ * not a value worth swallowing (#20 step 6, decision ٣).
+ */
+function parseCoordinate(value, max, label = 'الإحداثية') {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed) || Math.abs(parsed) > max) return null;
+  if (Number.isNaN(parsed) || Math.abs(parsed) > max) {
+    // "قيمة" carries the agreement so the sentence stays correct whatever the
+    // label is — 'خط العرض' is masculine, 'الإحداثية' feminine, and a type's
+    // field label is admin-supplied text whose gender we cannot know.
+    throw ApiError.badRequest(`قيمة ${label} غير صالحة`);
+  }
   return parsed;
 }
 
@@ -69,14 +97,50 @@ function parseAmount(value) {
   return Math.round(amount * 100) / 100;
 }
 
+/**
+ * Ceiling on how many honorees one publish/edit request may carry. "1..N" in
+ * the domain (a حج group, say) is a real range, not an invitation to accept
+ * an unbounded array — a few dozen covers any realistic group of pilgrims or
+ * a wedding couple with room to spare, while still refusing a payload of
+ * thousands of rows in a single INSERT loop.
+ */
+const MAX_HONOREES = 50;
+
+/**
+ * Cleans a submitted honorees array into `{ name, role }` pairs, dropping any
+ * entry whose name is empty after trimming (this is how an optional slot,
+ * like the bride's name on a wedding, ends up simply absent instead of
+ * needing a dedicated branch). Whether the resulting list must be non-empty
+ * is a caller decision — it depends on the occasion type's field label, which
+ * this module knows nothing about.
+ */
+function parseHonorees(raw, { max = MAX_HONOREES } = {}) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw ApiError.badRequest('صيغة أصحاب المناسبة غير صالحة');
+  }
+  if (raw.length > max) {
+    throw ApiError.badRequest(`عدد أصحاب المناسبة يتجاوز الحد المسموح (${max})`);
+  }
+  return raw
+    .map(item => ({
+      name: cleanString(item && item.name, 150),
+      role: cleanString(item && item.role, 60)
+    }))
+    .filter(honoree => honoree.name);
+}
+
 module.exports = {
   cleanString,
   requireFields,
   isValidDate,
   requireDate,
   optionalDate,
+  optionalDateTime,
   isValidPhone,
   parseCoordinate,
   parseId,
-  parseAmount
+  parseAmount,
+  parseHonorees,
+  MAX_HONOREES
 };

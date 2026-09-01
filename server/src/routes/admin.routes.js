@@ -4,6 +4,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const admin = require('../services/admin.service');
+const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const realtime = require('../realtime');
 const { requireAdmin } = require('../middleware/auth');
@@ -46,7 +47,7 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
     throw ApiError.badRequest('حالة غير صالحة');
   }
 
-  const event = await admin.updateEventStatus(eventId, status);
+  const { event, notifications } = await admin.updateEventStatus(eventId, status);
   if (status === 'approved') {
     realtime.emit('new_event_created', {
       id: event.id,
@@ -57,13 +58,32 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
     });
   }
 
+  // One channel per recipient — only whoever is connected right now ever
+  // sees this; everyone else only has the notifications row until FCM (#19).
+  for (const notification of notifications) {
+    realtime.emit(`new_notification_${notification.user_id}`, notification);
+  }
+
   const label = { approved: 'معتمدة ومنشورة', rejected: 'مرفوضة', pending: 'بانتظار المراجعة' }[status];
   res.json({ success: true, message: `تم تحديث حالة المناسبة إلى (${label})`, event });
+}));
+
+router.get('/admin/events/:id/amendments', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  res.json({ success: true, amendments: await events.listAmendments(eventId) });
 }));
 
 router.delete('/admin/events/:id', asyncHandler(async (req, res) => {
   await admin.deleteEvent(parseId(req.params.id, 'معرّف المناسبة'));
   res.json({ success: true, message: 'تم حذف المناسبة بالكامل' });
+}));
+
+router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const newOwnerId = parseId(req.body.user_id, 'معرّف المستخدم الجديد');
+
+  const event = await admin.transferEventOwnership(eventId, newOwnerId);
+  res.json({ success: true, message: 'تم نقل ملكية المناسبة بنجاح', event });
 }));
 
 router.get('/admin/comments', asyncHandler(async (req, res) => {

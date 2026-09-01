@@ -10,27 +10,100 @@ let stickerTheme = 'royal-gold';
 let leafletMap = null;
 let nokootChart = null;
 
+// Publish-form location picker (#20 step 6)
+let locationPickerMap = null;
+let locationPickerMarker = null;
+let pickerPinPlacedByUser = false;
+let townCoordinates = {};
+let townsList = [];
+const NEGEV_NEUTRAL_CENTER = [31.2858, 34.8431];
+
+// Publish form — occasion type drives the rest of the form (#20 step 9)
+let occasionTypesCache = null;
+let selectedOccasionType = null;
+let myEventsCache = [];
+
+// Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
+let currentPage = 1;
+const EVENTS_PAGE_SIZE = 30;
+let currentPagination = null;
+let selectedOccasionTypeId = null; // null = "الكل"
+let showArchive = false;
+let notificationsList = [];
+let congratsQueueEventId = null;
+
+// Story viewer (#20 step 18) — the strip's own stories list, plus the
+// viewer's playback state; opened by index into this same array.
+let allStories = [];
+let storyViewerIndex = 0;
+let storyViewerElapsedMs = 0;
+let storyViewerViewRecorded = false;
+let storyViewerPaused = false;
+let storyViewerLastTickTs = 0;
+let storyViewerRafId = null;
+let storyViewerDeviceId = null;
+
+// Write actions (publish, congratulate) require login; browsing never does.
+// Set right before openAuthModal() so a successful login/register can pick
+// back up exactly what the visitor was trying to do (#20 step 9).
+let pendingIntent = null;
+
 // Auth State
 let currentUser = JSON.parse(localStorage.getItem('negev_user') || 'null');
 let authToken = localStorage.getItem('negev_token') || null;
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   initSocket();
   setupTownFilters();
   updateAuthUI();
+  initOccasionTypeTabs();
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
   initAppDownload();
-  
+  fetchNotifications();
+
   const today = new Date().toISOString().split('T')[0];
-  const dateInput = document.getElementById('addEventDate');
-  if (dateInput) dateInput.value = today;
-  
+
   const nokootDateInput = document.getElementById('nokootDate');
   if (nokootDateInput) nokootDateInput.value = today;
 });
+
+// -1. Light/dark theme — data-theme on <html>, persisted in localStorage.
+// Absence of a saved choice means "follow the system" (#20 step 11): styles.css
+// already reacts to prefers-color-scheme on its own, so with nothing stored we
+// simply never set data-theme and let that media query decide.
+function initTheme() {
+  const saved = localStorage.getItem('negev_theme');
+  if (saved === 'dark' || saved === 'light') {
+    document.documentElement.setAttribute('data-theme', saved);
+  }
+  updateThemeToggleIcon();
+}
+
+function toggleTheme() {
+  const isDark = currentThemeIsDark();
+  const next = isDark ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('negev_theme', next);
+  updateThemeToggleIcon();
+}
+
+function currentThemeIsDark() {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return true;
+  if (attr === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+function updateThemeToggleIcon() {
+  const btn = document.getElementById('themeToggleBtn');
+  if (!btn) return;
+  const icon = btn.querySelector('i');
+  if (icon) icon.className = currentThemeIsDark() ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+}
 
 // 0. Android app download entry
 //
@@ -102,9 +175,27 @@ function initSocket() {
         banner.style.display = 'flex';
       }
     });
+
+    subscribeToNotificationSocket();
   } catch (e) {
     console.log('Socket initialization note:', e);
   }
+}
+
+/**
+ * قناة الإشعارات بمعرّف المستخدم لا معرّف المناسبة — تُبثّ فقط لمن كان متصلاً
+ * فعلاً تلك اللحظة (#20 step 7). تُستدعى عند تحميل الصفحة (إن كان الحساب
+ * محفوظاً في localStorage) وبعد كل دخول/تسجيل ناجح.
+ */
+function subscribeToNotificationSocket() {
+  if (!socket || !currentUser) return;
+  socket.off(`new_notification_${currentUser.id}`);
+  socket.on(`new_notification_${currentUser.id}`, (data) => {
+    notificationsList.unshift(data);
+    renderNotificationsList();
+    updateNotificationsBadge();
+    showToast(`🔔 ${data.title}`);
+  });
 }
 
 function dismissBanner() {
@@ -120,8 +211,9 @@ async function fetchStories() {
     const container = document.getElementById('storiesContainer');
 
     if (data.success && data.stories) {
-      container.innerHTML = data.stories.map(s => `
-        <div class="story-item" onclick="showToast('📹 جاري فتح قصة: ${escapeHtml(s.title)}')">
+      allStories = data.stories;
+      container.innerHTML = allStories.map((s, i) => `
+        <div class="story-item" onclick="openStoryViewer(${i})">
           <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
             <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
           </div>
@@ -134,19 +226,291 @@ async function fetchStories() {
   }
 }
 
-// 3. Fetch Events from API
-async function fetchEvents() {
-  const container = document.getElementById('eventsContainer');
+// 2.5 Story Viewer (#20 step 18) — full-screen viewer opened from the strip
+// above. Explicit prev/next/close controls, not implicit tap zones — a
+// deliberate deviation from touch conventions for a mouse-driven UI (README,
+// "الويب": أسهم وزرّ إغلاق صريحة). Matches
+// mobile/lib/screens/story_viewer_screen.dart's behaviour, not its gestures.
+
+// السقف الاحتياطي الوحيد لمدة الشريحة — يُستعمل فقط حين لا يرسل الخادم
+// slide_duration_seconds لهذه القصة تحديداً؛ الرقم الحقيقي يأتي من الخادم
+// دائماً (README: «مدة الشريحة تخرج من الخادم … حتى لا تُنسَخ كرقم ثابت»).
+const STORY_FALLBACK_SLIDE_MS = 5000;
+
+// عتبة «شوهدت» (README، جدول الستوريات؛ stories.routes.js): ثانيتان تُقاس
+// على جهاز المشاهد لا الخادم. تُقاس من نفس ساعة التقدّم (storyViewerElapsedMs)
+// لا مؤقّت ثانٍ منفصل، فتتوقّف تلقائياً مع الضغط المطوّل أو تبويب مخفي —
+// نفس مبدأ الموبايل (`_onTick` في story_viewer_screen.dart).
+const STORY_WATCHED_THRESHOLD_MS = 2000;
+
+/**
+ * معرّف عشوائي بحت لتمييز جهاز غير مسجَّل بين مشاهدتين — لا يُشتقّ من أي
+ * بصمة متصفّح (لا user-agent، لا مقاسات شاشة، لا canvas fingerprint)، بنفس
+ * سبب mobile/lib/state/device_id_store.dart: المطلوب تمييز مشاهدَين لا
+ * معرفة من هو. يُولَّد مرّة واحدة عبر crypto.randomUUID (أو
+ * crypto.getRandomValues احتياطاً) ويُحفظ في localStorage.
+ */
+function getStoryDeviceId() {
+  if (storyViewerDeviceId) return storyViewerDeviceId;
+  let id = localStorage.getItem('negev_device_id');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem('negev_device_id', id);
+  }
+  storyViewerDeviceId = id;
+  return id;
+}
+
+function openStoryViewer(index) {
+  if (!allStories.length) return;
+  storyViewerIndex = index;
+  storyViewerPaused = false;
+  document.getElementById('storyViewerOverlay').style.display = 'flex';
+  document.addEventListener('keydown', handleStoryViewerKeydown);
+  document.addEventListener('visibilitychange', handleStoryViewerVisibilityChange);
+  renderStoryProgressBars();
+  startStorySlide();
+}
+
+function closeStoryViewer() {
+  document.getElementById('storyViewerOverlay').style.display = 'none';
+  if (storyViewerRafId) cancelAnimationFrame(storyViewerRafId);
+  storyViewerRafId = null;
+  storyViewerPaused = false;
+  document.removeEventListener('keydown', handleStoryViewerKeydown);
+  document.removeEventListener('visibilitychange', handleStoryViewerVisibilityChange);
+}
+
+function renderStoryProgressBars() {
+  document.getElementById('storyProgressRow').innerHTML = allStories
+    .map(() => '<div class="story-progress-bar"><div class="story-progress-fill"></div></div>')
+    .join('');
+}
+
+/** يبدأ (أو يعيد بدء) الشريحة الحالية — يصفّر ساعة التقدّم ويحدّث كل ما يُعرض. */
+function startStorySlide() {
+  const story = allStories[storyViewerIndex];
+  storyViewerElapsedMs = 0;
+  storyViewerViewRecorded = false;
+  storyViewerLastTickTs = performance.now();
+
+  const img = document.getElementById('storyViewerImage');
+  img.src = story.image || '';
+  img.alt = story.title || '';
+  document.getElementById('storyViewerTitle').textContent = story.title || '';
+  document.getElementById('storyViewerSubtitle').textContent = [story.clan, story.town].filter(Boolean).join(' · ');
+  document.getElementById('storyViewerAdBadge').hidden = !story.is_ad;
+
+  renderStoryFooter(story);
+  updateStoryProgressBarsForIndex();
+
+  if (storyViewerRafId) cancelAnimationFrame(storyViewerRafId);
+  storyViewerRafId = requestAnimationFrame(tickStorySlide);
+}
+
+/** فصل الإعلان ثلاث طبقات (README): شارة «إعلان» (في الرأس)، اسم المعلن حرفياً هنا، وزرّ الإبلاغ. */
+function renderStoryFooter(story) {
+  const footer = document.getElementById('storyViewerFooter');
+  const hasTarget = isSafeHttpUrl(story.target_url);
+
+  if (story.is_ad) {
+    footer.innerHTML = `
+      <span class="story-viewer-advertiser">${escapeHtml(story.advertiser_name || '')}</span>
+      <div class="story-viewer-actions">
+        ${hasTarget ? '<button class="story-viewer-visit-btn" onclick="handleStoryTargetClick()">زيارة</button>' : ''}
+        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
+      </div>
+    `;
+  } else {
+    footer.innerHTML = `
+      <div class="story-viewer-actions">
+        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
+      </div>
+    `;
+  }
+}
+
+/** target_url قادم من قاعدة بيانات يديرها أدمن، ويُوضع في href/window.open — يُرفض أي مخطَّط غير http/https (مثل javascript:). */
+function isSafeHttpUrl(url) {
+  if (!url) return false;
   try {
-    let url = `/api/events?town=${encodeURIComponent(selectedTown)}`;
-    if (searchQuery) url += `&search=${encodeURIComponent(searchQuery)}`;
-    
-    const res = await apiFetch(url);
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (e) {
+    return false;
+  }
+}
+
+function updateStoryProgressBarsForIndex() {
+  const fills = document.querySelectorAll('#storyProgressRow .story-progress-fill');
+  fills.forEach((fill, i) => {
+    fill.style.width = i < storyViewerIndex ? '100%' : '0%';
+  });
+}
+
+function tickStorySlide(now) {
+  const story = allStories[storyViewerIndex];
+  const delta = now - storyViewerLastTickTs;
+  storyViewerLastTickTs = now;
+
+  if (!storyViewerPaused && !document.hidden) {
+    storyViewerElapsedMs += delta;
+  }
+
+  const durationMs = story.slide_duration_seconds
+    ? story.slide_duration_seconds * 1000
+    : STORY_FALLBACK_SLIDE_MS;
+
+  const fills = document.querySelectorAll('#storyProgressRow .story-progress-fill');
+  const activeFill = fills[storyViewerIndex];
+  if (activeFill) activeFill.style.width = Math.min(100, (storyViewerElapsedMs / durationMs) * 100) + '%';
+
+  if (!storyViewerViewRecorded && storyViewerElapsedMs >= STORY_WATCHED_THRESHOLD_MS) {
+    storyViewerViewRecorded = true;
+    recordStoryView(story);
+  }
+
+  if (storyViewerElapsedMs >= durationMs) {
+    storyViewerGoNext();
+    return;
+  }
+
+  storyViewerRafId = requestAnimationFrame(tickStorySlide);
+}
+
+function storyViewerGoNext() {
+  if (storyViewerIndex >= allStories.length - 1) {
+    closeStoryViewer();
+    return;
+  }
+  storyViewerIndex++;
+  startStorySlide();
+}
+
+function storyViewerGoPrev() {
+  if (storyViewerIndex === 0) {
+    startStorySlide();
+    return;
+  }
+  storyViewerIndex--;
+  startStorySlide();
+}
+
+function pauseStorySlide() {
+  storyViewerPaused = true;
+}
+
+function resumeStorySlide() {
+  storyViewerPaused = false;
+}
+
+/**
+ * الأسهم تتنقّل، لكن ليس بالافتراض الغربي: بالعربية RTL السهم المتّجه بصرياً
+ * يميناً يعيد للخلف (نفس جهة زرّ «السابق» على يمين الشاشة)، والمتّجه يساراً
+ * يقدّم (نفس جهة زرّ «التالي» على يسارها) — طابِق زوج أزرار التنقّل، لا اتجاه
+ * القراءة الغربي المعتاد لأسهم لوحة المفاتيح.
+ */
+function handleStoryViewerKeydown(e) {
+  if (e.key === 'Escape') { closeStoryViewer(); return; }
+  if (e.key === 'ArrowRight') storyViewerGoPrev();
+  else if (e.key === 'ArrowLeft') storyViewerGoNext();
+}
+
+/**
+ * rAF يتوقف أو يُبطَّأ فعلياً في تبويب مخفي، فـ storyViewerLastTickTs يبقى
+ * قديماً. بلا هذا التصحيح، أول نبضة بعد العودة تحسب delta ضخماً (كل مدة
+ * الإخفاء) وتُضيفه لزمن المشاهدة رغم أن التبويب لم يكن مرئياً — وهذا بالضبط
+ * ما يمنعه شرط document.hidden في tickStorySlide، بشرط أن تبدأ الساعة من
+ * جديد لا من رصيد قديم.
+ */
+function handleStoryViewerVisibilityChange() {
+  if (!document.hidden) {
+    storyViewerLastTickTs = performance.now();
+  }
+}
+
+/** تسجيل مشاهدة تحسين صامت — فشله لا يوقف العرض ولا يزعج المستخدم (مطابق للموبايل). */
+async function recordStoryView(story) {
+  try {
+    await apiFetch(`/api/stories/${story.id}/view`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: getStoryDeviceId() })
+    });
+  } catch (e) {
+    console.error('Story view error:', e);
+  }
+}
+
+async function handleStoryTargetClick() {
+  const story = allStories[storyViewerIndex];
+  if (!isSafeHttpUrl(story.target_url)) return;
+  try {
+    await apiFetch(`/api/stories/${story.id}/click`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: getStoryDeviceId() })
+    });
+  } catch (e) {
+    // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه (مطابق للموبايل).
+  }
+  window.open(story.target_url, '_blank', 'noopener');
+}
+
+/** إبلاغ يتطلّب حساباً — زائر بلا حساب يُوجَّه لمسار الدخول القائم، لا لرسالة خطأ (نفس نمط reportCongratulation). */
+async function handleStoryReport() {
+  if (!requireAuth({ type: 'report' })) return;
+  const story = allStories[storyViewerIndex];
+  pauseStorySlide();
+  try {
+    const res = await apiFetch(`/api/stories/${story.id}/report`, { method: 'POST', auth: true });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      showToast(data.message || 'تم استلام بلاغك');
+    } else {
+      alert(data.message || 'تعذر إرسال الإبلاغ');
+    }
+  } catch (e) {
+    alert('تعذر إرسال الإبلاغ');
+  } finally {
+    resumeStorySlide();
+  }
+}
+
+// 3. Fetch Events from API
+//
+// مرقّمة، مفلترة على الخادم دائماً (البلدة/البحث/النوع/الأرشيف تُمرَّر كوسائط
+// استعلام — لا ترشيح في العميل، وإلا انكسر الترقيم) (#20 step 10).
+async function fetchEvents(options = {}) {
+  const { append = false } = options;
+  const container = document.getElementById('eventsContainer');
+  if (!append) {
+    currentPage = 1;
+    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب أحدث مناسبات النقب...</p></div>`;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set('town', selectedTown);
+    if (searchQuery) params.set('search', searchQuery);
+    if (selectedOccasionTypeId) params.set('occasion_type_id', selectedOccasionTypeId);
+    if (showArchive) params.set('archive', '1');
+    params.set('page', currentPage);
+    params.set('limit', EVENTS_PAGE_SIZE);
+
+    const res = await apiFetch(`/api/events?${params.toString()}`);
     const data = await res.json();
 
     if (data.success) {
-      allEvents = data.events;
+      allEvents = append ? allEvents.concat(data.events) : data.events;
+      currentPagination = data.pagination || null;
       renderEvents(allEvents);
+      renderAnnouncements(data.announcements);
+      renderLoadMoreButton();
     } else {
       container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>تعذر جلب المناسبات حالياً</p></div>`;
     }
@@ -156,7 +520,119 @@ async function fetchEvents() {
   }
 }
 
+/** زرّ «عرض المزيد» — يحافظ على الفلاتر النشِطة (يستخدم fetchEvents نفسها بصفحة تالية). */
+function loadMoreEvents() {
+  if (!currentPagination || currentPagination.page >= currentPagination.totalPages) return;
+  currentPage = currentPagination.page + 1;
+  fetchEvents({ append: true });
+}
+
+function renderLoadMoreButton() {
+  const wrapper = document.getElementById('loadMoreWrapper');
+  if (!wrapper) return;
+  const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
+  wrapper.style.display = hasMore ? 'block' : 'none';
+}
+
+/** المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط عبر ?archive=1 (#20 step 10). */
+function toggleArchive() {
+  showArchive = !showArchive;
+  const btn = document.getElementById('archiveToggleBtn');
+  if (btn) btn.classList.toggle('active', showArchive);
+  fetchEvents();
+}
+
+/**
+ * إعلانات تعديل التاريخ — خبر عن مناسبة قائمة لا مناسبة جديدة، فتُعرَض ككرت
+ * مميّز بعرض القائمة، بالحقيقة الحالية فقط (من كذا إلى كذا) (#20 step 10).
+ * الخادم يرسل الحيّ وحده ضمن `announcements` — لا فلترة ولا منطق انتهاء هنا.
+ */
+function renderAnnouncements(announcements) {
+  const container = document.getElementById('announcementsContainer');
+  if (!container) return;
+  if (!announcements || !announcements.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = announcements.map(a => `
+    <div class="event-card announcement-card">
+      <div class="card-header-bar">
+        <div class="card-clan-town">
+          <span class="town-badge">${escapeHtml(a.event.town)}</span>
+        </div>
+        <span class="countdown-badge"><i class="fa-solid fa-bullhorn"></i> إعلان تعديل موعد</span>
+      </div>
+      <div class="card-body">
+        <h2 class="event-main-title">${escapeHtml(a.event.title || a.event.groom_name || '')}</h2>
+        <p style="color:var(--text-secondary); margin-top:6px;">
+          تغيّر موعد المناسبة من <strong>${escapeHtml(String(a.old_value))}</strong> إلى <strong>${escapeHtml(String(a.new_value))}</strong>.
+        </p>
+      </div>
+    </div>
+  `).join('');
+}
+
 // 4. Render Event Cards
+/** الحقول الظاهرة والتفاعلات تأتيان من إعداد النوع على الخادم — لا جدول ثابت هنا. */
+function typeVisibleFields(evt) {
+  return (evt.occasion_type && evt.occasion_type.fields) || null;
+}
+
+/**
+ * نوع لم ترسله القائمة (صفّ أقدم من الأنواع) يعرض كل شيء كما كان — إخفاءُ
+ * حقلٍ لا نعرف إعداده يخفي بياناتٍ حقيقية بلا سبب.
+ */
+function typeShowsField(evt, fieldKey) {
+  const fields = typeVisibleFields(evt);
+  if (!fields) return true;
+  return fields.some(f => f.field_key === fieldKey);
+}
+
+function typeFieldLabel(evt, fieldKey, fallback) {
+  const fields = typeVisibleFields(evt);
+  const field = fields && fields.find(f => f.field_key === fieldKey);
+  return (field && field.label) || fallback;
+}
+
+const REACTION_EMOJI = { coffee: '☕', horse: '🐎', fireworks: '🎆', rose: '🌹', hand: '🤝' };
+
+/**
+ * شريط التفاعلات من قائمة النوع لا من قائمة ثابتة في العميل. والعزاء مضبوط
+ * على صفر تفاعلات: أيّ عدّاد بجانب وفاة يخلق مقارنة بين الوفيات، والألعاب
+ * النارية على نعيٍ إساءة. صفر تفاعلات ⇒ لا شريط إطلاقاً.
+ */
+function renderReactionBarHtml(evt) {
+  const allowed = evt.occasion_type
+    ? (evt.occasion_type.reactions || [])
+    : Object.keys(REACTION_EMOJI);
+  if (!allowed.length) return '';
+
+  const buttons = allowed.filter(type => REACTION_EMOJI[type]).map(type => `
+            <button class="reaction-btn" onclick="sendReaction(${evt.id}, '${type}', this)">
+              <span class="emoji">${REACTION_EMOJI[type]}</span>
+              <span class="react-count">${(evt.reactions && evt.reactions[type]) || 0}</span>
+            </button>`).join('');
+
+  return `<div class="reaction-bar">${buttons}
+          </div>`;
+}
+
+/** «تبريكات» أم «تعازي» — من إعداد النوع لا من نصّ ثابت؛ اللغة تقول للناس أين هم. */
+function congratulationsLabel(evt) {
+  return (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
+}
+
+/**
+ * الهدوء البصري للعزاء — لا حقل «نوع» صريح في البيانات، فنستدل من نفس
+ * الإعداد الذي يميّز العزاء فعلياً على الخادم (congratulations_label 'تعازي'،
+ * seed بيانات dataMigrations.js) بدل مطابقة اسم النوع حرفياً (#20 خطوة 11، قرار ٥).
+ */
+function isMourningTone(evt) {
+  // علَم صريح من الخادم — لا مقارنة بتسمية يكتبها الأدمن ويستطيع تغييرها.
+  return !!(evt.occasion_type && evt.occasion_type.tone === 'solemn');
+}
+
 function renderEvents(events) {
   const container = document.getElementById('eventsContainer');
   if (!events || events.length === 0) {
@@ -177,11 +653,12 @@ function renderEvents(events) {
     const diffTime = eventDate - today;
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
+    // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
     let countdownText = '';
-    if (diffDays === 0) countdownText = '🔥 اليوم الفرح';
-    else if (diffDays === 1) countdownText = '⏳ غداً الفرح';
-    else if (diffDays > 1) countdownText = `⏳ باقي ${diffDays} أيام`;
-    else countdownText = '✨ مناسبة سابقة';
+    if (diffDays === 0) countdownText = 'اليوم';
+    else if (diffDays === 1) countdownText = 'غداً';
+    else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
+    else countdownText = 'مناسبة سابقة';
 
     const formattedDate = new Intl.DateTimeFormat('ar-EG', {
       weekday: 'long',
@@ -221,39 +698,66 @@ function renderEvents(events) {
       </div>
     ` : '';
 
-    return `
-      <div class="event-card" id="eventCard-${evt.id}">
-        <div class="card-header-bar">
-          <div class="card-clan-town">
-            <span class="town-badge">${escapeHtml(evt.town)}</span>
-            <span class="clan-text">${escapeHtml(evt.family_clan || '')}</span>
-          </div>
-          <span class="countdown-badge">${countdownText}</span>
-        </div>
+    // بنية الكرت الموصى بها: صورة أولاً بتركيب مضغوط — تاريخ فوق الصورة،
+    // نوع المناسبة كشارة فوقها، وسطر عشيرة/بلدة بلون النوع تحت الاسم. العزاء
+    // بلا صورة افتراضية أبداً؛ صورة المتوفَّى حين تُرفع تبقى أهدأ — بلا شارة
+    // تاريخ فوقها، فالتاريخ ينزل للكتلة النصية دائماً في العزاء (#20 خطوة 11).
+    const isMourning = isMourningTone(evt);
+    const toneColor = evt.occasion_type && evt.occasion_type.color
+      ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
+      : null;
+    const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
+    // hasShot يتّكئ فقط على وجود الصورة الفعلي — لا على النوع. الخادم يحقن
+    // default_poster_url لكل نوع غير العزاء عند النشر، فهذا نادراً ما يغيب
+    // إلا في العزاء أو صفّ قديم سابق لتلك القاعدة؛ وفي الحالتين يجب أن يبقى
+    // شارة النوع والتاريخ ظاهرَين من مكان ما (#20 خطوة 11).
+    const hasShot = !!evt.poster_url;
 
-        <div class="card-poster-wrapper">
-          <img src="${evt.poster_url}" alt="${escapeHtml(evt.groom_name)}" class="card-poster-img" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80'">
+    const shotHtml = !hasShot ? '' : `
+      <div class="card-shot">
+        <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}">
+          <img src="${evt.poster_url}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">
         </div>
+        ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
+        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+      </div>`;
+
+    const topRowHtml = (hasShot && !isMourning) ? '' : `
+      <div class="card-toprow">
+        ${hasShot ? '' : occasionTypeBadgeHtml(evt.occasion_type)}
+        <span class="card-meta">${escapeHtml(countdownText)}</span>
+      </div>`;
+
+    const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
+    const clanLineHtml = clanTownParts.length
+      ? `<div class="card-clan-line">${clanTownParts.join(' — ')}</div>` : '';
+
+    return `
+      <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
+        ${shotHtml}
 
         ${audioBlock}
 
         <div class="card-body">
+          ${topRowHtml}
           <h2 class="event-main-title">${escapeHtml(evt.title)}</h2>
-          
+          ${clanLineHtml}
+
           <div class="event-details-grid">
             <div class="detail-item">
               <i class="fa-solid fa-calendar-day"></i>
               <span><strong>التاريخ:</strong> ${formattedDate}</span>
             </div>
-            ${evt.youth_party_date ? `
+            ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
             <div class="detail-item">
               <i class="fa-solid fa-fire"></i>
-              <span><strong>سهرة الشباب والدحة:</strong> ${evt.youth_party_date}</span>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
             </div>` : ''}
+            ${typeShowsField(evt, 'dinner_time') ? `
             <div class="detail-item">
               <i class="fa-solid fa-utensils"></i>
-              <span><strong>طعام العشاء:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
-            </div>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+            </div>` : ''}
             <div class="detail-item">
               <i class="fa-solid fa-location-dot"></i>
               <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
@@ -270,34 +774,15 @@ function renderEvents(events) {
             </a>
           </div>
 
-          <!-- Quick Reaction Bar -->
-          <div class="reaction-bar">
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'coffee', this)">
-              <span class="emoji">☕</span>
-              <span class="react-count">${evt.reactions?.coffee || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'horse', this)">
-              <span class="emoji">🐎</span>
-              <span class="react-count">${evt.reactions?.horse || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'fireworks', this)">
-              <span class="emoji">🎆</span>
-              <span class="react-count">${evt.reactions?.fireworks || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'rose', this)">
-              <span class="emoji">🌹</span>
-              <span class="react-count">${evt.reactions?.rose || 0}</span>
-            </button>
-            <button class="reaction-btn" onclick="sendReaction(${evt.id}, 'hand', this)">
-              <span class="emoji">🤝</span>
-              <span class="react-count">${evt.reactions?.hand || 0}</span>
-            </button>
-          </div>
+          ${renderReactionBarHtml(evt)}
+
+          ${renderCongratsPreviewHtml(evt)}
+          ${renderReminderButtonHtml(evt)}
 
           <!-- Action Buttons Footer -->
           <div class="card-footer-actions">
             <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
-              <i class="fa-regular fa-comments"></i> تبريكات ودردشة
+              <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
             </button>
             <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
               <i class="fa-solid fa-wallet"></i> تسجيل نقوط
@@ -308,6 +793,75 @@ function renderEvents(events) {
       </div>
     `;
   }).join('');
+}
+
+/** أيقونة ولون نوع المناسبة من الخادم كما هما — لا لون جديد يُصمَّم هنا (#20 step 10). */
+function occasionTypeBadgeHtml(occasionType) {
+  if (!occasionType) return '';
+  const color = occasionType.color && occasionType.color.startsWith('#') ? occasionType.color : (occasionType.color ? `#${occasionType.color}` : null);
+  const style = color ? `style="background:${color}26; color:${color}; border-color:${color};"` : '';
+  return `<span class="town-badge" ${style}>${occasionType.icon ? escapeHtml(occasionType.icon) + ' ' : ''}${escapeHtml(occasionType.name)}</span>`;
+}
+
+/**
+ * العدّاد وسطر المعاينة — يفتحان ورقة التبريكات نفسها (الفتح على المودال
+ * القائم، لا صفحة تفاصيل). `congratulations_count` قد يغيب كلياً حين يكون
+ * `show_congratulations_count` مطفأً على النوع — غيابه يعني لا شيء يُعرَض،
+ * لا صفراً (#20 step 10).
+ */
+function renderCongratsPreviewHtml(evt) {
+  if (evt.congratulations_count === undefined) return '';
+  const label = (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
+  const latest = evt.latest_congratulation;
+  const preview = latest ? ` — ${escapeHtml(latest.sender_name)}: ${escapeHtml(truncateText(latest.message, 40))}` : '';
+  return `
+    <button class="chat-trigger-btn" style="width:100%; margin-bottom:10px;" onclick="openChatModal(${evt.id})">
+      <i class="fa-regular fa-comment-dots"></i> ${evt.congratulations_count} ${escapeHtml(label)}${preview}
+    </button>`;
+}
+
+/**
+ * «ذكّرني» — متابعة لا تعهّد حضور، ونفس التسمية في كل الأنواع (#20 step 10).
+ * `followers_count` قد يغيب (مخفيّ على نوع كالعزاء) — غيابه لا يُعرَض كصفر.
+ */
+function renderReminderButtonHtml(evt) {
+  const isReminded = !!evt.is_reminded;
+  const icon = isReminded ? 'fa-bell-slash' : 'fa-bell';
+  const label = isReminded ? 'إلغاء التذكير' : 'ذكّرني';
+  const followers = evt.followers_count !== undefined
+    ? ` <span style="opacity:.75; font-size:.8rem;">(${evt.followers_count} متابع)</span>`
+    : '';
+  return `
+    <button class="record-nokoot-btn" style="width:100%; margin-bottom:10px;" onclick="toggleReminder(${evt.id}, ${isReminded}, this)">
+      <i class="fa-solid ${icon}"></i> ${label}${followers}
+    </button>`;
+}
+
+function truncateText(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.slice(0, len) + '…' : str;
+}
+
+/** يبدّل حالة «ذكّرني» — فعل كتابة، خلف حساب مثل النشر والتبريك (#20 step 10). */
+async function toggleReminder(eventId, isReminded, btnElement) {
+  if (!requireAuth({ type: 'remind', eventId })) return;
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/remind`, { method: isReminded ? 'DELETE' : 'POST', auth: true });
+    const data = await res.json();
+    if (data.success) {
+      const evt = allEvents.find(e => e.id === eventId);
+      if (evt) evt.is_reminded = !isReminded;
+      renderEvents(allEvents);
+      showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
+    } else {
+      alert(data.message || 'تعذر تنفيذ الطلب');
+    }
+  } catch (e) {
+    alert('تعذر تنفيذ الطلب — تحقق من الاتصال بالخادم');
+  } finally {
+    if (btnElement) btnElement.disabled = false;
+  }
 }
 
 // 5. Audio Player Controller
@@ -366,19 +920,19 @@ async function initLeafletMap() {
     if (data.success && data.points) {
       data.points.forEach(pt => {
         const customIcon = L.divIcon({
-          className: 'custom-gold-marker',
-          html: `<div style="background:#dfb15b; color:#06150f; font-weight:800; font-size:12px; padding:4px 8px; border-radius:12px; border:2px solid #ffffff; box-shadow:0 4px 10px rgba(0,0,0,0.5); white-space:nowrap;">💍 ${escapeHtml(pt.groom_name)}</div>`,
+          className: 'map-marker-wrap',
+          html: `<div class="map-marker-badge">💍 ${escapeHtml(pt.groom_name)}</div>`,
           iconSize: [80, 30]
         });
 
         L.marker([pt.latitude, pt.longitude], { icon: customIcon })
           .addTo(leafletMap)
           .bindPopup(`
-            <div style="text-align:right; font-family:Tajawal, sans-serif;">
-              <h4 style="color:#dfb15b; margin-bottom:4px;">${escapeHtml(pt.title)}</h4>
-              <p style="font-size:12px; margin-bottom:4px;"><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
-              <p style="font-size:12px; margin-bottom:8px;"><strong>التاريخ:</strong> ${pt.event_date}</p>
-              <a href="${pt.waze_url}" target="_blank" style="background:#33ccff; color:#000; padding:4px 10px; border-radius:6px; text-decoration:none; font-weight:bold; font-size:12px; display:inline-block;">الملاحة عبر Waze</a>
+            <div class="map-popup">
+              <h4>${escapeHtml(pt.title)}</h4>
+              <p><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
+              <p><strong>التاريخ:</strong> ${pt.event_date}</p>
+              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn">الملاحة عبر Waze</a>
             </div>
           `);
       });
@@ -388,6 +942,150 @@ async function initLeafletMap() {
   }
 
   setTimeout(() => { leafletMap.invalidateSize(); }, 300);
+}
+
+// 6b. Interactive map picker for the publish form (#20 step 6)
+//
+// خط الطول وخط العرض لا يُكتَبان يدوياً بعد اليوم — المستخدم يسحب دبّوساً فوق
+// موقع القاعة الفعلي على الخريطة. زر «موقعي الآن» يوسّط الخريطة فقط ولا يحفظ
+// أي نقطة: من يملأ هذا النموذج غالباً في بيته قبل أسابيع من المناسبة، لا في
+// القاعة نفسها، فموقعه الحالي ليس موقع المناسبة.
+
+/** يجلب مراكز البلدات وقائمة البلدات نفسها من الخادم مرة واحدة فقط. */
+async function loadTownCoordinates() {
+  if (Object.keys(townCoordinates).length) return;
+  try {
+    const res = await apiFetch('/api/towns');
+    const data = await res.json();
+    if (data.success) {
+      if (data.town_coordinates) townCoordinates = data.town_coordinates;
+      if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
+    }
+  } catch (e) {
+    console.error('Town coordinates error:', e);
+  }
+}
+
+/** يملأ قائمة بلدات منسدلة من townsList (مجلوبة من الخادم، لا قائمة مثبَّتة). */
+function populateTownSelect(selectId, selectedValue) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = townsList.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  if (selectedValue) select.value = selectedValue;
+}
+
+function setPickerCoordinates(lat, lng) {
+  document.getElementById('addLat').value = lat != null ? lat : '';
+  document.getElementById('addLng').value = lng != null ? lng : '';
+}
+
+/** يضع الدبّوس على نقطة (أو ينقله إن كان موضوعاً أصلاً) ويملأ الحقلين المخفيَّين. */
+function placePickerMarker(lat, lng) {
+  if (!locationPickerMap) return;
+
+  if (locationPickerMarker) {
+    locationPickerMarker.setLatLng([lat, lng]);
+  } else {
+    locationPickerMarker = L.marker([lat, lng], { draggable: true }).addTo(locationPickerMap);
+    locationPickerMarker.on('dragend', () => {
+      const pos = locationPickerMarker.getLatLng();
+      pickerPinPlacedByUser = true;
+      setPickerCoordinates(pos.lat, pos.lng);
+    });
+  }
+  setPickerCoordinates(lat, lng);
+}
+
+/** يزيل الدبّوس الحالي بلا استبدال — يُستعمَل عند تفريغ النموذج بعد النشر. */
+function clearPickerMarker() {
+  if (locationPickerMarker && locationPickerMap) {
+    locationPickerMap.removeLayer(locationPickerMarker);
+  }
+  locationPickerMarker = null;
+  pickerPinPlacedByUser = false;
+  setPickerCoordinates(null, null);
+}
+
+/**
+ * يوسّط الخريطة على مركز البلدة المختارة، ويضع دبّوساً افتراضياً هناك ما دام
+ * المستخدم لم يحرّك الدبّوس بنفسه بعد — أول تحريك يدوي (سحب أو نقر) يوقف هذا
+ * التتبّع التلقائي نهائياً حتى لا يمحو تصحيحاً تعمّده المستخدم. «القرى
+ * والتجمعات» بلا مركز معروف عمداً (#20 step 6, decision ٨): الخريطة تُفتح على
+ * منظر عام للنقب بلا دبّوس، والمستخدم مطالَب بوضعه بنفسه.
+ */
+function recenterLocationPicker() {
+  if (!locationPickerMap) return;
+  const town = document.getElementById('addTown').value;
+  const coords = townCoordinates[town];
+
+  if (coords) {
+    locationPickerMap.setView([coords.lat, coords.lng], 14);
+    if (!pickerPinPlacedByUser) placePickerMarker(coords.lat, coords.lng);
+  } else {
+    locationPickerMap.setView(NEGEV_NEUTRAL_CENTER, 9);
+  }
+}
+
+async function initLocationPickerMap() {
+  const mapElement = document.getElementById('addLocationPickerMap');
+  if (!mapElement) return;
+
+  await loadTownCoordinates();
+
+  if (!locationPickerMap) {
+    locationPickerMap = L.map('addLocationPickerMap').setView(NEGEV_NEUTRAL_CENTER, 9);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      maxZoom: 19
+    }).addTo(locationPickerMap);
+
+    locationPickerMap.on('click', e => {
+      pickerPinPlacedByUser = true;
+      placePickerMarker(e.latlng.lat, e.latlng.lng);
+    });
+
+    // موقع المتصفح يتطلّب سياقاً آمناً (HTTPS، أو localhost أثناء التطوير) —
+    // خارج ذلك يفشل باستمرار، فزر معطوب أسوأ من زر غائب (#20 step 6, decision ٧).
+    const locateBtn = document.getElementById('useMyLocationBtn');
+    if (locateBtn && window.isSecureContext && navigator.geolocation) {
+      locateBtn.style.display = 'inline-flex';
+    }
+  }
+
+  recenterLocationPicker();
+  setTimeout(() => { locationPickerMap.invalidateSize(); }, 300);
+}
+
+/**
+ * «موقعي الآن» يوسّط الخريطة فقط — لا يضع دبّوساً ولا يُرسِل أي إحداثية إلى
+ * الخادم أبداً (#20 step 6, decision ٣). مهلة صريحة على `getCurrentPosition`
+ * حتى لا يُعلَّق الزر إلى الأبد (افتراض المتصفح بلا مهلة).
+ */
+function centerPickerOnMyLocation() {
+  if (!window.isSecureContext || !navigator.geolocation) return;
+
+  const btn = document.getElementById('useMyLocationBtn');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري تحديد موقعك...';
+
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      locationPickerMap.setView([position.coords.latitude, position.coords.longitude], 15);
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    },
+    () => {
+      // رمز الخطأ 1 (PERMISSION_DENIED) يجمع ثلاث حالات: رفض المستخدم، سياق
+      // غير آمن، وحجب بسياسة الأذونات — لا فرق بينها من هنا، فالرسالة تصدق
+      // على الثلاث معاً بدل تخمين أيّها وقع.
+      alert('تعذّر تحديد موقعك — يمكنك سحب الدبّوس يدوياً إلى موقع القاعة على الخريطة.');
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
 }
 
 // 7. AI Smart Nabati Poetry Generator
@@ -447,14 +1145,23 @@ async function simulateAICardScan() {
 
     if (data.success && data.extracted) {
       const ext = data.extracted;
-      document.getElementById('addGroomName').value = ext.groom_name;
-      document.getElementById('addFamily').value = ext.family_clan;
-      document.getElementById('addTown').value = ext.town;
-      document.getElementById('addEventDate').value = ext.event_date;
-      document.getElementById('addDinnerTime').value = ext.dinner_time;
-      document.getElementById('addLocationName').value = ext.location_name;
+      // النموذج لم يعد يملك حقل «اسم العريس» مستقلاً — أول صاحب مناسبة في
+      // القائمة الديناميكية هو ما يُملأ الآن (#20 step 9).
+      const firstHonoreeName = document.querySelector('#addHonoreesList .honoree-row .honoree-name');
+      if (firstHonoreeName) firstHonoreeName.value = ext.groom_name;
+      const familyInput = document.getElementById('addFamily');
+      if (familyInput) familyInput.value = ext.family_clan;
+      const townInput = document.getElementById('addTown');
+      if (townInput) townInput.value = ext.town;
+      const dateInput = document.getElementById('addEventDate');
+      if (dateInput) dateInput.value = ext.event_date;
+      const dinnerInput = document.getElementById('addDinnerTime');
+      if (dinnerInput) dinnerInput.value = ext.dinner_time;
+      const locationInput = document.getElementById('addLocationName');
+      if (locationInput) locationInput.value = ext.location_name;
 
       checkDateCollisionLive();
+      recenterLocationPicker();
       showToast(`✅ تم استخراج بيانات كرت ${ext.groom_name} بنجاح! دقة: ${ext.confidence}`);
     }
   } catch (e) {
@@ -485,7 +1192,13 @@ async function sendReaction(eventId, type, btnElement) {
 }
 
 // 10. Navigation Tabs Switcher
+//
+// «إعلان مناسبة» هو أول لحظة كتابة، فالدخول يُطلَب هنا فقط — القراءة (باقي
+// التبويبات) تبقى مفتوحة بلا حساب (#20 step 9). طلب الدخول يحفظ النيّة
+// (pendingIntent) ليعود الزائر لهذا التبويب نفسه بعد الدخول، لا أن يضيع طلبه.
 function switchTab(tabId) {
+  if (tabId === 'tabAdd' && !requireAuth({ type: 'publish' })) return;
+
   document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active-tab'));
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
 
@@ -501,6 +1214,38 @@ function switchTab(tabId) {
   if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
+  else if (tabId === 'tabAdd') {
+    if (!occasionTypesCache) initPublishForm();
+    fetchMyEvents();
+  }
+}
+
+/**
+ * يحرس أي فعل كتابة (نشر، تبريك). زائر بلا حساب يُحوَّل إلى شاشة الدخول
+ * الموجودة أصلاً بدل شاشة جديدة، ونيّته (pendingIntent) تُستأنف تلقائياً بعد
+ * نجاح الدخول أو التسجيل — القراءة نفسها لا تمرّ من هنا أبداً (#20 step 9).
+ */
+function requireAuth(intent) {
+  if (currentUser && authToken) return true;
+  pendingIntent = intent;
+  showToast('🔒 يرجى تسجيل الدخول أو إنشاء حساب أولاً للمتابعة');
+  openAuthModal();
+  return false;
+}
+
+/** يُستدعى بعد نجاح الدخول/التسجيل — يعيد الزائر إلى ما كان يحاول فعله بالضبط. */
+function resumePendingIntent() {
+  if (!pendingIntent) return;
+  const intent = pendingIntent;
+  pendingIntent = null;
+
+  if (intent.type === 'publish') {
+    switchTab('tabAdd');
+  } else if (intent.type === 'congratulate') {
+    // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
+    const senderInput = document.getElementById('chatSenderName');
+    if (senderInput && currentUser) senderInput.value = currentUser.full_name;
+  }
 }
 
 // 11. Town Filter & Search
@@ -531,11 +1276,286 @@ function clearSearch() {
   fetchEvents();
 }
 
-// 12. Add Event & Collision Check
+// 11b. Occasion Type Tabs — "الكل" أوّلاً، ثم كل نوع من GET /api/occasion-types
+// بترتيب position؛ لا قائمة ثابتة، فأي نوع يضيفه الأدمن يظهر تبويبه بلا نشر
+// واجهة جديد (#20 step 10). الفلتر يُرسَل إلى الخادم ويُعيد الترقيم للصفحة ١.
+async function initOccasionTypeTabs() {
+  const wrapper = document.getElementById('occasionTypeTabsWrapper');
+  const container = document.getElementById('occasionTypeTabs');
+  if (!wrapper || !container) return;
+
+  const types = await loadOccasionTypes();
+  if (!types.length) return;
+
+  const allTab = `<button class="town-pill active" data-type-id="" onclick="selectOccasionTypeTab(null)">الكل</button>`;
+  const typeTabs = types.map(t => `
+    <button class="town-pill" data-type-id="${t.id}" onclick="selectOccasionTypeTab(${t.id})">
+      ${t.icon ? escapeHtml(t.icon) + ' ' : ''}${escapeHtml(t.name)}
+    </button>
+  `).join('');
+
+  container.innerHTML = allTab + typeTabs;
+  wrapper.style.display = 'block';
+}
+
+function selectOccasionTypeTab(typeId) {
+  selectedOccasionTypeId = typeId;
+  document.querySelectorAll('#occasionTypeTabs .town-pill').forEach(pill => {
+    const pillId = pill.dataset.typeId ? Number(pill.dataset.typeId) : null;
+    pill.classList.toggle('active', pillId === typeId);
+  });
+  fetchEvents();
+}
+
+// 12. Occasion Type Picker & Dynamic Publish Form (#20 step 9)
+//
+// النموذج لم يعد ثابتاً — نوع المناسبة (من GET /api/occasion-types، لا قائمة
+// مكتوبة هنا) يقرّر أي الحقول تظهر، بأي تسمية، وأيّها إجباري. أضف الخادم
+// نوعاً جديداً غداً فسيظهر هنا بلا أي تغيير في هذا الملف.
+
+/** يجلب أنواع المناسبات مرة واحدة فقط ويخزّنها. */
+async function loadOccasionTypes() {
+  if (occasionTypesCache) return occasionTypesCache;
+  try {
+    const res = await apiFetch('/api/occasion-types');
+    const data = await res.json();
+    occasionTypesCache = (data.success && data.types) ? data.types : [];
+  } catch (e) {
+    console.error('Occasion types error:', e);
+    occasionTypesCache = [];
+  }
+  return occasionTypesCache;
+}
+
+/** يبني منتقي الأنواع (خطوة أولى في النموذج) ويختار أول نوع نشِط تلقائياً. */
+async function initPublishForm() {
+  await loadTownCoordinates();
+  const picker = document.getElementById('occasionTypePicker');
+  const types = await loadOccasionTypes();
+
+  if (!types.length) {
+    picker.innerHTML = '<p class="location-picker-hint">لا توجد أنواع مناسبات متاحة حالياً</p>';
+    return;
+  }
+
+  picker.innerHTML = types.map(t => `
+    <button type="button" class="town-pill occasion-type-pill" data-type-id="${t.id}" onclick="selectOccasionType(${t.id})">
+      ${t.icon ? escapeHtml(t.icon) + ' ' : ''}${escapeHtml(t.name)}
+    </button>
+  `).join('');
+
+  selectOccasionType(types[0].id);
+}
+
+function selectOccasionType(typeId) {
+  const type = occasionTypesCache.find(t => t.id === typeId);
+  if (!type) return;
+
+  document.querySelectorAll('#occasionTypePicker .occasion-type-pill').forEach(pill => {
+    pill.classList.toggle('active', Number(pill.dataset.typeId) === typeId);
+  });
+
+  renderOccasionForm(type);
+}
+
+/** يبني بقية النموذج من حقول هذا النوع تحديداً — الظاهر فقط، بتسميته هو. */
+function renderOccasionForm(type) {
+  selectedOccasionType = type;
+  const orderedFields = [...type.fields].sort((a, b) => a.position - b.position);
+  const uploadFields = orderedFields.filter(f => f.field_key === 'poster_url' || f.field_key === 'audio_url');
+  const otherFields = orderedFields.filter(f => f.field_key !== 'poster_url' && f.field_key !== 'audio_url');
+
+  const container = document.getElementById('dynamicFormFields');
+  let html = otherFields.map(renderFieldHtml).join('');
+  if (uploadFields.length) {
+    html += `<div class="upload-section">${uploadFields.map(renderFieldHtml).join('')}</div>`;
+  }
+  container.innerHTML = html;
+
+  const fieldsByKey = {};
+  for (const f of type.fields) fieldsByKey[f.field_key] = f;
+
+  if (fieldsByKey.town) populateTownSelect('addTown');
+
+  const dateInput = document.getElementById('addEventDate');
+  if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+
+  if (fieldsByKey.honorees) addHonoreeRow('addHonoreesList');
+
+  // الخريطة مرتبطة بعنصر DOM أُعيد إنشاؤه للتو — أي مرجع قديم لها أصبح ميتاً.
+  locationPickerMap = null;
+  locationPickerMarker = null;
+  pickerPinPlacedByUser = false;
+  if (fieldsByKey.location_name) initLocationPickerMap();
+
+  document.getElementById('collisionAlert').style.display = 'none';
+}
+
+/** حقول المناسبة المعروفة (server/src/constants.js) — كل نوع يختار الظاهر منها فقط، هذا الجدول لا يخترع حقلاً جديداً. */
+function renderFieldHtml(field) {
+  const req = field.is_required ? ' *' : '';
+  const label = escapeHtml(field.label);
+
+  switch (field.field_key) {
+    case 'honorees':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <div id="addHonoreesList"></div>
+          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('addHonoreesList')">
+            <i class="fa-solid fa-plus"></i> إضافة اسم
+          </button>
+        </div>`;
+    case 'town':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <select id="addTown" onchange="checkDateCollisionLive(); recenterLocationPicker();"></select>
+        </div>`;
+    case 'event_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addEventDate" onchange="checkDateCollisionLive()">
+        </div>`;
+    case 'event_end_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addEventEndDate" onchange="checkDateCollisionLive()">
+        </div>`;
+    case 'youth_party_date':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="date" id="addYouthDate">
+        </div>`;
+    case 'dinner_time':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً">
+        </div>`;
+    case 'host_phone':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
+        </div>`;
+    case 'title':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addTitle" placeholder="اتركه فارغاً ليُولَّد تلقائياً">
+        </div>`;
+    case 'family_clan':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
+        </div>`;
+    case 'location_name':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان بالقرب من الدوار الشرقي">
+        </div>
+        <div class="form-group">
+          <div class="location-picker-toolbar">
+            <label>حدّد الموقع على الخريطة</label>
+            <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
+              <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
+            </button>
+          </div>
+          <div id="addLocationPickerMap" class="location-picker-map"></div>
+          <p class="location-picker-hint">اسحب الدبّوس إلى الموقع الصحيح، أو انقر على المكان على الخريطة</p>
+          <input type="hidden" id="addLat">
+          <input type="hidden" id="addLng">
+        </div>`;
+    case 'secondary_location_name':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addSecondaryLocationName" placeholder="مكان إضافي (اختياري)">
+        </div>`;
+    case 'poster_url':
+      return `
+        <div class="upload-box">
+          <i class="fa-solid fa-image upload-icon"></i>
+          <h4>${label}${req}</h4>
+          <p>اختر صورة من الهاتف</p>
+          <input type="file" id="addPosterFile" accept="image/*">
+        </div>`;
+    case 'audio_url':
+      return `
+        <div class="upload-box audio-upload">
+          <i class="fa-solid fa-music upload-icon"></i>
+          <h4>${label}${req}</h4>
+          <p>أرفق شيلة أو مقطعاً صوتياً (MP3/M4A)</p>
+          <input type="file" id="addAudioFile" accept="audio/*">
+        </div>`;
+    case 'audio_title':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addAudioTitle" placeholder="مثال: شيلة الترحيب">
+        </div>`;
+    default:
+      return '';
+  }
+}
+
+// أصحاب المناسبة ١..N — مُدخل ديناميكي مشترك بين نموذج النشر ونافذة التعديل.
+/** يضيف صفّاً جديداً (اسم + صفة اختيارية) إلى قائمة أصحاب مناسبة. */
+function addHonoreeRow(containerId, name = '', role = '') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'honoree-row';
+  row.innerHTML = `
+    <input type="text" class="honoree-name" placeholder="الاسم" value="${escapeHtml(name)}">
+    <input type="text" class="honoree-role" placeholder="الصفة (اختياري)" value="${escapeHtml(role)}">
+    <button type="button" class="nokoot-del-btn" onclick="this.parentElement.remove()"><i class="fa-solid fa-trash"></i></button>
+  `;
+  container.appendChild(row);
+}
+
+/** يقرأ كل صفوف القائمة الحالية، ويُسقط أي صفّ بلا اسم — نفس منطق الخادم بالضبط. */
+function collectHonorees(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.honoree-row'))
+    .map(row => ({
+      name: row.querySelector('.honoree-name').value.trim(),
+      role: row.querySelector('.honoree-role').value.trim()
+    }))
+    .filter(h => h.name);
+}
+
+/**
+ * يُرفق أصحاب المناسبة داخل FormData بصيغة `honorees[i][name]` —
+ * تحقّقنا فعلياً (اختبار مباشر على multer المُثبَّت في server/) أن هذه
+ * الصيغة، وحدها من بين الصيغ الممكنة عبر multipart، تصل إلى الخادم كمصفوفة
+ * كائنات `{name, role}` كما يتوقعها `parseHonorees` — لا JSON.stringify ولا
+ * تكرار الحقل باسم واحد (ذاك يصل كمصفوفة نصوص، فيُسقَط بالكامل).
+ */
+function appendHonoreesToFormData(formData, honorees) {
+  honorees.forEach((h, i) => {
+    formData.append(`honorees[${i}][name]`, h.name);
+    if (h.role) formData.append(`honorees[${i}][role]`, h.role);
+  });
+}
+
+// 13. Add Event & Collision Check
 async function checkDateCollisionLive() {
-  const date = document.getElementById('addEventDate').value;
-  const town = document.getElementById('addTown').value;
+  const dateInput = document.getElementById('addEventDate');
+  const townInput = document.getElementById('addTown');
   const alertBox = document.getElementById('collisionAlert');
+  if (!dateInput || !alertBox) return;
+
+  const date = dateInput.value;
+  const town = townInput ? townInput.value : null;
+  const endDateInput = document.getElementById('addEventEndDate');
 
   if (!date) {
     alertBox.style.display = 'none';
@@ -546,7 +1566,12 @@ async function checkDateCollisionLive() {
     const res = await apiFetch('/api/check-collision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date, town })
+      body: JSON.stringify({
+        date,
+        town,
+        event_end_date: endDateInput ? endDateInput.value : undefined,
+        occasion_type_id: selectedOccasionType ? selectedOccasionType.id : undefined
+      })
     });
     const data = await res.json();
 
@@ -572,30 +1597,93 @@ async function checkDateCollisionLive() {
 
 async function handleEventSubmit(e) {
   e.preventDefault();
+  if (!requireAuth({ type: 'publish' })) return;
+
+  const type = selectedOccasionType;
+  if (!type) {
+    alert('يرجى اختيار نوع المناسبة أولاً');
+    return;
+  }
+
+  const fieldsByKey = {};
+  for (const f of type.fields) fieldsByKey[f.field_key] = f;
+  const labelOf = key => (fieldsByKey[key] && fieldsByKey[key].label) || key;
+
+  const honorees = collectHonorees('addHonoreesList');
+  if (!honorees.length) {
+    alert(`${labelOf('honorees')} مطلوب`);
+    return;
+  }
+
+  const town = document.getElementById('addTown').value;
+  const eventDate = document.getElementById('addEventDate').value;
+  if (!eventDate) {
+    alert(`${labelOf('event_date')} مطلوب`);
+    return;
+  }
+
+  // نفس تحقّق الإجبارية الذي يطبّقه الخادم من إعداد النوع نفسه — قبل الإرسال
+  // لا بعده، برسالة تحمل تسمية الحقل في هذا النوع تحديداً.
+  const textFieldGetters = {
+    title: () => document.getElementById('addTitle')?.value.trim(),
+    family_clan: () => document.getElementById('addFamily')?.value.trim(),
+    location_name: () => document.getElementById('addLocationName')?.value.trim(),
+    secondary_location_name: () => document.getElementById('addSecondaryLocationName')?.value.trim(),
+    event_end_date: () => document.getElementById('addEventEndDate')?.value,
+    youth_party_date: () => document.getElementById('addYouthDate')?.value,
+    dinner_time: () => document.getElementById('addDinnerTime')?.value.trim(),
+    host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
+    audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
+    poster_url: () => document.getElementById('addPosterFile')?.files[0],
+    audio_url: () => document.getElementById('addAudioFile')?.files[0]
+  };
+
+  for (const [key, field] of Object.entries(fieldsByKey)) {
+    if (!field.is_required || key === 'honorees' || key === 'town' || key === 'event_date') continue;
+    const getter = textFieldGetters[key];
+    const value = getter ? getter() : null;
+    if (!value) {
+      alert(`${field.label} مطلوب`);
+      return;
+    }
+  }
+
   const btn = document.getElementById('submitEventBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
 
   const formData = new FormData();
-  formData.append('groom_name', document.getElementById('addGroomName').value);
-  formData.append('town', document.getElementById('addTown').value);
-  formData.append('family_clan', document.getElementById('addFamily').value);
-  formData.append('event_date', document.getElementById('addEventDate').value);
-  formData.append('youth_party_date', document.getElementById('addYouthDate').value);
-  formData.append('dinner_time', document.getElementById('addDinnerTime').value);
-  formData.append('host_phone', document.getElementById('addHostPhone').value);
-  formData.append('location_name', document.getElementById('addLocationName').value);
-  formData.append('latitude', document.getElementById('addLat').value);
-  formData.append('longitude', document.getElementById('addLng').value);
+  formData.append('occasion_type_id', type.id);
+  appendHonoreesToFormData(formData, honorees);
+  formData.append('town', town);
+  formData.append('event_date', eventDate);
 
-  const posterFile = document.getElementById('addPosterFile').files[0];
-  if (posterFile) formData.append('poster', posterFile);
+  const latInput = document.getElementById('addLat');
+  const lngInput = document.getElementById('addLng');
+  if (latInput && latInput.value) formData.append('latitude', latInput.value);
+  if (lngInput && lngInput.value) formData.append('longitude', lngInput.value);
 
-  const audioFile = document.getElementById('addAudioFile').files[0];
-  if (audioFile) formData.append('audio', audioFile);
+  if (fieldsByKey.title) formData.append('title', document.getElementById('addTitle').value);
+  if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('addFamily').value);
+  if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('addLocationName').value);
+  if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('addSecondaryLocationName').value);
+  if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('addEventEndDate').value);
+  if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('addYouthDate').value);
+  if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('addDinnerTime').value);
+  if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('addHostPhone').value);
+  if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('addAudioTitle').value);
+
+  if (fieldsByKey.poster_url) {
+    const posterFile = document.getElementById('addPosterFile').files[0];
+    if (posterFile) formData.append('poster', posterFile);
+  }
+  if (fieldsByKey.audio_url) {
+    const audioFile = document.getElementById('addAudioFile').files[0];
+    if (audioFile) formData.append('audio', audioFile);
+  }
 
   try {
-    const res = await apiFetch('/api/events', { method: 'POST', body: formData });
+    const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
     const data = await res.json();
 
     if (data.success) {
@@ -604,8 +1692,20 @@ async function handleEventSubmit(e) {
       } else {
         showToast('🎉 تم نشر المناسبة بنجاح!');
       }
+      // تنبيه ليّن من الخادم — البلدة والإحداثيات كما اختارها المستخدم بالضبط،
+      // هذا إعلام لا رفض، والنشر أعلاه مضى فعلاً (#20 step 6, decision ٦).
+      if (data.location_warning) {
+        alert(`⚠️ ${data.location_warning.message}`);
+      }
       document.getElementById('addEventForm').reset();
       document.getElementById('collisionAlert').style.display = 'none';
+      clearPickerMarker();
+      const honoreesList = document.getElementById('addHonoreesList');
+      if (honoreesList) {
+        honoreesList.innerHTML = '';
+        addHonoreeRow('addHonoreesList');
+      }
+      fetchMyEvents();
       switchTab('tabHome');
       fetchEvents();
     } else {
@@ -619,7 +1719,278 @@ async function handleEventSubmit(e) {
   }
 }
 
-// 13. Live Chat & Congratulations Modal
+// 14. "مناسباتي" — ownership & editing (#20 step 9)
+const MY_EVENT_STATUS_LABELS = { approved: 'منشورة', pending: 'قيد المراجعة', rejected: 'مرفوضة' };
+
+async function fetchMyEvents() {
+  const container = document.getElementById('myEventsList');
+  if (!container || !currentUser || !authToken) return;
+
+  container.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب مناسباتك...</p></div>';
+
+  try {
+    const res = await apiFetch('/api/my-events', { auth: true });
+    const data = await res.json();
+    if (!data.success) {
+      container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+      return;
+    }
+    myEventsCache = data.events;
+    renderMyEvents(myEventsCache);
+  } catch (e) {
+    console.error('My events error:', e);
+    container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
+  }
+}
+
+function renderMyEvents(events) {
+  const container = document.getElementById('myEventsList');
+  if (!events || !events.length) {
+    container.innerHTML = '<div class="empty-state"><p>لم تنشر أي مناسبة بعد</p></div>';
+    return;
+  }
+
+  container.innerHTML = events.map(evt => `
+    <div class="event-card">
+      <div class="card-header-bar">
+        <div class="card-clan-town">
+          <span class="town-badge">${escapeHtml(evt.town)}</span>
+          <span class="clan-text">${escapeHtml(evt.occasion_type?.name || '')}</span>
+        </div>
+        <span class="status-tag ${evt.status}">${MY_EVENT_STATUS_LABELS[evt.status] || evt.status}</span>
+      </div>
+      <div class="card-body">
+        <h2 class="event-main-title">${escapeHtml(evt.title || evt.groom_name)}</h2>
+        <div class="detail-item">
+          <i class="fa-solid fa-calendar-day"></i>
+          <span>${evt.event_date}</span>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="record-nokoot-btn" style="flex:1;" onclick="openEditEventModal(${evt.id})">
+            <i class="fa-solid fa-pen"></i> تعديل
+          </button>
+          <button class="record-nokoot-btn" style="flex:1;" onclick="openCongratsQueueModal(${evt.id})">
+            <i class="fa-solid fa-list-check"></i> مراجعة الرسائل
+          </button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// 14b. مراجعة التبريكات/التعازي — طابور مناسبة يملكها المستخدم الحالي (#20 step 10).
+// GET .../congratulations?status=pending، والمفتاح في الاستجابة هو `comments`.
+async function openCongratsQueueModal(eventId) {
+  congratsQueueEventId = eventId;
+  const modal = document.getElementById('congratsQueueModal');
+  const list = document.getElementById('congratsQueueList');
+  modal.style.display = 'flex';
+  list.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/congratulations?status=pending`, { auth: true });
+    const data = await res.json();
+    if (data.success) {
+      renderCongratsQueue(data.comments);
+    } else {
+      list.innerHTML = `<div class="empty-state" style="padding:20px;"><p>${escapeHtml(data.message || 'تعذر جلب الطابور')}</p></div>`;
+    }
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p>تعذر جلب الطابور</p></div>';
+  }
+}
+
+function renderCongratsQueue(comments) {
+  const list = document.getElementById('congratsQueueList');
+  if (!comments || !comments.length) {
+    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا توجد رسائل قيد المراجعة</p></div>';
+    return;
+  }
+
+  list.innerHTML = comments.map(c => `
+    <div class="chat-bubble">
+      <div class="chat-bubble-header">
+        <span class="sender-name">${escapeHtml(c.sender_name)}</span>
+        ${c.badge_title ? `<span class="sender-badge">${escapeHtml(c.badge_title)}</span>` : ''}
+      </div>
+      <div class="chat-msg-text">${escapeHtml(c.message)}</div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button class="record-nokoot-btn" onclick="moderateCongratsItem(${c.id}, 'approve')"><i class="fa-solid fa-check"></i> اعتماد</button>
+        <button class="nokoot-del-btn" onclick="moderateCongratsItem(${c.id}, 'reject')"><i class="fa-solid fa-xmark"></i> رفض</button>
+        <button class="nokoot-del-btn" onclick="deleteCongratsItem(${c.id})"><i class="fa-solid fa-trash"></i> حذف</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function moderateCongratsItem(congratulationId, action) {
+  if (!congratsQueueEventId) return;
+  try {
+    const res = await apiFetch(`/api/events/${congratsQueueEventId}/congratulations/${congratulationId}`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(action === 'approve' ? 'تم اعتماد الرسالة' : 'تم رفض الرسالة');
+      openCongratsQueueModal(congratsQueueEventId);
+    } else {
+      alert(data.message || 'تعذر تنفيذ الإجراء');
+    }
+  } catch (e) {
+    alert('تعذر تنفيذ الإجراء');
+  }
+}
+
+async function deleteCongratsItem(congratulationId) {
+  if (!congratsQueueEventId) return;
+  if (!confirm('هل تريد حذف هذه الرسالة؟')) return;
+  try {
+    const res = await apiFetch(`/api/events/${congratsQueueEventId}/congratulations/${congratulationId}`, {
+      method: 'DELETE',
+      auth: true
+    });
+    const data = await res.json();
+    if (data.success) {
+      openCongratsQueueModal(congratsQueueEventId);
+    } else {
+      alert(data.message || 'تعذر الحذف');
+    }
+  } catch (e) {
+    alert('تعذر الحذف');
+  }
+}
+
+function closeCongratsQueueModal() {
+  document.getElementById('congratsQueueModal').style.display = 'none';
+  congratsQueueEventId = null;
+}
+
+/**
+ * يطبّق إعداد النوع على نموذج التعديل الثابت: يخفي ما لا يخصّ هذا النوع
+ * ويعيد تسمية ما يبقى بتسميته فيه. بدون هذا يعرض تعديلُ عزاءٍ حقلَ «سهرة
+ * الشباب والدحة» — وهو نفس الأذى الذي بُني نموذج النشر كلّه لتجنّبه.
+ */
+function applyOccasionTypeToEditForm(evt) {
+  const EDIT_FIELD_INPUTS = {
+    honorees: 'editHonoreesList',
+    title: 'editTitle',
+    town: 'editTown',
+    family_clan: 'editFamily',
+    event_date: 'editEventDate',
+    event_end_date: 'editEventEndDate',
+    youth_party_date: 'editYouthDate',
+    location_name: 'editLocationName',
+    secondary_location_name: 'editSecondaryLocationName',
+    dinner_time: 'editDinnerTime',
+    host_phone: 'editHostPhone'
+  };
+
+  const typeId = evt.occasion_type && evt.occasion_type.id;
+  const type = occasionTypesCache.find(t => t.id === typeId);
+
+  const fieldsByKey = {};
+  if (type) for (const f of type.fields) fieldsByKey[f.field_key] = f;
+
+  for (const [fieldKey, elementId] of Object.entries(EDIT_FIELD_INPUTS)) {
+    const el = document.getElementById(elementId);
+    if (!el) continue;
+    const group = el.closest('.form-group');
+    if (!group) continue;
+
+    // نوع غير معروف للواجهة (نسخة أقدم من الأنواع) — أظهر كل شيء بدل إخفاء
+    // حقل يحمل بيانات حقيقية.
+    const field = type ? fieldsByKey[fieldKey] : { label: null, is_required: false };
+    if (!field) {
+      group.style.display = 'none';
+      continue;
+    }
+
+    group.style.display = '';
+    const label = group.querySelector('label');
+    if (label && field.label) label.textContent = field.label + (field.is_required ? ' *' : '');
+  }
+}
+
+function openEditEventModal(eventId) {
+  const evt = myEventsCache.find(e => e.id === eventId);
+  if (!evt) return;
+
+  document.getElementById('editEventId').value = evt.id;
+  document.getElementById('editTitle').value = evt.title || '';
+  document.getElementById('editFamily').value = evt.family_clan || '';
+  populateTownSelect('editTown', evt.town);
+  document.getElementById('editEventDate').value = evt.event_date || '';
+  document.getElementById('editEventEndDate').value = evt.event_end_date || '';
+  document.getElementById('editYouthDate').value = evt.youth_party_date || '';
+  document.getElementById('editLocationName').value = evt.location_name || '';
+  document.getElementById('editSecondaryLocationName').value = evt.secondary_location_name || '';
+  document.getElementById('editDinnerTime').value = evt.dinner_time || '';
+  document.getElementById('editHostPhone').value = evt.host_phone || '';
+
+  const honoreesList = document.getElementById('editHonoreesList');
+  honoreesList.innerHTML = '';
+  const honorees = (evt.honorees && evt.honorees.length) ? evt.honorees : [{ name: evt.groom_name || '', role: '' }];
+  honorees.forEach(h => addHonoreeRow('editHonoreesList', h.name, h.role || ''));
+
+  applyOccasionTypeToEditForm(evt);
+  document.getElementById('editEventModal').style.display = 'flex';
+}
+
+function closeEditEventModal() {
+  document.getElementById('editEventModal').style.display = 'none';
+}
+
+async function handleEventEditSubmit(e) {
+  e.preventDefault();
+  const eventId = document.getElementById('editEventId').value;
+
+  const honorees = collectHonorees('editHonoreesList');
+  if (!honorees.length) {
+    alert('يجب إدخال اسم واحد على الأقل لأصحاب المناسبة');
+    return;
+  }
+
+  const payload = {
+    title: document.getElementById('editTitle').value,
+    family_clan: document.getElementById('editFamily').value,
+    town: document.getElementById('editTown').value,
+    event_date: document.getElementById('editEventDate').value,
+    event_end_date: document.getElementById('editEventEndDate').value,
+    youth_party_date: document.getElementById('editYouthDate').value,
+    location_name: document.getElementById('editLocationName').value,
+    secondary_location_name: document.getElementById('editSecondaryLocationName').value,
+    dinner_time: document.getElementById('editDinnerTime').value,
+    host_phone: document.getElementById('editHostPhone').value,
+    honorees
+  };
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      // الرسالة تفرّق أصلاً بين التجميلي والحرِج — نعرضها كما هي، ونضيف تنبيه
+      // الموقع إن جاء (#20 step 9).
+      alert(data.message + (data.location_warning ? `\n\n⚠️ ${data.location_warning.message}` : ''));
+      closeEditEventModal();
+      fetchMyEvents();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء حفظ التعديل');
+    }
+  } catch (err) {
+    alert('تعذر حفظ التعديل — تحقق من الاتصال بالخادم');
+  }
+}
+
+// 15. Live Chat & Congratulations Modal
 async function openChatModal(eventId) {
   currentChatEventId = eventId;
   const modal = document.getElementById('chatModal');
@@ -629,8 +2000,12 @@ async function openChatModal(eventId) {
   const stream = document.getElementById('chatMessagesStream');
   stream.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب التبريكات...</p></div>';
 
+  const senderInput = document.getElementById('chatSenderName');
   if (currentUser) {
-    document.getElementById('chatSenderName').value = currentUser.full_name;
+    senderInput.value = currentUser.full_name;
+  } else {
+    senderInput.value = '';
+    senderInput.placeholder = 'سجّل الدخول لإرسال تبريكة';
   }
 
   try {
@@ -639,7 +2014,7 @@ async function openChatModal(eventId) {
 
     if (data.success) {
       const evt = data.event;
-      document.getElementById('chatModalTitle').textContent = `تبريكات: ${evt.groom_name}`;
+      document.getElementById('chatModalTitle').textContent = `${congratulationsLabel(evt)}: ${evt.groom_name}`;
       document.getElementById('chatModalSubtitle').textContent = `${evt.town} - ${evt.event_date}`;
 
       if (evt.host_phone) {
@@ -659,10 +2034,16 @@ async function openChatModal(eventId) {
   }
 }
 
+/**
+ * رسالة `pending` لا يراها إلا مُرسِلها — الخادم أصلاً لا يعيد لهذا الطالب سوى
+ * رسائله المعلَّقة هو، فأي صفّ status==='pending' هنا هو صفّ الزائر نفسه
+ * (#20 step 10). شارة فارغة (`badge_title` غائب) لا تُعرَض كـ«مبارك» ثابتة —
+ * نوع بلا شارة افتراضية (كالعزاء) يبقى بلا شارة، لا نصّاً مُخترَعاً هنا.
+ */
 function renderChatMessages(congrats) {
   const stream = document.getElementById('chatMessagesStream');
   if (!congrats || congrats.length === 0) {
-    stream.innerHTML = '<div class="empty-state" style="padding: 20px;"><p>كن أول المهنئين والمباركين للعريس!</p></div>';
+    stream.innerHTML = '<div class="empty-state" style="padding: 20px;"><p>كن أول من يكتب هنا!</p></div>';
     return;
   }
 
@@ -670,13 +2051,41 @@ function renderChatMessages(congrats) {
     <div class="chat-bubble">
       <div class="chat-bubble-header">
         <span class="sender-name">${escapeHtml(c.sender_name)}</span>
-        <span class="sender-badge">${escapeHtml(c.badge_title || 'مبارك')}</span>
+        ${c.badge_title ? `<span class="sender-badge">${escapeHtml(c.badge_title)}</span>` : ''}
+        ${c.status === 'pending' ? '<span class="status-tag pending">قيد المراجعة</span>' : ''}
       </div>
       <div class="chat-msg-text">${escapeHtml(c.message)}</div>
+      ${c.status !== 'pending' ? `
+        <button class="nokoot-del-btn" style="margin-top:6px;" onclick="reportCongratulation(${currentChatEventId}, ${c.id}, this)">
+          <i class="fa-solid fa-flag"></i> إبلاغ
+        </button>` : ''}
     </div>
   `).join('');
 
   stream.scrollTop = stream.scrollHeight;
+}
+
+/** إبلاغ واحد لكل مستخدم — الخادم يرفض التكرار بـ409 ويعيد رسالة عربية جاهزة (#20 step 10). */
+async function reportCongratulation(eventId, congratulationId, btnElement) {
+  if (!requireAuth({ type: 'report' })) return;
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/congratulations/${congratulationId}/report`, {
+      method: 'POST',
+      auth: true
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      showToast('تم إرسال الإبلاغ');
+      if (btnElement) btnElement.innerHTML = '<i class="fa-solid fa-check"></i> تم الإبلاغ';
+    } else {
+      alert(data.message || 'تعذر إرسال الإبلاغ');
+      if (btnElement) btnElement.disabled = false;
+    }
+  } catch (e) {
+    alert('تعذر إرسال الإبلاغ');
+    if (btnElement) btnElement.disabled = false;
+  }
 }
 
 function closeChatModal() {
@@ -693,33 +2102,33 @@ function insertEmojiToChat(text) {
 async function sendCongratulation(e) {
   e.preventDefault();
   if (!currentChatEventId) return;
+  // التبريك فعل كتابة كالنشر — خلف authenticate على الخادم أيضاً، والاسم يُبنى
+  // من الحساب لا من الحقل (#20 step 9).
+  if (!requireAuth({ type: 'congratulate', eventId: currentChatEventId })) return;
 
-  const senderName = document.getElementById('chatSenderName').value.trim();
   const message = document.getElementById('chatInputMessage').value.trim();
-
-  if (!senderName || !message) return;
+  if (!message) return;
 
   try {
     const res = await apiFetch(`/api/events/${currentChatEventId}/congratulate`, {
       method: 'POST',
+      auth: true,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sender_name: senderName,
-        badge_title: 'مبارك الفرح',
-        message: message
-      })
+      body: JSON.stringify({ message })
     });
     const data = await res.json();
     if (data.success) {
       document.getElementById('chatInputMessage').value = '';
       openChatModal(currentChatEventId);
+    } else {
+      alert(data.message || 'تعذر إرسال التهنئة');
     }
   } catch (e) {
     alert('تعذر إرسال التهنئة');
   }
 }
 
-// 14. Nokoot Ledger & Financial Chart
+// 16. Nokoot Ledger & Financial Chart
 function loadNokootView() {
   const lockedView = document.getElementById('nokootLockedView');
   const unlockedView = document.getElementById('nokootUnlockedView');
@@ -798,7 +2207,7 @@ function renderNokootChart(townData) {
       labels: labels,
       datasets: [{
         data: values,
-        backgroundColor: ['#dfb15b', '#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899'],
+        backgroundColor: ['#0369a1', '#38bdf8', '#075985', '#15803d', '#9a7222', '#7c3aed'],
         borderWidth: 0
       }]
     },
@@ -808,7 +2217,7 @@ function renderNokootChart(townData) {
       plugins: {
         legend: {
           position: 'bottom',
-          labels: { color: '#94a3b8', font: { family: 'Tajawal' } }
+          labels: { color: currentThemeIsDark() ? '#9fb6c9' : '#47617a', font: { family: 'Cairo' } }
         }
       }
     }
@@ -898,7 +2307,7 @@ async function deleteNokoot(id) {
   }
 }
 
-// 15. Auth Modal & Controller
+// 17. Auth Modal & Controller
 function openAuthModal() {
   document.getElementById('authModal').style.display = 'flex';
 }
@@ -943,6 +2352,9 @@ async function handleLogin(e) {
       closeAuthModal();
       showToast(`مرحباً بك يا ${currentUser.full_name}`);
       loadNokootView();
+      subscribeToNotificationSocket();
+      fetchNotifications();
+      resumePendingIntent();
     } else {
       alert(data.message || 'بيانات الدخول غير صحيحة');
     }
@@ -975,6 +2387,9 @@ async function handleRegister(e) {
       closeAuthModal();
       showToast(`تم إنشاء حسابك وتفعيل السجل بنجاح!`);
       loadNokootView();
+      subscribeToNotificationSocket();
+      fetchNotifications();
+      resumePendingIntent();
     } else {
       alert(data.message || 'حدث خطأ في التسجيل');
     }
@@ -983,15 +2398,87 @@ async function handleRegister(e) {
   }
 }
 
+// 17b. Notifications Center — in-page only, no browser push (#20 step 10)
+async function fetchNotifications() {
+  if (!currentUser || !authToken) return;
+  try {
+    const res = await apiFetch('/api/notifications', { auth: true });
+    const data = await res.json();
+    if (data.success) {
+      notificationsList = data.notifications;
+      renderNotificationsList();
+      updateNotificationsBadge();
+    }
+  } catch (e) {
+    console.error('Notifications error:', e);
+  }
+}
+
+function updateNotificationsBadge() {
+  const btn = document.getElementById('notificationsBtn');
+  const badge = document.getElementById('notificationsBadge');
+  if (!btn || !badge) return;
+  btn.style.display = currentUser ? 'inline-flex' : 'none';
+  const unread = notificationsList.filter(n => !n.is_read).length;
+  if (unread > 0) {
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderNotificationsList() {
+  const container = document.getElementById('notificationsList');
+  if (!container) return;
+  if (!notificationsList.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا توجد إشعارات بعد</p></div>';
+    return;
+  }
+  container.innerHTML = notificationsList.map(n => `
+    <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${n.id})">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <strong style="color:${n.is_read ? 'var(--ink-soft)' : 'var(--sky)'};">${escapeHtml(n.title)}</strong>
+        ${!n.is_read ? '<span class="status-tag pending">جديد</span>' : ''}
+      </div>
+      <p style="margin-top:6px; color:var(--ink-soft); font-size:0.88rem;">${escapeHtml(n.body)}</p>
+    </div>
+  `).join('');
+}
+
+function toggleNotificationsPanel() {
+  document.getElementById('notificationsModal').style.display = 'flex';
+}
+
+function closeNotificationsModal() {
+  document.getElementById('notificationsModal').style.display = 'none';
+}
+
+async function markNotificationRead(notificationId) {
+  const notification = notificationsList.find(n => n.id === notificationId);
+  if (!notification || notification.is_read) return;
+  try {
+    const res = await apiFetch(`/api/notifications/${notificationId}/read`, { method: 'PATCH', auth: true });
+    if (res.ok) {
+      notification.is_read = true;
+      renderNotificationsList();
+      updateNotificationsBadge();
+    }
+  } catch (e) {
+    console.error('Mark notification read error:', e);
+  }
+}
+
 function updateAuthUI() {
   const label = document.getElementById('userAuthLabel');
   const btn = document.getElementById('userAuthBtn');
+  updateNotificationsBadge();
   if (currentUser) {
     if (currentUser.role === 'super_admin' || currentUser.phone_number === '0500000000') {
       label.innerHTML = `👑 لوحة الإدارة`;
       btn.onclick = () => { window.location.href = '/admin.html'; };
-      btn.style.borderColor = 'var(--gold-primary)';
-      btn.style.background = 'rgba(223, 177, 91, 0.25)';
+      btn.style.borderColor = 'var(--sky)';
+      btn.style.background = 'var(--sky-wash)';
     } else {
       label.textContent = currentUser.full_name.split(' ')[0];
       btn.onclick = () => { switchTab('tabNokoot'); };
@@ -1002,7 +2489,7 @@ function updateAuthUI() {
   }
 }
 
-// 16. Sticker Canvas Studio
+// 18. Sticker Canvas Studio
 function setStickerTheme(theme) {
   stickerTheme = theme;
   document.querySelectorAll('.theme-pill').forEach(p => p.classList.remove('active'));
@@ -1083,22 +2570,6 @@ function shareStickerToWhatsApp() {
 function showToast(msg) {
   const toast = document.createElement('div');
   toast.className = 'app-toast';
-  toast.style.cssText = `
-    position: fixed;
-    top: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #dfb15b;
-    color: #06150f;
-    font-weight: 800;
-    padding: 10px 22px;
-    border-radius: 20px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-    z-index: 9999;
-    font-family: Tajawal, sans-serif;
-    font-size: 0.86rem;
-    animation: fadeIn 0.2s;
-  `;
   toast.textContent = msg;
   document.body.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 3500);

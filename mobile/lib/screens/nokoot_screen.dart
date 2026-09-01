@@ -33,7 +33,7 @@ class _NokootScreenState extends State<NokootScreen> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppTheme.bgSecondary,
+      backgroundColor: context.c.surfaceSunk,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -50,13 +50,13 @@ class _NokootScreenState extends State<NokootScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Text(
                   'إضافة قيد نقوط',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.textGold,
+                    color: sheetContext.c.ink,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -106,8 +106,8 @@ class _NokootScreenState extends State<NokootScreen> {
                           : '${date!.year}-${date!.month.toString().padLeft(2, '0')}-${date!.day.toString().padLeft(2, '0')}',
                       style: TextStyle(
                         color: date == null
-                            ? AppTheme.textMuted
-                            : AppTheme.textPrimary,
+                            ? sheetContext.c.inkFaint
+                            : sheetContext.c.ink,
                       ),
                     ),
                   ),
@@ -182,7 +182,7 @@ class _NokootScreenState extends State<NokootScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: AppTheme.bgSecondary,
+        backgroundColor: dialogContext.c.surfaceSunk,
         title: const Text('حذف القيد'),
         content: Text('هل تريد حذف قيد "${record.recipientName}"؟'),
         actions: [
@@ -192,7 +192,7 @@ class _NokootScreenState extends State<NokootScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('حذف', style: TextStyle(color: Colors.redAccent)),
+            child: Text('حذف', style: TextStyle(color: dialogContext.c.danger)),
           ),
         ],
       ),
@@ -237,8 +237,8 @@ class _NokootScreenState extends State<NokootScreen> {
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _openAddSheet,
-            backgroundColor: AppTheme.gold,
-            foregroundColor: AppTheme.bgPrimary,
+            backgroundColor: context.c.sky,
+            foregroundColor: context.c.onSky,
             icon: const Icon(Icons.add),
             label: const Text('قيد جديد'),
           ),
@@ -254,12 +254,12 @@ class _NokootScreenState extends State<NokootScreen> {
                     _Totals(ledger: ledger),
                     const SizedBox(height: 18),
                     if (ledger.records.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 40),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 40),
                         child: Text(
                           'دفترك فارغ — أضف أول قيد نقوط',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppTheme.textMuted),
+                          style: TextStyle(color: context.c.inkFaint),
                         ),
                       )
                     else
@@ -290,23 +290,24 @@ class _Totals extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppTheme.bgSurface,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: Column(
         children: [
-          const Text(
+          Text(
             'إجمالي النقوط',
-            style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+            style: TextStyle(color: context.c.inkFaint, fontSize: 13),
           ),
           const SizedBox(height: 6),
           Text(
             '${ledger.totalAmount.toStringAsFixed(0)} ₪',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 30,
               fontWeight: FontWeight.bold,
-              color: AppTheme.gold,
+              color: context.c.sky,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
           const SizedBox(height: 14),
@@ -314,7 +315,7 @@ class _Totals extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _Stat(label: 'عدد القيود', value: '${ledger.count}'),
-              Container(width: 1, height: 34, color: AppTheme.borderSubtle),
+              Container(width: 1, height: 34, color: context.c.line),
               _Stat(
                 label: 'المعدّل',
                 value: '${ledger.averageNokoot.toStringAsFixed(0)} ₪',
@@ -339,16 +340,17 @@ class _Stat extends StatelessWidget {
       children: [
         Text(
           value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 17,
             fontWeight: FontWeight.bold,
-            color: AppTheme.textPrimary,
+            color: context.c.ink,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
         const SizedBox(height: 3),
         Text(
           label,
-          style: const TextStyle(fontSize: 11.5, color: AppTheme.textMuted),
+          style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
         ),
       ],
     );
@@ -366,16 +368,16 @@ class _RecordTile extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: AppTheme.bgCard,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: ListTile(
         title: Text(
           record.recipientName,
-          style: const TextStyle(
+          style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: AppTheme.textPrimary,
+            color: context.c.ink,
             fontSize: 15,
           ),
         ),
@@ -383,7 +385,7 @@ class _RecordTile extends StatelessWidget {
           padding: const EdgeInsets.only(top: 4),
           child: Text(
             '${record.clanTown ?? 'أخرى'} • ${record.eventDate} • ${record.occasionType}',
-            style: const TextStyle(fontSize: 12.5, color: AppTheme.textMuted),
+            style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
           ),
         ),
         trailing: Row(
@@ -391,17 +393,18 @@ class _RecordTile extends StatelessWidget {
           children: [
             Text(
               '${record.amount.toStringAsFixed(0)} ₪',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: AppTheme.gold,
+                color: context.c.sky,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
             IconButton(
-              icon: const Icon(
+              icon: Icon(
                 Icons.delete_outline,
                 size: 20,
-                color: AppTheme.textMuted,
+                color: context.c.inkFaint,
               ),
               onPressed: onDelete,
               tooltip: 'حذف',
@@ -424,21 +427,21 @@ class _SignInPrompt extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.lock_outline, size: 48, color: AppTheme.textMuted),
+            Icon(Icons.lock_outline, size: 48, color: context.c.inkFaint),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'دفتر النقوط خاص بك وحدك',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.bold,
-                color: AppTheme.textGold,
+                color: context.c.ink,
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'سجّل الدخول للاطلاع على سجل نقوطك وإضافة قيود جديدة.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textSecondary, height: 1.6),
+              style: TextStyle(color: context.c.inkSoft, height: 1.6),
             ),
             const SizedBox(height: 22),
             ElevatedButton.icon(

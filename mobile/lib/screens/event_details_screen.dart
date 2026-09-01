@@ -7,9 +7,16 @@ import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 
-/// تفاصيل مناسبة: البوستر، المعلومات، الشيلة، التفاعلات، التبريكات.
+/// ارتفاع بوستر التفاصيل — عادي مقابل نبرة `solemn`، بنفس نسبة كرت القائمة
+/// (#20 خطوة ١٥).
+const double _detailsPosterHeight = 250;
+const double _detailsPosterHeightSolemn = 194;
+
+/// تفاصيل مناسبة: البوستر، المعلومات، الشيلة، التفاعلات، التبريكات — كلها
+/// مقادة بإعداد نوع المناسبة (`occasion_type`)، لا نص فرح ثابت.
 class EventDetailsScreen extends StatefulWidget {
   const EventDetailsScreen({super.key, required this.eventId});
 
@@ -21,9 +28,14 @@ class EventDetailsScreen extends StatefulWidget {
 
 class _EventDetailsScreenState extends State<EventDetailsScreen> {
   Future<Event>? _event;
+
+  /// طابور مراجعة الرسائل — `null` يعني إمّا لا يزال يُحمَّل أو أنّ الخادم رفضه
+  /// (403 لغير المالك/الإدارة)؛ الحالتان تُعرَضان بنفس الشكل: بلا مدخل إطلاقاً.
+  /// لا استنتاج ملكية في العميل — القرار وحده عائد لاستجابة الخادم.
+  Future<List<Congratulation>?>? _queue;
+
   final _player = AudioPlayer();
   bool _isPlaying = false;
-  bool _sending = false;
 
   VoidCallback? _unsubscribeReactions;
   VoidCallback? _unsubscribeCongrats;
@@ -33,13 +45,25 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     super.didChangeDependencies();
     if (_event != null) return;
 
-    _event = AppServices.of(context).api.eventDetails(widget.eventId);
+    final services = AppServices.of(context);
+    _event = services.api.eventDetails(widget.eventId);
+    if (services.auth.isSignedIn) _queue = _loadQueue();
 
-    final realtime = AppServices.of(context).realtime;
+    final realtime = services.realtime;
     _unsubscribeReactions =
         realtime.onEventReaction(widget.eventId, _reloadQuietly);
     _unsubscribeCongrats =
         realtime.onNewCongratulation(widget.eventId, (_) => _reloadQuietly());
+  }
+
+  Future<List<Congratulation>?> _loadQueue() async {
+    try {
+      return await AppServices.of(context)
+          .api
+          .moderationQueue(widget.eventId, status: 'pending');
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -52,8 +76,10 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
 
   void _reloadQuietly() {
     if (!mounted) return;
+    final services = AppServices.of(context);
     setState(() {
-      _event = AppServices.of(context).api.eventDetails(widget.eventId);
+      _event = services.api.eventDetails(widget.eventId);
+      if (services.auth.isSignedIn) _queue = _loadQueue();
     });
   }
 
@@ -110,255 +136,374 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   }
 
   Future<void> _openCongratulateSheet(Event event) async {
-    final nameController = TextEditingController(
-      text: AppServices.of(context).auth.user?.fullName ?? '',
+    final label = event.occasionType?.congratulationsLabel ?? 'تبريكات';
+    await openCongratulateSheet(
+      context,
+      eventId: event.id,
+      label: label,
+      onSuccess: _reloadQuietly,
     );
-    final messageController = TextEditingController();
+  }
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.bgSecondary,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          left: 18,
-          right: 18,
-          top: 20,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'أضف تبريكتك',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppTheme.textGold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'اسمك'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: messageController,
-              maxLines: 3,
-              decoration: const InputDecoration(labelText: 'التبريكة'),
-            ),
-            const SizedBox(height: 18),
-            StatefulBuilder(
-              builder: (context, setSheetState) => ElevatedButton(
-                onPressed: _sending
-                    ? null
-                    : () async {
-                        final name = nameController.text.trim();
-                        final message = messageController.text.trim();
-                        if (name.isEmpty || message.isEmpty) {
-                          showMessage(
-                            context,
-                            'الاسم والتبريكة مطلوبان',
-                            isError: true,
-                          );
-                          return;
-                        }
+  Future<void> _toggleRemind(Event event) async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لتفعيل التذكير');
+      return;
+    }
 
-                        setSheetState(() => _sending = true);
-                        try {
-                          await AppServices.of(context).api.congratulate(
-                                event.id,
-                                senderName: name,
-                                message: message,
-                              );
-                          if (sheetContext.mounted) {
-                            Navigator.of(sheetContext).pop();
-                          }
-                          _reloadQuietly();
-                        } catch (error) {
-                          if (context.mounted) {
-                            showMessage(context, '$error', isError: true);
-                          }
-                        } finally {
-                          setSheetState(() => _sending = false);
-                        }
-                      },
-                child: Text(_sending ? 'جارٍ الإرسال…' : 'إرسال التبريكة'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+    try {
+      if (event.isReminded) {
+        await services.api.unremind(event.id);
+      } else {
+        await services.api.remind(event.id);
+      }
+      _reloadQuietly();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
 
-    nameController.dispose();
-    messageController.dispose();
+  Future<void> _report(int eventId, int congratulationId) async {
+    try {
+      await AppServices.of(context).api.reportCongratulation(eventId, congratulationId);
+      if (mounted) showMessage(context, 'تم إرسال البلاغ، شكراً لك');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تفاصيل المناسبة')),
+      appBar: AppBar(
+        title: const Text('تفاصيل المناسبة'),
+        actions: [
+          FutureBuilder<List<Congratulation>?>(
+            future: _queue,
+            builder: (context, snapshot) {
+              final queue = snapshot.data;
+              if (queue == null) return const SizedBox.shrink();
+              return IconButton(
+                tooltip: 'طابور المراجعة',
+                icon: Badge(
+                  label: Text('${queue.length}'),
+                  isLabelVisible: queue.isNotEmpty,
+                  child: const Icon(Icons.rule_folder_outlined),
+                ),
+                onPressed: () => showModerationQueueSheet(
+                  context,
+                  eventId: widget.eventId,
+                  onChanged: _reloadQuietly,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
       body: FutureBuilder<Event>(
         future: _event,
         builder: (context, snapshot) {
           return AsyncView<Event>(
             snapshot: snapshot,
             onRetry: _reloadQuietly,
-            builder: (event) => ListView(
-              padding: const EdgeInsets.only(bottom: 28),
-              children: [
-                EventPoster(url: event.posterUrl, height: 250),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        event.title.isEmpty
-                            ? 'زفاف العريس ${event.groomName}'
-                            : event.title,
-                        style: const TextStyle(
-                          fontSize: 21,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textGold,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _InfoRow(
-                        icon: Icons.person_outline,
-                        label: 'العريس',
-                        value: event.groomName,
-                      ),
-                      _InfoRow(
-                        icon: Icons.groups_2_outlined,
-                        label: 'العائلة',
-                        value: event.familyClan,
-                      ),
-                      _InfoRow(
-                        icon: Icons.location_on_outlined,
-                        label: 'المكان',
-                        value: '${event.town} — ${event.locationName}',
-                      ),
-                      _InfoRow(
-                        icon: Icons.event_outlined,
-                        label: 'تاريخ العرس',
-                        value: event.eventDate,
-                      ),
-                      if (event.youthPartyDate != null)
-                        _InfoRow(
-                          icon: Icons.nightlife_outlined,
-                          label: 'سهرة الشباب',
-                          value: event.youthPartyDate!,
-                        ),
-                      _InfoRow(
-                        icon: Icons.access_time,
-                        label: 'موعد العشاء',
-                        value: event.dinnerTime,
-                      ),
-                      const SizedBox(height: 14),
-                      if (event.audioUrl != null)
-                        _AudioTile(
-                          title: event.audioTitle ?? 'شيلة الفرح',
-                          isPlaying: _isPlaying,
-                          onToggle: () => _toggleAudio(event.audioUrl!),
-                        ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () => _openNavigation(event),
-                              icon: const Icon(Icons.navigation_outlined),
-                              label: const Text('اذهب بـ Waze'),
-                            ),
-                          ),
-                          if (event.hostPhone != null) ...[
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _callHost(event.hostPhone!),
-                                icon: const Icon(Icons.phone_outlined),
-                                label: const Text('اتصال'),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        'شارك فرحتهم',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.textGold,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: AppConfig.reactions.entries.map((entry) {
-                          final count = event.reactions[entry.key] ?? 0;
-                          return _ReactionButton(
-                            emoji: entry.value,
-                            label: AppConfig.reactionLabels[entry.key] ?? '',
-                            count: count,
-                            onTap: () => _react(entry.key),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          const Text(
-                            'التبريكات',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textGold,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '(${event.congratulations.length})',
-                            style: const TextStyle(color: AppTheme.textMuted),
-                          ),
-                          const Spacer(),
-                          TextButton.icon(
-                            onPressed: () => _openCongratulateSheet(event),
-                            icon: const Icon(Icons.add_comment_outlined, size: 18),
-                            label: const Text('بارك'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      if (event.congratulations.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 18),
-                          child: Text(
-                            'كن أول من يبارك لهم 🌹',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: AppTheme.textMuted),
-                          ),
-                        )
-                      else
-                        ...event.congratulations.map(
-                          (comment) => _CongratulationTile(comment: comment),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
+            builder: (event) => _EventDetailsBody(
+              event: event,
+              isPlaying: _isPlaying,
+              onRemindTap: () => _toggleRemind(event),
+              onReport: (congratulationId) => _report(event.id, congratulationId),
+              onToggleAudio: () => _toggleAudio(event.audioUrl!),
+              onReact: _react,
+              onNavigate: () => _openNavigation(event),
+              onCallHost: () => _callHost(event.hostPhone!),
+              onCongratulate: () => _openCongratulateSheet(event),
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _EventDetailsBody extends StatelessWidget {
+  const _EventDetailsBody({
+    required this.event,
+    required this.isPlaying,
+    required this.onToggleAudio,
+    required this.onReact,
+    required this.onNavigate,
+    required this.onCallHost,
+    required this.onCongratulate,
+    required this.onRemindTap,
+    required this.onReport,
+  });
+
+  final Event event;
+  final bool isPlaying;
+  final VoidCallback onToggleAudio;
+  final ValueChanged<String> onReact;
+  final VoidCallback onNavigate;
+  final VoidCallback onCallHost;
+  final VoidCallback onCongratulate;
+  final VoidCallback onRemindTap;
+  final ValueChanged<int> onReport;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = event.occasionType;
+    final showYouthParty = type?.showsField('youth_party_date') ?? true;
+    final showDinnerTime = type?.showsField('dinner_time') ?? true;
+    final showAudio = type?.showsField('audio_url') ?? true;
+    final showEndDate = type?.showsField('event_end_date') ?? false;
+    final showSecondaryLocation = type?.showsField('secondary_location_name') ?? false;
+    final reactionKeys = type?.reactions ?? const <String>[];
+    final congratulationsLabel = type?.congratulationsLabel ?? 'تبريكات';
+
+    final isSolemn = type?.isSolemn ?? false;
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 28),
+      children: [
+        if (event.posterUrl != null && event.posterUrl!.isNotEmpty)
+          EventPoster(
+            url: event.posterUrl,
+            height: isSolemn ? _detailsPosterHeightSolemn : _detailsPosterHeight,
+            isSolemn: isSolemn,
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (type != null) ...[
+                _TypeHeaderBadge(type: type),
+                const SizedBox(height: 10),
+              ],
+              Text(
+                event.displayTitle,
+                style: TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(height: 14),
+              if (event.honorees.isEmpty)
+                _InfoRow(
+                  icon: Icons.person_outline,
+                  label: type?.labelFor('honorees') ?? 'صاحب المناسبة',
+                  value: event.groomName,
+                )
+              else
+                ...event.honorees.map(
+                  (honoree) => _InfoRow(
+                    icon: Icons.person_outline,
+                    label: type?.labelFor('honorees') ?? 'أصحاب المناسبة',
+                    value: honoree.role != null && honoree.role!.isNotEmpty
+                        ? '${honoree.name} (${honoree.role})'
+                        : honoree.name,
+                  ),
+                ),
+              _InfoRow(
+                icon: Icons.groups_2_outlined,
+                label: type?.labelFor('family_clan') ?? 'العائلة',
+                value: event.familyClan,
+              ),
+              _InfoRow(
+                icon: Icons.location_on_outlined,
+                label: type?.labelFor('location_name') ?? 'المكان',
+                value: '${event.town} — ${event.locationName}',
+              ),
+              if (showSecondaryLocation && event.secondaryLocationName != null)
+                _InfoRow(
+                  icon: Icons.location_on_outlined,
+                  label: type?.labelFor('secondary_location_name') ?? 'مكان آخر',
+                  value: event.secondaryLocationName!,
+                ),
+              _InfoRow(
+                icon: Icons.event_outlined,
+                label: type?.labelFor('event_date') ?? 'التاريخ',
+                value: event.eventDate,
+              ),
+              if (showEndDate && event.eventEndDate != null)
+                _InfoRow(
+                  icon: Icons.event_outlined,
+                  label: type?.labelFor('event_end_date') ?? 'حتى',
+                  value: event.eventEndDate!,
+                ),
+              if (showYouthParty && event.youthPartyDate != null)
+                _InfoRow(
+                  icon: Icons.nightlife_outlined,
+                  label: type?.labelFor('youth_party_date') ?? 'سهرة الشباب',
+                  value: event.youthPartyDate!,
+                ),
+              if (showDinnerTime && event.dinnerTime.isNotEmpty)
+                _InfoRow(
+                  icon: Icons.access_time,
+                  label: type?.labelFor('dinner_time') ?? 'موعد العشاء',
+                  value: event.dinnerTime,
+                ),
+              const SizedBox(height: 14),
+              if (showAudio && event.audioUrl != null)
+                _AudioTile(
+                  title: event.audioTitle ?? type?.labelFor('audio_title') ?? 'مقطع صوتي',
+                  isPlaying: isPlaying,
+                  onToggle: onToggleAudio,
+                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: onNavigate,
+                      icon: const Icon(Icons.navigation_outlined),
+                      label: const Text('اذهب بـ Waze'),
+                    ),
+                  ),
+                  if (event.hostPhone != null) ...[
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: onCallHost,
+                        icon: const Icon(Icons.phone_outlined),
+                        label: const Text('اتصال'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: onRemindTap,
+                    icon: Icon(
+                      event.isReminded
+                          ? Icons.notifications_active
+                          : Icons.notifications_none,
+                    ),
+                    label: const Text('ذكّرني'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor:
+                          event.isReminded ? context.c.sky : context.c.inkSoft,
+                      side: BorderSide(
+                        color: event.isReminded ? context.c.sky : context.c.line,
+                      ),
+                    ),
+                  ),
+                  if (event.followersCount != null) ...[
+                    const SizedBox(width: 10),
+                    Text(
+                      'متابعون: ${event.followersCount}',
+                      style: TextStyle(color: context.c.inkFaint, fontSize: 12.5),
+                    ),
+                  ],
+                ],
+              ),
+              if (reactionKeys.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                Text(
+                  'تفاعل مع المناسبة',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: reactionKeys.map((key) {
+                    final count = event.reactions[key] ?? 0;
+                    return _ReactionButton(
+                      emoji: AppConfig.reactions[key] ?? key,
+                      label: AppConfig.reactionLabels[key] ?? '',
+                      count: count,
+                      onTap: () => onReact(key),
+                    );
+                  }).toList(),
+                ),
+              ],
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Text(
+                    congratulationsLabel,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.ink,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '(${event.congratulations.length})',
+                    style: TextStyle(color: context.c.inkFaint),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: onCongratulate,
+                    icon: const Icon(Icons.add_comment_outlined, size: 18),
+                    // «أضف» يميّز الزرّ عن العنوان الحامل لنفس التسمية.
+                    label: Text('أضف $congratulationsLabel'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (event.congratulations.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  child: Text(
+                    (type?.isSolemn ?? false)
+                        ? 'كن أول من يضيف $congratulationsLabel'
+                        : 'كن أول من يضيف $congratulationsLabel 🌹',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: context.c.inkFaint),
+                  ),
+                )
+              else
+                ...event.congratulations.map(
+                  (comment) => CongratulationTile(
+                    comment: comment,
+                    onReport: () => onReport(comment.id),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TypeHeaderBadge extends StatelessWidget {
+  const _TypeHeaderBadge({required this.type});
+
+  final OccasionType type;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = occasionTypeColor(type.color, context.c.sky);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (type.icon.isNotEmpty) ...[
+            Text(type.icon, style: const TextStyle(fontSize: 14)),
+            const SizedBox(width: 5),
+          ],
+          Text(
+            type.name,
+            style: TextStyle(fontSize: 12.5, color: color, fontWeight: FontWeight.bold),
+          ),
+        ],
       ),
     );
   }
@@ -384,20 +529,20 @@ class _InfoRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 17, color: AppTheme.gold),
+          Icon(icon, size: 17, color: context.c.sky),
           const SizedBox(width: 9),
           Text(
             '$label: ',
-            style: const TextStyle(
-              color: AppTheme.textMuted,
+            style: TextStyle(
+              color: context.c.inkFaint,
               fontSize: 14,
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
+              style: TextStyle(
+                color: context.c.ink,
                 fontSize: 14.5,
                 height: 1.45,
               ),
@@ -424,25 +569,25 @@ class _AudioTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.bgSurface,
+        color: context.c.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
+        border: Border.all(color: context.c.line),
       ),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: AppTheme.gold,
+          backgroundColor: context.c.sky,
           child: Icon(
             isPlaying ? Icons.pause : Icons.play_arrow,
-            color: AppTheme.bgPrimary,
+            color: context.c.onSky,
           ),
         ),
         title: Text(
           title,
-          style: const TextStyle(fontSize: 14.5, color: AppTheme.textPrimary),
+          style: TextStyle(fontSize: 14.5, color: context.c.ink),
         ),
         subtitle: Text(
           isPlaying ? 'قيد التشغيل…' : 'اضغط للاستماع',
-          style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+          style: TextStyle(fontSize: 12, color: context.c.inkFaint),
         ),
         onTap: onToggle,
       ),
@@ -471,9 +616,9 @@ class _ReactionButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: AppTheme.bgSurface,
+          color: context.c.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.borderSubtle),
+          border: Border.all(color: context.c.line),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -482,9 +627,9 @@ class _ReactionButton extends StatelessWidget {
             const SizedBox(width: 7),
             Text(
               '$label $count',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: AppTheme.textSecondary,
+                color: context.c.inkSoft,
               ),
             ),
           ],
@@ -494,64 +639,3 @@ class _ReactionButton extends StatelessWidget {
   }
 }
 
-class _CongratulationTile extends StatelessWidget {
-  const _CongratulationTile({required this.comment});
-
-  final Congratulation comment;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderSubtle),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.person, size: 15, color: AppTheme.gold),
-              const SizedBox(width: 6),
-              Text(
-                comment.senderName,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppTheme.goldDark.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  comment.badgeTitle,
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    color: AppTheme.textGold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 7),
-          Text(
-            comment.message,
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 14,
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}

@@ -20,7 +20,9 @@ function apiUrl(path) {
  */
 function apiFetch(path, options = {}) {
   const { auth = false, tokenKey = 'negev_token', headers = {}, ...rest } = options;
-  const finalHeaders = { ...headers };
+  // يُعلن هذا العميل نفسه حديثاً فيرى كل أنواع المناسبات — القيمة نفسها غير
+  // مقروءة على الخادم، وجودها فقط هو ما يهم (#20 خطوة 10).
+  const finalHeaders = { 'X-App-Version': 'web', ...headers };
 
   if (auth) {
     const token = localStorage.getItem(tokenKey);
