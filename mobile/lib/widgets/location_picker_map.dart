@@ -27,6 +27,8 @@ class LocationPickerMap extends StatefulWidget {
     required this.town,
     required this.townCoordinates,
     required this.onChanged,
+    this.initialLatitude,
+    this.initialLongitude,
   });
 
   final String town;
@@ -35,6 +37,12 @@ class LocationPickerMap extends StatefulWidget {
   /// يُستدعى بالإحداثيات المختارة عند كل نقرة على الخريطة، وبـ`null` حين
   /// يمسح المستخدم تحديده فيعود الحقل إلى الغياب التامّ.
   final void Function(double? latitude, double? longitude) onChanged;
+
+  /// دبّوس موجود مسبقاً (شاشة التعديل) — غائب افتراضياً (شاشة النشر، لا موقع
+  /// بعد). يُرسم فور البناء، ويُعامَل كدبّوس وضعه المستخدم بنفسه، فلا يزيحه
+  /// تغيير البلدة تحته.
+  final double? initialLatitude;
+  final double? initialLongitude;
 
   @override
   State<LocationPickerMap> createState() => _LocationPickerMapState();
@@ -45,6 +53,15 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
   LatLng? _pin;
   bool _pinPlacedByUser = false;
   bool _locating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialLatitude != null && widget.initialLongitude != null) {
+      _pin = LatLng(widget.initialLatitude!, widget.initialLongitude!);
+      _pinPlacedByUser = true;
+    }
+  }
 
   bool get _hasKnownCenter => widget.townCoordinates.containsKey(widget.town);
 
@@ -196,8 +213,8 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: _resolvedCenter(widget.town, widget.townCoordinates),
-                initialZoom: _hasKnownCenter ? _townZoom : _negevFallbackZoom,
+                initialCenter: _pin ?? _resolvedCenter(widget.town, widget.townCoordinates),
+                initialZoom: _pin != null || _hasKnownCenter ? _townZoom : _negevFallbackZoom,
                 minZoom: 6,
                 maxZoom: 18,
                 onTap: (_, point) => _setPin(point),

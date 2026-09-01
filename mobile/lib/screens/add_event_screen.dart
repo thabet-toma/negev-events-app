@@ -28,9 +28,32 @@ Map<String, String> buildLocationFields({double? latitude, double? longitude}) {
   return {'latitude': '$latitude', 'longitude': '$longitude'};
 }
 
+/// مفاتيح الحقول النصية العادية القابلة للتعديل بلا معالجة خاصة — البقية
+/// (honorees، town، التواريخ، poster_url، audio_url) لها معالجة خاصة في كل
+/// من شاشتي النشر والتعديل. عام كي تعيد شاشة تعديل المناسبة استعماله بدل
+/// نسخة ثانية من نفس القائمة.
+const kEventTextFieldKeys = [
+  'title',
+  'family_clan',
+  'location_name',
+  'secondary_location_name',
+  'dinner_time',
+  'audio_title',
+  'host_phone',
+];
+
+/// صيغة `YYYY-MM-DD` التي يفهمها الخادم — عام كي تعيد شاشة تعديل المناسبة
+/// استعماله بدل نسخة ثانية.
+String formatEventDate(DateTime date) {
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '${date.year}-$month-$day';
+}
+
 /// صف اسم/صفة واحد من أصحاب المناسبة — عرس له عريس (وربما عروس)، عزاء له
-/// متوفَّى، وهكذا. اسم واحد على الأقل مطلوب أياً كان النوع.
-class _HonoreeRow {
+/// متوفَّى، وهكذا. اسم واحد على الأقل مطلوب أياً كان النوع. عام كي تعيد
+/// شاشة تعديل المناسبة استعماله بدل نسخة ثانية.
+class HonoreeRow {
   final nameController = TextEditingController();
   final roleController = TextEditingController();
 
@@ -57,7 +80,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
   OccasionType? _type;
 
   final Map<String, TextEditingController> _controllers = {};
-  final List<_HonoreeRow> _honorees = [_HonoreeRow()];
+  final List<HonoreeRow> _honorees = [HonoreeRow()];
 
   String _town = AppConfig.towns.first;
   DateTime? _eventDate;
@@ -75,18 +98,6 @@ class _AddEventScreenState extends State<AddEventScreen> {
   bool _submitting = false;
   List<Event> _conflicts = const [];
   bool _checkingCollision = false;
-
-  /// مفاتيح الحقول النصية العادية — البقية (honorees، town، التواريخ،
-  /// poster_url، audio_url) لها معالجة خاصة أدناه.
-  static const _textFieldKeys = [
-    'title',
-    'family_clan',
-    'location_name',
-    'secondary_location_name',
-    'dinner_time',
-    'audio_title',
-    'host_phone',
-  ];
 
   @override
   void didChangeDependencies() {
@@ -114,12 +125,6 @@ class _AddEventScreenState extends State<AddEventScreen> {
     });
   }
 
-  String _format(DateTime date) {
-    final month = date.month.toString().padLeft(2, '0');
-    final day = date.day.toString().padLeft(2, '0');
-    return '${date.year}-$month-$day';
-  }
-
   Future<void> _pickDate({
     required DateTime? initial,
     required ValueChanged<DateTime> onPicked,
@@ -145,7 +150,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     setState(() => _checkingCollision = true);
     try {
       final conflicts = await AppServices.of(context).api.checkCollision(
-            date: _format(_eventDate!),
+            date: formatEventDate(_eventDate!),
             town: _town,
           );
       if (mounted) setState(() => _conflicts = conflicts);
@@ -186,7 +191,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       return '${type.labelFor('event_date') ?? 'تاريخ المناسبة'} مطلوب';
     }
 
-    for (final key in _textFieldKeys) {
+    for (final key in kEventTextFieldKeys) {
       if (!type.isRequiredField(key)) continue;
       if (_controllerFor(key).text.trim().isEmpty) {
         return '${type.labelFor(key) ?? key} مطلوب';
@@ -226,19 +231,19 @@ class _AddEventScreenState extends State<AddEventScreen> {
     try {
       final fields = <String, String>{
         'town': _town,
-        'event_date': _format(_eventDate!),
+        'event_date': formatEventDate(_eventDate!),
       };
-      for (final key in _textFieldKeys) {
+      for (final key in kEventTextFieldKeys) {
         if (!type.showsField(key)) continue;
         final value = _controllerFor(key).text.trim();
         if (value.isNotEmpty) fields[key] = value;
       }
       fields.addAll(buildLocationFields(latitude: _latitude, longitude: _longitude));
       if (type.showsField('event_end_date') && _eventEndDate != null) {
-        fields['event_end_date'] = _format(_eventEndDate!);
+        fields['event_end_date'] = formatEventDate(_eventEndDate!);
       }
       if (type.showsField('youth_party_date') && _youthDate != null) {
-        fields['youth_party_date'] = _format(_youthDate!);
+        fields['youth_party_date'] = formatEventDate(_youthDate!);
       }
 
       http.MultipartFile? posterFile;
@@ -297,7 +302,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     setState(() {
       _honorees
         ..clear()
-        ..add(_HonoreeRow());
+        ..add(HonoreeRow());
       _eventDate = null;
       _eventEndDate = null;
       _youthDate = null;
@@ -400,9 +405,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         const SizedBox(height: 12),
         ..._textFieldWidget(type, 'location_name'),
         ..._textFieldWidget(type, 'secondary_location_name'),
-        _DateField(
+        DateField(
           label: '${type.labelFor('event_date') ?? 'تاريخ المناسبة'} *',
-          value: _eventDate == null ? null : _format(_eventDate!),
+          value: _eventDate == null ? null : formatEventDate(_eventDate!),
           onTap: () => _pickDate(
             initial: _eventDate,
             onPicked: (date) => _eventDate = date,
@@ -417,9 +422,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         if (_conflicts.isNotEmpty) _CollisionWarning(conflicts: _conflicts),
         if (type.showsField('event_end_date')) ...[
           const SizedBox(height: 12),
-          _DateField(
+          DateField(
             label: type.labelFor('event_end_date') ?? 'حتى تاريخ',
-            value: _eventEndDate == null ? null : _format(_eventEndDate!),
+            value: _eventEndDate == null ? null : formatEventDate(_eventEndDate!),
             onTap: () => _pickDate(
               initial: _eventEndDate,
               onPicked: (date) => _eventEndDate = date,
@@ -428,9 +433,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         ],
         if (type.showsField('youth_party_date')) ...[
           const SizedBox(height: 12),
-          _DateField(
+          DateField(
             label: type.labelFor('youth_party_date') ?? 'سهرة الشباب (اختياري)',
-            value: _youthDate == null ? null : _format(_youthDate!),
+            value: _youthDate == null ? null : formatEventDate(_youthDate!),
             onTap: () => _pickDate(
               initial: _youthDate,
               onPicked: (date) => _youthDate = date,
@@ -531,7 +536,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
           );
         }),
         TextButton.icon(
-          onPressed: () => setState(() => _honorees.add(_HonoreeRow())),
+          onPressed: () => setState(() => _honorees.add(HonoreeRow())),
           icon: const Icon(Icons.add, size: 18),
           label: Text('إضافة $label'),
         ),
@@ -597,8 +602,10 @@ class _Note extends StatelessWidget {
   }
 }
 
-class _DateField extends StatelessWidget {
-  const _DateField({
+/// عام كي تعيد شاشة تعديل المناسبة استعماله بدل نسخة ثانية.
+class DateField extends StatelessWidget {
+  const DateField({
+    super.key,
     required this.label,
     required this.value,
     required this.onTap,

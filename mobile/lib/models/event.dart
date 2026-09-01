@@ -34,6 +34,11 @@ class Event {
   final int? followersCount;
   final bool isReminded;
 
+  /// `pending` / `approved` / `rejected` — يصل فقط من نقاط تُعيد الصف كاملاً
+  /// (`GET /api/events/:id`، `GET /api/my-events`)؛ القائمة العامة تُسقطه
+  /// عمداً (events.service.js LIST_COLUMNS) فيبقى `null` هناك.
+  final String? status;
+
   const Event({
     required this.id,
     required this.title,
@@ -61,6 +66,7 @@ class Event {
     this.latestCongratulation,
     this.followersCount,
     this.isReminded = false,
+    this.status,
   });
 
   int get totalReactions =>
@@ -95,6 +101,7 @@ class Event {
         latestCongratulation: latestCongratulation,
         followersCount: followersCount,
         isReminded: isReminded,
+        status: status,
       );
 
   /// عنوان بديل حين لا عنوان مخصّص — من النوع وأصحاب المناسبة، لا نص فرح ثابت.
@@ -171,6 +178,7 @@ class Event {
           ? _toInt(json['followers_count'])
           : null,
       isReminded: json['is_reminded'] == true,
+      status: _nullableString(json['status']),
     );
   }
 }
@@ -556,6 +564,44 @@ class AnnouncementEvent {
         occasionTypeId:
             json['occasion_type_id'] == null ? null : _toInt(json['occasion_type_id']),
         posterUrl: _nullableString(json['poster_url']),
+      );
+}
+
+/// سطر واحد في سجلّ تعديلات مناسبة — من GET /api/events/:id/amendments.
+/// التصنيف (`critical`/`cosmetic`) وحالة الصفّ (`pending`/`approved`/`rejected`)
+/// من الخادم وحده، لا تُشتقّان هنا.
+class Amendment {
+  final int id;
+  final String field;
+  final String? oldValue;
+  final String? newValue;
+  final String classification;
+  final String status;
+  final String? createdAt;
+  final String? changedByName;
+
+  const Amendment({
+    required this.id,
+    required this.field,
+    required this.classification,
+    required this.status,
+    this.oldValue,
+    this.newValue,
+    this.createdAt,
+    this.changedByName,
+  });
+
+  bool get isCritical => classification == 'critical';
+
+  factory Amendment.fromJson(Map<String, dynamic> json) => Amendment(
+        id: _toInt(json['id']),
+        field: '${json['field'] ?? ''}',
+        oldValue: _nullableString(json['old_value']),
+        newValue: _nullableString(json['new_value']),
+        classification: '${json['classification'] ?? 'cosmetic'}',
+        status: '${json['status'] ?? 'approved'}',
+        createdAt: _nullableString(json['created_at']),
+        changedByName: _nullableString(json['changed_by_name']),
       );
 }
 

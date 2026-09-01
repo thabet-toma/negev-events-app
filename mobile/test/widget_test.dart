@@ -10,6 +10,7 @@ import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
+import 'package:negev_events/screens/edit_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
@@ -862,6 +863,263 @@ void main() {
         await tester.pump();
         await tester.pump();
         expect(requests.where((u) => u.path.endsWith('/view')), isNotEmpty);
+      },
+    );
+  });
+
+  group('شاشة تعديل المناسبة (issue #20 خطوة ١٩)', () {
+    Map<String, dynamic> festiveTypeJson() => {
+      'id': 1,
+      'name': 'عرس',
+      'icon': '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'creates_collision': true,
+      'warns_others': false,
+      'premoderate_messages': false,
+      'show_congratulations_count': true,
+      'show_followers_count': true,
+      'show_views_count': true,
+      'congratulations_label': 'تبريكات',
+      'default_badge_title': 'مبارك الفرح',
+      'default_poster_url': null,
+      'legacy_client_supported': true,
+      'tone': 'festive',
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'العريس/العروس',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        {
+          'field_key': 'town',
+          'label': 'البلدة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 2,
+        },
+        {
+          'field_key': 'event_date',
+          'label': 'تاريخ المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 3,
+        },
+        {
+          'field_key': 'location_name',
+          'label': 'المكان',
+          'is_visible': true,
+          'is_required': false,
+          'position': 4,
+        },
+      ],
+      'reactions': <String>['coffee'],
+    };
+
+    Event buildEditableEvent() => Event.fromJson({
+      'id': 1,
+      'title': 'زفاف محمد',
+      'groom_name': 'محمد',
+      'family_clan': 'آل فلان',
+      'town': 'رهط',
+      'location_name': 'قاعة الأفراح',
+      'event_date': '2026-10-01',
+      'dinner_time': 'الساعة 8:00 مساءً',
+      'status': 'approved',
+      'occasion_type': festiveTypeJson(),
+      'honorees': [
+        {'name': 'محمد', 'role': null, 'position': 1},
+      ],
+    });
+
+    /// عميل وهمي يوجّه حسب المسار: `/api/towns` و`/amendments` بردود ثابتة،
+    /// وأي PATCH يرد بالجسم المُعطى — نفس نمط `apiReturning` أعلاه لكن بتفرّع
+    /// على الطلب لأنّ الشاشة تستدعي أكثر من نقطة واحدة معاً.
+    NegevApi editScreenApi(Map<String, dynamic> patchBody) {
+      final client = MockClient((request) async {
+        if (request.method == 'PATCH') {
+          return http.Response(
+            jsonEncode(patchBody),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.path.endsWith('/api/towns')) {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'towns': ['الكل', 'رهط', 'حورة'],
+              'town_coordinates': <String, dynamic>{},
+              'stats': <Map<String, dynamic>>[],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (request.url.path.contains('/amendments')) {
+          return http.Response(
+            jsonEncode({'success': true, 'amendments': <Map<String, dynamic>>[]}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          jsonEncode({'success': true}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      return NegevApi(ApiClient(client: client));
+    }
+
+    Future<void> pumpEditScreen(WidgetTester tester, NegevApi api) async {
+      // نافذة اختبار طويلة كي يُبنى النموذج كاملاً دون تمرير — ListView سلفرية
+      // تبني الأبناء القريبين من نافذة العرض فقط، والنموذج أطول من الحجم
+      // الافتراضي بسبب منتقي الخريطة.
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: EditEventScreen(event: buildEditableEvent()),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets(
+      'ردّ critical من الخادم يعرض للمستخدم أنّ المناسبة عادت للمراجعة، بنصّ الخادم كما هو',
+      (tester) async {
+        final criticalApi = editScreenApi({
+          'success': true,
+          'message':
+              'تم حفظ التعديل، ولأنه يمسّ تاريخ أو مكان المناسبة أُعيدت إلى قائمة المراجعة حتى تُعتمد مجدداً',
+          'amendment': 'critical',
+          'status': 'pending',
+          'collision': null,
+          'location_warning': null,
+        });
+        await pumpEditScreen(tester, criticalApi);
+
+        // تغيير مكان المناسبة — حقل حرِج (location_name ضمن
+        // CRITICAL_AMENDMENT_FIELDS في الخادم).
+        await tester.enterText(
+          find.byKey(const Key('event_field_location_name')),
+          'قاعة جديدة',
+        );
+        await tester.pump();
+
+        // زرّ الحفظ صار مفعَّلاً بعد التغيير — تأكيد قبل الحرِج، ثم متابعة.
+        await tester.tap(find.byKey(const Key('save_event_button')));
+        await tester.pump();
+        expect(find.text('حفظ والمتابعة'), findsOneWidget);
+        await tester.tap(find.text('حفظ والمتابعة'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // الرسالة المعروضة هي نصّ الخادم حرفياً — لا إعادة صياغة في العميل.
+        expect(find.textContaining('أُعيدت إلى قائمة المراجعة'), findsOneWidget);
+        expect(find.textContaining('الحالة الحالية: قيد المراجعة'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'ردّ cosmetic من الخادم لا يقول إنّ المناسبة عادت للمراجعة',
+      (tester) async {
+        final cosmeticApi = editScreenApi({
+          'success': true,
+          'message': 'تم حفظ التعديل، والمناسبة تبقى منشورة كما هي',
+          'amendment': 'cosmetic',
+          'status': 'approved',
+          'collision': null,
+          'location_warning': null,
+        });
+        await pumpEditScreen(tester, cosmeticApi);
+
+        await tester.enterText(
+          find.byKey(const Key('event_field_location_name')),
+          'قاعة جديدة',
+        );
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('save_event_button')));
+        await tester.pump();
+        expect(find.text('حفظ والمتابعة'), findsOneWidget);
+        await tester.tap(find.text('حفظ والمتابعة'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        expect(find.textContaining('أُعيدت إلى قائمة المراجعة'), findsNothing);
+        expect(find.text('تم حفظ التعديل، والمناسبة تبقى منشورة كما هي'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'بلا تغيير فعلي: زرّ الحفظ معطَّل ولا يُرسَل أي PATCH',
+      (tester) async {
+        final requests = <http.Request>[];
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (request.url.path.endsWith('/api/towns')) {
+            return http.Response(
+              jsonEncode({
+                'success': true,
+                'towns': ['الكل', 'رهط', 'حورة'],
+                'town_coordinates': <String, dynamic>{},
+                'stats': <Map<String, dynamic>>[],
+              }),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          if (request.url.path.contains('/amendments')) {
+            return http.Response(
+              jsonEncode({'success': true, 'amendments': <Map<String, dynamic>>[]}),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          return http.Response(
+            jsonEncode({'success': true}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+
+        await pumpEditScreen(tester, api);
+
+        final saveButton = tester.widget<ElevatedButton>(
+          find.byKey(const Key('save_event_button')),
+        );
+        expect(saveButton.onPressed, isNull);
+
+        // نضغط رغم التعطيل — زرّ بلا onPressed لا يفعل شيئاً، ولإثبات ذلك
+        // بيقين بدل الاكتفاء بقراءة onPressed فقط.
+        await tester.tap(find.byKey(const Key('save_event_button')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        expect(requests.where((r) => r.method == 'PATCH'), isEmpty);
       },
     );
   });

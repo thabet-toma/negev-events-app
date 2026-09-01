@@ -293,6 +293,51 @@ class NegevApi {
     );
   }
 
+  // --- مناسباتي ------------------------------------------------------
+
+  /// كل ما نشره المستخدم الحالي، بكل حالاته وبلا حدّ «القادم فقط» — شاشة
+  /// المالك تعرض تاريخه كاملاً، لا شهره القادم.
+  Future<List<Event>> myEvents() async {
+    final data = await _client.get('/api/my-events', auth: true);
+    final list = data['events'];
+    return list is List
+        ? list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList()
+        : <Event>[];
+  }
+
+  /// تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة). `fields` يحمل فقط
+  /// المفاتيح التي تغيّرت فعلاً — مفتاح غائب يعني «بلا تعديل عليه» عند الخادم،
+  /// لا قيمة فارغة. التصنيف (`amendment`) والحالة الجديدة (`status`) من الردّ
+  /// وحده؛ لا يُعاد بناؤهما هنا.
+  Future<EventUpdateResult> updateEvent(
+    int eventId, {
+    required Map<String, dynamic> fields,
+  }) async {
+    final data = await _client.patch('/api/events/$eventId', auth: true, body: fields);
+    final message = data['message'];
+    final rawWarning = data['location_warning'];
+    String? locationWarning;
+    if (rawWarning is Map<String, dynamic>) {
+      final text = rawWarning['message'];
+      if (text is String && text.isNotEmpty) locationWarning = text;
+    }
+    return EventUpdateResult(
+      message: message is String ? message : 'تم حفظ التعديل',
+      amendment: '${data['amendment'] ?? 'cosmetic'}',
+      status: '${data['status'] ?? ''}',
+      locationWarning: locationWarning,
+    );
+  }
+
+  /// سجلّ تعديلات مناسبة، الأحدث أولاً — للمالك أو الإدارة.
+  Future<List<Amendment>> eventAmendments(int eventId) async {
+    final data = await _client.get('/api/events/$eventId/amendments', auth: true);
+    final list = data['amendments'];
+    return list is List
+        ? list.whereType<Map<String, dynamic>>().map(Amendment.fromJson).toList()
+        : <Amendment>[];
+  }
+
   // --- الحساب ------------------------------------------------------
 
   Future<({String token, AppUser user})> login(
@@ -412,6 +457,24 @@ class EventSubmissionResult {
   final String? locationWarning;
 
   const EventSubmissionResult({required this.message, this.locationWarning});
+}
+
+/// ردّ PATCH /api/events/:id — `amendment` و`status` من الخادم وحده، وتظهران
+/// على الشاشة كما وصلتا بلا إعادة تصنيف في العميل.
+class EventUpdateResult {
+  final String message;
+  final String amendment;
+  final String status;
+  final String? locationWarning;
+
+  const EventUpdateResult({
+    required this.message,
+    required this.amendment,
+    required this.status,
+    this.locationWarning,
+  });
+
+  bool get isCritical => amendment == 'critical';
 }
 
 /// إعلان الإصدار من GET /api/app/version.

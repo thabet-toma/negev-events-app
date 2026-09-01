@@ -4,6 +4,7 @@ import '../config.dart';
 import '../main.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import 'my_events_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
 class AccountScreen extends StatelessWidget {
@@ -143,6 +144,14 @@ class AccountScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 22),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const MyEventsScreen()),
+                      ),
+                      icon: const Icon(Icons.event_note_outlined),
+                      label: const Text('مناسباتي'),
+                    ),
+                    const SizedBox(height: 14),
                     const _ThemeModeTile(),
                     const SizedBox(height: 14),
                     OutlinedButton.icon(
