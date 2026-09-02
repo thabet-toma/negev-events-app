@@ -29,18 +29,27 @@ Map<String, String> buildLocationFields({double? latitude, double? longitude}) {
 }
 
 /// مفاتيح الحقول النصية العادية القابلة للتعديل بلا معالجة خاصة — البقية
-/// (honorees، town، التواريخ، poster_url، audio_url) لها معالجة خاصة في كل
-/// من شاشتي النشر والتعديل. عام كي تعيد شاشة تعديل المناسبة استعماله بدل
-/// نسخة ثانية من نفس القائمة.
+/// (honorees، town، التواريخ، poster_url، audio_url، artist_image_url) لها
+/// معالجة خاصة في كل من شاشتي النشر والتعديل. عام كي تعيد شاشة تعديل
+/// المناسبة استعماله بدل نسخة ثانية من نفس القائمة.
+///
+/// `artist_name` فيها كأي حقل نصّي آخر عمداً — تُظهره `type.showsField` فقط
+/// حين يُشعله إعداد النوع (عرس وخطوبة اليوم)، بلا فرع `if (type == wedding)`
+/// في أي مكان (spec #21 خطوة ٢).
 const kEventTextFieldKeys = [
   'title',
   'family_clan',
+  'artist_name',
   'location_name',
   'secondary_location_name',
   'dinner_time',
   'audio_title',
   'host_phone',
 ];
+
+/// بند القرى والتجمعات الجامع — نفس النصّ الحرفي في `AppConfig.towns` وفي
+/// `VILLAGES_TOWN` على الخادم. اختياره وحده يُظهر منتقي القرية الإلزامي.
+const kVillagesTown = 'القرى والتجمعات';
 
 /// صيغة `YYYY-MM-DD` التي يفهمها الخادم — عام كي تعيد شاشة تعديل المناسبة
 /// استعماله بدل نسخة ثانية.
@@ -77,12 +86,15 @@ class AddEventScreen extends StatefulWidget {
 class _AddEventScreenState extends State<AddEventScreen> {
   Future<List<OccasionType>>? _typesFuture;
   Future<Map<String, TownCoordinate>>? _townCoordsFuture;
+  Future<List<Village>>? _villagesFuture;
   OccasionType? _type;
 
   final Map<String, TextEditingController> _controllers = {};
   final List<HonoreeRow> _honorees = [HonoreeRow()];
 
   String _town = AppConfig.towns.first;
+  // إلزامي فقط تحت بند القرى والتجمعات — `_validate` يرفض النشر بدونه هناك.
+  Village? _selectedVillage;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -94,6 +106,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
 
   XFile? _poster;
   PlatformFile? _audio;
+  XFile? _artistImage;
 
   bool _submitting = false;
   List<Event> _conflicts = const [];
@@ -104,6 +117,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     super.didChangeDependencies();
     _typesFuture ??= AppServices.of(context).api.listOccasionTypes();
     _townCoordsFuture ??= AppServices.of(context).api.townCoordinates();
+    _villagesFuture ??= AppServices.of(context).api.listVillages();
   }
 
   @override
@@ -174,6 +188,14 @@ class _AddEventScreenState extends State<AddEventScreen> {
     if (picked != null) setState(() => _audio = picked);
   }
 
+  Future<void> _pickArtistImage() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (picked != null) setState(() => _artistImage = picked);
+  }
+
   String? _validate(OccasionType type) {
     final honoreeNames = _honorees
         .map((row) => row.nameController.text.trim())
@@ -185,6 +207,12 @@ class _AddEventScreenState extends State<AddEventScreen> {
 
     if (!AppConfig.towns.contains(_town)) {
       return '${type.labelFor('town') ?? 'البلدة'} مطلوبة';
+    }
+
+    // قاعدة تكامل خادمية مطابَقة هنا: قرية إلزامية لنشر جديد تحت البند
+    // الجامع فقط، والخادم يرفض غيابها بـ400 (spec #21 «المخطط»).
+    if (_town == kVillagesTown && _selectedVillage == null) {
+      return 'يرجى اختيار القرية';
     }
 
     if (_eventDate == null) {
@@ -239,6 +267,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         if (value.isNotEmpty) fields[key] = value;
       }
       fields.addAll(buildLocationFields(latitude: _latitude, longitude: _longitude));
+      if (_town == kVillagesTown && _selectedVillage != null) {
+        fields['village_id'] = '${_selectedVillage!.id}';
+      }
       if (type.showsField('event_end_date') && _eventEndDate != null) {
         fields['event_end_date'] = formatEventDate(_eventEndDate!);
       }
@@ -264,6 +295,15 @@ class _AddEventScreenState extends State<AddEventScreen> {
         );
       }
 
+      http.MultipartFile? artistImageFile;
+      if (type.showsField('artist_image_url') && _artistImage != null) {
+        artistImageFile = http.MultipartFile.fromBytes(
+          'artist_image',
+          await _artistImage!.readAsBytes(),
+          filename: _artistImage!.name,
+        );
+      }
+
       final honorees = _honorees
           .map((row) => {
                 'name': row.nameController.text.trim(),
@@ -277,6 +317,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         fields: fields,
         poster: posterFile,
         audio: audioFile,
+        artistImage: artistImageFile,
       );
 
       if (!mounted) return;
@@ -308,8 +349,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _youthDate = null;
       _poster = null;
       _audio = null;
+      _artistImage = null;
       _conflicts = const [];
       _town = AppConfig.towns.first;
+      _selectedVillage = null;
       _latitude = null;
       _longitude = null;
       _locationPickerGeneration++;
@@ -373,6 +416,20 @@ class _AddEventScreenState extends State<AddEventScreen> {
         // إجبارياً غير قابل للنشر إطلاقاً — والخادم يولّده وحده عند الفراغ.
         ..._textFieldWidget(type, 'title'),
         ..._textFieldWidget(type, 'family_clan'),
+        // الفنان: حقل نصّ وصورة اختيارية كأي حقلين آخرين — يظهران فقط حين
+        // يُشعلهما إعداد هذا النوع تحديداً (عرس وخطوبة اليوم)، بلا فرع خاص.
+        ..._textFieldWidget(type, 'artist_name'),
+        if (type.showsField('artist_image_url')) ...[
+          const SizedBox(height: 6),
+          _FilePickTile(
+            icon: Icons.image_outlined,
+            label: type.labelFor('artist_image_url') ?? 'صورة الفنان',
+            value: _artistImage?.name,
+            onPick: _pickArtistImage,
+            onClear: () => setState(() => _artistImage = null),
+          ),
+          const SizedBox(height: 12),
+        ],
         DropdownButtonFormField<String>(
           initialValue: _town,
           decoration: InputDecoration(
@@ -383,18 +440,51 @@ class _AddEventScreenState extends State<AddEventScreen> {
               .toList(),
           onChanged: (value) {
             if (value == null) return;
-            setState(() => _town = value);
+            setState(() {
+              _town = value;
+              // مغادرة البند الجامع تُبطل أي قرية مختارة تحته — نفس القاعدة
+              // التي يفرضها الخادم (village_id غير NULL فقط تحت هذا البند).
+              if (value != kVillagesTown) _selectedVillage = null;
+            });
             _checkCollision();
           },
         ),
+        if (_town == kVillagesTown) ...[
+          const SizedBox(height: 12),
+          FutureBuilder<List<Village>>(
+            future: _villagesFuture,
+            builder: (context, snapshot) {
+              final villages = snapshot.data ?? const <Village>[];
+              return DropdownButtonFormField<Village>(
+                initialValue: _selectedVillage,
+                decoration: const InputDecoration(labelText: 'القرية *'),
+                items: villages
+                    .map((village) => DropdownMenuItem(value: village, child: Text(village.name)))
+                    .toList(),
+                onChanged: (value) => setState(() => _selectedVillage = value),
+              );
+            },
+          ),
+        ],
         const SizedBox(height: 12),
         FutureBuilder<Map<String, TownCoordinate>>(
           future: _townCoordsFuture,
           builder: (context, snapshot) {
+            // القرية المختارة تُعيد توسيط الخريطة على مركزها بدل مركز البند
+            // الجامع (الذي لا مركز واحداً له أصلاً) — بلا تعديل على
+            // LocationPickerMap نفسه: مجرّد استبدال مؤقّت لمدخل هذا البند
+            // في خريطة الإحداثيات التي يقرأها.
+            final coords = Map<String, TownCoordinate>.from(snapshot.data ?? const {});
+            if (_town == kVillagesTown && _selectedVillage != null) {
+              coords[kVillagesTown] = TownCoordinate(
+                lat: _selectedVillage!.latitude,
+                lng: _selectedVillage!.longitude,
+              );
+            }
             return LocationPickerMap(
               key: ValueKey(_locationPickerGeneration),
               town: _town,
-              townCoordinates: snapshot.data ?? const {},
+              townCoordinates: coords,
               onChanged: (lat, lng) => setState(() {
                 _latitude = lat;
                 _longitude = lng;

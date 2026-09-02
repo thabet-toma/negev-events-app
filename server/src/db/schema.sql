@@ -17,6 +17,19 @@ CREATE TABLE IF NOT EXISTS users (
   KEY idx_users_role (role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Local admin scope. Deliberately separate from users.clan_town: that column
+-- is a self-reported profile fact, so making it a permission would turn
+-- editing one's own profile into a privilege escalation (services-directory
+-- spec, decision #22).
+CREATE TABLE IF NOT EXISTS admin_towns (
+  id      INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id INT UNSIGNED NOT NULL,
+  town    VARCHAR(100) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_admin_towns (user_id, town),
+  CONSTRAINT fk_admin_towns_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Occasion types are runtime data, not an ENUM: a super_admin adds one from
 -- the admin panel with no deploy and no migration. occasion_type_fields and
 -- occasion_type_reactions cap what an admin controls per type — the field_key
@@ -68,6 +81,20 @@ CREATE TABLE IF NOT EXISTS occasion_type_reactions (
   CONSTRAINT fk_occasion_type_reactions_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- The village is a real place, unlike the catch-all bucket it sits under:
+-- coordinates are NOT NULL because a village without them reproduces the pin
+-- bug the catch-all town has today (services-directory spec, decision #23).
+CREATE TABLE IF NOT EXISTS villages (
+  id        INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  name      VARCHAR(100)  NOT NULL,
+  latitude  DECIMAL(10,7) NOT NULL,
+  longitude DECIMAL(10,7) NOT NULL,
+  position  INT           NOT NULL DEFAULT 0,
+  is_active TINYINT(1)    NOT NULL DEFAULT 1,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_villages_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS events (
   id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
   title            VARCHAR(255) NOT NULL,
@@ -75,6 +102,7 @@ CREATE TABLE IF NOT EXISTS events (
   family_clan      VARCHAR(150) NOT NULL,
   occasion_type_id INT UNSIGNED DEFAULT NULL,
   town             VARCHAR(100) NOT NULL,
+  village_id       INT UNSIGNED NULL,
   location_name    TEXT         NOT NULL,
   secondary_location_name TEXT  DEFAULT NULL,
   latitude         DECIMAL(10,7) DEFAULT NULL,
@@ -86,6 +114,8 @@ CREATE TABLE IF NOT EXISTS events (
   poster_url       TEXT,
   audio_url        TEXT,
   audio_title      VARCHAR(200) DEFAULT NULL,
+  artist_name      VARCHAR(150) NULL,
+  artist_image_url TEXT         NULL,
   host_phone       VARCHAR(30)  DEFAULT NULL,
   status           ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   views_count      INT UNSIGNED NOT NULL DEFAULT 0,
@@ -100,8 +130,10 @@ CREATE TABLE IF NOT EXISTS events (
   KEY idx_events_groom (groom_name),
   KEY idx_events_clan (family_clan),
   KEY idx_events_occasion_type (occasion_type_id),
+  KEY idx_events_village (village_id),
   CONSTRAINT fk_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT fk_events_occasion_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE RESTRICT
+  CONSTRAINT fk_events_occasion_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_events_village FOREIGN KEY (village_id) REFERENCES villages(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Honorees are a 1..N relation so search can match every name on an event
@@ -358,4 +390,52 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   PRIMARY KEY (id),
   KEY idx_broadcasts_created (created_at),
   CONSTRAINT fk_broadcasts_sender FOREIGN KEY (sent_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS service_categories (
+  id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name      VARCHAR(60)  NOT NULL,
+  icon      VARCHAR(60)  NOT NULL,
+  color     VARCHAR(20)  NOT NULL,
+  position  INT          NOT NULL DEFAULT 0,
+  is_active TINYINT(1)   NOT NULL DEFAULT 1,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_service_categories_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- consent_* are not cosmetic fields: they are the only guard once exposing a
+-- provider's phone on request was decided. No provider is published without
+-- a recorded consent (services-directory spec, decision #25).
+CREATE TABLE IF NOT EXISTS service_providers (
+  id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  category_id     INT UNSIGNED NOT NULL,
+  name            VARCHAR(150) NOT NULL,
+  phone           VARCHAR(30)  NOT NULL,
+  description     TEXT         DEFAULT NULL,
+  image_url       TEXT         DEFAULT NULL,
+  is_active       TINYINT(1)   NOT NULL DEFAULT 1,
+  consent_at      TIMESTAMP    NOT NULL,
+  consent_by      INT UNSIGNED DEFAULT NULL,
+  consent_channel VARCHAR(20)  NOT NULL,
+  created_by      INT UNSIGNED DEFAULT NULL,
+  created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_service_providers_category (category_id),
+  CONSTRAINT fk_service_providers_category FOREIGN KEY (category_id)
+    REFERENCES service_categories(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_service_providers_consent_by FOREIGN KEY (consent_by)
+    REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_service_providers_creator FOREIGN KEY (created_by)
+    REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS service_provider_towns (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  town        VARCHAR(100) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_service_provider_towns (provider_id, town),
+  CONSTRAINT fk_spt_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

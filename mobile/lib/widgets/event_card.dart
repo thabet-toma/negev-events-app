@@ -95,9 +95,22 @@ class EventCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   _IconLine(icon: Icons.groups_2_outlined, text: event.familyClan),
+                  // «يحيي الحفلة الفنان فلان» — بوزن أخفّ من سطر العشيرة فوقها،
+                  // وتختفي كلياً حين يفرغ الحقل (لا نصّ بديل، ولا صورة هنا:
+                  // صورة الفنان تبقى في التفاصيل وحدها).
+                  if (event.artistName != null && event.artistName!.trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(start: 22, bottom: 5),
+                      child: Text(
+                        'يحيي الحفلة الفنان ${event.artistName}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+                      ),
+                    ),
                   _IconLine(
                     icon: Icons.location_on_outlined,
-                    text: '${event.town} — ${event.locationName}',
+                    text: '${event.townDisplay} — ${event.locationName}',
                   ),
                   _IconLine(
                     icon: Icons.event_outlined,

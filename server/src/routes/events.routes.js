@@ -6,13 +6,15 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
+const villages = require('../services/villages.service');
+const { isAdminForTown } = require('../services/adminScope.service');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, MAX_HONOREES
 } = require('../middleware/validate');
-const { TOWNS, TOWN_COORDINATES, REACTION_TYPES } = require('../constants');
+const { TOWNS, VILLAGES_TOWN, TOWN_COORDINATES, REACTION_TYPES } = require('../constants');
 
 const router = express.Router();
 
@@ -38,12 +40,15 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const occasionTypeId = req.query.occasion_type_id === undefined || req.query.occasion_type_id === null || req.query.occasion_type_id === ''
     ? null
     : parseId(req.query.occasion_type_id, 'نوع المناسبة');
+  const villageId = req.query.village_id === undefined || req.query.village_id === null || req.query.village_id === ''
+    ? null
+    : parseId(req.query.village_id, 'القرية');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
   const legacyOnly = isLegacyClient(req);
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
-      town, search, date, occasionTypeId, archive, legacyOnly,
+      town, search, date, occasionTypeId, villageId, archive, legacyOnly,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null
@@ -70,6 +75,7 @@ router.get('/towns', asyncHandler(async (req, res) => {
     success: true,
     towns: ['الكل', ...TOWNS],
     town_coordinates: TOWN_COORDINATES,
+    villages: await villages.listActive(),
     stats: await events.townStats()
   });
 }));
@@ -96,7 +102,7 @@ router.get('/events/:id', optionalAuthenticate, asyncHandler(async (req, res) =>
  * of being stored or rejected: an old client sending e.g. `youth_party_date`
  * on a عزا must not have its whole request break over it.
  */
-function buildOptionalFieldFormatters(req, posterFile, audioFile) {
+function buildOptionalFieldFormatters(req, posterFile, audioFile, artistImageFile) {
   return {
     title: () => cleanString(req.body.title, 255),
     family_clan: () => cleanString(req.body.family_clan, 150),
@@ -108,7 +114,12 @@ function buildOptionalFieldFormatters(req, posterFile, audioFile) {
     poster_url: () => (posterFile ? `/uploads/${posterFile.filename}` : cleanString(req.body.custom_poster_url, 2000)),
     audio_url: () => (audioFile ? `/uploads/${audioFile.filename}` : null),
     audio_title: () => cleanString(req.body.audio_title, 200),
-    host_phone: () => cleanString(req.body.host_phone, 30)
+    host_phone: () => cleanString(req.body.host_phone, 30),
+    artist_name: () => cleanString(req.body.artist_name, 150),
+    // Same pattern as poster_url: an uploaded file wins, otherwise an
+    // externally-hosted URL the publisher typed in — never a placeholder
+    // when both are absent (#9, #11 — the field must vanish, not blank out).
+    artist_image_url: () => (artistImageFile ? `/uploads/${artistImageFile.filename}` : cleanString(req.body.custom_artist_image_url, 2000))
   };
 }
 
@@ -136,10 +147,29 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
+  // Integrity rule enforced here, not by the schema: `village_id` may only be
+  // set under the villages catch-all, and a NEW publish under it must name
+  // one (existing pre-villages rows stay NULL forever — never guessed).
+  let villageId = req.body.village_id === undefined || req.body.village_id === null || req.body.village_id === ''
+    ? null
+    : parseId(req.body.village_id, 'القرية');
+  if (villageId !== null && town !== VILLAGES_TOWN) {
+    throw ApiError.badRequest('لا يمكن اختيار قرية إلا ضمن بند "القرى والتجمعات"');
+  }
+  if (town === VILLAGES_TOWN && villageId === null) {
+    throw ApiError.badRequest('يرجى اختيار القرية');
+  }
+  let village = null;
+  if (villageId !== null) {
+    village = await villages.findActiveById(villageId);
+    if (!village) throw ApiError.badRequest('القرية المختارة غير معروفة أو غير نشِطة');
+  }
+
   const eventDate = requireDate(req.body.event_date, labelOf('event_date', 'تاريخ المناسبة'));
 
   const posterFile = req.files?.poster?.[0];
   const audioFile = req.files?.audio?.[0];
+  const artistImageFile = req.files?.artist_image?.[0];
 
   const latitude = parseCoordinate(req.body.latitude, 90, 'خط العرض');
   const longitude = parseCoordinate(req.body.longitude, 180, 'خط الطول');
@@ -154,12 +184,14 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     default_poster_url: type.default_poster_url,
     honorees,
     town,
+    village_id: villageId,
+    villageCoords: village ? { lat: village.latitude, lng: village.longitude } : null,
     event_date: eventDate,
     latitude,
     longitude
   };
 
-  const formatters = buildOptionalFieldFormatters(req, posterFile, audioFile);
+  const formatters = buildOptionalFieldFormatters(req, posterFile, audioFile, artistImageFile);
   for (const [key, formatter] of Object.entries(formatters)) {
     const field = fieldsByKey[key];
     if (!field) continue; // hidden for this occasion type — ignore any submitted value
@@ -172,11 +204,12 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   }
 
   // Ownership is built from the publish itself (authenticate above already
-  // rejected an anonymous request). Admins still publish straight away;
-  // everyone else lands in the moderation queue — unchanged behaviour.
-  const isAdmin = ADMIN_ROLES.includes(req.user.role);
+  // rejected an anonymous request). An admin publishing in one of their own
+  // towns still publishes straight away; outside their towns — or with no
+  // towns assigned at all — the publish lands in the moderation queue like
+  // anyone else's, never rejected (services-directory spec, story 25).
   const created = await events.createEvent(payload, {
-    autoApprove: isAdmin,
+    autoApprove: await isAdminForTown(req.user, town),
     createdBy: req.user.id
   });
 
@@ -198,18 +231,23 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
 
 // --- Event edit (owner or admin) -----------------------------------
 
-/** Owner or admin only — governs both editing an event and reading its amendment log. */
-function assertCanManageEvent(req, existing) {
-  const isAdmin = ADMIN_ROLES.includes(req.user.role);
-  if (existing.created_by === null) {
-    if (!isAdmin) {
-      throw ApiError.forbidden('هذه المناسبة غير مرتبطة بأي حساب — الوصول إليها متاح للإدارة فقط حتى يطالب بها صاحبها');
-    }
+/**
+ * Owner, super_admin, or an admin scoped to this event's town — governs
+ * editing an event, reading/moderating its congratulations, and reading its
+ * amendment log. `isAdminForTown` already resolves a super_admin to true
+ * regardless of town, so a single call covers both admin tiers.
+ */
+async function assertCanManageEvent(req, existing) {
+  if (existing.created_by !== null && existing.created_by === req.user.id) return;
+
+  if (ADMIN_ROLES.includes(req.user.role) && await isAdminForTown(req.user, existing.town)) {
     return;
   }
-  if (existing.created_by !== req.user.id && !isAdmin) {
-    throw ApiError.forbidden('لا تملك صلاحية الوصول إلى هذه المناسبة');
+
+  if (existing.created_by === null) {
+    throw ApiError.forbidden('هذه المناسبة غير مرتبطة بأي حساب — الوصول إليها متاح للإدارة فقط حتى يطالب بها صاحبها');
   }
+  throw ApiError.forbidden('لا تملك صلاحية الوصول إلى هذه المناسبة');
 }
 
 /** Arabic warning naming the conflicting event and its date — shared by the standalone check and the post-edit recheck. */
@@ -220,7 +258,7 @@ function buildCollisionMessage(conflict) {
 router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const existing = await events.getEventForEdit(eventId);
-  assertCanManageEvent(req, existing);
+  await assertCanManageEvent(req, existing);
 
   const body = req.body || {};
   const changes = {};
@@ -231,6 +269,11 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
     const town = cleanString(body.town, 100);
     if (!town || !TOWNS.includes(town)) throw ApiError.badRequest('البلدة المختارة غير معروفة');
     changes.town = town;
+    // Leaving the villages catch-all invalidates any village already on the
+    // row — clear it here unless this same edit sets a new one below.
+    if (town !== VILLAGES_TOWN && body.village_id === undefined) {
+      changes.village_id = null;
+    }
   }
   if (body.location_name !== undefined) {
     changes.location_name = cleanString(body.location_name, 1000) || existing.location_name;
@@ -248,6 +291,28 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
   if (body.audio_url !== undefined) changes.audio_url = cleanString(body.audio_url, 2000);
   if (body.audio_title !== undefined) changes.audio_title = cleanString(body.audio_title, 200);
   if (body.host_phone !== undefined) changes.host_phone = cleanString(body.host_phone, 30);
+  if (body.artist_name !== undefined) changes.artist_name = cleanString(body.artist_name, 150);
+  if (body.artist_image_url !== undefined) changes.artist_image_url = cleanString(body.artist_image_url, 2000);
+
+  if (body.village_id !== undefined) {
+    const villageId = body.village_id === null || body.village_id === '' ? null : parseId(body.village_id, 'القرية');
+    const finalTown = changes.town !== undefined ? changes.town : existing.town;
+    if (villageId !== null && finalTown !== VILLAGES_TOWN) {
+      throw ApiError.badRequest('لا يمكن اختيار قرية إلا ضمن بند "القرى والتجمعات"');
+    }
+    if (villageId !== null) {
+      const village = await villages.findActiveById(villageId);
+      if (!village) throw ApiError.badRequest('القرية المختارة غير معروفة أو غير نشِطة');
+      // A village is a place, so moving the event to one moves its pin —
+      // the same derivation createEvent does. Without this the row keeps the
+      // old village's coordinates and Waze sends guests to the wrong place,
+      // which is the exact failure villages exist to fix. An explicit map
+      // pick in this same request still wins, as it does on create.
+      if (body.latitude === undefined) changes.latitude = village.latitude;
+      if (body.longitude === undefined) changes.longitude = village.longitude;
+    }
+    changes.village_id = villageId;
+  }
 
   let honorees = null;
   if (body.honorees !== undefined) {
@@ -320,7 +385,7 @@ router.get('/my-reminders', authenticate, asyncHandler(async (req, res) => {
 router.get('/events/:id/amendments', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const existing = await events.getEventForEdit(eventId);
-  assertCanManageEvent(req, existing);
+  await assertCanManageEvent(req, existing);
 
   res.json({ success: true, amendments: await events.listAmendments(eventId) });
 }));
@@ -413,7 +478,7 @@ const CONGRATULATION_STATUSES = ['pending', 'approved', 'hidden'];
 router.get('/events/:id/congratulations', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const existing = await events.getEventForEdit(eventId);
-  assertCanManageEvent(req, existing);
+  await assertCanManageEvent(req, existing);
 
   const status = cleanString(req.query.status, 20);
   if (status && !CONGRATULATION_STATUSES.includes(status)) {
@@ -428,11 +493,34 @@ router.patch('/events/:id/congratulations/:cid', authenticate, asyncHandler(asyn
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const congratulationId = parseId(req.params.cid, 'معرّف التبريكة');
   const existing = await events.getEventForEdit(eventId);
-  assertCanManageEvent(req, existing);
+  await assertCanManageEvent(req, existing);
 
   const action = cleanString(req.body.action, 20);
   if (!['approve', 'reject'].includes(action)) {
     throw ApiError.badRequest('إجراء غير صالح — approve أو reject فقط');
+  }
+
+  // The owner may not undo a block an admin placed (#38): if this message is
+  // currently hidden by someone other than the owner, lifting it back to
+  // approved requires being that same admin's scope (or a super_admin) —
+  // assertCanManageEvent above already let the owner through on ownership
+  // alone, so the extra check happens only here, only for 'approve'. Hiding
+  // (action 'reject') is untouched — the owner's own right to hide a message
+  // on their page (#37) never needed this gate.
+  if (action === 'approve') {
+    const congratulation = await events.getCongratulationById(eventId, congratulationId);
+    if (!congratulation) throw ApiError.notFound('التعليق غير موجود');
+
+    const blockedByOther = congratulation.status === 'hidden'
+      && congratulation.moderated_by !== null
+      && congratulation.moderated_by !== existing.created_by;
+
+    if (blockedByOther) {
+      const isAdminInScope = ADMIN_ROLES.includes(req.user.role) && await isAdminForTown(req.user, existing.town);
+      if (!isAdminInScope) {
+        throw ApiError.forbidden('لا يمكنك رفع حجب وضعه أحد المشرفين على هذه الرسالة');
+      }
+    }
   }
 
   const comment = await events.moderateCongratulation(eventId, congratulationId, { action, moderatedBy: req.user.id });
@@ -449,7 +537,7 @@ router.delete('/events/:id/congratulations/:cid', authenticate, asyncHandler(asy
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const congratulationId = parseId(req.params.cid, 'معرّف التبريكة');
   const existing = await events.getEventForEdit(eventId);
-  assertCanManageEvent(req, existing);
+  await assertCanManageEvent(req, existing);
 
   await events.deleteCongratulation(eventId, congratulationId);
   res.json({ success: true, message: 'تم حذف التبريكة بنجاح' });

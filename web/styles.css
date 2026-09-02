@@ -557,6 +557,10 @@ body {
 
 .card-clan-line { font-size: 12.5px; font-weight: 700; color: var(--tone, var(--sky)); margin-top: 2px; margin-bottom: 10px; }
 
+/* «يحيي الحفلة الفنان فلان» — بوزن أخفّ من سطر العشيرة، ويغيب كلياً حين
+   يفرغ الحقل (الـHTML نفسه لا يُطبَع، لا display:none) (خريطة #21، تذكرة #23) */
+.card-artist-line { font-size: 12px; font-weight: 500; color: var(--ink-faint); margin-top: -6px; margin-bottom: 10px; }
+
 /* Audio Player */
 .card-audio-player {
   background: var(--surface-sunk);
@@ -1071,26 +1075,53 @@ body {
 
 .close-modal-btn { background: var(--surface-sunk); border: none; width: 34px; height: 34px; border-radius: 50%; color: var(--ink); cursor: pointer; }
 
-/* Bottom Navigation Bar */
-.bottom-navbar {
+/* Bottom Navigation Bar — الحاوية الثابتة تحمل الشريط وزرّ النشر العائم معاً،
+   فيتوسّط الزرّ نفس عرض الشريط (650px) بلا أن يعتمد على عرض النافذة (#31، الخيار ج) */
+.bottom-nav-wrap {
   position: fixed;
   bottom: 0;
   inset-inline: 0;
+  max-width: 650px;
+  margin: 0 auto;
+  z-index: 100;
+}
+
+.bottom-navbar {
+  position: static;
   background: var(--surface);
   border-top: 1px solid var(--line);
   display: flex;
   justify-content: space-around;
   padding: 10px 12px;
-  z-index: 100;
-  max-width: 650px;
-  margin: 0 auto;
   box-shadow: 0 -6px 20px rgba(12, 27, 42, 0.08);
 }
 
-.nav-btn { background: none; border: none; color: var(--ink-faint); font-family: var(--font-main); display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.nav-btn { background: none; border: none; color: var(--ink-faint); font-family: var(--font-main); display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.2s; min-height: 48px; justify-content: center; }
 .nav-btn i { font-size: 1.2rem; }
 .nav-btn.active { color: var(--sky); font-weight: 800; }
 .nav-btn.active i { transform: translateY(-2px); }
+
+/* زرّ النشر العائم — فعل لا وجهة، فلا يأخذ خانة في الشريط. الوسط محايد في
+   RTL (left/translateX لا يتأثران باتجاه النص، بخلاف right) (#4، #31). */
+.fab-publish {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--sky);
+  color: var(--on-sky);
+  border: 4px solid var(--surface);
+  display: grid;
+  place-items: center;
+  font-size: 1.4rem;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(3, 105, 161, 0.4);
+  z-index: 101;
+}
+.fab-publish:hover { background: var(--sky-deep); }
 
 .loading-spinner { text-align: center; padding: 44px 20px; color: var(--ink-faint); }
 
@@ -1155,3 +1186,42 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* دليل الخدمات — قائمة مسطّحة، بلا رقم وبلا زرّ تواصل على الصفّ (تذكرة #25، #31) */
+.provider-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  padding: 11px 14px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  min-height: 48px;
+  transition: border-color 0.2s;
+}
+.provider-row:hover { border-color: var(--sky); }
+
+.provider-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--sky-wash);
+  color: var(--sky);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  font-size: 1.1rem;
+}
+.provider-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.provider-info { flex: 1; min-width: 0; }
+.provider-info b { display: block; font-size: 0.92rem; color: var(--ink); font-weight: 700; }
+.provider-info small { color: var(--ink-faint); font-size: 0.78rem; }
+
+/* صفحة المزوّد — الرقم يظهر داخل #providerContactArea بعد فعل صريح فقط */
+.provider-modal-img { width: 100%; max-height: 220px; object-fit: cover; border-radius: var(--radius-md); margin-bottom: 14px; }
+.provider-modal-desc { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.75; margin-bottom: 10px; }
+.provider-modal-towns { color: var(--ink-faint); font-size: 0.82rem; margin-bottom: 16px; }

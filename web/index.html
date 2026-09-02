@@ -328,35 +328,72 @@
       </div>
     </section>
 
+    <!-- TAB 6: SERVICES DIRECTORY (دليل خدمات الأعراس والمناسبات) -->
+    <section id="tabServices" class="tab-content">
+      <div class="page-title-box">
+        <h2><i class="fa-solid fa-screwdriver-wrench"></i> دليل الخدمات</h2>
+        <p>طبّاخون ومصوّرون وصالات وفنانون يخدمون مناسبات النقب — بلا تقييمات ولا نجوم، الوجود هنا هو الشهادة</p>
+      </div>
+
+      <!-- Category chips — "الكل" أولاً، نفس نمط تبويبات نوع المناسبة (#18) -->
+      <div class="town-filter-wrapper">
+        <div class="town-slider" id="serviceCategoryTabs"></div>
+      </div>
+
+      <!-- Town Filter -->
+      <div class="form-group">
+        <label>فلترة حسب البلدة</label>
+        <select id="serviceTownFilter" onchange="handleServiceTownFilterChange()">
+          <option value="">كل البلدات</option>
+        </select>
+      </div>
+
+      <!-- Flat, alphabetical provider list — no phone, no contact button on the row -->
+      <div id="servicesListContainer" class="events-feed">
+        <div class="loading-spinner"><div class="spinner"></div></div>
+      </div>
+
+      <div id="servicesLoadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
+        <button id="servicesLoadMoreBtn" class="town-pill" onclick="loadMoreServiceProviders()">عرض المزيد</button>
+      </div>
+    </section>
+
   </main>
 
-  <!-- Bottom Navigation Bar -->
-  <nav class="bottom-navbar">
-    <button class="nav-btn active" onclick="switchTab('tabHome')">
-      <i class="fa-solid fa-house"></i>
-      <span>الأفراح</span>
+  <!--
+    الشريط السفلي — خمس وجهات ثابتة + زرّ نشر عائم (تذكرة #31، الخيار المعتمد ج).
+    «إضافة» خرج من الشريط لأنه فعل لا وجهة؛ رابط «الإدارة» خرج كلياً — أدمن
+    يذهب مباشرة إلى /admin.html، فلا داعي لعرضه لكل زائر عام.
+    الخانة الخامسة («الستيكرات») تختلف عمداً عن الموبايل («حسابي») — قرار
+    موثَّق لا انحراف، لا تُوحَّد الخانتان بلا قرار wayfinder مستقل.
+  -->
+  <div class="bottom-nav-wrap">
+    <button class="fab-publish" onclick="switchTab('tabAdd')" aria-label="إعلان مناسبة جديدة" title="إعلان مناسبة جديدة">
+      <i class="fa-solid fa-plus"></i>
     </button>
-    <button class="nav-btn" onclick="switchTab('tabMap')">
-      <i class="fa-solid fa-map-location-dot"></i>
-      <span>الخريطة</span>
-    </button>
-    <button class="nav-btn" onclick="switchTab('tabAdd')">
-      <i class="fa-solid fa-circle-plus"></i>
-      <span>إعلان عرس</span>
-    </button>
-    <button class="nav-btn" onclick="switchTab('tabNokoot')">
-      <i class="fa-solid fa-book-bookmark"></i>
-      <span>دفتر النقوط</span>
-    </button>
-    <button class="nav-btn" onclick="switchTab('tabStickers')">
-      <i class="fa-solid fa-palette"></i>
-      <span>الستيكرات</span>
-    </button>
-    <a href="/admin.html" class="nav-btn admin-quick-link" style="text-decoration: none; color: var(--ink-faint);">
-      <i class="fa-solid fa-crown" style="color: var(--sky);"></i>
-      <span>الإدارة</span>
-    </a>
-  </nav>
+    <nav class="bottom-navbar">
+      <button class="nav-btn active" onclick="switchTab('tabHome')">
+        <i class="fa-solid fa-champagne-glasses"></i>
+        <span>المناسبات</span>
+      </button>
+      <button class="nav-btn" onclick="switchTab('tabMap')">
+        <i class="fa-solid fa-map-location-dot"></i>
+        <span>الخريطة</span>
+      </button>
+      <button class="nav-btn" onclick="switchTab('tabNokoot')">
+        <i class="fa-solid fa-wallet"></i>
+        <span>النقوط</span>
+      </button>
+      <button class="nav-btn" onclick="switchTab('tabStickers')">
+        <i class="fa-solid fa-palette"></i>
+        <span>الستيكرات</span>
+      </button>
+      <button class="nav-btn" onclick="switchTab('tabServices')">
+        <i class="fa-solid fa-screwdriver-wrench"></i>
+        <span>الخدمات</span>
+      </button>
+    </nav>
+  </div>
 
   <!-- MODAL 1: AI SMART NABATI POETRY GENERATOR (مولد قصائد الذكاء الاصطناعي) -->
   <div id="aiPoemModal" class="modal-overlay" style="display:none;">
@@ -643,6 +680,24 @@
       <button class="story-viewer-nav story-viewer-nav-prev" onclick="storyViewerGoPrev()" aria-label="القصة السابقة"><i class="fa-solid fa-chevron-right"></i></button>
       <button class="story-viewer-nav story-viewer-nav-next" onclick="storyViewerGoNext()" aria-label="القصة التالية"><i class="fa-solid fa-chevron-left"></i></button>
       <div class="story-viewer-footer" id="storyViewerFooter"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 9: SERVICE PROVIDER DETAILS (دليل الخدمات — الرقم يُكشف بفعل صريح فقط) -->
+  <div id="providerModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="providerModalName"></h3>
+          <span id="providerModalCategory" class="modal-sub"></span>
+        </div>
+        <button class="close-modal-btn" onclick="closeProviderModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <img id="providerModalImage" class="provider-modal-img" alt="" hidden>
+      <p id="providerModalDescription" class="provider-modal-desc"></p>
+      <p id="providerModalTowns" class="provider-modal-towns"></p>
+      <!-- الرقم لا يظهر إلا بعد ضغط هذا الزرّ — لا رقم ولا رابط تواصل مقدَّماً -->
+      <div id="providerContactArea"></div>
     </div>
   </div>
 

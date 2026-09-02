@@ -68,7 +68,10 @@
     </header>
 
     <div class="admin-main-container">
-      
+
+      <!-- Scope banner (story 21) — من يديره الأدمن المحلي، أو صيغة السوبر أدمن -->
+      <div id="adminScopeBanner" class="admin-scope-banner" style="display:none;"></div>
+
       <!-- KPI Stats Grid -->
       <section class="stats-grid">
         <div class="stat-card pending-card" onclick="filterEventsByStatus('pending')">
@@ -87,7 +90,9 @@
           </div>
         </div>
 
-        <div class="stat-card users-card" onclick="switchAdminTab('tabUsers')">
+        <!-- totalUsers منصّة-عامة لا علاقة لها بالبلدة — سوبر أدمن حصراً (#20)،
+             وإلا عرضنا صفراً كأنه عدّاد حقيقي على أدمن محلي -->
+        <div class="stat-card users-card" id="usersStatCard" onclick="switchAdminTab('tabUsers')">
           <div class="stat-icon"><i class="fa-solid fa-users"></i></div>
           <div class="stat-info">
             <span class="stat-label">المستخدمين المسجلين</span>
@@ -105,24 +110,39 @@
       </section>
 
       <!-- Navigation Tabs -->
+      <!-- كل الأزرار موجودة دوماً في الـDOM (لحفظ فهرسة data-tab)، وتُخفى بـ
+           style.display حسب الدور في applyRoleVisibility() — لا زرّ معطَّل، بل
+           غائب كلياً عمّن لا يملك صلاحيته (#20 قاعدة "الحجب لا التعطيل") -->
       <nav class="admin-nav-tabs">
-        <button class="admin-tab-btn active" onclick="switchAdminTab('tabEvents')">
+        <button class="admin-tab-btn active" data-tab="tabEvents" onclick="switchAdminTab('tabEvents')">
           <i class="fa-solid fa-list-check"></i> إدارة ومراجعة المناسبات
         </button>
-        <button class="admin-tab-btn" onclick="switchAdminTab('tabDirectAdd')">
+        <button class="admin-tab-btn" data-tab="tabDirectAdd" onclick="switchAdminTab('tabDirectAdd')">
           <i class="fa-solid fa-plus-circle"></i> نشر مناسبة معتمدة فوراً
         </button>
-        <button class="admin-tab-btn" onclick="switchAdminTab('tabBroadcast')">
-          <i class="fa-solid fa-bullhorn"></i> البث والإشعارات العامة
+        <button class="admin-tab-btn" data-tab="tabServiceProviders" onclick="switchAdminTab('tabServiceProviders')">
+          <i class="fa-solid fa-handshake"></i> دليل مزوّدي الخدمات
         </button>
-        <button class="admin-tab-btn" onclick="switchAdminTab('tabComments')">
+        <button class="admin-tab-btn" data-tab="tabComments" onclick="switchAdminTab('tabComments')">
           <i class="fa-solid fa-comment-dots"></i> مراقبة التبريكات
         </button>
-        <button class="admin-tab-btn" onclick="switchAdminTab('tabUsers')">
+        <button class="admin-tab-btn" id="tabBroadcastBtn" data-tab="tabBroadcast" onclick="switchAdminTab('tabBroadcast')" style="display:none;">
+          <i class="fa-solid fa-bullhorn"></i> البث والإشعارات العامة
+        </button>
+        <button class="admin-tab-btn" id="tabUsersBtn" data-tab="tabUsers" onclick="switchAdminTab('tabUsers')" style="display:none;">
           <i class="fa-solid fa-user-gear"></i> إدارة المستخدمين
         </button>
-        <button class="admin-tab-btn" id="tabOccasionTypesBtn" onclick="switchAdminTab('tabOccasionTypes')" style="display:none;">
+        <button class="admin-tab-btn" id="tabOccasionTypesBtn" data-tab="tabOccasionTypes" onclick="switchAdminTab('tabOccasionTypes')" style="display:none;">
           <i class="fa-solid fa-sitemap"></i> أنواع المناسبات
+        </button>
+        <button class="admin-tab-btn" id="tabVillagesBtn" data-tab="tabVillages" onclick="switchAdminTab('tabVillages')" style="display:none;">
+          <i class="fa-solid fa-mountain-city"></i> القرى
+        </button>
+        <button class="admin-tab-btn" id="tabServiceCategoriesBtn" data-tab="tabServiceCategories" onclick="switchAdminTab('tabServiceCategories')" style="display:none;">
+          <i class="fa-solid fa-layer-group"></i> فئات الخدمات
+        </button>
+        <button class="admin-tab-btn" id="tabAdminsBtn" data-tab="tabAdmins" onclick="switchAdminTab('tabAdmins')" style="display:none;">
+          <i class="fa-solid fa-user-shield"></i> الأدمن والبلدات
         </button>
       </nav>
 
@@ -244,12 +264,12 @@
         </div>
       </section>
 
-      <!-- TAB 4: COMMENTS MODERATION -->
+      <!-- TAB 4: COMMENTS MODERATION — حجب لا حذف (#20 قصة 26-27) -->
       <section id="tabComments" class="admin-tab-pane">
         <div class="pane-box">
           <div class="pane-header">
-            <h2><i class="fa-solid fa-shield-halved"></i> مراقبة التبريكات والدردشة الحية</h2>
-            <p>مراجعة وحذف أي رسالة غير ملائمة بنقرة واحدة</p>
+            <h2><i class="fa-solid fa-shield-halved"></i> مراقبة التبريكات والتعازي</h2>
+            <p>الحجب لا يحذف الرسالة — تبقى في صفحة كاتبها كما هي، ولا يُخطَر بحجبها. يُسجَّل اسمك ووقت الحجب على الرسالة</p>
           </div>
           <div id="adminCommentsList" class="admin-comments-table-wrapper"></div>
         </div>
@@ -369,6 +389,216 @@
               <button type="button" class="btn-reject" onclick="closeOccasionTypeForm()">إلغاء</button>
             </div>
           </form>
+        </div>
+      </section>
+
+      <!-- TAB: SERVICE PROVIDERS — أدمن مقيَّد ببلداته (قصص 28-29) -->
+      <section id="tabServiceProviders" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-handshake"></i> دليل مزوّدي الخدمات</h2>
+            <p>مزوّدو بلداتك فقط — الطبّاخ والمصوّر وصاحب الصالة، بإذن موثَّق منهم</p>
+          </div>
+
+          <div id="providerScopeNotice" class="occasion-types-notice" style="display:none;"></div>
+
+          <div class="pane-controls-bar">
+            <button type="button" class="admin-btn-primary occasion-type-new-btn" id="providerNewBtn" onclick="openProviderForm()">
+              <i class="fa-solid fa-plus"></i> مزوّد جديد
+            </button>
+          </div>
+
+          <div id="providersList" class="admin-table-wrapper"></div>
+        </div>
+
+        <div class="pane-box" id="providerFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="providerFormTitle"><i class="fa-solid fa-pen"></i> مزوّد خدمة جديد</h2>
+            <p>الحقول المعلَّمة * إلزامية</p>
+          </div>
+
+          <form id="providerForm" class="admin-form" onsubmit="handleProviderSubmit(event)">
+            <input type="hidden" id="provId">
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم المزوّد *</label>
+                <input type="text" id="provName" required>
+              </div>
+              <div class="form-group half">
+                <label>الفئة *</label>
+                <select id="provCategory" required></select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>رقم الهاتف *</label>
+                <input type="tel" id="provPhone" placeholder="05XXXXXXXX" required>
+              </div>
+              <div class="form-group half">
+                <label>رابط الصورة (اختياري)</label>
+                <input type="url" id="provImage" placeholder="https://...">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>الوصف</label>
+              <textarea id="provDescription" rows="3" style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:12px; border-radius:8px; font-family:var(--font-tajawal);"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>البلدات التي يخدمها *</label>
+              <div id="provTownsPicker" class="provider-towns-picker"></div>
+              <span class="hint-text">القائمة مقصورة على بلداتك أنت فقط — الخادم يرفض الطلب كاملاً إن حوى بلدة خارجها</span>
+            </div>
+
+            <div class="form-group provider-consent-box">
+              <label class="consent-box-title"><i class="fa-solid fa-file-signature"></i> تسجيل إذن المزوّد بالنشر (إلزامي)</label>
+              <span class="hint-text">هذا السجل هو الدليل الوحيد على أن المزوّد وافق على ظهور اسمه ورقمه في الدليل — لا يُقبل مزوّد بلا هذين الحقلين</span>
+              <div class="form-row" style="margin-top:10px;">
+                <div class="form-group half">
+                  <label>تاريخ ووقت الموافقة *</label>
+                  <input type="datetime-local" id="provConsentAt" required>
+                </div>
+                <div class="form-group half">
+                  <label>وسيلة الحصول على الإذن *</label>
+                  <select id="provConsentChannel" required>
+                    <option value="">اختر...</option>
+                    <option value="phone">مكالمة هاتفية</option>
+                    <option value="whatsapp">واتساب</option>
+                    <option value="in_person">لقاء شخصي</option>
+                    <option value="written">إقرار مكتوب</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <label class="ot-check"><input type="checkbox" id="provIsActive" checked> نشِط (يظهر في الدليل العام)</label>
+
+            <div class="form-row" style="margin-top:18px;">
+              <button type="submit" class="admin-btn-primary" id="provSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ المزوّد
+              </button>
+              <button type="button" class="btn-reject" onclick="closeProviderForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB: VILLAGES — سوبر أدمن حصراً (قصص 32-33) -->
+      <section id="tabVillages" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-mountain-city"></i> القرى والتجمعات</h2>
+            <p>كل قرية تحتاج إحداثيات حقيقية — بلا هذا لن يحصل من ينشر فيها على دبّوس صحيح على الخريطة</p>
+          </div>
+          <div class="pane-controls-bar">
+            <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openVillageForm()">
+              <i class="fa-solid fa-plus"></i> قرية جديدة
+            </button>
+          </div>
+          <div id="villagesList" class="admin-table-wrapper"></div>
+        </div>
+
+        <div class="pane-box" id="villageFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="villageFormTitle"><i class="fa-solid fa-pen"></i> قرية جديدة</h2>
+          </div>
+          <form id="villageForm" class="admin-form" onsubmit="handleVillageSubmit(event)">
+            <input type="hidden" id="vilId">
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم القرية *</label>
+                <input type="text" id="vilName" required>
+              </div>
+              <div class="form-group half">
+                <label>الترتيب</label>
+                <input type="number" id="vilPosition" value="0" step="1">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>خط العرض (latitude) *</label>
+                <input type="number" id="vilLat" step="any" placeholder="مثال: 31.2589" required>
+              </div>
+              <div class="form-group half">
+                <label>خط الطول (longitude) *</label>
+                <input type="number" id="vilLng" step="any" placeholder="مثال: 34.7913" required>
+              </div>
+            </div>
+            <span class="hint-text">الإحداثيات إلزامية — قرية بلا إحداثيات حقيقية تعيد إنتاج عطل الدبّوس المفقود الذي تحلّه القرى أصلاً</span>
+            <label class="ot-check" style="margin-top:14px; display:block;"><input type="checkbox" id="vilIsActive" checked> نشِطة (تظهر لمن ينشر مناسبة)</label>
+            <div class="form-row" style="margin-top:18px;">
+              <button type="submit" class="admin-btn-primary" id="vilSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ القرية
+              </button>
+              <button type="button" class="btn-reject" onclick="closeVillageForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB: SERVICE CATEGORIES — سوبر أدمن حصراً (قصة 34) -->
+      <section id="tabServiceCategories" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-layer-group"></i> فئات الخدمات</h2>
+            <p>طبّاخون · مصوّرون · صالات · فنانون... فئات بيانات وقت تشغيل، بلا نشر ولا ترحيل لكل فئة جديدة</p>
+          </div>
+          <div class="pane-controls-bar">
+            <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openServiceCategoryForm()">
+              <i class="fa-solid fa-plus"></i> فئة جديدة
+            </button>
+          </div>
+          <div id="serviceCategoriesList" class="admin-table-wrapper"></div>
+        </div>
+
+        <div class="pane-box" id="serviceCategoryFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="serviceCategoryFormTitle"><i class="fa-solid fa-pen"></i> فئة خدمة جديدة</h2>
+          </div>
+          <form id="serviceCategoryForm" class="admin-form" onsubmit="handleServiceCategorySubmit(event)">
+            <input type="hidden" id="scId">
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم الفئة *</label>
+                <input type="text" id="scName" placeholder="مثال: مصوّرون" required>
+              </div>
+              <div class="form-group half">
+                <label>الأيقونة (إيموجي) *</label>
+                <input type="text" id="scIcon" placeholder="مثال: 📷" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اللون *</label>
+                <input type="color" id="scColor" value="#0369a1" required>
+              </div>
+              <div class="form-group half">
+                <label>الترتيب</label>
+                <input type="number" id="scPosition" value="0" step="1">
+              </div>
+            </div>
+            <label class="ot-check" style="display:block;"><input type="checkbox" id="scIsActive" checked> نشِطة</label>
+            <div class="form-row" style="margin-top:18px;">
+              <button type="submit" class="admin-btn-primary" id="scSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ الفئة
+              </button>
+              <button type="button" class="btn-reject" onclick="closeServiceCategoryForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB: ADMIN ↔ TOWN ASSIGNMENT — سوبر أدمن حصراً (قصص 31، 36) -->
+      <section id="tabAdmins" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-user-shield"></i> الأدمن والبلدات</h2>
+            <p>أدمن جديد لا يملك أي بلدة هنا <strong>لا يرى ولا يعتمد شيئاً</strong> في لوحته — أسنِد له بلدة واحدة على الأقل ليبدأ عمله</p>
+          </div>
+          <div id="adminsList" class="admin-table-wrapper"></div>
         </div>
       </section>
 
