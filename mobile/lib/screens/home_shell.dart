@@ -10,8 +10,16 @@ import 'add_event_screen.dart';
 import 'events_screen.dart';
 import 'map_screen.dart';
 import 'nokoot_screen.dart';
+import 'services_screen.dart';
 
-/// الهيكل الرئيسي — خمس شاشات بشريط تنقّل سفلي.
+/// الهيكل الرئيسي — خمس وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر في الوسط.
+///
+/// «إضافة» ليست وجهة بل فعل (wayfinder #21 خطوة ١): خرجت من الشريط إلى زرّ
+/// عائم، فأفرغت خانة أخذتها «الخدمات» — الخمسة الأصليون (المناسبات، الخريطة،
+/// النقوط، حسابي) بقوا كما هم، ولم يتنحَّ أحد.
+///
+/// الخانة الخامسة هنا «حسابي»، بينما نظيرتها في الويب «الستيكرات» — قرار
+/// موثَّق لا انحراف بين العميلين (spec #21 خطوة ١، القرار ٢).
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -58,14 +66,23 @@ class _HomeShellState extends State<HomeShell> {
     super.dispose();
   }
 
+  /// يفتح شاشة النشر — نفس ما كان يفعله تبويب «إضافة» بالضبط، فقط كدفعٍ
+  /// جديد بدل تبديل تبويب. حاجز الحساب لم يتغيّر: يبقى داخل `AddEventScreen`
+  /// نفسها عند الإرسال، لا هنا (`_submit` في add_event_screen.dart).
+  void _openAddEvent() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AddEventScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const screens = [
       EventsScreen(),
       MapScreen(),
-      AddEventScreen(),
       NokootScreen(),
       AccountScreen(),
+      ServicesScreen(),
     ];
 
     return Scaffold(
@@ -80,6 +97,13 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openAddEvent,
+        tooltip: 'إعلان مناسبة',
+        child: const Icon(Icons.add),
+      ),
+      // في الوسط — RTL لا يعكس الوسط (spec #21 خطوة ١، #4).
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
@@ -95,11 +119,6 @@ class _HomeShellState extends State<HomeShell> {
             label: 'الخريطة',
           ),
           NavigationDestination(
-            icon: Icon(Icons.add_circle_outline),
-            selectedIcon: Icon(Icons.add_circle),
-            label: 'إضافة',
-          ),
-          NavigationDestination(
             icon: Icon(Icons.account_balance_wallet_outlined),
             selectedIcon: Icon(Icons.account_balance_wallet),
             label: 'النقوط',
@@ -108,6 +127,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
             label: 'حسابي',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.handyman_outlined),
+            selectedIcon: Icon(Icons.handyman),
+            label: 'الخدمات',
           ),
         ],
       ),

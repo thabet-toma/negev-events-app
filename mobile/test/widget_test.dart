@@ -9,10 +9,12 @@ import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
+import 'package:negev_events/models/service.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/edit_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
+import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
@@ -1122,5 +1124,220 @@ void main() {
         expect(requests.where((r) => r.method == 'PATCH'), isEmpty);
       },
     );
+  });
+
+  group('القرى والفنان — تحليل النموذج (wayfinder #21)', () {
+    test('Village.fromJson يقرأ الإحداثيات كأرقام', () {
+      final village = Village.fromJson({
+        'id': 4,
+        'name': 'أم بطين',
+        'latitude': '31.2500000',
+        'longitude': '34.8500000',
+        'position': 2,
+      });
+
+      expect(village.id, 4);
+      expect(village.name, 'أم بطين');
+      expect(village.latitude, 31.25);
+      expect(village.longitude, 34.85);
+    });
+
+    test('مناسبة بحقول قرية وفنان تُقرأ كاملة', () {
+      final event = Event.fromJson({
+        'id': 12,
+        'groom_name': 'أحمد',
+        'town': 'القرى والتجمعات',
+        'village_id': 4,
+        'village_name': 'أم بطين',
+        'artist_name': 'فلان الفلاني',
+        'artist_image_url': 'https://api.example.com/uploads/artist.jpg',
+      });
+
+      expect(event.villageId, 4);
+      expect(event.villageName, 'أم بطين');
+      expect(event.artistName, 'فلان الفلاني');
+      expect(event.artistImageUrl, 'https://api.example.com/uploads/artist.jpg');
+      // البلدة المعروضة تُلحق باسم القرية، ولا تُغيّر القيمة الخام `town`.
+      expect(event.townDisplay, 'القرى والتجمعات (أم بطين)');
+      expect(event.town, 'القرى والتجمعات');
+    });
+
+    test('غياب القرية والفنان يبقى null بلا نصّ بديل، وtownDisplay يساوي town', () {
+      final event = Event.fromJson({'id': 13, 'groom_name': 'سالم', 'town': 'رهط'});
+
+      expect(event.villageId, isNull);
+      expect(event.villageName, isNull);
+      expect(event.artistName, isNull);
+      expect(event.artistImageUrl, isNull);
+      expect(event.townDisplay, 'رهط');
+    });
+
+    testWidgets('سطر الفنان يظهر على الكرت فقط حين يُملأ الحقل', (tester) async {
+      final withArtist = Event.fromJson({
+        'id': 1,
+        'groom_name': 'أحمد',
+        'family_clan': 'آل فلان',
+        'town': 'رهط',
+        'artist_name': 'راشد الماجد',
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(body: EventCard(event: withArtist, onTap: () {})),
+          ),
+        ),
+      );
+      expect(find.textContaining('يحيي الحفلة الفنان راشد الماجد'), findsOneWidget);
+
+      final withoutArtist = Event.fromJson({
+        'id': 2,
+        'groom_name': 'أحمد',
+        'family_clan': 'آل فلان',
+        'town': 'رهط',
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(body: EventCard(event: withoutArtist, onTap: () {})),
+          ),
+        ),
+      );
+      expect(find.textContaining('يحيي الحفلة الفنان'), findsNothing);
+    });
+  });
+
+  group('دليل الخدمات — تحليل النموذج (wayfinder #21 خطوة ٣)', () {
+    test('سطر مزوّد في القائمة العامة يتحلّل بلا مفتاح phone إطلاقاً', () {
+      final provider = ServiceProvider.fromJson({
+        'id': 5,
+        'name': 'أبو خالد للولائم',
+        'category_id': 1,
+        'category_name': 'طبّاخون',
+        'image_url': 'https://api.example.com/uploads/cook.jpg',
+        'towns': ['رهط', 'اللقية'],
+      });
+
+      expect(provider.id, 5);
+      expect(provider.name, 'أبو خالد للولائم');
+      expect(provider.towns, ['رهط', 'اللقية']);
+      // لا استثناء رغم غياب `phone` كلياً من الحمولة — هذا هو المقصود بالضبط.
+      expect(provider, isA<ServiceProvider>());
+    });
+
+    test('مزوّد التفاصيل وحده يحمل phone والوصف', () {
+      final detail = ServiceProviderDetail.fromJson({
+        'id': 5,
+        'name': 'أبو خالد للولائم',
+        'category_id': 1,
+        'category_name': 'طبّاخون',
+        'phone': '0501234567',
+        'description': 'ولائم أعراس ومناسبات في كل أنحاء النقب',
+        'towns': ['رهط'],
+      });
+
+      expect(detail.phone, '0501234567');
+      expect(detail.description, 'ولائم أعراس ومناسبات في كل أنحاء النقب');
+    });
+
+    test('عميل API يقرأ صفحة المزوّدين وفئات الدليل', () async {
+      final api = apiReturning({
+        'success': true,
+        'providers': [
+          {
+            'id': 1,
+            'name': 'استوديو الصحراء',
+            'category_id': 2,
+            'category_name': 'مصوّرون',
+            'towns': ['تل السبع'],
+          },
+        ],
+        'pagination': {'page': 1, 'limit': 30, 'total': 1, 'totalPages': 1},
+      });
+
+      final page = await api.serviceProviders();
+      expect(page.providers, hasLength(1));
+      expect(page.providers.first.categoryName, 'مصوّرون');
+    });
+  });
+
+  group('الشريط السفلي — «الخدمات» بدل «إضافة»، وزرّ عائم للنشر (wayfinder #21)', () {
+    testWidgets('خمس وجهات فقط بلا "إضافة"، و"الخدمات" ضمنها، وزرّ عائم', (tester) async {
+      final api = apiReturning({'success': true});
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      // AppServices يجب أن يلفّ MaterialApp نفسه هنا، لا العكس — نفس ترتيب
+      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كزرّ النشر العائم أدناه)
+      // يُدرَج تحت هذا الـNavigator مباشرة، فيبقى حفيداً لـAppServices فقط
+      // إن كان AppServices فوق الـNavigator، لا داخل `home` تحته.
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: realtime,
+          child: const MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: HomeShell(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+      expect(navBar.destinations, hasLength(5));
+
+      // «إضافة» لم تعد وجهة في الشريط — الزرّ العائم هو النشر الآن.
+      expect(
+        find.descendant(of: find.byType(NavigationBar), matching: find.text('إضافة')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: find.byType(NavigationBar), matching: find.text('الخدمات')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
+        findsOneWidget,
+      );
+      expect(find.byType(FloatingActionButton), findsOneWidget);
+    });
+
+    testWidgets('الزرّ العائم يفتح شاشة النشر', (tester) async {
+      final api = apiReturning({'success': true});
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      // AppServices يجب أن يلفّ MaterialApp نفسه هنا، لا العكس — نفس ترتيب
+      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كزرّ النشر العائم أدناه)
+      // يُدرَج تحت هذا الـNavigator مباشرة، فيبقى حفيداً لـAppServices فقط
+      // إن كان AppServices فوق الـNavigator، لا داخل `home` تحته.
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: realtime,
+          child: const MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: HomeShell(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AddEventScreen), findsOneWidget);
+    });
   });
 }

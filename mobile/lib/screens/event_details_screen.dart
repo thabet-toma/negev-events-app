@@ -1,4 +1,5 @@
 import 'package:audioplayers/audioplayers.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -309,10 +310,13 @@ class _EventDetailsBody extends StatelessWidget {
                 label: type?.labelFor('family_clan') ?? 'العائلة',
                 value: event.familyClan,
               ),
+              // صورة الفنان تعيش هنا حصراً — الكرت يحمل الاسم وحده (#7).
+              if (event.artistName != null && event.artistName!.trim().isNotEmpty)
+                _ArtistTile(name: event.artistName!, imageUrl: event.artistImageUrl),
               _InfoRow(
                 icon: Icons.location_on_outlined,
                 label: type?.labelFor('location_name') ?? 'المكان',
-                value: '${event.town} — ${event.locationName}',
+                value: '${event.townDisplay} — ${event.locationName}',
               ),
               if (showSecondaryLocation && event.secondaryLocationName != null)
                 _InfoRow(
@@ -502,6 +506,43 @@ class _TypeHeaderBadge extends StatelessWidget {
           Text(
             type.name,
             style: TextStyle(fontSize: 12.5, color: color, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// الفنان الذي يحيي الحفلة — صورته هنا وحدها (الكرت يحمل الاسم فقط، #7).
+/// بلا صورة: أيقونة موسيقى بديلة، لا مربع فارغ.
+class _ArtistTile extends StatelessWidget {
+  const _ArtistTile({required this.name, this.imageUrl});
+
+  final String name;
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = imageUrl != null && imageUrl!.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: context.c.surfaceSunk,
+            backgroundImage: hasImage ? CachedNetworkImageProvider(imageUrl!) : null,
+            child: hasImage
+                ? null
+                : Icon(Icons.music_note_outlined, color: context.c.sky, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'يحيي الحفلة الفنان $name',
+              style: TextStyle(fontSize: 14, color: context.c.inkSoft),
+            ),
           ),
         ],
       ),

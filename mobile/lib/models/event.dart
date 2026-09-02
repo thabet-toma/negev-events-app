@@ -20,6 +20,16 @@ class Event {
   final String? audioUrl;
   final String? audioTitle;
   final String? hostPhone;
+
+  /// «القرى والتجمعات» بند جامع، والقرية مكانٌ حقيقي تحته — كلاهما قد يغيب:
+  /// صفّ قديم قبل القرى، أو مناسبة في بلدة معروفة أصلاً بلا بند جامع.
+  final int? villageId;
+  final String? villageName;
+
+  /// حقلا الفنان — من `OCCASION_FIELDS`، ظاهران فقط لنوع يُشعلهما. غيابهما
+  /// يعني عدم ظهورهما على الكرت والتفاصيل، لا نصّاً بديلاً.
+  final String? artistName;
+  final String? artistImageUrl;
   final int viewsCount;
   final Map<String, int> reactions;
   final List<Congratulation> congratulations;
@@ -57,6 +67,10 @@ class Event {
     this.audioUrl,
     this.audioTitle,
     this.hostPhone,
+    this.villageId,
+    this.villageName,
+    this.artistName,
+    this.artistImageUrl,
     this.viewsCount = 0,
     this.reactions = const {},
     this.congratulations = const [],
@@ -71,6 +85,11 @@ class Event {
 
   int get totalReactions =>
       reactions.values.fold(0, (sum, value) => sum + value);
+
+  /// البلدة كما تُعرض للمستخدم — تُلحق باسم القرية حين تكون معروفة، بلا تغيير
+  /// حرفي على `town` نفسها (تبقى القيمة الخام «القرى والتجمعات» كما وصلت).
+  String get townDisplay =>
+      (villageName == null || villageName!.isEmpty) ? town : '$town ($villageName)';
 
   /// نسخة بحالة تذكير محدَّثة — تحدّث محلياً بعد نجاح POST/DELETE .../remind
   /// دون إعادة جلب الصفحة كاملة فتفقد ما تراكم من "عرض المزيد".
@@ -92,6 +111,10 @@ class Event {
         audioUrl: audioUrl,
         audioTitle: audioTitle,
         hostPhone: hostPhone,
+        villageId: villageId,
+        villageName: villageName,
+        artistName: artistName,
+        artistImageUrl: artistImageUrl,
         viewsCount: viewsCount,
         reactions: reactions,
         congratulations: congratulations,
@@ -163,6 +186,10 @@ class Event {
       audioUrl: _nullableString(json['audio_url']),
       audioTitle: _nullableString(json['audio_title']),
       hostPhone: _nullableString(json['host_phone']),
+      villageId: json['village_id'] == null ? null : _toInt(json['village_id']),
+      villageName: _nullableString(json['village_name']),
+      artistName: _nullableString(json['artist_name']),
+      artistImageUrl: _nullableString(json['artist_image_url']),
       viewsCount: _toInt(json['views_count']),
       reactions: reactions,
       congratulations: congratulations,

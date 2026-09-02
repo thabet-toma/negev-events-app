@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import '../models/event.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
+import '../models/service.dart';
 import '../models/user.dart';
 import 'api_client.dart';
 
@@ -77,6 +78,62 @@ class NegevApi {
       });
     }
     return result;
+  }
+
+  /// القرى النشِطة — من مفتاح `villages` في GET /api/towns. بيانات وقت تشغيل
+  /// حصراً: لا تُكرَّر في `lib/config.dart` مهما كثرت (خلافاً لـ `TOWNS`
+  /// الثمانية، التي تبقى ثابتاً بالكود لأنها لا تتغيّر إلا بنشر جديد).
+  Future<List<Village>> listVillages() async {
+    final data = await _client.get('/api/towns');
+    final raw = data['villages'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map<String, dynamic>>().map(Village.fromJson).toList();
+  }
+
+  // --- دليل الخدمات (عام، بلا حساب) ----------------------------------
+
+  Future<List<ServiceCategory>> serviceCategories() async {
+    final data = await _client.get('/api/services/categories');
+    final list = data['categories'];
+    if (list is! List) return const [];
+    return list.whereType<Map<String, dynamic>>().map(ServiceCategory.fromJson).toList();
+  }
+
+  /// صفحة مزوّدين — بلا `phone` أبداً (قرار خادم، رسمياً في enforcement rule 6
+  /// من مواصفة الدليل). الرقم لا يصل إلا عبر [serviceProviderDetails].
+  Future<ServiceProvidersPage> serviceProviders({
+    int? categoryId,
+    String? town,
+    int page = 1,
+    int limit = 30,
+  }) async {
+    final query = <String, String>{'page': '$page', 'limit': '$limit'};
+    if (categoryId != null) query['category_id'] = '$categoryId';
+    if (town != null && town.isNotEmpty && town != 'الكل') query['town'] = town;
+
+    final data = await _client.get('/api/services/providers', query: query);
+    final list = data['providers'];
+    final providers = list is List
+        ? list.whereType<Map<String, dynamic>>().map(ServiceProvider.fromJson).toList()
+        : <ServiceProvider>[];
+
+    final rawPagination = data['pagination'];
+    final pagination = rawPagination is Map<String, dynamic>
+        ? ServiceProvidersPagination.fromJson(rawPagination)
+        : ServiceProvidersPagination(
+            page: page, limit: limit, total: providers.length, totalPages: 1);
+
+    return ServiceProvidersPage(providers: providers, pagination: pagination);
+  }
+
+  /// مزوّد واحد كاملاً — الموضع الوحيد الذي يحمل `phone` والوصف.
+  Future<ServiceProviderDetail> serviceProviderDetails(int id) async {
+    final data = await _client.get('/api/services/providers/$id');
+    final provider = data['provider'];
+    if (provider is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة بيانات مزوّد الخدمة');
+    }
+    return ServiceProviderDetail.fromJson(provider);
   }
 
   /// أنواع المناسبات النشِطة، مرتّبة، وبحقول كل نوع وتفاعلاته — لا قائمة ثابتة.
@@ -256,6 +313,7 @@ class NegevApi {
     required Map<String, String> fields,
     http.MultipartFile? poster,
     http.MultipartFile? audio,
+    http.MultipartFile? artistImage,
   }) async {
     final allFields = <String, String>{
       'occasion_type_id': '$occasionTypeId',
@@ -277,7 +335,7 @@ class NegevApi {
     final data = await _client.postMultipart(
       '/api/events',
       fields: allFields,
-      files: [?poster, ?audio],
+      files: [?poster, ?audio, ?artistImage],
       auth: true,
     );
     final message = data['message'];
@@ -449,6 +507,38 @@ class TownCoordinate {
   final double lng;
 
   const TownCoordinate({required this.lat, required this.lng});
+}
+
+/// قرية نشِطة — من مفتاح `villages` في GET /api/towns. مكان حقيقي بإحداثياته
+/// الخاصة، بخلاف بند «القرى والتجمعات» الجامع الذي لا مركز واحداً له.
+class Village {
+  final int id;
+  final String name;
+  final double latitude;
+  final double longitude;
+  final int position;
+
+  const Village({
+    required this.id,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.position,
+  });
+
+  factory Village.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    final lat = json['latitude'];
+    final lng = json['longitude'];
+    final position = json['position'];
+    return Village(
+      id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
+      name: '${json['name'] ?? ''}',
+      latitude: lat is num ? lat.toDouble() : double.tryParse('$lat') ?? 0,
+      longitude: lng is num ? lng.toDouble() : double.tryParse('$lng') ?? 0,
+      position: position is int ? position : int.tryParse('${position ?? ''}') ?? 0,
+    );
+  }
 }
 
 /// ردّ POST /api/events — الرسالة إلزامية، والتحذير اللين اختياري.
