@@ -41,6 +41,33 @@ async function test(name, fn) {
  * of this suite keeps seeing every occasion type, matching its pre-#20
  * behaviour.
  */
+/**
+ * Posts a real multipart/form-data publish, the way both clients actually do
+ * it. The JSON `api()` helper below cannot exercise multer at all, which is
+ * why file upload went unverified until an artist image was added to the form
+ * and the whole path had to be trusted by reading. `fields` uses the same
+ * `honorees[0][name]` bracket notation web/app.js sends.
+ */
+async function apiUpload(path, { fields = {}, files = [], token } = {}) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  for (const file of files) {
+    form.append(file.field, new Blob([file.buffer], file.type ? { type: file.type } : {}), file.name);
+  }
+
+  const headers = { 'X-App-Version': '2.0.0' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers, body: form });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+/** A 1×1 PNG — the smallest byte sequence that is genuinely an image. */
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+);
+
 async function api(method, path, { body, token, legacy = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -1420,6 +1447,68 @@ async function run() {
     await api('DELETE', `/api/admin/villages/${second.body.village.id}`, { token: superAdminToken });
   });
 
+
+  console.log('\nFile upload: the multipart path both clients actually use');
+
+  function uploadFields(overrides = {}) {
+    return {
+      occasion_type_id: String(weddingType.id),
+      'honorees[0][name]': 'عريس الرفع',
+      town: 'حورة',
+      location_name: 'ديوان الاختبار',
+      event_date: '2027-07-01',
+      ...overrides
+    };
+  }
+
+  await test('A poster uploads and comes back as an absolute URL, not a relative one', async () => {
+    const { status, body } = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields(),
+      files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+    });
+    assert.strictEqual(status, 201);
+
+    const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
+    assert.ok(/^https?:\/\//.test(fetched.event.poster_url), `poster_url must be absolute, got: ${fetched.event.poster_url}`);
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('A poster and an artist image upload together — three file fields are now allowed, not two', async () => {
+    const { status, body } = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ artist_name: 'فنان الاختبار' }),
+      files: [
+        { field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' },
+        { field: 'artist_image', buffer: TINY_PNG, type: 'image/png', name: 'a.png' }
+      ]
+    });
+    assert.strictEqual(status, 201);
+
+    const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
+    assert.strictEqual(fetched.event.artist_name, 'فنان الاختبار');
+    assert.ok(/^https?:\/\//.test(fetched.event.artist_image_url), 'artist_image_url must be absolute too');
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('A file whose type is not on the allowlist is rejected with a message that names what IS accepted', async () => {
+    const { status, body } = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields(),
+      files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/heic', name: 'photo.heic' }]
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/JPG/.test(body.message || ''), `the rejection must name the accepted formats, got: ${body.message}`);
+  });
+
+  await test('A file sent under an unknown field name is rejected rather than silently stored', async () => {
+    const { status } = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields(),
+      files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'x.png' }]
+    });
+    assert.strictEqual(status, 400);
+  });
 
   console.log('\nMap picker: server-side town mismatch warning + coordinate validation (#20 step 6)');
 
