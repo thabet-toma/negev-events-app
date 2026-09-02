@@ -72,10 +72,15 @@ flutter build apk --release --dart-define=API_BASE=https://munasbat.ktra-pro.tec
 ووصل سليماً تماماً — وموقّعاً، وبالحجم الصحيح — وهو الملف الخطأ.
 
 ```bash
-unzip -p build/app/outputs/flutter-apk/app-release.apk AndroidManifest.xml | strings | grep -o '1\.[0-9]\.[0-9]' | head -3
-sha256sum build/app/outputs/flutter-apk/app-release.apk
-ls -l --time-style=long-iso build/app/outputs/flutter-apk/app-release.apk
+APK=build/app/outputs/flutter-apk/app-release.apk
+"$LOCALAPPDATA/Android/Sdk/build-tools/36.1.0/aapt2.exe" dump badging "$APK" | grep -oE "versionName='[^']*'|versionCode='[^']*'"
+sha256sum "$APK"
+ls -l --time-style=long-iso "$APK"
 ```
+
+`AndroidManifest.xml` داخل الـAPK ثنائي بترميز UTF‑16، فـ`strings` العادي **لا يجد
+رقم النسخة ويخرج فارغاً** — وفراغٌ يسهل قراءته على أنه «لا مشكلة». استعمل `aapt2`؛
+وإن لم يتوفّر فالبديل الصحيح `strings -e l` لا `strings`.
 
 ثلاثة شروط، **كلها معاً**:
 
@@ -237,14 +242,16 @@ curl -s -o /dev/null -w "%{http_code}\n" https://munasbat.ktra-pro.tech/
 ls -lh /tmp/negev-events-1.2.0.apk
 sha256sum /tmp/negev-events-1.2.0.apk
 sha256sum server/downloads/negev-events.apk
-unzip -p /tmp/negev-events-1.2.0.apk AndroidManifest.xml | strings | grep -o '1\.[0-9]\.[0-9]' | head -3
+unzip -p /tmp/negev-events-1.2.0.apk AndroidManifest.xml | strings -e l | grep -oE '^1\.[0-9]+\.[0-9]+$' | sort -u
 ```
 
 🛑 **قبل مقارنة البصمة بالمالك، افحص أنّ الملف جديد أصلاً:**
 
 - بصمة `/tmp` **يجب ألّا تساوي** بصمة `server/downloads/negev-events.apk` الحالية.
   إن تساوتا فما وصل هو النسخة المنشورة نفسها — **قف، والمالك لم يُعِد البناء**.
-- ورقم النسخة داخل `AndroidManifest.xml` يجب أن يكون **`1.2.0`**.
+- ورقم النسخة داخل `AndroidManifest.xml` يجب أن يكون **`1.2.0`**. (‏`strings` العادي
+  يخرج فارغاً هنا لأن الملف بترميز UTF‑16 — `strings -e l` هو الصحيح، والفراغ ليس
+  نجاحاً.)
 
 هذا ليس فرضاً نظرياً: حدث فعلاً في المحاولة الأولى لهذا الإصدار — رُفع ناتج بناء
 قديم، سليمٌ وموقَّع وبالحجم نفسه، ولم يكن يميّزه عن الجديد إلا هذان الفحصان.
