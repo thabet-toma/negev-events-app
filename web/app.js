@@ -30,6 +30,11 @@ let myEventsCache = [];
 
 // Services directory tab (#31) — فئات مسطَّحة، قائمة أبجدية، بلا تقييمات
 let servicesInitialized = false;
+// Whether the publish form has actually been built. This is NOT the same
+// question as "have occasion types been fetched": the browse tabs fetch them
+// at startup, so keying the form's construction off that cache meant the form
+// was never built at all and its spinner span forever.
+let publishFormReady = false;
 let serviceCategoriesCache = null;
 let selectedServiceCategoryId = null; // null = "الكل"
 let selectedServiceTown = '';
@@ -1239,7 +1244,7 @@ function switchTab(tabId) {
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
   else if (tabId === 'tabAdd') {
-    if (!occasionTypesCache) initPublishForm();
+    if (!publishFormReady) initPublishForm();
     fetchMyEvents();
   } else if (tabId === 'tabServices') {
     if (!servicesInitialized) { servicesInitialized = true; initServicesTab(); }
@@ -1371,6 +1376,9 @@ async function initPublishForm() {
   `).join('');
 
   selectOccasionType(types[0].id);
+  // Only now is the form genuinely built. Set on success, so the early return
+  // above (no types available) leaves the next visit free to try again.
+  publishFormReady = true;
 }
 
 function selectOccasionType(typeId) {
