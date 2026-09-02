@@ -1378,6 +1378,49 @@ async function run() {
     // it, then deletes it once it's no longer needed.
   });
 
+  // Publishing into a village derives the pin; EDITING into a different one
+  // must move it too, or the row keeps coordinates that point at the village
+  // it is no longer in — the exact wrong-pin failure villages exist to fix.
+  await test('Editing an event to a different village moves its pin as well as its village', async () => {
+    const first = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية الانتقال أ ${Date.now()}`, latitude: 31.21, longitude: 34.81 }
+    });
+    const second = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية الانتقال ب ${Date.now()}`, latitude: 31.42, longitude: 34.62 }
+    });
+    assert.strictEqual(first.status, 201);
+    assert.strictEqual(second.status, 201);
+
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس ينتقل بين قريتين' }],
+        town: 'القرى والتجمعات',
+        village_id: first.body.village.id,
+        event_date: '2027-01-07'
+      })
+    });
+    const before = await api('GET', `/api/events/${created.eventId}`);
+    assert.strictEqual(Number(before.body.event.latitude), 31.21);
+
+    const patched = await api('PATCH', `/api/events/${created.eventId}`, {
+      token: adminToken,
+      body: { village_id: second.body.village.id }
+    });
+    assert.strictEqual(patched.status, 200);
+
+    const after = await api('GET', `/api/events/${created.eventId}`);
+    assert.strictEqual(Number(after.body.event.latitude), 31.42);
+    assert.strictEqual(Number(after.body.event.longitude), 34.62);
+
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+    await api('DELETE', `/api/admin/villages/${first.body.village.id}`, { token: superAdminToken });
+    await api('DELETE', `/api/admin/villages/${second.body.village.id}`, { token: superAdminToken });
+  });
+
+
   console.log('\nMap picker: server-side town mismatch warning + coordinate validation (#20 step 6)');
 
   await test('A pin inside the chosen town gets no location_warning on publish', async () => {
@@ -2485,6 +2528,24 @@ async function run() {
       token: noScopeAdminToken, body: { status: 'approved' }
     });
     assert.strictEqual(attempt.status, 404, 'zero admin_towns rows must fail closed, even for a town that objectively has events');
+  });
+
+  // The panel asks the server who it is instead of inferring its towns from
+  // whatever happens to be in its lists. That inference is empty for exactly
+  // the brand-new admin who most needs to be told why the panel looks empty.
+  await test("GET /admin/me reports the caller's own towns, and an admin with none gets an empty list", async () => {
+    const mine = await api('GET', '/api/admin/me', { token: scopedAdminToken });
+    assert.strictEqual(mine.status, 200);
+    assert.strictEqual(mine.body.role, 'admin');
+    assert.deepStrictEqual(mine.body.towns, [scopedTown]);
+
+    const none = await api('GET', '/api/admin/me', { token: noScopeAdminToken });
+    assert.strictEqual(none.status, 200);
+    assert.deepStrictEqual(none.body.towns, [], 'an unassigned admin must be told plainly that it holds no towns');
+
+    const boss = await api('GET', '/api/admin/me', { token: superAdminToken });
+    assert.strictEqual(boss.body.role, 'super_admin');
+    assert.ok(boss.body.towns.length >= TOWNS.length, 'a super_admin implicitly holds every town');
   });
 
   await test("Case 8: an admin publishing in their own town is approved immediately; the same admin publishing outside it lands pending, never rejected", async () => {
