@@ -19,6 +19,19 @@
 
 # (أ) البناء والتوقيع والرفع — على جهازك
 
+> ⚠️ **شغّل هذا القسم كلّه في Git Bash، لا في PowerShell.** `sign-release.sh`
+> سكربت bash لا يعمل في PowerShell أصلاً، و`sha256sum` و`strings` و`unzip` غير
+> موجودة هناك. وPowerShell 5.1 (الافتراضي على ويندوز) لا يعرف `&&` ولا `||` حتى.
+>
+> إن أصررت على PowerShell للرفع وحده، فالمكافئ الصحيح للفحص والرفع معاً:
+>
+> ```powershell
+> $apk="<المسار الكامل>\mobile\build\app\outputs\flutter-apk\app-release.apk"; $want="<البصمة>"; $got=(Get-FileHash $apk -Algorithm SHA256).Hash.ToLower(); if ($got -eq $want) { scp -i "$env:USERPROFILE\.ssh\hostenger2" $apk "root@munasbat.ktra-pro.tech:/tmp/negev-events-1.2.0.apk" } else { Write-Host "STOP - hash mismatch - $got" }
+> ```
+>
+> (‏`Get-FileHash` بدل `sha256sum`، و`$env:USERPROFILE\.ssh\` بدل `~/.ssh/` لأن
+> `scp` برنامج خارجي لا يفكّ `~`.)
+
 ## ١. تأكّد من الأرضية
 
 ```bash
