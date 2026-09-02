@@ -3,10 +3,25 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
+const adminScope = require('./adminScope.service');
 
-/** Headline counters for the admin dashboard, in a single round trip each. */
-async function stats() {
-  const [eventRow, userRow, congratsRow] = await Promise.all([
+/**
+ * Headline counters for the admin dashboard, scoped to `user`'s towns
+ * (rule 1 of the admin-scoping spec — the restriction lives in the query,
+ * not filtered afterward in JS). Every counter here is either about events
+ * (scoped via `townScopeClause` on `events.town`) or about their children
+ * (congratulations, scoped by joining back to `events`) — `totalUsers` is
+ * the one exception: it counts the whole platform's users, a fact that has
+ * nothing to do with any town, so it cannot be scoped by town at all. Per
+ * the spec that makes it super_admin-only information (story 35); a scoped
+ * admin gets `0` rather than the key disappearing, so callers never have to
+ * special-case a missing field.
+ */
+async function stats(user) {
+  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const isSuperAdmin = Boolean(user && user.role === 'super_admin');
+
+  const [eventRow, congratsRow] = await Promise.all([
     db.queryOne(
       `SELECT
          COUNT(*) AS total,
@@ -14,27 +29,44 @@ async function stats() {
          SUM(status = 'approved') AS approved,
          SUM(status = 'rejected') AS rejected,
          COALESCE(SUM(views_count), 0) AS views
-       FROM events`
+       FROM events e
+       WHERE 1 = 1 ${clause}`,
+      params
     ),
-    db.queryOne('SELECT COUNT(*) AS total FROM users'),
-    db.queryOne('SELECT COUNT(*) AS total FROM congratulations')
+    db.queryOne(
+      `SELECT COUNT(*) AS total
+         FROM congratulations c
+         JOIN events e ON e.id = c.event_id
+        WHERE 1 = 1 ${clause}`,
+      params
+    )
   ]);
+
+  const totalUsers = isSuperAdmin
+    ? Number((await db.queryOne('SELECT COUNT(*) AS total FROM users')).total)
+    : 0;
 
   return {
     totalEvents: Number(eventRow.total),
     pendingEvents: Number(eventRow.pending || 0),
     approvedEvents: Number(eventRow.approved || 0),
     rejectedEvents: Number(eventRow.rejected || 0),
-    totalUsers: Number(userRow.total),
+    totalUsers,
     totalCongrats: Number(congratsRow.total),
     totalViews: Number(eventRow.views)
   };
 }
 
-async function listEvents(status) {
-  const rows = status
-    ? await db.query('SELECT * FROM events WHERE status = ? ORDER BY created_at DESC', [status])
-    : await db.query('SELECT * FROM events ORDER BY created_at DESC');
+/** The events queue, scoped to `user`'s towns the same way `stats` is. */
+async function listEvents(status, user) {
+  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const statusClause = status ? ' AND e.status = ?' : '';
+  const queryParams = status ? [...params, status] : params;
+
+  const rows = await db.query(
+    `SELECT e.* FROM events e WHERE 1 = 1 ${clause}${statusClause} ORDER BY e.created_at DESC`,
+    queryParams
+  );
   return rows.map(withAbsoluteMedia);
 }
 
@@ -165,18 +197,29 @@ async function transferEventOwnership(eventId, newOwnerId) {
   return withAbsoluteMedia(await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]));
 }
 
-async function listComments() {
+/**
+ * The comment moderation queue, scoped by its parent event's town. For a
+ * `super_admin` (`townScopeClause` returns no restriction) this keeps the
+ * original `LEFT JOIN` so a comment whose event row is somehow missing still
+ * shows up, exactly as before. For a scoped `admin` the join becomes an
+ * inner `JOIN`: a comment cannot be proven in-scope without a matching event
+ * row, so a missing event must hide the comment rather than leak it — the
+ * same "cannot happen" leak the LEFT JOIN would otherwise allow through with
+ * `e.town` reading NULL, which `IN (...)` never matches but is safer to rule
+ * out structurally than to rely on.
+ */
+async function listComments(user) {
+  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const joinType = clause ? 'JOIN' : 'LEFT JOIN';
+
   return db.query(
     `SELECT c.*, e.title AS event_title
        FROM congratulations c
-       LEFT JOIN events e ON e.id = c.event_id
-      ORDER BY c.created_at DESC`
+       ${joinType} events e ON e.id = c.event_id
+      WHERE 1 = 1 ${clause}
+      ORDER BY c.created_at DESC`,
+    params
   );
-}
-
-async function deleteComment(commentId) {
-  const { affectedRows } = await db.execute('DELETE FROM congratulations WHERE id = ?', [commentId]);
-  if (!affectedRows) throw ApiError.notFound('التعليق غير موجود');
 }
 
 async function listUsers() {
@@ -195,6 +238,60 @@ async function recordBroadcast({ title, message, sentBy }) {
   return insertId;
 }
 
+/** Every `admin`-role user with the towns assigned to it, for the super_admin panel. */
+async function listAdminsWithTowns() {
+  const admins = await db.query(
+    `SELECT id, phone_number, full_name, role, created_at
+       FROM users
+      WHERE role = 'admin'
+      ORDER BY created_at DESC`
+  );
+  if (!admins.length) return [];
+
+  const adminIds = admins.map(row => row.id);
+  const placeholders = adminIds.map(() => '?').join(', ');
+  const townRows = await db.query(
+    `SELECT user_id, town FROM admin_towns WHERE user_id IN (${placeholders}) ORDER BY town ASC`,
+    adminIds
+  );
+
+  const townsByUser = new Map();
+  for (const row of townRows) {
+    if (!townsByUser.has(row.user_id)) townsByUser.set(row.user_id, []);
+    townsByUser.get(row.user_id).push(row.town);
+  }
+
+  return admins.map(row => ({ ...row, towns: townsByUser.get(row.id) || [] }));
+}
+
+/**
+ * Replaces the full set of towns an `admin`-role user administers, inside a
+ * transaction so a partial write never leaves a stale mix of old and new
+ * rows. Every `town` value here already passed `TOWNS.includes(...)` in the
+ * route layer, so nothing here is unvalidated — but nothing here is string
+ * concatenation either, every value still travels through `?`.
+ */
+async function setAdminTowns(adminUserId, towns) {
+  return db.transaction(async connection => {
+    const [userRows] = await connection.execute(
+      "SELECT id FROM users WHERE id = ? AND role = 'admin'",
+      [adminUserId]
+    );
+    if (!userRows.length) throw ApiError.notFound('الأدمن غير موجود');
+
+    await connection.execute('DELETE FROM admin_towns WHERE user_id = ?', [adminUserId]);
+
+    for (const town of towns) {
+      await connection.execute(
+        'INSERT INTO admin_towns (user_id, town) VALUES (?, ?)',
+        [adminUserId, town]
+      );
+    }
+
+    return towns;
+  });
+}
+
 module.exports = {
   stats,
   listEvents,
@@ -202,7 +299,8 @@ module.exports = {
   deleteEvent,
   transferEventOwnership,
   listComments,
-  deleteComment,
   listUsers,
-  recordBroadcast
+  recordBroadcast,
+  listAdminsWithTowns,
+  setAdminTowns
 };

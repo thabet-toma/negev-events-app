@@ -42,13 +42,14 @@ function fileFilter(req, file, cb) {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: config.uploads.maxFileSizeMb * 1024 * 1024, files: 2 }
+  limits: { fileSize: config.uploads.maxFileSizeMb * 1024 * 1024, files: 3 }
 });
 
-/** Accepts an optional poster image and an optional audio track. */
+/** Accepts an optional poster image, an optional audio track, and an optional artist image. */
 const eventMedia = upload.fields([
   { name: 'poster', maxCount: 1 },
-  { name: 'audio', maxCount: 1 }
+  { name: 'audio', maxCount: 1 },
+  { name: 'artist_image', maxCount: 1 }
 ]);
 
 module.exports = { upload, eventMedia, uploadsDir };

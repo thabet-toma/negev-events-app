@@ -12,6 +12,9 @@ const TOWNS = [
   'القرى والتجمعات'
 ];
 
+/** The catch-all bucket, the last entry of `TOWNS` — the only town a village may live under (services-directory spec). */
+const VILLAGES_TOWN = 'القرى والتجمعات';
+
 /**
  * Fallback map coordinates used when an event has no explicit location.
  * 'القرى والتجمعات' is deliberately absent: it is a catch-all bucket, not a
@@ -64,7 +67,9 @@ const OCCASION_FIELDS = [
   { key: 'poster_url', label: 'صورة الملصق', core: false },
   { key: 'audio_url', label: 'الملف الصوتي', core: false },
   { key: 'audio_title', label: 'عنوان المقطع الصوتي', core: false },
-  { key: 'host_phone', label: 'رقم التواصل', core: false }
+  { key: 'host_phone', label: 'رقم التواصل', core: false },
+  { key: 'artist_name', label: 'الفنان', core: false },
+  { key: 'artist_image_url', label: 'صورة الفنان', core: false }
 ];
 
 const OCCASION_FIELD_KEYS = OCCASION_FIELDS.map(field => field.key);
@@ -82,6 +87,7 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
 
 module.exports = {
   TOWNS,
+  VILLAGES_TOWN,
   TOWN_COORDINATES,
   REACTION_TYPES,
   EVENT_STATUSES,

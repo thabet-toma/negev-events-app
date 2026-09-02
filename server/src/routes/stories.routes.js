@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const stories = require('../services/stories.service');
-const { authenticate, optionalAuthenticate, requireAdmin } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, parseId, optionalDateTime } = require('../middleware/validate');
 
 const router = express.Router();
@@ -62,8 +62,12 @@ router.post('/stories/:id/report', authenticate, asyncHandler(async (req, res) =
 }));
 
 // --- Admin -----------------------------------------------------------
+// super_admin only (spec rule: stories rise to the structural/super_admin
+// tier, not town-scoped moderation) — guarded on this router too, so a
+// weaker guard registered elsewhere (e.g. admin.routes.js's requireAdmin)
+// can never end up protecting these paths instead.
 
-router.use('/admin/stories', requireAdmin);
+router.use('/admin/stories', requireSuperAdmin);
 
 /** `expiry_preset` (one of stories.EXPIRY_PRESETS) wins over a raw `expires_at` when both are sent. */
 function resolveExpiry(body) {

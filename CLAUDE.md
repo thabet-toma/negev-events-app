@@ -165,9 +165,13 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 ### الأمان
 - `pin_code` مخزّن بـ bcrypt و**لا يخرج في أي استجابة** — مرّر المستخدم دائماً عبر `auth.service.publicUser`
 - **دفتر النقوط خاص على مستوى الاستعلام نفسه**: كل استعلام في `nokoot.service.js` يحمل `WHERE user_id = ?` (والحذف `WHERE id = ? AND user_id = ?`). فلترة بعد الجلب في الـJS = تسريب بيانات
-- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز — النشر الفوري مشروط برمز إدارة صالح في `events.routes.js`. استثناء: `/api/admin/occasion-types/*` خلف `requireSuperAdmin` حصراً (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`)
+- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/admins/*` و `GET /admin/users` و `POST /admin/broadcast` خلف `requireSuperAdmin` حصراً (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`)
+- **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
+- **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel`
 - المدخلات كلها عبر `server/src/middleware/validate.js` (`cleanString` يقصّ الطول، `parseId`، `parseAmount`، `requireDate`) — لا تحقق يدوي جديد
 - البلدة يجب أن تكون من `TOWNS`، والإحداثيات الاحتياطية من `TOWN_COORDINATES` — لا تخمين
+- **البلدات ثابتة بالكود ومكرَّرة في العميلين. القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو `web/` يعيد المشكلة التي وُجدت القرى لحلّها
+- `events.village_id` غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`) — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**
 - الرفع عبر `middleware/upload.js` فقط: قائمة MIME بيضاء، وأسماء ملفات تُولَّد على الخادم ولا تُؤخذ من العميل
 
 ### البث اللحظي

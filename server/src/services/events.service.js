@@ -21,9 +21,11 @@ const MAX_PAGE_SIZE = 100;
  * is unaffected and still returns every column (#20 step 4, decision هـ).
  */
 const LIST_COLUMNS = [
-  'id', 'title', 'groom_name', 'family_clan', 'occasion_type_id', 'town', 'location_name',
-  'latitude', 'longitude', 'event_date', 'event_end_date', 'youth_party_date', 'dinner_time',
-  'poster_url', 'audio_url', 'audio_title', 'host_phone', 'views_count'
+  'events.id', 'events.title', 'events.groom_name', 'events.family_clan', 'events.occasion_type_id',
+  'events.town', 'events.village_id', 'events.location_name',
+  'events.latitude', 'events.longitude', 'events.event_date', 'events.event_end_date', 'events.youth_party_date',
+  'events.dinner_time', 'events.poster_url', 'events.audio_url', 'events.audio_title',
+  'events.artist_name', 'events.artist_image_url', 'events.host_phone', 'events.views_count'
 ].join(', ');
 
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
@@ -275,7 +277,7 @@ async function attachHonoreesAndTypes(rows) {
  * decision و).
  */
 async function listPublicEvents({
-  town, date, search, occasionTypeId = null, legacyOnly = false, archive = false,
+  town, date, search, occasionTypeId = null, villageId = null, legacyOnly = false, archive = false,
   page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
@@ -308,6 +310,11 @@ async function listPublicEvents({
     params.push(town);
   }
 
+  if (villageId) {
+    conditions.push('events.village_id = ?');
+    params.push(villageId);
+  }
+
   if (date) {
     conditions.push('event_date = ?');
     params.push(date);
@@ -338,9 +345,14 @@ async function listPublicEvents({
   const orderClause = archive ? 'event_date DESC, id DESC' : 'event_date ASC, id ASC';
 
   // LIMIT/OFFSET as bound parameters, not string-concatenated — same
-  // parameterization rule as every other value in this query.
+  // parameterization rule as every other value in this query. `village_name`
+  // is joined in, never stored on `events` itself — a village is a place
+  // `village_id` merely points at.
   const rows = await db.query(
-    `SELECT ${LIST_COLUMNS} FROM events WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
+    `SELECT ${LIST_COLUMNS}, villages.name AS village_name
+       FROM events
+       LEFT JOIN villages ON villages.id = events.village_id
+      WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
     [...params, safeLimit, offset]
   );
 
@@ -518,7 +530,11 @@ function checkTownMismatch(town, latitude, longitude) {
  * everyone else lands in the moderation queue.
  */
 async function createEvent(data, { autoApprove = false, createdBy = null } = {}) {
-  const coords = TOWN_COORDINATES[data.town] || {};
+  // `TOWN_COORDINATES` has no entry for the villages catch-all — `data.villageCoords`
+  // (the chosen village's own lat/lng, looked up by the route) fills that gap
+  // the exact same way a real town's centre does, so a village event gets a
+  // correct pin on every published client with no query-time logic at all.
+  const coords = TOWN_COORDINATES[data.town] || data.villageCoords || {};
   const latitude = data.latitude ?? coords.lat ?? null;
   const longitude = data.longitude ?? coords.lng ?? null;
   const status = autoApprove ? 'approved' : 'pending';
@@ -533,6 +549,9 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
   const youthPartyDate = data.youth_party_date ?? null;
   const audioUrl = data.audio_url ?? null;
   const hostPhone = data.host_phone ?? null;
+  const villageId = data.village_id ?? null;
+  const artistName = data.artist_name ?? null;
+  const artistImageUrl = data.artist_image_url ?? null;
 
   return db.transaction(async connection => {
     const groomName = data.honorees[0].name;
@@ -545,16 +564,17 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 
     const [result] = await connection.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, occasion_type_id, town, location_name, secondary_location_name,
+         (title, groom_name, family_clan, occasion_type_id, town, village_id, location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
-          audio_url, audio_title, host_phone, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         groomName,
         familyClan,
         data.occasion_type_id,
         data.town,
+        villageId,
         // No column default exists for this NOT NULL text column; an
         // occasion type may leave it optional, so a blank submission still
         // needs a safe placeholder instead of a raw SQL NULL violation.
@@ -571,6 +591,8 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
         data.poster_url || data.default_poster_url || null,
         audioUrl,
         audioTitle,
+        artistName,
+        artistImageUrl,
         hostPhone,
         status,
         createdBy
@@ -592,7 +614,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 }
 
 /** Columns an amendment to this event that touches the map/schedule the public relies on forces re-review. */
-const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'location_name', 'latitude', 'longitude'];
+const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'village_id', 'location_name', 'latitude', 'longitude'];
 
 /**
  * Classifies a set of changed column names as 'critical' (event returns to
@@ -835,6 +857,11 @@ async function listCongratulationsForModeration(eventId, status = null) {
   return rows.map(withAbsoluteMedia);
 }
 
+/** Fetches a single congratulation scoped to its event, or null — used to check who last moderated it before an owner is allowed to lift a hide. */
+async function getCongratulationById(eventId, congratulationId) {
+  return db.queryOne('SELECT * FROM congratulations WHERE id = ? AND event_id = ?', [congratulationId, eventId]);
+}
+
 /**
  * A human review decision — approve or reject — always recorded with who and
  * when. There is no 'rejected' status in this domain (only pending/approved/
@@ -940,6 +967,7 @@ module.exports = {
   addReaction,
   addCongratulation,
   listCongratulationsForModeration,
+  getCongratulationById,
   moderateCongratulation,
   deleteCongratulation,
   reportCongratulation,

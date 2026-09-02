@@ -11,7 +11,7 @@
  */
 
 const logger = require('../utils/logger');
-const { TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
+const { TOWNS, TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
 
 async function columnExists(connection, table, column) {
   const [rows] = await connection.execute(
@@ -742,6 +742,242 @@ const steps = [
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
       logger.info('[migrations] create-story-reports-table-2026-08: table created.');
+    }
+  },
+  {
+    // admin_towns is deliberately separate from users.clan_town — that
+    // column is a self-reported profile fact, so making it a permission
+    // would turn editing one's own profile into a privilege escalation
+    // (services-directory spec, decision #22). Seeding must fire exactly
+    // once, the first time this table has no rows at all — NOT gated on
+    // "did this step's own CREATE TABLE just run", because schema.sql also
+    // carries `CREATE TABLE IF NOT EXISTS admin_towns` (every table added in
+    // this change does, per the project's schema.sql-for-fresh-installs +
+    // dataMigrations-for-upgrades convention) and migrate.js always applies
+    // schema.sql before this file's steps — so by the time this step runs,
+    // tableExists() is already true even on the very first migration that
+    // ever introduces the table, and a gate on table creation would silently
+    // skip seeding forever. Gating on row count instead seeds an existing
+    // admin with exactly what they own today on the one run that matters,
+    // and never re-seeds afterward once rows exist.
+    name: 'create-admin-towns-2026-09',
+    async run(connection) {
+      if (!(await tableExists(connection, 'admin_towns'))) {
+        await connection.query(`
+          CREATE TABLE admin_towns (
+            id      INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id INT UNSIGNED NOT NULL,
+            town    VARCHAR(100) NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_admin_towns (user_id, town),
+            CONSTRAINT fk_admin_towns_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      const [[{ cnt }]] = await connection.execute('SELECT COUNT(*) AS cnt FROM admin_towns');
+      if (cnt > 0) {
+        logger.info(`[migrations] create-admin-towns-2026-09: already present with ${cnt} row(s) — no seeding.`);
+        return;
+      }
+
+      const [adminRows] = await connection.execute(
+        "SELECT id FROM users WHERE role IN ('admin', 'super_admin')"
+      );
+
+      let seeded = 0;
+      if (adminRows.length) {
+        const placeholders = [];
+        const values = [];
+        for (const admin of adminRows) {
+          for (const town of TOWNS) {
+            placeholders.push('(?, ?)');
+            values.push(admin.id, town);
+          }
+        }
+        const [result] = await connection.execute(
+          `INSERT IGNORE INTO admin_towns (user_id, town) VALUES ${placeholders.join(', ')}`,
+          values
+        );
+        seeded = result.affectedRows;
+      }
+
+      logger.info(`[migrations] create-admin-towns-2026-09: table ensured, ${seeded} row(s) seeded for ${adminRows.length} existing admin(s).`);
+    }
+  },
+  {
+    // The village is a real place, unlike the catch-all bucket it sits
+    // under: no rows are seeded here — villages are product-owner data, and
+    // a village without real coordinates would reproduce the pin bug the
+    // catch-all town has today (services-directory spec, decision #23).
+    name: 'create-villages-2026-09',
+    async run(connection) {
+      if (await tableExists(connection, 'villages')) {
+        logger.info('[migrations] create-villages-2026-09: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE villages (
+          id        INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+          name      VARCHAR(100)  NOT NULL,
+          latitude  DECIMAL(10,7) NOT NULL,
+          longitude DECIMAL(10,7) NOT NULL,
+          position  INT           NOT NULL DEFAULT 0,
+          is_active TINYINT(1)    NOT NULL DEFAULT 1,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_villages_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      logger.info('[migrations] create-villages-2026-09: table created, no villages seeded.');
+    }
+  },
+  {
+    // Existing rows stay NULL — no automatic derivation of which village an
+    // already-published event belongs to (services-directory spec, decision
+    // #23, mirroring the no-guessing rule #13 already set for town pins).
+    name: 'add-events-village-id-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'village_id'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN village_id INT UNSIGNED NULL AFTER town'
+        );
+      }
+      if (!(await indexExists(connection, 'events', 'idx_events_village'))) {
+        await connection.execute('ALTER TABLE events ADD INDEX idx_events_village (village_id)');
+      }
+      if (!(await constraintExists(connection, 'events', 'fk_events_village'))) {
+        await connection.execute(
+          `ALTER TABLE events ADD CONSTRAINT fk_events_village
+             FOREIGN KEY (village_id) REFERENCES villages(id) ON DELETE RESTRICT`
+        );
+      }
+      logger.info('[migrations] add-events-village-id-2026-09: ensured column, index and FK. Existing rows stay NULL.');
+    }
+  },
+  {
+    // The artist is a field of the occasion type, not a code branch: two
+    // extra OCCASION_FIELDS keys, visible on عرس/خطوبة and hidden elsewhere
+    // through occasion_type_fields — the same mechanism every other field
+    // already uses, no special-casing. Guarded on both the ALTER (columnExists)
+    // and the insert (an explicit per-type/per-key existence check, plus
+    // INSERT IGNORE against the table's own unique key) so a re-run inserts
+    // nothing.
+    name: 'add-events-artist-fields-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'artist_name'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN artist_name VARCHAR(150) NULL AFTER audio_title'
+        );
+      }
+      if (!(await columnExists(connection, 'events', 'artist_image_url'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN artist_image_url TEXT NULL AFTER artist_name'
+        );
+      }
+
+      const artistFields = OCCASION_FIELDS.filter(
+        field => field.key === 'artist_name' || field.key === 'artist_image_url'
+      );
+
+      const [typeRows] = await connection.execute('SELECT id, name FROM occasion_types');
+
+      let inserted = 0;
+      for (const type of typeRows) {
+        const [existingRows] = await connection.execute(
+          'SELECT field_key FROM occasion_type_fields WHERE occasion_type_id = ? AND field_key IN (?, ?)',
+          [type.id, 'artist_name', 'artist_image_url']
+        );
+        const existingKeys = new Set(existingRows.map(row => row.field_key));
+
+        const [maxPosRows] = await connection.execute(
+          'SELECT COALESCE(MAX(position), 0) AS maxPos FROM occasion_type_fields WHERE occasion_type_id = ?',
+          [type.id]
+        );
+        let nextPosition = maxPosRows[0].maxPos + 1;
+
+        const isVisible = (type.name === 'عرس' || type.name === 'خطوبة') ? 1 : 0;
+
+        for (const field of artistFields) {
+          if (existingKeys.has(field.key)) continue;
+          await connection.execute(
+            `INSERT IGNORE INTO occasion_type_fields (occasion_type_id, field_key, label, is_visible, is_required, position)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [type.id, field.key, field.label, isVisible, 0, nextPosition]
+          );
+          nextPosition += 1;
+          inserted += 1;
+        }
+      }
+
+      logger.info(`[migrations] add-events-artist-fields-2026-09: ensured columns; ${inserted} occasion_type_fields row(s) inserted across ${typeRows.length} type(s).`);
+    }
+  },
+  {
+    // The three service-directory tables, in dependency order. No categories
+    // seeded here — a super_admin adds them from the admin panel, same as
+    // occasion types (services-directory spec).
+    name: 'create-service-directory-2026-09',
+    async run(connection) {
+      if (!(await tableExists(connection, 'service_categories'))) {
+        await connection.query(`
+          CREATE TABLE service_categories (
+            id        INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            name      VARCHAR(60)  NOT NULL,
+            icon      VARCHAR(60)  NOT NULL,
+            color     VARCHAR(20)  NOT NULL,
+            position  INT          NOT NULL DEFAULT 0,
+            is_active TINYINT(1)   NOT NULL DEFAULT 1,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_service_categories_name (name)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'service_providers'))) {
+        await connection.query(`
+          CREATE TABLE service_providers (
+            id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            category_id     INT UNSIGNED NOT NULL,
+            name            VARCHAR(150) NOT NULL,
+            phone           VARCHAR(30)  NOT NULL,
+            description     TEXT         DEFAULT NULL,
+            image_url       TEXT         DEFAULT NULL,
+            is_active       TINYINT(1)   NOT NULL DEFAULT 1,
+            consent_at      TIMESTAMP    NOT NULL,
+            consent_by      INT UNSIGNED DEFAULT NULL,
+            consent_channel VARCHAR(20)  NOT NULL,
+            created_by      INT UNSIGNED DEFAULT NULL,
+            created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_service_providers_category (category_id),
+            CONSTRAINT fk_service_providers_category FOREIGN KEY (category_id)
+              REFERENCES service_categories(id) ON DELETE RESTRICT,
+            CONSTRAINT fk_service_providers_consent_by FOREIGN KEY (consent_by)
+              REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT fk_service_providers_creator FOREIGN KEY (created_by)
+              REFERENCES users(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'service_provider_towns'))) {
+        await connection.query(`
+          CREATE TABLE service_provider_towns (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            town        VARCHAR(100) NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_service_provider_towns (provider_id, town),
+            CONSTRAINT fk_spt_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      logger.info('[migrations] create-service-directory-2026-09: ensured service_categories, service_providers, service_provider_towns. No categories seeded.');
     }
   }
 ];

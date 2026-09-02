@@ -18,7 +18,7 @@ const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS } = require('../src/constants');
 
 let baseUrl = '';
 let passed = 0;
@@ -1314,20 +1314,68 @@ async function run() {
     await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
   });
 
-  await test("An event in 'القرى والتجمعات' with no explicit coordinates gets no pin", async () => {
-    const { body: created } = await api('POST', '/api/events', {
+  // Behaviour change (services-directory spec): publishing under the
+  // catch-all town used to be accepted with no pin at all. It now REQUIRES a
+  // village_id — the three tests below replace the old single test with the
+  // new truth: a village-less publish under the catch-all is rejected (case
+  // 9), a still-existing legacy row with a NULL village_id (which no publish
+  // path can produce any more, so it is created directly here) keeps its
+  // no-pin behaviour, and a fresh village-backed publish gets a real pin
+  // (case 11).
+  await test("Publishing under 'القرى والتجمعات' with no village_id is rejected (case 9)", async () => {
+    const { status, body } = await api('POST', '/api/events', {
       token: adminToken,
       body: weddingEventBody({
-        honorees: [{ name: 'عريس بلا إحداثيات' }],
+        honorees: [{ name: 'عريس بلا قرية' }],
         town: 'القرى والتجمعات',
         event_date: '2027-01-04'
       })
     });
+    assert.strictEqual(status, 400);
+    assert.ok(/القرية/.test(body.message || ''), `expected a village-related Arabic message, got: ${body.message}`);
+  });
+
+  await test("A legacy row under 'القرى والتجمعات' with a NULL village_id — inserted directly, since no publish path can produce one any more — still gets no pin", async () => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, village_id, location_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'approved')`,
+      ['مناسبة قرية قديمة', 'عريس قديم بلا قرية', 'عائلة الاختبار', weddingType.id, 'القرى والتجمعات', 'ديوان الاختبار', '2027-01-05']
+    );
+    const row = await db.queryOne('SELECT latitude, longitude, village_id FROM events WHERE id = ?', [insertId]);
+    assert.strictEqual(row.village_id, null);
+    assert.strictEqual(row.latitude, null);
+    assert.strictEqual(row.longitude, null);
+    await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
+  });
+
+  let villageFixtureId = 0;
+  await test("An event published in a village inherits that village's coordinates and gets a real pin (case 11)", async () => {
+    const villageCreate = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية الاختبار ${Date.now()}`, latitude: 31.11, longitude: 34.91 }
+    });
+    assert.strictEqual(villageCreate.status, 201);
+    villageFixtureId = villageCreate.body.village.id;
+
+    const { status, body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس القرية' }],
+        town: 'القرى والتجمعات',
+        village_id: villageFixtureId,
+        event_date: '2027-01-06'
+      })
+    });
+    assert.strictEqual(status, 201);
     assert.strictEqual(created.status, 'approved');
+
     const { body } = await api('GET', `/api/events/${created.eventId}`);
-    assert.strictEqual(body.event.latitude, null);
-    assert.strictEqual(body.event.longitude, null);
+    assert.strictEqual(Number(body.event.latitude), 31.11);
+    assert.strictEqual(Number(body.event.longitude), 34.91);
+
     await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+    // villageFixtureId itself is left in place — case 10 further down reuses
+    // it, then deletes it once it's no longer needed.
   });
 
   console.log('\nMap picker: server-side town mismatch warning + coordinate validation (#20 step 6)');
@@ -1757,11 +1805,18 @@ async function run() {
     assert.ok(!publicView.body.event.congratulations.some(c => c.id === cReportCongratId), 'hidden once past the threshold');
   });
 
-  await test('DELETE /api/admin/comments/:id still works', async () => {
-    const { status } = await api('DELETE', `/api/admin/comments/${cReportCongratId}`, { token: adminToken });
-    assert.strictEqual(status, 200);
+  // Behaviour change (services-directory spec): DELETE /api/admin/comments/:id
+  // hard-deleted a row and bypassed the moderation system (status='hidden' +
+  // moderated_by) built in #20 step 5. The route is gone outright — replaced
+  // by the town-admin-aware PATCH .../congratulations/:cid (action: 'reject')
+  // exercised in the "Comments: a town-scoped admin's hide..." section below
+  // (case 19).
+  await test('DELETE /api/admin/comments/:id is gone (case 19) — the hard-delete route was removed, the row is not', async () => {
+    const { status, body } = await api('DELETE', `/api/admin/comments/${cReportCongratId}`, { token: adminToken });
+    assert.strictEqual(status, 404);
+    assert.strictEqual(body.success, false);
     const row = await db.queryOne('SELECT id FROM congratulations WHERE id = ?', [cReportCongratId]);
-    assert.strictEqual(row, null);
+    assert.ok(row, 'the comment must still exist — only the hard-delete route is gone');
   });
 
   await db.execute(
@@ -2294,6 +2349,379 @@ async function run() {
     [activeStoryId, adStoryId, expiredStoryId, neverExpiresStoryId]
   );
   await db.execute('DELETE FROM users WHERE phone_number IN (?, ?)', [storyViewerAPhone, storyViewerBPhone]);
+
+  console.log('\nAdmin scope: local admins scoped to their own towns (services-directory spec)');
+
+  // Every account below is inserted directly and signed with signToken, the
+  // same pattern used for storyViewerA/B above — the suite has already spent
+  // most of its shared authLimiter budget (register+login+admin/login share
+  // one window), so no fixture from here on touches those three routes.
+
+  const scopedTown = 'رهط';
+  const outOfScopeTown = 'حورة';
+
+  const scopedAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  let scopedAdminId = 0;
+  let scopedAdminToken = '';
+
+  await test("Set up: a town-scoped admin, assigned to رهط via the super_admin's towns API", async () => {
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [scopedAdminPhone, 'أدمن رهط الاختبار', hashedPin, scopedTown]
+    );
+    scopedAdminId = insertId;
+    scopedAdminToken = signToken(
+      { id: scopedAdminId, phone_number: scopedAdminPhone, full_name: 'أدمن رهط الاختبار', role: 'admin' },
+      '1h'
+    );
+
+    const assign = await api('PUT', `/api/admin/admins/${scopedAdminId}/towns`, {
+      token: superAdminToken,
+      body: { towns: [scopedTown] }
+    });
+    assert.strictEqual(assign.status, 200);
+    assert.deepStrictEqual(assign.body.towns, [scopedTown]);
+  });
+
+  let scopeInEventId = 0;
+  let scopeOutEventId = 0;
+  await test("Set up: one pending event inside the scoped admin's town, one outside it", async () => {
+    const inScope = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'داخل نطاق الأدمن' }], town: scopedTown, event_date: '2027-12-01' })
+    });
+    assert.strictEqual(inScope.status, 201);
+    assert.strictEqual(inScope.body.status, 'pending');
+    scopeInEventId = inScope.body.eventId;
+
+    const outOfScope = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'خارج نطاق الأدمن' }], town: outOfScopeTown, event_date: '2027-12-02' })
+    });
+    assert.strictEqual(outOfScope.status, 201);
+    assert.strictEqual(outOfScope.body.status, 'pending');
+    scopeOutEventId = outOfScope.body.eventId;
+  });
+
+  await test('Case 1: a town-scoped admin approves an event in their own town — 200', async () => {
+    const { status } = await api('PATCH', `/api/admin/events/${scopeInEventId}/status`, {
+      token: scopedAdminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(status, 200);
+  });
+
+  await test('Case 2: the same admin gets 404, not 403, for an event outside their towns', async () => {
+    const { status } = await api('PATCH', `/api/admin/events/${scopeOutEventId}/status`, {
+      token: scopedAdminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(status, 404, 'a 403 here would confirm to an out-of-scope admin that the event exists at all');
+  });
+
+  await test('Case 3: GET /admin/events never returns the out-of-scope event to the scoped admin', async () => {
+    const { body } = await api('GET', '/api/admin/events', { token: scopedAdminToken });
+    assert.ok(!body.events.some(e => e.id === scopeOutEventId));
+  });
+
+  await test("Case 4: GET /admin/stats counts only the scoped admin's own town — matches a direct DB count for رهط exactly", async () => {
+    const { body } = await api('GET', '/api/admin/stats', { token: scopedAdminToken });
+    const dbCount = await db.queryOne('SELECT COUNT(*) AS total FROM events WHERE town = ?', [scopedTown]);
+    assert.strictEqual(body.stats.totalEvents, Number(dbCount.total));
+  });
+
+  await test('Case 5: GET /admin/users is closed (403) to a plain admin — super_admin only now', async () => {
+    const { status } = await api('GET', '/api/admin/users', { token: scopedAdminToken });
+    assert.strictEqual(status, 403);
+  });
+
+  await test('Case 6: a super_admin passes every one of cases 1-5 — no town restriction, and /admin/users stays open to it', async () => {
+    const approve = await api('PATCH', `/api/admin/events/${scopeOutEventId}/status`, {
+      token: superAdminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200, 'a super_admin must be able to approve an event in any town');
+
+    const list = await api('GET', '/api/admin/events', { token: superAdminToken });
+    assert.ok(list.body.events.some(e => e.id === scopeOutEventId), 'a super_admin must see events outside any single town');
+
+    const stats = await api('GET', '/api/admin/stats', { token: superAdminToken });
+    const dbTotal = await db.queryOne('SELECT COUNT(*) AS total FROM events');
+    assert.strictEqual(stats.body.stats.totalEvents, Number(dbTotal.total));
+
+    const users = await api('GET', '/api/admin/users', { token: superAdminToken });
+    assert.strictEqual(users.status, 200);
+  });
+
+  const noScopeAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  let noScopeAdminId = 0;
+  let noScopeAdminToken = '';
+  let noScopeAttemptEventId = 0;
+
+  await test('Case 7: an admin with zero admin_towns rows sees nothing and can approve nothing — fail closed', async () => {
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [noScopeAdminPhone, 'أدمن بلا بلدات', hashedPin, scopedTown]
+    );
+    noScopeAdminId = insertId;
+    noScopeAdminToken = signToken(
+      { id: noScopeAdminId, phone_number: noScopeAdminPhone, full_name: 'أدمن بلا بلدات', role: 'admin' },
+      '1h'
+    );
+
+    const list = await api('GET', '/api/admin/events', { token: noScopeAdminToken });
+    assert.strictEqual(list.status, 200);
+    assert.strictEqual(list.body.events.length, 0, 'an admin with no admin_towns rows must see zero events, not everything');
+
+    const stats = await api('GET', '/api/admin/stats', { token: noScopeAdminToken });
+    assert.strictEqual(stats.body.stats.totalEvents, 0);
+
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'محاولة أدمن بلا نطاق' }], town: scopedTown, event_date: '2027-12-03' })
+    });
+    noScopeAttemptEventId = created.body.eventId;
+
+    const attempt = await api('PATCH', `/api/admin/events/${noScopeAttemptEventId}/status`, {
+      token: noScopeAdminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(attempt.status, 404, 'zero admin_towns rows must fail closed, even for a town that objectively has events');
+  });
+
+  await test("Case 8: an admin publishing in their own town is approved immediately; the same admin publishing outside it lands pending, never rejected", async () => {
+    const own = await api('POST', '/api/events', {
+      token: scopedAdminToken,
+      body: weddingEventBody({ honorees: [{ name: 'أدمن ينشر في بلدته' }], town: scopedTown, event_date: '2027-12-04' })
+    });
+    assert.strictEqual(own.status, 201);
+    assert.strictEqual(own.body.status, 'approved');
+
+    const outside = await api('POST', '/api/events', {
+      token: scopedAdminToken,
+      body: weddingEventBody({ honorees: [{ name: 'أدمن ينشر خارج بلدته' }], town: outOfScopeTown, event_date: '2027-12-05' })
+    });
+    assert.strictEqual(outside.status, 201);
+    assert.strictEqual(outside.body.status, 'pending', "outside the admin's own towns a publish must queue, never be rejected");
+
+    await db.execute('DELETE FROM events WHERE id IN (?, ?)', [own.body.eventId, outside.body.eventId]);
+  });
+
+  console.log('\nVillages: village_id + town combination rules, legacy client compatibility (services-directory spec)');
+
+  await test('Case 10: sending village_id together with a non-catch-all town is rejected', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'قرية مع بلدة أخرى' }],
+        town: 'رهط',
+        village_id: villageFixtureId,
+        event_date: '2027-12-11'
+      })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/القرى والتجمعات/.test(body.message || ''), `expected the villages-catch-all Arabic message, got: ${body.message}`);
+  });
+
+  await test('Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key', async () => {
+    const { body } = await api('GET', '/api/towns', { legacy: true });
+    assert.deepStrictEqual(body.towns, ['الكل', ...TOWNS]);
+    assert.ok(Array.isArray(body.villages), 'expected a villages array');
+  });
+
+  await api('DELETE', `/api/admin/villages/${villageFixtureId}`, { token: superAdminToken });
+
+  console.log('\nArtist field: visible on عرس/خطوبة only, driven by occasion_type_fields, never by code (services-directory spec)');
+
+  let funeralArtistEventId = 0;
+  await test('Case 13: artist_name sent on a عزا publish is silently ignored — not stored, not rejected', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى بفنان' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-12-15',
+        event_end_date: '2027-12-16',
+        artist_name: 'فنان لن يُحفظ'
+      }
+    });
+    assert.strictEqual(status, 201);
+    funeralArtistEventId = body.eventId;
+
+    const row = await db.queryOne('SELECT artist_name FROM events WHERE id = ?', [funeralArtistEventId]);
+    assert.strictEqual(row.artist_name, null);
+
+    await api('DELETE', `/api/admin/events/${funeralArtistEventId}`, { token: adminToken });
+  });
+
+  let weddingArtistEventId = 0;
+  await test('Case 14: artist_name sent on a عرس publish is stored and comes back in GET /api/events', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس بفنان' }],
+        town: 'رهط',
+        event_date: '2027-12-17',
+        artist_name: 'الفنان الاختبار'
+      })
+    });
+    assert.strictEqual(status, 201);
+    weddingArtistEventId = body.eventId;
+
+    const { body: list } = await api('GET', '/api/events?limit=100');
+    const event = list.events.find(e => e.id === weddingArtistEventId);
+    assert.ok(event, 'expected the event on the public list');
+    assert.strictEqual(event.artist_name, 'الفنان الاختبار');
+
+    await api('DELETE', `/api/admin/events/${weddingArtistEventId}`, { token: adminToken });
+  });
+
+  console.log('\nServices directory: no phone on the list, consent required, containment (services-directory spec)');
+
+  let serviceCategoryId = 0;
+  await test('Set up: a super_admin creates a service category', async () => {
+    const { status, body } = await api('POST', '/api/admin/service-categories', {
+      token: superAdminToken,
+      body: { name: `فئة اختبار ${Date.now()}`, icon: '🎤', color: '#ff0000' }
+    });
+    assert.strictEqual(status, 201);
+    serviceCategoryId = body.category.id;
+  });
+
+  await test('Case 17: creating a provider without consent_at is rejected', async () => {
+    const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { status } = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: {
+        category_id: serviceCategoryId,
+        name: 'مزوّد بلا إذن',
+        phone,
+        consent_channel: 'واتساب',
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('Case 18: an admin holding only رهط cannot create a provider for {رهط, حورة} — containment', async () => {
+    const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { status } = await api('POST', '/api/admin/service-providers', {
+      token: scopedAdminToken,
+      body: {
+        category_id: serviceCategoryId,
+        name: 'مزوّد احتواء',
+        phone,
+        consent_at: new Date().toISOString(),
+        consent_channel: 'واتساب',
+        towns: [scopedTown, outOfScopeTown]
+      }
+    });
+    assert.strictEqual(status, 403);
+  });
+
+  let publicProviderPhone = '';
+  let publicProviderId = 0;
+  await test('Set up: a super_admin creates a real provider with a phone number', async () => {
+    publicProviderPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { status, body } = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: {
+        category_id: serviceCategoryId,
+        name: 'مزوّد الاختبار',
+        phone: publicProviderPhone,
+        consent_at: new Date().toISOString(),
+        consent_channel: 'واتساب',
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(status, 201);
+    publicProviderId = body.providerId;
+  });
+
+  await test('Case 15: GET /api/services/providers carries no phone key on any row', async () => {
+    const { body } = await api('GET', '/api/services/providers');
+    assert.ok(body.providers.length > 0, 'expected at least the provider just created');
+    for (const provider of body.providers) {
+      assert.ok(!('phone' in provider), 'expected the phone key entirely absent from the list row');
+    }
+  });
+
+  await test('Case 16: GET /api/services/providers/:id carries phone', async () => {
+    const { body } = await api('GET', `/api/services/providers/${publicProviderId}`);
+    assert.ok('phone' in body.provider);
+    assert.strictEqual(body.provider.phone, publicProviderPhone);
+  });
+
+  await api('DELETE', `/api/admin/service-providers/${publicProviderId}`, { token: superAdminToken });
+  await api('DELETE', `/api/admin/service-categories/${serviceCategoryId}`, { token: superAdminToken });
+
+  console.log("\nComments: a town-scoped admin's hide is a signed block, not the owner's to lift (services-directory spec)");
+
+  const commentsOwnerPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  let commentsOwnerId = 0;
+  let commentsOwnerToken = '';
+  let commentsEventId = 0;
+  let commentsCongratId = 0;
+
+  await test("Set up: an owner publishes an approved event in the scoped admin's town, and a well-wisher congratulates it", async () => {
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [commentsOwnerPhone, 'صاحب مناسبة الحجب', 'x', scopedTown]
+    );
+    commentsOwnerId = insertId;
+    commentsOwnerToken = signToken(
+      { id: commentsOwnerId, phone_number: commentsOwnerPhone, full_name: 'صاحب مناسبة الحجب', role: 'user' },
+      '1h'
+    );
+
+    const created = await api('POST', '/api/events', {
+      token: commentsOwnerToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس اختبار الحجب' }], town: scopedTown, event_date: '2027-12-20' })
+    });
+    commentsEventId = created.body.eventId;
+
+    const approve = await api('PATCH', `/api/admin/events/${commentsEventId}/status`, {
+      token: superAdminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const posted = await api('POST', `/api/events/${commentsEventId}/congratulate`, {
+      token: userToken, body: { message: 'رسالة سيتم حجبها' }
+    });
+    assert.strictEqual(posted.status, 201);
+    commentsCongratId = posted.body.comment.id;
+  });
+
+  await test('Case 20: a town-scoped admin hides the comment — status becomes hidden, moderated_by is set to that admin', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${commentsEventId}/congratulations/${commentsCongratId}`, {
+      token: scopedAdminToken, body: { action: 'reject' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.comment.status, 'hidden');
+
+    const row = await db.queryOne('SELECT status, moderated_by FROM congratulations WHERE id = ?', [commentsCongratId]);
+    assert.strictEqual(row.status, 'hidden');
+    assert.strictEqual(row.moderated_by, scopedAdminId);
+  });
+
+  await test('Case 21: the event owner cannot lift the block the admin placed', async () => {
+    const { status } = await api('PATCH', `/api/events/${commentsEventId}/congratulations/${commentsCongratId}`, {
+      token: commentsOwnerToken, body: { action: 'approve' }
+    });
+    assert.strictEqual(status, 403);
+
+    const row = await db.queryOne('SELECT status FROM congratulations WHERE id = ?', [commentsCongratId]);
+    assert.strictEqual(row.status, 'hidden', "the block must still stand after the owner's rejected attempt");
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
+    [commentsEventId, noScopeAttemptEventId, scopeInEventId, scopeOutEventId]
+  );
+  await db.execute(
+    'DELETE FROM users WHERE id IN (?, ?, ?)',
+    [scopedAdminId, noScopeAdminId, commentsOwnerId]
+  );
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

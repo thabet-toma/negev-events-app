@@ -13,6 +13,8 @@ const appRoutes = require('./app.routes');
 const occasionTypesRoutes = require('./occasionTypes.routes');
 const notificationsRoutes = require('./notifications.routes');
 const storiesRoutes = require('./stories.routes');
+const villagesRoutes = require('./villages.routes');
+const servicesRoutes = require('./services.routes');
 
 const router = express.Router();
 
@@ -36,5 +38,7 @@ router.use(appRoutes);
 router.use(occasionTypesRoutes);
 router.use(notificationsRoutes);
 router.use(storiesRoutes);
+router.use(villagesRoutes);
+router.use(servicesRoutes);
 
 module.exports = router;
