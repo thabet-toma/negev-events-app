@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | السيرفر | `https://munasbat.ktra-pro.tech` · `root@munasbat.ktra-pro.tech` |
-| مسار التطبيق | `/root/negev-events` |
+| مسار التطبيق | `/root/munasbat/app` |
 | المستودع | `https://github.com/thabet-toma/negev-events-app` · `main` · `0534f85` |
 | نسخة التطبيق | `1.1.0+3` ← **`1.2.0+4`** |
 
@@ -62,7 +62,35 @@ flutter build apk --release --dart-define=API_BASE=https://munasbat.ktra-pro.tec
 
 إن خرج السكربت بخطأ، **لا ترفع شيئاً** — أعد البناء كما يقول لك.
 
-## ٤. ارفعه إلى `/tmp`
+## ٤. 🛑 أثبت أن الناتج جديد — قبل أن تلمس `scp`
+
+`flutter build` يكتب دائماً على المسار نفسه
+(`build/app/outputs/flutter-apk/app-release.apk`). فإن لم يُعَد البناء، **يبقى ناتج
+إصدارٍ سابق هناك بالاسم نفسه والمكان نفسه**، ويرفعه `scp` بلا أن يسأل.
+
+**هذا ما حدث فعلاً في المحاولة الأولى لـ1.2.0:** رُفع ناتج ١ أيلول (‏1.1.0+3)،
+ووصل سليماً تماماً — وموقّعاً، وبالحجم الصحيح — وهو الملف الخطأ.
+
+```bash
+unzip -p build/app/outputs/flutter-apk/app-release.apk AndroidManifest.xml | strings | grep -o '1\.[0-9]\.[0-9]' | head -3
+sha256sum build/app/outputs/flutter-apk/app-release.apk
+ls -l --time-style=long-iso build/app/outputs/flutter-apk/app-release.apk
+```
+
+ثلاثة شروط، **كلها معاً**:
+
+- رقم النسخة **`1.2.0`** لا `1.1.0`.
+- البصمة **ليست** `369abcd43d543c51f8228df03f8d44495558c9a6b9602b1a09a60b7b500a6ba7`
+  (تلك بصمة 1.1.0+3 المنشورة اليوم).
+- التاريخ **اليوم**، لا تاريخ إصدار سابق.
+
+إن سقط أيٌّ منها، **لم يُبنَ شيء** — عد إلى الخطوة ٢. و`flutter clean` ليس تجميلاً
+هنا: هو ما يحذف الناتج القديم فلا يبقى ما يُرفع بالخطأ أصلاً.
+
+⚠️ **الحجم لا يميّز بناءً من آخر.** بناءان مختلفان يخرجان بالحجم نفسه بالضبط
+(‏57,737,167 بايت في الحالتين) — البصمة وحدها تفصل.
+
+## ٥. ارفعه إلى `/tmp`
 
 ```bash
 scp -i ~/.ssh/hostenger2 "C:/Users/asus/Desktop/negev_events_app (1)/negev_events_app/mobile/build/app/outputs/flutter-apk/app-release.apk" root@munasbat.ktra-pro.tech:/tmp/negev-events-1.2.0.apk
@@ -72,7 +100,7 @@ scp -i ~/.ssh/hostenger2 "C:/Users/asus/Desktop/negev_events_app (1)/negev_event
 هناك حتى ينتهي الوكيل من تحديث الخادم، ولأن النقل يستغرق دقيقة على ٥٧ ميغابايت
 وخلالها كل من يضغط «تحميل» ينزّل ملفاً نصف مرفوع فيفشل تثبيته بلا رسالة مفهومة.
 
-## ٥. سلّم
+## ٦. سلّم
 
 أعطِ الوكيل كل ما تحت الخط، **ومعه بصمة SHA‑256** من الخطوة ٣.
 
@@ -110,7 +138,7 @@ scp -i ~/.ssh/hostenger2 "C:/Users/asus/Desktop/negev_events_app (1)/negev_event
 **⇒ خذ النسخة قبل إعادة التشغيل، لا بعدها.**
 
 ```bash
-cd /root/negev-events
+cd /root/munasbat/app
 docker exec negev_events_mysql sh -c \
   'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines negev_events' \
   > ~/negev-backup-before-0534f85.sql
@@ -173,7 +201,7 @@ curl -s https://munasbat.ktra-pro.tech/api/services/categories
 # 4. الأهم: لا رقم هاتف في استجابة القائمة العامة
 curl -s "https://munasbat.ktra-pro.tech/api/services/providers" | grep -c phone
 
-# 5. المسار المحذوف يعطي 404 لا 200
+# 5. المسار المحذوف لم يعد يعمل — المطلوب "ليس 200"، والمتوقَّع 401
 curl -s -o /dev/null -w "%{http_code}\n" -X DELETE \
   https://munasbat.ktra-pro.tech/api/admin/comments/1
 
@@ -182,7 +210,12 @@ curl -s -o /dev/null -w "%{http_code}\n" https://munasbat.ktra-pro.tech/
 ```
 
 المتوقَّع: (1) عدد موجب يقبل القسمة على ٨ · (2) الثماني ومعها مفتاح `villages`
-جديد · (3) مصفوفة فارغة · (4) **صفر** · (5) `404` · (6) `200`.
+جديد · (3) مصفوفة فارغة · (4) **صفر** · (5) **`401`** · (6) `200`.
+
+بشأن (5): الحارس `router.use('/admin', requireAdmin)` يسبق التوجيه، فكل مسار تحت
+`/admin` بلا رمز يُردّ بـ401 — سواء وُجد المسار أم لا. المطلوب هنا **«ليس 200»**،
+وقد حُذف المسار فعلاً من المصدر. للتمييز قطعاً، قارنه بمسار وهمي غير إداري:
+هذا يعطي 404 بينما أي مسار أدمن يعطي 401.
 
 🛑 **إن جاءت (1) بصفر مع وجود أدمن، أو (4) بغير الصفر — أوقف وأبلغ فوراً ولا
 تكمل إلى الجزء الثاني.** الأولى تعني أدمناً فقد صلاحيته، والثانية تعني أرقام
@@ -203,7 +236,18 @@ curl -s -o /dev/null -w "%{http_code}\n" https://munasbat.ktra-pro.tech/
 ```bash
 ls -lh /tmp/negev-events-1.2.0.apk
 sha256sum /tmp/negev-events-1.2.0.apk
+sha256sum server/downloads/negev-events.apk
+unzip -p /tmp/negev-events-1.2.0.apk AndroidManifest.xml | strings | grep -o '1\.[0-9]\.[0-9]' | head -3
 ```
+
+🛑 **قبل مقارنة البصمة بالمالك، افحص أنّ الملف جديد أصلاً:**
+
+- بصمة `/tmp` **يجب ألّا تساوي** بصمة `server/downloads/negev-events.apk` الحالية.
+  إن تساوتا فما وصل هو النسخة المنشورة نفسها — **قف، والمالك لم يُعِد البناء**.
+- ورقم النسخة داخل `AndroidManifest.xml` يجب أن يكون **`1.2.0`**.
+
+هذا ليس فرضاً نظرياً: حدث فعلاً في المحاولة الأولى لهذا الإصدار — رُفع ناتج بناء
+قديم، سليمٌ وموقَّع وبالحجم نفسه، ولم يكن يميّزه عن الجديد إلا هذان الفحصان.
 
 **قارن البصمة بالتي أعطاك إياها المالك.** إن اختلفتا فالنقل ناقص أو تالف —
 **قف واطلب إعادة الرفع**. ملف APK مقطوع ينزل عند المستخدم ويفشل تثبيته بلا رسالة
@@ -212,12 +256,12 @@ sha256sum /tmp/negev-events-1.2.0.apk
 ### ٧. احتفظ بالقديم ثم انقل الجديد
 
 ```bash
-cp /root/negev-events/server/downloads/negev-events.apk ~/negev-events-1.1.0.apk.bak
+cp /root/munasbat/app/server/downloads/negev-events.apk ~/negev-events-1.1.0.apk.bak
 ls -lh ~/negev-events-1.1.0.apk.bak
 
-mv /tmp/negev-events-1.2.0.apk /root/negev-events/server/downloads/negev-events.apk
-ls -lh /root/negev-events/server/downloads/negev-events.apk
-sha256sum /root/negev-events/server/downloads/negev-events.apk
+mv /tmp/negev-events-1.2.0.apk /root/munasbat/app/server/downloads/negev-events.apk
+ls -lh /root/munasbat/app/server/downloads/negev-events.apk
+sha256sum /root/munasbat/app/server/downloads/negev-events.apk
 ```
 
 النسخة الاحتياطية نقطة تراجعك الوحيدة لملف التطبيق — لا تكمل إن فشلت.
@@ -255,12 +299,15 @@ docker compose logs --tail=30 app
 
 ```bash
 curl -s https://munasbat.ktra-pro.tech/api/app/version
-curl -sI https://munasbat.ktra-pro.tech/downloads/negev-events.apk | head -5
+curl -sI https://munasbat.ktra-pro.tech/downloads/negev-events.apk | grep -iE "HTTP/|content-length|last-modified"
 ```
 
-المتوقَّع: `1.2.0` في الأول · و`200` مع `Content-Length` نحو ٥٥–٥٨ مليون بايت في
-الثاني · و**`min_version` فارغاً أو غائباً**. إن ظهر بقيمة، **أزلها من `.env`
-وأعد التشغيل**.
+المتوقَّع: `1.2.0` في الأول · و`200` مع **`Last-Modified` بتاريخ اليوم** في الثاني ·
+و**`min_version` فارغاً أو غائباً**. إن ظهر بقيمة، **أزلها من `.env` وأعد التشغيل**.
+
+⚠️ **لا تستعمل `Content-Length` دليلاً على أن الملف تغيّر.** بناءان مختلفان يخرجان
+بالحجم نفسه بالضبط — الحجم بقي `57737167` في الحالتين. `Last-Modified` والبصمة هما
+الدليل، لا الحجم.
 
 ---
 
@@ -269,7 +316,7 @@ curl -sI https://munasbat.ktra-pro.tech/downloads/negev-events.apk | head -5
 **ملف التطبيق وحده** (الخادم يبقى على الجديد):
 
 ```bash
-cp ~/negev-events-1.1.0.apk.bak /root/negev-events/server/downloads/negev-events.apk
+cp ~/negev-events-1.1.0.apk.bak /root/munasbat/app/server/downloads/negev-events.apk
 # ثم أعد APP_LATEST_VERSION إلى 1.1.0 في .env
 docker compose up -d app
 ```
