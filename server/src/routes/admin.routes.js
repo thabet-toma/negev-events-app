@@ -28,6 +28,22 @@ router.post('/admin/login', asyncHandler(async (req, res) => {
 // Everything below requires an admin token.
 router.use('/admin', requireAdmin);
 
+/**
+ * Who am I and what do I administer. The panel needs this to say «تدير: رهط ·
+ * اللقية» and to offer a town picker holding exactly the caller's towns —
+ * neither of which can be inferred from the scoped lists, because a town that
+ * was assigned but has no events yet would simply be missing from them. That
+ * inference would fail worst for a brand-new admin, who is exactly the person
+ * an empty panel confuses (#36).
+ */
+router.get('/admin/me', asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    role: req.user.role,
+    towns: await adminScope.listTownsFor(req.user)
+  });
+}));
+
 router.get('/admin/stats', asyncHandler(async (req, res) => {
   res.json({ success: true, stats: await admin.stats(req.user) });
 }));

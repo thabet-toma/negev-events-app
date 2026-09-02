@@ -375,3 +375,79 @@ body {
 
 .occasion-type-reactions-editor { display: flex; flex-wrap: wrap; gap: 12px 22px; }
 .ot-reaction-check { font-size: 0.92rem; }
+
+/* Scope banner (services-directory قصة 21) */
+.admin-scope-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  border: 1px solid var(--gold-main);
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 20px;
+}
+.admin-scope-banner.scope-banner-empty {
+  background: var(--danger-wash);
+  color: var(--danger-red);
+  border-color: var(--danger-red);
+}
+
+/* Generic table wrapper — يسمح بتمرير أفقي بدل كسر التخطيط على شاشة ضيقة */
+.admin-table-wrapper, .admin-comments-table-wrapper, .admin-users-table-wrapper, .occasion-types-table-wrapper {
+  overflow-x: auto;
+}
+
+/* Service providers directory (services-directory قصص 28-30) */
+.provider-towns-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  padding: 12px 14px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+}
+
+.town-chip {
+  display: inline-block;
+  background: var(--sky-wash);
+  color: var(--gold-main);
+  border: 1px solid var(--gold-main);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-inline-end: 4px;
+  margin-bottom: 2px;
+}
+
+/* الإذن هو الحارس الوحيد قبل نشر رقم مزوّد — يُبرَز بصرياً لا يُدفَن (#25) */
+.provider-consent-box {
+  background: var(--warn-wash);
+  border: 1px solid var(--warn-yellow);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+.consent-box-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  color: var(--text-main);
+  margin-bottom: 4px;
+}
+
+/* Admin ↔ town assignment (قصص 31، 36) */
+.admin-town-assign-row { margin-bottom: 16px; }
+.admin-town-assign-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}

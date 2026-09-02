@@ -103,8 +103,13 @@ async function deleteCategory(id) {
     return { deleted: true, disabled: false };
   }
 
+  // Same contract as villages.service.deleteVillage: deactivating IS the
+  // outcome asked for when the category still holds providers, so this
+  // succeeds and reports what it did instead of throwing after having
+  // already written. An error response that mutated state misleads whoever
+  // reads the log later.
   await db.execute('UPDATE service_categories SET is_active = 0 WHERE id = ?', [id]);
-  throw ApiError.conflict('لا يمكن حذف هذه الفئة لوجود مزوّدين مرتبطين بها — تم تعطيلها بدلاً من حذفها');
+  return { deleted: false, disabled: true };
 }
 
 // ======================================================================

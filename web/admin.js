@@ -4,6 +4,29 @@ let currentFilterStatus = 'all';
 let searchKeyword = '';
 let allOccasionTypes = [];
 let editingOccasionTypeId = null;
+let allServiceProviders = [];
+let allPublicCategories = [];
+let editingProviderId = null;
+let allVillages = [];
+let editingVillageId = null;
+let allServiceCategories = [];
+let editingServiceCategoryId = null;
+let allAdminsWithTowns = [];
+let myAdminTowns = [];
+
+// مرآة لـ TOWNS في server/src/constants.js — لا وحدة مشتركة بين web/ والخادم،
+// نفس سبب OCCASION_FIELDS أدناه ونفس نمط قائمة dirTown في admin.html (services-directory).
+const TOWNS = [
+  'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
+];
+
+/** الدور المخزَّن محلياً — ادّعاء العميل، يُتحقّق منه فعلياً في كل 403 يرجعه الخادم (نفس منطق fetchOccasionTypes القائم). */
+function currentAdminRole() {
+  return localStorage.getItem('negev_admin_role') || '';
+}
+function isSuperAdminRole() {
+  return currentAdminRole() === 'super_admin';
+}
 
 // مرآة لـ server/src/constants.js — لا وحدة مشتركة بين web/ والخادم، فالمفردات
 // تُنسخ هنا حرفياً كما تُنسخ TOWNS أعلاه في admin.html (#20 خطوة 16).
@@ -94,28 +117,94 @@ function showDashboard() {
   document.getElementById('adminLoginScreen').style.display = 'none';
   document.getElementById('adminDashboardScreen').style.display = 'block';
 
-  // مسارات /api/admin/occasion-types خلف requireSuperAdmin وحده — الدور
-  // المخزَّن ادّعاءٌ محلي قد يكون قديماً، ولذا يُتحقّق منه فعلياً أيضاً في
-  // fetchOccasionTypes عبر معالجة 403 لا افتراضه صحيحاً هنا فقط.
-  const isSuperAdmin = localStorage.getItem('negev_admin_role') === 'super_admin';
-  const occasionTypesTabBtn = document.getElementById('tabOccasionTypesBtn');
-  if (occasionTypesTabBtn) occasionTypesTabBtn.style.display = isSuperAdmin ? 'flex' : 'none';
-
+  applyRoleVisibility();
   loadAdminDashboard();
+}
+
+/*
+ * كل مسار خلف requireSuperAdmin (المستخدمون، البث، الستوريات/أنواع المناسبات،
+ * القرى، فئات الخدمات، الأدمن والبلدات) يُخفى تبويبه كلياً عن أدمن عادي — لا
+ * يُعطَّل بل يغيب، لأن الزرّ المعطَّل تسريبٌ لـ403 إلى الواجهة (قاعدة اللوحة في
+ * المواصفة). الدور المخزَّن ادّعاء محلي قد يكون قديماً؛ التحقق الحقيقي يبقى من
+ * الخادم نفسه (403) في كل جلب — هذه الدالة تتحكم بالعرض الأولي فقط.
+ */
+function applyRoleVisibility() {
+  const isSuperAdmin = isSuperAdminRole();
+  const superAdminOnlyBtnIds = [
+    'tabBroadcastBtn', 'tabUsersBtn', 'tabOccasionTypesBtn',
+    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn'
+  ];
+  superAdminOnlyBtnIds.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.style.display = isSuperAdmin ? 'flex' : 'none';
+  });
+
+  const usersCard = document.getElementById('usersStatCard');
+  if (usersCard) usersCard.style.display = isSuperAdmin ? 'flex' : 'none';
+
+  // إن كان التبويب النشِط الآن محجوباً عن هذا الدور (جلسة سوبر أدمن سابقة
+  // ثم دخول أدمن محلي بنفس المتصفح)، ارجع لتبويب متاح للجميع.
+  const activePane = document.querySelector('.admin-tab-pane.active-pane');
+  const hiddenPaneIds = superAdminOnlyBtnIds.map(id => id.replace(/Btn$/, ''));
+  if (!isSuperAdmin && activePane && hiddenPaneIds.includes(activePane.id)) {
+    switchAdminTab('tabEvents');
+  }
 }
 
 // 2. Load Dashboard Stats & Events
 async function loadAdminDashboard() {
+  const isSuperAdmin = isSuperAdminRole();
+
   const tasks = [
+    fetchAdminIdentity(),
     fetchKPIStats(),
     fetchAdminEvents(),
     fetchAdminComments(),
-    fetchAdminUsers()
+    fetchPublicServiceCategories(),
+    fetchAdminServiceProviders()
   ];
-  if (localStorage.getItem('negev_admin_role') === 'super_admin') {
-    tasks.push(fetchOccasionTypes());
+  if (isSuperAdmin) {
+    tasks.push(fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(), fetchAdminServiceCategories(), fetchAdminAdmins());
   }
   await Promise.all(tasks);
+  renderScopeBanner();
+}
+
+/*
+ * بلدات الأدمن كما يقولها الخادم نفسه (`GET /api/admin/me`)، لا كما تُستنتج من
+ * مناسباته. الاستنتاج كان يفوّت بلدة أُسنِدت للتوّ ولا مناسبة لها بعد — وهي حالة
+ * الأدمن الجديد بالضبط، أي الشخص الذي تربكه لوحة فارغة أكثر من غيره (قصة 36).
+ */
+function deriveScopedTowns() {
+  return myAdminTowns;
+}
+
+async function fetchAdminIdentity() {
+  const data = await adminFetch('/admin/me');
+  myAdminTowns = Array.isArray(data.towns) ? data.towns : [];
+}
+
+/** شريط «تدير: رهط · اللقية» — قصة 21. */
+function renderScopeBanner() {
+  const el = document.getElementById('adminScopeBanner');
+  if (!el) return;
+
+  if (isSuperAdminRole()) {
+    el.style.display = 'flex';
+    el.classList.remove('scope-banner-empty');
+    el.innerHTML = '<i class="fa-solid fa-earth-africa"></i> صلاحية سوبر أدمن — تدير كل بلدات المنصة بلا استثناء';
+    return;
+  }
+
+  const towns = deriveScopedTowns();
+  el.style.display = 'flex';
+  if (towns.length) {
+    el.classList.remove('scope-banner-empty');
+    el.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> تدير: ${towns.map(escapeHtml).join(' · ')}`;
+  } else {
+    el.classList.add('scope-banner-empty');
+    el.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> لا تدير أي بلدة بعد — لن ترى أي مناسبة أو مزوّد خدمات حتى يُسنِد السوبر أدمن بلدة لحسابك';
+  }
 }
 
 async function fetchKPIStats() {
@@ -349,63 +438,92 @@ async function handleSendBroadcast(e) {
   }
 }
 
-// 6. Comments Moderation
+// 6. Comments Moderation — حجب لا حذف (#20 قصص 26-27-37-39)
 async function fetchAdminComments() {
   try {
     const res = await adminFetch('/api/admin/comments');
     const data = await res.json();
 
     if (data.success) {
-      const container = document.getElementById('adminCommentsList');
-      if (data.comments.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:20px;">لا توجد تعليقات</p>';
-        return;
-      }
-
-      container.innerHTML = `
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>المرسل</th>
-              <th>الرتبة</th>
-              <th>نص التهنئة / الرسالة</th>
-              <th>التاريخ</th>
-              <th>الإجراء</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${data.comments.map(c => `
-              <tr>
-                <td><strong>${escapeHtml(c.sender_name)}</strong></td>
-                <td><span style="color:var(--gold-main);">${escapeHtml(c.badge_title || '')}</span></td>
-                <td>${escapeHtml(c.message)}</td>
-                <td style="font-size:0.75rem; color:var(--text-dim);">${new Date(c.created_at).toLocaleDateString('ar-EG')}</td>
-                <td>
-                  <button class="btn-delete" onclick="deleteAdminComment(${c.id})" title="حذف التعليق">
-                    <i class="fa-solid fa-trash"></i>
-                  </button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
+      renderAdminComments(data.comments);
     }
   } catch (e) {
     console.error('Comments error:', e);
   }
 }
 
-async function deleteAdminComment(id) {
-  if (!confirm('حذف هذا التعليق نهائياً؟')) return;
+function renderAdminComments(comments) {
+  const container = document.getElementById('adminCommentsList');
+  if (!container) return;
+
+  if (!comments.length) {
+    container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:20px;">لا توجد تعليقات</p>';
+    return;
+  }
+
+  const STATUS_LABEL = { pending: 'بانتظار المراجعة 🟡', approved: 'ظاهرة 🟢', hidden: 'محجوبة 🔴' };
+  const STATUS_CLASS = { pending: 'pending', approved: 'approved', hidden: 'rejected' };
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>المرسل</th>
+          <th>الرتبة</th>
+          <th>نص التهنئة / الرسالة</th>
+          <th>المناسبة</th>
+          <th>الحالة</th>
+          <th>التاريخ</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${comments.map(c => `
+          <tr>
+            <td><strong>${escapeHtml(c.sender_name)}</strong></td>
+            <td><span style="color:var(--gold-main);">${escapeHtml(c.badge_title || '')}</span></td>
+            <td>${escapeHtml(c.message)}</td>
+            <td style="font-size:0.8rem; color:var(--text-dim);">${escapeHtml(c.event_title || '')}</td>
+            <td>
+              <span class="status-tag ${STATUS_CLASS[c.status] || 'pending'}">${STATUS_LABEL[c.status] || c.status}</span>
+              ${c.status === 'hidden' && c.moderated_at ? `<div style="font-size:0.72rem; color:var(--text-dim); margin-top:4px;">حجبها المشرف رقم ${c.moderated_by ?? '—'} بتاريخ ${new Date(c.moderated_at).toLocaleString('ar-EG')}</div>` : ''}
+            </td>
+            <td style="font-size:0.75rem; color:var(--text-dim);">${new Date(c.created_at).toLocaleDateString('ar-EG')}</td>
+            <td>
+              ${c.status === 'hidden'
+                ? `<button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="moderateComment(${c.event_id}, ${c.id}, 'approve')"><i class="fa-solid fa-eye"></i> إظهار</button>`
+                : `<button class="btn-delete" onclick="moderateComment(${c.event_id}, ${c.id}, 'reject')" title="حجب الرسالة"><i class="fa-solid fa-eye-slash"></i></button>`}
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/**
+ * حجب أو رفع حجب عبر PATCH /api/events/:id/congratulations/:cid — نفس مسار
+ * `assertCanManageEvent` القائم أصلاً، لا مسار DELETE مُزال. action='reject'
+ * يضبط status='hidden' مع moderated_by/moderated_at (حجب لا حذف)، و'approve'
+ * يرفعه. الكاتب يبقى يرى رسالته في صفحته ولا يُخطَر (قصة 39).
+ */
+async function moderateComment(eventId, cid, action) {
+  if (action === 'reject' && !confirm('حجب هذه الرسالة؟ ستبقى ظاهرة لكاتبها في صفحته ولا تُحذف نهائياً.')) return;
   try {
-    const res = await adminFetch(`/api/admin/comments/${id}`, { method: 'DELETE' });
-    if (res.ok) {
+    const res = await adminFetch(`/api/events/${eventId}/congratulations/${cid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (data.success) {
       fetchAdminComments();
       fetchKPIStats();
+    } else {
+      alert(data.message || 'تعذّر تنفيذ الإجراء');
     }
   } catch (e) {
-    alert('تعذر الحذف');
+    alert('تعذر الاتصال بالخادم');
   }
 }
 
@@ -767,14 +885,15 @@ async function deleteOccasionType(id) {
 // UI Navigation Helpers
 function switchAdminTab(tabId) {
   document.querySelectorAll('.admin-tab-pane').forEach(p => p.classList.remove('active-pane'));
-  document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.admin-nav-tabs .admin-tab-btn').forEach(b => b.classList.remove('active'));
 
   const target = document.getElementById(tabId);
   if (target) target.classList.add('active-pane');
 
-  const tabIndex = ['tabEvents', 'tabDirectAdd', 'tabBroadcast', 'tabComments', 'tabUsers', 'tabOccasionTypes'].indexOf(tabId);
-  const btns = document.querySelectorAll('.admin-nav-tabs .admin-tab-btn');
-  if (btns[tabIndex]) btns[tabIndex].classList.add('active');
+  // مطابقة بـdata-tab لا بالفهرس — أزرار جديدة أُضيفت وبعضها مخفيّ حسب الدور،
+  // فالفهرس الثابت القديم كان سيكسر بمجرد إضافة تبويب.
+  const btn = document.querySelector(`.admin-nav-tabs .admin-tab-btn[data-tab="${tabId}"]`);
+  if (btn) btn.classList.add('active');
 }
 
 function filterEventsByStatus(status, btnElement) {
@@ -790,6 +909,703 @@ function filterEventsByStatus(status, btnElement) {
 function handleAdminEventSearch() {
   searchKeyword = document.getElementById('adminEventSearch').value.trim();
   renderAdminEvents();
+}
+
+// ======================================================================
+// 9. Service Providers Directory — admin، مقيَّد ببلداته (قصص 28-30)
+// ======================================================================
+
+/** الفئات العامة (بلا حاجة صلاحية) — تملأ قائمة الفئة في نموذج المزوّد لكل الأدوار. */
+async function fetchPublicServiceCategories() {
+  try {
+    const res = await apiFetch('/api/services/categories');
+    const data = await res.json();
+    if (data.success) allPublicCategories = data.categories;
+  } catch (e) {
+    console.error('Public categories error:', e);
+  }
+}
+
+async function fetchAdminServiceProviders() {
+  try {
+    const res = await adminFetch('/api/admin/service-providers?limit=100');
+    const data = await res.json();
+    const notice = document.getElementById('providerScopeNotice');
+
+    if (res.status === 403) {
+      allServiceProviders = [];
+      if (notice) {
+        notice.style.display = 'block';
+        notice.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(data.message || 'صلاحية غير كافية')}`;
+      }
+      renderProvidersList();
+      return;
+    }
+    if (notice) { notice.style.display = 'none'; notice.innerHTML = ''; }
+
+    if (data.success) {
+      allServiceProviders = data.providers;
+      renderProvidersList();
+    }
+  } catch (e) {
+    console.error('Providers error:', e);
+  }
+}
+
+function renderProvidersList() {
+  const container = document.getElementById('providersList');
+  if (!container) return;
+
+  if (!allServiceProviders.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا يوجد مزوّدو خدمات بعد في بلداتك</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>الاسم</th>
+          <th>الفئة</th>
+          <th>الهاتف</th>
+          <th>البلدات</th>
+          <th>الحالة</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allServiceProviders.map(p => `
+          <tr>
+            <td><strong>${escapeHtml(p.name)}</strong></td>
+            <td>${escapeHtml(p.category_name || '')}</td>
+            <td><a href="tel:${p.phone}" style="color:var(--gold-main);">${escapeHtml(p.phone)}</a></td>
+            <td>${(p.towns || []).map(t => `<span class="town-chip">${escapeHtml(t)}</span>`).join('')}</td>
+            <td><span class="status-tag ${p.is_active ? 'approved' : 'rejected'}">${p.is_active ? 'نشِط' : 'معطَّل'}</span></td>
+            <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openProviderForm(${p.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              <button class="btn-delete" onclick="handleDeleteProvider(${p.id})" title="حذف">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** يحوّل قيمة تاريخ من الخادم إلى صيغة <input type="datetime-local"> — يستخدم للعرض فقط عند التعديل، الحقل مقفل حينها. */
+function toDatetimeLocalValue(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * منتقي البلدات مقصور على ما يملكه المستخدم فعلاً: كل بلدات المنصة لسوبر
+ * أدمن، أو الاتحاد المشتق في deriveScopedTowns() لأدمن محلي — لا اختيار خارج
+ * هذه القائمة أصلاً، فالخادم يرفض الطلب كاملاً لو حاول عميل معدَّل تمرير بلدة
+ * خارجها (services.service.js assertTownsWithinScope).
+ */
+function openProviderForm(id) {
+  const scopedTowns = isSuperAdminRole() ? TOWNS : deriveScopedTowns();
+  if (!scopedTowns.length) {
+    alert('لا تملك أي بلدة مُسنَدة بعد — تواصل مع السوبر أدمن ليُسنِد لك بلدة قبل إضافة مزوّدين');
+    return;
+  }
+
+  editingProviderId = id || null;
+  const wrapper = document.getElementById('providerFormWrapper');
+  const title = document.getElementById('providerFormTitle');
+  const form = document.getElementById('providerForm');
+  form.reset();
+
+  const provider = id ? allServiceProviders.find(p => p.id === id) : null;
+
+  title.innerHTML = provider
+    ? `<i class="fa-solid fa-pen"></i> تعديل: ${escapeHtml(provider.name)}`
+    : `<i class="fa-solid fa-plus"></i> مزوّد خدمة جديد`;
+
+  document.getElementById('provId').value = provider ? provider.id : '';
+  renderProviderCategoryOptions(provider ? provider.category_id : null);
+  document.getElementById('provName').value = provider ? provider.name : '';
+  document.getElementById('provPhone').value = provider ? provider.phone : '';
+  document.getElementById('provImage').value = provider ? (provider.image_url || '') : '';
+  document.getElementById('provDescription').value = provider ? (provider.description || '') : '';
+  document.getElementById('provIsActive').checked = provider ? Boolean(provider.is_active) : true;
+
+  // consent_at/consent_channel هما سجل الإذن الأصلي — الخادم لا يقبل تعديلهما
+  // إطلاقاً بعد الإنشاء (services.service.js updateProvider)، فيُعرَضان هنا
+  // للسياق فقط عند التعديل ويُقفَلان، ويبقيان إلزاميين وقابلين للتحرير عند الإنشاء.
+  const consentAtInput = document.getElementById('provConsentAt');
+  const consentChannelInput = document.getElementById('provConsentChannel');
+  if (provider) {
+    consentAtInput.value = toDatetimeLocalValue(provider.consent_at);
+    consentChannelInput.value = provider.consent_channel || '';
+    consentAtInput.disabled = true;
+    consentChannelInput.disabled = true;
+  } else {
+    consentAtInput.value = '';
+    consentChannelInput.value = '';
+    consentAtInput.disabled = false;
+    consentChannelInput.disabled = false;
+  }
+
+  renderProviderTownsPicker(scopedTowns, provider ? provider.towns : []);
+
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeProviderForm() {
+  editingProviderId = null;
+  const wrapper = document.getElementById('providerFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const form = document.getElementById('providerForm');
+  if (form) form.reset();
+}
+
+function renderProviderCategoryOptions(selectedId) {
+  const select = document.getElementById('provCategory');
+  if (!select) return;
+  select.innerHTML = allPublicCategories.map(c =>
+    `<option value="${c.id}" ${selectedId === c.id ? 'selected' : ''}>${c.icon ? c.icon + ' ' : ''}${escapeHtml(c.name)}</option>`
+  ).join('');
+}
+
+function renderProviderTownsPicker(scopedTowns, selectedTowns) {
+  const container = document.getElementById('provTownsPicker');
+  if (!container) return;
+  const selected = new Set(selectedTowns || []);
+  container.innerHTML = scopedTowns.map(town => `
+    <label class="ot-check"><input type="checkbox" class="prov-town-check" value="${escapeHtml(town)}" ${selected.has(town) ? 'checked' : ''}> ${escapeHtml(town)}</label>
+  `).join('');
+}
+
+function collectProviderTowns() {
+  return Array.from(document.querySelectorAll('#provTownsPicker .prov-town-check:checked')).map(cb => cb.value);
+}
+
+async function handleProviderSubmit(e) {
+  e.preventDefault();
+
+  const towns = collectProviderTowns();
+  if (!towns.length) {
+    alert('اختر بلدة واحدة على الأقل يخدمها المزوّد');
+    return;
+  }
+
+  const id = document.getElementById('provId').value;
+  const payload = {
+    category_id: parseInt(document.getElementById('provCategory').value, 10),
+    name: document.getElementById('provName').value.trim(),
+    phone: document.getElementById('provPhone').value.trim(),
+    description: document.getElementById('provDescription').value.trim(),
+    image_url: document.getElementById('provImage').value.trim(),
+    is_active: document.getElementById('provIsActive').checked,
+    towns
+  };
+
+  // consent_at/consent_channel إلزاميان عند الإنشاء فقط — الخادم يرفض 400 بلا
+  // كليهما (services.routes.js requireConsentAt)، ولا يقبلهما إطلاقاً عند التعديل.
+  if (!id) {
+    const consentAt = document.getElementById('provConsentAt').value;
+    const consentChannel = document.getElementById('provConsentChannel').value;
+    if (!consentAt || !consentChannel) {
+      alert('تسجيل إذن المزوّد (التاريخ والوسيلة) إلزامي — لا يُنشر مزوّد بلا هذا السجل');
+      return;
+    }
+    payload.consent_at = new Date(consentAt).toISOString();
+    payload.consent_channel = consentChannel;
+  }
+
+  const btn = document.getElementById('provSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch(id ? `/api/admin/service-providers/${id}` : '/api/admin/service-providers', {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      alert(data.message || 'تم الحفظ بنجاح');
+      closeProviderForm();
+      await fetchAdminServiceProviders();
+      renderScopeBanner();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ المزوّد';
+  }
+}
+
+async function handleDeleteProvider(id) {
+  if (!confirm('حذف مزوّد الخدمة هذا نهائياً؟')) return;
+  try {
+    const res = await adminFetch(`/api/admin/service-providers/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      await fetchAdminServiceProviders();
+      renderScopeBanner();
+    } else {
+      alert(data.message || 'تعذر الحذف');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+// ======================================================================
+// 10. Villages — سوبر أدمن حصراً (قصص 32-33)
+// ======================================================================
+
+async function fetchAdminVillages() {
+  try {
+    const res = await adminFetch('/api/admin/villages');
+    const data = await res.json();
+    if (res.status === 403) { renderVillagesForbidden(data.message); return; }
+    if (data.success) {
+      allVillages = data.villages;
+      renderVillagesList();
+    }
+  } catch (e) {
+    console.error('Villages error:', e);
+  }
+}
+
+function renderVillagesForbidden(message) {
+  closeVillageForm();
+  const container = document.getElementById('villagesList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+}
+
+function renderVillagesList() {
+  const container = document.getElementById('villagesList');
+  if (!container) return;
+
+  if (!allVillages.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد قرى بعد</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>الاسم</th>
+          <th>خط العرض</th>
+          <th>خط الطول</th>
+          <th>الترتيب</th>
+          <th>الحالة</th>
+          <th>مناسبات</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allVillages.map(v => `
+          <tr>
+            <td><strong>${escapeHtml(v.name)}</strong></td>
+            <td>${v.latitude}</td>
+            <td>${v.longitude}</td>
+            <td>${v.position}</td>
+            <td><span class="status-tag ${v.is_active ? 'approved' : 'rejected'}">${v.is_active ? 'نشِطة' : 'معطَّلة'}</span></td>
+            <td>${v.events_count}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openVillageForm(${v.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              <button class="btn-delete" onclick="handleDeleteVillage(${v.id})" title="تعطيل/حذف">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function openVillageForm(id) {
+  editingVillageId = id || null;
+  const wrapper = document.getElementById('villageFormWrapper');
+  const title = document.getElementById('villageFormTitle');
+  const form = document.getElementById('villageForm');
+  form.reset();
+
+  const village = id ? allVillages.find(v => v.id === id) : null;
+
+  title.innerHTML = village
+    ? `<i class="fa-solid fa-pen"></i> تعديل قرية: ${escapeHtml(village.name)}`
+    : `<i class="fa-solid fa-plus"></i> قرية جديدة`;
+
+  document.getElementById('vilId').value = village ? village.id : '';
+  document.getElementById('vilName').value = village ? village.name : '';
+  document.getElementById('vilPosition').value = village ? village.position : 0;
+  document.getElementById('vilLat').value = village ? village.latitude : '';
+  document.getElementById('vilLng').value = village ? village.longitude : '';
+  document.getElementById('vilIsActive').checked = village ? Boolean(village.is_active) : true;
+
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeVillageForm() {
+  editingVillageId = null;
+  const wrapper = document.getElementById('villageFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const form = document.getElementById('villageForm');
+  if (form) form.reset();
+}
+
+/** التحقق من الإحداثيات هنا وقائي فقط — الخادم هو من يفرضها فعلياً (villages.routes.js requireCoordinate). */
+async function handleVillageSubmit(e) {
+  e.preventDefault();
+
+  const lat = document.getElementById('vilLat').value;
+  const lng = document.getElementById('vilLng').value;
+  if (lat === '' || lng === '') {
+    alert('خط العرض وخط الطول إلزاميان — قرية بلا إحداثيات لن يظهر لها دبّوس صحيح أبداً');
+    return;
+  }
+
+  const payload = {
+    name: document.getElementById('vilName').value.trim(),
+    latitude: parseFloat(lat),
+    longitude: parseFloat(lng),
+    position: parseInt(document.getElementById('vilPosition').value, 10) || 0,
+    is_active: document.getElementById('vilIsActive').checked
+  };
+
+  const id = document.getElementById('vilId').value;
+  const btn = document.getElementById('vilSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch(id ? `/api/admin/villages/${id}` : '/api/admin/villages', {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم الحفظ بنجاح');
+      closeVillageForm();
+      await fetchAdminVillages();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ القرية';
+  }
+}
+
+/**
+ * الحذف هنا لا يفشل أبداً على الخادم (villages.service.js deleteVillage لا
+ * يرمي أي خطأ) — قرية بلا مناسبات تُحذف فعلاً، وأخرى لها مناسبات تُعطَّل بدلاً
+ * من ذلك، والرسالتان تصلان بنص الخادم نفسه ضمن استجابة success:true واحدة —
+ * فلا داعي هنا لتمييز "فشل" عن "نجاح جزئي" كما في فئات الخدمات أدناه.
+ */
+async function handleDeleteVillage(id) {
+  if (!confirm('حذف هذه القرية؟ إن كانت لها مناسبات مرتبطة سيُعطَّل ظهورها بدلاً من حذفها.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/villages/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    alert(data.message || (data.success ? 'تم الحفظ' : 'حدث خطأ'));
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    await fetchAdminVillages();
+  }
+}
+
+// ======================================================================
+// 11. Service Categories — سوبر أدمن حصراً (قصة 34)
+// ======================================================================
+
+async function fetchAdminServiceCategories() {
+  try {
+    const res = await adminFetch('/api/admin/service-categories');
+    const data = await res.json();
+    if (res.status === 403) { renderServiceCategoriesForbidden(data.message); return; }
+    if (data.success) {
+      allServiceCategories = data.categories;
+      renderServiceCategoriesList();
+    }
+  } catch (e) {
+    console.error('Service categories error:', e);
+  }
+}
+
+function renderServiceCategoriesForbidden(message) {
+  closeServiceCategoryForm();
+  const container = document.getElementById('serviceCategoriesList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+}
+
+function renderServiceCategoriesList() {
+  const container = document.getElementById('serviceCategoriesList');
+  if (!container) return;
+
+  if (!allServiceCategories.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد فئات خدمات بعد</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>الفئة</th>
+          <th>الترتيب</th>
+          <th>الحالة</th>
+          <th>مزوّدون</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allServiceCategories.map(c => `
+          <tr>
+            <td>
+              <span style="display:inline-flex; align-items:center; gap:8px;">
+                <span style="width:20px; height:20px; border-radius:6px; display:inline-block; background:${escapeHtml(c.color)}; border:1px solid var(--admin-card-border);"></span>
+                <span style="font-size:1.1rem;">${escapeHtml(c.icon)}</span>
+                <strong>${escapeHtml(c.name)}</strong>
+              </span>
+            </td>
+            <td>${c.position}</td>
+            <td><span class="status-tag ${c.is_active ? 'approved' : 'rejected'}">${c.is_active ? 'نشِطة' : 'معطَّلة'}</span></td>
+            <td>${c.providers_count}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openServiceCategoryForm(${c.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              <button class="btn-delete" onclick="handleDeleteServiceCategory(${c.id})" title="حذف">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function openServiceCategoryForm(id) {
+  editingServiceCategoryId = id || null;
+  const wrapper = document.getElementById('serviceCategoryFormWrapper');
+  const title = document.getElementById('serviceCategoryFormTitle');
+  const form = document.getElementById('serviceCategoryForm');
+  form.reset();
+
+  const category = id ? allServiceCategories.find(c => c.id === id) : null;
+
+  title.innerHTML = category
+    ? `<i class="fa-solid fa-pen"></i> تعديل فئة: ${escapeHtml(category.name)}`
+    : `<i class="fa-solid fa-plus"></i> فئة خدمة جديدة`;
+
+  document.getElementById('scId').value = category ? category.id : '';
+  document.getElementById('scName').value = category ? category.name : '';
+  document.getElementById('scIcon').value = category ? category.icon : '';
+  document.getElementById('scColor').value = category ? category.color : '#0369a1';
+  document.getElementById('scPosition').value = category ? category.position : 0;
+  document.getElementById('scIsActive').checked = category ? Boolean(category.is_active) : true;
+
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeServiceCategoryForm() {
+  editingServiceCategoryId = null;
+  const wrapper = document.getElementById('serviceCategoryFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const form = document.getElementById('serviceCategoryForm');
+  if (form) form.reset();
+}
+
+async function handleServiceCategorySubmit(e) {
+  e.preventDefault();
+
+  const payload = {
+    name: document.getElementById('scName').value.trim(),
+    icon: document.getElementById('scIcon').value.trim(),
+    color: document.getElementById('scColor').value,
+    position: parseInt(document.getElementById('scPosition').value, 10) || 0,
+    is_active: document.getElementById('scIsActive').checked
+  };
+
+  const id = document.getElementById('scId').value;
+  const btn = document.getElementById('scSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch(id ? `/api/admin/service-categories/${id}` : '/api/admin/service-categories', {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم الحفظ بنجاح');
+      closeServiceCategoryForm();
+      await fetchAdminServiceCategories();
+      await fetchPublicServiceCategories();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ الفئة';
+  }
+}
+
+/**
+ * ٤٠٩ محتمل هنا رغم نجاح جزئي على الخادم: فئة لها مزوّدون تُعطَّل فعلاً ثم
+ * يُرمى ApiError.conflict بعد التعطيل (services.service.js deleteCategory) —
+ * بخلاف deleteVillage التي لا ترمي شيئاً أبداً. لذلك القائمة تُعاد تحميلها
+ * دوماً في finally بصرف النظر عن نجاح الطلب ظاهرياً، بنفس نمط deleteOccasionType.
+ */
+async function handleDeleteServiceCategory(id) {
+  if (!confirm('حذف فئة الخدمة هذه؟ إن وُجد مزوّدون مرتبطون بها سيُعطَّل ظهورها بدلاً من حذفها.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/service-categories/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    alert(data.message || (data.success ? 'تم الحذف' : 'حدث خطأ'));
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    await fetchAdminServiceCategories();
+    await fetchPublicServiceCategories();
+  }
+}
+
+// ======================================================================
+// 12. Admin ↔ Town Assignment — سوبر أدمن حصراً (قصص 31، 36)
+// ======================================================================
+
+async function fetchAdminAdmins() {
+  try {
+    const res = await adminFetch('/api/admin/admins');
+    const data = await res.json();
+    if (res.status === 403) { renderAdminsForbidden(data.message); return; }
+    if (data.success) {
+      allAdminsWithTowns = data.admins;
+      renderAdminsList();
+    }
+  } catch (e) {
+    console.error('Admins error:', e);
+  }
+}
+
+function renderAdminsForbidden(message) {
+  const container = document.getElementById('adminsList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+}
+
+/** أدمن بلا أي بلدة مؤشَّر عليه بوضوح — هذا بالضبط الحال الذي لا يرى فيه شيئاً (قصة 36، fail closed). */
+function renderAdminsList() {
+  const container = document.getElementById('adminsList');
+  if (!container) return;
+
+  if (!allAdminsWithTowns.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا يوجد حساب بدور "أدمن" بعد</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = allAdminsWithTowns.map(a => `
+    <div class="pane-box admin-town-assign-row">
+      <div class="admin-town-assign-head">
+        <div>
+          <strong>${escapeHtml(a.full_name)}</strong>
+          <span style="color:var(--text-dim); font-size:0.82rem; margin-inline-start:10px;">${escapeHtml(a.phone_number)}</span>
+        </div>
+        ${a.towns.length === 0
+          ? '<span class="status-tag pending"><i class="fa-solid fa-triangle-exclamation"></i> لا يرى شيئاً بعد — بلا بلدة مُسنَدة</span>'
+          : `<span class="status-tag approved">${a.towns.length} بلدة/بلدات</span>`}
+      </div>
+      <div class="provider-towns-picker">
+        ${TOWNS.map(town => `
+          <label class="ot-check"><input type="checkbox" class="admin-town-check" data-admin-id="${a.id}" value="${escapeHtml(town)}" ${a.towns.includes(town) ? 'checked' : ''}> ${escapeHtml(town)}</label>
+        `).join('')}
+      </div>
+      <button type="button" class="admin-btn-primary occasion-type-new-btn" style="margin-top:14px;" onclick="handleSaveAdminTowns(${a.id})">
+        <i class="fa-solid fa-check"></i> حفظ بلدات هذا الأدمن
+      </button>
+    </div>
+  `).join('');
+}
+
+async function handleSaveAdminTowns(adminId) {
+  const towns = Array.from(document.querySelectorAll(`.admin-town-check[data-admin-id="${adminId}"]:checked`)).map(cb => cb.value);
+  try {
+    const res = await adminFetch(`/api/admin/admins/${adminId}/towns`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ towns })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم تحديث بلدات الأدمن بنجاح');
+      await fetchAdminAdmins();
+    } else {
+      alert(data.message || 'تعذّر الحفظ');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
 }
 
 function escapeHtml(str) {

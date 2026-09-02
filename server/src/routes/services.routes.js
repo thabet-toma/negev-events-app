@@ -193,7 +193,10 @@ router.patch('/admin/service-categories/:id', asyncHandler(async (req, res) => {
 router.delete('/admin/service-categories/:id', asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف فئة الخدمة');
   const result = await services.deleteCategory(id);
-  res.json({ success: true, message: 'تم حذف فئة الخدمة بنجاح', ...result });
+  const message = result.deleted
+    ? 'تم حذف فئة الخدمة بنجاح'
+    : 'لا يمكن حذف فئة لها مزوّدون مرتبطون — تم تعطيلها بدلاً من ذلك فلن تظهر في الدليل';
+  res.json({ success: true, message, ...result });
 }));
 
 module.exports = router;
