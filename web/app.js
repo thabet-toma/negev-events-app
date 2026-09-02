@@ -16,12 +16,27 @@ let locationPickerMarker = null;
 let pickerPinPlacedByUser = false;
 let townCoordinates = {};
 let townsList = [];
+let villagesList = []; // من GET /api/towns (villages) — لا تُكرَّر في أي عميل (خريطة #21)
 const NEGEV_NEUTRAL_CENTER = [31.2858, 34.8431];
+
+// «القرى والتجمعات» — البند الجامع الوحيد الذي يطلب قرية إلزامية عند النشر
+// تحته (services-directory spec). القيمة نفسها ثابتة في server/src/constants.js.
+const VILLAGES_TOWN = 'القرى والتجمعات';
 
 // Publish form — occasion type drives the rest of the form (#20 step 9)
 let occasionTypesCache = null;
 let selectedOccasionType = null;
 let myEventsCache = [];
+
+// Services directory tab (#31) — فئات مسطَّحة، قائمة أبجدية، بلا تقييمات
+let servicesInitialized = false;
+let serviceCategoriesCache = null;
+let selectedServiceCategoryId = null; // null = "الكل"
+let selectedServiceTown = '';
+let serviceProvidersCache = [];
+let servicesPage = 1;
+let servicesPagination = null;
+let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل صريح (#25)
 
 // Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
 let currentPage = 1;
@@ -732,6 +747,11 @@ function renderEvents(events) {
     const clanLineHtml = clanTownParts.length
       ? `<div class="card-clan-line">${clanTownParts.join(' — ')}</div>` : '';
 
+    // «يحيي الحفلة الفنان فلان» — يغيب كلياً إن فرغ الحقل، لا سطر فارغ ولا
+    // نص بديل. صورة الفنان في التفاصيل لا الكرت — الكرت يحمل الملصق أصلاً.
+    const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
+      ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
+
     return `
       <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
         ${shotHtml}
@@ -742,6 +762,7 @@ function renderEvents(events) {
           ${topRowHtml}
           <h2 class="event-main-title">${escapeHtml(evt.title)}</h2>
           ${clanLineHtml}
+          ${artistLineHtml}
 
           <div class="event-details-grid">
             <div class="detail-item">
@@ -960,6 +981,7 @@ async function loadTownCoordinates() {
     if (data.success) {
       if (data.town_coordinates) townCoordinates = data.town_coordinates;
       if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
+      if (data.villages) villagesList = data.villages;
     }
   } catch (e) {
     console.error('Town coordinates error:', e);
@@ -1205,7 +1227,9 @@ function switchTab(tabId) {
   const targetTab = document.getElementById(tabId);
   if (targetTab) targetTab.classList.add('active-tab');
 
-  const navIndex = ['tabHome', 'tabMap', 'tabAdd', 'tabNokoot', 'tabStickers'].indexOf(tabId);
+  // «إضافة» لم تعد وجهة في الشريط (زرّ عائم بدلاً منها) — لا فهرس لها هنا،
+  // فتبقى بلا تمييز «نشط» في الشريط نفسه، وهذا هو المقصود (تذكرة #31).
+  const navIndex = ['tabHome', 'tabMap', 'tabNokoot', 'tabStickers', 'tabServices'].indexOf(tabId);
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
   if (navBtns[navIndex]) navBtns[navIndex].classList.add('active');
 
@@ -1217,6 +1241,8 @@ function switchTab(tabId) {
   else if (tabId === 'tabAdd') {
     if (!occasionTypesCache) initPublishForm();
     fetchMyEvents();
+  } else if (tabId === 'tabServices') {
+    if (!servicesInitialized) { servicesInitialized = true; initServicesTab(); }
   }
 }
 
@@ -1362,8 +1388,9 @@ function selectOccasionType(typeId) {
 function renderOccasionForm(type) {
   selectedOccasionType = type;
   const orderedFields = [...type.fields].sort((a, b) => a.position - b.position);
-  const uploadFields = orderedFields.filter(f => f.field_key === 'poster_url' || f.field_key === 'audio_url');
-  const otherFields = orderedFields.filter(f => f.field_key !== 'poster_url' && f.field_key !== 'audio_url');
+  const UPLOAD_FIELD_KEYS = ['poster_url', 'audio_url', 'artist_image_url'];
+  const uploadFields = orderedFields.filter(f => UPLOAD_FIELD_KEYS.includes(f.field_key));
+  const otherFields = orderedFields.filter(f => !UPLOAD_FIELD_KEYS.includes(f.field_key));
 
   const container = document.getElementById('dynamicFormFields');
   let html = otherFields.map(renderFieldHtml).join('');
@@ -1375,7 +1402,10 @@ function renderOccasionForm(type) {
   const fieldsByKey = {};
   for (const f of type.fields) fieldsByKey[f.field_key] = f;
 
-  if (fieldsByKey.town) populateTownSelect('addTown');
+  if (fieldsByKey.town) {
+    populateTownSelect('addTown');
+    updateVillagePickerVisibility();
+  }
 
   const dateInput = document.getElementById('addEventDate');
   if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
@@ -1410,7 +1440,12 @@ function renderFieldHtml(field) {
       return `
         <div class="form-group">
           <label>${label}${req}</label>
-          <select id="addTown" onchange="checkDateCollisionLive(); recenterLocationPicker();"></select>
+          <select id="addTown" onchange="handleAddTownChange()"></select>
+        </div>
+        <!-- يظهر فقط تحت بند "القرى والتجمعات" — إلزامي عندها (خريطة #21) -->
+        <div class="form-group" id="addVillageGroup" style="display:none;">
+          <label>القرية *</label>
+          <select id="addVillage" onchange="handleAddVillageChange()"></select>
         </div>`;
     case 'event_date':
       return `
@@ -1500,8 +1535,67 @@ function renderFieldHtml(field) {
           <label>${label}${req}</label>
           <input type="text" id="addAudioTitle" placeholder="مثال: شيلة الترحيب">
         </div>`;
+    case 'artist_name':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <input type="text" id="addArtistName" placeholder="مثال: عيسى الشمري">
+        </div>`;
+    case 'artist_image_url':
+      return `
+        <div class="upload-box">
+          <i class="fa-solid fa-image upload-icon"></i>
+          <h4>${label}${req}</h4>
+          <p>صورة الفنان (اختياري)</p>
+          <input type="file" id="addArtistImageFile" accept="image/*">
+        </div>`;
     default:
       return '';
+  }
+}
+
+/**
+ * تغيير البلدة أثناء النشر — نفس التحقّق الحيّ من قبل، بالإضافة إلى إظهار/إخفاء
+ * منتقي القرية. الترتيب مقصود: يعيد توسيط الخريطة على البلدة الجديدة أولاً،
+ * ثم يقرّر منتقي القرية إن كان عليه أن يفرض مركزاً مختلفاً فوقه.
+ */
+function handleAddTownChange() {
+  checkDateCollisionLive();
+  recenterLocationPicker();
+  updateVillagePickerVisibility();
+}
+
+/** يُظهر منتقي القرية فقط تحت بند "القرى والتجمعات"، ويملؤه من villagesList المجلوبة سلفاً. */
+function updateVillagePickerVisibility() {
+  const townSelect = document.getElementById('addTown');
+  const group = document.getElementById('addVillageGroup');
+  if (!townSelect || !group) return;
+
+  const isVillages = townSelect.value === VILLAGES_TOWN;
+  group.style.display = isVillages ? 'block' : 'none';
+
+  if (isVillages) {
+    populateVillageSelect();
+  } else {
+    const villageSelect = document.getElementById('addVillage');
+    if (villageSelect) villageSelect.value = '';
+  }
+}
+
+function populateVillageSelect() {
+  const select = document.getElementById('addVillage');
+  if (!select) return;
+  select.innerHTML = '<option value="">اختر القرية</option>' +
+    villagesList.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+}
+
+/** اختيار القرية يوسّط الخريطة على مركزها — ما لم يكن المستخدم قد حرّك الدبّوس يدوياً بالفعل. */
+function handleAddVillageChange() {
+  const villageId = document.getElementById('addVillage')?.value;
+  const village = villagesList.find(v => String(v.id) === String(villageId));
+  if (village && locationPickerMap) {
+    locationPickerMap.setView([village.latitude, village.longitude], 14);
+    if (!pickerPinPlacedByUser) placePickerMarker(village.latitude, village.longitude);
   }
 }
 
@@ -1544,6 +1638,186 @@ function appendHonoreesToFormData(formData, honorees) {
     formData.append(`honorees[${i}][name]`, h.name);
     if (h.role) formData.append(`honorees[${i}][role]`, h.role);
   });
+}
+
+// 12c. Services Directory Tab (تذكرة #31) — فئات مسطَّحة أوّلها "الكل" (نفس
+// نمط تبويبات نوع المناسبة #18)، فلتر بلدة، ثم قائمة مزوّدين أبجدية مسطّحة.
+// بلا رقم وبلا زرّ تواصل على الصفّ — الخادم أصلاً لا يرسل الرقم في هذه
+// القائمة. الرقم يظهر فقط داخل صفحة المزوّد بعد فعل تواصل صريح.
+
+async function initServicesTab() {
+  await loadTownCoordinates(); // townsList + villagesList معاً، نداء واحد مشترك
+  populateServiceTownFilter();
+  await initServiceCategoryTabs();
+  fetchServiceProviders();
+}
+
+function populateServiceTownFilter() {
+  const select = document.getElementById('serviceTownFilter');
+  if (!select) return;
+  select.innerHTML = '<option value="">كل البلدات</option>' +
+    townsList.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+}
+
+function handleServiceTownFilterChange() {
+  selectedServiceTown = document.getElementById('serviceTownFilter').value;
+  fetchServiceProviders();
+}
+
+async function initServiceCategoryTabs() {
+  const container = document.getElementById('serviceCategoryTabs');
+  if (!container) return;
+
+  try {
+    const res = await apiFetch('/api/services/categories');
+    const data = await res.json();
+    serviceCategoriesCache = (data.success && data.categories) ? data.categories : [];
+  } catch (e) {
+    console.error('Service categories error:', e);
+    serviceCategoriesCache = [];
+  }
+
+  const allTab = `<button class="town-pill active" data-cat-id="" onclick="selectServiceCategory(null)">الكل</button>`;
+  const catTabs = serviceCategoriesCache.map(c => `
+    <button class="town-pill" data-cat-id="${c.id}" onclick="selectServiceCategory(${c.id})">
+      ${c.icon ? escapeHtml(c.icon) + ' ' : ''}${escapeHtml(c.name)}
+    </button>
+  `).join('');
+  container.innerHTML = allTab + catTabs;
+}
+
+function selectServiceCategory(categoryId) {
+  selectedServiceCategoryId = categoryId;
+  document.querySelectorAll('#serviceCategoryTabs .town-pill').forEach(pill => {
+    const pillId = pill.dataset.catId ? Number(pill.dataset.catId) : null;
+    pill.classList.toggle('active', pillId === categoryId);
+  });
+  fetchServiceProviders();
+}
+
+async function fetchServiceProviders(options = {}) {
+  const { append = false } = options;
+  const container = document.getElementById('servicesListContainer');
+  if (!container) return;
+
+  if (!append) {
+    servicesPage = 1;
+    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div></div>`;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (selectedServiceCategoryId) params.set('category_id', selectedServiceCategoryId);
+    if (selectedServiceTown) params.set('town', selectedServiceTown);
+    params.set('page', servicesPage);
+    params.set('limit', 30);
+
+    const res = await apiFetch(`/api/services/providers?${params.toString()}`);
+    const data = await res.json();
+
+    if (data.success) {
+      serviceProvidersCache = append ? serviceProvidersCache.concat(data.providers) : data.providers;
+      servicesPagination = data.pagination || null;
+      renderServiceProviders(serviceProvidersCache);
+      renderServicesLoadMoreButton();
+    } else {
+      container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>تعذر جلب مزوّدي الخدمات حالياً</p></div>`;
+    }
+  } catch (e) {
+    console.error('Service providers error:', e);
+    container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>حدث خطأ في الاتصال بالخادم</p></div>`;
+  }
+}
+
+function loadMoreServiceProviders() {
+  if (!servicesPagination || servicesPagination.page >= servicesPagination.totalPages) return;
+  servicesPage = servicesPagination.page + 1;
+  fetchServiceProviders({ append: true });
+}
+
+function renderServicesLoadMoreButton() {
+  const wrapper = document.getElementById('servicesLoadMoreWrapper');
+  if (!wrapper) return;
+  const hasMore = !!(servicesPagination && servicesPagination.page < servicesPagination.totalPages);
+  wrapper.style.display = hasMore ? 'block' : 'none';
+}
+
+/** قائمة مسطّحة مرتّبة أبجدياً: الاسم · الفئة · البلدات · الصورة — لا رقم ولا زرّ تواصل هنا (#25). */
+function renderServiceProviders(providers) {
+  const container = document.getElementById('servicesListContainer');
+  if (!providers || !providers.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <i class="fa-solid fa-screwdriver-wrench"></i>
+        <h3>لا يوجد مزوّدون بعد</h3>
+        <p>سيُضيف الأدمن مزوّدي الخدمات قريباً</p>
+      </div>`;
+    return;
+  }
+
+  const sorted = [...providers].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+
+  container.innerHTML = sorted.map(p => `
+    <div class="provider-row" onclick="openProviderModal(${p.id})">
+      <div class="provider-avatar">
+        ${p.image_url ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" loading="lazy">` : `<i class="fa-solid fa-shop"></i>`}
+      </div>
+      <div class="provider-info">
+        <b>${escapeHtml(p.name)}</b>
+        <small>${escapeHtml(p.category_name || '')}${(p.towns && p.towns.length) ? ' · ' + escapeHtml(p.towns.join('، ')) : ''}</small>
+      </div>
+    </div>
+  `).join('');
+}
+
+/** فتح صفحة المزوّد: الوصف والصورة أولاً، والرقم خلف زرّ تواصل صريح — لا يُعرَض تلقائياً (#25). */
+async function openProviderModal(providerId) {
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}`);
+    const data = await res.json();
+    if (!data.success) return;
+
+    const p = data.provider;
+    currentProviderPhone = p.phone || '';
+
+    document.getElementById('providerModalName').textContent = p.name;
+    document.getElementById('providerModalCategory').textContent = p.category_name || '';
+
+    const img = document.getElementById('providerModalImage');
+    if (p.image_url) {
+      img.src = p.image_url;
+      img.alt = p.name;
+      img.hidden = false;
+    } else {
+      img.hidden = true;
+    }
+
+    document.getElementById('providerModalDescription').textContent = p.description || '';
+    document.getElementById('providerModalTowns').textContent = (p.towns && p.towns.length)
+      ? `يخدم: ${p.towns.join('، ')}` : '';
+
+    document.getElementById('providerContactArea').innerHTML = `
+      <button type="button" class="submit-btn" onclick="revealProviderPhone()">
+        <i class="fa-solid fa-phone"></i> إظهار رقم التواصل
+      </button>`;
+
+    document.getElementById('providerModal').style.display = 'flex';
+  } catch (e) {
+    console.error('Provider fetch error:', e);
+  }
+}
+
+/** الفعل الصريح الذي يكشف الرقم — لا يظهر بأي مسار آخر. */
+function revealProviderPhone() {
+  if (!currentProviderPhone) return;
+  document.getElementById('providerContactArea').innerHTML = `
+    <a class="submit-btn" href="tel:${escapeHtml(currentProviderPhone)}" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:8px;">
+      <i class="fa-solid fa-phone"></i> ${escapeHtml(currentProviderPhone)}
+    </a>`;
+}
+
+function closeProviderModal() {
+  document.getElementById('providerModal').style.display = 'none';
 }
 
 // 13. Add Event & Collision Check
@@ -1616,6 +1890,18 @@ async function handleEventSubmit(e) {
   }
 
   const town = document.getElementById('addTown').value;
+
+  // قاعدة تكامل الخادم نفسها: قرية إلزامية تحت "القرى والتجمعات" فقط، ومُرسَلة
+  // فقط عندها — بلدة أخرى لا تُرسِل village_id إطلاقاً (خريطة #21، تذكرة #23).
+  let villageId = null;
+  if (town === VILLAGES_TOWN) {
+    villageId = document.getElementById('addVillage')?.value || '';
+    if (!villageId) {
+      alert('يرجى اختيار القرية');
+      return;
+    }
+  }
+
   const eventDate = document.getElementById('addEventDate').value;
   if (!eventDate) {
     alert(`${labelOf('event_date')} مطلوب`);
@@ -1635,7 +1921,9 @@ async function handleEventSubmit(e) {
     host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
     audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
     poster_url: () => document.getElementById('addPosterFile')?.files[0],
-    audio_url: () => document.getElementById('addAudioFile')?.files[0]
+    audio_url: () => document.getElementById('addAudioFile')?.files[0],
+    artist_name: () => document.getElementById('addArtistName')?.value.trim(),
+    artist_image_url: () => document.getElementById('addArtistImageFile')?.files[0]
   };
 
   for (const [key, field] of Object.entries(fieldsByKey)) {
@@ -1656,6 +1944,7 @@ async function handleEventSubmit(e) {
   formData.append('occasion_type_id', type.id);
   appendHonoreesToFormData(formData, honorees);
   formData.append('town', town);
+  if (villageId) formData.append('village_id', villageId);
   formData.append('event_date', eventDate);
 
   const latInput = document.getElementById('addLat');
@@ -1672,6 +1961,7 @@ async function handleEventSubmit(e) {
   if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('addDinnerTime').value);
   if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('addHostPhone').value);
   if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('addAudioTitle').value);
+  if (fieldsByKey.artist_name) formData.append('artist_name', document.getElementById('addArtistName').value);
 
   if (fieldsByKey.poster_url) {
     const posterFile = document.getElementById('addPosterFile').files[0];
@@ -1680,6 +1970,10 @@ async function handleEventSubmit(e) {
   if (fieldsByKey.audio_url) {
     const audioFile = document.getElementById('addAudioFile').files[0];
     if (audioFile) formData.append('audio', audioFile);
+  }
+  if (fieldsByKey.artist_image_url) {
+    const artistImageFile = document.getElementById('addArtistImageFile').files[0];
+    if (artistImageFile) formData.append('artist_image', artistImageFile);
   }
 
   try {
@@ -1699,6 +1993,7 @@ async function handleEventSubmit(e) {
       }
       document.getElementById('addEventForm').reset();
       document.getElementById('collisionAlert').style.display = 'none';
+      updateVillagePickerVisibility();
       clearPickerMarker();
       const honoreesList = document.getElementById('addHonoreesList');
       if (honoreesList) {
