@@ -1035,6 +1035,17 @@ async function run() {
     assert.strictEqual(body.status, 'pending');
   });
 
+  await test('A critical edit (location_name) sends an approved event back to pending', async () => {
+    await api('PATCH', `/api/admin/events/${userEventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: userToken,
+      body: { location_name: 'ديوان الاختبار المعدَّل' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+  });
+
   await test('GET /api/my-events returns what this user published, across all statuses', async () => {
     const { status, body } = await api('GET', '/api/my-events', { token: userToken });
     assert.strictEqual(status, 200);

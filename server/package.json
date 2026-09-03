@@ -12,7 +12,7 @@
     "db:migrate": "node src/db/migrate.js",
     "db:seed": "node src/db/seed.js",
     "db:import-legacy": "node scripts/import-legacy-json.js",
-    "test": "node test/smoke.test.js"
+    "test": "node test/web-dom.test.js && node test/smoke.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -28,5 +28,8 @@
     "mysql2": "^3.11.5",
     "socket.io": "^4.8.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
 }
