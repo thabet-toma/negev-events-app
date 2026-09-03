@@ -13,6 +13,7 @@ let allServiceCategories = [];
 let editingServiceCategoryId = null;
 let allAdminsWithTowns = [];
 let myAdminTowns = [];
+let allPrivacyRequests = [];
 
 // حالة نموذج تعديل المناسبة (#43) — النموذج نفسه يُبنى ديناميكياً في JS (لا لمس
 // لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
@@ -62,6 +63,12 @@ const OCCASION_FIELDS = [
   { key: 'audio_title', label: 'عنوان المقطع الصوتي', core: false },
   { key: 'host_phone', label: 'رقم التواصل', core: false }
 ];
+
+// مرآة لـ PRIVACY_REQUEST_TYPES و PRIVACY_REQUEST_DEADLINE_DAYS في
+// server/src/constants.js — لا وحدة مشتركة بين web/ والخادم، نفس نمط نسخ
+// TOWNS وOCCASION_FIELDS أعلاه.
+const PRIVACY_REQUEST_TYPE_LABELS = { access: 'اطّلاع', erasure: 'محو' };
+const PRIVACY_REQUEST_DEADLINE_DAYS = 30;
 
 const REACTION_TYPES_LABELS = {
   coffee: '☕ قهوة',
@@ -148,7 +155,8 @@ function applyRoleVisibility() {
   const isSuperAdmin = isSuperAdminRole();
   const superAdminOnlyBtnIds = [
     'tabBroadcastBtn', 'tabUsersBtn', 'tabOccasionTypesBtn',
-    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn'
+    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
+    'tabPrivacyRequestsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
     const btn = document.getElementById(id);
@@ -181,7 +189,10 @@ async function loadAdminDashboard() {
     fetchTownVillages()
   ];
   if (isSuperAdmin) {
-    tasks.push(fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(), fetchAdminServiceCategories(), fetchAdminAdmins());
+    tasks.push(
+      fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
+      fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests()
+    );
   }
   await Promise.all(tasks);
   renderScopeBanner();
@@ -2127,6 +2138,139 @@ async function handleSaveAdminTowns(adminId) {
       await fetchAdminAdmins();
     } else {
       alert(data.message || 'تعذّر الحفظ');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+// ======================================================================
+// 12. Privacy Requests Queue — سوبر أدمن حصراً (قصة 62، issue #44)
+//
+// GET/PATCH /api/admin/privacy-requests — «طابور لطلبات الاطّلاع والمحو كي لا
+// تضيع في رسائل». يُجلب status=pending فقط (الطابور المفتوح، لا كل سجل
+// تاريخي)، وكل صف يحمل من طلب ونوعه ومنذ متى مقابل PRIVACY_REQUEST_DEADLINE_DAYS
+// المعلَنة للمستخدم عند تقديم طلبه — فتجاوز الموعد يظهر بصرياً بنفس ألوان
+// status-tag القائمة (رفض=أحمر) لا بخانة نص إضافية. الإغلاق (PATCH) يُعلم
+// الطلب كمكتمل على الخادم فيغيب تلقائياً من هذه القائمة بعد إعادة التحميل —
+// لا حذف من العميل ولا إخفاء محلي وحده.
+// ======================================================================
+
+async function fetchAdminPrivacyRequests() {
+  try {
+    const res = await adminFetch('/api/admin/privacy-requests?status=pending');
+    const data = await res.json();
+
+    // نفس منطق fetchOccasionTypes/fetchAdminVillages — 403 هنا حقيقة راهنة من
+    // الخادم (جلسة منتهية أو صلاحية ناقصة)، فتُعرض بنص الخادم نفسه لا تُخفى.
+    if (res.status === 403) {
+      renderPrivacyRequestsForbidden(data.message);
+      return;
+    }
+
+    if (data.success) {
+      allPrivacyRequests = data.requests;
+      renderPrivacyRequestsList();
+    } else {
+      alert(data.message || 'تعذر تحميل طلبات الاطّلاع والمحو');
+    }
+  } catch (e) {
+    console.error('Privacy requests error:', e);
+  }
+}
+
+function renderPrivacyRequestsForbidden(message) {
+  const container = document.getElementById('privacyRequestsList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+        <button class="btn-approve" style="flex:none; width:auto; margin-top:14px;" onclick="fetchAdminPrivacyRequests()">
+          <i class="fa-solid fa-rotate"></i> إعادة المحاولة
+        </button>
+      </div>
+    `;
+  }
+}
+
+/** الأيام المتبقية أمام مهلة الرد المعلَنة — سالبة يعني تجاوز الموعد فعلياً. */
+function privacyRequestDaysRemaining(createdAt) {
+  const created = new Date(createdAt);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const daysWaiting = Math.floor((Date.now() - created.getTime()) / msPerDay);
+  return PRIVACY_REQUEST_DEADLINE_DAYS - daysWaiting;
+}
+
+function renderPrivacyRequestsList() {
+  const container = document.getElementById('privacyRequestsList');
+  if (!container) return;
+
+  if (!allPrivacyRequests.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-shield-heart" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد طلبات اطّلاع أو محو بانتظار المعالجة حالياً</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>مقدّم الطلب</th>
+          <th>نوع الطلب</th>
+          <th>تاريخ الطلب</th>
+          <th>الموعد النهائي</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allPrivacyRequests.map(r => {
+          const daysRemaining = privacyRequestDaysRemaining(r.created_at);
+          let deadlineClass = 'approved';
+          let deadlineText = `متبقٍ ${daysRemaining} يوماً`;
+          if (daysRemaining < 0) {
+            deadlineClass = 'rejected';
+            deadlineText = `متجاوَز الموعد بـ ${Math.abs(daysRemaining)} يوماً ⚠️`;
+          } else if (daysRemaining <= 5) {
+            deadlineClass = 'pending';
+          }
+
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHtml(r.user_full_name || '')}</strong>
+                ${r.user_phone ? `<div style="font-size:0.78rem;"><a href="tel:${escapeHtml(r.user_phone)}" style="color:var(--gold-main);">${escapeHtml(r.user_phone)}</a></div>` : ''}
+              </td>
+              <td>${escapeHtml(PRIVACY_REQUEST_TYPE_LABELS[r.request_type] || r.request_type)}</td>
+              <td style="font-size:0.82rem; color:var(--text-dim);">${new Date(r.created_at).toLocaleString('ar-EG')}</td>
+              <td><span class="status-tag ${deadlineClass}">${deadlineText}</span></td>
+              <td style="white-space:nowrap;">
+                <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="closePrivacyRequest(${r.id})">
+                  <i class="fa-solid fa-check"></i> إغلاق الطلب
+                </button>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** إغلاق يُعلم الطلب كمكتمل على الخادم — يُفترض أن الاطّلاع أو المحو المطلوب نُفِّذ يدوياً قبل الضغط هنا. */
+async function closePrivacyRequest(id) {
+  if (!confirm('إغلاق هذا الطلب؟ هذا يُعلمه كمكتمل — تأكد أنك نفّذت الاطّلاع أو المحو المطلوب يدوياً قبل المتابعة.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/privacy-requests/${id}`, { method: 'PATCH' });
+    const data = await res.json();
+    if (data.success) {
+      await fetchAdminPrivacyRequests();
+    } else {
+      alert(data.message || 'تعذّر إغلاق الطلب');
     }
   } catch (e) {
     alert('تعذر الاتصال بالخادم');

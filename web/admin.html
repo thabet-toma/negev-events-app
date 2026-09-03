@@ -144,6 +144,9 @@
         <button class="admin-tab-btn" id="tabAdminsBtn" data-tab="tabAdmins" onclick="switchAdminTab('tabAdmins')" style="display:none;">
           <i class="fa-solid fa-user-shield"></i> الأدمن والبلدات
         </button>
+        <button class="admin-tab-btn" id="tabPrivacyRequestsBtn" data-tab="tabPrivacyRequests" onclick="switchAdminTab('tabPrivacyRequests')" style="display:none;">
+          <i class="fa-solid fa-user-lock"></i> طلبات الاطّلاع والمحو
+        </button>
       </nav>
 
       <!-- TAB 1: EVENTS REVIEW & MANAGEMENT -->
@@ -599,6 +602,17 @@
             <p>أدمن جديد لا يملك أي بلدة هنا <strong>لا يرى ولا يعتمد شيئاً</strong> في لوحته — أسنِد له بلدة واحدة على الأقل ليبدأ عمله</p>
           </div>
           <div id="adminsList" class="admin-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB: PRIVACY REQUESTS QUEUE — سوبر أدمن حصراً (قصة 62، issue #44) -->
+      <section id="tabPrivacyRequests" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-user-lock"></i> طلبات الاطّلاع والمحو</h2>
+            <p>طلبات اطّلاع أو محو على بيانات شخصية، بانتظار معالجتك — كي لا تضيع في رسائل. أغلق الطلب بعد تنفيذه يدوياً.</p>
+          </div>
+          <div id="privacyRequestsList" class="admin-table-wrapper"></div>
         </div>
       </section>
 
