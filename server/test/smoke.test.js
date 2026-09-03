@@ -2873,6 +2873,139 @@ async function run() {
     [scopedAdminId, noScopeAdminId, commentsOwnerId]
   );
 
+  console.log('\nShareable event page (GET /e/:id, issue #44)');
+
+  /** Plain HTTP GET against the share page — not JSON, so bypasses api(). */
+  async function rawGet(urlPath) {
+    const res = await fetch(`${baseUrl}${urlPath}`);
+    return { status: res.status, headers: res.headers, text: await res.text() };
+  }
+
+  const shareTitle = `<img src=x onerror=alert(1)>"عرس صفحة المشاركة`;
+  let shareEventId = 0;
+  await test('Set up: an approved wedding with an HTML-metacharacter title, for the share-page tests below', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        title: shareTitle,
+        honorees: [{ name: 'عريس صفحة المشاركة' }],
+        town: 'رهط',
+        event_date: '2027-09-10'
+      })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    shareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on an approved event returns 200 HTML with absolute og:title/og:image/og:url', async () => {
+    const { status, headers, text } = await rawGet(`/e/${shareEventId}`);
+    assert.strictEqual(status, 200);
+    assert.ok((headers.get('content-type') || '').includes('text/html'));
+    assert.ok(/property="og:title"/.test(text), 'expected an og:title meta tag');
+
+    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
+    const urlMatch = text.match(/property="og:url" content="([^"]*)"/);
+    assert.ok(imageMatch && imageMatch[1].startsWith('http'), 'expected an absolute og:image');
+    assert.ok(urlMatch && urlMatch[1].startsWith('http'), 'expected an absolute og:url');
+  });
+
+  await test('An HTML-metacharacter title comes back escaped — in the page body AND inside content="…"', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(!text.includes('<img src=x onerror=alert(1)>'), 'raw markup must never appear unescaped');
+    assert.ok(
+      text.includes('&lt;img src=x onerror=alert(1)&gt;&quot;'),
+      'expected the title escaped in the body'
+    );
+
+    const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
+    assert.ok(titleMeta, 'expected an og:title meta tag');
+    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped title inside content="…"');
+    assert.ok(!titleMeta[1].includes('<img'), 'must not break out of content="…" with a raw tag');
+  });
+
+  await test('The Content-Security-Policy header is present on the share route', async () => {
+    const { headers } = await rawGet(`/e/${shareEventId}`);
+    assert.strictEqual(
+      headers.get('content-security-policy'),
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'"
+    );
+  });
+
+  let pendingShareEventId = 0;
+  await test('Set up: a pending (not yet approved) wedding', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس معلَّق' }], town: 'حورة', event_date: '2027-09-11' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'pending');
+    pendingShareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on a pending event, a non-existent id, and a non-numeric id all 404 with an identical body', async () => {
+    const pending = await rawGet(`/e/${pendingShareEventId}`);
+    const missing = await rawGet('/e/999999999');
+    const malformed = await rawGet('/e/not-a-number');
+
+    assert.strictEqual(pending.status, 404);
+    assert.strictEqual(missing.status, 404);
+    assert.strictEqual(malformed.status, 404);
+    assert.strictEqual(pending.text, missing.text, 'a pending event must be indistinguishable from a missing one');
+    assert.strictEqual(pending.text, malformed.text, 'a malformed id must be indistinguishable from a missing one');
+  });
+
+  let expiredShareEventId = 0;
+  await test('Set up: an approved wedding whose date has already passed', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس منتهية مشاركته' }], town: 'رهط', event_date: '2020-01-01' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    expiredShareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on an expired approved event is still 200 and shows the «انتهت» marker', async () => {
+    const { status, text } = await rawGet(`/e/${expiredShareEventId}`);
+    assert.strictEqual(status, 200);
+    assert.ok(text.includes('انتهت'), 'expected the expired marker in the page');
+  });
+
+  let solemnShareEventId = 0;
+  await test('Set up: a poster-less عزا (solemn tone, no default_poster_url either)', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى صفحة المشاركة' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-09-12',
+        event_end_date: '2027-09-13'
+      }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    solemnShareEventId = body.eventId;
+  });
+
+  await test('A solemn-tone event with no poster gets the solemn fallback image, never the festive one', async () => {
+    const { text } = await rawGet(`/e/${solemnShareEventId}`);
+    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
+    assert.ok(imageMatch, 'expected an og:image tag');
+    assert.ok(
+      imageMatch[1].endsWith('/e/assets/solemn.png'),
+      `expected the solemn fallback image, got: ${imageMatch[1]}`
+    );
+    assert.ok(!imageMatch[1].includes('festive'), 'must not fall back to the festive image');
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
+    [shareEventId, pendingShareEventId, expiredShareEventId, solemnShareEventId]
+  );
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

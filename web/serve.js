@@ -23,7 +23,7 @@ const PORT = parseInt(process.env.PORT, 10) || 8080;
 const API_ORIGIN = process.env.API_ORIGIN || 'http://localhost:3000';
 
 // المسارات التي يملكها الخادم؛ كل ما عداها ملفات ثابتة.
-const PROXIED = ['/api', '/uploads', '/downloads', '/socket.io'];
+const PROXIED = ['/api', '/uploads', '/downloads', '/socket.io', '/e'];
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

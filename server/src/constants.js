@@ -39,6 +39,22 @@ const TOWN_COORDINATES = {
  */
 const OCCASION_TONES = ['festive', 'solemn'];
 
+/**
+ * The `og:image` used by the shareable event page (`GET /e/:id`,
+ * server/src/routes/share.routes.js) when an event has no `poster_url` and
+ * its occasion type has no `default_poster_url` either — the last link in
+ * that fallback chain, keyed by the type's own `tone` (never by name), so a
+ * renamed عزا still gets the no-person, muted panel. Paths are relative to
+ * the share router's own mount (`/e`); the route makes them absolute with
+ * `config.publicUrl`, same as every other media URL (ADR-0002). A tone with
+ * no entry here (there is none today — every `OCCASION_TONES` value is
+ * covered) would need one added before it could be used as a fallback.
+ */
+const SHARE_FALLBACK_POSTERS = {
+  festive: '/e/assets/festive.png',
+  solemn: '/e/assets/solemn.png'
+};
+
 const REACTION_TYPES = ['coffee', 'horse', 'fireworks', 'rose', 'hand'];
 
 const EVENT_STATUSES = ['pending', 'approved', 'rejected'];
@@ -96,5 +112,6 @@ module.exports = {
   OCCASION_FIELD_KEYS,
   CORE_OCCASION_FIELDS,
   CONGRATULATION_REPORT_THRESHOLD,
-  OCCASION_TONES
+  OCCASION_TONES,
+  SHARE_FALLBACK_POSTERS
 };

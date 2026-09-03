@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
 const routes = require('./routes');
+const shareRoutes = require('./routes/share.routes');
 const db = require('./db/pool');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
@@ -80,6 +81,12 @@ function createApp() {
     // Uploaded files are served as attachments-in-place, never executed.
     setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff')
   }));
+
+  // الصفحة القابلة للمشاركة (issue #44) — HTML حقيقي لعارضات الشبكات
+  // الاجتماعية التي لا تُشغّل JavaScript، فلا تلتقط شيئاً من واجهة الـSPA.
+  // على جذر التطبيق (`/e/...`) لا تحت `/api` — راجع
+  // docs/adr/0006-server-renders-the-share-page.md.
+  app.use('/e', shareRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
