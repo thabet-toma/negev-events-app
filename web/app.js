@@ -5,6 +5,7 @@ let searchQuery = '';
 let currentAudio = null;
 let currentAudioBtn = null;
 let currentChatEventId = null;
+let currentChatEvent = null; // الحدث الكامل من فتح مودال التبريكات — يغذّي زرّ المشاركة (تذكرة #44)
 let socket = null;
 let stickerTheme = 'royal-gold';
 let leafletMap = null;
@@ -75,6 +76,7 @@ let authToken = localStorage.getItem('negev_token') || null;
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  initErrorTracking();
   initSocket();
   setupTownFilters();
   updateAuthUI();
@@ -123,6 +125,84 @@ function updateThemeToggleIcon() {
   if (!btn) return;
   const icon = btn.querySelector('i');
   if (icon) icon.className = currentThemeIsDark() ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+}
+
+// -0.5. Error tracking (Sentry) — مُوصَّل لكن نائم (تذكرة #44)
+//
+// الخادم الذاتي المستضاف لتلقّي هذه التقارير لم يُنشر بعد (خادم الإنتاج
+// بمعالج واحد وswap ممتلئة أصلاً)، فـ errorDsn في config.js فارغ افتراضياً.
+// فارغ ⇒ لا سكربت يُحقَن، لا اتصال، لا تكلفة — الشرط أدناه هو كل ما يحول
+// دون ذلك. لا بيانات شخصية أبداً (لا معرّف مستخدم، لا هاتف، لا اسم) — لم
+// نستدعِ Sentry.setUser في أي مكان، وsendDefaultPii مضبوطة صراحةً false.
+// غير مربوط بمفتاح رفض التحليلات (analytics_opt_out) عمداً: تقرير عطل لا
+// يحمل هوية شخص بالتصميم، فهو خارج سؤال الموافقة من الأساس.
+function initErrorTracking() {
+  const cfg = window.NEGEV_CONFIG || {};
+  const dsn = cfg.errorDsn;
+  if (!dsn) return;
+
+  const script = document.createElement('script');
+  script.src = 'https://browser.sentry-cdn.com/7.120.3/bundle.min.js'; // إصدار مثبَّت دائماً — لا "latest"
+  script.crossOrigin = 'anonymous';
+  script.onload = () => {
+    if (!window.Sentry) return;
+    window.Sentry.init({
+      dsn,
+      release: cfg.releaseVersion || undefined,
+      sendDefaultPii: false
+    });
+  };
+  document.head.appendChild(script);
+}
+
+// -0.4. Analytics — the client half (تذكرة #44)
+//
+// نسجّل ما يفعله المستخدم، لا ما يقرأه — القائمة مغلقة ويملكها الخادم
+// (server/src/constants.js ANALYTICS_EVENTS)، واسم خارجها يُرفَض هناك. نداء
+// صامت تماماً: فشله لا يُزعج المستخدم ولا يوقف أي شيء يفعله — ولهذا لا
+// await على استدعائه في أي مكان.
+//
+// معرّف الجهاز نفسه المستعمل أصلاً لمشاهدات/نقرات القصص (negev_device_id) —
+// عشوائي بحت، لا يُشتقّ من أي شيء يخصّ الشخص، ونفس السبب بالضبط: تمييز جهاز
+// غير مسجَّل لا معرفة من هو. رقم واحد لكل جهاز يكفي، فلا داعي لمفتاح ثانٍ.
+function getDeviceId() {
+  return getStoryDeviceId();
+}
+
+/**
+ * يرفق رمز الدخول فقط عند تسجيل الدخول (نفس نمط auth:true في كل الملف) —
+ * ويعمل أيضاً بلا تسجيل دخول لأن apiFetch لا يرفق شيئاً حين لا يوجد رمز.
+ * content_town دائماً بلدة المناسبة موضوع الفعل، لا بلدة المستخدم نفسه —
+ * هذا هو الفارق الذي يحفظه القرار كله (README الخادم، ANALYTICS_EVENTS).
+ */
+function recordAnalyticsEvent(eventName, { contentTown } = {}) {
+  try {
+    apiFetch('/api/analytics/events', {
+      auth: true,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_name: eventName,
+        platform: 'web',
+        device_id: getDeviceId(),
+        content_town: contentTown || undefined
+      })
+    }).catch(() => {});
+  } catch (e) {
+    // لا شيء — هذا النداء لا يجوز أن يزعج المستخدم أبداً مهما فشل.
+  }
+}
+
+/**
+ * يميّز فشل نشر بسبب الصورة/الملف عن أي فشل نشر آخر — لا كود خطأ مخصَّص
+ * يرجعه الخادم، فقط نص الرسالة الذي يبنيه بالضبط server/src/middleware/error.js
+ * لأخطاء multer الثلاثة (حجم الملف، النوع غير المدعوم، أو خطأ رفع عام).
+ * إن تغيّرت تلك الرسائل يوماً يفقد هذا التمييز دقّته لا أكثر — النشر نفسه لا
+ * يتأثر، فالفشل يُسجَّل حينها كـpublish_failed العام بدل image_upload_failed.
+ */
+function isMediaUploadErrorMessage(message) {
+  if (!message) return false;
+  return message.includes('حجم الملف') || message.includes('نوع الملف غير مدعوم') || message.includes('خطأ في رفع الملف');
 }
 
 // 0. Android app download entry
@@ -807,6 +887,14 @@ function renderEvents(events) {
 
           <!-- Action Buttons Footer -->
           <div class="card-footer-actions">
+            <!-- المشاركة على البطاقة نفسها، لا في مودال التبريكات وحده: هذه
+                 الواجهة **لا تملك صفحة تفاصيل** أصلاً (البطاقة هي التفاصيل —
+                 تاريخ ومكان وصوت وأزرار ملاحة)، فقاعدة المواصفة «التفاصيل لا
+                 القائمة» لا تنطبق هنا كما تنطبق على الموبايل. زرّ لا يجده أحد
+                 يُفرغ القُمع الذي وُجدت هذه الميزة لأجله. -->
+            <button class="share-event-btn" onclick="shareEventById(${evt.id})">
+              <i class="fa-solid fa-share-nodes"></i> ${escapeHtml(shareButtonLabel(evt))}
+            </button>
             <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
               <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
             </button>
@@ -1984,6 +2072,10 @@ async function handleEventSubmit(e) {
     if (artistImageFile) formData.append('artist_image', artistImageFile);
   }
 
+  // بدء فعلي للنشر (تذكرة #44) — بعد كل التحقق المحلي أعلاه، لا عند فتح
+  // النموذج أو الضغط الأول على الزر بلا اكتمال الحقول.
+  recordAnalyticsEvent('publish_started', { contentTown: town });
+
   try {
     const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
     const data = await res.json();
@@ -2013,9 +2105,16 @@ async function handleEventSubmit(e) {
       fetchEvents();
     } else {
       alert(data.message || 'حدث خطأ أثناء النشر');
+      // فشل بسبب الصورة/الملف تحديداً (متعدّد multer، error.js) يُسجَّل باسمه
+      // الخاص لا كفشل نشر عام — الاثنان مفتاحان منفصلان في القائمة المغلقة.
+      recordAnalyticsEvent(
+        isMediaUploadErrorMessage(data.message) ? 'image_upload_failed' : 'publish_failed',
+        { contentTown: town }
+      );
     }
   } catch (err) {
     alert('تعذر الاتصال بالخادم');
+    recordAnalyticsEvent('publish_failed', { contentTown: town });
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة';
@@ -2296,6 +2395,7 @@ async function handleEventEditSubmit(e) {
 // 15. Live Chat & Congratulations Modal
 async function openChatModal(eventId) {
   currentChatEventId = eventId;
+  currentChatEvent = null; // يُعاد ضبطه أدناه بعد نجاح الجلب — لا زرّ مشاركة على بيانات مناسبة سابقة
   const modal = document.getElementById('chatModal');
   modal.style.display = 'flex';
 
@@ -2317,8 +2417,11 @@ async function openChatModal(eventId) {
 
     if (data.success) {
       const evt = data.event;
+      currentChatEvent = evt;
       document.getElementById('chatModalTitle').textContent = `${congratulationsLabel(evt)}: ${evt.groom_name}`;
       document.getElementById('chatModalSubtitle').textContent = `${evt.town} - ${evt.event_date}`;
+      const shareLabel = document.getElementById('shareEventBtnLabel');
+      if (shareLabel) shareLabel.textContent = shareButtonLabel(evt);
 
       if (evt.host_phone) {
         hostBar.style.display = 'flex';
@@ -2394,6 +2497,67 @@ async function reportCongratulation(eventId, congratulationId, btnElement) {
 function closeChatModal() {
   document.getElementById('chatModal').style.display = 'none';
   currentChatEventId = null;
+  currentChatEvent = null;
+}
+
+/**
+ * زرّ المشاركة في تفاصيل المناسبة (تذكرة #44) — الكلمة من نغمة النوع لا اسمه:
+ * نفس العلَم الذي يبني عليه isMourningTone أعلاه، لا مقارنة بتسمية يكتبها
+ * الأدمن. الاحتفالية «شارك المناسبة»، والوقورة «أرسل النعي».
+ */
+function shareButtonLabel(evt) {
+  return isMourningTone(evt) ? 'أرسل النعي' : 'شارك المناسبة';
+}
+
+/** الأصل من config.js دائماً (نفس API_BASE الذي يبنيه api.js) — لا نص ثابت ثانٍ هنا. */
+function shareOrigin() {
+  return API_BASE || window.location.origin;
+}
+
+/**
+ * سطر قصير باسم المناسبة وبلدتها ثم رابط صفحة المشاركة على الخادم
+ * (`GET /e/:id`، share.routes.js) — بلا «حمّل التطبيق»: تلك الصفحة نفسها تحمل
+ * زرّ التحميل، وتكراره هنا يحوّل دعوة إلى إعلان (تذكرة #44).
+ *
+ * navigator.share عند توفّره؛ نسخ إلى الحافظة مع تأكيد مرئي حين لا يتوفر —
+ * والزرّ لا يفشل بصمت في أي مسار: إلغاء المستخدم لورقة المشاركة (AbortError)
+ * وحده يُعامَل كلا شيء، لا كخطأ.
+ */
+async function shareCurrentEvent() {
+  await shareEvent(currentChatEvent);
+}
+
+/** مشاركة من البطاقة — المناسبة من القائمة المحمّلة أصلاً، بلا نداء جديد. */
+async function shareEventById(eventId) {
+  await shareEvent(allEvents.find(e => e.id === eventId));
+}
+
+async function shareEvent(evt) {
+  if (!evt) return;
+
+  const url = `${shareOrigin()}/e/${evt.id}`;
+  const line = `${evt.title} — ${evt.town}`;
+
+  recordAnalyticsEvent('share_clicked', { contentTown: evt.town });
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: evt.title, text: line, url });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // المستخدم أغلق ورقة المشاركة بنفسه — ليس خطأ
+      // أي فشل آخر (نادر) — نكمل إلى نسخ الرابط بدل ترك الزر بلا أثر.
+    }
+  }
+
+  const fullText = `${line}\n${url}`;
+  try {
+    await navigator.clipboard.writeText(fullText);
+    showToast('📋 تم نسخ رابط المناسبة');
+  } catch (e) {
+    // لا clipboard API متاح (سياق غير آمن مثلاً) — لا يبقى الزر بلا أثر أبداً.
+    alert(fullText);
+  }
 }
 
 function insertEmojiToChat(text) {
@@ -2443,6 +2607,9 @@ function loadNokootView() {
     lockedView.style.display = 'none';
     unlockedView.style.display = 'block';
     fetchNokootRecords();
+    // 🚧 قسم الخصوصية وحسابي أسفل سجل النقوط — لا نداء تحليلات هنا ولا في أي
+    // مسار آخر يلمس دفتر النقوط، بلا استثناء (تذكرة #44، القاعدة الحاكمة).
+    renderAnalyticsOptOutToggle();
   }
 }
 
@@ -2789,6 +2956,105 @@ function updateAuthUI() {
   } else {
     label.textContent = 'تسجيل الدخول';
     btn.onclick = () => { openAuthModal(); };
+  }
+}
+
+// 17c. Privacy — إشعار الخصوصية، رفض التحليلات، والاطلاع/الحذف (تذكرة #44)
+//
+// لا شاشة "حسابي" مستقلة في هذا العميل بعد؛ هذا القسم يعيش داخل تبويب النقوط
+// (index.html، #privacyAccountSection) لأنه المكان الفعلي الذي يصل إليه
+// المستخدم المسجَّل دخوله اليوم (updateAuthUI أعلاه يفتح tabNokoot).
+
+let privacyNoticeCache = null; // نص واحد لا يتغيّر أثناء الجلسة — يُجلب مرة، لا نداء عند كل فتح
+
+async function openPrivacyNoticeModal() {
+  const modal = document.getElementById('privacyNoticeModal');
+  const body = document.getElementById('privacyNoticeText');
+  modal.style.display = 'flex';
+
+  if (privacyNoticeCache) {
+    body.textContent = privacyNoticeCache.text;
+    return;
+  }
+
+  body.textContent = 'جاري التحميل...';
+  try {
+    const res = await apiFetch('/api/privacy/notice');
+    const data = await res.json();
+    if (data.success && data.notice) {
+      privacyNoticeCache = data.notice;
+      body.textContent = data.notice.text;
+    } else {
+      body.textContent = 'تعذر جلب إشعار الخصوصية';
+    }
+  } catch (e) {
+    body.textContent = 'تعذر جلب إشعار الخصوصية';
+  }
+}
+
+function closePrivacyNoticeModal() {
+  document.getElementById('privacyNoticeModal').style.display = 'none';
+}
+
+/** يعكس حالة الحساب الحالية (currentUser.analytics_opt_out) على المفتاح — بلا نداء شبكة. */
+function renderAnalyticsOptOutToggle() {
+  const toggle = document.getElementById('analyticsOptOutToggle');
+  if (!toggle || !currentUser) return;
+  toggle.checked = !!currentUser.analytics_opt_out;
+}
+
+/** مفتاح، لا شرط استخدام — لا تُقفَل أي ميزة إن رفض المستخدم (النص بجانب المفتاح في index.html يقول ذلك صراحةً). */
+async function handleAnalyticsOptOutChange(checked) {
+  if (!currentUser) return;
+  try {
+    const res = await apiFetch('/api/auth/me', {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analytics_opt_out: checked })
+    });
+    const data = await res.json();
+    if (data.success && data.user) {
+      currentUser = data.user;
+      localStorage.setItem('negev_user', JSON.stringify(currentUser));
+      showToast(data.message || 'تم الحفظ');
+    } else {
+      alert(data.message || 'تعذر حفظ الإعداد');
+      renderAnalyticsOptOutToggle(); // إعادة المفتاح لحالته الحقيقية عند الفشل
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+    renderAnalyticsOptOutToggle();
+  }
+}
+
+/** حذف فوري، ذاتي الخدمة — يؤكَّد قبل الإرسال لأنه لا رجعة فيه. */
+async function handleAnalyticsErasure() {
+  if (!currentUser) return;
+  if (!confirm('سيُحذف فوراً كل ما سُجِّل عنك من بيانات التحليلات السلوكية. متابعة؟')) return;
+  try {
+    const res = await apiFetch('/api/privacy/analytics-erasure', { method: 'POST', auth: true });
+    const data = await res.json().catch(() => ({}));
+    alert((data && data.message) || (res.ok ? 'تم الحذف' : 'تعذر الحذف'));
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+/** طلب رسمي (اطلاع أو حذف) — يُعرض الرد بحرفه لأنه يحمل مهلة المعالجة من الخادم (PRIVACY_REQUEST_DEADLINE_DAYS). */
+async function handlePrivacyRequest(requestType) {
+  if (!currentUser) return;
+  try {
+    const res = await apiFetch('/api/privacy/requests', {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_type: requestType })
+    });
+    const data = await res.json().catch(() => ({}));
+    alert((data && data.message) || (res.ok ? 'تم استلام طلبك' : 'تعذر إرسال الطلب'));
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
   }
 }
 

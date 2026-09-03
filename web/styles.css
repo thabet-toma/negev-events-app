@@ -1075,6 +1075,75 @@ body {
 
 .close-modal-btn { background: var(--surface-sunk); border: none; width: 34px; height: 34px; border-radius: 50%; color: var(--ink); cursor: pointer; }
 
+/* زرّ المشاركة في تفاصيل المناسبة (تذكرة #44) — بجانب زرّ الإغلاق في رأس المودال */
+.modal-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.share-event-btn {
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  border: 1px solid var(--sky);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.share-event-btn:hover { background: var(--sky); color: var(--on-sky); }
+
+/* على البطاقة، الشبكة عمودان — فالمشاركة تمتدّ عليهما معاً في سطرها الخاص
+   فوقهما، بدل أن تترك خانة فارغة بجانبها. */
+.card-footer-actions .share-event-btn {
+  grid-column: 1 / -1;
+  justify-content: center;
+  padding: 11px;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+}
+
+/* قسم الخصوصية وحسابي (تذكرة #44) — داخل تبويب النقوط، المكان الفعلي الذي
+   يصل إليه المستخدم المسجَّل دخوله اليوم. */
+.privacy-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.privacy-row-text strong { color: var(--ink); font-size: 0.92rem; }
+.privacy-row-text p { color: var(--ink-faint); font-size: 0.78rem; margin-top: 4px; }
+
+.privacy-toggle { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+.privacy-toggle input { opacity: 0; width: 0; height: 0; }
+.privacy-toggle-slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  transition: 0.2s;
+}
+.privacy-toggle-slider::before {
+  content: ''; position: absolute; height: 18px; width: 18px; top: 3px;
+  right: 4px; background: var(--surface); border-radius: 50%; transition: 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.privacy-toggle input:checked + .privacy-toggle-slider { background: var(--sky); border-color: var(--sky); }
+.privacy-toggle input:checked + .privacy-toggle-slider::before { transform: translateX(-20px); }
+
+.privacy-actions-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.privacy-actions-row button { flex: 1 1 160px; }
+
+.privacy-hint { font-size: 0.78rem; color: var(--ink-faint); margin: -6px 0 12px; text-align: center; }
+.privacy-hint a { color: var(--sky-deep); font-weight: 700; text-decoration: underline; cursor: pointer; }
+
+.privacy-notice-text {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-inline-end: 4px;
+}
+
 /* Bottom Navigation Bar — الحاوية الثابتة تحمل الشريط وزرّ النشر العائم معاً،
    فيتوسّط الزرّ نفس عرض الشريط (650px) بلا أن يعتمد على عرض النافذة (#31، الخيار ج) */
 .bottom-nav-wrap {
