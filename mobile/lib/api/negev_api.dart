@@ -486,6 +486,39 @@ class NegevApi {
     final data = await _client.get('/api/app/version');
     return AppRelease.fromJson(data);
   }
+
+  // --- التحليل السلوكي (issue #44) -----------------------------------
+
+  /// `POST /api/analytics/events` — النقطة الوحيدة. القائمة المغلقة لأسماء
+  /// الأحداث يملكها الخادم (`ANALYTICS_EVENTS` في server/src/constants.js)؛
+  /// هذا العميل لا يخترع اسماً جديداً ولا يتحقّق منه محلياً. `auth: true`
+  /// كي تُنسَب لحساب المستخدم إن كان مسجَّلاً بلا إجبار تسجيل الدخول —
+  /// `ApiClient` لا يرفق الترويسة أصلاً إن كان الرمز غائباً، فالزائر يُسجَّل
+  /// بلا حساب تماماً كما يقبل الخادم (`optionalAuthenticate`).
+  ///
+  /// هذه الدالة وحدها ترمي `ApiException` كأي نقطة أخرى — الابتلاع الكامل
+  /// للخطأ ("fire-and-forget") مسؤولية `recordAnalyticsEvent` في
+  /// `state/analytics.dart`، لا هنا، حتى تبقى `NegevApi` متّسقة: كل دالة
+  /// فيها تُبلّغ عن فشلها لموقع الاستدعاء.
+  Future<void> recordAnalyticsEvent({
+    required String eventName,
+    required String platform,
+    required String appVersion,
+    required String deviceId,
+    String? contentTown,
+  }) async {
+    await _client.post(
+      '/api/analytics/events',
+      auth: true,
+      body: {
+        'event_name': eventName,
+        'platform': platform,
+        'app_version': appVersion,
+        'device_id': deviceId,
+        if (contentTown != null && contentTown.isNotEmpty) 'content_town': contentTown,
+      },
+    );
+  }
 }
 
 /// صفحة مناسبات — من GET /api/events. الترقيم والإعلانات تصلان مع نفس الاستدعاء.

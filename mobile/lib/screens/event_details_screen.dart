@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../state/analytics.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/congratulations.dart';
@@ -135,6 +136,15 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   /// أصلاً ([AppConfig.apiBase]) لا ثابتاً ثانياً، والنصّ بلا «حمّل التطبيق» —
   /// تلك حكاية صفحة الهبوط، لا صحيفة المشاركة.
   Future<void> _share(Event event) async {
+    // بلدة *المناسبة* المشارَكة، لا بلدة المستخدم — نفس تمييز الويب
+    // (recordAnalyticsEvent في web/app.js). يُسجَّل عند النقرة نفسها، بصرف
+    // النظر عن نجاح صحيفة المشاركة بعدها أو فشلها.
+    recordAnalyticsEvent(
+      AppServices.of(context).api,
+      'share_clicked',
+      contentTown: event.town,
+    );
+
     final url = '${AppConfig.apiBase}/e/${event.id}';
     final text = '${event.displayTitle} — ${event.townDisplay}\n$url';
     try {
