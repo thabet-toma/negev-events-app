@@ -101,6 +101,42 @@ const CORE_OCCASION_FIELDS = OCCASION_FIELDS.filter(field => field.core).map(fie
  */
 const CONGRATULATION_REPORT_THRESHOLD = 3;
 
+/**
+ * Closed list of analytics event names (issue #44). The governing rule is:
+ * we record what a person DID in the app, never what they READ in it — a row
+ * saying "this named person opened this particular عزاء" reads as
+ * family-life information under Israeli Privacy Protection Law Amendment 13,
+ * which raises the required security tier and doubles the notice obligation.
+ * A name outside this list is rejected by analytics.service.js — that is
+ * what stops a client writing whatever it likes into analytics_events, and
+ * it is also what makes a privacy notice about this table writable at all
+ * (you can only describe a closed, known set of things to a regulator).
+ *
+ * `countOnly: true` marks the one kind of event allowed to describe someone
+ * opening a specific piece of content (share_page_viewed today). A
+ * count-only event is written with user_id and device_id forced to NULL
+ * regardless of what the caller sent — analytics.service.js enforces this in
+ * the layer closest to the write, not just here. Every other event may carry
+ * identity because it describes an action (a click, a login, a publish
+ * attempt), never a read.
+ *
+ * Adding an event name is a product decision, same as OCCASION_FIELDS above
+ * — never invent one inline in a route or service.
+ */
+const ANALYTICS_EVENTS = [
+  { key: 'share_clicked', countOnly: false },
+  { key: 'app_download_clicked', countOnly: false },
+  { key: 'publish_started', countOnly: false },
+  { key: 'publish_failed', countOnly: false },
+  { key: 'image_upload_failed', countOnly: false },
+  { key: 'login', countOnly: false },
+  { key: 'register', countOnly: false },
+  { key: 'share_page_viewed', countOnly: true }
+];
+
+const ANALYTICS_EVENT_KEYS = ANALYTICS_EVENTS.map(event => event.key);
+const COUNT_ONLY_ANALYTICS_EVENTS = ANALYTICS_EVENTS.filter(event => event.countOnly).map(event => event.key);
+
 module.exports = {
   TOWNS,
   VILLAGES_TOWN,
@@ -113,5 +149,8 @@ module.exports = {
   CORE_OCCASION_FIELDS,
   CONGRATULATION_REPORT_THRESHOLD,
   OCCASION_TONES,
-  SHARE_FALLBACK_POSTERS
+  SHARE_FALLBACK_POSTERS,
+  ANALYTICS_EVENTS,
+  ANALYTICS_EVENT_KEYS,
+  COUNT_ONLY_ANALYTICS_EVENTS
 };

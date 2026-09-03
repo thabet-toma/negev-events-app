@@ -23,6 +23,7 @@ const express = require('express');
 const config = require('../config');
 const asyncHandler = require('../utils/asyncHandler');
 const events = require('../services/events.service');
+const analytics = require('../services/analytics.service');
 const { parseId } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const { OCCASION_TONES, SHARE_FALLBACK_POSTERS } = require('../constants');
@@ -201,16 +202,58 @@ router.get('/:id', asyncHandler(async (req, res) => {
     return;
   }
 
+  // Count-only, on purpose (issue #44 — the governing rule: record what a
+  // person DID, never what they READ): this page has zero <script> tags
+  // (CSP below is default-src 'none'), so a client-side beacon is impossible
+  // here by design — recording the view has to happen in this handler, and
+  // analytics.service.js strips any identity regardless since
+  // share_page_viewed is a count-only event name.
+  await analytics.recordSafely({
+    eventName: 'share_page_viewed',
+    platform: 'web',
+    contentTown: event.town
+  });
+
   const pageUrl = `${config.publicUrl}/e/${event.id}`;
   const imageUrl = resolvePosterUrl(event);
-  const apkUrl = absoluteMediaUrl(config.app.apkUrl);
-  const downloadUrl = apkUrl || config.publicUrl;
+  const downloadUrl = `${pageUrl}/download`;
 
   res
     .status(200)
     .set('Content-Security-Policy', SHARE_CSP)
     .set('Content-Type', 'text/html; charset=utf-8')
     .send(renderEventPage(event, { pageUrl, imageUrl, downloadUrl }));
+}));
+
+/**
+ * The download button on the share page points here instead of straight at
+ * the APK, so the click can be recorded server-side (same no-JS constraint
+ * as share_page_viewed above) before handing the visitor on. The redirect
+ * target is exactly what the button used to link to directly — this route
+ * adds one hop, not a different destination.
+ */
+router.get('/:id/download', asyncHandler(async (req, res) => {
+  let eventId = null;
+  try {
+    eventId = parseId(req.params.id, 'معرّف المناسبة');
+  } catch (err) {
+    eventId = null;
+  }
+
+  // The redirect must never depend on the lookup succeeding — a stale or
+  // malformed link still has to hand the visitor the app. content_town is
+  // simply absent when there is no matching approved event to attribute it to.
+  const event = eventId ? await events.getShareEvent(eventId) : null;
+
+  await analytics.recordSafely({
+    eventName: 'app_download_clicked',
+    platform: 'web',
+    contentTown: event ? event.town : null
+  });
+
+  const apkUrl = absoluteMediaUrl(config.app.apkUrl);
+  const downloadTarget = apkUrl || config.publicUrl;
+  res.redirect(302, downloadTarget);
 }));
 
 module.exports = router;

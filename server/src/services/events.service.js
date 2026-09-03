@@ -950,7 +950,7 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  */
 async function getShareEvent(eventId) {
   const row = await db.queryOne(
-    `SELECT events.id, events.title, events.family_clan, events.poster_url,
+    `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
             occasion_types.default_poster_url AS occasion_type_poster_url,

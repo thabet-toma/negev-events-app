@@ -979,6 +979,54 @@ const steps = [
 
       logger.info('[migrations] create-service-directory-2026-09: ensured service_categories, service_providers, service_provider_towns. No categories seeded.');
     }
+  },
+  {
+    // The two behavioural-analytics tables (issue #44), in dependency order.
+    // See schema.sql for why analytics_events.user_id carries a real
+    // ON DELETE CASCADE FK (unlike story_views.user_id) and why
+    // analytics_daily_counters.content_town is NOT NULL DEFAULT '' rather
+    // than NULL.
+    name: 'create-analytics-events-2026-09',
+    async run(connection) {
+      if (!(await tableExists(connection, 'analytics_events'))) {
+        await connection.query(`
+          CREATE TABLE analytics_events (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            event_name   VARCHAR(60)  NOT NULL,
+            user_id      INT UNSIGNED DEFAULT NULL,
+            device_id    VARCHAR(100) DEFAULT NULL,
+            platform     VARCHAR(20)  NOT NULL,
+            app_version  VARCHAR(20)  DEFAULT NULL,
+            content_town VARCHAR(100) DEFAULT NULL,
+            viewer_key   VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) VIRTUAL,
+            created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_analytics_events_created (created_at),
+            KEY idx_analytics_events_name (event_name),
+            KEY idx_analytics_events_viewer (viewer_key),
+            CONSTRAINT fk_analytics_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'analytics_daily_counters'))) {
+        await connection.query(`
+          CREATE TABLE analytics_daily_counters (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            day          DATE         NOT NULL,
+            event_name   VARCHAR(60)  NOT NULL,
+            platform     VARCHAR(20)  NOT NULL,
+            content_town VARCHAR(100) NOT NULL DEFAULT '',
+            count        INT UNSIGNED NOT NULL DEFAULT 0,
+            created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_analytics_daily_counters (day, event_name, platform, content_town)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      logger.info('[migrations] create-analytics-events-2026-09: ensured analytics_events, analytics_daily_counters.');
+    }
   }
 ];
 

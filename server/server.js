@@ -15,9 +15,17 @@ const migrate = require('./src/db/migrate');
 const seed = require('./src/db/seed');
 const createApp = require('./src/app');
 const realtime = require('./src/realtime');
+const analytics = require('./src/services/analytics.service');
 
 const RUN_MIGRATIONS = process.env.RUN_MIGRATIONS !== 'false';
 const RUN_SEED = process.env.RUN_SEED !== 'false';
+// smoke.test.js boots the app via createApp() directly and never runs this
+// file, so this guard is belt-and-suspenders rather than what actually keeps
+// `npm test` timer-free — but it follows the same opt-out shape as
+// RUN_MIGRATIONS/RUN_SEED above, and gives ops an explicit way to disable the
+// background fold (e.g. running it from cron/analytics-retention.js instead).
+const RUN_ANALYTICS_RETENTION = process.env.RUN_ANALYTICS_RETENTION !== 'false';
+const ANALYTICS_RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 async function start() {
   await db.waitForConnection();
@@ -28,6 +36,19 @@ async function start() {
   const app = createApp();
   const server = http.createServer(app);
   realtime.init(server);
+
+  if (RUN_ANALYTICS_RETENTION) {
+    const runFold = () => {
+      analytics.foldOldEvents()
+        .then(({ folded, deleted }) => {
+          if (folded || deleted) {
+            logger.info(`[analytics] retention fold: ${folded} group(s) folded, ${deleted} row(s) deleted`);
+          }
+        })
+        .catch(err => logger.error('[analytics] retention fold failed:', err.message));
+    };
+    setInterval(runFold, ANALYTICS_RETENTION_INTERVAL_MS).unref();
+  }
 
   server.listen(config.port, config.host, () => {
     logger.info('====================================================');

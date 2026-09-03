@@ -19,6 +19,8 @@ const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
 const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS } = require('../src/constants');
+const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
+const analyticsService = require('../src/services/analytics.service');
 
 let baseUrl = '';
 let passed = 0;
@@ -251,6 +253,24 @@ async function run() {
     });
     assert.strictEqual(status, 200);
     assert.ok(body.token);
+  });
+
+  await test('The register and login calls above each wrote a server-side analytics row for this user (issue #44) — no extra requests needed, just reading what already happened', async () => {
+    const user = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [phone]);
+    const registerRow = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'register' AND user_id = ?", [user.id]
+    );
+    const loginRow = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'login' AND user_id = ?", [user.id]
+    );
+    assert.ok(registerRow, 'expected a "register" analytics row for the account created above');
+    assert.ok(loginRow, 'expected a "login" analytics row for the login above');
+    // The test client's api() helper sends X-App-Version: 2.0.0 (a real
+    // version string, not the literal 'web' marker web/api.js sends) — the
+    // route layer's clientSignal() reads that as the mobile client.
+    assert.strictEqual(registerRow.platform, 'android');
+    assert.strictEqual(registerRow.app_version, '2.0.0');
+    assert.strictEqual(loginRow.platform, 'android');
   });
 
   console.log('\nNokoot ledger (private)');
@@ -3005,6 +3025,163 @@ async function run() {
     'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
     [shareEventId, pendingShareEventId, expiredShareEventId, solemnShareEventId]
   );
+
+  console.log('\nAnalytics (behavioural events, issue #44)');
+
+  let analyticsEventId = 0;
+  await test('Set up: an approved event for the share/download analytics tests below', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس اختبار التحليلات' }], town: 'رهط', event_date: '2027-09-20' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    analyticsEventId = body.eventId;
+  });
+
+  await test('A name from the closed list is accepted, and a row is actually written', async () => {
+    const { status } = await api('POST', '/api/analytics/events', {
+      body: { event_name: 'image_upload_failed', platform: 'web', device_id: `device-${Date.now()}` }
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'image_upload_failed' ORDER BY id DESC LIMIT 1"
+    );
+    assert.ok(row, 'expected a row to have been written');
+    assert.strictEqual(row.platform, 'web');
+  });
+
+  await test('A name outside the closed list is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/analytics/events', {
+      body: { event_name: `not_a_real_event_${Date.now()}`, platform: 'web' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('غير معروف'), `expected an "unknown event" message, got: ${body.message}`);
+  });
+
+  await test('A count-only name (share_page_viewed) sent WITH a token and a device_id still writes a row whose user_id and device_id are both NULL', async () => {
+    const { status } = await api('POST', '/api/analytics/events', {
+      token: userToken,
+      body: { event_name: 'share_page_viewed', platform: 'web', device_id: `device-${Date.now()}` }
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'share_page_viewed' ORDER BY id DESC LIMIT 1"
+    );
+    assert.ok(row, 'expected a row to have been written');
+    assert.strictEqual(row.user_id, null, 'a count-only event must never carry identity, even with a valid token');
+    assert.strictEqual(row.device_id, null, 'a count-only event must never carry identity, even with a device_id in the body');
+  });
+
+  await test('The tighter analytics rate limit actually returns a rejection when exceeded', async () => {
+    let sawTooMany = false;
+    for (let i = 0; i < config.rateLimit.analyticsMax + 5; i += 1) {
+      const { status } = await api('POST', '/api/analytics/events', {
+        body: { event_name: 'share_clicked', platform: 'web', device_id: `rl-${i}` }
+      });
+      if (status === 429) { sawTooMany = true; break; }
+    }
+    assert.ok(sawTooMany, `expected a 429 within ${config.rateLimit.analyticsMax + 5} requests to the tighter analytics limiter`);
+  });
+
+  await test('The analytics_events table has no event_id, ip, or user_agent column at all — the direct, permanent test of the governing rule', async () => {
+    const rows = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'analytics_events'
+          AND COLUMN_NAME IN ('event_id', 'ip', 'user_agent')`
+    );
+    assert.strictEqual(rows.length, 0, `expected none of event_id/ip/user_agent, found: ${rows.map(r => r.COLUMN_NAME).join(', ')}`);
+  });
+
+  await test('Exercising the nokoot (دفتر النقوط) routes writes ZERO analytics rows — the private ledger is not an exception', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events');
+
+    const created = await api('POST', '/api/nokoot', {
+      token: userToken,
+      body: { recipient_name: 'اختبار عدم تسريب التحليلات', clan_town: 'رهط', amount: 42, event_date: '2026-09-05' }
+    });
+    assert.strictEqual(created.status, 201);
+    await api('GET', '/api/nokoot', { token: userToken });
+    await api('DELETE', `/api/nokoot/${created.body.recordId}`, { token: userToken });
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events');
+    assert.strictEqual(Number(after.cnt), Number(before.cnt));
+  });
+
+  await test("GET /e/:id/download 302-redirects to the APK url and records app_download_clicked with the event's town", async () => {
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_name = 'app_download_clicked'"
+    );
+
+    const res = await fetch(`${baseUrl}/e/${analyticsEventId}/download`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    const expectedTarget = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
+    assert.strictEqual(res.headers.get('location'), expectedTarget);
+
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_name = 'app_download_clicked'"
+    );
+    assert.strictEqual(Number(after.cnt) - Number(before.cnt), 1);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'app_download_clicked' ORDER BY id DESC LIMIT 1"
+    );
+    assert.strictEqual(row.content_town, 'رهط');
+    assert.strictEqual(row.user_id, null);
+  });
+
+  await test('GET /e/:id/download still redirects and records for a non-existent id — just with no content_town', async () => {
+    const res = await fetch(`${baseUrl}/e/999999999/download`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'app_download_clicked' ORDER BY id DESC LIMIT 1"
+    );
+    assert.strictEqual(row.content_town, null);
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [analyticsEventId]);
+
+  console.log('\nAnalytics retention fold (90 days identified, then anonymous counters)');
+
+  await test('A row older than the retention window loses its identity on fold and survives as a daily counter; running the fold twice does not double-count', async () => {
+    const testUser = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [phone]);
+    const oldDate = new Date(Date.now() - (analyticsService.RETENTION_DAYS + 5) * 24 * 60 * 60 * 1000);
+    const dayString = oldDate.toISOString().slice(0, 10);
+
+    const { insertId } = await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, device_id, platform, app_version, content_town, created_at)
+       VALUES ('login', ?, NULL, 'web', NULL, NULL, ?)`,
+      [testUser.id, oldDate]
+    );
+
+    const first = await analyticsService.foldOldEvents();
+    assert.ok(first.folded >= 1, 'expected at least one group folded');
+    assert.ok(first.deleted >= 1, 'expected at least one row deleted');
+
+    const stillThere = await db.queryOne('SELECT id FROM analytics_events WHERE id = ?', [insertId]);
+    assert.strictEqual(stillThere, null, 'the identified row must be gone after the fold');
+
+    const counter = await db.queryOne(
+      "SELECT * FROM analytics_daily_counters WHERE day = ? AND event_name = 'login' AND platform = 'web' AND content_town = ''",
+      [dayString]
+    );
+    assert.ok(counter, 'expected a daily counter row for the folded group');
+    const countAfterFirst = Number(counter.count);
+    assert.ok(countAfterFirst >= 1);
+
+    const second = await analyticsService.foldOldEvents();
+    assert.strictEqual(second.folded, 0, 'a second run must find nothing left to fold for this row');
+    assert.strictEqual(second.deleted, 0);
+
+    const counterAfterSecond = await db.queryOne(
+      "SELECT count FROM analytics_daily_counters WHERE day = ? AND event_name = 'login' AND platform = 'web' AND content_town = ''",
+      [dayString]
+    );
+    assert.strictEqual(Number(counterAfterSecond.count), countAfterFirst, 'running the fold twice must not double-count');
+  });
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

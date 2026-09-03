@@ -439,3 +439,67 @@ CREATE TABLE IF NOT EXISTS service_provider_towns (
   CONSTRAINT fk_spt_provider FOREIGN KEY (provider_id)
     REFERENCES service_providers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Behavioural analytics (issue #44). The governing rule this table is built
+-- around: we record what a person DID in the app, never what they READ in
+-- it — a row saying "this named person opened this particular عزاء" reads as
+-- family-life information under Israeli Privacy Protection Law Amendment 13,
+-- which raises the required security tier and doubles the notice obligation.
+-- There is deliberately NO `event_id`, NO `ip`, and NO `user_agent` column:
+-- their absence is what makes an identified "read" row structurally
+-- impossible to write here, not merely a convention someone has to remember.
+-- `event_name` is a closed list (ANALYTICS_EVENTS in src/constants.js) —
+-- analytics.service.js rejects any name outside it, and forces user_id and
+-- device_id to NULL for every count-only name regardless of what the caller
+-- sent, in the layer closest to the write.
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_name   VARCHAR(60)  NOT NULL,
+  user_id      INT UNSIGNED DEFAULT NULL,
+  device_id    VARCHAR(100) DEFAULT NULL,
+  platform     VARCHAR(20)  NOT NULL,
+  app_version  VARCHAR(20)  DEFAULT NULL,
+  -- The town the CONTENT belongs to (e.g. the event being shared/downloaded
+  -- for) — never the viewer's own town.
+  content_town VARCHAR(100) DEFAULT NULL,
+  -- Inherited verbatim from story_views.viewer_key, not reinvented: one person
+  -- is one key whether they were signed in or not, and two spellings of that
+  -- idea in one database is how the two stop agreeing. VIRTUAL, not STORED,
+  -- and the distinction is load-bearing: InnoDB refuses a CASCADE foreign key
+  -- on a column a *stored* generated column reads — which is why story_views
+  -- carries no FK at all — but allows it for a virtual one. Verified against
+  -- MySQL 8 directly rather than assumed, so this table keeps both.
+  viewer_key   VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) VIRTUAL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_analytics_events_created (created_at),
+  KEY idx_analytics_events_name (event_name),
+  KEY idx_analytics_events_viewer (viewer_key),
+  -- Erasure by the database, not by remembering to: deleting an account
+  -- removes its identified rows with it. This is why user_id here carries a
+  -- real FK — unlike story_views.user_id, whose viewer_key is STORED and so
+  -- blocks one. See the note on viewer_key above.
+  CONSTRAINT fk_analytics_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The retention fold's target (server/src/services/analytics.service.js,
+-- server/scripts/analytics-retention.js): every analytics_events row older
+-- than the retention window is grouped into one counter row here and the
+-- identified source rows deleted — see RETENTION_DAYS in analytics.service.js
+-- for why 90 days specifically. content_town is NOT NULL DEFAULT '' rather
+-- than NULL on purpose: MySQL treats every NULL in a UNIQUE index as distinct
+-- from every other NULL (the same reasoning documented on
+-- story_views.viewer_key above), which would let two folds of the same
+-- NULL-content_town day/event/platform group each insert their own row
+-- instead of the second one incrementing the first.
+CREATE TABLE IF NOT EXISTS analytics_daily_counters (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  day          DATE         NOT NULL,
+  event_name   VARCHAR(60)  NOT NULL,
+  platform     VARCHAR(20)  NOT NULL,
+  content_town VARCHAR(100) NOT NULL DEFAULT '',
+  count        INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_analytics_daily_counters (day, event_name, platform, content_town)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
