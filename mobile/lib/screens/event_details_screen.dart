@@ -1,6 +1,7 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
@@ -129,6 +130,20 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     }
   }
 
+  /// يفتح صحيفة مشاركة النظام — لا رابطاً مباشراً لواتساب وحده، كي يختار
+  /// المستخدم أي تطبيق يريد. الرابط من نفس عنوان الخادم الذي يستهلكه التطبيق
+  /// أصلاً ([AppConfig.apiBase]) لا ثابتاً ثانياً، والنصّ بلا «حمّل التطبيق» —
+  /// تلك حكاية صفحة الهبوط، لا صحيفة المشاركة.
+  Future<void> _share(Event event) async {
+    final url = '${AppConfig.apiBase}/e/${event.id}';
+    final text = '${event.displayTitle} — ${event.townDisplay}\n$url';
+    try {
+      await SharePlus.instance.share(ShareParams(text: text));
+    } catch (error) {
+      if (mounted) showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
+    }
+  }
+
   Future<void> _callHost(String phone) async {
     final uri = Uri(scheme: 'tel', path: phone);
     if (!await launchUrl(uri)) {
@@ -218,6 +233,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
               onNavigate: () => _openNavigation(event),
               onCallHost: () => _callHost(event.hostPhone!),
               onCongratulate: () => _openCongratulateSheet(event),
+              onShare: () => _share(event),
             ),
           );
         },
@@ -237,6 +253,7 @@ class _EventDetailsBody extends StatelessWidget {
     required this.onCongratulate,
     required this.onRemindTap,
     required this.onReport,
+    required this.onShare,
   });
 
   final Event event;
@@ -248,6 +265,7 @@ class _EventDetailsBody extends StatelessWidget {
   final VoidCallback onCongratulate;
   final VoidCallback onRemindTap;
   final ValueChanged<int> onReport;
+  final VoidCallback onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -375,6 +393,17 @@ class _EventDetailsBody extends StatelessWidget {
                     ),
                   ],
                 ],
+              ),
+              const SizedBox(height: 10),
+              // زرّ المشاركة — تفاصيل المناسبة وحدها (لا كرت القائمة، ثمانية
+              // عناصر عليه أصلاً). الكلمة من نبرة النوع (`tone`) حصراً، لا اسمه.
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: onShare,
+                  icon: const Icon(Icons.ios_share_outlined),
+                  label: Text(isSolemn ? 'أرسل النعي' : 'شارك المناسبة'),
+                ),
               ),
               const SizedBox(height: 10),
               Row(

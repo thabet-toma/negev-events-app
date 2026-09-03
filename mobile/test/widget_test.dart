@@ -1340,4 +1340,219 @@ void main() {
       expect(find.byType(AddEventScreen), findsOneWidget);
     });
   });
+
+  group('زرّ المشاركة، سطر سهرة الشباب، وترتيب كتلة المعلومات (issue #44)', () {
+    Map<String, dynamic> occasionTypeJson({
+      required String tone,
+      List<Map<String, dynamic>> fields = const [],
+    }) => {
+      'id': tone == 'solemn' ? 2 : 1,
+      'name': tone == 'solemn' ? 'عزا' : 'عرس',
+      'icon': tone == 'solemn' ? '🕯️' : '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'creates_collision': false,
+      'warns_others': false,
+      'premoderate_messages': false,
+      'show_congratulations_count': false,
+      'show_followers_count': false,
+      'show_views_count': false,
+      'congratulations_label': tone == 'solemn' ? 'تعازي' : 'تبريكات',
+      'default_badge_title': null,
+      'default_poster_url': null,
+      'legacy_client_supported': true,
+      'tone': tone,
+      'fields': fields,
+      'reactions': <String>[],
+    };
+
+    Future<void> pumpDetails(WidgetTester tester, Map<String, dynamic> eventBody) async {
+      final client = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'success': true, 'event': eventBody}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: EventDetailsScreen(eventId: eventBody['id'] as int),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    // اختباران منفصلان لا نداءان لـ`pumpDetails` داخل اختبار واحد: `EventDetailsScreen`
+    // شاشة State-ful، و`tester.pumpWidget` الثاني بنفس شكل الشجرة يُبقي الحالة
+    // القديمة حيّة (`didChangeDependencies` يتجاهل الجلب لأن `_event` صار غير
+    // null من المرّة الأولى) بدل بناء شاشة جديدة فعلاً — فيبقى النصّ القديم ظاهراً.
+    testWidgets(
+      'كلمة زرّ المشاركة لنوع festive: «شارك المناسبة» لا «أرسل النعي»',
+      (tester) async {
+        await pumpDetails(tester, {
+          'id': 40,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': occasionTypeJson(tone: 'festive'),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+        expect(find.text('شارك المناسبة'), findsOneWidget);
+        expect(find.text('أرسل النعي'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'كلمة زرّ المشاركة لنوع solemn: «أرسل النعي» لا «شارك المناسبة» — من tone حصراً لا اسم النوع',
+      (tester) async {
+        await pumpDetails(tester, {
+          'id': 50,
+          'groom_name': '',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': occasionTypeJson(tone: 'solemn'),
+          'honorees': [
+            {'name': 'سالم أبو فلان', 'role': null, 'position': 1},
+          ],
+        });
+        expect(find.text('أرسل النعي'), findsOneWidget);
+        expect(find.text('شارك المناسبة'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'سطر سهرة الشباب على الكرت: يظهر حين تُملأ القيمة، ويغيب تماماً من شجرة الودجت حين تفرغ',
+      (tester) async {
+        final typeShowingField = occasionTypeJson(
+          tone: 'festive',
+          fields: const [
+            {
+              'field_key': 'youth_party_date',
+              'label': 'سهرة الشباب',
+              'is_visible': true,
+              'is_required': false,
+              'position': 1,
+            },
+          ],
+        );
+
+        final withParty = Event.fromJson({
+          'id': 41,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'youth_party_date': '2026-09-20',
+          'occasion_type': typeShowingField,
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: withParty, onTap: () {})),
+            ),
+          ),
+        );
+        expect(find.text('2026-09-20'), findsOneWidget);
+        expect(find.byIcon(Icons.nightlife_outlined), findsOneWidget);
+
+        final withoutParty = Event.fromJson({
+          'id': 42,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': typeShowingField,
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: withoutParty, onTap: () {})),
+            ),
+          ),
+        );
+        expect(find.text('2026-09-20'), findsNothing);
+        expect(find.byIcon(Icons.nightlife_outlined), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'تفاصيل المناسبة: كتلة المعلومات تحت سطر الفنان مباشرة، بالترتيب المكان ثم التاريخ ثم سهرة الشباب ثم وقت العشاء',
+      (tester) async {
+        // نافذة اختبار طويلة كي تُبنى كل الصفوف فعلاً (ListView سلفرية لا تبني
+        // إلا القريب من نافذة العرض) — نفس نمط شاشة تعديل المناسبة أعلاه.
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final type = occasionTypeJson(
+          tone: 'festive',
+          fields: const [
+            {
+              'field_key': 'youth_party_date',
+              'label': 'سهرة الشباب',
+              'is_visible': true,
+              'is_required': false,
+              'position': 1,
+            },
+            {
+              'field_key': 'dinner_time',
+              'label': 'موعد العشاء',
+              'is_visible': true,
+              'is_required': false,
+              'position': 2,
+            },
+          ],
+        );
+
+        await pumpDetails(tester, {
+          'id': 43,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'قاعة الأفراح',
+          'event_date': '2026-10-01',
+          'dinner_time': 'الساعة 8:00 مساءً',
+          'youth_party_date': '2026-09-20',
+          'artist_name': 'راشد الماجد',
+          'occasion_type': type,
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        final artistY =
+            tester.getTopLeft(find.textContaining('يحيي الحفلة الفنان راشد الماجد')).dy;
+        final locationY = tester.getTopLeft(find.text('رهط — قاعة الأفراح')).dy;
+        final dateY = tester.getTopLeft(find.text('2026-10-01')).dy;
+        final youthY = tester.getTopLeft(find.text('2026-09-20')).dy;
+        final dinnerY = tester.getTopLeft(find.text('الساعة 8:00 مساءً')).dy;
+
+        expect(artistY, lessThan(locationY));
+        expect(locationY, lessThan(dateY));
+        expect(dateY, lessThan(youthY));
+        expect(youthY, lessThan(dinnerY));
+      },
+    );
+  });
 }
