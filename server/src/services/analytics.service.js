@@ -152,10 +152,78 @@ async function countsByEventName() {
   return rows.map(row => ({ event_name: row.event_name, total: Number(row.total) }));
 }
 
+/**
+ * Default and hard-ceiling page sizes for `listForUser` below — the exact
+ * same numbers, and the exact same clamp shape, as `listPublicEvents` in
+ * events.service.js (DEFAULT_PAGE_SIZE/MAX_PAGE_SIZE). This endpoint does not
+ * invent a second pagination idiom next to the one this project already has.
+ */
+const DEFAULT_PAGE_SIZE = 30;
+const MAX_PAGE_SIZE = 100;
+
+/**
+ * One user's own recorded analytics rows — issue #44 user story 45 ("كصاحب
+ * منتج، أريد أن أفتح مستخدماً بعينه وأرى ما فعله بالتطبيق، كما طلبتُ
+ * صراحةً"), which shipped with no implementation at all until now. It is
+ * also, as of this function, the ONLY way a super_admin can actually FULFIL
+ * a §13 access request sitting in the queue at `GET/PATCH
+ * /api/admin/privacy-requests` — before this existed that queue could be
+ * closed, but the request behind it could not actually be answered.
+ *
+ * Deliberately returns only event_name, platform, app_version, content_town
+ * and created_at — nothing else:
+ *   - no `id` (the row's own primary key) and no `device_id` — story 45 asked
+ *     to open a specific USER and see what they did, not to hand back a row
+ *     identifier or an unregistered device's fingerprint;
+ *   - and, structurally, no event/occasion id of any kind. Issue #44
+ *     deliberately narrowed this exact story: "مع هوية: ... بلا هوية (عدّ
+ *     فقط): أي حدث يقول أيّ مناسبة بعينها فُتحت." `analytics_events` has no
+ *     such column to begin with (schema.sql), this query does not JOIN to
+ *     `events`, and content_town + created_at are deliberately NOT combined
+ *     to reconstruct which occasion was involved. This function is the
+ *     enforcement point for that narrowing, the same way `record()` above is
+ *     the enforcement point for the count-only rule at the write.
+ *
+ * Paged with the exact idiom `listPublicEvents` (events.service.js) already
+ * uses for `GET /api/events` — safe-clamped page/limit, LIMIT/OFFSET as bound
+ * parameters, `{ page, limit, total, totalPages }` — not a second idiom
+ * invented here.
+ */
+async function listForUser(userId, { page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const offset = (safePage - 1) * safeLimit;
+
+  const { total } = await db.queryOne(
+    'SELECT COUNT(*) AS total FROM analytics_events WHERE user_id = ?',
+    [userId]
+  );
+
+  const rows = await db.query(
+    `SELECT event_name, platform, app_version, content_town, created_at
+       FROM analytics_events
+      WHERE user_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?`,
+    [userId, safeLimit, offset]
+  );
+
+  return {
+    events: rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total: Number(total),
+      totalPages: Math.ceil(Number(total) / safeLimit)
+    }
+  };
+}
+
 module.exports = {
   RETENTION_DAYS,
   record,
   recordSafely,
   foldOldEvents,
-  countsByEventName
+  countsByEventName,
+  listForUser
 };

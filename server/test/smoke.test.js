@@ -3348,6 +3348,67 @@ async function run() {
     assert.ok(close.body.request.handled_at, 'expected handled_at to be set on close');
   });
 
+  await test('GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user\'s own rows, isolated from another user\'s, with no event id of any kind, and pagination that behaves', async () => {
+    const rowsUser = await insertTestUser('مستخدم لاختبار قراءة السجل الفردي');
+    const otherUser = await insertTestUser('مستخدم آخر يجب ألا تظهر بياناته هنا');
+
+    // Five distinct rows for rowsUser (enough to exercise a page size of 2
+    // below), and one unrelated row for otherUser, standing in for the
+    // scenario this endpoint actually exists to serve: fulfilling a §13
+    // access request about ONE named person, never a second one.
+    for (let i = 0; i < 5; i += 1) {
+      await db.execute(
+        `INSERT INTO analytics_events (event_name, user_id, platform, app_version, content_town) VALUES (?, ?, 'web', '2.0.0', ?)`,
+        ['share_clicked', rowsUser.id, 'رهط']
+      );
+    }
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('login', ?, 'web')`,
+      [otherUser.id]
+    );
+
+    const full = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: superAdminToken });
+    assert.strictEqual(full.status, 200);
+    assert.strictEqual(full.body.user_id, rowsUser.id);
+    assert.strictEqual(full.body.pagination.total, 5);
+    assert.strictEqual(full.body.events.length, 5);
+    for (const row of full.body.events) {
+      assert.strictEqual(row.event_name, 'share_clicked');
+      assert.strictEqual(row.content_town, 'رهط');
+      assert.ok(row.created_at, 'expected a timestamp on every row');
+      assert.ok(!('id' in row), 'must not carry the analytics_events row\'s own id');
+      assert.ok(!('event_id' in row), 'must not carry any event/occasion id — none exists in this table at all');
+      assert.ok(!('device_id' in row), 'story 45 was scoped to a signed-in user, not a device fingerprint');
+      assert.ok(!('user_id' in row), 'the endpoint already scopes by user in the path — no need to echo it per row');
+    }
+
+    // Another user's row must never leak into this user's read.
+    assert.ok(!full.body.events.some(row => row.event_name === 'login'), "otherUser's row must not appear in rowsUser's read");
+
+    const page1 = await api('GET', `/api/admin/analytics/users/${rowsUser.id}?limit=2&page=1`, { token: superAdminToken });
+    assert.strictEqual(page1.status, 200);
+    assert.strictEqual(page1.body.events.length, 2);
+    assert.strictEqual(page1.body.pagination.total, 5);
+    assert.strictEqual(page1.body.pagination.totalPages, 3);
+
+    const page2 = await api('GET', `/api/admin/analytics/users/${rowsUser.id}?limit=2&page=2`, { token: superAdminToken });
+    assert.strictEqual(page2.status, 200);
+    assert.strictEqual(page2.body.events.length, 2);
+
+    const otherRead = await api('GET', `/api/admin/analytics/users/${otherUser.id}`, { token: superAdminToken });
+    assert.strictEqual(otherRead.status, 200);
+    assert.strictEqual(otherRead.body.pagination.total, 1);
+    assert.strictEqual(otherRead.body.events[0].event_name, 'login');
+
+    const scopedRead = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: scopedAdminToken });
+    assert.strictEqual(scopedRead.status, 403, 'a town-scoped admin must never read another user\'s analytics rows — super_admin only');
+
+    const userRead = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: userToken });
+    assert.strictEqual(userRead.status, 403, 'an ordinary signed-in user must not read analytics rows either');
+
+    await db.execute('DELETE FROM users WHERE id IN (?, ?)', [rowsUser.id, otherUser.id]);
+  });
+
   await test('GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers', async () => {
     const { status, body } = await api('GET', '/api/privacy/notice');
     assert.strictEqual(status, 200);

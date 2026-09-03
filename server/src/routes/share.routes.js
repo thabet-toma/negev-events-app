@@ -61,10 +61,15 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-/** poster_url → occasion type's default_poster_url → platform fallback by tone. */
+/**
+ * poster_url → occasion type's default_poster_url → platform fallback by tone.
+ * The first two arrive already absolute from the service layer, where media
+ * conversion belongs (ADR-0002); only the fallback constant is converted here,
+ * because it never passed through a query at all.
+ */
 function resolvePosterUrl(event) {
-  if (event.poster_url) return absoluteMediaUrl(event.poster_url);
-  if (event.occasion_type_poster_url) return absoluteMediaUrl(event.occasion_type_poster_url);
+  if (event.poster_url) return event.poster_url;
+  if (event.occasion_type_poster_url) return event.occasion_type_poster_url;
   const tone = OCCASION_TONES.includes(event.occasion_type_tone) ? event.occasion_type_tone : 'festive';
   return absoluteMediaUrl(SHARE_FALLBACK_POSTERS[tone]);
 }
@@ -184,17 +189,22 @@ router.get('/assets/:file', (req, res) => {
     .send(buffer);
 });
 
-router.get('/:id', asyncHandler(async (req, res) => {
-  // A non-numeric id must 404 with the exact same body as "not approved" or
-  // "does not exist" — so a parse failure here is swallowed into the same
-  // not-found path instead of being allowed to reach the JSON error handler
-  // (which would both look different and leak "this id is malformed").
-  let eventId = null;
+/**
+ * A non-numeric id must 404 with the exact same body as "not approved" or
+ * "does not exist", so a parse failure is folded into the same not-found path
+ * instead of reaching the JSON error handler — which would both look different
+ * and leak "this id is malformed". Both routes below share it.
+ */
+function shareEventIdOrNull(raw) {
   try {
-    eventId = parseId(req.params.id, 'معرّف المناسبة');
+    return parseId(raw, 'معرّف المناسبة');
   } catch (err) {
-    eventId = null;
+    return null;
   }
+}
+
+router.get('/:id', asyncHandler(async (req, res) => {
+  const eventId = shareEventIdOrNull(req.params.id);
 
   const event = eventId ? await events.getShareEvent(eventId) : null;
   if (!event) {
@@ -233,12 +243,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  * adds one hop, not a different destination.
  */
 router.get('/:id/download', asyncHandler(async (req, res) => {
-  let eventId = null;
-  try {
-    eventId = parseId(req.params.id, 'معرّف المناسبة');
-  } catch (err) {
-    eventId = null;
-  }
+  const eventId = shareEventIdOrNull(req.params.id);
 
   // The redirect must never depend on the lookup succeeding — a stale or
   // malformed link still has to hand the visitor the app. content_town is

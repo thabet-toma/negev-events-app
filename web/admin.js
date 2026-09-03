@@ -1370,9 +1370,9 @@ async function handleEventEditSubmit(e) {
   Object.keys(current).forEach(key => {
     const orig = editingEventOriginal[key];
     const val = current[key];
-    const normOrig = key === 'village_id' ? String(orig ?? '') : String(orig ?? '');
-    const normVal = key === 'village_id' ? String(val ?? '') : String(val ?? '');
-    if (normOrig === normVal) return;
+    // كل الحقول تُقارَن كنصوص: القيم تخرج من عناصر الإدخال نصوصاً أصلاً،
+    // و`null` القرية و`''` الحقل الفارغ يجب أن يتساويا وإلا أُرسل تعديل وهمي.
+    if (String(orig ?? '') === String(val ?? '')) return;
 
     payload[key] = key === 'village_id' ? (val === '' || val == null ? null : val) : val;
     if (CRITICAL_AMENDMENT_FIELDS.includes(key)) touchesCritical = true;

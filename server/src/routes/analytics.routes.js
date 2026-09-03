@@ -19,7 +19,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const analytics = require('../services/analytics.service');
 const { optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString } = require('../middleware/validate');
+const { cleanString, parseId } = require('../middleware/validate');
 const { TOWNS } = require('../constants');
 
 const router = express.Router();
@@ -68,6 +68,24 @@ router.use('/admin/analytics', requireSuperAdmin);
 
 router.get('/admin/analytics/counts', asyncHandler(async (req, res) => {
   res.json({ success: true, counts: await analytics.countsByEventName() });
+}));
+
+/**
+ * One user's own recorded analytics rows (issue #44, user story 45 — see the
+ * long comment on `analytics.service.js#listForUser` for exactly why this
+ * exists and exactly what it does and does not return). Same guard as the
+ * counts endpoint above (`router.use('/admin/analytics', requireSuperAdmin)`
+ * just above) — never a town admin: nothing this endpoint reads can be
+ * meaningfully scoped to a single town, same reasoning as the counts
+ * endpoint and the privacy-request queue.
+ */
+router.get('/admin/analytics/users/:userId', asyncHandler(async (req, res) => {
+  const userId = parseId(req.params.userId, 'معرّف المستخدم');
+  const result = await analytics.listForUser(userId, {
+    page: req.query.page,
+    limit: req.query.limit
+  });
+  res.json({ success: true, user_id: userId, ...result });
 }));
 
 module.exports = router;

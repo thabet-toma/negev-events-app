@@ -4,7 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const { REACTION_TYPES, TOWN_COORDINATES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
-const { withAbsoluteMedia } = require('../utils/mediaUrl');
+const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
@@ -963,8 +963,16 @@ async function getShareEvent(eventId) {
   if (!row) return null;
 
   const honoreeMap = await honoreesForEvents([eventId]);
+  // Media leaves this layer absolute, like every other query here (ADR-0002).
+  // withAbsoluteMedia covers the row's own poster_url; the occasion type's
+  // default poster is a joined column, not one of MEDIA_FIELDS, so it is
+  // converted explicitly rather than by widening that list — the list
+  // describes an event row's own media, and this column belongs to another
+  // table entirely. The route does no URL work beyond the fallback constant.
+  const absolute = withAbsoluteMedia(row);
   return {
-    ...row,
+    ...absolute,
+    occasion_type_poster_url: absoluteMediaUrl(absolute.occasion_type_poster_url),
     is_expired: Boolean(row.is_expired),
     honorees: honoreeMap[eventId] || []
   };
