@@ -123,19 +123,43 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
  * Adding an event name is a product decision, same as OCCASION_FIELDS above
  * — never invent one inline in a route or service.
  */
+// Each carries an Arabic label because this list is what the privacy notice
+// is generated from, and a notice that lists 'share_page_viewed' at a reader
+// in Rahat has not informed anyone — which is the entire point of the notice.
+// Same shape as OCCASION_FIELDS: key, human label, one flag.
 const ANALYTICS_EVENTS = [
-  { key: 'share_clicked', countOnly: false },
-  { key: 'app_download_clicked', countOnly: false },
-  { key: 'publish_started', countOnly: false },
-  { key: 'publish_failed', countOnly: false },
-  { key: 'image_upload_failed', countOnly: false },
-  { key: 'login', countOnly: false },
-  { key: 'register', countOnly: false },
-  { key: 'share_page_viewed', countOnly: true }
+  { key: 'share_clicked', label: 'الضغط على زرّ المشاركة', countOnly: false },
+  { key: 'app_download_clicked', label: 'الضغط على «حمّل التطبيق»', countOnly: false },
+  { key: 'publish_started', label: 'بدء نشر مناسبة', countOnly: false },
+  { key: 'publish_failed', label: 'فشل نشر مناسبة', countOnly: false },
+  { key: 'image_upload_failed', label: 'فشل رفع صورة', countOnly: false },
+  { key: 'login', label: 'تسجيل الدخول', countOnly: false },
+  { key: 'register', label: 'إنشاء حساب جديد', countOnly: false },
+  { key: 'share_page_viewed', label: 'فتح صفحة رابط مناسبة مشارَكة', countOnly: true }
 ];
 
 const ANALYTICS_EVENT_KEYS = ANALYTICS_EVENTS.map(event => event.key);
 const COUNT_ONLY_ANALYTICS_EVENTS = ANALYTICS_EVENTS.filter(event => event.countOnly).map(event => event.key);
+
+/**
+ * The two request kinds the privacy request queue (issue #44, part 3)
+ * accepts. "access" has no self-service path in this version — a
+ * super_admin fulfils it by hand — while "erasure" also has an immediate
+ * self-service endpoint (POST /api/privacy/analytics-erasure); a user may
+ * still file a formal erasure request here instead of/in addition to that
+ * button, for a documented, handled-by record.
+ */
+const PRIVACY_REQUEST_TYPES = ['access', 'erasure'];
+
+/**
+ * The deadline stated back to a user who files a formal privacy request.
+ * This is this project's own declared SLA, not a figure copied from the
+ * statute (the brief only requires that some deadline be stated) — 30 days
+ * matches the general timeframe used across Israeli data-subject-request
+ * practice, and is deliberately short enough to be a real commitment, not a
+ * shrug.
+ */
+const PRIVACY_REQUEST_DEADLINE_DAYS = 30;
 
 module.exports = {
   TOWNS,
@@ -152,5 +176,7 @@ module.exports = {
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,
   ANALYTICS_EVENT_KEYS,
-  COUNT_ONLY_ANALYTICS_EVENTS
+  COUNT_ONLY_ANALYTICS_EVENTS,
+  PRIVACY_REQUEST_TYPES,
+  PRIVACY_REQUEST_DEADLINE_DAYS
 };

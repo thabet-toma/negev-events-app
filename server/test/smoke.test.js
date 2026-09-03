@@ -18,7 +18,7 @@ const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 
@@ -3182,6 +3182,179 @@ async function run() {
     );
     assert.strictEqual(Number(counterAfterSecond.count), countAfterFirst, 'running the fold twice must not double-count');
   });
+
+  console.log('\nPrivacy (issue #44): opt-out, self-service erasure, the access/erasure queue, and the public notice');
+
+  /**
+   * The shared authLimiter budget for register/login/admin-login is already
+   * spent by this point in the suite (same constraint the "Admin scope"
+   * section above notes and works around) — inserted directly via SQL and
+   * signed with signToken, same pattern as scopedAdminPhone/scopedAdminId.
+   */
+  async function insertTestUser(fullName) {
+    const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [userPhone, fullName, hashedPin, 'رهط']
+    );
+    const token = signToken({ id: insertId, phone_number: userPhone, full_name: fullName, role: 'user' }, '1h');
+    return { id: insertId, phone: userPhone, token, full_name: fullName };
+  }
+
+  let privacyUserA = null; // will opt out of behavioural analytics below
+  let privacyUserB = null; // stays opted in throughout
+  let privacyRequestId = 0;
+
+  await test('Set up: two fresh users for the privacy tests below, each with a pre-existing identified analytics row (standing in for the register-time row a real sign-up would have written)', async () => {
+    privacyUserA = await insertTestUser('مستخدم رفض التحليلات');
+    privacyUserB = await insertTestUser('مستخدم آخر للتحليلات');
+
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('register', ?, 'web')`,
+      [privacyUserA.id]
+    );
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('register', ?, 'web')`,
+      [privacyUserB.id]
+    );
+
+    assert.ok(privacyUserA.token && privacyUserB.token);
+  });
+
+  await test('PATCH /api/auth/me opts a user out of behavioural analytics, and GET /api/auth/me reflects it — neither response carries pin_code', async () => {
+    const patch = await api('PATCH', '/api/auth/me', {
+      token: privacyUserA.token,
+      body: { analytics_opt_out: true }
+    });
+    assert.strictEqual(patch.status, 200);
+    assert.strictEqual(patch.body.user.analytics_opt_out, true);
+    assert.ok(!('pin_code' in patch.body.user), 'pin_code must never appear in this response');
+
+    const me = await api('GET', '/api/auth/me', { token: privacyUserA.token });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.body.user.analytics_opt_out, true);
+    assert.ok(!('pin_code' in me.body.user), 'pin_code must never appear in this response');
+  });
+
+  await test('An opted-out signed-in user triggers an identified analytics event ⇒ zero rows written for them — not an anonymised one', async () => {
+    // Exercised directly against analytics.service.record() — the actual
+    // enforcement point per the brief ("honoured at the write, not only at
+    // the route") — rather than through POST /api/analytics/events, whose
+    // own tighter rate limit (config.rateLimit.analyticsMax) was already
+    // deliberately exhausted by the "tighter analytics rate limit" test
+    // above, in the same shared window.
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+
+    const result = await analyticsService.record({ eventName: 'share_clicked', userId: privacyUserA.id, platform: 'web' });
+    assert.strictEqual(result.skipped, true, 'expected record() to report the write was skipped for an opted-out user');
+    assert.strictEqual(result.id, null);
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.strictEqual(Number(after.cnt), Number(before.cnt), 'an opted-out user must get ZERO new rows for an identified event');
+  });
+
+  await test('Opting out changes nothing about the ability to use the app — a normal authenticated action still succeeds', async () => {
+    const { status, body } = await api('POST', '/api/nokoot', {
+      token: privacyUserA.token,
+      body: { recipient_name: 'اختبار عدم تعطيل أي ميزة', clan_town: 'رهط', amount: 10, event_date: '2026-09-05' }
+    });
+    assert.strictEqual(status, 201, 'opting out of analytics must never gate a feature');
+    await api('DELETE', `/api/nokoot/${body.recordId}`, { token: privacyUserA.token });
+  });
+
+  await test("POST /api/privacy/analytics-erasure erases only the caller's own analytics rows — another user's rows are untouched", async () => {
+    // privacyUserA's "register" row (inserted in the set-up above) predates
+    // the opt-out set later — proves erasure removes rows that predate the
+    // opt-out too, not just future ones.
+    const beforeA = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.ok(Number(beforeA.cnt) > 0, 'expected at least the "register" row written at sign-up');
+
+    const beforeB = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.ok(Number(beforeB.cnt) > 0, 'expected at least the "register" row for the untouched user too');
+
+    const { status, body } = await api('POST', '/api/privacy/analytics-erasure', { token: privacyUserA.token });
+    assert.strictEqual(status, 200);
+    assert.ok(body.deleted >= Number(beforeA.cnt));
+
+    const afterA = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.strictEqual(Number(afterA.cnt), 0, "the caller's own rows must actually be gone");
+
+    const afterB = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.strictEqual(Number(afterB.cnt), Number(beforeB.cnt), "another user's rows must be untouched by someone else's erasure");
+  });
+
+  await test('Deleting an account removes its analytics rows too — the FK cascade, not a separate code path', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.ok(Number(before.cnt) > 0, 'expected privacyUserB to still have analytics rows before deletion');
+
+    await db.execute('DELETE FROM users WHERE id = ?', [privacyUserB.id]);
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.strictEqual(Number(after.cnt), 0, 'deleting the account must cascade-delete its analytics rows');
+  });
+
+  await test('POST /api/privacy/requests queues a formal request and states a deadline', async () => {
+    const { status, body } = await api('POST', '/api/privacy/requests', {
+      token: privacyUserA.token,
+      body: { request_type: 'access' }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.request.request_type, 'access');
+    assert.strictEqual(body.request.status, 'pending');
+    assert.ok(/\d+\s*يوماً/.test(body.message), 'expected the response to state a deadline');
+    privacyRequestId = body.request.id;
+  });
+
+  await test('POST /api/privacy/requests rejects an unknown request type', async () => {
+    const { status } = await api('POST', '/api/privacy/requests', {
+      token: privacyUserA.token,
+      body: { request_type: 'not_a_real_type' }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('A town-scoped admin gets 403 on both the analytics read and the privacy request queue — super_admin only, never a town admin', async () => {
+    const analyticsRead = await api('GET', '/api/admin/analytics/counts', { token: scopedAdminToken });
+    assert.strictEqual(analyticsRead.status, 403);
+
+    const queueRead = await api('GET', '/api/admin/privacy-requests', { token: scopedAdminToken });
+    assert.strictEqual(queueRead.status, 403);
+  });
+
+  await test('A super_admin gets 200 on both, sees the queued request, and can close it', async () => {
+    const analyticsRead = await api('GET', '/api/admin/analytics/counts', { token: superAdminToken });
+    assert.strictEqual(analyticsRead.status, 200);
+    assert.ok(Array.isArray(analyticsRead.body.counts));
+
+    const queueRead = await api('GET', '/api/admin/privacy-requests', { token: superAdminToken });
+    assert.strictEqual(queueRead.status, 200);
+    assert.ok(queueRead.body.requests.some(r => r.id === privacyRequestId));
+
+    const close = await api('PATCH', `/api/admin/privacy-requests/${privacyRequestId}`, { token: superAdminToken });
+    assert.strictEqual(close.status, 200);
+    assert.strictEqual(close.body.request.status, 'completed');
+    assert.ok(close.body.request.handled_at, 'expected handled_at to be set on close');
+  });
+
+  await test('GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers', async () => {
+    const { status, body } = await api('GET', '/api/privacy/notice');
+    assert.strictEqual(status, 200);
+
+    const text = body.notice.text;
+    assert.ok(text.includes(String(analyticsService.RETENTION_DAYS)), 'expected the retention window mentioned');
+
+    // The notice is read by the people the data is about, so it must name
+    // every collected event in Arabic — and must NOT hand them the code key,
+    // which informs nobody. Both halves matter: the first keeps the notice
+    // complete, the second keeps it a notice rather than a schema dump.
+    for (const event of ANALYTICS_EVENTS) {
+      assert.ok(text.includes(event.label), `expected the notice to name "${event.label}"`);
+      assert.ok(!text.includes(event.key), `the notice must not print the code key "${event.key}"`);
+    }
+  });
+
+  await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

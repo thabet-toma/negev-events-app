@@ -42,7 +42,15 @@ function createApp() {
   app.use(compression());
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-  app.use(morgan(config.isProduction ? 'combined' : 'dev'));
+  // 'combined' logs :remote-addr and the User-Agent — neither has a stated
+  // debugging purpose here, and under a purpose-as-ceiling privacy rule
+  // (Israeli Privacy Protection Law Amendment 13) an unjustified field is a
+  // liability, not a convenience. This custom format keeps only what is
+  // actually used for debugging — method, url, status, response time,
+  // content length — and this one line is what removes the client IP from
+  // both the privacy notice's obligations and the access log itself.
+  const PRODUCTION_LOG_FORMAT = ':method :url :status :res[content-length] - :response-time ms';
+  app.use(morgan(config.isProduction ? PRODUCTION_LOG_FORMAT : 'dev'));
 
   app.use('/api', rateLimit({
     windowMs: config.rateLimit.windowMs,

@@ -16,6 +16,7 @@ const storiesRoutes = require('./stories.routes');
 const villagesRoutes = require('./villages.routes');
 const servicesRoutes = require('./services.routes');
 const analyticsRoutes = require('./analytics.routes');
+const privacyRoutes = require('./privacy.routes');
 
 const router = express.Router();
 
@@ -55,5 +56,6 @@ router.use(storiesRoutes);
 router.use(villagesRoutes);
 router.use(servicesRoutes);
 router.use(analyticsRoutes);
+router.use(privacyRoutes);
 
 module.exports = router;

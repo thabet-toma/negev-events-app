@@ -1027,6 +1027,54 @@ const steps = [
 
       logger.info('[migrations] create-analytics-events-2026-09: ensured analytics_events, analytics_daily_counters.');
     }
+  },
+  {
+    // The opt-out switch (issue #44, privacy layer part 2). Default 0 so
+    // every existing user stays opted in — the same "unaffected until they
+    // act" posture every other additive column in this file takes.
+    name: 'add-users-analytics-opt-out-2026-09',
+    async run(connection) {
+      if (await columnExists(connection, 'users', 'analytics_opt_out')) {
+        logger.info('[migrations] add-users-analytics-opt-out-2026-09: already present.');
+        return;
+      }
+
+      await connection.query(
+        'ALTER TABLE users ADD COLUMN analytics_opt_out TINYINT(1) NOT NULL DEFAULT 0'
+      );
+      logger.info('[migrations] add-users-analytics-opt-out-2026-09: column added.');
+    }
+  },
+  {
+    // The access/erasure request queue (issue #44, privacy layer part 3).
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — same guarded pattern as
+    // every table addition above.
+    name: 'create-privacy-requests-2026-09',
+    async run(connection) {
+      if (await tableExists(connection, 'privacy_requests')) {
+        logger.info('[migrations] create-privacy-requests-2026-09: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE privacy_requests (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_id      INT UNSIGNED NOT NULL,
+          request_type ENUM('access','erasure') NOT NULL,
+          status       ENUM('pending','completed') NOT NULL DEFAULT 'pending',
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          handled_at   TIMESTAMP    NULL DEFAULT NULL,
+          handled_by   INT UNSIGNED DEFAULT NULL,
+          PRIMARY KEY (id),
+          KEY idx_privacy_requests_status (status),
+          KEY idx_privacy_requests_user (user_id),
+          CONSTRAINT fk_privacy_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_privacy_requests_handler FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-privacy-requests-2026-09: table created.');
+    }
   }
 ];
 

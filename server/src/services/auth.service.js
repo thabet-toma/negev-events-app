@@ -12,7 +12,11 @@ function publicUser(user) {
     phone_number: user.phone_number,
     full_name: user.full_name,
     clan_town: user.clan_town,
-    role: user.role
+    role: user.role,
+    // Exposed so a client can render the opt-out switch (issue #44, privacy
+    // layer part 2). register()'s literal user object has no such property —
+    // Boolean(undefined) === false, which matches the column's real DEFAULT 0.
+    analytics_opt_out: Boolean(user.analytics_opt_out)
   };
 }
 
@@ -66,10 +70,24 @@ async function adminLogin({ phone_number, pin_code }) {
 }
 
 async function findById(id) {
-  return db.queryOne(
-    'SELECT id, phone_number, full_name, clan_town, role, created_at FROM users WHERE id = ?',
+  const user = await db.queryOne(
+    'SELECT id, phone_number, full_name, clan_town, role, created_at, analytics_opt_out FROM users WHERE id = ?',
     [id]
   );
+  if (!user) return null;
+  return { ...user, analytics_opt_out: Boolean(user.analytics_opt_out) };
 }
 
-module.exports = { register, login, adminLogin, findById, publicUser };
+/**
+ * Sets the opt-out switch (issue #44, privacy layer part 2) — a switch, never
+ * a condition of use: nothing else in the app reads or gates on this value
+ * except analytics.service.record(), which honours it at the write.
+ */
+async function setAnalyticsOptOut(userId, optOut) {
+  await db.execute('UPDATE users SET analytics_opt_out = ? WHERE id = ?', [optOut ? 1 : 0, userId]);
+  const user = await findById(userId);
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+  return user;
+}
+
+module.exports = { register, login, adminLogin, findById, publicUser, setAnalyticsOptOut };

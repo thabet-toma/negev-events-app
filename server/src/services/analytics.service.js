@@ -48,12 +48,27 @@ async function record({
   const finalUserId = isCountOnly ? null : (userId ?? null);
   const finalDeviceId = isCountOnly ? null : (deviceId ?? null);
 
+  // Opt-out is honoured HERE, at the write — not only at the route (issue
+  // #44, privacy layer part 2). A signed-in user who has refused behavioural
+  // analytics gets NO row at all for an identified event, not an anonymised
+  // one: writing a row with user_id stripped would still describe what they
+  // did, just without a name attached, which is not what "refuse analytics"
+  // promises. Count-only events carry no identity by construction (finalUserId
+  // is already null above) and are unaffected — there is no one's row here to
+  // opt out of.
+  if (!isCountOnly && finalUserId) {
+    const user = await db.queryOne('SELECT analytics_opt_out FROM users WHERE id = ?', [finalUserId]);
+    if (user && user.analytics_opt_out) {
+      return { id: null, skipped: true };
+    }
+  }
+
   const { insertId } = await db.execute(
     `INSERT INTO analytics_events (event_name, user_id, device_id, platform, app_version, content_town)
      VALUES (?, ?, ?, ?, ?, ?)`,
     [eventName, finalUserId, finalDeviceId, platform, appVersion ?? null, contentTown ?? null]
   );
-  return { id: insertId };
+  return { id: insertId, skipped: false };
 }
 
 /**

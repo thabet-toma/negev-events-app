@@ -18,7 +18,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const analytics = require('../services/analytics.service');
-const { optionalAuthenticate } = require('../middleware/auth');
+const { optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString } = require('../middleware/validate');
 const { TOWNS } = require('../constants');
 
@@ -51,6 +51,23 @@ router.post('/analytics/events', optionalAuthenticate, asyncHandler(async (req, 
   });
 
   res.status(201).json({ success: true });
+}));
+
+/**
+ * Super-admin-only reading of the analytics service's unwired
+ * countsByEventName() (issue #44, privacy layer part 5). Guarded on this
+ * router itself — a weaker guard elsewhere on the `/admin` prefix
+ * (admin.routes.js's requireAdmin) does not protect this path just because
+ * it shares the prefix, same reasoning as villages.routes.js and
+ * occasionTypes.routes.js. This project's settled reasoning: anything that
+ * cannot be meaningfully scoped to a single town — like an app-wide event
+ * count — rises to the super admin, never a town admin. A reading
+ * dashboard/UI is explicitly out of scope; this is the one JSON endpoint.
+ */
+router.use('/admin/analytics', requireSuperAdmin);
+
+router.get('/admin/analytics/counts', asyncHandler(async (req, res) => {
+  res.json({ success: true, counts: await analytics.countsByEventName() });
 }));
 
 module.exports = router;

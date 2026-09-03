@@ -83,4 +83,24 @@ router.get('/auth/me', authenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, user });
 }));
 
+/**
+ * The one setting this layer adds to "my account" — the analytics opt-out
+ * switch (issue #44, privacy layer part 2). Reuses this same route shape
+ * rather than inventing a dedicated privacy-settings convention: a client
+ * reads the current value from GET /auth/me and flips it here.
+ */
+router.patch('/auth/me', authenticate, asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  if (typeof body.analytics_opt_out !== 'boolean') {
+    throw ApiError.badRequest('قيمة analytics_opt_out يجب أن تكون true أو false');
+  }
+
+  const user = await auth.setAnalyticsOptOut(req.user.id, body.analytics_opt_out);
+  res.json({
+    success: true,
+    user,
+    message: body.analytics_opt_out ? 'تم إيقاف التحليلات السلوكية' : 'تم تفعيل التحليلات السلوكية'
+  });
+}));
+
 module.exports = router;

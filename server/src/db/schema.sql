@@ -4,14 +4,19 @@
 -- ==========================================================
 
 CREATE TABLE IF NOT EXISTS users (
-  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  phone_number  VARCHAR(20)  NOT NULL,
-  full_name     VARCHAR(120) NOT NULL,
-  pin_code      VARCHAR(255) NOT NULL,
-  clan_town     VARCHAR(100) DEFAULT NULL,
-  role          ENUM('user','admin','super_admin') NOT NULL DEFAULT 'user',
-  created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  phone_number      VARCHAR(20)  NOT NULL,
+  full_name         VARCHAR(120) NOT NULL,
+  pin_code          VARCHAR(255) NOT NULL,
+  clan_town         VARCHAR(100) DEFAULT NULL,
+  role              ENUM('user','admin','super_admin') NOT NULL DEFAULT 'user',
+  -- Refusing behavioural analytics (issue #44, privacy layer). A switch, never
+  -- a condition of use: nothing in the app is gated on this flag, and it is
+  -- read at the write in analytics.service.js — an opted-out signed-in user's
+  -- identified events are never inserted at all, not written anonymised.
+  analytics_opt_out TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_phone (phone_number),
   KEY idx_users_role (role)
@@ -502,4 +507,27 @@ CREATE TABLE IF NOT EXISTS analytics_daily_counters (
   created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_analytics_daily_counters (day, event_name, platform, content_town)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The access/erasure request queue (issue #44, privacy layer part 3).
+-- Erasure of one's own analytics rows already has an immediate self-service
+-- endpoint (POST /api/privacy/analytics-erasure) — this table is for the
+-- request a super_admin fulfils BY HAND in this version (there is no
+-- screen): who asked, what kind, when, and — once handled — when and by
+-- whom. request_type covers 'erasure' too, for a user who wants a
+-- documented, handled-by record instead of (or in addition to) the
+-- self-service button.
+CREATE TABLE IF NOT EXISTS privacy_requests (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED NOT NULL,
+  request_type ENUM('access','erasure') NOT NULL,
+  status       ENUM('pending','completed') NOT NULL DEFAULT 'pending',
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_at   TIMESTAMP    NULL DEFAULT NULL,
+  handled_by   INT UNSIGNED DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_privacy_requests_status (status),
+  KEY idx_privacy_requests_user (user_id),
+  CONSTRAINT fk_privacy_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_privacy_requests_handler FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
