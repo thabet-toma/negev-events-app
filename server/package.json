@@ -15,6 +15,7 @@
     "test": "node test/web-dom.test.js && node test/smoke.test.js"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.8",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.5",
     "cors": "^2.8.5",

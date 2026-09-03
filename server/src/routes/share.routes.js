@@ -24,9 +24,11 @@ const config = require('../config');
 const asyncHandler = require('../utils/asyncHandler');
 const events = require('../services/events.service');
 const analytics = require('../services/analytics.service');
+const shareCard = require('../services/shareCard.service');
+const logger = require('../utils/logger');
 const { parseId } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
-const { OCCASION_TONES, SHARE_FALLBACK_POSTERS } = require('../constants');
+const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 
 const router = express.Router();
 
@@ -60,44 +62,6 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
-
-/**
- * poster_url → occasion type's default_poster_url → platform fallback by tone.
- * The first two arrive already absolute from the service layer, where media
- * conversion belongs (ADR-0002); only the fallback constant is converted here,
- * because it never passed through a query at all.
- */
-function resolvePosterUrl(event) {
-  if (event.poster_url) return event.poster_url;
-  if (event.occasion_type_poster_url) return event.occasion_type_poster_url;
-  const tone = OCCASION_TONES.includes(event.occasion_type_tone) ? event.occasion_type_tone : 'festive';
-  return absoluteMediaUrl(SHARE_FALLBACK_POSTERS[tone]);
-}
-
-/**
- * A CSS colour from the database is still database content, and it lands in a
- * style="" attribute on our own domain. img-src is open on this page, so a
- * crafted value could smuggle a background-image request out — hence a strict
- * hex allow-list rather than escaping. Anything else falls back to the tone's
- * own accent, which is never user-controlled.
- */
-function safeHexColour(value, fallback) {
-  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || '')) ? value : fallback;
-}
-
-function toneOf(event) {
-  return OCCASION_TONES.includes(event.occasion_type_tone) ? event.occasion_type_tone : 'festive';
-}
-
-/**
- * Two palettes, chosen by the type's own `tone` and never by its name. A عزاء
- * must not arrive dressed in wedding gold, and a super admin renaming a type
- * must not change how it looks.
- */
-const PALETTES = {
-  festive: { bg: '#141821', card: '#1e232e', ink: '#f6f2ea', faint: '#a9b0bd', accent: '#d8ab5c', btnInk: '#141821' },
-  solemn: { bg: '#14181a', card: '#1c2124', ink: '#eef1f0', faint: '#a3adaa', accent: '#8fa8a0', btnInk: '#14181a' }
-};
 
 /**
  * What the preview actually says. The event's own `title` is free text people
@@ -180,17 +144,25 @@ function pageStyle(palette) {
 }
 
 /**
- * No og:image:width/height is emitted, deliberately. They were pinned at
- * 1200x630 while the real posters on production are portrait phone
- * screenshots (a live one measures 1080x2340) — a declared aspect four times
- * off the actual image, which is why the preview arrived with no picture at
- * all: the crawler lays the card out from those numbers and drops or
- * hair-slices an image that contradicts them. Declared dimensions are a
- * rendering hint, not an obligation; absent, the crawler measures the image
- * itself and is never lied to. Put them back only when we serve an image
- * whose size we actually know.
+ * og:image:width/height are declared again as of the generated card
+ * (shareCard.service.js) — they were pulled out earlier because they were
+ * pinned at 1200x630 while og:image pointed straight at the event's own
+ * poster, and a real production poster is a portrait phone screenshot (a
+ * live one measures 1080x2340): a declared aspect four times off the actual
+ * image, which is why the preview arrived with no picture at all — the
+ * crawler lays the card out from those numbers and drops or hair-slices an
+ * image that contradicts them. Declared dimensions are a rendering hint, not
+ * an obligation; wrong, they are worse than absent.
+ *
+ * og:image now points at `/e/:id/card.png` instead, a 1200×630 PNG the
+ * server renders itself — so the declared size is no longer a guess about
+ * someone else's upload, it is the exact size of a file this route just
+ * asked to be produced. `imageDimensions` is null only when rendering that
+ * card failed and the page fell back to the raw poster URL (see the handler
+ * below) — that is the one case where the size is unknown again, and the
+ * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, downloadUrl }) {
+function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const description = buildDescription(event);
@@ -215,6 +187,8 @@ function renderEventPage(event, { pageUrl, imageUrl, downloadUrl }) {
 <meta property="og:title" content="${escapeHtml(headline)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:image" content="${escapeHtml(imageUrl)}">
+${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.width}">
+<meta property="og:image:height" content="${imageDimensions.height}">` : ''}
 <meta property="og:url" content="${escapeHtml(pageUrl)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="مناسبات النقب">
@@ -328,14 +302,59 @@ router.get('/:id', asyncHandler(async (req, res) => {
   });
 
   const pageUrl = `${config.publicUrl}/e/${event.id}`;
-  const imageUrl = resolvePosterUrl(event);
   const downloadUrl = `${pageUrl}/download`;
+
+  // Rendering (or, after the first view since the last edit, just reading
+  // the cache — see shareCard.service.js) happens here so the card exists by
+  // the time a crawler follows og:image, not on that request's own critical
+  // path. A render failure must never 500 this page: fall back to the plain
+  // poster URL exactly as before this feature existed, and — since we no
+  // longer know that image's real shape — omit the width/height hint too.
+  let imageUrl = `${pageUrl}/card.png`;
+  let imageDimensions = { width: shareCard.WIDTH, height: shareCard.HEIGHT };
+  try {
+    await shareCard.getOrRenderCard(event);
+  } catch (err) {
+    logger.error(`[share] card render failed for event ${event.id}: ${err.message}`);
+    imageUrl = resolvePosterUrl(event);
+    imageDimensions = null;
+  }
 
   res
     .status(200)
     .set('Content-Security-Policy', SHARE_CSP)
     .set('Content-Type', 'text/html; charset=utf-8')
-    .send(renderEventPage(event, { pageUrl, imageUrl, downloadUrl }));
+    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl }));
+}));
+
+/**
+ * The card itself — a 1200×630 PNG generated by shareCard.service.js (see
+ * that file for why it exists and how it is cached). Same not-found handling
+ * as the page above: a missing/pending/malformed id gets a plain 404, no
+ * body worth crafting for an image response. A render failure here (distinct
+ * from the pre-render above — this path is hit directly by a crawler
+ * fetching og:image, not just by a page view) redirects to the plain poster
+ * URL instead of 500ing, same fallback as the page uses.
+ */
+router.get('/:id/card.png', asyncHandler(async (req, res) => {
+  const eventId = shareEventIdOrNull(req.params.id);
+  const event = eventId ? await events.getShareEvent(eventId) : null;
+  if (!event) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const buffer = await shareCard.getOrRenderCard(event);
+    res
+      .status(200)
+      .set('Content-Type', 'image/png')
+      .set('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(buffer);
+  } catch (err) {
+    logger.error(`[share] card render failed for event ${event.id}: ${err.message}`);
+    res.redirect(302, resolvePosterUrl(event));
+  }
 }));
 
 /**

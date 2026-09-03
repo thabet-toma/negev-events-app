@@ -947,10 +947,16 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * `COALESCE(event_end_date, event_date) < CURDATE()` idiom every other
  * upcoming/archive query in this file uses, computed in SQL rather than by a
  * second, JS-side copy of the same rule.
+ *
+ * `updated_at` is selected for one more reason beyond display: it is the
+ * cache key `shareCard.service.js` renders the OG card under, so an edited
+ * event gets a new card automatically — no explicit cache-invalidation call
+ * anywhere else in the codebase.
  */
 async function getShareEvent(eventId) {
   const row = await db.queryOne(
     `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
+            events.updated_at,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
             occasion_types.icon AS occasion_type_icon,

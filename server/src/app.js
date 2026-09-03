@@ -12,6 +12,7 @@ const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const routes = require('./routes');
 const shareRoutes = require('./routes/share.routes');
+const shareCard = require('./services/shareCard.service');
 const db = require('./db/pool');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
@@ -19,6 +20,14 @@ const { uploadsDir } = require('./middleware/upload');
 // مجلد التوزيع يُنشأ عند الإقلاع حتى لا يفشل express.static على تنصيب جديد.
 const downloadsDir = path.join(__dirname, '..', 'downloads');
 fs.mkdirSync(downloadsDir, { recursive: true });
+
+// Same reasoning as downloadsDir above: the container runs as the
+// unprivileged `node` user (server/Dockerfile), so the OG-card cache
+// directory has to be created by this same process at boot to be owned by
+// it — created here rather than only inside shareCard.service.js so the
+// dependency on "this directory exists and is writable" is visible where
+// every other writable directory this app owns is declared.
+fs.mkdirSync(shareCard.CACHE_DIR, { recursive: true });
 
 function createApp() {
   const app = express();
