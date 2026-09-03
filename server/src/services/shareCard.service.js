@@ -2,20 +2,24 @@
 
 /**
  * Generates the `og:image` shown by the shareable event page (`GET /e/:id`,
- * server/src/routes/share.routes.js) — a 1200×630 card the server draws
+ * server/src/routes/share.routes.js) — a 1200×1200 card the server draws
  * itself, instead of handing crawlers the event's own poster.
  *
- * Why this exists at all: a real production poster is a 1080×2340 portrait
- * phone screenshot. WhatsApp/Facebook lay a summary_large_image card out at
- * roughly 1.91:1, so a portrait poster either gets dropped or hair-sliced —
- * "the image doesn't show" was the exact bug report. Worse, a wedding poster
- * has the date and venue printed on it, and the whole point of the share page
- * is to withhold those until someone installs the app — passing the poster
- * through leaked exactly what the page exists to hide. So: the background is
- * the poster, but cover-cropped to this card's own aspect ratio and heavily
- * blurred + darkened until it reads as colour and mood, not as a legible
- * document. That blur is the mechanism that keeps the details hidden, not
- * decoration on top of some other privacy control.
+ * Why not just hand over the poster: real ones are portrait (a live one
+ * measures 1080×2340), and a crawler laying out a link preview drops or
+ * hair-slices an image that does not fit the shape it expects — "the image
+ * doesn't show" was the literal bug report. Worse, a wedding poster has the
+ * date and venue printed on it, and the whole point of the share page is to
+ * withhold those until someone installs the app, so passing it through leaked
+ * exactly what the page exists to hide.
+ *
+ * The shape and the proportions are the product owner's: square, because a
+ * square preview occupies far more of a WhatsApp bubble than a 1.91:1 strip
+ * does, and mostly poster — "mostly picture, a little for the occasion type,
+ * the name, and promoting the site". So the poster is shown whole and large,
+ * and blur (calibrated in `posterBlur`) is what keeps its printed details
+ * unreadable — that blur is the privacy mechanism itself, not decoration on
+ * top of some other control.
  *
  * No SQL lives here — `events.service.getShareEvent` already has everything
  * this needs (including `updated_at`, the cache key below), and this module
@@ -33,7 +37,7 @@ const { uploadsDir } = require('../middleware/upload');
 const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 
 const WIDTH = 1200;
-const HEIGHT = 630;
+const HEIGHT = 1200;
 
 // Alpine (the production image, server/Dockerfile) ships no fonts and no
 // fontconfig at all — GlobalFonts starts out with nothing to fall back to,
@@ -74,7 +78,7 @@ function cacheKey(event) {
 }
 
 function cachePath(key) {
-  return path.join(CACHE_DIR, `${key}.png`);
+  return path.join(CACHE_DIR, `${key}.jpg`);
 }
 
 /**
@@ -90,7 +94,7 @@ async function evictStale(event, currentKey) {
     const entries = await fsp.readdir(CACHE_DIR);
     await Promise.all(
       entries
-        .filter(name => name.startsWith(prefix) && name !== `${currentKey}.png`)
+        .filter(name => name.startsWith(prefix) && name !== `${currentKey}.jpg`)
         .map(name => fsp.unlink(path.join(CACHE_DIR, name)).catch(() => {}))
     );
   } catch (err) {
@@ -134,40 +138,6 @@ async function loadPosterBuffer(url) {
     logger.warn(`[shareCard] failed to load background from ${url}: ${err.message}`);
     return null;
   }
-}
-
-/**
- * Draws `img` cover-cropped to fill the whole canvas, blurred heavily. Drawn
- * slightly larger than the canvas and offset negative so the blur's own edge
- * falloff lands outside the visible frame, not as a visible soft border.
- */
-function drawBlurredCover(ctx, img) {
-  const PAD = 60;
-  const targetW = WIDTH + PAD * 2;
-  const targetH = HEIGHT + PAD * 2;
-  const targetRatio = targetW / targetH;
-  const srcRatio = img.width / img.height;
-
-  let sx;
-  let sy;
-  let sw;
-  let sh;
-  if (srcRatio > targetRatio) {
-    sh = img.height;
-    sw = sh * targetRatio;
-    sx = (img.width - sw) / 2;
-    sy = 0;
-  } else {
-    sw = img.width;
-    sh = sw / targetRatio;
-    sx = 0;
-    sy = (img.height - sh) / 2;
-  }
-
-  ctx.save();
-  ctx.filter = 'blur(32px)';
-  ctx.drawImage(img, sx, sy, sw, sh, -PAD, -PAD, targetW, targetH);
-  ctx.restore();
 }
 
 /**
@@ -218,54 +188,158 @@ function withAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-const MARGIN = 64;
+const MARGIN = 56;
 
-const CENTER_X = WIDTH / 2;
+// The card is mostly the poster, with a thin band under it — that proportion
+// is the product owner's own call, after two rounds in which the poster was
+// first wallpaper and then a side panel: "mostly picture, a little for the
+// occasion type, the name, and promoting the site".
+const BAND_HEIGHT = 268;
+const HERO_HEIGHT = HEIGHT - BAND_HEIGHT;
 
 /**
- * A thin inset rule around the whole card. It is the cheapest thing that makes
- * a flat 1200x630 read as a *card* rather than a cropped photo — which is what
- * the product owner asked for after seeing the first version.
+ * How hard to blur the poster, in the coordinates it is *drawn* at.
+ *
+ * Blur is not decoration here: it is the mechanism that keeps a poster's
+ * printed date and venue unreadable, which is the whole reason the share page
+ * exists (someone who can read the date off the preview never installs the
+ * app). So it is calibrated to the drawn size rather than fixed. Measured
+ * against the two posters live on production: a fixed blur(8px) still left
+ * Arabic text readable at full size, and blur(9px) still left a poster's
+ * headline readable when drawn at 82% — while at 20% (a tall poster contained
+ * in a small frame) the downscale alone had already destroyed everything.
+ * Scaling with the drawn-to-source ratio is what makes one number cover both.
  */
-function drawFrame(ctx, palette) {
-  const inset = 26;
+function posterBlur(drawnWidth, sourceWidth) {
+  return Math.max(5, Math.round((drawnWidth / sourceWidth) * 17));
+}
+
+/**
+ * Lightens a colour until it is legible as text on this card's dark palette.
+ *
+ * `occasion_types.color` is admin-chosen for the app's own light-background
+ * UI: the seeded wedding colour is `#8f6a20`, a dark brown that all but
+ * vanished on the first card. Rather than overriding the admin's choice with a
+ * hardcoded one — the colour is meaningful, it is how people recognise the
+ * type — the hue is kept and only the luminance is raised.
+ */
+function readableOnDark(hex) {
+  const full = hex.length === 4
+    ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`
+    : hex;
+  const r = parseInt(full.slice(1, 3), 16);
+  const g = parseInt(full.slice(3, 5), 16);
+  const b = parseInt(full.slice(5, 7), 16);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  if (luminance >= 0.55) return full;
+  const towardsWhite = (0.62 - luminance) / (1 - luminance);
+  const mix = channel => Math.round(channel + (255 - channel) * towardsWhite);
+  return `#${[mix(r), mix(g), mix(b)].map(c => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Draws the poster across the hero area: the whole poster, contained so it is
+ * never cropped, over a blurred cover-crop of itself that fills whatever the
+ * containing leaves over. A wedding poster is portrait and this area is not,
+ * so those side bars are unavoidable — filling them with the poster's own
+ * colours is what stops them reading as empty gutters.
+ */
+function drawHero(ctx, img, palette) {
   ctx.save();
-  ctx.strokeStyle = withAlpha(palette.accent, 0.3);
+  ctx.beginPath();
+  ctx.rect(0, 0, WIDTH, HERO_HEIGHT);
+  ctx.clip();
+
+  const areaRatio = WIDTH / HERO_HEIGHT;
+  const sourceRatio = img.width / img.height;
+
+  // Fill: cover-cropped and blurred far past legibility, drawn proud of the
+  // area so the blur's own edge falloff is clipped away.
+  const bleed = 70;
+  let cw;
+  let ch;
+  if (sourceRatio > areaRatio) {
+    ch = HERO_HEIGHT + bleed * 2;
+    cw = ch * sourceRatio;
+  } else {
+    cw = WIDTH + bleed * 2;
+    ch = cw / sourceRatio;
+  }
+  ctx.save();
+  ctx.filter = 'blur(44px)';
+  ctx.drawImage(img, (WIDTH - cw) / 2, (HERO_HEIGHT - ch) / 2, cw, ch);
+  ctx.restore();
+  ctx.fillStyle = withAlpha(palette.bg, 0.45);
+  ctx.fillRect(0, 0, WIDTH, HERO_HEIGHT);
+
+  // The poster itself, whole.
+  const inset = 34;
+  const maxW = WIDTH - inset * 2;
+  const maxH = HERO_HEIGHT - inset * 2;
+  let height = maxH;
+  let width = height * sourceRatio;
+  if (width > maxW) {
+    width = maxW;
+    height = width / sourceRatio;
+  }
+  const x = (WIDTH - width) / 2;
+  const y = (HERO_HEIGHT - height) / 2;
+  const radius = 16;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+  ctx.shadowBlur = 38;
+  ctx.shadowOffsetY = 10;
+  ctx.fillStyle = palette.card;
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.fill();
+  ctx.restore();
+
+  const blur = posterBlur(width, img.width);
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.clip();
+  ctx.filter = `blur(${blur}px)`;
+  const edge = blur * 3;
+  ctx.drawImage(img, x - edge, y - edge, width + edge * 2, height + edge * 2);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(inset, inset, WIDTH - inset * 2, HEIGHT - inset * 2, 20);
+  ctx.roundRect(x + 1, y + 1, width - 2, height - 2, radius);
   ctx.stroke();
+  ctx.restore();
+
   ctx.restore();
 }
 
 /**
- * The occasion-type chip, horizontally centred at `topY`. Centred rather than
- * corner-pinned because everything on this card is one centred column: the
- * first cut hugged the right edge and left half the card empty, which read as
- * a mistake rather than a design.
- *
- * Name only, no icon glyph: the type icons are emoji, and the only font this
- * process registers is Cairo, which has no emoji coverage — an icon here
- * renders as a tofu box. Alpine has even less to fall back on.
+ * The occasion-type chip, centred at `centreX`. Name only, no icon glyph: the
+ * type icons are emoji (occasion_types.icon holds values like the ring and the
+ * dove), and the only font this process registers is Cairo, which has no emoji
+ * coverage — verified by rendering a sample, the glyph comes back as a tofu
+ * box here and, with even less font coverage available, on Alpine too.
  */
-function drawChip(ctx, event, palette, topY) {
+function drawChip(ctx, event, palette, centreX, centreY) {
   const typeName = event.occasion_type_name;
-  if (!typeName) return 0;
+  if (!typeName) return;
 
-  const typeColour = safeHexColour(event.occasion_type_colour, palette.accent);
-  const paddingX = 26;
-  const chipHeight = 54;
+  const typeColour = readableOnDark(safeHexColour(event.occasion_type_colour, palette.accent));
+  const height = 52;
 
-  ctx.font = `600 26px "${BOLD_FAMILY}"`;
-  const chipWidth = ctx.measureText(typeName).width + paddingX * 2;
-  const chipX = CENTER_X - chipWidth / 2;
+  ctx.font = `600 27px "${BOLD_FAMILY}"`;
+  const width = ctx.measureText(typeName).width + 52;
 
   ctx.save();
-  ctx.fillStyle = withAlpha(typeColour, 0.22);
-  ctx.strokeStyle = withAlpha(typeColour, 0.55);
+  ctx.fillStyle = withAlpha(typeColour, 0.18);
+  ctx.strokeStyle = withAlpha(typeColour, 0.62);
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.roundRect(chipX, topY, chipWidth, chipHeight, chipHeight / 2);
+  ctx.roundRect(centreX - width / 2, centreY - height / 2, width, height, height / 2);
   ctx.fill();
   ctx.stroke();
   ctx.restore();
@@ -275,25 +349,22 @@ function drawChip(ctx, event, palette, topY) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = typeColour;
-  ctx.fillText(typeName, CENTER_X, topY + chipHeight / 2 + 2);
+  ctx.fillText(typeName, centreX, centreY + 2);
   ctx.restore();
-
-  return chipHeight;
 }
 
-/** Small pill in the top corner marking an expired event, mirroring the share page's own «انتهت» badge. */
+/** Small pill marking an expired event, mirroring the share page's own badge. */
 function drawExpiredBadge(ctx, palette) {
   const label = 'انتهت';
-  ctx.font = `600 20px "${BOLD_FAMILY}"`;
-  const paddingX = 18;
+  ctx.font = `600 21px "${BOLD_FAMILY}"`;
   const height = 40;
-  const width = ctx.measureText(label).width + paddingX * 2;
+  const width = ctx.measureText(label).width + 36;
   const x = MARGIN;
-  const y = 56;
+  const y = MARGIN;
 
   ctx.save();
-  ctx.fillStyle = withAlpha(palette.bg, 0.78);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+  ctx.fillStyle = withAlpha(palette.bg, 0.85);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.roundRect(x, y, width, height, height / 2);
@@ -311,131 +382,121 @@ function drawExpiredBadge(ctx, palette) {
 }
 
 /**
- * Renders one event's card to a PNG buffer. No caching, no filesystem
+ * Renders one event's card to a JPEG buffer. No caching, no filesystem
  * bookkeeping — `getOrRenderCard` below owns that; this is pure drawing.
  *
- * The whole card is one centred column — chip, names, rule, clan — measured
- * first and then placed, so it sits optically centred whatever the name
- * lengths are. Nothing is pinned to an edge except the expiry pill and the
- * wordmark.
+ * JPEG, not PNG, and that is a functional choice rather than a preference:
+ * WhatsApp drops a preview image over roughly 600 KB, and this card is now
+ * almost entirely photograph — the same square rendered as PNG measured just
+ * over 1 MB, i.e. no preview at all, which is the exact bug this whole feature
+ * exists to fix.
  */
 async function renderCard(event) {
   const palette = PALETTES[toneOf(event)];
   const canvas = createCanvas(WIDTH, HEIGHT);
   const ctx = canvas.getContext('2d');
 
-  // Base fill, in case the background image never loads at all.
   ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   const posterUrl = resolvePosterUrl(event);
-  const posterBuffer = await loadPosterBuffer(posterUrl);
+  // `resolvePosterUrl` falls back to one of our own platform PNGs when the
+  // event has no poster. Those were drawn for the share *page*, which needs
+  // something in its <img>; framing one here would present our own placeholder
+  // as if it were the family's invitation. The wash below is the honest
+  // version of "there is no poster".
+  const isOwnFallback = Boolean(posterUrl) && posterUrl.startsWith(SHARE_ASSETS_PREFIX);
+  const posterBuffer = isOwnFallback ? null : await loadPosterBuffer(posterUrl);
+  let poster = null;
   if (posterBuffer) {
     try {
-      const img = await loadImage(posterBuffer);
-      drawBlurredCover(ctx, img);
+      poster = await loadImage(posterBuffer);
     } catch (err) {
       logger.warn(`[shareCard] failed to decode background image for event ${event.id}: ${err.message}`);
     }
   }
 
-  // Darkening veil — this, together with the blur above, is what keeps a
-  // poster's printed date/venue illegible, not merely muted.
-  ctx.fillStyle = withAlpha(palette.bg, 0.58);
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  if (poster) {
+    drawHero(ctx, poster, palette);
+  } else {
+    // No poster at all — the type has no default one and the event carries
+    // none. Washing only the hero area would leave three quarters of the card
+    // an empty rectangle above the text; instead the wash takes the whole
+    // square and the text sits in the middle of it, which reads as a plain
+    // typographic card rather than a picture that failed to load.
+    const wash = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    wash.addColorStop(0, palette.card);
+    wash.addColorStop(1, palette.bg);
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
 
-  // A soft vignette pulls the eye to the centred text and stops a busy poster
-  // from competing with it at the edges.
-  const vignette = ctx.createRadialGradient(CENTER_X, HEIGHT / 2, HEIGHT * 0.18, CENTER_X, HEIGHT / 2, WIDTH * 0.62);
-  vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  vignette.addColorStop(1, withAlpha(palette.bg, 0.55));
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-  drawFrame(ctx, palette);
   if (event.is_expired) drawExpiredBadge(ctx, palette);
 
-  // Same fallback share.routes.js's buildHeadline/names use, and the same
-  // `String(... ?? '')` guard escapeHtml relies on there — a legacy row with
-  // no honoree rows at all must still produce a valid card, not throw out of
+  // --- the band: type, name, and the site's own line, nothing else ---
+  // With a poster it is a strip under it, ruled off in the palette's accent.
+  // Without one there is nothing to divide, so the same block simply centres.
+  const bandTop = poster ? HERO_HEIGHT : Math.round((HEIGHT - BAND_HEIGHT) / 2);
+  ctx.fillStyle = withAlpha(palette.accent, 0.55);
+  if (poster) {
+    ctx.fillStyle = palette.bg;
+    ctx.fillRect(0, bandTop, WIDTH, BAND_HEIGHT);
+    ctx.fillStyle = withAlpha(palette.accent, 0.55);
+    ctx.fillRect(0, bandTop, WIDTH, 3);
+  } else {
+    // Nothing to divide, so the rule becomes a short centred mark above the
+    // type — the one place the palette's own accent shows on a poster-less
+    // card, and what the tone test samples.
+    ctx.fillRect(WIDTH / 2 - 60, bandTop - 12, 120, 4);
+  }
+
+  const centreX = WIDTH / 2;
+  drawChip(ctx, event, palette, centreX, bandTop + 56);
+
+  // Same fallback share.routes.js's buildHeadline uses, and the same
+  // `String(... ?? '')` guard escapeHtml relies on there — a legacy row with no
+  // honoree rows at all must still produce a valid card, not throw out of
   // wrapLines on an undefined title.
   const names = String(event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title || '');
-
-  // --- measure the column before drawing any of it ---
-  const hasChip = Boolean(event.occasion_type_name);
-  const chipHeight = hasChip ? 54 : 0;
-  const gapAfterChip = hasChip ? 38 : 0;
-
-  ctx.font = `700 62px "${BOLD_FAMILY}"`;
-  const nameLines = wrapLines(ctx, names, WIDTH - MARGIN * 2 - 40, 2);
-  const nameLineHeight = 78;
-  const namesHeight = nameLines.length * nameLineHeight;
-
-  const hasClan = Boolean(event.family_clan);
-  const ruleGap = 30;
-  const ruleHeight = 2;
-  const gapAfterRule = 28;
-  const clanHeight = hasClan ? 34 : 0;
-  const tailHeight = hasClan ? ruleGap + ruleHeight + gapAfterRule + clanHeight : 0;
-
-  const blockHeight = chipHeight + gapAfterChip + namesHeight + tailHeight;
-  // Nudged a little above true centre: the wordmark sits at the bottom, and a
-  // block centred on the geometric middle reads as low next to it.
-  let y = Math.max(MARGIN, (HEIGHT - blockHeight) / 2 - 18);
-
-  if (hasChip) {
-    drawChip(ctx, event, palette, y);
-    y += chipHeight + gapAfterChip;
-  }
 
   ctx.save();
   ctx.direction = 'rtl';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = palette.ink;
-  ctx.font = `700 62px "${BOLD_FAMILY}"`;
-  for (const line of nameLines) {
-    ctx.fillText(line, CENTER_X, y + nameLineHeight / 2);
-    y += nameLineHeight;
-  }
+  ctx.font = `700 50px "${BOLD_FAMILY}"`;
+  const nameLines = wrapLines(ctx, names, WIDTH - MARGIN * 2, 1);
+  if (nameLines[0]) ctx.fillText(nameLines[0], centreX, bandTop + 134);
   ctx.restore();
 
-  if (hasClan) {
-    y += ruleGap;
-    ctx.save();
-    ctx.fillStyle = withAlpha(palette.accent, 0.75);
-    ctx.beginPath();
-    ctx.roundRect(CENTER_X - 46, y, 92, ruleHeight, 1);
-    ctx.fill();
-    ctx.restore();
-    y += ruleHeight + gapAfterRule;
-
+  if (event.family_clan) {
     ctx.save();
     ctx.direction = 'rtl';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `30px "${REGULAR_FAMILY}"`;
+    ctx.font = `27px "${REGULAR_FAMILY}"`;
     ctx.fillStyle = palette.faint;
-    const clanLines = wrapLines(ctx, event.family_clan, WIDTH - MARGIN * 2 - 40, 1);
-    if (clanLines[0]) ctx.fillText(clanLines[0], CENTER_X, y + clanHeight / 2);
+    const clanLines = wrapLines(ctx, `عائلة ${event.family_clan}`, WIDTH - MARGIN * 2, 1);
+    if (clanLines[0]) ctx.fillText(clanLines[0], centreX, bandTop + 186);
     ctx.restore();
   }
 
-  // Wordmark, bottom-centre, always last so nothing else can overlap it.
+  // The site's line — the only promotion on the card, and the reason a person
+  // who sees this in a group chat knows where the details live.
   ctx.save();
-  ctx.font = `600 23px "${BOLD_FAMILY}"`;
-  ctx.fillStyle = withAlpha(palette.ink, 0.72);
   ctx.direction = 'rtl';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('مناسبات النقب', CENTER_X, HEIGHT - 58);
+  ctx.font = `600 24px "${BOLD_FAMILY}"`;
+  ctx.fillStyle = withAlpha(palette.accent, 0.95);
+  ctx.fillText('مناسبات النقب · التفاصيل في التطبيق', centreX, HEIGHT - 40);
   ctx.restore();
 
-  return canvas.toBuffer('image/png');
+  return canvas.toBuffer('image/jpeg', 88);
 }
 
 /**
- * Render-once-reuse entry point: returns the cached PNG buffer for this
+ * Render-once-reuse entry point: returns the cached JPEG buffer for this
  * exact (event id, updated_at) pair, rendering and writing it to disk first
  * if this is the first request since the event was last created/edited.
  * `updated_at` changing is what invalidates a card — an edited event gets a

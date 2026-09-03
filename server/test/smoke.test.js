@@ -13,7 +13,7 @@ const assert = require('assert');
 const bcrypt = require('bcryptjs');
 const fsp = require('fs/promises');
 const path = require('path');
-const zlib = require('zlib');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 
 const config = require('../src/config');
 const db = require('../src/db/pool');
@@ -2934,76 +2934,26 @@ async function run() {
    * actually emits — 8-bit, non-interlaced, colour type 0/2/3/4/6 — which is
    * all this suite ever needs to read back.
    */
-  function decodePng(buffer) {
-    const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-    assert.ok(buffer.slice(0, 8).equals(SIGNATURE), 'expected PNG file signature');
-
-    let offset = 8;
-    let width = 0;
-    let height = 0;
-    let bitDepth = 0;
-    let colorType = 0;
-    const idatParts = [];
-    while (offset < buffer.length) {
-      const len = buffer.readUInt32BE(offset);
-      const type = buffer.slice(offset + 4, offset + 8).toString('ascii');
-      const data = buffer.slice(offset + 8, offset + 8 + len);
-      if (type === 'IHDR') {
-        width = data.readUInt32BE(0);
-        height = data.readUInt32BE(4);
-        bitDepth = data[8];
-        colorType = data[9];
-        assert.strictEqual(data[12], 0, 'expected a non-interlaced PNG');
-      } else if (type === 'IDAT') {
-        idatParts.push(data);
-      }
-      offset += 8 + len + 4; // length + type + data + crc
-    }
-    assert.ok(width && height, 'expected an IHDR chunk with real dimensions');
-    assert.strictEqual(bitDepth, 8, 'this decoder only handles 8-bit PNGs');
-
-    const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
-    assert.ok(channels, `unsupported PNG colour type ${colorType}`);
-
-    const raw = zlib.inflateSync(Buffer.concat(idatParts));
-    const stride = width * channels;
-    const pixels = Buffer.alloc(height * stride);
-    let rawOffset = 0;
-    for (let y = 0; y < height; y += 1) {
-      const filterType = raw[rawOffset];
-      rawOffset += 1;
-      const rowStart = y * stride;
-      const prevRowStart = (y - 1) * stride;
-      for (let x = 0; x < stride; x += 1) {
-        const rawByte = raw[rawOffset + x];
-        const a = x >= channels ? pixels[rowStart + x - channels] : 0;
-        const b = y > 0 ? pixels[prevRowStart + x] : 0;
-        const c = y > 0 && x >= channels ? pixels[prevRowStart + x - channels] : 0;
-        let value;
-        if (filterType === 0) value = rawByte;
-        else if (filterType === 1) value = rawByte + a;
-        else if (filterType === 2) value = rawByte + b;
-        else if (filterType === 3) value = rawByte + Math.floor((a + b) / 2);
-        else if (filterType === 4) {
-          const p = a + b - c;
-          const pa = Math.abs(p - a);
-          const pb = Math.abs(p - b);
-          const pc = Math.abs(p - c);
-          value = rawByte + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
-        } else {
-          throw new Error(`unsupported PNG filter type ${filterType}`);
-        }
-        pixels[rowStart + x] = value & 0xff;
-      }
-      rawOffset += stride;
-    }
-
+  /**
+   * Decodes the generated card so its size and individual pixels can be
+   * asserted. The card is a JPEG now (shareCard.service.js explains why: a
+   * mostly-photographic PNG blew past the size at which WhatsApp drops the
+   * preview outright), so this leans on the same decoder the server itself
+   * uses rather than the hand-rolled PNG reader that used to live here —
+   * a JPEG cannot be walked chunk by chunk the way IHDR/IDAT could.
+   */
+  async function decodeCard(buffer) {
+    assert.ok(buffer[0] === 0xff && buffer[1] === 0xd8, 'expected a JPEG file signature');
+    const image = await loadImage(buffer);
+    const canvas = createCanvas(image.width, image.height);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0);
     return {
-      width,
-      height,
+      width: image.width,
+      height: image.height,
       pixelAt(x, y) {
-        const start = y * stride + x * channels;
-        return { r: pixels[start], g: pixels[start + 1], b: pixels[start + 2] };
+        const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+        return { r, g, b };
       }
     };
   }
@@ -3082,38 +3032,46 @@ async function run() {
     assert.ok(titleMeta[1].startsWith('عرس'), `expected og:title to lead with the type, got: ${titleMeta[1]}`);
   });
 
-  await test('og:image points at the generated card, and og:image:width/height declare its real 1200×630 size', async () => {
+  await test('og:image points at the generated card, and og:image:width/height declare its real 1200×1200 size', async () => {
     const { text } = await rawGet(`/e/${shareEventId}`);
     const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
     assert.ok(imageMatch, 'expected an og:image tag');
     assert.ok(imageMatch[1].startsWith('http'), 'expected an absolute og:image');
-    assert.ok(imageMatch[1].endsWith(`/e/${shareEventId}/card.png`), `expected og:image to point at the card, got: ${imageMatch[1]}`);
+    assert.ok(imageMatch[1].endsWith(`/e/${shareEventId}/card.jpg`), `expected og:image to point at the card, got: ${imageMatch[1]}`);
 
     assert.ok(text.includes('og:image:width" content="1200"'), 'expected og:image:width 1200 — we generate this file, its size is not a guess');
-    assert.ok(text.includes('og:image:height" content="630"'), 'expected og:image:height 630');
+    assert.ok(text.includes('og:image:height" content="1200"'), 'expected og:image:height 1200');
   });
 
-  await test('GET /e/:id/card.png on the approved event is a real 1200×630 PNG', async () => {
-    const { status, headers, buffer } = await rawGetBinary(`/e/${shareEventId}/card.png`);
+  await test('GET /e/:id/card.jpg on the approved event is a real 1200×1200 JPEG', async () => {
+    const { status, headers, buffer } = await rawGetBinary(`/e/${shareEventId}/card.jpg`);
     assert.strictEqual(status, 200);
-    assert.strictEqual(headers.get('content-type'), 'image/png');
+    assert.strictEqual(headers.get('content-type'), 'image/jpeg');
     assert.ok((headers.get('cache-control') || '').includes('max-age='), 'expected a long-lived Cache-Control header');
 
-    const png = decodePng(buffer);
-    assert.strictEqual(png.width, 1200, 'IHDR width');
-    assert.strictEqual(png.height, 630, 'IHDR height');
+    const card = await decodeCard(buffer);
+    assert.strictEqual(card.width, 1200);
+    assert.strictEqual(card.height, 1200);
+
+    // WhatsApp drops a link preview's image once it is past roughly 600 KB,
+    // which is the failure this whole card exists to fix — a card that is
+    // correct but too heavy is still a preview with no picture in it.
+    assert.ok(
+      buffer.length < 600 * 1024,
+      `the card must stay under WhatsApp's preview size limit, got ${Math.round(buffer.length / 1024)} KB`
+    );
   });
 
   await test('A second request for the same card is served from cache, not re-rendered', async () => {
     const file = await cachedCardFile(shareEventId);
     const before = await fsp.stat(file);
 
-    const { status, buffer } = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    const { status, buffer } = await rawGetBinary(`/e/${shareEventId}/card.jpg`);
     assert.strictEqual(status, 200);
 
     const after = await fsp.stat(file);
     assert.strictEqual(after.mtimeMs, before.mtimeMs, 'the cache file must not have been rewritten by the second request');
-    assert.ok(buffer.length > 0, 'expected non-empty PNG bytes from the cache hit');
+    assert.ok(buffer.length > 0, 'expected non-empty JPEG bytes from the cache hit');
   });
 
   await test('The Content-Security-Policy header is present on the share route', async () => {
@@ -3125,7 +3083,7 @@ async function run() {
   });
 
   await test('Editing the event produces a different card, and the old cached one is evicted', async () => {
-    const before = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    const before = await rawGetBinary(`/e/${shareEventId}/card.jpg`);
 
     // events.updated_at is a TIMESTAMP with one-second resolution, and it is
     // the card's cache key (shareCard.service.js) — an edit inside the same
@@ -3142,7 +3100,7 @@ async function run() {
     assert.strictEqual(status, 200);
     assert.strictEqual(body.amendment, 'cosmetic', 'a family_clan edit must stay approved, not fall back to pending');
 
-    const after = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    const after = await rawGetBinary(`/e/${shareEventId}/card.jpg`);
     assert.strictEqual(after.status, 200);
     assert.ok(!before.buffer.equals(after.buffer), 'expected a new card after the edit — same bytes means the old one was reused');
 
@@ -3175,10 +3133,10 @@ async function run() {
     assert.strictEqual(pending.text, malformed.text, 'a malformed id must be indistinguishable from a missing one');
   });
 
-  await test('GET /e/:id/card.png on a pending event, a non-existent id, and a non-numeric id all 404', async () => {
-    const pending = await rawGetBinary(`/e/${pendingShareEventId}/card.png`);
-    const missing = await rawGetBinary('/e/999999999/card.png');
-    const malformed = await rawGetBinary('/e/not-a-number/card.png');
+  await test('GET /e/:id/card.jpg on a pending event, a non-existent id, and a non-numeric id all 404', async () => {
+    const pending = await rawGetBinary(`/e/${pendingShareEventId}/card.jpg`);
+    const missing = await rawGetBinary('/e/999999999/card.jpg');
+    const malformed = await rawGetBinary('/e/not-a-number/card.jpg');
     assert.strictEqual(pending.status, 404, 'same as the page: a pending event has no card either');
     assert.strictEqual(missing.status, 404);
     assert.strictEqual(malformed.status, 404);
@@ -3219,26 +3177,24 @@ async function run() {
     solemnShareEventId = body.eventId;
   });
 
-  await test('A solemn-tone event with no poster renders a real card from the solemn fallback, not the festive one', async () => {
-    const { status, buffer } = await rawGetBinary(`/e/${solemnShareEventId}/card.png`);
+  await test('A solemn-tone event with no poster renders a real card in the solemn palette, not the festive one', async () => {
+    const { status, buffer } = await rawGetBinary(`/e/${solemnShareEventId}/card.jpg`);
     assert.strictEqual(status, 200, 'card generation must not crash on a poster-less solemn event');
 
-    const png = decodePng(buffer);
-    assert.strictEqual(png.width, 1200);
-    assert.strictEqual(png.height, 630);
+    const card = await decodeCard(buffer);
+    assert.strictEqual(card.width, 1200);
+    assert.strictEqual(card.height, 1200);
 
-    // A far corner — outside any text, the chip, and the fallback emblem's
-    // rings (server/scripts/build-share-fallbacks.js draws those within
-    // ~200px of centre) — so this samples pure background. The festive
-    // fallback is warm gold there (red channel well above blue); the solemn
-    // one is a cool muted slate (blue at or above red). The blur + dark veil
-    // shareCard.service.js always composites on top shrink that gap but
-    // cannot flip it, so this stays a reliable "which fallback rendered"
-    // signal without hardcoding the blend's exact pixel values.
-    const corner = png.pixelAt(20, 600);
+    // Sampled on the short accent mark a poster-less card draws above the type
+    // chip (shareCard.service.js) — a flat run of the palette's own accent
+    // colour, far from any glyph. Festive is warm gold there (red well above
+    // blue); solemn is a cool muted sage (blue at or above red). Unlike the
+    // background sample this replaced, the two tones cannot converge: these
+    // accent colours differ by hue, not merely by brightness.
+    const rule = card.pixelAt(600, 456);
     assert.ok(
-      corner.b >= corner.r,
-      `expected a cool/neutral background (solemn fallback), got a warm one (festive leaked in): ${JSON.stringify(corner)}`
+      rule.b >= rule.r,
+      `expected the solemn palette's cool accent, got a warm one (festive leaked in): ${JSON.stringify(rule)}`
     );
   });
 
