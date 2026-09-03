@@ -32,6 +32,11 @@ mobile/.flutter-plugins-dependencies
 # ملفات التوزيع (APK) — كبيرة، تُبنى ولا تُلتزم
 server/downloads/*
 !server/downloads/.gitkeep
+
+# بطاقات og:image المولَّدة (server/src/services/shareCard.service.js) — تُبنى
+# عند أول عرض بعد كل نشر/تعديل، لا تُلتزم أبداً
+server/cache/*
+!server/cache/.gitkeep
 mobile/android/.kotlin/
 
 # مفتاح توقيع الإصدار وكلمة سرّه — ضياعهما يمنع تحديث كل نسخة مثبَّتة

@@ -11,6 +11,9 @@
 const http = require('http');
 const assert = require('assert');
 const bcrypt = require('bcryptjs');
+const fsp = require('fs/promises');
+const path = require('path');
+const zlib = require('zlib');
 
 const config = require('../src/config');
 const db = require('../src/db/pool');
@@ -21,6 +24,7 @@ const { signToken } = require('../src/middleware/auth');
 const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
+const shareCard = require('../src/services/shareCard.service');
 
 let baseUrl = '';
 let passed = 0;
@@ -2912,14 +2916,119 @@ async function run() {
     return { status: res.status, headers: res.headers, text: await res.text() };
   }
 
-  const shareTitle = `<img src=x onerror=alert(1)>"عرس صفحة المشاركة`;
+  /** Same as rawGet, but for the generated PNG card — a Buffer, not text. */
+  async function rawGetBinary(urlPath) {
+    const res = await fetch(`${baseUrl}${urlPath}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, headers: res.headers, buffer };
+  }
+
+  /**
+   * A small hand-rolled PNG decoder, in the same spirit as
+   * server/scripts/build-share-fallbacks.js's hand-rolled encoder: reads
+   * IHDR for the real dimensions (never trust a Content-Type header alone —
+   * this is what actually proves the bytes are a 1200×630 PNG) and, for the
+   * palette test below, fully reconstructs pixels (concatenate every IDAT,
+   * inflate, then undo the PNG's own per-scanline filtering) so a specific
+   * pixel can be sampled. Handles exactly what @napi-rs/canvas's `toBuffer`
+   * actually emits — 8-bit, non-interlaced, colour type 0/2/3/4/6 — which is
+   * all this suite ever needs to read back.
+   */
+  function decodePng(buffer) {
+    const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.ok(buffer.slice(0, 8).equals(SIGNATURE), 'expected PNG file signature');
+
+    let offset = 8;
+    let width = 0;
+    let height = 0;
+    let bitDepth = 0;
+    let colorType = 0;
+    const idatParts = [];
+    while (offset < buffer.length) {
+      const len = buffer.readUInt32BE(offset);
+      const type = buffer.slice(offset + 4, offset + 8).toString('ascii');
+      const data = buffer.slice(offset + 8, offset + 8 + len);
+      if (type === 'IHDR') {
+        width = data.readUInt32BE(0);
+        height = data.readUInt32BE(4);
+        bitDepth = data[8];
+        colorType = data[9];
+        assert.strictEqual(data[12], 0, 'expected a non-interlaced PNG');
+      } else if (type === 'IDAT') {
+        idatParts.push(data);
+      }
+      offset += 8 + len + 4; // length + type + data + crc
+    }
+    assert.ok(width && height, 'expected an IHDR chunk with real dimensions');
+    assert.strictEqual(bitDepth, 8, 'this decoder only handles 8-bit PNGs');
+
+    const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
+    assert.ok(channels, `unsupported PNG colour type ${colorType}`);
+
+    const raw = zlib.inflateSync(Buffer.concat(idatParts));
+    const stride = width * channels;
+    const pixels = Buffer.alloc(height * stride);
+    let rawOffset = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filterType = raw[rawOffset];
+      rawOffset += 1;
+      const rowStart = y * stride;
+      const prevRowStart = (y - 1) * stride;
+      for (let x = 0; x < stride; x += 1) {
+        const rawByte = raw[rawOffset + x];
+        const a = x >= channels ? pixels[rowStart + x - channels] : 0;
+        const b = y > 0 ? pixels[prevRowStart + x] : 0;
+        const c = y > 0 && x >= channels ? pixels[prevRowStart + x - channels] : 0;
+        let value;
+        if (filterType === 0) value = rawByte;
+        else if (filterType === 1) value = rawByte + a;
+        else if (filterType === 2) value = rawByte + b;
+        else if (filterType === 3) value = rawByte + Math.floor((a + b) / 2);
+        else if (filterType === 4) {
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          value = rawByte + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+        } else {
+          throw new Error(`unsupported PNG filter type ${filterType}`);
+        }
+        pixels[rowStart + x] = value & 0xff;
+      }
+      rawOffset += stride;
+    }
+
+    return {
+      width,
+      height,
+      pixelAt(x, y) {
+        const start = y * stride + x * channels;
+        return { r: pixels[start], g: pixels[start + 1], b: pixels[start + 2] };
+      }
+    };
+  }
+
+  /** The one cached card file for this event id — asserts there is exactly one (stale ones are evicted). */
+  async function cachedCardFile(eventId) {
+    const entries = await fsp.readdir(shareCard.CACHE_DIR);
+    const matches = entries.filter(name => name.startsWith(`${eventId}-`));
+    assert.strictEqual(matches.length, 1, `expected exactly one cached card for event ${eventId}, found: ${matches.join(', ')}`);
+    return path.join(shareCard.CACHE_DIR, matches[0]);
+  }
+
+  // Attack the values the page actually renders. It leads with the occasion type
+  // and the honoree names now, not the free-text title, so putting the payload in
+  // `title` alone would leave this test passing while testing nothing.
+  const shareHonoree = `<img src=x onerror=alert(1)>"عريس`;
+  const shareClan = `<script>alert(2)</script>عشيرة`;
   let shareEventId = 0;
-  await test('Set up: an approved wedding with an HTML-metacharacter title, for the share-page tests below', async () => {
+  await test('Set up: an approved wedding whose honoree name and clan carry HTML metacharacters', async () => {
     const { status, body } = await api('POST', '/api/events', {
       token: adminToken,
       body: weddingEventBody({
-        title: shareTitle,
-        honorees: [{ name: 'عريس صفحة المشاركة' }],
+        title: 'عرس صفحة المشاركة',
+        family_clan: shareClan,
+        honorees: [{ name: shareHonoree }],
         town: 'رهط',
         event_date: '2027-09-10'
       })
@@ -2941,18 +3050,70 @@ async function run() {
     assert.ok(urlMatch && urlMatch[1].startsWith('http'), 'expected an absolute og:url');
   });
 
-  await test('An HTML-metacharacter title comes back escaped — in the page body AND inside content="…"', async () => {
+  await test('User text comes back escaped — in the page body AND inside content="…"', async () => {
     const { text } = await rawGet(`/e/${shareEventId}`);
+
     assert.ok(!text.includes('<img src=x onerror=alert(1)>'), 'raw markup must never appear unescaped');
+    assert.ok(!text.includes('<script>alert(2)</script>'), 'a raw script tag must never appear');
     assert.ok(
       text.includes('&lt;img src=x onerror=alert(1)&gt;&quot;'),
-      'expected the title escaped in the body'
+      'expected the honoree name escaped in the body'
+    );
+    assert.ok(
+      text.includes('&lt;script&gt;alert(2)&lt;/script&gt;'),
+      'expected the clan escaped in the body'
     );
 
+    // og:title now carries the occasion type plus the honoree names, so the
+    // payload rides in through the name — the attribute context still has to hold.
     const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
     assert.ok(titleMeta, 'expected an og:title meta tag');
-    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped title inside content="…"');
+    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped name inside content="…"');
     assert.ok(!titleMeta[1].includes('<img'), 'must not break out of content="…" with a raw tag');
+
+    const descMeta = text.match(/property="og:description" content="([^"]*)"/);
+    assert.ok(descMeta, 'expected an og:description meta tag');
+    assert.ok(!descMeta[1].includes('<script'), 'the clan must not break out of content="…" either');
+  });
+
+  await test('The preview leads with the occasion type, not the free-text title', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
+    assert.ok(titleMeta[1].startsWith('عرس'), `expected og:title to lead with the type, got: ${titleMeta[1]}`);
+  });
+
+  await test('og:image points at the generated card, and og:image:width/height declare its real 1200×630 size', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
+    assert.ok(imageMatch, 'expected an og:image tag');
+    assert.ok(imageMatch[1].startsWith('http'), 'expected an absolute og:image');
+    assert.ok(imageMatch[1].endsWith(`/e/${shareEventId}/card.png`), `expected og:image to point at the card, got: ${imageMatch[1]}`);
+
+    assert.ok(text.includes('og:image:width" content="1200"'), 'expected og:image:width 1200 — we generate this file, its size is not a guess');
+    assert.ok(text.includes('og:image:height" content="630"'), 'expected og:image:height 630');
+  });
+
+  await test('GET /e/:id/card.png on the approved event is a real 1200×630 PNG', async () => {
+    const { status, headers, buffer } = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    assert.strictEqual(status, 200);
+    assert.strictEqual(headers.get('content-type'), 'image/png');
+    assert.ok((headers.get('cache-control') || '').includes('max-age='), 'expected a long-lived Cache-Control header');
+
+    const png = decodePng(buffer);
+    assert.strictEqual(png.width, 1200, 'IHDR width');
+    assert.strictEqual(png.height, 630, 'IHDR height');
+  });
+
+  await test('A second request for the same card is served from cache, not re-rendered', async () => {
+    const file = await cachedCardFile(shareEventId);
+    const before = await fsp.stat(file);
+
+    const { status, buffer } = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    assert.strictEqual(status, 200);
+
+    const after = await fsp.stat(file);
+    assert.strictEqual(after.mtimeMs, before.mtimeMs, 'the cache file must not have been rewritten by the second request');
+    assert.ok(buffer.length > 0, 'expected non-empty PNG bytes from the cache hit');
   });
 
   await test('The Content-Security-Policy header is present on the share route', async () => {
@@ -2961,6 +3122,34 @@ async function run() {
       headers.get('content-security-policy'),
       "default-src 'none'; img-src *; style-src 'unsafe-inline'"
     );
+  });
+
+  await test('Editing the event produces a different card, and the old cached one is evicted', async () => {
+    const before = await rawGetBinary(`/e/${shareEventId}/card.png`);
+
+    // events.updated_at is a TIMESTAMP with one-second resolution, and it is
+    // the card's cache key (shareCard.service.js) — an edit inside the same
+    // wall-clock second as the original publish would collide with it. This
+    // test exists specifically to prove the cache busts on edit, so it has
+    // to guarantee the two timestamps actually differ rather than rely on
+    // the suite being slow enough by accident.
+    await new Promise(resolve => setTimeout(resolve, 1100));
+
+    const { status, body } = await api('PATCH', `/api/events/${shareEventId}`, {
+      token: adminToken,
+      body: { family_clan: 'عائلة مُعدَّلة لاختبار البطاقة' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic', 'a family_clan edit must stay approved, not fall back to pending');
+
+    const after = await rawGetBinary(`/e/${shareEventId}/card.png`);
+    assert.strictEqual(after.status, 200);
+    assert.ok(!before.buffer.equals(after.buffer), 'expected a new card after the edit — same bytes means the old one was reused');
+
+    // Confirms it was a real re-render, not just new bytes for the same
+    // reason (e.g. non-determinism) — the cache key changed, so the old file
+    // is gone and only the new one remains.
+    await cachedCardFile(shareEventId);
   });
 
   let pendingShareEventId = 0;
@@ -2984,6 +3173,15 @@ async function run() {
     assert.strictEqual(malformed.status, 404);
     assert.strictEqual(pending.text, missing.text, 'a pending event must be indistinguishable from a missing one');
     assert.strictEqual(pending.text, malformed.text, 'a malformed id must be indistinguishable from a missing one');
+  });
+
+  await test('GET /e/:id/card.png on a pending event, a non-existent id, and a non-numeric id all 404', async () => {
+    const pending = await rawGetBinary(`/e/${pendingShareEventId}/card.png`);
+    const missing = await rawGetBinary('/e/999999999/card.png');
+    const malformed = await rawGetBinary('/e/not-a-number/card.png');
+    assert.strictEqual(pending.status, 404, 'same as the page: a pending event has no card either');
+    assert.strictEqual(missing.status, 404);
+    assert.strictEqual(malformed.status, 404);
   });
 
   let expiredShareEventId = 0;
@@ -3021,15 +3219,27 @@ async function run() {
     solemnShareEventId = body.eventId;
   });
 
-  await test('A solemn-tone event with no poster gets the solemn fallback image, never the festive one', async () => {
-    const { text } = await rawGet(`/e/${solemnShareEventId}`);
-    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
-    assert.ok(imageMatch, 'expected an og:image tag');
+  await test('A solemn-tone event with no poster renders a real card from the solemn fallback, not the festive one', async () => {
+    const { status, buffer } = await rawGetBinary(`/e/${solemnShareEventId}/card.png`);
+    assert.strictEqual(status, 200, 'card generation must not crash on a poster-less solemn event');
+
+    const png = decodePng(buffer);
+    assert.strictEqual(png.width, 1200);
+    assert.strictEqual(png.height, 630);
+
+    // A far corner — outside any text, the chip, and the fallback emblem's
+    // rings (server/scripts/build-share-fallbacks.js draws those within
+    // ~200px of centre) — so this samples pure background. The festive
+    // fallback is warm gold there (red channel well above blue); the solemn
+    // one is a cool muted slate (blue at or above red). The blur + dark veil
+    // shareCard.service.js always composites on top shrink that gap but
+    // cannot flip it, so this stays a reliable "which fallback rendered"
+    // signal without hardcoding the blend's exact pixel values.
+    const corner = png.pixelAt(20, 600);
     assert.ok(
-      imageMatch[1].endsWith('/e/assets/solemn.png'),
-      `expected the solemn fallback image, got: ${imageMatch[1]}`
+      corner.b >= corner.r,
+      `expected a cool/neutral background (solemn fallback), got a warm one (festive leaked in): ${JSON.stringify(corner)}`
     );
-    assert.ok(!imageMatch[1].includes('festive'), 'must not fall back to the festive image');
   });
 
   await db.execute(
