@@ -7,9 +7,14 @@ import 'api/api_client.dart';
 import 'api/negev_api.dart';
 import 'screens/home_shell.dart';
 import 'state/auth_store.dart';
+import 'state/deep_link_handler.dart';
 import 'state/realtime.dart';
 import 'state/theme_store.dart';
 import 'theme.dart';
+
+/// جذر الملاحة — [DeepLinkHandler] يدفع شاشة التفاصيل من خارج شجرة الودجت
+/// (رابط قد يصل قبل أي `BuildContext` مفيد آخر)، فلا بديل عن مفتاح عام هنا.
+final navigatorKey = GlobalKey<NavigatorState>();
 
 /// رخصة خط Cairo (OFL 1.1) — الرخصة توجب مرافقة نصّها للخط أينما وُزّع،
 /// و APK بيد الناس توزيعٌ كامل: وجود `OFL.txt` في المستودع يغطي الشيفرة
@@ -36,6 +41,9 @@ void main() {
   auth.load();
   realtime.connect();
   themeStore.load();
+  // رابط مناسبة (`/e/<id>`) يفتح شاشة تفاصيلها مباشرة — إقلاعاً بارداً أو
+  // استئنافاً دافئاً. لا يُنتظر أيضاً: أول إطار يُبنى بصرف النظر عن وجود رابط.
+  DeepLinkHandler(navigatorKey: navigatorKey, api: api).start();
 
   runApp(
     AppServices(
@@ -93,6 +101,7 @@ class NegevApp extends StatelessWidget {
       animation: themeStore,
       builder: (context, _) {
         return MaterialApp(
+          navigatorKey: navigatorKey,
           title: 'مناسبات النقب',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),

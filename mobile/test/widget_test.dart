@@ -16,11 +16,13 @@ import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
+import 'package:negev_events/state/analytics.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// عميل وهمي يرد بجسم ثابت — يختبر منطق العميل دون خادم حقيقي.
@@ -1339,5 +1341,358 @@ void main() {
 
       expect(find.byType(AddEventScreen), findsOneWidget);
     });
+  });
+
+  group('زرّ المشاركة، سطر سهرة الشباب، وترتيب كتلة المعلومات (issue #44)', () {
+    Map<String, dynamic> occasionTypeJson({
+      required String tone,
+      List<Map<String, dynamic>> fields = const [],
+    }) => {
+      'id': tone == 'solemn' ? 2 : 1,
+      'name': tone == 'solemn' ? 'عزا' : 'عرس',
+      'icon': tone == 'solemn' ? '🕯️' : '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'creates_collision': false,
+      'warns_others': false,
+      'premoderate_messages': false,
+      'show_congratulations_count': false,
+      'show_followers_count': false,
+      'show_views_count': false,
+      'congratulations_label': tone == 'solemn' ? 'تعازي' : 'تبريكات',
+      'default_badge_title': null,
+      'default_poster_url': null,
+      'legacy_client_supported': true,
+      'tone': tone,
+      'fields': fields,
+      'reactions': <String>[],
+    };
+
+    Future<void> pumpDetails(WidgetTester tester, Map<String, dynamic> eventBody) async {
+      final client = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'success': true, 'event': eventBody}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: realtime,
+              child: EventDetailsScreen(eventId: eventBody['id'] as int),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    // اختباران منفصلان لا نداءان لـ`pumpDetails` داخل اختبار واحد: `EventDetailsScreen`
+    // شاشة State-ful، و`tester.pumpWidget` الثاني بنفس شكل الشجرة يُبقي الحالة
+    // القديمة حيّة (`didChangeDependencies` يتجاهل الجلب لأن `_event` صار غير
+    // null من المرّة الأولى) بدل بناء شاشة جديدة فعلاً — فيبقى النصّ القديم ظاهراً.
+    testWidgets(
+      'كلمة زرّ المشاركة لنوع festive: «شارك المناسبة» لا «أرسل النعي»',
+      (tester) async {
+        await pumpDetails(tester, {
+          'id': 40,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': occasionTypeJson(tone: 'festive'),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+        expect(find.text('شارك المناسبة'), findsOneWidget);
+        expect(find.text('أرسل النعي'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'كلمة زرّ المشاركة لنوع solemn: «أرسل النعي» لا «شارك المناسبة» — من tone حصراً لا اسم النوع',
+      (tester) async {
+        await pumpDetails(tester, {
+          'id': 50,
+          'groom_name': '',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': occasionTypeJson(tone: 'solemn'),
+          'honorees': [
+            {'name': 'سالم أبو فلان', 'role': null, 'position': 1},
+          ],
+        });
+        expect(find.text('أرسل النعي'), findsOneWidget);
+        expect(find.text('شارك المناسبة'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'سطر سهرة الشباب على الكرت: يظهر حين تُملأ القيمة، ويغيب تماماً من شجرة الودجت حين تفرغ',
+      (tester) async {
+        final typeShowingField = occasionTypeJson(
+          tone: 'festive',
+          fields: const [
+            {
+              'field_key': 'youth_party_date',
+              'label': 'سهرة الشباب',
+              'is_visible': true,
+              'is_required': false,
+              'position': 1,
+            },
+          ],
+        );
+
+        final withParty = Event.fromJson({
+          'id': 41,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'youth_party_date': '2026-09-20',
+          'occasion_type': typeShowingField,
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: withParty, onTap: () {})),
+            ),
+          ),
+        );
+        expect(find.text('2026-09-20'), findsOneWidget);
+        expect(find.byIcon(Icons.nightlife_outlined), findsOneWidget);
+
+        final withoutParty = Event.fromJson({
+          'id': 42,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'occasion_type': typeShowingField,
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: withoutParty, onTap: () {})),
+            ),
+          ),
+        );
+        expect(find.text('2026-09-20'), findsNothing);
+        expect(find.byIcon(Icons.nightlife_outlined), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'تفاصيل المناسبة: كتلة المعلومات تحت سطر الفنان مباشرة، بالترتيب المكان ثم التاريخ ثم سهرة الشباب ثم وقت العشاء',
+      (tester) async {
+        // نافذة اختبار طويلة كي تُبنى كل الصفوف فعلاً (ListView سلفرية لا تبني
+        // إلا القريب من نافذة العرض) — نفس نمط شاشة تعديل المناسبة أعلاه.
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final type = occasionTypeJson(
+          tone: 'festive',
+          fields: const [
+            {
+              'field_key': 'youth_party_date',
+              'label': 'سهرة الشباب',
+              'is_visible': true,
+              'is_required': false,
+              'position': 1,
+            },
+            {
+              'field_key': 'dinner_time',
+              'label': 'موعد العشاء',
+              'is_visible': true,
+              'is_required': false,
+              'position': 2,
+            },
+          ],
+        );
+
+        await pumpDetails(tester, {
+          'id': 43,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'قاعة الأفراح',
+          'event_date': '2026-10-01',
+          'dinner_time': 'الساعة 8:00 مساءً',
+          'youth_party_date': '2026-09-20',
+          'artist_name': 'راشد الماجد',
+          'occasion_type': type,
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        final artistY =
+            tester.getTopLeft(find.textContaining('يحيي الحفلة الفنان راشد الماجد')).dy;
+        final locationY = tester.getTopLeft(find.text('رهط — قاعة الأفراح')).dy;
+        final dateY = tester.getTopLeft(find.text('2026-10-01')).dy;
+        final youthY = tester.getTopLeft(find.text('2026-09-20')).dy;
+        final dinnerY = tester.getTopLeft(find.text('الساعة 8:00 مساءً')).dy;
+
+        expect(artistY, lessThan(locationY));
+        expect(locationY, lessThan(dateY));
+        expect(dateY, lessThan(youthY));
+        expect(youthY, lessThan(dinnerY));
+      },
+    );
+  });
+
+  group('التحليل السلوكي في الموبايل (issue #44)', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      PackageInfo.setMockInitialValues(
+        appName: 'negev_events',
+        packageName: 'com.negev.events',
+        version: '1.2.0',
+        buildNumber: '4',
+        buildSignature: '',
+      );
+    });
+
+    testWidgets(
+      'الضغط على «شارك المناسبة» يرسل share_clicked وcontent_town ببلدة المناسبة نفسها لا بلدة المستخدم',
+      (tester) async {
+        final requests = <http.Request>[];
+        final eventJson = {
+          'id': 60,
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          // بلدة المناسبة — عمداً مختلفة عن أي بلدة قد تُنسَب للمستخدم، كي
+          // يفشل الاختبار بوضوح لو انقلب المصدر إلى بلدة المستخدم خطأً.
+          'town': 'اللقية',
+          'occasion_type': {
+            'id': 1,
+            'name': 'عرس',
+            'icon': '💍',
+            'color': '#0369a1',
+            'position': 1,
+            'is_active': true,
+            'creates_collision': false,
+            'warns_others': false,
+            'premoderate_messages': false,
+            'show_congratulations_count': false,
+            'show_followers_count': false,
+            'show_views_count': false,
+            'congratulations_label': 'تبريكات',
+            'default_badge_title': null,
+            'default_poster_url': null,
+            'legacy_client_supported': true,
+            'tone': 'festive',
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        };
+
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (request.url.path.endsWith('/api/events/60')) {
+            return http.Response(
+              jsonEncode({'success': true, 'event': eventJson}),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          return http.Response(
+            jsonEncode({'success': true}),
+            201,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+        final auth = AuthStore(api);
+        final realtime = RealtimeService();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: AppServices(
+                api: api,
+                auth: auth,
+                realtime: realtime,
+                child: const EventDetailsScreen(eventId: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        await tester.tap(find.text('شارك المناسبة'));
+        // فسحة لإتمام سلسلة async (DeviceIdStore.get وPackageInfo.fromPlatform
+        // ثم POST التحليل) بلا مؤقّت حقيقي — نفس نمط اختبار الستوري أعلاه.
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final analyticsRequest = requests.firstWhere(
+          (r) => r.url.path.endsWith('/api/analytics/events'),
+        );
+        final body = jsonDecode(analyticsRequest.body) as Map<String, dynamic>;
+        expect(body['event_name'], 'share_clicked');
+        expect(body['platform'], 'android');
+        expect(body['content_town'], 'اللقية');
+        expect(body['app_version'], '1.2.0');
+        expect(body['device_id'], isNotEmpty);
+      },
+    );
+
+    testWidgets(
+      'فشل الطلب (٥٠٠) لا يُسقط استثناء غير معالَج ولا يظهر أي رسالة للمستخدم',
+      (tester) async {
+        var requestSent = false;
+        final client = MockClient((request) async {
+          requestSent = true;
+          return http.Response(
+            jsonEncode({'success': false, 'message': 'خطأ في الخادم'}),
+            500,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+
+        await tester.pumpWidget(
+          const MaterialApp(home: Scaffold(body: Text('شاشة اختبار'))),
+        );
+
+        // النداء لا يُنتظَر من موقع الاستدعاء — تماماً كموقعي الاستدعاء
+        // الحقيقيين (المشاركة والنشر). أي استثناء يفلت من الداخل بلا التقاط
+        // يُسقط هذا الاختبار نفسه (flutter_test يفشل الاختبار على أي خطأ
+        // غير ملتقَط في Zone غير متزامن) — فنجاح الاختبار هو الإثبات.
+        recordAnalyticsEvent(api, 'publish_started', contentTown: 'رهط');
+
+        await tester.pump();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        expect(requestSent, isTrue);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.text('خطأ في الخادم'), findsNothing);
+      },
+    );
   });
 }

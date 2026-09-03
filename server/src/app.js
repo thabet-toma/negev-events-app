@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
 const routes = require('./routes');
+const shareRoutes = require('./routes/share.routes');
 const db = require('./db/pool');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
@@ -41,7 +42,15 @@ function createApp() {
   app.use(compression());
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-  app.use(morgan(config.isProduction ? 'combined' : 'dev'));
+  // 'combined' logs :remote-addr and the User-Agent — neither has a stated
+  // debugging purpose here, and under a purpose-as-ceiling privacy rule
+  // (Israeli Privacy Protection Law Amendment 13) an unjustified field is a
+  // liability, not a convenience. This custom format keeps only what is
+  // actually used for debugging — method, url, status, response time,
+  // content length — and this one line is what removes the client IP from
+  // both the privacy notice's obligations and the access log itself.
+  const PRODUCTION_LOG_FORMAT = ':method :url :status :res[content-length] - :response-time ms';
+  app.use(morgan(config.isProduction ? PRODUCTION_LOG_FORMAT : 'dev'));
 
   app.use('/api', rateLimit({
     windowMs: config.rateLimit.windowMs,
@@ -80,6 +89,12 @@ function createApp() {
     // Uploaded files are served as attachments-in-place, never executed.
     setHeaders: res => res.setHeader('X-Content-Type-Options', 'nosniff')
   }));
+
+  // الصفحة القابلة للمشاركة (issue #44) — HTML حقيقي لعارضات الشبكات
+  // الاجتماعية التي لا تُشغّل JavaScript، فلا تلتقط شيئاً من واجهة الـSPA.
+  // على جذر التطبيق (`/e/...`) لا تحت `/api` — راجع
+  // docs/adr/0006-server-renders-the-share-page.md.
+  app.use('/e', shareRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

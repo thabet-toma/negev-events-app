@@ -4,7 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const { REACTION_TYPES, TOWN_COORDINATES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
-const { withAbsoluteMedia } = require('../utils/mediaUrl');
+const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
@@ -937,6 +937,47 @@ async function reportCongratulation(eventId, congratulationId, userId) {
   });
 }
 
+/**
+ * The one row the shareable event page (`GET /e/:id`) needs — nothing else,
+ * since that page deliberately shows only a poster, the honoree names and a
+ * download button (server/src/routes/share.routes.js). Returns `null` for a
+ * non-`approved` status or a non-existent id alike: the route must not be
+ * able to tell those two apart from this function's result, any more than
+ * from its own response. `is_expired` reuses the exact
+ * `COALESCE(event_end_date, event_date) < CURDATE()` idiom every other
+ * upcoming/archive query in this file uses, computed in SQL rather than by a
+ * second, JS-side copy of the same rule.
+ */
+async function getShareEvent(eventId) {
+  const row = await db.queryOne(
+    `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
+            occasion_types.name AS occasion_type_name,
+            occasion_types.tone AS occasion_type_tone,
+            occasion_types.default_poster_url AS occasion_type_poster_url,
+            (COALESCE(events.event_end_date, events.event_date) < CURDATE()) AS is_expired
+       FROM events
+       LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
+      WHERE events.id = ? AND events.status = 'approved'`,
+    [eventId]
+  );
+  if (!row) return null;
+
+  const honoreeMap = await honoreesForEvents([eventId]);
+  // Media leaves this layer absolute, like every other query here (ADR-0002).
+  // withAbsoluteMedia covers the row's own poster_url; the occasion type's
+  // default poster is a joined column, not one of MEDIA_FIELDS, so it is
+  // converted explicitly rather than by widening that list — the list
+  // describes an event row's own media, and this column belongs to another
+  // table entirely. The route does no URL work beyond the fallback constant.
+  const absolute = withAbsoluteMedia(row);
+  return {
+    ...absolute,
+    occasion_type_poster_url: absoluteMediaUrl(absolute.occasion_type_poster_url),
+    is_expired: Boolean(row.is_expired),
+    honorees: honoreeMap[eventId] || []
+  };
+}
+
 /** Per-town counts of approved events, for the filter chips. */
 async function townStats() {
   return db.query(
@@ -971,5 +1012,6 @@ module.exports = {
   moderateCongratulation,
   deleteCongratulation,
   reportCongratulation,
-  townStats
+  townStats,
+  getShareEvent
 };

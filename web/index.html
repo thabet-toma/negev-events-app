@@ -273,6 +273,42 @@
           <!-- Populated by JS -->
         </div>
 
+        <!-- Privacy & Account (تذكرة #44) — لا شاشة "حسابي" مستقلة بعد، فهذا
+             هو المكان الذي يصل إليه المستخدم المسجَّل دخوله فعلياً (زر
+             الحساب في الشريط العلوي يفتح هذا التبويب). -->
+        <div class="chart-card-box" id="privacyAccountSection">
+          <div class="chart-header">
+            <h4><i class="fa-solid fa-shield-halved"></i> الخصوصية وحسابي</h4>
+          </div>
+
+          <div class="privacy-row">
+            <div class="privacy-row-text">
+              <strong>رفض التحليلات السلوكية</strong>
+              <p>لا تتعطّل بذلك أي ميزة في التطبيق، ولا يتغيّر شيء مما يمكنك فعله فيه.</p>
+            </div>
+            <label class="privacy-toggle">
+              <input type="checkbox" id="analyticsOptOutToggle" onchange="handleAnalyticsOptOutChange(this.checked)">
+              <span class="privacy-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="privacy-actions-row">
+            <button type="button" class="nokoot-del-btn" onclick="handleAnalyticsErasure()">
+              <i class="fa-solid fa-eraser"></i> حذف بيانات التحليلات الآن
+            </button>
+            <button type="button" class="record-nokoot-btn" onclick="handlePrivacyRequest('access')">
+              <i class="fa-solid fa-file-shield"></i> طلب الاطلاع على بياناتي
+            </button>
+            <button type="button" class="record-nokoot-btn" onclick="handlePrivacyRequest('erasure')">
+              <i class="fa-solid fa-trash"></i> طلب حذف بياناتي
+            </button>
+          </div>
+
+          <button type="button" class="chat-trigger-btn" style="width:100%; margin-top:10px;" onclick="openPrivacyNoticeModal()">
+            <i class="fa-solid fa-circle-info"></i> إشعار الخصوصية
+          </button>
+        </div>
+
       </div>
 
     </section>
@@ -439,7 +475,13 @@
           <h3 id="chatModalTitle">تبريكات ودردشة الفرح</h3>
           <span id="chatModalSubtitle" class="modal-sub">غرفة المباركة الحية</span>
         </div>
-        <button class="close-modal-btn" onclick="closeChatModal()"><i class="fa-solid fa-xmark"></i></button>
+        <div class="modal-header-actions">
+          <!-- الكلمة من نغمة النوع لا اسمه — تُضبَط من JS عند فتح المودال (تذكرة #44) -->
+          <button id="shareEventBtn" class="share-event-btn" onclick="shareCurrentEvent()">
+            <i class="fa-solid fa-share-nodes"></i> <span id="shareEventBtnLabel">مشاركة</span>
+          </button>
+          <button class="close-modal-btn" onclick="closeChatModal()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
 
       <!-- Quick Call / WhatsApp Host Bar -->
@@ -510,6 +552,10 @@
           <label>رمز PIN السري (لحماية دفتر نقوطك) *</label>
           <input type="password" id="regPin" placeholder="••••" required maxlength="6">
         </div>
+        <p class="privacy-hint">
+          <a href="javascript:void(0)" onclick="openPrivacyNoticeModal()">اطّلع على إشعار الخصوصية</a>
+          — لا يمنعك ذلك من إكمال التسجيل.
+        </p>
         <button type="submit" class="submit-btn"><i class="fa-solid fa-user-plus"></i> إنشاء الحساب وتفعيل السجل</button>
       </form>
     </div>
@@ -698,6 +744,17 @@
       <p id="providerModalTowns" class="provider-modal-towns"></p>
       <!-- الرقم لا يظهر إلا بعد ضغط هذا الزرّ — لا رقم ولا رابط تواصل مقدَّماً -->
       <div id="providerContactArea"></div>
+    </div>
+  </div>
+
+  <!-- MODAL 10: PRIVACY NOTICE (إشعار الخصوصية — تذكرة #44) -->
+  <div id="privacyNoticeModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-shield-halved"></i> إشعار الخصوصية</h3>
+        <button class="close-modal-btn" onclick="closePrivacyNoticeModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="privacyNoticeText" class="privacy-notice-text">جاري التحميل...</div>
     </div>
   </div>
 

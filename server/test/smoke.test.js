@@ -18,7 +18,9 @@ const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
+const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
+const analyticsService = require('../src/services/analytics.service');
 
 let baseUrl = '';
 let passed = 0;
@@ -251,6 +253,24 @@ async function run() {
     });
     assert.strictEqual(status, 200);
     assert.ok(body.token);
+  });
+
+  await test('The register and login calls above each wrote a server-side analytics row for this user (issue #44) — no extra requests needed, just reading what already happened', async () => {
+    const user = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [phone]);
+    const registerRow = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'register' AND user_id = ?", [user.id]
+    );
+    const loginRow = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'login' AND user_id = ?", [user.id]
+    );
+    assert.ok(registerRow, 'expected a "register" analytics row for the account created above');
+    assert.ok(loginRow, 'expected a "login" analytics row for the login above');
+    // The test client's api() helper sends X-App-Version: 2.0.0 (a real
+    // version string, not the literal 'web' marker web/api.js sends) — the
+    // route layer's clientSignal() reads that as the mobile client.
+    assert.strictEqual(registerRow.platform, 'android');
+    assert.strictEqual(registerRow.app_version, '2.0.0');
+    assert.strictEqual(loginRow.platform, 'android');
   });
 
   console.log('\nNokoot ledger (private)');
@@ -1009,6 +1029,17 @@ async function run() {
     const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
       token: userToken,
       body: { event_date: '2027-03-01' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+  });
+
+  await test('A critical edit (location_name) sends an approved event back to pending', async () => {
+    await api('PATCH', `/api/admin/events/${userEventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    const { status, body } = await api('PATCH', `/api/events/${userEventId}`, {
+      token: userToken,
+      body: { location_name: 'ديوان الاختبار المعدَّل' }
     });
     assert.strictEqual(status, 200);
     assert.strictEqual(body.amendment, 'critical');
@@ -2872,6 +2903,530 @@ async function run() {
     'DELETE FROM users WHERE id IN (?, ?, ?)',
     [scopedAdminId, noScopeAdminId, commentsOwnerId]
   );
+
+  console.log('\nShareable event page (GET /e/:id, issue #44)');
+
+  /** Plain HTTP GET against the share page — not JSON, so bypasses api(). */
+  async function rawGet(urlPath) {
+    const res = await fetch(`${baseUrl}${urlPath}`);
+    return { status: res.status, headers: res.headers, text: await res.text() };
+  }
+
+  const shareTitle = `<img src=x onerror=alert(1)>"عرس صفحة المشاركة`;
+  let shareEventId = 0;
+  await test('Set up: an approved wedding with an HTML-metacharacter title, for the share-page tests below', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        title: shareTitle,
+        honorees: [{ name: 'عريس صفحة المشاركة' }],
+        town: 'رهط',
+        event_date: '2027-09-10'
+      })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    shareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on an approved event returns 200 HTML with absolute og:title/og:image/og:url', async () => {
+    const { status, headers, text } = await rawGet(`/e/${shareEventId}`);
+    assert.strictEqual(status, 200);
+    assert.ok((headers.get('content-type') || '').includes('text/html'));
+    assert.ok(/property="og:title"/.test(text), 'expected an og:title meta tag');
+
+    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
+    const urlMatch = text.match(/property="og:url" content="([^"]*)"/);
+    assert.ok(imageMatch && imageMatch[1].startsWith('http'), 'expected an absolute og:image');
+    assert.ok(urlMatch && urlMatch[1].startsWith('http'), 'expected an absolute og:url');
+  });
+
+  await test('An HTML-metacharacter title comes back escaped — in the page body AND inside content="…"', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(!text.includes('<img src=x onerror=alert(1)>'), 'raw markup must never appear unescaped');
+    assert.ok(
+      text.includes('&lt;img src=x onerror=alert(1)&gt;&quot;'),
+      'expected the title escaped in the body'
+    );
+
+    const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
+    assert.ok(titleMeta, 'expected an og:title meta tag');
+    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped title inside content="…"');
+    assert.ok(!titleMeta[1].includes('<img'), 'must not break out of content="…" with a raw tag');
+  });
+
+  await test('The Content-Security-Policy header is present on the share route', async () => {
+    const { headers } = await rawGet(`/e/${shareEventId}`);
+    assert.strictEqual(
+      headers.get('content-security-policy'),
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'"
+    );
+  });
+
+  let pendingShareEventId = 0;
+  await test('Set up: a pending (not yet approved) wedding', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس معلَّق' }], town: 'حورة', event_date: '2027-09-11' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'pending');
+    pendingShareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on a pending event, a non-existent id, and a non-numeric id all 404 with an identical body', async () => {
+    const pending = await rawGet(`/e/${pendingShareEventId}`);
+    const missing = await rawGet('/e/999999999');
+    const malformed = await rawGet('/e/not-a-number');
+
+    assert.strictEqual(pending.status, 404);
+    assert.strictEqual(missing.status, 404);
+    assert.strictEqual(malformed.status, 404);
+    assert.strictEqual(pending.text, missing.text, 'a pending event must be indistinguishable from a missing one');
+    assert.strictEqual(pending.text, malformed.text, 'a malformed id must be indistinguishable from a missing one');
+  });
+
+  let expiredShareEventId = 0;
+  await test('Set up: an approved wedding whose date has already passed', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس منتهية مشاركته' }], town: 'رهط', event_date: '2020-01-01' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    expiredShareEventId = body.eventId;
+  });
+
+  await test('GET /e/:id on an expired approved event is still 200 and shows the «انتهت» marker', async () => {
+    const { status, text } = await rawGet(`/e/${expiredShareEventId}`);
+    assert.strictEqual(status, 200);
+    assert.ok(text.includes('انتهت'), 'expected the expired marker in the page');
+  });
+
+  let solemnShareEventId = 0;
+  await test('Set up: a poster-less عزا (solemn tone, no default_poster_url either)', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى صفحة المشاركة' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-09-12',
+        event_end_date: '2027-09-13'
+      }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    solemnShareEventId = body.eventId;
+  });
+
+  await test('A solemn-tone event with no poster gets the solemn fallback image, never the festive one', async () => {
+    const { text } = await rawGet(`/e/${solemnShareEventId}`);
+    const imageMatch = text.match(/property="og:image" content="([^"]*)"/);
+    assert.ok(imageMatch, 'expected an og:image tag');
+    assert.ok(
+      imageMatch[1].endsWith('/e/assets/solemn.png'),
+      `expected the solemn fallback image, got: ${imageMatch[1]}`
+    );
+    assert.ok(!imageMatch[1].includes('festive'), 'must not fall back to the festive image');
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
+    [shareEventId, pendingShareEventId, expiredShareEventId, solemnShareEventId]
+  );
+
+  console.log('\nAnalytics (behavioural events, issue #44)');
+
+  let analyticsEventId = 0;
+  await test('Set up: an approved event for the share/download analytics tests below', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس اختبار التحليلات' }], town: 'رهط', event_date: '2027-09-20' })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.status, 'approved');
+    analyticsEventId = body.eventId;
+  });
+
+  await test('A name from the closed list is accepted, and a row is actually written', async () => {
+    const { status } = await api('POST', '/api/analytics/events', {
+      body: { event_name: 'image_upload_failed', platform: 'web', device_id: `device-${Date.now()}` }
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'image_upload_failed' ORDER BY id DESC LIMIT 1"
+    );
+    assert.ok(row, 'expected a row to have been written');
+    assert.strictEqual(row.platform, 'web');
+  });
+
+  await test('A name outside the closed list is rejected with an Arabic message', async () => {
+    const { status, body } = await api('POST', '/api/analytics/events', {
+      body: { event_name: `not_a_real_event_${Date.now()}`, platform: 'web' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('غير معروف'), `expected an "unknown event" message, got: ${body.message}`);
+  });
+
+  await test('A count-only name (share_page_viewed) sent WITH a token and a device_id still writes a row whose user_id and device_id are both NULL', async () => {
+    const { status } = await api('POST', '/api/analytics/events', {
+      token: userToken,
+      body: { event_name: 'share_page_viewed', platform: 'web', device_id: `device-${Date.now()}` }
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'share_page_viewed' ORDER BY id DESC LIMIT 1"
+    );
+    assert.ok(row, 'expected a row to have been written');
+    assert.strictEqual(row.user_id, null, 'a count-only event must never carry identity, even with a valid token');
+    assert.strictEqual(row.device_id, null, 'a count-only event must never carry identity, even with a device_id in the body');
+  });
+
+  await test('The tighter analytics rate limit actually returns a rejection when exceeded', async () => {
+    let sawTooMany = false;
+    for (let i = 0; i < config.rateLimit.analyticsMax + 5; i += 1) {
+      const { status } = await api('POST', '/api/analytics/events', {
+        body: { event_name: 'share_clicked', platform: 'web', device_id: `rl-${i}` }
+      });
+      if (status === 429) { sawTooMany = true; break; }
+    }
+    assert.ok(sawTooMany, `expected a 429 within ${config.rateLimit.analyticsMax + 5} requests to the tighter analytics limiter`);
+  });
+
+  await test('The analytics_events table has no event_id, ip, or user_agent column at all — the direct, permanent test of the governing rule', async () => {
+    const rows = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'analytics_events'
+          AND COLUMN_NAME IN ('event_id', 'ip', 'user_agent')`
+    );
+    assert.strictEqual(rows.length, 0, `expected none of event_id/ip/user_agent, found: ${rows.map(r => r.COLUMN_NAME).join(', ')}`);
+  });
+
+  await test('Exercising the nokoot (دفتر النقوط) routes writes ZERO analytics rows — the private ledger is not an exception', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events');
+
+    const created = await api('POST', '/api/nokoot', {
+      token: userToken,
+      body: { recipient_name: 'اختبار عدم تسريب التحليلات', clan_town: 'رهط', amount: 42, event_date: '2026-09-05' }
+    });
+    assert.strictEqual(created.status, 201);
+    await api('GET', '/api/nokoot', { token: userToken });
+    await api('DELETE', `/api/nokoot/${created.body.recordId}`, { token: userToken });
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events');
+    assert.strictEqual(Number(after.cnt), Number(before.cnt));
+  });
+
+  await test("GET /e/:id/download 302-redirects to the APK url and records app_download_clicked with the event's town", async () => {
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_name = 'app_download_clicked'"
+    );
+
+    const res = await fetch(`${baseUrl}/e/${analyticsEventId}/download`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    const expectedTarget = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
+    assert.strictEqual(res.headers.get('location'), expectedTarget);
+
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_name = 'app_download_clicked'"
+    );
+    assert.strictEqual(Number(after.cnt) - Number(before.cnt), 1);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'app_download_clicked' ORDER BY id DESC LIMIT 1"
+    );
+    assert.strictEqual(row.content_town, 'رهط');
+    assert.strictEqual(row.user_id, null);
+  });
+
+  await test('GET /e/:id/download still redirects and records for a non-existent id — just with no content_town', async () => {
+    const res = await fetch(`${baseUrl}/e/999999999/download`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'app_download_clicked' ORDER BY id DESC LIMIT 1"
+    );
+    assert.strictEqual(row.content_town, null);
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [analyticsEventId]);
+
+  console.log('\nAnalytics retention fold (90 days identified, then anonymous counters)');
+
+  await test('A row older than the retention window loses its identity on fold and survives as a daily counter; running the fold twice does not double-count', async () => {
+    const testUser = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [phone]);
+    const oldDate = new Date(Date.now() - (analyticsService.RETENTION_DAYS + 5) * 24 * 60 * 60 * 1000);
+    const dayString = oldDate.toISOString().slice(0, 10);
+
+    const { insertId } = await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, device_id, platform, app_version, content_town, created_at)
+       VALUES ('login', ?, NULL, 'web', NULL, NULL, ?)`,
+      [testUser.id, oldDate]
+    );
+
+    const first = await analyticsService.foldOldEvents();
+    assert.ok(first.folded >= 1, 'expected at least one group folded');
+    assert.ok(first.deleted >= 1, 'expected at least one row deleted');
+
+    const stillThere = await db.queryOne('SELECT id FROM analytics_events WHERE id = ?', [insertId]);
+    assert.strictEqual(stillThere, null, 'the identified row must be gone after the fold');
+
+    const counter = await db.queryOne(
+      "SELECT * FROM analytics_daily_counters WHERE day = ? AND event_name = 'login' AND platform = 'web' AND content_town = ''",
+      [dayString]
+    );
+    assert.ok(counter, 'expected a daily counter row for the folded group');
+    const countAfterFirst = Number(counter.count);
+    assert.ok(countAfterFirst >= 1);
+
+    const second = await analyticsService.foldOldEvents();
+    assert.strictEqual(second.folded, 0, 'a second run must find nothing left to fold for this row');
+    assert.strictEqual(second.deleted, 0);
+
+    const counterAfterSecond = await db.queryOne(
+      "SELECT count FROM analytics_daily_counters WHERE day = ? AND event_name = 'login' AND platform = 'web' AND content_town = ''",
+      [dayString]
+    );
+    assert.strictEqual(Number(counterAfterSecond.count), countAfterFirst, 'running the fold twice must not double-count');
+  });
+
+  console.log('\nPrivacy (issue #44): opt-out, self-service erasure, the access/erasure queue, and the public notice');
+
+  /**
+   * The shared authLimiter budget for register/login/admin-login is already
+   * spent by this point in the suite (same constraint the "Admin scope"
+   * section above notes and works around) — inserted directly via SQL and
+   * signed with signToken, same pattern as scopedAdminPhone/scopedAdminId.
+   */
+  async function insertTestUser(fullName) {
+    const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [userPhone, fullName, hashedPin, 'رهط']
+    );
+    const token = signToken({ id: insertId, phone_number: userPhone, full_name: fullName, role: 'user' }, '1h');
+    return { id: insertId, phone: userPhone, token, full_name: fullName };
+  }
+
+  let privacyUserA = null; // will opt out of behavioural analytics below
+  let privacyUserB = null; // stays opted in throughout
+  let privacyRequestId = 0;
+
+  await test('Set up: two fresh users for the privacy tests below, each with a pre-existing identified analytics row (standing in for the register-time row a real sign-up would have written)', async () => {
+    privacyUserA = await insertTestUser('مستخدم رفض التحليلات');
+    privacyUserB = await insertTestUser('مستخدم آخر للتحليلات');
+
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('register', ?, 'web')`,
+      [privacyUserA.id]
+    );
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('register', ?, 'web')`,
+      [privacyUserB.id]
+    );
+
+    assert.ok(privacyUserA.token && privacyUserB.token);
+  });
+
+  await test('PATCH /api/auth/me opts a user out of behavioural analytics, and GET /api/auth/me reflects it — neither response carries pin_code', async () => {
+    const patch = await api('PATCH', '/api/auth/me', {
+      token: privacyUserA.token,
+      body: { analytics_opt_out: true }
+    });
+    assert.strictEqual(patch.status, 200);
+    assert.strictEqual(patch.body.user.analytics_opt_out, true);
+    assert.ok(!('pin_code' in patch.body.user), 'pin_code must never appear in this response');
+
+    const me = await api('GET', '/api/auth/me', { token: privacyUserA.token });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.body.user.analytics_opt_out, true);
+    assert.ok(!('pin_code' in me.body.user), 'pin_code must never appear in this response');
+  });
+
+  await test('An opted-out signed-in user triggers an identified analytics event ⇒ zero rows written for them — not an anonymised one', async () => {
+    // Exercised directly against analytics.service.record() — the actual
+    // enforcement point per the brief ("honoured at the write, not only at
+    // the route") — rather than through POST /api/analytics/events, whose
+    // own tighter rate limit (config.rateLimit.analyticsMax) was already
+    // deliberately exhausted by the "tighter analytics rate limit" test
+    // above, in the same shared window.
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+
+    const result = await analyticsService.record({ eventName: 'share_clicked', userId: privacyUserA.id, platform: 'web' });
+    assert.strictEqual(result.skipped, true, 'expected record() to report the write was skipped for an opted-out user');
+    assert.strictEqual(result.id, null);
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.strictEqual(Number(after.cnt), Number(before.cnt), 'an opted-out user must get ZERO new rows for an identified event');
+  });
+
+  await test('Opting out changes nothing about the ability to use the app — a normal authenticated action still succeeds', async () => {
+    const { status, body } = await api('POST', '/api/nokoot', {
+      token: privacyUserA.token,
+      body: { recipient_name: 'اختبار عدم تعطيل أي ميزة', clan_town: 'رهط', amount: 10, event_date: '2026-09-05' }
+    });
+    assert.strictEqual(status, 201, 'opting out of analytics must never gate a feature');
+    await api('DELETE', `/api/nokoot/${body.recordId}`, { token: privacyUserA.token });
+  });
+
+  await test("POST /api/privacy/analytics-erasure erases only the caller's own analytics rows — another user's rows are untouched", async () => {
+    // privacyUserA's "register" row (inserted in the set-up above) predates
+    // the opt-out set later — proves erasure removes rows that predate the
+    // opt-out too, not just future ones.
+    const beforeA = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.ok(Number(beforeA.cnt) > 0, 'expected at least the "register" row written at sign-up');
+
+    const beforeB = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.ok(Number(beforeB.cnt) > 0, 'expected at least the "register" row for the untouched user too');
+
+    const { status, body } = await api('POST', '/api/privacy/analytics-erasure', { token: privacyUserA.token });
+    assert.strictEqual(status, 200);
+    assert.ok(body.deleted >= Number(beforeA.cnt));
+
+    const afterA = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserA.id]);
+    assert.strictEqual(Number(afterA.cnt), 0, "the caller's own rows must actually be gone");
+
+    const afterB = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.strictEqual(Number(afterB.cnt), Number(beforeB.cnt), "another user's rows must be untouched by someone else's erasure");
+  });
+
+  await test('Deleting an account removes its analytics rows too — the FK cascade, not a separate code path', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.ok(Number(before.cnt) > 0, 'expected privacyUserB to still have analytics rows before deletion');
+
+    await db.execute('DELETE FROM users WHERE id = ?', [privacyUserB.id]);
+
+    const after = await db.queryOne('SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ?', [privacyUserB.id]);
+    assert.strictEqual(Number(after.cnt), 0, 'deleting the account must cascade-delete its analytics rows');
+  });
+
+  await test('POST /api/privacy/requests queues a formal request and states a deadline', async () => {
+    const { status, body } = await api('POST', '/api/privacy/requests', {
+      token: privacyUserA.token,
+      body: { request_type: 'access' }
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(body.request.request_type, 'access');
+    assert.strictEqual(body.request.status, 'pending');
+    assert.ok(/\d+\s*يوماً/.test(body.message), 'expected the response to state a deadline');
+    privacyRequestId = body.request.id;
+  });
+
+  await test('POST /api/privacy/requests rejects an unknown request type', async () => {
+    const { status } = await api('POST', '/api/privacy/requests', {
+      token: privacyUserA.token,
+      body: { request_type: 'not_a_real_type' }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('A town-scoped admin gets 403 on both the analytics read and the privacy request queue — super_admin only, never a town admin', async () => {
+    const analyticsRead = await api('GET', '/api/admin/analytics/counts', { token: scopedAdminToken });
+    assert.strictEqual(analyticsRead.status, 403);
+
+    const queueRead = await api('GET', '/api/admin/privacy-requests', { token: scopedAdminToken });
+    assert.strictEqual(queueRead.status, 403);
+  });
+
+  await test('A super_admin gets 200 on both, sees the queued request, and can close it', async () => {
+    const analyticsRead = await api('GET', '/api/admin/analytics/counts', { token: superAdminToken });
+    assert.strictEqual(analyticsRead.status, 200);
+    assert.ok(Array.isArray(analyticsRead.body.counts));
+
+    const queueRead = await api('GET', '/api/admin/privacy-requests', { token: superAdminToken });
+    assert.strictEqual(queueRead.status, 200);
+    assert.ok(queueRead.body.requests.some(r => r.id === privacyRequestId));
+
+    const close = await api('PATCH', `/api/admin/privacy-requests/${privacyRequestId}`, { token: superAdminToken });
+    assert.strictEqual(close.status, 200);
+    assert.strictEqual(close.body.request.status, 'completed');
+    assert.ok(close.body.request.handled_at, 'expected handled_at to be set on close');
+  });
+
+  await test('GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user\'s own rows, isolated from another user\'s, with no event id of any kind, and pagination that behaves', async () => {
+    const rowsUser = await insertTestUser('مستخدم لاختبار قراءة السجل الفردي');
+    const otherUser = await insertTestUser('مستخدم آخر يجب ألا تظهر بياناته هنا');
+
+    // Five distinct rows for rowsUser (enough to exercise a page size of 2
+    // below), and one unrelated row for otherUser, standing in for the
+    // scenario this endpoint actually exists to serve: fulfilling a §13
+    // access request about ONE named person, never a second one.
+    for (let i = 0; i < 5; i += 1) {
+      await db.execute(
+        `INSERT INTO analytics_events (event_name, user_id, platform, app_version, content_town) VALUES (?, ?, 'web', '2.0.0', ?)`,
+        ['share_clicked', rowsUser.id, 'رهط']
+      );
+    }
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, user_id, platform) VALUES ('login', ?, 'web')`,
+      [otherUser.id]
+    );
+
+    const full = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: superAdminToken });
+    assert.strictEqual(full.status, 200);
+    assert.strictEqual(full.body.user_id, rowsUser.id);
+    assert.strictEqual(full.body.pagination.total, 5);
+    assert.strictEqual(full.body.events.length, 5);
+    for (const row of full.body.events) {
+      assert.strictEqual(row.event_name, 'share_clicked');
+      assert.strictEqual(row.content_town, 'رهط');
+      assert.ok(row.created_at, 'expected a timestamp on every row');
+      assert.ok(!('id' in row), 'must not carry the analytics_events row\'s own id');
+      assert.ok(!('event_id' in row), 'must not carry any event/occasion id — none exists in this table at all');
+      assert.ok(!('device_id' in row), 'story 45 was scoped to a signed-in user, not a device fingerprint');
+      assert.ok(!('user_id' in row), 'the endpoint already scopes by user in the path — no need to echo it per row');
+    }
+
+    // Another user's row must never leak into this user's read.
+    assert.ok(!full.body.events.some(row => row.event_name === 'login'), "otherUser's row must not appear in rowsUser's read");
+
+    const page1 = await api('GET', `/api/admin/analytics/users/${rowsUser.id}?limit=2&page=1`, { token: superAdminToken });
+    assert.strictEqual(page1.status, 200);
+    assert.strictEqual(page1.body.events.length, 2);
+    assert.strictEqual(page1.body.pagination.total, 5);
+    assert.strictEqual(page1.body.pagination.totalPages, 3);
+
+    const page2 = await api('GET', `/api/admin/analytics/users/${rowsUser.id}?limit=2&page=2`, { token: superAdminToken });
+    assert.strictEqual(page2.status, 200);
+    assert.strictEqual(page2.body.events.length, 2);
+
+    const otherRead = await api('GET', `/api/admin/analytics/users/${otherUser.id}`, { token: superAdminToken });
+    assert.strictEqual(otherRead.status, 200);
+    assert.strictEqual(otherRead.body.pagination.total, 1);
+    assert.strictEqual(otherRead.body.events[0].event_name, 'login');
+
+    const scopedRead = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: scopedAdminToken });
+    assert.strictEqual(scopedRead.status, 403, 'a town-scoped admin must never read another user\'s analytics rows — super_admin only');
+
+    const userRead = await api('GET', `/api/admin/analytics/users/${rowsUser.id}`, { token: userToken });
+    assert.strictEqual(userRead.status, 403, 'an ordinary signed-in user must not read analytics rows either');
+
+    await db.execute('DELETE FROM users WHERE id IN (?, ?)', [rowsUser.id, otherUser.id]);
+  });
+
+  await test('GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers', async () => {
+    const { status, body } = await api('GET', '/api/privacy/notice');
+    assert.strictEqual(status, 200);
+
+    const text = body.notice.text;
+    assert.ok(text.includes(String(analyticsService.RETENTION_DAYS)), 'expected the retention window mentioned');
+
+    // The notice is read by the people the data is about, so it must name
+    // every collected event in Arabic — and must NOT hand them the code key,
+    // which informs nobody. Both halves matter: the first keeps the notice
+    // complete, the second keeps it a notice rather than a schema dump.
+    for (const event of ANALYTICS_EVENTS) {
+      assert.ok(text.includes(event.label), `expected the notice to name "${event.label}"`);
+      assert.ok(!text.includes(event.key), `the notice must not print the code key "${event.key}"`);
+    }
+  });
+
+  await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

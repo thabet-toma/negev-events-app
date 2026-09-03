@@ -7,6 +7,7 @@ import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../state/analytics.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/location_picker_map.dart';
@@ -26,6 +27,20 @@ String composeEventSubmitMessage(EventSubmissionResult result) {
 Map<String, String> buildLocationFields({double? latitude, double? longitude}) {
   if (latitude == null || longitude == null) return const {};
   return {'latitude': '$latitude', 'longitude': '$longitude'};
+}
+
+/// يميّز فشل نشر بسبب الصورة/الملف عن أي فشل نشر آخر — لا كود خطأ مخصَّص
+/// يرجعه الخادم، فقط نص الرسالة الذي يبنيه بالضبط server/src/middleware/error.js
+/// لأخطاء multer الثلاثة (حجم الملف، النوع غير المدعوم، أو خطأ رفع عام).
+/// نفس المنطق حرفياً الذي يستعمله web/app.js (isMediaUploadErrorMessage) —
+/// إن تغيّرت تلك الرسائل يوماً يفقد هذا التمييز دقّته لا أكثر، فيُسجَّل
+/// الفشل حينها كـ publish_failed العام بدل image_upload_failed. دالة عامة
+/// صِرفة كبقية الدوال أعلاه لتبقى قابلة للاختبار دون تركيب الشاشة كاملة.
+bool isMediaUploadErrorMessage(String? message) {
+  if (message == null) return false;
+  return message.contains('حجم الملف') ||
+      message.contains('نوع الملف غير مدعوم') ||
+      message.contains('خطأ في رفع الملف');
 }
 
 /// مفاتيح الحقول النصية العادية القابلة للتعديل بلا معالجة خاصة — البقية
@@ -255,6 +270,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
     setState(() => _submitting = true);
     // نلتقط الخدمة قبل أي await حتى لا نلمس context بعد فجوة غير متزامنة.
     final api = AppServices.of(context).api;
+    // بلدة *المناسبة* المنشورة، لا بلدة المستخدم — نفس تمييز _share في
+    // event_details_screen.dart، وبلدة القيد الفعلية للمنشور دائماً (issue #44).
+    recordAnalyticsEvent(api, 'publish_started', contentTown: _town);
 
     try {
       final fields = <String, String>{
@@ -326,6 +344,13 @@ class _AddEventScreenState extends State<AddEventScreen> {
       showMessage(context, composeEventSubmitMessage(result));
       _reset();
     } catch (error) {
+      // فشل بسبب الصورة/الملف تحديداً يُسجَّل باسمه الخاص لا كفشل نشر عام —
+      // الاثنان مفتاحان منفصلان في القائمة المغلقة (ANALYTICS_EVENTS).
+      recordAnalyticsEvent(
+        api,
+        isMediaUploadErrorMessage('$error') ? 'image_upload_failed' : 'publish_failed',
+        contentTown: _town,
+      );
       if (mounted) showMessage(context, '$error', isError: true);
     } finally {
       if (mounted) setState(() => _submitting = false);

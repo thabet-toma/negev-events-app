@@ -4,14 +4,19 @@
 -- ==========================================================
 
 CREATE TABLE IF NOT EXISTS users (
-  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  phone_number  VARCHAR(20)  NOT NULL,
-  full_name     VARCHAR(120) NOT NULL,
-  pin_code      VARCHAR(255) NOT NULL,
-  clan_town     VARCHAR(100) DEFAULT NULL,
-  role          ENUM('user','admin','super_admin') NOT NULL DEFAULT 'user',
-  created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  phone_number      VARCHAR(20)  NOT NULL,
+  full_name         VARCHAR(120) NOT NULL,
+  pin_code          VARCHAR(255) NOT NULL,
+  clan_town         VARCHAR(100) DEFAULT NULL,
+  role              ENUM('user','admin','super_admin') NOT NULL DEFAULT 'user',
+  -- Refusing behavioural analytics (issue #44, privacy layer). A switch, never
+  -- a condition of use: nothing in the app is gated on this flag, and it is
+  -- read at the write in analytics.service.js — an opted-out signed-in user's
+  -- identified events are never inserted at all, not written anonymised.
+  analytics_opt_out TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_phone (phone_number),
   KEY idx_users_role (role)
@@ -438,4 +443,91 @@ CREATE TABLE IF NOT EXISTS service_provider_towns (
   UNIQUE KEY uq_service_provider_towns (provider_id, town),
   CONSTRAINT fk_spt_provider FOREIGN KEY (provider_id)
     REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Behavioural analytics (issue #44). The governing rule this table is built
+-- around: we record what a person DID in the app, never what they READ in
+-- it — a row saying "this named person opened this particular عزاء" reads as
+-- family-life information under Israeli Privacy Protection Law Amendment 13,
+-- which raises the required security tier and doubles the notice obligation.
+-- There is deliberately NO `event_id`, NO `ip`, and NO `user_agent` column:
+-- their absence is what makes an identified "read" row structurally
+-- impossible to write here, not merely a convention someone has to remember.
+-- `event_name` is a closed list (ANALYTICS_EVENTS in src/constants.js) —
+-- analytics.service.js rejects any name outside it, and forces user_id and
+-- device_id to NULL for every count-only name regardless of what the caller
+-- sent, in the layer closest to the write.
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_name   VARCHAR(60)  NOT NULL,
+  user_id      INT UNSIGNED DEFAULT NULL,
+  device_id    VARCHAR(100) DEFAULT NULL,
+  platform     VARCHAR(20)  NOT NULL,
+  app_version  VARCHAR(20)  DEFAULT NULL,
+  -- The town the CONTENT belongs to (e.g. the event being shared/downloaded
+  -- for) — never the viewer's own town.
+  content_town VARCHAR(100) DEFAULT NULL,
+  -- Inherited verbatim from story_views.viewer_key, not reinvented: one person
+  -- is one key whether they were signed in or not, and two spellings of that
+  -- idea in one database is how the two stop agreeing. VIRTUAL, not STORED,
+  -- and the distinction is load-bearing: InnoDB refuses a CASCADE foreign key
+  -- on a column a *stored* generated column reads — which is why story_views
+  -- carries no FK at all — but allows it for a virtual one. Verified against
+  -- MySQL 8 directly rather than assumed, so this table keeps both.
+  viewer_key   VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) VIRTUAL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_analytics_events_created (created_at),
+  KEY idx_analytics_events_name (event_name),
+  KEY idx_analytics_events_viewer (viewer_key),
+  -- Erasure by the database, not by remembering to: deleting an account
+  -- removes its identified rows with it. This is why user_id here carries a
+  -- real FK — unlike story_views.user_id, whose viewer_key is STORED and so
+  -- blocks one. See the note on viewer_key above.
+  CONSTRAINT fk_analytics_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The retention fold's target (server/src/services/analytics.service.js,
+-- server/scripts/analytics-retention.js): every analytics_events row older
+-- than the retention window is grouped into one counter row here and the
+-- identified source rows deleted — see RETENTION_DAYS in analytics.service.js
+-- for why 90 days specifically. content_town is NOT NULL DEFAULT '' rather
+-- than NULL on purpose: MySQL treats every NULL in a UNIQUE index as distinct
+-- from every other NULL (the same reasoning documented on
+-- story_views.viewer_key above), which would let two folds of the same
+-- NULL-content_town day/event/platform group each insert their own row
+-- instead of the second one incrementing the first.
+CREATE TABLE IF NOT EXISTS analytics_daily_counters (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  day          DATE         NOT NULL,
+  event_name   VARCHAR(60)  NOT NULL,
+  platform     VARCHAR(20)  NOT NULL,
+  content_town VARCHAR(100) NOT NULL DEFAULT '',
+  count        INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_analytics_daily_counters (day, event_name, platform, content_town)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The access/erasure request queue (issue #44, privacy layer part 3).
+-- Erasure of one's own analytics rows already has an immediate self-service
+-- endpoint (POST /api/privacy/analytics-erasure) — this table is for the
+-- request a super_admin fulfils BY HAND in this version (there is no
+-- screen): who asked, what kind, when, and — once handled — when and by
+-- whom. request_type covers 'erasure' too, for a user who wants a
+-- documented, handled-by record instead of (or in addition to) the
+-- self-service button.
+CREATE TABLE IF NOT EXISTS privacy_requests (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED NOT NULL,
+  request_type ENUM('access','erasure') NOT NULL,
+  status       ENUM('pending','completed') NOT NULL DEFAULT 'pending',
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_at   TIMESTAMP    NULL DEFAULT NULL,
+  handled_by   INT UNSIGNED DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_privacy_requests_status (status),
+  KEY idx_privacy_requests_user (user_id),
+  CONSTRAINT fk_privacy_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_privacy_requests_handler FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

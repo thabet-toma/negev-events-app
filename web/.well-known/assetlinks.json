@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.negev.negev_events",
+      "sha256_cert_fingerprints": [
+        "0E:2C:75:22:F9:35:4D:E1:98:EA:F0:8E:CE:92:93:3A:D9:AD:1D:89:2E:8D:BA:FA:43:A8:A8:DD:A3:C1:B1:E2",
+        "A4:78:5E:3D:03:EE:FB:F9:22:0D:D7:EB:25:4D:72:FD:01:A7:45:33:05:3A:A1:B0:21:A8:6C:C1:D1:23:42:53"
+      ]
+    }
+  }
+]

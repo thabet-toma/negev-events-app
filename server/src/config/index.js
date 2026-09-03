@@ -90,7 +90,11 @@ const config = {
   rateLimit: {
     windowMs: toInt(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: toInt(process.env.RATE_LIMIT_MAX, 600),
-    authMax: toInt(process.env.RATE_LIMIT_AUTH_MAX, 20)
+    authMax: toInt(process.env.RATE_LIMIT_AUTH_MAX, 20),
+    // Tighter than the global API budget above: this is a fire-and-forget
+    // beacon endpoint (POST /api/analytics/events) with no login required,
+    // so it is the cheapest route in the API to spam.
+    analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 15)
   },
 
   bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 10)

@@ -13,12 +13,29 @@ let allServiceCategories = [];
 let editingServiceCategoryId = null;
 let allAdminsWithTowns = [];
 let myAdminTowns = [];
+let allPrivacyRequests = [];
+
+// حالة نموذج تعديل المناسبة (#43) — النموذج نفسه يُبنى ديناميكياً في JS (لا لمس
+// لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
+let editingEventId = null;
+let editingEventOriginal = null; // القيم الأصلية للمقارنة عند الحفظ — إرسال الفرق فقط (قيد ٤)
+let allTownVillages = []; // من GET /api/towns، لا GET /api/admin/villages (قيد ٣ — الأخير 403 لأدمن محلي)
+let townVillagesFetchAttempted = false;
 
 // مرآة لـ TOWNS في server/src/constants.js — لا وحدة مشتركة بين web/ والخادم،
 // نفس سبب OCCASION_FIELDS أدناه ونفس نمط قائمة dirTown في admin.html (services-directory).
 const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
+
+// مرآة لـ VILLAGES_TOWN في server/src/constants.js — البلدة الوحيدة التي تقبل village_id.
+const VILLAGES_TOWN = 'القرى والتجمعات';
+
+// مرآة لـ CRITICAL_AMENDMENT_FIELDS في server/src/services/events.service.js —
+// تعديل أيّ منها على مناسبة معتمدة يعيدها إلى pending (قيد ١). تُستخدم هنا
+// فقط لتحذير المستخدم قبل الحفظ وتمييز الحقول بصرياً؛ التصنيف الحقيقي يبقى
+// من الخادم دائماً (result.amendment في الاستجابة).
+const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'village_id', 'location_name', 'latitude', 'longitude'];
 
 /** الدور المخزَّن محلياً — ادّعاء العميل، يُتحقّق منه فعلياً في كل 403 يرجعه الخادم (نفس منطق fetchOccasionTypes القائم). */
 function currentAdminRole() {
@@ -46,6 +63,12 @@ const OCCASION_FIELDS = [
   { key: 'audio_title', label: 'عنوان المقطع الصوتي', core: false },
   { key: 'host_phone', label: 'رقم التواصل', core: false }
 ];
+
+// مرآة لـ PRIVACY_REQUEST_TYPES و PRIVACY_REQUEST_DEADLINE_DAYS في
+// server/src/constants.js — لا وحدة مشتركة بين web/ والخادم، نفس نمط نسخ
+// TOWNS وOCCASION_FIELDS أعلاه.
+const PRIVACY_REQUEST_TYPE_LABELS = { access: 'اطّلاع', erasure: 'محو' };
+const PRIVACY_REQUEST_DEADLINE_DAYS = 30;
 
 const REACTION_TYPES_LABELS = {
   coffee: '☕ قهوة',
@@ -132,7 +155,8 @@ function applyRoleVisibility() {
   const isSuperAdmin = isSuperAdminRole();
   const superAdminOnlyBtnIds = [
     'tabBroadcastBtn', 'tabUsersBtn', 'tabOccasionTypesBtn',
-    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn'
+    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
+    'tabPrivacyRequestsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
     const btn = document.getElementById(id);
@@ -161,10 +185,14 @@ async function loadAdminDashboard() {
     fetchAdminEvents(),
     fetchAdminComments(),
     fetchPublicServiceCategories(),
-    fetchAdminServiceProviders()
+    fetchAdminServiceProviders(),
+    fetchTownVillages()
   ];
   if (isSuperAdmin) {
-    tasks.push(fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(), fetchAdminServiceCategories(), fetchAdminAdmins());
+    tasks.push(
+      fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
+      fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests()
+    );
   }
   await Promise.all(tasks);
   renderScopeBanner();
@@ -180,8 +208,19 @@ function deriveScopedTowns() {
 }
 
 async function fetchAdminIdentity() {
-  const data = await adminFetch('/admin/me');
-  myAdminTowns = Array.isArray(data.towns) ? data.towns : [];
+  // مرّتان كان هذا النداء يسقط بصمت: مساره كان '/admin/me' بلا بادئة
+  // '/api' التي يحملها كل نداء آخر في هذا الملف، و`adminFetch` تُرجع
+  // `Response` لا جسمها — فكان `data.towns` دائماً `undefined` و`myAdminTowns`
+  // دائماً فارغة، أي أنّ شريط النطاق يقول 'لا بلدات' لكل أدمن محلي منذ شحن
+  // الميزة. الفشل صامت لأن الاستدعاء داخل `Promise.all` بلا فحص `res.ok`.
+  try {
+    const res = await adminFetch('/api/admin/me');
+    const data = await res.json();
+    myAdminTowns = Array.isArray(data.towns) ? data.towns : [];
+  } catch (e) {
+    console.error('admin identity error:', e);
+    myAdminTowns = [];
+  }
 }
 
 /** شريط «تدير: رهط · اللقية» — قصة 21. */
@@ -313,6 +352,10 @@ function renderAdminEvents() {
                 <i class="fa-solid fa-xmark"></i> رفض
               </button>
             ` : ''}
+
+            <button class="btn-approve" onclick="openEventEditForm(${evt.id})">
+              <i class="fa-solid fa-pen"></i> تعديل
+            </button>
 
             <button class="btn-delete" onclick="deleteAdminEvent(${evt.id})" title="حذف نهائي">
               <i class="fa-solid fa-trash"></i>
@@ -909,6 +952,499 @@ function filterEventsByStatus(status, btnElement) {
 function handleAdminEventSearch() {
   searchKeyword = document.getElementById('adminEventSearch').value.trim();
   renderAdminEvents();
+}
+
+// ======================================================================
+// 8ب. Event Edit — زرّ «تعديل» على بطاقة المناسبة (#43)
+//
+// النموذج نفسه غير موجود في admin.html — يُبنى ويُدرج ديناميكياً هنا عند أول
+// استخدام (ensureEventEditFormMounted) بدل لمس admin.html، ويُلحَق داخل
+// #tabEvents تحت قائمة البطاقات، بنفس نمط pane-box في بقية اللوحة.
+//
+// PATCH /api/events/:id (لا /api/admin/events/:id) — نفس مسار المالك/الأدمن
+// المحلي، بلا رفع ملفات (poster_url/audio_url/artist_image_url نصوص عناوين
+// لا غير)، ويرسل الفرق فقط: كل حقل غير مُغيَّر يبقى `undefined` ولا يدخل
+// الحمولة، لأن الخادم يرفض 400 «لم يتم إرسال أي تعديل» ويترك كل undefined
+// كما هو (قيد ٤).
+// ======================================================================
+
+function ensureEventEditFormMounted() {
+  if (document.getElementById('eventEditFormWrapper')) return;
+  const tabEvents = document.getElementById('tabEvents');
+  if (!tabEvents) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'pane-box';
+  wrapper.id = 'eventEditFormWrapper';
+  wrapper.style.display = 'none';
+  wrapper.style.marginTop = '20px';
+
+  const criticalHint = '<span style="color:var(--warn-yellow); font-size:0.78rem; margin-inline-start:6px;"><i class="fa-solid fa-triangle-exclamation"></i> حرج — يعيد مناسبة معتمدة إلى المراجعة</span>';
+
+  wrapper.innerHTML = `
+    <div class="pane-header">
+      <h2 id="eventEditFormTitle"><i class="fa-solid fa-pen"></i> تعديل مناسبة</h2>
+      <p>يُرسَل الحقل المتغيّر فقط. الحقول المعلَّمة أدناه حرِجة: تغييرها في مناسبة معتمدة يعيدها إلى قائمة المراجعة حتى تُعتمد ثانيةً.</p>
+    </div>
+
+    <div id="eventEditForbiddenNotice" style="display:none; padding:16px; margin-bottom:16px; border-radius:8px; background:var(--surface-sunk); color:var(--danger-red); text-align:center;"></div>
+
+    <form id="eventEditForm" class="admin-form" onsubmit="handleEventEditSubmit(event)">
+      <div class="form-row">
+        <div class="form-group half">
+          <label>العنوان</label>
+          <input type="text" id="evtTitle" maxlength="255">
+        </div>
+        <div class="form-group half">
+          <label>العائلة/العشيرة</label>
+          <input type="text" id="evtFamilyClan" maxlength="150">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>أصحاب المناسبة *</label>
+        <div id="evtHonoreesEditor"></div>
+        <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventHonoreeRow()">
+          <i class="fa-solid fa-plus"></i> إضافة اسم
+        </button>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>البلدة ${criticalHint}</label>
+          <select id="evtTown" onchange="handleEventEditTownChange()">
+            ${TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group half" id="evtVillageGroup" style="display:none;">
+          <label>القرية ${criticalHint}</label>
+          <select id="evtVillage"></select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>وصف المكان (لـ Waze وGoogle Maps) ${criticalHint}</label>
+          <input type="text" id="evtLocationName" maxlength="1000">
+        </div>
+        <div class="form-group half">
+          <label>مكان إضافي</label>
+          <input type="text" id="evtSecondaryLocation" maxlength="1000">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>خط العرض (latitude) ${criticalHint}</label>
+          <input type="text" id="evtLat" placeholder="مثال: 31.2589">
+        </div>
+        <div class="form-group half">
+          <label>خط الطول (longitude) ${criticalHint}</label>
+          <input type="text" id="evtLng" placeholder="مثال: 34.7913">
+        </div>
+      </div>
+      <p style="font-size:0.78rem; color:var(--text-dim); margin-top:-8px;">اختيار قرية يستبدل هذين الحقلين بإحداثياتها تلقائياً ما لم تُعدَّلا هنا صراحةً في نفس الحفظة.</p>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>تاريخ المناسبة ${criticalHint}</label>
+          <input type="date" id="evtEventDate">
+        </div>
+        <div class="form-group half">
+          <label>تاريخ الانتهاء ${criticalHint}</label>
+          <input type="date" id="evtEventEndDate">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>سهرة الشباب والدحة</label>
+          <input type="date" id="evtYouthPartyDate">
+        </div>
+        <div class="form-group half">
+          <label>وقت العشاء</label>
+          <input type="text" id="evtDinnerTime" maxlength="100">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>رقم التواصل</label>
+          <input type="text" id="evtHostPhone" maxlength="30">
+        </div>
+        <div class="form-group half">
+          <label>اسم الفنان</label>
+          <input type="text" id="evtArtistName" maxlength="150">
+        </div>
+      </div>
+
+      <p style="font-size:0.82rem; color:var(--text-dim);">
+        <i class="fa-solid fa-circle-info"></i> لا رفع ملفات في هذا النموذج — الحقول أدناه عناوين URL نصّية فقط (رابط صورة أو ملف صوتي مستضاف مسبقاً)، لا منتقي ملفات.
+      </p>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>رابط صورة الملصق (URL)</label>
+          <input type="text" id="evtPosterUrl" maxlength="2000" placeholder="https://...">
+        </div>
+        <div class="form-group half">
+          <label>رابط صورة الفنان (URL)</label>
+          <input type="text" id="evtArtistImageUrl" maxlength="2000" placeholder="https://...">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group half">
+          <label>رابط الملف الصوتي (URL)</label>
+          <input type="text" id="evtAudioUrl" maxlength="2000" placeholder="https://...">
+        </div>
+        <div class="form-group half">
+          <label>عنوان المقطع الصوتي</label>
+          <input type="text" id="evtAudioTitle" maxlength="200">
+        </div>
+      </div>
+
+      <div id="evtAmendmentsLogWrapper" style="display:none; margin-top:10px;">
+        <h3 style="font-size:0.95rem; color:var(--gold-main); margin-bottom:8px;"><i class="fa-solid fa-clock-rotate-left"></i> سجلّ التعديلات</h3>
+        <div id="evtAmendmentsLog"></div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:16px;">
+        <button type="submit" class="admin-btn-primary" id="evtEditSubmitBtn">
+          <i class="fa-solid fa-check"></i> حفظ التعديل
+        </button>
+        <button type="button" class="admin-btn-primary" style="background:var(--surface-sunk); color:var(--text-main);" onclick="closeEventEditForm()">
+          إلغاء
+        </button>
+      </div>
+    </form>
+  `;
+
+  tabEvents.appendChild(wrapper);
+}
+
+/** القرى مصدرها GET /api/towns العام (لا GET /api/admin/villages، خلف requireSuperAdmin — 403 لكل أدمن محلي، قيد ٣). */
+async function fetchTownVillages() {
+  if (townVillagesFetchAttempted) return;
+  townVillagesFetchAttempted = true;
+  try {
+    const res = await apiFetch('/api/towns');
+    const data = await res.json();
+    if (data.success) allTownVillages = data.villages || [];
+  } catch (e) {
+    console.error('Towns/villages fetch error:', e);
+  }
+}
+
+function renderEventVillageOptions(selectedId) {
+  const select = document.getElementById('evtVillage');
+  if (!select) return;
+  select.innerHTML = '<option value="">— بلا قرية محددة —</option>' + allTownVillages.map(v =>
+    `<option value="${v.id}" ${String(v.id) === String(selectedId ?? '') ? 'selected' : ''}>${escapeHtml(v.name)}</option>`
+  ).join('');
+}
+
+/** إظهار/إخفاء منتقي القرية حسب البلدة — village_id غير مقبول أصلاً إلا ضمن VILLAGES_TOWN (قيد ٣، 400 من الخادم غير ذلك). */
+function handleEventEditTownChange() {
+  const town = document.getElementById('evtTown').value;
+  const group = document.getElementById('evtVillageGroup');
+  const select = document.getElementById('evtVillage');
+  if (town === VILLAGES_TOWN) {
+    group.style.display = '';
+  } else {
+    group.style.display = 'none';
+    select.value = '';
+  }
+}
+
+function renderEventHonoreesEditor(honorees) {
+  const container = document.getElementById('evtHonoreesEditor');
+  const rows = (honorees && honorees.length) ? honorees : [{ name: '', role: '' }];
+  container.innerHTML = rows.map(h => `
+    <div class="ot-field-row" data-honoree-row>
+      <input type="text" class="evt-honoree-name" placeholder="الاسم" maxlength="150" value="${escapeHtml(h.name || '')}" style="flex:2;">
+      <input type="text" class="evt-honoree-role" placeholder="الصفة (اختياري، مثال: العريس)" maxlength="60" value="${escapeHtml(h.role || '')}" style="flex:2;">
+      <button type="button" class="btn-delete" onclick="this.closest('[data-honoree-row]').remove()" title="حذف">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+  `).join('');
+}
+
+function addEventHonoreeRow() {
+  const container = document.getElementById('evtHonoreesEditor');
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'ot-field-row';
+  row.setAttribute('data-honoree-row', '');
+  row.innerHTML = `
+    <input type="text" class="evt-honoree-name" placeholder="الاسم" maxlength="150" style="flex:2;">
+    <input type="text" class="evt-honoree-role" placeholder="الصفة (اختياري، مثال: العريس)" maxlength="60" style="flex:2;">
+    <button type="button" class="btn-delete" onclick="this.closest('[data-honoree-row]').remove()" title="حذف">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+  `;
+  container.appendChild(row);
+}
+
+function collectEventHonorees() {
+  return Array.from(document.querySelectorAll('#evtHonoreesEditor [data-honoree-row]')).map(row => ({
+    name: row.querySelector('.evt-honoree-name').value.trim(),
+    role: row.querySelector('.evt-honoree-role').value.trim()
+  })).filter(h => h.name);
+}
+
+function honoreesEqual(a, b) {
+  const listA = a || [];
+  const listB = b || [];
+  if (listA.length !== listB.length) return false;
+  return listA.every((h, i) => h.name === listB[i].name && (h.role || '') === (listB[i].role || ''));
+}
+
+/** سجلّ اختياري (المرجّح المذكور في المهمة) — GET /api/events/:id/amendments، نفس حارس الملكية القائم أصلاً. */
+function renderEventAmendmentsLog(amendments) {
+  const wrapperEl = document.getElementById('evtAmendmentsLogWrapper');
+  const listEl = document.getElementById('evtAmendmentsLog');
+  if (!wrapperEl || !listEl) return;
+
+  if (!amendments || !amendments.length) {
+    wrapperEl.style.display = 'none';
+    listEl.innerHTML = '';
+    return;
+  }
+
+  wrapperEl.style.display = 'block';
+  listEl.innerHTML = amendments.map(a => `
+    <div style="padding:8px 10px; border-bottom:1px solid var(--admin-card-border); font-size:0.8rem; color:var(--text-dim);">
+      <span class="status-tag ${a.classification === 'critical' ? 'rejected' : 'approved'}" style="font-size:0.7rem;">${a.classification === 'critical' ? 'حرِج' : 'تجميلي'}</span>
+      <strong style="color:var(--text-main);">${escapeHtml(a.field)}</strong>:
+      ${escapeHtml(a.old_value || '—')} ← ${escapeHtml(a.new_value || '—')}
+      <span style="margin-inline-start:6px;">(${escapeHtml(a.changed_by_name || 'غير معروف')} — ${new Date(a.created_at).toLocaleString('ar-EG')})</span>
+    </div>
+  `).join('');
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  return String(value).slice(0, 10);
+}
+
+async function openEventEditForm(id) {
+  const evt = allAdminEvents.find(e => e.id === id);
+  if (!evt) return;
+
+  ensureEventEditFormMounted();
+  await fetchTownVillages();
+
+  const wrapper = document.getElementById('eventEditFormWrapper');
+  const forbiddenNotice = document.getElementById('eventEditForbiddenNotice');
+  const form = document.getElementById('eventEditForm');
+  forbiddenNotice.style.display = 'none';
+  form.style.display = '';
+  form.reset();
+
+  // يجلب أصحاب المناسبة (لا يحملها GET /api/admin/events — SELECT e.* بلا
+  // event_honorees) وسجلّ التعديلات معاً. نفس مسار المالك/الأدمن المحلي
+  // (assertCanManageEvent) — 403 هنا حقيقة راهنة من الخادم لا تُخفى (نفس نمط
+  // fetchOccasionTypes)، ويشمل حالتي "خارج بلداتك" و"الجلسة منتهية" معاً بنص
+  // الخادم نفسه فيتميّزان تلقائياً بلا تفريق من العميل.
+  let honorees = [{ name: evt.groom_name || '', role: '' }];
+  let amendments = [];
+  try {
+    const [detailRes, amendRes] = await Promise.all([
+      adminFetch(`/api/events/${id}`),
+      adminFetch(`/api/events/${id}/amendments`)
+    ]);
+    const detailData = await detailRes.json();
+
+    if (detailRes.status === 403 || detailRes.status === 404) {
+      forbiddenNotice.style.display = 'block';
+      forbiddenNotice.innerHTML = `<i class="fa-solid fa-lock"></i> ${escapeHtml(detailData.message || 'تعذّر الوصول إلى هذه المناسبة')}`;
+      form.style.display = 'none';
+      editingEventId = null;
+      editingEventOriginal = null;
+      wrapper.style.display = 'block';
+      wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    if (detailData.success && Array.isArray(detailData.event.honorees) && detailData.event.honorees.length) {
+      honorees = detailData.event.honorees;
+    }
+    if (amendRes.ok) {
+      const amendData = await amendRes.json();
+      if (amendData.success) amendments = amendData.amendments || [];
+    }
+  } catch (e) {
+    console.error('Event detail fetch error:', e);
+  }
+
+  editingEventId = id;
+  editingEventOriginal = {
+    title: evt.title || '',
+    family_clan: evt.family_clan || '',
+    town: evt.town || '',
+    village_id: evt.village_id ?? null,
+    location_name: evt.location_name || '',
+    secondary_location_name: evt.secondary_location_name || '',
+    latitude: evt.latitude != null ? String(evt.latitude) : '',
+    longitude: evt.longitude != null ? String(evt.longitude) : '',
+    event_date: toDateInputValue(evt.event_date),
+    event_end_date: toDateInputValue(evt.event_end_date),
+    youth_party_date: toDateInputValue(evt.youth_party_date),
+    dinner_time: evt.dinner_time || '',
+    poster_url: evt.poster_url || '',
+    audio_url: evt.audio_url || '',
+    audio_title: evt.audio_title || '',
+    host_phone: evt.host_phone || '',
+    artist_name: evt.artist_name || '',
+    artist_image_url: evt.artist_image_url || '',
+    honorees,
+    status: evt.status
+  };
+
+  document.getElementById('eventEditFormTitle').innerHTML =
+    `<i class="fa-solid fa-pen"></i> تعديل مناسبة: ${escapeHtml(evt.title || evt.groom_name || '')}`;
+
+  document.getElementById('evtTitle').value = editingEventOriginal.title;
+  document.getElementById('evtFamilyClan').value = editingEventOriginal.family_clan;
+  document.getElementById('evtTown').value = editingEventOriginal.town;
+  document.getElementById('evtLocationName').value = editingEventOriginal.location_name;
+  document.getElementById('evtSecondaryLocation').value = editingEventOriginal.secondary_location_name;
+  document.getElementById('evtLat').value = editingEventOriginal.latitude;
+  document.getElementById('evtLng').value = editingEventOriginal.longitude;
+  document.getElementById('evtEventDate').value = editingEventOriginal.event_date;
+  document.getElementById('evtEventEndDate').value = editingEventOriginal.event_end_date;
+  document.getElementById('evtYouthPartyDate').value = editingEventOriginal.youth_party_date;
+  document.getElementById('evtDinnerTime').value = editingEventOriginal.dinner_time;
+  document.getElementById('evtPosterUrl').value = editingEventOriginal.poster_url;
+  document.getElementById('evtAudioUrl').value = editingEventOriginal.audio_url;
+  document.getElementById('evtAudioTitle').value = editingEventOriginal.audio_title;
+  document.getElementById('evtHostPhone').value = editingEventOriginal.host_phone;
+  document.getElementById('evtArtistName').value = editingEventOriginal.artist_name;
+  document.getElementById('evtArtistImageUrl').value = editingEventOriginal.artist_image_url;
+
+  renderEventVillageOptions(editingEventOriginal.village_id);
+  document.getElementById('evtVillage').value = editingEventOriginal.village_id != null ? String(editingEventOriginal.village_id) : '';
+  handleEventEditTownChange();
+
+  renderEventHonoreesEditor(editingEventOriginal.honorees);
+  renderEventAmendmentsLog(amendments);
+
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeEventEditForm() {
+  editingEventId = null;
+  editingEventOriginal = null;
+  const wrapper = document.getElementById('eventEditFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+}
+
+/**
+ * يقارن كل حقل بقيمته الأصلية ويرسل الفرق فقط (قيد ٤) — حمولة فارغة تماماً
+ * تعني ألا نداء يُرسَل إطلاقاً، لا نداء بجسم فارغ. حقول التاريخ (لا وقت) تُقارن
+ * كنص "YYYY-MM-DD" مباشرة، وvillage_id يُطبَّع null/'' معاً لتفادي فرق زائف.
+ */
+async function handleEventEditSubmit(e) {
+  e.preventDefault();
+  if (!editingEventId || !editingEventOriginal) return;
+
+  const town = document.getElementById('evtTown').value;
+  const villageRaw = town === VILLAGES_TOWN ? document.getElementById('evtVillage').value : '';
+
+  const current = {
+    title: document.getElementById('evtTitle').value.trim(),
+    family_clan: document.getElementById('evtFamilyClan').value.trim(),
+    town,
+    village_id: villageRaw === '' ? null : villageRaw,
+    location_name: document.getElementById('evtLocationName').value.trim(),
+    secondary_location_name: document.getElementById('evtSecondaryLocation').value.trim(),
+    latitude: document.getElementById('evtLat').value.trim(),
+    longitude: document.getElementById('evtLng').value.trim(),
+    event_date: document.getElementById('evtEventDate').value,
+    event_end_date: document.getElementById('evtEventEndDate').value,
+    youth_party_date: document.getElementById('evtYouthPartyDate').value,
+    dinner_time: document.getElementById('evtDinnerTime').value.trim(),
+    poster_url: document.getElementById('evtPosterUrl').value.trim(),
+    audio_url: document.getElementById('evtAudioUrl').value.trim(),
+    audio_title: document.getElementById('evtAudioTitle').value.trim(),
+    host_phone: document.getElementById('evtHostPhone').value.trim(),
+    artist_name: document.getElementById('evtArtistName').value.trim(),
+    artist_image_url: document.getElementById('evtArtistImageUrl').value.trim()
+  };
+
+  const payload = {};
+  let touchesCritical = false;
+
+  Object.keys(current).forEach(key => {
+    const orig = editingEventOriginal[key];
+    const val = current[key];
+    // كل الحقول تُقارَن كنصوص: القيم تخرج من عناصر الإدخال نصوصاً أصلاً،
+    // و`null` القرية و`''` الحقل الفارغ يجب أن يتساويا وإلا أُرسل تعديل وهمي.
+    if (String(orig ?? '') === String(val ?? '')) return;
+
+    payload[key] = key === 'village_id' ? (val === '' || val == null ? null : val) : val;
+    if (CRITICAL_AMENDMENT_FIELDS.includes(key)) touchesCritical = true;
+  });
+
+  const currentHonorees = collectEventHonorees();
+  if (!honoreesEqual(editingEventOriginal.honorees, currentHonorees)) {
+    if (!currentHonorees.length) {
+      alert('يجب إدخال اسم واحد على الأقل لأصحاب المناسبة');
+      return;
+    }
+    payload.honorees = currentHonorees;
+  }
+
+  if (!Object.keys(payload).length) {
+    // لا تعديل فعلي — لا نداء يُرسَل إطلاقاً (قيد ٤).
+    alert('لم تُجرِ أي تعديل — لا شيء لحفظه');
+    return;
+  }
+
+  // تحذير صريح قبل الحفظ حين يمسّ التعديل حقلاً حرجاً على مناسبة معتمدة
+  // ومنشورة حالياً — لا رسالة بعد وقوع الأمر (قيد ١، أخطر ما في المهمة).
+  if (touchesCritical && editingEventOriginal.status === 'approved') {
+    const confirmed = confirm(
+      '⚠️ هذا التعديل يمسّ حقلاً حرجاً (التاريخ أو المكان) في مناسبة معتمدة ومنشورة حالياً.\n' +
+      'حفظه سيعيدها فوراً إلى قائمة المراجعة، وستختفي عن الجمهور حتى تُعتمد مجدداً.\n\n' +
+      'هل تريد المتابعة؟'
+    );
+    if (!confirmed) return;
+  }
+
+  const btn = document.getElementById('evtEditSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch(`/api/events/${editingEventId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      // رسالة الخادم كما هي حرفياً — هي من تشرح الحرِج/التجميلي وتحمل تنبيه
+      // التعارض مدمَجاً فيها؛ location_warning حقل منفصل فلا يُبتلع (قيد الاستجابة).
+      let fullMessage = data.message || 'تم الحفظ بنجاح';
+      if (data.location_warning) fullMessage += `\n\n⚠️ ${data.location_warning}`;
+      alert(fullMessage);
+      closeEventEditForm();
+      await fetchAdminEvents();
+      await fetchKPIStats();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ التعديل';
+  }
 }
 
 // ======================================================================
@@ -1602,6 +2138,139 @@ async function handleSaveAdminTowns(adminId) {
       await fetchAdminAdmins();
     } else {
       alert(data.message || 'تعذّر الحفظ');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+// ======================================================================
+// 12. Privacy Requests Queue — سوبر أدمن حصراً (قصة 62، issue #44)
+//
+// GET/PATCH /api/admin/privacy-requests — «طابور لطلبات الاطّلاع والمحو كي لا
+// تضيع في رسائل». يُجلب status=pending فقط (الطابور المفتوح، لا كل سجل
+// تاريخي)، وكل صف يحمل من طلب ونوعه ومنذ متى مقابل PRIVACY_REQUEST_DEADLINE_DAYS
+// المعلَنة للمستخدم عند تقديم طلبه — فتجاوز الموعد يظهر بصرياً بنفس ألوان
+// status-tag القائمة (رفض=أحمر) لا بخانة نص إضافية. الإغلاق (PATCH) يُعلم
+// الطلب كمكتمل على الخادم فيغيب تلقائياً من هذه القائمة بعد إعادة التحميل —
+// لا حذف من العميل ولا إخفاء محلي وحده.
+// ======================================================================
+
+async function fetchAdminPrivacyRequests() {
+  try {
+    const res = await adminFetch('/api/admin/privacy-requests?status=pending');
+    const data = await res.json();
+
+    // نفس منطق fetchOccasionTypes/fetchAdminVillages — 403 هنا حقيقة راهنة من
+    // الخادم (جلسة منتهية أو صلاحية ناقصة)، فتُعرض بنص الخادم نفسه لا تُخفى.
+    if (res.status === 403) {
+      renderPrivacyRequestsForbidden(data.message);
+      return;
+    }
+
+    if (data.success) {
+      allPrivacyRequests = data.requests;
+      renderPrivacyRequestsList();
+    } else {
+      alert(data.message || 'تعذر تحميل طلبات الاطّلاع والمحو');
+    }
+  } catch (e) {
+    console.error('Privacy requests error:', e);
+  }
+}
+
+function renderPrivacyRequestsForbidden(message) {
+  const container = document.getElementById('privacyRequestsList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+        <button class="btn-approve" style="flex:none; width:auto; margin-top:14px;" onclick="fetchAdminPrivacyRequests()">
+          <i class="fa-solid fa-rotate"></i> إعادة المحاولة
+        </button>
+      </div>
+    `;
+  }
+}
+
+/** الأيام المتبقية أمام مهلة الرد المعلَنة — سالبة يعني تجاوز الموعد فعلياً. */
+function privacyRequestDaysRemaining(createdAt) {
+  const created = new Date(createdAt);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const daysWaiting = Math.floor((Date.now() - created.getTime()) / msPerDay);
+  return PRIVACY_REQUEST_DEADLINE_DAYS - daysWaiting;
+}
+
+function renderPrivacyRequestsList() {
+  const container = document.getElementById('privacyRequestsList');
+  if (!container) return;
+
+  if (!allPrivacyRequests.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-shield-heart" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد طلبات اطّلاع أو محو بانتظار المعالجة حالياً</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>مقدّم الطلب</th>
+          <th>نوع الطلب</th>
+          <th>تاريخ الطلب</th>
+          <th>الموعد النهائي</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allPrivacyRequests.map(r => {
+          const daysRemaining = privacyRequestDaysRemaining(r.created_at);
+          let deadlineClass = 'approved';
+          let deadlineText = `متبقٍ ${daysRemaining} يوماً`;
+          if (daysRemaining < 0) {
+            deadlineClass = 'rejected';
+            deadlineText = `متجاوَز الموعد بـ ${Math.abs(daysRemaining)} يوماً ⚠️`;
+          } else if (daysRemaining <= 5) {
+            deadlineClass = 'pending';
+          }
+
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHtml(r.user_full_name || '')}</strong>
+                ${r.user_phone ? `<div style="font-size:0.78rem;"><a href="tel:${escapeHtml(r.user_phone)}" style="color:var(--gold-main);">${escapeHtml(r.user_phone)}</a></div>` : ''}
+              </td>
+              <td>${escapeHtml(PRIVACY_REQUEST_TYPE_LABELS[r.request_type] || r.request_type)}</td>
+              <td style="font-size:0.82rem; color:var(--text-dim);">${new Date(r.created_at).toLocaleString('ar-EG')}</td>
+              <td><span class="status-tag ${deadlineClass}">${deadlineText}</span></td>
+              <td style="white-space:nowrap;">
+                <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="closePrivacyRequest(${r.id})">
+                  <i class="fa-solid fa-check"></i> إغلاق الطلب
+                </button>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** إغلاق يُعلم الطلب كمكتمل على الخادم — يُفترض أن الاطّلاع أو المحو المطلوب نُفِّذ يدوياً قبل الضغط هنا. */
+async function closePrivacyRequest(id) {
+  if (!confirm('إغلاق هذا الطلب؟ هذا يُعلمه كمكتمل — تأكد أنك نفّذت الاطّلاع أو المحو المطلوب يدوياً قبل المتابعة.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/privacy-requests/${id}`, { method: 'PATCH' });
+    const data = await res.json();
+    if (data.success) {
+      await fetchAdminPrivacyRequests();
+    } else {
+      alert(data.message || 'تعذّر إغلاق الطلب');
     }
   } catch (e) {
     alert('تعذر الاتصال بالخادم');

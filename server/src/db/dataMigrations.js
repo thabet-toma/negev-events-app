@@ -979,6 +979,102 @@ const steps = [
 
       logger.info('[migrations] create-service-directory-2026-09: ensured service_categories, service_providers, service_provider_towns. No categories seeded.');
     }
+  },
+  {
+    // The two behavioural-analytics tables (issue #44), in dependency order.
+    // See schema.sql for why analytics_events.user_id carries a real
+    // ON DELETE CASCADE FK (unlike story_views.user_id) and why
+    // analytics_daily_counters.content_town is NOT NULL DEFAULT '' rather
+    // than NULL.
+    name: 'create-analytics-events-2026-09',
+    async run(connection) {
+      if (!(await tableExists(connection, 'analytics_events'))) {
+        await connection.query(`
+          CREATE TABLE analytics_events (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            event_name   VARCHAR(60)  NOT NULL,
+            user_id      INT UNSIGNED DEFAULT NULL,
+            device_id    VARCHAR(100) DEFAULT NULL,
+            platform     VARCHAR(20)  NOT NULL,
+            app_version  VARCHAR(20)  DEFAULT NULL,
+            content_town VARCHAR(100) DEFAULT NULL,
+            viewer_key   VARCHAR(140) GENERATED ALWAYS AS (COALESCE(CONCAT('u:', user_id), CONCAT('d:', device_id))) VIRTUAL,
+            created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_analytics_events_created (created_at),
+            KEY idx_analytics_events_name (event_name),
+            KEY idx_analytics_events_viewer (viewer_key),
+            CONSTRAINT fk_analytics_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'analytics_daily_counters'))) {
+        await connection.query(`
+          CREATE TABLE analytics_daily_counters (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            day          DATE         NOT NULL,
+            event_name   VARCHAR(60)  NOT NULL,
+            platform     VARCHAR(20)  NOT NULL,
+            content_town VARCHAR(100) NOT NULL DEFAULT '',
+            count        INT UNSIGNED NOT NULL DEFAULT 0,
+            created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_analytics_daily_counters (day, event_name, platform, content_town)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      logger.info('[migrations] create-analytics-events-2026-09: ensured analytics_events, analytics_daily_counters.');
+    }
+  },
+  {
+    // The opt-out switch (issue #44, privacy layer part 2). Default 0 so
+    // every existing user stays opted in — the same "unaffected until they
+    // act" posture every other additive column in this file takes.
+    name: 'add-users-analytics-opt-out-2026-09',
+    async run(connection) {
+      if (await columnExists(connection, 'users', 'analytics_opt_out')) {
+        logger.info('[migrations] add-users-analytics-opt-out-2026-09: already present.');
+        return;
+      }
+
+      await connection.query(
+        'ALTER TABLE users ADD COLUMN analytics_opt_out TINYINT(1) NOT NULL DEFAULT 0'
+      );
+      logger.info('[migrations] add-users-analytics-opt-out-2026-09: column added.');
+    }
+  },
+  {
+    // The access/erasure request queue (issue #44, privacy layer part 3).
+    // schema.sql already carries this table's CREATE TABLE IF NOT EXISTS, so
+    // on a fresh install this step always no-ops — same guarded pattern as
+    // every table addition above.
+    name: 'create-privacy-requests-2026-09',
+    async run(connection) {
+      if (await tableExists(connection, 'privacy_requests')) {
+        logger.info('[migrations] create-privacy-requests-2026-09: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE privacy_requests (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_id      INT UNSIGNED NOT NULL,
+          request_type ENUM('access','erasure') NOT NULL,
+          status       ENUM('pending','completed') NOT NULL DEFAULT 'pending',
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          handled_at   TIMESTAMP    NULL DEFAULT NULL,
+          handled_by   INT UNSIGNED DEFAULT NULL,
+          PRIMARY KEY (id),
+          KEY idx_privacy_requests_status (status),
+          KEY idx_privacy_requests_user (user_id),
+          CONSTRAINT fk_privacy_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_privacy_requests_handler FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-privacy-requests-2026-09: table created.');
+    }
   }
 ];
 
