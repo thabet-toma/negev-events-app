@@ -953,6 +953,8 @@ async function getShareEvent(eventId) {
     `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
+            occasion_types.icon AS occasion_type_icon,
+            occasion_types.color AS occasion_type_colour,
             occasion_types.default_poster_url AS occasion_type_poster_url,
             (COALESCE(events.event_end_date, events.event_date) < CURDATE()) AS is_expired
        FROM events

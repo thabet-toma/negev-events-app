@@ -74,68 +74,169 @@ function resolvePosterUrl(event) {
   return absoluteMediaUrl(SHARE_FALLBACK_POSTERS[tone]);
 }
 
-/** No date, no venue, no phone — deliberately: those live in the app. */
-function buildDescription(event) {
-  const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ');
-  if (names && event.family_clan) return `${names} — ${event.family_clan}`;
-  return names || event.occasion_type_name || event.title;
+/**
+ * A CSS colour from the database is still database content, and it lands in a
+ * style="" attribute on our own domain. img-src is open on this page, so a
+ * crafted value could smuggle a background-image request out — hence a strict
+ * hex allow-list rather than escaping. Anything else falls back to the tone's
+ * own accent, which is never user-controlled.
+ */
+function safeHexColour(value, fallback) {
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || '')) ? value : fallback;
 }
 
-const PAGE_STYLE = `
+function toneOf(event) {
+  return OCCASION_TONES.includes(event.occasion_type_tone) ? event.occasion_type_tone : 'festive';
+}
+
+/**
+ * Two palettes, chosen by the type's own `tone` and never by its name. A عزاء
+ * must not arrive dressed in wedding gold, and a super admin renaming a type
+ * must not change how it looks.
+ */
+const PALETTES = {
+  festive: { bg: '#141821', card: '#1e232e', ink: '#f6f2ea', faint: '#a9b0bd', accent: '#d8ab5c', btnInk: '#141821' },
+  solemn: { bg: '#14181a', card: '#1c2124', ink: '#eef1f0', faint: '#a3adaa', accent: '#8fa8a0', btnInk: '#14181a' }
+};
+
+/**
+ * What the preview actually says. The event's own `title` is free text people
+ * fill with anything — on real rows it is often just the town name — so the
+ * occasion type leads instead: it is the one word that tells someone what they
+ * were sent. Falls back to the title only for a legacy row with no type.
+ *
+ * Still no date, no venue, no phone, in the preview or on the page: those live
+ * in the app, and that friction is the whole point of this page existing.
+ */
+function buildHeadline(event) {
+  const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ');
+  const type = event.occasion_type_name;
+  if (type && names) return `${type} ${names}`;
+  return type || names || event.title;
+}
+
+function buildDescription(event) {
+  const clan = event.family_clan;
+  return clan
+    ? `عائلة ${clan} — التفاصيل في تطبيق مناسبات النقب`
+    : 'التفاصيل في تطبيق مناسبات النقب';
+}
+
+function pageStyle(palette) {
+  return `
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    background: #1c1f26; color: #f4f1ec; font-family: Tahoma, Arial, sans-serif;
-    padding: 24px;
+    background: ${palette.bg}; color: ${palette.ink};
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif; padding: 20px;
+    background-image: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.05), transparent 60%);
   }
   .card {
-    width: 100%; max-width: 480px; background: #262a33; border-radius: 18px; overflow: hidden;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center;
+    width: 100%; max-width: 440px; background: ${palette.card}; border-radius: 22px;
+    overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,255,255,0.06); text-align: center;
   }
-  .poster { width: 100%; height: 360px; object-fit: cover; display: block; background: #3f4552; }
-  .body { padding: 24px 20px 28px; }
-  .expired-badge {
-    display: inline-block; background: #7a2e2e; color: #fbe4e4; font-size: 14px;
-    padding: 4px 14px; border-radius: 999px; margin-bottom: 12px;
+  .frame { position: relative; }
+  .poster { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; display: block; background: #2b3038; }
+  .veil {
+    position: absolute; inset: 0;
+    background: linear-gradient(to top, ${palette.card} 2%, rgba(0,0,0,0.35) 32%, transparent 62%);
   }
-  .honorees { font-size: 22px; margin: 0 0 20px; line-height: 1.6; }
-  .download-btn {
-    display: inline-block; background: #caa057; color: #1c1f26; text-decoration: none;
-    font-size: 17px; font-weight: bold; padding: 12px 32px; border-radius: 999px;
+  .chip {
+    position: absolute; inset-inline-start: 50%; transform: translateX(50%);
+    bottom: 16px; display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 18px; border-radius: 999px; font-size: 15px; font-weight: 700;
+    backdrop-filter: blur(6px); white-space: nowrap;
   }
-  .not-found { max-width: 420px; }
-  .not-found .body { padding: 40px 24px; }
-  .not-found h1 { font-size: 20px; margin: 0; }
+  .chip .ico { font-size: 17px; line-height: 1; }
+  .expired {
+    position: absolute; top: 14px; inset-inline-end: 14px;
+    background: rgba(20,24,33,0.82); color: ${palette.faint};
+    border: 1px solid rgba(255,255,255,0.14);
+    font-size: 13px; padding: 5px 14px; border-radius: 999px;
+  }
+  .body { padding: 20px 22px 26px; }
+  .names { font-size: 25px; font-weight: 700; margin: 0; line-height: 1.5; }
+  .clan { font-size: 15px; color: ${palette.faint}; margin: 7px 0 0; }
+  .rule {
+    width: 46px; height: 2px; margin: 18px auto 16px; border: 0; border-radius: 2px;
+    background: ${palette.accent}; opacity: 0.75;
+  }
+  .lead { font-size: 14px; color: ${palette.faint}; margin: 0 0 16px; line-height: 1.7; }
+  .cta {
+    display: block; background: ${palette.accent}; color: ${palette.btnInk};
+    text-decoration: none; font-size: 17px; font-weight: 700;
+    padding: 14px 20px; border-radius: 14px;
+  }
+  .mark {
+    font-size: 12px; color: ${palette.faint}; opacity: 0.75;
+    margin: 14px 0 0; letter-spacing: 0.3px;
+  }
+  .not-found { max-width: 380px; }
+  .not-found .body { padding: 44px 26px; }
+  .not-found h1 { font-size: 19px; margin: 0; font-weight: 700; }
+  .not-found p { font-size: 14px; color: ${palette.faint}; margin: 10px 0 0; }
 `;
+}
 
+/**
+ * No og:image:width/height is emitted, deliberately. They were pinned at
+ * 1200x630 while the real posters on production are portrait phone
+ * screenshots (a live one measures 1080x2340) — a declared aspect four times
+ * off the actual image, which is why the preview arrived with no picture at
+ * all: the crawler lays the card out from those numbers and drops or
+ * hair-slices an image that contradicts them. Declared dimensions are a
+ * rendering hint, not an obligation; absent, the crawler measures the image
+ * itself and is never lied to. Put them back only when we serve an image
+ * whose size we actually know.
+ */
 function renderEventPage(event, { pageUrl, imageUrl, downloadUrl }) {
-  const title = event.title;
+  const palette = PALETTES[toneOf(event)];
+  const headline = buildHeadline(event);
   const description = buildDescription(event);
-  const honoreesText = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || title;
+  const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
+  const typeName = event.occasion_type_name;
+  const typeColour = safeHexColour(event.occasion_type_colour, palette.accent);
+  const icon = event.occasion_type_icon;
+
+  // The type chip is the fix for what this page got wrong first time round:
+  // the preview led with the free-text title, often just the town on real rows,
+  // so nothing on the card said whether it was a wedding or a funeral.
+  const chip = typeName
+    ? `<span class="chip" style="background:${escapeHtml(typeColour)}26;color:${escapeHtml(typeColour)};border:1px solid ${escapeHtml(typeColour)}59;">${icon ? `<span class="ico">${escapeHtml(icon)}</span>` : ''}${escapeHtml(typeName)}</span>`
+    : '';
 
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title>
-<meta property="og:title" content="${escapeHtml(title)}">
+<title>${escapeHtml(headline)}</title>
+<meta property="og:title" content="${escapeHtml(headline)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:image" content="${escapeHtml(imageUrl)}">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
 <meta property="og:url" content="${escapeHtml(pageUrl)}">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="مناسبات النقب">
+<meta property="og:locale" content="ar_AR">
 <meta name="twitter:card" content="summary_large_image">
-<style>${PAGE_STYLE}</style>
+<style>${pageStyle(palette)}</style>
 </head>
 <body>
 <main class="card">
+<div class="frame">
 <img class="poster" src="${escapeHtml(imageUrl)}" alt="">
+<div class="veil"></div>
+${event.is_expired ? '<span class="expired">انتهت</span>' : ''}
+${chip}
+</div>
 <div class="body">
-${event.is_expired ? '<span class="expired-badge">انتهت</span><br>' : ''}
-<h1 class="honorees">${escapeHtml(honoreesText)}</h1>
-<a class="download-btn" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+<h1 class="names">${escapeHtml(names)}</h1>
+${event.family_clan ? `<p class="clan">${escapeHtml(event.family_clan)}</p>` : ''}
+<hr class="rule">
+<p class="lead">التفاصيل الكاملة في التطبيق</p>
+<a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+<p class="mark">مناسبات النقب</p>
 </div>
 </main>
 </body>
@@ -153,12 +254,14 @@ function renderNotFoundPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>المناسبة غير موجودة</title>
-<style>${PAGE_STYLE}</style>
+<style>${pageStyle(PALETTES.festive)}</style>
 </head>
 <body>
 <main class="card not-found">
 <div class="body">
 <h1>هذه المناسبة غير متاحة</h1>
+<p>قد تكون قد حُذفت، أو لم تُعتمد بعد.</p>
+<p class="mark">مناسبات النقب</p>
 </div>
 </main>
 </body>

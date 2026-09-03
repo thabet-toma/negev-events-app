@@ -2912,14 +2912,19 @@ async function run() {
     return { status: res.status, headers: res.headers, text: await res.text() };
   }
 
-  const shareTitle = `<img src=x onerror=alert(1)>"عرس صفحة المشاركة`;
+  // Attack the values the page actually renders. It leads with the occasion type
+  // and the honoree names now, not the free-text title, so putting the payload in
+  // `title` alone would leave this test passing while testing nothing.
+  const shareHonoree = `<img src=x onerror=alert(1)>"عريس`;
+  const shareClan = `<script>alert(2)</script>عشيرة`;
   let shareEventId = 0;
-  await test('Set up: an approved wedding with an HTML-metacharacter title, for the share-page tests below', async () => {
+  await test('Set up: an approved wedding whose honoree name and clan carry HTML metacharacters', async () => {
     const { status, body } = await api('POST', '/api/events', {
       token: adminToken,
       body: weddingEventBody({
-        title: shareTitle,
-        honorees: [{ name: 'عريس صفحة المشاركة' }],
+        title: 'عرس صفحة المشاركة',
+        family_clan: shareClan,
+        honorees: [{ name: shareHonoree }],
         town: 'رهط',
         event_date: '2027-09-10'
       })
@@ -2941,18 +2946,42 @@ async function run() {
     assert.ok(urlMatch && urlMatch[1].startsWith('http'), 'expected an absolute og:url');
   });
 
-  await test('An HTML-metacharacter title comes back escaped — in the page body AND inside content="…"', async () => {
+  await test('User text comes back escaped — in the page body AND inside content="…"', async () => {
     const { text } = await rawGet(`/e/${shareEventId}`);
+
     assert.ok(!text.includes('<img src=x onerror=alert(1)>'), 'raw markup must never appear unescaped');
+    assert.ok(!text.includes('<script>alert(2)</script>'), 'a raw script tag must never appear');
     assert.ok(
       text.includes('&lt;img src=x onerror=alert(1)&gt;&quot;'),
-      'expected the title escaped in the body'
+      'expected the honoree name escaped in the body'
+    );
+    assert.ok(
+      text.includes('&lt;script&gt;alert(2)&lt;/script&gt;'),
+      'expected the clan escaped in the body'
     );
 
+    // og:title now carries the occasion type plus the honoree names, so the
+    // payload rides in through the name — the attribute context still has to hold.
     const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
     assert.ok(titleMeta, 'expected an og:title meta tag');
-    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped title inside content="…"');
+    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped name inside content="…"');
     assert.ok(!titleMeta[1].includes('<img'), 'must not break out of content="…" with a raw tag');
+
+    const descMeta = text.match(/property="og:description" content="([^"]*)"/);
+    assert.ok(descMeta, 'expected an og:description meta tag');
+    assert.ok(!descMeta[1].includes('<script'), 'the clan must not break out of content="…" either');
+  });
+
+  await test('The preview leads with the occasion type, not the free-text title', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    const titleMeta = text.match(/property="og:title" content="([^"]*)"/);
+    assert.ok(titleMeta[1].startsWith('عرس'), `expected og:title to lead with the type, got: ${titleMeta[1]}`);
+  });
+
+  await test('No og:image:width/height is declared — we do not know the poster shape', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(!text.includes('og:image:width'), 'declaring a width we cannot verify is what broke the preview');
+    assert.ok(!text.includes('og:image:height'), 'declaring a height we cannot verify is what broke the preview');
   });
 
   await test('The Content-Security-Policy header is present on the share route', async () => {
