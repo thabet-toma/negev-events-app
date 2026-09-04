@@ -92,6 +92,14 @@ const COMBINED_SCRIPT = [CONFIG_JS, API_JS, APP_JS].join('\n;\n');
 // (server/src/services/occasionTypes.service.js: attachFieldsAndReactions)
 // ---------------------------------------------------------------------------
 
+// The admin panel is the second page in web/ and loads the same way, for the
+// same reason: nothing anywhere asserted that one of its screens renders. Same
+// script stripping and same concatenation as above, and for the same causes.
+const ADMIN_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'admin.html'), 'utf8');
+const ADMIN_JS = fs.readFileSync(path.join(WEB_DIR, 'admin.js'), 'utf8');
+const ADMIN_HTML_WITHOUT_SCRIPTS = ADMIN_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
+const ADMIN_COMBINED_SCRIPT = [CONFIG_JS, API_JS, ADMIN_JS].join('\n;\n');
+
 const WEDDING_TYPE = {
   id: 1,
   name: 'عرس',
@@ -270,6 +278,37 @@ function buildEnv({ loggedIn = false } = {}) {
   return dom;
 }
 
+/**
+ * The same seam for web/admin.html. Deliberately thinner than buildEnv(): the
+ * admin panel talks to nothing until a token exists, so an unauthenticated load
+ * is enough to drive a form open by hand, which is all these tests do.
+ */
+function buildAdminEnv() {
+  const virtualConsole = new VirtualConsole();
+  const dom = new JSDOM(ADMIN_HTML_WITHOUT_SCRIPTS, {
+    url: 'http://localhost/admin.html',
+    runScripts: 'dangerously',
+    virtualConsole
+  });
+  const { window } = dom;
+
+  window.fetch = buildFetchStub();
+  window.alert = () => {};
+  window.confirm = () => true;
+  window.matchMedia = () => ({
+    matches: false, addListener() {}, addEventListener() {}, removeListener() {}, removeEventListener() {}
+  });
+  window.Chart = function FakeChart() { return { destroy() {}, update() {} }; };
+  window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
+  // jsdom implements no layout, so scrollIntoView throws "not implemented" —
+  // and every form-open function in admin.js calls it as its last line.
+  window.Element.prototype.scrollIntoView = () => {};
+
+  window.eval(ADMIN_COMBINED_SCRIPT);
+
+  return dom;
+}
+
 async function run() {
   console.log('\nDOM smoke seam (web/, no database)\n');
 
@@ -395,6 +434,64 @@ async function run() {
     const solemnBtn = document.querySelector('#eventCard-903 .share-event-btn');
     assert.ok(solemnBtn, 'expected a share button on the solemn (عزا) card');
     assert.strictEqual(solemnBtn.textContent.trim(), 'أرسل النعي');
+  });
+
+  console.log('\nAdmin panel — the emoji icon fields');
+
+  /**
+   * `service_categories.icon` and `occasion_types.icon` hold a literal emoji:
+   * both clients print it as text beside the name (web/app.js and
+   * mobile/lib/screens/services_screen.dart), so it can never become a Font
+   * Awesome class. The field is free text, correctly — but it shipped with no
+   * way to enter one, which is what the product owner hit: "where am I supposed
+   * to get an emoji from?". These assert the shortcut exists and writes into
+   * the field the form actually submits.
+   */
+  await test('opening the service-category form renders an icon picker under the free-text field', () => {
+    const dom = buildAdminEnv();
+    dom.window.openServiceCategoryForm();
+
+    const choices = dom.window.document.querySelectorAll('#scIconPicker .icon-choice');
+    assert.ok(choices.length > 0, 'expected the service-category icon picker to render its choices');
+    assert.ok(
+      dom.window.document.getElementById('scIcon'),
+      'the free-text icon input must still be there — the picker is a shortcut, not a replacement'
+    );
+  });
+
+  await test('clicking a suggested icon fills the input the form submits', () => {
+    const dom = buildAdminEnv();
+    dom.window.openServiceCategoryForm();
+
+    const { document } = dom.window;
+    const choice = document.querySelectorAll('#scIconPicker .icon-choice')[3];
+    const expected = choice.textContent.trim();
+    choice.click();
+
+    assert.strictEqual(document.getElementById('scIcon').value, expected, 'the clicked emoji should land in #scIcon');
+    assert.ok(choice.classList.contains('active'), 'the clicked choice should be the highlighted one');
+  });
+
+  await test('the occasion-type form got the same treatment, not just the service one', () => {
+    const dom = buildAdminEnv();
+    // Opened for a new type rather than an existing one: admin.js keeps its
+    // loaded types in a top-level `let`, which an indirect eval does not expose
+    // on window (the same jsdom binding rule the comment above buildEnv()
+    // describes), so there is no honest way to seed one from out here. The
+    // pre-selection path is covered by the click test above regardless.
+    dom.window.openOccasionTypeForm();
+
+    const { document } = dom.window;
+    const choices = document.querySelectorAll('#otIconPicker .icon-choice');
+    assert.ok(choices.length > 0, 'expected the occasion-type icon picker to render its choices');
+    assert.strictEqual(
+      document.querySelectorAll('#otIconPicker .icon-choice.active').length,
+      0,
+      'nothing should be highlighted for a brand-new type with an empty icon'
+    );
+
+    choices[0].click();
+    assert.strictEqual(document.getElementById('otIcon').value, choices[0].textContent.trim());
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
