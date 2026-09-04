@@ -28,6 +28,44 @@ const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
 
+// أيقونات جاهزة لحقلَي «الأيقونة» — نوع المناسبة وفئة الخدمة. الحقل في الحالتين
+// إيموجي يُرسَم كنصّ حرفي بجانب الاسم في العميلين (web/app.js و
+// mobile/lib/screens/services_screen.dart)، لا صنف Font Awesome، ولذلك لا يمكن
+// استبداله بقائمة أصناف. لكن حقلاً نصّياً حرّاً يطلب إيموجي يفترض أن الأدمن يعرف
+// اختصار نظامه لفتح لوحة الإيموجي — وهو ما لا يعرفه، بحقّ. هذه لوحة اختصار فقط:
+// الحقل يبقى حرّاً والخادم يقبل أي إيموجي كما كان (services.routes.js).
+const OCCASION_TYPE_ICONS = ['💍', '🕊️', '💐', '🎓', '🕋', '👶', '🏠', '🤝', '📿', '🎉', '🌙', '🎊'];
+const SERVICE_CATEGORY_ICONS = [
+  '📷', '🎥', '🏛️', '🎪', '🍽️', '🍰', '☕', '🎤', '🔊', '💡', '🎀',
+  '💐', '🪑', '🚌', '👗', '💄', '💈', '💍', '🎁', '🎆', '⚡', '🧹'
+];
+
+/**
+ * يبني لوحة الأيقونات تحت حقل نصّي، ويُبرز ما يطابق قيمته الحالية.
+ * تُستدعى عند فتح النموذج بعد ضبط قيمة الحقل، لا قبلها.
+ */
+function renderIconPicker(containerId, inputId, icons) {
+  const container = document.getElementById(containerId);
+  const input = document.getElementById(inputId);
+  if (!container || !input) return;
+  const current = input.value.trim();
+  container.innerHTML = icons.map(icon => `
+    <button type="button" class="icon-choice${icon === current ? ' active' : ''}"
+      onclick="pickIcon('${containerId}', '${inputId}', '${icon}')">${icon}</button>
+  `).join('');
+}
+
+/** يضع الأيقونة المضغوطة في الحقل وينقل الإبراز إليها. */
+function pickIcon(containerId, inputId, icon) {
+  const input = document.getElementById(inputId);
+  const container = document.getElementById(containerId);
+  if (!input || !container) return;
+  input.value = icon;
+  container.querySelectorAll('.icon-choice').forEach(button => {
+    button.classList.toggle('active', button.textContent.trim() === icon);
+  });
+}
+
 // مرآة لـ VILLAGES_TOWN في server/src/constants.js — البلدة الوحيدة التي تقبل village_id.
 const VILLAGES_TOWN = 'القرى والتجمعات';
 
@@ -750,6 +788,7 @@ function openOccasionTypeForm(id) {
   document.getElementById('otCongratsLabel').value = type ? type.congratulations_label : '';
   document.getElementById('otBadgeTitle').value = type ? (type.default_badge_title || '') : '';
   document.getElementById('otIsActive').checked = type ? Boolean(type.is_active) : true;
+  renderIconPicker('otIconPicker', 'otIcon', OCCASION_TYPE_ICONS);
   document.getElementById('otCreatesCollision').checked = type ? Boolean(type.creates_collision) : false;
   document.getElementById('otWarnsOthers').checked = type ? Boolean(type.warns_others) : false;
   document.getElementById('otPremoderate').checked = type ? Boolean(type.premoderate_messages) : false;
@@ -1984,6 +2023,7 @@ function openServiceCategoryForm(id) {
   document.getElementById('scColor').value = category ? category.color : '#0369a1';
   document.getElementById('scPosition').value = category ? category.position : 0;
   document.getElementById('scIsActive').checked = category ? Boolean(category.is_active) : true;
+  renderIconPicker('scIconPicker', 'scIcon', SERVICE_CATEGORY_ICONS);
 
   wrapper.style.display = 'block';
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });

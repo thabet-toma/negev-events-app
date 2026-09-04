@@ -122,6 +122,21 @@ body {
 
 .hint-text { font-size: 0.76rem; color: var(--text-dim); margin-top: 5px; display: block; }
 
+/* لوحة الأيقونات تحت حقلَي الإيموجي (نوع المناسبة، فئة الخدمة). */
+.icon-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.icon-choice {
+  padding: 6px 9px;
+  font-size: 1.15rem;
+  line-height: 1.2;
+  cursor: pointer;
+  background: var(--surface-sunk);
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+.icon-choice:hover { border-color: var(--gold-main); }
+.icon-choice.active { border-color: var(--gold-main); box-shadow: 0 0 0 3px var(--sky-wash); }
+
 .admin-btn-primary {
   width: 100%;
   background: var(--gold-main);
