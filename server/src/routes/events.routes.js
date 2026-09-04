@@ -255,7 +255,7 @@ function buildCollisionMessage(conflict) {
   return `تعارض محتمل مع مناسبة "${conflict.title}" بتاريخ ${conflict.event_date}${conflict.town ? ` في ${conflict.town}` : ''}`;
 }
 
-router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
+router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const existing = await events.getEventForEdit(eventId);
   await assertCanManageEvent(req, existing);
@@ -293,6 +293,23 @@ router.patch('/events/:id', authenticate, asyncHandler(async (req, res) => {
   if (body.host_phone !== undefined) changes.host_phone = cleanString(body.host_phone, 30);
   if (body.artist_name !== undefined) changes.artist_name = cleanString(body.artist_name, 150);
   if (body.artist_image_url !== undefined) changes.artist_image_url = cleanString(body.artist_image_url, 2000);
+
+  // An uploaded file wins over the matching URL field, exactly as it does on
+  // publish (buildOptionalFieldFormatters above). Until this route carried
+  // `eventMedia` an edit could only ever point at a URL, so replacing a poster
+  // meant hosting the new one somewhere else first — which is not something an
+  // admin can be expected to do. Applied after the URL fields on purpose: a
+  // request that carries both means the file.
+  const uploads = req.files || {};
+  const uploadedMedia = {
+    poster_url: uploads.poster && uploads.poster[0],
+    audio_url: uploads.audio && uploads.audio[0],
+    artist_image_url: uploads.artist_image && uploads.artist_image[0]
+  };
+  Object.keys(uploadedMedia).forEach(field => {
+    const file = uploadedMedia[field];
+    if (file) changes[field] = `/uploads/${file.filename}`;
+  });
 
   if (body.village_id !== undefined) {
     const villageId = body.village_id === null || body.village_id === '' ? null : parseId(body.village_id, 'القرية');

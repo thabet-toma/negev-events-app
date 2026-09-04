@@ -299,6 +299,7 @@ function buildAdminEnv() {
     matches: false, addListener() {}, addEventListener() {}, removeListener() {}, removeEventListener() {}
   });
   window.Chart = function FakeChart() { return { destroy() {}, update() {} }; };
+  window.L = buildFakeLeaflet();
   window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
   // jsdom implements no layout, so scrollIntoView throws "not implemented" —
   // and every form-open function in admin.js calls it as its last line.
@@ -492,6 +493,69 @@ async function run() {
 
     choices[0].click();
     assert.strictEqual(document.getElementById('otIcon').value, choices[0].textContent.trim());
+  });
+
+  console.log('\nAdmin panel — editing an event');
+
+  /**
+   * The edit form used to ask for a latitude and a longitude as two bare text
+   * boxes, and for the poster as a URL — so replacing a picture meant hosting
+   * it somewhere else first. Both were the product owner's report. These pin
+   * the replacements: the coordinates come from a map, and a file can be
+   * chosen straight from the device.
+   */
+  await test('the event edit form carries a map and a file input, not hand-typed coordinates', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+
+    const { document } = dom.window;
+    assert.ok(document.getElementById('evtLocationMap'), 'expected a map container in the edit form');
+    assert.ok(document.getElementById('evtPosterFile'), 'expected a poster file input in the edit form');
+    assert.strictEqual(
+      document.getElementById('evtLat').type,
+      'hidden',
+      'latitude must no longer be a box someone types into — the map writes it'
+    );
+    assert.strictEqual(document.getElementById('evtLng').type, 'hidden');
+  });
+
+  await test('opening the map on an event with coordinates fills the fields the form submits', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+    dom.window.initEventLocationMap('31.2589', '34.7913');
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('evtLat').value, '31.258900');
+    assert.strictEqual(document.getElementById('evtLng').value, '34.791300');
+    assert.ok(
+      document.getElementById('evtCoordsLabel').textContent.includes('31.258900'),
+      'the coordinates should be readable under the map, not only inside a hidden input'
+    );
+  });
+
+  await test('an event with no coordinates opens with nothing selected, and clearing says so', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+    dom.window.initEventLocationMap('', '');
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('evtLat').value, '', 'no pin means no coordinate, not a default one');
+    assert.strictEqual(document.getElementById('evtCoordsLabel').textContent, 'لا موقع محدَّد');
+  });
+
+  await test('a chosen poster is sent as multipart under the field name the server reads', () => {
+    const dom = buildAdminEnv();
+    const file = new dom.window.File(['x'], 'poster.png', { type: 'image/png' });
+
+    const form = dom.window.buildEventEditFormData(
+      { title: 'عنوان جديد', village_id: null, honorees: [{ name: 'عريس' }] },
+      file
+    );
+
+    assert.ok(form.get('poster'), 'the file must ride under "poster" — the name upload.js registers');
+    assert.strictEqual(form.get('title'), 'عنوان جديد');
+    assert.strictEqual(form.get('village_id'), '', 'a cleared village must travel as empty, which the server reads as null');
+    assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'عريس' }]), 'honorees must be JSON, as the publish form sends them');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

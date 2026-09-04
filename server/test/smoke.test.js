@@ -54,7 +54,7 @@ async function test(name, fn) {
  * and the whole path had to be trusted by reading. `fields` uses the same
  * `honorees[0][name]` bracket notation web/app.js sends.
  */
-async function apiUpload(path, { fields = {}, files = [], token } = {}) {
+async function apiUpload(path, { fields = {}, files = [], token, method = 'POST' } = {}) {
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) form.append(key, value);
   for (const file of files) {
@@ -64,7 +64,7 @@ async function apiUpload(path, { fields = {}, files = [], token } = {}) {
   const headers = { 'X-App-Version': '2.0.0' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers, body: form });
+  const res = await fetch(`${baseUrl}${path}`, { method, headers, body: form });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
@@ -1507,6 +1507,53 @@ async function run() {
     const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
     assert.ok(/^https?:\/\//.test(fetched.event.poster_url), `poster_url must be absolute, got: ${fetched.event.poster_url}`);
     await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('PATCH replaces a poster from an uploaded file, not only from a URL', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس تبديل الملصق' }),
+      files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'first.png' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const before = await api('GET', `/api/events/${created.body.eventId}`);
+    const originalPoster = before.body.event.poster_url;
+
+    const patched = await apiUpload(`/api/events/${created.body.eventId}`, {
+      method: 'PATCH',
+      token: adminToken,
+      files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'second.png' }]
+    });
+    assert.strictEqual(patched.status, 200, `expected the multipart PATCH to succeed, got ${patched.status}: ${patched.body.message}`);
+
+    const after = await api('GET', `/api/events/${created.body.eventId}`);
+    assert.ok(
+      after.body.event.poster_url && after.body.event.poster_url !== originalPoster,
+      `the uploaded file must replace the poster — before: ${originalPoster}, after: ${after.body.event.poster_url}`
+    );
+    assert.ok(/^https?:\/\//.test(after.body.event.poster_url), 'and it must still come back absolute');
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
+  await test('A JSON PATCH still works now that the route carries multer — the old path must not regress', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس التعديل النصّي' })
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { status, body } = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: adminToken,
+      body: { title: 'عنوان بعد التعديل' }
+    });
+    assert.strictEqual(status, 200, `a JSON PATCH must still be accepted, got ${status}: ${body.message}`);
+
+    const after = await api('GET', `/api/events/${created.body.eventId}`);
+    assert.strictEqual(after.body.event.title, 'عنوان بعد التعديل');
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
   });
 
   await test('A poster and an artist image upload together — three file fields are now allowed, not two', async () => {
