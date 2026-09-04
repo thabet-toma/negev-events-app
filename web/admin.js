@@ -19,6 +19,8 @@ let allPrivacyRequests = [];
 // لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
 let editingEventId = null;
 let editingEventOriginal = null; // القيم الأصلية للمقارنة عند الحفظ — إرسال الفرق فقط (قيد ٤)
+let eventLocationMap = null;    // خريطة اختيار الموقع في نموذج التعديل — تُبنى مرّة وتُعاد استخدامها
+let eventLocationMarker = null;
 let allTownVillages = []; // من GET /api/towns، لا GET /api/admin/villages (قيد ٣ — الأخير 403 لأدمن محلي)
 let townVillagesFetchAttempted = false;
 
@@ -1072,17 +1074,24 @@ function ensureEventEditFormMounted() {
         </div>
       </div>
 
-      <div class="form-row">
-        <div class="form-group half">
-          <label>خط العرض (latitude) ${criticalHint}</label>
-          <input type="text" id="evtLat" placeholder="مثال: 31.2589">
+      <div class="form-group">
+        <label>موقع المناسبة على الخريطة ${criticalHint}</label>
+        <div id="evtLocationMap" class="admin-map-picker"></div>
+        <div class="map-picker-actions">
+          <button type="button" class="admin-btn-ghost" onclick="useMyLocationForEvent()">
+            <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن
+          </button>
+          <button type="button" class="admin-btn-ghost" onclick="clearEventLocation()">
+            <i class="fa-solid fa-eraser"></i> مسح التحديد
+          </button>
+          <span class="hint-text" id="evtCoordsLabel"></span>
         </div>
-        <div class="form-group half">
-          <label>خط الطول (longitude) ${criticalHint}</label>
-          <input type="text" id="evtLng" placeholder="مثال: 34.7913">
-        </div>
+        <!-- الحقلان يحملان القيمة المُرسَلة فعلاً؛ الخريطة تكتب فيهما. للقراءة
+             فقط لأن كتابة إحداثيات بخط اليد كانت الشكوى الأصلية. -->
+        <input type="hidden" id="evtLat">
+        <input type="hidden" id="evtLng">
       </div>
-      <p style="font-size:0.78rem; color:var(--text-dim); margin-top:-8px;">اختيار قرية يستبدل هذين الحقلين بإحداثياتها تلقائياً ما لم تُعدَّلا هنا صراحةً في نفس الحفظة.</p>
+      <p style="font-size:0.78rem; color:var(--text-dim); margin-top:-8px;">اختيار قرية يستبدل الإحداثيات بإحداثياتها تلقائياً ما لم تُحرَّك الدبّوس هنا في نفس الحفظة.</p>
 
       <div class="form-row">
         <div class="form-group half">
@@ -1123,8 +1132,11 @@ function ensureEventEditFormMounted() {
 
       <div class="form-row">
         <div class="form-group half">
-          <label>رابط صورة الملصق (URL)</label>
-          <input type="text" id="evtPosterUrl" maxlength="2000" placeholder="https://...">
+          <label>صورة الملصق</label>
+          <img id="evtPosterPreview" class="admin-media-preview" alt="" style="display:none;">
+          <input type="file" id="evtPosterFile" accept="image/*" onchange="previewEventPoster(event)">
+          <span class="hint-text">اختر صورة من جهازك لتحلّ محلّ الملصق الحالي، أو اترك الحقل واكتب رابطاً أدناه.</span>
+          <input type="text" id="evtPosterUrl" maxlength="2000" placeholder="https://..." style="margin-top:8px;">
         </div>
         <div class="form-group half">
           <label>رابط صورة الفنان (URL)</label>
@@ -1370,7 +1382,13 @@ async function openEventEditForm(id) {
   renderEventHonoreesEditor(editingEventOriginal.honorees);
   renderEventAmendmentsLog(amendments);
 
+  const posterFileInput = document.getElementById('evtPosterFile');
+  if (posterFileInput) posterFileInput.value = '';
+  showEventPosterPreview(editingEventOriginal.poster_url);
+
   wrapper.style.display = 'block';
+  // بعد إظهار الحاوية لا قبلها — Leaflet يقيس حاوية بعرض صفر وهي مخفية.
+  initEventLocationMap(editingEventOriginal.latitude, editingEventOriginal.longitude);
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -1386,6 +1404,157 @@ function closeEventEditForm() {
  * تعني ألا نداء يُرسَل إطلاقاً، لا نداء بجسم فارغ. حقول التاريخ (لا وقت) تُقارن
  * كنص "YYYY-MM-DD" مباشرة، وvillage_id يُطبَّع null/'' معاً لتفادي فرق زائف.
  */
+/**
+ * خريطة اختيار موقع المناسبة داخل نموذج التعديل.
+ *
+ * الحقلان `evtLat` و `evtLng` بقيا كما هما — هما ما يُقارَن ويُرسَل — لكنهما صارا
+ * مخفيَّين والخريطة هي من يكتب فيهما: كتابة خط طول وعرض بخط اليد كانت الشكوى
+ * الأصلية، وهي أيضاً أسهل طريقة لوضع دبّوس مناسبة في مكان خاطئ.
+ *
+ * نسخة مستقلة عن مُنتقي web/app.js عن قصد: الصفحتان لا تتشاركان وحدة (نفس سبب
+ * مرآة TOWNS أعلاه)، وسحب مُنتقي النشر إلى ملف ثالث يعني تعديل شاشة نشر تعمل
+ * اليوم — تغيير أوسع من هذا الإصلاح.
+ */
+const NEGEV_MAP_CENTER = [31.2858, 34.8431];
+
+/** يكتب الإحداثيات في الحقلين المخفيَّين ويحدّث السطر الظاهر تحت الخريطة. */
+function setEventCoords(lat, lng) {
+  const latInput = document.getElementById('evtLat');
+  const lngInput = document.getElementById('evtLng');
+  const label = document.getElementById('evtCoordsLabel');
+  if (!latInput || !lngInput) return;
+
+  if (lat == null || lng == null || lat === '' || lng === '') {
+    latInput.value = '';
+    lngInput.value = '';
+    if (label) label.textContent = 'لا موقع محدَّد';
+    return;
+  }
+
+  latInput.value = Number(lat).toFixed(6);
+  lngInput.value = Number(lng).toFixed(6);
+  if (label) label.textContent = `${latInput.value}، ${lngInput.value}`;
+}
+
+/** يضع الدبّوس (أو ينقله) ويُبقي الحقلين متزامنَين معه. */
+function placeEventMarker(lat, lng) {
+  if (!eventLocationMap) return;
+  if (eventLocationMarker) {
+    eventLocationMarker.setLatLng([lat, lng]);
+  } else {
+    eventLocationMarker = L.marker([lat, lng], { draggable: true }).addTo(eventLocationMap);
+    eventLocationMarker.on('dragend', () => {
+      const pos = eventLocationMarker.getLatLng();
+      setEventCoords(pos.lat, pos.lng);
+    });
+  }
+  setEventCoords(lat, lng);
+}
+
+/** يمسح التحديد — مناسبة بلا إحداثيات وضع مشروع، فالخادم يقبل تركهما فارغَين. */
+function clearEventLocation() {
+  if (eventLocationMarker && eventLocationMap) {
+    eventLocationMap.removeLayer(eventLocationMarker);
+  }
+  eventLocationMarker = null;
+  setEventCoords(null, null);
+}
+
+/** يقفز بالخريطة إلى موقع المتصفّح ويضع الدبّوس هناك. */
+function useMyLocationForEvent() {
+  if (!navigator.geolocation) {
+    alert('المتصفّح لا يدعم تحديد الموقع');
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      const { latitude, longitude } = position.coords;
+      if (eventLocationMap) eventLocationMap.setView([latitude, longitude], 15);
+      placeEventMarker(latitude, longitude);
+    },
+    () => alert('تعذّر تحديد موقعك — تأكّد من السماح للمتصفّح بالوصول إلى الموقع')
+  );
+}
+
+/**
+ * يبني الخريطة عند أول فتح للنموذج ثم يعيد ضبطها على المناسبة الحالية.
+ * `invalidateSize` ضرورية لأن الحاوية كانت `display:none` لحظة الإنشاء، وLeaflet
+ * يقيس أبعادها مرّة واحدة عند البناء.
+ */
+function initEventLocationMap(latitude, longitude) {
+  const container = document.getElementById('evtLocationMap');
+  if (!container || typeof L === 'undefined') return;
+
+  if (!eventLocationMap) {
+    eventLocationMap = L.map('evtLocationMap').setView(NEGEV_MAP_CENTER, 9);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(eventLocationMap);
+    eventLocationMap.on('click', ev => placeEventMarker(ev.latlng.lat, ev.latlng.lng));
+  }
+
+  if (eventLocationMarker) {
+    eventLocationMap.removeLayer(eventLocationMarker);
+    eventLocationMarker = null;
+  }
+
+  const hasPoint = latitude !== '' && longitude !== '' && latitude != null && longitude != null;
+  if (hasPoint) {
+    eventLocationMap.setView([Number(latitude), Number(longitude)], 14);
+    placeEventMarker(Number(latitude), Number(longitude));
+  } else {
+    eventLocationMap.setView(NEGEV_MAP_CENTER, 9);
+    setEventCoords(null, null);
+  }
+
+  setTimeout(() => eventLocationMap.invalidateSize(), 0);
+}
+
+/** معاينة فورية للملصق المختار من الجهاز، قبل الحفظ. */
+function previewEventPoster(e) {
+  const preview = document.getElementById('evtPosterPreview');
+  const file = e.target.files && e.target.files[0];
+  if (!preview) return;
+  if (!file) {
+    showEventPosterPreview(document.getElementById('evtPosterUrl').value.trim());
+    return;
+  }
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+}
+
+/** يعرض الملصق الحالي (أو يخفي المعاينة إن لم يكن هناك واحد). */
+function showEventPosterPreview(url) {
+  const preview = document.getElementById('evtPosterPreview');
+  if (!preview) return;
+  if (url) {
+    preview.src = url;
+    preview.style.display = 'block';
+  } else {
+    preview.removeAttribute('src');
+    preview.style.display = 'none';
+  }
+}
+
+/**
+ * يحوّل حمولة الفرق إلى `FormData` حين يرافقها ملف. `honorees` مصفوفة فتُرسَل
+ * نصاً JSON — نفس ما يفعله نموذج النشر، و`parseHonorees` على الخادم يقبل
+ * الاثنين. و`null` (القرية المُفرَّغة) يصير `''`، وهو ما يقرأه الخادم null.
+ */
+function buildEventEditFormData(payload, posterFile) {
+  const form = new FormData();
+  Object.keys(payload).forEach(key => {
+    const value = payload[key];
+    if (key === 'honorees') {
+      form.append(key, JSON.stringify(value));
+    } else {
+      form.append(key, value == null ? '' : String(value));
+    }
+  });
+  form.append('poster', posterFile);
+  return form;
+}
+
 async function handleEventEditSubmit(e) {
   e.preventDefault();
   if (!editingEventId || !editingEventOriginal) return;
@@ -1437,7 +1606,11 @@ async function handleEventEditSubmit(e) {
     payload.honorees = currentHonorees;
   }
 
-  if (!Object.keys(payload).length) {
+  // ملف مرفوع تعديلٌ بذاته وإن لم يتغيّر أي حقل نصّي: الخادم يشتق منه
+  // `poster_url` (events.routes.js، PATCH)، فلا يُحسب النموذج فارغاً.
+  const posterFile = (document.getElementById('evtPosterFile').files || [])[0] || null;
+
+  if (!Object.keys(payload).length && !posterFile) {
     // لا تعديل فعلي — لا نداء يُرسَل إطلاقاً (قيد ٤).
     alert('لم تُجرِ أي تعديل — لا شيء لحفظه');
     return;
@@ -1459,11 +1632,14 @@ async function handleEventEditSubmit(e) {
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
 
   try {
-    const res = await adminFetch(`/api/events/${editingEventId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    // مع ملف: multipart، والفرق نفسه يُرسَل حقلاً حقلاً. بلا ملف: JSON كما كان
+    // تماماً. لا Content-Type يدوي في حالة FormData — المتصفّح يضبط الحدّ الفاصل،
+    // وضبطُه بخط اليد يكسر التحليل على الخادم.
+    const request = posterFile
+      ? { method: 'PATCH', body: buildEventEditFormData(payload, posterFile) }
+      : { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
+
+    const res = await adminFetch(`/api/events/${editingEventId}`, request);
     const data = await res.json();
 
     if (data.success) {
