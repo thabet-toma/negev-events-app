@@ -69,8 +69,12 @@ function escapeHtml(value) {
  * occasion type leads instead: it is the one word that tells someone what they
  * were sent. Falls back to the title only for a legacy row with no type.
  *
- * Still no date, no venue, no phone, in the preview or on the page: those live
- * in the app, and that friction is the whole point of this page existing.
+ * Still no date, no venue, no phone in any text this file emits — the preview
+ * copy, the meta tags, the page body. Those live in the app, and that friction
+ * is the point of this page. What the generated card shows is a separate
+ * question and a separate decision: the poster is drawn sharp there, so
+ * anything a family printed on their own invitation is visible in it (see
+ * shareCard.service.js). This file's own restraint is unchanged either way.
  */
 function buildHeadline(event) {
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ');

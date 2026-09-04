@@ -5,21 +5,27 @@
  * server/src/routes/share.routes.js) — a 1200×1200 card the server draws
  * itself, instead of handing crawlers the event's own poster.
  *
- * Why not just hand over the poster: real ones are portrait (a live one
- * measures 1080×2340), and a crawler laying out a link preview drops or
+ * Why not just hand crawlers the poster itself: real ones are portrait (a live
+ * one measures 1080×2340), and a crawler laying out a link preview drops or
  * hair-slices an image that does not fit the shape it expects — "the image
- * doesn't show" was the literal bug report. Worse, a wedding poster has the
- * date and venue printed on it, and the whole point of the share page is to
- * withhold those until someone installs the app, so passing it through leaked
- * exactly what the page exists to hide.
+ * doesn't show" was the literal bug report. Drawing our own card fixes the
+ * shape, and gives the type and the names somewhere to live.
  *
  * The shape and the proportions are the product owner's: square, because a
  * square preview occupies far more of a WhatsApp bubble than a 1.91:1 strip
  * does, and mostly poster — "mostly picture, a little for the occasion type,
- * the name, and promoting the site". So the poster is shown whole and large,
- * and blur (calibrated in `posterBlur`) is what keeps its printed details
- * unreadable — that blur is the privacy mechanism itself, not decoration on
- * top of some other control.
+ * the name, and promoting the site".
+ *
+ * And the poster is drawn *sharp*. An earlier cut blurred it, because a
+ * wedding poster has the date and venue printed on it and the share page was
+ * built to withhold those until someone installs the app. That trade was put
+ * to the product owner explicitly — a legible poster gives the details away in
+ * the preview, and there is no middle setting (measured: at blur(8px) the
+ * Arabic on a live poster was still readable) — and the call was to show the
+ * picture: "let the image show". So the withholding that remains is in the
+ * *text*: `share.routes.js` still prints no date, venue or phone anywhere on
+ * the page or in the meta tags. Whatever the family chose to print on their
+ * own invitation travels with it.
  *
  * No SQL lives here — `events.service.getShareEvent` already has everything
  * this needs (including `updated_at`, the cache key below), and this module
@@ -198,23 +204,6 @@ const BAND_HEIGHT = 268;
 const HERO_HEIGHT = HEIGHT - BAND_HEIGHT;
 
 /**
- * How hard to blur the poster, in the coordinates it is *drawn* at.
- *
- * Blur is not decoration here: it is the mechanism that keeps a poster's
- * printed date and venue unreadable, which is the whole reason the share page
- * exists (someone who can read the date off the preview never installs the
- * app). So it is calibrated to the drawn size rather than fixed. Measured
- * against the two posters live on production: a fixed blur(8px) still left
- * Arabic text readable at full size, and blur(9px) still left a poster's
- * headline readable when drawn at 82% — while at 20% (a tall poster contained
- * in a small frame) the downscale alone had already destroyed everything.
- * Scaling with the drawn-to-source ratio is what makes one number cover both.
- */
-function posterBlur(drawnWidth, sourceWidth) {
-  return Math.max(5, Math.round((drawnWidth / sourceWidth) * 17));
-}
-
-/**
  * Lightens a colour until it is legible as text on this card's dark palette.
  *
  * `occasion_types.color` is admin-chosen for the app's own light-background
@@ -239,8 +228,8 @@ function readableOnDark(hex) {
 
 /**
  * Draws the poster across the hero area: the whole poster, contained so it is
- * never cropped, over a blurred cover-crop of itself that fills whatever the
- * containing leaves over. A wedding poster is portrait and this area is not,
+ * never cropped and never blurred, over a blurred cover-crop of itself that
+ * fills whatever the containing leaves over. A wedding poster is portrait and this area is not,
  * so those side bars are unavoidable — filling them with the poster's own
  * colours is what stops them reading as empty gutters.
  */
@@ -253,8 +242,9 @@ function drawHero(ctx, img, palette) {
   const areaRatio = WIDTH / HERO_HEIGHT;
   const sourceRatio = img.width / img.height;
 
-  // Fill: cover-cropped and blurred far past legibility, drawn proud of the
-  // area so the blur's own edge falloff is clipped away.
+  // Fill: the poster again, cover-cropped and blurred, purely to carry its
+  // colours into whatever space containing the real one leaves over. Drawn
+  // proud of the area so the blur's own edge falloff is clipped away.
   const bleed = 70;
   let cw;
   let ch;
@@ -296,14 +286,13 @@ function drawHero(ctx, img, palette) {
   ctx.fill();
   ctx.restore();
 
-  const blur = posterBlur(width, img.width);
+  // Sharp, and drawn exactly inside the frame — see the note at the top of
+  // this file for why there is no blur here any more.
   ctx.save();
   ctx.beginPath();
   ctx.roundRect(x, y, width, height, radius);
   ctx.clip();
-  ctx.filter = `blur(${blur}px)`;
-  const edge = blur * 3;
-  ctx.drawImage(img, x - edge, y - edge, width + edge * 2, height + edge * 2);
+  ctx.drawImage(img, x, y, width, height);
   ctx.restore();
 
   ctx.save();
