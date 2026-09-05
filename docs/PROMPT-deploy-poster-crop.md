@@ -8,7 +8,7 @@
 | السيرفر | `root@munasbat.ktra-pro.tech` · مفتاح `~/.ssh/hostenger2/id_ed25519` (المسار مجلد، والمفتاح داخله) |
 | مسار التطبيق | `/root/munasbat/app` |
 | من | ‏`79b1bf1` — **تحقّقتُ منه حيّاً**: `admin.js` يحمل أيقونات الإيموجي، و`admin.html` يحمل Leaflet، و`PATCH` بلا رمز يعيد `401`. أي أن نشر إصلاحات اللوحة السابق تمّ فعلاً |
-| إلى | `main` بعد دمج فرع `fix/poster-crop-contract` |
+| إلى | `main` عند `22d0205` (دمج PR #58) |
 
 ## ⚠️ تصحيح لبرومت النشر السابق — اقرأه قبل أن تشغّل شيئاً
 
@@ -67,7 +67,7 @@
 cd /root/munasbat/app
 git status            # نظيفة (docker-compose.override.yml غير المتتبَّع طبيعي — اتركه)
 git pull origin main
-git log --oneline -1
+git log --oneline -1  # يجب أن يظهر 22d0205
 ```
 
 **لا `docker compose build`. لا `docker compose up`.** إن شغّلتهما فلن يضرّا، لكنهما
