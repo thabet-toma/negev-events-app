@@ -85,6 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStories();
   renderStickerCanvas();
   initAppDownload();
+  initInstallHint();
   fetchNotifications();
 
   const today = new Date().toISOString().split('T')[0];
@@ -249,6 +250,51 @@ async function initAppDownload() {
   } catch (e) {
     // الخادم متوقف أو النداء فشل: الزائر لا يرى زراً ولا خطأ.
     console.debug('App download entry unavailable:', e);
+  }
+}
+
+/**
+ * إرشاد التثبيت على iOS — الوجه الآخر لـ`initAppDownload` أعلاه.
+ *
+ * زرّ التحميل يختفي على الآيفون لأن ملف APK لا يعمل هناك، فيبقى مستخدم الآيفون
+ * بلا أي مسار تطبيق. وهذا مساره الوحيد: iOS لا يعرض أي مُحفِّز تثبيت — لا
+ * `beforeinstallprompt` ولا مكافئ له (#54) — فلا يوجد زرّ «ثبّت» يمكن برمجته،
+ * والشرح اليدوي خيارٌ وحيد لا خيارٌ كسول.
+ *
+ * ويُصرَف مرة واحدة إلى الأبد: من أغلقه لا يُزعَج به ثانيةً.
+ */
+function initInstallHint() {
+  const sheet = document.getElementById('installHint');
+  if (!sheet) return;
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    // iPadOS يعرّف نفسه ماكنتوش منذ 13؛ وجود اللمس هو ما يفرّقه عن ماك حقيقي.
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!isIOS) return;
+
+  // مثبَّت فعلاً: `navigator.standalone` هو ما يجيب عليه iOS، والاستعلام يغطّي
+  // البقية. إظهار إرشاد تثبيت لمن ثبّت هو أسوأ من عدم إظهاره أصلاً.
+  const installed = window.navigator.standalone === true
+    || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  if (installed) return;
+
+  try {
+    if (localStorage.getItem('negev_install_hint') === 'dismissed') return;
+  } catch (e) {
+    // تصفّح خاص: القراءة نفسها ترمي. نُظهر الإرشاد ولا نُسقط الصفحة.
+  }
+
+  sheet.hidden = false;
+}
+
+/** صرف الإرشاد — يُستدعى من الزر في index.html. */
+function dismissInstallHint() {
+  const sheet = document.getElementById('installHint');
+  if (sheet) sheet.hidden = true;
+  try {
+    localStorage.setItem('negev_install_hint', 'dismissed');
+  } catch (e) {
+    // لا شيء يُحفظ في التصفّح الخاص، والصرف يبقى نافذاً لهذه الجلسة على الأقل.
   }
 }
 

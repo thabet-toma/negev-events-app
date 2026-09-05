@@ -97,7 +97,13 @@ body {
   text-align: center;
 }
 
-.crown-icon { font-size: 3.5rem; display: block; margin-bottom: 14px; }
+.admin-logo-mark {
+  width: 68px;
+  height: 68px;
+  display: block;
+  margin: 0 auto 14px;
+  color: var(--gold-main);
+}
 
 .admin-logo h2 { font-size: 1.5rem; color: var(--text-main); margin-bottom: 6px; font-weight: 900; }
 .admin-logo p { font-size: 0.86rem; color: var(--text-dim); margin-bottom: 26px; }

@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>مركز القيادة | لوحة السوبر أدمن لمناسبات النقب</title>
-  
+
+  <!-- نفس فافيكون الموقع (#57): اللوحة تُفتح في تبويب بجانبه، وتبويب بلا أيقونة
+       يُقرأ صفحة غريبة. اللوحة ليست تطبيقاً يُثبَّت، فلا مانيفست لها. -->
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+
   <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -29,7 +34,11 @@
   <div id="adminLoginScreen" class="admin-login-wrapper">
     <div class="admin-login-card">
       <div class="admin-logo">
-        <span class="crown-icon">👑</span>
+        <!-- العلامة نفسها التي في الموقع (#57)، لا تاجاً — اللوحة جزء من المنصّة
+             لا منتج آخر. -->
+        <svg class="admin-logo-mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <path d="M14 66 L28 44 Q39 47 50 35 Q61 47 72 44 L86 66 Z" fill="currentColor"></path>
+        </svg>
         <h2>مركز تحكم السوبر أدمن</h2>
         <p>المنصة العالمية لمناسبات وأعراس النقب</p>
       </div>

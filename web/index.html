@@ -5,11 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>مناسبات النقب | المنصة الأولى لأعراس وأفراح النقب</title>
   
-  <!-- Web App Manifest Meta -->
+  <!-- تطبيق ويب قابل للتثبيت (#55). الوسمان الأخيران كانا هنا وحدهما يعدان
+       بمانيفست غير موجود: لا يجعلان الموقع قابلاً للتثبيت، بل يغيّران شكله بعد
+       أن يثبّته المستخدم بيده. المانيفست موجود الآن، والأيقونات معه.
+       `apple-mobile-web-app-capable` **غير مُهمَل من Apple** — تحذير الإهمال
+       مصدره Chromium وحده — فيبقى، ويُضاف `mobile-web-app-capable` إلى جانبه
+       لا بدلاً منه (#54). -->
+  <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#eef2f6">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="مناسبات النقب">
   <meta name="description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
+
+  <!-- `apple-touch-icon` ليس تكراراً لأيقونات المانيفست: iOS يقرأ المانيفست
+       لكنه **يقدّم هذا الوسم عليه** (WebKit 15.4، وما زال قائماً في 26.6). بدونه
+       يشتقّ النظام أيقونة الشاشة الرئيسية من لقطة للصفحة. -->
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 
   <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11)؛ Tajawal/Amiri تبقى لاستوديو الملصقات (canvas) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -46,8 +61,14 @@
   <header class="app-header">
     <div class="header-container">
       <div class="logo-area">
+        <!-- العلامة: بيت الشَّعَر (#56). كانت إيموجي هلال — يتغيّر شكله بين
+             الأنظمة، ولا نملك منه ملفاً، ويُقرأ دينياً والمنصّة مدنية. الخيمة
+             ترمز إلى **المكان لا الحدث**، وهي ما يشترك فيه كل نوع مناسبة هنا:
+             خيمة العرس خيمة، وبيت العزاء خيمة. -->
         <div class="logo-badge">
-          <span class="logo-moon">🌙</span>
+          <svg class="logo-mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <path d="M14 66 L28 44 Q39 47 50 35 Q61 47 72 44 L86 66 Z" fill="currentColor"></path>
+          </svg>
         </div>
         <div class="logo-text">
           <h1>مناسبات النقب <span class="pro-tag">PRO</span></h1>
@@ -755,6 +776,26 @@
         <button class="close-modal-btn" onclick="closePrivacyNoticeModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div id="privacyNoticeText" class="privacy-notice-text">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- إرشاد التثبيت على iOS (#55) — الوجه الآخر لزرّ تحميل APK، الذي يختفي على
+       الآيفون لأن الملف لا يعمل هناك. بلا هذا القسم يبقى مستخدم الآيفون بلا أي
+       مسار تطبيق إطلاقاً. يُظهره app.js شرطياً؛ يبقى مخفياً لكل أحد آخر. -->
+  <div id="installHint" class="install-hint" hidden>
+    <button class="install-hint-close" onclick="dismissInstallHint()" aria-label="إغلاق إرشاد التثبيت">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+    <svg class="install-hint-mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+      <path d="M14 66 L28 44 Q39 47 50 35 Q61 47 72 44 L86 66 Z" fill="currentColor"></path>
+    </svg>
+    <div class="install-hint-body">
+      <strong>ثبّت مناسبات النقب على شاشتك</strong>
+      <p>
+        اضغط زرّ المشاركة <i class="fa-solid fa-arrow-up-from-bracket"></i> في شريط
+        سفاري، ثم اختر <b>«إضافة إلى الشاشة الرئيسية»</b>.
+      </p>
+      <p class="install-hint-why">وبذلك تُفتح المنصة كأي تطبيق، ويبقى دخولك محفوظاً.</p>
     </div>
   </div>
 

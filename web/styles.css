@@ -163,7 +163,9 @@ body {
   justify-content: center;
 }
 
-.logo-moon { font-size: 22px; }
+/* العلامة تأخذ لونها من `currentColor` فتتبع الوضعين الفاتح والداكن بلا نسخة
+   ثانية منها (#56). */
+.logo-mark { width: 26px; height: 26px; color: var(--sky); display: block; }
 
 .logo-text h1 {
   font-size: 1.25rem;
@@ -1299,3 +1301,47 @@ body {
 .provider-modal-img { width: 100%; max-height: 220px; object-fit: cover; border-radius: var(--radius-md); margin-bottom: 14px; }
 .provider-modal-desc { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.75; margin-bottom: 10px; }
 .provider-modal-towns { color: var(--ink-faint); font-size: 0.82rem; margin-bottom: 16px; }
+
+/* ===== إرشاد التثبيت على iOS (#55) =====
+   ورقة سفلية لا نافذة معترِضة: مستخدم الآيفون جاء ليرى مناسبة، لا ليُطالَب
+   بتثبيت. تُصرَف بضغطة وتُحفظ مصروفة. */
+.install-hint {
+  position: fixed;
+  inset-inline: 12px;
+  inset-block-end: 12px;
+  z-index: 2000;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lift);
+  max-width: 460px;
+  margin-inline: auto;
+}
+
+.install-hint-mark { width: 40px; height: 40px; flex: 0 0 auto; color: var(--sky); margin-block-start: 2px; }
+
+.install-hint-body { flex: 1; min-width: 0; }
+.install-hint-body strong { display: block; font-size: 0.98rem; font-weight: 900; color: var(--ink); margin-block-end: 5px; }
+.install-hint-body p { font-size: 0.84rem; color: var(--ink-soft); line-height: 1.7; margin: 0; }
+.install-hint-body i { color: var(--sky); }
+.install-hint-why { margin-block-start: 6px !important; color: var(--ink-faint) !important; font-size: 0.78rem !important; }
+
+.install-hint-close {
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-start: 8px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.install-hint-close:hover { background: var(--line-soft); color: var(--ink); }
