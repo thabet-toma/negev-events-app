@@ -524,8 +524,13 @@ body {
    الصورة + سطر عشيرة/بلدة بلون النوع تحت الاسم (#20 خطوة 11، قرار ٤) */
 .card-shot { position: relative; }
 
+/* `object-position: top` لا `cover` وحدها (#53): الملصق عمودي غالباً — دعوة
+   مطبوعة أو صورة هاتف ٣:٤ — والشريط هنا أفقي، فالقصّ المركزي الافتراضي يأكل
+   الأعلى والأسفل معاً، والوجه في الأعلى. هذا سطح **مسح** لا قرار، والملصق فيه
+   أيقونة تعريف: أعلى الدعوة ترويستها، وأعلى الصورة الوجه. العرض الكامل هنا
+   يعطي طابعاً بعرض ٩٣px وسط شريط فارغ — لذلك يُترك لسطوح القرار وحدها. */
 .card-poster-wrapper { height: 124px; overflow: hidden; background: var(--surface-sunk); }
-.card-poster-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-poster-img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 
 /* العزاء: صورة المتوفَّى اختيارية وأهدأ — أقصر، بلا شارة تاريخ، وأردوازي لا سماوي (قرار ٥) */
 .card-poster-wrapper.tone-mourning { height: 96px; background: linear-gradient(135deg, #334155, #64748b); }

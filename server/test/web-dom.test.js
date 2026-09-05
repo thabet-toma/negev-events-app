@@ -100,6 +100,13 @@ const ADMIN_JS = fs.readFileSync(path.join(WEB_DIR, 'admin.js'), 'utf8');
 const ADMIN_HTML_WITHOUT_SCRIPTS = ADMIN_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
 const ADMIN_COMBINED_SCRIPT = [CONFIG_JS, API_JS, ADMIN_JS].join('\n;\n');
 
+// The two stylesheets are read as text, not parsed: jsdom implements no layout
+// and loads no external CSS here, so there is nothing to compute a style from.
+// A text assertion is still a real guard — it fails the moment someone deletes
+// the rule — and it is the only seam this buildless frontend offers.
+const STYLES_CSS = fs.readFileSync(path.join(WEB_DIR, 'styles.css'), 'utf8');
+const ADMIN_CSS = fs.readFileSync(path.join(WEB_DIR, 'admin.css'), 'utf8');
+
 const WEDDING_TYPE = {
   id: 1,
   name: 'عرس',
@@ -151,6 +158,19 @@ const FUNERAL_TYPE = {
 
 const OCCASION_TYPES_FIXTURE = [WEDDING_TYPE, FUNERAL_TYPE];
 
+/** One approved event with a poster — enough for renderAdminEvents to draw a card. */
+const ADMIN_EVENT_FIXTURE = {
+  id: 7,
+  status: 'approved',
+  title: 'شقيب سلام',
+  town: 'شقيب السلام',
+  groom_name: 'راني',
+  family_clan: 'سلام',
+  event_date: '2026-09-26',
+  location_name: 'شقيب سلام دوار الثاني بجانب الملعب الكبير',
+  poster_url: 'https://example.test/uploads/poster.jpg'
+};
+
 function jsonResponse(body, { status = 200 } = {}) {
   return {
     ok: status >= 200 && status < 300,
@@ -178,6 +198,9 @@ function buildFetchStub() {
     if (requestPath === '/api/map/events') return jsonResponse({ success: true, points: [] });
     if (requestPath === '/api/app/version') return jsonResponse({ success: false });
     if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [] });
+    if (requestPath === '/api/admin/events') {
+      return jsonResponse({ success: true, events: [ADMIN_EVENT_FIXTURE] });
+    }
     return jsonResponse({ success: false });
   };
 }
@@ -556,6 +579,58 @@ async function run() {
     assert.strictEqual(form.get('title'), 'عنوان جديد');
     assert.strictEqual(form.get('village_id'), '', 'a cleared village must travel as empty, which the server reads as null');
     assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'عريس' }]), 'honorees must be JSON, as the publish form sends them');
+  });
+
+
+  console.log('\nAdmin panel — the poster is no longer cropped through the head');
+
+  /**
+   * The product owner sent a screenshot of the admin list: a portrait photo
+   * with the head cut clean off. `object-fit: cover` crops from the CENTRE by
+   * default, and every poster here is portrait — a printed invitation or a 3:4
+   * phone photo — inside a landscape band, so the crop eats the top and the
+   * bottom, and the face lives at the top.
+   *
+   * The contract these pin (#53): a surface you SCAN crops, but from the top;
+   * a surface where you DECIDE shows the whole poster. The admin list is the
+   * second kind — an admin looking at a crop is being shown the wrong thing.
+   */
+  await test('the admin list draws the whole poster over a fill, not a crop of it', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminEvents();
+
+    const { document } = dom.window;
+    const shot = document.querySelector('#adminEventsList .admin-card-shot');
+    assert.ok(shot, 'expected the poster to sit in a shot wrapper, which is what holds the fill behind it');
+
+    const poster = shot.querySelector('.admin-card-poster');
+    const fill = shot.querySelector('.admin-card-poster-fill');
+    assert.ok(poster, 'the poster itself must still be there');
+    assert.ok(fill, 'and a blurred copy behind it, or the contained poster sits in empty gutters');
+    assert.strictEqual(poster.getAttribute('src'), fill.getAttribute('src'), 'both must be the same file — one fetch, not two');
+    assert.strictEqual(fill.getAttribute('aria-hidden'), 'true', 'the fill is decoration and must not be announced twice');
+  });
+
+  await test('and its stylesheet contains the poster rather than cropping it', () => {
+    assert.ok(
+      /\.admin-card-poster\s*\{[^}]*object-fit:\s*contain/.test(ADMIN_CSS),
+      'the admin poster must be contained — a cropped poster is what the product owner reported'
+    );
+    assert.ok(
+      /\.admin-card-shot\s*\{[^}]*height:\s*200px/.test(ADMIN_CSS),
+      'the height must stay fixed, or the card grid goes ragged — that is the whole reason for the blurred fill'
+    );
+  });
+
+  await test('the browsing cards still crop, but from the top, so the face survives', () => {
+    assert.ok(
+      /\.card-poster-img\s*\{[^}]*object-position:\s*top/.test(STYLES_CSS),
+      'without an explicit top anchor object-fit: cover crops from the centre, which is the reported bug'
+    );
+    assert.ok(
+      /\.card-poster-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
+      'the browsing card keeps cropping on purpose: contained inside 124px a portrait poster is a 93px stamp'
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

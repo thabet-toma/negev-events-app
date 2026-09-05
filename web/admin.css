@@ -324,7 +324,24 @@ body {
 .status-tag.approved { background: var(--success-wash); color: var(--success-green); }
 .status-tag.rejected { background: var(--danger-wash); color: var(--danger-red); }
 
-.admin-card-poster { width: 100%; height: 200px; object-fit: cover; background: var(--surface-sunk); }
+/* الأدمن هنا **يقرّر اعتماداً**، فيرى الملصق كاملاً لا قصاصة منه (#53): عرض
+   الأدمن قصاصةً هو عرض الشيء الخطأ عليه. `contain` فوق تعبئة مطموسة من الصورة
+   نفسها تملأ ما يتركه، فالارتفاع يبقى ثابتاً عند ٢٠٠px والشبكة منتظمة بلا حوافّ
+   فارغة. نفس ما تفعله `drawHero` في shareCard.service.js، منقولاً إلى CSS.
+   الصورتان بنفس العنوان فالمتصفّح يجلبه مرّة واحدة. */
+.admin-card-shot { position: relative; height: 200px; overflow: hidden; background: var(--surface-sunk); }
+
+.admin-card-poster-fill {
+  position: absolute;
+  inset: -28px;
+  width: calc(100% + 56px);
+  height: calc(100% + 56px);
+  object-fit: cover;
+  filter: blur(20px);
+  opacity: 0.55;
+}
+
+.admin-card-poster { position: relative; width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .admin-card-content { padding: 16px; flex: 1; }
 .admin-card-content h3 { font-size: 1.1rem; color: var(--text-main); margin-bottom: 10px; font-weight: 800; }
