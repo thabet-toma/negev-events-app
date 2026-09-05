@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -320,45 +322,96 @@ class EventPoster extends StatelessWidget {
     required this.url,
     this.height,
     this.isSolemn = false,
+    this.whole = false,
   });
 
   final String? url;
   final double? height;
   final bool isSolemn;
 
+  /// سطح **قرار** لا سطح مسح (#53): يعرض الملصق كاملاً فوق تعبئة مطموسة منه
+  /// بدل قصّه. تستعمله شاشة التفاصيل — من فتح مناسبة بعينها جاء ليراها. والكرت
+  /// يبقى على القصّ: ارتفاعه لا يتّسع لملصق كامل إلا كطابع صغير وسط فراغ.
+  final bool whole;
+
+  /// الخلفية الهادئة تحت التحميل والفشل — أردوازي للعزاء لا سماوي.
+  BoxDecoration _veil(BuildContext context) => isSolemn
+      ? const BoxDecoration(gradient: _mourningGradient)
+      : BoxDecoration(color: context.c.surfaceSunk);
+
+  Widget _placeholder(BuildContext context) => Container(
+    height: height,
+    width: double.infinity,
+    decoration: _veil(context),
+    child: const Center(
+      child: SizedBox(
+        width: 26,
+        height: 26,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    ),
+  );
+
+  Widget _failed(BuildContext context) => Container(
+    height: height,
+    width: double.infinity,
+    decoration: _veil(context),
+    child: Icon(
+      Icons.image_not_supported_outlined,
+      color: isSolemn ? Colors.white70 : context.c.inkFaint,
+      size: 38,
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     if (url == null || url!.isEmpty) return const SizedBox.shrink();
+    if (whole) return _buildWhole(context);
 
     return CachedNetworkImage(
       imageUrl: url!,
       height: height,
       width: double.infinity,
       fit: BoxFit.cover,
-      placeholder: (_, _) => Container(
-        height: height,
-        decoration: isSolemn
-            ? const BoxDecoration(gradient: _mourningGradient)
-            : BoxDecoration(color: context.c.surfaceSunk),
-        child: const Center(
-          child: SizedBox(
-            width: 26,
-            height: 26,
-            child: CircularProgressIndicator(strokeWidth: 2),
+      // مربوط بالأعلى لا بالمركز (#53): القصّ المركزي الافتراضي يأكل الوجه في
+      // صورة عمودية، وهو بالضبط ما أبلغ عنه صاحب المنتج.
+      alignment: Alignment.topCenter,
+      placeholder: (_, _) => _placeholder(context),
+      errorWidget: (_, _, _) => _failed(context),
+    );
+  }
+
+  /// الملصق كاملاً فوق نسخة مطموسة منه تملأ ما يتركه الاحتواء — فلا حوافّ
+  /// فارغة والارتفاع يبقى ثابتاً. نفس تركيب `drawHero` في
+  /// `server/src/services/shareCard.service.js`.
+  Widget _buildWhole(BuildContext context) {
+    return SizedBox(
+      height: height,
+      width: double.infinity,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRect(
+            child: ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: Opacity(
+                opacity: 0.55,
+                child: CachedNetworkImage(
+                  imageUrl: url!,
+                  fit: BoxFit.cover,
+                  placeholder: (_, _) => _placeholder(context),
+                  errorWidget: (_, _, _) => _failed(context),
+                ),
+              ),
+            ),
           ),
-        ),
-      ),
-      errorWidget: (_, _, _) => Container(
-        height: height,
-        width: double.infinity,
-        decoration: isSolemn
-            ? const BoxDecoration(gradient: _mourningGradient)
-            : BoxDecoration(color: context.c.surfaceSunk),
-        child: Icon(
-          Icons.image_not_supported_outlined,
-          color: isSolemn ? Colors.white70 : context.c.inkFaint,
-          size: 38,
-        ),
+          CachedNetworkImage(
+            imageUrl: url!,
+            fit: BoxFit.contain,
+            placeholder: (_, _) => const SizedBox.shrink(),
+            errorWidget: (_, _, _) => _failed(context),
+          ),
+        ],
       ),
     );
   }

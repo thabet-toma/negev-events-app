@@ -298,6 +298,8 @@ class _EventDetailsBody extends StatelessWidget {
             url: event.posterUrl,
             height: isSolemn ? _detailsPosterHeightSolemn : _detailsPosterHeight,
             isSolemn: isSolemn,
+            // سطح قرار: من فتح هذه المناسبة جاء ليرى ملصقها، فيُعرض كاملاً (#53).
+            whole: true,
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
