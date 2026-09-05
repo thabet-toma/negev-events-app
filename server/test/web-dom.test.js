@@ -267,7 +267,7 @@ function assertNoUnhandledRejections(context) {
  * app.js reads negev_user/negev_token into module state at load time, the
  * same way a real page load would.
  */
-function buildEnv({ loggedIn = false } = {}) {
+function buildEnv({ loggedIn = false, userAgent } = {}) {
   const virtualConsole = new VirtualConsole(); // swallow jsdom's own "not implemented" noise; real throws still propagate
   const dom = new JSDOM(HTML_WITHOUT_SCRIPTS, {
     url: 'http://localhost/',
@@ -281,6 +281,15 @@ function buildEnv({ loggedIn = false } = {}) {
       id: 501, full_name: 'مستخدم الاختبار', role: 'user', phone_number: '0521234567'
     }));
     window.localStorage.setItem('negev_token', 'test-token-web-dom');
+  }
+
+  // The install hint is the one thing here that branches on the device, and it
+  // branches on the user agent. jsdom has no constructor option for this —
+  // its `userAgent` option belongs to the resource loader and never reaches
+  // navigator — so the property is redefined directly, before app.js is
+  // evaluated and can read it.
+  if (userAgent) {
+    Object.defineProperty(window.navigator, 'userAgent', { value: userAgent, configurable: true });
   }
 
   window.fetch = buildFetchStub();
@@ -630,6 +639,122 @@ async function run() {
     assert.ok(
       /\.card-poster-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
       'the browsing card keeps cropping on purpose: contained inside 124px a portrait poster is a 93px stamp'
+    );
+  });
+
+
+  console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');
+
+  const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
+
+  /**
+   * index.html used to carry two Apple meta tags under a comment reading
+   * "Web App Manifest Meta" — and no manifest. So the site had no icon at all:
+   * iOS derived the home-screen icon from a SCREENSHOT of the page. On iOS 26
+   * every site added to the home screen opens standalone regardless, so this
+   * was not a dormant feature, it was a live one wearing a screenshot for a
+   * face (#54, #55).
+   */
+  await test('the page links a real manifest and a real apple-touch-icon', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    assert.ok(document.querySelector('link[rel="manifest"]'), 'the manifest promised by the old comment must actually exist');
+    assert.ok(
+      document.querySelector('link[rel="apple-touch-icon"]'),
+      'iOS prefers apple-touch-icon OVER the manifest icons — without it the icon is a screenshot of the page'
+    );
+    assert.ok(document.querySelector('link[rel="icon"]'), 'and a favicon, which the site never had');
+  });
+
+  await test('the manifest is valid JSON, standalone, and names icons that exist on disk', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(WEB_DIR, 'manifest.json'), 'utf8'));
+
+    assert.strictEqual(manifest.display, 'standalone', 'a browser-tab manifest installs nothing worth installing');
+    assert.strictEqual(manifest.dir, 'rtl', 'the whole product is RTL Arabic; the installed shell must be too');
+
+    const maskable = manifest.icons.filter(i => String(i.purpose).includes('maskable'));
+    assert.ok(maskable.length > 0, 'without a maskable icon Android crops the mark inside its own shape');
+
+    manifest.icons.forEach(icon => {
+      const onDisk = path.join(WEB_DIR, icon.src.replace(/^\//, ''));
+      assert.ok(fs.existsSync(onDisk), `manifest names ${icon.src}, which is not on disk — a 404 icon is worse than none`);
+    });
+  });
+
+  await test('the header carries a drawn mark, not an emoji', () => {
+    const dom = buildEnv();
+    const badge = dom.window.document.querySelector('.logo-badge');
+
+    assert.ok(badge.querySelector('svg path'), 'the mark must be a path we own, not a glyph the OS draws differently everywhere');
+    assert.ok(!/🌙/.test(badge.textContent), 'the crescent is retired: it reads religious, and the platform is civic');
+  });
+
+  /**
+   * iOS exposes no install prompt at all — `beforeinstallprompt` is not
+   * supported there and has no equivalent (#54) — so a written explanation is
+   * the only path, not a lazy one. And the APK button is hidden on iOS on
+   * purpose (an APK does nothing there), which is exactly why an iPhone
+   * visitor would otherwise be offered no app at all.
+   */
+  await test('an iPhone visitor who has not installed is shown how', () => {
+    const dom = buildEnv({ userAgent: IPHONE_UA });
+    // Driven through its entry point, as every test here does: jsdom fires
+    // DOMContentLoaded while parsing, which is before this file evaluates
+    // app.js into the window, so the real listener never runs under test. The
+    // wiring itself is asserted separately below.
+    dom.window.initInstallHint();
+
+    assert.strictEqual(dom.window.document.getElementById('installHint').hidden, false);
+  });
+
+  await test('everyone else is left alone', () => {
+    const dom = buildEnv();
+    dom.window.initInstallHint();
+
+    assert.strictEqual(
+      dom.window.document.getElementById('installHint').hidden,
+      true,
+      'an Android or desktop visitor already has the APK button — this would be noise'
+    );
+  });
+
+  await test('an iPhone that already installed the app is not told to install it', () => {
+    const dom = buildEnv({ userAgent: IPHONE_UA });
+    dom.window.navigator.standalone = true;   // what iOS sets inside an installed web app
+    dom.window.initInstallHint();
+
+    assert.strictEqual(
+      dom.window.document.getElementById('installHint').hidden,
+      true,
+      'showing install instructions to someone who installed is worse than showing nothing'
+    );
+  });
+
+  await test('and it is actually wired into page load, not merely defined', () => {
+    // The bug this guards is silent: every test above would still pass with the
+    // call missing from the boot sequence, and no visitor would ever see it.
+    const boot = APP_JS.slice(APP_JS.indexOf("addEventListener('DOMContentLoaded'"));
+    assert.ok(
+      /initInstallHint\(\)/.test(boot.slice(0, boot.indexOf('});'))),
+      'initInstallHint() must be called on load, next to initAppDownload() whose gap it fills'
+    );
+  });
+
+  await test('dismissing the hint keeps it dismissed on the next visit', () => {
+    const first = buildEnv({ userAgent: IPHONE_UA });
+    first.window.dismissInstallHint();
+    assert.strictEqual(first.window.document.getElementById('installHint').hidden, true);
+    assert.strictEqual(first.window.localStorage.getItem('negev_install_hint'), 'dismissed');
+
+    // A second page load with that choice already stored — the real repeat visit.
+    const second = buildEnv({ userAgent: IPHONE_UA });
+    second.window.localStorage.setItem('negev_install_hint', 'dismissed');
+    second.window.initInstallHint();
+    assert.strictEqual(
+      second.window.document.getElementById('installHint').hidden,
+      true,
+      'nagging someone who already said no is the fastest way to lose them'
     );
   });
 
