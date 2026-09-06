@@ -29,22 +29,36 @@ const logger = require('../utils/logger');
 const { parseId } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
+const { buildMarkParts, partsToSvgPaths } = require('../../scripts/brand-icons');
 
 const router = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
 // sets its own: no scripts, no external stylesheets, images from anywhere
-// (posters can be admin-supplied external URLs).
-const SHARE_CSP = "default-src 'none'; img-src *; style-src 'unsafe-inline'";
+// (posters can be admin-supplied external URLs). `font-src 'self'` is a
+// deliberate, narrow widening (product-owner decision) so this page can load
+// its own Cairo woff2 files below — still no script-src, no external origin.
+const SHARE_CSP = "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'";
 
-// The two platform fallback PNGs (server/scripts/build-share-fallbacks.js),
-// read once at startup — they're a handful of KB each and never change at
-// runtime, so there is no reason to hit the filesystem on every request.
+// The two platform fallback PNGs (server/scripts/build-share-fallbacks.js)
+// and the two Cairo weights this page's own @font-face declares (converted
+// from server/src/assets/fonts/*.ttf — see the OFL.txt copied alongside them
+// here, same licence obligation shareCard.service.js discharges for the TTFs)
+// — read once at startup, a handful of KB each, never changing at runtime,
+// so there is no reason to hit the filesystem on every request.
 const ASSET_DIR = path.join(__dirname, '..', 'assets', 'share');
 const ASSETS = {
   'festive.png': fs.readFileSync(path.join(ASSET_DIR, 'festive.png')),
-  'solemn.png': fs.readFileSync(path.join(ASSET_DIR, 'solemn.png'))
+  'solemn.png': fs.readFileSync(path.join(ASSET_DIR, 'solemn.png')),
+  'Cairo-Regular.woff2': fs.readFileSync(path.join(ASSET_DIR, 'Cairo-Regular.woff2')),
+  'Cairo-Bold.woff2': fs.readFileSync(path.join(ASSET_DIR, 'Cairo-Bold.woff2'))
+};
+const ASSET_CONTENT_TYPES = {
+  'festive.png': 'image/png',
+  'solemn.png': 'image/png',
+  'Cairo-Regular.woff2': 'font/woff2',
+  'Cairo-Bold.woff2': 'font/woff2'
 };
 
 /**
@@ -61,6 +75,90 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * `#rrggbb` (or `#rgb`) + an 0–1 alpha → a CSS `rgba(...)` string — the same
+ * conversion shareCard.service.js's own `withAlpha` performs for canvas
+ * fills, needed again here for style-attribute strings since that module
+ * exports no shared utility. Only ever called with a palette's own hardcoded
+ * hex (never a database value), so no allow-list check is needed here —
+ * `safeHexColour` above still guards the one colour on this page that does
+ * come from the database (the occasion type chip).
+ */
+function withAlphaCss(hex, alpha) {
+  const full = hex.length === 4
+    ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`
+    : hex;
+  const r = parseInt(full.slice(1, 3), 16);
+  const g = parseInt(full.slice(3, 5), 16);
+  const b = parseInt(full.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * The brand mark, inline in the document rather than an `<img>` — literal
+ * markup is part of the page, not a fetch, so it never collides with
+ * `default-src 'none'` the way a reference to `web/icons/…` would (`web/` is
+ * a separate deployable, a different origin this CSP cannot open). Built
+ * from the same `buildMarkParts` geometry every other rendering of the mark
+ * reads from (server/scripts/brand-icons.js) — never redrawn by hand here.
+ * The 'icon' detail level is the one already used at small sizes elsewhere
+ * (shareCard.service.js's own footer mark). `groundD` (the door cut-outs) is
+ * painted the palette's own card colour rather than composited transparent,
+ * since this SVG always sits directly on a `.card`-coloured surface here.
+ */
+const MARK_PATHS = partsToSvgPaths(buildMarkParts('icon'));
+function inlineMarkSvg(palette) {
+  return `<svg class="mark-svg" viewBox="0 0 100 100" width="34" height="34" role="img" aria-label="${escapeHtml(palette.wordmark)}">
+  <path d="${MARK_PATHS.markD}" fill="${palette.accent}"/>
+  <path d="${MARK_PATHS.groundD}" fill="${palette.card}"/>
+</svg>`;
+}
+
+/**
+ * Three small monoline glyphs, hand-authored primitives (no icon font, no
+ * emoji — emoji is what shareCard.service.js's own chip explicitly avoids,
+ * for the same reason: no font coverage to rely on). `currentColor` so each
+ * inherits `.glyph`'s own colour rather than hardcoding one twice.
+ */
+const REASON_ICONS = {
+  bell: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a5 5 0 0 0-5 5v3.5c0 1-.4 2-1.2 2.7L4 16h16l-1.8-1.8c-.8-.7-1.2-1.7-1.2-2.7V8a5 5 0 0 0-5-5Z"/><path d="M9.5 19a2.5 2.5 0 0 0 5 0"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.5-9-9c-1.3-3 1-6 4-6 2 0 3.5 1.3 5 3 1.5-1.7 3-3 5-3 3 0 5.3 3 4 6-2 4.5-9 9-9 9Z"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+};
+
+/**
+ * What the platform gives someone who installs — never anything about the
+ * one event this link is for, so the no-date/no-venue/no-phone rule above is
+ * untouched by this strip (product-owner decision: three reasons under the
+ * call to action, since the page's real problem was never saying what the
+ * app IS).
+ */
+const REASONS = [
+  { icon: REASON_ICONS.bell, text: 'كل مناسبة في بلدك، قبل ما توصلك الأخبار' },
+  { icon: REASON_ICONS.heart, text: 'تهنئتك أو تعزيتك توصل للعائلة مباشرة' },
+  { icon: REASON_ICONS.lock, text: 'دفتر نقوطك الخاص، ما يشوفه غيرك' }
+];
+
+function reasonsStrip() {
+  return `<ul class="reasons">
+${REASONS.map(r => `<li class="reason"><span class="glyph">${r.icon}</span><span>${escapeHtml(r.text)}</span></li>`).join('\n')}
+</ul>`;
+}
+
+/**
+ * Two buttons, always both shown — no platform sniffing, no `<script>` to do
+ * it with anyway. The primary is unchanged (the existing download route,
+ * still recording `app_download_clicked`); the secondary is the honest
+ * answer for an iPhone visitor who would otherwise be handed an APK their
+ * device cannot open: the site itself, installable from the browser.
+ */
+function actionButtons({ downloadUrl, siteRootUrl }) {
+  return `<div class="actions">
+<a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+<a class="cta-secondary" href="${escapeHtml(siteRootUrl)}">فتح من المتصفح</a>
+</div>`;
 }
 
 /**
@@ -93,18 +191,33 @@ function buildDescription(event) {
 
 function pageStyle(palette) {
   return `
+  @font-face {
+    font-family: "Cairo Share"; font-weight: 400; font-style: normal; font-display: swap;
+    src: url("/e/assets/Cairo-Regular.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Cairo Share"; font-weight: 700; font-style: normal; font-display: swap;
+    src: url("/e/assets/Cairo-Bold.woff2") format("woff2");
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
     background: ${palette.bg}; color: ${palette.ink};
-    font-family: "Segoe UI", Tahoma, Arial, sans-serif; padding: 20px;
+    font-family: "Cairo Share", "Segoe UI", Tahoma, Arial, sans-serif; padding: 20px;
     background-image: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.05), transparent 60%);
   }
   .card {
     width: 100%; max-width: 440px; background: ${palette.card}; border-radius: 22px;
-    overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,0.45);
-    border: 1px solid rgba(255,255,255,0.06); text-align: center;
+    overflow: hidden; text-align: center;
+    /* Same two-tone frame convention as the generated card's own drawFrame
+       (shareCard.service.js): an outer accent border plus an inset
+       "companion rule" a few pixels in, so the frame drawn inside the image
+       and the frame around it read as one idea in the same screenshot. */
+    border: 1px solid ${withAlphaCss(palette.accent, 0.55)};
+    box-shadow: 0 18px 50px rgba(0,0,0,0.45), inset 0 0 0 5px ${withAlphaCss(palette.accent, 0.22)};
   }
+  .top-mark { padding: 18px 0 2px; display: flex; justify-content: center; }
+  .mark-svg { display: block; }
   .frame { position: relative; }
   /* Square, matching the generated card this <img> actually loads — a 4/5 box
      cropped the card's own text band off the bottom of the page. */
@@ -134,10 +247,32 @@ function pageStyle(palette) {
     background: ${palette.accent}; opacity: 0.75;
   }
   .lead { font-size: 14px; color: ${palette.faint}; margin: 0 0 16px; line-height: 1.7; }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
   .cta {
     display: block; background: ${palette.accent}; color: ${palette.btnInk};
     text-decoration: none; font-size: 17px; font-weight: 700;
     padding: 14px 20px; border-radius: 14px;
+  }
+  /* The honest answer for a visitor whose device the primary button cannot
+     serve (an iPhone handed an APK) — the site itself, installable from the
+     browser it is already open in. Always shown next to the primary, never
+     chosen by sniffing the visitor's platform — this page runs no script,
+     so there is nothing to sniff with anyway. */
+  .cta-secondary {
+    display: block; background: transparent; color: ${palette.ink};
+    text-decoration: none; font-size: 15px; font-weight: 600;
+    padding: 12px 20px; border-radius: 14px;
+    border: 1px solid ${withAlphaCss(palette.faint, 0.4)};
+  }
+  .reasons {
+    list-style: none; margin: 20px 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: 10px; text-align: start;
+  }
+  .reason { display: flex; align-items: center; gap: 10px; font-size: 13px; color: ${palette.faint}; line-height: 1.4; }
+  .reason .glyph {
+    flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: ${withAlphaCss(palette.accent, 0.14)}; color: ${palette.accent};
   }
   .mark {
     font-size: 12px; color: ${palette.faint}; opacity: 0.75;
@@ -169,7 +304,7 @@ function pageStyle(palette) {
  * below) — that is the one case where the size is unknown again, and the
  * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl }) {
+function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const description = buildDescription(event);
@@ -209,6 +344,7 @@ ${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.
 </head>
 <body>
 <main class="card">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
 <div class="frame">
 <img class="poster" src="${escapeHtml(imageUrl)}" alt="">
 ${overlay ? '<div class="veil"></div>' : ''}
@@ -220,7 +356,8 @@ ${chip}
 ${event.family_clan ? `<p class="clan">${escapeHtml(event.family_clan)}</p>` : ''}
 <hr class="rule">
 <p class="lead">التفاصيل الكاملة في التطبيق</p>
-<a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+${actionButtons({ downloadUrl, siteRootUrl })}
+${reasonsStrip()}
 <p class="mark">${palette.wordmark}</p>
 </div>
 </main>
@@ -230,23 +367,31 @@ ${event.family_clan ? `<p class="clan">${escapeHtml(event.family_clan)}</p>` : '
 
 /**
  * Byte-identical for "does not exist", "not approved yet", and "not a valid
- * id" — the response must not let anyone distinguish those (issue #44).
+ * id" — the response must not let anyone distinguish those (issue #44). No
+ * per-request data goes into this template (there is no event to draw one
+ * from), so that stays true by construction even with the redesigned shell
+ * below: same mark, same two buttons, same reasons, every time.
  */
 function renderNotFoundPage() {
+  const palette = PALETTES.festive;
+  const downloadUrl = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>المناسبة غير موجودة</title>
-<style>${pageStyle(PALETTES.festive)}</style>
+<style>${pageStyle(palette)}</style>
 </head>
 <body>
 <main class="card not-found">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
 <div class="body">
 <h1>هذه المناسبة غير متاحة</h1>
 <p>قد تكون قد حُذفت، أو لم تُعتمد بعد.</p>
-<p class="mark">${PALETTES.festive.wordmark}</p>
+${actionButtons({ downloadUrl, siteRootUrl: config.publicUrl })}
+${reasonsStrip()}
+<p class="mark">${palette.wordmark}</p>
 </div>
 </main>
 </body>
@@ -272,7 +417,7 @@ router.get('/assets/:file', (req, res) => {
   }
   res
     .status(200)
-    .set('Content-Type', 'image/png')
+    .set('Content-Type', ASSET_CONTENT_TYPES[req.params.file])
     .set('Cache-Control', 'public, max-age=31536000, immutable')
     .send(buffer);
 });
@@ -335,7 +480,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     .status(200)
     .set('Content-Security-Policy', SHARE_CSP)
     .set('Content-Type', 'text/html; charset=utf-8')
-    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl }));
+    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl }));
 }));
 
 /**

@@ -3211,12 +3211,71 @@ async function run() {
     assert.ok(buffer.length > 0, 'expected non-empty JPEG bytes from the cache hit');
   });
 
-  await test('The Content-Security-Policy header is present on the share route', async () => {
+  await test('The Content-Security-Policy header is present on the share route, with a font source and still no script source', async () => {
     const { headers } = await rawGet(`/e/${shareEventId}`);
+    const csp = headers.get('content-security-policy');
     assert.strictEqual(
-      headers.get('content-security-policy'),
-      "default-src 'none'; img-src *; style-src 'unsafe-inline'"
+      csp,
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'"
     );
+    assert.ok(csp.includes("font-src 'self'"), 'expected a font-src directive for the page\'s own Cairo woff2 files');
+    assert.ok(!csp.includes('script-src'), 'expected no script-src to ever be added to this route');
+  });
+
+  await test('The Cairo woff2 files are actually served by the assets route with the woff2 content type', async () => {
+    for (const file of ['Cairo-Regular.woff2', 'Cairo-Bold.woff2']) {
+      const { status, headers, buffer } = await rawGetBinary(`/e/assets/${file}`);
+      assert.strictEqual(status, 200, `expected ${file} to be served`);
+      assert.strictEqual(headers.get('content-type'), 'font/woff2');
+      assert.ok(buffer.length > 0, `expected non-empty bytes for ${file}`);
+    }
+  });
+
+  await test('Both download buttons are present, and the secondary one points at the site root rather than the APK', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(text.includes('class="cta"'), 'expected the primary download button');
+    assert.ok(text.includes('class="cta-secondary"'), 'expected a secondary button');
+
+    const secondaryMatch = text.match(/class="cta-secondary" href="([^"]*)"/);
+    assert.ok(secondaryMatch, 'expected an href on the secondary button');
+    assert.strictEqual(secondaryMatch[1], config.publicUrl, 'expected the secondary button to point at the site root, not the APK download route');
+
+    const primaryMatch = text.match(/class="cta" href="([^"]*)"/);
+    assert.ok(primaryMatch[1].includes('/download'), 'expected the primary button to still point at the download-recording route');
+  });
+
+  await test('The three-reason strip is present', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(text.includes('class="reasons"'), 'expected the reasons strip container');
+    const reasonCount = (text.match(/class="reason"/g) || []).length;
+    assert.strictEqual(reasonCount, 3, `expected exactly three reasons, found ${reasonCount}`);
+  });
+
+  await test('The page contains no <script tag at all', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(!text.includes('<script'), 'expected zero <script tags on this page');
+  });
+
+  await test('No date, venue, or phone value leaks anywhere in the response for an event that has all three set', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس فحص التسريب' }],
+        town: 'رهط',
+        location_name: 'قاعة الاختبار السرية',
+        event_date: '2027-09-16',
+        host_phone: '0501234567'
+      })
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { text } = await rawGet(`/e/${created.body.eventId}`);
+    assert.ok(!text.includes('قاعة الاختبار السرية'), 'the venue must never appear on the share page');
+    assert.ok(!text.includes('0501234567'), 'the phone number must never appear on the share page');
+    assert.ok(!text.includes('2027-09-16'), 'the raw event date must never appear on the share page');
+    assert.ok(!text.includes('16/09/2027') && !text.includes('16-09-2027'), 'no reformatted date either');
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
   });
 
   await test('Editing the event produces a different card, and the old cached one is evicted', async () => {
