@@ -23,7 +23,8 @@ const path = require('path');
 const assert = require('assert');
 const { JSDOM, VirtualConsole } = require('jsdom');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
-const { renderIcon, buildIconSvg, ringBeads, HUB, GROUND, MARK } = require('../scripts/brand-icons');
+const { renderIcon, buildIconSvg } = require('../scripts/brand-icons');
+const { ringBeads, HUB, GROUND, MARK, buildMarkParts, partsToSvgPaths } = require('../src/utils/brandMark');
 
 // Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
 // server and this fixture must not become a second copy of them (CLAUDE.md,
@@ -930,6 +931,31 @@ async function run() {
 
     assert.ok(badge.querySelector('svg path'), 'the mark must be a path we own, not a glyph the OS draws differently everywhere');
     assert.ok(!/🌙/.test(badge.textContent), 'the crescent is retired: it reads religious, and the platform is civic');
+  });
+
+  /**
+   * The header mark, the iOS install-hint mark, and the admin header mark are
+   * all hand-inlined `<path>`s — copies, not references to icon.svg — because
+   * an inline SVG path is what lets `fill="currentColor"` follow the theme.
+   * A hand-copied path is exactly what let the site keep shipping the retired
+   * three-pole tent after the mark itself changed underneath it: nothing
+   * failed, so nobody noticed. This pins all three against the single
+   * geometry definition (server/src/utils/brandMark.js) so the next redraw
+   * cannot silently leave them behind. Compared against the mark-coloured
+   * path only (`markD`) — these badges are a single-colour `currentColor`
+   * silhouette, with no ground-coloured door cut-out layered under it.
+   */
+  await test('the inlined header/install-hint/admin mark paths match the current mark geometry', () => {
+    const { markD } = partsToSvgPaths(buildMarkParts('icon'));
+    const pathRe = /<path d="([^"]+)" fill="currentColor">/g;
+
+    const indexMatches = [...INDEX_HTML_RAW.matchAll(pathRe)].map(m => m[1]);
+    assert.strictEqual(indexMatches.length, 2, 'expected two inlined marks in index.html: the header and the iOS install hint');
+    indexMatches.forEach(d => assert.strictEqual(d, markD, 'index.html carries a mark path that has drifted from buildMarkParts'));
+
+    const adminMatches = [...ADMIN_HTML_RAW.matchAll(pathRe)].map(m => m[1]);
+    assert.strictEqual(adminMatches.length, 1, 'expected one inlined mark in admin.html: the admin header');
+    assert.strictEqual(adminMatches[0], markD, 'admin.html carries a mark path that has drifted from buildMarkParts');
   });
 
   await test('the rename to «أعراسنا» reached the document title, the iOS web-app title, and the header', () => {

@@ -1913,14 +1913,11 @@ function renderPosterCropBox() {
   box.style.height = `${(h / state.workingHeight) * 100}%`;
 }
 
-/** يُوصَل مرّة واحدة لكل عنصر (data-wired) — pointerdown يبدأ السحب، move/up على المستند لأن اللمس أو الفأرة قد يخرجان من المقبض الصغير. */
+/** يُوصَل بعد كل بناء لمربّع القصّ (العنصر جديد دائماً) — pointerdown وحده هنا، إذ هو ما يبدأ السحب فعلياً. move/up على المستند لا تُوصَلان إلا مع بدء سحب حقيقي، وتُفكّان معه، فلا يبقى منهما شيء بين سحبة وأخرى. */
 function attachPosterCropDragHandlers() {
   const box = document.getElementById('posterCropBox');
-  if (!box || box.dataset.wired) return;
-  box.dataset.wired = '1';
+  if (!box) return;
   box.addEventListener('pointerdown', startPosterCropDrag);
-  document.addEventListener('pointermove', movePosterCropDrag);
-  document.addEventListener('pointerup', endPosterCropDrag);
 }
 
 function startPosterCropDrag(e) {
@@ -1932,6 +1929,9 @@ function startPosterCropDrag(e) {
     startClientY: e.clientY,
     startRect: { ...posterCropState.rect }
   };
+  document.addEventListener('pointermove', movePosterCropDrag);
+  document.addEventListener('pointerup', endPosterCropDrag);
+  document.addEventListener('pointercancel', endPosterCropDrag);
   e.preventDefault();
 }
 
@@ -1962,6 +1962,9 @@ function movePosterCropDrag(e) {
 
 function endPosterCropDrag() {
   if (posterCropState) posterCropState.drag = null;
+  document.removeEventListener('pointermove', movePosterCropDrag);
+  document.removeEventListener('pointerup', endPosterCropDrag);
+  document.removeEventListener('pointercancel', endPosterCropDrag);
 }
 
 function clampPosterCropRect(rect, state) {

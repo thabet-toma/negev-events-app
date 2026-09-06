@@ -29,7 +29,7 @@ const logger = require('../utils/logger');
 const { parseId } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
-const { buildMarkParts, partsToSvgPaths } = require('../../scripts/brand-icons');
+const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
 
 const router = express.Router();
 
@@ -102,7 +102,7 @@ function withAlphaCss(hex, alpha) {
  * `default-src 'none'` the way a reference to `web/icons/…` would (`web/` is
  * a separate deployable, a different origin this CSP cannot open). Built
  * from the same `buildMarkParts` geometry every other rendering of the mark
- * reads from (server/scripts/brand-icons.js) — never redrawn by hand here.
+ * reads from (server/src/utils/brandMark.js) — never redrawn by hand here.
  * The 'icon' detail level is the one already used at small sizes elsewhere
  * (shareCard.service.js's own footer mark). `groundD` (the door cut-outs) is
  * painted the palette's own card colour rather than composited transparent,
@@ -157,7 +157,7 @@ ${REASONS.map(r => `<li class="reason"><span class="glyph">${r.icon}</span><span
 function actionButtons({ downloadUrl, siteRootUrl }) {
   return `<div class="actions">
 <a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
-<a class="cta-secondary" href="${escapeHtml(siteRootUrl)}">فتح من المتصفح</a>
+<a class="cta-secondary" href="${escapeHtml(siteRootUrl)}">افتح في المتصفّح</a>
 </div>`;
 }
 

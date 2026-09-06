@@ -41,6 +41,7 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { uploadsDir } = require('../middleware/upload');
 const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
+const { buildMarkParts, MARK, markScale } = require('../utils/brandMark');
 
 const WIDTH = 1200;
 const HEIGHT = 1200;
@@ -71,12 +72,6 @@ const SHARE_ASSETS = {
   'solemn.png': fs.readFileSync(path.join(SHARE_ASSET_DIR, 'solemn.png'))
 };
 
-// العلامة وحدها، بخلفية شفافة — مولَّدة بـ server/scripts/brand-icons.js (طبقة
-// 'icon' المبسَّطة)، لا مرسومة هنا يدوياً؛ العلامة معرَّفة مرة واحدة فقط في
-// buildMarkParts هناك. تُقرأ مرة عند تحميل الوحدة، على نمط SHARE_ASSETS أعلاه،
-// وتُفكّ شفرتها بـ loadImage عند كل رسم بطاقة (نفس ما يفعله الملصق الاحتياطي).
-const SHARE_MARK = fs.readFileSync(path.join(SHARE_ASSET_DIR, 'mark.png'));
-
 // Rendered once per (event id, updated_at) pair and reused after that — a
 // 1-core production box must not re-render a card on every crawler hit.
 // Created at boot by server/src/app.js, the same way it creates downloadsDir:
@@ -84,9 +79,17 @@ const SHARE_MARK = fs.readFileSync(path.join(SHARE_ASSET_DIR, 'mark.png'));
 // to be created by that same process to be owned by it.
 const CACHE_DIR = path.join(__dirname, '..', '..', 'cache', 'share-cards');
 
+// Bumped whenever renderCard's own drawing changes (layout, colours, fonts,
+// anything pixel-visible) — folded into the cache key below so a design
+// change invalidates every cached card by itself. Without this, editing the
+// design changes no event's `updated_at`, so every existing event keeps
+// serving its old card after a deploy and the redesign looks like it never
+// shipped.
+const CARD_DESIGN_VERSION = 2;
+
 function cacheKey(event) {
   const updatedAtMs = event.updated_at ? new Date(event.updated_at).getTime() : 0;
-  return `${event.id}-${updatedAtMs}`;
+  return `${event.id}-${updatedAtMs}-v${CARD_DESIGN_VERSION}`;
 }
 
 function cachePath(key) {
@@ -187,6 +190,59 @@ function wrapLines(ctx, text, maxWidth, maxLines) {
     lines[lines.length - 1] = `${last}…`;
   }
   return lines;
+}
+
+/** Traces one mark part's path onto the current 2D context, at scale `u` — no fill, so the same trace serves both a normal fill and a `destination-out` cut. */
+function traceMarkPart(ctx, part, u) {
+  ctx.beginPath();
+  if (part.shape.type === 'circle') {
+    ctx.arc(part.shape.cx * u, part.shape.cy * u, part.shape.r * u, 0, Math.PI * 2);
+  } else {
+    part.shape.commands.forEach(([type, ...args]) => {
+      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
+      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
+      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
+      else if (type === 'Z') ctx.closePath();
+    });
+  }
+}
+
+/**
+ * Draws the brand mark directly into a `size`×`size` box at (`boxX`, `boxY`),
+ * from the same `buildMarkParts('icon')` geometry every other rendering of
+ * the mark reads from (server/src/utils/brandMark.js) — no PNG asset to keep
+ * in sync. The door cut-outs are punched with `destination-out` rather than
+ * painted a background colour, exactly as server/scripts/brand-icons.js's own
+ * transparent render does, so whatever this box already sits on (the band's
+ * gradient) shows through instead of a hardcoded colour that would not match
+ * every palette.
+ */
+function drawBrandMark(ctx, boxX, boxY, size) {
+  const u = size / 100;
+  const scale = markScale(false);
+  const parts = buildMarkParts('icon');
+
+  ctx.save();
+  ctx.translate(boxX + size / 2, boxY + size / 2);
+  ctx.scale(scale, scale);
+  ctx.translate(-size / 2, -size / 2);
+
+  ctx.fillStyle = MARK;
+  parts.filter(p => p.fill === 'mark').forEach(part => {
+    traceMarkPart(ctx, part, u);
+    ctx.fill();
+  });
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000';
+  parts.filter(p => p.fill === 'ground').forEach(part => {
+    traceMarkPart(ctx, part, u);
+    ctx.fill();
+  });
+  ctx.restore();
+
+  ctx.restore();
 }
 
 /** `#rrggbb` (or `#rgb`) + an 0–1 alpha → an `rgba(...)` string. */
@@ -580,8 +636,7 @@ async function renderCard(event) {
   const groupRight = centreX + (markSize + markGap + brandTextWidth) / 2;
   const markX = groupRight - markSize;
 
-  const markImage = await loadImage(SHARE_MARK);
-  ctx.drawImage(markImage, markX, rowY - markSize / 2, markSize, markSize);
+  drawBrandMark(ctx, markX, rowY - markSize / 2, markSize);
 
   ctx.save();
   ctx.direction = 'rtl';
