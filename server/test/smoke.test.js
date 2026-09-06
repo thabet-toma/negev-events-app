@@ -25,6 +25,7 @@ const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_E
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const shareCard = require('../src/services/shareCard.service');
+const { PALETTES } = require('../src/utils/shareTheme');
 
 let baseUrl = '';
 let passed = 0;
@@ -3013,6 +3014,40 @@ async function run() {
     return path.join(shareCard.CACHE_DIR, matches[0]);
   }
 
+  /**
+   * A portrait JPEG the size and shape of a real poster (this file's own
+   * header measures a live one at 1080×2340), with per-pixel noise instead of
+   * a flat wash — a smooth gradient compresses to almost nothing and would
+   * pass the size guard below without exercising it. The card draws this
+   * twice (blurred cover-fill plus the sharp contained copy), which is the
+   * actual worst case the 600 KB guard exists to catch.
+   */
+  function buildRealisticPoster() {
+    const width = 1080;
+    const height = 2340;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, '#3b1f5c');
+    gradient.addColorStop(0.5, '#a3315f');
+    gradient.addColorStop(1, '#f2b134');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const { data } = imageData;
+    for (let i = 0; i < data.length; i += 4) {
+      const noise = Math.random() * 60 - 30;
+      data[i] = Math.min(255, Math.max(0, data[i] + noise));
+      data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
+      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return canvas.toBuffer('image/jpeg', 90);
+  }
+
   // Attack the values the page actually renders. It leads with the occasion type
   // and the honoree names now, not the free-text title, so putting the payload in
   // `title` alone would leave this test passing while testing nothing.
@@ -3109,6 +3144,61 @@ async function run() {
     );
   });
 
+  await test('THE SIZE GUARD: a card built from a real (non-trivial) poster still stays under the WhatsApp preview limit', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس بطاقة ثقيلة', event_date: '2027-09-14' }),
+      files: [{ field: 'poster', buffer: buildRealisticPoster(), type: 'image/jpeg', name: 'heavy.jpg' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { status, buffer } = await rawGetBinary(`/e/${created.body.eventId}/card.jpg`);
+    assert.strictEqual(status, 200);
+    assert.ok(
+      buffer.length < 600 * 1024,
+      `a card built from a real poster must stay under WhatsApp's preview limit, got ${Math.round(buffer.length / 1024)} KB`
+    );
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
+  await test('The footer mark/text sit clear of the decorative frame — lowest drawn content stays ≥12px above the companion rule', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس فحص الإطار', event_date: '2027-09-15' }),
+      files: [{ field: 'poster', buffer: buildRealisticPoster(), type: 'image/jpeg', name: 'frame-check.jpg' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { buffer } = await rawGetBinary(`/e/${created.body.eventId}/card.jpg`);
+    const card = await decodeCard(buffer);
+
+    // عمود شاهد بعيد عن علامات زوايا الإطار (تمتد من ٢٢ إلى ٤٨ بكسل من كل
+    // حافة) وعن مجموعة العلامة/النص المتوسطة — أي فرق بينه وبين عمود آخر في
+    // الصف نفسه يدلّ على محتوى حقيقي (علامة أو نص)، لا على خط الإطار الذي
+    // يمتد بعرض البطاقة كله بنفس اللون عند أي x فيُطرَح تلقائياً من المقارنة.
+    const controlX = 100;
+    let lowestContentY = 0;
+    for (let y = card.height - 120; y < card.height - 5; y += 1) {
+      const control = card.pixelAt(controlX, y);
+      for (let x = 250; x <= 950; x += 15) {
+        const sample = card.pixelAt(x, y);
+        const diff = Math.abs(sample.r - control.r) + Math.abs(sample.g - control.g) + Math.abs(sample.b - control.b);
+        if (diff > 40) { lowestContentY = y; break; }
+      }
+    }
+    assert.ok(lowestContentY > 0, 'expected to actually find the footer mark/text while scanning the band');
+
+    const companionRuleY = card.height - 31; // FRAME_INSET(22) + FRAME_GAP(9)
+    const limit = companionRuleY - 12;
+    assert.ok(
+      lowestContentY <= limit,
+      `expected the lowest footer content row (${lowestContentY}) at least 12px above the frame's companion rule (y=${companionRuleY}); limit was ${limit}`
+    );
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
   await test('A second request for the same card is served from cache, not re-rendered', async () => {
     const file = await cachedCardFile(shareEventId);
     const before = await fsp.stat(file);
@@ -3121,12 +3211,71 @@ async function run() {
     assert.ok(buffer.length > 0, 'expected non-empty JPEG bytes from the cache hit');
   });
 
-  await test('The Content-Security-Policy header is present on the share route', async () => {
+  await test('The Content-Security-Policy header is present on the share route, with a font source and still no script source', async () => {
     const { headers } = await rawGet(`/e/${shareEventId}`);
+    const csp = headers.get('content-security-policy');
     assert.strictEqual(
-      headers.get('content-security-policy'),
-      "default-src 'none'; img-src *; style-src 'unsafe-inline'"
+      csp,
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'"
     );
+    assert.ok(csp.includes("font-src 'self'"), 'expected a font-src directive for the page\'s own Cairo woff2 files');
+    assert.ok(!csp.includes('script-src'), 'expected no script-src to ever be added to this route');
+  });
+
+  await test('The Cairo woff2 files are actually served by the assets route with the woff2 content type', async () => {
+    for (const file of ['Cairo-Regular.woff2', 'Cairo-Bold.woff2']) {
+      const { status, headers, buffer } = await rawGetBinary(`/e/assets/${file}`);
+      assert.strictEqual(status, 200, `expected ${file} to be served`);
+      assert.strictEqual(headers.get('content-type'), 'font/woff2');
+      assert.ok(buffer.length > 0, `expected non-empty bytes for ${file}`);
+    }
+  });
+
+  await test('Both download buttons are present, and the secondary one points at the site root rather than the APK', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(text.includes('class="cta"'), 'expected the primary download button');
+    assert.ok(text.includes('class="cta-secondary"'), 'expected a secondary button');
+
+    const secondaryMatch = text.match(/class="cta-secondary" href="([^"]*)"/);
+    assert.ok(secondaryMatch, 'expected an href on the secondary button');
+    assert.strictEqual(secondaryMatch[1], config.publicUrl, 'expected the secondary button to point at the site root, not the APK download route');
+
+    const primaryMatch = text.match(/class="cta" href="([^"]*)"/);
+    assert.ok(primaryMatch[1].includes('/download'), 'expected the primary button to still point at the download-recording route');
+  });
+
+  await test('The three-reason strip is present', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(text.includes('class="reasons"'), 'expected the reasons strip container');
+    const reasonCount = (text.match(/class="reason"/g) || []).length;
+    assert.strictEqual(reasonCount, 3, `expected exactly three reasons, found ${reasonCount}`);
+  });
+
+  await test('The page contains no <script tag at all', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    assert.ok(!text.includes('<script'), 'expected zero <script tags on this page');
+  });
+
+  await test('No date, venue, or phone value leaks anywhere in the response for an event that has all three set', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس فحص التسريب' }],
+        town: 'رهط',
+        location_name: 'قاعة الاختبار السرية',
+        event_date: '2027-09-16',
+        host_phone: '0501234567'
+      })
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { text } = await rawGet(`/e/${created.body.eventId}`);
+    assert.ok(!text.includes('قاعة الاختبار السرية'), 'the venue must never appear on the share page');
+    assert.ok(!text.includes('0501234567'), 'the phone number must never appear on the share page');
+    assert.ok(!text.includes('2027-09-16'), 'the raw event date must never appear on the share page');
+    assert.ok(!text.includes('16/09/2027') && !text.includes('16-09-2027'), 'no reformatted date either');
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
   });
 
   await test('Editing the event produces a different card, and the old cached one is evicted', async () => {
@@ -3224,6 +3373,18 @@ async function run() {
     solemnShareEventId = body.eventId;
   });
 
+  await test('The festive share page carries «أعراسنا» in og:site_name, the description, and the footer', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+
+    assert.ok(
+      /property="og:site_name" content="أعراسنا"/.test(text),
+      'expected og:site_name to be أعراسنا on a festive (wedding) event'
+    );
+    const descMeta = text.match(/property="og:description" content="([^"]*)"/);
+    assert.ok(descMeta && descMeta[1].includes('أعراسنا'), `expected the description to carry أعراسنا, got: ${descMeta && descMeta[1]}`);
+    assert.ok(/<p class="mark">أعراسنا<\/p>/.test(text), 'expected the footer mark to read أعراسنا on a festive event');
+  });
+
   await test('A solemn-tone event with no poster renders a real card in the solemn palette, not the festive one', async () => {
     const { status, buffer } = await rawGetBinary(`/e/${solemnShareEventId}/card.jpg`);
     assert.strictEqual(status, 200, 'card generation must not crash on a poster-less solemn event');
@@ -3243,6 +3404,33 @@ async function run() {
       rule.b >= rule.r,
       `expected the solemn palette's cool accent, got a warm one (festive leaked in): ${JSON.stringify(rule)}`
     );
+  });
+
+  await test('Both palettes expose a wordmark, and the generated card renders for each tone', async () => {
+    assert.strictEqual(PALETTES.festive.wordmark, 'أعراسنا');
+    assert.strictEqual(PALETTES.solemn.wordmark, 'مناسبات النقب');
+
+    // The wordmark drawn ON the JPEG cannot be asserted by reading pixels
+    // (there is no OCR here) — this only pins the contract a card render can
+    // be checked against: both tones have a wordmark to draw, and drawing it
+    // does not throw for either tone. The share-page assertions above are
+    // what actually catch a forgotten hardcoded string.
+    for (const eid of [shareEventId, solemnShareEventId]) {
+      const { status } = await rawGetBinary(`/e/${eid}/card.jpg`);
+      assert.strictEqual(status, 200, `expected card generation to succeed for event ${eid}`);
+    }
+  });
+
+  await test('The solemn (condolence) share page never carries «أعراسنا» anywhere, and still carries «مناسبات النقب»', async () => {
+    const { status, text } = await rawGet(`/e/${solemnShareEventId}`);
+    assert.strictEqual(status, 200);
+
+    assert.strictEqual(
+      (text.match(/أعراسنا/g) || []).length,
+      0,
+      'the festive wordmark must not appear anywhere on a condolence page — it would read as celebrating a death'
+    );
+    assert.ok(text.includes('مناسبات النقب'), 'the descriptive line must still appear, standing alone, on a solemn page');
   });
 
   await db.execute(

@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../api/negev_api.dart';
@@ -65,6 +66,18 @@ const kEventTextFieldKeys = [
 /// بند القرى والتجمعات الجامع — نفس النصّ الحرفي في `AppConfig.towns` وفي
 /// `VILLAGES_TOWN` على الخادم. اختياره وحده يُظهر منتقي القرية الإلزامي.
 const kVillagesTown = 'القرى والتجمعات';
+
+/// أقصى ضلع لصورة البوستر بعد القصّ — نفس السقف الذي تستعمله `web/app.js`
+/// (`POSTER_CROP_MAX_DIMENSION`). القصّ اختياري بالكامل: الخادم لا يتغيّر،
+/// ولا إحداثيات قصّ تُخزَّن، والبايتات المقصوصة هي ما يُرفع لا أكثر.
+const kPosterCropMaxDimension = 1600;
+
+/// إلغاء المستخدم لشاشة القصّ (بلا لمسها، أو بالرجوع منها) هو طريقه لرفع
+/// الصورة كما هي — لا يجوز أن يخسر اختياره بسبب ذلك. عام كي يبقى قابلاً
+/// للاختبار دون فتح شاشة قصّ حقيقية (قناة منصّة لا تعمل في `flutter test`).
+XFile resolveCroppedPoster(XFile picked, CroppedFile? cropped) {
+  return cropped == null ? picked : XFile(cropped.path);
+}
 
 /// صيغة `YYYY-MM-DD` التي يفهمها الخادم — عام كي تعيد شاشة تعديل المناسبة
 /// استعماله بدل نسخة ثانية.
@@ -195,7 +208,33 @@ class _AddEventScreenState extends State<AddEventScreen> {
       source: ImageSource.gallery,
       imageQuality: 85,
     );
-    if (picked != null) setState(() => _poster = picked);
+    if (picked == null) return;
+
+    // القصّ حرّ الأبعاد عمداً — لا aspectRatio هنا، والدعوات غالباً طولية
+    // فتربيعها يتلف نصف الدعوة (نفس قرار الويب في posterCropState).
+    final cropped = await ImageCropper().cropImage(
+      sourcePath: picked.path,
+      maxWidth: kPosterCropMaxDimension,
+      maxHeight: kPosterCropMaxDimension,
+      compressFormat: ImageCompressFormat.jpg,
+      compressQuality: 90,
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'قص صورة البوستر',
+          lockAspectRatio: false,
+        ),
+        IOSUiSettings(
+          title: 'قص صورة البوستر',
+          aspectRatioLockEnabled: false,
+          resetAspectRatioEnabled: true,
+          doneButtonTitle: 'تم',
+          cancelButtonTitle: 'إلغاء',
+        ),
+      ],
+    );
+
+    if (!mounted) return;
+    setState(() => _poster = resolveCroppedPoster(picked, cropped));
   }
 
   Future<void> _pickAudio() async {

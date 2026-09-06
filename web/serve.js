@@ -160,7 +160,7 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(PORT, () => {
   console.log('====================================================');
-  console.log('🖥️  واجهة الويب — منصة مناسبات النقب');
+  console.log('🖥️  واجهة الويب — منصة أعراسنا');
   console.log(`📱 الموقع:      http://localhost:${PORT}`);
   console.log(`👑 لوحة التحكم: http://localhost:${PORT}/admin.html`);
   console.log(`🔌 يمرّر ${PROXIED.join(' ')} إلى ${API_ORIGIN}`);

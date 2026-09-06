@@ -129,7 +129,7 @@ router.get('/admin/users', requireSuperAdmin, asyncHandler(async (req, res) => {
 router.post('/admin/broadcast', requireSuperAdmin, asyncHandler(async (req, res) => {
   requireFields(req.body, ['message']);
 
-  const title = cleanString(req.body.title, 200) || '📢 تنبيه عام من إدارة مناسبات النقب';
+  const title = cleanString(req.body.title, 200) || '📢 تنبيه عام من إدارة أعراسنا (مناسبات النقب)';
   const message = cleanString(req.body.message, 2000);
 
   await admin.recordBroadcast({ title, message, sentBy: req.user.id });

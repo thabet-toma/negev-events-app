@@ -4,9 +4,14 @@
  * يولّد كل أيقونات العلامة من تعريف واحد — «بيت الشَّعَر» (‏#56).
  *
  * الأيقونات صور ثنائية، ولو دخلت المستودع مرسومة يدوياً لصارت غير قابلة
- * لإعادة التوليد: أي تعديل على العلامة يعني إعادة رسم ٢٦ ملفاً بيدك. هذا
- * السكربت هو مصدر الحقيقة بدلاً منها — العلامة معرَّفة مرة واحدة في
- * `drawTent` أدناه، وكل مقاس مشتقّ منها.
+ * لإعادة التوليد: أي تعديل على العلامة يعني إعادة رسم ٢٥ ملفاً بيدك. هندسة
+ * العلامة نفسها (‏`buildMarkParts` وما تحته) معرَّفة مرة واحدة في
+ * `server/src/utils/brandMark.js` — لا هنا — لأن طبقة المسارات
+ * (`share.routes.js`) وخدمة بطاقة المشاركة تحتاجانها أيضاً، ولا يجوز لـ
+ * `server/src/` أن يستدعي `server/scripts/` (أداة تشغيل تنفّذ عملاً حقيقياً
+ * عند التحميل). هذا الملف يستهلك تلك الهندسة ويضيف عليها ما هو من اختصاصه
+ * فقط: الرسم على القماش بكل مقاس، وقالب SVG، وجداول ملفات الإخراج، والكتابة
+ * الفعلية.
  *
  *   node scripts/brand-icons.js          (من داخل server/)
  *
@@ -16,60 +21,57 @@
  *   mobile/ios/.../AppIcon.appiconset — أيقونة iOS
  *
  * ولا يلمس شيئاً آخر. تشغيله متكرّراً آمن: يستبدل الملفات نفسها بالمحتوى نفسه.
+ * `require`-ه (كما يفعل test/web-dom.test.js) لا يكتب شيئاً — الكتابة كلها
+ * خلف `require.main === module` في ذيل الملف.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { createCanvas } = require('@napi-rs/canvas');
+const { GROUND, MARK, buildMarkParts, markScale, partsToSvgPaths } = require('../src/utils/brandMark');
 
 const REPO = path.join(__dirname, '..', '..');
 
-/**
- * ألوان العلامة.
- *
- * الأرضية `--ink` من لوحة الموقع نفسها (`web/styles.css`) — كحليّ شديد القتامة،
- * وهو اللون الذي يقرأه العين شعرَ الماعز الأسود الذي تُنسج منه الخيمة فعلاً.
- * والعلامة رمليّة دافئة مشتقّة من `--gold` (‏#8f6a20) بعد رفع إضاءتها لتُقرأ على
- * أرضية داكنة — نفس المنطق الذي تطبّقه `readableOnDark` في `shareCard.service.js`،
- * لا لون مخترَع من خارج اللوحة.
- */
-const GROUND = '#0c1b2a';
-const MARK = '#e3c08a';
+// ---------------------------------------------------------------------------
+// الرسم على القماش
+// ---------------------------------------------------------------------------
 
-/**
- * بيت الشَّعَر: ثلاثة أعمدة وسقف متهدّل بينها.
- *
- * الإحداثيات في مربّع ١٠٠ وحدة. أبعد نقطة عن المركز هي طرف القاعدة
- * (‏±٣٦، +١٦) أي على بُعد ٣٩٫٤ وحدة — تحت نصف قطر المنطقة الآمنة للقناع
- * (‏٤٠ وحدة، أي ٨٠٪ من الأيقونة)، فالعلامة تنجو من القصّ الدائري على أندرويد.
- *
- * ثلاثة أشياء تفصل بيت الشَّعَر عن سلسلة جبال، وكلها مقصودة هنا:
- *   • **التهدّل ضحل** — نقاط التحكّم عند ٤٧ بينما وتر المنحنى عند ٣٩٫٥، أي
- *     نزول ٣٫٧٥ وحدة لا أكثر. المحاولة الأولى هدّلت إلى ٦٠ فصارت الأيقونة
- *     ثلاث قمم وواديين.
- *   • **الأضلاع مستقيمة مشدودة** لا منحنية — حبال الشدّ تنزل من العمود إلى
- *     الوتد في خطّ واحد.
- *   • **القاعدة مسطّحة والنسبة واطئة** — عرض ٧٢ وحدة في ارتفاع ٣١، فالشكل
- *     يمتدّ لا يرتفع. الجبل يرتفع، والخيمة تمتدّ.
- */
-function drawTent(ctx, size, { safeZone }) {
+/** يبني مسار جزء واحد على القماش، بلا ملء — القاعدة نفسها يُبنى عليها ملء الشكل بلون وحذف بكسله معاً. */
+function tracePart(ctx, part, u) {
+  ctx.beginPath();
+  if (part.shape.type === 'circle') {
+    ctx.arc(part.shape.cx * u, part.shape.cy * u, part.shape.r * u, 0, Math.PI * 2);
+  } else {
+    part.shape.commands.forEach(([type, ...args]) => {
+      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
+      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
+      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
+      else if (type === 'Z') ctx.closePath();
+    });
+  }
+}
+
+function drawShapesOnCanvas(ctx, parts, u) {
+  ['mark', 'ground'].forEach(fillKind => {
+    ctx.fillStyle = fillKind === 'mark' ? MARK : GROUND;
+    parts.filter(p => p.fill === fillKind).forEach(part => {
+      tracePart(ctx, part, u);
+      ctx.fill();
+    });
+  });
+}
+
+function drawTent(ctx, size, { safeZone, detail = 'full' }) {
   const u = size / 100;
-  const scale = safeZone ? 1 : 1.14;
+  const scale = markScale(safeZone);
 
   ctx.save();
   ctx.translate(size / 2, size / 2);
   ctx.scale(scale, scale);
   ctx.translate(-size / 2, -size / 2);
 
-  ctx.fillStyle = MARK;
-  ctx.beginPath();
-  ctx.moveTo(14 * u, 66 * u);
-  ctx.lineTo(28 * u, 44 * u);
-  ctx.quadraticCurveTo(39 * u, 47 * u, 50 * u, 35 * u);
-  ctx.quadraticCurveTo(61 * u, 47 * u, 72 * u, 44 * u);
-  ctx.lineTo(86 * u, 66 * u);
-  ctx.closePath();
-  ctx.fill();
+  drawShapesOnCanvas(ctx, buildMarkParts(detail), u);
+
   ctx.restore();
 }
 
@@ -79,14 +81,35 @@ function drawTent(ctx, size, { safeZone }) {
  * الأرضية مصمتة لا شفّافة عمداً — iOS يرفض الشفافية في أيقونة التطبيق، وأندرويد
  * يرسم خلفها أبيض فتظهر العلامة على لون لم يُختَر.
  */
-function renderIcon(size, { safeZone = false } = {}) {
+function renderIcon(size, { safeZone = false, detail = 'full' } = {}) {
   const canvas = createCanvas(size, size);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = GROUND;
   ctx.fillRect(0, 0, size, size);
-  drawTent(ctx, size, { safeZone });
+  drawTent(ctx, size, { safeZone, detail });
   return canvas.toBuffer('image/png');
 }
+
+// ---------------------------------------------------------------------------
+// SVG — يُبنى من نفس `buildMarkParts`، لا يُكتب يدوياً أبداً
+// ---------------------------------------------------------------------------
+
+/** نسخة متّجهة للفافيكون — تكبر بلا حدّ ووزنها بضع مئات بايت، مبنيّة من نفس `buildMarkParts` تماماً كالقماش. */
+function buildIconSvg(detail, safeZone) {
+  const { markD, groundD } = partsToSvgPaths(buildMarkParts(detail));
+  const scale = markScale(safeZone);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="أعراسنا">
+  <rect width="100" height="100" rx="22" fill="${GROUND}"/>
+  <g transform="translate(50 50) scale(${scale}) translate(-50 -50)">
+    <path d="${markD}" fill="${MARK}"/>
+    <path d="${groundD}" fill="${GROUND}"/>
+  </g>
+</svg>
+`;
+}
+
+// favicon.svg يشغل نفس دور favicon-32.png: تفصيل 'icon' بلا منطقة آمنة (نفس مقياس ١٫١٤)
+const ICON_SVG = buildIconSvg('icon', false);
 
 function write(relativePath, buffer) {
   const target = path.join(REPO, relativePath);
@@ -95,19 +118,23 @@ function write(relativePath, buffer) {
   console.log(`  ${relativePath}  (${Math.round(buffer.length / 1024)} KB)`);
 }
 
-/** نسخة متّجهة للفافيكون — تكبر بلا حدّ ووزنها بضع مئات بايت. */
-const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="مناسبات النقب">
-  <rect width="100" height="100" rx="22" fill="${GROUND}"/>
-  <path d="M14 66 L28 44 Q39 47 50 35 Q61 47 72 44 L86 66 Z" fill="${MARK}"/>
-</svg>
-`;
-
+/**
+ * قاعدة اختيار الطبقة — **بالغرض لا بمقاس الملف**.
+ *
+ * كل أيقونة يعرضها النظام **أيقونةَ تطبيق** (شاشة رئيسية، مشغّل، لسان متصفّح)
+ * تأخذ `'icon'` مهما كان مقاس الملف، لأن النظام يصغّرها عند العرض: ملف ‎١٨٠px‎
+ * يظهر على شاشة آيفون بنحو ‎٦٠px‎، وعندها تختفي لمبات الطوق الصغيرة وحبال الشدّ
+ * وتصير رذاذاً — وهو العطل الذي وُجدت الطبقتان لمنعه.
+ *
+ * ولا يأخذ `'full'` إلا ما يُعرض **بحجمه الكبير فعلاً**: صورة المتجر (‏١٠٢٤‎)
+ * وأصل الـPWA الكبير المستعمَل في شاشة التثبيت والإقلاع.
+ */
 const WEB_ICONS = [
-  ['web/icons/favicon-32.png', 32, {}],
-  ['web/icons/apple-touch-icon.png', 180, {}],
-  ['web/icons/icon-192.png', 192, {}],
-  ['web/icons/icon-512.png', 512, {}],
-  ['web/icons/icon-maskable-512.png', 512, { safeZone: true }]
+  ['web/icons/favicon-32.png', 32, { detail: 'icon' }],
+  ['web/icons/apple-touch-icon.png', 180, { detail: 'icon' }],
+  ['web/icons/icon-192.png', 192, { detail: 'icon' }],
+  ['web/icons/icon-512.png', 512, { detail: 'full' }],
+  ['web/icons/icon-maskable-512.png', 512, { safeZone: true, detail: 'icon' }]
 ];
 
 const ANDROID_ICONS = [
@@ -125,20 +152,29 @@ const IOS_ICONS = [
   ['Icon-App-1024x1024@1x.png', 1024]
 ];
 
-console.log('web/');
-fs.mkdirSync(path.join(REPO, 'web', 'icons'), { recursive: true });
-fs.writeFileSync(path.join(REPO, 'web', 'icons', 'icon.svg'), ICON_SVG, 'utf8');
-console.log('  web/icons/icon.svg');
-WEB_ICONS.forEach(([target, size, options]) => write(target, renderIcon(size, options)));
+if (require.main === module) {
+  console.log('web/');
+  fs.mkdirSync(path.join(REPO, 'web', 'icons'), { recursive: true });
+  fs.writeFileSync(path.join(REPO, 'web', 'icons', 'icon.svg'), ICON_SVG, 'utf8');
+  console.log('  web/icons/icon.svg');
+  WEB_ICONS.forEach(([target, size, options]) => write(target, renderIcon(size, options)));
 
-console.log('\nmobile/android — أندرويد يقصّ الأيقونة بأشكال مختلفة، فكلها بالمنطقة الآمنة');
-ANDROID_ICONS.forEach(([density, size]) => {
-  write(`mobile/android/app/src/main/res/mipmap-${density}/ic_launcher.png`, renderIcon(size, { safeZone: true }));
-});
+  console.log('\nmobile/android — أندرويد يقصّ الأيقونة بأشكال مختلفة، فكلها بالمنطقة الآمنة وبالتفصيل المبسَّط');
+  ANDROID_ICONS.forEach(([density, size]) => {
+    write(`mobile/android/app/src/main/res/mipmap-${density}/ic_launcher.png`, renderIcon(size, { safeZone: true, detail: 'icon' }));
+  });
 
-console.log('\nmobile/ios — iOS يقصّ بزواياه هو، والعلامة تملأ أكثر');
-IOS_ICONS.forEach(([filename, size]) => {
-  write(`mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/${filename}`, renderIcon(size));
-});
+  // iOS يقصّ بزواياه هو (لا منطقة آمنة دائرية)، لكن كل هذه الملفات — عدا صورة
+  // المتجر ‎١٠٢٤‎ — أيقونةُ تطبيق تُعرض صغيرة على الشاشة الرئيسية، فتأخذ الطبقة
+  // المبسَّطة بحكم القاعدة أعلى `WEB_ICONS`. ملف ‎٢٠px‎ بطوق ٢٨ لمبة وحبال شدّ
+  // رذاذٌ لا علامة.
+  console.log('\nmobile/ios — أيقونات التطبيق مبسَّطة، وصورة المتجر ١٠٢٤ وحدها بكامل التفصيل');
+  IOS_ICONS.forEach(([filename, size]) => {
+    const detail = size >= 1024 ? 'full' : 'icon';
+    write(`mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/${filename}`, renderIcon(size, { detail }));
+  });
 
-console.log('\nتمّ.');
+  console.log('\nتمّ.');
+}
+
+module.exports = { drawTent, renderIcon, buildIconSvg };

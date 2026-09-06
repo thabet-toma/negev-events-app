@@ -1,0 +1,5 @@
+# الأصول المولَّدة من `server/scripts/brand-icons.js` تُقارَن بايتياً في
+# `server/test/web-dom.test.js` مقابل ما يولّده السكربت في الذاكرة، والسكربت
+# يكتب `\n` دائماً. وعلى ويندوز `core.autocrlf=true` افتراضاً، فبلا هذا السطر
+# يخرج الملف من المستودع بنهايات CRLF وينكسر الفحص على نسخة نظيفة.
+web/icons/icon.svg text eol=lf

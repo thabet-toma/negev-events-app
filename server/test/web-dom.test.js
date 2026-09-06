@@ -22,6 +22,9 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { JSDOM, VirtualConsole } = require('jsdom');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const { renderIcon, buildIconSvg } = require('../scripts/brand-icons');
+const { ringBeads, HUB, GROUND, MARK, buildMarkParts, partsToSvgPaths } = require('../src/utils/brandMark');
 
 // Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
 // server and this fixture must not become a second copy of them (CLAUDE.md,
@@ -67,6 +70,7 @@ async function waitFor(conditionFn, { timeout = 3000, interval = 20 } = {}) {
 
 const WEB_DIR = path.join(__dirname, '..', '..', 'web');
 const INDEX_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
+const STYLES_CSS_RAW = fs.readFileSync(path.join(WEB_DIR, 'styles.css'), 'utf8');
 const CONFIG_JS = fs.readFileSync(path.join(WEB_DIR, 'config.js'), 'utf8');
 const API_JS = fs.readFileSync(path.join(WEB_DIR, 'api.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
@@ -128,7 +132,8 @@ const WEDDING_TYPE = {
     { field_key: 'town', label: 'البلدة', is_required: true, position: 2 },
     { field_key: 'event_date', label: 'تاريخ المناسبة', is_required: true, position: 3 },
     { field_key: 'youth_party_date', label: 'سهرة الشباب والدحة', is_required: false, position: 4 },
-    { field_key: 'location_name', label: 'موقع القاعة', is_required: true, position: 5 }
+    { field_key: 'location_name', label: 'موقع القاعة', is_required: true, position: 5 },
+    { field_key: 'poster_url', label: 'صورة الملصق', is_required: false, position: 6 }
   ]
 };
 
@@ -241,6 +246,43 @@ function buildFakeCanvasContext() {
 }
 
 /**
+ * The poster crop editor's three seams beyond the 2D context, needed for the
+ * publish form's crop editor (app.js): jsdom has no real image decoding (an
+ * `Image`'s `src` never fires load/error — verified directly against jsdom
+ * before writing this, the same way the concatenated-eval comment above was),
+ * no `URL.createObjectURL`, and `HTMLCanvasElement.toBlob` only logs "not
+ * implemented" and never calls back. None of these weaken app.js's real path:
+ * a real browser provides all three natively, and the editor deliberately
+ * never re-queries layout (getBoundingClientRect) for its drag math — it
+ * tracks pointer movement by delta from the drag's own start point instead
+ * (see `movePosterCropDrag` in app.js) — so no fourth seam is needed for that.
+ *
+ * `window.__FAKE_IMAGE_SIZE` lets a test choose the "photo" dimensions the
+ * next chosen file will decode to, before dispatching its `change` event —
+ * this is what exercises the 1600px downscale cap deliberately.
+ */
+function installPosterCropFakes(window) {
+  window.__FAKE_IMAGE_SIZE = { width: 480, height: 640 };
+
+  window.URL.createObjectURL = () => 'blob:fake-poster-url';
+  window.URL.revokeObjectURL = () => {};
+
+  window.Image = function FakeImage() {
+    const size = window.__FAKE_IMAGE_SIZE;
+    const img = { naturalWidth: size.width, naturalHeight: size.height, onload: null, onerror: null };
+    Object.defineProperty(img, 'src', {
+      set() { setTimeout(() => { if (img.onload) img.onload(); }, 0); }
+    });
+    return img;
+  };
+
+  window.HTMLCanvasElement.prototype.toBlob = function toBlob(callback, type) {
+    const blob = new window.Blob(['fake-cropped-bytes'], { type: type || 'image/png' });
+    setTimeout(() => callback(blob), 0);
+  };
+}
+
+/**
  * Every unhandled rejection anywhere in the process while a DOM env is live.
  * app.js's DOMContentLoaded handler fires several async functions
  * fire-and-forget (fetchEvents(), initSocket(), ...) — a genuine bug in one
@@ -257,6 +299,38 @@ function assertNoUnhandledRejections(context) {
     unhandledRejections.length = 0;
     throw new Error(`${context}: unhandled rejection(s):\n${messages.join('\n')}`);
   }
+}
+
+/**
+ * Decodes a brand-icon PNG buffer (server/scripts/brand-icons.js) into its raw
+ * pixels, the same loadImage -> drawImage -> getImageData round-trip
+ * smoke.test.js's decodeCard() uses for the share card.
+ */
+async function decodeIconPixels(buffer) {
+  const image = await loadImage(buffer);
+  const canvas = createCanvas(image.width, image.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, image.width, image.height);
+  return { data, width, height };
+}
+
+function hexToRgb(hex) {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16)
+  };
+}
+
+const MARK_RGB = hexToRgb(MARK);
+const GROUND_RGB = hexToRgb(GROUND);
+
+/** Nearest-colour classification — anti-aliased edge pixels fall on whichever side they lean toward. */
+function classifyPixel(r, g, b) {
+  const distMark = (r - MARK_RGB.r) ** 2 + (g - MARK_RGB.g) ** 2 + (b - MARK_RGB.b) ** 2;
+  const distGround = (r - GROUND_RGB.r) ** 2 + (g - GROUND_RGB.g) ** 2 + (b - GROUND_RGB.b) ** 2;
+  return distMark < distGround ? 'mark' : 'ground';
 }
 
 /**
@@ -304,6 +378,7 @@ function buildEnv({ loggedIn = false, userAgent } = {}) {
   window.requestAnimationFrame = cb => setTimeout(cb, 16);
   window.cancelAnimationFrame = id => clearTimeout(id);
   window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
+  installPosterCropFakes(window);
 
   window.eval(COMBINED_SCRIPT);
 
@@ -406,6 +481,175 @@ async function run() {
 
     const label = input.closest('.form-group').querySelector('label');
     assert.ok(label.textContent.includes('سهرة الشباب'), `expected the field's own label, got "${label.textContent}"`);
+  });
+
+  console.log('\nPublish form — poster crop editor (Facebook-style, #optional-crop)');
+
+  /**
+   * Simulates a publisher choosing a file for the poster field: assigns a
+   * fake `File` onto `#addPosterFile.files` (jsdom's own `files` is read-only,
+   * so this is the standard `defineProperty` workaround) and fires the same
+   * `change` event a real file picker would, then waits for the editor to
+   * actually appear — `installPosterCropFakes` is what makes the underlying
+   * `Image`/`toBlob`/`createObjectURL` calls resolve at all under jsdom.
+   */
+  async function choosePosterFile(dom, size) {
+    const win = dom.window;
+    const { document } = win;
+    if (size) win.__FAKE_IMAGE_SIZE = size;
+
+    const input = document.getElementById('addPosterFile');
+    const file = new win.File(['fake-bytes'], 'invitation.png', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    await waitFor(() => document.getElementById('posterCropEditor').hidden === false);
+  }
+
+  /** Fills in what handleEventSubmit requires for the (default-selected) عرس type, beyond the poster itself. */
+  function fillRequiredPublishFields(document) {
+    document.querySelector('#addHonoreesList .honoree-name').value = 'محمد وفاطمة';
+    document.getElementById('addLocationName').value = 'ديوان آل تجربة بجانب الجامع';
+  }
+
+  await test('choosing a poster reveals the crop editor and steps the plain upload box aside', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    await choosePosterFile(dom);
+    assertNoUnhandledRejections('poster crop editor / reveal');
+
+    assert.strictEqual(document.getElementById('posterCropEditor').hidden, false, 'expected the crop editor to be shown');
+    assert.strictEqual(document.getElementById('posterUploadBox').hidden, true, 'the plain file box must step aside once a file is chosen');
+    assert.strictEqual(document.getElementById('posterCropPreview').hidden, true, 'no preview yet — nothing has been confirmed');
+  });
+
+  await test('the crop rectangle initialises around the whole image', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    const box = document.getElementById('posterCropBox');
+    assert.strictEqual(box.style.left, '0%', 'the crop box must start flush with the image\'s left edge');
+    assert.strictEqual(box.style.top, '0%', 'the crop box must start flush with the image\'s top edge');
+    assert.strictEqual(box.style.width, '100%', 'nothing is cropped away until the publisher drags a handle');
+    assert.strictEqual(box.style.height, '100%');
+  });
+
+  await test('dragging a corner handle changes the crop rectangle\'s stored bounds', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    // 480×640 keeps displayScale at 1 (below POSTER_CROP_MAX_EDITOR_WIDTH), so
+    // client-pixel deltas map onto working-canvas pixels one-to-one — this
+    // test's own arithmetic below can stay a direct mirror of app.js's.
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    const handle = document.querySelector('#posterCropBox .poster-crop-handle[data-corner="br"]');
+    handle.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 480, clientY: 640, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 380, clientY: 500, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 380, clientY: 500, bubbles: true }));
+
+    const box = document.getElementById('posterCropBox');
+    assert.strictEqual(box.style.left, '0%', 'dragging the bottom-right corner must not move the fixed top-left one');
+    assert.strictEqual(box.style.top, '0%');
+    assert.strictEqual(box.style.width, `${(380 / 480) * 100}%`, 'shrinking by 100 client px on a 1:1 scale should shrink the rect by exactly that');
+    assert.strictEqual(box.style.height, `${(500 / 640) * 100}%`);
+  });
+
+  await test('confirming a crop sends the cropped Blob under "poster", with an explicit .jpg filename', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('confirmPosterCrop');
+
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit after confirming a crop');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry in the submitted FormData');
+    // The regression this guards: appending a Blob with no third argument
+    // makes multer's `file.originalname` the literal string "blob" — no
+    // extension — and upload.js's filename() builds the stored name from
+    // `path.extname(originalname)`, so the file is saved with no suffix at all.
+    assert.ok(
+      posterEntry.name.endsWith('.jpg'),
+      `expected an explicit filename ending in .jpg, got "${posterEntry.name}" — a nameless Blob would silently save with no extension`
+    );
+    assert.strictEqual(posterEntry.type, 'image/jpeg', 'expected the export MIME to be image/jpeg, as passed to canvas.toBlob');
+  });
+
+  await test('"استخدام الصورة كاملة" still submits a Blob, and the working canvas never exceeds 1600px on its longest edge', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    // Deliberately over the cap — 3000×4000 — to exercise the downscale, not just assert its absence of harm.
+    await choosePosterFile(dom, { width: 3000, height: 4000 });
+
+    const canvas = document.getElementById('posterCropCanvas');
+    assert.ok(
+      canvas.width <= 1600 && canvas.height <= 1600,
+      `expected the working canvas capped at 1600px, got ${canvas.width}x${canvas.height}`
+    );
+    assert.strictEqual(
+      Math.max(canvas.width, canvas.height), 1600,
+      'an oversized photo should be downscaled until its longest edge lands exactly on the cap'
+    );
+
+    win.usePosterWholeImage();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('usePosterWholeImage');
+
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit after "use the whole image"');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire even with no crop made');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry even when the publisher never touched the crop rectangle');
+    assert.ok(posterEntry.name.endsWith('.jpg'), `expected the filename to end in .jpg, got "${posterEntry.name}"`);
   });
 
   console.log('\nEvent card rendering');
@@ -691,6 +935,142 @@ async function run() {
   });
 
   /**
+   * The header mark, the iOS install-hint mark, and the admin header mark are
+   * all hand-inlined `<path>`s — copies, not references to icon.svg — because
+   * an inline SVG path is what lets `fill="currentColor"` follow the theme.
+   * A hand-copied path is exactly what let the site keep shipping the retired
+   * three-pole tent after the mark itself changed underneath it: nothing
+   * failed, so nobody noticed. This pins all three against the single
+   * geometry definition (server/src/utils/brandMark.js) so the next redraw
+   * cannot silently leave them behind. Compared against the mark-coloured
+   * path only (`markD`) — these badges are a single-colour `currentColor`
+   * silhouette, with no ground-coloured door cut-out layered under it.
+   */
+  await test('the inlined header/install-hint/admin mark paths match the current mark geometry', () => {
+    const { markD } = partsToSvgPaths(buildMarkParts('icon'));
+    const pathRe = /<path d="([^"]+)" fill="currentColor">/g;
+
+    const indexMatches = [...INDEX_HTML_RAW.matchAll(pathRe)].map(m => m[1]);
+    assert.strictEqual(indexMatches.length, 2, 'expected two inlined marks in index.html: the header and the iOS install hint');
+    indexMatches.forEach(d => assert.strictEqual(d, markD, 'index.html carries a mark path that has drifted from buildMarkParts'));
+
+    const adminMatches = [...ADMIN_HTML_RAW.matchAll(pathRe)].map(m => m[1]);
+    assert.strictEqual(adminMatches.length, 1, 'expected one inlined mark in admin.html: the admin header');
+    assert.strictEqual(adminMatches[0], markD, 'admin.html carries a mark path that has drifted from buildMarkParts');
+  });
+
+  await test('the rename to «أعراسنا» reached the document title, the iOS web-app title, and the header', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    assert.ok(document.title.startsWith('أعراسنا'), `expected the title to lead with أعراسنا, got: ${document.title}`);
+    assert.strictEqual(
+      document.querySelector('meta[name="apple-mobile-web-app-title"]').getAttribute('content'),
+      'أعراسنا',
+      'the iOS home-screen label is a one-word surface — أعراسنا alone, mandatory'
+    );
+    assert.ok(
+      dom.window.document.querySelector('.logo-text h1').textContent.includes('أعراسنا'),
+      'the header is an internal surface — the app name alone'
+    );
+  });
+
+  await test('the manifest short_name is «أعراسنا» alone, and name carries both names', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(WEB_DIR, 'manifest.json'), 'utf8'));
+
+    assert.strictEqual(manifest.short_name, 'أعراسنا', 'short_name is a one-word surface — Android truncates a long label');
+    assert.ok(manifest.name.includes('أعراسنا'), `expected the manifest name to carry أعراسنا, got: ${manifest.name}`);
+    assert.ok(manifest.name.includes('مناسبات النقب'), `expected the manifest name to also carry the descriptive line, got: ${manifest.name}`);
+  });
+
+  console.log('\nBrand icon generation (server/scripts/brand-icons.js)');
+
+  await test('the smallest Android mipmap (mdpi, 48×48) really is 48×48 and mixes mark- and ground-coloured pixels', async () => {
+    const buffer = renderIcon(48, { safeZone: true, detail: 'icon' });
+    const { data, width, height } = await decodeIconPixels(buffer);
+
+    assert.strictEqual(width, 48);
+    assert.strictEqual(height, 48);
+
+    let markCount = 0;
+    let groundCount = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (classifyPixel(data[i], data[i + 1], data[i + 2]) === 'mark') markCount += 1;
+      else groundCount += 1;
+    }
+    assert.ok(markCount > 0, 'expected mark-coloured pixels — the mark must not vanish at 48px');
+    assert.ok(groundCount > 0, 'expected ground-coloured pixels too — a single flat colour means nothing rendered');
+  });
+
+  await test('every safe-zone render keeps mark-coloured pixels inside the circular safe zone (radius 40% of the image width)', async () => {
+    const sizes = [48, 72, 96, 144, 192, 512];
+    for (const size of sizes) {
+      const buffer = renderIcon(size, { safeZone: true, detail: 'icon' });
+      const { data, width, height } = await decodeIconPixels(buffer);
+      const cx = width / 2;
+      const cy = height / 2;
+      const maxRadius = width * 0.4;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const idx = (y * width + x) * 4;
+          if (classifyPixel(data[idx], data[idx + 1], data[idx + 2]) !== 'mark') continue;
+          const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          assert.ok(
+            dist <= maxRadius + 1,
+            `mark pixel at (${x},${y}) in a ${size}×${size} render sits ${dist.toFixed(1)}px from centre, past the ${maxRadius.toFixed(1)}px safe radius — Android's circular mask would clip it`
+          );
+        }
+      }
+    }
+  });
+
+  /**
+   * The burst used to run into the ring — outer beam lamps overlapped ring
+   * beads, and the mast finial nearly touched the top one. Asserted against
+   * the geometry rather than rendered pixels: at the sizes these icons ship
+   * at (down to 32-48px) the required 3-unit gap is often under one pixel,
+   * so a pixel scan would pass by accident even with the wrong geometry —
+   * the source coordinates are the only place this is actually checkable.
+   */
+  await test('the mast finial keeps at least 3 units of dark space from the ring\'s top bead, in both detail tiers', () => {
+    ['full', 'icon'].forEach(detail => {
+      const topBead = ringBeads(detail).reduce((closest, bead) => (bead.y < closest.y ? bead : closest));
+      const topBeadInnerEdgeY = topBead.y + topBead.r; // closer to the tent, since y grows downward
+      const finialTopEdgeY = HUB.y - HUB.r; // closer to the ring
+      const gap = finialTopEdgeY - topBeadInnerEdgeY;
+      assert.ok(
+        gap >= 3,
+        `detail=${detail}: only ${gap.toFixed(2)} units of dark space between the mast finial and the ring's top bead, need >= 3`
+      );
+    });
+  });
+
+  await test('detail \'icon\' and detail \'full\' render different bytes at the same size', () => {
+    const iconBuffer = renderIcon(192, { safeZone: false, detail: 'icon' });
+    const fullBuffer = renderIcon(192, { safeZone: false, detail: 'full' });
+    assert.ok(!iconBuffer.equals(fullBuffer), 'the detail flag must actually change what gets drawn, not be a no-op');
+  });
+
+  await test('the generated favicon SVG is well-formed, carries both brand colours, and matches the geometry the raster uses', () => {
+    const svgContent = fs.readFileSync(path.join(WEB_DIR, 'icons', 'icon.svg'), 'utf8');
+
+    const parserWindow = new JSDOM('').window;
+    const doc = new parserWindow.DOMParser().parseFromString(svgContent, 'image/svg+xml');
+    assert.strictEqual(doc.querySelector('parsererror'), null, 'icon.svg must be well-formed XML');
+    assert.strictEqual(doc.documentElement.tagName, 'svg');
+
+    assert.ok(svgContent.includes(GROUND), 'expected the ground colour hex in the SVG');
+    assert.ok(svgContent.includes(MARK), 'expected the mark colour hex in the SVG');
+
+    assert.strictEqual(
+      svgContent,
+      buildIconSvg('icon', false),
+      'icon.svg must be generated straight from buildMarkParts, not hand-copied — it drifts the moment someone edits the mark and forgets this file'
+    );
+  });
+
+  /**
    * iOS exposes no install prompt at all — `beforeinstallprompt` is not
    * supported there and has no equivalent (#54) — so a written explanation is
    * the only path, not a lazy one. And the APK button is hidden on iOS on
@@ -739,6 +1119,49 @@ async function run() {
       /initInstallHint\(\)/.test(boot.slice(0, boot.indexOf('});'))),
       'initInstallHint() must be called on load, next to initAppDownload() whose gap it fills'
     );
+  });
+
+  /**
+   * The regression this exists for: `hidden` is a browser default
+   * (`[hidden] { display: none }`) and ANY author rule that sets `display` on
+   * the same element beats it. `.install-hint` set `display: flex`, so setting
+   * `.hidden = true` changed the property and nothing on screen — the close
+   * button appeared dead, and the sheet showed to every visitor on every
+   * platform because the `hidden` attribute in index.html never applied either.
+   *
+   * Every test above asserts the `.hidden` PROPERTY, which stayed true the
+   * whole time. jsdom applies no stylesheet, so none of them could ever have
+   * caught it. This one reads the stylesheet instead, for every element that
+   * ships hidden.
+   */
+  await test('nothing that ships hidden is un-hidden by a class that forces a display', () => {
+    // Parsed, not pattern-matched: the markup is the thing under test, so read
+    // it as a document rather than guessing at attribute order. No scripts run
+    // here — this is index.html exactly as it is served.
+    const markup = new JSDOM(INDEX_HTML_RAW).window.document;
+    const shipsHidden = [...markup.querySelectorAll('[hidden]')];
+    assert.ok(shipsHidden.length, 'expected index.html to ship some elements hidden');
+
+    for (const element of shipsHidden) {
+      for (const cls of [...element.classList]) {
+        // Every class in this stylesheet is plain kebab-case; anything else is
+        // not worth interpolating into a pattern, so skip it rather than
+        // escape it.
+        if (!/^[a-zA-Z0-9_-]+$/.test(cls)) continue;
+
+        const rule = STYLES_CSS_RAW.match(new RegExp('[.]' + cls + '[ ]*[{]([^}]*)[}]'));
+        if (!rule || !/display[ ]*:/.test(rule[1])) continue;
+
+        const neutralised = new RegExp('[.]' + cls + '\\[hidden\\][^{]*[{][^}]*display[ ]*:[ ]*none')
+          .test(STYLES_CSS_RAW);
+        assert.ok(
+          neutralised,
+          '#' + (element.id || cls) + ' ships hidden, but .' + cls
+          + ' sets a display that overrides it — add ".' + cls
+          + '[hidden] { display: none; }" or it stays on screen for everyone'
+        );
+      }
+    }
   });
 
   await test('dismissing the hint keeps it dismissed on the next visit', () => {
