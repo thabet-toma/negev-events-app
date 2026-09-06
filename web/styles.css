@@ -887,6 +887,56 @@ body {
 .upload-box p { font-size: 0.7rem; color: var(--ink-faint); }
 .upload-box input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
+/* محرِّر قصّ الملصق (Facebook-style) — نسبة حرّة، بلا تدوير وبلا تقريب.
+   المربّع يبدأ حول الصورة كلها، والقصّ اختياري تماماً. */
+.poster-crop-editor { margin-top: 10px; text-align: center; }
+
+.poster-crop-canvas-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  touch-action: none;
+}
+
+#posterCropCanvas { display: block; max-width: 100%; border-radius: var(--radius-md); }
+
+.poster-crop-guide {
+  position: absolute;
+  border: 2px dashed rgba(255, 255, 255, 0.65);
+  pointer-events: none;
+}
+
+.poster-crop-box {
+  position: absolute;
+  border: 2px solid var(--sky);
+  background: rgba(56, 189, 248, 0.12);
+  cursor: move;
+}
+
+.poster-crop-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: var(--sky);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  cursor: nwse-resize;
+}
+.poster-crop-handle[data-corner="tl"] { top: 0; left: 0; }
+.poster-crop-handle[data-corner="tr"] { top: 0; left: 100%; cursor: nesw-resize; }
+.poster-crop-handle[data-corner="bl"] { top: 100%; left: 0; cursor: nesw-resize; }
+.poster-crop-handle[data-corner="br"] { top: 100%; left: 100%; }
+
+.poster-crop-hint { font-size: 0.7rem; color: var(--ink-faint); margin: 8px 0; }
+
+.poster-crop-actions { display: flex; gap: 10px; }
+.poster-crop-actions .submit-btn, .poster-crop-actions .record-nokoot-btn { flex: 1; }
+
+.poster-crop-preview { text-align: center; margin-top: 10px; }
+.poster-crop-preview img { max-width: 100%; max-height: 220px; border-radius: var(--radius-md); margin-bottom: 8px; }
+.poster-crop-preview .record-nokoot-btn { margin-top: 8px; }
+
 .submit-btn {
   width: 100%;
   background: var(--sky);

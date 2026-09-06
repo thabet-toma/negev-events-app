@@ -130,7 +130,8 @@ const WEDDING_TYPE = {
     { field_key: 'town', label: 'البلدة', is_required: true, position: 2 },
     { field_key: 'event_date', label: 'تاريخ المناسبة', is_required: true, position: 3 },
     { field_key: 'youth_party_date', label: 'سهرة الشباب والدحة', is_required: false, position: 4 },
-    { field_key: 'location_name', label: 'موقع القاعة', is_required: true, position: 5 }
+    { field_key: 'location_name', label: 'موقع القاعة', is_required: true, position: 5 },
+    { field_key: 'poster_url', label: 'صورة الملصق', is_required: false, position: 6 }
   ]
 };
 
@@ -243,6 +244,43 @@ function buildFakeCanvasContext() {
 }
 
 /**
+ * The poster crop editor's three seams beyond the 2D context, needed for the
+ * publish form's crop editor (app.js): jsdom has no real image decoding (an
+ * `Image`'s `src` never fires load/error — verified directly against jsdom
+ * before writing this, the same way the concatenated-eval comment above was),
+ * no `URL.createObjectURL`, and `HTMLCanvasElement.toBlob` only logs "not
+ * implemented" and never calls back. None of these weaken app.js's real path:
+ * a real browser provides all three natively, and the editor deliberately
+ * never re-queries layout (getBoundingClientRect) for its drag math — it
+ * tracks pointer movement by delta from the drag's own start point instead
+ * (see `movePosterCropDrag` in app.js) — so no fourth seam is needed for that.
+ *
+ * `window.__FAKE_IMAGE_SIZE` lets a test choose the "photo" dimensions the
+ * next chosen file will decode to, before dispatching its `change` event —
+ * this is what exercises the 1600px downscale cap deliberately.
+ */
+function installPosterCropFakes(window) {
+  window.__FAKE_IMAGE_SIZE = { width: 480, height: 640 };
+
+  window.URL.createObjectURL = () => 'blob:fake-poster-url';
+  window.URL.revokeObjectURL = () => {};
+
+  window.Image = function FakeImage() {
+    const size = window.__FAKE_IMAGE_SIZE;
+    const img = { naturalWidth: size.width, naturalHeight: size.height, onload: null, onerror: null };
+    Object.defineProperty(img, 'src', {
+      set() { setTimeout(() => { if (img.onload) img.onload(); }, 0); }
+    });
+    return img;
+  };
+
+  window.HTMLCanvasElement.prototype.toBlob = function toBlob(callback, type) {
+    const blob = new window.Blob(['fake-cropped-bytes'], { type: type || 'image/png' });
+    setTimeout(() => callback(blob), 0);
+  };
+}
+
+/**
  * Every unhandled rejection anywhere in the process while a DOM env is live.
  * app.js's DOMContentLoaded handler fires several async functions
  * fire-and-forget (fetchEvents(), initSocket(), ...) — a genuine bug in one
@@ -338,6 +376,7 @@ function buildEnv({ loggedIn = false, userAgent } = {}) {
   window.requestAnimationFrame = cb => setTimeout(cb, 16);
   window.cancelAnimationFrame = id => clearTimeout(id);
   window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
+  installPosterCropFakes(window);
 
   window.eval(COMBINED_SCRIPT);
 
@@ -440,6 +479,175 @@ async function run() {
 
     const label = input.closest('.form-group').querySelector('label');
     assert.ok(label.textContent.includes('سهرة الشباب'), `expected the field's own label, got "${label.textContent}"`);
+  });
+
+  console.log('\nPublish form — poster crop editor (Facebook-style, #optional-crop)');
+
+  /**
+   * Simulates a publisher choosing a file for the poster field: assigns a
+   * fake `File` onto `#addPosterFile.files` (jsdom's own `files` is read-only,
+   * so this is the standard `defineProperty` workaround) and fires the same
+   * `change` event a real file picker would, then waits for the editor to
+   * actually appear — `installPosterCropFakes` is what makes the underlying
+   * `Image`/`toBlob`/`createObjectURL` calls resolve at all under jsdom.
+   */
+  async function choosePosterFile(dom, size) {
+    const win = dom.window;
+    const { document } = win;
+    if (size) win.__FAKE_IMAGE_SIZE = size;
+
+    const input = document.getElementById('addPosterFile');
+    const file = new win.File(['fake-bytes'], 'invitation.png', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    await waitFor(() => document.getElementById('posterCropEditor').hidden === false);
+  }
+
+  /** Fills in what handleEventSubmit requires for the (default-selected) عرس type, beyond the poster itself. */
+  function fillRequiredPublishFields(document) {
+    document.querySelector('#addHonoreesList .honoree-name').value = 'محمد وفاطمة';
+    document.getElementById('addLocationName').value = 'ديوان آل تجربة بجانب الجامع';
+  }
+
+  await test('choosing a poster reveals the crop editor and steps the plain upload box aside', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    await choosePosterFile(dom);
+    assertNoUnhandledRejections('poster crop editor / reveal');
+
+    assert.strictEqual(document.getElementById('posterCropEditor').hidden, false, 'expected the crop editor to be shown');
+    assert.strictEqual(document.getElementById('posterUploadBox').hidden, true, 'the plain file box must step aside once a file is chosen');
+    assert.strictEqual(document.getElementById('posterCropPreview').hidden, true, 'no preview yet — nothing has been confirmed');
+  });
+
+  await test('the crop rectangle initialises around the whole image', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    const box = document.getElementById('posterCropBox');
+    assert.strictEqual(box.style.left, '0%', 'the crop box must start flush with the image\'s left edge');
+    assert.strictEqual(box.style.top, '0%', 'the crop box must start flush with the image\'s top edge');
+    assert.strictEqual(box.style.width, '100%', 'nothing is cropped away until the publisher drags a handle');
+    assert.strictEqual(box.style.height, '100%');
+  });
+
+  await test('dragging a corner handle changes the crop rectangle\'s stored bounds', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    // 480×640 keeps displayScale at 1 (below POSTER_CROP_MAX_EDITOR_WIDTH), so
+    // client-pixel deltas map onto working-canvas pixels one-to-one — this
+    // test's own arithmetic below can stay a direct mirror of app.js's.
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    const handle = document.querySelector('#posterCropBox .poster-crop-handle[data-corner="br"]');
+    handle.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 480, clientY: 640, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 380, clientY: 500, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 380, clientY: 500, bubbles: true }));
+
+    const box = document.getElementById('posterCropBox');
+    assert.strictEqual(box.style.left, '0%', 'dragging the bottom-right corner must not move the fixed top-left one');
+    assert.strictEqual(box.style.top, '0%');
+    assert.strictEqual(box.style.width, `${(380 / 480) * 100}%`, 'shrinking by 100 client px on a 1:1 scale should shrink the rect by exactly that');
+    assert.strictEqual(box.style.height, `${(500 / 640) * 100}%`);
+  });
+
+  await test('confirming a crop sends the cropped Blob under "poster", with an explicit .jpg filename', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('confirmPosterCrop');
+
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit after confirming a crop');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry in the submitted FormData');
+    // The regression this guards: appending a Blob with no third argument
+    // makes multer's `file.originalname` the literal string "blob" — no
+    // extension — and upload.js's filename() builds the stored name from
+    // `path.extname(originalname)`, so the file is saved with no suffix at all.
+    assert.ok(
+      posterEntry.name.endsWith('.jpg'),
+      `expected an explicit filename ending in .jpg, got "${posterEntry.name}" — a nameless Blob would silently save with no extension`
+    );
+    assert.strictEqual(posterEntry.type, 'image/jpeg', 'expected the export MIME to be image/jpeg, as passed to canvas.toBlob');
+  });
+
+  await test('"استخدام الصورة كاملة" still submits a Blob, and the working canvas never exceeds 1600px on its longest edge', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    // Deliberately over the cap — 3000×4000 — to exercise the downscale, not just assert its absence of harm.
+    await choosePosterFile(dom, { width: 3000, height: 4000 });
+
+    const canvas = document.getElementById('posterCropCanvas');
+    assert.ok(
+      canvas.width <= 1600 && canvas.height <= 1600,
+      `expected the working canvas capped at 1600px, got ${canvas.width}x${canvas.height}`
+    );
+    assert.strictEqual(
+      Math.max(canvas.width, canvas.height), 1600,
+      'an oversized photo should be downscaled until its longest edge lands exactly on the cap'
+    );
+
+    win.usePosterWholeImage();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('usePosterWholeImage');
+
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit after "use the whole image"');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire even with no crop made');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry even when the publisher never touched the crop rectangle');
+    assert.ok(posterEntry.name.endsWith('.jpg'), `expected the filename to end in .jpg, got "${posterEntry.name}"`);
   });
 
   console.log('\nEvent card rendering');

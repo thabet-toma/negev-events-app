@@ -29,6 +29,16 @@ let occasionTypesCache = null;
 let selectedOccasionType = null;
 let myEventsCache = [];
 
+// Poster crop editor (Facebook-style) — the rectangle answers "what IS this
+// image", not "how is it framed on any given surface"; display CSS elsewhere
+// is untouched. Free aspect ratio, no rotation/zoom. All geometry lives in
+// the working canvas's own pixel space, downscaled once on load so a 4000px
+// phone photo never freezes the page.
+let posterCropState = null;
+const POSTER_CROP_MAX_DIMENSION = 1600; // longest edge cap on the exported crop
+const POSTER_CROP_MIN_SIZE = 40; // smallest crop rectangle edge, in working-canvas pixels
+const POSTER_CROP_MAX_EDITOR_WIDTH = 560; // fits a phone screen without CSS-scaling the canvas unpredictably
+
 // Services directory tab (#31) — فئات مسطَّحة، قائمة أبجدية، بلا تقييمات
 let servicesInitialized = false;
 // Whether the publish form has actually been built. This is NOT the same
@@ -1560,6 +1570,9 @@ function renderOccasionForm(type) {
 
   if (fieldsByKey.honorees) addHonoreeRow('addHonoreesList');
 
+  // المربّع أُعيد بناؤه للتو ضمن innerHTML أعلاه — أي مستمع سابق مات معه.
+  initPosterCropField();
+
   // الخريطة مرتبطة بعنصر DOM أُعيد إنشاؤه للتو — أي مرجع قديم لها أصبح ميتاً.
   locationPickerMap = null;
   locationPickerMarker = null;
@@ -1663,11 +1676,39 @@ function renderFieldHtml(field) {
         </div>`;
     case 'poster_url':
       return `
-        <div class="upload-box">
-          <i class="fa-solid fa-image upload-icon"></i>
-          <h4>${label}${req}</h4>
-          <p>اختر صورة من الهاتف</p>
-          <input type="file" id="addPosterFile" accept="image/*">
+        <div class="poster-field">
+          <div class="upload-box" id="posterUploadBox">
+            <i class="fa-solid fa-image upload-icon"></i>
+            <h4>${label}${req}</h4>
+            <p>اختر صورة من الهاتف</p>
+            <input type="file" id="addPosterFile" accept="image/*">
+          </div>
+          <div id="posterCropEditor" class="poster-crop-editor" hidden>
+            <div class="poster-crop-canvas-wrap">
+              <canvas id="posterCropCanvas"></canvas>
+              <div class="poster-crop-guide" id="posterCropGuide"></div>
+              <div class="poster-crop-box" id="posterCropBox">
+                <div class="poster-crop-handle" data-corner="tl"></div>
+                <div class="poster-crop-handle" data-corner="tr"></div>
+                <div class="poster-crop-handle" data-corner="bl"></div>
+                <div class="poster-crop-handle" data-corner="br"></div>
+              </div>
+            </div>
+            <p class="poster-crop-hint">اسحب زوايا المربع لتحديد الجزء الذي تريد إظهاره، أو اسحب من الوسط لتحريكه. المربع المنقّط توضيحي فقط لما ستعرضه بطاقة المشاركة، ولا يفرض عليك شيئاً.</p>
+            <div class="poster-crop-actions">
+              <button type="button" class="submit-btn" onclick="confirmPosterCrop()">تأكيد القص</button>
+              <button type="button" class="record-nokoot-btn" onclick="usePosterWholeImage()">استخدام الصورة كاملة</button>
+            </div>
+          </div>
+          <div id="posterCropPreview" class="poster-crop-preview" hidden>
+            <img id="posterCropPreviewImg" alt="الصورة بعد القص">
+            <button type="button" class="record-nokoot-btn" onclick="reopenPosterCropEditor()">
+              <i class="fa-solid fa-crop"></i> تعديل الاقتصاص
+            </button>
+            <button type="button" class="record-nokoot-btn" onclick="choosePosterAgain()">
+              <i class="fa-solid fa-rotate"></i> اختيار صورة أخرى
+            </button>
+          </div>
         </div>`;
     case 'audio_url':
       return `
@@ -1786,6 +1827,234 @@ function appendHonoreesToFormData(formData, honorees) {
     formData.append(`honorees[${i}][name]`, h.name);
     if (h.role) formData.append(`honorees[${i}][role]`, h.role);
   });
+}
+
+// 12b. Poster crop editor (Facebook-style) — only the poster field, never
+// artist_image or audio. The client crops; the cropped bytes are what gets
+// uploaded — the server is untouched, no crop coordinates are stored. The
+// rectangle starts around the whole image, so a publisher who never touches
+// it uploads their picture with no re-encoding beyond the 1600px cap below.
+
+/** يُستدعى بعد كل بناء لمربّع الرفع (renderOccasionForm) — العنصر جديد دائماً. */
+function initPosterCropField() {
+  resetPosterCropState({ clearInput: false });
+  const input = document.getElementById('addPosterFile');
+  if (!input) return;
+  input.addEventListener('change', handlePosterFileChosen);
+  attachPosterCropDragHandlers();
+}
+
+function handlePosterFileChosen(e) {
+  const file = e.target.files && e.target.files[0];
+  resetPosterCropState({ clearInput: false });
+  if (!file) return;
+
+  const objectUrl = URL.createObjectURL(file);
+  const image = new Image();
+  image.onload = () => {
+    const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
+    const scale = Math.min(1, POSTER_CROP_MAX_DIMENSION / longestEdge);
+    const workingWidth = Math.max(1, Math.round(image.naturalWidth * scale));
+    const workingHeight = Math.max(1, Math.round(image.naturalHeight * scale));
+    const displayScale = Math.min(1, POSTER_CROP_MAX_EDITOR_WIDTH / workingWidth);
+
+    posterCropState = {
+      objectUrl,
+      previewUrl: null,
+      workingWidth,
+      workingHeight,
+      displayScale,
+      rect: { x: 0, y: 0, w: workingWidth, h: workingHeight },
+      drag: null,
+      blob: null
+    };
+
+    const canvas = document.getElementById('posterCropCanvas');
+    canvas.width = workingWidth;
+    canvas.height = workingHeight;
+    canvas.style.width = `${Math.round(workingWidth * displayScale)}px`;
+    canvas.style.height = `${Math.round(workingHeight * displayScale)}px`;
+    canvas.getContext('2d').drawImage(image, 0, 0, workingWidth, workingHeight);
+
+    renderPosterCropGuide();
+    renderPosterCropBox();
+    showPosterCropEditor();
+  };
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+  };
+  image.src = objectUrl;
+}
+
+/** المربّع المنقّط — أكبر مربّع مركَزي يسع الصورة، توضيحي فقط ولا يُقيَّد به شيء. */
+function renderPosterCropGuide() {
+  const state = posterCropState;
+  const guide = document.getElementById('posterCropGuide');
+  if (!state || !guide) return;
+
+  const size = Math.min(state.workingWidth, state.workingHeight);
+  const x = (state.workingWidth - size) / 2;
+  const y = (state.workingHeight - size) / 2;
+  guide.style.left = `${(x / state.workingWidth) * 100}%`;
+  guide.style.top = `${(y / state.workingHeight) * 100}%`;
+  guide.style.width = `${(size / state.workingWidth) * 100}%`;
+  guide.style.height = `${(size / state.workingHeight) * 100}%`;
+}
+
+function renderPosterCropBox() {
+  const state = posterCropState;
+  const box = document.getElementById('posterCropBox');
+  if (!state || !box) return;
+
+  const { x, y, w, h } = state.rect;
+  box.style.left = `${(x / state.workingWidth) * 100}%`;
+  box.style.top = `${(y / state.workingHeight) * 100}%`;
+  box.style.width = `${(w / state.workingWidth) * 100}%`;
+  box.style.height = `${(h / state.workingHeight) * 100}%`;
+}
+
+/** يُوصَل مرّة واحدة لكل عنصر (data-wired) — pointerdown يبدأ السحب، move/up على المستند لأن اللمس أو الفأرة قد يخرجان من المقبض الصغير. */
+function attachPosterCropDragHandlers() {
+  const box = document.getElementById('posterCropBox');
+  if (!box || box.dataset.wired) return;
+  box.dataset.wired = '1';
+  box.addEventListener('pointerdown', startPosterCropDrag);
+  document.addEventListener('pointermove', movePosterCropDrag);
+  document.addEventListener('pointerup', endPosterCropDrag);
+}
+
+function startPosterCropDrag(e) {
+  if (!posterCropState) return;
+  const corner = e.target && e.target.dataset ? e.target.dataset.corner : null;
+  posterCropState.drag = {
+    corner: corner || 'move',
+    startClientX: e.clientX,
+    startClientY: e.clientY,
+    startRect: { ...posterCropState.rect }
+  };
+  e.preventDefault();
+}
+
+/** حساب بالفرق (delta) عن نقطة بدء السحب — لا يعتمد على موضع العنصر في الصفحة، فيعمل بلا تخطيط حقيقي أيضاً. */
+function movePosterCropDrag(e) {
+  const state = posterCropState;
+  if (!state || !state.drag) return;
+
+  const dx = (e.clientX - state.drag.startClientX) / state.displayScale;
+  const dy = (e.clientY - state.drag.startClientY) / state.displayScale;
+  const start = state.drag.startRect;
+  const corner = state.drag.corner;
+  let { x, y, w, h } = start;
+
+  if (corner === 'move') {
+    x = start.x + dx;
+    y = start.y + dy;
+  } else {
+    if (corner.includes('l')) { x = start.x + dx; w = start.w - dx; }
+    if (corner.includes('r')) { w = start.w + dx; }
+    if (corner.includes('t')) { y = start.y + dy; h = start.h - dy; }
+    if (corner.includes('b')) { h = start.h + dy; }
+  }
+
+  state.rect = clampPosterCropRect({ x, y, w, h }, state);
+  renderPosterCropBox();
+}
+
+function endPosterCropDrag() {
+  if (posterCropState) posterCropState.drag = null;
+}
+
+function clampPosterCropRect(rect, state) {
+  let { x, y, w, h } = rect;
+  w = Math.max(POSTER_CROP_MIN_SIZE, Math.min(w, state.workingWidth));
+  h = Math.max(POSTER_CROP_MIN_SIZE, Math.min(h, state.workingHeight));
+  x = Math.max(0, Math.min(x, state.workingWidth - w));
+  y = Math.max(0, Math.min(y, state.workingHeight - h));
+  return { x, y, w, h };
+}
+
+function showPosterCropEditor() {
+  document.getElementById('posterUploadBox').hidden = true;
+  document.getElementById('posterCropEditor').hidden = false;
+  document.getElementById('posterCropPreview').hidden = true;
+}
+
+function confirmPosterCrop() {
+  if (!posterCropState) return;
+  exportPosterCrop(posterCropState.rect);
+}
+
+/** «استخدام الصورة كاملة» — يُعيد المربّع ليغطّي الصورة كلها ثم يصدّرها كما هي، دون قصّ. */
+function usePosterWholeImage() {
+  const state = posterCropState;
+  if (!state) return;
+  state.rect = { x: 0, y: 0, w: state.workingWidth, h: state.workingHeight };
+  renderPosterCropBox();
+  exportPosterCrop(state.rect);
+}
+
+/** يرسم المستطيل المحدَّد فقط من المصدر (أصلاً محدود ‎1600px‎ بالفعل) إلى قماشة جديدة ويصدّرها JPEG. */
+function exportPosterCrop(rect) {
+  const state = posterCropState;
+  const source = document.getElementById('posterCropCanvas');
+  if (!state || !source) return;
+
+  const outWidth = Math.max(1, Math.round(rect.w));
+  const outHeight = Math.max(1, Math.round(rect.h));
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = outWidth;
+  outCanvas.height = outHeight;
+  outCanvas.getContext('2d').drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, outWidth, outHeight);
+
+  outCanvas.toBlob(blob => {
+    if (!blob || !posterCropState) return;
+    posterCropState.blob = blob;
+    showPosterCropPreview(blob);
+  }, 'image/jpeg', 0.9);
+}
+
+function showPosterCropPreview(blob) {
+  const state = posterCropState;
+  if (!state) return;
+  if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+  state.previewUrl = URL.createObjectURL(blob);
+
+  document.getElementById('posterCropPreviewImg').src = state.previewUrl;
+  document.getElementById('posterUploadBox').hidden = true;
+  document.getElementById('posterCropEditor').hidden = true;
+  document.getElementById('posterCropPreview').hidden = false;
+}
+
+function reopenPosterCropEditor() {
+  if (!posterCropState) return;
+  document.getElementById('posterUploadBox').hidden = true;
+  document.getElementById('posterCropEditor').hidden = false;
+  document.getElementById('posterCropPreview').hidden = true;
+}
+
+/** يمحو كل شيء ويُعيد مربّع الاختيار — الطريق الوحيد لبدء صورة جديدة من الصفر. */
+function choosePosterAgain() {
+  resetPosterCropState({ clearInput: true });
+}
+
+function resetPosterCropState({ clearInput } = {}) {
+  if (posterCropState) {
+    if (posterCropState.objectUrl) URL.revokeObjectURL(posterCropState.objectUrl);
+    if (posterCropState.previewUrl) URL.revokeObjectURL(posterCropState.previewUrl);
+  }
+  posterCropState = null;
+
+  const uploadBox = document.getElementById('posterUploadBox');
+  const editor = document.getElementById('posterCropEditor');
+  const preview = document.getElementById('posterCropPreview');
+  if (uploadBox) uploadBox.hidden = false;
+  if (editor) editor.hidden = true;
+  if (preview) preview.hidden = true;
+
+  if (clearInput) {
+    const input = document.getElementById('addPosterFile');
+    if (input) input.value = '';
+  }
 }
 
 // 12c. Services Directory Tab (تذكرة #31) — فئات مسطَّحة أوّلها "الكل" (نفس
@@ -2112,8 +2381,16 @@ async function handleEventSubmit(e) {
   if (fieldsByKey.artist_name) formData.append('artist_name', document.getElementById('addArtistName').value);
 
   if (fieldsByKey.poster_url) {
-    const posterFile = document.getElementById('addPosterFile').files[0];
-    if (posterFile) formData.append('poster', posterFile);
+    // القص اختياري: القيمة المقصوصة هي ما يُرفع إن وُجدت، والملف الخام كما
+    // هو إن لم يكتمل مسار القص لأي سبب (مثلاً فشل تحميل الصورة في المحرِّر) —
+    // اسم صريح ثالث لـ`append` لا غنى عنه، وإلا صار originalname الحرفي "blob"
+    // بلا امتداد (server/src/middleware/upload.js).
+    if (posterCropState && posterCropState.blob) {
+      formData.append('poster', posterCropState.blob, 'poster.jpg');
+    } else {
+      const posterFile = document.getElementById('addPosterFile').files[0];
+      if (posterFile) formData.append('poster', posterFile);
+    }
   }
   if (fieldsByKey.audio_url) {
     const audioFile = document.getElementById('addAudioFile').files[0];
@@ -2147,6 +2424,7 @@ async function handleEventSubmit(e) {
       document.getElementById('collisionAlert').style.display = 'none';
       updateVillagePickerVisibility();
       clearPickerMarker();
+      resetPosterCropState({ clearInput: false });
       const honoreesList = document.getElementById('addHonoreesList');
       if (honoreesList) {
         honoreesList.innerHTML = '';
