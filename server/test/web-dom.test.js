@@ -22,6 +22,8 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { JSDOM, VirtualConsole } = require('jsdom');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const { renderIcon, buildIconSvg, ringBeads, HUB, GROUND, MARK } = require('../scripts/brand-icons');
 
 // Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
 // server and this fixture must not become a second copy of them (CLAUDE.md,
@@ -257,6 +259,38 @@ function assertNoUnhandledRejections(context) {
     unhandledRejections.length = 0;
     throw new Error(`${context}: unhandled rejection(s):\n${messages.join('\n')}`);
   }
+}
+
+/**
+ * Decodes a brand-icon PNG buffer (server/scripts/brand-icons.js) into its raw
+ * pixels, the same loadImage -> drawImage -> getImageData round-trip
+ * smoke.test.js's decodeCard() uses for the share card.
+ */
+async function decodeIconPixels(buffer) {
+  const image = await loadImage(buffer);
+  const canvas = createCanvas(image.width, image.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, image.width, image.height);
+  return { data, width, height };
+}
+
+function hexToRgb(hex) {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16)
+  };
+}
+
+const MARK_RGB = hexToRgb(MARK);
+const GROUND_RGB = hexToRgb(GROUND);
+
+/** Nearest-colour classification — anti-aliased edge pixels fall on whichever side they lean toward. */
+function classifyPixel(r, g, b) {
+  const distMark = (r - MARK_RGB.r) ** 2 + (g - MARK_RGB.g) ** 2 + (b - MARK_RGB.b) ** 2;
+  const distGround = (r - GROUND_RGB.r) ** 2 + (g - GROUND_RGB.g) ** 2 + (b - GROUND_RGB.b) ** 2;
+  return distMark < distGround ? 'mark' : 'ground';
 }
 
 /**
@@ -688,6 +722,93 @@ async function run() {
 
     assert.ok(badge.querySelector('svg path'), 'the mark must be a path we own, not a glyph the OS draws differently everywhere');
     assert.ok(!/🌙/.test(badge.textContent), 'the crescent is retired: it reads religious, and the platform is civic');
+  });
+
+  console.log('\nBrand icon generation (server/scripts/brand-icons.js)');
+
+  await test('the smallest Android mipmap (mdpi, 48×48) really is 48×48 and mixes mark- and ground-coloured pixels', async () => {
+    const buffer = renderIcon(48, { safeZone: true, detail: 'icon' });
+    const { data, width, height } = await decodeIconPixels(buffer);
+
+    assert.strictEqual(width, 48);
+    assert.strictEqual(height, 48);
+
+    let markCount = 0;
+    let groundCount = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (classifyPixel(data[i], data[i + 1], data[i + 2]) === 'mark') markCount += 1;
+      else groundCount += 1;
+    }
+    assert.ok(markCount > 0, 'expected mark-coloured pixels — the mark must not vanish at 48px');
+    assert.ok(groundCount > 0, 'expected ground-coloured pixels too — a single flat colour means nothing rendered');
+  });
+
+  await test('every safe-zone render keeps mark-coloured pixels inside the circular safe zone (radius 40% of the image width)', async () => {
+    const sizes = [48, 72, 96, 144, 192, 512];
+    for (const size of sizes) {
+      const buffer = renderIcon(size, { safeZone: true, detail: 'icon' });
+      const { data, width, height } = await decodeIconPixels(buffer);
+      const cx = width / 2;
+      const cy = height / 2;
+      const maxRadius = width * 0.4;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const idx = (y * width + x) * 4;
+          if (classifyPixel(data[idx], data[idx + 1], data[idx + 2]) !== 'mark') continue;
+          const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          assert.ok(
+            dist <= maxRadius + 1,
+            `mark pixel at (${x},${y}) in a ${size}×${size} render sits ${dist.toFixed(1)}px from centre, past the ${maxRadius.toFixed(1)}px safe radius — Android's circular mask would clip it`
+          );
+        }
+      }
+    }
+  });
+
+  /**
+   * The burst used to run into the ring — outer beam lamps overlapped ring
+   * beads, and the mast finial nearly touched the top one. Asserted against
+   * the geometry rather than rendered pixels: at the sizes these icons ship
+   * at (down to 32-48px) the required 3-unit gap is often under one pixel,
+   * so a pixel scan would pass by accident even with the wrong geometry —
+   * the source coordinates are the only place this is actually checkable.
+   */
+  await test('the mast finial keeps at least 3 units of dark space from the ring\'s top bead, in both detail tiers', () => {
+    ['full', 'icon'].forEach(detail => {
+      const topBead = ringBeads(detail).reduce((closest, bead) => (bead.y < closest.y ? bead : closest));
+      const topBeadInnerEdgeY = topBead.y + topBead.r; // closer to the tent, since y grows downward
+      const finialTopEdgeY = HUB.y - HUB.r; // closer to the ring
+      const gap = finialTopEdgeY - topBeadInnerEdgeY;
+      assert.ok(
+        gap >= 3,
+        `detail=${detail}: only ${gap.toFixed(2)} units of dark space between the mast finial and the ring's top bead, need >= 3`
+      );
+    });
+  });
+
+  await test('detail \'icon\' and detail \'full\' render different bytes at the same size', () => {
+    const iconBuffer = renderIcon(192, { safeZone: false, detail: 'icon' });
+    const fullBuffer = renderIcon(192, { safeZone: false, detail: 'full' });
+    assert.ok(!iconBuffer.equals(fullBuffer), 'the detail flag must actually change what gets drawn, not be a no-op');
+  });
+
+  await test('the generated favicon SVG is well-formed, carries both brand colours, and matches the geometry the raster uses', () => {
+    const svgContent = fs.readFileSync(path.join(WEB_DIR, 'icons', 'icon.svg'), 'utf8');
+
+    const parserWindow = new JSDOM('').window;
+    const doc = new parserWindow.DOMParser().parseFromString(svgContent, 'image/svg+xml');
+    assert.strictEqual(doc.querySelector('parsererror'), null, 'icon.svg must be well-formed XML');
+    assert.strictEqual(doc.documentElement.tagName, 'svg');
+
+    assert.ok(svgContent.includes(GROUND), 'expected the ground colour hex in the SVG');
+    assert.ok(svgContent.includes(MARK), 'expected the mark colour hex in the SVG');
+
+    assert.strictEqual(
+      svgContent,
+      buildIconSvg('icon', false),
+      'icon.svg must be generated straight from buildMarkParts, not hand-copied — it drifts the moment someone edits the mark and forgets this file'
+    );
   });
 
   /**

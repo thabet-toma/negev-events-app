@@ -53,7 +53,7 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
 | أي شيء في تطبيق الموبايل | `mobile/lib/screens/` ثم `mobile/lib/api/negev_api.dart` |
-| أيقونة أو شعار | `server/scripts/brand-icons.js` — العلامة (بيت الشَّعَر) معرَّفة مرة واحدة في `drawTent`، و٢١ ملف أيقونة في `web/icons/` و`mobile/` **مولَّدة منها**. لا تحرّر PNG بيدك؛ عدّل المسار وأعد التشغيل |
+| أيقونة أو شعار | `server/scripts/brand-icons.js` — العلامة (بيت الشَّعَر تحت أضواء العرس داخل طوق) معرَّفة مرة واحدة في `buildMarkParts`، و٢٦ ملفاً (٢٥ PNG + `icon.svg`) في `web/icons/` و`mobile/` **مولَّدة منها** — النقطي والمتّجه من نفس التعريف. طبقتان بعلَم `detail`: `'icon'` لكل ما يُعرض أيقونةَ تطبيق، و`'full'` لما يُعرض كبيراً فعلاً. لا تحرّر PNG ولا SVG بيدك؛ عدّل الهندسة وأعد التشغيل |
 | بلدة جديدة | `server/src/constants.js` — `TOWNS` و `TOWN_COORDINATES` معاً |
 | نوع مناسبة (عرس/عزا/…) | `server/src/services/occasionTypes.service.js` + `server/src/routes/occasionTypes.routes.js` — بيانات وقت تشغيل، لا `ENUM` ولا كود جديد لكل نوع |
 
