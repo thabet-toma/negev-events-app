@@ -198,14 +198,30 @@ cd mobile
 # ١) ارفع النسخة في pubspec.yaml إلى:  version: 1.5.0+7
 C:/Users/asus/flutter/bin/flutter.bat pub get       # إلزامي: حزمة جديدة
 C:/Users/asus/flutter/bin/flutter.bat analyze       # يجب: No issues found
-C:/Users/asus/flutter/bin/flutter.bat test          # يجب: 42 ناجحاً
+C:/Users/asus/flutter/bin/flutter.bat test          # يجب: 45 ناجحاً
 C:/Users/asus/flutter/bin/flutter.bat build apk --release
+
+# البوّابة — تفحص **الملف المبنيّ** لا الكود. لا ترفع إن فشلت:
+unzip -p build/app/outputs/flutter-apk/app-release.apk lib/arm64-v8a/libapp.so \
+  | strings | grep -aoE "https?://[a-zA-Z0-9._-]+(:[0-9]+)?" | sort -u
+# يجب أن تحوي  https://munasbat.ktra-pro.tech  ولا تحوي  10.0.2.2
 ```
+
+⚠️ **العنوان مخبوز في الملف، ولا يقوله أي فحص آخر.** نسخة 1.5.0+7 الأولى بُنيت
+حين كان `config.dart` يسقط إلى عنوان محاكي أندرويد (`http://10.0.2.2:3000`)
+عند غياب `--dart-define=API_BASE`، فوصلت أجهزةً حقيقية لا خادم لها — والبناء
+نجح و`analyze` نظيف وكل الاختبارات مرّت، لأن لا شيء منها يلمس الشبكة. صار
+بناء الإصدار يقصد الإنتاج افتراضياً (`AppConfig.productionApiBase`)، والبوّابة أعلاه
+تثبت ذلك على الملف نفسه. أبقِها حتى بعد الإصلاح — هي التي تفحص ما يُرفع فعلاً.
 
 ⚠️ **افحص القصّ يدوياً على جهاز حقيقي قبل الرفع.** `image_cropper` يفتح شاشة
 أصلية لا يبلغها `flutter test`، وإن نقص تسجيل `UCropActivity` فالتطبيق **يُبنى
 بنجاح ثم ينهار عند أول قصّ**. الخطوات: اختر دعوة **طولية** → اقصّها → انشر →
 تأكّد أن القصّ هو ما وصل الكرت، وأن شاشة القصّ **بالعربية**.
+
+⚠️ **وافتح التطبيق وتأكّد أن قائمة المناسبات تُحمَّل فعلاً** — لا أن الشاشة
+تفتح فقط. فتحُ الشاشة لا يثبت أن الشبكة تعمل: التطبيق المعطوب يفتح ويعرض قائمة
+فارغة كأن لا مناسبات، لا رسالة خطأ.
 
 ### الرفع
 

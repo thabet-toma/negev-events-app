@@ -8,6 +8,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
+import 'package:negev_events/config.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
@@ -1715,5 +1716,49 @@ void main() {
         expect(find.text('خطأ في الخادم'), findsNothing);
       },
     );
+  });
+
+  // بناء الإصدار الذي يصل الأجهزة الحقيقية. نسخة 1.5.0+7 بُنيت بلا
+  // `--dart-define=API_BASE` فحملت عنوان المحاكي إلى كل جهاز، ولم يكشفها
+  // شيء: البناء نجح و`analyze` نظيف وكل الاختبارات مرّت — لأن لا شيء منها
+  // كان يفحص العنوان. هذه المجموعة تفحصه.
+  group('عنوان الخادم', () {
+    test('بناء الإصدار يقصد الإنتاج بلا أي علَم', () {
+      final resolved = AppConfig.resolveApiBase(
+        fromEnv: '',
+        releaseMode: true,
+        isWeb: false,
+        platform: TargetPlatform.android,
+      );
+
+      expect(resolved, AppConfig.productionApiBase);
+      expect(resolved, isNot(contains('10.0.2.2')));
+      expect(resolved, isNot(contains('localhost')));
+      expect(resolved, startsWith('https://'));
+    });
+
+    test('‏--dart-define يتجاوز الإنتاج — بيئة اختبار تبقى ممكنة', () {
+      expect(
+        AppConfig.resolveApiBase(
+          fromEnv: 'https://staging.example.com',
+          releaseMode: true,
+          isWeb: false,
+          platform: TargetPlatform.android,
+        ),
+        'https://staging.example.com',
+      );
+    });
+
+    test('التطوير على أندرويد يبقى على مضيف المحاكي', () {
+      expect(
+        AppConfig.resolveApiBase(
+          fromEnv: '',
+          releaseMode: false,
+          isWeb: false,
+          platform: TargetPlatform.android,
+        ),
+        'http://10.0.2.2:3000',
+      );
+    });
   });
 }
