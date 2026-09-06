@@ -3014,6 +3014,40 @@ async function run() {
     return path.join(shareCard.CACHE_DIR, matches[0]);
   }
 
+  /**
+   * A portrait JPEG the size and shape of a real poster (this file's own
+   * header measures a live one at 1080×2340), with per-pixel noise instead of
+   * a flat wash — a smooth gradient compresses to almost nothing and would
+   * pass the size guard below without exercising it. The card draws this
+   * twice (blurred cover-fill plus the sharp contained copy), which is the
+   * actual worst case the 600 KB guard exists to catch.
+   */
+  function buildRealisticPoster() {
+    const width = 1080;
+    const height = 2340;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, '#3b1f5c');
+    gradient.addColorStop(0.5, '#a3315f');
+    gradient.addColorStop(1, '#f2b134');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const { data } = imageData;
+    for (let i = 0; i < data.length; i += 4) {
+      const noise = Math.random() * 60 - 30;
+      data[i] = Math.min(255, Math.max(0, data[i] + noise));
+      data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
+      data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return canvas.toBuffer('image/jpeg', 90);
+  }
+
   // Attack the values the page actually renders. It leads with the occasion type
   // and the honoree names now, not the free-text title, so putting the payload in
   // `title` alone would leave this test passing while testing nothing.
@@ -3108,6 +3142,61 @@ async function run() {
       buffer.length < 600 * 1024,
       `the card must stay under WhatsApp's preview size limit, got ${Math.round(buffer.length / 1024)} KB`
     );
+  });
+
+  await test('THE SIZE GUARD: a card built from a real (non-trivial) poster still stays under the WhatsApp preview limit', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس بطاقة ثقيلة', event_date: '2027-09-14' }),
+      files: [{ field: 'poster', buffer: buildRealisticPoster(), type: 'image/jpeg', name: 'heavy.jpg' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { status, buffer } = await rawGetBinary(`/e/${created.body.eventId}/card.jpg`);
+    assert.strictEqual(status, 200);
+    assert.ok(
+      buffer.length < 600 * 1024,
+      `a card built from a real poster must stay under WhatsApp's preview limit, got ${Math.round(buffer.length / 1024)} KB`
+    );
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
+  await test('The footer mark/text sit clear of the decorative frame — lowest drawn content stays ≥12px above the companion rule', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس فحص الإطار', event_date: '2027-09-15' }),
+      files: [{ field: 'poster', buffer: buildRealisticPoster(), type: 'image/jpeg', name: 'frame-check.jpg' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { buffer } = await rawGetBinary(`/e/${created.body.eventId}/card.jpg`);
+    const card = await decodeCard(buffer);
+
+    // عمود شاهد بعيد عن علامات زوايا الإطار (تمتد من ٢٢ إلى ٤٨ بكسل من كل
+    // حافة) وعن مجموعة العلامة/النص المتوسطة — أي فرق بينه وبين عمود آخر في
+    // الصف نفسه يدلّ على محتوى حقيقي (علامة أو نص)، لا على خط الإطار الذي
+    // يمتد بعرض البطاقة كله بنفس اللون عند أي x فيُطرَح تلقائياً من المقارنة.
+    const controlX = 100;
+    let lowestContentY = 0;
+    for (let y = card.height - 120; y < card.height - 5; y += 1) {
+      const control = card.pixelAt(controlX, y);
+      for (let x = 250; x <= 950; x += 15) {
+        const sample = card.pixelAt(x, y);
+        const diff = Math.abs(sample.r - control.r) + Math.abs(sample.g - control.g) + Math.abs(sample.b - control.b);
+        if (diff > 40) { lowestContentY = y; break; }
+      }
+    }
+    assert.ok(lowestContentY > 0, 'expected to actually find the footer mark/text while scanning the band');
+
+    const companionRuleY = card.height - 31; // FRAME_INSET(22) + FRAME_GAP(9)
+    const limit = companionRuleY - 12;
+    assert.ok(
+      lowestContentY <= limit,
+      `expected the lowest footer content row (${lowestContentY}) at least 12px above the frame's companion rule (y=${companionRuleY}); limit was ${limit}`
+    );
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
   });
 
   await test('A second request for the same card is served from cache, not re-rendered', async () => {

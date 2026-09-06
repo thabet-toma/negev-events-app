@@ -71,6 +71,12 @@ const SHARE_ASSETS = {
   'solemn.png': fs.readFileSync(path.join(SHARE_ASSET_DIR, 'solemn.png'))
 };
 
+// العلامة وحدها، بخلفية شفافة — مولَّدة بـ server/scripts/brand-icons.js (طبقة
+// 'icon' المبسَّطة)، لا مرسومة هنا يدوياً؛ العلامة معرَّفة مرة واحدة فقط في
+// buildMarkParts هناك. تُقرأ مرة عند تحميل الوحدة، على نمط SHARE_ASSETS أعلاه،
+// وتُفكّ شفرتها بـ loadImage عند كل رسم بطاقة (نفس ما يفعله الملصق الاحتياطي).
+const SHARE_MARK = fs.readFileSync(path.join(SHARE_ASSET_DIR, 'mark.png'));
+
 // Rendered once per (event id, updated_at) pair and reused after that — a
 // 1-core production box must not re-render a card on every crawler hit.
 // Created at boot by server/src/app.js, the same way it creates downloadsDir:
@@ -200,8 +206,18 @@ const MARGIN = 56;
 // is the product owner's own call, after two rounds in which the poster was
 // first wallpaper and then a side panel: "mostly picture, a little for the
 // occasion type, the name, and promoting the site".
-const BAND_HEIGHT = 268;
+//
+// ٣٢٠ لا ٢٦٨: كانت ٢٦٨ قبل انضمام العلامة إلى سطر الترويج أسفل الشريط. صار
+// لسطر الترويج ارتفاع حقيقي (العلامة ٤٤px‏) يصطدم بالإطار المزخرِف أسفل
+// البطاقة (‏drawFrame‏) لو بقي الشريط بارتفاعه القديم — قِيس فعلياً برسم بطاقة
+// وفحص بكسلاتها، لا بالحساب وحده. الزيادة أُخذت من الخبطة (‏hero‏) لا من مكان
+// آخر، فتبقى نسبة «الصورة أولاً» قائمة، والملصق نفسه يبقى كاملاً وحاداً كما هو.
+const BAND_HEIGHT = 320;
 const HERO_HEIGHT = HEIGHT - BAND_HEIGHT;
+
+// إطار الزينة حول البطاقة كلها (drawFrame) — هامش عند حافة القماش نفسها.
+const FRAME_INSET = 22;
+const FRAME_GAP = 9;
 
 /**
  * Lightens a colour until it is legible as text on this card's dark palette.
@@ -312,16 +328,30 @@ function drawHero(ctx, img, palette) {
  * dove), and the only font this process registers is Cairo, which has no emoji
  * coverage — verified by rendering a sample, the glyph comes back as a tofu
  * box here and, with even less font coverage available, on Alpine too.
+ *
+ * `typeColour` is computed once by the caller (`renderCard`) and reused for
+ * the gradient rule under the hero too — one colour, two places, never
+ * computed twice from the same raw `occasion_type_colour`.
  */
-function drawChip(ctx, event, palette, centreX, centreY) {
+function drawChip(ctx, event, palette, centreX, centreY, typeColour) {
   const typeName = event.occasion_type_name;
   if (!typeName) return;
 
-  const typeColour = readableOnDark(safeHexColour(event.occasion_type_colour, palette.accent));
   const height = 52;
 
   ctx.font = `600 27px "${BOLD_FAMILY}"`;
   const width = ctx.measureText(typeName).width + 52;
+
+  // وهج نصف قطري خافت جداً خلف الشريحة، بلون النوع نفسه — يربطها بالشريط بدل
+  // أن تطفو منفصلة عنه. ألفا ٠٫١٠ عند المركز، صفر عند الحافة.
+  const glowRadius = 140;
+  const glow = ctx.createRadialGradient(centreX, centreY, 0, centreX, centreY, glowRadius);
+  glow.addColorStop(0, withAlpha(typeColour, 0.1));
+  glow.addColorStop(1, withAlpha(typeColour, 0));
+  ctx.save();
+  ctx.fillStyle = glow;
+  ctx.fillRect(centreX - glowRadius, centreY - glowRadius, glowRadius * 2, glowRadius * 2);
+  ctx.restore();
 
   ctx.save();
   ctx.fillStyle = withAlpha(typeColour, 0.18);
@@ -371,6 +401,53 @@ function drawExpiredBadge(ctx, palette) {
 }
 
 /**
+ * إطار مزدوج حول البطاقة كلها، بلونين من اللوحة نفسها لا لون مخترَع: خط رئيسي
+ * ٣px، فجوة ٩px، خط مرافق ١px داخله، وأربع علامات زوايا قصيرة — اصطلاح
+ * الدعوة المطبوعة. يُرسم أخيراً وفوق كل شيء، وموضعه هامش عند حافة القماش نفسها
+ * (‏MARGIN‏ يبقى كما هو — هذا هامش القماش، لا هامش المحتوى الداخلي).
+ *
+ * لكنه ليس معزولاً عن التخطيط كما بدا أول الأمر: سطر الترويج أسفل الشريط صار
+ * يحمل ارتفاعاً حقيقياً (علامة ٤٤px‏) يقع تحته مباشرة، فـ`BAND_HEIGHT` أعلاه
+ * كُبِّر خصيصاً ليُبعد ذلك السطر عن الرُتبتين هنا بمسافة آمنة — رُصد التصادم
+ * الأول برسم بطاقة فعلية وفحص بكسلاتها، لا بالحساب وحده.
+ *
+ * الطابع الحزين لا يفقد الإطار — يخفت ألفاه فقط. بطاقة بلا إطار إطلاقاً تُقرأ
+ * إهمالاً لا وقاراً.
+ */
+function drawFrame(ctx, palette, tone) {
+  const alpha = tone === 'solemn' ? 0.4 : 0.85;
+  const outer = withAlpha(palette.accent, alpha);
+  const inner = withAlpha(palette.accent, alpha * 0.6);
+
+  ctx.save();
+  ctx.strokeStyle = outer;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(FRAME_INSET, FRAME_INSET, WIDTH - FRAME_INSET * 2, HEIGHT - FRAME_INSET * 2);
+
+  const innerInset = FRAME_INSET + FRAME_GAP;
+  ctx.strokeStyle = inner;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(innerInset, innerInset, WIDTH - innerInset * 2, HEIGHT - innerInset * 2);
+
+  const markLen = 26;
+  ctx.strokeStyle = outer;
+  ctx.lineWidth = 2;
+  [
+    [FRAME_INSET, FRAME_INSET, 1, 1],
+    [WIDTH - FRAME_INSET, FRAME_INSET, -1, 1],
+    [FRAME_INSET, HEIGHT - FRAME_INSET, 1, -1],
+    [WIDTH - FRAME_INSET, HEIGHT - FRAME_INSET, -1, -1]
+  ].forEach(([x, y, dx, dy]) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y + dy * markLen);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x + dx * markLen, y);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/**
  * Renders one event's card to a JPEG buffer. No caching, no filesystem
  * bookkeeping — `getOrRenderCard` below owns that; this is pure drawing.
  *
@@ -381,7 +458,13 @@ function drawExpiredBadge(ctx, palette) {
  * exists to fix.
  */
 async function renderCard(event) {
-  const palette = PALETTES[toneOf(event)];
+  const tone = toneOf(event);
+  const palette = PALETTES[tone];
+  // مصدر اللون الإضافي الفعلي: لون النوع نفسه (بيانات وقت تشغيل يديرها
+  // الأدمن)، لا لوحة ثالثة مخترَعة — عرس وخطوبة يفترقان هنا بلا أي كود جديد.
+  // مرفوع الإضاءة أولاً لأن الألوان المزروعة اختيرت لواجهة فاتحة وتختفي على
+  // هذه البطاقة الداكنة بلا ذلك (انظر readableOnDark).
+  const typeColour = readableOnDark(safeHexColour(event.occasion_type_colour, palette.accent));
   const canvas = createCanvas(WIDTH, HEIGHT);
   const ctx = canvas.getContext('2d');
 
@@ -423,14 +506,24 @@ async function renderCard(event) {
   if (event.is_expired) drawExpiredBadge(ctx, palette);
 
   // --- the band: type, name, and the site's own line, nothing else ---
-  // With a poster it is a strip under it, ruled off in the palette's accent.
-  // Without one there is nothing to divide, so the same block simply centres.
+  // With a poster it is a strip under it, ruled off in a gradient from the
+  // occasion type's own colour into the palette's accent. Without one there
+  // is nothing to divide, so the same block simply centres.
   const bandTop = poster ? HERO_HEIGHT : Math.round((HEIGHT - BAND_HEIGHT) / 2);
   ctx.fillStyle = withAlpha(palette.accent, 0.55);
   if (poster) {
-    ctx.fillStyle = palette.bg;
+    // نفس اصطلاح التدرّج الذي يبنيه فرع «بلا ملصق» أدناه للبطاقة كلها، هنا
+    // مقصوراً على ارتفاع الشريط فقط: بين لوني اللوحة الداكنين نفسيهما.
+    const bandWash = ctx.createLinearGradient(0, bandTop, 0, bandTop + BAND_HEIGHT);
+    bandWash.addColorStop(0, palette.card);
+    bandWash.addColorStop(1, palette.bg);
+    ctx.fillStyle = bandWash;
     ctx.fillRect(0, bandTop, WIDTH, BAND_HEIGHT);
-    ctx.fillStyle = withAlpha(palette.accent, 0.55);
+
+    const ruleGradient = ctx.createLinearGradient(0, 0, WIDTH, 0);
+    ruleGradient.addColorStop(0, typeColour);
+    ruleGradient.addColorStop(1, palette.accent);
+    ctx.fillStyle = ruleGradient;
     ctx.fillRect(0, bandTop, WIDTH, 3);
   } else {
     // Nothing to divide, so the rule becomes a short centred mark above the
@@ -440,7 +533,7 @@ async function renderCard(event) {
   }
 
   const centreX = WIDTH / 2;
-  drawChip(ctx, event, palette, centreX, bandTop + 56);
+  drawChip(ctx, event, palette, centreX, bandTop + 56, typeColour);
 
   // Same fallback share.routes.js's buildHeadline uses, and the same
   // `String(... ?? '')` guard escapeHtml relies on there — a legacy row with no
@@ -471,15 +564,35 @@ async function renderCard(event) {
   }
 
   // The site's line — the only promotion on the card, and the reason a person
-  // who sees this in a group chat knows where the details live.
+  // who sees this in a group chat knows where the details live. The mark and
+  // the text are centred together as one group: the mark on the leading
+  // (right) edge of this RTL layout, the text trailing from it.
+  const brandFont = `600 24px "${BOLD_FAMILY}"`;
+  const brandText = `${palette.wordmark} · التفاصيل في التطبيق`;
+  ctx.font = brandFont;
+  const brandTextWidth = ctx.measureText(brandText).width;
+  const markSize = 44;
+  const markGap = 14;
+  // ‎HEIGHT - 80‎ لا ‎- 40‎: ‎- 40‎ كان يضع أسفل العلامة (‏٤٤px‎ ارتفاعها) داخل
+  // الإطار المزخرِف أسفل البطاقة (‏drawFrame‏) مباشرة — راجع التعليق أعلى
+  // BAND_HEIGHT.
+  const rowY = HEIGHT - 80;
+  const groupRight = centreX + (markSize + markGap + brandTextWidth) / 2;
+  const markX = groupRight - markSize;
+
+  const markImage = await loadImage(SHARE_MARK);
+  ctx.drawImage(markImage, markX, rowY - markSize / 2, markSize, markSize);
+
   ctx.save();
   ctx.direction = 'rtl';
-  ctx.textAlign = 'center';
+  ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.font = `600 24px "${BOLD_FAMILY}"`;
+  ctx.font = brandFont;
   ctx.fillStyle = withAlpha(palette.accent, 0.95);
-  ctx.fillText(`${palette.wordmark} · التفاصيل في التطبيق`, centreX, HEIGHT - 40);
+  ctx.fillText(brandText, markX - markGap, rowY + 2);
   ctx.restore();
+
+  drawFrame(ctx, palette, tone);
 
   return canvas.toBuffer('image/jpeg', 88);
 }

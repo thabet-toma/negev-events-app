@@ -10,10 +10,11 @@
  *
  *   node scripts/brand-icons.js          (من داخل server/)
  *
- * يكتب إلى ثلاثة أماكن:
+ * يكتب إلى أربعة أماكن:
  *   web/icons/            — فافيكون، apple-touch-icon، وأيقونات PWA
  *   mobile/android/.../mipmap-*   — أيقونة الأندرويد
  *   mobile/ios/.../AppIcon.appiconset — أيقونة iOS
+ *   server/src/assets/share/ — علامة بطاقة المشاركة وحدها، بخلفية شفافة
  *
  * ولا يلمس شيئاً آخر. تشغيله متكرّراً آمن: يستبدل الملفات نفسها بالمحتوى نفسه.
  * `require`-ه (كما يفعل test/web-dom.test.js) لا يكتب شيئاً — الكتابة كلها
@@ -248,24 +249,52 @@ function buildMarkParts(detail) {
 // الرسم على القماش
 // ---------------------------------------------------------------------------
 
+/** يبني مسار جزء واحد على القماش، بلا ملء — القاعدة نفسها يُبنى عليها ملء الشكل بلون وحذف بكسله معاً. */
+function tracePart(ctx, part, u) {
+  ctx.beginPath();
+  if (part.shape.type === 'circle') {
+    ctx.arc(part.shape.cx * u, part.shape.cy * u, part.shape.r * u, 0, Math.PI * 2);
+  } else {
+    part.shape.commands.forEach(([type, ...args]) => {
+      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
+      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
+      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
+      else if (type === 'Z') ctx.closePath();
+    });
+  }
+}
+
 function drawShapesOnCanvas(ctx, parts, u) {
   ['mark', 'ground'].forEach(fillKind => {
     ctx.fillStyle = fillKind === 'mark' ? MARK : GROUND;
     parts.filter(p => p.fill === fillKind).forEach(part => {
-      ctx.beginPath();
-      if (part.shape.type === 'circle') {
-        ctx.arc(part.shape.cx * u, part.shape.cy * u, part.shape.r * u, 0, Math.PI * 2);
-      } else {
-        part.shape.commands.forEach(([type, ...args]) => {
-          if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
-          else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
-          else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
-          else if (type === 'Z') ctx.closePath();
-        });
-      }
+      tracePart(ctx, part, u);
       ctx.fill();
     });
   });
+}
+
+/**
+ * نفس الأجزاء، لكن بخلفية شفافة — تولّد علامة بطاقة المشاركة
+ * (‏shareCard.service.js‏) التي لا تحمل مربّع أرضية أصلاً. فتحتا الباب هنا حذف
+ * بكسل فعلي (‏`destination-out`‏) لا طلاء بلون الأرضية، إذ لا أرضية صلبة تحتهما
+ * تبرّر الطلاء.
+ */
+function drawShapesTransparent(ctx, parts, u) {
+  ctx.fillStyle = MARK;
+  parts.filter(p => p.fill === 'mark').forEach(part => {
+    tracePart(ctx, part, u);
+    ctx.fill();
+  });
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000';
+  parts.filter(p => p.fill === 'ground').forEach(part => {
+    tracePart(ctx, part, u);
+    ctx.fill();
+  });
+  ctx.restore();
 }
 
 /**
@@ -309,6 +338,28 @@ function renderIcon(size, { safeZone = false, detail = 'full' } = {}) {
   ctx.fillStyle = GROUND;
   ctx.fillRect(0, 0, size, size);
   drawTent(ctx, size, { safeZone, detail });
+  return canvas.toBuffer('image/png');
+}
+
+/**
+ * علامة بطاقة المشاركة وحدها، بخلفية شفافة — لا مربّع أرضية، فالبطاقة نفسها
+ * (‏shareCard.service.js‏) تحمل خلفيتها الخاصة. طبقة 'icon' المبسَّطة دائماً:
+ * تُرسم صغيرة على البطاقة (‏‎~44px‎) فتذوب لمبات الطوق الكاملة وحبال الشدّ
+ * رذاذاً، تماماً كأيقونة تطبيق صغيرة (انظر التعليق أعلى WEB_ICONS).
+ */
+function renderShareMark(size, { detail = 'icon' } = {}) {
+  const canvas = createCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  const u = size / 100;
+  const scale = markScale(false);
+
+  ctx.save();
+  ctx.translate(size / 2, size / 2);
+  ctx.scale(scale, scale);
+  ctx.translate(-size / 2, -size / 2);
+  drawShapesTransparent(ctx, buildMarkParts(detail), u);
+  ctx.restore();
+
   return canvas.toBuffer('image/png');
 }
 
@@ -402,6 +453,9 @@ if (require.main === module) {
   console.log('  web/icons/icon.svg');
   WEB_ICONS.forEach(([target, size, options]) => write(target, renderIcon(size, options)));
 
+  console.log('\nserver/src/assets/share — علامة بطاقة المشاركة وحدها، بخلفية شفافة (‏٨٨px‎)');
+  write('server/src/assets/share/mark.png', renderShareMark(88, { detail: 'icon' }));
+
   console.log('\nmobile/android — أندرويد يقصّ الأيقونة بأشكال مختلفة، فكلها بالمنطقة الآمنة وبالتفصيل المبسَّط');
   ANDROID_ICONS.forEach(([density, size]) => {
     write(`mobile/android/app/src/main/res/mipmap-${density}/ic_launcher.png`, renderIcon(size, { safeZone: true, detail: 'icon' }));
@@ -420,4 +474,4 @@ if (require.main === module) {
   console.log('\nتمّ.');
 }
 
-module.exports = { drawTent, renderIcon, buildMarkParts, partsToSvgPaths, buildIconSvg, ringBeads, HUB, GROUND, MARK };
+module.exports = { drawTent, renderIcon, renderShareMark, buildMarkParts, partsToSvgPaths, buildIconSvg, ringBeads, HUB, GROUND, MARK };
