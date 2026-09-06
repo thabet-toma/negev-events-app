@@ -341,7 +341,7 @@ function partsToSvgPaths(parts) {
 function buildIconSvg(detail, safeZone) {
   const { markD, groundD } = partsToSvgPaths(buildMarkParts(detail));
   const scale = markScale(safeZone);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="مناسبات النقب">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="أعراسنا">
   <rect width="100" height="100" rx="22" fill="${GROUND}"/>
   <g transform="translate(50 50) scale(${scale}) translate(-50 -50)">
     <path d="${markD}" fill="${MARK}"/>

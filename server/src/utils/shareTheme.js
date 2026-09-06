@@ -14,8 +14,8 @@ const { absoluteMediaUrl } = require('./mediaUrl');
  * from.
  */
 const PALETTES = {
-  festive: { bg: '#141821', card: '#1e232e', ink: '#f6f2ea', faint: '#a9b0bd', accent: '#d8ab5c', btnInk: '#141821' },
-  solemn: { bg: '#14181a', card: '#1c2124', ink: '#eef1f0', faint: '#a3adaa', accent: '#8fa8a0', btnInk: '#14181a' }
+  festive: { bg: '#141821', card: '#1e232e', ink: '#f6f2ea', faint: '#a9b0bd', accent: '#d8ab5c', btnInk: '#141821', wordmark: 'أعراسنا' },
+  solemn: { bg: '#14181a', card: '#1c2124', ink: '#eef1f0', faint: '#a3adaa', accent: '#8fa8a0', btnInk: '#14181a', wordmark: 'مناسبات النقب' }
 };
 
 function toneOf(event) {

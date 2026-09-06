@@ -39,7 +39,7 @@ function buildNoticeText() {
   const eventList = ANALYTICS_EVENTS.map(eventLabel).join('، ');
 
   return [
-    'إشعار الخصوصية — منصة مناسبات النقب',
+    'إشعار الخصوصية — منصة أعراسنا (مناسبات النقب)',
     '',
     '1) ماذا نجمع؟',
     `نُسجّل ما يفعله المستخدم في التطبيق، لا ما يقرأه فيه: ${eventList}.`,

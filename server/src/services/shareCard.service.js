@@ -478,7 +478,7 @@ async function renderCard(event) {
   ctx.textBaseline = 'middle';
   ctx.font = `600 24px "${BOLD_FAMILY}"`;
   ctx.fillStyle = withAlpha(palette.accent, 0.95);
-  ctx.fillText('مناسبات النقب · التفاصيل في التطبيق', centreX, HEIGHT - 40);
+  ctx.fillText(`${palette.wordmark} · التفاصيل في التطبيق`, centreX, HEIGHT - 40);
   ctx.restore();
 
   return canvas.toBuffer('image/jpeg', 88);

@@ -25,6 +25,7 @@ const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_E
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const shareCard = require('../src/services/shareCard.service');
+const { PALETTES } = require('../src/utils/shareTheme');
 
 let baseUrl = '';
 let passed = 0;
@@ -3224,6 +3225,18 @@ async function run() {
     solemnShareEventId = body.eventId;
   });
 
+  await test('The festive share page carries «أعراسنا» in og:site_name, the description, and the footer', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+
+    assert.ok(
+      /property="og:site_name" content="أعراسنا"/.test(text),
+      'expected og:site_name to be أعراسنا on a festive (wedding) event'
+    );
+    const descMeta = text.match(/property="og:description" content="([^"]*)"/);
+    assert.ok(descMeta && descMeta[1].includes('أعراسنا'), `expected the description to carry أعراسنا, got: ${descMeta && descMeta[1]}`);
+    assert.ok(/<p class="mark">أعراسنا<\/p>/.test(text), 'expected the footer mark to read أعراسنا on a festive event');
+  });
+
   await test('A solemn-tone event with no poster renders a real card in the solemn palette, not the festive one', async () => {
     const { status, buffer } = await rawGetBinary(`/e/${solemnShareEventId}/card.jpg`);
     assert.strictEqual(status, 200, 'card generation must not crash on a poster-less solemn event');
@@ -3243,6 +3256,33 @@ async function run() {
       rule.b >= rule.r,
       `expected the solemn palette's cool accent, got a warm one (festive leaked in): ${JSON.stringify(rule)}`
     );
+  });
+
+  await test('Both palettes expose a wordmark, and the generated card renders for each tone', async () => {
+    assert.strictEqual(PALETTES.festive.wordmark, 'أعراسنا');
+    assert.strictEqual(PALETTES.solemn.wordmark, 'مناسبات النقب');
+
+    // The wordmark drawn ON the JPEG cannot be asserted by reading pixels
+    // (there is no OCR here) — this only pins the contract a card render can
+    // be checked against: both tones have a wordmark to draw, and drawing it
+    // does not throw for either tone. The share-page assertions above are
+    // what actually catch a forgotten hardcoded string.
+    for (const eid of [shareEventId, solemnShareEventId]) {
+      const { status } = await rawGetBinary(`/e/${eid}/card.jpg`);
+      assert.strictEqual(status, 200, `expected card generation to succeed for event ${eid}`);
+    }
+  });
+
+  await test('The solemn (condolence) share page never carries «أعراسنا» anywhere, and still carries «مناسبات النقب»', async () => {
+    const { status, text } = await rawGet(`/e/${solemnShareEventId}`);
+    assert.strictEqual(status, 200);
+
+    assert.strictEqual(
+      (text.match(/أعراسنا/g) || []).length,
+      0,
+      'the festive wordmark must not appear anywhere on a condolence page — it would read as celebrating a death'
+    );
+    assert.ok(text.includes('مناسبات النقب'), 'the descriptive line must still appear, standing alone, on a solemn page');
   });
 
   await db.execute(

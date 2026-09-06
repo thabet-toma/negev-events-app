@@ -724,6 +724,30 @@ async function run() {
     assert.ok(!/🌙/.test(badge.textContent), 'the crescent is retired: it reads religious, and the platform is civic');
   });
 
+  await test('the rename to «أعراسنا» reached the document title, the iOS web-app title, and the header', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    assert.ok(document.title.startsWith('أعراسنا'), `expected the title to lead with أعراسنا, got: ${document.title}`);
+    assert.strictEqual(
+      document.querySelector('meta[name="apple-mobile-web-app-title"]').getAttribute('content'),
+      'أعراسنا',
+      'the iOS home-screen label is a one-word surface — أعراسنا alone, mandatory'
+    );
+    assert.ok(
+      dom.window.document.querySelector('.logo-text h1').textContent.includes('أعراسنا'),
+      'the header is an internal surface — the app name alone'
+    );
+  });
+
+  await test('the manifest short_name is «أعراسنا» alone, and name carries both names', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(WEB_DIR, 'manifest.json'), 'utf8'));
+
+    assert.strictEqual(manifest.short_name, 'أعراسنا', 'short_name is a one-word surface — Android truncates a long label');
+    assert.ok(manifest.name.includes('أعراسنا'), `expected the manifest name to carry أعراسنا, got: ${manifest.name}`);
+    assert.ok(manifest.name.includes('مناسبات النقب'), `expected the manifest name to also carry the descriptive line, got: ${manifest.name}`);
+  });
+
   console.log('\nBrand icon generation (server/scripts/brand-icons.js)');
 
   await test('the smallest Android mipmap (mdpi, 48×48) really is 48×48 and mixes mark- and ground-coloured pixels', async () => {

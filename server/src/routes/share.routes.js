@@ -84,10 +84,11 @@ function buildHeadline(event) {
 }
 
 function buildDescription(event) {
+  const palette = PALETTES[toneOf(event)];
   const clan = event.family_clan;
   return clan
-    ? `عائلة ${clan} — التفاصيل في تطبيق مناسبات النقب`
-    : 'التفاصيل في تطبيق مناسبات النقب';
+    ? `عائلة ${clan} — التفاصيل في تطبيق ${palette.wordmark}`
+    : `التفاصيل في تطبيق ${palette.wordmark}`;
 }
 
 function pageStyle(palette) {
@@ -201,7 +202,7 @@ ${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.
 <meta property="og:image:height" content="${imageDimensions.height}">` : ''}
 <meta property="og:url" content="${escapeHtml(pageUrl)}">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="مناسبات النقب">
+<meta property="og:site_name" content="${palette.wordmark}">
 <meta property="og:locale" content="ar_AR">
 <meta name="twitter:card" content="summary_large_image">
 <style>${pageStyle(palette)}</style>
@@ -220,7 +221,7 @@ ${event.family_clan ? `<p class="clan">${escapeHtml(event.family_clan)}</p>` : '
 <hr class="rule">
 <p class="lead">التفاصيل الكاملة في التطبيق</p>
 <a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
-<p class="mark">مناسبات النقب</p>
+<p class="mark">${palette.wordmark}</p>
 </div>
 </main>
 </body>
@@ -245,7 +246,7 @@ function renderNotFoundPage() {
 <div class="body">
 <h1>هذه المناسبة غير متاحة</h1>
 <p>قد تكون قد حُذفت، أو لم تُعتمد بعد.</p>
-<p class="mark">مناسبات النقب</p>
+<p class="mark">${PALETTES.festive.wordmark}</p>
 </div>
 </main>
 </body>

@@ -52,7 +52,7 @@ async function start() {
 
   server.listen(config.port, config.host, () => {
     logger.info('====================================================');
-    logger.info('🌟 خادم منصة مناسبات النقب — جاهز للعمل');
+    logger.info('🌟 خادم منصة أعراسنا — جاهز للعمل');
     logger.info(`🔌 الـAPI:              http://localhost:${config.port}/api`);
     logger.info(`❤️  فحص الصحة:          http://localhost:${config.port}/health`);
     logger.info(`🖼️  الوسائط:            ${config.publicUrl}/uploads`);
