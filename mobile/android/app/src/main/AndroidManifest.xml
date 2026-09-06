@@ -47,6 +47,12 @@
                     android:pathPrefix="/e/"/>
             </intent-filter>
         </activity>
+        <!-- شاشة قصّ البوستر (image_cropper، مكتبة uCrop) — بلا هذا التسجيل
+             الشاشة الأصلية لا تفتح إطلاقاً. الثيم كما يوثّقه المشروع نفسه. -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
@@ -699,6 +701,25 @@ void main() {
         expect(capturedBody, isNot(contains('name="longitude"')));
       },
     );
+  });
+
+  group('قصّ صورة البوستر — التراجع لا يُفقد الاختيار', () {
+    test('نتيجة قصّ غير null تستبدل مسار الصورة الملتقطة', () {
+      final picked = XFile('/tmp/original.jpg');
+      final cropped = CroppedFile('/tmp/cropped.jpg');
+
+      final result = resolveCroppedPoster(picked, cropped);
+
+      expect(result.path, '/tmp/cropped.jpg');
+    });
+
+    test('رجوع المستخدم من شاشة القصّ (null) يُبقي الصورة الملتقطة كما هي', () {
+      final picked = XFile('/tmp/original.jpg');
+
+      final result = resolveCroppedPoster(picked, null);
+
+      expect(result.path, '/tmp/original.jpg');
+    });
   });
 
   group('تحذير عدم توافق البلدة بعد النشر (issue #20 خطوة ١٤)', () {
