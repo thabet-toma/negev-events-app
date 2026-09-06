@@ -1372,6 +1372,14 @@ body {
   margin-inline: auto;
 }
 
+/* `display: flex` أعلاه قاعدة مؤلِّف، وهي تغلب `[hidden] { display: none }`
+   الآتية من المتصفّح — فبدون هذا السطر تبقى الورقة ظاهرة رغم أن `hidden`
+   مضبوطة. وقد كسر ذلك شيئين معاً: زرّ الإغلاق كان يضبط `hidden` ولا يختفي شيء،
+   والورقة كانت تظهر لكل زائر على كل منصّة لأن `hidden` الابتدائية في
+   `index.html` لم تكن تعمل أصلاً. نفس العلاج المطبَّق على
+   `.app-download-btn[hidden]` أعلى الملف. */
+.install-hint[hidden] { display: none; }
+
 .install-hint-mark { width: 40px; height: 40px; flex: 0 0 auto; color: var(--sky); margin-block-start: 2px; }
 
 .install-hint-body { flex: 1; min-width: 0; }

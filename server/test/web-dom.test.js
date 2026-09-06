@@ -70,6 +70,7 @@ async function waitFor(conditionFn, { timeout = 3000, interval = 20 } = {}) {
 
 const WEB_DIR = path.join(__dirname, '..', '..', 'web');
 const INDEX_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8');
+const STYLES_CSS_RAW = fs.readFileSync(path.join(WEB_DIR, 'styles.css'), 'utf8');
 const CONFIG_JS = fs.readFileSync(path.join(WEB_DIR, 'config.js'), 'utf8');
 const API_JS = fs.readFileSync(path.join(WEB_DIR, 'api.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
@@ -1118,6 +1119,49 @@ async function run() {
       /initInstallHint\(\)/.test(boot.slice(0, boot.indexOf('});'))),
       'initInstallHint() must be called on load, next to initAppDownload() whose gap it fills'
     );
+  });
+
+  /**
+   * The regression this exists for: `hidden` is a browser default
+   * (`[hidden] { display: none }`) and ANY author rule that sets `display` on
+   * the same element beats it. `.install-hint` set `display: flex`, so setting
+   * `.hidden = true` changed the property and nothing on screen — the close
+   * button appeared dead, and the sheet showed to every visitor on every
+   * platform because the `hidden` attribute in index.html never applied either.
+   *
+   * Every test above asserts the `.hidden` PROPERTY, which stayed true the
+   * whole time. jsdom applies no stylesheet, so none of them could ever have
+   * caught it. This one reads the stylesheet instead, for every element that
+   * ships hidden.
+   */
+  await test('nothing that ships hidden is un-hidden by a class that forces a display', () => {
+    // Parsed, not pattern-matched: the markup is the thing under test, so read
+    // it as a document rather than guessing at attribute order. No scripts run
+    // here — this is index.html exactly as it is served.
+    const markup = new JSDOM(INDEX_HTML_RAW).window.document;
+    const shipsHidden = [...markup.querySelectorAll('[hidden]')];
+    assert.ok(shipsHidden.length, 'expected index.html to ship some elements hidden');
+
+    for (const element of shipsHidden) {
+      for (const cls of [...element.classList]) {
+        // Every class in this stylesheet is plain kebab-case; anything else is
+        // not worth interpolating into a pattern, so skip it rather than
+        // escape it.
+        if (!/^[a-zA-Z0-9_-]+$/.test(cls)) continue;
+
+        const rule = STYLES_CSS_RAW.match(new RegExp('[.]' + cls + '[ ]*[{]([^}]*)[}]'));
+        if (!rule || !/display[ ]*:/.test(rule[1])) continue;
+
+        const neutralised = new RegExp('[.]' + cls + '\\[hidden\\][^{]*[{][^}]*display[ ]*:[ ]*none')
+          .test(STYLES_CSS_RAW);
+        assert.ok(
+          neutralised,
+          '#' + (element.id || cls) + ' ships hidden, but .' + cls
+          + ' sets a display that overrides it — add ".' + cls
+          + '[hidden] { display: none; }" or it stays on screen for everyone'
+        );
+      }
+    }
   });
 
   await test('dismissing the hint keeps it dismissed on the next visit', () => {
