@@ -6,6 +6,9 @@
 |---|---|
 | السيرفر | `root@munasbat.ktra-pro.tech` · مفتاح `~/.ssh/hostenger2/id_ed25519` (المسار مجلد، والمفتاح داخله) |
 | مسار التطبيق | `/root/munasbat/app` |
+| ملف البيئة | `/root/munasbat/app/.env` — **لا `server/.env`** |
+| حاوية القاعدة | `negev_events_mysql` |
+| منفذ التطبيق على المضيف | `127.0.0.1:3100` — المنفذ 3000 محجوز لمشروع آخر |
 | من | `main` قبل الدمج |
 | إلى | `main` بعد دمج `feat/aarasna-rebrand` (PR #68) |
 | التطبيق | `1.4.0+6` ← **`1.5.0+7`** |
@@ -102,7 +105,7 @@ default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'
 ssh -i ~/.ssh/hostenger2/id_ed25519 root@munasbat.ktra-pro.tech \
   'cd /root/munasbat/app && git log --oneline -1 && \
    docker exec negev_events_app grep -c wordmark /app/src/utils/shareTheme.js; \
-   curl -s localhost:3000/api/app/version'
+   curl -s localhost:3100/api/app/version'
 ```
 
 `/app/src` يأتي من **الصورة المبنيّة** (‏`uploads` و `downloads` وحدهما mounts)، فوجود
@@ -141,7 +144,7 @@ git fetch origin && git checkout main && git pull
 
 ```bash
 cd /root/munasbat/app
-docker exec negev_events_db mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_events \
+docker exec negev_events_mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_events \
   > ~/backup-$(date +%F-%H%M).sql
 ls -lh ~/backup-*.sql | tail -1
 
@@ -153,19 +156,19 @@ docker compose logs --tail 40 app
 
 ```bash
 # ١) صفحة عرس: تحمل «أعراسنا»
-curl -s localhost:3000/e/<ID_عرس> | grep -o 'og:site_name[^>]*'
+curl -s localhost:3100/e/<ID_عرس> | grep -o 'og:site_name[^>]*'
 
 # ٢) صفحة عزاء: صفر ظهور لـ«أعراسنا» — لا نقاش
-curl -s localhost:3000/e/<ID_عزاء> | grep -c 'أعراسنا'   # يجب أن يطبع 0
+curl -s localhost:3100/e/<ID_عزاء> | grep -c 'أعراسنا'   # يجب أن يطبع 0
 
 # ٣) الترويسة توسّعت بتوجيه واحد فقط
-curl -sI localhost:3000/e/<ID> | grep -i content-security-policy
+curl -sI localhost:3100/e/<ID> | grep -i content-security-policy
 
 # ٤) الخطّ يُخدَم فعلاً
-curl -sI localhost:3000/e/assets/Cairo-Regular.woff2 | head -3
+curl -sI localhost:3100/e/assets/Cairo-Regular.woff2 | head -3
 
 # ٥) البطاقة تُولَّد وتحت السقف
-curl -s localhost:3000/e/<ID>/card.jpg -o /tmp/c.jpg && ls -l /tmp/c.jpg
+curl -s localhost:3100/e/<ID>/card.jpg -o /tmp/c.jpg && ls -l /tmp/c.jpg
 ```
 
 الخطوة **٢** إن طبعت غير الصفر فالنشر **يُتراجَع عنه**.
@@ -216,11 +219,19 @@ scp -i ~/.ssh/hostenger2/id_ed25519 \
 
 ```bash
 cd /root/munasbat/app
+
+# ١) اقرأ قبل أن تحرّك — سلسلة && تنفّذ mv ثم تفشل على مسار خاطئ،
+#    فينتهي بك APK جديد ونسخة قديمة، وهو «نصف الإصدار» بعينه.
+grep -n '^APP_LATEST_VERSION' .env        # لا تتقدّم إن لم يطبع شيئاً
+
+# ٢) حرّك الملف
 cp server/downloads/negev-events.apk ~/apk-backup-$(date +%F).apk
 mv /tmp/negev-events.apk server/downloads/negev-events.apk
 chmod 644 server/downloads/negev-events.apk
 
-# ارفع APP_LATEST_VERSION=1.5.0 في server/.env  ثم:
+# ٣) ارفع النسخة وأعد التشغيل
+sed -i 's/^APP_LATEST_VERSION=.*/APP_LATEST_VERSION=1.5.0/' .env
+grep -n '^APP_LATEST_VERSION' .env        # يجب أن يقول 1.5.0
 docker compose up -d app
 ```
 
