@@ -514,6 +514,54 @@ async function run() {
     assert.ok(!honoreesGroup.querySelector('button.btn-approve'), 'must not borrow the admin panel\'s button class — styles.css does not style it');
   });
 
+  /**
+   * The four overrides/one suffix above are the exception, not the rule —
+   * most fields on the public form (town, event_date, and every field with
+   * no override at all) go through the SAME default renderer admin.js's
+   * direct-publish form uses. This pins that the shared path itself still
+   * works correctly for the public page: right id, right onchange wiring,
+   * right label — not just the overridden fields covered above.
+   */
+  await test('shared (non-overridden) fields still render correctly on the public form: town select and event-date input', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addTown') !== null);
+    assertNoUnhandledRejections('publish form / shared renderer — town + event_date');
+
+    const townSelect = document.getElementById('addTown');
+    assert.ok(townSelect, 'expected the shared default #addTown select — town has no override on the public form');
+    assert.strictEqual(townSelect.tagName, 'SELECT');
+    assert.strictEqual(townSelect.getAttribute('onchange'), 'handleAddTownChange()', 'expected the public form\'s own onTownChange handler wired by the shared renderer');
+    const townLabel = townSelect.closest('.form-group').querySelector('label');
+    assert.ok(townLabel.textContent.includes('البلدة'), `expected the type's own town label, got "${townLabel.textContent}"`);
+    assert.ok(!townSelect.closest('.form-row'), 'the public form\'s town field is not a two-column row — that layout is the admin panel\'s override');
+
+    const dateInput = document.getElementById('addEventDate');
+    assert.ok(dateInput, 'expected the shared default #addEventDate input');
+    assert.strictEqual(dateInput.getAttribute('type'), 'date');
+    assert.strictEqual(dateInput.getAttribute('onchange'), 'checkDateCollisionLive()', 'expected the public form\'s own onDateChange handler wired by the shared renderer');
+  });
+
+  /**
+   * groupUploads: true is what wraps upload fields in a single
+   * `.upload-section` on the public form (occasionForm.js's
+   * buildOccasionFieldsHtml) — asserted nowhere before this.
+   */
+  await test('groupUploads wraps the poster field in .upload-section on the public form', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    assertNoUnhandledRejections('publish form / upload-section grouping');
+
+    const uploadSection = document.querySelector('#dynamicFormFields .upload-section');
+    assert.ok(uploadSection, 'expected upload fields grouped inside a single .upload-section on the public form');
+    assert.ok(uploadSection.querySelector('#addPosterFile'), 'expected the poster field specifically inside that section');
+  });
+
   console.log('\nPublish form — poster crop editor (Facebook-style, #optional-crop)');
 
   /**
@@ -875,8 +923,9 @@ async function run() {
    * admin saw). These pin the fixed behaviour: the type picker drives the
    * rest of the form, built by the SAME field-key renderer web/app.js's own
    * publish form uses (buildOccasionFieldsHtml, web/occasionForm.js) — the
-   * admin panel supplies no overrides, so it gets the plain default markup
-   * for every field (no map, no crop editor) instead of a second copy of the
+   * admin panel overrides only 'town' (its own two-column form-row layout)
+   * and the honoree-add button's class, so every other field gets the plain
+   * default markup (no map, no crop editor) instead of a second copy of the
    * switch.
    */
   await test('initDirectAddForm() builds a type picker and the first active type\'s own fields — no hardcoded wedding form', async () => {
@@ -922,6 +971,44 @@ async function run() {
     assert.ok(button, 'expected an add-honoree button right after the list');
     assert.ok(button.classList.contains('btn-approve'), 'the admin panel button must use its own admin.css class');
     assert.ok(!button.classList.contains('add-nokoot-btn'), 'must not borrow the public site\'s button class — admin.css does not style it');
+  });
+
+  /**
+   * The town+village pair used to sit side by side (a `.form-row` of two
+   * `.form-group.half`s, styled by admin.css:372-373) before the shared
+   * renderer shipped, and silently stacked full-width afterwards — nothing
+   * asked for that, and admin.css never stopped supporting the two-column
+   * layout. 'town' is the one field the admin panel overrides (not just
+   * relabels), specifically to keep this layout.
+   */
+  await test('the panel keeps its own two-column layout for town+village — not the shared renderer\'s stacked default', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+
+    const townSelect = document.getElementById('dirTown');
+    assert.ok(townSelect, 'expected the town select');
+    const row = townSelect.closest('.form-row');
+    assert.ok(row, 'expected the town field wrapped in a .form-row — the panel\'s own two-column layout');
+
+    const halves = row.querySelectorAll(':scope > .form-group.half');
+    assert.strictEqual(halves.length, 2, 'expected exactly two .form-group.half columns: town and village');
+    assert.ok(halves[0].contains(townSelect), 'the town select must be the first column');
+    assert.ok(halves[1].querySelector('#dirVillageGroup') || halves[1].id === 'dirVillageGroup', 'the village group must be the second column');
+  });
+
+  /**
+   * groupUploads: false on the panel — it never wrapped upload fields in a
+   * visual section, and the shared renderer must not start doing that on its
+   * behalf just because the public form wants it.
+   */
+  await test('the panel gets no .upload-section wrapper — groupUploads stays false there', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+
+    assert.ok(document.getElementById('dirPosterFile'), 'expected the poster field to exist');
+    assert.strictEqual(document.querySelector('#dirDynamicFields .upload-section'), null, 'the admin panel must not gain the public form\'s upload-section grouping');
   });
 
   await test('a required field left empty is rejected client-side with that type\'s own label', async () => {

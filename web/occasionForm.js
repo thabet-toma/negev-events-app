@@ -4,9 +4,12 @@
  * (switch field_key) نفسه: الحقول الأربعة عشر تُبنى مرّة واحدة هنا، لا
  * مرّتين. ما يختلف فعلاً بين الشاشتين — بادئة معرّفات DOM، أسماء معالجات
  * onchange (أو غيابها في اللوحة: لا فحص تعارض حيّ ولا خريطة تُعاد توسيطها
- * هناك)، وأربعة حقول ذات معالجة غنية لا تملكها اللوحة (خريطة الموقع، محرِّر
- * القص، صندوقا الرفع المزخرَفان للصوت وصورة الفنان) — يبقى بارامترات تمرّرها
- * كل صفحة لـ`buildOccasionFieldsHtml`، لا نسخة ثانية من الحقول الأخرى.
+ * هناك)، تخطيط زوج البلدة/القرية في اللوحة (عمودان جنباً إلى جنب، بخلاف
+ * الموقع العام)، وأربعة حقول ذات معالجة غنية لا تملكها اللوحة (خريطة الموقع،
+ * محرِّر القص، صندوقا الرفع المزخرَفان للصوت وصورة الفنان) — يبقى بارامترات
+ * أو استبدالات صغيرة تمرّرها كل صفحة لـ`buildOccasionFieldsHtml`، لا نسخة
+ * ثانية من الحقول الأخرى. `label`/`req` يُحسَبان مرّة واحدة هنا ويُمرَّران
+ * إلى كل استبدال (override) أو إلحاق (suffix) — لا صفحة مستدعية تعيد اشتقاقهما.
  *
  * يعتمد هذا الملف على escapeHtml بلا تعريفها هنا — كل من app.js وadmin.js
  * يُعرّفها إعلان دالة top-level خاصاً به (تكرار سابق لهذا التغيير، لا يُلمَس
@@ -98,17 +101,24 @@ const OCCASION_UPLOAD_FIELD_KEYS = ['poster_url', 'audio_url', 'artist_image_url
  * الحقول الأربعة عشر في كل ملف.
  *
  * ctx: {
- *   idPrefix: 'add' | 'dir' — يُلحَق بكل معرّف DOM يُولَّد؛ الفارق الوحيد
- *     الحقيقي بين الشاشتين في شكل المعرّفات،
+ *   idPrefix: 'add' | 'dir' — يُلحَق بكل معرّف DOM يُولَّد؛ الفارق الأكثر
+ *     شيوعاً بين الشاشتين في شكل المعرّفات،
  *   renderHonoreeAddButton(containerId): string — زرّ «إضافة اسم» بأسلوب كل
  *     صفحة (صنف CSS مختلف تماماً بين styles.css وadmin.css)، إلزامي،
  *   onTownChange / onVillageChange / onDateChange: اسم دالة onchange (نصّاً)
- *     أو null/undefined لإسقاط السمة كلياً — اللوحة لا تملك فحص تعارض حيّ
- *     ولا خريطة تُعاد توسيطها عند تغيير القرية، فتمرّر null لهما،
- *   overrides: { field_key: (field) => string } اختياري — استبدال كامل
- *     لحقل بعينه؛ الموقع العام وحده يستعملها (location_name، poster_url،
- *     audio_url، artist_image_url) ليحتفظ بمعالجته الغنية (خريطة Leaflet،
- *     محرِّر قص، صندوق رفع مزخرَف) التي لا تحتاجها اللوحة ولا تملك CSS لها،
+ *     أو null/undefined لإسقاط السمة كلياً — تُقرَأ فقط حين لا override لحقل
+ *     'town' (اللوحة تستبدله كاملاً، الموقع العام لا)،
+ *   overrides: { field_key: (field, meta) => string } اختياري — استبدال
+ *     كامل لحقل بعينه، حين لا يكفي الشكل الافتراضي مهما عُدِّل. `meta` هي
+ *     `{ label, req }` المحسوبتان هنا مسبقاً، فلا يُعيد أي استبدال اشتقاقهما.
+ *     الموقع العام يستبدل به poster_url/audio_url/artist_image_url (صناديق
+ *     رفع مزخرَفة لا تملك اللوحة CSS لها)؛ اللوحة تستبدل به town (عمودان
+ *     جنباً إلى جنب — form-row/half — بدل الشكل المكدَّس الافتراضي؛ الموقع
+ *     العام كان مكدَّساً دائماً فيبقى على الافتراضي بلا استبدال),
+ *   suffixes: { field_key: (field, meta) => string } اختياري — إلحاق HTML
+ *     بعد الشكل الافتراضي للحقل، لا استبداله؛ الموقع العام وحده يستعملها
+ *     (location_name) ليُلحق خريطة Leaflet بعد حقل النص العادي نفسه الذي
+ *     تحصل عليه اللوحة أيضاً — لا نسخة ثانية من تسمية الحقل الافتراضية،
  *   groupUploads: boolean — لفّ حقول الرفع الثلاثة في `.upload-section`
  *     واحد، كما يفعل الموقع العام؛ اللوحة تُبقيها مسطَّحة كما كانت دائماً.
  * }
@@ -130,15 +140,26 @@ function buildOccasionFieldsHtml(type, ctx) {
   return html;
 }
 
-/** حقول المناسبة المعروفة (server/src/constants.js) — كل نوع يختار الظاهر منها فقط، هذا الجدول لا يخترع حقلاً جديداً. */
+/**
+ * حقل واحد: استبدال كامل إن وُجد (overrides)، وإلا الشكل الافتراضي أدناه —
+ * ثم إلحاق (suffixes) إن وُجد له. `meta` (`label`/`req`) تُحسَب هنا مرّة
+ * واحدة فقط وتصل لكل استبدال أو إلحاق، فلا يُعيد أيّهما اشتقاقها.
+ */
 function renderOccasionFieldHtml(field, ctx) {
-  const override = ctx.overrides && ctx.overrides[field.field_key];
-  if (override) return override(field);
+  const meta = { label: escapeHtml(field.label), req: field.is_required ? ' *' : '' };
 
-  const req = field.is_required ? ' *' : '';
-  const label = escapeHtml(field.label);
+  const override = ctx.overrides && ctx.overrides[field.field_key];
+  if (override) return override(field, meta);
+
+  const defaultHtml = renderDefaultOccasionFieldHtml(field, ctx, meta);
+  const suffix = ctx.suffixes && ctx.suffixes[field.field_key];
+  return suffix ? defaultHtml + suffix(field, meta) : defaultHtml;
+}
+
+/** حقول المناسبة المعروفة (server/src/constants.js) — كل نوع يختار الظاهر منها فقط، هذا الجدول لا يخترع حقلاً جديداً. */
+function renderDefaultOccasionFieldHtml(field, ctx, { label, req }) {
   const p = ctx.idPrefix;
-  const attr = (handlerName, attrName = 'onchange') => (handlerName ? ` ${attrName}="${handlerName}()"` : '');
+  const onchangeAttr = handlerName => (handlerName ? ` onchange="${handlerName}()"` : '');
 
   switch (field.field_key) {
     case 'honorees':
@@ -152,24 +173,24 @@ function renderOccasionFieldHtml(field, ctx) {
       return `
         <div class="form-group">
           <label>${label}${req}</label>
-          <select id="${p}Town"${attr(ctx.onTownChange)}></select>
+          <select id="${p}Town"${onchangeAttr(ctx.onTownChange)}></select>
         </div>
         <!-- يظهر فقط تحت بند "القرى والتجمعات" — إلزامي عندها (خريطة #21) -->
         <div class="form-group" id="${p}VillageGroup" style="display:none;">
           <label>القرية *</label>
-          <select id="${p}Village"${attr(ctx.onVillageChange)}></select>
+          <select id="${p}Village"${onchangeAttr(ctx.onVillageChange)}></select>
         </div>`;
     case 'event_date':
       return `
         <div class="form-group">
           <label>${label}${req}</label>
-          <input type="date" id="${p}EventDate"${attr(ctx.onDateChange)}>
+          <input type="date" id="${p}EventDate"${onchangeAttr(ctx.onDateChange)}>
         </div>`;
     case 'event_end_date':
       return `
         <div class="form-group">
           <label>${label}${req}</label>
-          <input type="date" id="${p}EventEndDate"${attr(ctx.onDateChange)}>
+          <input type="date" id="${p}EventEndDate"${onchangeAttr(ctx.onDateChange)}>
         </div>`;
     case 'youth_party_date':
       return `

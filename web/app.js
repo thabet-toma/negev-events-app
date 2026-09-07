@@ -1537,10 +1537,13 @@ function selectOccasionType(typeId) {
 
 /**
  * تُصنَع مرّة واحدة فقط، لا في كل استدعاء لـrenderOccasionForm — الدوال التي
- * تحملها (overrides، renderHonoreeAddButton) لا حالة لها، وbuildOccasionFieldsHtml
- * (occasionForm.js) هي مالكة الحقول الأربعة عشر المشتركة؛ هنا فقط الحقول
- * الأربعة ذات المعالجة الغنية التي لا تملكها اللوحة (خريطة، محرِّر قص،
- * صندوقا رفع مزخرَفان)، وأسماء معالجات onchange الخاصة بهذه الصفحة.
+ * تحملها (overrides، suffixes، renderHonoreeAddButton) لا حالة لها،
+ * وbuildOccasionFieldsHtml (occasionForm.js) هي مالكة الحقول الأربعة عشر
+ * المشتركة؛ هنا فقط أسماء معالجات onchange الخاصة بهذه الصفحة، وثلاثة حقول
+ * ذات استبدال كامل (صناديق رفع مزخرَفة لا تملك اللوحة CSS لها)، وحقل واحد
+ * بإلحاق فقط: location_name يبقى على الشكل الافتراضي نفسه (نص عادي بالتسمية
+ * والتسمية الاحتياطية اللتين تملكهما اللوحة أيضاً)، وتُلحَق خريطة Leaflet
+ * بعده — لا نسخة ثانية من ذلك الحقل النصّي.
  */
 const PUBLISH_FORM_FIELD_CTX = {
   idPrefix: 'add',
@@ -1552,12 +1555,8 @@ const PUBLISH_FORM_FIELD_CTX = {
     <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('${containerId}')">
       <i class="fa-solid fa-plus"></i> إضافة اسم
     </button>`,
-  overrides: {
-    location_name: field => `
-      <div class="form-group">
-        <label>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</label>
-        <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان بالقرب من الدوار الشرقي">
-      </div>
+  suffixes: {
+    location_name: () => `
       <div class="form-group">
         <div class="location-picker-toolbar">
           <label>حدّد الموقع على الخريطة</label>
@@ -1569,12 +1568,14 @@ const PUBLISH_FORM_FIELD_CTX = {
         <p class="location-picker-hint">اسحب الدبّوس إلى الموقع الصحيح، أو انقر على المكان على الخريطة</p>
         <input type="hidden" id="addLat">
         <input type="hidden" id="addLng">
-      </div>`,
-    poster_url: field => `
+      </div>`
+  },
+  overrides: {
+    poster_url: (field, { label, req }) => `
       <div class="poster-field">
         <div class="upload-box" id="posterUploadBox">
           <i class="fa-solid fa-image upload-icon"></i>
-          <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+          <h4>${label}${req}</h4>
           <p>اختر صورة من الهاتف</p>
           <input type="file" id="addPosterFile" accept="image/*">
         </div>
@@ -1605,17 +1606,17 @@ const PUBLISH_FORM_FIELD_CTX = {
           </button>
         </div>
       </div>`,
-    audio_url: field => `
+    audio_url: (field, { label, req }) => `
       <div class="upload-box audio-upload">
         <i class="fa-solid fa-music upload-icon"></i>
-        <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+        <h4>${label}${req}</h4>
         <p>أرفق شيلة أو مقطعاً صوتياً (MP3/M4A)</p>
         <input type="file" id="addAudioFile" accept="audio/*">
       </div>`,
-    artist_image_url: field => `
+    artist_image_url: (field, { label, req }) => `
       <div class="upload-box">
         <i class="fa-solid fa-image upload-icon"></i>
-        <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+        <h4>${label}${req}</h4>
         <p>صورة الفنان (اختياري)</p>
         <input type="file" id="addArtistImageFile" accept="image/*">
       </div>`

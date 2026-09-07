@@ -31,10 +31,11 @@ let directAddOccasionTypes = [];
 let selectedDirectAddType = null;
 
 // مرآة لـ TOWNS في server/src/constants.js — لا وحدة مشتركة بين web/ والخادم،
-// نفس سبب OCCASION_FIELDS أدناه (البلدات ثابتة بالكود ومكرَّرة عمداً في كل
-// عميل، services-directory — خلافاً للقرى وفئات الخدمات التي تُجلب من الخادم).
-// قائمة dirTown في نموذج النشر المباشر تُولَّد من هذه المصفوفة وقت التشغيل
-// (populateDirTownSelect)، لا خيارات <option> ثابتة في admin.html كما كانت.
+// نفس سبب OCCASION_FIELDS أدناه: البلدات ثابتة بالكود ومكرَّرة عمداً في كل
+// عميل، خلافاً للقرى وفئات الخدمات التي تُجلب من الخادم (services-directory
+// spec). قائمة dirTown في نموذج النشر المباشر تُولَّد من هذه المصفوفة وقت
+// التشغيل (populateDirTownSelect)، لا خيارات <option> ثابتة في admin.html
+// كما كانت.
 const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
@@ -483,24 +484,37 @@ function handleDirOccasionTypeChange() {
 }
 
 /**
- * الحقول الأربعة عشر المشتركة تُبنى في buildOccasionFieldsHtml
+ * أغلب الحقول الأربعة عشر المشتركة تُبنى في buildOccasionFieldsHtml
  * (occasionForm.js)، لا هنا — هذه فقط أسماء معالجات onchange الخاصة باللوحة
- * (لا فحص تعارض حيّ ولا خريطة تُعاد توسيطها، فـonDateChange/onVillageChange
- * تبقيان null) وزرّ «إضافة اسم» بأسلوب اللوحة (صنف btn-approve، لا
- * add-nokoot-btn الذي يستعمله الموقع العام). اللوحة لا تمرّر overrides
- * إطلاقاً، فتحصل على المعالجة البسيطة الافتراضية (نص/تاريخ/ملف عادي) لكل
- * حقل — لا خريطة ولا محرِّر قص، تماماً كما كانت من قبل.
+ * (لا فحص تعارض حيّ، فـonDateChange تبقى null)، زرّ «إضافة اسم» بأسلوب اللوحة
+ * (صنف btn-approve، لا add-nokoot-btn الذي يستعمله الموقع العام)، واستبدال
+ * وحيد لحقل 'town': لوحة الإدارة تعرض البلدة والقرية عمودين جنباً إلى جنب
+ * (form-row/half، admin.css:372-373) لا مكدَّسين كما يخرجهما الشكل الافتراضي
+ * — تخطيط اللوحة نفسه قبل هذا الملف، والموقع العام كان مكدَّساً دائماً فيبقى
+ * على الافتراضي بلا استبدال. كل حقل آخر يحصل على المعالجة البسيطة الافتراضية
+ * (نص/تاريخ/ملف عادي) — لا خريطة ولا محرِّر قص، تماماً كما كان من قبل.
  */
 const DIRECT_ADD_FIELD_CTX = {
   idPrefix: 'dir',
   groupUploads: false,
-  onTownChange: 'handleDirTownChange',
-  onVillageChange: null,
   onDateChange: null,
   renderHonoreeAddButton: containerId => `
     <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addHonoreeRow('${containerId}')">
       <i class="fa-solid fa-plus"></i> إضافة اسم
-    </button>`
+    </button>`,
+  overrides: {
+    town: (field, { label, req }) => `
+      <div class="form-row">
+        <div class="form-group half">
+          <label>${label}${req}</label>
+          <select id="dirTown" onchange="handleDirTownChange()"></select>
+        </div>
+        <div class="form-group half" id="dirVillageGroup" style="display:none;">
+          <label>القرية *</label>
+          <select id="dirVillage"></select>
+        </div>
+      </div>`
+  }
 };
 
 /** يبني بقية النموذج من حقول هذا النوع تحديداً — الظاهر فقط، بتسميته هو. */
