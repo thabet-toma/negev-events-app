@@ -435,6 +435,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
+| `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
 | `POST` | `/api/admin/broadcast` | بث إشعار عام |
 | `GET` | `/api/admin/occasion-types` | كل أنواع المناسبات (نشِطة ومعطَّلة) مع عدد المناسبات لكل نوع 🛡️ |
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |

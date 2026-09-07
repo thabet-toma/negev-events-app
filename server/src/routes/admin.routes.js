@@ -126,6 +126,41 @@ router.get('/admin/users', requireSuperAdmin, asyncHandler(async (req, res) => {
   res.json({ success: true, users: await admin.listUsers() });
 }));
 
+/**
+ * The only path that changes `users.role` — promotes a user to `admin` or
+ * demotes an `admin`/`super_admin` back to `user`. `super_admin` is never
+ * grantable here (only `seed.js` creates one). Guarded on this router
+ * itself, not via the shared `requireSuperAdmin` middleware: a non-super
+ * `admin` caller (who already cleared the router's own `requireAdmin` above)
+ * gets 404, not 403 — same reasoning as `adminScope.service.js`, this
+ * project never confirms the existence of a capability the caller does not
+ * own.
+ */
+router.patch('/admin/users/:id/role', asyncHandler(async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    throw ApiError.notFound('المستخدم غير موجود');
+  }
+
+  const targetUserId = parseId(req.params.id, 'معرّف المستخدم');
+  const role = cleanString(req.body.role, 20);
+
+  if (!['admin', 'user'].includes(role)) {
+    throw ApiError.badRequest('رتبة غير صالحة');
+  }
+
+  if (role === 'admin') {
+    const user = await admin.promoteToAdmin(targetUserId, req.user.id);
+    return res.json({
+      success: true,
+      user,
+      message: 'تمت ترقية المستخدم إلى أدمن — أدمن جديد لا يملك أي بلدة هنا، فلن يرى ولا يعتمد شيئاً حتى تُسنِد له بلدة واحدة على الأقل'
+    });
+  }
+
+  const user = await admin.demoteToUser(targetUserId, req.user.id);
+  res.json({ success: true, user, message: 'تم إلغاء صلاحيات الإدارة عن هذا المستخدم' });
+}));
+
 router.post('/admin/broadcast', requireSuperAdmin, asyncHandler(async (req, res) => {
   requireFields(req.body, ['message']);
 

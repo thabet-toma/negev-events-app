@@ -2,6 +2,7 @@
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
+const logger = require('../utils/logger');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 const adminScope = require('./adminScope.service');
 
@@ -292,6 +293,66 @@ async function setAdminTowns(adminUserId, towns) {
   });
 }
 
+/**
+ * Promotes a plain `user` to `admin` — never any higher: `super_admin` is
+ * refused explicitly, so one compromised super_admin account can never mint
+ * another one through this path (it can only ever be created by `seed.js`).
+ * The new admin owns no towns yet, so it sees and approves nothing until a
+ * super_admin runs `setAdminTowns` — the route layer is responsible for
+ * saying so to whoever just clicked promote.
+ */
+async function promoteToAdmin(userId, promotedBy) {
+  const user = await db.queryOne('SELECT id, role FROM users WHERE id = ?', [userId]);
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+  if (user.role === 'super_admin') throw ApiError.badRequest('لا يمكن تعديل صلاحيات المدير العام');
+  if (user.role === 'admin') throw ApiError.conflict('هذا المستخدم أدمن بالفعل');
+
+  await db.execute("UPDATE users SET role = 'admin' WHERE id = ?", [userId]);
+  logger.info('admin.promote', { userId, promotedBy });
+
+  return db.queryOne(
+    'SELECT id, phone_number, full_name, clan_town, role, created_at FROM users WHERE id = ?',
+    [userId]
+  );
+}
+
+/**
+ * Demotes an `admin` or `super_admin` back to a plain `user`, clearing its
+ * `admin_towns` rows in the same transaction — a dangling row would silently
+ * come back to life with authority nobody intended the moment anyone
+ * re-promotes that same user. Refuses self-demotion and refuses to demote
+ * the last remaining `super_admin`, either of which would leave the panel
+ * without an owner.
+ */
+async function demoteToUser(userId, actingUserId) {
+  if (userId === actingUserId) throw ApiError.badRequest('لا يمكنك إلغاء صلاحياتك عن نفسك');
+
+  return db.transaction(async connection => {
+    const [userRows] = await connection.execute('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [userId]);
+    const user = userRows[0];
+    if (!user) throw ApiError.notFound('المستخدم غير موجود');
+    if (user.role === 'user') throw ApiError.conflict('هذا المستخدم ليس إدارياً أصلاً');
+
+    if (user.role === 'super_admin') {
+      const [countRows] = await connection.execute("SELECT COUNT(*) AS total FROM users WHERE role = 'super_admin'");
+      if (Number(countRows[0].total) <= 1) {
+        throw ApiError.badRequest('لا يمكن إلغاء صلاحيات آخر مدير عام في المنصة');
+      }
+    }
+
+    await connection.execute("UPDATE users SET role = 'user' WHERE id = ?", [userId]);
+    await connection.execute('DELETE FROM admin_towns WHERE user_id = ?', [userId]);
+
+    logger.info('admin.demote', { userId, demotedBy: actingUserId, priorRole: user.role });
+
+    const [rows] = await connection.execute(
+      'SELECT id, phone_number, full_name, clan_town, role, created_at FROM users WHERE id = ?',
+      [userId]
+    );
+    return rows[0];
+  });
+}
+
 module.exports = {
   stats,
   listEvents,
@@ -302,5 +363,7 @@ module.exports = {
   listUsers,
   recordBroadcast,
   listAdminsWithTowns,
-  setAdminTowns
+  setAdminTowns,
+  promoteToAdmin,
+  demoteToUser
 };

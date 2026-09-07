@@ -24,6 +24,7 @@ const { signToken } = require('../src/middleware/auth');
 const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
+const adminService = require('../src/services/admin.service');
 const shareCard = require('../src/services/shareCard.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
@@ -2738,6 +2739,110 @@ async function run() {
     await db.execute('DELETE FROM events WHERE id IN (?, ?)', [own.body.eventId, outside.body.eventId]);
   });
 
+  console.log('\nRole management: the only path that appoints or removes an admin');
+
+  // Created via direct SQL, not POST /api/auth/register, which shares the
+  // suite-wide authLimiter budget with every other register/login call —
+  // this section only needs a plain `user` row to promote, not a real signup.
+  const promotableUserPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const { insertId: promotableUserId } = await db.execute(
+    `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+    [promotableUserPhone, 'مستخدم للترقية', bcrypt.hashSync('1234', config.bcryptRounds), 'رهط']
+  );
+  const promotableUser = { id: promotableUserId, phone: promotableUserPhone };
+  let promotedAdminId = 0;
+
+  await test('A non-super admin gets 404, not 403, on PATCH /admin/users/:id/role', async () => {
+    const { status } = await api('PATCH', `/api/admin/users/${promotableUser.id}/role`, {
+      token: scopedAdminToken, body: { role: 'admin' }
+    });
+    assert.strictEqual(status, 404, 'a plain admin must never learn this capability exists at all');
+  });
+
+  await test('super_admin is never grantable through this endpoint', async () => {
+    const { status } = await api('PATCH', `/api/admin/users/${promotableUser.id}/role`, {
+      token: superAdminToken, body: { role: 'super_admin' }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('Promotion reaches admin and nothing higher, and the response never carries pin_code', async () => {
+    const { status, body } = await api('PATCH', `/api/admin/users/${promotableUser.id}/role`, {
+      token: superAdminToken, body: { role: 'admin' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.user.role, 'admin');
+    assert.ok(!('pin_code' in body.user), 'pin_code must never appear in this response');
+    assert.ok(/بلدة/.test(body.message || ''), 'expected the empty-towns Arabic notice at the moment of promotion');
+    promotedAdminId = body.user.id;
+
+    const list = await api('GET', '/api/admin/admins', { token: superAdminToken });
+    const found = list.body.admins.find(a => a.id === promotedAdminId);
+    assert.ok(found, 'the freshly promoted admin must show up in the admins list');
+    assert.deepStrictEqual(found.towns, [], 'a freshly promoted admin owns no towns yet');
+  });
+
+  await test('Promoting an already-admin user is rejected, not silently repeated', async () => {
+    const { status } = await api('PATCH', `/api/admin/users/${promotedAdminId}/role`, {
+      token: superAdminToken, body: { role: 'admin' }
+    });
+    assert.strictEqual(status, 409);
+  });
+
+  await test('Demoting clears admin_towns in the same transaction', async () => {
+    const assign = await api('PUT', `/api/admin/admins/${promotedAdminId}/towns`, {
+      token: superAdminToken, body: { towns: [scopedTown] }
+    });
+    assert.strictEqual(assign.status, 200);
+
+    const before = await db.query('SELECT * FROM admin_towns WHERE user_id = ?', [promotedAdminId]);
+    assert.strictEqual(before.length, 1);
+
+    const demote = await api('PATCH', `/api/admin/users/${promotedAdminId}/role`, {
+      token: superAdminToken, body: { role: 'user' }
+    });
+    assert.strictEqual(demote.status, 200);
+    assert.strictEqual(demote.body.user.role, 'user');
+    assert.ok(!('pin_code' in demote.body.user), 'pin_code must never appear in this response');
+
+    const after = await db.query('SELECT * FROM admin_towns WHERE user_id = ?', [promotedAdminId]);
+    assert.strictEqual(after.length, 0, 'demotion must clear admin_towns in the same transaction, not leave dangling rows');
+  });
+
+  await test('Demoting a plain user (never an admin) is rejected', async () => {
+    const { status } = await api('PATCH', `/api/admin/users/${promotableUser.id}/role`, {
+      token: superAdminToken, body: { role: 'user' }
+    });
+    assert.strictEqual(status, 409);
+  });
+
+  await test('Self-demotion is refused', async () => {
+    const selfRow = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [config.admin.phone]);
+    const { status } = await api('PATCH', `/api/admin/users/${selfRow.id}/role`, {
+      token: superAdminToken, body: { role: 'user' }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('The last remaining super_admin cannot be demoted', async () => {
+    const totalSupers = await db.queryOne("SELECT COUNT(*) AS total FROM users WHERE role = 'super_admin'");
+    assert.strictEqual(Number(totalSupers.total), 1, 'expected exactly one super_admin at this point in the suite');
+
+    const selfRow = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [config.admin.phone]);
+
+    // Calling the service directly with an acting id different from the
+    // target is the only way to isolate this guard from the self-demotion
+    // guard above, since the platform genuinely holds only one super_admin.
+    let caught = null;
+    try {
+      await adminService.demoteToUser(selfRow.id, 0);
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught, 'expected demoteToUser to refuse demoting the sole remaining super_admin');
+    assert.strictEqual(caught.status, 400);
+  });
+
   console.log('\nVillages: village_id + town combination rules, legacy client compatibility (services-directory spec)');
 
   await test('Case 10: sending village_id together with a non-catch-all town is rejected', async () => {
@@ -2952,8 +3057,8 @@ async function run() {
     [commentsEventId, noScopeAttemptEventId, scopeInEventId, scopeOutEventId]
   );
   await db.execute(
-    'DELETE FROM users WHERE id IN (?, ?, ?)',
-    [scopedAdminId, noScopeAdminId, commentsOwnerId]
+    'DELETE FROM users WHERE id IN (?, ?, ?, ?)',
+    [scopedAdminId, noScopeAdminId, commentsOwnerId, promotedAdminId]
   );
 
   console.log('\nShareable event page (GET /e/:id, issue #44)');

@@ -828,6 +828,7 @@ async function fetchAdminUsers() {
               <th>رقم الهاتف</th>
               <th>البلدة / العشيرة</th>
               <th>الرتبة</th>
+              <th>الإجراء</th>
             </tr>
           </thead>
           <tbody>
@@ -837,7 +838,10 @@ async function fetchAdminUsers() {
                 <td><strong>${escapeHtml(u.full_name)}</strong></td>
                 <td><a href="tel:${u.phone_number}" style="color:var(--gold-main);">${u.phone_number}</a></td>
                 <td>${escapeHtml(u.clan_town || '')}</td>
-                <td><span style="color:${u.role === 'super_admin' ? 'var(--warn-yellow)' : 'var(--success-green)'}; font-weight:700;">${u.role === 'super_admin' ? '👑 سوبر أدمن' : 'مستخدم'}</span></td>
+                <td><span style="color:${u.role === 'super_admin' ? 'var(--warn-yellow)' : u.role === 'admin' ? 'var(--gold-main)' : 'var(--success-green)'}; font-weight:700;">${u.role === 'super_admin' ? '👑 سوبر أدمن' : u.role === 'admin' ? 'أدمن' : 'مستخدم'}</span></td>
+                <td>${u.role === 'user'
+                  ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handlePromoteToAdmin(${u.id})"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
+                  : ''}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -846,6 +850,28 @@ async function fetchAdminUsers() {
     }
   } catch (e) {
     console.error('Users error:', e);
+  }
+}
+
+/** ترقية مستخدم إلى أدمن — لن يرى ولا يعتمد شيئاً حتى تُسنَد له بلدة عبر تبويب "الأدمن والبلدات" (قصة 31، 36). */
+async function handlePromoteToAdmin(userId) {
+  if (!confirm('ترقية هذا المستخدم إلى أدمن؟')) return;
+  try {
+    const res = await adminFetch(`/api/admin/users/${userId}/role`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'admin' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تمت الترقية بنجاح');
+      await fetchAdminUsers();
+      await fetchAdminAdmins();
+    } else {
+      alert(data.message || 'تعذّرت الترقية');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
   }
 }
 
@@ -2534,11 +2560,38 @@ function renderAdminsList() {
           <label class="ot-check"><input type="checkbox" class="admin-town-check" data-admin-id="${a.id}" value="${escapeHtml(town)}" ${a.towns.includes(town) ? 'checked' : ''}> ${escapeHtml(town)}</label>
         `).join('')}
       </div>
-      <button type="button" class="admin-btn-primary occasion-type-new-btn" style="margin-top:14px;" onclick="handleSaveAdminTowns(${a.id})">
-        <i class="fa-solid fa-check"></i> حفظ بلدات هذا الأدمن
-      </button>
+      <div style="display:flex; gap:10px; margin-top:14px;">
+        <button type="button" class="admin-btn-primary occasion-type-new-btn" style="flex:1;" onclick="handleSaveAdminTowns(${a.id})">
+          <i class="fa-solid fa-check"></i> حفظ بلدات هذا الأدمن
+        </button>
+        <button type="button" class="btn-reject" onclick="handleDemoteAdmin(${a.id})">
+          <i class="fa-solid fa-user-slash"></i> إلغاء صلاحيات الإدارة
+        </button>
+      </div>
     </div>
   `).join('');
+}
+
+/** إلغاء صلاحيات أدمن — يعيده مستخدماً عادياً ويمحو بلداته المُسنَدة معاً (قصة 31، 36). */
+async function handleDemoteAdmin(adminId) {
+  if (!confirm('إلغاء صلاحيات الإدارة عن هذا المستخدم؟ ستُحذف بلداته المُسنَدة أيضاً.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/users/${adminId}/role`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'user' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم إلغاء صلاحيات الإدارة بنجاح');
+      await fetchAdminAdmins();
+      await fetchAdminUsers();
+    } else {
+      alert(data.message || 'تعذّر إلغاء الصلاحيات');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
 }
 
 async function handleSaveAdminTowns(adminId) {
