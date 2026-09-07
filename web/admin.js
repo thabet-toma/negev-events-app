@@ -17,6 +17,8 @@ let adminUserSearchKeyword = '';
 let myAdminTowns = [];
 let allPrivacyRequests = [];
 let allAnalyticsCounts = [];
+let analyticsEventCatalog = []; // من GET /api/privacy/notice — {key, label, count_only}، لا نسخة محلية (privacyNotice.js يملك هذه القائمة عمداً)
+let analyticsRetentionDays = null; // نفس المصدر — لا رقم ثابت بالكود
 let analyticsSelectedUserId = null;
 let analyticsSelectedUserLabel = '';
 let analyticsUserLogPage = 1;
@@ -44,24 +46,6 @@ const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
 
-// مرآة لـ ANALYTICS_EVENTS في server/src/constants.js — نفس سبب TOWNS أعلاه.
-// isFailure ليست حقلاً في الأصل؛ حدثا العطل الوحيدان بين الثمانية هما
-// publish_failed وimage_upload_failed تحديداً (تعداد صريح، لا تخمين على شكل
-// الاسم — القائمة مغلقة وصغيرة).
-const ANALYTICS_EVENTS = [
-  { key: 'share_clicked', label: 'الضغط على زرّ المشاركة', isFailure: false },
-  { key: 'app_download_clicked', label: 'الضغط على «حمّل التطبيق»', isFailure: false },
-  { key: 'publish_started', label: 'بدء نشر مناسبة', isFailure: false },
-  { key: 'publish_failed', label: 'فشل نشر مناسبة', isFailure: true },
-  { key: 'image_upload_failed', label: 'فشل رفع صورة', isFailure: true },
-  { key: 'login', label: 'تسجيل الدخول', isFailure: false },
-  { key: 'register', label: 'إنشاء حساب جديد', isFailure: false },
-  { key: 'share_page_viewed', label: 'فتح صفحة رابط مناسبة مشارَكة', isFailure: false }
-];
-
-// مرآة لـ RETENTION_DAYS في server/src/services/analytics.service.js — رقم
-// عرض فقط، لا حسابياً هنا.
-const ANALYTICS_RETENTION_DAYS = 90;
 
 // أيقونات جاهزة لحقلَي «الأيقونة» — نوع المناسبة وفئة الخدمة. الحقل في الحالتين
 // إيموجي يُرسَم كنصّ حرفي بجانب الاسم في العميلين (web/app.js و
@@ -2859,8 +2843,31 @@ async function closePrivacyRequest(id) {
 // هذا هو ما كان مفقوداً: واجهة تقرأهما.
 // ======================================================================
 
+/**
+ * الأحداث الثمانية (المفتاح والتسمية العربية) والاحتفاظ الحقيقي — من
+ * GET /api/privacy/notice، لا نسخة محلية: هذا المسار عام أصلاً ويعرض بالضبط
+ * ما تحتاجه هذه اللوحة، وprivacyNotice.js يملك القائمة عمداً كي لا تُعاد
+ * كتابتها في أي عميل (خلافاً لـTOWNS الثابتة بالكود، وهي الاستثناء لا القاعدة).
+ * ترجع true عند النجاح كي تعرف الجهة المستدعية أن الكتالوج صالح للعرض.
+ */
+async function fetchAnalyticsEventCatalog() {
+  try {
+    const res = await apiFetch('/api/privacy/notice');
+    const data = await res.json();
+    if (data.success && data.notice) {
+      analyticsEventCatalog = data.notice.events || [];
+      analyticsRetentionDays = data.notice.retention_days || null;
+      return true;
+    }
+  } catch (e) {
+    console.error('Analytics event catalog error:', e);
+  }
+  return false;
+}
+
 async function fetchAdminAnalyticsCounts() {
-  renderAnalyticsRetentionNotice();
+  const catalogOk = await fetchAnalyticsEventCatalog();
+  renderAnalyticsRetentionNotice(catalogOk);
   try {
     const res = await adminFetch('/api/admin/analytics/counts');
     const data = await res.json();
@@ -2872,7 +2879,7 @@ async function fetchAdminAnalyticsCounts() {
 
     if (data.success) {
       allAnalyticsCounts = data.counts;
-      renderAnalyticsCounts();
+      renderAnalyticsCounts(catalogOk);
     } else {
       alert(data.message || 'تعذر تحميل إحصاءات التتبّع');
     }
@@ -2893,17 +2900,54 @@ function renderAnalyticsCountsForbidden(message) {
   }
 }
 
-/** الأحداث الثمانية كلها تظهر دوماً بلقبها العربي، حتى ما لم يُسجَّل منه شيء بعد — لا فقط ما رجع من الخادم، ولا مفتاحه الإنجليزي أبداً. */
-function renderAnalyticsCounts() {
+/**
+ * حدث معروف (في كتالوج /api/privacy/notice) هو نوع "عطل" فقط من اسم مفتاحه —
+ * لا قائمة ثابتة هنا تحتاج تحديثاً كلما أُضيف حدث تاسع على الخادم، بل قاعدة
+ * تسمية (`..._failed`) تبقى صحيحة تلقائياً.
+ */
+function isFailureEventKey(key) {
+  return typeof key === 'string' && key.endsWith('_failed');
+}
+
+/**
+ * كل حدث ظهر في الكتالوج يظهر دوماً بلقبه العربي، حتى ما لم يُسجَّل منه شيء
+ * بعد (صفر لا اختفاء) — وأي event_name وصل من الخادم لكنه غائب عن الكتالوج
+ * (حدث تقاعد أو حذفه أحد من القائمة المغلقة) يظهر أيضاً بمفتاحه الخام
+ * ووسم صريح أنه غير معروف، لا يختفي بصمت: بيانات حقيقية تحت لقب صادق أفضل من
+ * عنوان اللوحة يدّعي "كل حدث" بينما يُسقط بعضها.
+ */
+function renderAnalyticsCounts(catalogOk = analyticsEventCatalog.length > 0) {
   const container = document.getElementById('analyticsCountsList');
   if (!container) return;
+
+  if (!catalogOk || !analyticsEventCatalog.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-triangle-exclamation" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>تعذّر تحميل قائمة الأحداث وتسمياتها من الخادم — أعد تحميل الصفحة أو حاول لاحقاً</p>
+      </div>
+    `;
+    return;
+  }
 
   const totalsByKey = {};
   allAnalyticsCounts.forEach(row => { totalsByKey[row.event_name] = row.total; });
 
-  const rows = ANALYTICS_EVENTS
-    .map(event => ({ ...event, total: totalsByKey[event.key] || 0 }))
-    .sort((a, b) => b.total - a.total);
+  const allKeys = new Set([
+    ...analyticsEventCatalog.map(e => e.key),
+    ...allAnalyticsCounts.map(row => row.event_name)
+  ]);
+
+  const rows = Array.from(allKeys).map(key => {
+    const catalogEntry = analyticsEventCatalog.find(e => e.key === key);
+    return {
+      key,
+      label: catalogEntry ? catalogEntry.label : key,
+      retired: !catalogEntry,
+      isFailure: isFailureEventKey(key),
+      total: totalsByKey[key] || 0
+    };
+  }).sort((a, b) => b.total - a.total);
 
   container.innerHTML = `
     <table class="admin-table">
@@ -2918,6 +2962,7 @@ function renderAnalyticsCounts() {
           <tr>
             <td>
               ${escapeHtml(r.label)}
+              ${r.retired ? '<span class="status-tag pending" style="margin-inline-start:8px;"><i class="fa-solid fa-clock-rotate-left"></i> حدث غير معروف/متقاعد</span>' : ''}
               ${r.isFailure ? '<span class="status-tag rejected" style="margin-inline-start:8px;"><i class="fa-solid fa-triangle-exclamation"></i> عطل</span>' : ''}
             </td>
             <td>${r.total}</td>
@@ -2929,12 +2974,21 @@ function renderAnalyticsCounts() {
 }
 
 /** طوي الاحتفاظ (analytics-retention.js) يحذف الصفوف الأصلية بعد نقلها لعدّاد — سجل مستخدم قصير هنا متوقَّع، لا عطل. */
-function renderAnalyticsRetentionNotice() {
+function renderAnalyticsRetentionNotice(catalogOk = analyticsRetentionDays !== null) {
   const el = document.getElementById('analyticsRetentionNotice');
   if (!el) return;
+
+  if (!catalogOk || !analyticsRetentionDays) {
+    el.innerHTML = `
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <span>تعذّر تحميل مدة الاحتفاظ الحقيقية من الخادم — أعد تحميل الصفحة قبل الاعتماد على أي رقم هنا</span>
+    `;
+    return;
+  }
+
   el.innerHTML = `
     <i class="fa-solid fa-circle-info"></i>
-    <span>جدول العدّادات أعلاه يشمل كل التاريخ المسجَّل، حتى ما طُوي منه بعد ${ANALYTICS_RETENTION_DAYS} يوماً في عدّاد يومي مجهول الهوية. أما سجل مستخدم بعينه أسفل هذا فيعرض فقط آخر ${ANALYTICS_RETENTION_DAYS} يوماً — الصفوف الأقدم حُذفت فعلاً بعد طيّها في العدّاد، فسجل قصير أو فارغ هنا ليس عطلاً بالضرورة.</span>
+    <span>جدول العدّادات أعلاه يشمل كل التاريخ المسجَّل، حتى ما طُوي منه بعد ${analyticsRetentionDays} يوماً في عدّاد يومي مجهول الهوية. أما سجل مستخدم بعينه أسفل هذا فيعرض فقط آخر ${analyticsRetentionDays} يوماً — الصفوف الأقدم حُذفت فعلاً بعد طيّها في العدّاد، فسجل قصير أو فارغ هنا ليس عطلاً بالضرورة.</span>
   `;
 }
 
@@ -2951,6 +3005,10 @@ function viewUserAnalytics(userId) {
 async function fetchAnalyticsUserLog(page = analyticsUserLogPage) {
   if (!analyticsSelectedUserId) return;
   analyticsUserLogPage = page;
+  // الكتالوج (تسميات الأحداث) قد يكون تحمَّل فعلاً من تبويب العدّادات — لا يُعاد
+  // جلبه إن كان جاهزاً، لكن من يفتح سجل مستخدم أولاً بلا زيارة تبويب العدّادات
+  // يحتاجه هنا أيضاً.
+  if (!analyticsEventCatalog.length) await fetchAnalyticsEventCatalog();
   try {
     const res = await adminFetch(`/api/admin/analytics/users/${analyticsSelectedUserId}?page=${page}`);
     const data = await res.json();
@@ -2991,10 +3049,10 @@ function renderAnalyticsUserLogHeader() {
   el.innerHTML = `<p style="color:var(--text-main); font-weight:700; margin-bottom:14px;"><i class="fa-solid fa-user"></i> ${escapeHtml(analyticsSelectedUserLabel)}</p>`;
 }
 
-/** الأحداث المدفوعة من الخادم بمفتاحها الإنجليزي؛ الترجمة للقب العربي هنا فقط، ونفس مصدر جدول العدّادات (ANALYTICS_EVENTS). */
+/** الأحداث المدفوعة من الخادم بمفتاحها الإنجليزي؛ الترجمة للقب العربي من نفس كتالوج جدول العدّادات (analyticsEventCatalog) — حدث غائب عن الكتالوج يظهر بمفتاحه مع وسم صريح، لا صامتاً. */
 function analyticsEventLabel(key) {
-  const found = ANALYTICS_EVENTS.find(e => e.key === key);
-  return found ? found.label : key;
+  const found = analyticsEventCatalog.find(e => e.key === key);
+  return found ? found.label : `${key} (حدث غير معروف/متقاعد)`;
 }
 
 function renderAnalyticsUserLog(events, pagination) {
@@ -3005,7 +3063,7 @@ function renderAnalyticsUserLog(events, pagination) {
     container.innerHTML = `
       <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
         <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
-        <p>لا سجل لهذا المستخدم ضمن آخر ${ANALYTICS_RETENTION_DAYS} يوماً — قد يكون سجلّه أقدم من ذلك وطُوي في العدّادات، لا عطلاً بالضرورة</p>
+        <p>لا سجل لهذا المستخدم ضمن نافذة الاحتفاظ الحالية${analyticsRetentionDays ? ` (آخر ${analyticsRetentionDays} يوماً)` : ''} — قد يكون سجلّه أقدم من ذلك وطُوي في العدّادات، لا عطلاً بالضرورة</p>
       </div>
     `;
   } else {

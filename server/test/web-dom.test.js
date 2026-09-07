@@ -29,7 +29,19 @@ const { ringBeads, HUB, GROUND, MARK, buildMarkParts, partsToSvgPaths } = requir
 // Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
 // server and this fixture must not become a second copy of them (CLAUDE.md,
 // "البلدات ثابتة بالكود ومكرَّرة في العميلين ... نسخها ... يعيد المشكلة").
-const { TOWNS, TOWN_COORDINATES } = require('../src/constants');
+const { TOWNS, TOWN_COORDINATES, ANALYTICS_EVENTS } = require('../src/constants');
+
+// The analytics tab fetches its event catalogue and retention window from the
+// real GET /api/privacy/notice (privacyNotice.js), not a copy in web/admin.js
+// — so the mocked response here is built from the SAME live constants that
+// endpoint reads, not a hand-typed literal. If RETENTION_DAYS ever changes,
+// this fixture changes with it, which is the whole point of the assertion
+// below that reads it back through the UI.
+const { RETENTION_DAYS } = require('../src/services/analytics.service');
+const PRIVACY_NOTICE_FIXTURE = {
+  retention_days: RETENTION_DAYS,
+  events: ANALYTICS_EVENTS.map(e => ({ key: e.key, label: e.label, count_only: e.countOnly }))
+};
 
 let passed = 0;
 let failed = 0;
@@ -233,6 +245,9 @@ function buildFetchStub() {
     }
     if (requestPath === '/api/admin/users') {
       return jsonResponse({ success: true, users: ADMIN_USERS_FIXTURE });
+    }
+    if (requestPath === '/api/privacy/notice') {
+      return jsonResponse({ success: true, notice: PRIVACY_NOTICE_FIXTURE });
     }
     if (requestPath === '/api/admin/analytics/counts') {
       return jsonResponse({ success: true, counts: ANALYTICS_COUNTS_FIXTURE });
@@ -1342,22 +1357,93 @@ async function run() {
     assert.strictEqual(failureBadges.length, 2, 'expected exactly publish_failed and image_upload_failed to carry the failure badge');
   });
 
-  await test('every one of the eight known events renders, even one with zero recorded occurrences so far', async () => {
+  await test('every known event renders as its own row, and one with zero recorded occurrences renders as 0, not blank or omitted', async () => {
     const dom = buildAdminEnv();
     await dom.window.fetchAdminAnalyticsCounts();
 
-    // register never appears in ANALYTICS_COUNTS_FIXTURE — an admin reading
-    // this panel must still see it listed, at zero, not silently dropped.
-    const text = dom.window.document.getElementById('analyticsCountsList').textContent;
-    assert.ok(text.includes('إنشاء حساب جديد'), 'expected the Arabic label for register even though it has no rows in the fixture');
+    const { document } = dom.window;
+    const rows = document.querySelectorAll('#analyticsCountsList tbody tr');
+    assert.strictEqual(rows.length, ANALYTICS_EVENTS.length, `expected one row per known event (${ANALYTICS_EVENTS.length}), got ${rows.length}`);
+
+    // register never appears in ANALYTICS_COUNTS_FIXTURE — it must still
+    // render, explicitly at 0, not silently dropped from the table.
+    const registerRow = Array.from(rows).find(r => r.textContent.includes('إنشاء حساب جديد'));
+    assert.ok(registerRow, 'expected a row for register even though it has no rows in the fixture');
+    assert.strictEqual(
+      registerRow.querySelector('td:last-child').textContent.trim(),
+      '0',
+      'a never-recorded event must render its total as 0, not blank or omitted'
+    );
   });
 
-  await test('the retention notice states the real 90-day window, not a made-up number', async () => {
+  /**
+   * FIX 5 (review round 2): an `event_name` the counts endpoint actually has
+   * rows for, but which is absent from the catalog (GET /api/privacy/notice —
+   * a retired or otherwise unknown key — must still render: with its raw key
+   * (there is no Arabic label to show instead) and an explicit "unknown"
+   * marker, never silently dropped just because it has no catalog entry. A
+   * pane header claiming "every event recorded on the platform" would be a
+   * lie for real recorded data that a refactor quietly stopped drawing.
+   *
+   * Given its own stubbed counts response rather than editing
+   * ANALYTICS_COUNTS_FIXTURE, so it does not disturb the "one row per known
+   * event" count the test above asserts.
+   */
+  await test('a retired/unknown event_name the server still has real rows for renders with its raw key and an Arabic "unknown" marker, instead of vanishing', async () => {
+    const dom = buildAdminEnv();
+
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/privacy/notice') {
+        return jsonResponse({ success: true, notice: PRIVACY_NOTICE_FIXTURE });
+      }
+      if (requestPath === '/api/admin/analytics/counts') {
+        return jsonResponse({
+          success: true,
+          counts: [{ event_name: 'story_uploaded_legacy', total: 7 }]
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    await dom.window.fetchAdminAnalyticsCounts();
+
+    const { document } = dom.window;
+    const rows = document.querySelectorAll('#analyticsCountsList tbody tr');
+    assert.strictEqual(
+      rows.length,
+      ANALYTICS_EVENTS.length + 1,
+      'expected the eight known events PLUS one extra row for the retired key — a dropped row means rows.length stayed at 8'
+    );
+
+    const retiredRow = Array.from(rows).find(r => r.textContent.includes('story_uploaded_legacy'));
+    assert.ok(retiredRow, 'the retired key\'s row must render its raw key text — it has no Arabic label to show instead');
+    assert.strictEqual(
+      retiredRow.querySelector('td:last-child').textContent.trim(),
+      '7',
+      'the retired key\'s real recorded total must still show, not be hidden along with the row'
+    );
+    assert.ok(
+      retiredRow.textContent.includes('غير معروف') || retiredRow.textContent.includes('متقاعد'),
+      'expected an explicit Arabic marker that this key is unknown/retired, not a bare raw key with no explanation'
+    );
+  });
+
+  /**
+   * The notice's number must come from the same live value the endpoint
+   * itself reads (server/src/services/analytics.service.js RETENTION_DAYS),
+   * not two independent literals (one in the mock, one in the UI) that could
+   * both go stale together without this test ever noticing.
+   */
+  await test('the retention notice states the real retention window read from analytics.service.js, not an independent literal', async () => {
     const dom = buildAdminEnv();
     await dom.window.fetchAdminAnalyticsCounts();
 
     const noticeText = dom.window.document.getElementById('analyticsRetentionNotice').textContent;
-    assert.ok(noticeText.includes('90'), `expected the real retention window from analytics.service.js, got: "${noticeText}"`);
+    assert.ok(
+      noticeText.includes(String(RETENTION_DAYS)),
+      `expected the real retention window (${RETENTION_DAYS}) sourced from analytics.service.js, got: "${noticeText}"`
+    );
   });
 
   await test('a 403 on the counts endpoint (a non-super-admin somehow landing here) renders the server\'s Arabic message, not a blank panel or a thrown error', async () => {
@@ -1393,6 +1479,54 @@ async function run() {
     assert.ok(rows[0].textContent.includes('تسجيل الدخول'), 'expected the Arabic label for login');
     assert.ok(rows[1].textContent.includes('فشل نشر مناسبة'), 'expected the Arabic label for publish_failed');
     assert.ok(!document.getElementById('analyticsUserLog').textContent.includes('publish_failed'), 'the raw English key must never reach the screen');
+  });
+
+  /**
+   * ANALYTICS_USER_LOG_FIXTURE (used everywhere else in this suite) has
+   * totalPages: 1, so no other test ever renders the prev/next controls or
+   * exercises a page change. This one forces a two-page result and checks
+   * that "next" actually requests page 2 from the server, not just that the
+   * button exists.
+   */
+  await test('a multi-page user log renders prev/next controls, and clicking "next" requests page=2', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminUsers();
+
+    const requestedPaths = [];
+    dom.window.fetch = async url => {
+      const requestPath = String(url);
+      requestedPaths.push(requestPath);
+      if (requestPath === '/api/privacy/notice') {
+        return jsonResponse({ success: true, notice: PRIVACY_NOTICE_FIXTURE });
+      }
+      if (requestPath.startsWith('/api/admin/analytics/users/')) {
+        const page = requestPath.includes('page=2') ? 2 : 1;
+        return jsonResponse({
+          success: true,
+          user_id: 501,
+          events: [{ event_name: 'login', platform: 'web', app_version: null, content_town: null, created_at: '2026-09-01T10:00:00.000Z' }],
+          pagination: { page, limit: 1, total: 2, totalPages: 2 }
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    dom.window.viewUserAnalytics(501);
+    await waitFor(() => dom.window.document.querySelectorAll('#analyticsUserLogPagination button').length > 0);
+    assertNoUnhandledRejections('user log pagination (page 1)');
+
+    const { document } = dom.window;
+    const pageButtons = document.querySelectorAll('#analyticsUserLogPagination button');
+    assert.strictEqual(pageButtons.length, 2, 'expected both a previous and a next control on a two-page log');
+    assert.ok(document.getElementById('analyticsUserLogPagination').textContent.includes('1'), 'expected the current page number in the pagination label');
+
+    const previousRequestCount = requestedPaths.length;
+    const nextButton = pageButtons[1];
+    nextButton.click();
+
+    await waitFor(() => requestedPaths.length > previousRequestCount && requestedPaths.some(p => p.includes('page=2')));
+    assertNoUnhandledRejections('user log pagination (page 2)');
+    assert.ok(requestedPaths.some(p => p.includes('page=2')), 'clicking "next" must request page 2 from the server');
   });
 
   console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');
