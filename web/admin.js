@@ -12,6 +12,8 @@ let editingVillageId = null;
 let allServiceCategories = [];
 let editingServiceCategoryId = null;
 let allAdminsWithTowns = [];
+let allAdminUsers = [];
+let adminUserSearchKeyword = '';
 let myAdminTowns = [];
 let allPrivacyRequests = [];
 
@@ -818,57 +820,80 @@ async function fetchAdminUsers() {
     const data = await res.json();
 
     if (data.success) {
-      const container = document.getElementById('adminUsersList');
-      container.innerHTML = `
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>الاسم الكامل</th>
-              <th>رقم الهاتف</th>
-              <th>البلدة / العشيرة</th>
-              <th>الرتبة</th>
-              <th>الإجراء</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${data.users.map(u => `
-              <tr>
-                <td>${u.id}</td>
-                <td><strong>${escapeHtml(u.full_name)}</strong></td>
-                <td><a href="tel:${u.phone_number}" style="color:var(--gold-main);">${u.phone_number}</a></td>
-                <td>${escapeHtml(u.clan_town || '')}</td>
-                <td><span style="color:${u.role === 'super_admin' ? 'var(--warn-yellow)' : u.role === 'admin' ? 'var(--gold-main)' : 'var(--success-green)'}; font-weight:700;">${u.role === 'super_admin' ? '👑 سوبر أدمن' : u.role === 'admin' ? 'أدمن' : 'مستخدم'}</span></td>
-                <td>${u.role === 'user'
-                  ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handlePromoteToAdmin(${u.id})"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
-                  : ''}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
+      allAdminUsers = data.users;
+      renderAdminUsersList();
     }
   } catch (e) {
     console.error('Users error:', e);
   }
 }
 
-/** ترقية مستخدم إلى أدمن — لن يرى ولا يعتمد شيئاً حتى تُسنَد له بلدة عبر تبويب "الأدمن والبلدات" (قصة 31، 36). */
-async function handlePromoteToAdmin(userId) {
-  if (!confirm('ترقية هذا المستخدم إلى أدمن؟')) return;
+/** فلترة برقم الهاتف أو الاسم فوق القائمة المجلوبة أصلاً — لا نداء خادم جديد (قصة #83). */
+function handleAdminUserSearch() {
+  adminUserSearchKeyword = document.getElementById('adminUserSearch').value.trim();
+  renderAdminUsersList();
+}
+
+function renderAdminUsersList() {
+  const container = document.getElementById('adminUsersList');
+  if (!container) return;
+
+  const keyword = adminUserSearchKeyword.trim();
+  const users = keyword
+    ? allAdminUsers.filter(u => u.phone_number.includes(keyword) || u.full_name.includes(keyword))
+    : allAdminUsers;
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>الاسم الكامل</th>
+          <th>رقم الهاتف</th>
+          <th>البلدة / العشيرة</th>
+          <th>الرتبة</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${users.map(u => `
+          <tr>
+            <td>${u.id}</td>
+            <td><strong>${escapeHtml(u.full_name)}</strong></td>
+            <td><a href="tel:${u.phone_number}" style="color:var(--gold-main);">${u.phone_number}</a></td>
+            <td>${escapeHtml(u.clan_town || '')}</td>
+            <td><span style="color:${u.role === 'super_admin' ? 'var(--warn-yellow)' : u.role === 'admin' ? 'var(--gold-main)' : 'var(--success-green)'}; font-weight:700;">${u.role === 'super_admin' ? '👑 سوبر أدمن' : u.role === 'admin' ? 'أدمن' : 'مستخدم'}</span></td>
+            <td>${u.role === 'user'
+              ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handleChangeUserRole(${u.id}, 'admin', 'ترقية هذا المستخدم إلى أدمن؟')"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
+              : ''}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/**
+ * ترقية مستخدم إلى أدمن أو إلغاء صلاحيات أدمن — نداء واحد لـ
+ * PATCH /admin/users/:id/role يشترك فيه الاتجاهان، يفترقان فقط بالرتبة
+ * الهدف ونص التأكيد (قصة 31، 36). ترقية جديدة لن تُرى ولا تُعتمَد حتى تُسنَد
+ * لها بلدة عبر تبويب "الأدمن والبلدات".
+ */
+async function handleChangeUserRole(userId, role, confirmText) {
+  if (!confirm(confirmText)) return;
   try {
     const res = await adminFetch(`/api/admin/users/${userId}/role`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'admin' })
+      body: JSON.stringify({ role })
     });
     const data = await res.json();
     if (data.success) {
-      alert(data.message || 'تمت الترقية بنجاح');
+      alert(data.message || (role === 'admin' ? 'تمت الترقية بنجاح' : 'تم إلغاء صلاحيات الإدارة بنجاح'));
       await fetchAdminUsers();
       await fetchAdminAdmins();
     } else {
-      alert(data.message || 'تعذّرت الترقية');
+      alert(data.message || (role === 'admin' ? 'تعذّرت الترقية' : 'تعذّر إلغاء الصلاحيات'));
     }
   } catch (e) {
     alert('تعذر الاتصال بالخادم');
@@ -2564,34 +2589,12 @@ function renderAdminsList() {
         <button type="button" class="admin-btn-primary occasion-type-new-btn" style="flex:1;" onclick="handleSaveAdminTowns(${a.id})">
           <i class="fa-solid fa-check"></i> حفظ بلدات هذا الأدمن
         </button>
-        <button type="button" class="btn-reject" onclick="handleDemoteAdmin(${a.id})">
+        <button type="button" class="btn-reject" onclick="handleChangeUserRole(${a.id}, 'user', 'إلغاء صلاحيات الإدارة عن هذا المستخدم؟ ستُحذف بلداته المُسنَدة أيضاً.')">
           <i class="fa-solid fa-user-slash"></i> إلغاء صلاحيات الإدارة
         </button>
       </div>
     </div>
   `).join('');
-}
-
-/** إلغاء صلاحيات أدمن — يعيده مستخدماً عادياً ويمحو بلداته المُسنَدة معاً (قصة 31، 36). */
-async function handleDemoteAdmin(adminId) {
-  if (!confirm('إلغاء صلاحيات الإدارة عن هذا المستخدم؟ ستُحذف بلداته المُسنَدة أيضاً.')) return;
-  try {
-    const res = await adminFetch(`/api/admin/users/${adminId}/role`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user' })
-    });
-    const data = await res.json();
-    if (data.success) {
-      alert(data.message || 'تم إلغاء صلاحيات الإدارة بنجاح');
-      await fetchAdminAdmins();
-      await fetchAdminUsers();
-    } else {
-      alert(data.message || 'تعذّر إلغاء الصلاحيات');
-    }
-  } catch (e) {
-    alert('تعذر الاتصال بالخادم');
-  }
 }
 
 async function handleSaveAdminTowns(adminId) {

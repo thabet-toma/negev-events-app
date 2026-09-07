@@ -25,6 +25,7 @@ const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_E
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
+const logger = require('../src/utils/logger');
 const shareCard = require('../src/services/shareCard.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
@@ -2841,6 +2842,38 @@ async function run() {
     }
     assert.ok(caught, 'expected demoteToUser to refuse demoting the sole remaining super_admin');
     assert.strictEqual(caught.status, 400);
+  });
+
+  await test('admin.demote is logged only for a successful commit, never for a rejected attempt', async () => {
+    const logCalls = [];
+    const originalInfo = logger.info;
+    logger.info = (...args) => { logCalls.push(args); };
+    try {
+      // promotedAdminId is a plain 'user' at this point (demoted earlier in
+      // this section), so this rejects before any write ever happens — the
+      // exact shape of a rolled-back attempt. It must never be logged.
+      let caught = null;
+      try {
+        await adminService.demoteToUser(promotedAdminId, 0);
+      } catch (err) {
+        caught = err;
+      }
+      assert.ok(caught, 'expected the rejected demote to throw');
+      assert.ok(
+        !logCalls.some(args => args[0] === 'admin.demote'),
+        'a rejected/rolled-back attempt must never be logged as a demotion'
+      );
+
+      // Now a real commit: promote, then demote the same user again — this
+      // time the log must fire, exactly once, only after it actually happened.
+      await adminService.promoteToAdmin(promotedAdminId, 0);
+      logCalls.length = 0;
+      await adminService.demoteToUser(promotedAdminId, 0);
+      const demoteLogs = logCalls.filter(args => args[0] === 'admin.demote');
+      assert.strictEqual(demoteLogs.length, 1, 'a successful demotion must be logged exactly once');
+    } finally {
+      logger.info = originalInfo;
+    }
   });
 
   console.log('\nVillages: village_id + town combination rules, legacy client compatibility (services-directory spec)');

@@ -178,6 +178,12 @@ const ADMIN_EVENT_FIXTURE = {
   poster_url: 'https://example.test/uploads/poster.jpg'
 };
 
+/** Two platform users — enough to exercise the phone/name search filter (issue #83). */
+const ADMIN_USERS_FIXTURE = [
+  { id: 501, phone_number: '0501112223', full_name: 'أحمد المستخدم', clan_town: 'رهط', role: 'user', created_at: '2026-01-01' },
+  { id: 502, phone_number: '0509998887', full_name: 'سارة الإدارية', clan_town: 'حورة', role: 'admin', created_at: '2026-01-02' }
+];
+
 function jsonResponse(body, { status = 200 } = {}) {
   return {
     ok: status >= 200 && status < 300,
@@ -207,6 +213,9 @@ function buildFetchStub() {
     if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [] });
     if (requestPath === '/api/admin/events') {
       return jsonResponse({ success: true, events: [ADMIN_EVENT_FIXTURE] });
+    }
+    if (requestPath === '/api/admin/users') {
+      return jsonResponse({ success: true, users: ADMIN_USERS_FIXTURE });
     }
     return jsonResponse({ success: false });
   };
@@ -1112,6 +1121,37 @@ async function run() {
     );
   });
 
+
+  console.log('\nAdmin panel — searching for a user by phone number or name (issue #83)');
+
+  /**
+   * Issue #83 criterion 1: a super admin «يبحث عن مستخدم برقمه» before
+   * promoting them. The list itself already came from GET /api/admin/users —
+   * this filters over that already-fetched array, client-side, with no new
+   * request per keystroke.
+   */
+  await test('the users tab filters by phone number and by name, over the already-fetched list', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminUsers();
+
+    const { document } = dom.window;
+    const rowCount = () => document.querySelectorAll('#adminUsersList tbody tr').length;
+    assert.strictEqual(rowCount(), ADMIN_USERS_FIXTURE.length, 'expected every fetched user to render with no filter applied');
+
+    document.getElementById('adminUserSearch').value = '0509998887';
+    dom.window.handleAdminUserSearch();
+    assert.strictEqual(rowCount(), 1, 'expected the phone-number filter to narrow to exactly one row');
+    assert.ok(document.getElementById('adminUsersList').textContent.includes('سارة الإدارية'));
+
+    document.getElementById('adminUserSearch').value = 'أحمد';
+    dom.window.handleAdminUserSearch();
+    assert.strictEqual(rowCount(), 1, 'expected the name filter to narrow to exactly one row');
+    assert.ok(document.getElementById('adminUsersList').textContent.includes('0501112223'));
+
+    document.getElementById('adminUserSearch').value = '';
+    dom.window.handleAdminUserSearch();
+    assert.strictEqual(rowCount(), ADMIN_USERS_FIXTURE.length, 'clearing the search must restore the full list');
+  });
 
   console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');
 

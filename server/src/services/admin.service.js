@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 const adminScope = require('./adminScope.service');
+const auth = require('./auth.service');
 
 /**
  * Headline counters for the admin dashboard, scoped to `user`'s towns
@@ -299,21 +300,33 @@ async function setAdminTowns(adminUserId, towns) {
  * another one through this path (it can only ever be created by `seed.js`).
  * The new admin owns no towns yet, so it sees and approves nothing until a
  * super_admin runs `setAdminTowns` — the route layer is responsible for
- * saying so to whoever just clicked promote.
+ * saying so to whoever just clicked promote. Read-then-write on the target
+ * row happens under `FOR UPDATE` inside a transaction — the same shape as
+ * `demoteToUser` below — so a concurrent promote/demote on the same user
+ * cannot interleave between the role check and the write.
  */
 async function promoteToAdmin(userId, promotedBy) {
-  const user = await db.queryOne('SELECT id, role FROM users WHERE id = ?', [userId]);
-  if (!user) throw ApiError.notFound('المستخدم غير موجود');
-  if (user.role === 'super_admin') throw ApiError.badRequest('لا يمكن تعديل صلاحيات المدير العام');
-  if (user.role === 'admin') throw ApiError.conflict('هذا المستخدم أدمن بالفعل');
+  const user = await db.transaction(async connection => {
+    const [userRows] = await connection.execute('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [userId]);
+    const row = userRows[0];
+    if (!row) throw ApiError.notFound('المستخدم غير موجود');
+    if (row.role === 'super_admin') throw ApiError.badRequest('لا يمكن تعديل صلاحيات المدير العام');
+    if (row.role === 'admin') throw ApiError.conflict('هذا المستخدم أدمن بالفعل');
 
-  await db.execute("UPDATE users SET role = 'admin' WHERE id = ?", [userId]);
+    await connection.execute("UPDATE users SET role = 'admin' WHERE id = ?", [userId]);
+
+    const [rows] = await connection.execute(
+      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out FROM users WHERE id = ?',
+      [userId]
+    );
+    return rows[0];
+  });
+
+  // Logged only after the transaction actually commits — a log written
+  // inside the transaction would still say "promoted" even if the commit
+  // itself later failed.
   logger.info('admin.promote', { userId, promotedBy });
-
-  return db.queryOne(
-    'SELECT id, phone_number, full_name, clan_town, role, created_at FROM users WHERE id = ?',
-    [userId]
-  );
+  return auth.publicUser(user);
 }
 
 /**
@@ -323,34 +336,45 @@ async function promoteToAdmin(userId, promotedBy) {
  * re-promotes that same user. Refuses self-demotion and refuses to demote
  * the last remaining `super_admin`, either of which would leave the panel
  * without an owner.
+ *
+ * The last-remaining-super_admin guard locks the whole `super_admin` SET
+ * (`SELECT id ... WHERE role = 'super_admin' FOR UPDATE`) before locking the
+ * target row, not a plain `COUNT(*)` — a `COUNT(*)` is a non-locking
+ * snapshot read, so two super_admins demoting each other at the same moment
+ * would each lock a different single row, each read "2 remain" from their
+ * own snapshot, and both would commit, leaving zero. Because every call
+ * takes this identical `FOR UPDATE` query first, the second transaction
+ * to reach it blocks until the first commits or rolls back, then re-reads
+ * the now-current (locked) row set and refuses if only one is left.
  */
 async function demoteToUser(userId, actingUserId) {
   if (userId === actingUserId) throw ApiError.badRequest('لا يمكنك إلغاء صلاحياتك عن نفسك');
 
-  return db.transaction(async connection => {
-    const [userRows] = await connection.execute('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [userId]);
-    const user = userRows[0];
-    if (!user) throw ApiError.notFound('المستخدم غير موجود');
-    if (user.role === 'user') throw ApiError.conflict('هذا المستخدم ليس إدارياً أصلاً');
+  const { user, priorRole } = await db.transaction(async connection => {
+    const [superAdminRows] = await connection.execute("SELECT id FROM users WHERE role = 'super_admin' FOR UPDATE");
 
-    if (user.role === 'super_admin') {
-      const [countRows] = await connection.execute("SELECT COUNT(*) AS total FROM users WHERE role = 'super_admin'");
-      if (Number(countRows[0].total) <= 1) {
-        throw ApiError.badRequest('لا يمكن إلغاء صلاحيات آخر مدير عام في المنصة');
-      }
+    const [userRows] = await connection.execute('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [userId]);
+    const targetUser = userRows[0];
+    if (!targetUser) throw ApiError.notFound('المستخدم غير موجود');
+    if (targetUser.role === 'user') throw ApiError.conflict('هذا المستخدم ليس إدارياً أصلاً');
+
+    if (targetUser.role === 'super_admin' && superAdminRows.length <= 1) {
+      throw ApiError.badRequest('لا يمكن إلغاء صلاحيات آخر مدير عام في المنصة');
     }
 
     await connection.execute("UPDATE users SET role = 'user' WHERE id = ?", [userId]);
     await connection.execute('DELETE FROM admin_towns WHERE user_id = ?', [userId]);
 
-    logger.info('admin.demote', { userId, demotedBy: actingUserId, priorRole: user.role });
-
     const [rows] = await connection.execute(
-      'SELECT id, phone_number, full_name, clan_town, role, created_at FROM users WHERE id = ?',
+      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out FROM users WHERE id = ?',
       [userId]
     );
-    return rows[0];
+    return { user: rows[0], priorRole: targetUser.role };
   });
+
+  // Logged only after the transaction actually commits — see promoteToAdmin.
+  logger.info('admin.demote', { userId, demotedBy: actingUserId, priorRole });
+  return auth.publicUser(user);
 }
 
 module.exports = {

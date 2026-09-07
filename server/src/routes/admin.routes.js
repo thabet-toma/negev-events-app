@@ -134,9 +134,12 @@ router.get('/admin/users', requireSuperAdmin, asyncHandler(async (req, res) => {
  * `admin` caller (who already cleared the router's own `requireAdmin` above)
  * gets 404, not 403 — same reasoning as `adminScope.service.js`, this
  * project never confirms the existence of a capability the caller does not
- * own.
+ * own. `requireAdmin` is attached here too, redundant with line 29's
+ * router-wide `router.use('/admin', requireAdmin)` today, but it means this
+ * route still rejects cleanly instead of throwing on `req.user` being
+ * undefined if that line ever moves or this route is ever relocated.
  */
-router.patch('/admin/users/:id/role', asyncHandler(async (req, res) => {
+router.patch('/admin/users/:id/role', requireAdmin, asyncHandler(async (req, res) => {
   if (req.user.role !== 'super_admin') {
     throw ApiError.notFound('المستخدم غير موجود');
   }
