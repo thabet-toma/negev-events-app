@@ -21,8 +21,6 @@ let allPrivacyRequests = [];
 // لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
 let editingEventId = null;
 let editingEventOriginal = null; // القيم الأصلية للمقارنة عند الحفظ — إرسال الفرق فقط (قيد ٤)
-let eventLocationMap = null;    // خريطة اختيار الموقع في نموذج التعديل — تُبنى مرّة وتُعاد استخدامها
-let eventLocationMarker = null;
 let allTownVillages = []; // من GET /api/towns، لا GET /api/admin/villages (قيد ٣ — الأخير 403 لأدمن محلي)
 let townVillagesFetchAttempted = false;
 
@@ -1657,23 +1655,24 @@ function closeEventEditForm() {
  * كنص "YYYY-MM-DD" مباشرة، وvillage_id يُطبَّع null/'' معاً لتفادي فرق زائف.
  */
 /**
- * خريطة اختيار موقع المناسبة داخل نموذج التعديل.
- *
- * الحقلان `evtLat` و `evtLng` بقيا كما هما — هما ما يُقارَن ويُرسَل — لكنهما صارا
- * مخفيَّين والخريطة هي من يكتب فيهما: كتابة خط طول وعرض بخط اليد كانت الشكوى
- * الأصلية، وهي أيضاً أسهل طريقة لوضع دبّوس مناسبة في مكان خاطئ.
+ * منتقي موقع على خريطة Leaflet — نموذج تعديل المناسبة (evtLat/evtLng) ونموذج
+ * القرية (vilLat/vilLng) يشتركان في هذا المنطق حرفياً، فرق فقط في الحاوية
+ * والحقول؛ لذلك عاش هنا مرّة واحدة بدل نسخة لكل نموذج. الحالة (خريطة + دبّوس)
+ * مفتاحة باسم حاوية كل نموذج في `locationPickers`، لا في متغيّر واحد، لأن
+ * النموذجين قد يبقيان في الصفحة معاً (تبويبان مختلفان، DOM واحد).
  *
  * نسخة مستقلة عن مُنتقي web/app.js عن قصد: الصفحتان لا تتشاركان وحدة (نفس سبب
  * مرآة TOWNS أعلاه)، وسحب مُنتقي النشر إلى ملف ثالث يعني تعديل شاشة نشر تعمل
  * اليوم — تغيير أوسع من هذا الإصلاح.
  */
 const NEGEV_MAP_CENTER = [31.2858, 34.8431];
+const locationPickers = {}; // containerId -> { map, marker }
 
-/** يكتب الإحداثيات في الحقلين المخفيَّين ويحدّث السطر الظاهر تحت الخريطة. */
-function setEventCoords(lat, lng) {
-  const latInput = document.getElementById('evtLat');
-  const lngInput = document.getElementById('evtLng');
-  const label = document.getElementById('evtCoordsLabel');
+/** يكتب الإحداثيات في الحقلين ويحدّث السطر الظاهر تحت الخريطة إن وُجد. */
+function setPickedCoords(latInputId, lngInputId, labelId, lat, lng) {
+  const latInput = document.getElementById(latInputId);
+  const lngInput = document.getElementById(lngInputId);
+  const label = labelId ? document.getElementById(labelId) : null;
   if (!latInput || !lngInput) return;
 
   if (lat == null || lng == null || lat === '' || lng === '') {
@@ -1689,31 +1688,31 @@ function setEventCoords(lat, lng) {
 }
 
 /** يضع الدبّوس (أو ينقله) ويُبقي الحقلين متزامنَين معه. */
-function placeEventMarker(lat, lng) {
-  if (!eventLocationMap) return;
-  if (eventLocationMarker) {
-    eventLocationMarker.setLatLng([lat, lng]);
+function placeLocationMarker(containerId, latInputId, lngInputId, labelId, lat, lng) {
+  const picker = locationPickers[containerId];
+  if (!picker || !picker.map) return;
+  if (picker.marker) {
+    picker.marker.setLatLng([lat, lng]);
   } else {
-    eventLocationMarker = L.marker([lat, lng], { draggable: true }).addTo(eventLocationMap);
-    eventLocationMarker.on('dragend', () => {
-      const pos = eventLocationMarker.getLatLng();
-      setEventCoords(pos.lat, pos.lng);
+    picker.marker = L.marker([lat, lng], { draggable: true }).addTo(picker.map);
+    picker.marker.on('dragend', () => {
+      const pos = picker.marker.getLatLng();
+      setPickedCoords(latInputId, lngInputId, labelId, pos.lat, pos.lng);
     });
   }
-  setEventCoords(lat, lng);
+  setPickedCoords(latInputId, lngInputId, labelId, lat, lng);
 }
 
-/** يمسح التحديد — مناسبة بلا إحداثيات وضع مشروع، فالخادم يقبل تركهما فارغَين. */
-function clearEventLocation() {
-  if (eventLocationMarker && eventLocationMap) {
-    eventLocationMap.removeLayer(eventLocationMarker);
-  }
-  eventLocationMarker = null;
-  setEventCoords(null, null);
+/** يمسح التحديد — لنموذج المناسبة فقط، حيث الموقع اختياري. */
+function clearLocationPicker(containerId, latInputId, lngInputId, labelId) {
+  const picker = locationPickers[containerId];
+  if (picker && picker.marker && picker.map) picker.map.removeLayer(picker.marker);
+  if (picker) picker.marker = null;
+  setPickedCoords(latInputId, lngInputId, labelId, null, null);
 }
 
 /** يقفز بالخريطة إلى موقع المتصفّح ويضع الدبّوس هناك. */
-function useMyLocationForEvent() {
+function useMyLocationFor(containerId, latInputId, lngInputId, labelId) {
   if (!navigator.geolocation) {
     alert('المتصفّح لا يدعم تحديد الموقع');
     return;
@@ -1721,45 +1720,71 @@ function useMyLocationForEvent() {
   navigator.geolocation.getCurrentPosition(
     position => {
       const { latitude, longitude } = position.coords;
-      if (eventLocationMap) eventLocationMap.setView([latitude, longitude], 15);
-      placeEventMarker(latitude, longitude);
+      const picker = locationPickers[containerId];
+      if (picker && picker.map) picker.map.setView([latitude, longitude], 15);
+      placeLocationMarker(containerId, latInputId, lngInputId, labelId, latitude, longitude);
     },
     () => alert('تعذّر تحديد موقعك — تأكّد من السماح للمتصفّح بالوصول إلى الموقع')
   );
 }
 
 /**
- * يبني الخريطة عند أول فتح للنموذج ثم يعيد ضبطها على المناسبة الحالية.
+ * يبني خريطة الحاوية عند أول فتح لها ثم يعيد ضبطها على النقطة الحالية.
  * `invalidateSize` ضرورية لأن الحاوية كانت `display:none` لحظة الإنشاء، وLeaflet
  * يقيس أبعادها مرّة واحدة عند البناء.
  */
-function initEventLocationMap(latitude, longitude) {
-  const container = document.getElementById('evtLocationMap');
+function initLocationPicker(containerId, latInputId, lngInputId, labelId, latitude, longitude) {
+  const container = document.getElementById(containerId);
   if (!container || typeof L === 'undefined') return;
 
-  if (!eventLocationMap) {
-    eventLocationMap = L.map('evtLocationMap').setView(NEGEV_MAP_CENTER, 9);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap'
-    }).addTo(eventLocationMap);
-    eventLocationMap.on('click', ev => placeEventMarker(ev.latlng.lat, ev.latlng.lng));
+  let picker = locationPickers[containerId];
+  if (!picker) {
+    picker = { map: null, marker: null };
+    locationPickers[containerId] = picker;
   }
 
-  if (eventLocationMarker) {
-    eventLocationMap.removeLayer(eventLocationMarker);
-    eventLocationMarker = null;
+  if (!picker.map) {
+    picker.map = L.map(containerId).setView(NEGEV_MAP_CENTER, 9);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(picker.map);
+    picker.map.on('click', ev => placeLocationMarker(containerId, latInputId, lngInputId, labelId, ev.latlng.lat, ev.latlng.lng));
+  }
+
+  if (picker.marker) {
+    picker.map.removeLayer(picker.marker);
+    picker.marker = null;
   }
 
   const hasPoint = latitude !== '' && longitude !== '' && latitude != null && longitude != null;
   if (hasPoint) {
-    eventLocationMap.setView([Number(latitude), Number(longitude)], 14);
-    placeEventMarker(Number(latitude), Number(longitude));
+    picker.map.setView([Number(latitude), Number(longitude)], 14);
+    placeLocationMarker(containerId, latInputId, lngInputId, labelId, Number(latitude), Number(longitude));
   } else {
-    eventLocationMap.setView(NEGEV_MAP_CENTER, 9);
-    setEventCoords(null, null);
+    picker.map.setView(NEGEV_MAP_CENTER, 9);
+    setPickedCoords(latInputId, lngInputId, labelId, null, null);
   }
 
-  setTimeout(() => eventLocationMap.invalidateSize(), 0);
+  setTimeout(() => picker.map.invalidateSize(), 0);
+}
+
+// نموذج تعديل المناسبة — نفس أسماء الدوال التي يستدعيها admin.js/admin.html اليوم
+function initEventLocationMap(latitude, longitude) {
+  initLocationPicker('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel', latitude, longitude);
+}
+function useMyLocationForEvent() {
+  useMyLocationFor('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel');
+}
+function clearEventLocation() {
+  clearLocationPicker('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel');
+}
+
+// نموذج القرية — لا زرّ مسح: الإحداثيات إلزامية هنا، خلافاً لموقع المناسبة
+function initVillageLocationMap(latitude, longitude) {
+  initLocationPicker('vilLocationMap', 'vilLat', 'vilLng', null, latitude, longitude);
+}
+function useMyLocationForVillage() {
+  useMyLocationFor('vilLocationMap', 'vilLat', 'vilLng', null);
 }
 
 /** معاينة فورية للملصق المختار من الجهاز، قبل الحفظ. */
@@ -2274,6 +2299,8 @@ function openVillageForm(id) {
   document.getElementById('vilIsActive').checked = village ? Boolean(village.is_active) : true;
 
   wrapper.style.display = 'block';
+  // بعد إظهار الحاوية لا قبلها — Leaflet يقيس حاوية بعرض صفر وهي مخفية.
+  initVillageLocationMap(village ? village.latitude : '', village ? village.longitude : '');
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 

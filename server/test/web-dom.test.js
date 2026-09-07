@@ -922,6 +922,58 @@ async function run() {
     assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'عريس' }]), 'honorees must be JSON, as the publish form sends them');
   });
 
+  console.log('\nAdmin panel — village map (typed-by-hand coordinates → click-to-pick)');
+
+  /**
+   * Adding a village used to mean typing latitude/longitude from memory —
+   * nobody has their village's coordinates memorised, so the pin landed
+   * wrong or the village never got added. The fix reuses the event-edit
+   * form's map logic (extracted into initLocationPicker) rather than a
+   * second copy: these pin that both forms share the one initialiser and
+   * that the village form's own coordinate fields stay required, unlike the
+   * event form's map (whose location is optional).
+   */
+  await test('the village form carries a map container, and coordinates stay required', () => {
+    const dom = buildAdminEnv();
+    dom.window.openVillageForm();
+
+    const { document } = dom.window;
+    assert.ok(document.getElementById('vilLocationMap'), 'expected a map container in the village form');
+    assert.strictEqual(document.getElementById('vilLat').required, true, 'latitude must stay mandatory — the map makes it easy, not optional');
+    assert.strictEqual(document.getElementById('vilLng').required, true, 'longitude must stay mandatory — the map makes it easy, not optional');
+  });
+
+  await test('opening the map on a village with coordinates fills the fields the form submits', () => {
+    const dom = buildAdminEnv();
+    dom.window.initVillageLocationMap('31.2589', '34.7913');
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('vilLat').value, '31.258900');
+    assert.strictEqual(document.getElementById('vilLng').value, '34.791300');
+  });
+
+  await test('a simulated pin placement (click or drag) writes vilLat/vilLng — the same function the map\'s own click/drag handlers call', () => {
+    const dom = buildAdminEnv();
+    dom.window.openVillageForm();
+    dom.window.placeLocationMarker('vilLocationMap', 'vilLat', 'vilLng', null, 31.3, 34.8);
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('vilLat').value, '31.300000');
+    assert.strictEqual(document.getElementById('vilLng').value, '34.800000');
+  });
+
+  await test('the event and village maps are one extracted initialiser, not two copies — each keeps its own pin', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+
+    dom.window.initEventLocationMap('31.0', '34.0');
+    dom.window.initVillageLocationMap('30.0', '35.0');
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('evtLat').value, '31.000000', 'the event map must not be clobbered by initialising the village map');
+    assert.strictEqual(document.getElementById('vilLat').value, '30.000000', 'the village map must not be clobbered by initialising the event map');
+  });
+
   console.log('\nAdmin panel — direct publish form (the production blocker: no occasion type, no honorees)');
 
   /**

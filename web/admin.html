@@ -488,6 +488,15 @@
                 <input type="number" id="vilPosition" value="0" step="1">
               </div>
             </div>
+            <div class="form-group">
+              <label>موقع القرية على الخريطة *</label>
+              <div id="vilLocationMap" class="admin-map-picker"></div>
+              <div class="map-picker-actions">
+                <button type="button" class="admin-btn-ghost" onclick="useMyLocationForVillage()">
+                  <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن
+                </button>
+              </div>
+            </div>
             <div class="form-row">
               <div class="form-group half">
                 <label>خط العرض (latitude) *</label>
@@ -498,7 +507,7 @@
                 <input type="number" id="vilLng" step="any" placeholder="مثال: 34.7913" required>
               </div>
             </div>
-            <span class="hint-text">الإحداثيات إلزامية — قرية بلا إحداثيات حقيقية تعيد إنتاج عطل الدبّوس المفقود الذي تحلّه القرى أصلاً</span>
+            <span class="hint-text">الإحداثيات إلزامية — انقر على الخريطة أو اسحب الدبّوس لتعبئتها تلقائياً، أو عدّلها هنا يدوياً. قرية بلا إحداثيات حقيقية تعيد إنتاج عطل الدبّوس المفقود الذي تحلّه القرى أصلاً</span>
             <label class="ot-check" style="margin-top:14px; display:block;"><input type="checkbox" id="vilIsActive" checked> نشِطة (تظهر لمن ينشر مناسبة)</label>
             <div class="form-row" style="margin-top:18px;">
               <button type="submit" class="admin-btn-primary" id="vilSubmitBtn" style="flex:1;">
