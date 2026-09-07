@@ -1666,13 +1666,18 @@ function closeEventEditForm() {
  * اليوم — تغيير أوسع من هذا الإصلاح.
  */
 const NEGEV_MAP_CENTER = [31.2858, 34.8431];
-const locationPickers = {}; // containerId -> { map, marker }
+// containerId -> { map, marker, latInputId, lngInputId, labelId } — أسماء
+// الحقول تُخزَّن هنا مرّة عند initLocationPicker بدل أن تُمرَّر عبر كل دالة
+// (كانت أربعة معرّفات تسافر معاً، وواحد منها `null` دائماً لنموذج القرية).
+const locationPickers = {};
 
-/** يكتب الإحداثيات في الحقلين ويحدّث السطر الظاهر تحت الخريطة إن وُجد. */
-function setPickedCoords(latInputId, lngInputId, labelId, lat, lng) {
-  const latInput = document.getElementById(latInputId);
-  const lngInput = document.getElementById(lngInputId);
-  const label = labelId ? document.getElementById(labelId) : null;
+/** يكتب الإحداثيات في حقلي الحاوية ويحدّث السطر الظاهر تحت الخريطة إن وُجد. */
+function setPickedCoords(containerId, lat, lng) {
+  const picker = locationPickers[containerId];
+  if (!picker) return;
+  const latInput = document.getElementById(picker.latInputId);
+  const lngInput = document.getElementById(picker.lngInputId);
+  const label = picker.labelId ? document.getElementById(picker.labelId) : null;
   if (!latInput || !lngInput) return;
 
   if (lat == null || lng == null || lat === '' || lng === '') {
@@ -1682,13 +1687,16 @@ function setPickedCoords(latInputId, lngInputId, labelId, lat, lng) {
     return;
   }
 
-  latInput.value = Number(lat).toFixed(6);
-  lngInput.value = Number(lng).toFixed(6);
+  // toFixed(7) — العمودان villages.latitude/longitude وevents.latitude/longitude
+  // كلاهما DECIMAL(10,7)؛ توفيق(6) كان يقصّ الرقم السابع بصمت، فحفظ قرية أو
+  // مناسبة قائمة بلا أي تعديل فعلي كان يزيح إحداثياتها فعلياً.
+  latInput.value = Number(lat).toFixed(7);
+  lngInput.value = Number(lng).toFixed(7);
   if (label) label.textContent = `${latInput.value}، ${lngInput.value}`;
 }
 
-/** يضع الدبّوس (أو ينقله) ويُبقي الحقلين متزامنَين معه. */
-function placeLocationMarker(containerId, latInputId, lngInputId, labelId, lat, lng) {
+/** ينشئ الدبّوس عند أول استخدام أو ينقله لاحقاً — لا يكتب في الحقلين. */
+function ensureLocationMarker(containerId, lat, lng) {
   const picker = locationPickers[containerId];
   if (!picker || !picker.map) return;
   if (picker.marker) {
@@ -1697,22 +1705,56 @@ function placeLocationMarker(containerId, latInputId, lngInputId, labelId, lat, 
     picker.marker = L.marker([lat, lng], { draggable: true }).addTo(picker.map);
     picker.marker.on('dragend', () => {
       const pos = picker.marker.getLatLng();
-      setPickedCoords(latInputId, lngInputId, labelId, pos.lat, pos.lng);
+      setPickedCoords(containerId, pos.lat, pos.lng);
     });
   }
-  setPickedCoords(latInputId, lngInputId, labelId, lat, lng);
+}
+
+/** يضع الدبّوس (أو ينقله) عبر نقرة/سحب على الخريطة، ويُبقي حقلي الحاوية متزامنَين معه. */
+function placeLocationMarker(containerId, lat, lng) {
+  const picker = locationPickers[containerId];
+  if (!picker || !picker.map) return;
+  ensureLocationMarker(containerId, lat, lng);
+  setPickedCoords(containerId, lat, lng);
+}
+
+/**
+ * يُستدعى من استماع الكتابة اليدوية في حقلي القرية (vilLat/vilLng) — الحقل
+ * كان يقبل الكتابة اليدوية بلا أثر على الدبّوس، فيختلف ما يُحفَظ عمّا تُظهره
+ * الخريطة بصمت. لا يكتب في الحقلين نفسيهما (خلافاً لـplaceLocationMarker) كي
+ * لا يقطع الكتابة منتصف الطريق بإعادة تنسيق كل ضغطة مفتاح؛ زوج ناقص أو غير
+ * رقمي يُتجاهَل بصمت بدل رمي خطأ أو قفزة الدبّوس لمكان عشوائي. نموذج المناسبة
+ * لا يحتاج هذا: حقلاه مخفيّان ولا كتابة يدوية فيهما أصلاً.
+ */
+function followManualCoordsInput(containerId) {
+  const picker = locationPickers[containerId];
+  if (!picker || !picker.map) return;
+  const latInput = document.getElementById(picker.latInputId);
+  const lngInput = document.getElementById(picker.lngInputId);
+  if (!latInput || !lngInput) return;
+
+  const latText = latInput.value.trim();
+  const lngText = lngInput.value.trim();
+  if (latText === '' || lngText === '') return;
+
+  const lat = Number(latText);
+  const lng = Number(lngText);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  ensureLocationMarker(containerId, lat, lng);
+  picker.map.setView([lat, lng], picker.map.getZoom());
 }
 
 /** يمسح التحديد — لنموذج المناسبة فقط، حيث الموقع اختياري. */
-function clearLocationPicker(containerId, latInputId, lngInputId, labelId) {
+function clearLocationPicker(containerId) {
   const picker = locationPickers[containerId];
   if (picker && picker.marker && picker.map) picker.map.removeLayer(picker.marker);
   if (picker) picker.marker = null;
-  setPickedCoords(latInputId, lngInputId, labelId, null, null);
+  setPickedCoords(containerId, null, null);
 }
 
 /** يقفز بالخريطة إلى موقع المتصفّح ويضع الدبّوس هناك. */
-function useMyLocationFor(containerId, latInputId, lngInputId, labelId) {
+function useMyLocationFor(containerId) {
   if (!navigator.geolocation) {
     alert('المتصفّح لا يدعم تحديد الموقع');
     return;
@@ -1722,7 +1764,7 @@ function useMyLocationFor(containerId, latInputId, lngInputId, labelId) {
       const { latitude, longitude } = position.coords;
       const picker = locationPickers[containerId];
       if (picker && picker.map) picker.map.setView([latitude, longitude], 15);
-      placeLocationMarker(containerId, latInputId, lngInputId, labelId, latitude, longitude);
+      placeLocationMarker(containerId, latitude, longitude);
     },
     () => alert('تعذّر تحديد موقعك — تأكّد من السماح للمتصفّح بالوصول إلى الموقع')
   );
@@ -1742,13 +1784,16 @@ function initLocationPicker(containerId, latInputId, lngInputId, labelId, latitu
     picker = { map: null, marker: null };
     locationPickers[containerId] = picker;
   }
+  picker.latInputId = latInputId;
+  picker.lngInputId = lngInputId;
+  picker.labelId = labelId;
 
   if (!picker.map) {
     picker.map = L.map(containerId).setView(NEGEV_MAP_CENTER, 9);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap'
     }).addTo(picker.map);
-    picker.map.on('click', ev => placeLocationMarker(containerId, latInputId, lngInputId, labelId, ev.latlng.lat, ev.latlng.lng));
+    picker.map.on('click', ev => placeLocationMarker(containerId, ev.latlng.lat, ev.latlng.lng));
   }
 
   if (picker.marker) {
@@ -1759,10 +1804,10 @@ function initLocationPicker(containerId, latInputId, lngInputId, labelId, latitu
   const hasPoint = latitude !== '' && longitude !== '' && latitude != null && longitude != null;
   if (hasPoint) {
     picker.map.setView([Number(latitude), Number(longitude)], 14);
-    placeLocationMarker(containerId, latInputId, lngInputId, labelId, Number(latitude), Number(longitude));
+    placeLocationMarker(containerId, Number(latitude), Number(longitude));
   } else {
     picker.map.setView(NEGEV_MAP_CENTER, 9);
-    setPickedCoords(latInputId, lngInputId, labelId, null, null);
+    setPickedCoords(containerId, null, null);
   }
 
   setTimeout(() => picker.map.invalidateSize(), 0);
@@ -1773,10 +1818,10 @@ function initEventLocationMap(latitude, longitude) {
   initLocationPicker('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel', latitude, longitude);
 }
 function useMyLocationForEvent() {
-  useMyLocationFor('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel');
+  useMyLocationFor('evtLocationMap');
 }
 function clearEventLocation() {
-  clearLocationPicker('evtLocationMap', 'evtLat', 'evtLng', 'evtCoordsLabel');
+  clearLocationPicker('evtLocationMap');
 }
 
 // نموذج القرية — لا زرّ مسح: الإحداثيات إلزامية هنا، خلافاً لموقع المناسبة
@@ -1784,7 +1829,7 @@ function initVillageLocationMap(latitude, longitude) {
   initLocationPicker('vilLocationMap', 'vilLat', 'vilLng', null, latitude, longitude);
 }
 function useMyLocationForVillage() {
-  useMyLocationFor('vilLocationMap', 'vilLat', 'vilLng', null);
+  useMyLocationFor('vilLocationMap');
 }
 
 /** معاينة فورية للملصق المختار من الجهاز، قبل الحفظ. */
@@ -2294,6 +2339,10 @@ function openVillageForm(id) {
   document.getElementById('vilId').value = village ? village.id : '';
   document.getElementById('vilName').value = village ? village.name : '';
   document.getElementById('vilPosition').value = village ? village.position : 0;
+  // تبدو زائدة لأن `initVillageLocationMap` أدناه يكتب الحقلين على كل حال —
+  // لكنها ليست كذلك: `initLocationPicker` يخرج فوراً إن لم تُحمَّل Leaflet
+  // (‏`typeof L === 'undefined'`)، وهي تأتي من CDN. عندها هذان السطران وحدهما
+  // ما يُبقي تعديل إحداثيات قرية ممكناً يدوياً بلا خريطة. لا تحذفهما.
   document.getElementById('vilLat').value = village ? village.latitude : '';
   document.getElementById('vilLng').value = village ? village.longitude : '';
   document.getElementById('vilIsActive').checked = village ? Boolean(village.is_active) : true;

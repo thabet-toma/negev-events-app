@@ -500,11 +500,11 @@
             <div class="form-row">
               <div class="form-group half">
                 <label>خط العرض (latitude) *</label>
-                <input type="number" id="vilLat" step="any" placeholder="مثال: 31.2589" required>
+                <input type="number" id="vilLat" step="any" placeholder="مثال: 31.2589" required oninput="followManualCoordsInput('vilLocationMap')">
               </div>
               <div class="form-group half">
                 <label>خط الطول (longitude) *</label>
-                <input type="number" id="vilLng" step="any" placeholder="مثال: 34.7913" required>
+                <input type="number" id="vilLng" step="any" placeholder="مثال: 34.7913" required oninput="followManualCoordsInput('vilLocationMap')">
               </div>
             </div>
             <span class="hint-text">الإحداثيات إلزامية — انقر على الخريطة أو اسحب الدبّوس لتعبئتها تلقائياً، أو عدّلها هنا يدوياً. قرية بلا إحداثيات حقيقية تعيد إنتاج عطل الدبّوس المفقود الذي تحلّه القرى أصلاً</span>

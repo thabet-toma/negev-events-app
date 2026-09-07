@@ -228,6 +228,7 @@ function buildFakeLeaflet() {
       addTo() { return obj; },
       on() { return obj; },
       setView() { return obj; },
+      getZoom() { return 9; },
       invalidateSize() {},
       removeLayer() {},
       setLatLng() {},
@@ -889,10 +890,13 @@ async function run() {
     dom.window.initEventLocationMap('31.2589', '34.7913');
 
     const { document } = dom.window;
-    assert.strictEqual(document.getElementById('evtLat').value, '31.258900');
-    assert.strictEqual(document.getElementById('evtLng').value, '34.791300');
+    // 7 decimals, not 6 — villages.latitude/longitude and events.latitude/longitude
+    // are both DECIMAL(10,7); toFixed(6) silently dropped the seventh digit, so
+    // re-saving an event with no real change moved its pin.
+    assert.strictEqual(document.getElementById('evtLat').value, '31.2589000');
+    assert.strictEqual(document.getElementById('evtLng').value, '34.7913000');
     assert.ok(
-      document.getElementById('evtCoordsLabel').textContent.includes('31.258900'),
+      document.getElementById('evtCoordsLabel').textContent.includes('31.2589000'),
       'the coordinates should be readable under the map, not only inside a hidden input'
     );
   });
@@ -948,30 +952,111 @@ async function run() {
     dom.window.initVillageLocationMap('31.2589', '34.7913');
 
     const { document } = dom.window;
-    assert.strictEqual(document.getElementById('vilLat').value, '31.258900');
-    assert.strictEqual(document.getElementById('vilLng').value, '34.791300');
+    // 7 decimals — see the matching event-form assertion above for why.
+    assert.strictEqual(document.getElementById('vilLat').value, '31.2589000');
+    assert.strictEqual(document.getElementById('vilLng').value, '34.7913000');
   });
 
   await test('a simulated pin placement (click or drag) writes vilLat/vilLng — the same function the map\'s own click/drag handlers call', () => {
     const dom = buildAdminEnv();
     dom.window.openVillageForm();
-    dom.window.placeLocationMarker('vilLocationMap', 'vilLat', 'vilLng', null, 31.3, 34.8);
+    dom.window.placeLocationMarker('vilLocationMap', 31.3, 34.8);
 
     const { document } = dom.window;
-    assert.strictEqual(document.getElementById('vilLat').value, '31.300000');
-    assert.strictEqual(document.getElementById('vilLng').value, '34.800000');
+    assert.strictEqual(document.getElementById('vilLat').value, '31.3000000');
+    assert.strictEqual(document.getElementById('vilLng').value, '34.8000000');
   });
 
-  await test('the event and village maps are one extracted initialiser, not two copies — each keeps its own pin', () => {
+  /**
+   * Typing coordinates by hand used to submit the typed value while the pin
+   * silently kept pointing wherever it last was — the map and the fields
+   * could disagree with nothing on screen saying so. Fixed by having the
+   * fields drive the marker too (followManualCoordsInput), wired from
+   * vilLat/vilLng's own oninput in admin.html. The event form's inputs stay
+   * hidden, so it gets none of this.
+   */
+  await test('typing a full, valid pair of coordinates by hand moves the pin and recentres the map', () => {
+    const dom = buildAdminEnv();
+    dom.window.openVillageForm();
+
+    const { document, L } = dom.window;
+    const markerCalls = [];
+    const originalMarker = L.marker;
+    L.marker = (latlng, opts) => { markerCalls.push(latlng); return originalMarker(latlng, opts); };
+
+    document.getElementById('vilLat').value = '31.4';
+    document.getElementById('vilLng').value = '34.9';
+    dom.window.followManualCoordsInput('vilLocationMap');
+
+    assert.strictEqual(markerCalls.length, 1, 'a full valid pair should place a pin — none existed yet for a brand-new village');
+    // markerCalls[0] is an Array from the jsdom window's own realm, not Node's
+    // — compared element-by-element rather than via deepStrictEqual to avoid
+    // a spurious cross-realm inequality.
+    assert.strictEqual(markerCalls[0][0], 31.4);
+    assert.strictEqual(markerCalls[0][1], 34.9);
+    // must not fight the admin mid-keystroke: the fields stay exactly what
+    // was typed, not reformatted to 7 decimals the moment a valid pair lands
+    assert.strictEqual(document.getElementById('vilLat').value, '31.4');
+    assert.strictEqual(document.getElementById('vilLng').value, '34.9');
+  });
+
+  await test('typing a partial or non-numeric coordinate by hand is ignored — no thrown error, no pin jumping to a nonsense location', () => {
+    const dom = buildAdminEnv();
+    dom.window.openVillageForm();
+
+    const { document, L } = dom.window;
+    const markerCalls = [];
+    const originalMarker = L.marker;
+    L.marker = (latlng, opts) => { markerCalls.push(latlng); return originalMarker(latlng, opts); };
+
+    document.getElementById('vilLat').value = '31.2589';
+    document.getElementById('vilLng').value = ''; // still mid-typing
+    assert.doesNotThrow(() => dom.window.followManualCoordsInput('vilLocationMap'));
+    assert.strictEqual(markerCalls.length, 0, 'an incomplete pair must not place or move a pin');
+
+    document.getElementById('vilLat').value = 'abc';
+    document.getElementById('vilLng').value = '34.7913';
+    assert.doesNotThrow(() => dom.window.followManualCoordsInput('vilLocationMap'));
+    assert.strictEqual(markerCalls.length, 0, 'non-numeric text must not place or move a pin either');
+  });
+
+  /**
+   * The earlier version of this test only asserted that evtLat/vilLat ended
+   * up with the right values — which a shared-module-globals implementation
+   * (exactly what the registry replaced) would also get right, since each
+   * wrapper passes its own field ids straight through. That proved nothing
+   * about the registry itself. This asserts the thing that actually depends
+   * on per-container keying: initialising the village map must not skip
+   * building a real Leaflet map for it, and re-initialising the event map
+   * afterwards must not rebuild one either (its own picker entry is still
+   * there, untouched). Note: the fake Leaflet's on() is a no-op, so this
+   * still cannot exercise real click/drag wiring — only inspect it.
+   */
+  await test('the event and village pickers are genuinely distinct registry entries, not a shared global', () => {
     const dom = buildAdminEnv();
     dom.window.ensureEventEditFormMounted();
 
+    const mapCalls = [];
+    const originalMap = dom.window.L.map;
+    dom.window.L.map = containerId => {
+      mapCalls.push(containerId);
+      return originalMap(containerId);
+    };
+
     dom.window.initEventLocationMap('31.0', '34.0');
     dom.window.initVillageLocationMap('30.0', '35.0');
+    // re-initialising the event picker must reuse its own stored map, not
+    // rebuild one — a shared-globals implementation that let the village
+    // init overwrite a single module-level map variable would fail this by
+    // either rebuilding here or never having built a real map for the
+    // village container in the first place.
+    dom.window.initEventLocationMap('31.1', '34.1');
 
-    const { document } = dom.window;
-    assert.strictEqual(document.getElementById('evtLat').value, '31.000000', 'the event map must not be clobbered by initialising the village map');
-    assert.strictEqual(document.getElementById('vilLat').value, '30.000000', 'the village map must not be clobbered by initialising the event map');
+    assert.deepStrictEqual(
+      mapCalls,
+      ['evtLocationMap', 'vilLocationMap'],
+      'expected exactly one L.map() call per container — one for each — and none rebuilt on re-init'
+    );
   });
 
   console.log('\nAdmin panel — direct publish form (the production blocker: no occasion type, no honorees)');
