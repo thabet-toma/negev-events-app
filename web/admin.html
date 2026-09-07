@@ -160,6 +160,9 @@
         <button class="admin-tab-btn" id="tabPrivacyRequestsBtn" data-tab="tabPrivacyRequests" onclick="switchAdminTab('tabPrivacyRequests')" style="display:none;">
           <i class="fa-solid fa-user-lock"></i> طلبات الاطّلاع والمحو
         </button>
+        <button class="admin-tab-btn" id="tabAnalyticsBtn" data-tab="tabAnalytics" onclick="switchAdminTab('tabAnalytics')" style="display:none;">
+          <i class="fa-solid fa-chart-line"></i> التتبّع والتحليلات
+        </button>
       </nav>
 
       <!-- TAB 1: EVENTS REVIEW & MANAGEMENT -->
@@ -592,6 +595,36 @@
             <p>طلبات اطّلاع أو محو على بيانات شخصية، بانتظار معالجتك — كي لا تضيع في رسائل. أغلق الطلب بعد تنفيذه يدوياً.</p>
           </div>
           <div id="privacyRequestsList" class="admin-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB: ANALYTICS / TRACKING — سوبر أدمن حصراً. الجلب والتخزين موجودان منذ
+           issue #44 (GET /api/admin/analytics/counts و
+           GET /api/admin/analytics/users/:userId) — هذه هي واجهة قراءتهما التي
+           تُركت خارج النطاق حينها. -->
+      <section id="tabAnalytics" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-chart-line"></i> التتبّع والتحليلات</h2>
+            <p>عدّاد كل حدث مسجَّل على المنصّة — بلا هوية أصحابه هنا</p>
+          </div>
+          <div id="analyticsRetentionNotice" class="occasion-types-notice"></div>
+          <div id="analyticsCountsList" class="admin-table-wrapper"></div>
+        </div>
+
+        <div class="pane-box" style="margin-top:20px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-user-clock"></i> سجل مستخدم بعينه</h2>
+            <p>اختر مستخدماً من تبويب «إدارة المستخدمين» بزرّ «سجل التتبّع» بجانب اسمه</p>
+          </div>
+          <div id="analyticsUserLogHeader"></div>
+          <div id="analyticsUserLog" class="admin-table-wrapper">
+            <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+              <i class="fa-solid fa-user-magnifying-glass" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+              <p>لم يُختَر مستخدم بعد</p>
+            </div>
+          </div>
+          <div id="analyticsUserLogPagination" class="pane-controls-bar" style="display:none;"></div>
         </div>
       </section>
 

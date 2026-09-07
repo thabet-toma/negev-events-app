@@ -16,6 +16,10 @@ let allAdminUsers = [];
 let adminUserSearchKeyword = '';
 let myAdminTowns = [];
 let allPrivacyRequests = [];
+let allAnalyticsCounts = [];
+let analyticsSelectedUserId = null;
+let analyticsSelectedUserLabel = '';
+let analyticsUserLogPage = 1;
 
 // حالة نموذج تعديل المناسبة (#43) — النموذج نفسه يُبنى ديناميكياً في JS (لا لمس
 // لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
@@ -39,6 +43,25 @@ let selectedDirectAddType = null;
 const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
+
+// مرآة لـ ANALYTICS_EVENTS في server/src/constants.js — نفس سبب TOWNS أعلاه.
+// isFailure ليست حقلاً في الأصل؛ حدثا العطل الوحيدان بين الثمانية هما
+// publish_failed وimage_upload_failed تحديداً (تعداد صريح، لا تخمين على شكل
+// الاسم — القائمة مغلقة وصغيرة).
+const ANALYTICS_EVENTS = [
+  { key: 'share_clicked', label: 'الضغط على زرّ المشاركة', isFailure: false },
+  { key: 'app_download_clicked', label: 'الضغط على «حمّل التطبيق»', isFailure: false },
+  { key: 'publish_started', label: 'بدء نشر مناسبة', isFailure: false },
+  { key: 'publish_failed', label: 'فشل نشر مناسبة', isFailure: true },
+  { key: 'image_upload_failed', label: 'فشل رفع صورة', isFailure: true },
+  { key: 'login', label: 'تسجيل الدخول', isFailure: false },
+  { key: 'register', label: 'إنشاء حساب جديد', isFailure: false },
+  { key: 'share_page_viewed', label: 'فتح صفحة رابط مناسبة مشارَكة', isFailure: false }
+];
+
+// مرآة لـ RETENTION_DAYS في server/src/services/analytics.service.js — رقم
+// عرض فقط، لا حسابياً هنا.
+const ANALYTICS_RETENTION_DAYS = 90;
 
 // أيقونات جاهزة لحقلَي «الأيقونة» — نوع المناسبة وفئة الخدمة. الحقل في الحالتين
 // إيموجي يُرسَم كنصّ حرفي بجانب الاسم في العميلين (web/app.js و
@@ -202,7 +225,7 @@ function applyRoleVisibility() {
   const superAdminOnlyBtnIds = [
     'tabBroadcastBtn', 'tabUsersBtn', 'tabOccasionTypesBtn',
     'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
-    'tabPrivacyRequestsBtn'
+    'tabPrivacyRequestsBtn', 'tabAnalyticsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
     const btn = document.getElementById(id);
@@ -238,7 +261,8 @@ async function loadAdminDashboard() {
   if (isSuperAdmin) {
     tasks.push(
       fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
-      fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests()
+      fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
+      fetchAdminAnalyticsCounts()
     );
   }
   await Promise.all(tasks);
@@ -861,9 +885,12 @@ function renderAdminUsersList() {
             <td><a href="tel:${u.phone_number}" style="color:var(--gold-main);">${u.phone_number}</a></td>
             <td>${escapeHtml(u.clan_town || '')}</td>
             <td><span style="color:${u.role === 'super_admin' ? 'var(--warn-yellow)' : u.role === 'admin' ? 'var(--gold-main)' : 'var(--success-green)'}; font-weight:700;">${u.role === 'super_admin' ? '👑 سوبر أدمن' : u.role === 'admin' ? 'أدمن' : 'مستخدم'}</span></td>
-            <td>${u.role === 'user'
-              ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handleChangeUserRole(${u.id}, 'admin', 'ترقية هذا المستخدم إلى أدمن؟')"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
-              : ''}</td>
+            <td>
+              ${u.role === 'user'
+                ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handleChangeUserRole(${u.id}, 'admin', 'ترقية هذا المستخدم إلى أدمن؟')"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
+                : ''}
+              <button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.8rem;" onclick="viewUserAnalytics(${u.id})"><i class="fa-solid fa-chart-line"></i> سجل التتبّع</button>
+            </td>
           </tr>
         `).join('')}
       </tbody>
@@ -2824,6 +2851,211 @@ async function closePrivacyRequest(id) {
   } catch (e) {
     alert('تعذر الاتصال بالخادم');
   }
+}
+
+// ======================================================================
+// 13. Analytics / Tracking — سوبر أدمن حصراً. الجلب موجود منذ issue #44
+// (GET /api/admin/analytics/counts وGET /api/admin/analytics/users/:userId)؛
+// هذا هو ما كان مفقوداً: واجهة تقرأهما.
+// ======================================================================
+
+async function fetchAdminAnalyticsCounts() {
+  renderAnalyticsRetentionNotice();
+  try {
+    const res = await adminFetch('/api/admin/analytics/counts');
+    const data = await res.json();
+
+    if (res.status === 403) {
+      renderAnalyticsCountsForbidden(data.message);
+      return;
+    }
+
+    if (data.success) {
+      allAnalyticsCounts = data.counts;
+      renderAnalyticsCounts();
+    } else {
+      alert(data.message || 'تعذر تحميل إحصاءات التتبّع');
+    }
+  } catch (e) {
+    console.error('Analytics counts error:', e);
+  }
+}
+
+function renderAnalyticsCountsForbidden(message) {
+  const container = document.getElementById('analyticsCountsList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+}
+
+/** الأحداث الثمانية كلها تظهر دوماً بلقبها العربي، حتى ما لم يُسجَّل منه شيء بعد — لا فقط ما رجع من الخادم، ولا مفتاحه الإنجليزي أبداً. */
+function renderAnalyticsCounts() {
+  const container = document.getElementById('analyticsCountsList');
+  if (!container) return;
+
+  const totalsByKey = {};
+  allAnalyticsCounts.forEach(row => { totalsByKey[row.event_name] = row.total; });
+
+  const rows = ANALYTICS_EVENTS
+    .map(event => ({ ...event, total: totalsByKey[event.key] || 0 }))
+    .sort((a, b) => b.total - a.total);
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>الحدث</th>
+          <th>الإجمالي</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td>
+              ${escapeHtml(r.label)}
+              ${r.isFailure ? '<span class="status-tag rejected" style="margin-inline-start:8px;"><i class="fa-solid fa-triangle-exclamation"></i> عطل</span>' : ''}
+            </td>
+            <td>${r.total}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** طوي الاحتفاظ (analytics-retention.js) يحذف الصفوف الأصلية بعد نقلها لعدّاد — سجل مستخدم قصير هنا متوقَّع، لا عطل. */
+function renderAnalyticsRetentionNotice() {
+  const el = document.getElementById('analyticsRetentionNotice');
+  if (!el) return;
+  el.innerHTML = `
+    <i class="fa-solid fa-circle-info"></i>
+    <span>جدول العدّادات أعلاه يشمل كل التاريخ المسجَّل، حتى ما طُوي منه بعد ${ANALYTICS_RETENTION_DAYS} يوماً في عدّاد يومي مجهول الهوية. أما سجل مستخدم بعينه أسفل هذا فيعرض فقط آخر ${ANALYTICS_RETENTION_DAYS} يوماً — الصفوف الأقدم حُذفت فعلاً بعد طيّها في العدّاد، فسجل قصير أو فارغ هنا ليس عطلاً بالضرورة.</span>
+  `;
+}
+
+/** زرّ «سجل التتبّع» بجانب كل مستخدم في تبويب «إدارة المستخدمين» — لا بحث مستخدم ثانٍ هنا، بل انتقال للسجل ممن اختير أصلاً من القائمة والبحث الموجودين. */
+function viewUserAnalytics(userId) {
+  const user = allAdminUsers.find(u => u.id === userId);
+  analyticsSelectedUserId = userId;
+  analyticsSelectedUserLabel = user ? `${user.full_name} — ${user.phone_number}` : `مستخدم #${userId}`;
+  analyticsUserLogPage = 1;
+  switchAdminTab('tabAnalytics');
+  fetchAnalyticsUserLog();
+}
+
+async function fetchAnalyticsUserLog(page = analyticsUserLogPage) {
+  if (!analyticsSelectedUserId) return;
+  analyticsUserLogPage = page;
+  try {
+    const res = await adminFetch(`/api/admin/analytics/users/${analyticsSelectedUserId}?page=${page}`);
+    const data = await res.json();
+
+    if (res.status === 403) {
+      renderAnalyticsUserLogForbidden(data.message);
+      return;
+    }
+
+    if (data.success) {
+      renderAnalyticsUserLogHeader();
+      renderAnalyticsUserLog(data.events, data.pagination);
+    } else {
+      alert(data.message || 'تعذر تحميل سجل هذا المستخدم');
+    }
+  } catch (e) {
+    console.error('Analytics user log error:', e);
+  }
+}
+
+function renderAnalyticsUserLogForbidden(message) {
+  const container = document.getElementById('analyticsUserLog');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+  const pagination = document.getElementById('analyticsUserLogPagination');
+  if (pagination) pagination.style.display = 'none';
+}
+
+function renderAnalyticsUserLogHeader() {
+  const el = document.getElementById('analyticsUserLogHeader');
+  if (!el) return;
+  el.innerHTML = `<p style="color:var(--text-main); font-weight:700; margin-bottom:14px;"><i class="fa-solid fa-user"></i> ${escapeHtml(analyticsSelectedUserLabel)}</p>`;
+}
+
+/** الأحداث المدفوعة من الخادم بمفتاحها الإنجليزي؛ الترجمة للقب العربي هنا فقط، ونفس مصدر جدول العدّادات (ANALYTICS_EVENTS). */
+function analyticsEventLabel(key) {
+  const found = ANALYTICS_EVENTS.find(e => e.key === key);
+  return found ? found.label : key;
+}
+
+function renderAnalyticsUserLog(events, pagination) {
+  const container = document.getElementById('analyticsUserLog');
+  if (!container) return;
+
+  if (!events.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا سجل لهذا المستخدم ضمن آخر ${ANALYTICS_RETENTION_DAYS} يوماً — قد يكون سجلّه أقدم من ذلك وطُوي في العدّادات، لا عطلاً بالضرورة</p>
+      </div>
+    `;
+  } else {
+    container.innerHTML = `
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>الوقت</th>
+            <th>الحدث</th>
+            <th>المنصّة</th>
+            <th>نسخة التطبيق</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${events.map(ev => `
+            <tr>
+              <td style="font-size:0.82rem; color:var(--text-dim);">${new Date(ev.created_at).toLocaleString('ar-EG')}</td>
+              <td>${escapeHtml(analyticsEventLabel(ev.event_name))}</td>
+              <td>${escapeHtml(ev.platform || '')}</td>
+              <td>${escapeHtml(ev.app_version || '—')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  renderAnalyticsUserLogPagination(pagination);
+}
+
+function renderAnalyticsUserLogPagination(pagination) {
+  const el = document.getElementById('analyticsUserLogPagination');
+  if (!el) return;
+
+  if (!pagination || pagination.totalPages <= 1) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+
+  el.style.display = 'flex';
+  el.innerHTML = `
+    <button type="button" class="admin-btn-ghost" ${pagination.page <= 1 ? 'disabled' : ''} onclick="fetchAnalyticsUserLog(${pagination.page - 1})">
+      <i class="fa-solid fa-arrow-right"></i> السابق
+    </button>
+    <span style="color:var(--text-dim); font-size:0.85rem;">صفحة ${pagination.page} من ${pagination.totalPages}</span>
+    <button type="button" class="admin-btn-ghost" ${pagination.page >= pagination.totalPages ? 'disabled' : ''} onclick="fetchAnalyticsUserLog(${pagination.page + 1})">
+      التالي <i class="fa-solid fa-arrow-left"></i>
+    </button>
+  `;
 }
 
 function escapeHtml(str) {

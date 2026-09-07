@@ -184,6 +184,23 @@ const ADMIN_USERS_FIXTURE = [
   { id: 502, phone_number: '0509998887', full_name: 'سارة الإدارية', clan_town: 'حورة', role: 'admin', created_at: '2026-01-02' }
 ];
 
+/** Four of the eight ANALYTICS_EVENTS, two of them the failure ones — enough to exercise Arabic-label mapping and the failure highlight. */
+const ANALYTICS_COUNTS_FIXTURE = [
+  { event_name: 'share_page_viewed', total: 120 },
+  { event_name: 'login', total: 80 },
+  { event_name: 'publish_failed', total: 3 },
+  { event_name: 'image_upload_failed', total: 1 }
+];
+
+/** One user's recent rows, shaped exactly like analytics.service.js#listForUser's return. */
+const ANALYTICS_USER_LOG_FIXTURE = {
+  events: [
+    { event_name: 'login', platform: 'web', app_version: null, content_town: null, created_at: '2026-09-01T10:00:00.000Z' },
+    { event_name: 'publish_failed', platform: 'web', app_version: '1.2.0', content_town: 'رهط', created_at: '2026-09-02T11:00:00.000Z' }
+  ],
+  pagination: { page: 1, limit: 30, total: 2, totalPages: 1 }
+};
+
 function jsonResponse(body, { status = 200 } = {}) {
   return {
     ok: status >= 200 && status < 300,
@@ -216,6 +233,12 @@ function buildFetchStub() {
     }
     if (requestPath === '/api/admin/users') {
       return jsonResponse({ success: true, users: ADMIN_USERS_FIXTURE });
+    }
+    if (requestPath === '/api/admin/analytics/counts') {
+      return jsonResponse({ success: true, counts: ANALYTICS_COUNTS_FIXTURE });
+    }
+    if (requestPath.startsWith('/api/admin/analytics/users/')) {
+      return jsonResponse({ success: true, user_id: 501, ...ANALYTICS_USER_LOG_FIXTURE });
     }
     return jsonResponse({ success: false });
   };
@@ -1288,6 +1311,88 @@ async function run() {
     document.getElementById('adminUserSearch').value = '';
     dom.window.handleAdminUserSearch();
     assert.strictEqual(rowCount(), ADMIN_USERS_FIXTURE.length, 'clearing the search must restore the full list');
+  });
+
+  console.log('\nAdmin panel — analytics/tracking tab (the reading UI that shipped with no UI)');
+
+  /**
+   * Both endpoints (GET /api/admin/analytics/counts and
+   * GET /api/admin/analytics/users/:userId) predate this UI — only the
+   * reading screen was missing. These pin the two things the brief called
+   * out by name: a super admin reading "share_page_viewed" is told nothing,
+   * and the two events that mean something is actually broken
+   * (publish_failed, image_upload_failed) must stand out, not sit in a plain
+   * list indistinguishable from the rest.
+   */
+  await test('the counts panel shows Arabic labels, never raw English event keys, and flags exactly the two failure events', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminAnalyticsCounts();
+
+    const { document } = dom.window;
+    const text = document.getElementById('analyticsCountsList').textContent;
+
+    assert.ok(text.includes('فتح صفحة رابط مناسبة مشارَكة'), 'expected the Arabic label for share_page_viewed');
+    assert.ok(text.includes('تسجيل الدخول'), 'expected the Arabic label for login');
+    assert.ok(text.includes('فشل نشر مناسبة'), 'expected the Arabic label for publish_failed');
+    assert.ok(!text.includes('share_page_viewed'), 'the raw English key must never reach the screen');
+    assert.ok(!text.includes('publish_failed'), 'the raw English key must never reach the screen');
+    assert.ok(!text.includes('image_upload_failed'), 'the raw English key must never reach the screen');
+
+    const failureBadges = document.querySelectorAll('#analyticsCountsList .status-tag.rejected');
+    assert.strictEqual(failureBadges.length, 2, 'expected exactly publish_failed and image_upload_failed to carry the failure badge');
+  });
+
+  await test('every one of the eight known events renders, even one with zero recorded occurrences so far', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminAnalyticsCounts();
+
+    // register never appears in ANALYTICS_COUNTS_FIXTURE — an admin reading
+    // this panel must still see it listed, at zero, not silently dropped.
+    const text = dom.window.document.getElementById('analyticsCountsList').textContent;
+    assert.ok(text.includes('إنشاء حساب جديد'), 'expected the Arabic label for register even though it has no rows in the fixture');
+  });
+
+  await test('the retention notice states the real 90-day window, not a made-up number', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminAnalyticsCounts();
+
+    const noticeText = dom.window.document.getElementById('analyticsRetentionNotice').textContent;
+    assert.ok(noticeText.includes('90'), `expected the real retention window from analytics.service.js, got: "${noticeText}"`);
+  });
+
+  await test('a 403 on the counts endpoint (a non-super-admin somehow landing here) renders the server\'s Arabic message, not a blank panel or a thrown error', async () => {
+    const dom = buildAdminEnv();
+    dom.window.fetch = async () => jsonResponse({ success: false, message: 'صلاحيات المدير العام مطلوبة' }, { status: 403 });
+
+    await dom.window.fetchAdminAnalyticsCounts();
+
+    const text = dom.window.document.getElementById('analyticsCountsList').textContent;
+    assert.ok(text.includes('صلاحيات المدير العام مطلوبة'), 'expected the server\'s own Arabic forbidden message on screen');
+  });
+
+  /**
+   * Picking a user is a button on the ALREADY-fetched/searchable users list
+   * (issue #83), not a second search implementation — this drives that exact
+   * path: fetch the users list, then pick one, and check the per-user log
+   * that comes back from the paginated endpoint.
+   */
+  await test('picking a user from the users list renders that user\'s paginated log with Arabic event labels', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.fetchAdminUsers();
+
+    dom.window.viewUserAnalytics(501);
+    await waitFor(() => dom.window.document.getElementById('analyticsUserLog').querySelectorAll('tbody tr').length > 0);
+    assertNoUnhandledRejections('viewUserAnalytics');
+
+    const { document } = dom.window;
+    assert.ok(document.getElementById('tabAnalytics').classList.contains('active-pane'), 'picking a user must switch to the analytics tab');
+    assert.ok(document.getElementById('analyticsUserLogHeader').textContent.includes('أحمد المستخدم'), 'expected the picked user\'s own name in the log header');
+
+    const rows = document.querySelectorAll('#analyticsUserLog tbody tr');
+    assert.strictEqual(rows.length, ANALYTICS_USER_LOG_FIXTURE.events.length, 'expected one row per returned event');
+    assert.ok(rows[0].textContent.includes('تسجيل الدخول'), 'expected the Arabic label for login');
+    assert.ok(rows[1].textContent.includes('فشل نشر مناسبة'), 'expected the Arabic label for publish_failed');
+    assert.ok(!document.getElementById('analyticsUserLog').textContent.includes('publish_failed'), 'the raw English key must never reach the screen');
   });
 
   console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');

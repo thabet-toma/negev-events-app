@@ -61,8 +61,10 @@ router.post('/analytics/events', optionalAuthenticate, asyncHandler(async (req, 
  * it shares the prefix, same reasoning as villages.routes.js and
  * occasionTypes.routes.js. This project's settled reasoning: anything that
  * cannot be meaningfully scoped to a single town — like an app-wide event
- * count — rises to the super admin, never a town admin. A reading
- * dashboard/UI is explicitly out of scope; this is the one JSON endpoint.
+ * count — rises to the super admin, never a town admin. These stayed the only
+ * JSON endpoints with nothing reading them until the panel's «التتبّع
+ * والتحليلات» tab was built on top of them (#84) — they are still the only
+ * two, and this file is still where that boundary is decided.
  */
 router.use('/admin/analytics', requireSuperAdmin);
 
