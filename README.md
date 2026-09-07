@@ -329,13 +329,34 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/notifications` | إشعارات المستخدم الحالي، الأحدث أولاً — هذا هو مركز الإشعارات داخل صفحة الويب |
+| `GET` | `/api/notifications` | إشعارات المستخدم الحالي مدموجة مع التعاميم التي تخصّه، قائمة واحدة مرتّبة بالأحدث أولاً — هذا هو مركز الإشعارات داخل صفحة الويب |
 | `PATCH` | `/api/notifications/:id/read` | تعليم إشعار كمقروء |
 
 تُنشَأ الإشعارات تلقائياً، في نفس معاملة اعتماد التعديل، لجمهور محدّد فقط: من ضغط «ذكّرني»
 على المناسبة + مالكها — لا أحد غيرهما، ولا صفّ لمن قام بالتعديل بنفسه. ⚠️ **التسليم الفعلي
 عبر FCM محبوس بـ#19** (مشروع Firebase خارج نطاق هذا الكود) — `delivered_at` يبقى `NULL` لكل
 صف حتى ذلك الحين؛ الصف نفسه (ومن يستحقّه ومتى يُنشأ) موجود ومكتمل من اليوم.
+
+عنصر التعميم داخل هذه القائمة يحمل شكلاً مختلفاً عمداً عن الإشعار الشخصي — `type: 'broadcast'`
+و`broadcast_id` (لا `id` إطلاقاً) و`tone` و`expires_at`، ويبقى فيها للأبد حتى بعد انتهاء مدّة
+شريطه (issue #85, قصة 30). الفصل بين `id` و`broadcast_id` مقصود: عدّادا `notifications.id`
+و`broadcasts.id` مستقلّان ويتداخلان، فعنصر يحمل `id` وحده كان يجعل عميلاً يخلط بين الجدولين
+عند تعليم عنصر كمقروء. **حالة القراءة موحَّدة عبر `is_read` على كلا النوعين** — لعنصر التعميم
+هي `broadcast_views.dismissed` نفسها (`PATCH /api/broadcasts/:id/dismiss` أدناه هو فعل
+«القراءة» الوحيد الذي يملكه تعميم، فإعادة استخدامه بدل حقل منفصل هو ما يتيح وصول الشارة إلى
+صفر حتى لتعميم منتهٍ لم يظهر في أي شريط قط).
+
+### التعاميم والشريط الإخباري
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `GET` | `/api/broadcasts/live` | التعاميم الحيّة للشريط: العامة للجميع + تعاميم بلدة المستخدم إن كان مسجَّلاً دخوله، بلا المنتهية وبلا ما أغلقه هذا المستخدم. لا يتطلب تسجيل دخول (⚠️ إضافة خارج جدول المواصفة #85 — انظر الملاحظة أدناه) |
+| `PATCH` | `/api/broadcasts/:id/dismiss` 🔒 | إغلاق الشريط لهذا المستخدم فقط — لا يعود بعد إعادة التحميل، ويبقى التعميم في مركز الإشعارات |
+
+⚠️ **`GET /api/broadcasts/live` انحراف متعمَّد عن جدول واجهات #85**: المواصفة لا تسمّي نقطة
+نهاية للشريط الحيّ، و`GET /api/notifications` المدموج يقف خلف `authenticate` — فبدونها يفتح
+زائر مجهول الصفحة ولا يرى شريطاً إطلاقاً، وقصة ٢٨ («عند فتح الصفحة») تصبح صمتاً يعني
+«بعد تسجيل الدخول» فقط.
 
 ### الستوريات (#20 خطوة 8)
 
@@ -437,7 +458,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
-| `POST` | `/api/admin/broadcast` | بث إشعار عام |
+| `POST` | `/api/admin/broadcast` | بث تعميم — `message` مطلوب، و`title`/`tone` (`info`\|`urgent`\|`solemn`)/`duration` (`hour`\|`day`\|`3_days`\|`week`\|`none`) أو `expires_at` اختيارية. `super_admin` يصل الجميع (صفّ واحد `scope_town = NULL`)؛ أدمن بلدة يبثّ لبلداته هو فقط (`towns[]`، صفّ لكل بلدة)، ويُرفض إن لم يملك بلدة مُسنَدة أصلاً |
 | `GET` | `/api/admin/occasion-types` | كل أنواع المناسبات (نشِطة ومعطَّلة) مع عدد المناسبات لكل نوع 🛡️ |
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
 | `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه) 🛡️ |
@@ -450,7 +471,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 ### أحداث Socket.IO
 
 `new_event_created` · `admin_new_pending_event` · `event_reaction_<id>` ·
-`new_congratulation_<id>` · `system_broadcast` · `new_notification_<userId>`
+`new_congratulation_<id>` · `system_broadcast` · `new_notification_<userId>` · `town_broadcast`
 
 ⚠️ `new_congratulation_<id>` (#20 خطوة 5): يُبثّ فقط حين تصير التبريكة/التعزية `approved` —
 عند النشر المباشر (نوع لا يراجع مسبقاً)، أو عند اعتماد المالك/الإدارة لاحقاً. رسالة `pending`
@@ -460,6 +481,13 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 المناسبة — تُبثّ فقط لمن كان متصلاً في تلك اللحظة (متابع أو مالك، أُنشئ له صفّ في
 `notifications` بعد اعتماد تعديل تاريخ حرِج). من لم يكن متصلاً لا يصله شيء حتى تسليم FCM
 (#19) لاحقاً — الصف نفسه في `GET /api/notifications` يبقى موجوداً بانتظاره.
+
+⚠️ `system_broadcast` مقابل `town_broadcast` (issue #85): `realtime.emit` **بلا غرف — يصل كل
+عميل متصل** (`realtime/index.js`)، فنصّ تعميم مخصوص ببلدة لا يجوز أن يمرّ منه أبداً، وإلا وصل
+كل مستخدم على المنصّة تعميم بلدة غيره. `system_broadcast` يبقى كما هو تماماً (نفس شكل
+الحمولة) وللتعاميم **العامة فقط** — عملاء الويب وAPK المنشورة تستمع له. `town_broadcast`
+قناة جديدة **بلا نصّ التعميم إطلاقاً** — تحمل فقط `id` و`scope_town` و`tone` و`expires_at`،
+ما يكفي عميلاً ليقرّر إعادة الجلب من `GET /api/broadcasts/live` المرشَّح فعلياً على الخادم.
 
 ---
 

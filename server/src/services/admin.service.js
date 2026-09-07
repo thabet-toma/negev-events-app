@@ -232,14 +232,6 @@ async function listUsers() {
   );
 }
 
-async function recordBroadcast({ title, message, sentBy }) {
-  const { insertId } = await db.execute(
-    'INSERT INTO broadcasts (title, message, sent_by) VALUES (?, ?, ?)',
-    [title, message, sentBy]
-  );
-  return insertId;
-}
-
 /** Every `admin`-role user with the towns assigned to it, for the super_admin panel. */
 async function listAdminsWithTowns() {
   const admins = await db.query(
@@ -385,7 +377,6 @@ module.exports = {
   transferEventOwnership,
   listComments,
   listUsers,
-  recordBroadcast,
   listAdminsWithTowns,
   setAdminTowns,
   promoteToAdmin,

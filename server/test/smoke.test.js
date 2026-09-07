@@ -2239,15 +2239,22 @@ async function run() {
     const { status, body } = await api('GET', '/api/notifications', { token: reminderFollower.token });
     assert.strictEqual(status, 200);
     assert.ok(body.notifications.length >= 2);
-    assert.ok(body.notifications.every(n => n.user_id === reminderFollower.id));
+    // A merged broadcast entry (issue #85, story 30) is never fanned out to a
+    // user row, so it structurally carries no `user_id` at all — asserted on
+    // that absence itself, not on trusting `type`, so a personal notification
+    // that somehow got mislabelled would still fail this (review round 2, FIX 2).
+    const broadcastEntries = body.notifications.filter(n => n.type === 'broadcast');
+    const personalEntries = body.notifications.filter(n => n.type !== 'broadcast');
+    assert.ok(broadcastEntries.every(n => !('user_id' in n)), 'a broadcast entry must carry no user_id at all');
+    assert.ok(personalEntries.every(n => n.user_id === reminderFollower.id), "every personal notification must belong to the caller");
 
-    const unread = body.notifications.find(n => !n.is_read);
-    assert.ok(unread, 'expected at least one unread notification');
+    const unread = personalEntries.find(n => !n.is_read);
+    assert.ok(unread, 'expected at least one unread personal notification');
     const marked = await api('PATCH', `/api/notifications/${unread.id}/read`, { token: reminderFollower.token });
     assert.strictEqual(marked.status, 200);
 
     const { body: after } = await api('GET', '/api/notifications', { token: reminderFollower.token });
-    assert.ok(after.notifications.find(n => n.id === unread.id).is_read, 'expected the notification marked read');
+    assert.ok(after.notifications.find(n => n.type !== 'broadcast' && n.id === unread.id).is_read, 'expected the notification marked read');
   });
 
   await test('A user cannot read or mark-read another user\'s notification — secrecy at the query itself', async () => {
@@ -2743,6 +2750,215 @@ async function run() {
 
     await db.execute('DELETE FROM events WHERE id IN (?, ?)', [own.body.eventId, outside.body.eventId]);
   });
+
+  console.log('\nBroadcasts & the live ticker (issue #85)');
+
+  async function createUserInTown(fullName, town) {
+    const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [userPhone, fullName, hashedPin, town]
+    );
+    return {
+      id: insertId,
+      phone: userPhone,
+      token: signToken({ id: insertId, phone_number: userPhone, full_name: fullName, role: 'user' }, '1h')
+    };
+  }
+
+  const broadcastTownUser = await createUserInTown('مستخدم داخل بلدة التعميم', scopedTown);
+  const broadcastOtherTownUser = await createUserInTown('مستخدم خارج بلدة التعميم', outOfScopeTown);
+  const broadcastCleanupUserIds = [broadcastTownUser.id, broadcastOtherTownUser.id];
+  const broadcastCleanupBroadcastIds = [];
+
+  let globalBroadcastId = 0;
+  await test("A super_admin's broadcast lands with scope_town = NULL and reaches a user in any town", async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts WHERE scope_town IS NULL');
+    const { status, body } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { title: 'تعميم عام للاختبار', message: 'اختبار تعميم عام', duration: 'day', tone: 'urgent' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.broadcasts.length, 1, 'a super_admin broadcast must write exactly one row');
+    assert.strictEqual(body.broadcasts[0].scope_town, null);
+    globalBroadcastId = body.broadcasts[0].id;
+    broadcastCleanupBroadcastIds.push(globalBroadcastId);
+
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts WHERE scope_town IS NULL');
+    assert.strictEqual(Number(after.total), Number(before.total) + 1);
+
+    const live = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(live.body.broadcasts.some(b => b.id === globalBroadcastId), 'a global broadcast must reach a user in any town');
+  });
+
+  let townBroadcastId = 0;
+  await test("A town admin's broadcast produces one row per own town and reaches only those users", async () => {
+    const { status, body } = await api('POST', '/api/admin/broadcast', {
+      token: scopedAdminToken,
+      body: { title: 'تعميم بلدة الاختبار', message: 'اختبار تعميم بلدة', duration: 'day', tone: 'info' }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.broadcasts.length, 1, 'the scoped admin owns exactly one town, so exactly one row');
+    assert.strictEqual(body.broadcasts[0].scope_town, scopedTown);
+    townBroadcastId = body.broadcasts[0].id;
+    broadcastCleanupBroadcastIds.push(townBroadcastId);
+
+    const inTown = await api('GET', '/api/broadcasts/live', { token: broadcastTownUser.token });
+    assert.ok(inTown.body.broadcasts.some(b => b.id === townBroadcastId), 'a user in the broadcast town must see it');
+  });
+
+  await test('A user in another town does NOT see a town-scoped broadcast', async () => {
+    const outside = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(!outside.body.broadcasts.some(b => b.id === townBroadcastId), 'a user outside the broadcast town must never see it');
+  });
+
+  await test("A town admin naming a town outside their scope gets 404, and writes zero rows", async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    const { status } = await api('POST', '/api/admin/broadcast', {
+      token: scopedAdminToken,
+      body: { message: 'محاولة تعميم خارج النطاق', duration: 'day', towns: [outOfScopeTown] }
+    });
+    assert.strictEqual(status, 404, "a town outside this admin's scope must never be confirmed to exist");
+
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    assert.strictEqual(Number(after.total), Number(before.total), 'a rejected broadcast must write zero rows');
+  });
+
+  await test('An admin with no assigned towns is refused and writes zero rows', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    const { status, body } = await api('POST', '/api/admin/broadcast', {
+      token: noScopeAdminToken,
+      body: { message: 'محاولة بث بلا بلدات' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/بلدة/.test(body.message || ''), 'expected a clear Arabic notice that this admin holds no towns');
+
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    assert.strictEqual(Number(after.total), Number(before.total), 'a refused broadcast must write zero rows, never a silent success');
+  });
+
+  let expiredBroadcastId = 0;
+  await test('An expired broadcast is absent from the live read and present in the notification centre', async () => {
+    const { body } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'تعميم سينتهي', duration: 'hour' }
+    });
+    expiredBroadcastId = body.broadcasts[0].id;
+    broadcastCleanupBroadcastIds.push(expiredBroadcastId);
+    await db.execute('UPDATE broadcasts SET expires_at = ? WHERE id = ?', ['2020-01-01 00:00:00', expiredBroadcastId]);
+
+    const live = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(!live.body.broadcasts.some(b => b.id === expiredBroadcastId), 'an expired broadcast must not appear in the live ticker');
+
+    const center = await api('GET', '/api/notifications', { token: broadcastOtherTownUser.token });
+    assert.ok(
+      center.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === expiredBroadcastId),
+      'an expired broadcast must still appear in the notification centre — expiry ends the ticker, not the record'
+    );
+  });
+
+  let quietBroadcastId = 0;
+  await test('A «بلا شريط» broadcast (expires_at = NULL) never appears in the live read', async () => {
+    const { body } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'تعميم هادئ بلا شريط', duration: 'none' }
+    });
+    quietBroadcastId = body.broadcasts[0].id;
+    broadcastCleanupBroadcastIds.push(quietBroadcastId);
+    assert.strictEqual(body.broadcasts[0].expires_at, null);
+
+    const live = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(!live.body.broadcasts.some(b => b.id === quietBroadcastId));
+
+    const center = await api('GET', '/api/notifications', { token: broadcastOtherTownUser.token });
+    assert.ok(center.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === quietBroadcastId));
+  });
+
+  await test("Dismissing hides a broadcast from the live read for that user only, moves it to read in their centre, and it stays there", async () => {
+    const before = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(before.body.broadcasts.some(b => b.id === globalBroadcastId));
+
+    const beforeCenter = await api('GET', '/api/notifications', { token: broadcastOtherTownUser.token });
+    const beforeEntry = beforeCenter.body.notifications.find(n => n.type === 'broadcast' && n.broadcast_id === globalBroadcastId);
+    assert.ok(beforeEntry, 'expected the global broadcast in the centre before dismissing');
+    assert.strictEqual(beforeEntry.is_read, false, 'an un-dismissed broadcast must read as unread');
+
+    const dismiss = await api('PATCH', `/api/broadcasts/${globalBroadcastId}/dismiss`, { token: broadcastOtherTownUser.token });
+    assert.strictEqual(dismiss.status, 200);
+
+    const after = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
+    assert.ok(!after.body.broadcasts.some(b => b.id === globalBroadcastId), 'dismissing must hide it for this user');
+
+    const otherUser = await api('GET', '/api/broadcasts/live', { token: broadcastTownUser.token });
+    assert.ok(otherUser.body.broadcasts.some(b => b.id === globalBroadcastId), 'dismissing must not hide it for anyone else');
+
+    const center = await api('GET', '/api/notifications', { token: broadcastOtherTownUser.token });
+    const entry = center.body.notifications.find(n => n.type === 'broadcast' && n.broadcast_id === globalBroadcastId);
+    assert.ok(entry, 'a dismissed broadcast must stay in the notification centre');
+    assert.strictEqual(entry.is_read, true, 'dismissing a broadcast must also mark it read in the centre');
+
+    const again = await api('PATCH', `/api/broadcasts/${globalBroadcastId}/dismiss`, { token: broadcastOtherTownUser.token });
+    assert.strictEqual(again.status, 200, 'dismissing twice must be idempotent, not an error');
+  });
+
+  await test("Dismissing a broadcast outside the caller's scope is 404", async () => {
+    const { status } = await api('PATCH', `/api/broadcasts/${townBroadcastId}/dismiss`, { token: broadcastOtherTownUser.token });
+    assert.strictEqual(status, 404);
+  });
+
+  await test('A user created AFTER the broadcast still sees it — proves no fan-out', async () => {
+    const lateUser = await createUserInTown('مستخدم مسجَّل بعد التعميم', scopedTown);
+    broadcastCleanupUserIds.push(lateUser.id);
+
+    const live = await api('GET', '/api/broadcasts/live', { token: lateUser.token });
+    assert.ok(
+      live.body.broadcasts.some(b => b.id === townBroadcastId),
+      'a broadcast sent before registration must still reach a newly registered user in its town'
+    );
+  });
+
+  await test('An invalid tone is rejected in Arabic', async () => {
+    const { status, body } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'اختبار نغمة فاسدة', tone: 'happy' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), 'expected an Arabic error message');
+  });
+
+  await test('A past expires_at is rejected in Arabic', async () => {
+    const { status, body } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'اختبار تاريخ ماضٍ', expires_at: '2020-01-01T00:00:00.000Z' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), 'expected an Arabic error message');
+  });
+
+  await test('An expires_at too far in the future is rejected', async () => {
+    const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const { status } = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'اختبار تاريخ بعيد جداً', expires_at: farFuture }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await db.query(
+    `DELETE FROM broadcast_views WHERE user_id IN (${broadcastCleanupUserIds.map(() => '?').join(', ')})`,
+    broadcastCleanupUserIds
+  );
+  if (broadcastCleanupBroadcastIds.length) {
+    await db.query(
+      `DELETE FROM broadcasts WHERE id IN (${broadcastCleanupBroadcastIds.map(() => '?').join(', ')})`,
+      broadcastCleanupBroadcastIds
+    );
+  }
+  await db.query(
+    `DELETE FROM users WHERE id IN (${broadcastCleanupUserIds.map(() => '?').join(', ')})`,
+    broadcastCleanupUserIds
+  );
 
   console.log('\nRole management: the only path that appoints or removes an admin');
 

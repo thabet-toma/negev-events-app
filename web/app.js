@@ -3109,15 +3109,26 @@ function renderNotificationsList() {
     container.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا توجد إشعارات بعد</p></div>';
     return;
   }
-  container.innerHTML = notificationsList.map(n => `
-    <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${n.id})">
+  // A merged entry (issue #85, story 30) is either a personal notification
+  // (`id`, marked read via PATCH /api/notifications/:id/read) or a broadcast
+  // (`broadcast_id`, no `id` at all — marked read via the SAME
+  // PATCH /api/broadcasts/:id/dismiss story 29 already uses, see
+  // notifications.service.js). `notifications.id` and `broadcasts.id` are two
+  // independent, overlapping AUTO_INCREMENT counters, so which endpoint gets
+  // called must be decided by entry kind, never by treating both as one `id`.
+  container.innerHTML = notificationsList.map(n => {
+    const isBroadcast = isBroadcastEntry(n);
+    const clickArgs = isBroadcast ? `true, ${n.broadcast_id}` : `false, ${n.id}`;
+    return `
+    <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${clickArgs})">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
         <strong style="color:${n.is_read ? 'var(--ink-soft)' : 'var(--sky)'};">${escapeHtml(n.title)}</strong>
         ${!n.is_read ? '<span class="status-tag pending">جديد</span>' : ''}
       </div>
       <p style="margin-top:6px; color:var(--ink-soft); font-size:0.88rem;">${escapeHtml(n.body)}</p>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function toggleNotificationsPanel() {
@@ -3128,11 +3139,22 @@ function closeNotificationsModal() {
   document.getElementById('notificationsModal').style.display = 'none';
 }
 
-async function markNotificationRead(notificationId) {
-  const notification = notificationsList.find(n => n.id === notificationId);
+// Which kind an entry is, decided by a field a broadcast STRUCTURALLY has and
+// a personal notification cannot: `notifications.type` is a free-text
+// VARCHAR(40) written by application code, so a personal row whose type
+// happened to be 'broadcast' would otherwise be routed to the wrong endpoint.
+function isBroadcastEntry(entry) {
+  return entry.broadcast_id !== undefined;
+}
+
+async function markNotificationRead(isBroadcast, id) {
+  const notification = isBroadcast
+    ? notificationsList.find(n => isBroadcastEntry(n) && n.broadcast_id === id)
+    : notificationsList.find(n => !isBroadcastEntry(n) && n.id === id);
   if (!notification || notification.is_read) return;
+  const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
   try {
-    const res = await apiFetch(`/api/notifications/${notificationId}/read`, { method: 'PATCH', auth: true });
+    const res = await apiFetch(endpoint, { method: 'PATCH', auth: true });
     if (res.ok) {
       notification.is_read = true;
       renderNotificationsList();

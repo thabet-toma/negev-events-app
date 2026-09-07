@@ -66,6 +66,32 @@ async function townScopeClause(user, alias = 'e') {
 }
 
 /**
+ * Resolves which towns a broadcast from `user` (a non-super-admin, town-
+ * scoped `admin`) should be written to (issue #85, story 23/24) — the sole
+ * module that decides "which towns may this admin act on" (CLAUDE.md:
+ * «نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر»), same as
+ * `assertEventInScope` for a single event. `requestedTowns` empty defaults
+ * to every town `user` owns; naming even one town outside that ownership is
+ * 404, never 403 — the same "never confirm what the caller doesn't own"
+ * rule `assertEventInScope` already follows. An admin owning zero towns is
+ * refused outright before any town list is even considered (story 24).
+ */
+async function resolveBroadcastTowns(user, requestedTowns) {
+  const ownTowns = await listTownsFor(user);
+  if (!ownTowns.length) {
+    throw ApiError.badRequest('لا تملك أي بلدة مُسنَدة، فلا يمكنك بثّ تعميم لأحد');
+  }
+  if (!requestedTowns.length) return ownTowns;
+
+  for (const town of requestedTowns) {
+    if (!ownTowns.includes(town)) {
+      throw ApiError.notFound('بلدة غير موجودة ضمن نطاقك');
+    }
+  }
+  return requestedTowns;
+}
+
+/**
  * Loads one event, throwing the same 404 whether it does not exist at all or
  * exists outside `user`'s towns — a 403 would confirm existence to someone
  * who cannot see it, which is exactly what rule 3 of the admin-scoping spec
@@ -86,5 +112,6 @@ module.exports = {
   listTownsFor,
   isAdminForTown,
   townScopeClause,
+  resolveBroadcastTowns,
   assertEventInScope
 };

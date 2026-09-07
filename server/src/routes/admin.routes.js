@@ -5,11 +5,12 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const admin = require('../services/admin.service');
 const adminScope = require('../services/adminScope.service');
+const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const realtime = require('../realtime');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, requireFields, parseId } = require('../middleware/validate');
+const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
 const { EVENT_STATUSES, TOWNS } = require('../constants');
 
 const router = express.Router();
@@ -164,21 +165,87 @@ router.patch('/admin/users/:id/role', requireAdmin, asyncHandler(async (req, res
   res.json({ success: true, user, message: 'تم إلغاء صلاحيات الإدارة عن هذا المستخدم' });
 }));
 
-router.post('/admin/broadcast', requireSuperAdmin, asyncHandler(async (req, res) => {
+/** `duration` (one of broadcastsService.BROADCAST_DURATIONS) wins over a raw `expires_at` when both are sent; neither given means a quiet broadcast (`expires_at = NULL`, story 26). */
+function resolveBroadcastExpiry(body) {
+  const duration = cleanString(body.duration, 20);
+  if (duration) return broadcastsService.durationToExpiresAt(duration);
+  if (body.expires_at !== undefined) {
+    return broadcastsService.validateExpiresAt(optionalDateTime(body.expires_at, 'موعد انتهاء الشريط'));
+  }
+  return null;
+}
+
+/**
+ * Broadcasts a general announcement — no longer super_admin-only (story 23):
+ * the guard here is the router-wide `requireAdmin` from line 29, and the
+ * AUDIENCE, not the router, decides who reaches whom. A super_admin always
+ * writes one row with `scope_town = NULL` (story 22 — everyone). A town
+ * admin names one or more of its OWN towns, resolved entirely by
+ * `adminScope.resolveBroadcastTowns` (never here) — a town outside that
+ * scope is 404, never 403; naming none defaults to all of the admin's towns;
+ * an admin holding zero towns is refused outright, zero rows written, never
+ * a silent success (story 24).
+ */
+router.post('/admin/broadcast', asyncHandler(async (req, res) => {
   requireFields(req.body, ['message']);
 
   const title = cleanString(req.body.title, 200) || '📢 تنبيه عام من إدارة أعراسنا (مناسبات النقب)';
   const message = cleanString(req.body.message, 2000);
 
-  await admin.recordBroadcast({ title, message, sentBy: req.user.id });
-  realtime.emit('system_broadcast', {
-    title,
-    message,
-    time: new Date().toLocaleTimeString('ar-EG'),
-    created_at: new Date().toISOString()
+  const tone = cleanString(req.body.tone, 20) || 'info';
+  if (!broadcastsService.BROADCAST_TONES.includes(tone)) {
+    throw ApiError.badRequest('نغمة التعميم غير صالحة — الخيارات: عادي، عاجل، وقور');
+  }
+
+  const expiresAt = resolveBroadcastExpiry(req.body);
+
+  let scopeTowns;
+  if (req.user.role === 'super_admin') {
+    scopeTowns = [null];
+  } else {
+    let requestedTowns = [];
+    if (req.body.towns !== undefined) {
+      if (!Array.isArray(req.body.towns)) {
+        throw ApiError.badRequest('قائمة البلدات غير صالحة');
+      }
+      requestedTowns = [...new Set(req.body.towns.map(town => cleanString(town, 100)).filter(Boolean))];
+    }
+
+    // Which towns this admin may actually reach — resolved entirely inside
+    // adminScope.service.js, never here (CLAUDE.md: "نطاق الأدمن المحلي داخل
+    // الاستعلام لا في الراوتر"). This route only shapes the raw request body.
+    scopeTowns = await adminScope.resolveBroadcastTowns(req.user, requestedTowns);
+  }
+
+  const rows = await broadcastsService.sendBroadcast({
+    title, message, sentBy: req.user.id, expiresAt, tone, scopeTowns
   });
 
-  res.json({ success: true, message: 'تم بث الإشعار لجميع المستخدمين بنجاح' });
+  const isGlobal = scopeTowns.length === 1 && scopeTowns[0] === null;
+  if (isGlobal) {
+    realtime.emit('system_broadcast', {
+      title,
+      message,
+      time: new Date().toLocaleTimeString('ar-EG'),
+      created_at: new Date().toISOString()
+    });
+  } else {
+    // realtime.emit has no rooms — it reaches EVERY connected client
+    // (realtime/index.js) — so a town-scoped broadcast's text must never
+    // travel through it. This channel carries only what a client needs to
+    // decide to re-fetch GET /api/broadcasts/live, which is scoped
+    // server-side to the towns/user it actually applies to.
+    for (const row of rows) {
+      realtime.emit('town_broadcast', {
+        id: row.id,
+        scope_town: row.scope_town,
+        tone: row.tone,
+        expires_at: row.expires_at
+      });
+    }
+  }
+
+  res.json({ success: true, message: 'تم بث التعميم بنجاح', broadcasts: rows });
 }));
 
 // --- Admin ↔ town assignment — super_admin only, guarded on this router too

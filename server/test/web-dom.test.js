@@ -840,6 +840,105 @@ async function run() {
     assert.strictEqual(solemnBtn.textContent.trim(), 'أرسل النعي');
   });
 
+  console.log('\nNotification centre — merged personal + broadcast feed (issue #85, review round 2 FIX 1)');
+
+  /**
+   * `notifications.id` and `broadcasts.id` are two independent, overlapping
+   * AUTO_INCREMENT counters — this fixture deliberately gives the personal
+   * notification and the broadcast entry the SAME numeric id (5) to
+   * reproduce that collision exactly. Before FIX 1, `renderNotificationsList`
+   * built `onclick="markNotificationRead(${n.id})"` off a shared `id` field
+   * and always called `PATCH /api/notifications/:id/read` — so clicking the
+   * broadcast card here would have called `/api/notifications/5/read`
+   * instead of `/api/broadcasts/5/dismiss`, either 404ing or marking an
+   * unrelated personal notification of this same id read.
+   */
+  const MIXED_NOTIFICATIONS_FIXTURE = [
+    {
+      id: 5, type: 'event_soon', title: 'إشعار شخصي', body: 'نص شخصي',
+      is_read: false, user_id: 501, event_id: null, created_at: '2026-09-05T10:00:00.000Z'
+    },
+    {
+      broadcast_id: 5, type: 'broadcast', title: 'تعميم عام', body: 'نص التعميم',
+      tone: 'info', expires_at: null, scope_town: null, is_read: false, created_at: '2026-09-04T10:00:00.000Z'
+    }
+  ];
+
+  /** Every PATCH this section's fetch stub receives, in call order — `{ url, method }`. */
+  function buildTrackingFetchStub() {
+    const calls = [];
+    const fetchStub = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method !== 'GET') calls.push({ url: requestPath, method });
+
+      if (requestPath === '/api/notifications' && method === 'GET') {
+        return jsonResponse({ success: true, notifications: MIXED_NOTIFICATIONS_FIXTURE });
+      }
+      if (requestPath === '/api/notifications/5/read' && method === 'PATCH') {
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/broadcasts/5/dismiss' && method === 'PATCH') {
+        return jsonResponse({ success: true });
+      }
+      // Any other path — e.g. the pre-FIX-1 shape's /api/notifications/undefined/read
+      // — is a real 404 here, same as Express's own notFound handler would give an
+      // unmatched route, not a masking default 200.
+      return jsonResponse({ success: false, message: 'غير موجود' }, { status: 404 });
+    };
+    return { fetchStub, calls };
+  }
+
+  await test('the merged feed renders both a personal notification and a broadcast entry, both marked unread', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { fetchStub } = buildTrackingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchNotifications();
+
+    const cards = dom.window.document.querySelectorAll('#notificationsList .event-card');
+    assert.strictEqual(cards.length, 2, 'expected both the personal notification and the broadcast to render');
+    assert.ok(cards[0].textContent.includes('إشعار شخصي'));
+    assert.ok(cards[1].textContent.includes('تعميم عام'));
+    assert.strictEqual(cards[0].querySelectorAll('.status-tag.pending').length, 1, 'the personal entry must show as new');
+    assert.strictEqual(cards[1].querySelectorAll('.status-tag.pending').length, 1, 'the broadcast entry must show as new too');
+
+    const badge = dom.window.document.getElementById('notificationsBadge');
+    assert.strictEqual(badge.textContent, '2', 'expected both unread entries counted in the badge');
+  });
+
+  await test('clicking the broadcast card calls PATCH /api/broadcasts/:id/dismiss, never /api/notifications/:id/read — even though the ids collide', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { fetchStub, calls } = buildTrackingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchNotifications();
+    const broadcastCard = dom.window.document.querySelectorAll('#notificationsList .event-card')[1];
+    broadcastCard.click();
+    await waitFor(() => calls.length > 0);
+
+    assert.strictEqual(calls.length, 1, `expected exactly one PATCH call, got: ${JSON.stringify(calls)}`);
+    assert.strictEqual(calls[0].url, '/api/broadcasts/5/dismiss', 'a broadcast entry must dismiss the broadcast, never touch /api/notifications/:id/read');
+  });
+
+  await test('the badge reaches zero once every entry — personal and broadcast alike — has been acted on', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { fetchStub } = buildTrackingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchNotifications();
+    const [personalCard, broadcastCard] = dom.window.document.querySelectorAll('#notificationsList .event-card');
+    personalCard.click();
+    broadcastCard.click();
+    await waitFor(() => {
+      const badge = dom.window.document.getElementById('notificationsBadge');
+      return badge.style.display === 'none';
+    });
+
+    const badge = dom.window.document.getElementById('notificationsBadge');
+    assert.strictEqual(badge.style.display, 'none', 'a broadcast entry must be reachable to zero unread, not permanently unread');
+  });
+
   console.log('\nAdmin panel — the emoji icon fields');
 
   /**
