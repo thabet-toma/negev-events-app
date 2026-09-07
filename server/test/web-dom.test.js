@@ -485,6 +485,35 @@ async function run() {
     assert.ok(label.textContent.includes('سهرة الشباب'), `expected the field's own label, got "${label.textContent}"`);
   });
 
+  /**
+   * The field-key switch itself moved into web/occasionForm.js and is now
+   * shared with admin.js's direct-publish form (buildOccasionFieldsHtml) —
+   * app.js supplies overrides only for location_name/poster_url/audio_url/
+   * artist_image_url, the four fields with a richer treatment than a plain
+   * input. This pins that the public form still gets ITS OWN rich markup for
+   * those (map, crop entry point) and its own button styling, not the admin
+   * panel's plain defaults or its button class.
+   */
+  await test('after the shared field-renderer refactor, the public form still has its own map, crop entry point, and honoree-button styling', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addLocationPickerMap') !== null);
+    assertNoUnhandledRejections('publish form / shared renderer — location + poster');
+
+    assert.ok(document.getElementById('addLocationPickerMap'), 'expected the Leaflet map container — the public form must keep its rich location picker, not the admin panel\'s plain text field');
+    assert.ok(document.getElementById('addLat'), 'expected the hidden latitude input the map writes into');
+    assert.ok(document.getElementById('addLng'), 'expected the hidden longitude input the map writes into');
+    assert.ok(document.getElementById('posterUploadBox'), 'expected the poster crop editor\'s entry point, not a plain file input');
+    assert.ok(document.getElementById('addPosterFile'), 'expected the poster file input inside the crop editor\'s upload box');
+
+    const honoreesGroup = document.getElementById('addHonoreesList').closest('.form-group');
+    const addButton = honoreesGroup.querySelector('button.add-nokoot-btn');
+    assert.ok(addButton, 'expected the public form\'s own styled honoree-add button (add-nokoot-btn), not the admin panel\'s (btn-approve)');
+    assert.ok(!honoreesGroup.querySelector('button.btn-approve'), 'must not borrow the admin panel\'s button class — styles.css does not style it');
+  });
+
   console.log('\nPublish form — poster crop editor (Facebook-style, #optional-crop)');
 
   /**
@@ -844,8 +873,11 @@ async function run() {
    * honorees[] — events.routes.js rejects that unconditionally
    * (parseId(undefined) → "نوع المناسبة غير صالح", the exact alert the super
    * admin saw). These pin the fixed behaviour: the type picker drives the
-   * rest of the form, exactly like web/app.js's publish form, but built by
-   * admin.js's own leaner renderer (no map, no crop editor).
+   * rest of the form, built by the SAME field-key renderer web/app.js's own
+   * publish form uses (buildOccasionFieldsHtml, web/occasionForm.js) — the
+   * admin panel supplies no overrides, so it gets the plain default markup
+   * for every field (no map, no crop editor) instead of a second copy of the
+   * switch.
    */
   await test('initDirectAddForm() builds a type picker and the first active type\'s own fields — no hardcoded wedding form', async () => {
     const dom = buildAdminEnv();
@@ -858,12 +890,12 @@ async function run() {
     assert.ok(document.getElementById('dirHonoreesList'), 'expected an honorees list for the (default-selected) عرس type');
     assert.ok(document.querySelector('#dirHonoreesList .honoree-name'), 'expected at least one honoree row pre-added');
     assert.ok(document.getElementById('dirTown'), 'expected a town select');
-    assert.ok(document.getElementById('dirDate'), 'expected an event-date input');
+    assert.ok(document.getElementById('dirEventDate'), 'expected an event-date input');
     assert.ok(document.getElementById('dirYouthDate'), 'عرس defines a youth-party field');
-    assert.ok(document.getElementById('dirLocation'), 'عرس defines a location field');
-    assert.ok(document.getElementById('dirPoster'), 'عرس defines a poster field');
+    assert.ok(document.getElementById('dirLocationName'), 'عرس defines a location field');
+    assert.ok(document.getElementById('dirPosterFile'), 'عرس defines a poster field');
 
-    assert.strictEqual(document.getElementById('dirClan'), null, 'family_clan is not on the عرس fixture — it must not render');
+    assert.strictEqual(document.getElementById('dirFamily'), null, 'family_clan is not on the عرس fixture — it must not render');
     assert.strictEqual(document.getElementById('dirGroom'), null, 'the old hardcoded groom_name field must be gone entirely');
   });
 
@@ -878,7 +910,18 @@ async function run() {
     const label = document.getElementById('dirHonoreesList').closest('.form-group').querySelector('label');
     assert.ok(label.textContent.includes('المتوفَّى'), `expected the funeral type's own label, got "${label.textContent}"`);
     assert.strictEqual(document.getElementById('dirYouthDate'), null, 'a funeral type has no youth-party field in this fixture — it must not render');
-    assert.strictEqual(document.getElementById('dirPoster'), null, 'a funeral type has no poster field in this fixture — it must not render');
+    assert.strictEqual(document.getElementById('dirPosterFile'), null, 'a funeral type has no poster field in this fixture — it must not render');
+  });
+
+  await test('the admin honoree-add button keeps the panel\'s own styling, not the public site\'s', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+
+    const button = document.querySelector('#dirHonoreesList + button');
+    assert.ok(button, 'expected an add-honoree button right after the list');
+    assert.ok(button.classList.contains('btn-approve'), 'the admin panel button must use its own admin.css class');
+    assert.ok(!button.classList.contains('add-nokoot-btn'), 'must not borrow the public site\'s button class — admin.css does not style it');
   });
 
   await test('a required field left empty is rejected client-side with that type\'s own label', async () => {
@@ -888,7 +931,7 @@ async function run() {
     const { document } = win;
 
     document.querySelector('#dirHonoreesList .honoree-name').value = 'محمد وفاطمة';
-    document.getElementById('dirDate').value = '2027-05-01';
+    document.getElementById('dirEventDate').value = '2027-05-01';
     // location_name («موقع القاعة» على هذا النوع تحديداً) يبقى فارغاً عمداً
 
     let alertedWith = null;
@@ -910,8 +953,8 @@ async function run() {
     const { document } = win;
 
     document.querySelector('#dirHonoreesList .honoree-name').value = 'سالم ونورة';
-    document.getElementById('dirDate').value = '2027-06-15';
-    document.getElementById('dirLocation').value = 'ديوان آل تجربة';
+    document.getElementById('dirEventDate').value = '2027-06-15';
+    document.getElementById('dirLocationName').value = 'ديوان آل تجربة';
 
     let captured = null;
     win.fetch = async (url, opts = {}) => {

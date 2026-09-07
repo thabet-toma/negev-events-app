@@ -1535,20 +1535,99 @@ function selectOccasionType(typeId) {
   renderOccasionForm(type);
 }
 
+/**
+ * تُصنَع مرّة واحدة فقط، لا في كل استدعاء لـrenderOccasionForm — الدوال التي
+ * تحملها (overrides، renderHonoreeAddButton) لا حالة لها، وbuildOccasionFieldsHtml
+ * (occasionForm.js) هي مالكة الحقول الأربعة عشر المشتركة؛ هنا فقط الحقول
+ * الأربعة ذات المعالجة الغنية التي لا تملكها اللوحة (خريطة، محرِّر قص،
+ * صندوقا رفع مزخرَفان)، وأسماء معالجات onchange الخاصة بهذه الصفحة.
+ */
+const PUBLISH_FORM_FIELD_CTX = {
+  idPrefix: 'add',
+  groupUploads: true,
+  onTownChange: 'handleAddTownChange',
+  onVillageChange: 'handleAddVillageChange',
+  onDateChange: 'checkDateCollisionLive',
+  renderHonoreeAddButton: containerId => `
+    <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('${containerId}')">
+      <i class="fa-solid fa-plus"></i> إضافة اسم
+    </button>`,
+  overrides: {
+    location_name: field => `
+      <div class="form-group">
+        <label>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</label>
+        <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان بالقرب من الدوار الشرقي">
+      </div>
+      <div class="form-group">
+        <div class="location-picker-toolbar">
+          <label>حدّد الموقع على الخريطة</label>
+          <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
+            <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
+          </button>
+        </div>
+        <div id="addLocationPickerMap" class="location-picker-map"></div>
+        <p class="location-picker-hint">اسحب الدبّوس إلى الموقع الصحيح، أو انقر على المكان على الخريطة</p>
+        <input type="hidden" id="addLat">
+        <input type="hidden" id="addLng">
+      </div>`,
+    poster_url: field => `
+      <div class="poster-field">
+        <div class="upload-box" id="posterUploadBox">
+          <i class="fa-solid fa-image upload-icon"></i>
+          <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+          <p>اختر صورة من الهاتف</p>
+          <input type="file" id="addPosterFile" accept="image/*">
+        </div>
+        <div id="posterCropEditor" class="poster-crop-editor" hidden>
+          <div class="poster-crop-canvas-wrap">
+            <canvas id="posterCropCanvas"></canvas>
+            <div class="poster-crop-guide" id="posterCropGuide"></div>
+            <div class="poster-crop-box" id="posterCropBox">
+              <div class="poster-crop-handle" data-corner="tl"></div>
+              <div class="poster-crop-handle" data-corner="tr"></div>
+              <div class="poster-crop-handle" data-corner="bl"></div>
+              <div class="poster-crop-handle" data-corner="br"></div>
+            </div>
+          </div>
+          <p class="poster-crop-hint">اسحب زوايا المربع لتحديد الجزء الذي تريد إظهاره، أو اسحب من الوسط لتحريكه. المربع المنقّط توضيحي فقط لما ستعرضه بطاقة المشاركة، ولا يفرض عليك شيئاً.</p>
+          <div class="poster-crop-actions">
+            <button type="button" class="submit-btn" onclick="confirmPosterCrop()">تأكيد القص</button>
+            <button type="button" class="record-nokoot-btn" onclick="usePosterWholeImage()">استخدام الصورة كاملة</button>
+          </div>
+        </div>
+        <div id="posterCropPreview" class="poster-crop-preview" hidden>
+          <img id="posterCropPreviewImg" alt="الصورة بعد القص">
+          <button type="button" class="record-nokoot-btn" onclick="reopenPosterCropEditor()">
+            <i class="fa-solid fa-crop"></i> تعديل الاقتصاص
+          </button>
+          <button type="button" class="record-nokoot-btn" onclick="choosePosterAgain()">
+            <i class="fa-solid fa-rotate"></i> اختيار صورة أخرى
+          </button>
+        </div>
+      </div>`,
+    audio_url: field => `
+      <div class="upload-box audio-upload">
+        <i class="fa-solid fa-music upload-icon"></i>
+        <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+        <p>أرفق شيلة أو مقطعاً صوتياً (MP3/M4A)</p>
+        <input type="file" id="addAudioFile" accept="audio/*">
+      </div>`,
+    artist_image_url: field => `
+      <div class="upload-box">
+        <i class="fa-solid fa-image upload-icon"></i>
+        <h4>${escapeHtml(field.label)}${field.is_required ? ' *' : ''}</h4>
+        <p>صورة الفنان (اختياري)</p>
+        <input type="file" id="addArtistImageFile" accept="image/*">
+      </div>`
+  }
+};
+
 /** يبني بقية النموذج من حقول هذا النوع تحديداً — الظاهر فقط، بتسميته هو. */
 function renderOccasionForm(type) {
   selectedOccasionType = type;
-  const orderedFields = [...type.fields].sort((a, b) => a.position - b.position);
-  const UPLOAD_FIELD_KEYS = ['poster_url', 'audio_url', 'artist_image_url'];
-  const uploadFields = orderedFields.filter(f => UPLOAD_FIELD_KEYS.includes(f.field_key));
-  const otherFields = orderedFields.filter(f => !UPLOAD_FIELD_KEYS.includes(f.field_key));
 
   const container = document.getElementById('dynamicFormFields');
-  let html = otherFields.map(renderFieldHtml).join('');
-  if (uploadFields.length) {
-    html += `<div class="upload-section">${uploadFields.map(renderFieldHtml).join('')}</div>`;
-  }
-  container.innerHTML = html;
+  container.innerHTML = buildOccasionFieldsHtml(type, PUBLISH_FORM_FIELD_CTX);
 
   const fieldsByKey = {};
   for (const f of type.fields) fieldsByKey[f.field_key] = f;
@@ -1573,167 +1652,6 @@ function renderOccasionForm(type) {
   if (fieldsByKey.location_name) initLocationPickerMap();
 
   document.getElementById('collisionAlert').style.display = 'none';
-}
-
-/** حقول المناسبة المعروفة (server/src/constants.js) — كل نوع يختار الظاهر منها فقط، هذا الجدول لا يخترع حقلاً جديداً. */
-function renderFieldHtml(field) {
-  const req = field.is_required ? ' *' : '';
-  const label = escapeHtml(field.label);
-
-  switch (field.field_key) {
-    case 'honorees':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <div id="addHonoreesList"></div>
-          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('addHonoreesList')">
-            <i class="fa-solid fa-plus"></i> إضافة اسم
-          </button>
-        </div>`;
-    case 'town':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <select id="addTown" onchange="handleAddTownChange()"></select>
-        </div>
-        <!-- يظهر فقط تحت بند "القرى والتجمعات" — إلزامي عندها (خريطة #21) -->
-        <div class="form-group" id="addVillageGroup" style="display:none;">
-          <label>القرية *</label>
-          <select id="addVillage" onchange="handleAddVillageChange()"></select>
-        </div>`;
-    case 'event_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="addEventDate" onchange="checkDateCollisionLive()">
-        </div>`;
-    case 'event_end_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="addEventEndDate" onchange="checkDateCollisionLive()">
-        </div>`;
-    case 'youth_party_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="addYouthDate">
-        </div>`;
-    case 'dinner_time':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addDinnerTime" placeholder="مثال: 7:30 مساءً">
-        </div>`;
-    case 'host_phone':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="tel" id="addHostPhone" placeholder="05XXXXXXXX">
-        </div>`;
-    case 'title':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addTitle" placeholder="اتركه فارغاً ليُولَّد تلقائياً">
-        </div>`;
-    case 'family_clan':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addFamily" placeholder="مثال: آل الأطرش">
-        </div>`;
-    case 'location_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addLocationName" placeholder="مثال: ديوان آل فلان بالقرب من الدوار الشرقي">
-        </div>
-        <div class="form-group">
-          <div class="location-picker-toolbar">
-            <label>حدّد الموقع على الخريطة</label>
-            <button type="button" id="useMyLocationBtn" class="use-location-btn" onclick="centerPickerOnMyLocation()" style="display:none;">
-              <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن (لتوسيط الخريطة فقط)
-            </button>
-          </div>
-          <div id="addLocationPickerMap" class="location-picker-map"></div>
-          <p class="location-picker-hint">اسحب الدبّوس إلى الموقع الصحيح، أو انقر على المكان على الخريطة</p>
-          <input type="hidden" id="addLat">
-          <input type="hidden" id="addLng">
-        </div>`;
-    case 'secondary_location_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addSecondaryLocationName" placeholder="مكان إضافي (اختياري)">
-        </div>`;
-    case 'poster_url':
-      return `
-        <div class="poster-field">
-          <div class="upload-box" id="posterUploadBox">
-            <i class="fa-solid fa-image upload-icon"></i>
-            <h4>${label}${req}</h4>
-            <p>اختر صورة من الهاتف</p>
-            <input type="file" id="addPosterFile" accept="image/*">
-          </div>
-          <div id="posterCropEditor" class="poster-crop-editor" hidden>
-            <div class="poster-crop-canvas-wrap">
-              <canvas id="posterCropCanvas"></canvas>
-              <div class="poster-crop-guide" id="posterCropGuide"></div>
-              <div class="poster-crop-box" id="posterCropBox">
-                <div class="poster-crop-handle" data-corner="tl"></div>
-                <div class="poster-crop-handle" data-corner="tr"></div>
-                <div class="poster-crop-handle" data-corner="bl"></div>
-                <div class="poster-crop-handle" data-corner="br"></div>
-              </div>
-            </div>
-            <p class="poster-crop-hint">اسحب زوايا المربع لتحديد الجزء الذي تريد إظهاره، أو اسحب من الوسط لتحريكه. المربع المنقّط توضيحي فقط لما ستعرضه بطاقة المشاركة، ولا يفرض عليك شيئاً.</p>
-            <div class="poster-crop-actions">
-              <button type="button" class="submit-btn" onclick="confirmPosterCrop()">تأكيد القص</button>
-              <button type="button" class="record-nokoot-btn" onclick="usePosterWholeImage()">استخدام الصورة كاملة</button>
-            </div>
-          </div>
-          <div id="posterCropPreview" class="poster-crop-preview" hidden>
-            <img id="posterCropPreviewImg" alt="الصورة بعد القص">
-            <button type="button" class="record-nokoot-btn" onclick="reopenPosterCropEditor()">
-              <i class="fa-solid fa-crop"></i> تعديل الاقتصاص
-            </button>
-            <button type="button" class="record-nokoot-btn" onclick="choosePosterAgain()">
-              <i class="fa-solid fa-rotate"></i> اختيار صورة أخرى
-            </button>
-          </div>
-        </div>`;
-    case 'audio_url':
-      return `
-        <div class="upload-box audio-upload">
-          <i class="fa-solid fa-music upload-icon"></i>
-          <h4>${label}${req}</h4>
-          <p>أرفق شيلة أو مقطعاً صوتياً (MP3/M4A)</p>
-          <input type="file" id="addAudioFile" accept="audio/*">
-        </div>`;
-    case 'audio_title':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addAudioTitle" placeholder="مثال: شيلة الترحيب">
-        </div>`;
-    case 'artist_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="addArtistName" placeholder="مثال: عيسى الشمري">
-        </div>`;
-    case 'artist_image_url':
-      return `
-        <div class="upload-box">
-          <i class="fa-solid fa-image upload-icon"></i>
-          <h4>${label}${req}</h4>
-          <p>صورة الفنان (اختياري)</p>
-          <input type="file" id="addArtistImageFile" accept="image/*">
-        </div>`;
-    default:
-      return '';
-  }
 }
 
 /**

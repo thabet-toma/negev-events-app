@@ -31,7 +31,10 @@ let directAddOccasionTypes = [];
 let selectedDirectAddType = null;
 
 // مرآة لـ TOWNS في server/src/constants.js — لا وحدة مشتركة بين web/ والخادم،
-// نفس سبب OCCASION_FIELDS أدناه ونفس نمط قائمة dirTown في admin.html (services-directory).
+// نفس سبب OCCASION_FIELDS أدناه (البلدات ثابتة بالكود ومكرَّرة عمداً في كل
+// عميل، services-directory — خلافاً للقرى وفئات الخدمات التي تُجلب من الخادم).
+// قائمة dirTown في نموذج النشر المباشر تُولَّد من هذه المصفوفة وقت التشغيل
+// (populateDirTownSelect)، لا خيارات <option> ثابتة في admin.html كما كانت.
 const TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
@@ -479,147 +482,55 @@ function handleDirOccasionTypeChange() {
   if (type) renderDirectAddFields(type);
 }
 
+/**
+ * الحقول الأربعة عشر المشتركة تُبنى في buildOccasionFieldsHtml
+ * (occasionForm.js)، لا هنا — هذه فقط أسماء معالجات onchange الخاصة باللوحة
+ * (لا فحص تعارض حيّ ولا خريطة تُعاد توسيطها، فـonDateChange/onVillageChange
+ * تبقيان null) وزرّ «إضافة اسم» بأسلوب اللوحة (صنف btn-approve، لا
+ * add-nokoot-btn الذي يستعمله الموقع العام). اللوحة لا تمرّر overrides
+ * إطلاقاً، فتحصل على المعالجة البسيطة الافتراضية (نص/تاريخ/ملف عادي) لكل
+ * حقل — لا خريطة ولا محرِّر قص، تماماً كما كانت من قبل.
+ */
+const DIRECT_ADD_FIELD_CTX = {
+  idPrefix: 'dir',
+  groupUploads: false,
+  onTownChange: 'handleDirTownChange',
+  onVillageChange: null,
+  onDateChange: null,
+  renderHonoreeAddButton: containerId => `
+    <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addHonoreeRow('${containerId}')">
+      <i class="fa-solid fa-plus"></i> إضافة اسم
+    </button>`
+};
+
 /** يبني بقية النموذج من حقول هذا النوع تحديداً — الظاهر فقط، بتسميته هو. */
 function renderDirectAddFields(type) {
   selectedDirectAddType = type;
-  const orderedFields = [...type.fields].sort((a, b) => a.position - b.position);
-  document.getElementById('dirDynamicFields').innerHTML = orderedFields.map(renderDirectAddFieldHtml).join('');
+  document.getElementById('dirDynamicFields').innerHTML = buildOccasionFieldsHtml(type, DIRECT_ADD_FIELD_CTX);
 
   const fieldsByKey = {};
   for (const f of type.fields) fieldsByKey[f.field_key] = f;
 
   if (fieldsByKey.event_date) {
-    const dateInput = document.getElementById('dirDate');
+    const dateInput = document.getElementById('dirEventDate');
     if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
   }
   if (fieldsByKey.dinner_time) {
-    const dinnerInput = document.getElementById('dirDinner');
+    const dinnerInput = document.getElementById('dirDinnerTime');
     if (dinnerInput) dinnerInput.value = 'الساعة 8:00 مساءً';
   }
-  if (fieldsByKey.town) handleDirTownChange();
+  if (fieldsByKey.town) {
+    populateDirTownSelect();
+    handleDirTownChange();
+  }
   if (fieldsByKey.honorees) addHonoreeRow('dirHonoreesList');
 }
 
-/**
- * حقول بلا خريطة ولا محرِّر قص عمداً — نموذج إداري سريع، لا نموذج الموقع
- * العام. مفاتيح الحقول والتسميات من الخادم (occasion_type_fields)، لا قائمة
- * مثبَّتة هنا؛ فقط شكل الإدخال (نص/تاريخ/ملف) ثابت لكل مفتاح.
- */
-function renderDirectAddFieldHtml(field) {
-  const req = field.is_required ? ' *' : '';
-  const label = escapeHtml(field.label);
-
-  switch (field.field_key) {
-    case 'honorees':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <div id="dirHonoreesList"></div>
-          <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addHonoreeRow('dirHonoreesList')">
-            <i class="fa-solid fa-plus"></i> إضافة اسم
-          </button>
-        </div>`;
-    case 'town':
-      return `
-        <div class="form-row">
-          <div class="form-group half">
-            <label>${label}${req}</label>
-            <select id="dirTown" onchange="handleDirTownChange()">
-              ${TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group half" id="dirVillageGroup" style="display:none;">
-            <label>القرية *</label>
-            <select id="dirVillage"></select>
-          </div>
-        </div>`;
-    case 'event_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="dirDate">
-        </div>`;
-    case 'event_end_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="dirEventEndDate">
-        </div>`;
-    case 'youth_party_date':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="date" id="dirYouthDate">
-        </div>`;
-    case 'dinner_time':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirDinner" placeholder="مثال: 7:30 مساءً">
-        </div>`;
-    case 'host_phone':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="tel" id="dirHostPhone" placeholder="05XXXXXXXX">
-        </div>`;
-    case 'title':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirTitle" placeholder="اتركه فارغاً ليُولَّد تلقائياً">
-        </div>`;
-    case 'family_clan':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirClan" placeholder="مثال: آل النعامي">
-        </div>`;
-    case 'location_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirLocation" placeholder="مثال: ديوان آل فلان - رهط بالقرب من...">
-        </div>`;
-    case 'secondary_location_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirSecondaryLocation" placeholder="مكان إضافي (اختياري)">
-        </div>`;
-    case 'poster_url':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="file" id="dirPoster" accept="image/*">
-        </div>`;
-    case 'audio_url':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="file" id="dirAudio" accept="audio/*">
-        </div>`;
-    case 'audio_title':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirAudioTitle" placeholder="مثال: شيلة الترحيب">
-        </div>`;
-    case 'artist_name':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="text" id="dirArtistName" placeholder="مثال: عيسى الشمري">
-        </div>`;
-    case 'artist_image_url':
-      return `
-        <div class="form-group">
-          <label>${label}${req}</label>
-          <input type="file" id="dirArtistImage" accept="image/*">
-        </div>`;
-    default:
-      return '';
-  }
+/** يملأ منتقي البلدة من TOWNS المحلية — نفس مصدر كل بلدة أخرى في اللوحة. */
+function populateDirTownSelect() {
+  const select = document.getElementById('dirTown');
+  if (!select) return;
+  select.innerHTML = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
 }
 
 /** يُظهر منتقي القرية فقط تحت بند "القرى والتجمعات" — نفس قاعدة app.js وتعديل مناسبة. */
@@ -674,7 +585,7 @@ async function handleDirectAdd(e) {
     }
   }
 
-  const eventDate = document.getElementById('dirDate').value;
+  const eventDate = document.getElementById('dirEventDate').value;
   if (!eventDate) {
     alert(`${labelOf('event_date')} مطلوب`);
     return;
@@ -684,18 +595,18 @@ async function handleDirectAdd(e) {
   // لا بعده، برسالة تحمل تسمية الحقل في هذا النوع تحديداً.
   const textFieldGetters = {
     title: () => document.getElementById('dirTitle')?.value.trim(),
-    family_clan: () => document.getElementById('dirClan')?.value.trim(),
-    location_name: () => document.getElementById('dirLocation')?.value.trim(),
-    secondary_location_name: () => document.getElementById('dirSecondaryLocation')?.value.trim(),
+    family_clan: () => document.getElementById('dirFamily')?.value.trim(),
+    location_name: () => document.getElementById('dirLocationName')?.value.trim(),
+    secondary_location_name: () => document.getElementById('dirSecondaryLocationName')?.value.trim(),
     event_end_date: () => document.getElementById('dirEventEndDate')?.value,
     youth_party_date: () => document.getElementById('dirYouthDate')?.value,
-    dinner_time: () => document.getElementById('dirDinner')?.value.trim(),
+    dinner_time: () => document.getElementById('dirDinnerTime')?.value.trim(),
     host_phone: () => document.getElementById('dirHostPhone')?.value.trim(),
     audio_title: () => document.getElementById('dirAudioTitle')?.value.trim(),
-    poster_url: () => document.getElementById('dirPoster')?.files[0],
-    audio_url: () => document.getElementById('dirAudio')?.files[0],
+    poster_url: () => document.getElementById('dirPosterFile')?.files[0],
+    audio_url: () => document.getElementById('dirAudioFile')?.files[0],
     artist_name: () => document.getElementById('dirArtistName')?.value.trim(),
-    artist_image_url: () => document.getElementById('dirArtistImage')?.files[0]
+    artist_image_url: () => document.getElementById('dirArtistImageFile')?.files[0]
   };
 
   const missingFieldLabel = firstMissingRequiredField(type, textFieldGetters);
@@ -716,26 +627,26 @@ async function handleDirectAdd(e) {
   formData.append('event_date', eventDate);
 
   if (fieldsByKey.title) formData.append('title', document.getElementById('dirTitle').value);
-  if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('dirClan').value);
-  if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('dirLocation').value);
-  if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('dirSecondaryLocation').value);
+  if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('dirFamily').value);
+  if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('dirLocationName').value);
+  if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('dirSecondaryLocationName').value);
   if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('dirEventEndDate').value);
   if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('dirYouthDate').value);
-  if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('dirDinner').value);
+  if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('dirDinnerTime').value);
   if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('dirHostPhone').value);
   if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('dirAudioTitle').value);
   if (fieldsByKey.artist_name) formData.append('artist_name', document.getElementById('dirArtistName').value);
 
   if (fieldsByKey.poster_url) {
-    const posterFile = document.getElementById('dirPoster').files[0];
+    const posterFile = document.getElementById('dirPosterFile').files[0];
     if (posterFile) formData.append('poster', posterFile);
   }
   if (fieldsByKey.audio_url) {
-    const audioFile = document.getElementById('dirAudio').files[0];
+    const audioFile = document.getElementById('dirAudioFile').files[0];
     if (audioFile) formData.append('audio', audioFile);
   }
   if (fieldsByKey.artist_image_url) {
-    const artistImageFile = document.getElementById('dirArtistImage').files[0];
+    const artistImageFile = document.getElementById('dirArtistImageFile').files[0];
     if (artistImageFile) formData.append('artist_image', artistImageFile);
   }
 
