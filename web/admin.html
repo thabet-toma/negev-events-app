@@ -191,63 +191,13 @@
           </div>
 
           <form id="adminDirectAddForm" class="admin-form" onsubmit="handleDirectAdd(event)">
-            <div class="form-row">
-              <div class="form-group half">
-                <label>اسم العريس الكريم *</label>
-                <input type="text" id="dirGroom" placeholder="مثال: سالم عودة النعامي" required>
-              </div>
-              <div class="form-group half">
-                <label>البلدة / المنطقة *</label>
-                <select id="dirTown" required>
-                  <option value="رهط">رهط</option>
-                  <option value="حورة">حورة</option>
-                  <option value="تل السبع">تل السبع</option>
-                  <option value="كسيفة">كسيفة</option>
-                  <option value="شقيب السلام">شقيب السلام</option>
-                  <option value="اللقية">اللقية</option>
-                  <option value="عرعرة النقب">عرعرة النقب</option>
-                  <option value="القرى والتجمعات">القرى والتجمعات</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group half">
-                <label>العشيرة / العائلة</label>
-                <input type="text" id="dirClan" placeholder="مثال: آل النعامي">
-              </div>
-              <div class="form-group half">
-                <label>تاريخ الفرح *</label>
-                <input type="date" id="dirDate" required>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group half">
-                <label>سهرة الشباب والدحة (اختياري)</label>
-                <input type="date" id="dirYouthDate">
-              </div>
-              <div class="form-group half">
-                <label>طعام العشاء</label>
-                <input type="text" id="dirDinner" value="الساعة 8:00 مساءً">
-              </div>
-            </div>
-
             <div class="form-group">
-              <label>وصف المكان والديوان (لـ Waze و Google Maps) *</label>
-              <input type="text" id="dirLocation" placeholder="مثال: ديوان آل فلان - رهط بالقرب من..." required>
+              <label>نوع المناسبة *</label>
+              <select id="dirOccasionType" onchange="handleDirOccasionTypeChange()" required></select>
             </div>
 
-            <div class="form-row">
-              <div class="form-group half">
-                <label>صورة كرت الدعوة</label>
-                <input type="file" id="dirPoster" accept="image/*">
-              </div>
-              <div class="form-group half">
-                <label>مقطع صوتي / شيلة الفرح</label>
-                <input type="file" id="dirAudio" accept="audio/*">
-              </div>
-            </div>
+            <!-- تُبنى من حقول النوع المختار تحديداً — تسميتها وإجباريتها منه، لا نموذج عرس ثابت -->
+            <div id="dirDynamicFields"></div>
 
             <button type="submit" class="admin-btn-primary" id="dirSubmitBtn">
               <i class="fa-solid fa-check-double"></i> اعتماد ونشر المناسبة فوراً
@@ -638,6 +588,7 @@
 
   <script src="config.js"></script>
   <script src="api.js"></script>
+  <script src="occasionForm.js"></script>
   <script src="admin.js"></script>
 </body>
 </html>

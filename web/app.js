@@ -1497,14 +1497,7 @@ function selectOccasionTypeTab(typeId) {
 /** يجلب أنواع المناسبات مرة واحدة فقط ويخزّنها. */
 async function loadOccasionTypes() {
   if (occasionTypesCache) return occasionTypesCache;
-  try {
-    const res = await apiFetch('/api/occasion-types');
-    const data = await res.json();
-    occasionTypesCache = (data.success && data.types) ? data.types : [];
-  } catch (e) {
-    console.error('Occasion types error:', e);
-    occasionTypesCache = [];
-  }
+  occasionTypesCache = await fetchActiveOccasionTypes();
   return occasionTypesCache;
 }
 
@@ -1788,46 +1781,9 @@ function handleAddVillageChange() {
   }
 }
 
-// أصحاب المناسبة ١..N — مُدخل ديناميكي مشترك بين نموذج النشر ونافذة التعديل.
-/** يضيف صفّاً جديداً (اسم + صفة اختيارية) إلى قائمة أصحاب مناسبة. */
-function addHonoreeRow(containerId, name = '', role = '') {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  const row = document.createElement('div');
-  row.className = 'honoree-row';
-  row.innerHTML = `
-    <input type="text" class="honoree-name" placeholder="الاسم" value="${escapeHtml(name)}">
-    <input type="text" class="honoree-role" placeholder="الصفة (اختياري)" value="${escapeHtml(role)}">
-    <button type="button" class="nokoot-del-btn" onclick="this.parentElement.remove()"><i class="fa-solid fa-trash"></i></button>
-  `;
-  container.appendChild(row);
-}
-
-/** يقرأ كل صفوف القائمة الحالية، ويُسقط أي صفّ بلا اسم — نفس منطق الخادم بالضبط. */
-function collectHonorees(containerId) {
-  const container = document.getElementById(containerId);
-  if (!container) return [];
-  return Array.from(container.querySelectorAll('.honoree-row'))
-    .map(row => ({
-      name: row.querySelector('.honoree-name').value.trim(),
-      role: row.querySelector('.honoree-role').value.trim()
-    }))
-    .filter(h => h.name);
-}
-
-/**
- * يُرفق أصحاب المناسبة داخل FormData بصيغة `honorees[i][name]` —
- * تحقّقنا فعلياً (اختبار مباشر على multer المُثبَّت في server/) أن هذه
- * الصيغة، وحدها من بين الصيغ الممكنة عبر multipart، تصل إلى الخادم كمصفوفة
- * كائنات `{name, role}` كما يتوقعها `parseHonorees` — لا JSON.stringify ولا
- * تكرار الحقل باسم واحد (ذاك يصل كمصفوفة نصوص، فيُسقَط بالكامل).
- */
-function appendHonoreesToFormData(formData, honorees) {
-  honorees.forEach((h, i) => {
-    formData.append(`honorees[${i}][name]`, h.name);
-    if (h.role) formData.append(`honorees[${i}][role]`, h.role);
-  });
-}
+// أصحاب المناسبة ١..N — مُدخل ديناميكي مشترك بين نموذج النشر ونافذة التعديل
+// ونموذج النشر المباشر في اللوحة؛ معرَّف في web/occasionForm.js (المشترك بين
+// الصفحتين)، لا هنا.
 
 // 12b. Poster crop editor (Facebook-style) — only the poster field, never
 // artist_image or audio. The client crops; the cropped bytes are what gets
@@ -2346,14 +2302,10 @@ async function handleEventSubmit(e) {
     artist_image_url: () => document.getElementById('addArtistImageFile')?.files[0]
   };
 
-  for (const [key, field] of Object.entries(fieldsByKey)) {
-    if (!field.is_required || key === 'honorees' || key === 'town' || key === 'event_date') continue;
-    const getter = textFieldGetters[key];
-    const value = getter ? getter() : null;
-    if (!value) {
-      alert(`${field.label} مطلوب`);
-      return;
-    }
+  const missingFieldLabel = firstMissingRequiredField(type, textFieldGetters);
+  if (missingFieldLabel) {
+    alert(`${missingFieldLabel} مطلوب`);
+    return;
   }
 
   const btn = document.getElementById('submitEventBtn');

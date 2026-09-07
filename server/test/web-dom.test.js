@@ -73,11 +73,12 @@ const INDEX_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'index.html'), 'utf8')
 const STYLES_CSS_RAW = fs.readFileSync(path.join(WEB_DIR, 'styles.css'), 'utf8');
 const CONFIG_JS = fs.readFileSync(path.join(WEB_DIR, 'config.js'), 'utf8');
 const API_JS = fs.readFileSync(path.join(WEB_DIR, 'api.js'), 'utf8');
+const OCCASION_FORM_JS = fs.readFileSync(path.join(WEB_DIR, 'occasionForm.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
 
 // index.html's own <script> tags either point at a CDN (Leaflet, Chart.js,
 // Socket.IO — README: "كلها عبر CDN ... لا React ولا خطوة بناء") or at the
-// three local files above. jsdom never fetches either kind unless
+// four local files above. jsdom never fetches either kind unless
 // `resources: 'usable'` is set, which this harness deliberately does not do
 // (no network, no database — this suite must run standalone) — so those
 // tags would just be silent no-ops if left in place. They are stripped for a
@@ -85,11 +86,12 @@ const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
 // API_BASE` directly (shareOrigin(), initSocket()), and jsdom's window.eval
 // does not share `let`/`const` bindings across separate eval() calls the way
 // a real browser shares them across sequential <script> tags (verified
-// directly against jsdom before writing this). Evaluating config.js, api.js
-// and app.js concatenated as ONE script — exactly the scope a browser would
-// give them — sidesteps that without changing a single byte of any of them.
+// directly against jsdom before writing this). Evaluating config.js, api.js,
+// occasionForm.js and app.js concatenated as ONE script — exactly the scope a
+// browser would give them — sidesteps that without changing a single byte of
+// any of them.
 const HTML_WITHOUT_SCRIPTS = INDEX_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
-const COMBINED_SCRIPT = [CONFIG_JS, API_JS, APP_JS].join('\n;\n');
+const COMBINED_SCRIPT = [CONFIG_JS, API_JS, OCCASION_FORM_JS, APP_JS].join('\n;\n');
 
 // ---------------------------------------------------------------------------
 // Fixtures — shaped exactly like GET /api/occasion-types
@@ -102,7 +104,7 @@ const COMBINED_SCRIPT = [CONFIG_JS, API_JS, APP_JS].join('\n;\n');
 const ADMIN_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'admin.html'), 'utf8');
 const ADMIN_JS = fs.readFileSync(path.join(WEB_DIR, 'admin.js'), 'utf8');
 const ADMIN_HTML_WITHOUT_SCRIPTS = ADMIN_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
-const ADMIN_COMBINED_SCRIPT = [CONFIG_JS, API_JS, ADMIN_JS].join('\n;\n');
+const ADMIN_COMBINED_SCRIPT = [CONFIG_JS, API_JS, OCCASION_FORM_JS, ADMIN_JS].join('\n;\n');
 
 // The two stylesheets are read as text, not parsed: jsdom implements no layout
 // and loads no external CSS here, so there is nothing to compute a style from.
@@ -834,6 +836,100 @@ async function run() {
     assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'عريس' }]), 'honorees must be JSON, as the publish form sends them');
   });
 
+  console.log('\nAdmin panel — direct publish form (the production blocker: no occasion type, no honorees)');
+
+  /**
+   * Before this fix, "نشر مناسبة معتمدة فوراً" was a hardcoded wedding form
+   * that sent groom_name/town/family_clan/... with no occasion_type_id and no
+   * honorees[] — events.routes.js rejects that unconditionally
+   * (parseId(undefined) → "نوع المناسبة غير صالح", the exact alert the super
+   * admin saw). These pin the fixed behaviour: the type picker drives the
+   * rest of the form, exactly like web/app.js's publish form, but built by
+   * admin.js's own leaner renderer (no map, no crop editor).
+   */
+  await test('initDirectAddForm() builds a type picker and the first active type\'s own fields — no hardcoded wedding form', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+
+    const { document } = dom.window;
+    const options = document.querySelectorAll('#dirOccasionType option');
+    assert.strictEqual(options.length, OCCASION_TYPES_FIXTURE.length, 'expected one option per active occasion type');
+
+    assert.ok(document.getElementById('dirHonoreesList'), 'expected an honorees list for the (default-selected) عرس type');
+    assert.ok(document.querySelector('#dirHonoreesList .honoree-name'), 'expected at least one honoree row pre-added');
+    assert.ok(document.getElementById('dirTown'), 'expected a town select');
+    assert.ok(document.getElementById('dirDate'), 'expected an event-date input');
+    assert.ok(document.getElementById('dirYouthDate'), 'عرس defines a youth-party field');
+    assert.ok(document.getElementById('dirLocation'), 'عرس defines a location field');
+    assert.ok(document.getElementById('dirPoster'), 'عرس defines a poster field');
+
+    assert.strictEqual(document.getElementById('dirClan'), null, 'family_clan is not on the عرس fixture — it must not render');
+    assert.strictEqual(document.getElementById('dirGroom'), null, 'the old hardcoded groom_name field must be gone entirely');
+  });
+
+  await test('switching to a mourning type relabels the honorees field and drops fields it does not define', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+
+    document.getElementById('dirOccasionType').value = String(FUNERAL_TYPE.id);
+    dom.window.handleDirOccasionTypeChange();
+
+    const label = document.getElementById('dirHonoreesList').closest('.form-group').querySelector('label');
+    assert.ok(label.textContent.includes('المتوفَّى'), `expected the funeral type's own label, got "${label.textContent}"`);
+    assert.strictEqual(document.getElementById('dirYouthDate'), null, 'a funeral type has no youth-party field in this fixture — it must not render');
+    assert.strictEqual(document.getElementById('dirPoster'), null, 'a funeral type has no poster field in this fixture — it must not render');
+  });
+
+  await test('a required field left empty is rejected client-side with that type\'s own label', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const win = dom.window;
+    const { document } = win;
+
+    document.querySelector('#dirHonoreesList .honoree-name').value = 'محمد وفاطمة';
+    document.getElementById('dirDate').value = '2027-05-01';
+    // location_name («موقع القاعة» على هذا النوع تحديداً) يبقى فارغاً عمداً
+
+    let alertedWith = null;
+    win.alert = msg => { alertedWith = msg; };
+    let fetchCalled = false;
+    win.fetch = async () => { fetchCalled = true; return jsonResponse({ success: true }); };
+
+    await win.handleDirectAdd({ preventDefault() {} });
+    assertNoUnhandledRejections('handleDirectAdd / missing required field');
+
+    assert.ok(alertedWith && alertedWith.includes('موقع القاعة'), `expected the alert to name the type's own location label, got "${alertedWith}"`);
+    assert.ok(!fetchCalled, 'the publish request must not fire while a required field is missing');
+  });
+
+  await test('a successful publish sends occasion_type_id and honorees[], never the old hardcoded groom_name form', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const win = dom.window;
+    const { document } = win;
+
+    document.querySelector('#dirHonoreesList .honoree-name').value = 'سالم ونورة';
+    document.getElementById('dirDate').value = '2027-06-15';
+    document.getElementById('dirLocation').value = 'ديوان آل تجربة';
+
+    let captured = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        captured = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await win.handleDirectAdd({ preventDefault() {} });
+    assertNoUnhandledRejections('handleDirectAdd / successful publish');
+
+    assert.ok(captured, 'expected the publish POST to actually fire');
+    assert.strictEqual(captured.body.get('occasion_type_id'), String(WEDDING_TYPE.id));
+    assert.strictEqual(captured.body.get('honorees[0][name]'), 'سالم ونورة');
+    assert.strictEqual(captured.body.get('groom_name'), null, 'the old hardcoded field must never be sent again');
+  });
 
   console.log('\nAdmin panel — the poster is no longer cropped through the head');
 
