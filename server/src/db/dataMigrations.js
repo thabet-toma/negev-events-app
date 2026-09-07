@@ -1075,6 +1075,125 @@ const steps = [
       `);
       logger.info('[migrations] create-privacy-requests-2026-09: table created.');
     }
+  },
+  {
+    // The whole reach-and-usability spec's schema in one step (issue #85,
+    // batch 1 — the spec's own instruction: "خطوة ترحيل واحدة جديدة"). Every
+    // ALTER and CREATE TABLE below is guarded independently, same pattern as
+    // add-occasion-type-columns-to-events-2026-08 and create-service-directory-2026-09
+    // above, so a partial prior run (or a fresh install where schema.sql
+    // already carries the final shape) never re-applies anything.
+    // This step also WRITES to occasion_types on every single run (see the
+    // notify_countdown UPDATE below, deliberately unguarded) — every step in
+    // this file runs on every `npm run db:migrate`, there is no ledger of
+    // applied steps (migrate.js just loops the whole array), and server
+    // migrations run automatically on container boot. app_settings is the
+    // only table this batch's *application code* writes to; occasion_types
+    // is written by this migration step itself, every time it runs.
+    name: 'add-reach-and-usability-schema-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'notifications', 'dedupe_key'))) {
+        await connection.execute(
+          'ALTER TABLE notifications ADD COLUMN dedupe_key VARCHAR(80) DEFAULT NULL'
+        );
+      }
+      if (!(await indexExists(connection, 'notifications', 'uq_notifications_dedupe'))) {
+        await connection.execute(
+          'ALTER TABLE notifications ADD UNIQUE KEY uq_notifications_dedupe (user_id, dedupe_key)'
+        );
+      }
+
+      if (!(await columnExists(connection, 'broadcasts', 'expires_at'))) {
+        await connection.execute(
+          'ALTER TABLE broadcasts ADD COLUMN expires_at TIMESTAMP NULL DEFAULT NULL'
+        );
+      }
+      if (!(await columnExists(connection, 'broadcasts', 'tone'))) {
+        await connection.execute(
+          "ALTER TABLE broadcasts ADD COLUMN tone VARCHAR(20) NOT NULL DEFAULT 'info'"
+        );
+      }
+      if (!(await columnExists(connection, 'broadcasts', 'scope_town'))) {
+        await connection.execute(
+          'ALTER TABLE broadcasts ADD COLUMN scope_town VARCHAR(100) DEFAULT NULL'
+        );
+      }
+
+      if (!(await columnExists(connection, 'occasion_types', 'notify_countdown'))) {
+        await connection.execute(
+          'ALTER TABLE occasion_types ADD COLUMN notify_countdown TINYINT(1) NOT NULL DEFAULT 1'
+        );
+      }
+      // Deliberately UNGUARDED and re-run on every single migrate — unlike
+      // every columnExists-gated block above, this UPDATE is not a one-time
+      // backfill. On a fresh install schema.sql already carries
+      // notify_countdown (default 1) but the seed step
+      // (seed-occasion-types-2026-08 above) never sets it, so a guard here
+      // would skip عزا's backfill entirely and leave it with a countdown —
+      // this line is the ONLY thing that ever sets it to 0, on both a fresh
+      // install and an upgrade. The consequence: for a tone='solemn' type,
+      // notify_countdown is DERIVED FROM THE TONE and re-asserted on every
+      // migrate run, not an independently settable flag — this is the
+      // spec's intent (story 4: «باقي ٣ أيام» جملة مسيئة على عزاء), not an
+      // oversight. A later batch must NOT offer an admin toggle for
+      // notify_countdown on a solemn type: any value an admin sets there
+      // would be silently reverted on the next deploy. An admin who wants a
+      // countdown on such a type must change its TONE, not this flag.
+      const [notifyCountdownResult] = await connection.execute(
+        "UPDATE occasion_types SET notify_countdown = 0 WHERE tone = 'solemn'"
+      );
+
+      if (!(await tableExists(connection, 'broadcast_views'))) {
+        await connection.query(`
+          CREATE TABLE broadcast_views (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            broadcast_id INT UNSIGNED NOT NULL,
+            user_id      INT UNSIGNED NOT NULL,
+            seen_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            dismissed    TINYINT(1)   NOT NULL DEFAULT 0,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_broadcast_views (broadcast_id, user_id),
+            KEY idx_broadcast_views_user (user_id),
+            CONSTRAINT fk_broadcast_views_broadcast FOREIGN KEY (broadcast_id) REFERENCES broadcasts(id) ON DELETE CASCADE,
+            CONSTRAINT fk_broadcast_views_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'app_settings'))) {
+        await connection.query(`
+          CREATE TABLE app_settings (
+            setting_key   VARCHAR(60)  NOT NULL,
+            setting_value TEXT         DEFAULT NULL,
+            updated_by    INT UNSIGNED DEFAULT NULL,
+            updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (setting_key),
+            CONSTRAINT fk_app_settings_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (!(await tableExists(connection, 'push_subscriptions'))) {
+        await connection.query(`
+          CREATE TABLE push_subscriptions (
+            id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id    INT UNSIGNED NOT NULL,
+            endpoint   VARCHAR(500) NOT NULL,
+            p256dh     VARCHAR(255) NOT NULL,
+            auth       VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_push_subscriptions (user_id, endpoint),
+            CONSTRAINT fk_push_subscriptions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      logger.info(
+        `[migrations] add-reach-and-usability-schema-2026-09: ensured columns/keys/tables; ` +
+        `${notifyCountdownResult.affectedRows} occasion_type row(s) set to notify_countdown=0 for tone='solemn'.`
+      );
+    }
   }
 ];
 

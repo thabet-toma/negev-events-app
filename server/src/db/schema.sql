@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   default_poster_url          TEXT         DEFAULT NULL,
   legacy_client_supported     TINYINT(1)   NOT NULL DEFAULT 0,
   tone                        VARCHAR(20)  NOT NULL DEFAULT 'festive',
+  -- Whether this type's events ever produce the scheduler's `event_soon`
+  -- countdown notifications (issue #85). Defaults to 1 here, but for a type
+  -- whose tone is 'solemn' this is DERIVED from the tone, not independently
+  -- settable: dataMigrations.js's add-reach-and-usability-schema-2026-09 step
+  -- unconditionally re-asserts notify_countdown = 0 for every solemn type on
+  -- EVERY migrate run (not a one-time backfill) — "باقي ٣ أيام" reads as an
+  -- insult on a funeral. An admin toggle for this column on a solemn type
+  -- would be silently reverted on the next deploy; to get a countdown,
+  -- change the type's tone instead.
+  notify_countdown            TINYINT(1)   NOT NULL DEFAULT 1,
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -226,11 +236,20 @@ CREATE TABLE IF NOT EXISTS notifications (
   title        VARCHAR(200) NOT NULL,
   body         TEXT         NOT NULL,
   is_read      TINYINT(1)   NOT NULL DEFAULT 0,
+  -- The scheduler's (issue #85) "insert or skip" primitive — a stable string
+  -- like `event_soon_<event_id>_7` per notification occurrence. NULL for
+  -- every notification kind that isn't produced by the scheduler, which is
+  -- why the UNIQUE key below is on (user_id, dedupe_key) rather than
+  -- dedupe_key alone: MySQL treats every NULL in a unique index as distinct,
+  -- so ordinary notifications keep inserting freely while a scheduler run
+  -- that fires twice for the same (user, key) collides on the second insert.
+  dedupe_key   VARCHAR(80)  DEFAULT NULL,
   created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   delivered_at TIMESTAMP    NULL DEFAULT NULL,
   PRIMARY KEY (id),
   KEY idx_notifications_user (user_id),
   KEY idx_notifications_user_read (user_id, is_read),
+  UNIQUE KEY uq_notifications_dedupe (user_id, dedupe_key),
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_notifications_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -391,10 +410,70 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   title      VARCHAR(200) NOT NULL,
   message    TEXT         NOT NULL,
   sent_by    INT UNSIGNED DEFAULT NULL,
+  -- The ticker's own lifetime (issue #85, story 25/26) — NULL means "no
+  -- ticker at all", a quiet broadcast that only ever sits in the
+  -- notification centre. Independent of the row's own created_at, which
+  -- never changes.
+  expires_at TIMESTAMP    NULL DEFAULT NULL,
+  -- 'info' | 'urgent' | 'solemn' — content-driven, chosen by whoever sends
+  -- the broadcast (story 27); never inferred from the message text.
+  tone       VARCHAR(20)  NOT NULL DEFAULT 'info',
+  -- NULL = everyone. Set only when a town-scoped admin sends one (story 23) —
+  -- a super_admin broadcast (story 22) always leaves this NULL.
+  scope_town VARCHAR(100) DEFAULT NULL,
   created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_broadcasts_created (created_at),
   CONSTRAINT fk_broadcasts_sender FOREIGN KEY (sent_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per (broadcast, user) who actually SAW or DISMISSED it — never one
+-- row per (broadcast, every user) up front. A user who registered after a
+-- broadcast went out and never opens the app simply has no row here at all
+-- (issue #85, decision "صفّ واحد + broadcast_views — لا فَرْد على المستخدمين").
+CREATE TABLE IF NOT EXISTS broadcast_views (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  broadcast_id INT UNSIGNED NOT NULL,
+  user_id      INT UNSIGNED NOT NULL,
+  seen_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  dismissed    TINYINT(1)   NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_broadcast_views (broadcast_id, user_id),
+  KEY idx_broadcast_views_user (user_id),
+  CONSTRAINT fk_broadcast_views_broadcast FOREIGN KEY (broadcast_id) REFERENCES broadcasts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_broadcast_views_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Platform-wide settings behind a code-owned whitelist (settings.service.js)
+-- — a key that isn't on that list can never be read or written through it,
+-- whatever ends up in this table by other means. setting_value is TEXT, not
+-- typed, because every setting this batch or the next needs (a phone number
+-- today) is a plain string; a future non-string setting is that setting's
+-- own problem to encode, not this table's.
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key   VARCHAR(60)  NOT NULL,
+  setting_value TEXT         DEFAULT NULL,
+  updated_by    INT UNSIGNED DEFAULT NULL,
+  updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (setting_key),
+  CONSTRAINT fk_app_settings_updated_by FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per device, not per user (UNIQUE (user_id, endpoint)) — the same
+-- person signed in on a phone and a laptop gets two rows, both reachable.
+-- `endpoint` is sized for a real Web Push endpoint URL (well over 255 chars
+-- on some browsers), and is a secret capability URL: it must never leave
+-- this table in any API response (issue #85, Web Push decision).
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    INT UNSIGNED NOT NULL,
+  endpoint   VARCHAR(500) NOT NULL,
+  p256dh     VARCHAR(255) NOT NULL,
+  auth       VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_push_subscriptions (user_id, endpoint),
+  CONSTRAINT fk_push_subscriptions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS service_categories (

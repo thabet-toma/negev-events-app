@@ -17,6 +17,7 @@ const villagesRoutes = require('./villages.routes');
 const servicesRoutes = require('./services.routes');
 const analyticsRoutes = require('./analytics.routes');
 const privacyRoutes = require('./privacy.routes');
+const settingsRoutes = require('./settings.routes');
 
 const router = express.Router();
 
@@ -57,5 +58,6 @@ router.use(villagesRoutes);
 router.use(servicesRoutes);
 router.use(analyticsRoutes);
 router.use(privacyRoutes);
+router.use(settingsRoutes);
 
 module.exports = router;

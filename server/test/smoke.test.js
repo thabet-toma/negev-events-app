@@ -2342,19 +2342,23 @@ async function run() {
       'each request increments the bare counter regardless of who is viewing'
     );
 
-    const columns = await db.query(
+    const userIdColumns = await db.query(
       `SELECT TABLE_NAME FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'user_id'`
     );
-    // story_views is a deliberate, documented exception (#20 step 8): a
-    // story's honest once-per-day view count is a different domain with
-    // different requirements than an event's bare views_count. The
-    // invariant this assertion guards is specifically about *events* — so
-    // only a per-user view table that also carries an event_id column would
-    // violate it, and story_views carries no such column.
-    const eventViewTables = columns
+    const eventIdColumns = await db.query(
+      `SELECT TABLE_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'event_id'`
+    );
+    // The invariant this assertion guards is specifically about *events* —
+    // a per-user view table for a different domain (story_views for stories,
+    // broadcast_views for broadcasts, issue #85) does not violate it. Checked
+    // by requiring BOTH a user_id column AND an event_id column, rather than
+    // hardcoding an ever-growing list of table-name exceptions.
+    const tablesWithEventId = new Set(eventIdColumns.map(c => c.TABLE_NAME));
+    const eventViewTables = userIdColumns
       .map(c => c.TABLE_NAME)
-      .filter(name => /view/i.test(name) && name !== 'story_views');
+      .filter(name => /view/i.test(name) && tablesWithEventId.has(name));
     assert.strictEqual(eventViewTables.length, 0, 'expected no per-user "views" table for events anywhere in the schema');
   });
 
@@ -3963,6 +3967,103 @@ async function run() {
       assert.ok(text.includes(event.label), `expected the notice to name "${event.label}"`);
       assert.ok(!text.includes(event.key), `the notice must not print the code key "${event.key}"`);
     }
+  });
+
+  console.log('\nPlatform settings (issue #85 batch 1)');
+
+  // app_settings is not reset between test runs like the throwaway
+  // users/events this suite creates — start from a known-empty state so "no
+  // setting was ever saved" is actually true on a re-run against the same
+  // database, not just on a freshly migrated one.
+  await db.execute("DELETE FROM app_settings WHERE setting_key = 'support_whatsapp_number'");
+
+  await test('GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number', async () => {
+    const { status, body } = await api('GET', '/api/settings/public');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number']);
+    assert.strictEqual(body.settings.support_whatsapp_number, null);
+  });
+
+  await test('A plain (town-scoped) admin is refused on both GET and PUT /api/admin/settings — super_admin only', async () => {
+    const get = await api('GET', '/api/admin/settings', { token: scopedAdminToken });
+    assert.strictEqual(get.status, 403);
+
+    const put = await api('PUT', '/api/admin/settings', {
+      token: scopedAdminToken, body: { support_whatsapp_number: '0501234567' }
+    });
+    assert.strictEqual(put.status, 403);
+  });
+
+  await test('PUT /api/admin/settings rejects an invalid WhatsApp number with an Arabic message', async () => {
+    const { status, body } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '12345' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+  });
+
+  await test('PUT /api/admin/settings rejects a key outside the code-owned whitelist', async () => {
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { some_unknown_setting: 'x' }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('A super_admin saves the support number, local and international forms normalise to the same canonical value, and it reads back on both the admin and public routes', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '050-1234567' }
+    });
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.support_whatsapp_number, '972501234567');
+
+    const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(adminRead.status, 200);
+    assert.strictEqual(adminRead.body.settings.support_whatsapp_number, '972501234567');
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.status, 200);
+    assert.deepStrictEqual(Object.keys(publicRead.body.settings), ['support_whatsapp_number']);
+    assert.strictEqual(publicRead.body.settings.support_whatsapp_number, '972501234567');
+
+    const resave = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '+972501234567' }
+    });
+    assert.strictEqual(resave.status, 200);
+    assert.strictEqual(resave.body.settings.support_whatsapp_number, '972501234567');
+  });
+
+  await test('A super_admin clears a previously-saved support number with an explicit empty value — it goes back to null everywhere, and an absent key leaves it untouched', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '0501234567' }
+    });
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.support_whatsapp_number, '972501234567');
+
+    const clear = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '' }
+    });
+    assert.strictEqual(clear.status, 200, 'an explicit empty value must clear the setting, not be rejected');
+    assert.strictEqual(clear.body.settings.support_whatsapp_number, null);
+
+    const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(adminRead.body.settings.support_whatsapp_number, null);
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.body.settings.support_whatsapp_number, null);
+
+    // A PUT that never mentions the key must not touch it — save it again,
+    // then PUT an unrelated whitelisted-but-absent scenario is not
+    // reachable with only one key today, so this asserts the narrower,
+    // still-real guarantee: an empty PUT body is rejected outright rather
+    // than silently clearing everything.
+    const resave = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { support_whatsapp_number: '0501234567' }
+    });
+    assert.strictEqual(resave.status, 200);
+    const emptyBody = await api('PUT', '/api/admin/settings', { token: superAdminToken, body: {} });
+    assert.strictEqual(emptyBody.status, 400);
+    const stillSet = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(stillSet.body.settings.support_whatsapp_number, '972501234567', 'a PUT that names no keys must change nothing');
   });
 
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
