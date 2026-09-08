@@ -432,8 +432,10 @@ void main() {
     });
   });
 
-  group('شاشة المناسبات — تبويبات الأنواع (سطح القراءة #20 خطوة ١٣)', () {
-    testWidgets('تغيير التبويب يعيد الترقيم لصفحة ١ ويمرّر occasion_type_id للخادم', (tester) async {
+  group('شاشة المناسبات — فلتر النوع (#85 خطوة 40-46، سابقاً تبويبات #20 خطوة ١٣)', () {
+    testWidgets(
+        'اختيار نوع من ورقة الفلتر يعيد الترقيم لصفحة ١ ويمرّر occasion_type_id للخادم',
+        (tester) async {
       final requests = <Uri>[];
       final client = MockClient((request) async {
         requests.add(request.url);
@@ -513,12 +515,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       // نُصفّر السجلّ بعد التحميل الأول — يحمل هو نفسه page=1 أصلاً، والمطلوب
-      // إثباته هو ما يُرسَل بعد الضغط على التبويب تحديداً.
+      // إثباته هو ما يُرسَل بعد اختيار النوع من ورقة الفلتر تحديداً — الفلتر
+      // صار رقاقة تفتح ورقة بحث متعدّدة الاختيار، لا شريط تبويبات (#85 خطوة 40-46).
       requests.clear();
 
+      await tester.tap(find.text('كل الأنواع'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('🕯️ عزا'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text('تطبيق'));
+      await tester.pumpAndSettle();
 
       final eventsRequest = requests.firstWhere((uri) => uri.path.endsWith('/api/events'));
       expect(eventsRequest.queryParameters['page'], '1');
@@ -595,50 +600,74 @@ void main() {
       },
     );
 
-    // الاختبار أعلاه يغيّر متغيّرين معاً (النبرة والصورة)، فلا يميّز «بلا صورة
-    // لا منطقة» عن «العزاء بلا صورة أبداً» — وخطأ يُخفي صورة كل مناسبة solemn
-    // كان سيمرّ فيه. هنا الصورة موجودة في الحالتين والنبرة وحدها تتغيّر.
+    // الاختبار كان يقيس صورة عزاء أقصر من صورة عرس — قرار #20 خطوة ١٥ الذي
+    // عكسته المواصفة صراحةً (#85 خطوة 50-51): «صندوق ٤:٥ ثابت في كل الحالات».
+    // الحقيقة الجديدة أقوى لا أضعف: نفس الصندوق للنوعين، والعزاء وحده بلا
+    // عدّاد إطلاقاً (قصة 52) وتاريخه ظاهر في الجزء المرئي من الكرت — لا خلف
+    // «مزيد من التفاصيل» (الفخّ الذي وقعت فيه دفعة الويب أولاً واضطرت لإصلاحه).
     testWidgets(
-      'نوع solemn بصورة يرسمها فعلاً، لكن أقصر من نوع عادي بصورة',
+      'نوع solemn وعادي بصورة: نفس صندوق ٤:٥، والعزاء وحده بلا عدّاد وتاريخه ظاهر لا خلف الطيّ',
       (tester) async {
-        Future<double?> posterHeightFor({required bool solemn}) async {
-          final event = Event.fromJson({
-            'id': solemn ? 32 : 33,
-            'groom_name': 'سالم أبو فلان',
-            'town': 'رهط',
-            'poster_url': 'https://api.example.com/uploads/a.jpg',
-            'occasion_type': {
-              'id': solemn ? 2 : 1,
-              'name': solemn ? 'عزا' : 'عرس',
-              'icon': solemn ? '🕯️' : '💍',
-              'color': '#4b5563',
-              'tone': solemn ? 'solemn' : 'festive',
-              'fields': <Map<String, dynamic>>[],
-              'reactions': <String>[],
-            },
-          });
+        final futureDate = DateTime.now().add(const Duration(days: 10));
+        final dateString = '${futureDate.year.toString().padLeft(4, '0')}-'
+            '${futureDate.month.toString().padLeft(2, '0')}-'
+            '${futureDate.day.toString().padLeft(2, '0')}';
 
-          await tester.pumpWidget(
-            MaterialApp(
-              theme: AppTheme.light(),
-              home: Directionality(
-                textDirection: TextDirection.rtl,
-                child: Scaffold(body: EventCard(event: event, onTap: () {})),
+        Map<String, dynamic> buildEventJson({required bool solemn}) => {
+              'id': solemn ? 32 : 33,
+              'groom_name': 'سالم أبو فلان',
+              'family_clan': 'آل فلان',
+              'town': 'رهط',
+              'event_date': dateString,
+              'poster_url': 'https://api.example.com/uploads/a.jpg',
+              'occasion_type': {
+                'id': solemn ? 2 : 1,
+                'name': solemn ? 'عزا' : 'عرس',
+                'icon': solemn ? '🕯️' : '💍',
+                'color': '#4b5563',
+                'tone': solemn ? 'solemn' : 'festive',
+                'fields': <Map<String, dynamic>>[],
+                'reactions': <String>[],
+              },
+            };
+
+        Finder aspectRatioFourToFive() => find.byWidgetPredicate(
+              (w) => w is AspectRatio && (w.aspectRatio - 4 / 5).abs() < 0.001,
+            );
+
+        // العادي: صندوق ٤:٥ وعدّاد «باقي ١٠ أيام» فوق الصورة.
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(
+                body: EventCard(event: Event.fromJson(buildEventJson(solemn: false)), onTap: () {}),
               ),
             ),
-          );
+          ),
+        );
+        expect(aspectRatioFourToFive(), findsOneWidget);
+        expect(find.text('باقي 10 أيام'), findsOneWidget);
 
-          expect(find.byType(EventPoster), findsOneWidget);
-          return tester.widget<EventPoster>(find.byType(EventPoster)).height;
-        }
-
-        final solemnHeight = await posterHeightFor(solemn: true);
-        final festiveHeight = await posterHeightFor(solemn: false);
-
-        expect(solemnHeight, isNotNull);
-        expect(festiveHeight, isNotNull);
-        // العلاقة هي المقصودة، لا الرقمان: صورة العزاء أقصر، لا مساوية ولا غائبة.
-        expect(solemnHeight! < festiveHeight!, isTrue);
+        // العزاء: نفس صندوق ٤:٥ بالضبط — لا أقصر ولا مختلف — بلا عدّاد
+        // إطلاقاً، والتاريخ نفسه ظاهر بلا فتح «مزيد من التفاصيل».
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(
+                body: EventCard(event: Event.fromJson(buildEventJson(solemn: true)), onTap: () {}),
+              ),
+            ),
+          ),
+        );
+        expect(aspectRatioFourToFive(), findsOneWidget);
+        expect(find.textContaining('باقي'), findsNothing);
+        expect(find.text('اليوم'), findsNothing);
+        expect(find.text('غداً'), findsNothing);
+        expect(find.text(dateString), findsOneWidget);
       },
     );
   });
@@ -1196,42 +1225,52 @@ void main() {
       expect(event.townDisplay, 'رهط');
     });
 
-    testWidgets('سطر الفنان يظهر على الكرت فقط حين يُملأ الحقل', (tester) async {
-      final withArtist = Event.fromJson({
-        'id': 1,
-        'groom_name': 'أحمد',
-        'family_clan': 'آل فلان',
-        'town': 'رهط',
-        'artist_name': 'راشد الماجد',
-      });
+    testWidgets(
+      'سطر الفنان يظهر داخل «مزيد من التفاصيل» فقط حين يُملأ الحقل، ويغيب تماماً من الشجرة حين يفرغ',
+      (tester) async {
+        final withArtist = Event.fromJson({
+          'id': 1,
+          'groom_name': 'أحمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'artist_name': 'راشد الماجد',
+        });
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Scaffold(body: EventCard(event: withArtist, onTap: () {})),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(key: ValueKey(withArtist.id), event: withArtist, onTap: () {})),
+            ),
           ),
-        ),
-      );
-      expect(find.textContaining('يحيي الحفلة الفنان راشد الماجد'), findsOneWidget);
+        );
+        // سطر الفنان صار خلف «مزيد من التفاصيل» (#85 قصة 48) — يُفتح الزرّ أوّلاً.
+        await tester.tap(find.text('مزيد من التفاصيل'));
+        await tester.pump();
+        expect(find.textContaining('يحيي الحفلة الفنان راشد الماجد'), findsOneWidget);
 
-      final withoutArtist = Event.fromJson({
-        'id': 2,
-        'groom_name': 'أحمد',
-        'family_clan': 'آل فلان',
-        'town': 'رهط',
-      });
+        final withoutArtist = Event.fromJson({
+          'id': 2,
+          'groom_name': 'أحمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+        });
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Scaffold(body: EventCard(event: withoutArtist, onTap: () {})),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(key: ValueKey(withoutArtist.id), event: withoutArtist, onTap: () {})),
+            ),
           ),
-        ),
-      );
-      expect(find.textContaining('يحيي الحفلة الفنان'), findsNothing);
-    });
+        );
+        // نفتح الطيّ هنا أيضاً — الغياب المُثبَت هو غياب عن الشجرة كاملةً، لا
+        // مجرّد اختباء خلف زرّ لم يُضغَط بعد.
+        await tester.tap(find.text('مزيد من التفاصيل'));
+        await tester.pump();
+        expect(find.textContaining('يحيي الحفلة الفنان'), findsNothing);
+      },
+    );
   });
 
   group('دليل الخدمات — تحليل النموذج (wayfinder #21 خطوة ٣)', () {
@@ -1489,10 +1528,13 @@ void main() {
           MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(event: withParty, onTap: () {})),
+              child: Scaffold(body: EventCard(key: ValueKey(withParty.id), event: withParty, onTap: () {})),
             ),
           ),
         );
+        // سطر سهرة الشباب صار خلف «مزيد من التفاصيل» (#85 قصة 48) — يُفتح أولاً.
+        await tester.tap(find.text('مزيد من التفاصيل'));
+        await tester.pump();
         expect(find.text('2026-09-20'), findsOneWidget);
         expect(find.byIcon(Icons.nightlife_outlined), findsOneWidget);
 
@@ -1508,10 +1550,14 @@ void main() {
           MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(event: withoutParty, onTap: () {})),
+              child: Scaffold(body: EventCard(key: ValueKey(withoutParty.id), event: withoutParty, onTap: () {})),
             ),
           ),
         );
+        // نفتح الطيّ هنا أيضاً — الغياب المُثبَت هو غياب عن الشجرة كاملةً، لا
+        // مجرّد اختباء خلف زرّ لم يُضغَط بعد.
+        await tester.tap(find.text('مزيد من التفاصيل'));
+        await tester.pump();
         expect(find.text('2026-09-20'), findsNothing);
         expect(find.byIcon(Icons.nightlife_outlined), findsNothing);
       },

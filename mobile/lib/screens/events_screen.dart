@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../api/negev_api.dart' show Village;
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
@@ -10,6 +11,8 @@ import '../theme.dart';
 import '../widgets/async_view.dart' show showMessage;
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
+import '../widgets/filter_sheet.dart';
+import '../widgets/motion.dart';
 import 'event_details_screen.dart';
 import 'story_viewer_screen.dart';
 
@@ -25,9 +28,12 @@ class EventsScreen extends StatefulWidget {
 class _EventsScreenState extends State<EventsScreen> {
   final _searchController = TextEditingController();
 
-  String _town = 'الكل';
+  /// اختيار متعدّد — بلدة أو أكثر، قرية أو أكثر، نوع مناسبة أو أكثر معاً
+  /// (#85 خطوة 40-43). قائمة فارغة تعني «كل الأماكن»/«كل الأنواع»، لا فلترة.
+  List<String> _selectedTowns = const [];
+  List<int> _selectedVillageIds = const [];
+  List<int> _selectedOccasionTypeIds = const [];
   String _search = '';
-  int? _occasionTypeId;
   bool _archive = false;
   Timer? _debounce;
 
@@ -35,6 +41,12 @@ class _EventsScreenState extends State<EventsScreen> {
 
   Future<List<Story>>? _stories;
   Future<List<OccasionType>>? _types;
+  Future<List<Village>>? _villages;
+
+  /// نُسختان محلّيتان من نتيجة `_types`/`_villages` — تُستعملان لتسمية رقاقة
+  /// الفلتر المغلقة («رهط +٢») بلا `FutureBuilder` حول كل رقاقة (#85 خطوة 44).
+  List<OccasionType> _typesList = const [];
+  List<Village> _villagesList = const [];
 
   List<Event> _events = const [];
   List<Announcement> _announcements = const [];
@@ -43,6 +55,11 @@ class _EventsScreenState extends State<EventsScreen> {
   bool _loadingMore = false;
   Object? _error;
   bool _didInit = false;
+
+  /// معرّفات مناسبات الدفعة الأولى فقط — الظهور المتدرّج للشاشة الأولى وحدها
+  /// (٥٣، ٥٤)؛ صفحة تالية أو فلتر جديد أو تحديث لا يعيدان تشغيله.
+  Set<int> _entranceEventIds = const {};
+  bool _entranceCaptured = false;
 
   /// يُصعَّد مع كل طلب صفحة أولى جديد — طلب `_loadMore` بدأ قبل تغيير فلتر
   /// يتجاهل نتيجته إن وصلت بعد أن بدأ طلب أحدث (فلتر آخر تغيّر أثناء
@@ -53,7 +70,19 @@ class _EventsScreenState extends State<EventsScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _stories ??= AppServices.of(context).api.stories();
-    _types ??= AppServices.of(context).api.listOccasionTypes();
+    if (_types == null) {
+      _types = AppServices.of(context).api.listOccasionTypes();
+      _types!.then((list) {
+        if (mounted) setState(() => _typesList = list);
+      });
+    }
+    // القرى من الخادم حصراً — لا تُكرَّر في أي عميل (`GET /api/towns`).
+    if (_villages == null) {
+      _villages = AppServices.of(context).api.listVillages();
+      _villages!.then((list) {
+        if (mounted) setState(() => _villagesList = list);
+      });
+    }
 
     if (!_didInit) {
       _didInit = true;
@@ -84,9 +113,10 @@ class _EventsScreenState extends State<EventsScreen> {
     });
     try {
       final result = await AppServices.of(context).api.listEvents(
-            town: _town,
+            towns: _selectedTowns,
+            villageIds: _selectedVillageIds,
             search: _search,
-            occasionTypeId: _occasionTypeId,
+            occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
             page: 1,
           );
@@ -96,6 +126,12 @@ class _EventsScreenState extends State<EventsScreen> {
         _pagination = result.pagination;
         _announcements = result.announcements;
         _initialLoading = false;
+        // الظهور المتدرّج مرّة واحدة فقط لعمر الشاشة — أوّل تحميل ناجح وحده
+        // يملأ هذه المجموعة؛ أي تحديث لاحق (فلتر، سحب للتحديث) يتركها فارغة.
+        if (!_entranceCaptured) {
+          _entranceCaptured = true;
+          _entranceEventIds = result.events.map((e) => e.id).toSet();
+        }
       });
     } catch (error) {
       if (!mounted || generation != _requestGeneration) return;
@@ -114,9 +150,10 @@ class _EventsScreenState extends State<EventsScreen> {
     setState(() => _loadingMore = true);
     try {
       final result = await AppServices.of(context).api.listEvents(
-            town: _town,
+            towns: _selectedTowns,
+            villageIds: _selectedVillageIds,
             search: _search,
-            occasionTypeId: _occasionTypeId,
+            occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
             page: pagination.page + 1,
           );
@@ -143,13 +180,109 @@ class _EventsScreenState extends State<EventsScreen> {
     });
   }
 
-  void _onTownSelected(String town) {
-    _town = town;
+  /// اسم قرية من مخزَّنها المحلّي — سلسلة فارغة إن لم تُحلّ بعد (تحميل لم يكتمل)
+  /// أو حُذفت من الخادم؛ الاستدعاء لا يبني رقاقة على قيمة فارغة بل يتجاهلها.
+  String _villageName(int id) {
+    for (final village in _villagesList) {
+      if (village.id == id) return village.name;
+    }
+    return '';
+  }
+
+  String _occasionTypeName(int id) {
+    for (final type in _typesList) {
+      if (type.id == id) return type.name;
+    }
+    return '';
+  }
+
+  /// نص رقاقة المكان المغلقة — لا يعود أبداً لـ«كل الأماكن» طالما هناك اختيار
+  /// فعلي (#85 FIX 1، story 44).
+  String get _placeChipLabel {
+    final total = _selectedTowns.length + _selectedVillageIds.length;
+    if (total == 0) return 'كل الأماكن';
+    final names = <String>[
+      ..._selectedTowns,
+      ..._selectedVillageIds.map(_villageName).where((n) => n.isNotEmpty),
+    ];
+    if (names.isEmpty) return total == 1 ? 'مكان واحد محدَّد' : '$total أماكن محدَّدة';
+    if (total == 1) return names.first;
+    return '${names.first} +${total - 1}';
+  }
+
+  String get _kindChipLabel {
+    final total = _selectedOccasionTypeIds.length;
+    if (total == 0) return 'كل الأنواع';
+    final names =
+        _selectedOccasionTypeIds.map(_occasionTypeName).where((n) => n.isNotEmpty).toList();
+    if (names.isEmpty) return total == 1 ? 'نوع واحد محدَّد' : '$total أنواع محدَّدة';
+    if (total == 1) return names.first;
+    return '${names.first} +${total - 1}';
+  }
+
+  /// وصف مكان الفراغ («لا توجد مناسبات في…») — يذكر الأسماء إن أمكن حلّها،
+  /// وإلا العدّة، ولا يعود أبداً لـ«النقب» طالما هناك اختيار فعلي.
+  String get _placeDescriptionForEmptyState {
+    final total = _selectedTowns.length + _selectedVillageIds.length;
+    if (total == 0) return 'منطقة النقب';
+    final names = <String>[
+      ..._selectedTowns,
+      ..._selectedVillageIds.map(_villageName).where((n) => n.isNotEmpty),
+    ];
+    if (names.isNotEmpty) return names.join('، ');
+    return total == 1 ? 'مكان واحد محدَّد' : '$total أماكن محدَّدة';
+  }
+
+  Future<void> _openPlaceFilter() async {
+    final options = <FilterOption>[
+      ...AppConfig.towns.map((t) => FilterOption(kind: 'town', id: t, label: t)),
+      ..._villagesList.map((v) => FilterOption(kind: 'village', id: v.id, label: v.name)),
+    ];
+    final selected = <FilterToken>[
+      ..._selectedTowns.map((t) => FilterToken('town', t)),
+      ..._selectedVillageIds.map((id) => FilterToken('village', id)),
+    ];
+    final result = await showMultiSelectFilterSheet(
+      context,
+      title: 'اختر الأماكن',
+      searchHint: 'ابحث عن بلدة أو قرية…',
+      options: options,
+      selected: selected,
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedTowns = result.where((t) => t.kind == 'town').map((t) => t.id as String).toList();
+      _selectedVillageIds =
+          result.where((t) => t.kind == 'village').map((t) => t.id as int).toList();
+    });
     _loadFirstPage();
   }
 
-  void _onOccasionTypeSelected(int? id) {
-    _occasionTypeId = id;
+  Future<void> _openKindFilter() async {
+    final options = _typesList
+        .map((t) => FilterOption(kind: 'type', id: t.id, label: t.name, icon: t.icon))
+        .toList();
+    final selected = _selectedOccasionTypeIds.map((id) => FilterToken('type', id)).toList();
+    final result = await showMultiSelectFilterSheet(
+      context,
+      title: 'اختر أنواع المناسبات',
+      searchHint: 'ابحث عن نوع مناسبة…',
+      options: options,
+      selected: selected,
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedOccasionTypeIds = result.map((t) => t.id as int).toList();
+    });
+    _loadFirstPage();
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _selectedTowns = const [];
+      _selectedVillageIds = const [];
+      _selectedOccasionTypeIds = const [];
+    });
     _loadFirstPage();
   }
 
@@ -254,17 +387,14 @@ class _EventsScreenState extends State<EventsScreen> {
               controller: _searchController,
               onChanged: _onSearchChanged,
             ),
-            _TownFilter(selected: _town, onSelected: _onTownSelected),
-            FutureBuilder<List<OccasionType>>(
-              future: _types,
-              builder: (context, snapshot) {
-                final types = snapshot.data ?? const <OccasionType>[];
-                return _OccasionTypeTabs(
-                  types: types,
-                  selectedId: _occasionTypeId,
-                  onSelected: _onOccasionTypeSelected,
-                );
-              },
+            // رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا يأكلان أعلى
+            // الشاشة (#85 خطوة 40-46) — «مسح الفلاتر» ظاهرة دائماً (قصة 45).
+            _FilterChipsRow(
+              placeLabel: _placeChipLabel,
+              kindLabel: _kindChipLabel,
+              onPlaceTap: _openPlaceFilter,
+              onKindTap: _openKindFilter,
+              onClearTap: _clearFilters,
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
@@ -295,7 +425,9 @@ class _EventsScreenState extends State<EventsScreen> {
 
   Widget _buildList() {
     if (_initialLoading) {
-      return const Center(child: CircularProgressIndicator());
+      // هياكل تحميل بدل دوّارة (٥٣) — النغمة الوقورة لا تُميَّز هنا أصلاً:
+      // الهيكل نفسه بلا أي حركة، فلا فرق ليُلغى على نوع بعينه.
+      return const EventFeedSkeletonList();
     }
 
     if (_error != null) {
@@ -341,8 +473,8 @@ class _EventsScreenState extends State<EventsScreen> {
                 _search.isNotEmpty
                     ? 'لا توجد مناسبات تطابق بحثك'
                     : _archive
-                        ? 'لا توجد مناسبات منتهية في $_town'
-                        : 'لا توجد مناسبات معتمدة في $_town حالياً',
+                        ? 'لا توجد مناسبات منتهية في $_placeDescriptionForEmptyState'
+                        : 'لا توجد مناسبات معتمدة في $_placeDescriptionForEmptyState حالياً',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: context.c.inkFaint, fontSize: 15),
               ),
@@ -371,12 +503,17 @@ class _EventsScreenState extends State<EventsScreen> {
         final eventIndex = index - _announcements.length;
         if (eventIndex < _events.length) {
           final event = _events[eventIndex];
-          return EventCard(
+          final card = EventCard(
             event: event,
             onTap: () => _openEvent(event.id),
             onCongratulationsTap: () => _openCongratulations(event),
             onRemindTap: () => _toggleRemind(event),
           );
+          // الظهور المتدرّج للشاشة الأولى وحدها — مناسبة من صفحة تالية أو
+          // فلتر جديد لا تحمل معرّفها في هذه المجموعة فتُرسَم فوراً (٥٣).
+          return _entranceEventIds.contains(event.id)
+              ? FirstScreenFadeIn(index: eventIndex, child: card)
+              : card;
         }
 
         return Padding(
@@ -425,107 +562,100 @@ class _SearchBar extends StatelessWidget {
   }
 }
 
-class _TownFilter extends StatelessWidget {
-  const _TownFilter({required this.selected, required this.onSelected});
+/// صفّ رقاقتَي المكان والنوع + «مسح الفلاتر» — بدل شريطين زاحفين كانا يأكلان
+/// أعلى الشاشة (#85 خطوة 40-46). ارتفاع ثابت ٥٢ بكسل (٨ حشو + ٣٦ رقاقة + ٨
+/// حشو) — نفس الرقم الذي تنصّ عليه المواصفة لِما تستردّه هذه الدفعة من أعلى
+/// كل شاشة. «مسح الفلاتر» ظاهرة دائماً لا فقط عند وجود اختيار (قصة 45): تغذية
+/// فارغة بلا زرّ ظاهر لغزٌ لا تفسير له.
+class _FilterChipsRow extends StatelessWidget {
+  const _FilterChipsRow({
+    required this.placeLabel,
+    required this.kindLabel,
+    required this.onPlaceTap,
+    required this.onKindTap,
+    required this.onClearTap,
+  });
 
-  final String selected;
-  final ValueChanged<String> onSelected;
+  final String placeLabel;
+  final String kindLabel;
+  final VoidCallback onPlaceTap;
+  final VoidCallback onKindTap;
+  final VoidCallback onClearTap;
 
   @override
   Widget build(BuildContext context) {
-    const towns = ['الكل', ...AppConfig.towns];
-
     return SizedBox(
-      height: 46,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        itemCount: towns.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final town = towns[index];
-          final isSelected = town == selected;
-          return ChoiceChip(
-            label: Text(town),
-            selected: isSelected,
-            onSelected: (_) => onSelected(town),
-            showCheckmark: false,
-            backgroundColor: context.c.surface,
-            selectedColor: context.c.sky,
-            labelStyle: TextStyle(
-              fontSize: 13,
-              color: isSelected ? context.c.onSky : context.c.inkSoft,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            ),
-            side: BorderSide(color: context.c.line),
-          );
-        },
+      height: 52,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _FilterChip(icon: Icons.location_on_outlined, label: placeLabel, onTap: onPlaceTap),
+              const SizedBox(width: 8),
+              _FilterChip(icon: Icons.category_outlined, label: kindLabel, onTap: onKindTap),
+              const SizedBox(width: 8),
+              _FilterChip(
+                icon: Icons.filter_alt_off_outlined,
+                label: 'مسح الفلاتر',
+                onTap: onClearTap,
+                isClear: true,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-/// تبويبات نوع المناسبة — «الكل» أولاً ثم كل نوع نشِط بترتيب الخادم
-/// (`position`). لا قائمة ثابتة: نوع يضيفه الأدمن يظهر تبويبه بلا نشر APK.
-class _OccasionTypeTabs extends StatelessWidget {
-  const _OccasionTypeTabs({
-    required this.types,
-    required this.selectedId,
-    required this.onSelected,
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isClear = false,
   });
 
-  final List<OccasionType> types;
-  final int? selectedId;
-  final ValueChanged<int?> onSelected;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isClear;
 
   @override
   Widget build(BuildContext context) {
-    if (types.isEmpty) return const SizedBox.shrink();
-
-    return SizedBox(
-      height: 42,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        itemCount: types.length + 1,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            final isSelected = selectedId == null;
-            return ChoiceChip(
-              label: const Text('الكل'),
-              selected: isSelected,
-              onSelected: (_) => onSelected(null),
-              showCheckmark: false,
-              backgroundColor: context.c.surface,
-              selectedColor: context.c.sky,
-              labelStyle: TextStyle(
-                fontSize: 12.5,
-                color: isSelected ? context.c.onSky : context.c.inkSoft,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-              side: BorderSide(color: context.c.line),
-            );
-          }
-
-          final type = types[index - 1];
-          final isSelected = selectedId == type.id;
-          final color = occasionTypeColor(type.color, context.c.sky);
-          return ChoiceChip(
-            label: Text(type.icon.isEmpty ? type.name : '${type.icon} ${type.name}'),
-            selected: isSelected,
-            onSelected: (_) => onSelected(type.id),
-            showCheckmark: false,
-            backgroundColor: context.c.surface,
-            selectedColor: color,
-            labelStyle: TextStyle(
-              fontSize: 12.5,
-              color: isSelected ? context.c.onSky : color,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: isClear ? Colors.transparent : context.c.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isClear ? context.c.inkFaint.withValues(alpha: 0.5) : context.c.line,
             ),
-            side: BorderSide(color: color.withValues(alpha: 0.6)),
-          );
-        },
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: isClear ? context.c.inkFaint : context.c.sky),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: isClear ? context.c.inkFaint : context.c.inkSoft,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

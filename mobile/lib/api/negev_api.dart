@@ -21,19 +21,62 @@ class NegevApi {
   /// صفحة من المناسبات العامة — القادمة افتراضياً، `archive: true` للمنتهية.
   /// الترشيح كله على الخادم؛ لا تُرشَّح النتيجة ثانيةً في العميل.
   Future<EventsPage> listEvents({
-    String? town,
+    Object? town,
+    Iterable<String>? towns,
     String? search,
-    int? occasionTypeId,
+    Object? occasionTypeId,
+    Iterable<int>? occasionTypeIds,
+    Object? villageId,
+    Iterable<int>? villageIds,
     bool archive = false,
     int page = 1,
     int limit = 30,
   }) async {
     final query = <String, String>{'page': '$page', 'limit': '$limit'};
-    if (town != null && town.isNotEmpty && town != 'الكل') query['town'] = town;
+
+    final List<String> townList = [];
+    if (towns != null) {
+      townList.addAll(towns.where((t) => t.isNotEmpty && t != 'الكل'));
+    } else if (town is Iterable) {
+      townList.addAll(town.map((e) => '$e').where((t) => t.isNotEmpty && t != 'الكل'));
+    } else if (town is String && town.isNotEmpty && town != 'الكل') {
+      townList.addAll(town.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty && s != 'الكل'));
+    }
+    if (townList.isNotEmpty) {
+      query['town'] = townList.join(',');
+    }
+
+    final List<int> typeList = [];
+    if (occasionTypeIds != null) {
+      typeList.addAll(occasionTypeIds);
+    } else if (occasionTypeId is Iterable) {
+      typeList.addAll(occasionTypeId.map((e) => int.tryParse('$e')).whereType<int>());
+    } else if (occasionTypeId is int) {
+      typeList.add(occasionTypeId);
+    } else if (occasionTypeId is String && occasionTypeId.isNotEmpty) {
+      typeList.addAll(occasionTypeId.split(',').map((s) => int.tryParse(s.trim())).whereType<int>());
+    }
+    if (typeList.isNotEmpty) {
+      query['occasion_type_id'] = typeList.join(',');
+    }
+
+    final List<int> villageList = [];
+    if (villageIds != null) {
+      villageList.addAll(villageIds);
+    } else if (villageId is Iterable) {
+      villageList.addAll(villageId.map((e) => int.tryParse('$e')).whereType<int>());
+    } else if (villageId is int) {
+      villageList.add(villageId);
+    } else if (villageId is String && villageId.isNotEmpty) {
+      villageList.addAll(villageId.split(',').map((s) => int.tryParse(s.trim())).whereType<int>());
+    }
+    if (villageList.isNotEmpty) {
+      query['village_id'] = villageList.join(',');
+    }
+
     if (search != null && search.trim().isNotEmpty) {
       query['search'] = search.trim();
     }
-    if (occasionTypeId != null) query['occasion_type_id'] = '$occasionTypeId';
     if (archive) query['archive'] = '1';
 
     final data = await _client.get('/api/events', query: query);
