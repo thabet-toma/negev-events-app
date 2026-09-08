@@ -571,7 +571,7 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
  * admin panel talks to nothing until a token exists, so an unauthenticated load
  * is enough to drive a form open by hand, which is all these tests do.
  */
-function buildAdminEnv() {
+function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [] } = {}) {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(ADMIN_HTML_WITHOUT_SCRIPTS, {
     url: 'http://localhost/admin.html',
@@ -580,7 +580,22 @@ function buildAdminEnv() {
   });
   const { window } = dom;
 
-  window.fetch = buildFetchStub();
+  if (loggedIn) {
+    window.localStorage.setItem('negev_admin_token', 'test-admin-token');
+    window.localStorage.setItem('negev_admin_role', role);
+  }
+
+  const defaultFetch = buildFetchStub();
+  window.fetch = async (url, options = {}) => {
+    const requestPath = String(url).split('?')[0];
+    if (requestPath === '/api/admin/me') {
+      return jsonResponse({ success: true, user: { id: 1, role }, towns });
+    }
+    if (requestPath === '/api/admin/settings') {
+      return jsonResponse({ success: true, settings: { support_whatsapp_number: '972501234567' } });
+    }
+    return defaultFetch(url, options);
+  };
   window.alert = () => {};
   window.confirm = () => true;
   window.matchMedia = () => ({
@@ -2216,6 +2231,313 @@ async function run() {
     await waitFor(() => requestedPaths.length > previousRequestCount && requestedPaths.some(p => p.includes('page=2')));
     assertNoUnhandledRejections('user log pagination (page 2)');
     assert.ok(requestedPaths.some(p => p.includes('page=2')), 'clicking "next" must request page 2 from the server');
+  });
+
+  console.log('\nAdmin panel — batch 6d tests (spec stories 8, 22-27, 36-37, 46)');
+
+  await test('rejecting an event sends a reason in the request body', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const patchCalls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'GET' && requestPath === '/api/admin/events') {
+        return jsonResponse({ success: true, events: [{ ...ADMIN_EVENT_FIXTURE, id: 99, status: 'pending' }] });
+      }
+      if (method === 'PATCH' && requestPath.startsWith('/api/admin/events/')) {
+        patchCalls.push({
+          url: requestPath,
+          method,
+          body: options.body ? JSON.parse(options.body) : null
+        });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.fetchAdminEvents();
+    const rejectBtn = dom.window.document.querySelector('.btn-reject');
+    assert.ok(rejectBtn, 'reject button must be present on a pending event');
+    rejectBtn.click();
+
+    const reasonInput = dom.window.document.getElementById('rejectReasonInput');
+    const confirmBtn = dom.window.document.getElementById('confirmRejectBtn');
+    if (reasonInput && confirmBtn) {
+      reasonInput.value = 'الصورة غير واضحة';
+      confirmBtn.click();
+    }
+    await waitFor(() => patchCalls.length > 0);
+
+    assert.strictEqual(patchCalls.length, 1, 'expected one PATCH call');
+    assert.strictEqual(patchCalls[0].body.status, 'rejected');
+    assert.strictEqual(patchCalls[0].body.reason, 'الصورة غير واضحة', 'rejection request body must carry the reason');
+  });
+
+  await test('a broadcast carries a tone and a duration', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const broadcastCalls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'POST' && requestPath === '/api/admin/broadcast') {
+        broadcastCalls.push({
+          url: requestPath,
+          method,
+          body: options.body ? JSON.parse(options.body) : null
+        });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    dom.window.renderBroadcastComposer();
+    dom.window.document.getElementById('broadcastMessageInput').value = 'رسالة تجريبية هامة';
+    dom.window.selectBroadcastTone('urgent');
+    dom.window.selectBroadcastDuration('week');
+    const form = dom.window.document.getElementById('broadcastForm');
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 0);
+
+    assert.strictEqual(broadcastCalls.length, 1, 'expected one POST /api/admin/broadcast call');
+    const sentBody = broadcastCalls[0].body;
+    assert.strictEqual(sentBody.message, 'رسالة تجريبية هامة');
+    assert.strictEqual(sentBody.tone, 'urgent', 'broadcast payload must carry a tone');
+    assert.strictEqual(sentBody.duration, 'week', 'broadcast payload must carry a duration');
+  });
+
+  await test('a broadcast with duration "none" sends duration: "none" and the composer describes it as centre-only', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const broadcastCalls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'POST' && requestPath === '/api/admin/broadcast') {
+        broadcastCalls.push({
+          url: requestPath,
+          method,
+          body: options.body ? JSON.parse(options.body) : null
+        });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    dom.window.renderBroadcastComposer();
+    dom.window.selectBroadcastDuration('none');
+    const hint = dom.window.document.getElementById('broadcastDurationHint').textContent;
+    assert.ok(hint.includes('بلا شريط') && hint.includes('مركز الإشعارات'), 'duration hint must honestly explain that "none" leaves the ticker empty');
+
+    dom.window.document.getElementById('broadcastMessageInput').value = 'تعميم للأرشيف ومركز الإشعارات';
+    const form = dom.window.document.getElementById('broadcastForm');
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 0);
+
+    assert.strictEqual(broadcastCalls.length, 1, 'expected one POST call');
+    assert.strictEqual(broadcastCalls[0].body.duration, 'none');
+  });
+
+  await test('super admin sees no town picker; town admin sees only their own assigned towns', async () => {
+    // 1. Super admin sees no town picker
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    superDom.window.renderBroadcastComposer();
+    const superTownsGroup = superDom.window.document.getElementById('broadcastTownsGroup');
+    assert.strictEqual(superTownsGroup.style.display, 'none', 'super admin must not see a town picker');
+    const superNotice = superDom.window.document.getElementById('broadcastScopeNotice').textContent;
+    assert.ok(superNotice.includes('بث عام وشامل'), 'super admin notice must describe global reach');
+
+    // 2. Town admin sees only their own assigned towns
+    const townDom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط', 'حورة'] });
+    await townDom.window.fetchAdminIdentity();
+    townDom.window.renderBroadcastComposer();
+    const townGroup = townDom.window.document.getElementById('broadcastTownsGroup');
+    assert.strictEqual(townGroup.style.display, 'block', 'town admin must see town picker');
+    const checkboxes = Array.from(townDom.window.document.querySelectorAll('#broadcastTownsPicker .broadcast-town-check'));
+    const renderedTowns = checkboxes.map(cb => cb.value);
+    assert.deepStrictEqual(renderedTowns, ['رهط', 'حورة'], 'town admin can pick only from their assigned towns');
+
+    // Select one town and submit
+    checkboxes[0].checked = true;
+    const broadcastCalls = [];
+    townDom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'POST' && requestPath === '/api/admin/broadcast') {
+        broadcastCalls.push({
+          url: requestPath,
+          method,
+          body: options.body ? JSON.parse(options.body) : null
+        });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    townDom.window.document.getElementById('broadcastMessageInput').value = 'تعميم لأهل رهط';
+    const form = townDom.window.document.getElementById('broadcastForm');
+    form.dispatchEvent(new townDom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 0);
+
+    assert.strictEqual(broadcastCalls.length, 1);
+    assert.deepStrictEqual(broadcastCalls[0].body.towns, ['رهط'], 'payload must carry selected towns');
+  });
+
+  await test('admin with zero assigned towns is stopped before sending (controls disabled and notice shown)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: [] });
+    await dom.window.fetchAdminIdentity();
+    dom.window.renderBroadcastComposer();
+
+    const notice = dom.window.document.getElementById('broadcastScopeNotice');
+    assert.ok(notice.classList.contains('scope-banner-empty'), 'empty scope notice should have empty banner styling');
+    assert.ok(notice.textContent.includes('لا يملك أي بلدة مُسنَدة'), 'notice must tell the admin they have 0 assigned towns');
+
+    const msgInput = dom.window.document.getElementById('broadcastMessageInput');
+    const sendBtn = dom.window.document.getElementById('sendBroadcastBtn');
+    assert.strictEqual(msgInput.disabled, true, 'message input must be disabled for 0-towns admin');
+    assert.strictEqual(sendBtn.disabled, true, 'submit button must be disabled for 0-towns admin');
+
+    let fetchCalled = false;
+    dom.window.fetch = async () => {
+      fetchCalled = true;
+      return jsonResponse({ success: true });
+    };
+
+    dom.window.handleSendBroadcast({ preventDefault() {} });
+    assert.strictEqual(fetchCalled, false, 'send broadcast must abort before network call when admin has 0 towns');
+    const noticeModal = dom.window.document.getElementById('adminNoticeModal');
+    assert.strictEqual(noticeModal.style.display, 'flex', 'in-app modal notice must be shown instead of native alert');
+    assert.ok(dom.window.document.getElementById('adminNoticeMessage').textContent.includes('لا يملك أي بلدة مُسنَدة'));
+  });
+
+  await test('settings tab is reachable only for super admin, saves number, and can clear it', async () => {
+    // 1. Role visibility — start from visible so hiding is load-bearing and falsifiable
+    const townDom = buildAdminEnv({ loggedIn: true, role: 'admin' });
+    const townSettingsBtn = townDom.window.document.getElementById('tabSettingsBtn');
+    townSettingsBtn.style.display = 'flex';
+    townDom.window.applyRoleVisibility();
+    assert.strictEqual(townSettingsBtn.style.display, 'none', 'settings tab button must be hidden for town admin even if initially visible');
+
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    superDom.window.applyRoleVisibility();
+    assert.strictEqual(superDom.window.document.getElementById('tabSettingsBtn').style.display, 'flex', 'settings tab button must be visible for super admin');
+
+    // 2. Fetch settings
+    let savedSettings = { support_whatsapp_number: '972501112233' };
+    const calls = [];
+    superDom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      calls.push({ url: requestPath, method, body: options.body ? JSON.parse(options.body) : null });
+      if (method === 'GET' && requestPath === '/api/admin/settings') {
+        return jsonResponse({ success: true, settings: savedSettings });
+      }
+      if (method === 'PUT' && requestPath === '/api/admin/settings') {
+        const body = JSON.parse(options.body);
+        savedSettings.support_whatsapp_number = body.support_whatsapp_number;
+        return jsonResponse({ success: true, message: 'تم حفظ الإعدادات بنجاح', settings: savedSettings });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    await superDom.window.fetchAdminSettings();
+    const input = superDom.window.document.getElementById('settingSupportWhatsapp');
+    assert.strictEqual(input.value, '972501112233', 'input must display fetched support number');
+
+    // 3. Save number
+    input.value = '972509998877';
+    await superDom.window.handleSaveSettings({ preventDefault() {} });
+    const putCall = calls.find(c => c.method === 'PUT');
+    assert.ok(putCall, 'expected a PUT call to save settings');
+    assert.strictEqual(putCall.body.support_whatsapp_number, '972509998877');
+
+    // 4. Clear number
+    calls.length = 0;
+    await superDom.window.handleClearSupportNumber();
+    const clearCall = calls.find(c => c.method === 'PUT');
+    assert.ok(clearCall, 'expected a PUT call to clear settings');
+    assert.strictEqual(clearCall.body.support_whatsapp_number, '', 'clearing must send empty string');
+    assert.strictEqual(input.value, '', 'input must be empty after clearing');
+  });
+
+  await test('invalid WhatsApp number displays the server\'s Arabic error without client format check', async () => {
+    const dom = buildAdminEnv();
+    dom.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    dom.window.localStorage.setItem('negev_admin_token', 'test-admin-token');
+
+    let putCalled = false;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'PUT' && requestPath === '/api/admin/settings') {
+        putCalled = true;
+        return jsonResponse({ success: false, message: 'رقم واتساب غير صالح — يجب أن يبدأ برمز الدولة وبدون إشارات' }, { status: 400 });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    const input = dom.window.document.getElementById('settingSupportWhatsapp');
+    input.value = 'invalid-phone-string';
+    await dom.window.handleSaveSettings({ preventDefault() {} });
+
+    assert.strictEqual(putCalled, true, 'must attempt PUT without client-side regex blocking it');
+    const notice = dom.window.document.getElementById('settingsNotice');
+    assert.strictEqual(notice.style.display, 'block');
+    assert.ok(notice.textContent.includes('رقم واتساب غير صالح'), 'must display server error message verbatim in settingsNotice');
+
+    const noticeModal = dom.window.document.getElementById('adminNoticeModal');
+    assert.strictEqual(noticeModal.style.display, 'flex');
+    assert.ok(dom.window.document.getElementById('adminNoticeMessage').textContent.includes('رقم واتساب غير صالح'));
+  });
+
+  await test('town dropdowns are filled from GET /api/towns with \'الكل\' filtered out', async () => {
+    const dom = buildAdminEnv();
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/towns') {
+        return jsonResponse({
+          success: true,
+          towns: ['الكل', 'رهط', 'حورة', 'تل السبع', 'اللقية']
+        });
+      }
+      if (requestPath === '/api/occasion-types') {
+        return jsonResponse({ success: true, types: OCCASION_TYPES_FIXTURE });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.initDirectAddForm();
+    const dirTownSelect = dom.window.document.getElementById('dirTown');
+    assert.ok(dirTownSelect, '#dirTown select should exist in DOM');
+    const optionValues = Array.from(dirTownSelect.querySelectorAll('option')).map(o => o.value);
+    assert.ok(!optionValues.includes('الكل'), '\'الكل\' must be filtered out of admin town dropdowns');
+    assert.ok(optionValues.includes('رهط') && optionValues.includes('حورة') && optionValues.includes('تل السبع'));
+  });
+
+  await test('panel behaves sanely when GET /api/towns fails (uses fallback array)', async () => {
+    const dom = buildAdminEnv();
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/towns') {
+        throw new Error('Network error loading towns');
+      }
+      if (requestPath === '/api/occasion-types') {
+        return jsonResponse({ success: true, types: OCCASION_TYPES_FIXTURE });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    await dom.window.initDirectAddForm();
+    const dirTownSelect = dom.window.document.getElementById('dirTown');
+    assert.ok(dirTownSelect, '#dirTown select should exist in DOM');
+    const optionValues = Array.from(dirTownSelect.querySelectorAll('option')).map(o => o.value);
+    assert.ok(optionValues.length > 0, 'town dropdown must not be left empty on fetch failure');
+    assert.ok(optionValues.includes('رهط'), 'fallback towns should be present in dropdown');
+    assert.ok(!optionValues.includes('الكل'), 'fallback towns must never contain \'الكل\'');
+  });
+
+  await test('picking "القرى والتجمعات" in direct add form keeps the selection without resetting to default town', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const townSelect = dom.window.document.getElementById('dirTown');
+    assert.ok(townSelect, 'town select must exist');
+    townSelect.value = 'القرى والتجمعات';
+    await dom.window.handleDirTownChange();
+    assert.strictEqual(townSelect.value, 'القرى والتجمعات', 'picking villages town must not reset town select back to first option');
   });
 
   console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');

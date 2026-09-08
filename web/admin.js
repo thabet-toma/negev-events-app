@@ -28,7 +28,7 @@ let analyticsUserLogPage = 1;
 let editingEventId = null;
 let editingEventOriginal = null; // القيم الأصلية للمقارنة عند الحفظ — إرسال الفرق فقط (قيد ٤)
 let allTownVillages = []; // من GET /api/towns، لا GET /api/admin/villages (قيد ٣ — الأخير 403 لأدمن محلي)
-let townVillagesFetchAttempted = false;
+let townsFetchPromise = null;
 
 // حالة نموذج «نشر مناسبة معتمدة فوراً» (إصلاح عطل الإنتاج: كان نموذج عرس ثابتاً
 // بلا occasion_type_id ولا honorees[]) — يُبنى من نوع المناسبة المختار، بنفس
@@ -36,15 +36,14 @@ let townVillagesFetchAttempted = false;
 let directAddOccasionTypes = [];
 let selectedDirectAddType = null;
 
-// مرآة لـ TOWNS في server/src/constants.js — لا وحدة مشتركة بين web/ والخادم،
-// نفس سبب OCCASION_FIELDS أدناه: البلدات ثابتة بالكود ومكرَّرة عمداً في كل
-// عميل، خلافاً للقرى وفئات الخدمات التي تُجلب من الخادم (services-directory
-// spec). قائمة dirTown في نموذج النشر المباشر تُولَّد من هذه المصفوفة وقت
-// التشغيل (populateDirTownSelect)، لا خيارات <option> ثابتة في admin.html
-// كما كانت.
-const TOWNS = [
+// قائمة البلدات الاحتياطية — تُستخدم فقط في حال تعذر الاتصال بالخادم،
+// لضمان عدم ظهور قوائم منسدلة فارغة للأدمن إن فشل GET /api/towns (story 46).
+// تُستبدل تلقائياً بالقائمة الحية المجلوبة من الخادم فور نجاح الطلب، وهي
+// مجرد احتياط أوفلاين يصبح قديماً بصمت إذا تغيّرت TOWNS في constants.js.
+const FALLBACK_TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
+let TOWNS = [...FALLBACK_TOWNS];
 
 
 // أيقونات جاهزة لحقلَي «الأيقونة» — نوع المناسبة وفئة الخدمة. الحقل في الحالتين
@@ -103,7 +102,7 @@ function isSuperAdminRole() {
 }
 
 // مرآة لـ server/src/constants.js — لا وحدة مشتركة بين web/ والخادم، فالمفردات
-// تُنسخ هنا حرفياً كما تُنسخ TOWNS أعلاه في admin.html (#20 خطوة 16).
+// تُنسخ هنا حرفياً (#20 خطوة 16).
 const OCCASION_FIELDS = [
   { key: 'honorees', label: 'أصحاب المناسبة', core: true },
   { key: 'title', label: 'العنوان', core: false },
@@ -207,14 +206,17 @@ function showDashboard() {
 function applyRoleVisibility() {
   const isSuperAdmin = isSuperAdminRole();
   const superAdminOnlyBtnIds = [
-    'tabBroadcastBtn', 'tabUsersBtn', 'tabOccasionTypesBtn',
+    'tabUsersBtn', 'tabOccasionTypesBtn',
     'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
-    'tabPrivacyRequestsBtn', 'tabAnalyticsBtn'
+    'tabPrivacyRequestsBtn', 'tabAnalyticsBtn', 'tabSettingsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.style.display = isSuperAdmin ? 'flex' : 'none';
   });
+
+  const broadcastBtn = document.getElementById('tabBroadcastBtn');
+  if (broadcastBtn) broadcastBtn.style.display = 'flex';
 
   const usersCard = document.getElementById('usersStatCard');
   if (usersCard) usersCard.style.display = isSuperAdmin ? 'flex' : 'none';
@@ -239,18 +241,19 @@ async function loadAdminDashboard() {
     fetchAdminComments(),
     fetchPublicServiceCategories(),
     fetchAdminServiceProviders(),
-    fetchTownVillages(),
+    fetchTowns(),
     initDirectAddForm()
   ];
   if (isSuperAdmin) {
     tasks.push(
       fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
       fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
-      fetchAdminAnalyticsCounts()
+      fetchAdminAnalyticsCounts(), fetchAdminSettings()
     );
   }
   await Promise.all(tasks);
   renderScopeBanner();
+  renderBroadcastComposer();
 }
 
 /*
@@ -401,13 +404,13 @@ function renderAdminEvents() {
                 <i class="fa-solid fa-check"></i> اعتماد ونشر
               </button>
             ` : `
-              <button class="btn-reject" onclick="updateEventStatus(${evt.id}, 'rejected')">
+              <button class="btn-reject" onclick="openRejectEventModal(${evt.id})">
                 <i class="fa-solid fa-ban"></i> إيقاف النشر
               </button>
             `}
             
             ${evt.status === 'pending' ? `
-              <button class="btn-reject" onclick="updateEventStatus(${evt.id}, 'rejected')">
+              <button class="btn-reject" onclick="openRejectEventModal(${evt.id})">
                 <i class="fa-solid fa-xmark"></i> رفض
               </button>
             ` : ''}
@@ -428,12 +431,59 @@ function renderAdminEvents() {
 }
 
 // 3. Status Actions (Approve / Reject / Delete)
-async function updateEventStatus(id, newStatus) {
+let pendingRejectEventId = null;
+
+function showAdminNotice(message, title = 'تنبيه') {
+  const modal = document.getElementById('adminNoticeModal');
+  const titleEl = document.getElementById('adminNoticeTitle');
+  const msgEl = document.getElementById('adminNoticeMessage');
+  if (titleEl) titleEl.innerHTML = `<i class="fa-solid fa-bell"></i> ${escapeHtml(title)}`;
+  if (msgEl) msgEl.textContent = message;
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeAdminNoticeModal() {
+  const modal = document.getElementById('adminNoticeModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function openRejectEventModal(id) {
+  pendingRejectEventId = id;
+  const input = document.getElementById('rejectReasonInput');
+  if (input) input.value = '';
+  const modal = document.getElementById('rejectEventModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeRejectEventModal() {
+  pendingRejectEventId = null;
+  const modal = document.getElementById('rejectEventModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function confirmRejectEvent() {
+  if (!pendingRejectEventId) return;
+  const id = pendingRejectEventId;
+  const input = document.getElementById('rejectReasonInput');
+  const reason = input ? input.value.trim() : '';
+  closeRejectEventModal();
+  await updateEventStatus(id, 'rejected', reason);
+}
+
+async function updateEventStatus(id, newStatus, reason) {
+  if (newStatus === 'rejected' && reason === undefined) {
+    openRejectEventModal(id);
+    return;
+  }
   try {
+    const payload = { status: newStatus };
+    if (newStatus === 'rejected' && reason) {
+      payload.reason = reason;
+    }
     const res = await adminFetch(`/api/admin/events/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
 
@@ -441,10 +491,10 @@ async function updateEventStatus(id, newStatus) {
       fetchKPIStats();
       fetchAdminEvents();
     } else {
-      alert(data.message || 'حدث خطأ أثناء التحديث');
+      showAdminNotice(data.message || 'حدث خطأ أثناء التحديث', 'خطأ');
     }
   } catch (e) {
-    alert('تعذر الاتصال بالخادم');
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
   }
 }
 
@@ -467,6 +517,7 @@ async function deleteAdminEvent(id) {
 
 /** يجلب الأنواع النشِطة ويملأ منتقيها، ثم يبني حقول أول نوع تلقائياً. */
 async function initDirectAddForm() {
+  await fetchTowns();
   directAddOccasionTypes = await fetchActiveOccasionTypes();
   const select = document.getElementById('dirOccasionType');
   if (!select) return;
@@ -548,11 +599,15 @@ function renderDirectAddFields(type) {
   if (fieldsByKey.honorees) addHonoreeRow('dirHonoreesList');
 }
 
-/** يملأ منتقي البلدة من TOWNS المحلية — نفس مصدر كل بلدة أخرى في اللوحة. */
+/** يملأ منتقي البلدة من TOWNS المجلوبة من الخادم (أو الاحتياطية عند الفشل) — نفس مصدر كل بلدة أخرى في اللوحة. */
 function populateDirTownSelect() {
   const select = document.getElementById('dirTown');
   if (!select) return;
+  const currentVal = select.value;
   select.innerHTML = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  if (currentVal && TOWNS.includes(currentVal)) {
+    select.value = currentVal;
+  }
 }
 
 /** يُظهر منتقي القرية فقط تحت بند "القرى والتجمعات" — نفس قاعدة app.js وتعديل مناسبة. */
@@ -563,13 +618,15 @@ async function handleDirTownChange() {
 
   if (townSelect.value === VILLAGES_TOWN) {
     group.style.display = '';
-    // قد يُختار هذا البند قبل اكتمال fetchTownVillages() من مهام لوحة التحكم
+    // قد يُختار هذا البند قبل اكتمال fetchTowns() من مهام لوحة التحكم
     // الموازية (loadAdminDashboard) — نفس نمط الانتظار في openEventEditForm.
-    await fetchTownVillages();
+    await fetchTowns();
     const select = document.getElementById('dirVillage');
     if (select) {
+      const curVillage = select.value;
       select.innerHTML = '<option value="">اختر القرية</option>' +
         allTownVillages.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+      if (curVillage) select.value = curVillage;
     }
   } else {
     group.style.display = 'none';
@@ -698,12 +755,127 @@ async function handleDirectAdd(e) {
   }
 }
 
-// 5. Send Broadcast Notification
+// 5. Send Broadcast Notification (stories 22-27)
+const BROADCAST_TONE_HINTS = {
+  info: 'نغمة عادية للتنبيهات والأخبار العامة',
+  urgent: 'نغمة عاجلة — تبرز بلون تحذيري وتنبيه فوري',
+  solemn: 'نغمة وقورة — للأخبار الحزينة ومناسبات العزاء'
+};
+
+const BROADCAST_DURATION_HINTS = {
+  hour: 'يظهر في الشريط أعلى الشاشة لمدة ساعة واحدة، ويبقى في مركز الإشعارات',
+  day: 'يظهر في الشريط أعلى الشاشة لمدة يوم كامل، ويبقى في مركز الإشعارات',
+  '3_days': 'يظهر في الشريط أعلى الشاشة لمدة ٣ أيام، ويبقى في مركز الإشعارات',
+  week: 'يظهر في الشريط أعلى الشاشة لمدة أسبوع، ويبقى في مركز الإشعارات',
+  none: 'تعميم هادئ: لا يظهر في الشريط الإخباري (بلا شريط)، ويبقى في مركز الإشعارات فقط'
+};
+
+function selectBroadcastTone(tone) {
+  const input = document.getElementById('broadcastToneInput');
+  if (input) input.value = tone;
+  document.querySelectorAll('#broadcastToneGroup .tone-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tone === tone);
+  });
+  const hint = document.getElementById('broadcastToneHint');
+  if (hint && BROADCAST_TONE_HINTS[tone]) {
+    hint.textContent = BROADCAST_TONE_HINTS[tone];
+  }
+}
+
+function selectBroadcastDuration(duration) {
+  const input = document.getElementById('broadcastDurationInput');
+  if (input) input.value = duration;
+  document.querySelectorAll('#broadcastDurationGroup .duration-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.duration === duration);
+  });
+  const hint = document.getElementById('broadcastDurationHint');
+  if (hint && BROADCAST_DURATION_HINTS[duration]) {
+    hint.textContent = BROADCAST_DURATION_HINTS[duration];
+  }
+}
+
+function renderBroadcastComposer() {
+  const scopeNotice = document.getElementById('broadcastScopeNotice');
+  const townsGroup = document.getElementById('broadcastTownsGroup');
+  const townsPicker = document.getElementById('broadcastTownsPicker');
+  const titleInput = document.getElementById('broadcastTitleInput');
+  const messageInput = document.getElementById('broadcastMessageInput');
+  const submitBtn = document.getElementById('sendBroadcastBtn');
+
+  if (!scopeNotice) return;
+
+  const isSuper = isSuperAdminRole();
+  if (isSuper) {
+    scopeNotice.style.display = 'flex';
+    scopeNotice.className = 'admin-scope-banner';
+    scopeNotice.innerHTML = '<i class="fa-solid fa-earth-africa"></i> بث عام وشامل — يصل تعميمك إلى جميع مستخدمي المنصة في كافة البلدات';
+    if (townsGroup) townsGroup.style.display = 'none';
+    if (titleInput) titleInput.disabled = false;
+    if (messageInput) messageInput.disabled = false;
+    if (submitBtn) submitBtn.disabled = false;
+    document.querySelectorAll('#broadcastToneGroup .tone-btn, #broadcastDurationGroup .duration-btn').forEach(b => { b.disabled = false; });
+    return;
+  }
+
+  const myTowns = deriveScopedTowns();
+  if (!myTowns.length) {
+    scopeNotice.style.display = 'flex';
+    scopeNotice.className = 'admin-scope-banner scope-banner-empty';
+    scopeNotice.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> لا يمكنك إرسال تعميم لأن حسابك لا يملك أي بلدة مُسنَدة حالياً. تواصل مع السوبر أدمن لإسناد بلدة لحسابك.';
+    if (townsGroup) townsGroup.style.display = 'none';
+    if (titleInput) titleInput.disabled = true;
+    if (messageInput) messageInput.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
+    document.querySelectorAll('#broadcastToneGroup .tone-btn, #broadcastDurationGroup .duration-btn').forEach(b => { b.disabled = true; });
+    return;
+  }
+
+  scopeNotice.style.display = 'flex';
+  scopeNotice.className = 'admin-scope-banner';
+  scopeNotice.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> نطاق البث الخاص بك: ${myTowns.map(escapeHtml).join(' · ')}`;
+  
+  if (townsGroup && townsPicker) {
+    townsGroup.style.display = 'block';
+    townsPicker.innerHTML = myTowns.map(town => `
+      <label class="ot-check">
+        <input type="checkbox" class="broadcast-town-check" value="${escapeHtml(town)}"> ${escapeHtml(town)}
+      </label>
+    `).join('');
+  }
+
+  if (titleInput) titleInput.disabled = false;
+  if (messageInput) messageInput.disabled = false;
+  if (submitBtn) submitBtn.disabled = false;
+  document.querySelectorAll('#broadcastToneGroup .tone-btn, #broadcastDurationGroup .duration-btn').forEach(b => { b.disabled = false; });
+}
+
 async function handleSendBroadcast(e) {
   e.preventDefault();
-  const title = document.getElementById('broadcastTitleInput').value.trim();
-  const message = document.getElementById('broadcastMessageInput').value.trim();
+
+  if (!isSuperAdminRole() && deriveScopedTowns().length === 0) {
+    showAdminNotice('لا يمكنك إرسال تعميم لأن حسابك لا يملك أي بلدة مُسنَدة حالياً.', 'تنبيه');
+    return;
+  }
+
+  const title = (document.getElementById('broadcastTitleInput')?.value || '').trim();
+  const message = (document.getElementById('broadcastMessageInput')?.value || '').trim();
+  const tone = (document.getElementById('broadcastToneInput')?.value || '').trim() || 'info';
+  const duration = (document.getElementById('broadcastDurationInput')?.value || '').trim() || 'day';
   const btn = document.getElementById('sendBroadcastBtn');
+
+  const payload = {
+    message,
+    tone,
+    duration
+  };
+  if (title) payload.title = title;
+
+  if (!isSuperAdminRole()) {
+    const checkedTowns = Array.from(document.querySelectorAll('.broadcast-town-check:checked')).map(cb => cb.value);
+    if (checkedTowns.length > 0) {
+      payload.towns = checkedTowns;
+    }
+  }
 
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري البث...';
@@ -712,21 +884,27 @@ async function handleSendBroadcast(e) {
     const res = await adminFetch('/api/admin/broadcast', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, message })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
 
     if (data.success) {
-      alert('📢 تم بث الإشعار بنجاح لجميع شاشات المستخدمين المتصلين!');
-      document.getElementById('broadcastMessageInput').value = '';
+      showAdminNotice('📢 تم بث الإشعار بنجاح لجميع المستخدمين المستهدفين!', 'تم البث');
+      const msgInp = document.getElementById('broadcastMessageInput');
+      if (msgInp) msgInp.value = '';
+      const titleInp = document.getElementById('broadcastTitleInput');
+      if (titleInp) titleInp.value = '';
+      selectBroadcastTone('info');
+      selectBroadcastDuration('day');
+      document.querySelectorAll('.broadcast-town-check').forEach(cb => { cb.checked = false; });
     } else {
-      alert(data.message || 'فشل إرسال البث');
+      showAdminNotice(data.message || 'فشل إرسال البث', 'خطأ في البث');
     }
   } catch (err) {
-    alert('تعذر الاتصال بالخادم');
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال البث لجميع الشاشات الآن';
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال البث الآن';
   }
 }
 
@@ -1239,6 +1417,12 @@ function switchAdminTab(tabId) {
   // فالفهرس الثابت القديم كان سيكسر بمجرد إضافة تبويب.
   const btn = document.querySelector(`.admin-nav-tabs .admin-tab-btn[data-tab="${tabId}"]`);
   if (btn) btn.classList.add('active');
+
+  if (tabId === 'tabBroadcast') {
+    renderBroadcastComposer();
+  } else if (tabId === 'tabSettings') {
+    fetchAdminSettings();
+  }
 }
 
 function filterEventsByStatus(status, btnElement) {
@@ -1435,17 +1619,59 @@ function ensureEventEditFormMounted() {
   tabEvents.appendChild(wrapper);
 }
 
-/** القرى مصدرها GET /api/towns العام (لا GET /api/admin/villages، خلف requireSuperAdmin — 403 لكل أدمن محلي، قيد ٣). */
-async function fetchTownVillages() {
-  if (townVillagesFetchAttempted) return;
-  townVillagesFetchAttempted = true;
-  try {
-    const res = await apiFetch('/api/towns');
-    const data = await res.json();
-    if (data.success) allTownVillages = data.villages || [];
-  } catch (e) {
-    console.error('Towns/villages fetch error:', e);
+function populateEvtTownSelect(selectedVal) {
+  const select = document.getElementById('evtTown');
+  if (!select) return;
+  const val = selectedVal !== undefined ? selectedVal : select.value;
+  select.innerHTML = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  if (val && TOWNS.includes(val)) {
+    select.value = val;
   }
+}
+
+function onTownsUpdated() {
+  populateDirTownSelect();
+  populateEvtTownSelect();
+  if (typeof allAdminsWithTowns !== 'undefined' && allAdminsWithTowns.length > 0) {
+    renderAdminsList();
+  }
+  const provWrapper = document.getElementById('providerFormWrapper');
+  if (provWrapper && provWrapper.style.display !== 'none') {
+    const checked = collectProviderTowns();
+    const scopedTowns = isSuperAdminRole() ? TOWNS : deriveScopedTowns();
+    renderProviderTownsPicker(scopedTowns, checked);
+  }
+}
+
+/** يجلب البلدات والقرى من GET /api/towns العام، ويستبعد 'الكل'. */
+async function fetchTowns() {
+  if (townsFetchPromise) return townsFetchPromise;
+  townsFetchPromise = (async () => {
+    try {
+      const res = await apiFetch('/api/towns');
+      const data = await res.json();
+      if (data.success) {
+        if (Array.isArray(data.towns)) {
+          const fetched = data.towns.filter(t => t !== 'الكل');
+          if (fetched.length > 0) {
+            TOWNS = fetched;
+          }
+        }
+        if (Array.isArray(data.villages)) {
+          allTownVillages = data.villages;
+        }
+        onTownsUpdated();
+        return true;
+      }
+      townsFetchPromise = null;
+      return false;
+    } catch (e) {
+      console.error('Towns/villages fetch error (keeping fallbacks):', e);
+      townsFetchPromise = null;
+      return false;
+    }
+  })();
+  return townsFetchPromise;
 }
 
 function renderEventVillageOptions(selectedId) {
@@ -1546,7 +1772,7 @@ async function openEventEditForm(id) {
   if (!evt) return;
 
   ensureEventEditFormMounted();
-  await fetchTownVillages();
+  await fetchTowns();
 
   const wrapper = document.getElementById('eventEditFormWrapper');
   const forbiddenNotice = document.getElementById('eventEditForbiddenNotice');
@@ -1620,6 +1846,7 @@ async function openEventEditForm(id) {
 
   document.getElementById('evtTitle').value = editingEventOriginal.title;
   document.getElementById('evtFamilyClan').value = editingEventOriginal.family_clan;
+  populateEvtTownSelect(editingEventOriginal.town);
   document.getElementById('evtTown').value = editingEventOriginal.town;
   document.getElementById('evtLocationName').value = editingEventOriginal.location_name;
   document.getElementById('evtSecondaryLocation').value = editingEventOriginal.secondary_location_name;
@@ -2617,6 +2844,7 @@ async function handleDeleteServiceCategory(id) {
 
 async function fetchAdminAdmins() {
   try {
+    await fetchTowns();
     const res = await adminFetch('/api/admin/admins');
     const data = await res.json();
     if (res.status === 403) { renderAdminsForbidden(data.message); return; }
@@ -3127,4 +3355,105 @@ function escapeHtml(str) {
       "'": '&#039;'
     }[m];
   });
+}
+
+// 12. Platform Settings (stories 36, 37)
+async function fetchAdminSettings() {
+  const notice = document.getElementById('settingsNotice');
+  const input = document.getElementById('settingSupportWhatsapp');
+  if (!input) return;
+
+  try {
+    const res = await adminFetch('/api/admin/settings');
+    const data = await res.json();
+    if (data.success && data.settings) {
+      input.value = data.settings.support_whatsapp_number || '';
+      if (notice) notice.style.display = 'none';
+    } else if (!data.success) {
+      if (notice) {
+        notice.style.display = 'block';
+        notice.textContent = data.message || 'تعذر تحميل الإعدادات';
+      }
+    }
+  } catch (e) {
+    console.error('Fetch admin settings error:', e);
+  }
+}
+
+async function handleSaveSettings(e) {
+  e.preventDefault();
+  const notice = document.getElementById('settingsNotice');
+  const input = document.getElementById('settingSupportWhatsapp');
+  const btn = document.getElementById('saveSettingsBtn');
+  if (!input) return;
+
+  const value = input.value.trim();
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+  }
+
+  try {
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ support_whatsapp_number: value })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      if (data.settings) {
+        input.value = data.settings.support_whatsapp_number || '';
+      }
+      if (notice) {
+        notice.style.display = 'none';
+      }
+      showAdminNotice(data.message || 'تم حفظ الإعدادات بنجاح', 'نجاح');
+    } else {
+      if (notice) {
+        notice.style.display = 'block';
+        notice.textContent = data.message || 'فشل حفظ الإعدادات';
+      }
+      showAdminNotice(data.message || 'فشل حفظ الإعدادات', 'خطأ في الحفظ');
+    }
+  } catch (err) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ الإعدادات';
+    }
+  }
+}
+
+async function handleClearSupportNumber() {
+  const input = document.getElementById('settingSupportWhatsapp');
+  if (input) input.value = '';
+
+  const btn = document.getElementById('clearSupportWhatsappBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ support_whatsapp_number: '' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (data.settings && input) {
+        input.value = data.settings.support_whatsapp_number || '';
+      }
+      const notice = document.getElementById('settingsNotice');
+      if (notice) notice.style.display = 'none';
+      showAdminNotice('تم حذف رقم الدعم الفني وتعطيله بنجاح', 'تم الحذف');
+    } else {
+      showAdminNotice(data.message || 'فشل حذف رقم الدعم', 'خطأ');
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }

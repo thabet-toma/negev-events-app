@@ -139,7 +139,7 @@
         <button class="admin-tab-btn" data-tab="tabComments" onclick="switchAdminTab('tabComments')">
           <i class="fa-solid fa-comment-dots"></i> مراقبة التبريكات
         </button>
-        <button class="admin-tab-btn" id="tabBroadcastBtn" data-tab="tabBroadcast" onclick="switchAdminTab('tabBroadcast')" style="display:none;">
+        <button class="admin-tab-btn" id="tabBroadcastBtn" data-tab="tabBroadcast" onclick="switchAdminTab('tabBroadcast')">
           <i class="fa-solid fa-bullhorn"></i> البث والإشعارات العامة
         </button>
         <button class="admin-tab-btn" id="tabUsersBtn" data-tab="tabUsers" onclick="switchAdminTab('tabUsers')" style="display:none;">
@@ -162,6 +162,9 @@
         </button>
         <button class="admin-tab-btn" id="tabAnalyticsBtn" data-tab="tabAnalytics" onclick="switchAdminTab('tabAnalytics')" style="display:none;">
           <i class="fa-solid fa-chart-line"></i> التتبّع والتحليلات
+        </button>
+        <button class="admin-tab-btn" id="tabSettingsBtn" data-tab="tabSettings" onclick="switchAdminTab('tabSettings')" style="display:none;">
+          <i class="fa-solid fa-gear"></i> إعدادات المنصة
         </button>
       </nav>
 
@@ -209,25 +212,63 @@
         </div>
       </section>
 
-      <!-- TAB 3: BROADCAST NOTIFICATIONS -->
+      <!-- TAB 3: BROADCAST NOTIFICATIONS (stories 22-27) -->
       <section id="tabBroadcast" class="admin-tab-pane">
         <div class="pane-box">
           <div class="pane-header">
-            <h2><i class="fa-solid fa-tower-broadcast"></i> بث إشعار وتنبيه عاجل لجميع المستخدمين</h2>
-            <p>سيظهر الإشعار فوراً في أعلى شاشات جميع المستخدمين المتصلين بالتطبيق</p>
+            <h2><i class="fa-solid fa-tower-broadcast"></i> بث إشعار وتنبيه</h2>
+            <p id="broadcastHeaderDesc">إرسال تعميم يظهر في الشريط الإخباري ومركز الإشعارات</p>
           </div>
 
+          <!-- إشعار النطاق حسب دور الأدمن والبلدات المُسنَدة -->
+          <div id="broadcastScopeNotice" class="admin-scope-banner" style="display:none;"></div>
+
           <form id="broadcastForm" class="admin-form" onsubmit="handleSendBroadcast(event)">
-            <div class="form-group">
-              <label>عنوان التنبيه</label>
-              <input type="text" id="broadcastTitleInput" value="📢 تنبيه من إدارة أعراسنا" required>
+            <!-- منتقي البلدات لأدمن البلدة فقط (مخفي تماماً عن السوبر أدمن، ومخفي إن كانت البلدات صفر) -->
+            <div class="form-group" id="broadcastTownsGroup" style="display:none;">
+              <label>البلدات المستهدفة بالتعميم</label>
+              <div id="broadcastTownsPicker" class="provider-towns-picker"></div>
+              <span class="hint-text">اختر بلدة واحدة أو أكثر، أو اتركها جميعاً دون تحديد للبث لكافة بلداتك المُسنَدة.</span>
             </div>
+
+            <div class="form-group">
+              <label>عنوان التنبيه (اختياري)</label>
+              <input type="text" id="broadcastTitleInput" maxlength="200" placeholder="عنوان التنبيه (اختياري — يُملأ تلقائياً إن ترك فارغاً)...">
+            </div>
+
             <div class="form-group">
               <label>نص الرسالة أو الإشعار *</label>
-              <textarea id="broadcastMessageInput" rows="4" style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:12px; border-radius:8px; font-family:var(--font-tajawal);" placeholder="اكتب نص الإشعار هنا..." required></textarea>
+              <textarea id="broadcastMessageInput" rows="4" maxlength="2000" style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:12px; border-radius:8px; font-family:var(--font-tajawal);" placeholder="اكتب نص الإشعار هنا..." required></textarea>
             </div>
+
+            <!-- نغمة التعميم (قصة 27) -->
+            <div class="form-group">
+              <label>نغمة التعميم *</label>
+              <div class="broadcast-tone-group" id="broadcastToneGroup">
+                <button type="button" class="tone-btn active" data-tone="info" onclick="selectBroadcastTone('info')">عادي</button>
+                <button type="button" class="tone-btn" data-tone="urgent" onclick="selectBroadcastTone('urgent')">عاجل</button>
+                <button type="button" class="tone-btn" data-tone="solemn" onclick="selectBroadcastTone('solemn')">وقور</button>
+              </div>
+              <input type="hidden" id="broadcastToneInput" value="info">
+              <span class="hint-text" id="broadcastToneHint">نغمة عادية للتنبيهات والأخبار العامة</span>
+            </div>
+
+            <!-- مدة بقاء الشريط الإخباري بأزرار جاهزة (قصص 25، 26) -->
+            <div class="form-group">
+              <label>مدة بقاء الشريط الإخباري *</label>
+              <div class="broadcast-duration-group" id="broadcastDurationGroup">
+                <button type="button" class="duration-btn" data-duration="hour" onclick="selectBroadcastDuration('hour')">ساعة</button>
+                <button type="button" class="duration-btn active" data-duration="day" onclick="selectBroadcastDuration('day')">يوم</button>
+                <button type="button" class="duration-btn" data-duration="3_days" onclick="selectBroadcastDuration('3_days')">٣ أيام</button>
+                <button type="button" class="duration-btn" data-duration="week" onclick="selectBroadcastDuration('week')">أسبوع</button>
+                <button type="button" class="duration-btn" data-duration="none" onclick="selectBroadcastDuration('none')">بلا شريط</button>
+              </div>
+              <input type="hidden" id="broadcastDurationInput" value="day">
+              <span class="hint-text" id="broadcastDurationHint">يظهر في الشريط أعلى الشاشة لمدة يوم كامل، ويبقى في مركز الإشعارات</span>
+            </div>
+
             <button type="submit" class="admin-btn-primary" id="sendBroadcastBtn">
-              <i class="fa-solid fa-paper-plane"></i> إرسال البث لجميع الشاشات الآن
+              <i class="fa-solid fa-paper-plane"></i> إرسال البث الآن
             </button>
           </form>
         </div>
@@ -628,6 +669,71 @@
         </div>
       </section>
 
+      <!-- TAB: PLATFORM SETTINGS — سوبر أدمن حصراً (قصص 36، 37) -->
+      <section id="tabSettings" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-gear"></i> إعدادات المنصة</h2>
+            <p>إعدادات النظام العامة — تظهر وتُعدَّل من قِبل السوبر أدمن حصراً</p>
+          </div>
+
+          <div id="settingsNotice" class="occasion-types-notice" style="display:none;"></div>
+
+          <form id="platformSettingsForm" class="admin-form" onsubmit="handleSaveSettings(event)">
+            <div class="form-group">
+              <label>رقم واتساب الدعم الفني</label>
+              <input type="text" id="settingSupportWhatsapp" placeholder="مثال: 0501234567 أو 972501234567">
+              <span class="hint-text">يظهر في زر «الدعم الفني» في القائمة العامة لفتح محادثة واتساب مع المنصة. اتركه فارغاً أو اضغط زر الحذف لإلغاء تفعيل الدعم.</span>
+            </div>
+
+            <div class="form-row" style="margin-top:18px; gap:12px;">
+              <button type="submit" class="admin-btn-primary" id="saveSettingsBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ الإعدادات
+              </button>
+              <button type="button" class="btn-reject" id="clearSupportWhatsappBtn" onclick="handleClearSupportNumber()">
+                <i class="fa-solid fa-trash-can"></i> حذف الرقم (تعطيل الدعم)
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- REJECT EVENT MODAL (story 8) -->
+  <div id="rejectEventModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-ban"></i> سبب الرفض</h3>
+        <button type="button" class="close-modal-btn" onclick="closeRejectEventModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="modal-sub" style="margin-bottom:14px; font-size:0.9rem; line-height:1.6;">
+        اكتب سبب الرفض ليصل إلى ناشر المناسبة في إشعار ليتمكن من تصحيحها (اختياري — تركه فارغاً يعتمد «لم يُذكر سبب إضافي»):
+      </p>
+      <div class="form-group">
+        <textarea id="rejectReasonInput" rows="3" maxlength="500" placeholder="مثال: يرجى إرفاق صورة واضحة وتحديد موقع القاعة بدقة..." style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:10px; border-radius:8px; font-family:var(--font-tajawal);"></textarea>
+      </div>
+      <div class="form-row" style="margin-top:16px; gap:10px;">
+        <button type="button" class="btn-reject" id="confirmRejectBtn" onclick="confirmRejectEvent()">
+          <i class="fa-solid fa-ban"></i> تأكيد الرفض
+        </button>
+        <button type="button" class="admin-btn-ghost" onclick="closeRejectEventModal()">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN NOTICE MODAL (native alert replacement) -->
+  <div id="adminNoticeModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="adminNoticeTitle"><i class="fa-solid fa-bell"></i> تنبيه</h3>
+        <button type="button" class="close-modal-btn" onclick="closeAdminNoticeModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p id="adminNoticeMessage" class="modal-sub" style="margin-bottom:16px; font-size:0.95rem; line-height:1.6; color:var(--text-main);"></p>
+      <div class="form-row">
+        <button type="button" class="admin-btn-primary" style="flex:1;" onclick="closeAdminNoticeModal()">حسناً</button>
+      </div>
     </div>
   </div>
 

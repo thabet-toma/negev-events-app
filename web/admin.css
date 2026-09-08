@@ -529,3 +529,122 @@ body {
   gap: 10px;
   margin-bottom: 12px;
 }
+
+/* Modals (stories 8, 22-27, 36-37) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 27, 42, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+@media (min-width: 600px) { .modal-overlay { align-items: center; padding: 20px; } }
+
+.modal-card {
+  width: 100%;
+  max-width: 520px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 24px 24px 0 0;
+  padding: 22px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lift);
+}
+@media (min-width: 600px) { .modal-card { border-radius: var(--radius-lg); } }
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.modal-header h3 {
+  font-size: 1.15rem;
+  color: var(--text-main);
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.modal-sub {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.close-modal-btn {
+  background: var(--surface-sunk);
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--text-main);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.close-modal-btn:hover {
+  background: var(--line);
+}
+
+/* Broadcast Composer Ready Buttons (stories 22-27) */
+.broadcast-tone-group,
+.broadcast-duration-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.tone-btn,
+.duration-btn {
+  padding: 8px 16px;
+  background: var(--surface-sunk);
+  border: 1.5px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-family: var(--font-tajawal);
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tone-btn:hover,
+.duration-btn:hover {
+  border-color: var(--gold-main);
+}
+.tone-btn.active,
+.duration-btn.active {
+  background: var(--sky-wash);
+  color: var(--gold-main);
+  border-color: var(--gold-main);
+  font-weight: 800;
+}
+.tone-btn[data-tone="info"].active {
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  border-color: var(--sky-deep);
+  font-weight: 800;
+}
+.tone-btn[data-tone="urgent"].active {
+  background: var(--warn-wash);
+  color: var(--warn);
+  border-color: var(--warn);
+  font-weight: 800;
+}
+.tone-btn[data-tone="solemn"].active {
+  background: var(--surface-sunk);
+  color: var(--text-dim);
+  border-color: var(--text-dim);
+  font-weight: 800;
+}
+.tone-btn:disabled,
+.duration-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
