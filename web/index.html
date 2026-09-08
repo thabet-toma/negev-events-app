@@ -191,8 +191,11 @@
         <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
       </div>
 
-      <div id="loadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
+      <div id="loadMoreWrapper" style="display:none;">
         <button id="loadMoreBtn" class="town-pill" onclick="loadMoreEvents()">عرض المزيد</button>
+        <div id="feedLoadingSpinner" class="feed-loading-pill" style="display:none;">
+          <i class="fa-solid fa-spinner fa-spin"></i> <span>جاري تحميل المزيد...</span>
+        </div>
       </div>
 
     </section>

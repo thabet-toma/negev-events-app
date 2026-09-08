@@ -127,6 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initNotificationsPush();
   initServiceWorker();
   initUrlNavigation();
+  initFeedScroller();
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
@@ -702,6 +703,7 @@ async function fetchStories() {
           <span class="story-title">${escapeHtml(s.title)}</span>
         </div>
       `).join('');
+      updateFeedDimensions();
     }
   } catch (e) {
     console.error('Stories error:', e);
@@ -979,10 +981,61 @@ function renderEventSkeletons(container, count = 3) {
   `).join('');
 }
 
+let isFetchingEvents = false;
+
+function initFeedScroller() {
+  const container = document.getElementById('eventsContainer');
+  if (container) {
+    container.addEventListener('scroll', handleFeedScroll, { passive: true });
+  }
+  window.addEventListener('resize', updateFeedDimensions);
+  window.addEventListener('load', updateFeedDimensions);
+  updateFeedDimensions();
+}
+
+function updateFeedDimensions() {
+  const container = document.getElementById('eventsContainer');
+  if (!container) return;
+  const rect = container.getBoundingClientRect();
+  const feedTop = rect.top + (window.scrollY || window.pageYOffset || 0);
+  const bottomNav = document.querySelector('.bottom-nav-wrap') || document.querySelector('.bottom-navbar');
+  const feedBottom = bottomNav
+    ? (bottomNav.offsetHeight || bottomNav.getBoundingClientRect().height || 0)
+    : 0;
+
+  const targetEl = document.getElementById('tabHome') || container;
+  targetEl.style.setProperty('--feed-top', `${Math.round(feedTop)}px`);
+  targetEl.style.setProperty('--feed-bottom', `${Math.round(feedBottom)}px`);
+}
+
+function handleFeedScroll() {
+  const container = document.getElementById('eventsContainer');
+  if (!container || isFetchingEvents) return;
+  const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
+  if (!hasMore) return;
+
+  const threshold = container.clientHeight || 500;
+  const distanceToEnd = container.scrollHeight - (container.scrollTop + container.clientHeight);
+  if (distanceToEnd <= threshold) {
+    loadMoreEvents();
+  }
+}
+
 async function fetchEvents(options = {}) {
   const { append = false } = options;
   const container = document.getElementById('eventsContainer');
-  if (!append) {
+  if (append && isFetchingEvents) return;
+  isFetchingEvents = true;
+
+  const loadMoreBtn = document.getElementById('loadMoreBtn');
+  const loadingPill = document.getElementById('feedLoadingSpinner');
+  const loadWrapper = document.getElementById('loadMoreWrapper');
+
+  if (append) {
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (loadingPill) loadingPill.style.display = 'inline-flex';
+    if (loadWrapper) loadWrapper.style.display = 'block';
+  } else {
     currentPage = 1;
     renderEventSkeletons(container);
   }
@@ -1009,6 +1062,7 @@ async function fetchEvents(options = {}) {
       renderEvents(allEvents);
       renderAnnouncements(data.announcements);
       renderLoadMoreButton();
+      updateFeedDimensions();
       // فحص أي رابط عميق بعد اكتمال جلب التغذية (FIX 5)
       if (!append) {
         await checkPendingDeepLink();
@@ -1021,11 +1075,16 @@ async function fetchEvents(options = {}) {
     console.error('Error fetching events:', err);
     container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>حدث خطأ في الاتصال بالخادم</p></div>`;
     if (!append) await checkPendingDeepLink();
+  } finally {
+    isFetchingEvents = false;
+    if (loadingPill) loadingPill.style.display = 'none';
+    renderLoadMoreButton();
   }
 }
 
 /** زرّ «عرض المزيد» — يحافظ على الفلاتر النشِطة (يستخدم fetchEvents نفسها بصفحة تالية). */
 function loadMoreEvents() {
+  if (isFetchingEvents) return;
   if (!currentPagination || currentPagination.page >= currentPagination.totalPages) return;
   currentPage = currentPagination.page + 1;
   fetchEvents({ append: true });
@@ -1033,9 +1092,25 @@ function loadMoreEvents() {
 
 function renderLoadMoreButton() {
   const wrapper = document.getElementById('loadMoreWrapper');
+  const btn = document.getElementById('loadMoreBtn');
+  const loadingPill = document.getElementById('feedLoadingSpinner');
   if (!wrapper) return;
+  const isLoading = isFetchingEvents;
   const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
-  wrapper.style.display = hasMore ? 'block' : 'none';
+
+  if (isLoading) {
+    wrapper.style.display = 'block';
+    if (btn) btn.style.display = 'none';
+    if (loadingPill) loadingPill.style.display = 'inline-flex';
+  } else if (hasMore) {
+    wrapper.style.display = 'block';
+    if (btn) btn.style.display = 'inline-block';
+    if (loadingPill) loadingPill.style.display = 'none';
+  } else {
+    wrapper.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+    if (loadingPill) loadingPill.style.display = 'none';
+  }
 }
 
 /** المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط عبر ?archive=1 (#20 step 10). */
@@ -1056,6 +1131,7 @@ function renderAnnouncements(announcements) {
   if (!container) return;
   if (!announcements || !announcements.length) {
     container.innerHTML = '';
+    updateFeedDimensions();
     return;
   }
 
@@ -1075,6 +1151,7 @@ function renderAnnouncements(announcements) {
       </div>
     </div>
   `).join('');
+  updateFeedDimensions();
 }
 
 // 4. Render Event Cards
@@ -1152,14 +1229,9 @@ function selectedPlacesHtml() {
   return escapeHtml(tokens.length === 1 ? FILTER_SHEETS.place.nounSingular : FILTER_SHEETS.place.nounPlural(tokens.length));
 }
 
-/**
- * يهيّئ رابطاً للاستعمال داخل `url(...)` بصيغة CSS مضمَّنة — يستبدل أي محرف
- * قادر على كسر الخروج من القوسين بترميز نسبة مئوية. روابط الخادم (رفع محلي أو
- * مطلق عبر withAbsoluteMedia) لا تحمل أياً من هذه المحارف أصلاً، فهذا تحصين
- * ضد مدخل مستقبلي لا إصلاح لعطل ملحوظ.
- */
-function cssUrl(url) {
-  return String(url).replace(/['"()\\]/g, c => '%' + c.charCodeAt(0).toString(16));
+function getBezelOrnamentSvg(color) {
+  const stroke = encodeURIComponent(color || '#d4af37');
+  return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='${stroke}' stroke-width='1.1' opacity='0.24'%3E%3Crect x='14' y='14' width='36' height='36'/%3E%3Crect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/%3E%3C/g%3E%3C/svg%3E`;
 }
 
 function renderSingleEventCardHtml(evt) {
@@ -1168,7 +1240,7 @@ function renderSingleEventCardHtml(evt) {
   today.setHours(0, 0, 0, 0);
   const diffTime = eventDate - today;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
+
   // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
   let countdownText = '';
   if (diffDays === 0) countdownText = 'اليوم';
@@ -1214,124 +1286,119 @@ function renderSingleEventCardHtml(evt) {
     </div>
   ` : '';
 
-  // الصورة تحكم الكرت: صندوق ٤:٥ ثابت في كل الحالات — بملصق أو بلا ملصق،
-  // فرحاً أو عزاءً — بحيث تتساوى كروت التغذية ارتفاعاً ولا يبدو كرت بلا
-  // ملصق مكسوراً (#85 خطوة 47-52). الملصق `contain` كاملاً أبداً بلا قصّ،
-  // فوق نسخة مضبَّبة مكبَّرة من نفس الصورة تملأ ما لا يملؤه القياس الحقيقي —
-  // نفس تركيبة drawHero في shareCard.service.js، بـCSS هنا لا Canvas.
-  // الشارتان فوق الصورة دائماً، لا في صفّ يسبقها يأكل مساحة. العزاء بلا عدّاد
-  // إطلاقاً — «باقي ٣ أيام» جملة مسيئة على نعيٍ.
   const isMourning = isMourningTone(evt);
   const toneColor = evt.occasion_type && evt.occasion_type.color
     ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
     : null;
   const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
+  const bezelSvg = getBezelOrnamentSvg(toneColor);
+  const bezelStyle = ` style="background-image:url(&quot;${bezelSvg}&quot;)"`;
   const hasShot = !!evt.poster_url;
 
-  const posterHtml = hasShot ? `
-        <div class="card-poster-backdrop" style="background-image:url('${escapeHtml(cssUrl(evt.poster_url))}')" aria-hidden="true"></div>
-        <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">` : `
-        <div class="card-poster-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
+  const mediaContent = hasShot ? `
+    <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
+    <div class="card-media-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
-  const shotHtml = `
-    <div class="card-shot">
-      <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}${hasShot ? '' : ' card-poster-empty'}">${posterHtml}
-      </div>
-      <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-      ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
-    </div>`;
+  const countdownChipHtml = isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`;
 
   const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
   const clanLineHtml = clanTownParts.length
     ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
 
-  // العزاء بلا عدّاد إطلاقاً (قصة 52)، لكن التاريخ نفسه يبقى — هو الحقيقة
-  // الأهمّ على كرت تعزية، لا يجوز أن يختبئ خلف «مزيد من التفاصيل» كبقية
-  // الشبكة (#85 FIX 3). سطر هادئ لا شارة صاخبة فوق الصورة.
-  const mourningDateLineHtml = isMourning
-    ? `<div class="card-date-line card-clamp-1-line">${escapeHtml(formattedDate)}</div>` : '';
+  // التاريخ والمكان يظهران في شريط التعريف لكل الأنواع دون استثناء؛ قصة 15 تقتضي قراءتهما مباشرة دون الحاجة لفتح التفاصيل.
+  const dateVenueParts = [formattedDate, evt.location_name].filter(Boolean).map(escapeHtml);
+  const dateVenueLineHtml = dateVenueParts.length
+    ? `<div class="card-date-line card-clamp-1-line">${dateVenueParts.join(' — ')}</div>` : '';
 
-  // «يحيي الحفلة الفنان فلان» — يغيب كلياً إن فرغ الحقل، لا سطر فارغ ولا
-  // نص بديل. صورة الفنان في التفاصيل لا الكرت — الكرت يحمل الملصق أصلاً.
   const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
     ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
 
+  const captionHtml = `
+    <div class="card-caption">
+      <div class="card-caption-chips">
+        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+        ${countdownChipHtml}
+      </div>
+      <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
+      ${clanLineHtml}
+      ${dateVenueLineHtml}
+      <div class="card-caption-actions">
+        <button type="button" class="chat-trigger-btn card-action-btn" onclick="openChatModal(${evt.id})">
+          <i class="fa-regular fa-comments"></i> <span>${escapeHtml(congratulationsLabel(evt))}</span>
+        </button>
+        ${renderReminderButtonHtml(evt)}
+        <button type="button" class="share-event-btn card-action-btn" onclick="shareEventById(${evt.id})">
+          <i class="fa-solid fa-share-nodes"></i> <span>${escapeHtml(shareButtonLabel(evt))}</span>
+        </button>
+        <button type="button" class="card-more-details-btn card-action-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
+          <i class="fa-solid fa-chevron-down"></i> <span>مزيد من التفاصيل</span>
+        </button>
+      </div>
+    </div>`;
+
+  const collapsibleHtml = `
+    <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
+      <div class="card-details-sheet-header">
+        <span class="card-details-sheet-title">تفاصيل المناسبة</span>
+        <button type="button" class="card-details-close-btn" onclick="toggleCardDetails(${evt.id})" aria-label="إغلاق">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      ${artistLineHtml}
+      ${audioBlock}
+      <div class="event-details-grid">
+        <div class="detail-item">
+          <i class="fa-solid fa-calendar-day"></i>
+          <span><strong>التاريخ:</strong> ${formattedDate}</span>
+        </div>
+        ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
+        <div class="detail-item">
+          <i class="fa-solid fa-fire"></i>
+          <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
+        </div>` : ''}
+        ${typeShowsField(evt, 'dinner_time') ? `
+        <div class="detail-item">
+          <i class="fa-solid fa-utensils"></i>
+          <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+        </div>` : ''}
+        <div class="detail-item">
+          <i class="fa-solid fa-location-dot"></i>
+          <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
+        </div>
+      </div>
+
+      <!-- 1-Click Navigation -->
+      <div class="nav-buttons-row">
+        <a href="${wazeUrl}" target="_blank" class="waze-btn">
+          <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
+        </a>
+        <a href="${mapsUrl}" target="_blank" class="maps-btn">
+          <i class="fa-solid fa-location-arrow"></i> خرائط Google
+        </a>
+      </div>
+
+      ${renderReactionBarHtml(evt)}
+      ${renderCongratsPreviewHtml(evt)}
+
+      <!-- Action Buttons Footer -->
+      <div class="card-footer-actions">
+        <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
+          <i class="fa-solid fa-wallet"></i> تسجيل نقوط
+        </button>
+      </div>
+    </div>`;
+
   return `
     <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
-      ${shotHtml}
-
-      ${audioBlock}
-
-      <div class="card-body">
-        <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
-        ${clanLineHtml}
-        ${mourningDateLineHtml}
-
-        <!-- كتلة النصّ سطران فقط (ثلاثة في العزاء، بسطر التاريخ الهادئ
-             أعلاه)؛ كل شيء آخر خلف «مزيد من التفاصيل» — الصورة سبب فتح
-             التطبيق لا النصّ (#85 خطوة 48، الاستثناء من FIX 3). -->
-        <button type="button" class="card-more-details-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
-          <i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل
-        </button>
-
-        <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
-          ${artistLineHtml}
-
-          <div class="event-details-grid">
-            <div class="detail-item">
-              <i class="fa-solid fa-calendar-day"></i>
-              <span><strong>التاريخ:</strong> ${formattedDate}</span>
-            </div>
-            ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
-            <div class="detail-item">
-              <i class="fa-solid fa-fire"></i>
-              <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
-            </div>` : ''}
-            ${typeShowsField(evt, 'dinner_time') ? `
-            <div class="detail-item">
-              <i class="fa-solid fa-utensils"></i>
-              <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
-            </div>` : ''}
-            <div class="detail-item">
-              <i class="fa-solid fa-location-dot"></i>
-              <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
-            </div>
+      <div class="card-bezel"${bezelStyle}>
+        <div class="card-framed">
+          <div class="card-media${hasShot ? '' : ' card-media-empty'}">
+            ${mediaContent}
           </div>
-
-          <!-- 1-Click Navigation -->
-          <div class="nav-buttons-row">
-            <a href="${wazeUrl}" target="_blank" class="waze-btn">
-              <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
-            </a>
-            <a href="${mapsUrl}" target="_blank" class="maps-btn">
-              <i class="fa-solid fa-location-arrow"></i> خرائط Google
-            </a>
-          </div>
+          ${captionHtml}
+          <div class="card-goldframe" aria-hidden="true"></div>
+          ${collapsibleHtml}
         </div>
-
-        ${renderReactionBarHtml(evt)}
-
-        ${renderCongratsPreviewHtml(evt)}
-        ${renderReminderButtonHtml(evt)}
-
-        <!-- Action Buttons Footer -->
-        <div class="card-footer-actions">
-          <!-- المشاركة على البطاقة نفسها، لا في مودال التبريكات وحده: هذه
-               الواجهة **لا تملك صفحة تفاصيل** أصلاً (البطاقة هي التفاصيل —
-               تاريخ ومكان وصوت وأزرار ملاحة)، فقاعدة المواصفة «التفاصيل لا
-               القائمة» لا تنطبق هنا كما تنطبق على الموبايل. زرّ لا يجده أحد
-               يُفرغ القُمع الذي وُجدت هذه الميزة لأجله. -->
-          <button class="share-event-btn" onclick="shareEventById(${evt.id})">
-            <i class="fa-solid fa-share-nodes"></i> ${escapeHtml(shareButtonLabel(evt))}
-          </button>
-          <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
-            <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
-          </button>
-          <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
-            <i class="fa-solid fa-wallet"></i> تسجيل نقوط
-          </button>
-        </div>
-
       </div>
     </div>
   `;
@@ -1351,11 +1418,13 @@ function renderEvents(events) {
         <p>كن أول من يعلن عن مناسبة في ${selectedPlacesHtml()}</p>
       </div>
     `;
+    updateFeedDimensions();
     return;
   }
 
   container.classList.toggle('events-feed-first-load', isFirstLoad);
   container.innerHTML = events.map(evt => renderSingleEventCardHtml(evt)).join('');
+  updateFeedDimensions();
 }
 
 /**
@@ -1395,15 +1464,16 @@ function clearSingleEventView() {
   if (container) container.innerHTML = '';
 }
 
-/** يطوي/يبسط كتلة تفاصيل الكرت (الشبكة، أزرار الملاحة، سطر الفنان) خلف زرّ واحد (#85 خطوة 48). */
+/** يطوي/يبسط كتلة تفاصيل الكرت خلف زرّ واحد أو زر الإغلاق (#85 خطوة 48). */
 function toggleCardDetails(eventId, btn) {
   const panel = document.getElementById(`cardDetails-${eventId}`);
   if (!panel) return;
   const willShow = panel.hidden;
   panel.hidden = !willShow;
-  if (btn) {
-    btn.setAttribute('aria-expanded', String(willShow));
-    btn.innerHTML = willShow
+  const toggleBtn = btn || document.querySelector(`#eventCard-${eventId} .card-more-details-btn`);
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', String(willShow));
+    toggleBtn.innerHTML = willShow
       ? '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل'
       : '<i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل';
   }
@@ -1436,18 +1506,14 @@ function renderCongratsPreviewHtml(evt) {
 
 /**
  * «ذكّرني» — متابعة لا تعهّد حضور، ونفس التسمية في كل الأنواع (#20 step 10).
- * `followers_count` قد يغيب (مخفيّ على نوع كالعزاء) — غيابه لا يُعرَض كصفر.
  */
 function renderReminderButtonHtml(evt) {
   const isReminded = !!evt.is_reminded;
   const icon = isReminded ? 'fa-bell-slash' : 'fa-bell';
   const label = isReminded ? 'إلغاء التذكير' : 'ذكّرني';
-  const followers = evt.followers_count !== undefined
-    ? ` <span style="opacity:.75; font-size:.8rem;">(${evt.followers_count} متابع)</span>`
-    : '';
   return `
-    <button class="record-nokoot-btn" style="width:100%; margin-bottom:10px;" onclick="toggleReminder(${evt.id}, ${isReminded}, this)">
-      <i class="fa-solid ${icon}"></i> ${label}${followers}
+    <button class="record-nokoot-btn card-action-btn" onclick="toggleReminder(${evt.id}, ${isReminded}, this)">
+      <i class="fa-solid ${icon}"></i> <span>${label}</span>
     </button>`;
 }
 
@@ -1836,7 +1902,8 @@ function switchTab(tabId) {
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
-  if (tabId === 'tabNokoot') loadNokootView();
+  if (tabId === 'tabHome') updateFeedDimensions();
+  else if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
   else if (tabId === 'tabAdd') {

@@ -20,6 +20,11 @@
   --gold:          #8f6a20;
   --gold-wash:     #fdf6e3;
 
+  /* ألوان بطاقة التغذية بملء الشاشة (#98) — تتطابق مع لون أرضية الشعار (#0c1b2a) */
+  --card-ground:   #0c1b2a;
+  --card-gold:     #d4af37;
+  --card-gold-soft: rgba(212, 175, 55, 0.4);
+
   --mourn:         #475569;
   --mourn-wash:    #eef1f5;
 
@@ -627,9 +632,49 @@ body {
 .clear-btn { position: absolute; inset-inline-start: 14px; background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 0.9rem; }
 
 /* Events Feed & Cards */
-.events-feed { display: flex; flex-direction: column; gap: 18px; }
+#tabHome {
+  position: relative;
+}
+
+/*
+ * يتجاوز هذا المحدد قاعدة `.tab-content.active-tab { display: block }` القائمة عمداً:
+ * التبويب الرئيسي يحتاج تخطيط flex رأسياً مع منع التمرير الخارجي (overflow: hidden)،
+ * حيث ينتهي محتوى التغذية بحساب height الدقيق عند الحافة العلوية للشريط السفلي،
+ * ليثبت شريط البحث والأشرطة الخارجية دون تجاوز نافذة العرض (قرار الملحق 1).
+ */
+#tabHome.active-tab {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.events-feed {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  height: 100vh;
+  height: calc(100vh - var(--feed-top, 0px) - var(--feed-bottom, 0px));
+  height: calc(100dvh - var(--feed-top, 0px) - var(--feed-bottom, 0px));
+}
+
+.events-feed::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .events-feed {
+    scroll-behavior: auto;
+  }
+}
 
 .event-card {
+  --card-base-ground: color-mix(in srgb, var(--tone, var(--card-gold)) 12%, var(--card-ground));
+  --card-bezel-ground: color-mix(in srgb, var(--tone, var(--card-gold)) 8%, var(--card-ground));
+  --card-framed-ground: color-mix(in srgb, var(--tone, var(--card-gold)) 14%, var(--card-ground));
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -638,9 +683,49 @@ body {
   overflow: hidden;
   box-shadow: var(--shadow);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-sizing: border-box;
+}
+
+.events-feed > .event-card {
+  height: 100%;
+  flex: 0 0 100%;
+  min-height: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+:not(.events-feed) > .event-card:not(.announcement-card),
+#singleEventContainer .event-card {
+  height: auto;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+:not(.events-feed) > .event-card:not(.announcement-card) .card-bezel,
+#singleEventContainer .card-bezel {
+  position: relative;
+  inset: auto;
+  height: auto;
+}
+
+:not(.events-feed) > .event-card:not(.announcement-card) .card-framed,
+#singleEventContainer .card-framed {
+  height: auto;
+}
+
+:not(.events-feed) > .event-card:not(.announcement-card) .card-media,
+#singleEventContainer .card-media {
+  min-height: 340px;
 }
 
 .event-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+.events-feed > .event-card:hover { transform: none; box-shadow: none; }
 
 .card-header-bar {
   padding: 13px 18px;
@@ -679,83 +764,125 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* الكرت الذي تحكمه الصورة — صندوق ٤:٥ ثابت في كل الحالات، بملصق أو بلا ملصق،
-   فرحاً أو عزاءً، فتتساوى كل الكروت ارتفاعاً ولا يبدو كرت بلا ملصق مكسوراً
-   (#85 خطوة 47-52). الشارتان مطلقتا الوضع فوق هذا الصندوق مباشرة — لا صفّ
-   يسبقه يأكل مساحة. */
-.card-shot { position: relative; }
-
-/* الملصق `contain` كاملاً أبداً بلا قصّ — «الصورة سبب فتحي للتطبيق» — فوق نسخة
-   مضبَّبة مكبَّرة من نفس الصورة (`.card-poster-backdrop`) تملأ ما لا يملؤه
-   القياس الحقيقي بلا أشرطة فارغة. نفس تركيبة drawHero في shareCard.service.js
-   (poster + blurred cover-crop of itself)، بـCSS هنا بدل Canvas. */
-.card-poster-wrapper { position: relative; aspect-ratio: 4 / 5; overflow: hidden; background: var(--surface-sunk); }
-
-.card-poster-backdrop {
+/* Four nested card layers (spec issue #98) */
+.card-bezel {
   position: absolute;
-  inset: -12%;
-  background-size: cover;
+  inset: 0;
+  z-index: 1;
+  padding: 44px 10px 10px;
+  box-sizing: border-box;
+  background-color: var(--card-bezel-ground);
+  background-repeat: repeat;
   background-position: center;
-  filter: blur(28px);
-  transform: scale(1.15);
 }
 
-.card-poster-img {
+.card-framed {
   position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  object-position: center;
-  display: block;
-}
-
-/* العزاء: صورة المتوفَّى اختيارية وأهدأ — نفس الصندوق الكامل، بلا شارة تاريخ إطلاقاً (قرار ٥) */
-.card-poster-wrapper.tone-mourning { background: linear-gradient(135deg, #334155, #64748b); }
-.card-poster-wrapper.tone-mourning .card-poster-backdrop { filter: blur(28px) brightness(0.75); }
-
-/* مناسبة بلا ملصق أصلاً — لا صورة الخادم الاحتياطية ولا صندوق فارغ يقرأ عطلاً؛
-   أيقونة مركزية على خلفية متدرّجة تقول «هذا كرت بلا صورة» عمداً (#85 خطوة 51). */
-.card-poster-wrapper.card-poster-empty { background: linear-gradient(180deg, var(--surface-sunk), var(--surface)); }
-.card-poster-wrapper.card-poster-empty.tone-mourning { background: linear-gradient(135deg, #334155, #64748b); }
-.card-poster-placeholder {
-  position: relative;
-  z-index: 1;
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  background-color: var(--card-framed-ground);
+  box-sizing: border-box;
+}
+
+.card-media {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  background-color: var(--card-base-ground);
+}
+
+.card-media-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  display: block;
+}
+
+.card-media.card-media-empty {
+  display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ink-faint);
-  font-size: 2.6rem;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tone, var(--card-gold)) 20%, var(--card-ground)), var(--card-base-ground));
 }
-.card-poster-wrapper.card-poster-empty.tone-mourning .card-poster-placeholder { color: rgba(255, 255, 255, 0.75); }
+
+.card-media-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tone, var(--card-gold));
+  font-size: 2.6rem;
+  width: 100%;
+  height: 100%;
+}
+
+.card-caption {
+  flex-shrink: 0;
+  padding: 12px 16px 15px;
+  background: var(--surface);
+  border-top: 1px solid var(--card-gold-soft);
+  border-top: 1px solid color-mix(in srgb, var(--tone, var(--card-gold)) 40%, transparent);
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.card-caption-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.card-caption .card-kindchip,
+.card-caption .card-datechip {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+}
 
 .card-datechip {
-  position: absolute;
-  inset-block-end: 9px;
-  inset-inline-start: 10px;
-  background: rgba(255, 255, 255, 0.94);
-  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  background: var(--success-wash);
+  color: var(--success);
   font-size: 11.5px;
   font-weight: 800;
-  padding: 4px 11px;
+  padding: 3.5px 10px;
   border-radius: var(--radius-pill);
+  border: 1px solid var(--success);
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 2px 8px rgba(12, 27, 42, 0.25);
+  letter-spacing: 0.1px;
 }
 
-.card-kindchip { position: absolute; inset-block-start: 9px; inset-inline-end: 10px; }
-/* لون النوع من البيانات (inline style) شفّاف بتصميمه — موثوق فوق خلفية ثابتة،
-   غير مضمون فوق صورة عشوائية. نفرض خلفية شبه-بيضاء صلبة هنا فقط، والنص
-   والحدّ يبقيان بلون النوع كما أرسله الخادم (#20 خطوة 11). */
-.card-kindchip .town-badge { background: rgba(255, 255, 255, 0.94) !important; box-shadow: 0 2px 8px rgba(12, 27, 42, 0.25); }
+.card-kindchip {
+  display: inline-flex;
+  align-items: center;
+}
+.card-kindchip .town-badge {
+  padding: 3.5px 12px;
+  font-size: 11.5px;
+}
 
-.card-clan-line { font-size: 12.5px; font-weight: 700; color: var(--tone, var(--sky)); margin-top: 2px; margin-bottom: 10px; }
+.card-goldframe {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--tone, var(--card-gold));
+  border-radius: 14px;
+  pointer-events: none;
+  z-index: 2;
+}
 
-/* العزاء وحده يحمل سطراً ثالثاً هادئاً: التاريخ، بلا شارة عدّاد فوق الصورة
-   (#85 FIX 3) — نفس وزن سطر الفنان، لا صوت العنوان ولا لون النوع. */
-.card-date-line { font-size: 12.5px; font-weight: 600; color: var(--ink-faint); margin-top: -6px; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+.card-clan-line { font-size: 12.5px; font-weight: 700; color: var(--tone, var(--card-gold)); margin-top: 2px; margin-bottom: 4px; }
+
+.card-date-line { font-size: 12.5px; font-weight: 600; color: var(--ink-faint); margin-top: 0; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
 
 /* كتلة النصّ سطران في العادة (ثلاثة في العزاء، بسطر التاريخ أعلاه) — العنوان
    وسطر العشيرة/البلدة وسطر تاريخ العزاء كلها مقصوصة لسطر واحد، فـ«عشيرة طويلة
@@ -768,9 +895,54 @@ body {
   overflow: hidden;
 }
 
-/* كل شيء غير كتلة النصّ (الشبكة، الملاحة، سطر الفنان) يبدأ مطوياً خلف هذا الزرّ */
-.card-more-details-btn {
+.card-caption-actions {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: nowrap;
+}
+
+.card-caption-actions .card-action-btn,
+.card-caption-actions .record-nokoot-btn {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px;
+  margin: 0;
+  width: auto;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.card-caption-actions .card-action-btn:hover,
+.card-caption-actions .record-nokoot-btn:hover {
+  background: var(--line-soft);
+}
+
+.card-caption-actions .card-more-details-btn {
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--ink-soft);
+}
+
+.card-caption-actions .card-more-details-btn:hover {
+  background: var(--surface-sunk);
+  color: var(--ink);
+}
+
+.card-more-details-btn {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   background: none;
@@ -780,11 +952,82 @@ body {
   font-size: 0.85rem;
   font-weight: 700;
   padding: 4px 0;
-  margin-bottom: 8px;
   cursor: pointer;
 }
 .card-more-details-btn:hover { text-decoration: underline; }
+
+.card-details-collapsible {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--surface);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+}
+
 .card-details-collapsible[hidden] { display: none; }
+
+.card-details-sheet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.card-details-sheet-title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.card-details-close-btn {
+  background: var(--surface-sunk);
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.card-details-close-btn:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+#loadMoreWrapper {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  pointer-events: none;
+}
+
+#loadMoreWrapper #loadMoreBtn,
+#loadMoreWrapper .feed-loading-pill {
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 8px 20px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+}
 
 /* «يحيي الحفلة الفنان فلان» — بوزن أخفّ من سطر العشيرة، ويغيب كلياً حين
    يفرغ الحقل (الـHTML نفسه لا يُطبَع، لا display:none) (خريطة #21، تذكرة #23) */
@@ -1477,16 +1720,25 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* هياكل تحميل بشكل الكرت نفسه بدل الدوّارة — تُعرَض حتى تصل استجابة الخادم
-   (#85 خطوة 53). عمود الشبكة نفسه يبقى ٤:٥ حتى في الهيكل، فلا يقفز التخطيط
-   عند وصول الكروت الحقيقية. */
+   (#85 خطوة 53، #98 قرار الملحق 5). تشغل كامل ارتفاع حاوية التغذية وتنجذب مع التمرير. */
+.events-feed > .card-skeleton {
+  height: 100%;
+  min-height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
 .card-skeleton {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
-.card-skeleton .skeleton-shot { aspect-ratio: 4 / 5; background: var(--surface-sunk); }
-.card-skeleton .skeleton-line { height: 14px; margin: 12px 16px; border-radius: 7px; background: var(--surface-sunk); }
+.card-skeleton .skeleton-shot { flex: 1; min-height: 0; background: var(--surface-sunk); }
+.card-skeleton .skeleton-line { height: 14px; margin: 12px 16px; border-radius: 7px; background: var(--surface-sunk); flex-shrink: 0; }
 .card-skeleton .skeleton-line.short { width: 55%; }
 
 .skeleton-shimmer { position: relative; overflow: hidden; }

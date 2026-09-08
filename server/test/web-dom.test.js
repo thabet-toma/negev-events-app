@@ -1332,40 +1332,114 @@ async function run() {
 
   console.log('\nEvent card — the image-first redesign (#85 batch 6a, stories 47-52)');
 
-  await test('a card with a poster emits the contain/blur structure, and both badges sit over the image', () => {
+  await test('a card with a poster emits the four nested layers, media covers from top, no blur, and badges sit in caption', () => {
     const { document } = renderCardFixtures();
     const card = document.getElementById('eventCard-910');
     assert.ok(card, 'expected the poster-bearing card to render');
 
-    const wrapper = card.querySelector('.card-poster-wrapper');
-    assert.ok(wrapper, 'expected the poster wrapper');
-    const backdrop = wrapper.querySelector('.card-poster-backdrop');
-    const img = wrapper.querySelector('.card-poster-img');
-    assert.ok(backdrop, 'expected a blurred backdrop layer behind the poster (shareCard.service.js#drawHero\'s own composition)');
-    assert.ok(img, 'expected the sharp, whole poster image');
-    assert.ok(
-      (backdrop.getAttribute('style') || '').includes('poster910.jpg'),
-      'the backdrop must be the SAME poster, not a second asset'
-    );
-    assert.strictEqual(backdrop.getAttribute('aria-hidden'), 'true', 'the backdrop is decoration only');
+    // 1. No blur in feed card tree
+    assert.strictEqual(card.querySelector('.card-poster-backdrop'), null, 'no blurred backdrop in the feed card');
 
-    const shot = card.querySelector('.card-shot');
-    assert.ok(shot.querySelector('.card-kindchip'), 'expected the kind badge inside the shot, over the image');
-    assert.ok(shot.querySelector('.card-datechip'), 'expected the countdown badge inside the shot too (festive tone)');
+    // 2. The four layers exist, and .card-caption is a sibling of .card-media, not a descendant of it
+    const bezel = card.querySelector('.card-bezel');
+    assert.ok(bezel, 'Layer 1: expected .card-bezel');
+    const framed = bezel.querySelector('.card-framed');
+    assert.ok(framed, 'Layer 2: expected .card-framed inside .card-bezel');
+    const media = framed.querySelector('.card-media');
+    assert.ok(media, 'Layer 3: expected .card-media inside .card-framed');
+    const caption = framed.querySelector('.card-caption');
+    assert.ok(caption, 'Layer 4: expected .card-caption inside .card-framed');
+    const goldframe = framed.querySelector('.card-goldframe');
+    assert.ok(goldframe, 'expected .card-goldframe inside .card-framed');
+
+    assert.strictEqual(caption.parentElement, framed, '.card-caption is a direct child of .card-framed');
+    assert.strictEqual(media.parentElement, framed, '.card-media is a direct child of .card-framed');
+    assert.ok(!media.contains(caption), '.card-caption is a sibling of .card-media, not a descendant');
+    assert.ok(!caption.contains(media), '.card-media is not a descendant of .card-caption');
+
+    const img = media.querySelector('.card-media-img');
+    assert.ok(img, 'expected .card-media-img inside .card-media');
+    assert.ok(
+      (img.getAttribute('src') || '').includes('poster910.jpg'),
+      'expected the poster image to load poster910.jpg'
+    );
+
+    // Badges sit in caption
+    assert.ok(caption.querySelector('.card-kindchip'), 'expected the kind badge inside caption');
+    assert.ok(caption.querySelector('.card-datechip'), 'expected the countdown badge inside caption (festive tone)');
   });
 
-  await test('a card with NO poster still renders, with a deliberate placeholder rather than a broken layout', () => {
+  await test('a card with NO poster builds the short caption plus the icon, not a tall empty box', () => {
     const { document } = renderCardFixtures();
     const card = document.getElementById('eventCard-901');
     assert.ok(card, 'expected the poster-less card to render at all');
 
-    const wrapper = card.querySelector('.card-poster-wrapper');
-    assert.ok(wrapper, 'expected the poster wrapper to exist even with no poster_url');
-    assert.ok(wrapper.classList.contains('card-poster-empty'), 'expected the empty-poster modifier class');
-    assert.ok(wrapper.querySelector('.card-poster-placeholder'), 'expected a placeholder icon, not an empty box');
-    assert.strictEqual(wrapper.querySelector('.card-poster-img'), null, 'no <img> should be emitted with no poster URL');
-    assert.strictEqual(wrapper.querySelector('.card-poster-backdrop'), null, 'no blurred backdrop either — nothing to blur');
-    assert.ok(card.querySelector('.card-kindchip'), 'the kind badge must still show over the placeholder');
+    // 4. A poster-less event builds the short caption plus the icon, not a tall empty box
+    const bezel = card.querySelector('.card-bezel');
+    assert.ok(bezel, 'expected .card-bezel');
+    const framed = bezel.querySelector('.card-framed');
+    assert.ok(framed, 'expected .card-framed');
+    const media = framed.querySelector('.card-media');
+    assert.ok(media, 'expected .card-media');
+    assert.ok(media.classList.contains('card-media-empty'), 'expected card-media-empty class');
+    assert.ok(media.querySelector('.card-media-placeholder i, .card-media-placeholder'), 'expected a placeholder icon, not an empty box');
+    assert.strictEqual(media.querySelector('img'), null, 'no <img> should be emitted with no poster URL');
+    assert.strictEqual(card.querySelector('.card-poster-backdrop'), null, 'no blurred backdrop — nothing to blur');
+
+    const caption = framed.querySelector('.card-caption');
+    assert.ok(caption, 'expected .card-caption');
+    assert.ok(caption.querySelector('.card-kindchip'), 'the kind badge must still show in caption');
+  });
+
+  await test('frame colour source: type with colour sets inline --tone, type without colour emits no inline --tone', () => {
+    // 3. Frame colour source
+    const dom = buildEnv();
+    dom.window.renderEvents([
+      {
+        id: 930, title: 'مناسبة بلون', family_clan: 'آل فلان', town: 'حورة',
+        event_date: '2027-01-10', location_name: 'ديوان',
+        occasion_type: { id: 1, name: 'عرس', color: '#10b981' }
+      },
+      {
+        id: 931, title: 'مناسبة بلا لون', family_clan: 'آل علان', town: 'رهط',
+        event_date: '2027-01-11', location_name: 'قاعة',
+        occasion_type: { id: 2, name: 'عام', color: null }
+      }
+    ]);
+    const coloredCard = dom.window.document.getElementById('eventCard-930');
+    const uncoloredCard = dom.window.document.getElementById('eventCard-931');
+    assert.ok(coloredCard, 'expected colored card to render');
+    assert.ok(uncoloredCard, 'expected uncolored card to render');
+
+    assert.ok(
+      (coloredCard.getAttribute('style') || '').includes('--tone:#10b981'),
+      'type with a colour produces that colour on the card inline --tone'
+    );
+    assert.ok(
+      !(uncoloredCard.getAttribute('style') || '').includes('--tone'),
+      'type with no colour produces no inline --tone and therefore falls to CSS default'
+    );
+  });
+
+  await test('the feed is its own scroll container and its tree holds only cards', () => {
+    // 6. The feed is its own scroll container and its tree holds only cards
+    const { document } = renderCardFixtures();
+    const feed = document.querySelector('.events-feed');
+    assert.ok(feed, 'expected .events-feed element');
+    const children = Array.from(feed.children);
+    assert.ok(children.length > 0, 'expected cards in feed');
+    assert.ok(
+      children.every(child => child.classList.contains('event-card')),
+      'every child of .events-feed is an .event-card'
+    );
+    assert.strictEqual(feed.querySelector('#announcementsContainer'), null, '#announcementsContainer is not inside .events-feed');
+    assert.strictEqual(feed.querySelector('#loadMoreWrapper'), null, '#loadMoreWrapper is not inside .events-feed');
+    assert.strictEqual(feed.querySelector('#eventSearchInput'), null, 'search bar is not inside .events-feed');
+    assert.strictEqual(feed.querySelector('.search-bar-container'), null, 'search bar container is not inside .events-feed');
+    assert.ok(
+      /\.events-feed\s*\{[^}]*overflow-y:\s*auto/.test(STYLES_CSS),
+      '.events-feed must declare overflow-y: auto to be its own scroll container'
+    );
   });
 
   await test('a mourning card never emits a countdown badge, whether or not it has a poster', () => {
@@ -1396,7 +1470,9 @@ async function run() {
     assert.ok(dateLine.textContent.length > 0, 'expected an actual formatted date, not an empty line');
 
     const festiveCard = document.getElementById('eventCard-901');
-    assert.strictEqual(festiveCard.querySelector('.card-date-line'), null, 'a festive card relies on its countdown badge — no duplicate quiet date line');
+    const festiveDateLine = festiveCard.querySelector('.card-date-line');
+    assert.ok(festiveDateLine, 'a festive card now carries the date and venue line too (issue #98 story 15)');
+    assert.ok(festiveDateLine.textContent.length > 0, 'expected formatted date and venue text');
   });
 
   await test('the details grid, nav buttons and artist line start collapsed behind "مزيد من التفاصيل"', () => {
@@ -1978,25 +2054,56 @@ async function run() {
       /\.admin-card-shot\s*\{[^}]*height:\s*200px/.test(ADMIN_CSS),
       'the height must stay fixed, or the card grid goes ragged — that is the whole reason for the blurred fill'
     );
+    assert.ok(
+      /\.admin-card-poster-fill\s*\{[^}]*filter:\s*blur/.test(ADMIN_CSS),
+      'the admin poster fill must still declare filter: blur — blur removal from the feed must not touch admin'
+    );
   });
 
   /**
-   * #85 batch 6a moved the browsing card off the "crop, but from the top"
-   * compromise pinned above: the product owner's second literal complaint —
-   * "الصور اللي طولها أكبر من العرض المخصص بتنقص" — was that ANY crop is a
-   * loss, on this surface too. The card is now a 4:5 box, `contain`ed, over a
-   * blurred cover-crop of the same image (shareCard.service.js#drawHero's own
-   * composition, in CSS instead of Canvas) — so a tall or wide poster fills
-   * the box without bars and without losing anything.
+   * Spec issue #98: The feed card is redesigned as a full-screen card.
+   * Blur and fixed 4:5 aspect ratio are deleted from the feed path.
+   * Poster image becomes object-fit: cover with object-position: top center.
+   * Snapping rules are declared in styles.css.
    */
-  await test('the browsing cards stopped cropping too — the whole poster, over a blurred fill of itself', () => {
+  await test('the feed card has no blur and no fixed aspect ratio, object-fit is cover from top center, and snapping is declared', () => {
+    // 1. No blur and no fixed aspect ratio anywhere in the feed path (styles.css text assertion)
     assert.ok(
-      /\.card-poster-img\s*\{[^}]*object-fit:\s*contain/.test(STYLES_CSS),
-      'the browsing card must show the whole poster now, same fix as the admin list got'
+      !/\.card-poster-backdrop\s*\{[^}]*filter:\s*blur/.test(STYLES_CSS),
+      'feed backdrop blur rule must be deleted from styles.css'
     );
     assert.ok(
-      /\.card-poster-backdrop\s*\{[^}]*filter:\s*blur/.test(STYLES_CSS),
-      'expected a blurred backdrop layer behind the contained poster — otherwise a portrait poster in a 4:5 box leaves bare gutters'
+      !/\.card-poster-wrapper\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
+      'feed 4:5 fixed aspect-ratio rule must be deleted from styles.css'
+    );
+    assert.ok(
+      !/\.card-media\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
+      'no aspect-ratio on .card-media in styles.css'
+    );
+    assert.ok(
+      !/\.events-feed\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
+      'no aspect-ratio on .events-feed in styles.css'
+    );
+
+    // Image object-fit and position
+    assert.ok(
+      /\.card-media-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
+      'the browsing card image must be object-fit: cover'
+    );
+    assert.ok(
+      /\.card-media-img\s*\{[^}]*object-position:\s*top\s+center/.test(STYLES_CSS),
+      'the browsing card image must be object-position: top center'
+    );
+
+    // 6. Snapping declared in styles.css
+    assert.ok(
+      /\.events-feed\s*\{[^}]*scroll-snap-type:\s*y\s+mandatory/.test(STYLES_CSS),
+      '.events-feed must declare scroll-snap-type: y mandatory'
+    );
+    assert.ok(
+      /\.events-feed\s*>\s*\.event-card\s*\{[^}]*scroll-snap-stop:\s*always/.test(STYLES_CSS) ||
+      /\.event-card\s*\{[^}]*scroll-snap-stop:\s*always/.test(STYLES_CSS),
+      '.event-card must declare scroll-snap-stop: always'
     );
   });
 
