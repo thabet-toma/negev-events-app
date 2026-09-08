@@ -11,7 +11,7 @@
 
 const db = require('../db/pool');
 const logger = require('../utils/logger');
-const realtime = require('../realtime');
+const { announceNotification } = require('../realtime/announce');
 const notifications = require('../services/notifications.service');
 const { getZonedParts, zonedTimeToUtc, RUN_HOUR } = require('../utils/jerusalemTime');
 
@@ -99,7 +99,13 @@ async function runCountdownPass() {
         exempt: event.created_by === userId
       });
       if (result.inserted) {
-        realtime.emit(`new_notification_${userId}`, { id: result.id });
+        announceNotification({
+          id: result.id,
+          user_id: userId,
+          title: 'تذكير بمناسبة قادمة',
+          body: countdownBody(offsetDays, event.title),
+          event_id: event.id
+        });
       }
     }
   }
@@ -132,17 +138,19 @@ async function runModerationDigestPass() {
 
   for (const row of rows) {
     const count = Number(row.pending_count);
+    const title = 'رسائل بانتظار مراجعتك';
+    const body = `لديك ${count} رسالة تنتظر مراجعتك`;
     const result = await notifications.createScheduled({
       userId: row.user_id,
       eventId: null,
       type: notifications.TYPES.MODERATION_DIGEST,
-      title: 'رسائل بانتظار مراجعتك',
-      body: `لديك ${count} رسالة تنتظر مراجعتك`,
+      title,
+      body,
       dedupeKey: `moderation_digest_${today}`,
       exempt: true
     });
     if (result.inserted) {
-      realtime.emit(`new_notification_${row.user_id}`, { id: result.id });
+      announceNotification({ id: result.id, user_id: row.user_id, title, body });
     }
   }
 }

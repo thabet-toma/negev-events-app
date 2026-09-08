@@ -97,7 +97,16 @@ const config = {
     analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 15)
   },
 
-  bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 10)
+  bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 10),
+
+  // Web Push (issue #85). The pair is generated ONCE and never rotated — see
+  // .env.example. Absent by default: push.service.js must keep the platform
+  // fully functional (notification rows still written) with all three null.
+  push: {
+    publicKey: process.env.VAPID_PUBLIC_KEY || null,
+    privateKey: process.env.VAPID_PRIVATE_KEY || null,
+    subject: process.env.VAPID_SUBJECT || null
+  }
 };
 
 if (isProduction && config.admin.pin === '9999') {

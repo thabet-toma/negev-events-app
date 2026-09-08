@@ -9,6 +9,7 @@ const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const realtime = require('../realtime');
+const { announceNotification } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
 const { EVENT_STATUSES, TOWNS } = require('../constants');
@@ -93,7 +94,7 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   // never should have seen it. A connected client just re-fetches its own
   // GET /api/notifications — the same shape issue #85's town_broadcast uses.
   for (const notification of notifications) {
-    realtime.emit(`new_notification_${notification.user_id}`, { id: notification.id });
+    announceNotification(notification);
   }
 
   const label = { approved: 'معتمدة ومنشورة', rejected: 'مرفوضة', pending: 'بانتظار المراجعة' }[status];

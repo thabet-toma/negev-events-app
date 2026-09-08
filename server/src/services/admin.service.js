@@ -151,7 +151,7 @@ async function publishDateAnnouncement(connection, eventId, amendment) {
       { userId, eventId, type: notifications.TYPES.EVENT_DATE_CHANGED, title, body },
       connection
     );
-    created.push({ id: notification.id, user_id: userId });
+    created.push({ id: notification.id, user_id: userId, title, body, event_id: eventId });
   }
   return created;
 }
@@ -190,7 +190,7 @@ async function notifyVenueChange(connection, eventId, amendments) {
       { userId, eventId, type: notifications.TYPES.EVENT_VENUE_CHANGED, title, body },
       connection
     );
-    created.push({ id: notification.id, user_id: userId });
+    created.push({ id: notification.id, user_id: userId, title, body, event_id: eventId });
   }
   return created;
 }
@@ -245,15 +245,18 @@ async function updateEventStatus(eventId, status, { reason = null, actingUserId 
     // admin is the publisher (story 15).
     if (updatedEvent.created_by !== null && updatedEvent.created_by !== actingUserId) {
       if (status === 'approved') {
+        const approvedTitle = 'تمت الموافقة على مناسبتك';
+        const approvedBody = `تمت الموافقة على مناسبتك "${updatedEvent.title}" وأصبحت مرئية للجميع`;
         const notification = await notifications.create({
           userId: updatedEvent.created_by,
           eventId,
           type: notifications.TYPES.EVENT_APPROVED,
-          title: 'تمت الموافقة على مناسبتك',
-          body: `تمت الموافقة على مناسبتك "${updatedEvent.title}" وأصبحت مرئية للجميع`
+          title: approvedTitle,
+          body: approvedBody
         }, connection);
-        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by });
+        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by, title: approvedTitle, body: approvedBody, event_id: eventId });
       } else if (status === 'rejected') {
+        const rejectedTitle = 'تم رفض مناسبتك';
         const body = reason
           ? `تم رفض مناسبتك "${updatedEvent.title}": ${reason}`
           : `تم رفض مناسبتك "${updatedEvent.title}" — لم يُذكر سبب إضافي`;
@@ -261,10 +264,10 @@ async function updateEventStatus(eventId, status, { reason = null, actingUserId 
           userId: updatedEvent.created_by,
           eventId,
           type: notifications.TYPES.EVENT_REJECTED,
-          title: 'تم رفض مناسبتك',
+          title: rejectedTitle,
           body
         }, connection);
-        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by });
+        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by, title: rejectedTitle, body, event_id: eventId });
       }
     }
 

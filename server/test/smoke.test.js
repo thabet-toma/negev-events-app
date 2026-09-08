@@ -27,6 +27,8 @@ const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
 const scheduler = require('../src/jobs/scheduler');
 const notificationsService = require('../src/services/notifications.service');
+const pushService = require('../src/services/push.service');
+const webpush = require('web-push');
 const { runInstantForDate } = require('../src/utils/jerusalemTime');
 const logger = require('../src/utils/logger');
 const shareCard = require('../src/services/shareCard.service');
@@ -3048,6 +3050,301 @@ async function run() {
 
   await db.execute('DELETE FROM events WHERE id IN (?, ?)', [scheduleFollowedEventId, scheduleUnfollowedEventId]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [scheduleUser.phone]);
+
+  console.log('\nWeb Push subscriptions (issue #85 batch 4)');
+
+  await test('shouldDropSubscription: pure decision, no network — drops only on 404/410, keeps on 429/413/5xx/success', () => {
+    assert.strictEqual(pushService.shouldDropSubscription(404), true, '404 must drop');
+    assert.strictEqual(pushService.shouldDropSubscription(410), true, '410 must drop');
+    assert.strictEqual(pushService.shouldDropSubscription(429), false, '429 (rate limited) must keep');
+    assert.strictEqual(pushService.shouldDropSubscription(413), false, '413 (our own payload bug) must keep');
+    assert.strictEqual(pushService.shouldDropSubscription(500), false, '5xx must keep');
+    assert.strictEqual(pushService.shouldDropSubscription(201), false, 'a success code must keep');
+    assert.strictEqual(pushService.shouldDropSubscription(undefined), false, 'no status at all (network error) must keep');
+  });
+
+  await test('GET /api/notifications/vapid-public-key returns null with no VAPID keys configured, and never carries a private key', async () => {
+    const { status, body } = await api('GET', '/api/notifications/vapid-public-key');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.public_key, null);
+    const raw = JSON.stringify(body);
+    assert.ok(!/private/i.test(raw), `response must never mention a private key: ${raw}`);
+  });
+
+  await test('POST /api/notifications/subscribe is refused with an Arabic message (not a 500) when no VAPID keys are configured, and writes no row', async () => {
+    const user = await createDirectUser('مستخدم اختبار الاشتراك بلا مفاتيح');
+    const { status, body } = await api('POST', '/api/notifications/subscribe', {
+      token: user.token,
+      body: { endpoint: 'https://push.example.com/no-keys-configured', keys: { p256dh: 'p256dh-value', auth: 'auth-value' } }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), `expected an Arabic error message, got: ${JSON.stringify(body)}`);
+    const rows = await db.query('SELECT id FROM push_subscriptions WHERE user_id = ?', [user.id]);
+    assert.strictEqual(rows.length, 0, 'a refused subscribe attempt must not write a row');
+    await db.execute('DELETE FROM users WHERE id = ?', [user.id]);
+  });
+
+  await test('A notification row is still written normally with no VAPID keys configured (push failure never blocks persistence)', async () => {
+    const author = await createDirectUser('ناشر بلا مفاتيح دفع');
+    const created = await api('POST', '/api/events', { token: author.token, body: weddingEventBody({ honorees: [{ name: 'عريس بلا دفع' }], town: 'رهط' }) });
+    const eventId = created.body.eventId;
+    await api('PATCH', `/api/admin/events/${eventId}/status`, { token: adminToken, body: { status: 'approved' } });
+
+    const rows = await db.query("SELECT * FROM notifications WHERE user_id = ? AND type = 'event_approved'", [author.id]);
+    assert.strictEqual(rows.length, 1, 'the notification row must exist regardless of push delivery being unavailable');
+
+    await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+    await db.execute('DELETE FROM users WHERE id = ?', [author.id]);
+  });
+
+  /**
+   * Everything below needs a configured VAPID pair to exercise the
+   * subscribe/unsubscribe HTTP path at all — the whole rest of this suite
+   * runs with none configured (issue #85's own required degraded-state
+   * coverage, exercised above), so this fake pair is set directly on the
+   * shared `config` object for the lifetime of this one block only, and
+   * restored immediately after. It is never written to any file, never a
+   * real key (web-push is never actually asked to encrypt or send anything
+   * in this block — only push.service.js's own storage functions run, which
+   * touch no network), and it is not the "generate a real VAPID pair" this
+   * batch's action-safety rules forbid.
+   */
+  const originalPushConfig = { ...config.push };
+  function enableFakeVapidForTest() {
+    Object.assign(config.push, { publicKey: 'fake-test-public-key', privateKey: 'fake-test-private-key', subject: 'mailto:test@example.com' });
+  }
+  function restoreVapidConfig() {
+    Object.assign(config.push, originalPushConfig);
+  }
+
+  let pushUserA = null;
+  let pushUserB = null;
+
+  await test('Set up two users for push subscription storage/isolation tests', async () => {
+    pushUserA = await createDirectUser('مستخدم اشتراك دفع أ');
+    pushUserB = await createDirectUser('مستخدم اشتراك دفع ب');
+  });
+
+  await test('Subscribing stores exactly one row per device; re-subscribing the same device is idempotent, not a duplicate; the endpoint never appears in the response', async () => {
+    enableFakeVapidForTest();
+    try {
+      const endpoint = 'https://push.example.com/device-a-first-subscribe';
+      const body = { endpoint, keys: { p256dh: 'p256dh-value-a', auth: 'auth-value-a' } };
+
+      const first = await api('POST', '/api/notifications/subscribe', { token: pushUserA.token, body });
+      assert.strictEqual(first.status, 200);
+      assert.ok(!JSON.stringify(first.body).includes(endpoint), 'the endpoint must never appear in the subscribe response');
+
+      const second = await api('POST', '/api/notifications/subscribe', { token: pushUserA.token, body });
+      assert.strictEqual(second.status, 200);
+      assert.ok(!JSON.stringify(second.body).includes(endpoint), 'the endpoint must never appear in a re-subscribe response either');
+
+      const rows = await db.query('SELECT * FROM push_subscriptions WHERE user_id = ?', [pushUserA.id]);
+      assert.strictEqual(rows.length, 1, 're-subscribing the exact same device must leave exactly one row');
+      assert.strictEqual(rows[0].endpoint, endpoint);
+    } finally {
+      restoreVapidConfig();
+    }
+  });
+
+  await test('A malformed subscription body is rejected with 400 in Arabic before ever reaching storage', async () => {
+    enableFakeVapidForTest();
+    try {
+      const { status, body } = await api('POST', '/api/notifications/subscribe', {
+        token: pushUserA.token,
+        body: { endpoint: '', keys: {} }
+      });
+      assert.strictEqual(status, 400);
+      assert.ok(/[؀-ۿ]/.test(body.message || ''));
+    } finally {
+      restoreVapidConfig();
+    }
+  });
+
+  await test('An over-length endpoint is rejected with 400, never silently truncated and stored (issue #85 review, FIX 1)', async () => {
+    enableFakeVapidForTest();
+    try {
+      const overLongEndpoint = `https://push.example.com/${'x'.repeat(500)}`;
+      assert.ok(overLongEndpoint.length > 500, 'sanity: the fixture must actually exceed the push_subscriptions.endpoint column length');
+
+      // Counted before/after, not asserted as an absolute 0 — pushUserA may
+      // already carry a row from an earlier test in this section (it does),
+      // so the only thing this test may claim is "this specific rejected
+      // attempt wrote nothing", not "this user owns no rows at all".
+      const before = await db.query('SELECT id FROM push_subscriptions WHERE user_id = ?', [pushUserA.id]);
+
+      const { status, body } = await api('POST', '/api/notifications/subscribe', {
+        token: pushUserA.token,
+        body: { endpoint: overLongEndpoint, keys: { p256dh: 'p256dh-value-long', auth: 'auth-value-long' } }
+      });
+      assert.strictEqual(status, 400, 'an over-length endpoint must be rejected outright, never silently shortened and stored');
+      assert.ok(/[؀-ۿ]/.test(body.message || ''));
+
+      const after = await db.query('SELECT id FROM push_subscriptions WHERE user_id = ?', [pushUserA.id]);
+      assert.strictEqual(after.length, before.length, 'no truncated row must ever be written for a rejected endpoint');
+    } finally {
+      restoreVapidConfig();
+    }
+  });
+
+  await test('A non-URL, and a non-https, endpoint are both rejected with 400 — a capability URL that is not even a URL is not worth storing', async () => {
+    enableFakeVapidForTest();
+    try {
+      const notAUrl = await api('POST', '/api/notifications/subscribe', {
+        token: pushUserA.token,
+        body: { endpoint: 'not-a-url-at-all', keys: { p256dh: 'p', auth: 'a' } }
+      });
+      assert.strictEqual(notAUrl.status, 400);
+
+      const notHttps = await api('POST', '/api/notifications/subscribe', {
+        token: pushUserA.token,
+        body: { endpoint: 'http://push.example.com/insecure', keys: { p256dh: 'p', auth: 'a' } }
+      });
+      assert.strictEqual(notHttps.status, 400, 'an http: (non-https) endpoint must be rejected');
+    } finally {
+      restoreVapidConfig();
+    }
+  });
+
+  await test('DELETE /api/notifications/subscribe also rejects an over-length endpoint with 400 (shares the same validation)', async () => {
+    const overLongEndpoint = `https://push.example.com/${'y'.repeat(500)}`;
+    const { status } = await api('DELETE', '/api/notifications/subscribe', {
+      token: pushUserA.token,
+      body: { endpoint: overLongEndpoint }
+    });
+    assert.strictEqual(status, 400);
+  });
+
+  await test('A user cannot see or remove another user\'s subscription, and unsubscribing an already-gone endpoint is not an error', async () => {
+    enableFakeVapidForTest();
+    try {
+      const endpoint = 'https://push.example.com/device-a-second-subscribe';
+      const subscribeRes = await api('POST', '/api/notifications/subscribe', {
+        token: pushUserA.token, body: { endpoint, keys: { p256dh: 'p256dh-value-a2', auth: 'auth-value-a2' } }
+      });
+      assert.strictEqual(subscribeRes.status, 200);
+
+      const crossDelete = await api('DELETE', '/api/notifications/subscribe', { token: pushUserB.token, body: { endpoint } });
+      assert.strictEqual(crossDelete.status, 200, 'unsubscribe is always a no-op success, even naming a row that is not this caller\'s');
+      assert.ok(!JSON.stringify(crossDelete.body).includes(endpoint));
+      const stillThere = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [pushUserA.id, endpoint]);
+      assert.ok(stillThere, 'user B must never be able to remove user A\'s subscription by naming its endpoint');
+
+      const ownDelete = await api('DELETE', '/api/notifications/subscribe', { token: pushUserA.token, body: { endpoint } });
+      assert.strictEqual(ownDelete.status, 200);
+      const gone = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ? AND endpoint = ?', [pushUserA.id, endpoint]);
+      assert.strictEqual(gone, null);
+
+      const again = await api('DELETE', '/api/notifications/subscribe', { token: pushUserA.token, body: { endpoint } });
+      assert.strictEqual(again.status, 200, 'unsubscribing an endpoint that is already gone must not be an error');
+    } finally {
+      restoreVapidConfig();
+    }
+  });
+
+  await test('A 429 with a short Retry-After triggers exactly one retry, and sendToUser itself returns without waiting for it (issue #85 review, FIX 2) — no real network call', async () => {
+    enableFakeVapidForTest();
+    const retryUser = await createDirectUser('مستخدم اختبار إعادة محاولة 429');
+    const endpoint = 'https://push.example.com/retry-device';
+    const originalSendNotification = webpush.sendNotification;
+    try {
+      await db.execute(
+        'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)',
+        [retryUser.id, endpoint, 'p256dh-retry', 'auth-retry']
+      );
+
+      let callCount = 0;
+      webpush.sendNotification = async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          const err = new Error('rate limited');
+          err.statusCode = 429;
+          err.headers = { 'retry-after': '0' }; // 0 seconds — well inside RETRY_CEILING_MS
+          throw err;
+        }
+        return { statusCode: 201 };
+      };
+
+      const startedAt = Date.now();
+      await pushService.sendToUser(retryUser.id, { title: 'عنوان', body: 'نص' });
+      assert.ok(Date.now() - startedAt < 200, 'sendToUser must return almost immediately — a bounded retry must never become caller-visible latency');
+      assert.strictEqual(callCount, 0, 'sanity: sendToUser is fire-and-forget, so no delivery attempt has actually run synchronously yet');
+
+      // The retry runs in the background on a real (very short) timer — wait
+      // for it, rather than asserting anything about timing beyond "fast".
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      assert.strictEqual(callCount, 2, 'expected exactly one retry after the 429 — the first attempt plus one, not zero and not more');
+
+      const stillThere = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ?', [retryUser.id]);
+      assert.ok(stillThere, 'the subscription must survive a 429, retried or not — 429 never drops a row');
+    } finally {
+      webpush.sendNotification = originalSendNotification;
+      restoreVapidConfig();
+      await db.execute('DELETE FROM push_subscriptions WHERE user_id = ?', [retryUser.id]);
+      await db.execute('DELETE FROM users WHERE id = ?', [retryUser.id]);
+    }
+  });
+
+  await test('A 429 whose Retry-After exceeds the retry ceiling is NOT retried, and still keeps the row', async () => {
+    const noRetryUser = await createDirectUser('مستخدم 429 بلا إعادة محاولة');
+    const endpoint = 'https://push.example.com/no-retry-device';
+    const originalSendNotification = webpush.sendNotification;
+    try {
+      await db.execute(
+        'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)',
+        [noRetryUser.id, endpoint, 'p256dh-no-retry', 'auth-no-retry']
+      );
+
+      let callCount = 0;
+      webpush.sendNotification = async () => {
+        callCount += 1;
+        const err = new Error('rate limited');
+        err.statusCode = 429;
+        err.headers = { 'retry-after': '3600' }; // an hour — far beyond the retry ceiling
+        throw err;
+      };
+
+      // deliverToUser is the awaitable core sendToUser fires without waiting
+      // for (see push.service.js) — calling it directly here lets this test
+      // assert on completion without depending on a background timer.
+      await pushService.deliverToUser(noRetryUser.id, { title: 'عنوان', body: 'نص' });
+      assert.strictEqual(callCount, 1, 'a Retry-After beyond the ceiling must not be retried at all');
+
+      const stillThere = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ?', [noRetryUser.id]);
+      assert.ok(stillThere, 'the subscription must still be kept — 429 never drops the row, retried or not');
+    } finally {
+      webpush.sendNotification = originalSendNotification;
+      await db.execute('DELETE FROM push_subscriptions WHERE user_id = ?', [noRetryUser.id]);
+      await db.execute('DELETE FROM users WHERE id = ?', [noRetryUser.id]);
+    }
+  });
+
+  await test('Deleting a user deletes their push subscriptions (story 21, FK ON DELETE CASCADE)', async () => {
+    const cascadeUser = await createDirectUser('مستخدم اختبار حذف الاشتراكات');
+    await db.execute(
+      'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)',
+      [cascadeUser.id, 'https://push.example.com/cascade-device', 'p256dh-cascade', 'auth-cascade']
+    );
+    const before = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ?', [cascadeUser.id]);
+    assert.ok(before, 'sanity: the subscription row must exist before the user is deleted');
+
+    await db.execute('DELETE FROM users WHERE id = ?', [cascadeUser.id]);
+
+    const after = await db.queryOne('SELECT id FROM push_subscriptions WHERE user_id = ?', [cascadeUser.id]);
+    assert.strictEqual(after, null, 'deleting the user must cascade-delete their push subscriptions');
+  });
+
+  // Guarded, not a bare `[pushUserA.id, pushUserB.id]` (issue #85 review, FIX
+  // 6): if the "Set up two users" test above ever fails, test()'s own
+  // try/catch already reports that failure and moves on — but this line sits
+  // OUTSIDE any test() wrapper, so an unguarded `.id` on a still-null
+  // pushUserA/pushUserB would throw synchronously here, uncaught, and take
+  // down every remaining test in the suite instead of just the one that
+  // actually failed.
+  if (pushUserA && pushUserB) {
+    await db.execute('DELETE FROM users WHERE id IN (?, ?)', [pushUserA.id, pushUserB.id]);
+  }
 
   console.log('\nStories — ad separation, honest views, town breakdown (#20 step 8)');
 
