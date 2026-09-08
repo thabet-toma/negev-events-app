@@ -404,6 +404,113 @@ function classifyPixel(r, g, b) {
 }
 
 /**
+ * Push notification fakes for jsdom: ServiceWorkerRegistration, PushManager,
+ * and Notification. Stubbed at the window seam so tests can assert behavior.
+ */
+function installPushFakes(window, options = {}) {
+  const {
+    initialPermission = 'default',
+    existingSubscription = null,
+    onPrompt = null,
+    onSubscribe = null,
+    onUnsubscribe = null
+  } = options;
+
+  let currentPermission = initialPermission;
+  let currentSub = existingSubscription ? {
+    endpoint: existingSubscription.endpoint,
+    keys: existingSubscription.keys || {},
+    toJSON() { return { endpoint: this.endpoint, keys: { ...this.keys } }; },
+    unsubscribe: async () => {
+      if (existingSubscription.unsubscribe) await existingSubscription.unsubscribe();
+      if (onUnsubscribe) onUnsubscribe();
+      currentSub = null;
+      return true;
+    }
+  } : null;
+  const registerCalls = [];
+  const promptCalls = [];
+
+  window.Notification = {
+    get permission() {
+      return currentPermission;
+    },
+    requestPermission: async () => {
+      promptCalls.push(Date.now());
+      if (onPrompt) {
+        currentPermission = await onPrompt();
+      } else {
+        currentPermission = 'granted';
+      }
+      return currentPermission;
+    }
+  };
+
+  const fakePushManager = {
+    getSubscription: async () => currentSub,
+    subscribe: async (opts) => {
+      if (onSubscribe) onSubscribe(opts);
+      const sub = {
+        endpoint: 'https://push.example.test/sub/12345',
+        keys: {
+          p256dh: 'fake-p256dh-key',
+          auth: 'fake-auth-key'
+        },
+        toJSON() {
+          return {
+            endpoint: this.endpoint,
+            keys: { ...this.keys }
+          };
+        },
+        unsubscribe: async () => {
+          if (onUnsubscribe) onUnsubscribe();
+          currentSub = null;
+          return true;
+        }
+      };
+      currentSub = sub;
+      return sub;
+    }
+  };
+
+  const fakeRegistration = {
+    pushManager: fakePushManager,
+    showNotification: async (title, opts) => {},
+    active: {}
+  };
+
+  const messageListeners = [];
+  window.navigator.serviceWorker = {
+    register: async (scriptUrl, opts) => {
+      registerCalls.push(scriptUrl);
+      return fakeRegistration;
+    },
+    ready: Promise.resolve(fakeRegistration),
+    getRegistration: async () => fakeRegistration,
+    addEventListener: (type, listener) => {
+      if (type === 'message') messageListeners.push(listener);
+    },
+    removeEventListener: () => {},
+    _dispatchMessage: (data) => {
+      messageListeners.forEach(l => l({ data }));
+    }
+  };
+
+  window.PushManager = function FakePushManager() {};
+
+  return {
+    registerCalls,
+    promptCalls,
+    fakePushManager,
+    getPermission: () => currentPermission,
+    setPermission: (p) => { currentPermission = p; },
+    getSub: () => currentSub,
+    setSub: (s) => { currentSub = s; },
+    fakeRegistration
+  };
+}
+
+/**
  * Builds one fresh jsdom document with web/'s three scripts evaluated into
  * it, real CDN globals (L, Chart, io) and browser-only APIs (fetch,
  * matchMedia, canvas 2D, rAF) stubbed at the seam beforehand — never by
@@ -411,10 +518,10 @@ function classifyPixel(r, g, b) {
  * app.js reads negev_user/negev_token into module state at load time, the
  * same way a real page load would.
  */
-function buildEnv({ loggedIn = false, userAgent } = {}) {
+function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/' } = {}) {
   const virtualConsole = new VirtualConsole(); // swallow jsdom's own "not implemented" noise; real throws still propagate
   const dom = new JSDOM(HTML_WITHOUT_SCRIPTS, {
-    url: 'http://localhost/',
+    url,
     runScripts: 'dangerously',
     virtualConsole
   });
@@ -449,6 +556,10 @@ function buildEnv({ loggedIn = false, userAgent } = {}) {
   window.cancelAnimationFrame = id => clearTimeout(id);
   window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
   installPosterCropFakes(window);
+
+  if (onBeforeEval) {
+    onBeforeEval(window);
+  }
 
   window.eval(COMBINED_SCRIPT);
 
@@ -2816,6 +2927,632 @@ async function run() {
       true,
       'signing in must never resurrect a broadcast this same person, on this same device, already dismissed as a visitor'
     );
+  });
+
+  console.log('\nWeb Push & Notification Centre (issue #85 batch 6c, stories 12-18)');
+
+  await test('loading the page does NOT request notification permission', async () => {
+    let pushFakes;
+    const FAKE_VAPID_PUBLIC_KEY = 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE';
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+        w.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/notifications/vapid-public-key') {
+            return jsonResponse({ success: true, public_key: FAKE_VAPID_PUBLIC_KEY });
+          }
+          return buildFetchStub()(url, options);
+        };
+      }
+    });
+    await flushBoot();
+    await delay(50);
+
+    assert.strictEqual(
+      pushFakes.registerCalls.length,
+      1,
+      'expected service worker (/sw.js) to be registered on page load'
+    );
+    assert.strictEqual(
+      pushFakes.promptCalls.length,
+      0,
+      'story 16: loading the page must never request notification permission'
+    );
+  });
+
+  await test('tapping a personal notification with an event_id marks it read AND navigates to that event', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    let patchCalled = false;
+    let getEventCalled = false;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          notifications: [
+            {
+              id: 99,
+              type: 'event_soon',
+              title: 'تذكير بمناسبة قادمة',
+              body: 'مناسبة آل فلان غداً',
+              event_id: 123,
+              is_read: false,
+              created_at: '2026-09-08T08:00:00.000Z'
+            }
+          ]
+        });
+      }
+      if (requestPath === '/api/notifications/99/read' && method === 'PATCH') {
+        patchCalled = true;
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/events/123' && method === 'GET') {
+        getEventCalled = true;
+        return jsonResponse({
+          success: true,
+          event: {
+            id: 123,
+            title: 'فرح راني سلام',
+            town: 'شقيب السلام',
+            event_date: '2026-09-09',
+            location_name: 'قاعة الأساطير'
+          }
+        });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    dom.window.toggleNotificationsPanel();
+    await dom.window.fetchNotifications();
+
+    const notifCard = dom.window.document.querySelector('#notificationsList .event-card');
+    assert.ok(notifCard, 'expected notification card to be rendered');
+
+    notifCard.click();
+    await waitFor(() => patchCalled);
+    assert.strictEqual(patchCalled, true, 'expected PATCH /api/notifications/99/read to be called');
+
+    const modal = dom.window.document.getElementById('notificationsModal');
+    await waitFor(() => modal.style.display === 'none');
+    assert.strictEqual(modal.style.display, 'none', 'expected notifications modal to be closed upon tapping an event notification');
+
+    await waitFor(() => getEventCalled, { timeout: 500 });
+    assert.strictEqual(getEventCalled, true, 'expected GET /api/events/123 to be called to load missing event');
+
+    const eventCard = dom.window.document.getElementById('eventCard-123');
+    assert.ok(eventCard, 'expected eventCard-123 to be rendered in the DOM');
+    assert.ok(
+      dom.window.document.querySelector('#singleEventContainer #eventCard-123'),
+      'expected eventCard-123 to be rendered in #singleEventContainer (FIX 6)'
+    );
+    assert.strictEqual(
+      dom.window.document.querySelector('#eventsContainer #eventCard-123'),
+      null,
+      'eventsContainer must not be corrupted by out-of-feed notification navigation (FIX 6)'
+    );
+  });
+
+  await test('adding a reminder requests notification permission, and removing one does not', async () => {
+    let pushFakes;
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+      }
+    });
+    await flushBoot();
+
+    const FAKE_VAPID_PUBLIC_KEY = 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE';
+    let remindPostCalled = false;
+    let remindDeleteCalled = false;
+    let subscribeCalled = false;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications/vapid-public-key') {
+        return jsonResponse({ success: true, public_key: FAKE_VAPID_PUBLIC_KEY });
+      }
+      if (requestPath === '/api/events/77/remind' && method === 'POST') {
+        remindPostCalled = true;
+        return jsonResponse({ success: true, reminded: true });
+      }
+      if (requestPath === '/api/events/77/remind' && method === 'DELETE') {
+        remindDeleteCalled = true;
+        return jsonResponse({ success: true, reminded: false });
+      }
+      if (requestPath === '/api/notifications/subscribe' && method === 'POST') {
+        subscribeCalled = true;
+        return jsonResponse({ success: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    // First: removing a reminder (isReminded: true)
+    await dom.window.toggleReminder(77, true, null);
+    assert.strictEqual(remindDeleteCalled, true, 'expected DELETE /api/events/77/remind');
+    assert.strictEqual(pushFakes.promptCalls.length, 0, 'removing a reminder must NOT prompt for notification permission');
+    assert.strictEqual(subscribeCalled, false, 'removing a reminder must NOT call subscribe');
+
+    // Second: adding a reminder (isReminded: false)
+    await dom.window.toggleReminder(77, false, null);
+    assert.strictEqual(remindPostCalled, true, 'expected POST /api/events/77/remind');
+    await waitFor(() => pushFakes.promptCalls.length > 0);
+    assert.strictEqual(pushFakes.promptCalls.length, 1, 'adding a reminder MUST prompt for notification permission');
+    await waitFor(() => subscribeCalled);
+    assert.strictEqual(subscribeCalled, true, 'adding a reminder with permission granted MUST subscribe');
+  });
+
+  await test('a null VAPID public key means no prompt, no subscribe call, and no visible error', async () => {
+    let pushFakes;
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+      }
+    });
+    await flushBoot();
+
+    let subscribeCalled = false;
+    let toastCreated = false;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications/vapid-public-key') {
+        // Operator has not generated a VAPID pair — the state of the platform today
+        return jsonResponse({ success: true, public_key: null });
+      }
+      if (requestPath === '/api/events/88/remind' && method === 'POST') {
+        return jsonResponse({ success: true, reminded: true });
+      }
+      if (requestPath === '/api/notifications/subscribe') {
+        subscribeCalled = true;
+        return jsonResponse({ success: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    const origAppendChild = dom.window.document.body.appendChild;
+    dom.window.document.body.appendChild = function (node) {
+      if (node && node.className === 'app-toast' && node.textContent.includes('خطأ')) {
+        toastCreated = true;
+      }
+      return origAppendChild.call(this, node);
+    };
+
+    // Adding reminder when VAPID key is null
+    await dom.window.toggleReminder(88, false, null);
+    await delay(50);
+
+    assert.strictEqual(pushFakes.promptCalls.length, 0, 'null VAPID key must never prompt for notification permission');
+    assert.strictEqual(subscribeCalled, false, 'null VAPID key must never call subscribe');
+    assert.strictEqual(toastCreated, false, 'null VAPID key must not show an error to the user');
+  });
+
+  await test('a successful subscribe POSTs the exact { endpoint, keys: { p256dh, auth } } shape', async () => {
+    let pushFakes;
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+      }
+    });
+    await flushBoot();
+
+    const FAKE_VAPID_PUBLIC_KEY = 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE';
+    let subscribePayload = null;
+    let subscribeAuthHeader = null;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications/vapid-public-key') {
+        return jsonResponse({ success: true, public_key: FAKE_VAPID_PUBLIC_KEY });
+      }
+      if (requestPath === '/api/events/99/remind' && method === 'POST') {
+        return jsonResponse({ success: true, reminded: true });
+      }
+      if (requestPath === '/api/notifications/subscribe' && method === 'POST') {
+        subscribePayload = JSON.parse(options.body);
+        subscribeAuthHeader = options.headers && options.headers['Authorization'];
+        return jsonResponse({ success: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    await dom.window.toggleReminder(99, false, null);
+    await waitFor(() => subscribePayload !== null);
+
+    assert.ok(subscribePayload, 'subscribe endpoint was called');
+    assert.strictEqual(typeof subscribePayload.endpoint, 'string');
+    assert.ok(subscribePayload.endpoint.startsWith('https://'));
+    assert.ok(subscribePayload.keys, 'keys object must be present');
+    assert.strictEqual(typeof subscribePayload.keys.p256dh, 'string');
+    assert.strictEqual(typeof subscribePayload.keys.auth, 'string');
+    assert.strictEqual(subscribeAuthHeader, 'Bearer test-token-web-dom', 'subscribe request must include auth token');
+  });
+
+  await test('the off control calls DELETE /api/notifications/subscribe and the displayed state changes', async () => {
+    let pushFakes;
+    const existingSub = {
+      endpoint: 'https://push.example.test/sub/active-endpoint',
+      keys: { p256dh: 'active-p256dh', auth: 'active-auth' },
+      toJSON() { return { endpoint: this.endpoint, keys: { ...this.keys } }; },
+      unsubscribe: async () => true
+    };
+
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w, {
+          initialPermission: 'granted',
+          existingSubscription: existingSub
+        });
+      }
+    });
+    await flushBoot();
+
+    const FAKE_VAPID_PUBLIC_KEY = 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE';
+    let deleteCalled = false;
+    let deleteBody = null;
+    let deleteAuth = null;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications/vapid-public-key') {
+        return jsonResponse({ success: true, public_key: FAKE_VAPID_PUBLIC_KEY });
+      }
+      if (requestPath === '/api/notifications/subscribe' && method === 'DELETE') {
+        deleteCalled = true;
+        deleteBody = JSON.parse(options.body);
+        deleteAuth = options.headers && options.headers['Authorization'];
+        return jsonResponse({ success: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    // Open notifications panel
+    dom.window.toggleNotificationsPanel();
+    await waitFor(() => {
+      const status = dom.window.document.getElementById('pushStatusText');
+      return status && status.textContent === 'مفعّلة';
+    });
+
+    const statusVal = dom.window.document.getElementById('pushStatusText');
+    const toggleBtn = dom.window.document.getElementById('togglePushNotificationsBtn');
+    assert.strictEqual(statusVal.textContent, 'مفعّلة', 'status should initially be on');
+    assert.strictEqual(toggleBtn.textContent, 'إيقاف الإشعارات', 'button should offer to turn off');
+
+    // Click off control
+    toggleBtn.click();
+    await waitFor(() => deleteCalled);
+
+    assert.strictEqual(deleteCalled, true, 'expected DELETE /api/notifications/subscribe to be called');
+    assert.strictEqual(deleteBody.endpoint, 'https://push.example.test/sub/active-endpoint', 'DELETE body must match endpoint');
+    assert.strictEqual(deleteAuth, 'Bearer test-token-web-dom', 'DELETE request must include auth token');
+
+    await waitFor(() => statusVal.textContent === 'متوقفة');
+    assert.strictEqual(statusVal.textContent, 'متوقفة', 'status must update to off');
+    assert.strictEqual(toggleBtn.textContent, 'تفعيل', 'button must update to enable');
+  });
+
+  await test('tapping a broadcast marks it read through the broadcast endpoint and navigates nowhere', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    let dismissCalled = false;
+    let eventGetCalled = false;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          notifications: [
+            {
+              broadcast_id: 88,
+              type: 'broadcast',
+              title: 'تعميم إداري',
+              body: 'نص التعميم الإداري',
+              tone: 'info',
+              expires_at: null,
+              is_read: false,
+              created_at: '2026-09-08T08:00:00.000Z'
+            }
+          ]
+        });
+      }
+      if (requestPath === '/api/broadcasts/88/dismiss' && method === 'PATCH') {
+        dismissCalled = true;
+        return jsonResponse({ success: true });
+      }
+      if (requestPath.startsWith('/api/events/')) {
+        eventGetCalled = true;
+        return jsonResponse({ success: false });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    dom.window.toggleNotificationsPanel();
+    await dom.window.fetchNotifications();
+
+    const broadcastCard = dom.window.document.querySelector('#notificationsList .event-card');
+    assert.ok(broadcastCard, 'expected broadcast card to be rendered');
+
+    broadcastCard.click();
+    await waitFor(() => dismissCalled);
+    assert.strictEqual(dismissCalled, true, 'expected PATCH /api/broadcasts/88/dismiss to be called');
+
+    // Broadcast has no event: must NOT call GET /api/events/:id, must remain on current view
+    await delay(50);
+    assert.strictEqual(eventGetCalled, false, 'tapping a broadcast must never navigate or fetch an event');
+  });
+
+  await test('a browser with no serviceWorker/PushManager degrades silently and the page still works', async () => {
+    // Default buildEnv has NO serviceWorker, NO PushManager, NO Notification
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+
+    // Opening notifications panel should not throw
+    dom.window.toggleNotificationsPanel();
+
+    const statusVal = dom.window.document.getElementById('pushStatusText');
+    const toggleBtn = dom.window.document.getElementById('togglePushNotificationsBtn');
+
+    assert.strictEqual(statusVal.textContent, 'غير مدعومة على هذا الجهاز');
+    assert.strictEqual(toggleBtn.disabled, true);
+
+    // Adding reminder should succeed and not crash
+    let remindCalled = false;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events/101/remind' && options.method === 'POST') {
+        remindCalled = true;
+        return jsonResponse({ success: true, reminded: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    await dom.window.toggleReminder(101, false, null);
+    assert.strictEqual(remindCalled, true, 'reminder toggle still works in unsupported browser');
+  });
+
+  await test('iOS Safari not installed shows Arabic line and does not prompt', async () => {
+    let pushFakes;
+    const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+    const dom = buildEnv({
+      loggedIn: true,
+      userAgent: IPHONE_UA,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+      }
+    });
+    await flushBoot();
+
+    let toastMessage = '';
+    const origAppendChild = dom.window.document.body.appendChild;
+    dom.window.document.body.appendChild = function (node) {
+      if (node && node.className === 'app-toast') {
+        toastMessage = node.textContent;
+      }
+      return origAppendChild.call(this, node);
+    };
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events/102/remind' && options.method === 'POST') {
+        return jsonResponse({ success: true, reminded: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    await dom.window.toggleReminder(102, false, null);
+    await delay(50);
+
+    assert.strictEqual(pushFakes.promptCalls.length, 0, 'must not prompt for permission on uninstalled iOS Safari');
+    assert.ok(toastMessage.includes('iPhone') && toastMessage.includes('الشاشة الرئيسية'), 'must show Arabic line directing to home screen');
+  });
+
+  await test('after turning notifications off, adding a reminder does not re-subscribe (FIX 4, story 18)', async () => {
+    let pushFakes;
+    const existingSub = {
+      endpoint: 'https://push.example.test/sub/active-endpoint-opt-out',
+      keys: { p256dh: 'opt-p256dh', auth: 'opt-auth' },
+      toJSON() { return { endpoint: this.endpoint, keys: { ...this.keys } }; },
+      unsubscribe: async () => true
+    };
+
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w, {
+          initialPermission: 'granted',
+          existingSubscription: existingSub
+        });
+      }
+    });
+    await flushBoot();
+
+    const FAKE_VAPID_PUBLIC_KEY = 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE';
+    let deleteCalled = false;
+    let subscribeCalled = false;
+    let remindCalled = false;
+
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/notifications/vapid-public-key') {
+        return jsonResponse({ success: true, public_key: FAKE_VAPID_PUBLIC_KEY });
+      }
+      if (requestPath === '/api/notifications/subscribe' && method === 'DELETE') {
+        deleteCalled = true;
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/notifications/subscribe' && method === 'POST') {
+        subscribeCalled = true;
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/events/200/remind' && method === 'POST') {
+        remindCalled = true;
+        return jsonResponse({ success: true, reminded: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    // Open notifications panel and turn push off
+    dom.window.toggleNotificationsPanel();
+    await waitFor(() => {
+      const status = dom.window.document.getElementById('pushStatusText');
+      return status && status.textContent === 'مفعّلة';
+    });
+
+    const toggleBtn = dom.window.document.getElementById('togglePushNotificationsBtn');
+    toggleBtn.click();
+    await waitFor(() => deleteCalled);
+    assert.strictEqual(deleteCalled, true, 'expected DELETE /api/notifications/subscribe');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_push_opt_out'), 'true', 'opt-out must be stored in localStorage');
+
+    // Now, add a reminder to an event while opted out
+    pushFakes.promptCalls.length = 0;
+    await dom.window.toggleReminder(200, false, null);
+    assert.strictEqual(remindCalled, true, 'reminder toggle must still succeed');
+    assert.strictEqual(pushFakes.promptCalls.length, 0, 'must not prompt for notification permission while opted out');
+    assert.strictEqual(subscribeCalled, false, 'after turning notifications off, adding a reminder does not re-subscribe');
+  });
+
+  await test('the deep-linked event survives the feed load instead of being wiped by it (FIX 5, story 14)', async () => {
+    let getSingleEventCalled = false;
+    let getFeedCalled = false;
+
+    const dom = buildEnv({
+      loggedIn: true,
+      url: 'http://localhost/?event_id=456',
+      onBeforeEval: (w) => {
+        w.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          if (requestPath === '/api/events' && method === 'GET') {
+            getFeedCalled = true;
+            return jsonResponse({
+              success: true,
+              events: [
+                { id: 101, title: 'مناسبة عادية في التغذية', town: 'رهط', event_date: '2026-09-15', location_name: 'قاعة الأساطير' }
+              ],
+              pagination: { page: 1, totalPages: 1 },
+              announcements: []
+            });
+          }
+          if (requestPath === '/api/events/456' && method === 'GET') {
+            getSingleEventCalled = true;
+            return jsonResponse({
+              success: true,
+              event: {
+                id: 456,
+                title: 'مناسبة الرابط العميق',
+                town: 'عرعرة النقب',
+                event_date: '2026-09-20',
+                location_name: 'قاعة السلام'
+              }
+            });
+          }
+          return buildFetchStub()(url, options);
+        };
+      }
+    });
+
+    await flushBoot();
+
+    await waitFor(() => getFeedCalled);
+    await waitFor(() => getSingleEventCalled);
+
+    // Deep-linked event must be present in DOM (rendered in #singleEventContainer)
+    const deepLinkedCard = dom.window.document.getElementById('eventCard-456');
+    assert.ok(deepLinkedCard, 'deep-linked event 456 must be rendered in DOM');
+    assert.ok(
+      dom.window.document.querySelector('#singleEventContainer #eventCard-456'),
+      'deep-linked event 456 must be rendered inside #singleEventContainer'
+    );
+
+    // Feed event must also be present in #eventsContainer
+    const feedCard = dom.window.document.getElementById('eventCard-101');
+    assert.ok(feedCard, 'feed event 101 must remain intact in #eventsContainer');
+
+    // eventsContainer must NOT contain event 456
+    assert.strictEqual(
+      dom.window.document.querySelector('#eventsContainer #eventCard-456'),
+      null,
+      'eventsContainer must not contain the out-of-feed deep-linked event'
+    );
+
+    // ?event_id= must be cleaned from the URL via replaceState
+    assert.strictEqual(
+      dom.window.location.search.includes('event_id='),
+      false,
+      'event_id query param must be cleared from URL after handling'
+    );
+  });
+
+  await test('navigateToEvent uses behavior auto under prefers-reduced-motion or solemn tone (FIX 7, story 54)', async () => {
+    const dom = buildEnv({ loggedIn: true });
+
+    let lastScrollBehavior = null;
+    const origGetElementById = dom.window.document.getElementById.bind(dom.window.document);
+    dom.window.document.getElementById = (id) => {
+      if (id === 'eventCard-777') {
+        return {
+          id: 'eventCard-777',
+          classList: {
+            contains: (cls) => cls === 'tone-mourning',
+            add: () => {},
+            remove: () => {}
+          },
+          scrollIntoView: (opts) => {
+            lastScrollBehavior = opts && opts.behavior;
+          }
+        };
+      }
+      return origGetElementById(id);
+    };
+
+    await dom.window.navigateToEvent(777);
+    assert.strictEqual(lastScrollBehavior, 'auto', 'solemn occasion card must scroll with auto behavior, never smooth');
+  });
+
+  await test('iOS install hint is not shown unbidden if already dismissed (FIX 3, story 17)', async () => {
+    const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    let pushFakes;
+
+    const dom = buildEnv({
+      loggedIn: true,
+      userAgent: IPHONE_UA,
+      onBeforeEval: (w) => {
+        pushFakes = installPushFakes(w);
+      }
+    });
+
+    // Dismiss the hint
+    dom.window.dismissInstallHint();
+    assert.strictEqual(dom.window.localStorage.getItem('negev_install_hint'), 'dismissed');
+
+    const sheet = dom.window.document.getElementById('installHint');
+    sheet.hidden = true;
+
+    // Adding reminder on iOS when dismissed must show toast but NOT reopen installHint sheet unbidden
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events/888/remind' && options.method === 'POST') {
+        return jsonResponse({ success: true, reminded: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    await dom.window.toggleReminder(888, false, null);
+    assert.strictEqual(sheet.hidden, true, 'installHint sheet must remain hidden when dismissed forever');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

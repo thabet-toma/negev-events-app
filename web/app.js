@@ -119,14 +119,17 @@ document.addEventListener('DOMContentLoaded', () => {
   updateAuthUI();
   initPlaceFilter();
   initKindFilter();
-  fetchEvents();
-  fetchStories();
-  renderStickerCanvas();
   initAppDownload();
   initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
   initSupportEntry();
+  initNotificationsPush();
+  initServiceWorker();
+  initUrlNavigation();
+  fetchEvents();
+  fetchStories();
+  renderStickerCanvas();
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -303,26 +306,39 @@ async function initAppDownload() {
  *
  * ويُصرَف مرة واحدة إلى الأبد: من أغلقه لا يُزعَج به ثانيةً.
  */
+/** كشف جهاز iOS (آيفون أو آيباد بما في ذلك iPadOS 13+) */
+function isIOSDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+/** هل الموقع يعمل في وضع التثبيت المستقل (PWA) */
+function isStandaloneMode() {
+  if (typeof window === 'undefined') return false;
+  return (window.navigator && window.navigator.standalone === true)
+    || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+
+/** هل متصفح Safari على iOS والموقع غير مثبت على الشاشة الرئيسية بعد (قصة 17) */
+function isIOSSafariNotInstalled() {
+  return isIOSDevice() && !isStandaloneMode();
+}
+
+/** فحص هل صرف المستخدم إرشاد التثبيت إلى الأبد */
+function isInstallHintDismissed() {
+  try {
+    return localStorage.getItem('negev_install_hint') === 'dismissed';
+  } catch (e) {
+    return false;
+  }
+}
+
 function initInstallHint() {
   const sheet = document.getElementById('installHint');
   if (!sheet) return;
-
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-    // iPadOS يعرّف نفسه ماكنتوش منذ 13؛ وجود اللمس هو ما يفرّقه عن ماك حقيقي.
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  if (!isIOS) return;
-
-  // مثبَّت فعلاً: `navigator.standalone` هو ما يجيب عليه iOS، والاستعلام يغطّي
-  // البقية. إظهار إرشاد تثبيت لمن ثبّت هو أسوأ من عدم إظهاره أصلاً.
-  const installed = window.navigator.standalone === true
-    || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-  if (installed) return;
-
-  try {
-    if (localStorage.getItem('negev_install_hint') === 'dismissed') return;
-  } catch (e) {
-    // تصفّح خاص: القراءة نفسها ترمي. نُظهر الإرشاد ولا نُسقط الصفحة.
-  }
+  if (!isIOSSafariNotInstalled()) return;
+  if (isInstallHintDismissed()) return;
 
   sheet.hidden = false;
 }
@@ -993,12 +1009,18 @@ async function fetchEvents(options = {}) {
       renderEvents(allEvents);
       renderAnnouncements(data.announcements);
       renderLoadMoreButton();
+      // فحص أي رابط عميق بعد اكتمال جلب التغذية (FIX 5)
+      if (!append) {
+        await checkPendingDeepLink();
+      }
     } else {
       container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>تعذر جلب المناسبات حالياً</p></div>`;
+      if (!append) await checkPendingDeepLink();
     }
   } catch (err) {
     console.error('Error fetching events:', err);
     container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>حدث خطأ في الاتصال بالخادم</p></div>`;
+    if (!append) await checkPendingDeepLink();
   }
 }
 
@@ -1140,6 +1162,181 @@ function cssUrl(url) {
   return String(url).replace(/['"()\\]/g, c => '%' + c.charCodeAt(0).toString(16));
 }
 
+function renderSingleEventCardHtml(evt) {
+  const eventDate = new Date(evt.event_date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffTime = eventDate - today;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
+  let countdownText = '';
+  if (diffDays === 0) countdownText = 'اليوم';
+  else if (diffDays === 1) countdownText = 'غداً';
+  else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
+  else countdownText = 'مناسبة سابقة';
+
+  const formattedDate = new Intl.DateTimeFormat('ar-EG', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(eventDate);
+
+  let wazeUrl = '';
+  let mapsUrl = '';
+  if (evt.latitude && evt.longitude) {
+    wazeUrl = `https://waze.com/ul?ll=${evt.latitude},${evt.longitude}&navigate=yes`;
+    mapsUrl = `https://www.google.com/maps/search/?api=1&query=${evt.latitude},${evt.longitude}`;
+  } else {
+    const q = encodeURIComponent(`${evt.location_name} ${evt.town} النقب`);
+    wazeUrl = `https://waze.com/ul?q=${q}&navigate=yes`;
+    mapsUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
+  }
+
+  const audioBlock = evt.audio_url ? `
+    <div class="card-audio-player">
+      <div class="audio-info-area">
+        <div class="wave-bars" id="waveBars-${evt.id}">
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+        </div>
+        <div class="audio-text">
+          <div class="audio-title">${escapeHtml(evt.audio_title || 'شيلة الفرح والترحيب')}</div>
+          <div class="audio-sub">استمع للشيلة أو الترحيب الصوتي</div>
+        </div>
+      </div>
+      <button class="play-audio-btn" onclick="toggleAudio('${evt.audio_url}', this, ${evt.id})" title="تشغيل / إيقاف">
+        <i class="fa-solid fa-play"></i>
+      </button>
+    </div>
+  ` : '';
+
+  // الصورة تحكم الكرت: صندوق ٤:٥ ثابت في كل الحالات — بملصق أو بلا ملصق،
+  // فرحاً أو عزاءً — بحيث تتساوى كروت التغذية ارتفاعاً ولا يبدو كرت بلا
+  // ملصق مكسوراً (#85 خطوة 47-52). الملصق `contain` كاملاً أبداً بلا قصّ،
+  // فوق نسخة مضبَّبة مكبَّرة من نفس الصورة تملأ ما لا يملؤه القياس الحقيقي —
+  // نفس تركيبة drawHero في shareCard.service.js، بـCSS هنا لا Canvas.
+  // الشارتان فوق الصورة دائماً، لا في صفّ يسبقها يأكل مساحة. العزاء بلا عدّاد
+  // إطلاقاً — «باقي ٣ أيام» جملة مسيئة على نعيٍ.
+  const isMourning = isMourningTone(evt);
+  const toneColor = evt.occasion_type && evt.occasion_type.color
+    ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
+    : null;
+  const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
+  const hasShot = !!evt.poster_url;
+
+  const posterHtml = hasShot ? `
+        <div class="card-poster-backdrop" style="background-image:url('${escapeHtml(cssUrl(evt.poster_url))}')" aria-hidden="true"></div>
+        <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">` : `
+        <div class="card-poster-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
+
+  const shotHtml = `
+    <div class="card-shot">
+      <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}${hasShot ? '' : ' card-poster-empty'}">${posterHtml}
+      </div>
+      <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+      ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
+    </div>`;
+
+  const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
+  const clanLineHtml = clanTownParts.length
+    ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
+
+  // العزاء بلا عدّاد إطلاقاً (قصة 52)، لكن التاريخ نفسه يبقى — هو الحقيقة
+  // الأهمّ على كرت تعزية، لا يجوز أن يختبئ خلف «مزيد من التفاصيل» كبقية
+  // الشبكة (#85 FIX 3). سطر هادئ لا شارة صاخبة فوق الصورة.
+  const mourningDateLineHtml = isMourning
+    ? `<div class="card-date-line card-clamp-1-line">${escapeHtml(formattedDate)}</div>` : '';
+
+  // «يحيي الحفلة الفنان فلان» — يغيب كلياً إن فرغ الحقل، لا سطر فارغ ولا
+  // نص بديل. صورة الفنان في التفاصيل لا الكرت — الكرت يحمل الملصق أصلاً.
+  const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
+    ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
+
+  return `
+    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
+      ${shotHtml}
+
+      ${audioBlock}
+
+      <div class="card-body">
+        <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
+        ${clanLineHtml}
+        ${mourningDateLineHtml}
+
+        <!-- كتلة النصّ سطران فقط (ثلاثة في العزاء، بسطر التاريخ الهادئ
+             أعلاه)؛ كل شيء آخر خلف «مزيد من التفاصيل» — الصورة سبب فتح
+             التطبيق لا النصّ (#85 خطوة 48، الاستثناء من FIX 3). -->
+        <button type="button" class="card-more-details-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
+          <i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل
+        </button>
+
+        <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
+          ${artistLineHtml}
+
+          <div class="event-details-grid">
+            <div class="detail-item">
+              <i class="fa-solid fa-calendar-day"></i>
+              <span><strong>التاريخ:</strong> ${formattedDate}</span>
+            </div>
+            ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
+            <div class="detail-item">
+              <i class="fa-solid fa-fire"></i>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
+            </div>` : ''}
+            ${typeShowsField(evt, 'dinner_time') ? `
+            <div class="detail-item">
+              <i class="fa-solid fa-utensils"></i>
+              <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+            </div>` : ''}
+            <div class="detail-item">
+              <i class="fa-solid fa-location-dot"></i>
+              <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
+            </div>
+          </div>
+
+          <!-- 1-Click Navigation -->
+          <div class="nav-buttons-row">
+            <a href="${wazeUrl}" target="_blank" class="waze-btn">
+              <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
+            </a>
+            <a href="${mapsUrl}" target="_blank" class="maps-btn">
+              <i class="fa-solid fa-location-arrow"></i> خرائط Google
+            </a>
+          </div>
+        </div>
+
+        ${renderReactionBarHtml(evt)}
+
+        ${renderCongratsPreviewHtml(evt)}
+        ${renderReminderButtonHtml(evt)}
+
+        <!-- Action Buttons Footer -->
+        <div class="card-footer-actions">
+          <!-- المشاركة على البطاقة نفسها، لا في مودال التبريكات وحده: هذه
+               الواجهة **لا تملك صفحة تفاصيل** أصلاً (البطاقة هي التفاصيل —
+               تاريخ ومكان وصوت وأزرار ملاحة)، فقاعدة المواصفة «التفاصيل لا
+               القائمة» لا تنطبق هنا كما تنطبق على الموبايل. زرّ لا يجده أحد
+               يُفرغ القُمع الذي وُجدت هذه الميزة لأجله. -->
+          <button class="share-event-btn" onclick="shareEventById(${evt.id})">
+            <i class="fa-solid fa-share-nodes"></i> ${escapeHtml(shareButtonLabel(evt))}
+          </button>
+          <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
+            <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
+          </button>
+          <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
+            <i class="fa-solid fa-wallet"></i> تسجيل نقوط
+          </button>
+        </div>
+
+      </div>
+    </div>
+  `;
+}
+
 function renderEvents(events) {
   const container = document.getElementById('eventsContainer');
   const isFirstLoad = !eventsFeedFirstLoadDone;
@@ -1158,180 +1355,44 @@ function renderEvents(events) {
   }
 
   container.classList.toggle('events-feed-first-load', isFirstLoad);
-  container.innerHTML = events.map(evt => {
-    const eventDate = new Date(evt.event_date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const diffTime = eventDate - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
-    // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
-    let countdownText = '';
-    if (diffDays === 0) countdownText = 'اليوم';
-    else if (diffDays === 1) countdownText = 'غداً';
-    else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
-    else countdownText = 'مناسبة سابقة';
+  container.innerHTML = events.map(evt => renderSingleEventCardHtml(evt)).join('');
+}
 
-    const formattedDate = new Intl.DateTimeFormat('ar-EG', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    }).format(eventDate);
+/**
+ * يعرض مناسبة مفردة في الحاوية المخصصة (#singleEventContainer) عند الوصول
+ * إليها عبر إشعار أو رابط عميق، دون تلويث allEvents أو الإخلال بفلاتر التغذية (قصة 14، FIX 6).
+ */
+function renderSingleEventView(event) {
+  const container = document.getElementById('singleEventContainer');
+  if (!container) return;
 
-    let wazeUrl = '';
-    let mapsUrl = '';
-    if (evt.latitude && evt.longitude) {
-      wazeUrl = `https://waze.com/ul?ll=${evt.latitude},${evt.longitude}&navigate=yes`;
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${evt.latitude},${evt.longitude}`;
-    } else {
-      const q = encodeURIComponent(`${evt.location_name} ${evt.town} النقب`);
-      wazeUrl = `https://waze.com/ul?q=${q}&navigate=yes`;
-      mapsUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
-    }
-
-    const audioBlock = evt.audio_url ? `
-      <div class="card-audio-player">
-        <div class="audio-info-area">
-          <div class="wave-bars" id="waveBars-${evt.id}">
-            <div class="wave-bar"></div>
-            <div class="wave-bar"></div>
-            <div class="wave-bar"></div>
-            <div class="wave-bar"></div>
-          </div>
-          <div class="audio-text">
-            <div class="audio-title">${escapeHtml(evt.audio_title || 'شيلة الفرح والترحيب')}</div>
-            <div class="audio-sub">استمع للشيلة أو الترحيب الصوتي</div>
-          </div>
-        </div>
-        <button class="play-audio-btn" onclick="toggleAudio('${evt.audio_url}', this, ${evt.id})" title="تشغيل / إيقاف">
-          <i class="fa-solid fa-play"></i>
+  const cardHtml = renderSingleEventCardHtml(event);
+  container.innerHTML = `
+    <div class="single-event-box">
+      <div class="single-event-header">
+        <span class="single-event-header-title">
+          <i class="fa-solid fa-bell" aria-hidden="true"></i>
+          <span>مناسبة من إشعار</span>
+        </span>
+        <button type="button" class="single-event-close-btn" onclick="clearSingleEventView()" title="إغلاق العرض الخاص">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i> إغلاق
         </button>
       </div>
-    ` : '';
-
-    // الصورة تحكم الكرت: صندوق ٤:٥ ثابت في كل الحالات — بملصق أو بلا ملصق،
-    // فرحاً أو عزاءً — بحيث تتساوى كروت التغذية ارتفاعاً ولا يبدو كرت بلا
-    // ملصق مكسوراً (#85 خطوة 47-52). الملصق `contain` كاملاً أبداً بلا قصّ،
-    // فوق نسخة مضبَّبة مكبَّرة من نفس الصورة تملأ ما لا يملؤه القياس الحقيقي —
-    // نفس تركيبة drawHero في shareCard.service.js، بـCSS هنا لا Canvas.
-    // الشارتان فوق الصورة دائماً، لا في صفّ يسبقها يأكل مساحة. العزاء بلا عدّاد
-    // إطلاقاً — «باقي ٣ أيام» جملة مسيئة على نعيٍ.
-    const isMourning = isMourningTone(evt);
-    const toneColor = evt.occasion_type && evt.occasion_type.color
-      ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
-      : null;
-    const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
-    const hasShot = !!evt.poster_url;
-
-    const posterHtml = hasShot ? `
-          <div class="card-poster-backdrop" style="background-image:url('${escapeHtml(cssUrl(evt.poster_url))}')" aria-hidden="true"></div>
-          <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">` : `
-          <div class="card-poster-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
-
-    const shotHtml = `
-      <div class="card-shot">
-        <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}${hasShot ? '' : ' card-poster-empty'}">${posterHtml}
-        </div>
-        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-        ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
-      </div>`;
-
-    const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
-    const clanLineHtml = clanTownParts.length
-      ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
-
-    // العزاء بلا عدّاد إطلاقاً (قصة 52)، لكن التاريخ نفسه يبقى — هو الحقيقة
-    // الأهمّ على كرت تعزية، لا يجوز أن يختبئ خلف «مزيد من التفاصيل» كبقية
-    // الشبكة (#85 FIX 3). سطر هادئ لا شارة صاخبة فوق الصورة.
-    const mourningDateLineHtml = isMourning
-      ? `<div class="card-date-line card-clamp-1-line">${escapeHtml(formattedDate)}</div>` : '';
-
-    // «يحيي الحفلة الفنان فلان» — يغيب كلياً إن فرغ الحقل، لا سطر فارغ ولا
-    // نص بديل. صورة الفنان في التفاصيل لا الكرت — الكرت يحمل الملصق أصلاً.
-    const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
-      ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
-
-    return `
-      <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
-        ${shotHtml}
-
-        ${audioBlock}
-
-        <div class="card-body">
-          <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
-          ${clanLineHtml}
-          ${mourningDateLineHtml}
-
-          <!-- كتلة النصّ سطران فقط (ثلاثة في العزاء، بسطر التاريخ الهادئ
-               أعلاه)؛ كل شيء آخر خلف «مزيد من التفاصيل» — الصورة سبب فتح
-               التطبيق لا النصّ (#85 خطوة 48، الاستثناء من FIX 3). -->
-          <button type="button" class="card-more-details-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
-            <i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل
-          </button>
-
-          <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
-            ${artistLineHtml}
-
-            <div class="event-details-grid">
-              <div class="detail-item">
-                <i class="fa-solid fa-calendar-day"></i>
-                <span><strong>التاريخ:</strong> ${formattedDate}</span>
-              </div>
-              ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
-              <div class="detail-item">
-                <i class="fa-solid fa-fire"></i>
-                <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
-              </div>` : ''}
-              ${typeShowsField(evt, 'dinner_time') ? `
-              <div class="detail-item">
-                <i class="fa-solid fa-utensils"></i>
-                <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
-              </div>` : ''}
-              <div class="detail-item">
-                <i class="fa-solid fa-location-dot"></i>
-                <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
-              </div>
-            </div>
-
-            <!-- 1-Click Navigation -->
-            <div class="nav-buttons-row">
-              <a href="${wazeUrl}" target="_blank" class="waze-btn">
-                <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
-              </a>
-              <a href="${mapsUrl}" target="_blank" class="maps-btn">
-                <i class="fa-solid fa-location-arrow"></i> خرائط Google
-              </a>
-            </div>
-          </div>
-
-          ${renderReactionBarHtml(evt)}
-
-          ${renderCongratsPreviewHtml(evt)}
-          ${renderReminderButtonHtml(evt)}
-
-          <!-- Action Buttons Footer -->
-          <div class="card-footer-actions">
-            <!-- المشاركة على البطاقة نفسها، لا في مودال التبريكات وحده: هذه
-                 الواجهة **لا تملك صفحة تفاصيل** أصلاً (البطاقة هي التفاصيل —
-                 تاريخ ومكان وصوت وأزرار ملاحة)، فقاعدة المواصفة «التفاصيل لا
-                 القائمة» لا تنطبق هنا كما تنطبق على الموبايل. زرّ لا يجده أحد
-                 يُفرغ القُمع الذي وُجدت هذه الميزة لأجله. -->
-            <button class="share-event-btn" onclick="shareEventById(${evt.id})">
-              <i class="fa-solid fa-share-nodes"></i> ${escapeHtml(shareButtonLabel(evt))}
-            </button>
-            <button class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
-              <i class="fa-regular fa-comments"></i> ${escapeHtml(congratulationsLabel(evt))}
-            </button>
-            <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
-              <i class="fa-solid fa-wallet"></i> تسجيل نقوط
-            </button>
-          </div>
-
-        </div>
+      <div class="single-event-card-wrap">
+        ${cardHtml}
       </div>
-    `;
-  }).join('');
+    </div>
+  `;
+
+  const card = document.getElementById(`eventCard-${event.id}`);
+  if (card) {
+    highlightAndScrollToCard(card, isMourningTone(event));
+  }
+}
+
+function clearSingleEventView() {
+  const container = document.getElementById('singleEventContainer');
+  if (container) container.innerHTML = '';
 }
 
 /** يطوي/يبسط كتلة تفاصيل الكرت (الشبكة، أزرار الملاحة، سطر الفنان) خلف زرّ واحد (#85 خطوة 48). */
@@ -1407,6 +1468,10 @@ async function toggleReminder(eventId, isReminded, btnElement) {
       if (evt) evt.is_reminded = !isReminded;
       renderEvents(allEvents);
       showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
+      // طلب إذن الإشعارات الفورية عند إضافة تذكير فقط — لا عند أول فتح للموقع ولا عند إلغائه (قصة 16)
+      if (!isReminded) {
+        requestPushNotificationSubscription();
+      }
     } else {
       alert(data.message || 'تعذر تنفيذ الطلب');
     }
@@ -3737,6 +3802,7 @@ function renderNotificationsList() {
 
 function toggleNotificationsPanel() {
   document.getElementById('notificationsModal').style.display = 'flex';
+  updatePushControlUI();
 }
 
 function closeNotificationsModal() {
@@ -3755,17 +3821,432 @@ async function markNotificationRead(isBroadcast, id) {
   const notification = isBroadcast
     ? notificationsList.find(n => isBroadcastEntry(n) && n.broadcast_id === id)
     : notificationsList.find(n => !isBroadcastEntry(n) && n.id === id);
-  if (!notification || notification.is_read) return;
-  const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
+  if (!notification) return;
+
+  const eventId = !isBroadcast ? notification.event_id : null;
+
+  if (!notification.is_read) {
+    const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
+    try {
+      const res = await apiFetch(endpoint, { method: 'PATCH', auth: true });
+      if (res.ok) {
+        notification.is_read = true;
+        renderNotificationsList();
+        updateNotificationsBadge();
+      }
+    } catch (e) {
+      console.error('Mark notification read error:', e);
+    }
+  }
+
+  // التوجّه إلى المناسبة نفسها عند النقر على إشعار شخصي مرتبط بمناسبة (قصة 14)
+  if (eventId) {
+    await navigateToEvent(eventId);
+  }
+}
+
+/**
+ * تظليل الكرت والتمرير إليه، مع احترام تفضيل تقليل الحركة ونغمة الوقار (قصة 54، FIX 7).
+ */
+function isReducedMotionPreferred() {
   try {
-    const res = await apiFetch(endpoint, { method: 'PATCH', auth: true });
+    return !!(typeof window !== 'undefined'
+      && window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (e) {
+    return false;
+  }
+}
+
+function highlightAndScrollToCard(card, isSolemn = false) {
+  if (!card) return;
+  const reduceMotion = isReducedMotionPreferred();
+  const solemn = isSolemn || card.classList.contains('tone-mourning');
+  if (typeof card.scrollIntoView === 'function') {
+    card.scrollIntoView({
+      behavior: (reduceMotion || solemn) ? 'auto' : 'smooth',
+      block: 'center'
+    });
+  }
+  card.classList.add('event-card-highlight');
+  setTimeout(() => card.classList.remove('event-card-highlight'), 2500);
+}
+
+/**
+ * ينتقل إلى مناسبة في التغذية (قصة 14):
+ * يغلق المركز، يفتح تبويب الرئيسية، ويفرغ معامل ?event_id= من العنوان عبر replaceState (FIX 5).
+ * إن كان الكرت في التغذية المحمّلة ينتقل إليه.
+ * إن لم يكن في التغذية (فلتر نشط أو صفحة لاحقة)، يجلبه ويعرضه في #singleEventContainer
+ * دون تلويث allEvents أو الإخلال بالفلاتر الحالية (FIX 6).
+ */
+async function navigateToEvent(eventId) {
+  if (!eventId) return;
+  closeNotificationsModal();
+  switchTab('tabHome');
+
+  // تنظيف ?event_id= من شريط العنوان حتى لا يُعاد تشغيل التنقل عند كل تحديث (FIX 5)
+  try {
+    if (typeof window !== 'undefined' && window.location && window.history && window.history.replaceState) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('event_id')) {
+        url.searchParams.delete('event_id');
+        const cleanSearch = url.searchParams.toString();
+        const cleanUrl = url.pathname + (cleanSearch ? '?' + cleanSearch : '') + url.hash;
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
+  } catch (e) {}
+
+  let card = document.getElementById(`eventCard-${eventId}`);
+  if (card) {
+    clearSingleEventView();
+    highlightAndScrollToCard(card);
+    return;
+  }
+
+  // الكرت غير موجود في القائمة المحمّلة: جلبه وعرضه في خانة مستقلة (FIX 6)
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`);
     if (res.ok) {
-      notification.is_read = true;
-      renderNotificationsList();
-      updateNotificationsBadge();
+      const data = await res.json();
+      if (data && data.success && data.event) {
+        renderSingleEventView(data.event);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch event for navigation:', err);
+  }
+}
+
+let pendingDeepLinkEventId = null;
+
+function initUrlNavigation() {
+  try {
+    if (typeof window === 'undefined' || !window.location) return;
+    const urlParams = new URLSearchParams(window.location.search);
+    const raw = urlParams.get('event_id');
+    if (raw) {
+      const num = Number(raw);
+      if (!isNaN(num) && num > 0) {
+        pendingDeepLinkEventId = num;
+      }
     }
   } catch (e) {
-    console.error('Mark notification read error:', e);
+    // ignore
+  }
+}
+
+async function checkPendingDeepLink() {
+  if (pendingDeepLinkEventId) {
+    const id = pendingDeepLinkEventId;
+    pendingDeepLinkEventId = null;
+    await navigateToEvent(id);
+  }
+}
+
+// ============================================================================
+// Web Push Client (قصص 16، 17، 18)
+// ============================================================================
+
+let cachedVapidPublicKey = null;
+
+async function getVapidPublicKey() {
+  if (cachedVapidPublicKey) {
+    return cachedVapidPublicKey;
+  }
+  try {
+    const res = await apiFetch('/api/notifications/vapid-public-key');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.public_key) {
+        cachedVapidPublicKey = data.public_key;
+      }
+    }
+  } catch (err) {
+    console.warn('VAPID key check error:', err);
+  }
+  return cachedVapidPublicKey;
+}
+
+function isPushOptedOut() {
+  try {
+    return localStorage.getItem('negev_push_opt_out') === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+function setPushOptOut(val) {
+  try {
+    if (val) {
+      localStorage.setItem('negev_push_opt_out', 'true');
+    } else {
+      localStorage.removeItem('negev_push_opt_out');
+    }
+  } catch (e) {}
+}
+
+/** تسجيل Service Worker بأمان عند دعم المتصفح له، دون رمي أي خطأ */
+function initServiceWorker() {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !navigator.serviceWorker) return;
+  try {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+      console.warn('SW registration failed:', err);
+    });
+    if (navigator.serviceWorker.addEventListener) {
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'NAVIGATE_EVENT' && event.data.event_id) {
+          const num = Number(event.data.event_id);
+          if (num > 0) {
+            navigateToEvent(num);
+          }
+        }
+      });
+    }
+  } catch (err) {
+    // Silently degrade
+  }
+}
+
+function initNotificationsPush() {
+  updatePushControlUI();
+}
+
+/** هل المتصفح يدعم واجهات Push البرمجية كاملة */
+function isPushSupported() {
+  return typeof window !== 'undefined'
+    && 'Notification' in window
+    && typeof navigator !== 'undefined'
+    && 'serviceWorker' in navigator
+    && 'PushManager' in window;
+}
+
+/**
+ * Converts a base64url-encoded VAPID public key string into a Uint8Array
+ * required by PushManager.subscribe({ applicationServerKey }).
+ */
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+/**
+ * يحدد الحالة الفعلية لعنصر التحكم بالإشعارات (FIX 8):
+ * 'hidden' | 'unsupported' | 'ios_uninstalled' | 'no_vapid' | 'subscribed' | 'opted_out' | 'unsubscribed'
+ */
+async function getPushState() {
+  if (!currentUser) return 'hidden';
+  if (!isPushSupported()) return 'unsupported';
+  if (isIOSSafariNotInstalled()) return 'ios_uninstalled';
+
+  const publicKey = await getVapidPublicKey();
+  if (!publicKey) return 'no_vapid';
+
+  let sub = null;
+  try {
+    const reg = (navigator.serviceWorker && navigator.serviceWorker.ready)
+      ? await navigator.serviceWorker.ready
+      : (navigator.serviceWorker && navigator.serviceWorker.getRegistration ? await navigator.serviceWorker.getRegistration() : null);
+    if (reg && reg.pushManager) {
+      sub = await reg.pushManager.getSubscription();
+    }
+  } catch (err) {
+    console.warn('Check push subscription error:', err);
+  }
+
+  const isSubscribed = !!(sub && window.Notification && window.Notification.permission === 'granted');
+  if (isSubscribed) {
+    return 'subscribed';
+  }
+  if (isPushOptedOut()) {
+    return 'opted_out';
+  }
+  return 'unsubscribed';
+}
+
+/** تحديث حالة زر وعنصر التحكم بالإشعارات الفورية بصدق عبر آلة الحالة الواحدة (قصة 18، FIX 8) */
+async function updatePushControlUI() {
+  const pushBar = document.getElementById('notificationsPushControl');
+  const statusText = document.getElementById('pushStatusText');
+  const toggleBtn = document.getElementById('togglePushNotificationsBtn');
+  if (!pushBar || !statusText || !toggleBtn) return;
+
+  const state = await getPushState();
+
+  if (state === 'hidden') {
+    pushBar.style.display = 'none';
+    return;
+  }
+  pushBar.style.display = 'flex';
+
+  switch (state) {
+    case 'unsupported':
+      statusText.textContent = 'غير مدعومة على هذا الجهاز';
+      statusText.className = 'push-status-val status-na';
+      toggleBtn.textContent = 'غير متوفرة';
+      toggleBtn.disabled = true;
+      toggleBtn.onclick = null;
+      break;
+
+    case 'ios_uninstalled':
+      statusText.textContent = 'يتطلب إضافة الموقع للشاشة الرئيسية';
+      statusText.className = 'push-status-val status-na';
+      toggleBtn.textContent = 'تثبيت على الشاشة';
+      toggleBtn.disabled = false;
+      toggleBtn.onclick = togglePushNotifications;
+      break;
+
+    case 'no_vapid':
+      statusText.textContent = 'غير متوفرة حالياً';
+      statusText.className = 'push-status-val status-na';
+      toggleBtn.textContent = 'غير متوفرة';
+      toggleBtn.disabled = true;
+      toggleBtn.onclick = null;
+      break;
+
+    case 'subscribed':
+      statusText.textContent = 'مفعّلة';
+      statusText.className = 'push-status-val status-on';
+      toggleBtn.textContent = 'إيقاف الإشعارات';
+      toggleBtn.disabled = false;
+      toggleBtn.onclick = togglePushNotifications;
+      break;
+
+    case 'opted_out':
+    case 'unsubscribed':
+      statusText.textContent = 'متوقفة';
+      statusText.className = 'push-status-val status-off';
+      toggleBtn.textContent = 'تفعيل';
+      toggleBtn.disabled = false;
+      toggleBtn.onclick = togglePushNotifications;
+      break;
+  }
+}
+
+async function togglePushNotifications() {
+  const state = await getPushState();
+  if (state === 'subscribed') {
+    await unsubscribeFromPush();
+  } else if (state === 'opted_out' || state === 'unsubscribed') {
+    await requestPushNotificationSubscription({ manual: true });
+  } else if (state === 'ios_uninstalled') {
+    showToast('لتفعيل الإشعارات على iPhone، أضف الموقع إلى الشاشة الرئيسية أولاً');
+    if (!isInstallHintDismissed()) {
+      const sheet = document.getElementById('installHint');
+      if (sheet) sheet.hidden = false;
+    }
+  }
+}
+
+/**
+ * طلب الإذن والاشتراك بالإشعارات الفورية:
+ * يُستدعى حصراً عند تفعيل تذكير لمناسبة (قصة 16)، أو يدوياً عبر زر التفعيل في المركز.
+ */
+async function requestPushNotificationSubscription(options = {}) {
+  const { manual = false } = options;
+  if (!currentUser) return;
+
+  if (!manual && isPushOptedOut()) {
+    return;
+  }
+
+  if (!isPushSupported()) {
+    if (manual) showToast('الإشعارات الفورية غير مدعومة على هذا المتصفح');
+    return;
+  }
+
+  if (isIOSSafariNotInstalled()) {
+    showToast('لتفعيل الإشعارات على iPhone، أضف الموقع إلى الشاشة الرئيسية أولاً');
+    if (!isInstallHintDismissed()) {
+      const sheet = document.getElementById('installHint');
+      if (sheet) sheet.hidden = false;
+    }
+    return;
+  }
+
+  const publicKey = await getVapidPublicKey();
+  // إذا لم يكن هناك مفتاح VAPID في الخادم (وهي الحالة اليوم)، نسلك المسار الهادئ
+  if (!publicKey) {
+    return;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      await updatePushControlUI();
+      return;
+    }
+
+    const reg = (navigator.serviceWorker && navigator.serviceWorker.ready)
+      ? await navigator.serviceWorker.ready
+      : (navigator.serviceWorker && navigator.serviceWorker.getRegistration ? await navigator.serviceWorker.getRegistration() : null);
+    if (!reg || !reg.pushManager) return;
+
+    const applicationServerKey = urlBase64ToUint8Array(publicKey);
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey
+    });
+
+    const subJson = subscription.toJSON ? subscription.toJSON() : {
+      endpoint: subscription.endpoint,
+      keys: {
+        p256dh: subscription.getKey ? btoa(String.fromCharCode.apply(null, new Uint8Array(subscription.getKey('p256dh')))) : '',
+        auth: subscription.getKey ? btoa(String.fromCharCode.apply(null, new Uint8Array(subscription.getKey('auth')))) : ''
+      }
+    };
+
+    const subRes = await apiFetch('/api/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subJson),
+      auth: true
+    });
+
+    if (subRes.ok) {
+      setPushOptOut(false);
+      await updatePushControlUI();
+      if (manual) {
+        showToast('🔔 تم تفعيل الإشعارات الفورية');
+      }
+    }
+  } catch (err) {
+    console.warn('Push subscription failed:', err);
+  }
+}
+
+/** إيقاف الإشعارات الفورية وحذف الاشتراك من الخادم وحفظ خيار الإيقاف (قصة 18، FIX 4) */
+async function unsubscribeFromPush() {
+  if (!isPushSupported()) return;
+  try {
+    const reg = (navigator.serviceWorker && navigator.serviceWorker.ready)
+      ? await navigator.serviceWorker.ready
+      : (navigator.serviceWorker && navigator.serviceWorker.getRegistration ? await navigator.serviceWorker.getRegistration() : null);
+    if (!reg || !reg.pushManager) return;
+
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      const endpoint = sub.endpoint;
+      await apiFetch('/api/notifications/subscribe', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint }),
+        auth: true
+      });
+      await sub.unsubscribe();
+    }
+    // FIX 4: حفظ رغبة المستخدم في إيقاف الإشعارات حتى لا تعيد التذكيرات الاشتراك تلقائياً
+    setPushOptOut(true);
+    await updatePushControlUI();
+    showToast('تم إيقاف الإشعارات الفورية');
+  } catch (err) {
+    console.error('Unsubscribe error:', err);
   }
 }
 
@@ -3773,6 +4254,7 @@ function updateAuthUI() {
   const label = document.getElementById('userAuthLabel');
   const btn = document.getElementById('userAuthBtn');
   updateNotificationsBadge();
+  updatePushControlUI();
   if (currentUser) {
     if (currentUser.role === 'super_admin' || currentUser.phone_number === '0500000000') {
       label.innerHTML = `👑 لوحة الإدارة`;

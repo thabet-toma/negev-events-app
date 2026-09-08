@@ -182,6 +182,9 @@
       <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
       <div id="announcementsContainer"></div>
 
+      <!-- عرض مناسبة مفردة من إشعار أو رابط عميق (قصة 14) -->
+      <div id="singleEventContainer"></div>
+
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
       <div id="eventsContainer" class="events-feed">
         <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
@@ -730,6 +733,15 @@
           <h3><i class="fa-solid fa-bell"></i> الإشعارات</h3>
         </div>
         <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <!-- التحكّم بالإشعارات الفورية (قصة 18) -->
+      <div id="notificationsPushControl" class="notifications-push-bar">
+        <div class="push-control-status">
+          <i class="fa-solid fa-tower-broadcast" aria-hidden="true"></i>
+          <span>الإشعارات الفورية:</span>
+          <strong id="pushStatusText" class="push-status-val status-na">غير متوفرة</strong>
+        </div>
+        <button id="togglePushNotificationsBtn" type="button" class="push-toggle-btn" onclick="togglePushNotifications()" disabled>تفعيل</button>
       </div>
       <div id="notificationsList" class="events-feed" style="gap:10px;"></div>
     </div>

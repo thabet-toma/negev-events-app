@@ -1669,3 +1669,122 @@ body {
 }
 
 .install-hint-close:hover { background: var(--line-soft); color: var(--ink); }
+
+/* ===== التحكم بالإشعارات الفورية (قصة 18) ===== */
+.notifications-push-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-block-end: 12px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+}
+
+.push-control-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+}
+
+.push-control-status i {
+  color: var(--sky);
+}
+
+.push-status-val {
+  font-weight: 700;
+}
+
+.push-status-val.status-on {
+  color: #16a34a;
+}
+
+.push-status-val.status-off {
+  color: var(--ink-soft);
+}
+
+.push-status-val.status-na {
+  color: var(--ink-faint);
+}
+
+.push-toggle-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.push-toggle-btn:hover:not(:disabled) {
+  border-color: var(--sky);
+}
+
+.push-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.event-card-highlight {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+  transition: outline-color 0.3s ease;
+}
+
+/* ===== عرض مناسبة مفردة من إشعار (قصة 14) ===== */
+#singleEventContainer {
+  margin-block-end: 18px;
+}
+
+.single-event-box {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.single-event-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 10px;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+  border-block-end: 1px solid var(--line-soft);
+  padding-block-end: 8px;
+}
+
+.single-event-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--sky);
+}
+
+.single-event-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.single-event-close-btn:hover {
+  background: var(--surface-sunk);
+  color: var(--ink);
+}
+
