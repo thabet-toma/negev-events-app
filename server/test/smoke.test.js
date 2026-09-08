@@ -5248,6 +5248,223 @@ async function run() {
     assert.strictEqual(stillSet.body.settings.support_whatsapp_number, '972501234567', 'a PUT that names no keys must change nothing');
   });
 
+  console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
+
+  const filterTownA = 'تل السبع';
+  const filterTownB = 'كسيفة';
+  const filterTownC = 'شقيب السلام';
+  let filterEventA = 0; // wedding, filterTownA
+  let filterEventB = 0; // wedding, filterTownB
+  let filterEventC = 0; // funeral, filterTownC — the non-legacy type
+  let filterVillageId = 0;
+  let filterVillageEventId = 0;
+
+  await test('Set up: three events across three distinct towns (two weddings, one funeral) plus a fourth event in a fresh village', async () => {
+    const a = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'فلتر بلدة أ' }], town: filterTownA, event_date: '2027-03-01' })
+    });
+    assert.strictEqual(a.status, 201);
+    filterEventA = a.body.eventId;
+
+    const b = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'فلتر بلدة ب' }], town: filterTownB, event_date: '2027-03-02' })
+    });
+    assert.strictEqual(b.status, 201);
+    filterEventB = b.body.eventId;
+
+    const c = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'فلتر عزا ج' }],
+        town: filterTownC,
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-03-03',
+        event_end_date: '2027-03-04'
+      }
+    });
+    assert.strictEqual(c.status, 201);
+    filterEventC = c.body.eventId;
+
+    const villageCreate = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية فلترة ${Date.now()}`, latitude: 31.2, longitude: 34.95 }
+    });
+    assert.strictEqual(villageCreate.status, 201);
+    filterVillageId = villageCreate.body.village.id;
+
+    const v = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'فلتر قرية' }],
+        town: 'القرى والتجمعات',
+        village_id: filterVillageId,
+        event_date: '2027-03-05'
+      })
+    });
+    assert.strictEqual(v.status, 201);
+    filterVillageEventId = v.body.eventId;
+  });
+
+  await test('A single ?town= value returns exactly what it always has — the no-regression case', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&town=${encodeURIComponent(filterTownA)}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventA));
+    assert.ok(!ids.includes(filterEventB));
+    assert.ok(body.events.every(e => e.town === filterTownA));
+  });
+
+  await test('Two comma-separated towns return the union of both, and nothing from a third', async () => {
+    const list = `${encodeURIComponent(filterTownA)},${encodeURIComponent(filterTownB)}`;
+    const { status, body } = await api('GET', `/api/events?limit=200&town=${list}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventA));
+    assert.ok(ids.includes(filterEventB));
+    assert.ok(!ids.includes(filterEventC));
+  });
+
+  await test('A single occasion_type_id (the funeral) excludes a wedding event', async () => {
+    const { body } = await api('GET', `/api/events?limit=200&occasion_type_id=${funeralType.id}`);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventC));
+    assert.ok(!ids.includes(filterEventA));
+  });
+
+  await test('Two comma-separated occasion_type_id values return the union of both types', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&occasion_type_id=${weddingType.id},${funeralType.id}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventA));
+    assert.ok(ids.includes(filterEventC));
+  });
+
+  await test('?village_id= filters to only that village alone', async () => {
+    const alone = await api('GET', `/api/events?limit=200&village_id=${filterVillageId}`);
+    assert.strictEqual(alone.status, 200);
+    assert.deepStrictEqual(alone.body.events.map(e => e.id), [filterVillageEventId], 'expected exactly the one event in this fresh village');
+  });
+
+  // FIX 2: village_id is non-NULL only under town = 'القرى والتجمعات', so ANDing
+  // a specific OTHER town with a village can never match anything — exactly
+  // the "عائلتي موزّعة" combination stories 40/41 describe picking from one
+  // place picker. The place filter must be a UNION of what was chosen.
+  await test('village_id combined with a town in a DIFFERENT town returns the union of both places, not their (always-empty) intersection', async () => {
+    const unioned = await api('GET', `/api/events?limit=200&village_id=${filterVillageId}&town=${encodeURIComponent(filterTownA)}`);
+    assert.strictEqual(unioned.status, 200);
+    const ids = unioned.body.events.map(e => e.id);
+    assert.ok(ids.includes(filterVillageEventId), 'expected the chosen village\'s event to still appear');
+    assert.ok(ids.includes(filterEventA), 'expected the unrelated town\'s event to appear too — a union, not an AND that can only ever be empty');
+    assert.ok(!ids.includes(filterEventB), 'a town never requested must still be excluded');
+  });
+
+  await test("village_id combined with town = 'القرى والتجمعات' itself is coherent: the catch-all town already contains every village's events, so the union is just that same catch-all set", async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&village_id=${filterVillageId}&town=${encodeURIComponent('القرى والتجمعات')}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterVillageEventId));
+    assert.ok(!ids.includes(filterEventA), 'a town outside القرى والتجمعات that was never requested must not leak in');
+  });
+
+  await test('Twenty comma-separated occasion_type_id values are accepted', async () => {
+    const ids = Array.from({ length: 20 }, (_, i) => 90000 + i).join(',');
+    const { status } = await api('GET', `/api/events?limit=5&occasion_type_id=${ids}`);
+    assert.strictEqual(status, 200);
+  });
+
+  await test('Twenty-one comma-separated occasion_type_id values are rejected with 400 and an Arabic message — not a silent truncation to the first twenty', async () => {
+    const ids = Array.from({ length: 21 }, (_, i) => 90000 + i).join(',');
+    const { status, body } = await api('GET', `/api/events?limit=5&occasion_type_id=${ids}`);
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), 'expected an Arabic error message');
+  });
+
+  // FIX 3: the cap counts what the caller actually SENT, before dedupe — 21
+  // repetitions of the SAME id collapse to one distinct value, but the spec's
+  // "سقف عشرين قيمة" is a limit on the request, not on what survives cleanup.
+  await test('Twenty-one repetitions of the SAME occasion_type_id are also rejected — the cap counts raw values sent, not distinct ones after dedupe', async () => {
+    const ids = Array.from({ length: 21 }, () => funeralType.id).join(',');
+    const { status, body } = await api('GET', `/api/events?limit=5&occasion_type_id=${ids}`);
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message || ''), 'expected an Arabic error message');
+  });
+
+  await test('A duplicated value in the list does not duplicate a row in the result', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&occasion_type_id=${funeralType.id},${funeralType.id},${funeralType.id}`);
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.events.filter(e => e.id === filterEventC).length, 1);
+  });
+
+  await test("'الكل' inside a town list still means no town filter, exactly as a lone ?town=الكل", async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&town=${encodeURIComponent(filterTownA)},${encodeURIComponent('الكل')}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventA));
+    assert.ok(ids.includes(filterEventB), 'الكل in the list must void the town filter entirely, not narrow it to filterTownA');
+    assert.ok(ids.includes(filterEventC));
+  });
+
+  // FIX 1: TOWNS is duplicated by hand in mobile/lib/config.dart (CLAUDE.md)
+  // and a published APK cannot be pushed a fix, so a stale town value must
+  // stay exactly as forgiving on the read path as it always was — matching
+  // nothing, never a 400 that takes the whole feed down. Publishing (POST
+  // /api/events) is a different codepath and stays strict against TOWNS.
+  await test('An unknown town value matches nothing, exactly like before list support existed — 200 with an empty list, not a 400', async () => {
+    const { status, body } = await api('GET', '/api/events?town=بلدة_وهمية_غير_موجودة');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.events.length, 0);
+  });
+
+  await test('A request with no X-App-Version cannot see the non-legacy funeral type even when it asks for it by id inside a list', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&occasion_type_id=${weddingType.id},${funeralType.id}`, { legacy: true });
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(filterEventA), 'the legacy-supported wedding must still appear');
+    assert.ok(!ids.includes(filterEventC), 'a funeral must never reach a legacy client, even when explicitly requested by id');
+  });
+
+  await test('A legacy client requesting ONLY the non-legacy funeral type by id gets an empty result, never a widened one', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=200&occasion_type_id=${funeralType.id}`, { legacy: true });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.events.length, 0);
+  });
+
+  await test('GET /api/map/events supports the same town/occasion_type_id/village_id list filtering, including the legacy intersection', async () => {
+    const byTown = await api('GET', `/api/map/events?town=${encodeURIComponent(filterTownA)},${encodeURIComponent(filterTownB)}`);
+    assert.strictEqual(byTown.status, 200);
+    const townIds = byTown.body.points.map(p => p.id);
+    assert.ok(townIds.includes(filterEventA));
+    assert.ok(townIds.includes(filterEventB));
+    assert.ok(!townIds.includes(filterEventC));
+
+    const byType = await api('GET', `/api/map/events?occasion_type_id=${funeralType.id}`);
+    const typeIds = byType.body.points.map(p => p.id);
+    assert.ok(typeIds.includes(filterEventC));
+    assert.ok(!typeIds.includes(filterEventA));
+
+    const byVillage = await api('GET', `/api/map/events?village_id=${filterVillageId}`);
+    assert.deepStrictEqual(byVillage.body.points.map(p => p.id), [filterVillageEventId]);
+
+    const legacyByType = await api('GET', `/api/map/events?occasion_type_id=${funeralType.id}`, { legacy: true });
+    assert.strictEqual(legacyByType.body.points.length, 0, 'a legacy client must not see a non-legacy type on the map either, even by explicit id');
+
+    // Same FIX 2 union as the feed: village_id + an unrelated town must union, not AND.
+    const unioned = await api('GET', `/api/map/events?village_id=${filterVillageId}&town=${encodeURIComponent(filterTownA)}`);
+    const unionedIds = unioned.body.points.map(p => p.id);
+    assert.ok(unionedIds.includes(filterVillageEventId));
+    assert.ok(unionedIds.includes(filterEventA));
+    assert.ok(!unionedIds.includes(filterEventB));
+  });
+
+  await api('DELETE', `/api/admin/events/${filterEventA}`, { token: adminToken });
+  await api('DELETE', `/api/admin/events/${filterEventB}`, { token: adminToken });
+  await api('DELETE', `/api/admin/events/${filterEventC}`, { token: adminToken });
+  await api('DELETE', `/api/admin/events/${filterVillageEventId}`, { token: adminToken });
+  await api('DELETE', `/api/admin/villages/${filterVillageId}`, { token: superAdminToken });
+
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 
   // Clean up the throwaway accounts.

@@ -89,6 +89,33 @@ function parseId(value, label = 'المعرّف') {
   return id;
 }
 
+/** Ceiling on distinct values a comma-separated filter query parameter may carry (#85 batch 5). */
+const MAX_FILTER_VALUES = 20;
+
+/**
+ * Splits a comma-separated query value into a deduplicated, trimmed list.
+ * Absent, empty, or made only of commas/whitespace ⇒ `null` ("no filter") —
+ * the same outcome as a filter never being sent at all, so a caller that
+ * still sends one bare value gets exactly today's behaviour.
+ *
+ * The cap is checked against what the caller actually SENT, before dedupe —
+ * "سقف عشرين قيمة لكل معامل" is a limit on the request, not on the distinct
+ * values left after cleanup, so five hundred repeats of one value must not
+ * pass just because they collapse to one. Over `MAX_FILTER_VALUES` raw
+ * values throws instead of truncating, so an oversized filter is a visible
+ * 400, never a silently mutilated query.
+ */
+function parseCsvList(value, label = 'القيمة') {
+  if (value === undefined || value === null || value === '') return null;
+  const values = String(value).split(',').map(item => item.trim()).filter(Boolean);
+  if (!values.length) return null;
+
+  if (values.length > MAX_FILTER_VALUES) {
+    throw ApiError.badRequest(`عدد قيم ${label} يتجاوز الحد المسموح (${MAX_FILTER_VALUES})`);
+  }
+  return [...new Set(values)];
+}
+
 function parseAmount(value) {
   const amount = Number.parseFloat(value);
   if (Number.isNaN(amount) || amount < 0 || amount > 9999999999) {
@@ -142,5 +169,7 @@ module.exports = {
   parseId,
   parseAmount,
   parseHonorees,
-  MAX_HONOREES
+  parseCsvList,
+  MAX_HONOREES,
+  MAX_FILTER_VALUES
 };

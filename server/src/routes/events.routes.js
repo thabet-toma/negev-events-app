@@ -12,7 +12,7 @@ const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
-  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, MAX_HONOREES
+  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, MAX_HONOREES
 } = require('../middleware/validate');
 const { TOWNS, VILLAGES_TOWN, TOWN_COORDINATES, REACTION_TYPES } = require('../constants');
 
@@ -30,25 +30,55 @@ function isLegacyClient(req) {
   return !req.get('X-App-Version');
 }
 
+/**
+ * `?occasion_type_id=` and `?village_id=` each accept a single id or a
+ * comma-separated list — a lone value is built as a one-element `IN (?)`,
+ * the same query MySQL would run for `= ?`, so a caller sending one value
+ * (every client today) sees no change at all (#85 batch 5, stories 40/43).
+ * Shared by `/events` and `/map/events` so the two can't drift apart.
+ */
+function parseIdListParam(raw, label) {
+  const values = parseCsvList(raw, label);
+  if (!values) return null;
+  return [...new Set(values.map(value => parseId(value, label)))];
+}
+
+/**
+ * Same list shape as `parseIdListParam`, for `?town=`. `'الكل'` inside a list
+ * still means "no town filter" — the same sentinel a single `?town=الكل`
+ * already carried — so a filter UI can add it to a selection without a
+ * special case.
+ *
+ * Deliberately NOT validated against `TOWNS`, unlike publishing an event:
+ * `TOWNS` is duplicated by hand in `mobile/lib/config.dart` (CLAUDE.md), so a
+ * published APK can legitimately be filtering on a name the server no longer
+ * recognises, and a live APK cannot be pushed a fix. Rejecting the request
+ * would take the caller's whole feed down over one stale filter value; the
+ * pre-#85 behaviour of matching nothing for an unrecognised town is more
+ * forgiving and is kept on purpose — do not "fix" this back to a 400.
+ */
+function parseTownListParam(raw) {
+  const values = parseCsvList(raw, 'البلدة');
+  if (!values) return null;
+  if (values.includes('الكل')) return null;
+  return values;
+}
+
 // `optionalAuthenticate`: an anonymous caller sees the list unchanged, but a
 // logged-in one also gets `is_reminded` on every card, so the client knows
 // which button state ("ذكّرني" on/off) to render without a second request.
 router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
-  const town = cleanString(req.query.town, 100);
+  const towns = parseTownListParam(req.query.town);
   const search = cleanString(req.query.search, 100);
   const date = optionalDate(req.query.date);
-  const occasionTypeId = req.query.occasion_type_id === undefined || req.query.occasion_type_id === null || req.query.occasion_type_id === ''
-    ? null
-    : parseId(req.query.occasion_type_id, 'نوع المناسبة');
-  const villageId = req.query.village_id === undefined || req.query.village_id === null || req.query.village_id === ''
-    ? null
-    : parseId(req.query.village_id, 'القرية');
+  const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
+  const villageIds = parseIdListParam(req.query.village_id, 'القرية');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
   const legacyOnly = isLegacyClient(req);
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
-      town, search, date, occasionTypeId, villageId, archive, legacyOnly,
+      towns, search, date, occasionTypeIds, villageIds, archive, legacyOnly,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null
@@ -59,7 +89,14 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
 }));
 
 router.get('/map/events', asyncHandler(async (req, res) => {
-  res.json({ success: true, points: await events.listMapPoints({ legacyOnly: isLegacyClient(req) }) });
+  const towns = parseTownListParam(req.query.town);
+  const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
+  const villageIds = parseIdListParam(req.query.village_id, 'القرية');
+
+  res.json({
+    success: true,
+    points: await events.listMapPoints({ towns, occasionTypeIds, villageIds, legacyOnly: isLegacyClient(req) })
+  });
 }));
 
 /**

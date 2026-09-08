@@ -261,6 +261,51 @@ async function attachHonoreesAndTypes(rows) {
 }
 
 /**
+ * Resolves the `occasion_type_id` list a query should filter by, combining a
+ * caller's requested ids (if any) with the legacy-client restriction (if
+ * any) by INTERSECTION rather than override — a legacy client asking for a
+ * type it cannot render must get an empty result, never a widened one (#85
+ * batch 5: "silence beats a funeral drawn as a wedding"). `null` means no
+ * restriction at all; an empty array means the filter can match nothing, and
+ * the caller must short-circuit without a query. Shared by `listPublicEvents`
+ * and `listMapPoints` so the two can't drift apart.
+ */
+async function resolveTypeFilterIds({ legacyOnly, occasionTypeIds }) {
+  if (legacyOnly) {
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    return occasionTypeIds ? occasionTypeIds.filter(id => legacyTypeIds.includes(id)) : legacyTypeIds;
+  }
+  return occasionTypeIds;
+}
+
+/**
+ * Builds the place filter for `towns`/`villageIds` — a UNION of what the
+ * caller picked, never an intersection. `events.village_id` is non-NULL
+ * ONLY when `town = 'القرى والتجمعات'` (the villages catch-all), so ANDing a
+ * specific town together with a village produces zero rows for exactly the
+ * combination a single searchable place picker naturally creates — pick
+ * «رهط» and one village together (stories 40/41, "عائلتي موزّعة") and an AND
+ * can never match anything (#85 batch 5, FIX 2). When only one of the two is
+ * given, the result is that single `IN (...)` clause, unchanged.
+ *
+ * `villageColumn` lets each caller qualify the column its own query needs
+ * (`events.village_id` alongside a JOIN, plain `village_id` otherwise)
+ * without a second copy of this logic — shared by `listPublicEvents` and
+ * `listMapPoints` so the two can't drift apart the way they already had.
+ */
+function buildPlaceCondition(towns, villageIds, villageColumn) {
+  const townClause = towns ? `town IN (${towns.map(() => '?').join(',')})` : null;
+  const villageClause = villageIds ? `${villageColumn} IN (${villageIds.map(() => '?').join(',')})` : null;
+
+  if (townClause && villageClause) {
+    return { clause: `(${townClause} OR ${villageClause})`, params: [...towns, ...villageIds] };
+  }
+  if (townClause) return { clause: townClause, params: [...towns] };
+  if (villageClause) return { clause: villageClause, params: [...villageIds] };
+  return null;
+}
+
+/**
  * Approved events, optionally filtered by town, date, occasion type and
  * free-text search — paginated, upcoming-first (or archived-first when
  * `archive` is set), with per-card congratulation stats attached.
@@ -271,13 +316,17 @@ async function attachHonoreesAndTypes(rows) {
  * already ended, newest-ended first, reached only on explicit request so it
  * never crowds out what's upcoming (#20 step 4, decision أ).
  *
- * `legacyOnly` forces the result to the occasion types a client with no
- * `X-App-Version` header understands, overriding any `occasionTypeId` filter
- * — that filter is a tab a legacy client's UI cannot even render (#20 step 4,
+ * `towns`, `occasionTypeIds` and `villageIds` are each either `null` (no
+ * filter) or a non-empty array — a single value is simply a one-element
+ * array, built as a one-element `IN (?)` (#85 batch 5). `towns`/`villageIds`
+ * combine as a UNION via `buildPlaceCondition`, never an AND (FIX 2).
+ * `legacyOnly` still intersects `occasionTypeIds` via `resolveTypeFilterIds`
+ * — a legacy client's own UI cannot even render a type outside its supported
+ * set, so asking for one by id must never widen past it (#20 step 4,
  * decision و).
  */
 async function listPublicEvents({
-  town, date, search, occasionTypeId = null, villageId = null, legacyOnly = false, archive = false,
+  towns = null, date, search, occasionTypeIds = null, villageIds = null, legacyOnly = false, archive = false,
   page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
@@ -290,29 +339,19 @@ async function listPublicEvents({
     ? 'COALESCE(event_end_date, event_date) < CURDATE()'
     : 'COALESCE(event_end_date, event_date) >= CURDATE()');
 
-  if (legacyOnly) {
-    // A client that does not announce itself only ever sees the types a
-    // published build knows how to render. None marked means none sent —
-    // silence beats a funeral drawn as a wedding.
-    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
-    if (!legacyTypeIds.length) {
-      return { events: [], pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 } };
-    }
-    conditions.push(`occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
-    params.push(...legacyTypeIds);
-  } else if (occasionTypeId) {
-    conditions.push('occasion_type_id = ?');
-    params.push(occasionTypeId);
+  const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
+  if (typeFilterIds && !typeFilterIds.length) {
+    return { events: [], pagination: { page: safePage, limit: safeLimit, total: 0, totalPages: 0 } };
+  }
+  if (typeFilterIds) {
+    conditions.push(`occasion_type_id IN (${typeFilterIds.map(() => '?').join(',')})`);
+    params.push(...typeFilterIds);
   }
 
-  if (town && town !== 'الكل') {
-    conditions.push('town = ?');
-    params.push(town);
-  }
-
-  if (villageId) {
-    conditions.push('events.village_id = ?');
-    params.push(villageId);
+  const placeCondition = buildPlaceCondition(towns, villageIds, 'events.village_id');
+  if (placeCondition) {
+    conditions.push(placeCondition.clause);
+    params.push(...placeCondition.params);
   }
 
   if (date) {
@@ -444,21 +483,27 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
 
 /**
  * Approved, upcoming events that carry coordinates, shaped for the map view.
- * Same upcoming cutoff and legacy-client type filter as `listPublicEvents`
- * (#20 step 4, decisions أ and و).
+ * Same upcoming cutoff, legacy-client type filter, and town/type/village list
+ * filtering as `listPublicEvents` (#20 step 4, decisions أ and و; #85 batch 5).
  */
-async function listMapPoints({ legacyOnly = false } = {}) {
+async function listMapPoints({ towns = null, occasionTypeIds = null, villageIds = null, legacyOnly = false } = {}) {
   const conditions = [
     "status = 'approved'", 'latitude IS NOT NULL', 'longitude IS NOT NULL',
     'COALESCE(event_end_date, event_date) >= CURDATE()'
   ];
   const params = [];
 
-  if (legacyOnly) {
-    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
-    if (!legacyTypeIds.length) return [];
-    conditions.push(`occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
-    params.push(...legacyTypeIds);
+  const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
+  if (typeFilterIds && !typeFilterIds.length) return [];
+  if (typeFilterIds) {
+    conditions.push(`occasion_type_id IN (${typeFilterIds.map(() => '?').join(',')})`);
+    params.push(...typeFilterIds);
+  }
+
+  const placeCondition = buildPlaceCondition(towns, villageIds, 'village_id');
+  if (placeCondition) {
+    conditions.push(placeCondition.clause);
+    params.push(...placeCondition.params);
   }
 
   const rows = await db.query(
