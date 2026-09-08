@@ -20,7 +20,7 @@
 | الحاويات | `negev_events_app` · `negev_events_mysql` · `negev_events_web` |
 | الفرع المنشور | `main` |
 | من | `3bcc12e` |
-| إلى | `427edea` |
+| إلى | `4d57d1f` |
 | نسخة التطبيق | `1.6.0+8` ← **`1.7.0+9`** |
 | ملف الـAPK محلياً | `mobile/build/app/outputs/flutter-apk/app-release.apk` |
 
@@ -103,7 +103,7 @@ ssh -i ~/.ssh/hostenger2/id_ed25519 root@munasbat.ktra-pro.tech \
   'cd /root/munasbat/app && git pull origin main && git log --oneline -1'
 ```
 
-المتوقَّع أن ينتهي عند `427edea`.
+المتوقَّع أن ينتهي عند `4d57d1f`.
 
 ⚠️ السحب يحدّث `web/` **فوراً** (nginx يربط المجلد بالقرص للقراءة، بلا بناء).
 فمن هذه اللحظة حتى انتهاء الخطوة ٤ يكون الموقع الجديد يخاطب خادماً قديماً —
@@ -175,8 +175,16 @@ curl -s "https://munasbat.ktra-pro.tech/e/<ID>" | grep -c "mark-svg"
 ls -l "mobile/build/app/outputs/flutter-apk/app-release.apk"
 ```
 
-يجب أن يكون تاريخه من اليوم. إن كان قديماً أو غائباً: **قف وأبلغ**، ولا تبنِ من
-عندك.
+**الملف المبنيّ والمُتحقَّق منه محلياً هو هذا بالضبط** — قارن الأربعة ولا تقبل غيرها:
+
+| | |
+|---|---|
+| الحجم | `60282924` بايت |
+| MD5 | `65420d6c30c8af36e61446c649fb65ce` |
+| النسخة داخل الملف | `versionName=1.7.0` · `versionCode=9` |
+| التوقيع | `CN=thabet toma` — مفتاح الإصدار لا مفتاح التنقيح |
+
+إن اختلف أيٌّ من هذه: **قف وأبلغ**، ولا تبنِ من عندك.
 
 **٢. انسخه** (المجلد مربوط بالقرص في `docker-compose.yml` عبر
 `./server/downloads:/app/downloads`، فلا حاجة لإعادة تشغيل الحاوية بعده):
@@ -195,8 +203,15 @@ ssh -i ~/.ssh/hostenger2/id_ed25519 root@munasbat.ktra-pro.tech 'ls -l /root/mun
 curl -sI https://munasbat.ktra-pro.tech/downloads/negev-events.apk | grep -iE "^HTTP/|^content-length|^last-modified"
 ```
 
-الثلاثة يجب أن تحمل **نفس عدد البايتات بالضبط**، و`last-modified` من اليوم.
-اختلاف بايت واحد يعني نسخاً ناقصاً — **أعد النسخ، ولا تكمل**.
+الثلاثة يجب أن تحمل **نفس عدد البايتات بالضبط** (`60282924`)، و`last-modified`
+من اليوم. ثم الفحص القاطع — البصمة على السيرفر:
+
+```
+ssh -i ~/.ssh/hostenger2/id_ed25519 root@munasbat.ktra-pro.tech 'md5sum /root/munasbat/app/server/downloads/negev-events.apk'
+```
+
+يجب أن تكون `65420d6c30c8af36e61446c649fb65ce` حرفاً بحرف. اختلافها يعني نسخاً
+ناقصاً أو ملفاً آخر — **أعد النسخ، ولا تكمل**.
 
 ---
 
