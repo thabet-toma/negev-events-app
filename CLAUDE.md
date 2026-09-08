@@ -50,6 +50,7 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | صلاحيات ومصادقة | `server/src/middleware/auth.js` |
 | رفع صورة أو صوت | `server/src/middleware/upload.js` |
 | بث لحظي | `server/src/realtime/index.js` + `realtime.emit` من طبقة المسارات |
+| وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
 | أي شيء في تطبيق الموبايل | `mobile/lib/screens/` ثم `mobile/lib/api/negev_api.dart` |

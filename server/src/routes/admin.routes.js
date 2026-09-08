@@ -70,7 +70,13 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   // admin that the event exists at all (spec rule 3).
   await adminScope.assertEventInScope(req.user, eventId);
 
-  const { event, notifications } = await admin.updateEventStatus(eventId, status);
+  // Only meaningful on a rejection (story 8) — an approval never needed one,
+  // and cleanString on a field the body doesn't carry is already null.
+  const reason = status === 'rejected' ? cleanString(req.body.reason, 500) : null;
+
+  const { event, notifications } = await admin.updateEventStatus(eventId, status, {
+    reason, actingUserId: req.user.id
+  });
   if (status === 'approved') {
     realtime.emit('new_event_created', {
       id: event.id,
@@ -81,10 +87,13 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
     });
   }
 
-  // One channel per recipient — only whoever is connected right now ever
-  // sees this; everyone else only has the notifications row until FCM (#19).
+  // A contentless signal per recipient, never the notification's own
+  // title/body: realtime.emit has no rooms and reaches every connected
+  // client (realtime/index.js), so any text here would leak to a socket that
+  // never should have seen it. A connected client just re-fetches its own
+  // GET /api/notifications — the same shape issue #85's town_broadcast uses.
   for (const notification of notifications) {
-    realtime.emit(`new_notification_${notification.user_id}`, notification);
+    realtime.emit(`new_notification_${notification.user_id}`, { id: notification.id });
   }
 
   const label = { approved: 'معتمدة ومنشورة', rejected: 'مرفوضة', pending: 'بانتظار المراجعة' }[status];

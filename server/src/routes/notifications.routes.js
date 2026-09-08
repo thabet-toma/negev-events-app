@@ -21,4 +21,11 @@ router.patch('/notifications/:id/read', authenticate, asyncHandler(async (req, r
   res.json({ success: true });
 }));
 
+// The remaining countdown fire times for every event this user follows
+// (issue #85, batch 3) — computed on the server so no client re-derives the
+// offsets and drifts from what the scheduler itself will actually send.
+router.get('/reminders/schedule', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, schedule: await notifications.scheduleForUser(req.user.id) });
+}));
+
 module.exports = router;

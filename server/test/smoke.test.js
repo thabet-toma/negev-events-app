@@ -25,6 +25,9 @@ const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_E
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
+const scheduler = require('../src/jobs/scheduler');
+const notificationsService = require('../src/services/notifications.service');
+const { runInstantForDate } = require('../src/utils/jerusalemTime');
 const logger = require('../src/utils/logger');
 const shareCard = require('../src/services/shareCard.service');
 const { PALETTES } = require('../src/utils/shareTheme');
@@ -2049,6 +2052,8 @@ async function run() {
   let reminderOwner = null;
   let reminderFollower = null;
   let reminderOther = null;
+  let reminderOwnerApprovedBefore = 0;
+  let reminderOwnerApprovedAfter = 0;
   let reminderEventId = 0;
 
   await test('Set up: an owner publishes an approved wedding for the reminder/announcement/notification tests', async () => {
@@ -2166,10 +2171,22 @@ async function run() {
   });
 
   await test('Approving that edit publishes the announcement, naming the old and new date', async () => {
+    const beforeApproved = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_approved'",
+      [reminderOwner.id, reminderEventId]
+    );
+
     const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
       token: adminToken, body: { status: 'approved' }
     });
     assert.strictEqual(approve.status, 200);
+
+    const afterApproved = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_approved'",
+      [reminderOwner.id, reminderEventId]
+    );
+    reminderOwnerApprovedBefore = Number(beforeApproved.total);
+    reminderOwnerApprovedAfter = Number(afterApproved.total);
 
     const { body } = await api('GET', '/api/events?limit=1');
     const announcement = body.announcements.find(a => a.event_id === reminderEventId);
@@ -2188,12 +2205,25 @@ async function run() {
     assert.ok(followerNotifs[0].body.includes('2027-09-15'));
 
     const ownerNotifs = await db.query(
-      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOwner.id, reminderEventId]
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_date_changed'",
+      [reminderOwner.id, reminderEventId]
     );
     assert.strictEqual(ownerNotifs.length, 0, 'the person who made the edit must never be notified of it');
 
+    // What the owner DOES receive from this same approval, so the claim
+    // above reads as "excluded from their own edit specifically", not
+    // "excluded from everything about this approval" (issue #85 review,
+    // FIX 8a). A delta, not an absolute count — this event has already been
+    // approved once before (in the setup step above), so it already carries
+    // an earlier event_approved row for the owner.
+    assert.strictEqual(
+      reminderOwnerApprovedAfter - reminderOwnerApprovedBefore, 1,
+      'the owner is still told their event was approved — just not that they themself changed its date'
+    );
+
     const strangerNotifs = await db.query(
-      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOther.id, reminderEventId]
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_date_changed'",
+      [reminderOther.id, reminderEventId]
     );
     assert.strictEqual(strangerNotifs.length, 0);
   });
@@ -2225,12 +2255,14 @@ async function run() {
 
   await test('This time both the follower and the owner (neither of them the editor) are notified', async () => {
     const followerNotifs = await db.query(
-      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderFollower.id, reminderEventId]
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_date_changed'",
+      [reminderFollower.id, reminderEventId]
     );
     assert.strictEqual(followerNotifs.length, 2, 'one from each of the two approved date edits');
 
     const ownerNotifs = await db.query(
-      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [reminderOwner.id, reminderEventId]
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_date_changed'",
+      [reminderOwner.id, reminderEventId]
     );
     assert.strictEqual(ownerNotifs.length, 1, 'the owner is notified this time — the edit was not their own');
   });
@@ -2284,7 +2316,7 @@ async function run() {
     assert.strictEqual(Number(afterNotifs.total), Number(beforeNotifs.total));
   });
 
-  await test('A critical edit that is NOT a date change (location) is approved normally but never publishes an announcement or a notification', async () => {
+  await test('A critical edit that is NOT a date change (location) is approved normally, never publishes a date announcement, but does notify as a venue change (issue #85, story 6)', async () => {
     const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
       token: adminToken, body: { location_name: 'قاعة جديدة لاختبار التذكير' }
     });
@@ -2293,7 +2325,6 @@ async function run() {
     assert.strictEqual(edit.body.status, 'pending');
 
     const beforeAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
-    const beforeNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
 
     const approve = await api('PATCH', `/api/admin/events/${reminderEventId}/status`, {
       token: adminToken, body: { status: 'approved' }
@@ -2301,9 +2332,30 @@ async function run() {
     assert.strictEqual(approve.status, 200);
 
     const afterAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
-    const afterNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
     assert.strictEqual(Number(afterAnnouncements.total), Number(beforeAnnouncements.total), 'a location amendment must never publish a date announcement');
-    assert.strictEqual(Number(afterNotifs.total), Number(beforeNotifs.total));
+
+    // The admin made this edit, not the follower or the owner — both of them
+    // (neither the editor) are notified, same audience shape as a date change.
+    const followerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [reminderFollower.id, reminderEventId]
+    );
+    assert.strictEqual(followerNotifs.length, 1);
+
+    const ownerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [reminderOwner.id, reminderEventId]
+    );
+    assert.strictEqual(ownerNotifs.length, 1);
+
+    // ...and nobody else (issue #85 review, FIX 8b — restoring the "and
+    // nobody else" guarantee the earlier before/after total count used to
+    // give, now that the total itself legitimately grows on this path).
+    const strangerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [reminderOther.id, reminderEventId]
+    );
+    assert.strictEqual(strangerNotifs.length, 0);
   });
 
   let legacyAnnouncementEventId = 0;
@@ -2379,6 +2431,623 @@ async function run() {
   for (const u of [reminderOwner, reminderFollower, reminderOther]) {
     await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
   }
+
+  console.log('\nNotifications — creation, scheduler, daily cap, reminders schedule (issue #85 batch 3)');
+
+  /** Adds `days` (may be negative) to a `YYYY-MM-DD` string, in UTC — plain calendar arithmetic, no time-of-day involved. */
+  function addDaysToDate(dateStr, days) {
+    const d = new Date(`${dateStr}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Read from the DB itself, not from Node's own clock — DATEDIFF(event_date,
+  // CURDATE()) inside the scheduler is what actually decides an offset, so
+  // every date this section builds is relative to the same CURDATE() the
+  // scheduler will see, never to a possibly different local wall clock.
+  const { today: schedulerToday } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+
+  // Inserted straight into the DB and signed locally, not through
+  // /api/auth/register — same reasoning as the story-viewer setup earlier in
+  // this file: the suite's shared authLimiter budget (20 requests/window
+  // across register+login+admin/login) is already spent by this point.
+  async function createDirectUser(fullName) {
+    const phoneNumber = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [phoneNumber, fullName, 'x', 'رهط']
+    );
+    return {
+      id: insertId,
+      phone: phoneNumber,
+      token: signToken({ id: insertId, phone_number: phoneNumber, full_name: fullName, role: 'user' }, '1h')
+    };
+  }
+
+  let soonFollower = null;
+  let soonWeddingEventId = 0;
+  let soonFuneralEventId = 0;
+
+  await test('Set up: a followed wedding 3 days away, and a followed funeral 3 days away (notify_countdown off)', async () => {
+    soonFollower = await createDirectUser('متابع مناسبات العدّاد');
+
+    const wedding = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس العدّاد' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 3)
+      })
+    });
+    soonWeddingEventId = wedding.body.eventId;
+    assert.strictEqual(wedding.body.status, 'approved');
+
+    const funeral = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى اختبار العدّاد' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: addDaysToDate(schedulerToday, 3),
+        event_end_date: addDaysToDate(schedulerToday, 4)
+      }
+    });
+    soonFuneralEventId = funeral.body.eventId;
+    assert.strictEqual(funeral.body.status, 'approved');
+
+    await api('POST', `/api/events/${soonWeddingEventId}/remind`, { token: soonFollower.token });
+    await api('POST', `/api/events/${soonFuneralEventId}/remind`, { token: soonFollower.token });
+  });
+
+  await test('A follower of an event 3 days away gets exactly one event_soon row', async () => {
+    await scheduler.runDailyPass();
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_soon'",
+      [soonFollower.id, soonWeddingEventId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].dedupe_key, `event_soon_${soonWeddingEventId}_3`);
+  });
+
+  await test('The countdown body never names a date', async () => {
+    const row = await db.queryOne(
+      "SELECT body FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_soon'",
+      [soonFollower.id, soonWeddingEventId]
+    );
+    assert.ok(!/\d{4}-\d{2}-\d{2}/.test(row.body), `expected no literal date inside "${row.body}"`);
+    assert.ok(row.body.includes('٣ أيام'), 'expected a relative day-count phrase instead');
+  });
+
+  await test('An occasion type with notify_countdown = 0 produces NO countdown row, for any offset', async () => {
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_soon'",
+      [soonFollower.id, soonFuneralEventId]
+    );
+    assert.strictEqual(rows.length, 0, 'a solemn occasion type must never produce a countdown notification');
+  });
+
+  await test('Running the scheduler pass twice for the same day produces ONE row, not two', async () => {
+    await scheduler.runDailyPass();
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_soon'",
+      [soonFollower.id, soonWeddingEventId]
+    );
+    assert.strictEqual(rows.length, 1, 'a second same-day run must not duplicate the deduped row');
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?)', [soonWeddingEventId, soonFuneralEventId]);
+  await db.execute('DELETE FROM users WHERE phone_number = ?', [soonFollower.phone]);
+
+  let venueOwner = null;
+  let venueFollower = null;
+  let venueOther = null;
+  let venueEventId = 0;
+
+  await test('Set up: an owner publishes an approved wedding for the venue-change notification test', async () => {
+    venueOwner = await createDirectUser('مالك مناسبة المكان');
+    venueFollower = await createDirectUser('متابع مناسبة المكان');
+    venueOther = await createDirectUser('مستخدم بلا علاقة بالمكان');
+
+    const created = await api('POST', '/api/events', {
+      token: venueOwner.token,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس اختبار المكان' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 60)
+      })
+    });
+    venueEventId = created.body.eventId;
+
+    const approve = await api('PATCH', `/api/admin/events/${venueEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    await api('POST', `/api/events/${venueEventId}/remind`, { token: venueFollower.token });
+  });
+
+  await test('A venue change notifies followers; the user who made the change is not notified', async () => {
+    const edit = await api('PATCH', `/api/events/${venueEventId}`, {
+      token: venueOwner.token, body: { location_name: 'قاعة جديدة تماماً لاختبار التغيير' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'critical');
+    assert.strictEqual(edit.body.status, 'pending');
+
+    const beforeApproved = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_approved'",
+      [venueOwner.id, venueEventId]
+    );
+
+    const approve = await api('PATCH', `/api/admin/events/${venueEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const afterApproved = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_approved'",
+      [venueOwner.id, venueEventId]
+    );
+
+    const followerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [venueFollower.id, venueEventId]
+    );
+    assert.strictEqual(followerNotifs.length, 1);
+    assert.strictEqual(followerNotifs[0].dedupe_key, null, 'a venue-changed notification is never deduped — it is not scheduler-produced');
+
+    const ownerNotifs = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [venueOwner.id, venueEventId]
+    );
+    assert.strictEqual(ownerNotifs.length, 0, 'the person who made the edit must never be notified of it');
+
+    // What the owner DOES receive from this same approval (issue #85 review,
+    // FIX 8a). A delta, not an absolute count — this event was already
+    // approved once in the setup step above.
+    assert.strictEqual(
+      Number(afterApproved.total) - Number(beforeApproved.total), 1,
+      'the owner is still told their event was approved — just not that they themself changed its venue'
+    );
+
+    const otherNotifs = await db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [venueOther.id, venueEventId]
+    );
+    assert.strictEqual(otherNotifs.length, 0);
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [venueEventId]);
+  for (const u of [venueOwner, venueFollower, venueOther]) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
+  }
+
+  let approvalPublisher = null;
+  let approvalEventId = 0;
+  let rejectionPublisher = null;
+  let rejectionEventId = 0;
+
+  await test('Approval notifies the publisher', async () => {
+    approvalPublisher = await createDirectUser('ناشر مناسبة الاعتماد');
+    const created = await api('POST', '/api/events', {
+      token: approvalPublisher.token,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس اختبار الاعتماد' }], event_date: addDaysToDate(schedulerToday, 90)
+      })
+    });
+    approvalEventId = created.body.eventId;
+    assert.strictEqual(created.body.status, 'pending');
+
+    const approve = await api('PATCH', `/api/admin/events/${approvalEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_approved'",
+      [approvalPublisher.id, approvalEventId]
+    );
+    assert.strictEqual(rows.length, 1);
+  });
+
+  await test('Rejection notifies the publisher and carries the reason', async () => {
+    rejectionPublisher = await createDirectUser('ناشر مناسبة الرفض');
+    const created = await api('POST', '/api/events', {
+      token: rejectionPublisher.token,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس اختبار الرفض' }], event_date: addDaysToDate(schedulerToday, 91)
+      })
+    });
+    rejectionEventId = created.body.eventId;
+
+    const reject = await api('PATCH', `/api/admin/events/${rejectionEventId}/status`, {
+      token: adminToken, body: { status: 'rejected', reason: 'الصورة غير واضحة' }
+    });
+    assert.strictEqual(reject.status, 200);
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_rejected'",
+      [rejectionPublisher.id, rejectionEventId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.ok(rows[0].body.includes('الصورة غير واضحة'), 'expected the rejection reason inside the notification body');
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?)', [approvalEventId, rejectionEventId]);
+  for (const u of [approvalPublisher, rejectionPublisher]) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
+  }
+
+  let digestPublisher = null;
+  let digestWellWisherA = null;
+  let digestWellWisherB = null;
+  let digestFuneralEventId = 0;
+
+  await test('Set up: a publisher owns a funeral with two pending تعازي awaiting review', async () => {
+    digestPublisher = await createDirectUser('ناشر مناسبة الملخّص');
+    digestWellWisherA = await createDirectUser('معزٍّ أول لاختبار الملخّص');
+    digestWellWisherB = await createDirectUser('معزٍّ ثانٍ لاختبار الملخّص');
+
+    const created = await api('POST', '/api/events', {
+      token: digestPublisher.token,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى اختبار الملخّص' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: addDaysToDate(schedulerToday, 2),
+        event_end_date: addDaysToDate(schedulerToday, 3)
+      }
+    });
+    digestFuneralEventId = created.body.eventId;
+    assert.strictEqual(created.body.status, 'pending');
+
+    const approve = await api('PATCH', `/api/admin/events/${digestFuneralEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    for (const wellWisher of [digestWellWisherA, digestWellWisherB]) {
+      const posted = await api('POST', `/api/events/${digestFuneralEventId}/congratulate`, {
+        token: wellWisher.token, body: { message: 'تعازينا الحارّة' }
+      });
+      assert.strictEqual(posted.status, 201);
+      assert.strictEqual(posted.body.comment.status, 'pending');
+    }
+  });
+
+  await test('The moderation digest is ONE row carrying a count, not one row per message', async () => {
+    await scheduler.runDailyPass();
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND type = 'moderation_digest'",
+      [digestPublisher.id]
+    );
+    assert.strictEqual(rows.length, 1, 'expected exactly one digest row regardless of pending message count');
+    assert.ok(rows[0].body.includes('2'), 'expected the pending count inside the digest body');
+    assert.strictEqual(rows[0].dedupe_key, `moderation_digest_${schedulerToday}`);
+  });
+
+  await db.execute('DELETE FROM events WHERE id = ?', [digestFuneralEventId]);
+  for (const u of [digestPublisher, digestWellWisherA, digestWellWisherB]) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
+  }
+
+  let capUser = null;
+  let capEventA = 0;
+  let capEventB = 0;
+  let capEventC = 0;
+  let capEventD = 0;
+  let capOwnEventE = 0;
+  let capVenueEventF = 0;
+
+  await test('Set up: capUser follows four unrelated events at four countdown offsets, and owns+follows a fifth at 0 days', async () => {
+    capUser = await createDirectUser('مستخدم اختبار السقف اليومي');
+
+    async function createFollowedWedding(offsetDays) {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({
+          honorees: [{ name: `عريس سقف ${offsetDays}` }], town: 'رهط',
+          event_date: addDaysToDate(schedulerToday, offsetDays)
+        })
+      });
+      assert.strictEqual(created.body.status, 'approved');
+      await api('POST', `/api/events/${created.body.eventId}/remind`, { token: capUser.token });
+      return created.body.eventId;
+    }
+
+    // Created in this exact order — the scheduler processes candidate events
+    // by ascending id, so A/B/C are guaranteed to be considered before D.
+    capEventA = await createFollowedWedding(7);
+    capEventB = await createFollowedWedding(5);
+    capEventC = await createFollowedWedding(3);
+    capEventD = await createFollowedWedding(1);
+
+    const own = await api('POST', '/api/events', {
+      token: capUser.token,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس السقف نفسه' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 0)
+      })
+    });
+    capOwnEventE = own.body.eventId;
+    const approveOwn = await api('PATCH', `/api/admin/events/${capOwnEventE}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approveOwn.status, 200);
+    await api('POST', `/api/events/${capOwnEventE}/remind`, { token: capUser.token });
+
+    const venueSource = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس سقف المكان' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 45)
+      })
+    });
+    capVenueEventF = venueSource.body.eventId;
+    await api('POST', `/api/events/${capVenueEventF}/remind`, { token: capUser.token });
+  });
+
+  await test('The daily cap holds at three scheduled notifications, but an own-event one still arrives once the cap is spent', async () => {
+    await scheduler.runDailyPass();
+
+    const rows = await db.query(
+      "SELECT event_id FROM notifications WHERE user_id = ? AND type = 'event_soon' ORDER BY id ASC",
+      [capUser.id]
+    );
+    assert.strictEqual(
+      rows.length, notificationsService.DAILY_SCHEDULED_CAP + 1,
+      'expected exactly DAILY_SCHEDULED_CAP capped rows plus the one exempt own-event row'
+    );
+
+    const notifiedEventIds = rows.map(r => r.event_id);
+    assert.ok(notifiedEventIds.includes(capEventA));
+    assert.ok(notifiedEventIds.includes(capEventB));
+    assert.ok(notifiedEventIds.includes(capEventC));
+    assert.ok(!notifiedEventIds.includes(capEventD), 'the fourth non-exempt event must be capped out');
+    assert.ok(notifiedEventIds.includes(capOwnEventE), 'an own-event notification must arrive even once the cap is spent');
+  });
+
+  await test('A venue change still arrives for this same user even though the daily cap is already spent', async () => {
+    const edit = await api('PATCH', `/api/events/${capVenueEventF}`, {
+      token: adminToken, body: { location_name: 'قاعة جديدة لاختبار سقف المكان' }
+    });
+    assert.strictEqual(edit.body.amendment, 'critical');
+
+    const approve = await api('PATCH', `/api/admin/events/${capVenueEventF}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_venue_changed'",
+      [capUser.id, capVenueEventF]
+    );
+    assert.strictEqual(rows.length, 1, 'a venue change must never be swallowed by the scheduled-notification cap');
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?, ?, ?)',
+    [capEventA, capEventB, capEventC, capEventD, capOwnEventE, capVenueEventF]
+  );
+  await db.execute('DELETE FROM users WHERE phone_number = ?', [capUser.phone]);
+
+  let capExemptUser = null;
+  let capExemptOwnA = 0;
+  let capExemptOwnB = 0;
+  let capExemptOwnC = 0;
+  let capExemptForeignD = 0;
+
+  await test('Exempt (own-event) event_soon rows must not be COUNTED by the cap — three of them must never block a fourth, unrelated one (issue #85 review, FIX 2)', async () => {
+    capExemptUser = await createDirectUser('مستخدم اختبار احتساب الاستثناء');
+
+    async function createOwnFollowedWedding(offsetDays) {
+      const created = await api('POST', '/api/events', {
+        token: capExemptUser.token,
+        body: weddingEventBody({
+          honorees: [{ name: `عريس استثناء ${offsetDays}` }], town: 'رهط',
+          event_date: addDaysToDate(schedulerToday, offsetDays)
+        })
+      });
+      const approve = await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, {
+        token: adminToken, body: { status: 'approved' }
+      });
+      assert.strictEqual(approve.status, 200);
+      await api('POST', `/api/events/${created.body.eventId}/remind`, { token: capExemptUser.token });
+      return created.body.eventId;
+    }
+
+    // Three events capExemptUser OWNS and follows — every one of them is
+    // `exempt: true` and must never consume the daily budget. Created (and
+    // therefore processed, ascending id) BEFORE the fourth, unrelated one.
+    capExemptOwnA = await createOwnFollowedWedding(7);
+    capExemptOwnB = await createOwnFollowedWedding(5);
+    capExemptOwnC = await createOwnFollowedWedding(3);
+
+    // A fourth event capExemptUser only FOLLOWS (not exempt) — under the old,
+    // broken accounting this would already see a count of 3 from the exempt
+    // writes above and be capped out even though none of them should have
+    // spent anything.
+    const foreign = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس استثناء غير مملوك' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 1)
+      })
+    });
+    capExemptForeignD = foreign.body.eventId;
+    await api('POST', `/api/events/${capExemptForeignD}/remind`, { token: capExemptUser.token });
+
+    await scheduler.runDailyPass();
+
+    const rows = await db.query(
+      "SELECT event_id FROM notifications WHERE user_id = ? AND type = 'event_soon'",
+      [capExemptUser.id]
+    );
+    const notifiedEventIds = rows.map(r => r.event_id);
+    assert.ok(notifiedEventIds.includes(capExemptOwnA), 'expected the first exempt own-event row');
+    assert.ok(notifiedEventIds.includes(capExemptOwnB), 'expected the second exempt own-event row');
+    assert.ok(notifiedEventIds.includes(capExemptOwnC), 'expected the third exempt own-event row');
+    assert.ok(
+      notifiedEventIds.includes(capExemptForeignD),
+      'the three exempt own-event rows above must not have consumed the cap — this unrelated, non-exempt fourth row must still arrive'
+    );
+  });
+
+  await db.execute(
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
+    [capExemptOwnA, capExemptOwnB, capExemptOwnC, capExemptForeignD]
+  );
+  await db.execute('DELETE FROM users WHERE phone_number = ?', [capExemptUser.phone]);
+
+  console.log('\nScheduler re-arm across DST (issue #85 review, FIX 5)');
+
+  await test('start() re-arms itself with a fresh, zone-aware setTimeout every cycle — never a fixed-length setInterval', async () => {
+    const originalSetTimeout = global.setTimeout;
+    const originalSetInterval = global.setInterval;
+    const capturedDelays = [];
+    let capturedCallback = null;
+    let intervalCalls = 0;
+
+    global.setTimeout = (fn, delay) => {
+      capturedDelays.push(delay);
+      capturedCallback = fn;
+      return { unref() {} };
+    };
+    global.setInterval = () => {
+      intervalCalls += 1;
+      return { unref() {} };
+    };
+
+    try {
+      scheduler.stop();
+      scheduler.start();
+      assert.strictEqual(capturedDelays.length, 1, 'expected exactly one setTimeout armed by start()');
+
+      // Simulate the first run firing — a real, idempotent scheduler pass —
+      // and inspect what gets armed for the cycle AFTER it.
+      await capturedCallback();
+
+      assert.strictEqual(
+        intervalCalls, 0,
+        'the scheduler must never fall back to a fixed-length setInterval — that is exactly what drifts off 09:00 across a DST boundary'
+      );
+      assert.strictEqual(capturedDelays.length, 2, 'expected a second setTimeout armed after the first run fired');
+
+      const freshDelay = scheduler.millisecondsUntilNextRun();
+      assert.ok(
+        Math.abs(capturedDelays[1] - freshDelay) < 5000,
+        `expected the re-armed delay (${capturedDelays[1]}) to match a fresh millisecondsUntilNextRun() call (${freshDelay}), not a stale fixed step`
+      );
+    } finally {
+      global.setTimeout = originalSetTimeout;
+      global.setInterval = originalSetInterval;
+      scheduler.stop();
+    }
+  });
+
+  await test('The next run lands on 09:00 Asia/Jerusalem wall-clock across the next real DST boundary, not merely 24h later', async () => {
+    function offsetMinutesAt(date) {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Jerusalem', hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+      const parts = {};
+      for (const { type, value } of fmt.formatToParts(date)) if (type !== 'literal') parts[type] = Number(value);
+      if (parts.hour === 24) parts.hour = 0;
+      const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+      return Math.round((asUtc - date.getTime()) / 60000);
+    }
+
+    function localHourAt(date) {
+      const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Jerusalem', hour12: false, hour: '2-digit' });
+      const hour = Number(fmt.format(date));
+      return hour === 24 ? 0 : hour;
+    }
+
+    // Scan forward day by day from today for the next real Asia/Jerusalem
+    // DST transition — no hardcoded date, so this test stays correct
+    // whenever it actually runs.
+    let cursor = new Date();
+    cursor.setUTCHours(0, 0, 0, 0);
+    let prevOffset = offsetMinutesAt(cursor);
+    let dayBefore = null;
+    for (let i = 0; i < 400 && !dayBefore; i += 1) {
+      const next = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+      const offset = offsetMinutesAt(next);
+      if (offset !== prevOffset) {
+        dayBefore = cursor;
+      } else {
+        cursor = next;
+      }
+      prevOffset = offset;
+    }
+    assert.ok(dayBefore, 'expected an Asia/Jerusalem DST transition within the next year');
+
+    const runOnDayBefore = dayBefore.getTime() + scheduler.millisecondsUntilNextRun(dayBefore);
+    const fixedIntervalNextRun = runOnDayBefore + 24 * 60 * 60 * 1000;
+    const recomputedNextRun = runOnDayBefore + scheduler.millisecondsUntilNextRun(new Date(runOnDayBefore));
+
+    assert.strictEqual(localHourAt(new Date(runOnDayBefore)), 9, 'sanity: the run before the transition must land on 09:00 local');
+    assert.strictEqual(
+      localHourAt(new Date(recomputedNextRun)), 9,
+      'recomputing via millisecondsUntilNextRun must keep landing on 09:00 local across the DST boundary'
+    );
+    assert.notStrictEqual(
+      localHourAt(new Date(fixedIntervalNextRun)), 9,
+      'a flat 24h step from before the boundary must NOT land on 09:00 — this is exactly why start() must recompute, not assume a fixed day length'
+    );
+  });
+
+  let scheduleUser = null;
+  let scheduleFollowedEventId = 0;
+  let scheduleUnfollowedEventId = 0;
+
+  await test('GET /api/reminders/schedule returns the remaining offsets for a followed event and nothing for an unfollowed one', async () => {
+    scheduleUser = await createDirectUser('مستخدم اختبار جدول التذكير');
+
+    const followed = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس جدول التذكير' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 10)
+      })
+    });
+    scheduleFollowedEventId = followed.body.eventId;
+    await api('POST', `/api/events/${scheduleFollowedEventId}/remind`, { token: scheduleUser.token });
+
+    const unfollowed = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس غير متابَع لجدول التذكير' }], town: 'رهط',
+        event_date: addDaysToDate(schedulerToday, 10)
+      })
+    });
+    scheduleUnfollowedEventId = unfollowed.body.eventId;
+
+    const { status, body } = await api('GET', '/api/reminders/schedule', { token: scheduleUser.token });
+    assert.strictEqual(status, 200);
+
+    const followedEntry = body.schedule.find(e => e.event_id === scheduleFollowedEventId);
+    assert.ok(followedEntry, 'expected the followed event in the schedule');
+    assert.deepStrictEqual(
+      followedEntry.offsets.map(o => o.days_before),
+      [7, 5, 3, 1, 0],
+      'an event 10 days away should still carry every countdown offset'
+    );
+    // fires_on is a full instant (09:00 Asia/Jerusalem), not a bare date
+    // (issue #85 review, FIX 10) — a mobile alarm must never have to invent
+    // the hour itself.
+    assert.strictEqual(
+      followedEntry.offsets.find(o => o.days_before === 3).fires_on,
+      runInstantForDate(addDaysToDate(schedulerToday, 7)).toISOString()
+    );
+
+    assert.ok(!body.schedule.some(e => e.event_id === scheduleUnfollowedEventId), 'an unfollowed event must not appear');
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?)', [scheduleFollowedEventId, scheduleUnfollowedEventId]);
+  await db.execute('DELETE FROM users WHERE phone_number = ?', [scheduleUser.phone]);
 
   console.log('\nStories — ad separation, honest views, town breakdown (#20 step 8)');
 

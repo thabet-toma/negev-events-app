@@ -1006,6 +1006,7 @@ module.exports = {
   getEventForEdit,
   updateEvent,
   classifyAmendment,
+  CRITICAL_AMENDMENT_FIELDS,
   listAmendments,
   listMyEvents,
   findCollisions,

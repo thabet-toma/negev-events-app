@@ -6,6 +6,8 @@ const logger = require('../utils/logger');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 const adminScope = require('./adminScope.service');
 const auth = require('./auth.service');
+const events = require('./events.service');
+const notifications = require('./notifications.service');
 
 /**
  * Headline counters for the admin dashboard, scoped to `user`'s towns
@@ -72,17 +74,54 @@ async function listEvents(status, user) {
   return rows.map(withAbsoluteMedia);
 }
 
+// The two amendment-field groups a critical, approved edit can fall into
+// (events.service.js's CRITICAL_AMENDMENT_FIELDS) — split here only to pick
+// which notification kind (date vs venue) an approved amendment produces.
+// DATE_AMENDMENT_FIELDS is the authoritative, hand-kept list (only these two
+// columns are ever a date); VENUE_AMENDMENT_FIELDS is derived as "everything
+// else critical", so the two can never OVERLAP — but a genuinely new date-
+// shaped column added to CRITICAL_AMENDMENT_FIELDS in events.service.js
+// without also being added here would still be misclassified as venue. There
+// is no way to derive both sides from nothing; DATE_AMENDMENT_FIELDS is the
+// one that must be kept current by hand when a new date field is ever added.
+const DATE_AMENDMENT_FIELDS = ['event_date', 'event_end_date'];
+const VENUE_AMENDMENT_FIELDS = events.CRITICAL_AMENDMENT_FIELDS.filter(
+  field => !DATE_AMENDMENT_FIELDS.includes(field)
+);
+
+/**
+ * Every "ذكّرني" follower plus the event's owner, minus whoever is in
+ * `excludedUserIds` — the shared recipient set for both a critical-date
+ * notification and a critical-venue one (issue #85, stories 5/6). Nobody is
+ * ever notified of their own edit (story 15) — `excludedUserIds` may be a
+ * single id (the date path, one amendment at a time) or a `Set` of ids (the
+ * venue path, which can batch several amendments from different editors into
+ * one notification and must exclude each of them, not just the first).
+ * Runs on the same `connection` as the amendment approval itself.
+ */
+async function notifiableUserIds(connection, eventId, excludedUserIds) {
+  const excluded = excludedUserIds instanceof Set ? excludedUserIds : new Set([excludedUserIds]);
+
+  const [rows] = await connection.execute(
+    `SELECT DISTINCT user_id FROM (
+        SELECT user_id FROM event_reminders WHERE event_id = ?
+        UNION
+        SELECT created_by AS user_id FROM events WHERE id = ? AND created_by IS NOT NULL
+     ) recipients`,
+    [eventId, eventId]
+  );
+  return rows.map(row => row.user_id).filter(userId => !excluded.has(userId));
+}
+
 /**
  * Publishes one public announcement for a critical date amendment that just
  * got approved (#20 step 7 — an announcement is never created for anything
  * else: no cosmetic edit, no town/location amendment, only event_date and
  * event_end_date). Turns off `is_current` on any prior live announcement for
  * the same event first — the newest replaces the old one in display, but
- * neither row is ever deleted. Then notifies whoever earned it: every
- * "ذكّرني" follower plus the event's owner, minus whoever made the edit
- * themself (nobody is notified of their own action). Everything here runs on
- * the same `connection` as the status update, so an announcement or
- * notification is never left half-written.
+ * neither row is ever deleted. Then notifies whoever earned it via
+ * `notifications.create` on this same `connection`, so an announcement or
+ * notification is never left half-written if the transaction rolls back.
  */
 async function publishDateAnnouncement(connection, eventId, amendment) {
   await connection.execute(
@@ -98,14 +137,7 @@ async function publishDateAnnouncement(connection, eventId, amendment) {
   const [eventRows] = await connection.execute('SELECT id, title, created_by FROM events WHERE id = ?', [eventId]);
   const event = eventRows[0];
 
-  const [recipientRows] = await connection.execute(
-    `SELECT DISTINCT user_id FROM (
-        SELECT user_id FROM event_reminders WHERE event_id = ?
-        UNION
-        SELECT created_by AS user_id FROM events WHERE id = ? AND created_by IS NOT NULL
-     ) recipients`,
-    [eventId, eventId]
-  );
+  const recipientIds = await notifiableUserIds(connection, eventId, amendment.changed_by);
 
   const label = amendment.field === 'event_end_date' ? 'تاريخ انتهاء' : 'تاريخ';
   // One title serves both audiences — the followers and the owner. "تتابعها"
@@ -113,28 +145,54 @@ async function publishDateAnnouncement(connection, eventId, amendment) {
   const title = 'تغيّر موعد المناسبة';
   const body = `تغيّر ${label} "${event.title}" من ${amendment.old_value || 'غير محدَّد'} إلى ${amendment.new_value || 'غير محدَّد'}`;
 
-  const notifications = [];
-  for (const recipient of recipientRows) {
-    // Nobody is notified of an edit they made themself.
-    if (recipient.user_id === amendment.changed_by) continue;
-
-    const [insertResult] = await connection.execute(
-      `INSERT INTO notifications (user_id, event_id, type, title, body)
-       VALUES (?, ?, 'event_date_changed', ?, ?)`,
-      [recipient.user_id, eventId, title, body]
+  const created = [];
+  for (const userId of recipientIds) {
+    const notification = await notifications.create(
+      { userId, eventId, type: notifications.TYPES.EVENT_DATE_CHANGED, title, body },
+      connection
     );
-    notifications.push({
-      id: insertResult.insertId,
-      user_id: recipient.user_id,
-      event_id: eventId,
-      type: 'event_date_changed',
-      title,
-      body,
-      is_read: false
-    });
+    created.push({ id: notification.id, user_id: userId });
   }
+  return created;
+}
 
-  return notifications;
+/**
+ * The sibling of `publishDateAnnouncement` for a critical venue amendment —
+ * town, village, location name, or coordinates (issue #85, story 6). Every
+ * venue field that changed in the same edit becomes ONE notification, not
+ * one per field: a village move alone can touch village_id + latitude +
+ * longitude together, and raw coordinates mean nothing to a reader anyway.
+ * Unlike a date amendment this never writes a public `event_announcements`
+ * row — that table's own banner is specifically a date change (see
+ * README.md's «إعلانات تعديل التاريخ»); widening it to venue text/lat/lng is
+ * a web/mobile rendering decision this batch does not touch.
+ *
+ * Excludes EVERY editor among `amendments`, not just the first one — two
+ * pending venue amendments on the same event can carry two different
+ * `changed_by` values (two different people editing before either was
+ * approved), and each of them must be excluded from their own edit, the same
+ * per-amendment rule `publishDateAnnouncement` already applies one amendment
+ * at a time (issue #85 review, FIX 4).
+ */
+async function notifyVenueChange(connection, eventId, amendments) {
+  const [eventRows] = await connection.execute('SELECT id, title, created_by FROM events WHERE id = ?', [eventId]);
+  const event = eventRows[0];
+
+  const editorIds = new Set(amendments.map(amendment => amendment.changed_by).filter(id => id !== null && id !== undefined));
+  const recipientIds = await notifiableUserIds(connection, eventId, editorIds);
+
+  const title = 'تغيّر مكان المناسبة';
+  const body = `تغيّر مكان "${event.title}" — يرجى مراجعة التفاصيل الجديدة`;
+
+  const created = [];
+  for (const userId of recipientIds) {
+    const notification = await notifications.create(
+      { userId, eventId, type: notifications.TYPES.EVENT_VENUE_CHANGED, title, body },
+      connection
+    );
+    created.push({ id: notification.id, user_id: userId });
+  }
+  return created;
 }
 
 /**
@@ -142,14 +200,19 @@ async function publishDateAnnouncement(connection, eventId, amendment) {
  * otherwise the log keeps saying "بانتظار المراجعة" for a decision that was
  * already made, and the audit trail lies. An approval that resolves a
  * pending event_date/event_end_date amendment also publishes the public
- * announcement and notifies its audience — all writes share one transaction.
+ * announcement and notifies its audience; one that resolves a venue
+ * amendment notifies the same audience without a public announcement
+ * (story 6). Either way the publisher is also told the decision itself —
+ * approved (story 7), or rejected with `reason` (story 8) — unless
+ * `actingUserId` (the admin who just clicked the button) is the publisher
+ * themself (story 15). All writes share one transaction.
  */
-async function updateEventStatus(eventId, status) {
-  const { event, notifications } = await db.transaction(async connection => {
+async function updateEventStatus(eventId, status, { reason = null, actingUserId = null } = {}) {
+  const { event, notifications: notificationRows } = await db.transaction(async connection => {
     const [result] = await connection.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
     if (!result.affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
 
-    let notifications = [];
+    let createdNotifications = [];
 
     if (status === 'approved' || status === 'rejected') {
       const [pendingRows] = await connection.execute(
@@ -163,19 +226,52 @@ async function updateEventStatus(eventId, status) {
       );
 
       if (status === 'approved') {
-        const dateAmendments = pendingRows.filter(row => row.field === 'event_date' || row.field === 'event_end_date');
+        const dateAmendments = pendingRows.filter(row => DATE_AMENDMENT_FIELDS.includes(row.field));
         for (const amendment of dateAmendments) {
-          const published = await publishDateAnnouncement(connection, eventId, amendment);
-          notifications = notifications.concat(published);
+          createdNotifications = createdNotifications.concat(await publishDateAnnouncement(connection, eventId, amendment));
+        }
+
+        const venueAmendments = pendingRows.filter(row => VENUE_AMENDMENT_FIELDS.includes(row.field));
+        if (venueAmendments.length) {
+          createdNotifications = createdNotifications.concat(await notifyVenueChange(connection, eventId, venueAmendments));
         }
       }
     }
 
     const [rows] = await connection.execute('SELECT * FROM events WHERE id = ?', [eventId]);
-    return { event: rows[0], notifications };
+    const updatedEvent = rows[0];
+
+    // The publisher is told the decision itself — never when the acting
+    // admin is the publisher (story 15).
+    if (updatedEvent.created_by !== null && updatedEvent.created_by !== actingUserId) {
+      if (status === 'approved') {
+        const notification = await notifications.create({
+          userId: updatedEvent.created_by,
+          eventId,
+          type: notifications.TYPES.EVENT_APPROVED,
+          title: 'تمت الموافقة على مناسبتك',
+          body: `تمت الموافقة على مناسبتك "${updatedEvent.title}" وأصبحت مرئية للجميع`
+        }, connection);
+        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by });
+      } else if (status === 'rejected') {
+        const body = reason
+          ? `تم رفض مناسبتك "${updatedEvent.title}": ${reason}`
+          : `تم رفض مناسبتك "${updatedEvent.title}" — لم يُذكر سبب إضافي`;
+        const notification = await notifications.create({
+          userId: updatedEvent.created_by,
+          eventId,
+          type: notifications.TYPES.EVENT_REJECTED,
+          title: 'تم رفض مناسبتك',
+          body
+        }, connection);
+        createdNotifications.push({ id: notification.id, user_id: updatedEvent.created_by });
+      }
+    }
+
+    return { event: updatedEvent, notifications: createdNotifications };
   });
 
-  return { event: withAbsoluteMedia(event), notifications };
+  return { event: withAbsoluteMedia(event), notifications: notificationRows };
 }
 
 /** Deleting an event cascades to its reactions and congratulations. */

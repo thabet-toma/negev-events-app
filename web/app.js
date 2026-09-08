@@ -352,11 +352,14 @@ function initSocket() {
 function subscribeToNotificationSocket() {
   if (!socket || !currentUser) return;
   socket.off(`new_notification_${currentUser.id}`);
-  socket.on(`new_notification_${currentUser.id}`, (data) => {
-    notificationsList.unshift(data);
-    renderNotificationsList();
-    updateNotificationsBadge();
-    showToast(`🔔 ${data.title}`);
+  // الحمولة هنا بلا عنوان ولا نص عمداً (issue #85 دفعة 3) — القناة بلا غرف
+  // وتصل كل عميل متصل، فأي نصّ فيها كان سيُسرَّب. نتجاهلها ونعيد جلب القائمة
+  // نفسها دائماً، تماماً كما يفعل تطبيق الموبايل (events_screen.dart)، ولا
+  // نُنبِّه إلا بعد وصول محتوًى حقيقي من الخادم.
+  socket.on(`new_notification_${currentUser.id}`, async () => {
+    await fetchNotifications();
+    const latest = notificationsList[0];
+    if (latest) showToast(`🔔 ${latest.title}`);
   });
 }
 

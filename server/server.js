@@ -16,6 +16,7 @@ const seed = require('./src/db/seed');
 const createApp = require('./src/app');
 const realtime = require('./src/realtime');
 const analytics = require('./src/services/analytics.service');
+const scheduler = require('./src/jobs/scheduler');
 
 const RUN_MIGRATIONS = process.env.RUN_MIGRATIONS !== 'false';
 const RUN_SEED = process.env.RUN_SEED !== 'false';
@@ -36,6 +37,14 @@ async function start() {
   const app = createApp();
   const server = http.createServer(app);
   realtime.init(server);
+
+  // The daily countdown/digest job (issue #85) — lives in src/jobs/, not
+  // src/services/, precisely because it calls realtime.emit itself; see its
+  // own file comment. Its timer is unref()'d, so this never keeps the
+  // process alive on its own. smoke.test.js/web-dom.test.js boot the app via
+  // createApp() directly and never require server.js, so start() is never
+  // called during a test run at all.
+  scheduler.start();
 
   if (RUN_ANALYTICS_RETENTION) {
     const runFold = () => {
@@ -63,6 +72,7 @@ async function start() {
 
   const shutdown = signal => {
     logger.info(`${signal} received — shutting down gracefully...`);
+    scheduler.stop();
     server.close(async () => {
       await db.close().catch(() => {});
       process.exit(0);
