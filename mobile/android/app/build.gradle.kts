@@ -24,6 +24,12 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications (منبّه التذكير المحلي، issue #85 دفعة ٧)
+        // يفرض هذا على التطبيق المستهلِك نفسه لا على الحزمة وحدها — بلاه يسقط
+        // `flutter build apk` عند :app:checkReleaseAarMetadata برسالة «requires
+        // core library desugaring to be enabled for :app». ولا اختبار يمسك
+        // هذا: `flutter test` لا يبني أندرويد إطلاقاً، فالبناء وحده يكشفه.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -61,6 +67,13 @@ android {
             }
         }
     }
+}
+
+dependencies {
+    // النسخة مثبَّتة على ما تطلبه الحزمة نفسها في
+    // flutter_local_notifications-22.3.0/android/build.gradle — نسخة أقدم
+    // منها تُسقط البناء، ورفعها بلا سبب يخاطر بتعارض لا يظهر إلا في release.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
