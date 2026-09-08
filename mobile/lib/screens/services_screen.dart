@@ -298,9 +298,11 @@ class _ServicesScreenState extends State<ServicesScreen> {
   }
 }
 
-/// شريط فئات أفقي أوّله «الكل» — نفس نمط `_OccasionTypeTabs` في
-/// `events_screen.dart` بصرياً (رقائق اختيار، ٤٢ ارتفاعاً)، بلا مشاركة كودٍ
-/// لأنّ ذاك خاص بأنواع المناسبات لا فئات الخدمات.
+/// شريط فئات أفقي أوّله «الكل» — رقائق اختيار بارتفاع ٤٢. كان يحاكي
+/// `_OccasionTypeTabs` في `events_screen.dart`، وقد حلّت محلّها هناك رقاقة
+/// تفتح ورقة بحث متعدّدة الاختيار (#85 دفعة ٨) لأنّ شريطين زاحفين كانا يأكلان
+/// أعلى شاشة المناسبات. دليل الخدمات فيه شريط واحد لا شريطان، فالسبب لا ينطبق
+/// عليه ولم يُغيَّر.
 class _CategoryTabs extends StatelessWidget {
   const _CategoryTabs({
     required this.categories,
