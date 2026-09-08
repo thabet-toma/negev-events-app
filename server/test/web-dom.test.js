@@ -1446,6 +1446,27 @@ async function run() {
       /\.events-feed\s*\{[^}]*overflow-y:\s*auto/.test(STYLES_CSS),
       '.events-feed must declare overflow-y: auto to be its own scroll container'
     );
+
+    // العطل الذي نزل للإنتاج في 1.7.0: التبويب كان `display: flex` فصار مقاس
+    // التغذية يأتي من `flex-basis: auto` (حجم المحتوى) لا من `height`، و
+    // `overflow: hidden` عليه كان يعطّل `position: sticky`. النتيجة كرت بارتفاع
+    // 145px من 844 — المناسبات موجودة في الـDOM وغير مرئية.
+    assert.ok(
+      !/#tabHome\.active-tab\s*\{[^}]*overflow:\s*hidden/.test(STYLES_CSS),
+      '#tabHome.active-tab must not clip: overflow:hidden disables position:sticky on the feed'
+    );
+    assert.ok(
+      !/#tabHome\.active-tab\s*\{[^}]*display:\s*flex/.test(STYLES_CSS),
+      '#tabHome.active-tab must not be a flex container: flex-basis:auto sizes the feed from content, not height'
+    );
+    assert.ok(
+      /#eventsContainer\.events-feed\s*\{[^}]*min-height:\s*60dvh/.test(STYLES_CSS),
+      'the home feed needs a min-height floor so a bad measurement can never hide every event'
+    );
+    assert.ok(
+      /#eventsContainer\.events-feed\s*\{[^}]*position:\s*sticky/.test(STYLES_CSS),
+      'the home feed pins under the sticky header once the scrollable chrome above it passes'
+    );
   });
 
   await test('a mourning card never emits a countdown badge, whether or not it has a poster', () => {

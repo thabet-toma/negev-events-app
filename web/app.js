@@ -990,22 +990,58 @@ function initFeedScroller() {
   }
   window.addEventListener('resize', updateFeedDimensions);
   window.addEventListener('load', updateFeedDimensions);
+  observeFeedChrome();
   updateFeedDimensions();
 }
 
+/*
+ * الكروم الثابت يتغيّر ارتفاعه بلا `resize`: الترويسة تلتفّ سطرين عند تبدّل
+ * الخط أو اللغة، والشريط السفلي يتغيّر مع منطقة الأمان في الهواتف. ربطُ الحساب
+ * بـ`resize` وحده كان يترك القيمة قديمة بعد كل تغيّر من هذا النوع، وهو سبب
+ * تقطّع العطل. `ResizeObserver` يراقب الصندوقين اللذين يدخلان الحساب فعلاً.
+ */
+let feedChromeObserver = null;
+function observeFeedChrome() {
+  if (feedChromeObserver || typeof ResizeObserver === 'undefined') return;
+  feedChromeObserver = new ResizeObserver(() => updateFeedDimensions());
+  [document.querySelector('.app-header'), feedBottomChromeEl()]
+    .filter(Boolean)
+    .forEach((el) => feedChromeObserver.observe(el));
+}
+
+function feedBottomChromeEl() {
+  return document.querySelector('.bottom-nav-wrap') || document.querySelector('.bottom-navbar');
+}
+
+/*
+ * ارتفاع الخلاصة = الشاشة ناقص **الكروم الثابت وحده**: الترويسة `sticky` أعلى
+ * الصفحة، والشريط السفلي `fixed` أسفلها. لا شيء غيرهما يبقى على الشاشة.
+ *
+ * الحساب السابق كان يطرح `getBoundingClientRect().top + scrollY` — أي إزاحة
+ * الخلاصة عن أعلى **المستند**، فيدخل فيه كل ما فوقها: شريط التعميم وشريط
+ * الستوريات ورقاقتا الفلتر وشريط البحث. وهذه كلها `static` تمرّ عند التمرير
+ * ولا تشغل الشاشة بعده، ومع ذلك كانت تُطرح طرحاً دائماً. على 390×844 كان
+ * المطروح 630px من 844، فلا يتبقّى للكرت داخل الشاشة إلا 145px.
+ *
+ * والقيمة تؤدّي وظيفتين معاً بعد أن صارت الخلاصة `position: sticky`: مقدار
+ * الطرح من ارتفاع الشاشة، ومسافة التثبيت (`top`) تحت الترويسة.
+ */
 function updateFeedDimensions() {
   const container = document.getElementById('eventsContainer');
   if (!container) return;
-  const rect = container.getBoundingClientRect();
-  const feedTop = rect.top + (window.scrollY || window.pageYOffset || 0);
-  const bottomNav = document.querySelector('.bottom-nav-wrap') || document.querySelector('.bottom-navbar');
-  const feedBottom = bottomNav
-    ? (bottomNav.offsetHeight || bottomNav.getBoundingClientRect().height || 0)
-    : 0;
 
-  const targetEl = document.getElementById('tabHome') || container;
-  targetEl.style.setProperty('--feed-top', `${Math.round(feedTop)}px`);
-  targetEl.style.setProperty('--feed-bottom', `${Math.round(feedBottom)}px`);
+  const measure = (el) => (el ? Math.round(el.getBoundingClientRect().height || el.offsetHeight || 0) : 0);
+  const feedTop = measure(document.querySelector('.app-header'));
+  const feedBottom = measure(feedBottomChromeEl());
+  // أرضية ٦٠٪ من الشاشة: على هاتف قصير بترويسة ملتفّة قد يصير الباقي أقلّ من
+  // كرت صالح للقراءة، والمطلوب ألّا تختفي المناسبات مهما ضاق الباقي.
+  const available = Math.max(Math.round(window.innerHeight * 0.6), window.innerHeight - feedTop - feedBottom);
+
+  // بالبكسل على العنصر نفسه، لا عبر `var()` يُقرأ من أب داخل `calc`: القياس
+  // جرى هنا أصلاً، والكتابة المباشرة تُخرج الأرضية أعلاه من قدرة CSS وحدها
+  // (لا تعرف ارتفاع الكروم) وتُسقط طبقة استبدال كاملة من طريق الخطأ.
+  container.style.setProperty('top', `${feedTop}px`, 'important');
+  container.style.setProperty('height', `${available}px`, 'important');
 }
 
 function handleFeedScroll() {

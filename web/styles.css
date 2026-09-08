@@ -637,15 +637,21 @@ body {
 }
 
 /*
- * يتجاوز هذا المحدد قاعدة `.tab-content.active-tab { display: block }` القائمة عمداً:
- * التبويب الرئيسي يحتاج تخطيط flex رأسياً مع منع التمرير الخارجي (overflow: hidden)،
- * حيث ينتهي محتوى التغذية بحساب height الدقيق عند الحافة العلوية للشريط السفلي،
- * ليثبت شريط البحث والأشرطة الخارجية دون تجاوز نافذة العرض (قرار الملحق 1).
+ * كان هنا `display: flex; flex-direction: column; overflow: hidden` — وكلاهما
+ * صار ضاراً:
+ *
+ * - **flex**: التغذية عنصر في العمود، ومقاس عنصر flex يأتي من `flex-basis`.
+ *   و`auto` منه يعود إلى **حجم المحتوى** لا إلى خاصية `height`، وحجم المحتوى
+ *   هنا كرتٌ بملء الشاشة (`.event-card { min-height: 100% }`) — فكان الصندوق
+ *   يخرج 100dvh كاملة مهما قالت `height`، أي أن حساب الارتفاع كان بلا أثر
+ *   أصلاً. بالتخطيط الكتلي `height` تعني ما تقوله.
+ * - **overflow: hidden**: يجعل العنصر حاوية قصّ، فتتعطّل `position: sticky`
+ *   على التغذية داخله.
+ *
+ * والعناصر هنا كلها كتل تتراصّ رأسياً، فالكتلة ترتّبها كما كان الـflex يرتّبها.
  */
 #tabHome.active-tab {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  display: block;
 }
 
 .events-feed {
@@ -656,9 +662,36 @@ body {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  /* `--feed-top`/`--feed-bottom` لم يعودا يُكتبان من أي مكان: التغذية الرئيسية
+     تأخذ ارتفاعها بالبكسل من `updateFeedDimensions()`، والحاويات الثلاث الأخرى
+     التي تشارك هذا الصنف كانت دائماً خارج نطاقهما فتقرأ 0. فبقي المعنى نفسه
+     بلا متغيّر لا يعرّفه أحد. */
   height: 100vh;
-  height: calc(100vh - var(--feed-top, 0px) - var(--feed-bottom, 0px));
-  height: calc(100dvh - var(--feed-top, 0px) - var(--feed-bottom, 0px));
+  height: 100dvh;
+}
+
+/*
+ * التغذية الرئيسية وحدها. `.events-feed` صنف مشترك بين أربع حاويات
+ * (`#eventsContainer` و`#myEventsList` و`#servicesListContainer`
+ * و`#notificationsList`)، وواحدةٌ منها فقط هي سطح القفز بملء الشاشة.
+ *
+ * `position: sticky` هي نصف الإصلاح: الكروم غير الثابت فوق التغذية (شريط
+ * التعميم، الستوريات، رقاقتا الفلتر، شريط البحث — 421px على 390×844) يمرّ
+ * ويختفي عند التمرير، فتُثبَّت التغذية تحت الترويسة وتملأ ما بقي من الشاشة
+ * بدل أن تُدفَع أسفلها. الحساب القديم كان يطرح هذه الـ421px طرحاً دائماً من
+ * ارتفاع الشاشة، فلا يبقى للكرت إلا 145px.
+ */
+#eventsContainer.events-feed {
+  position: sticky;
+  /* `top` والارتفاع الفعليان يكتبهما `updateFeedDimensions()` بالبكسل على
+     العنصر بعد قياس الكروم الثابت. ما هنا أرضية تعمل بلا JS وقبل أول قياس:
+     مهما اختلّ القياس مستقبلاً لا تنهار التغذية ولا تختفي المناسبات. */
+  top: 0;
+  height: 60dvh;
+  min-height: 60dvh;
+  /* `contain` كان يقطع سلسلة التمرير: السحب لأعلى من أول كرت لا يعيد الكروم
+     فوقها، و«السحب للتحديث» الأصلي في المتصفّح لا يعمل فوقها إطلاقاً. */
+  overscroll-behavior-y: auto;
 }
 
 .events-feed::-webkit-scrollbar {
@@ -787,6 +820,15 @@ body {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
   background-color: var(--card-framed-ground);
   box-sizing: border-box;
+}
+
+/*
+ * أرضية للملصق في التغذية الرئيسية وحدها: تحميه من الانهيار إلى صفر دون أن
+ * تزاحم التسمية تحته. بالنسبة المئوية (40dvh) كان الملصق يأخذ ثلثي كرت قصير
+ * ويقصّ العنوان — والأرضية حماية من الاختفاء لا حصّة ثابتة من الكرت.
+ */
+#eventsContainer .card-media {
+  min-height: 180px;
 }
 
 .card-media {
