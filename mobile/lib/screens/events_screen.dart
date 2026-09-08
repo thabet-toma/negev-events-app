@@ -183,13 +183,24 @@ class _EventsScreenState extends State<EventsScreen> {
       return;
     }
 
+    bool willAlarm = true;
     try {
       if (event.isReminded) {
         await services.api.unremind(event.id);
+        await services.reminders.onReminderRemoved(event.id);
       } else {
         await services.api.remind(event.id);
+        willAlarm = await services.reminders.onReminderAdded();
       }
       if (!mounted) return;
+      if (!willAlarm) {
+        showMessage(
+          context,
+          'تم حفظ التذكير، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — '
+          'فعّله من إعدادات النظام كي يصلك المنبّه',
+          isError: true,
+        );
+      }
       setState(() {
         _events = _events
             .map(
@@ -771,11 +782,22 @@ class _NotificationBellState extends State<_NotificationBell> {
                     itemCount: _notifications.length,
                     itemBuilder: (context, index) {
                       final n = _notifications[index];
+                      // تعميم نبرته وقورة لا يُرسم احتفالياً بأي حال — لا لون
+                      // ولا أيقونة تبتهج فوق نعي.
+                      final iconColor = n.isRead
+                          ? context.c.inkFaint
+                          : n.tone == notif.BroadcastTone.solemn
+                              ? context.c.inkSoft
+                              : n.tone == notif.BroadcastTone.urgent
+                                  ? context.c.warn
+                                  : context.c.sky;
                       return ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(
-                          n.isRead ? Icons.notifications_none : Icons.notifications_active,
-                          color: n.isRead ? context.c.inkFaint : context.c.sky,
+                          n.isBroadcast
+                              ? Icons.campaign_outlined
+                              : (n.isRead ? Icons.notifications_none : Icons.notifications_active),
+                          color: iconColor,
                         ),
                         title: Text(
                           n.title,
@@ -792,12 +814,17 @@ class _NotificationBellState extends State<_NotificationBell> {
                           Navigator.of(sheetContext).pop();
                           if (!n.isRead) {
                             try {
-                              await api.markNotificationRead(n.id);
+                              if (n.isBroadcast) {
+                                await api.dismissBroadcast(n.broadcastId!);
+                              } else {
+                                await api.markNotificationRead(n.id!);
+                              }
                               _load();
                             } catch (_) {
                               // لا يعطّل فتح المناسبة إن فشل تعليم القراءة.
                             }
                           }
+                          // تعميم بلا event_id إطلاقاً — لا مكان ينقل إليه النقر.
                           if (n.eventId != null && context.mounted) {
                             Navigator.of(context).push(
                               MaterialPageRoute(

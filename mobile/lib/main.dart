@@ -9,6 +9,7 @@ import 'screens/home_shell.dart';
 import 'state/auth_store.dart';
 import 'state/deep_link_handler.dart';
 import 'state/realtime.dart';
+import 'state/reminder_scheduler.dart';
 import 'state/theme_store.dart';
 import 'theme.dart';
 
@@ -36,11 +37,17 @@ void main() {
   final auth = AuthStore(api);
   final realtime = RealtimeService();
   final themeStore = ThemeStore();
+  final reminders = ReminderScheduler(api: api, auth: auth);
 
   // لا ننتظر التحميل: الشاشات تعرض حالتها الخاصة عبر AnimatedBuilder.
   auth.load();
   realtime.connect();
   themeStore.load();
+  // إعادة بناء خطّة المنبّهات كل ما تغيّرت هويّة الحساب المسجَّل — يغطّي فتح
+  // التطبيق (أول notifyListeners بعد auth.load())، تسجيل الدخول، وتبديل
+  // الحساب معاً بمسار واحد؛ تسجيل الخروج يُلغي كل منبّه بلا استثناء (قصة ١٩
+  // والقرار الصريح بشأن تبديل الحساب، دفعة ٧).
+  auth.addListener(reminders.handleAuthChange);
   // رابط مناسبة (`/e/<id>`) يفتح شاشة تفاصيلها مباشرة — إقلاعاً بارداً أو
   // استئنافاً دافئاً. لا يُنتظر أيضاً: أول إطار يُبنى بصرف النظر عن وجود رابط.
   DeepLinkHandler(navigatorKey: navigatorKey, api: api).start();
@@ -51,6 +58,7 @@ void main() {
       auth: auth,
       realtime: realtime,
       themeStore: themeStore,
+      reminders: reminders,
       child: const NegevApp(),
     ),
   );
@@ -67,13 +75,16 @@ class AppServices extends InheritedWidget {
     required this.auth,
     required this.realtime,
     ThemeStore? themeStore,
+    ReminderScheduler? reminders,
     required super.child,
-  }) : themeStore = themeStore ?? ThemeStore();
+  })  : themeStore = themeStore ?? ThemeStore(),
+        reminders = reminders ?? ReminderScheduler(api: api, auth: auth);
 
   final NegevApi api;
   final AuthStore auth;
   final RealtimeService realtime;
   final ThemeStore themeStore;
+  final ReminderScheduler reminders;
 
   static AppServices of(BuildContext context) {
     final services =
@@ -87,7 +98,8 @@ class AppServices extends InheritedWidget {
       api != oldWidget.api ||
       auth != oldWidget.auth ||
       realtime != oldWidget.realtime ||
-      themeStore != oldWidget.themeStore;
+      themeStore != oldWidget.themeStore ||
+      reminders != oldWidget.reminders;
 }
 
 class NegevApp extends StatelessWidget {

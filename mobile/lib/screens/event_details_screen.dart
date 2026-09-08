@@ -181,8 +181,18 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     try {
       if (event.isReminded) {
         await services.api.unremind(event.id);
+        await services.reminders.onReminderRemoved(event.id);
       } else {
         await services.api.remind(event.id);
+        final willAlarm = await services.reminders.onReminderAdded();
+        if (!willAlarm && mounted) {
+          showMessage(
+            context,
+            'تم حفظ التذكير، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — '
+            'فعّله من إعدادات النظام كي يصلك المنبّه',
+            isError: true,
+          );
+        }
       }
       _reloadQuietly();
     } catch (error) {

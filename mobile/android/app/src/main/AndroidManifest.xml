@@ -7,6 +7,12 @@
          12+ يتجاهل FINE بلا COARSE معه في نفس الطلب. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- منبّه التذكير المحلي (flutter_local_notifications, issue #85 دفعة ٧):
+         جدولة غير دقيقة عمداً (inexactAllowWhileIdle)، فلا حاجة لإذن
+         SCHEDULE_EXACT_ALARM. RECEIVE_BOOT_COMPLETED وحده لازم كي تُعاد
+         جدولة المنبّهات بعد إعادة تشغيل الجهاز — أندرويد يمسح تنبيهات
+         AlarmManager عند كل إقلاع. POST_NOTIFICATIONS تضيفه الحزمة نفسها. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
         android:label="أعراسنا"
@@ -53,6 +59,17 @@
             android:name="com.yalantis.ucrop.UCropActivity"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
+        <!-- بلا هذين المستقبلَين، جدولة flutter_local_notifications لا تُطلق
+             شيئاً فعلياً على أندرويد إطلاقاً. -->
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

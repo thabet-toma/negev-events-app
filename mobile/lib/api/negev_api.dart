@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import '../models/event.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
+import '../models/reminder_schedule.dart';
 import '../models/service.dart';
 import '../models/user.dart';
 import 'api_client.dart';
@@ -288,6 +289,24 @@ class NegevApi {
 
   Future<void> markNotificationRead(int id) async {
     await _client.patch('/api/notifications/$id/read', auth: true);
+  }
+
+  /// إغلاق تعميم من مركز الإشعارات — مسار مختلف عن تعليم إشعار شخصي مقروءاً؛
+  /// لا `id` لتعميم في القائمة المدموجة، بل `broadcast_id` وحده.
+  Future<void> dismissBroadcast(int broadcastId) async {
+    await _client.patch('/api/broadcasts/$broadcastId/dismiss', auth: true);
+  }
+
+  /// مواعيد إطلاق المنبّه المحلي المتبقّية لكل مناسبة يتابعها المستخدم —
+  /// الخادم يحسبها كاملة (jerusalemTime.js)، والعميل لا يعيد اشتقاقها.
+  Future<List<ReminderScheduleEntry>> remindersSchedule() async {
+    final data = await _client.get('/api/reminders/schedule', auth: true);
+    final list = data['schedule'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(ReminderScheduleEntry.fromJson)
+        .toList();
   }
 
   /// فحص تعارض التاريخ قبل تقديم المناسبة.
