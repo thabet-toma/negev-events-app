@@ -1,6 +1,5 @@
 // State Management
 let allEvents = [];
-let selectedTown = 'الكل';
 let searchQuery = '';
 let currentAudio = null;
 let currentAudioBtn = null;
@@ -58,8 +57,17 @@ let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل 
 let currentPage = 1;
 const EVENTS_PAGE_SIZE = 30;
 let currentPagination = null;
-let selectedOccasionTypeId = null; // null = "الكل"
 let showArchive = false;
+
+// Place & kind filter — رقاقة واحدة لكل منها تفتح ورقة بحث متعددة الاختيار،
+// بدل شريطين زاحفين (#85 خطوة 40-46). البلدة والقرية يُختاران من قائمة واحدة
+// لكنهما يُرسلان في معاملين منفصلين — الخادم يوحّدهما (union) لا يقاطعهما.
+let selectedTowns = []; // أسماء بلدات، من TOWNS على الخادم
+let selectedVillageIds = []; // معرّفات قرى رقمية
+let selectedOccasionTypeIds = []; // معرّفات أنواع مناسبات رقمية
+let filterSheetActiveKey = null; // 'place' أو 'kind' — أيّ ورقة فلترة مفتوحة الآن (ورقة واحدة في كل لحظة)
+let filterSheetDraft = []; // رموز {kind, id} داخل الورقة المفتوحة فقط — لا تُطبَّق إلا بزرّ «تطبيق»
+let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة الأولى فقط (#85 خطوة 54)
 let notificationsList = [];
 let congratsQueueEventId = null;
 
@@ -88,9 +96,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initErrorTracking();
   initSocket();
-  setupTownFilters();
+  loadFilterSelectionFromStorage();
   updateAuthUI();
-  initOccasionTypeTabs();
+  initPlaceFilter();
+  initKindFilter();
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
@@ -650,19 +659,35 @@ async function handleStoryReport() {
 //
 // مرقّمة، مفلترة على الخادم دائماً (البلدة/البحث/النوع/الأرشيف تُمرَّر كوسائط
 // استعلام — لا ترشيح في العميل، وإلا انكسر الترقيم) (#20 step 10).
+/** هياكل تحميل شبيهة بشكل الكرت بدل الدوّارة — تُعرَض قبل استجابة الخادم (#85 خطوة 53). */
+function renderEventSkeletons(container, count = 3) {
+  container.classList.remove('events-feed-first-load');
+  container.innerHTML = Array.from({ length: count }).map(() => `
+    <div class="card-skeleton skeleton-shimmer">
+      <div class="skeleton-shot"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line short"></div>
+    </div>
+  `).join('');
+}
+
 async function fetchEvents(options = {}) {
   const { append = false } = options;
   const container = document.getElementById('eventsContainer');
   if (!append) {
     currentPage = 1;
-    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div><p>جاري جلب أحدث مناسبات النقب...</p></div>`;
+    renderEventSkeletons(container);
   }
 
   try {
     const params = new URLSearchParams();
-    params.set('town', selectedTown);
+    // البلدة والقرية مفصولتان بفاصلة لكل منهما — الخادم يقبل قوائم مفصولة
+    // بفاصلة ويوحّدهما، لا يقاطعهما (#85 خطوة 40-42). عدم اختيار أي مكان يعني
+    // كل الأماكن، فلا معامل يُرسَل أصلاً.
+    if (selectedTowns.length) params.set('town', selectedTowns.join(','));
+    if (selectedVillageIds.length) params.set('village_id', selectedVillageIds.join(','));
+    if (selectedOccasionTypeIds.length) params.set('occasion_type_id', selectedOccasionTypeIds.join(','));
     if (searchQuery) params.set('search', searchQuery);
-    if (selectedOccasionTypeId) params.set('occasion_type_id', selectedOccasionTypeId);
     if (showArchive) params.set('archive', '1');
     params.set('page', currentPage);
     params.set('limit', EVENTS_PAGE_SIZE);
@@ -798,19 +823,49 @@ function isMourningTone(evt) {
   return !!(evt.occasion_type && evt.occasion_type.tone === 'solemn');
 }
 
+/**
+ * حيّز HTML جاهز للحقن مباشرة في رسالة «لا توجد مناسبات» — لا وصف نصّي عادي
+ * (الاسم يخالف ما كان يعيده: هذه القيمة مُهرَّبة (`escapeHtml`) بالفعل ومُعَدّة
+ * للحقن، لا للعرض بذاتها) (#85 FIX 10أ). لا تعود أبداً لـ«منطقة النقب» طالما
+ * هناك اختيار فعلي، حتى إن تعذّر حلّ اسم أحد عناصره — حينها تُعرَض العدّة
+ * («٢ أماكن محدَّدة») لا الفراغ (#85 FIX 1، نفس علّة `filterChipLabelText`).
+ */
+function selectedPlacesHtml() {
+  const tokens = FILTER_SHEETS.place.selected();
+  if (!tokens.length) return 'منطقة النقب';
+  const resolvedNames = tokens.map(t => resolveFilterOptionLabel(FILTER_SHEETS.place, t)).filter(Boolean);
+  if (resolvedNames.length) return escapeHtml(resolvedNames.join('، '));
+  return escapeHtml(tokens.length === 1 ? FILTER_SHEETS.place.nounSingular : FILTER_SHEETS.place.nounPlural(tokens.length));
+}
+
+/**
+ * يهيّئ رابطاً للاستعمال داخل `url(...)` بصيغة CSS مضمَّنة — يستبدل أي محرف
+ * قادر على كسر الخروج من القوسين بترميز نسبة مئوية. روابط الخادم (رفع محلي أو
+ * مطلق عبر withAbsoluteMedia) لا تحمل أياً من هذه المحارف أصلاً، فهذا تحصين
+ * ضد مدخل مستقبلي لا إصلاح لعطل ملحوظ.
+ */
+function cssUrl(url) {
+  return String(url).replace(/['"()\\]/g, c => '%' + c.charCodeAt(0).toString(16));
+}
+
 function renderEvents(events) {
   const container = document.getElementById('eventsContainer');
+  const isFirstLoad = !eventsFeedFirstLoadDone;
+  eventsFeedFirstLoadDone = true;
+
   if (!events || events.length === 0) {
+    container.classList.remove('events-feed-first-load');
     container.innerHTML = `
       <div class="empty-state">
         <i class="fa-solid fa-calendar-xmark"></i>
         <h3>لا توجد مناسبات مسجلة</h3>
-        <p>كن أول من يعلن عن مناسبة في ${selectedTown === 'الكل' ? 'منطقة النقب' : selectedTown}</p>
+        <p>كن أول من يعلن عن مناسبة في ${selectedPlacesHtml()}</p>
       </div>
     `;
     return;
   }
 
+  container.classList.toggle('events-feed-first-load', isFirstLoad);
   container.innerHTML = events.map(evt => {
     const eventDate = new Date(evt.event_date);
     const today = new Date();
@@ -863,39 +918,42 @@ function renderEvents(events) {
       </div>
     ` : '';
 
-    // بنية الكرت الموصى بها: صورة أولاً بتركيب مضغوط — تاريخ فوق الصورة،
-    // نوع المناسبة كشارة فوقها، وسطر عشيرة/بلدة بلون النوع تحت الاسم. العزاء
-    // بلا صورة افتراضية أبداً؛ صورة المتوفَّى حين تُرفع تبقى أهدأ — بلا شارة
-    // تاريخ فوقها، فالتاريخ ينزل للكتلة النصية دائماً في العزاء (#20 خطوة 11).
+    // الصورة تحكم الكرت: صندوق ٤:٥ ثابت في كل الحالات — بملصق أو بلا ملصق،
+    // فرحاً أو عزاءً — بحيث تتساوى كروت التغذية ارتفاعاً ولا يبدو كرت بلا
+    // ملصق مكسوراً (#85 خطوة 47-52). الملصق `contain` كاملاً أبداً بلا قصّ،
+    // فوق نسخة مضبَّبة مكبَّرة من نفس الصورة تملأ ما لا يملؤه القياس الحقيقي —
+    // نفس تركيبة drawHero في shareCard.service.js، بـCSS هنا لا Canvas.
+    // الشارتان فوق الصورة دائماً، لا في صفّ يسبقها يأكل مساحة. العزاء بلا عدّاد
+    // إطلاقاً — «باقي ٣ أيام» جملة مسيئة على نعيٍ.
     const isMourning = isMourningTone(evt);
     const toneColor = evt.occasion_type && evt.occasion_type.color
       ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
       : null;
     const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
-    // hasShot يتّكئ فقط على وجود الصورة الفعلي — لا على النوع. الخادم يحقن
-    // default_poster_url لكل نوع غير العزاء عند النشر، فهذا نادراً ما يغيب
-    // إلا في العزاء أو صفّ قديم سابق لتلك القاعدة؛ وفي الحالتين يجب أن يبقى
-    // شارة النوع والتاريخ ظاهرَين من مكان ما (#20 خطوة 11).
     const hasShot = !!evt.poster_url;
 
-    const shotHtml = !hasShot ? '' : `
-      <div class="card-shot">
-        <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}">
-          <img src="${evt.poster_url}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">
-        </div>
-        ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
-        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-      </div>`;
+    const posterHtml = hasShot ? `
+          <div class="card-poster-backdrop" style="background-image:url('${escapeHtml(cssUrl(evt.poster_url))}')" aria-hidden="true"></div>
+          <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-poster-img" loading="lazy">` : `
+          <div class="card-poster-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
-    const topRowHtml = (hasShot && !isMourning) ? '' : `
-      <div class="card-toprow">
-        ${hasShot ? '' : occasionTypeBadgeHtml(evt.occasion_type)}
-        <span class="card-meta">${escapeHtml(countdownText)}</span>
+    const shotHtml = `
+      <div class="card-shot">
+        <div class="card-poster-wrapper${isMourning ? ' tone-mourning' : ''}${hasShot ? '' : ' card-poster-empty'}">${posterHtml}
+        </div>
+        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+        ${isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`}
       </div>`;
 
     const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
     const clanLineHtml = clanTownParts.length
-      ? `<div class="card-clan-line">${clanTownParts.join(' — ')}</div>` : '';
+      ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
+
+    // العزاء بلا عدّاد إطلاقاً (قصة 52)، لكن التاريخ نفسه يبقى — هو الحقيقة
+    // الأهمّ على كرت تعزية، لا يجوز أن يختبئ خلف «مزيد من التفاصيل» كبقية
+    // الشبكة (#85 FIX 3). سطر هادئ لا شارة صاخبة فوق الصورة.
+    const mourningDateLineHtml = isMourning
+      ? `<div class="card-date-line card-clamp-1-line">${escapeHtml(formattedDate)}</div>` : '';
 
     // «يحيي الحفلة الفنان فلان» — يغيب كلياً إن فرغ الحقل، لا سطر فارغ ولا
     // نص بديل. صورة الفنان في التفاصيل لا الكرت — الكرت يحمل الملصق أصلاً.
@@ -909,40 +967,50 @@ function renderEvents(events) {
         ${audioBlock}
 
         <div class="card-body">
-          ${topRowHtml}
-          <h2 class="event-main-title">${escapeHtml(evt.title)}</h2>
+          <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
           ${clanLineHtml}
-          ${artistLineHtml}
+          ${mourningDateLineHtml}
 
-          <div class="event-details-grid">
-            <div class="detail-item">
-              <i class="fa-solid fa-calendar-day"></i>
-              <span><strong>التاريخ:</strong> ${formattedDate}</span>
-            </div>
-            ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
-            <div class="detail-item">
-              <i class="fa-solid fa-fire"></i>
-              <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
-            </div>` : ''}
-            ${typeShowsField(evt, 'dinner_time') ? `
-            <div class="detail-item">
-              <i class="fa-solid fa-utensils"></i>
-              <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
-            </div>` : ''}
-            <div class="detail-item">
-              <i class="fa-solid fa-location-dot"></i>
-              <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
-            </div>
-          </div>
+          <!-- كتلة النصّ سطران فقط (ثلاثة في العزاء، بسطر التاريخ الهادئ
+               أعلاه)؛ كل شيء آخر خلف «مزيد من التفاصيل» — الصورة سبب فتح
+               التطبيق لا النصّ (#85 خطوة 48، الاستثناء من FIX 3). -->
+          <button type="button" class="card-more-details-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
+            <i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل
+          </button>
 
-          <!-- 1-Click Navigation -->
-          <div class="nav-buttons-row">
-            <a href="${wazeUrl}" target="_blank" class="waze-btn">
-              <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
-            </a>
-            <a href="${mapsUrl}" target="_blank" class="maps-btn">
-              <i class="fa-solid fa-location-arrow"></i> خرائط Google
-            </a>
+          <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
+            ${artistLineHtml}
+
+            <div class="event-details-grid">
+              <div class="detail-item">
+                <i class="fa-solid fa-calendar-day"></i>
+                <span><strong>التاريخ:</strong> ${formattedDate}</span>
+              </div>
+              ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
+              <div class="detail-item">
+                <i class="fa-solid fa-fire"></i>
+                <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
+              </div>` : ''}
+              ${typeShowsField(evt, 'dinner_time') ? `
+              <div class="detail-item">
+                <i class="fa-solid fa-utensils"></i>
+                <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+              </div>` : ''}
+              <div class="detail-item">
+                <i class="fa-solid fa-location-dot"></i>
+                <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
+              </div>
+            </div>
+
+            <!-- 1-Click Navigation -->
+            <div class="nav-buttons-row">
+              <a href="${wazeUrl}" target="_blank" class="waze-btn">
+                <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
+              </a>
+              <a href="${mapsUrl}" target="_blank" class="maps-btn">
+                <i class="fa-solid fa-location-arrow"></i> خرائط Google
+              </a>
+            </div>
           </div>
 
           ${renderReactionBarHtml(evt)}
@@ -972,6 +1040,20 @@ function renderEvents(events) {
       </div>
     `;
   }).join('');
+}
+
+/** يطوي/يبسط كتلة تفاصيل الكرت (الشبكة، أزرار الملاحة، سطر الفنان) خلف زرّ واحد (#85 خطوة 48). */
+function toggleCardDetails(eventId, btn) {
+  const panel = document.getElementById(`cardDetails-${eventId}`);
+  if (!panel) return;
+  const willShow = panel.hidden;
+  panel.hidden = !willShow;
+  if (btn) {
+    btn.setAttribute('aria-expanded', String(willShow));
+    btn.innerHTML = willShow
+      ? '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل'
+      : '<i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل';
+  }
 }
 
 /** أيقونة ولون نوع المناسبة من الخادم كما هما — لا لون جديد يُصمَّم هنا (#20 step 10). */
@@ -1131,8 +1213,9 @@ async function initLeafletMap() {
 // القاعة نفسها، فموقعه الحالي ليس موقع المناسبة.
 
 /** يجلب مراكز البلدات وقائمة البلدات نفسها من الخادم مرة واحدة فقط. */
+/** يعيد true حين تُحمَّل البلدات/القرى فعلاً — الفلتر يتوقّف على هذا بدل افتراض النجاح دائماً (#85 FIX 10ب). */
 async function loadTownCoordinates() {
-  if (Object.keys(townCoordinates).length) return;
+  if (Object.keys(townCoordinates).length) return true;
   try {
     const res = await apiFetch('/api/towns');
     const data = await res.json();
@@ -1140,9 +1223,12 @@ async function loadTownCoordinates() {
       if (data.town_coordinates) townCoordinates = data.town_coordinates;
       if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
       if (data.villages) villagesList = data.villages;
+      return true;
     }
+    return false;
   } catch (e) {
     console.error('Town coordinates error:', e);
+    return false;
   }
 }
 
@@ -1432,17 +1518,263 @@ function resumePendingIntent() {
   }
 }
 
-// 11. Town Filter & Search
-function setupTownFilters() {
-  const pills = document.querySelectorAll('.town-pill');
-  pills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      pills.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      selectedTown = pill.dataset.town;
-      fetchEvents();
-    });
-  });
+// 11. Place & kind filter — رقاقتان تفتحان نفس ورقة البحث متعددة الاختيار،
+// بإعداد مختلف لكل منهما، لا نسختين شبه متطابقتين من كل دالّة (#85 خطوة 40-46،
+// FIX 9 على مراجعة الدفعة 6أ). الرقاقتان كانتا شريطين زاحفين يأكلان أعلى
+// تبويب التغذية (#tabHome) وحده — لا كل شاشة في التطبيق.
+
+// مطابق لـMAX_FILTER_VALUES في server/src/middleware/validate.js — الفلتر هنا
+// يجب أن يمنع طلباً سيرفضه الخادم أصلاً بـ400، لا أن يرسله ثم يعرض خطأ عاماً
+// (#85 FIX 2؛ حالة الاختبار القائمة في المواصفة: «فلتر بثلاثين بلدة → مرفوض
+// بالسقف، لا استعلامٌ عملاق»). الحدّ لكل «نوع» (بلدة/قرية/نوع مناسبة) منفصلاً —
+// مطابقةً لكيفية تحقّق الخادم من كل معامل قائمة بمعزل عن الآخر.
+const FILTER_MAX_VALUES_PER_KIND = 20;
+const FILTER_KIND_NOUNS = { town: 'بلدة', village: 'قرية', type: 'نوع مناسبة' };
+
+/**
+ * تعريف مُوحَّد لكل ورقة فلترة — إعداد واحد لكل استعمال بدل نسخة كاملة من كل
+ * دالّة (#85 FIX 9). `selected()`/`commit()` يقرآن ويكتبان الحالة الفعلية
+ * (`selectedTowns` وما شابه)؛ البقية وصف عرض بحت.
+ */
+const FILTER_SHEETS = {
+  place: {
+    sheetId: 'placeFilterModal',
+    searchInputId: 'placeFilterSearchInput',
+    listId: 'placeFilterList',
+    chipLabelId: 'placeFilterChipLabel',
+    warningId: 'placeFilterWarning',
+    emptyLabel: 'كل الأماكن',
+    nounSingular: 'مكان واحد محدَّد',
+    nounPlural: n => `${n} أماكن محدَّدة`,
+    // بلدات وقرى معاً في قائمة واحدة قابلة للبحث (#85 خطوة 40-42) — معرّف
+    // البلدة اسمها نفسه، ومعرّف القرية رقمي؛ كلاهما يُميَّز بـ`kind`.
+    options() {
+      return [
+        ...townsList.map(name => ({ kind: 'town', id: name, label: name })),
+        ...villagesList.map(v => ({ kind: 'village', id: v.id, label: v.name }))
+      ];
+    },
+    selected() {
+      return [
+        ...selectedTowns.map(name => ({ kind: 'town', id: name })),
+        ...selectedVillageIds.map(id => ({ kind: 'village', id }))
+      ];
+    },
+    commit(tokens) {
+      selectedTowns = tokens.filter(t => t.kind === 'town').map(t => t.id);
+      selectedVillageIds = tokens.filter(t => t.kind === 'village').map(t => t.id);
+    }
+  },
+  kind: {
+    sheetId: 'kindFilterModal',
+    searchInputId: 'kindFilterSearchInput',
+    listId: 'kindFilterList',
+    chipLabelId: 'kindFilterChipLabel',
+    warningId: 'kindFilterWarning',
+    emptyLabel: 'كل الأنواع',
+    nounSingular: 'نوع واحد محدَّد',
+    nounPlural: n => `${n} أنواع محدَّدة`,
+    options() {
+      return (occasionTypesCache || []).map(t => ({ kind: 'type', id: t.id, label: t.name, icon: t.icon }));
+    },
+    // الأيقونة زينة عرض بحتة فوق تسمية النوع — لا تُستعمل في البحث ولا في تسمية الرقاقة.
+    optionHtml(opt) {
+      return `${opt.icon ? escapeHtml(opt.icon) + ' ' : ''}${escapeHtml(opt.label)}`;
+    },
+    selected() {
+      return selectedOccasionTypeIds.map(id => ({ kind: 'type', id }));
+    },
+    commit(tokens) {
+      selectedOccasionTypeIds = tokens.map(t => t.id);
+    }
+  }
+};
+
+/** يقرأ الاختيار المحفوظ من زيارة سابقة — كل قراءة محميّة، فقيمة تالفة تعني قائمة فارغة لا صفحة معطوبة (#85 خطوة 46). */
+function loadFilterSelectionFromStorage() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('negev_filter_towns') || '[]');
+    selectedTowns = Array.isArray(raw) ? raw.filter(t => typeof t === 'string') : [];
+  } catch (err) { selectedTowns = []; }
+
+  try {
+    const raw = JSON.parse(localStorage.getItem('negev_filter_villages') || '[]');
+    selectedVillageIds = Array.isArray(raw) ? raw.map(Number).filter(Number.isFinite) : [];
+  } catch (err) { selectedVillageIds = []; }
+
+  try {
+    const raw = JSON.parse(localStorage.getItem('negev_filter_kinds') || '[]');
+    selectedOccasionTypeIds = Array.isArray(raw) ? raw.map(Number).filter(Number.isFinite) : [];
+  } catch (err) { selectedOccasionTypeIds = []; }
+}
+
+function persistFilterSelection() {
+  try { localStorage.setItem('negev_filter_towns', JSON.stringify(selectedTowns)); } catch (err) { /* التخزين المحلي معطَّل أو ممتلئ — الجلسة الحالية تبقى تعمل */ }
+  try { localStorage.setItem('negev_filter_villages', JSON.stringify(selectedVillageIds)); } catch (err) {}
+  try { localStorage.setItem('negev_filter_kinds', JSON.stringify(selectedOccasionTypeIds)); } catch (err) {}
+}
+
+async function initPlaceFilter() {
+  const loaded = await loadTownCoordinates();
+  const chip = document.getElementById('placeFilterChip');
+  if (chip) {
+    if (loaded) {
+      chip.disabled = false;
+      chip.removeAttribute('title');
+    } else {
+      // يبقى مقفلاً بدل أن يفتح على ورقة فارغة بلا أي تفسير (#85 FIX 10ب)
+      chip.title = 'تعذّر تحميل قائمة الأماكن — أعد تحميل الصفحة للمحاولة مجدداً';
+    }
+  }
+  updateFilterChipLabel('place');
+}
+
+async function initKindFilter() {
+  await loadOccasionTypes();
+  const chip = document.getElementById('kindFilterChip');
+  if (chip) chip.disabled = false;
+  updateFilterChipLabel('kind');
+}
+
+function openFilterSheet(key) {
+  const cfg = FILTER_SHEETS[key];
+  if (!cfg) return;
+  filterSheetActiveKey = key;
+  filterSheetDraft = cfg.selected();
+  const searchInput = document.getElementById(cfg.searchInputId);
+  if (searchInput) searchInput.value = '';
+  hideFilterSheetWarning(cfg);
+  renderFilterSheetList();
+  const modal = document.getElementById(cfg.sheetId);
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeFilterSheet(key) {
+  const cfg = FILTER_SHEETS[key];
+  if (!cfg) return;
+  const modal = document.getElementById(cfg.sheetId);
+  if (modal) modal.style.display = 'none';
+}
+
+/** تُعيد رسم قائمة الورقة المفتوحة حالياً — بحث و«تطبيق» يستدعيانها معاً. */
+function renderFilterSheetList() {
+  const cfg = FILTER_SHEETS[filterSheetActiveKey];
+  if (!cfg) return;
+  const list = document.getElementById(cfg.listId);
+  if (!list) return;
+
+  const searchInput = document.getElementById(cfg.searchInputId);
+  const query = ((searchInput && searchInput.value) || '').trim();
+  const options = cfg.options().filter(opt => !query || opt.label.includes(query));
+
+  if (!options.length) {
+    list.innerHTML = `<p class="filter-sheet-empty">لا نتائج مطابقة</p>`;
+    return;
+  }
+
+  list.innerHTML = options.map(opt => {
+    const checked = filterSheetDraft.some(t => t.kind === opt.kind && t.id === opt.id);
+    const labelHtml = cfg.optionHtml ? cfg.optionHtml(opt) : escapeHtml(opt.label);
+    return `
+      <label class="filter-option-row">
+        <input type="checkbox" data-kind="${escapeHtml(opt.kind)}" data-id="${escapeHtml(String(opt.id))}" ${checked ? 'checked' : ''} onchange="toggleFilterSheetOption(this)">
+        <span>${labelHtml}</span>
+      </label>`;
+  }).join('');
+}
+
+/** بلدة معرَّفة باسمها نصّاً، وقرية/نوع مناسبة برقم — لا نحوّل البلدة رقماً. */
+function filterOptionIdFromDataset(kind, rawId) {
+  return kind === 'town' ? rawId : Number(rawId);
+}
+
+function toggleFilterSheetOption(checkbox) {
+  const cfg = FILTER_SHEETS[filterSheetActiveKey];
+  if (!cfg) return;
+  const kind = checkbox.dataset.kind;
+  const id = filterOptionIdFromDataset(kind, checkbox.dataset.id);
+
+  if (checkbox.checked) {
+    const sameKindCount = filterSheetDraft.filter(t => t.kind === kind).length;
+    if (sameKindCount >= FILTER_MAX_VALUES_PER_KIND) {
+      // يرتدّ عن الاختيار — لا يبني طلباً سيرفضه الخادم بـ400 أصلاً (#85 FIX 2)
+      checkbox.checked = false;
+      const noun = FILTER_KIND_NOUNS[kind] || 'عنصر';
+      showFilterSheetWarning(cfg, `لا يمكن اختيار أكثر من ${FILTER_MAX_VALUES_PER_KIND} ${noun} في هذا الفلتر`);
+      return;
+    }
+    filterSheetDraft = [...filterSheetDraft, { kind, id }];
+  } else {
+    filterSheetDraft = filterSheetDraft.filter(t => !(t.kind === kind && t.id === id));
+  }
+  hideFilterSheetWarning(cfg);
+}
+
+function showFilterSheetWarning(cfg, message) {
+  const el = document.getElementById(cfg.warningId);
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+}
+
+function hideFilterSheetWarning(cfg) {
+  const el = document.getElementById(cfg.warningId);
+  if (!el) return;
+  el.hidden = true;
+}
+
+function applyFilterSheet() {
+  const cfg = FILTER_SHEETS[filterSheetActiveKey];
+  if (!cfg) return;
+  cfg.commit(filterSheetDraft);
+  persistFilterSelection();
+  updateFilterChipLabel(filterSheetActiveKey);
+  closeFilterSheet(filterSheetActiveKey);
+  fetchEvents();
+}
+
+/**
+ * يحلّ اسم رمز واحد ({kind, id}) من خيارات هذه الورقة — أو null إن تعذّر: قرية
+ * حذفها الأدمن، أو عرض سبق وصول GET /api/towns (#85 FIX 1).
+ */
+function resolveFilterOptionLabel(cfg, token) {
+  const match = cfg.options().find(opt => opt.kind === token.kind && opt.id === token.id);
+  return match ? match.label : null;
+}
+
+/**
+ * نص الرقاقة المغلقة — لا يعود أبداً لـ«لا شيء مختار» طالما هناك اختيار فعلي،
+ * حتى حين يتعذّر حلّ اسمه: حينها تُعرَض العدّة («٢ أماكن محدَّدة») لا الفراغ
+ * (#85 FIX 1 — رقاقة تقول «كل الأماكن» فوق فلتر فعلي تمنع المستخدم من الوصول
+ * لزرّ «مسح الفلاتر» أصلاً، وهذا اللغز الذي وُجد الزرّ ليمنعه).
+ */
+function filterChipLabelText(cfg, tokens) {
+  if (!tokens.length) return cfg.emptyLabel;
+  const resolvedNames = tokens.map(t => resolveFilterOptionLabel(cfg, t)).filter(Boolean);
+  if (!resolvedNames.length) {
+    return tokens.length === 1 ? cfg.nounSingular : cfg.nounPlural(tokens.length);
+  }
+  if (tokens.length === 1) return resolvedNames[0];
+  return `${resolvedNames[0]} +${tokens.length - 1}`;
+}
+
+function updateFilterChipLabel(key) {
+  const cfg = FILTER_SHEETS[key];
+  if (!cfg) return;
+  const label = document.getElementById(cfg.chipLabelId);
+  if (!label) return;
+  label.textContent = filterChipLabelText(cfg, cfg.selected());
+}
+
+/** «مسح الفلاتر» ظاهر دائماً — لا فقط حين يوجد اختيار — لئلّا تصير التغذية الفارغة لغزاً (#85 خطوة 45). */
+function clearAllFilters() {
+  selectedTowns = [];
+  selectedVillageIds = [];
+  selectedOccasionTypeIds = [];
+  persistFilterSelection();
+  updateFilterChipLabel('place');
+  updateFilterChipLabel('kind');
+  fetchEvents();
 }
 
 function handleSearch() {
@@ -1457,37 +1789,6 @@ function clearSearch() {
   document.getElementById('eventSearchInput').value = '';
   searchQuery = '';
   document.getElementById('clearSearchBtn').style.display = 'none';
-  fetchEvents();
-}
-
-// 11b. Occasion Type Tabs — "الكل" أوّلاً، ثم كل نوع من GET /api/occasion-types
-// بترتيب position؛ لا قائمة ثابتة، فأي نوع يضيفه الأدمن يظهر تبويبه بلا نشر
-// واجهة جديد (#20 step 10). الفلتر يُرسَل إلى الخادم ويُعيد الترقيم للصفحة ١.
-async function initOccasionTypeTabs() {
-  const wrapper = document.getElementById('occasionTypeTabsWrapper');
-  const container = document.getElementById('occasionTypeTabs');
-  if (!wrapper || !container) return;
-
-  const types = await loadOccasionTypes();
-  if (!types.length) return;
-
-  const allTab = `<button class="town-pill active" data-type-id="" onclick="selectOccasionTypeTab(null)">الكل</button>`;
-  const typeTabs = types.map(t => `
-    <button class="town-pill" data-type-id="${t.id}" onclick="selectOccasionTypeTab(${t.id})">
-      ${t.icon ? escapeHtml(t.icon) + ' ' : ''}${escapeHtml(t.name)}
-    </button>
-  `).join('');
-
-  container.innerHTML = allTab + typeTabs;
-  wrapper.style.display = 'block';
-}
-
-function selectOccasionTypeTab(typeId) {
-  selectedOccasionTypeId = typeId;
-  document.querySelectorAll('#occasionTypeTabs .town-pill').forEach(pill => {
-    const pillId = pill.dataset.typeId ? Number(pill.dataset.typeId) : null;
-    pill.classList.toggle('active', pillId === typeId);
-  });
   fetchEvents();
 }
 

@@ -446,6 +446,64 @@ body {
   box-shadow: 0 4px 12px rgba(3, 105, 161, 0.25);
 }
 
+/* Place & kind filter chips — رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين
+   يأكلان أعلى الشاشة؛ «مسح الفلاتر» ظاهر دائماً بينهما (#85 خطوة 40-46). */
+.filter-chips-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+
+.filter-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-family: var(--font-main);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.filter-chip:hover:not(:disabled) { border-color: var(--sky); color: var(--sky-deep); }
+.filter-chip:disabled { opacity: 0.55; cursor: wait; }
+.filter-chip-clear { margin-inline-start: auto; background: transparent; border-style: dashed; color: var(--ink-faint); }
+.filter-chip-clear:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ورقة الفلتر (مكان/نوع) — نفس بطاقة المودال، ببحث فوق قائمة قابلة للتمرير */
+.filter-sheet-card { display: flex; flex-direction: column; }
+.filter-sheet-search { margin-bottom: 14px; flex-shrink: 0; }
+.filter-sheet-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; flex: 1; min-height: 120px; }
+.filter-option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 0.92rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.filter-option-row input { width: 18px; height: 18px; accent-color: var(--sky); flex-shrink: 0; }
+.filter-sheet-empty { text-align: center; color: var(--ink-faint); padding: 20px; }
+.filter-sheet-apply { margin-top: 14px; flex-shrink: 0; }
+
+/* تحذير سقف العشرين قيمة لكل نوع (بلدة/قرية/نوع مناسبة) — يظهر فقط حين
+   يُرفض تحديد إضافي، ويختفي بمجرّد أن يعود الاختيار دون السقف (#85 FIX 2) */
+.filter-sheet-warning {
+  background: var(--warn-wash);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-top: 10px;
+  flex-shrink: 0;
+}
+.filter-sheet-warning[hidden] { display: none; }
+
 /* Search Bar */
 .search-bar-container { margin-bottom: 18px; }
 .search-input-box { position: relative; display: flex; align-items: center; }
@@ -522,20 +580,57 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* بنية الكرت الموصى بها — الصورة أولاً، مع تركيب: ملصق مضغوط + تاريخ فوق
-   الصورة + سطر عشيرة/بلدة بلون النوع تحت الاسم (#20 خطوة 11، قرار ٤) */
+/* الكرت الذي تحكمه الصورة — صندوق ٤:٥ ثابت في كل الحالات، بملصق أو بلا ملصق،
+   فرحاً أو عزاءً، فتتساوى كل الكروت ارتفاعاً ولا يبدو كرت بلا ملصق مكسوراً
+   (#85 خطوة 47-52). الشارتان مطلقتا الوضع فوق هذا الصندوق مباشرة — لا صفّ
+   يسبقه يأكل مساحة. */
 .card-shot { position: relative; }
 
-/* `object-position: top` لا `cover` وحدها (#53): الملصق عمودي غالباً — دعوة
-   مطبوعة أو صورة هاتف ٣:٤ — والشريط هنا أفقي، فالقصّ المركزي الافتراضي يأكل
-   الأعلى والأسفل معاً، والوجه في الأعلى. هذا سطح **مسح** لا قرار، والملصق فيه
-   أيقونة تعريف: أعلى الدعوة ترويستها، وأعلى الصورة الوجه. العرض الكامل هنا
-   يعطي طابعاً بعرض ٩٣px وسط شريط فارغ — لذلك يُترك لسطوح القرار وحدها. */
-.card-poster-wrapper { height: 124px; overflow: hidden; background: var(--surface-sunk); }
-.card-poster-img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+/* الملصق `contain` كاملاً أبداً بلا قصّ — «الصورة سبب فتحي للتطبيق» — فوق نسخة
+   مضبَّبة مكبَّرة من نفس الصورة (`.card-poster-backdrop`) تملأ ما لا يملؤه
+   القياس الحقيقي بلا أشرطة فارغة. نفس تركيبة drawHero في shareCard.service.js
+   (poster + blurred cover-crop of itself)، بـCSS هنا بدل Canvas. */
+.card-poster-wrapper { position: relative; aspect-ratio: 4 / 5; overflow: hidden; background: var(--surface-sunk); }
 
-/* العزاء: صورة المتوفَّى اختيارية وأهدأ — أقصر، بلا شارة تاريخ، وأردوازي لا سماوي (قرار ٥) */
-.card-poster-wrapper.tone-mourning { height: 96px; background: linear-gradient(135deg, #334155, #64748b); }
+.card-poster-backdrop {
+  position: absolute;
+  inset: -12%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(28px);
+  transform: scale(1.15);
+}
+
+.card-poster-img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+
+/* العزاء: صورة المتوفَّى اختيارية وأهدأ — نفس الصندوق الكامل، بلا شارة تاريخ إطلاقاً (قرار ٥) */
+.card-poster-wrapper.tone-mourning { background: linear-gradient(135deg, #334155, #64748b); }
+.card-poster-wrapper.tone-mourning .card-poster-backdrop { filter: blur(28px) brightness(0.75); }
+
+/* مناسبة بلا ملصق أصلاً — لا صورة الخادم الاحتياطية ولا صندوق فارغ يقرأ عطلاً؛
+   أيقونة مركزية على خلفية متدرّجة تقول «هذا كرت بلا صورة» عمداً (#85 خطوة 51). */
+.card-poster-wrapper.card-poster-empty { background: linear-gradient(180deg, var(--surface-sunk), var(--surface)); }
+.card-poster-wrapper.card-poster-empty.tone-mourning { background: linear-gradient(135deg, #334155, #64748b); }
+.card-poster-placeholder {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 2.6rem;
+}
+.card-poster-wrapper.card-poster-empty.tone-mourning .card-poster-placeholder { color: rgba(255, 255, 255, 0.75); }
 
 .card-datechip {
   position: absolute;
@@ -557,12 +652,40 @@ body {
    والحدّ يبقيان بلون النوع كما أرسله الخادم (#20 خطوة 11). */
 .card-kindchip .town-badge { background: rgba(255, 255, 255, 0.94) !important; box-shadow: 0 2px 8px rgba(12, 27, 42, 0.25); }
 
-/* يظهر فقط حين لا توجد صورة فوقها تُعرَض هذه المعلومات (عزاء بلا صورة، أو
-   عزاء بصورة — التاريخ ينزل للكتلة النصية دائماً في العزاء) */
-.card-toprow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
-.card-toprow .card-meta { font-size: 12.5px; color: var(--ink-soft); font-weight: 700; font-variant-numeric: tabular-nums; }
-
 .card-clan-line { font-size: 12.5px; font-weight: 700; color: var(--tone, var(--sky)); margin-top: 2px; margin-bottom: 10px; }
+
+/* العزاء وحده يحمل سطراً ثالثاً هادئاً: التاريخ، بلا شارة عدّاد فوق الصورة
+   (#85 FIX 3) — نفس وزن سطر الفنان، لا صوت العنوان ولا لون النوع. */
+.card-date-line { font-size: 12.5px; font-weight: 600; color: var(--ink-faint); margin-top: -6px; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+
+/* كتلة النصّ سطران في العادة (ثلاثة في العزاء، بسطر التاريخ أعلاه) — العنوان
+   وسطر العشيرة/البلدة وسطر تاريخ العزاء كلها مقصوصة لسطر واحد، فـ«عشيرة طويلة
+   — بلدة طويلة» على شاشة ضيّقة لا يفلت الكتلة إلى سطر ثالث خفي (#85 خطوة 48،
+   FIX 4). صنف واحد مشترك لا ثلاث نسخ من نفس القاعدة. */
+.card-clamp-1-line {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* كل شيء غير كتلة النصّ (الشبكة، الملاحة، سطر الفنان) يبدأ مطوياً خلف هذا الزرّ */
+.card-more-details-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--sky-deep);
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 4px 0;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.card-more-details-btn:hover { text-decoration: underline; }
+.card-details-collapsible[hidden] { display: none; }
 
 /* «يحيي الحفلة الفنان فلان» — بوزن أخفّ من سطر العشيرة، ويغيب كلياً حين
    يفرغ الحقل (الـHTML نفسه لا يُطبَع، لا display:none) (خريطة #21، تذكرة #23) */
@@ -1253,6 +1376,50 @@ body {
 
 .spinner { width: 38px; height: 38px; border: 3px solid var(--sky-wash); border-top-color: var(--sky); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 14px auto; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* هياكل تحميل بشكل الكرت نفسه بدل الدوّارة — تُعرَض حتى تصل استجابة الخادم
+   (#85 خطوة 53). عمود الشبكة نفسه يبقى ٤:٥ حتى في الهيكل، فلا يقفز التخطيط
+   عند وصول الكروت الحقيقية. */
+.card-skeleton {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.card-skeleton .skeleton-shot { aspect-ratio: 4 / 5; background: var(--surface-sunk); }
+.card-skeleton .skeleton-line { height: 14px; margin: 12px 16px; border-radius: 7px; background: var(--surface-sunk); }
+.card-skeleton .skeleton-line.short { width: 55%; }
+
+.skeleton-shimmer { position: relative; overflow: hidden; }
+.skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  animation: skeletonShimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeletonShimmer { 100% { transform: translateX(100%); } }
+
+/* ظهور متدرّج للشاشة الأولى فقط، لا كل إعادة رسم — العزاء لا يظهر تدريجياً
+   أبداً، بلا شرط النظام أدناه (#85 خطوة 52 و54). */
+.events-feed-first-load .event-card:not(.tone-mourning) { animation: cardFadeIn 0.32s ease-out backwards; }
+.events-feed-first-load .event-card:not(.tone-mourning):nth-child(2) { animation-delay: 0.05s; }
+.events-feed-first-load .event-card:not(.tone-mourning):nth-child(3) { animation-delay: 0.1s; }
+.events-feed-first-load .event-card:not(.tone-mourning):nth-child(4) { animation-delay: 0.15s; }
+.events-feed-first-load .event-card:not(.tone-mourning):nth-child(n+5) { animation-delay: 0.2s; }
+@keyframes cardFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* تقليل الحركة يلغي الظهور المتدرّج كلياً، ويُبقي الهياكل بلا وميض — الهياكل
+   نفسها ليست "حركة" احتفالية، بل إشارة تحميل محايدة (#85 خطوة 54). القصة تخصّ
+   التطبيق كله لا هذه الدفعة وحدها، فتبديل التبويب (fadeSlideIn، أعلى الملف)
+   يلغى هنا أيضاً — لا يكفي الاتّكال على القاعدة الشاملة *{animation-duration}
+   أدناه وحدها (#85 FIX 8 على مراجعة الدفعة 6أ). */
+@media (prefers-reduced-motion: reduce) {
+  .events-feed-first-load .event-card { animation: none; }
+  .skeleton-shimmer::after { animation: none; }
+  .tab-content.active-tab { animation: none; }
+}
 
 .empty-state { text-align: center; padding: 44px 20px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--ink-soft); }
 .empty-state i { font-size: 2.8rem; color: var(--sky); margin-bottom: 12px; }

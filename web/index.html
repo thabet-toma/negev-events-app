@@ -120,24 +120,23 @@
     <!-- TAB 1: HOME FEED (الأفراح والمناسبات) -->
     <section id="tabHome" class="tab-content active-tab">
 
-      <!-- Occasion Type Tabs — "الكل" ثم كل نوع من GET /api/occasion-types بترتيب position (#20 خطوة 10) -->
-      <div class="town-filter-wrapper" id="occasionTypeTabsWrapper" style="display:none;">
-        <div class="town-slider" id="occasionTypeTabs"></div>
-      </div>
-
-      <!-- Town Filter Slider -->
-      <div class="town-filter-wrapper">
-        <div class="town-slider" id="townPills">
-          <button class="town-pill active" data-town="الكل">الكل</button>
-          <button class="town-pill" data-town="رهط">رهط</button>
-          <button class="town-pill" data-town="حورة">حورة</button>
-          <button class="town-pill" data-town="تل السبع">تل السبع</button>
-          <button class="town-pill" data-town="كسيفة">كسيفة</button>
-          <button class="town-pill" data-town="شقيب السلام">شقيب السلام</button>
-          <button class="town-pill" data-town="اللقية">اللقية</button>
-          <button class="town-pill" data-town="عرعرة النقب">عرعرة النقب</button>
-          <button class="town-pill" data-town="القرى والتجمعات">القرى والتجمعات</button>
-        </div>
+      <!-- فلتر المكان والنوع — رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا
+           يأكلان أعلى تبويب التغذية هذا وحده (#85 خطوة 40-46). البلدات والقرى
+           تُجلب معاً من GET /api/towns — لا قائمة بلدات ثابتة هنا. «مسح
+           الفلاتر» في الطرف الأقصى (margin-inline-start: auto)، لا بين
+           الرقاقتين. -->
+      <div class="filter-chips-row">
+        <button id="placeFilterChip" class="filter-chip" onclick="openFilterSheet('place')" disabled>
+          <i class="fa-solid fa-location-dot"></i>
+          <span id="placeFilterChipLabel">كل الأماكن</span>
+        </button>
+        <button id="kindFilterChip" class="filter-chip" onclick="openFilterSheet('kind')" disabled>
+          <i class="fa-solid fa-icons"></i>
+          <span id="kindFilterChipLabel">كل الأنواع</span>
+        </button>
+        <button id="clearFiltersBtn" class="filter-chip filter-chip-clear" onclick="clearAllFilters()">
+          <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
+        </button>
       </div>
 
       <!-- Quick Search Bar -->
@@ -156,12 +155,10 @@
       <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
       <div id="announcementsContainer"></div>
 
-      <!-- Events List Feed -->
+      <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
       <div id="eventsContainer" class="events-feed">
-        <div class="loading-spinner">
-          <div class="spinner"></div>
-          <p>جاري جلب أحدث مناسبات النقب...</p>
-        </div>
+        <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+        <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
       </div>
 
       <div id="loadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
@@ -708,6 +705,42 @@
         <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div id="notificationsList" class="events-feed" style="gap:10px;"></div>
+    </div>
+  </div>
+
+  <!-- MODAL: PLACE FILTER SHEET — بلدات وقرى معاً في قائمة واحدة قابلة للبحث (#85 خطوة 40-42).
+       نفس تركيب ورقة النوع تحتها بالضبط — عنصر واحد (app.js#openFilterSheet) يقود الاثنتين
+       بإعداد مختلف، لا نسختين شبه متطابقتين (#85 FIX 9). -->
+  <div id="placeFilterModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card filter-sheet-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-solid fa-location-dot"></i> اختر الأماكن</h3></div>
+        <button class="close-modal-btn" onclick="closeFilterSheet('place')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="search-input-box filter-sheet-search">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="placeFilterSearchInput" placeholder="ابحث عن بلدة أو قرية..." oninput="renderFilterSheetList()">
+      </div>
+      <div id="placeFilterList" class="filter-sheet-list"></div>
+      <p id="placeFilterWarning" class="filter-sheet-warning" hidden></p>
+      <button type="button" class="submit-btn filter-sheet-apply" onclick="applyFilterSheet()">تطبيق</button>
+    </div>
+  </div>
+
+  <!-- MODAL: KIND FILTER SHEET — نفس الفكرة على أنواع المناسبات (#85 خطوة 43) -->
+  <div id="kindFilterModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card filter-sheet-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-solid fa-icons"></i> اختر نوع المناسبة</h3></div>
+        <button class="close-modal-btn" onclick="closeFilterSheet('kind')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="search-input-box filter-sheet-search">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="kindFilterSearchInput" placeholder="ابحث عن نوع مناسبة..." oninput="renderFilterSheetList()">
+      </div>
+      <div id="kindFilterList" class="filter-sheet-list"></div>
+      <p id="kindFilterWarning" class="filter-sheet-warning" hidden></p>
+      <button type="button" class="submit-btn filter-sheet-apply" onclick="applyFilterSheet()">تطبيق</button>
     </div>
   </div>
 

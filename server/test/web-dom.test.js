@@ -482,18 +482,23 @@ async function run() {
   /**
    * Reproduces the actual sequence that shipped the 2026-09-02 bug, not just
    * a click in isolation: a visitor lands on the home feed first — which
-   * fetches occasion types for its own tab bar (initOccasionTypeTabs(),
-   * called from DOMContentLoaded) — and only afterwards opens "publish".
-   * The historical bug keyed the form's construction off that same
-   * already-populated cache instead of "has the form itself been built",
-   * so initPublishForm() was silently skipped. Asserting after this same
-   * sequence is what makes this test capable of catching it again — see the
-   * comment above buildEnv() for how it was verified against a reintroduced
-   * copy of the bug.
+   * fetches occasion types for the kind-filter chip (initKindFilter(),
+   * called from DOMContentLoaded — #85 batch 6a replaced the old scrolling
+   * occasion-type strip with this chip, but the fetch-then-cache sequence it
+   * gates is the same one the historical bug hit) — and only afterwards
+   * opens "publish". The historical bug keyed the form's construction off
+   * that same already-populated cache instead of "has the form itself been
+   * built", so initPublishForm() was silently skipped. Asserting after this
+   * same sequence is what makes this test capable of catching it again — see
+   * the comment above buildEnv() for how it was verified against a
+   * reintroduced copy of the bug.
    */
   async function openPublishTabAfterBrowsingHome(dom) {
     const { document } = dom.window;
-    await waitFor(() => document.querySelectorAll('#occasionTypeTabs .town-pill').length > 0);
+    await waitFor(() => {
+      const chip = document.getElementById('kindFilterChip');
+      return !!chip && !chip.disabled;
+    });
     dom.window.switchTab('tabAdd');
   }
 
@@ -779,6 +784,331 @@ async function run() {
     assert.ok(posterEntry.name.endsWith('.jpg'), `expected the filename to end in .jpg, got "${posterEntry.name}"`);
   });
 
+  console.log('\nPlace & kind filter — one searchable multi-select each (#85 batch 6a, stories 40-46)');
+
+  const TEST_VILLAGE_FIXTURE = { id: 777, name: 'قرية الاختبار', latitude: 31.1, longitude: 34.8, position: 1 };
+  const TOWNS_WITH_VILLAGE_FIXTURE = {
+    success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [TEST_VILLAGE_FIXTURE]
+  };
+
+  /** Every GET /api/events call this section's fetch stub receives, full URL (query string included). */
+  function buildEventsCapturingFetchStub(townsFixture = TOWNS_WITH_VILLAGE_FIXTURE) {
+    const calls = [];
+    const fetchStub = async url => {
+      const fullUrl = String(url);
+      const requestPath = fullUrl.split('?')[0];
+      if (requestPath === '/api/towns') return jsonResponse(townsFixture);
+      if (requestPath === '/api/occasion-types') return jsonResponse({ success: true, types: OCCASION_TYPES_FIXTURE });
+      if (requestPath === '/api/events') {
+        calls.push(fullUrl);
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+      }
+      return jsonResponse({ success: false });
+    };
+    return { fetchStub, calls };
+  }
+
+  function queryParam(fullUrl, key) {
+    return new URLSearchParams(fullUrl.split('?')[1] || '').get(key);
+  }
+
+  /** Loads towns/villages/kinds, wiring a capturing fetch stub, so the sheets have real options to check. */
+  async function setupFilterEnv(townsFixture) {
+    const dom = buildEnv();
+    const { fetchStub, calls } = buildEventsCapturingFetchStub(townsFixture);
+    dom.window.fetch = fetchStub;
+    await dom.window.initPlaceFilter();
+    await dom.window.initKindFilter();
+    return { dom, calls };
+  }
+
+  /** Ticks a checkbox inside an open filter sheet by its visible label text, firing the same 'change' event a click would. */
+  function checkFilterOption(win, listId, labelText) {
+    const rows = [...win.document.querySelectorAll(`#${listId} .filter-option-row`)];
+    const row = rows.find(r => r.textContent.trim().includes(labelText));
+    if (!row) throw new Error(`option "${labelText}" not found in #${listId}`);
+    const input = row.querySelector('input');
+    input.checked = true;
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+  }
+
+  await test('selecting two towns sends both in one ?town= parameter', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    checkFilterOption(dom.window, 'placeFilterList', 'حورة');
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => calls.length > 0);
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'town'), 'رهط,حورة');
+    assert.strictEqual(queryParam(lastCall, 'village_id'), null, 'no village was selected — no ?village_id= at all');
+  });
+
+  await test('selecting a village sends ?village_id=, separate from ?town=', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', TEST_VILLAGE_FIXTURE.name);
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => calls.length > 0);
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'village_id'), String(TEST_VILLAGE_FIXTURE.id));
+    assert.strictEqual(queryParam(lastCall, 'town'), null);
+  });
+
+  await test('a town and a village picked together travel in their own separate parameters', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    checkFilterOption(dom.window, 'placeFilterList', TEST_VILLAGE_FIXTURE.name);
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => calls.length > 0);
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'town'), 'رهط');
+    assert.strictEqual(queryParam(lastCall, 'village_id'), String(TEST_VILLAGE_FIXTURE.id));
+  });
+
+  await test('selecting two kinds sends both in one ?occasion_type_id= parameter, alongside a place filter', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    calls.length = 0;
+
+    dom.window.openFilterSheet('kind');
+    checkFilterOption(dom.window, 'kindFilterList', WEDDING_TYPE.name);
+    checkFilterOption(dom.window, 'kindFilterList', FUNERAL_TYPE.name);
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => calls.length > 0);
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'occasion_type_id'), `${WEDDING_TYPE.id},${FUNERAL_TYPE.id}`);
+    assert.strictEqual(queryParam(lastCall, 'town'), 'رهط', 'the earlier place filter must survive picking a kind too');
+  });
+
+  await test('nothing selected sends no place/kind parameters at all', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    await dom.window.fetchEvents();
+    await waitFor(() => calls.length > 0);
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'town'), null);
+    assert.strictEqual(queryParam(lastCall, 'village_id'), null);
+    assert.strictEqual(queryParam(lastCall, 'occasion_type_id'), null);
+  });
+
+  await test('the place chip label shows one name, or "name +N" once more than one place is selected', async () => {
+    const { dom } = await setupFilterEnv();
+    const { document } = dom.window;
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    assert.strictEqual(document.getElementById('placeFilterChipLabel').textContent, 'رهط');
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'حورة');
+    dom.window.applyFilterSheet();
+    assert.strictEqual(document.getElementById('placeFilterChipLabel').textContent, 'رهط +1');
+  });
+
+  /**
+   * Review round 2, FIX 1 (the important one): `updatePlaceFilterChipLabel`
+   * used to resolve village ids through `villagesList` and drop what it could
+   * not resolve (`.filter(Boolean)`) — so a village an admin deleted, or any
+   * render before `GET /api/towns` resolves, made the chip read «كل الأماكن»
+   * while the id was still filtering the feed. A selection the code cannot
+   * NAME must still be reported as a selection — never silently coerced to
+   * "nothing selected", which is exactly the puzzle «مسح الفلاتر» exists to
+   * prevent (story 45).
+   */
+  await test('a selected id that cannot be resolved is still reported as selected, never silently dropped to "nothing selected"', async () => {
+    const dom = buildEnv();
+    // Two unresolvable ids — not in TOWNS_WITH_VILLAGE_FIXTURE.villages — so the
+    // fallback must be the PLURAL, countable form, not the singular one.
+    const UNRESOLVABLE_VILLAGE_IDS = [999999, 999998];
+    dom.window.localStorage.setItem('negev_filter_towns', JSON.stringify([]));
+    dom.window.localStorage.setItem('negev_filter_villages', JSON.stringify(UNRESOLVABLE_VILLAGE_IDS));
+    dom.window.localStorage.setItem('negev_filter_kinds', JSON.stringify([]));
+    const { fetchStub } = buildEventsCapturingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    dom.window.loadFilterSelectionFromStorage();
+    await dom.window.initPlaceFilter();
+
+    const chipLabel = dom.window.document.getElementById('placeFilterChipLabel').textContent;
+    assert.notStrictEqual(chipLabel, 'كل الأماكن', 'an unresolvable but real selection must never read as "nothing selected"');
+    assert.ok(chipLabel.includes(String(UNRESOLVABLE_VILLAGE_IDS.length)), `expected the count of selected-but-unresolved places somewhere in the label, got "${chipLabel}"`);
+
+    // The empty-state message must carry the exact same honesty (FIX 1 names both functions).
+    dom.window.renderEvents([]);
+    const emptyMessage = dom.window.document.querySelector('#eventsContainer .empty-state p').textContent;
+    assert.ok(!emptyMessage.includes('منطقة النقب'), 'the empty state must not claim "no place selected" either, under the same unresolved filter');
+  });
+
+  /**
+   * Review round 2, FIX 2: the server caps each filter parameter at twenty
+   * values and rejects a 21st with 400 (`MAX_FILTER_VALUES`,
+   * server/src/middleware/validate.js). Nothing stopped the sheet from
+   * building a request past that cap — the user would only find out from a
+   * generic server error. The cap must be enforced in the sheet itself, in
+   * Arabic, at the moment it is hit.
+   */
+  await test('ticking a 21st option in one kind is rejected in the sheet, in Arabic, and never reaches the request', async () => {
+    const MANY_VILLAGES = Array.from({ length: 25 }, (_, i) => ({
+      id: 1000 + i, name: `قرية رقم ${i}`, latitude: 31, longitude: 34, position: i
+    }));
+    const { dom, calls } = await setupFilterEnv({
+      success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: MANY_VILLAGES
+    });
+    const { document } = dom.window;
+
+    dom.window.openFilterSheet('place');
+    MANY_VILLAGES.forEach(v => checkFilterOption(dom.window, 'placeFilterList', v.name));
+
+    const checkedCount = document.querySelectorAll('#placeFilterList input:checked').length;
+    assert.strictEqual(checkedCount, 20, 'expected exactly twenty villages checked — the 21st tick must have been rejected, not silently dropped later');
+
+    const warning = document.getElementById('placeFilterWarning');
+    assert.strictEqual(warning.hidden, false, 'expected an Arabic warning to appear the moment the cap is hit');
+    assert.ok(/\d+/.test(warning.textContent), 'expected the warning to name the actual cap');
+    assert.ok(/[؀-ۿ]/.test(warning.textContent), 'expected the warning message in Arabic');
+
+    dom.window.applyFilterSheet();
+    await waitFor(() => calls.length > 0);
+    const villageIds = queryParam(calls[calls.length - 1], 'village_id').split(',');
+    assert.strictEqual(villageIds.length, 20, 'the request itself must never carry more than the server-side cap');
+  });
+
+  await test('"مسح الفلاتر" clears every filter, resets both chip labels, and re-fetches with no filter params', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    const { document } = dom.window;
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    dom.window.openFilterSheet('kind');
+    checkFilterOption(dom.window, 'kindFilterList', WEDDING_TYPE.name);
+    dom.window.applyFilterSheet();
+    await waitFor(() => calls.length > 0);
+    calls.length = 0;
+
+    dom.window.clearAllFilters();
+    await waitFor(() => calls.length > 0);
+
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(queryParam(lastCall, 'town'), null);
+    assert.strictEqual(queryParam(lastCall, 'occasion_type_id'), null);
+    assert.strictEqual(document.getElementById('placeFilterChipLabel').textContent, 'كل الأماكن');
+    assert.strictEqual(document.getElementById('kindFilterChipLabel').textContent, 'كل الأنواع');
+  });
+
+  await test('«مسح الفلاتر» is always visible, not only once something is selected', () => {
+    const markup = new JSDOM(INDEX_HTML_RAW).window.document;
+    const clearBtn = markup.getElementById('clearFiltersBtn');
+    assert.ok(clearBtn, 'expected the clear-filters chip in the static markup');
+    assert.ok(!clearBtn.hasAttribute('hidden'), 'must not ship hidden — an empty feed must never be a puzzle');
+    assert.ok(
+      !/display\s*:\s*none/.test(clearBtn.getAttribute('style') || ''),
+      'must not ship display:none either'
+    );
+  });
+
+  await test('the selection is restored from localStorage on load, and reflected in the chip label', async () => {
+    const dom = buildEnv();
+    dom.window.localStorage.setItem('negev_filter_towns', JSON.stringify(['رهط']));
+    dom.window.localStorage.setItem('negev_filter_villages', JSON.stringify([]));
+    dom.window.localStorage.setItem('negev_filter_kinds', JSON.stringify([WEDDING_TYPE.id]));
+    const { fetchStub } = buildEventsCapturingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    dom.window.loadFilterSelectionFromStorage();
+    await dom.window.initPlaceFilter();
+    await dom.window.initKindFilter();
+
+    assert.strictEqual(dom.window.document.getElementById('placeFilterChipLabel').textContent, 'رهط');
+    assert.strictEqual(dom.window.document.getElementById('kindFilterChipLabel').textContent, WEDDING_TYPE.name);
+  });
+
+  await test('a restored village selection resolves its real name once towns/villages have loaded', async () => {
+    const dom = buildEnv();
+    dom.window.localStorage.setItem('negev_filter_towns', JSON.stringify([]));
+    dom.window.localStorage.setItem('negev_filter_villages', JSON.stringify([TEST_VILLAGE_FIXTURE.id]));
+    dom.window.localStorage.setItem('negev_filter_kinds', JSON.stringify([]));
+    const { fetchStub } = buildEventsCapturingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    dom.window.loadFilterSelectionFromStorage();
+    await dom.window.initPlaceFilter();
+
+    assert.strictEqual(dom.window.document.getElementById('placeFilterChipLabel').textContent, TEST_VILLAGE_FIXTURE.name);
+  });
+
+  await test('a corrupt or missing localStorage filter value does not break the page', async () => {
+    const dom = buildEnv();
+    dom.window.localStorage.setItem('negev_filter_towns', 'not-json{{{');
+    dom.window.localStorage.setItem('negev_filter_villages', JSON.stringify({ not: 'an array' }));
+    // negev_filter_kinds left entirely absent — the third read must still default cleanly.
+    const { fetchStub } = buildEventsCapturingFetchStub();
+    dom.window.fetch = fetchStub;
+
+    assert.doesNotThrow(() => dom.window.loadFilterSelectionFromStorage());
+    await dom.window.initPlaceFilter();
+    await dom.window.initKindFilter();
+    assertNoUnhandledRejections('corrupt localStorage filter values');
+
+    assert.strictEqual(dom.window.document.getElementById('placeFilterChipLabel').textContent, 'كل الأماكن');
+    assert.strictEqual(dom.window.document.getElementById('kindFilterChipLabel').textContent, 'كل الأنواع');
+    assert.strictEqual(dom.window.document.getElementById('placeFilterChip').disabled, false, 'a corrupt stored value must not leave the picker stuck disabled');
+  });
+
+  console.log('\nLoading state — skeletons before the feed resolves, not a spinner (#85 خطوة 53-54)');
+
+  await test('skeleton placeholders appear synchronously while fetchEvents is still in flight', async () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+    let resolveEvents;
+    dom.window.fetch = async url => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/events') {
+        return new Promise(resolve => {
+          resolveEvents = () => resolve(jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] }));
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    const fetchPromise = dom.window.fetchEvents();
+
+    assert.ok(document.querySelectorAll('#eventsContainer .card-skeleton').length > 0, 'expected skeleton placeholders while the request is in flight');
+    assert.strictEqual(document.querySelector('#eventsContainer .loading-spinner'), null, 'no spinner — skeletons replace it (#53)');
+
+    resolveEvents();
+    await fetchPromise;
+    assertNoUnhandledRejections('fetchEvents skeleton -> resolved');
+  });
+
+  await test('the fade-in class is applied on the very first render only, never on a later refetch', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+    const container = document.getElementById('eventsContainer');
+
+    dom.window.renderEvents([{
+      id: 950, title: 'عرس أول', family_clan: null, town: 'رهط',
+      event_date: '2027-06-01', location_name: 'مكان', poster_url: null, audio_url: null,
+      occasion_type: WEDDING_TYPE, reactions: {}
+    }]);
+    assert.ok(container.classList.contains('events-feed-first-load'), 'the very first render should carry the fade-in class');
+
+    dom.window.renderEvents([{
+      id: 951, title: 'عرس ثانٍ', family_clan: null, town: 'رهط',
+      event_date: '2027-06-02', location_name: 'مكان آخر', poster_url: null, audio_url: null,
+      occasion_type: WEDDING_TYPE, reactions: {}
+    }]);
+    assert.ok(!container.classList.contains('events-feed-first-load'), 'a later re-render (filter change, refresh) must not fade in again');
+  });
+
   console.log('\nEvent card rendering');
 
   // One renderEvents() call, asserted on synchronously right after — the
@@ -805,6 +1135,20 @@ async function run() {
         id: 903, title: 'عزاء آل تجربة', family_clan: 'آل تجربة', town: 'حورة',
         event_date: '2027-03-10', location_name: 'بيت العزاء',
         youth_party_date: null, dinner_time: null, poster_url: null, audio_url: null,
+        occasion_type: FUNERAL_TYPE, reactions: {}
+      },
+      {
+        id: 910, title: 'عرس أبو مصطفى', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-04-10', location_name: 'ديوان آل تجربة الثالث',
+        youth_party_date: null, dinner_time: null,
+        poster_url: 'https://example.test/uploads/poster910.jpg', audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}
+      },
+      {
+        id: 911, title: 'عزاء آل فلان', family_clan: 'آل فلان', town: 'رهط',
+        event_date: '2027-05-01', location_name: 'بيت العزاء الثاني',
+        youth_party_date: null, dinner_time: null,
+        poster_url: 'https://example.test/uploads/poster911.jpg', audio_url: null,
         occasion_type: FUNERAL_TYPE, reactions: {}
       }
     ]);
@@ -838,6 +1182,112 @@ async function run() {
     const solemnBtn = document.querySelector('#eventCard-903 .share-event-btn');
     assert.ok(solemnBtn, 'expected a share button on the solemn (عزا) card');
     assert.strictEqual(solemnBtn.textContent.trim(), 'أرسل النعي');
+  });
+
+  console.log('\nEvent card — the image-first redesign (#85 batch 6a, stories 47-52)');
+
+  await test('a card with a poster emits the contain/blur structure, and both badges sit over the image', () => {
+    const { document } = renderCardFixtures();
+    const card = document.getElementById('eventCard-910');
+    assert.ok(card, 'expected the poster-bearing card to render');
+
+    const wrapper = card.querySelector('.card-poster-wrapper');
+    assert.ok(wrapper, 'expected the poster wrapper');
+    const backdrop = wrapper.querySelector('.card-poster-backdrop');
+    const img = wrapper.querySelector('.card-poster-img');
+    assert.ok(backdrop, 'expected a blurred backdrop layer behind the poster (shareCard.service.js#drawHero\'s own composition)');
+    assert.ok(img, 'expected the sharp, whole poster image');
+    assert.ok(
+      (backdrop.getAttribute('style') || '').includes('poster910.jpg'),
+      'the backdrop must be the SAME poster, not a second asset'
+    );
+    assert.strictEqual(backdrop.getAttribute('aria-hidden'), 'true', 'the backdrop is decoration only');
+
+    const shot = card.querySelector('.card-shot');
+    assert.ok(shot.querySelector('.card-kindchip'), 'expected the kind badge inside the shot, over the image');
+    assert.ok(shot.querySelector('.card-datechip'), 'expected the countdown badge inside the shot too (festive tone)');
+  });
+
+  await test('a card with NO poster still renders, with a deliberate placeholder rather than a broken layout', () => {
+    const { document } = renderCardFixtures();
+    const card = document.getElementById('eventCard-901');
+    assert.ok(card, 'expected the poster-less card to render at all');
+
+    const wrapper = card.querySelector('.card-poster-wrapper');
+    assert.ok(wrapper, 'expected the poster wrapper to exist even with no poster_url');
+    assert.ok(wrapper.classList.contains('card-poster-empty'), 'expected the empty-poster modifier class');
+    assert.ok(wrapper.querySelector('.card-poster-placeholder'), 'expected a placeholder icon, not an empty box');
+    assert.strictEqual(wrapper.querySelector('.card-poster-img'), null, 'no <img> should be emitted with no poster URL');
+    assert.strictEqual(wrapper.querySelector('.card-poster-backdrop'), null, 'no blurred backdrop either — nothing to blur');
+    assert.ok(card.querySelector('.card-kindchip'), 'the kind badge must still show over the placeholder');
+  });
+
+  await test('a mourning card never emits a countdown badge, whether or not it has a poster', () => {
+    const { document } = renderCardFixtures();
+
+    const noPosterMourning = document.getElementById('eventCard-903');
+    assert.strictEqual(noPosterMourning.querySelector('.card-datechip'), null, 'no countdown on a solemn card without a poster');
+    assert.ok(noPosterMourning.querySelector('.card-kindchip'), 'the kind badge should still show');
+
+    const posterMourning = document.getElementById('eventCard-911');
+    assert.strictEqual(posterMourning.querySelector('.card-datechip'), null, 'no countdown on a solemn card WITH a poster either — "باقي ٣ أيام" is a bad word choice on a condolence');
+    assert.ok(posterMourning.querySelector('.card-kindchip'), 'the kind badge should still show');
+  });
+
+  /**
+   * Review round 2, FIX 3: removing the countdown badge (story 52) is not the
+   * same as removing the date. A مناسبة عزاء must still show WHEN it is,
+   * plainly, on the card's visible face — not behind "مزيد من التفاصيل" like
+   * the rest of the grid, and never as a countdown.
+   */
+  await test('a mourning card shows a plain, visible date on its face — never a countdown, never hidden behind "مزيد من التفاصيل"', () => {
+    const { document } = renderCardFixtures();
+    const card = document.getElementById('eventCard-903');
+
+    const dateLine = card.querySelector('.card-date-line');
+    assert.ok(dateLine, 'expected a visible quiet date line on a mourning card');
+    assert.ok(!card.querySelector('.card-details-collapsible').contains(dateLine), 'the date line must sit outside the collapsed panel — visible immediately');
+    assert.ok(dateLine.textContent.length > 0, 'expected an actual formatted date, not an empty line');
+
+    const festiveCard = document.getElementById('eventCard-901');
+    assert.strictEqual(festiveCard.querySelector('.card-date-line'), null, 'a festive card relies on its countdown badge — no duplicate quiet date line');
+  });
+
+  await test('the details grid, nav buttons and artist line start collapsed behind "مزيد من التفاصيل"', () => {
+    const { document } = renderCardFixtures();
+    const card = document.getElementById('eventCard-901');
+
+    const panel = card.querySelector('.card-details-collapsible');
+    assert.ok(panel, 'expected a collapsible details panel');
+    assert.strictEqual(panel.hidden, true, 'details must start collapsed — the text block is two lines only');
+    assert.ok(panel.querySelector('.event-details-grid'), 'expected the details grid inside the collapsible panel');
+    assert.ok(panel.querySelector('.nav-buttons-row'), 'expected the nav buttons inside the collapsible panel');
+
+    const toggle = card.querySelector('.card-more-details-btn');
+    assert.ok(toggle, 'expected the toggle button');
+    toggle.click();
+    assert.strictEqual(panel.hidden, false, 'clicking the toggle should reveal the details');
+    assert.ok(toggle.textContent.includes('إخفاء التفاصيل'), 'the toggle label should flip once expanded');
+  });
+
+  /**
+   * Review round 2, FIX 4: `.card-clan-line` was unclamped, so a long
+   * `family_clan — town` pair could wrap the visible text block to three
+   * lines on a narrow screen (spec: «كتلة النصّ سطران»). jsdom has no layout
+   * engine, so this asserts the STRUCTURE (the clamp class is actually on the
+   * element) and reads styles.css directly for the clamp rule itself — the
+   * actual wrapping behaviour cannot be proven here.
+   */
+  await test('the clan/town line carries the same one-line clamp as the title, structurally', () => {
+    const { document } = renderCardFixtures();
+    const clanLine = document.querySelector('#eventCard-901 .card-clan-line');
+    assert.ok(clanLine, 'expected a clan/town line on a card with a family_clan');
+    assert.ok(clanLine.classList.contains('card-clamp-1-line'), 'expected the shared one-line clamp class on the clan/town line');
+
+    assert.ok(
+      /\.card-clamp-1-line\s*\{[^}]*-webkit-line-clamp:\s*1/.test(STYLES_CSS),
+      'expected the shared clamp class to actually set -webkit-line-clamp: 1 in styles.css'
+    );
   });
 
   console.log('\nNotification centre — merged personal + broadcast feed (issue #85, review round 2 FIX 1)');
@@ -1384,14 +1834,23 @@ async function run() {
     );
   });
 
-  await test('the browsing cards still crop, but from the top, so the face survives', () => {
+  /**
+   * #85 batch 6a moved the browsing card off the "crop, but from the top"
+   * compromise pinned above: the product owner's second literal complaint —
+   * "الصور اللي طولها أكبر من العرض المخصص بتنقص" — was that ANY crop is a
+   * loss, on this surface too. The card is now a 4:5 box, `contain`ed, over a
+   * blurred cover-crop of the same image (shareCard.service.js#drawHero's own
+   * composition, in CSS instead of Canvas) — so a tall or wide poster fills
+   * the box without bars and without losing anything.
+   */
+  await test('the browsing cards stopped cropping too — the whole poster, over a blurred fill of itself', () => {
     assert.ok(
-      /\.card-poster-img\s*\{[^}]*object-position:\s*top/.test(STYLES_CSS),
-      'without an explicit top anchor object-fit: cover crops from the centre, which is the reported bug'
+      /\.card-poster-img\s*\{[^}]*object-fit:\s*contain/.test(STYLES_CSS),
+      'the browsing card must show the whole poster now, same fix as the admin list got'
     );
     assert.ok(
-      /\.card-poster-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
-      'the browsing card keeps cropping on purpose: contained inside 124px a portrait poster is a 93px stamp'
+      /\.card-poster-backdrop\s*\{[^}]*filter:\s*blur/.test(STYLES_CSS),
+      'expected a blurred backdrop layer behind the contained poster — otherwise a portrait poster in a 4:5 box leaves bare gutters'
     );
   });
 
