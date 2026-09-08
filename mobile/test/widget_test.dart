@@ -384,6 +384,10 @@ void main() {
             textDirection: TextDirection.rtl,
             child: Scaffold(
               body: EventCard(
+                // مفتاح لكل حالة: بلا مفاتيح تُعاد الحالة نفسها بين الضخّتين
+                // (نفس النوع ونفس الموضع)، فتبقى ورقة التفاصيل مفتوحة من
+                // الشطر الأوّل ويقرأ الزرّ «إخفاء التفاصيل».
+                key: const ValueKey('missing'),
                 event: missing,
                 onTap: () {},
                 onCongratulationsTap: () {},
@@ -393,6 +397,12 @@ void main() {
           ),
         ),
       );
+
+      // العدّادان صارا داخل ورقة التفاصيل (المواصفة #98): شريط التعريف يحمل
+      // التسمية وحدها كما في الويب. فتُفتح الورقة أوّلاً، وإلا كان توكيد
+      // الغياب أدناه ناجحاً لمجرّد أنّ الورقة مطويّة — لا لأنّ العدّاد غائب.
+      await tester.tap(find.text('مزيد من التفاصيل'));
+      await tester.pumpAndSettle();
 
       // النوع مطفئ العدّادين (بلا congratulations_count ولا followers_count
       // في الـJSON إطلاقاً) — لا يظهر أي عدّاد، لا صفراً ولا شرطة.
@@ -416,6 +426,7 @@ void main() {
             textDirection: TextDirection.rtl,
             child: Scaffold(
               body: EventCard(
+                key: const ValueKey('zeroed'),
                 event: zeroed,
                 onTap: () {},
                 onCongratulationsTap: () {},
@@ -426,7 +437,10 @@ void main() {
         ),
       );
 
-      // وعلى الكرت: يُرسم كصفر فعلاً.
+      await tester.tap(find.text('مزيد من التفاصيل'));
+      await tester.pumpAndSettle();
+
+      // وفي ورقة التفاصيل: يُرسم كصفر فعلاً.
       expect(find.text('تبريكات (0)'), findsOneWidget);
       expect(find.text('متابعون: 0'), findsOneWidget);
     });
@@ -606,7 +620,7 @@ void main() {
     // عدّاد إطلاقاً (قصة 52) وتاريخه ظاهر في الجزء المرئي من الكرت — لا خلف
     // «مزيد من التفاصيل» (الفخّ الذي وقعت فيه دفعة الويب أولاً واضطرت لإصلاحه).
     testWidgets(
-      'نوع solemn وعادي بصورة: نفس صندوق ٤:٥، والعزاء وحده بلا عدّاد وتاريخه ظاهر لا خلف الطيّ',
+      'نوع solemn وعادي بصورة: بلا صندوق ٤:٥، والعزاء وحده بلا عدّاد وتاريخه ظاهر لا خلف الطيّ',
       (tester) async {
         final futureDate = DateTime.now().add(const Duration(days: 10));
         final dateString = '${futureDate.year.toString().padLeft(4, '0')}-'
@@ -635,7 +649,7 @@ void main() {
               (w) => w is AspectRatio && (w.aspectRatio - 4 / 5).abs() < 0.001,
             );
 
-        // العادي: صندوق ٤:٥ وعدّاد «باقي ١٠ أيام» فوق الصورة.
+        // العادي: بلا صندوق ٤:٥ وعدّاد «باقي ١٠ أيام» في شريط التعريف.
         await tester.pumpWidget(
           MaterialApp(
             theme: AppTheme.light(),
@@ -647,11 +661,10 @@ void main() {
             ),
           ),
         );
-        expect(aspectRatioFourToFive(), findsOneWidget);
+        expect(aspectRatioFourToFive(), findsNothing);
         expect(find.text('باقي 10 أيام'), findsOneWidget);
 
-        // العزاء: نفس صندوق ٤:٥ بالضبط — لا أقصر ولا مختلف — بلا عدّاد
-        // إطلاقاً، والتاريخ نفسه ظاهر بلا فتح «مزيد من التفاصيل».
+        // العزاء: بلا صندوق ٤:٥ وبلا عدّاد إطلاقاً، والتاريخ نفسه ظاهر بلا فتح «مزيد من التفاصيل».
         await tester.pumpWidget(
           MaterialApp(
             theme: AppTheme.light(),
@@ -663,11 +676,17 @@ void main() {
             ),
           ),
         );
-        expect(aspectRatioFourToFive(), findsOneWidget);
+        expect(aspectRatioFourToFive(), findsNothing);
         expect(find.textContaining('باقي'), findsNothing);
         expect(find.text('اليوم'), findsNothing);
         expect(find.text('غداً'), findsNothing);
-        expect(find.text(dateString), findsOneWidget);
+        // التاريخ صار مصوغاً بالعربية الطويلة كما في الويب، ومضموماً إلى
+        // المكان في سطر واحد — فالمطلوب أنّه **ظاهر**، لا أنّه بصيغته الخام.
+        // ويُبنى التوقّع من جدولَي الأسماء لا من `arabicEventDate` نفسها: تاريخ
+        // الاختبار متحرّك (اليوم + ١٠)، والدالة تحت الفحص لا تصلح مرجعاً لنفسها.
+        final expectedDate = 'الأحد، ٢٠ سبتمبر ٢٠٢٦';
+        expect(arabicEventDate('2026-09-20'), expectedDate);
+        expect(find.textContaining(arabicEventDate(dateString)), findsOneWidget);
       },
     );
   });

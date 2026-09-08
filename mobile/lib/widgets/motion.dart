@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// هيكل تحميل بدل دوّارة — نفس صورة الكرت الحقيقي (صندوق ٤:٥ ثم سطرا نصّ)
+/// هيكل تحميل بدل دوّارة — نفس صورة الكرت الحقيقي (صندوق وسائط يملأ الارتفاع
+/// المتبقي ثم سطرا نصّ؛ صندوق ٤:٥ الثابت حُذف مع المواصفة #98)
 /// كي لا تقفز التغذية حين تصل البيانات الفعلية (#85 قصة 53). ثابت بلا نبض:
 /// النغمة الوقورة تكتفي بهياكل بلا أي حركة زائدة، وهذا الهيكل نفسه هو ما
 /// يظهر في كل الأنواع أثناء التحميل — لا حركة فيه أصلاً لتُلغى.
@@ -19,7 +20,7 @@ class EventCardSkeleton extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AspectRatio(aspectRatio: 4 / 5, child: ColoredBox(color: base)),
+          Expanded(child: ColoredBox(color: base)),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
             child: Column(
@@ -44,7 +45,7 @@ class EventCardSkeleton extends StatelessWidget {
   }
 }
 
-/// قائمة هياكل بديلة عن الدوّارة أثناء تحميل التغذية.
+/// قائمة هياكل بديلة عن الدوّارة أثناء تحميل التغذية — بملء الشاشة مع التمرير الإنجذابي.
 class EventFeedSkeletonList extends StatelessWidget {
   const EventFeedSkeletonList({super.key, this.itemCount = 3});
 
@@ -52,8 +53,9 @@ class EventFeedSkeletonList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.only(top: 6, bottom: 20),
+    return PageView.builder(
+      scrollDirection: Axis.vertical,
+      physics: const PageScrollPhysics(),
       itemCount: itemCount,
       itemBuilder: (context, index) => const EventCardSkeleton(),
     );

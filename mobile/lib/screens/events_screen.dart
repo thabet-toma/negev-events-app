@@ -16,6 +16,11 @@ import '../widgets/motion.dart';
 import 'event_details_screen.dart';
 import 'story_viewer_screen.dart';
 
+/// أقصى ارتفاع لشريط الإعلانات في الكروم الثابت: كرت إعلان واحد (‏‎~٩٦px‎)
+/// وطرفُ الذي يليه، فيُقرأ أنّ تحته المزيد. وما زاد يُمرَّر داخل الشريط. سقفٌ
+/// لازم لأنّ الكروم غير قابل للتمرير وتحته `Expanded`.
+const double _announcementsMaxHeight = 132;
+
 /// الشاشة الرئيسية: القصص + بحث + فلترة بلدة ونوع + إعلانات + قائمة المناسبات
 /// المرقّمة.
 class EventsScreen extends StatefulWidget {
@@ -27,6 +32,7 @@ class EventsScreen extends StatefulWidget {
 
 class _EventsScreenState extends State<EventsScreen> {
   final _searchController = TextEditingController();
+  final _pageController = PageController();
 
   /// اختيار متعدّد — بلدة أو أكثر، قرية أو أكثر، نوع مناسبة أو أكثر معاً
   /// (#85 خطوة 40-43). قائمة فارغة تعني «كل الأماكن»/«كل الأنواع»، لا فلترة.
@@ -99,6 +105,7 @@ class _EventsScreenState extends State<EventsScreen> {
     _debounce?.cancel();
     _newEventSub?.cancel();
     _searchController.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -133,6 +140,9 @@ class _EventsScreenState extends State<EventsScreen> {
           _entranceEventIds = result.events.map((e) => e.id).toSet();
         }
       });
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(0);
+      }
     } catch (error) {
       if (!mounted || generation != _requestGeneration) return;
       setState(() {
@@ -375,156 +385,240 @@ class _EventsScreenState extends State<EventsScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          setState(() => _stories = AppServices.of(context).api.stories());
-          await _loadFirstPage();
-        },
-        child: Column(
-          children: [
-            _StoriesStrip(future: _stories),
-            _SearchBar(
-              controller: _searchController,
-              onChanged: _onSearchChanged,
+      body: Column(
+        children: [
+          _StoriesStrip(future: _stories),
+          _SearchBar(
+            controller: _searchController,
+            onChanged: _onSearchChanged,
+          ),
+          // رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا يأكلان أعلى
+          // الشاشة (#85 خطوة 40-46) — «مسح الفلاتر» ظاهرة دائماً (قصة 45).
+          _FilterChipsRow(
+            placeLabel: _placeChipLabel,
+            kindLabel: _kindChipLabel,
+            onPlaceTap: _openPlaceFilter,
+            onKindTap: _openKindFilter,
+            onClearTap: _clearFilters,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.archive_outlined,
+                  size: 17,
+                  color: _archive ? context.c.sky : context.c.inkFaint,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'عرض المناسبات المنتهية',
+                  style: TextStyle(fontSize: 13, color: context.c.inkSoft),
+                ),
+                const Spacer(),
+                Switch(value: _archive, onChanged: _onArchiveToggled),
+              ],
             ),
-            // رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا يأكلان أعلى
-            // الشاشة (#85 خطوة 40-46) — «مسح الفلاتر» ظاهرة دائماً (قصة 45).
-            _FilterChipsRow(
-              placeLabel: _placeChipLabel,
-              kindLabel: _kindChipLabel,
-              onPlaceTap: _openPlaceFilter,
-              onKindTap: _openKindFilter,
-              onClearTap: _clearFilters,
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.archive_outlined,
-                    size: 17,
-                    color: _archive ? context.c.sky : context.c.inkFaint,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'عرض المناسبات المنتهية',
-                    style: TextStyle(fontSize: 13, color: context.c.inkSoft),
-                  ),
-                  const Spacer(),
-                  Switch(value: _archive, onChanged: _onArchiveToggled),
-                ],
+          ),
+          // الإعلانات تغادر قائمة التمرير الانجذابي وتستقر كشريط في الكروم
+          // الثابت (المواصفة #98): القفز الإجباري لا يهبط إلا على كرت، فعنصرٌ
+          // ليس نقطة توقّف لا يصله المُمرِّر أصلاً.
+          //
+          // بسقف ارتفاع وتمرير داخليّ: الكروم هنا غير قابل للتمرير وتحته
+          // `Expanded`، فعدّة إعلانات بلا سقف تخنق التغذية حتى الصفر ثم ترمي
+          // `RenderFlex overflow`. الويب ينحدر بهدوء في نفس الحالة؛ فلاتر لا.
+          if (_announcements.isNotEmpty)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: _announcementsMaxHeight),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                child: Column(
+                  children: _announcements
+                      .map((announcement) => _AnnouncementCard(
+                            announcement: announcement,
+                            onTap: () => _openEvent(announcement.eventId),
+                          ))
+                      .toList(),
+                ),
               ),
             ),
-            const Divider(height: 1),
-            Expanded(child: _buildList()),
-          ],
-        ),
+          const Divider(height: 1),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () async {
+                setState(() => _stories = AppServices.of(context).api.stories());
+                await _loadFirstPage();
+              },
+              child: _buildList(),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildList() {
     if (_initialLoading) {
-      // هياكل تحميل بدل دوّارة (٥٣) — النغمة الوقورة لا تُميَّز هنا أصلاً:
-      // الهيكل نفسه بلا أي حركة، فلا فرق ليُلغى على نوع بعينه.
+      // هياكل تحميل بدل دوّارة (٥٣)
       return const EventFeedSkeletonList();
     }
 
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
-              const SizedBox(height: 14),
-              Text(
-                '$_error',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.c.inkSoft, height: 1.6),
-              ),
-              const SizedBox(height: 18),
-              ElevatedButton.icon(
-                onPressed: _loadFirstPage,
-                icon: const Icon(Icons.refresh),
-                label: const Text('إعادة المحاولة'),
-              ),
-            ],
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
+                const SizedBox(height: 14),
+                Text(
+                  '$_error',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: context.c.inkSoft, height: 1.6),
+                ),
+                const SizedBox(height: 18),
+                ElevatedButton.icon(
+                  onPressed: _loadFirstPage,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('إعادة المحاولة'),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       );
     }
 
-    if (_events.isEmpty && _announcements.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.celebration_outlined,
-                size: 46,
-                color: context.c.inkFaint,
-              ),
-              const SizedBox(height: 14),
-              Text(
-                _search.isNotEmpty
-                    ? 'لا توجد مناسبات تطابق بحثك'
-                    : _archive
-                        ? 'لا توجد مناسبات منتهية في $_placeDescriptionForEmptyState'
-                        : 'لا توجد مناسبات معتمدة في $_placeDescriptionForEmptyState حالياً',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.c.inkFaint, fontSize: 15),
-              ),
-            ],
+    if (_events.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.celebration_outlined,
+                  size: 46,
+                  color: context.c.inkFaint,
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  _search.isNotEmpty
+                      ? 'لا توجد مناسبات تطابق بحثك'
+                      : _archive
+                          ? 'لا توجد مناسبات منتهية في $_placeDescriptionForEmptyState'
+                          : 'لا توجد مناسبات معتمدة في $_placeDescriptionForEmptyState حالياً',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: context.c.inkFaint, fontSize: 15),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       );
     }
 
     final hasMore = _pagination?.hasMore ?? false;
-    final showFooter = hasMore || _loadingMore;
-    final itemCount = _announcements.length + _events.length + (showFooter ? 1 : 0);
 
-    return ListView.builder(
-      padding: const EdgeInsets.only(top: 6, bottom: 20),
-      itemCount: itemCount,
-      itemBuilder: (context, index) {
-        if (index < _announcements.length) {
-          final announcement = _announcements[index];
-          return _AnnouncementCard(
-            announcement: announcement,
-            onTap: () => _openEvent(announcement.eventId),
-          );
-        }
-
-        final eventIndex = index - _announcements.length;
-        if (eventIndex < _events.length) {
-          final event = _events[eventIndex];
-          final card = EventCard(
-            event: event,
-            onTap: () => _openEvent(event.id),
-            onCongratulationsTap: () => _openCongratulations(event),
-            onRemindTap: () => _toggleRemind(event),
-          );
-          // الظهور المتدرّج للشاشة الأولى وحدها — مناسبة من صفحة تالية أو
-          // فلتر جديد لا تحمل معرّفها في هذه المجموعة فتُرسَم فوراً (٥٣).
-          return _entranceEventIds.contains(event.id)
-              ? FirstScreenFadeIn(index: eventIndex, child: card)
-              : card;
-        }
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Center(
-            child: _loadingMore
-                ? const CircularProgressIndicator()
-                : OutlinedButton(onPressed: _loadMore, child: const Text('عرض المزيد')),
+    return Stack(
+      alignment: Alignment.bottomCenter,
+      children: [
+        PageView.builder(
+          controller: _pageController,
+          scrollDirection: Axis.vertical,
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: PageScrollPhysics(),
           ),
-        );
-      },
+          itemCount: _events.length,
+          onPageChanged: (index) {
+            if (index >= _events.length - 2 && hasMore && !_loadingMore) {
+              _loadMore();
+            }
+          },
+          itemBuilder: (context, index) {
+            final event = _events[index];
+            final card = EventCard(
+              event: event,
+              onTap: () => _openEvent(event.id),
+              onCongratulationsTap: () => _openCongratulations(event),
+              onRemindTap: () => _toggleRemind(event),
+            );
+            // الظهور المتدرّج للشاشة الأولى وحدها — مناسبة من صفحة تالية أو
+            // فلتر جديد لا تحمل معرّفها في هذه المجموعة فتُرسَم فوراً (٥٣).
+            return _entranceEventIds.contains(event.id)
+                ? FirstScreenFadeIn(index: index, child: card)
+                : card;
+          },
+        ),
+        if (_loadingMore)
+          Positioned(
+            bottom: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+              decoration: BoxDecoration(
+                color: context.c.surface,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: context.c.line),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x40000000),
+                    blurRadius: 16,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: context.c.sky,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'جاري تحميل المزيد...',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.ink,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else if (hasMore)
+          Positioned(
+            bottom: 16,
+            child: ElevatedButton(
+              onPressed: _loadMore,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: context.c.surface,
+                foregroundColor: context.c.ink,
+                elevation: 4,
+                shape: const StadiumBorder(),
+                side: BorderSide(color: context.c.line),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              ),
+              child: const Text(
+                'عرض المزيد',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

@@ -1,5 +1,16 @@
 import 'package:flutter/material.dart';
 
+/// أرضية كرت التغذية ولون الإطار الاحتياطي — مقابلا `--card-ground` و
+/// `--card-gold` في `web/styles.css`.
+///
+/// **ثابتان عمداً، لا يتبعان الوضع الفاتح/الداكن**، تماماً كما هما في الويب:
+/// معرَّفان مرّة في `:root` ولا يُعاد تعريفهما تحت `[data-theme="dark"]`، لأنّ
+/// الكرت داكن دائماً بذاته. إتباعهما الوضع هنا يخلق فارقاً بين العميلين — وهو
+/// بالضبط ما تمنعه المواصفة #98. و`--card-ground` هو نفسه `GROUND` في
+/// `server/src/utils/brandMark.js`: أرضية الكرت من أرضية العلامة.
+const Color cardGround = Color(0xFF0C1B2A);
+const Color cardGold = Color(0xFFD4AF37);
+
 /// لوحة سماء النقب — رموز مطابقة حرفياً لمتغيرات CSS في `web/styles.css`
 /// (الفاتح من `:root`، الداكن من `:root[data-theme="dark"]`)، بدل ثوابت لون
 /// ساكنة لا تتبع وضعاً. الوصول من الواجهات عبر `context.c.<رمز>`.

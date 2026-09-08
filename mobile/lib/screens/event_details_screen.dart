@@ -1,13 +1,12 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
-import '../state/analytics.dart';
+import '../state/share_event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/congratulations.dart';
@@ -132,27 +131,9 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   }
 
   /// يفتح صحيفة مشاركة النظام — لا رابطاً مباشراً لواتساب وحده، كي يختار
-  /// المستخدم أي تطبيق يريد. الرابط من نفس عنوان الخادم الذي يستهلكه التطبيق
-  /// أصلاً ([AppConfig.apiBase]) لا ثابتاً ثانياً، والنصّ بلا «حمّل التطبيق» —
-  /// تلك حكاية صفحة الهبوط، لا صحيفة المشاركة.
-  Future<void> _share(Event event) async {
-    // بلدة *المناسبة* المشارَكة، لا بلدة المستخدم — نفس تمييز الويب
-    // (recordAnalyticsEvent في web/app.js). يُسجَّل عند النقرة نفسها، بصرف
-    // النظر عن نجاح صحيفة المشاركة بعدها أو فشلها.
-    recordAnalyticsEvent(
-      AppServices.of(context).api,
-      'share_clicked',
-      contentTown: event.town,
-    );
-
-    final url = '${AppConfig.apiBase}/e/${event.id}';
-    final text = '${event.displayTitle} — ${event.townDisplay}\n$url';
-    try {
-      await SharePlus.instance.share(ShareParams(text: text));
-    } catch (error) {
-      if (mounted) showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
-    }
-  }
+  /// المستخدم أي تطبيق يريد. التعريف نفسه في [shareEvent]، يشاركه كرت التغذية:
+  /// صيغة الرسالة والرابط وحدث التحليل تعيش في مكان واحد لا مكانين.
+  Future<void> _share(Event event) => shareEvent(context, event);
 
   Future<void> _callHost(String phone) async {
     final uri = Uri(scheme: 'tel', path: phone);
