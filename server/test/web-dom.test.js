@@ -61,6 +61,26 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * jsdom queues its DOMContentLoaded dispatch at document-parse time, which
+ * lands BEFORE `window.eval(COMBINED_SCRIPT)` runs synchronously — so by the
+ * time app.js's own `addEventListener('DOMContentLoaded', ...)` registers,
+ * that dispatch is already pending and fires on the very next microtask tick
+ * (verified directly against jsdom before writing this, the same way the
+ * concatenated-eval comment above buildEnv() was). Most tests never notice —
+ * they assert synchronously, before that tick ever runs — but any test that
+ * awaits something (fetchLiveBroadcasts, waitFor, initSocket + a fired
+ * handler) risks a REAL second automatic call racing its own explicit one.
+ * Awaiting this, right after buildEnv() and before installing any
+ * test-specific fetch/io stub, lets that one automatic pass complete against
+ * whatever buildEnv() already installed, so nothing installed afterward can
+ * ever race it.
+ */
+async function flushBoot() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 /** Polls until `conditionFn()` is truthy or `timeout` elapses. */
 async function waitFor(conditionFn, { timeout = 3000, interval = 20 } = {}) {
   const start = Date.now();
@@ -2279,10 +2299,12 @@ async function run() {
    */
   await test('an iPhone visitor who has not installed is shown how', () => {
     const dom = buildEnv({ userAgent: IPHONE_UA });
-    // Driven through its entry point, as every test here does: jsdom fires
-    // DOMContentLoaded while parsing, which is before this file evaluates
-    // app.js into the window, so the real listener never runs under test. The
-    // wiring itself is asserted separately below.
+    // Driven through its entry point, as every test here does: the queued
+    // DOMContentLoaded dispatch actually DOES reach app.js's own listener
+    // (readyState is still 'loading' when window.eval runs, and it fires
+    // within two microtask ticks — see flushBoot() above, verified directly
+    // against jsdom). It just hasn't happened yet at this synchronous line,
+    // so calling the function directly is still required here, not optional.
     dom.window.initInstallHint();
 
     assert.strictEqual(dom.window.document.getElementById('installHint').hidden, false);
@@ -2378,6 +2400,421 @@ async function run() {
       second.window.document.getElementById('installHint').hidden,
       true,
       'nagging someone who already said no is the fastest way to lose them'
+    );
+  });
+
+  console.log('\nNews ticker & support button (issue #85 batch 6b)');
+
+  const TICKER_INFO = {
+    id: 101, title: 'تعميم عادي', message: 'نص تعميم عادي', tone: 'info',
+    expires_at: '2026-09-10T00:00:00.000Z', scope_town: null, created_at: '2026-09-08T08:00:00.000Z'
+  };
+  const TICKER_URGENT = {
+    id: 102, title: 'تعميم عاجل', message: 'نص تعميم عاجل', tone: 'urgent',
+    expires_at: '2026-09-09T00:00:00.000Z', scope_town: null, created_at: '2026-09-08T09:00:00.000Z'
+  };
+  const TICKER_SOLEMN = {
+    id: 103, title: 'تعميم وقور', message: 'نص تعميم وقور', tone: 'solemn',
+    expires_at: '2026-09-09T00:00:00.000Z', scope_town: null, created_at: '2026-09-08T07:00:00.000Z'
+  };
+  // رقم اختباري بحت — ليس رقماً حقيقياً، شكله فقط مطابق لما يعيده settings.service.js.
+  const FAKE_SUPPORT_NUMBER = '972520000000';
+
+  /** يبني fetch stub يعيد `broadcasts` على GET /api/broadcasts/live فوق القاعدة العامة، ويتتبّع كل PATCH. */
+  function buildBroadcastsFetchStub(broadcasts) {
+    const calls = [];
+    const fetchStub = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method !== 'GET') calls.push({ url: requestPath, method });
+
+      if (requestPath === '/api/broadcasts/live' && method === 'GET') {
+        return jsonResponse({ success: true, broadcasts });
+      }
+      if (requestPath.startsWith('/api/broadcasts/') && requestPath.endsWith('/dismiss') && method === 'PATCH') {
+        return jsonResponse({ success: true });
+      }
+      return buildFetchStub()(url, options);
+    };
+    return { fetchStub, calls };
+  }
+
+  await test('the ticker renders from GET /api/broadcasts/live on load, with no socket involved', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([TICKER_INFO]);
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+
+    const ticker = dom.window.document.getElementById('broadcastTicker');
+    assert.strictEqual(ticker.hidden, false, 'a live broadcast must show the ticker without any socket signal');
+    assert.strictEqual(dom.window.document.getElementById('tickerTitle').textContent, TICKER_INFO.title);
+    assert.strictEqual(dom.window.document.getElementById('tickerMessage').textContent, TICKER_INFO.message);
+  });
+
+  await test('zero live broadcasts leaves the ticker hidden', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([]);
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+
+    assert.strictEqual(dom.window.document.getElementById('broadcastTicker').hidden, true);
+  });
+
+  await test('with two live broadcasts, the ticker shows the newest and an indicator that opens the rest', async () => {
+    const dom = buildEnv(); // anonymous — the indicator expands the ticker in place
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([TICKER_URGENT, TICKER_INFO]); // server order: newest first
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+
+    assert.strictEqual(dom.window.document.getElementById('tickerTitle').textContent, TICKER_URGENT.title, 'the newest broadcast must be the one shown');
+    const moreBtn = dom.window.document.getElementById('tickerMoreBtn');
+    assert.strictEqual(moreBtn.hidden, false);
+    assert.strictEqual(dom.window.document.getElementById('tickerMoreCount').textContent, '1');
+
+    const expandedList = dom.window.document.getElementById('tickerExpandedList');
+    assert.strictEqual(expandedList.hidden, true, 'the rest stays collapsed until the indicator is used');
+
+    dom.window.handleTickerMoreClick();
+    assert.strictEqual(expandedList.hidden, false, 'an anonymous visitor expands the ticker in place');
+    assert.ok(expandedList.textContent.includes(TICKER_INFO.title), 'the second broadcast must appear once expanded');
+  });
+
+  await test('signed in, the same indicator re-fetches the notifications centre before opening it, instead of expanding the ticker', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([TICKER_URGENT, TICKER_INFO]);
+    let notificationsFetches = 0;
+    dom.window.fetch = async (url, options) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/notifications') notificationsFetches += 1;
+      return fetchStub(url, options);
+    };
+
+    await dom.window.fetchLiveBroadcasts();
+    // FIX 3: without a re-fetch here, "+N" could open a centre still showing
+    // the stale list fetched at page load — counting a broadcast the "+N"
+    // itself just proved arrived, but never actually listing it.
+    await dom.window.handleTickerMoreClick();
+
+    assert.strictEqual(notificationsFetches, 1, 'opening the centre from "+N" must re-fetch it first');
+    assert.strictEqual(dom.window.document.getElementById('notificationsModal').style.display, 'flex');
+    assert.strictEqual(dom.window.document.getElementById('tickerExpandedList').hidden, true, 'a signed-in visitor never gets the inline expansion');
+  });
+
+  await test('a solemn broadcast gets its own class and never the animated (urgent-pulse) class', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([TICKER_SOLEMN]);
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+
+    const ticker = dom.window.document.getElementById('broadcastTicker');
+    assert.ok(ticker.classList.contains('tone-solemn'));
+    assert.ok(!ticker.classList.contains('ticker-urgent-pulse'), 'a solemn broadcast must never animate');
+  });
+
+  await test('an urgent broadcast gets the pulse class, for contrast with solemn', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { fetchStub } = buildBroadcastsFetchStub([TICKER_URGENT]);
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+
+    assert.ok(dom.window.document.getElementById('broadcastTicker').classList.contains('ticker-urgent-pulse'));
+  });
+
+  await test('dismissing while signed in calls PATCH /api/broadcasts/:id/dismiss, and the ticker clears', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const { fetchStub, calls } = buildBroadcastsFetchStub([TICKER_INFO]);
+    dom.window.fetch = fetchStub;
+
+    await dom.window.fetchLiveBroadcasts();
+    dom.window.dismissActiveBroadcast();
+    await waitFor(() => calls.length > 0);
+
+    assert.strictEqual(calls.length, 1);
+    assert.deepStrictEqual(calls[0], { url: `/api/broadcasts/${TICKER_INFO.id}/dismiss`, method: 'PATCH' });
+    assert.strictEqual(dom.window.document.getElementById('broadcastTicker').hidden, true);
+  });
+
+  await test('dismissing while anonymous writes to localStorage, calls no PATCH, and the broadcast does not come back on the next render', async () => {
+    const first = buildEnv(); // anonymous
+    await flushBoot();
+    const { fetchStub, calls } = buildBroadcastsFetchStub([TICKER_INFO]);
+    first.window.fetch = fetchStub;
+
+    await first.window.fetchLiveBroadcasts();
+    first.window.dismissActiveBroadcast();
+
+    assert.strictEqual(calls.length, 0, 'an anonymous visitor must never call the server to dismiss — there is no identity to key it on');
+    const stored = JSON.parse(first.window.localStorage.getItem('negev_dismissed_broadcasts') || '[]');
+    assert.ok(stored.includes(TICKER_INFO.id), 'the dismissed id must be remembered in localStorage');
+    assert.strictEqual(first.window.document.getElementById('broadcastTicker').hidden, true);
+
+    // The next page load: a fresh document, the server still returns the same
+    // still-live broadcast (it has no idea an anonymous visitor dismissed it),
+    // but the persisted localStorage value must keep it off the ticker.
+    const second = buildEnv();
+    await flushBoot();
+    second.window.localStorage.setItem('negev_dismissed_broadcasts', JSON.stringify(stored));
+    const { fetchStub: secondFetchStub } = buildBroadcastsFetchStub([TICKER_INFO]);
+    second.window.fetch = secondFetchStub;
+
+    await second.window.fetchLiveBroadcasts();
+
+    assert.strictEqual(
+      second.window.document.getElementById('broadcastTicker').hidden,
+      true,
+      'a broadcast dismissed anonymously must not reappear after a reload'
+    );
+  });
+
+  await test('a town_broadcast socket signal triggers a re-fetch and never renders text from the payload itself', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const socketHandlers = {};
+    dom.window.io = () => ({
+      on(event, handler) { socketHandlers[event] = handler; },
+      off() {},
+      emit() {}
+    });
+
+    let liveFetchCount = 0;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/broadcasts/live') {
+        liveFetchCount += 1;
+        return jsonResponse({ success: true, broadcasts: [TICKER_INFO] });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    dom.window.initSocket();
+    assert.strictEqual(typeof socketHandlers.town_broadcast, 'function', 'expected app.js to register a town_broadcast handler');
+
+    // The real payload carries no title/message at all (server/src/routes/admin.routes.js) —
+    // firing it with a shape that WOULD leak text if ever rendered directly is
+    // the point: the assertion below only passes if the handler re-fetched.
+    socketHandlers.town_broadcast({ id: 999, scope_town: 'رهط', tone: 'urgent', expires_at: null });
+    // liveFetchCount already ticks up the instant the stub is CALLED — the
+    // handler's own fire-and-forget promise (res.json(), render) may still be
+    // in flight at that point, so wait for the actual render instead.
+    // #tickerTitle is (re)created fresh on every render — before the first
+    // one it does not exist in the document at all, so the lookup itself
+    // must be null-safe here.
+    await waitFor(() => {
+      const titleEl = dom.window.document.getElementById('tickerTitle');
+      return !!titleEl && titleEl.textContent === TICKER_INFO.title;
+    });
+
+    assert.strictEqual(liveFetchCount, 1);
+    assert.strictEqual(
+      dom.window.document.getElementById('tickerTitle').textContent,
+      TICKER_INFO.title,
+      'the ticker must show the re-fetched broadcast, never anything derived from the socket payload'
+    );
+  });
+
+  await test('the support entry opens a wa.me link built from the exact stored number, unmodified — via the in-app modal, not confirm()', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({ success: true, settings: { support_whatsapp_number: FAKE_SUPPORT_NUMBER } });
+      }
+      return buildFetchStub()(url);
+    };
+
+    await dom.window.initSupportEntry();
+
+    const btn = dom.window.document.getElementById('supportBtn');
+    assert.strictEqual(btn.hidden, false);
+    assert.ok(!btn.classList.contains('support-btn-disabled'));
+
+    const opened = [];
+    dom.window.open = (...args) => opened.push(args);
+
+    dom.window.handleSupportClick();
+    assert.strictEqual(opened.length, 0, 'the modal must appear before anything opens');
+    assert.strictEqual(dom.window.document.getElementById('supportModal').style.display, 'flex');
+    assert.strictEqual(dom.window.document.getElementById('supportModalConfirmActions').hidden, false);
+    assert.strictEqual(dom.window.document.getElementById('supportModalOkActions').hidden, true);
+
+    dom.window.confirmSupportWhatsappOpen(); // the "متابعة إلى واتساب" button
+
+    assert.strictEqual(opened.length, 1);
+    assert.strictEqual(opened[0][0], `https://wa.me/${FAKE_SUPPORT_NUMBER}`, 'the number must travel into the link exactly as the server sent it — no re-formatting');
+    assert.strictEqual(dom.window.document.getElementById('supportModal').style.display, 'none', 'the modal must close once WhatsApp opens');
+  });
+
+  await test('FIX 5: the disclosure is the page\'s own modal, not a browser confirm() — declining it opens nothing', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({ success: true, settings: { support_whatsapp_number: FAKE_SUPPORT_NUMBER } });
+      }
+      return buildFetchStub()(url);
+    };
+    await dom.window.initSupportEntry();
+
+    const opened = [];
+    dom.window.open = (...args) => opened.push(args);
+    // A page that still called window.confirm() here would auto-accept
+    // under this env's default stub (buildEnv sets confirm to always return
+    // true) — leaving it exactly as buildEnv provides it, unstubbed further,
+    // is itself part of the proof that this path no longer consults it.
+
+    dom.window.handleSupportClick();
+    dom.window.document.getElementById('supportModalConfirmActions')
+      .querySelector('.chat-trigger-btn').click(); // "إلغاء"
+
+    assert.strictEqual(opened.length, 0, 'declining the disclosure must open nothing');
+    assert.strictEqual(dom.window.document.getElementById('supportModal').style.display, 'none');
+
+    dom.window.handleSupportClick();
+    dom.window.document.getElementById('supportModalConfirmActions')
+      .querySelector('.submit-btn').click(); // "متابعة إلى واتساب"
+
+    assert.strictEqual(opened.length, 1, 'accepting the disclosure must open WhatsApp');
+  });
+
+  await test('a null support number leaves the entry visible but disabled, and tapping it explains why in the same modal, never a browser alert()', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = async url => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({ success: true, settings: { support_whatsapp_number: null } });
+      }
+      return buildFetchStub()(url);
+    };
+
+    await dom.window.initSupportEntry();
+
+    const btn = dom.window.document.getElementById('supportBtn');
+    assert.strictEqual(btn.hidden, false, 'a null number must not hide the entry — it must stay reachable, just disabled');
+    assert.ok(btn.classList.contains('support-btn-disabled'));
+
+    const opened = [];
+    dom.window.open = (...args) => opened.push(args);
+
+    dom.window.handleSupportClick();
+
+    assert.strictEqual(opened.length, 0, 'no number means nothing to open');
+    assert.strictEqual(dom.window.document.getElementById('supportModal').style.display, 'flex', 'tapping a disabled entry must explain why in the page\'s own modal, never do nothing at all');
+    assert.ok(dom.window.document.getElementById('supportModalText').textContent.length > 0);
+    assert.strictEqual(dom.window.document.getElementById('supportModalOkActions').hidden, false);
+    assert.strictEqual(dom.window.document.getElementById('supportModalConfirmActions').hidden, true, 'no number means no "continue to WhatsApp" option at all');
+  });
+
+  console.log('\nNews ticker — second review round (issue #85, FIX 1 and FIX 2b)');
+
+  await test('FIX 1: a single long broadcast — no "+N" to fall back on — is still reachable in full, for an anonymous AND a signed-in visitor', async () => {
+    const LONG_BROADCAST = {
+      id: 201,
+      title: 'عنوان تعميم طويل جداً يتجاوز عرض السطر الواحد بسهولة، ولا يجوز أن يبقى مقصوصاً بلا وسيلة لقراءته كاملاً',
+      message: 'نص تعميم طويل أيضاً يشرح تفاصيل حقيقية يجب أن تصل كاملة لكل من يقرأ الشريط، سواء كان مسجَّلاً دخوله أو زائراً مجهولاً بلا حساب على الإطلاق — لا مركز إشعارات يظهر له بديلاً',
+      tone: 'info', expires_at: '2026-09-10T00:00:00.000Z', scope_town: null, created_at: '2026-09-08T08:00:00.000Z'
+    };
+
+    for (const loggedIn of [false, true]) {
+      const dom = buildEnv({ loggedIn });
+      await flushBoot();
+      const { fetchStub } = buildBroadcastsFetchStub([LONG_BROADCAST]); // exactly one broadcast — no rest, so "+N" cannot be the answer
+      dom.window.fetch = fetchStub;
+
+      await dom.window.fetchLiveBroadcasts();
+
+      const ticker = dom.window.document.getElementById('broadcastTicker');
+      assert.strictEqual(dom.window.document.getElementById('tickerMoreBtn').hidden, true, 'a single broadcast never shows a +N — the expand button has to work without one');
+      assert.ok(!ticker.classList.contains('ticker-text-expanded'), 'collapsed by default — that is still the point of a ticker');
+      // jsdom draws no layout, so the full text already sits in the DOM even
+      // collapsed — clipping is CSS-only. What the toggle must prove is the
+      // CSS HOOK existing and actually being lifted, asserted below.
+      assert.strictEqual(dom.window.document.getElementById('tickerTitle').textContent, LONG_BROADCAST.title);
+      assert.strictEqual(dom.window.document.getElementById('tickerMessage').textContent, LONG_BROADCAST.message);
+
+      dom.window.toggleTickerTextExpanded();
+
+      assert.ok(ticker.classList.contains('ticker-text-expanded'), `expanding must work ${loggedIn ? 'signed in' : 'anonymously'}`);
+      assert.strictEqual(dom.window.document.getElementById('tickerExpandTextBtn').getAttribute('aria-expanded'), 'true');
+    }
+
+    // The behavioural assertions above would still pass even if the CSS never
+    // actually clipped anything, OR if it clipped everything permanently —
+    // jsdom cannot tell those apart by itself. This reads the real stylesheet,
+    // the same technique the file's own "nothing that ships hidden" test uses
+    // for the identical reason.
+    assert.ok(
+      /\.broadcast-ticker:not\(\.ticker-text-expanded\)[\s\S]{0,120}white-space:\s*nowrap/.test(STYLES_CSS_RAW),
+      'the collapsed row must actually be clipped to one line in CSS — that is what a ticker is'
+    );
+    assert.ok(
+      STYLES_CSS_RAW.includes('.ticker-text-expanded'),
+      'expanding must be wired to a real CSS rule, not just a JS class with nothing reading it'
+    );
+  });
+
+  await test('FIX 2b: a broadcast dismissed while anonymous does not reappear after signing in on the SAME device', async () => {
+    const dom = buildEnv(); // starts anonymous — nobody in negev_user yet
+    await flushBoot();
+
+    let liveFetches = 0;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (requestPath === '/api/broadcasts/live' && method === 'GET') {
+        liveFetches += 1;
+        // The server has no idea this visitor dismissed it locally — a
+        // global broadcast is not scoped to an account that never called
+        // PATCH .../dismiss because it had no account yet.
+        return jsonResponse({ success: true, broadcasts: [TICKER_INFO] });
+      }
+      if (requestPath === '/api/auth/login' && method === 'POST') {
+        return jsonResponse({ success: true, token: 'test-token-after-login', user: { id: 777, full_name: 'مستخدم بعد الدخول', role: 'user' } });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    await dom.window.fetchLiveBroadcasts();
+    dom.window.dismissActiveBroadcast();
+    assert.strictEqual(dom.window.document.getElementById('broadcastTicker').hidden, true, 'dismissed while still anonymous');
+    assert.strictEqual(liveFetches, 1);
+
+    // The real sign-in path, on the SAME window/closure — not a second
+    // buildEnv(): app.js's top-level `currentUser`/`authToken` do not attach
+    // to `window` under an indirect eval (this file's own documented gotcha),
+    // so the only faithful way to become "signed in" here is the real
+    // function that flips them from inside its own closure.
+    dom.window.document.getElementById('loginPhone').value = '0500000000';
+    dom.window.document.getElementById('loginPin').value = '1234';
+    await dom.window.handleLogin({ preventDefault() {} });
+    // handleLogin's own fetchLiveBroadcasts() call is fire-and-forget, same
+    // as its existing fetchNotifications() — awaiting handleLogin itself does
+    // NOT wait for that second render to land, so the count and the render
+    // must both be polled for, or this assertion below would silently pass
+    // against the PRE-fix state too (still-hidden from the dismiss above,
+    // never actually re-checked against the re-fetched data at all).
+    await waitFor(() => liveFetches >= 2);
+    await flushBoot();
+
+    assert.ok(liveFetches >= 2, 'signing in must re-fetch the live broadcasts (FIX 2a) — otherwise this proof cannot even reach the FIX 2b question');
+    assert.strictEqual(
+      dom.window.document.getElementById('broadcastTicker').hidden,
+      true,
+      'signing in must never resurrect a broadcast this same person, on this same device, already dismissed as a visitor'
     );
   });
 

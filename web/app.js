@@ -71,6 +71,25 @@ let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة ال�
 let notificationsList = [];
 let congratsQueueEventId = null;
 
+// News ticker (#85 خطوة 28-33) — الحيّ من GET /api/broadcasts/live، مرتّباً
+// بالأحدث أولاً كما يعيده الخادم. tickerExpanded توسيع قائمة البقيّة في مكانها
+// لزائر مجهول فقط (المسجَّل دخوله يفتح مركز الإشعارات بدلاً منه).
+// tickerTextExpanded مستقلّة عنها تماماً: عرض نصّ الصفّ الأساسي كاملاً بلا قصّ،
+// للمسجَّل دخوله وللمجهول معاً (مراجعة #85، FIX 1).
+let liveBroadcasts = [];
+let tickerExpanded = false;
+let tickerTextExpanded = false;
+let tickerPrimaryBroadcastId = null;
+
+// المصدر الحقيقي الوحيد لهذا التعداد هو تعليق عمود broadcasts.tone في
+// server/src/db/schema.sql — لا استيراد ممكن هنا (web/ بلا خطوة بناء)، فهذه
+// نسخة يدوية واحدة معرَّفة مرّة، لا نسخة إضافية متفرّقة (مراجعة #85، FIX 7).
+const BROADCAST_TONES = ['info', 'urgent', 'solemn'];
+
+// رقم الدعم الفني من GET /api/settings/public (#85 خطوة 34-35، 39) — null يعني
+// لم يُضبط بعد، وهي الحالة الافتراضية اليوم.
+let supportWhatsappNumber = null;
+
 // Story viewer (#20 step 18) — the strip's own stories list, plus the
 // viewer's playback state; opened by index into this same array.
 let allStories = [];
@@ -106,6 +125,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initAppDownload();
   initInstallHint();
   fetchNotifications();
+  fetchLiveBroadcasts();
+  initSupportEntry();
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -338,13 +359,18 @@ function initSocket() {
       fetchEvents();
     });
 
-    socket.on('system_broadcast', (data) => {
-      const banner = document.getElementById('broadcastBanner');
-      const text = document.getElementById('broadcastText');
-      if (banner && text) {
-        text.textContent = `${data.title}: ${data.message}`;
-        banner.style.display = 'flex';
-      }
+    // بثّ عام (كل المستخدمين) — الحمولة تحمل نصاً فعلاً، لكن لا معرّف
+    // (`id`) يسمح بإغلاقه لاحقاً، فنعيد الجلب من GET /api/broadcasts/live
+    // دائماً لنحصل على الصفّ كاملاً بدل تركيب واحد ناقص من الحمولة (#85 خطوة 28).
+    socket.on('system_broadcast', () => {
+      fetchLiveBroadcasts();
+    });
+
+    // بثّ بلدة — الحمولة بلا عنوان ولا نص عمداً (القناة بلا غرف، تصل كل
+    // عميل متصل)؛ نتجاهلها ونعيد الجلب دائماً، بنفس انضباط قناة الإشعارات
+    // أعلاه (#85 خطوة 28-31).
+    socket.on('town_broadcast', () => {
+      fetchLiveBroadcasts();
     });
 
     subscribeToNotificationSocket();
@@ -372,9 +398,275 @@ function subscribeToNotificationSocket() {
   });
 }
 
-function dismissBanner() {
-  const banner = document.getElementById('broadcastBanner');
-  if (banner) banner.style.display = 'none';
+// 1.5 News ticker (#85 خطوة 28-33) — أثر دائم تحت الترويسة، غير ملتصق وبلا
+// زحف. يظهر عند فتح الصفحة من GET /api/broadcasts/live مباشرة، لا فقط عند
+// إشارة socket (قصة 28)، فيراه أيضاً من سجّل بعد بثّ التعميم (قصة 32) —
+// الخادم يستثني المنتهي والمُغلَق أصلاً ولا تُعاد فلترته هنا.
+
+const DISMISSED_BROADCASTS_KEY = 'negev_dismissed_broadcasts';
+const DISMISSED_BROADCASTS_CAP = 50; // سقف بسيط كي لا ينمو التخزين بلا حدّ
+
+/** إغلاق الشريط للزائر المجهول — الخادم بلا كوكيز ولا هوية مجهولة يُبنى عليها صفّ (قصة 29). */
+function getLocallyDismissedBroadcastIds() {
+  try {
+    const raw = localStorage.getItem(DISMISSED_BROADCASTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function rememberBroadcastDismissedLocally(broadcastId) {
+  try {
+    const ids = getLocallyDismissedBroadcastIds();
+    if (!ids.includes(broadcastId)) ids.push(broadcastId);
+    while (ids.length > DISMISSED_BROADCASTS_CAP) ids.shift();
+    localStorage.setItem(DISMISSED_BROADCASTS_KEY, JSON.stringify(ids));
+  } catch (e) {
+    // تصفّح خاص أو تخزين ممتلئ — الإغلاق يبقى نافذاً لهذه الجلسة على الأقل.
+  }
+}
+
+function isBroadcastDismissedLocally(broadcastId) {
+  return getLocallyDismissedBroadcastIds().includes(broadcastId);
+}
+
+async function fetchLiveBroadcasts() {
+  try {
+    // auth:true يرفق الرمز إن وُجد فقط (apiFetch)، فيعمل بلا تسجيل دخول
+    // أيضاً — والمسار نفسه optionalAuthenticate على الخادم.
+    const res = await apiFetch('/api/broadcasts/live', { auth: true });
+    const data = await res.json();
+    if (data.success) {
+      liveBroadcasts = data.broadcasts || [];
+      renderBroadcastTicker();
+    }
+  } catch (e) {
+    console.error('Broadcasts error:', e);
+  }
+}
+
+/**
+ * صفّ نصّ واحد (عنوان + رسالة) — المكان الوحيد الذي يبنيه، يستعمله الصفّ
+ * الأساسي (بمعرّفين لعناصره) وكل صفّ في القائمة الموسَّعة (بلا معرّفات) معاً
+ * (مراجعة #85، FIX 6). عبر `textContent` لا `innerHTML` — نفس تحصين XSS الذي
+ * كان قائماً، بلا حاجة إلى `escapeHtml` هنا لأنه غير وارد إطلاقاً.
+ */
+function buildTickerTextRow(title, message, ids) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ticker-text';
+
+  const strong = document.createElement('strong');
+  if (ids) strong.id = ids.titleId;
+  strong.textContent = title || '';
+
+  const span = document.createElement('span');
+  if (ids) span.id = ids.messageId;
+  span.textContent = message || '';
+
+  wrap.appendChild(strong);
+  wrap.appendChild(span);
+  return wrap;
+}
+
+/**
+ * الأحدث وحده يُعرَض، و«+N» تفتح الباقي — مركز الإشعارات لمن سجّل دخوله
+ * (نفس الطابور الذي يدمج التعاميم فعلاً)، أو توسيع الشريط في مكانه لزائر
+ * مجهول (قصة 31). فلتر الإغلاق المحلي يُطبَّق دائماً بلا شرط تسجيل الدخول
+ * (مراجعة #85، FIX 2ب) — تعميم أغلقه هذا الشخص وهو زائر يجب ألّا يعود له على
+ * نفس الجهاز بعد أن يسجّل دخوله. المُغلَق محلياً يُستبعد من العرض هنا فقط —
+ * لا يُحذف من liveBroadcasts نفسها لأن معرّف مركز الإشعارات لاحقاً (#85
+ * دفعة 6ج) قد يحتاجها كاملة.
+ */
+function renderBroadcastTicker() {
+  const el = document.getElementById('broadcastTicker');
+  if (!el) return;
+
+  const visible = liveBroadcasts.filter(b => !isBroadcastDismissedLocally(b.id));
+
+  if (!visible.length) {
+    el.hidden = true;
+    tickerPrimaryBroadcastId = null;
+    tickerExpanded = false;
+    tickerTextExpanded = false;
+    return;
+  }
+
+  const primary = visible[0];
+  const rest = visible.slice(1);
+  tickerPrimaryBroadcastId = primary.id;
+
+  el.hidden = false;
+  const tone = BROADCAST_TONES.includes(primary.tone) ? primary.tone : 'info';
+  // النبض اللطيف حصراً لنغمة «عاجل» — الوقور لا يتحرك أبداً بأي حال (قصة 27، 33).
+  el.className = `broadcast-ticker tone-${tone}`
+    + (tone === 'urgent' ? ' ticker-urgent-pulse' : '')
+    + (tickerTextExpanded ? ' ticker-text-expanded' : '');
+
+  const textArea = document.getElementById('tickerTextArea');
+  if (textArea) {
+    textArea.innerHTML = '';
+    textArea.appendChild(buildTickerTextRow(primary.title, primary.message, { titleId: 'tickerTitle', messageId: 'tickerMessage' }));
+  }
+
+  const expandTextBtn = document.getElementById('tickerExpandTextBtn');
+  if (expandTextBtn) {
+    expandTextBtn.setAttribute('aria-expanded', String(tickerTextExpanded));
+    const icon = expandTextBtn.querySelector('i');
+    if (icon) icon.className = tickerTextExpanded ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down';
+  }
+
+  const moreBtn = document.getElementById('tickerMoreBtn');
+  const moreCount = document.getElementById('tickerMoreCount');
+  if (moreBtn && moreCount) {
+    if (rest.length) {
+      moreBtn.hidden = false;
+      moreCount.textContent = String(rest.length);
+    } else {
+      moreBtn.hidden = true;
+      tickerExpanded = false;
+    }
+  }
+
+  const expandedList = document.getElementById('tickerExpandedList');
+  if (expandedList) {
+    if (tickerExpanded && rest.length) {
+      expandedList.hidden = false;
+      expandedList.innerHTML = '';
+      rest.forEach(b => {
+        const item = document.createElement('div');
+        item.className = 'ticker-expanded-item';
+        item.appendChild(buildTickerTextRow(b.title, b.message));
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.type = 'button';
+        dismissBtn.className = 'ticker-dismiss-btn';
+        dismissBtn.setAttribute('aria-label', 'إغلاق التعميم');
+        dismissBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+        dismissBtn.addEventListener('click', () => dismissBroadcastById(b.id));
+        item.appendChild(dismissBtn);
+
+        expandedList.appendChild(item);
+      });
+    } else {
+      expandedList.hidden = true;
+      expandedList.innerHTML = '';
+    }
+  }
+}
+
+/**
+ * سطر النصّ الأساسي مقصوص سطراً واحداً افتراضياً (هذا هو معنى الشريط) — هذا
+ * الزرّ يفتحه كاملاً بلا قصّ، للمسجَّل دخوله وللزائر المجهول معاً؛ مستقلّ عن
+ * وجود «+N» تماماً (مراجعة #85، FIX 1: تعميم واحد فقط بلا أي بقيّة كان بلا أي
+ * وسيلة لقراءته كاملاً). لا يحرّك شيئاً — تبديل خاصية CSS فقط.
+ */
+function toggleTickerTextExpanded() {
+  tickerTextExpanded = !tickerTextExpanded;
+  renderBroadcastTicker();
+}
+
+/**
+ * «+N» — مركز الإشعارات لمن سجّل دخوله، توسيع الشريط في مكانه لغيره (قصة 31).
+ * يُعاد جلب مركز الإشعارات أولاً (مراجعة #85، FIX 3) — بلا ذلك يمكن أن يحمل
+ * «+N» عدداً وصل بعد آخر جلب بينما يفتح مركزاً لا يزال يعرض القائمة القديمة.
+ */
+async function handleTickerMoreClick() {
+  if (currentUser && authToken) {
+    await fetchNotifications();
+    toggleNotificationsPanel();
+    return;
+  }
+  tickerExpanded = !tickerExpanded;
+  renderBroadcastTicker();
+}
+
+/** إغلاق التعميم المعروض حالياً (الأحدث) — زرّ الإغلاق الرئيسي على الشريط. */
+function dismissActiveBroadcast() {
+  if (tickerPrimaryBroadcastId != null) dismissBroadcastById(tickerPrimaryBroadcastId);
+}
+
+/**
+ * مسجَّل دخوله → PATCH يُذكَر عبر الأجهزة؛ مجهول → localStorage محلي بحت
+ * (قصة 29). الإزالة من liveBroadcasts فورية في الحالتين حتى لا ينتظر
+ * الشريط جولة شبكة قبل أن يختفي التعميم المُغلَق.
+ */
+async function dismissBroadcastById(broadcastId) {
+  liveBroadcasts = liveBroadcasts.filter(b => b.id !== broadcastId);
+  renderBroadcastTicker();
+
+  if (currentUser && authToken) {
+    try {
+      await apiFetch(`/api/broadcasts/${broadcastId}/dismiss`, { method: 'PATCH', auth: true });
+    } catch (e) {
+      console.error('Dismiss broadcast error:', e);
+    }
+  } else {
+    rememberBroadcastDismissedLocally(broadcastId);
+  }
+}
+
+// 1.6 زرّ الدعم الفني (#85 خطوة 34-35، 39) — يفتح واتساب على الرقم من
+// GET /api/settings/public، برقم كما يعيده الخادم حرفياً («972XXXXXXXXX» بلا
+// «+») بلا أي إعادة تهيئة هنا؛ wa.me يقبله كما هو.
+async function initSupportEntry() {
+  try {
+    const res = await apiFetch('/api/settings/public');
+    const data = await res.json();
+    if (data.success && data.settings) {
+      supportWhatsappNumber = data.settings.support_whatsapp_number || null;
+    }
+  } catch (e) {
+    console.error('Support settings error:', e);
+  } finally {
+    updateSupportButtonState();
+  }
+}
+
+/** يبقى الزرّ ظاهراً دائماً بعد وصول الاستجابة — معطَّلاً بصرياً لا مخفياً حين لا رقم محفوظ، كي لا يصير طرفاً ميتاً بلا تفسير. */
+function updateSupportButtonState() {
+  const btn = document.getElementById('supportBtn');
+  if (!btn) return;
+  const configured = !!supportWhatsappNumber;
+  btn.hidden = false;
+  btn.classList.toggle('support-btn-disabled', !configured);
+  btn.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
+}
+
+/**
+ * سطر إفصاح واحد قبل الفتح (قصة 35) — مودال الصفحة نفسه لا `confirm()`
+ * المتصفّح (مراجعة #85، FIX 5): حوار المتصفّح الأصلي يرسم اتجاهه وأزراره من
+ * لغة المتصفّح لا الصفحة، فيظهر LTR بزرّي "OK/Cancel" فوق صفحة عربية RTL.
+ * رقم بلا تهيئة يُفتح بنفس هوية المودال — رسالة وزرّ واحد، لا `alert()`.
+ */
+function handleSupportClick() {
+  const text = document.getElementById('supportModalText');
+  const confirmActions = document.getElementById('supportModalConfirmActions');
+  const okActions = document.getElementById('supportModalOkActions');
+  if (!text || !confirmActions || !okActions) return;
+
+  if (!supportWhatsappNumber) {
+    text.textContent = 'الدعم الفني غير مُفعَّل بعد على المنصّة — حاول لاحقاً';
+    confirmActions.hidden = true;
+    okActions.hidden = false;
+  } else {
+    text.textContent = 'سيرى فريق الدعم الفني رقم هاتفك عند فتح واتساب — هل تريد المتابعة؟';
+    confirmActions.hidden = false;
+    okActions.hidden = true;
+  }
+  document.getElementById('supportModal').style.display = 'flex';
+}
+
+/** زرّ «متابعة إلى واتساب» في المودال — الرقم كما وصل من الخادم حرفياً، بلا أي إعادة تهيئة. */
+function confirmSupportWhatsappOpen() {
+  closeSupportModal();
+  if (supportWhatsappNumber) window.open(`https://wa.me/${supportWhatsappNumber}`, '_blank', 'noopener');
+}
+
+function closeSupportModal() {
+  const modal = document.getElementById('supportModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // 2. Stories / Snaps Loader
@@ -3332,6 +3624,10 @@ async function handleLogin(e) {
       loadNokootView();
       subscribeToNotificationSocket();
       fetchNotifications();
+      // بلا هذا يبقى الشريط بنتيجة الزائر المجهول (تعاميم عامة فقط) حتى
+      // إعادة تحميل يدوية — تعاميم بلدة هذا الحساب لا تظهر رغم أنها له
+      // فعلاً (مراجعة #85، FIX 2أ، قصة 32).
+      fetchLiveBroadcasts();
       resumePendingIntent();
     } else {
       alert(data.message || 'بيانات الدخول غير صحيحة');
@@ -3367,6 +3663,10 @@ async function handleRegister(e) {
       loadNokootView();
       subscribeToNotificationSocket();
       fetchNotifications();
+      // بلا هذا يبقى الشريط بنتيجة الزائر المجهول (تعاميم عامة فقط) حتى
+      // إعادة تحميل يدوية — تعاميم بلدة هذا الحساب لا تظهر رغم أنها له
+      // فعلاً (مراجعة #85، FIX 2أ، قصة 32).
+      fetchLiveBroadcasts();
       resumePendingIntent();
     } else {
       alert(data.message || 'حدث خطأ في التسجيل');

@@ -48,15 +48,6 @@
 </head>
 <body>
 
-  <!-- Top Broadcast Announcement Banner -->
-  <div id="broadcastBanner" class="broadcast-banner" style="display: none;">
-    <div class="banner-content">
-      <i class="fa-solid fa-bullhorn banner-icon"></i>
-      <span id="broadcastText">تنبيه عام من إدارة أعراسنا</span>
-    </div>
-    <button class="close-banner" onclick="dismissBanner()"><i class="fa-solid fa-xmark"></i></button>
-  </div>
-
   <!-- Main Luxury Header -->
   <header class="app-header">
     <div class="header-container">
@@ -85,6 +76,14 @@
           <i class="fa-solid fa-bell"></i>
           <span id="notificationsBadge" class="status-tag pending" style="display:none; position:absolute; top:-8px; left:-8px; padding:1px 6px;">0</span>
         </button>
+        <!-- الدعم الفني — يفتح واتساب على الرقم من GET /api/settings/public
+             (#85 خطوة 34-35، 39). مخفي حتى تأتي الاستجابة كي لا يظهر ثم
+             يتحوّل معطَّلاً أمام المستخدم؛ يبقى معطَّلاً (لا مخفياً) إن كان
+             الرقم null كي لا يصير طرفاً ميتاً بلا تفسير. -->
+        <button id="supportBtn" class="ai-magic-btn" onclick="handleSupportClick()" title="الدعم الفني" hidden>
+          <i class="fa-brands fa-whatsapp"></i>
+          <span>الدعم الفني</span>
+        </button>
         <button id="userAuthBtn" class="auth-pill-btn" onclick="openAuthModal()">
           <i class="fa-solid fa-user-lock"></i>
           <span id="userAuthLabel">تسجيل الدخول</span>
@@ -106,6 +105,34 @@
       </div>
     </div>
   </header>
+
+  <!-- الشريط الإخباري للتعاميم — أثرٌ دائم بدل ومضة (#85 خطوة 28-33). تحت
+       الترويسة، غير ملتصق (لا position:sticky)، وبلا زحف — لا نص متحرك ولا
+       دوران تلقائي. يُملأ من GET /api/broadcasts/live عند فتح الصفحة (وليس
+       فقط من إشارة socket)، ويُعاد جلبه كاملاً عند system_broadcast أو
+       town_broadcast — القناة الثانية لا تحمل نصاً أصلاً. الأحدث وحده يظهر
+       بسطر واحد افتراضياً، وزرّ السهم يفتح نصّه كاملاً بلا قصّ (مراجعة #85،
+       FIX 1 — سطر واحد مقصوص لا يفي بقصة 28 حين لا مركز إشعارات لزائر
+       مجهول). ومؤشر «+N» يفتح الباقي: مركز الإشعارات لمن سجّل دخوله، أو
+       توسيع الشريط في مكانه لزائر مجهول. النغمة تتبع المحتوى؛ الوقور لا
+       يتحرك أبداً. #tickerTextArea يُملأ بعنصر واحد يبنيه buildTickerTextRow
+       في app.js — نفس الدالّة التي تبني كل صفّ في القائمة الموسَّعة (FIX 6). -->
+  <div id="broadcastTicker" class="broadcast-ticker" hidden>
+    <div class="ticker-main-row">
+      <i class="fa-solid fa-bullhorn ticker-icon" aria-hidden="true"></i>
+      <div id="tickerTextArea"></div>
+      <button id="tickerExpandTextBtn" class="ticker-expand-text-btn" onclick="toggleTickerTextExpanded()" aria-expanded="false" aria-label="عرض نص التعميم كاملاً">
+        <i class="fa-solid fa-chevron-down"></i>
+      </button>
+      <button id="tickerMoreBtn" class="ticker-more-btn" onclick="handleTickerMoreClick()" hidden>
+        +<span id="tickerMoreCount">0</span>
+      </button>
+      <button class="ticker-dismiss-btn" onclick="dismissActiveBroadcast()" aria-label="إغلاق التعميم">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div id="tickerExpandedList" class="ticker-expanded-list" hidden></div>
+  </div>
 
   <!-- STORIES & LIVE SNAPS BAR (قصص وسنابات الأفراح) -->
   <section class="stories-section">
@@ -809,6 +836,27 @@
         <button class="close-modal-btn" onclick="closePrivacyNoticeModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div id="privacyNoticeText" class="privacy-notice-text">جاري التحميل...</div>
+    </div>
+  </div>
+
+  <!-- MODAL 11: SUPPORT DISCLOSURE / UNAVAILABLE (#85 خطوة 34-35 — مراجعة FIX 5)
+       حوار المتصفّح الأصلي (confirm/alert) يرسم أزراره واتجاهه من لغة المتصفّح
+       لا الصفحة، فيظهر LTR فوق صفحة RTL. هوية المودالات القائمة نفسها هنا،
+       بجملة واحدة وزرّين كحدّ أقصى — لا شاشة كاملة (قصة 35). -->
+  <div id="supportModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-brands fa-whatsapp"></i> الدعم الفني</h3></div>
+        <button class="close-modal-btn" onclick="closeSupportModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p id="supportModalText" class="modal-sub support-modal-text"></p>
+      <div id="supportModalConfirmActions" class="support-modal-actions" hidden>
+        <button type="button" class="chat-trigger-btn" onclick="closeSupportModal()">إلغاء</button>
+        <button type="button" class="submit-btn" onclick="confirmSupportWhatsappOpen()">متابعة إلى واتساب</button>
+      </div>
+      <div id="supportModalOkActions" class="support-modal-actions" hidden>
+        <button type="button" class="submit-btn" onclick="closeSupportModal()">حسناً</button>
+      </div>
     </div>
   </div>
 

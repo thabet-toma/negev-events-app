@@ -92,42 +92,116 @@ body {
   transition: background-color .2s ease, color .2s ease;
 }
 
-/* Broadcast Announcement Banner — تنبيه نظام، بلون تحذيري مستقل عن هوية المناسبات.
-   التدرّج الأصلي (b45309→d97706→f59e0b) يرسب مع نص أبيض في منتصفه ونهايته —
-   أُبدل بتدرّج أغمق يعبر 4.5:1 عند كل نقطة (#20 خطوة 11، جدول التباين). */
-.broadcast-banner {
-  background: linear-gradient(90deg, #92400e 0%, #78350f 100%);
-  color: #ffffff;
-  padding: 10px 18px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.86rem;
-  font-weight: 800;
-  box-shadow: 0 4px 16px rgba(180, 83, 9, 0.35);
+/* الشريط الإخباري للتعاميم (#85 خطوة 28-33) — تحت الترويسة (مكانه في
+   index.html بعد </header>‎)، غير ملتصق عمداً (لا position:sticky، بخلاف
+   .app-header تحته)، وبلا زحف: لا خاصية animation على النص نفسه ولا نقل
+   موضع تلقائي. النغمة تتبع المحتوى لا الشكل الافتراضي — «عادي» محايد،
+   «عاجل» تحذيري، و«وقور» بلا أي إشارة احتفالية ولا أي حركة إطلاقاً. */
+.broadcast-ticker {
   position: relative;
-  z-index: 101;
+  z-index: 90;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.86rem;
 }
 
-.banner-content {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.broadcast-ticker.tone-info { background: var(--sky-wash); color: var(--sky-deep); }
+.broadcast-ticker.tone-urgent { background: linear-gradient(90deg, #92400e 0%, #78350f 100%); color: #ffffff; }
+.broadcast-ticker.tone-solemn { background: var(--surface-sunk); color: var(--ink-soft); border-bottom-color: var(--line-soft); }
+
+.ticker-main-row { display: flex; align-items: center; gap: 10px; }
+
+.ticker-icon { font-size: 1.05rem; flex-shrink: 0; }
+
+.ticker-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; cursor: pointer; }
+.ticker-text strong { font-weight: 800; }
+.ticker-text span { font-weight: 600; opacity: 0.92; }
+
+/* الصفّ المطوي (الحالة الافتراضية) سطر واحد — هذا هو معنى "شريط" أصلاً (قصة
+   33). التوسيع (زرّ السهم على الصفّ الأساسي، أو فتح القائمة على أي صفّ فيها)
+   يُلغي القصّ تماماً بدل تخفيفه فقط — لا درجة وسطى، وإلا بقي التعميم الطويل
+   مقروءاً جزئياً لا كاملاً (مراجعة #85، FIX 1). */
+.broadcast-ticker:not(.ticker-text-expanded) #tickerTextArea .ticker-text strong,
+.broadcast-ticker:not(.ticker-text-expanded) #tickerTextArea .ticker-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.banner-icon { font-size: 1.1rem; color: #ffffff; }
+/* صفّ في القائمة الموسَّعة مفتوح أصلاً بفعل المستخدم — نصّه كاملاً دائماً. */
+.ticker-expanded-item .ticker-text strong,
+.ticker-expanded-item .ticker-text span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+}
 
-.close-banner {
+.ticker-expand-text-btn {
+  flex-shrink: 0;
   background: rgba(255, 255, 255, 0.18);
   border: none;
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  color: #ffffff;
+  color: inherit;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 0.72rem;
+}
+.broadcast-ticker.tone-info .ticker-expand-text-btn,
+.broadcast-ticker.tone-solemn .ticker-expand-text-btn { background: rgba(0, 0, 0, 0.08); }
+
+.ticker-more-btn {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.22);
+  border: none;
+  color: inherit;
+  font-weight: 800;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.broadcast-ticker.tone-info .ticker-more-btn,
+.broadcast-ticker.tone-solemn .ticker-more-btn { background: rgba(0, 0, 0, 0.08); }
+
+.ticker-dismiss-btn {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.18);
+  border: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.broadcast-ticker.tone-info .ticker-dismiss-btn,
+.broadcast-ticker.tone-solemn .ticker-dismiss-btn { background: rgba(0, 0, 0, 0.08); }
+
+.ticker-expanded-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ticker-expanded-list[hidden] { display: none; }
+.ticker-expanded-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+.broadcast-ticker.tone-info .ticker-expanded-item,
+.broadcast-ticker.tone-solemn .ticker-expanded-item { border-top-color: var(--line-soft); }
+
+/* نبض لطيف حصراً لنغمة «عاجل» — الوقور والعادي بلا أي حركة إطلاقاً، ويلغيه
+   تقليل الحركة عبر القاعدة الشاملة *{animation-duration} أسفل الملف. */
+.ticker-urgent-pulse { animation: tickerUrgentPulse 2.2s ease-in-out infinite; }
+@keyframes tickerUrgentPulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(180, 83, 9, 0); }
+  50% { box-shadow: 0 0 0 4px rgba(180, 83, 9, 0.25); }
 }
 
 /* Header */
@@ -210,6 +284,31 @@ body {
 }
 
 .ai-magic-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(139, 92, 246, 0.5); }
+
+/* زرّ الدعم الفني — لون واتساب المعروف كي يُميَّز فوراً عن زرّ الشعر (#85
+   خطوة 34-35). حالة «غير مُفعَّل» رمادية معطَّلة الشكل، لكن ليست disabled
+   حقيقية — الضغط عليها يشرح السبب بدل أن تكون طرفاً ميتاً بلا رسالة. */
+#supportBtn { background: linear-gradient(135deg, #25d366 0%, #128c3e 100%); }
+#supportBtn:hover { box-shadow: 0 6px 20px rgba(37, 211, 102, 0.5); }
+#supportBtn.support-btn-disabled {
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+  box-shadow: none;
+}
+#supportBtn.support-btn-disabled:hover { transform: none; box-shadow: none; }
+/* .ai-magic-btn's own display:flex beats the browser default [hidden]{display:none}
+   at equal specificity — #supportBtn ships hidden until GET /api/settings/public
+   answers, so this override is load-bearing, not decorative (same class of bug
+   .install-hint hit before it). */
+.ai-magic-btn[hidden] { display: none; }
+
+/* مودال إفصاح الدعم الفني (#85 خطوة 35 — مراجعة FIX 5) — هوية المودالات
+   القائمة نفسها بدل confirm()/alert() المتصفّح، بجملة واحدة وزرّين كحدّ أقصى. */
+.support-modal-text { font-size: 0.95rem; color: var(--ink); margin-bottom: 16px; line-height: 1.6; }
+.support-modal-actions { display: flex; gap: 10px; }
+.support-modal-actions[hidden] { display: none; }
+.support-modal-actions .submit-btn,
+.support-modal-actions .chat-trigger-btn { flex: 1; }
 
 .auth-pill-btn {
   background: var(--sky-wash);
