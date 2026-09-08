@@ -1,267 +1,208 @@
 'use strict';
 
 /**
- * تعريف العلامة نفسها — «بيت الشَّعَر تحت أضواء العرس داخل طوق» (‏#56) — وحده،
- * بلا أي رسم على قماش ولا أي كتابة ملف. هذه الوحدة تحت `server/src/` فقط لأنها
- * تُقرأ من طبقة المسارات (`share.routes.js`) ومن خدمة بطاقة المشاركة
- * (`shareCard.service.js`)، و`server/src/` لا يجوز أن يستدعي `server/scripts/`
- * (أداة تشغيل تنفّذ عملاً حقيقياً عند التحميل ولا معنى لمسارها المطلَق داخل
- * حاوية الخادم).
+ * تعريف العلامة — «خاتم زواج ذهبي محزَّز، فصّ مرصَّع على الشريط، وداخله «عرس» بحرف عربي حقيقي» (‏#99).
+ *
+ * بلا أي رسم على قماش ولا أي كتابة ملف عند التحميل. هذه الوحدة تحت `server/src/`
+ * فقط لأنها تُقرأ من طبقة المسارات (`share.routes.js`) ومن خدمة بطاقة المشاركة
+ * (`shareCard.service.js`).
  *
  * `server/scripts/brand-icons.js` يستدعي هذه الوحدة بدوره لبناء الأيقونات
- * والـSVG (توليد وقت أوفلاين، لا مسار تشغيل الخادم) — فالاعتماد اتجاه واحد:
- * الأداة تعتمد على كود التطبيق، لا العكس. العلامة معرَّفة هنا **مرة واحدة
- * فقط**؛ لا تُنسخ هندستها إلى أي ملف آخر.
+ * والـSVG (توليد وقت أوفلاين، لا مسار تشغيل الخادم).
  *
- * `require`-ها بلا أي أثر جانبي: لا رسم، لا قراءة/كتابة ملف — دوال محضة تُبنى
- * نتيجتها عند الطلب فقط.
+ * دوال محضة: لا آثار جانبية عند `require`، وبلا أي اعتماد على خطوط في وقت التشغيل.
  */
 
-/**
- * ألوان العلامة.
- *
- * الأرضية `--ink` من لوحة الموقع نفسها (`web/styles.css`) — كحليّ شديد القتامة،
- * وهو اللون الذي يقرأه العين شعرَ الماعز الأسود الذي تُنسج منه الخيمة فعلاً.
- * والعلامة رمليّة دافئة مشتقّة من `--gold` (‏#8f6a20) بعد رفع إضاءتها لتُقرأ على
- * أرضية داكنة — نفس المنطق الذي تطبّقه `readableOnDark` في `shareCard.service.js`،
- * لا لون مخترَع من خارج اللوحة.
- */
+const BRAND_WORD = require('./brandWord');
+
+// ---- لوحة ألوان العلامة — معرَّفة هنا ومصدَّرة للمستهلكين كافة ----------------
 const GROUND = '#0c1b2a';
-const MARK = '#e3c08a';
+const GOLD_DEEP = '#8f6a20';
+const GOLD_MID = '#c39a55';
+const GOLD_HI = '#f0d5a8';
+const BRIGHT_EDGE = '#f3dcb4';
+const WORD_INK = '#f6e2c2';
+const MARK = GOLD_MID;
 
-// ---------------------------------------------------------------------------
-// أدوات بناء المسار — نفس تعريف الشكل يُستخدم للرسم على القماش وللـSVG معاً
-// ---------------------------------------------------------------------------
-
-function polarPoint(cx, cy, angleDeg, radius) {
-  const angleRad = (angleDeg * Math.PI) / 180;
-  // زاوية تُقاس من محور +x صعوداً، مع أن y ينمو نازلاً على الشاشة — ولهذا الطرح لا الجمع
-  return { x: cx + radius * Math.cos(angleRad), y: cy - radius * Math.sin(angleRad) };
-}
-
-function bezierPoint(p0, c, p1, t) {
-  const mt = 1 - t;
-  return {
-    x: mt * mt * p0.x + 2 * mt * t * c.x + t * t * p1.x,
-    y: mt * mt * p0.y + 2 * mt * t * c.y + t * t * p1.y
-  };
-}
-
-/** عند أي t من [0,1] تمرّ منحنية Bezier تربيعية بإحداثي x بعينه — يحدّد أين يبدأ شقّ الباب فعلياً على السقف المتهدّل، بدل رقم مثبَّت يشيخ صامتاً إن تغيّر شكل السقف. */
-function solveQuadraticT(p0x, cx, p1x, targetX) {
-  const a = p0x - 2 * cx + p1x;
-  const b = 2 * (cx - p0x);
-  const c = p0x - targetX;
-  if (Math.abs(a) < 1e-9) return -c / b;
-  const discriminant = Math.sqrt(b * b - 4 * a * c);
-  const candidates = [(-b + discriminant) / (2 * a), (-b - discriminant) / (2 * a)];
-  return candidates.find(t => t >= 0 && t <= 1);
-}
-
-function pathPart(fill, commands) {
-  return { fill, shape: { type: 'path', commands } };
-}
-
-function circlePart(fill, cx, cy, r) {
-  return { fill, shape: { type: 'circle', cx, cy, r } };
-}
-
-function rectPart(fill, x, y, w, h) {
-  return pathPart(fill, [['M', x, y], ['L', x + w, y], ['L', x + w, y + h], ['L', x, y + h], ['Z']]);
-}
-
-/** حبل شدّ: خط مستقيم مشدود بعرض معيّن — مضلَّع رفيع لا stroke، فكل العلامة تمتلئ بتعبئة واحدة. */
-function ropePart(x1, y1, x2, y2, width) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const length = Math.hypot(dx, dy);
-  const px = (-dy / length) * (width / 2);
-  const py = (dx / length) * (width / 2);
-  return pathPart('mark', [
-    ['M', x1 + px, y1 + py],
-    ['L', x2 + px, y2 + py],
-    ['L', x2 - px, y2 - py],
-    ['L', x1 - px, y1 - py],
-    ['Z']
-  ]);
-}
-
-/** وتد إضاءة: مضلَّع مصمت ضيّق من الداخل وأعرض من الخارج — كتلة لا نقطاً، فالستيبل يموت عند التصغير. */
-function wedgePart(origin, angleDeg, innerRadius, outerRadius, innerWidth, outerWidth) {
-  const angleRad = (angleDeg * Math.PI) / 180;
-  const dir = { x: Math.cos(angleRad), y: -Math.sin(angleRad) };
-  const perp = { x: -dir.y, y: dir.x };
-  const innerCenter = { x: origin.x + dir.x * innerRadius, y: origin.y + dir.y * innerRadius };
-  const outerCenter = { x: origin.x + dir.x * outerRadius, y: origin.y + dir.y * outerRadius };
-  const iw = innerWidth / 2;
-  const ow = outerWidth / 2;
-  return pathPart('mark', [
-    ['M', innerCenter.x + perp.x * iw, innerCenter.y + perp.y * iw],
-    ['L', outerCenter.x + perp.x * ow, outerCenter.y + perp.y * ow],
-    ['L', outerCenter.x - perp.x * ow, outerCenter.y - perp.y * ow],
-    ['L', innerCenter.x - perp.x * iw, innerCenter.y - perp.y * iw],
-    ['Z']
-  ]);
-}
-
-/**
- * هندسة بيت الشَّعَر الثابتة — نقاط لا تتغيّر بين `detail`.
- *
- * السقف منحنيان متقابلان (‏`eaveLeft`→`roofControlLeft`→`ridgeCenter` ثم
- * `ridgeCenter`→`roofControlRight`→`eaveRight`)، وكلّ واحد منهما **يتهدّل**:
- * نقطة التحكّم أوطأ من وتر المنحنى، فيمرّ المنحنى **تحت** الوتر لا فوقه.
- *
- * وهذا هو الشرط الذي يفصل بيت الشَّعَر عن القبّة، ويُفحص بالحساب لا بالعين:
- * نقطة منتصف منحنى تربيعي هي ‎¼p0 + ½c + ¼p1‎، ومنتصف الوتر ‎½p0 + ½p1‎. مع
- * الأرقام أدناه: منتصف المنحنى عند ‎y=53.5‎ ومنتصف الوتر عند ‎y=52.0‎ — أي
- * المنحنى أوطأ بـ‎1.5‎ وحدة، وهو التهدّل الضحل المطلوب. **إن صار منتصف المنحنى
- * أعلى من منتصف الوتر فقد انقلب الشكل قبّةً**، وهو ما حدث في محاولة سابقة
- * وُضعت فيها نقطتا التحكّم بنفس ارتفاع `ridgeCenter` تماماً.
- *
- * والصاري يرفع السقف عند المركز رفعاً خفيفاً — هكذا هي الخيمة فعلاً — فارتفاع
- * `ridgeCenter` فوق الأفريز ‎10‎ وحدات لا أكثر، والنسبة العامة ‎46×23‎ أي ‎2:1‎
- * بالضبط: الشكل يمتدّ ولا يرتفع.
- */
-const TENT = {
-  base: { y: 70, left: 27, right: 73 },
-  eaveLeft: { x: 30, y: 57 },
-  eaveRight: { x: 70, y: 57 },
-  ridgeCenter: { x: 50, y: 47 },
-  roofControlLeft: { x: 40, y: 55 },
-  roofControlRight: { x: 60, y: 55 }
+// ---- التدرّج المعدني الموحَّد — تعريف واحد يقرأه القماش وSVG ------------------
+const GOLD_GRADIENT = {
+  x1: 0.16,
+  y1: 0.14,
+  x2: 0.86,
+  y2: 0.88,
+  stops: [
+    { offset: 0, color: GOLD_HI },
+    { offset: 0.42, color: GOLD_DEEP },
+    { offset: 0.72, color: GOLD_MID },
+    { offset: 1, color: GOLD_HI }
+  ]
 };
 
-/** محور الزينة: نقطة يتوقف عندها الصاري وتتفرّع منها الأوتاد — قصيرة عمداً، انظر التعليق تحت `buildMarkParts`. */
-const HUB = { x: 50, y: 44, r: 1.8 };
+function goldGradient(ctx, size) {
+  const g = ctx.createLinearGradient(
+    size * GOLD_GRADIENT.x1,
+    size * GOLD_GRADIENT.y1,
+    size * GOLD_GRADIENT.x2,
+    size * GOLD_GRADIENT.y2
+  );
+  GOLD_GRADIENT.stops.forEach(s => g.addColorStop(s.offset, s.color));
+  return g;
+}
 
-/** لمبات الطوق — مستخرجة من `buildMarkParts` لتصديرها للاختبارات دون تفكيك قائمة الأجزاء المجهولة الاسم. */
-function ringBeads(detail) {
-  const beadCount = detail === 'icon' ? 18 : 28;
-  const ringRadius = 36;
-  const beads = [];
-  for (let i = 0; i < beadCount; i += 1) {
-    const angle = (360 / beadCount) * i;
-    const isLarge = detail === 'icon' ? true : i % 2 === 0;
-    const r = detail === 'icon' ? 3.6 : (isLarge ? 3.0 : 1.6);
-    const { x, y } = polarPoint(50, 50, angle, ringRadius);
-    beads.push({ x, y, r });
-  }
-  return beads;
+// ---- الهندسة، بنسبة إلى ضلع اللوحة، على مقياس منطقة الأمان (المربّع ١٠٠ وحدة) ----
+const R_OUT = 38.3;        // الحافّة الخارجية للشريط
+const BAND = 9.8;          // سماكة الشريط
+const R_MID = 33.4;        // خط منتصف الشريط (R_OUT - BAND / 2)
+const R_IN = 28.5;         // الحافّة الداخلية للشريط
+const BEZEL_W = 1.55 * BAND; // عرض الفص (15.19)
+const BEZEL_H = 1.24 * BAND; // ارتفاع الفص (12.152) — قمّته عند ٠٫٣٩٤٨ داخل حدّ الأمان ٠٫٤٠
+
+function pathPart(fill, role, commands) {
+  return { fill, role, shape: { type: 'path', commands } };
+}
+
+function annulusPart(fill, role, cx, cy, rIn, rOut) {
+  return { fill, role, shape: { type: 'annulus', cx, cy, rIn, rOut } };
+}
+
+function lozengePart(fill, role, cx, cy, w, h) {
+  const hw = w / 2;
+  const hh = h / 2;
+  return pathPart(fill, role, [
+    ['M', cx, cy - hh],
+    ['L', cx + hw, cy],
+    ['L', cx, cy + hh],
+    ['L', cx - hw, cy],
+    ['Z']
+  ]);
+}
+
+function notchPart(cx, cy, r0, r1, angle, thickness) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const hw = thickness / 2;
+  const px = -sin * hw;
+  const py = cos * hw;
+
+  const p0x = cx + cos * r0 - px;
+  const p0y = cy + sin * r0 - py;
+  const p1x = cx + cos * r1 - px;
+  const p1y = cy + sin * r1 - py;
+  const p2x = cx + cos * r1 + px;
+  const p2y = cy + sin * r1 + py;
+  const p3x = cx + cos * r0 + px;
+  const p3y = cy + sin * r0 + py;
+
+  const part = pathPart('engrave', 'notch', [
+    ['M', p0x, p0y],
+    ['L', p1x, p1y],
+    ['L', p2x, p2y],
+    ['L', p3x, p3y],
+    ['Z']
+  ]);
+  part.angle = angle;
+  return part;
 }
 
 /**
- * العلامة المعتمدة: بيت شَعَر تحت انفجار أضواء عرس، محاط بطوق لمبات مغلق يُقرأ
- * كخاتم زواج. كل الإحداثيات في مربّع ١٠٠ وحدة، مركزه (‏٥٠،٥٠)، ودون أي مقياس —
- * القياس (‏`scale`) يُطبَّق لاحقاً في `drawTent`/`buildIconSvg` لا هنا.
- *
- * أربعة أشياء تفصل بيت الشَّعَر عن قبّة سيرك أو جبل، وكلها مقصودة هنا:
- *   • **السقف يتهدّل ولا ينتفخ** — هذا هو الشرط الحاسم. محاولة أولى جعلت
- *     المنحنيين يلتقيان في قمّة حادّة عالية فبدت الأيقونة خيمة سيرك، ومحاولة
- *     ثانية صحّحت القمّة فرفعت المنحنى **فوق** وتره فبدت قبّةً. الصواب بينهما:
- *     ارتفاع خفيف عند الصاري (‏`ridgeCenter` أعلى من الأفريز بعشر وحدات) مع
- *     تهدّل كل شقّ **تحت** وتره. الشرط محسوب في التعليق أعلى `TENT`، لا مقدَّر
- *     بالعين.
- *   • **الجدران مستقيمة مشدودة**، وكذلك حبال الشدّ — لا منحنى في أيّ منهما.
- *   • **القاعدة مسطّحة والنسبة واطئة** — فالشكل يمتدّ لا يرتفع.
- *   • **فراغ داكن حول العلامة الداخلية** — الصاري قصير عمداً (يتوقف عند
- *     `HUB`، لا يقارب الطوق)، والأوتاد مقصوصة عند نصف قطر يُبقي مسافة واضحة
- *     عن الحافة الداخلية لأقرب لمبة في الطوق. محاولة سابقة مدّت الأوتاد
- *     والصاري حتى لامسا الطوق فبدت العلامة كتلة واحدة مطموسة لا شكلين
- *     متمايزين.
+ * هندسة العلامة المعتمدة — خاتم زواج ذهبي وفص وكلمة «عرس».
  *
  * `detail`:
- *   'full' — الطوق الكامل (٢٨ لمبة متبادلة)، ٧ أوتاد، وحبال الشدّ وأوتادها.
- *   'icon' — طبقة مبسَّطة: بلا حبال شدّ، ٥ أوتاد أسمك، فتحتا باب أعرض، وطوق
- *            ١٨ لمبة كبيرة متساوية — لا اثنتي عشرة: عند اثنتي عشرة تتباعد
- *            اللمبات أكثر من قطرها فيقرأ الطوق نقطاً متناثرة لا خاتماً مغلقاً.
+ *   'full' — ٣٦ حزاً، حلقتان محفورتان، زهرتان بجانب الكلمة.
+ *   'icon' — ١٨ حزاً (النصف بالضبط من الـ٣٦)، بلا حلقتين وبلا زهرتين.
  */
-function buildMarkParts(detail) {
+function buildMarkParts(detail = 'full') {
+  const full = detail === 'full';
+  const cx = 50;
+  const cy = 50;
   const parts = [];
 
-  // الطوق — عقد لمبات مغلق حول المركز، يقرأ كخاتم زواج
-  ringBeads(detail).forEach(({ x, y, r }) => parts.push(circlePart('mark', x, y, r)));
+  // 1. شريط الخاتم — طارة مفرغة
+  parts.push(annulusPart('band', 'band', cx, cy, R_IN, R_OUT));
 
-  // بيت الشَّعَر نفسه: قاعدة، جداران، وسقف يتهدّل قليلاً بين عمودين
-  const { base, eaveLeft, eaveRight, ridgeCenter, roofControlLeft, roofControlRight } = TENT;
-  parts.push(pathPart('mark', [
-    ['M', base.left, base.y],
-    ['L', eaveLeft.x, eaveLeft.y],
-    ['Q', roofControlLeft.x, roofControlLeft.y, ridgeCenter.x, ridgeCenter.y],
-    ['Q', roofControlRight.x, roofControlRight.y, eaveRight.x, eaveRight.y],
-    ['L', base.right, base.y],
+  // 2. الحزوز — ٣٦ في الكامل، ١٨ في الأيقونة (نصف الـ٣٦ بالضبط)
+  const notchStep = (Math.PI * 2) / 36;
+  const rNotchIn = R_IN + 0.26 * BAND;
+  const rNotchOut = R_OUT - 0.26 * BAND;
+  const notchThickness = 0.75; // 0.0075 * 100
+
+  // تبدأ بزاوية إزاحة نصف خطوة من الساعة ١٢ كي لا يقع حزّ تحت الفص
+  const indexStep = full ? 1 : 2;
+  for (let i = 0; i < 36; i += indexStep) {
+    const angle = -Math.PI / 2 + (i + 0.5) * notchStep;
+    parts.push(notchPart(cx, cy, rNotchIn, rNotchOut, angle, notchThickness));
+  }
+
+  // 3. خطّان محفوران يحصران الحزوز — تفصيل داخلي يسقط في الأيقونة
+  if (full) {
+    const ringThickness = 0.6; // 0.006 * 100
+    const rOuterEngrave = R_OUT - 0.16 * BAND;
+    const rInnerEngrave = R_IN + 0.16 * BAND;
+    parts.push(annulusPart('engrave', 'engraved-ring', cx, cy, rOuterEngrave - ringThickness / 2, rOuterEngrave + ringThickness / 2));
+    parts.push(annulusPart('engrave', 'engraved-ring', cx, cy, rInnerEngrave - ringThickness / 2, rInnerEngrave + ringThickness / 2));
+  }
+
+  // 4. خط لامع على الحافة الخارجية — يبقى في المستويين (هو حدّ الجسم)
+  const brightMid = R_OUT - 0.4; // 0.004 * 100
+  const brightThickness = 0.8;   // 0.008 * 100
+  parts.push(annulusPart('bright', 'bright-edge', cx, cy, brightMid - brightThickness / 2, brightMid + brightThickness / 2));
+
+  // 5. الفص — معيّن مرصّع على خط المنتصف عند الساعة ١٢
+  const bezelY = cy - R_MID;
+  parts.push(lozengePart('bezel', 'bezel', cx, bezelY, BEZEL_W, BEZEL_H));
+
+  // 6. خط واجهة الفص المحفور
+  const facetY = bezelY - BEZEL_H * 0.22;
+  const facetHalfW = BEZEL_W * 0.26;
+  const facetThickness = 0.6;
+  parts.push(pathPart('engrave', 'facet', [
+    ['M', cx - facetHalfW, facetY - facetThickness / 2],
+    ['L', cx + facetHalfW, facetY - facetThickness / 2],
+    ['L', cx + facetHalfW, facetY + facetThickness / 2],
+    ['L', cx - facetHalfW, facetY + facetThickness / 2],
     ['Z']
   ]));
 
-  // فتحتا الباب: تُرسمان بلون الأرضية فوق جسم الخيمة، لا بتفريغ حقيقي للمسار
-  const doorHalfWidth = detail === 'icon' ? 1.3 : 0.9;
-  [
-    { centerX: 45.5, p0: eaveLeft, control: roofControlLeft, p1: ridgeCenter },
-    { centerX: 54.5, p0: ridgeCenter, control: roofControlRight, p1: eaveRight }
-  ].forEach(({ centerX, p0, control, p1 }) => {
-    const t = solveQuadraticT(p0.x, control.x, p1.x, centerX);
-    const { y: topY } = bezierPoint(p0, control, p1, t);
-    parts.push(pathPart('ground', [
-      ['M', centerX - doorHalfWidth, topY],
-      ['L', centerX + doorHalfWidth, topY],
-      ['L', centerX + doorHalfWidth, base.y],
-      ['L', centerX - doorHalfWidth, base.y],
-      ['Z']
-    ]));
+  // 7. زهرتان تحفّان الكلمة (في المستوى الكامل فقط)
+  if (full) {
+    const floretOffset = 0.82 * R_IN; // 23.37
+    const floretW = 3.3;  // 0.033 * 100
+    const floretH = 5.2;  // 0.052 * 100
+    parts.push(lozengePart('floret', 'floret', cx - floretOffset, cy, floretW, floretH));
+    parts.push(lozengePart('floret', 'floret', cx + floretOffset, cy, floretW, floretH));
+  }
+
+  // 8. كلمة «عرس» — ممركزة على ارتفاع الحبر الحقيقي
+  const wordW = 1.28 * R_IN; // 36.48
+  const wordH = wordW / BRAND_WORD.aspectRatio;
+  const wordLeft = cx - wordW / 2;
+  const wordTop = cy - wordH / 2;
+
+  const wordCommands = BRAND_WORD.commands.map(([type, ...args]) => {
+    if (type === 'M') return ['M', wordLeft + args[0] * wordW, wordTop + args[1] * wordH];
+    if (type === 'L') return ['L', wordLeft + args[0] * wordW, wordTop + args[1] * wordH];
+    if (type === 'Q') return ['Q', wordLeft + args[0] * wordW, wordTop + args[1] * wordH, wordLeft + args[2] * wordW, wordTop + args[3] * wordH];
+    if (type === 'C') return ['C', wordLeft + args[0] * wordW, wordTop + args[1] * wordH, wordLeft + args[2] * wordW, wordTop + args[3] * wordH, wordLeft + args[4] * wordW, wordTop + args[5] * wordH];
+    if (type === 'Z') return ['Z'];
+    return [type, ...args];
   });
-
-  // الصاري: عمود قصير من منتصف تهدّل السقف إلى محور الزينة، يحمل لمبة في قمته
-  parts.push(rectPart('mark', HUB.x - 0.7, HUB.y, 1.4, ridgeCenter.y - HUB.y));
-  parts.push(circlePart('mark', HUB.x, HUB.y, HUB.r));
-
-  // أشعّة الزينة: أوتاد صلبة تتفرّع من محور الزينة، كل واحدة بلمبة في طرفها —
-  // نصف قطرها الخارجي مقصوص عمداً ليبقى بعيداً عن الطوق (انظر التعليق أعلاه)
-  const beamCount = detail === 'icon' ? 5 : 7;
-  const beamThickness = detail === 'icon' ? 1.6 : 1;
-  for (let i = 0; i < beamCount; i += 1) {
-    const angle = 20 + ((160 - 20) * i) / (beamCount - 1);
-    parts.push(wedgePart(HUB, angle, 5, 19.5, 1.4 * beamThickness, 2.8 * beamThickness));
-    const tip = polarPoint(HUB.x, HUB.y, angle, 19.5);
-    parts.push(circlePart('mark', tip.x, tip.y, 2.4));
-  }
-
-  // حبال الشدّ: فقط في التفصيل الكامل — عند التصغير الشديد تصير خطوطاً مشوَّشة لا حبالاً
-  if (detail !== 'icon') {
-    parts.push(ropePart(eaveLeft.x, eaveLeft.y, 21, 71, 1.4));
-    parts.push(rectPart('mark', 19.5, 70.4, 3, 1.2));
-    parts.push(ropePart(eaveRight.x, eaveRight.y, 79, 71, 1.4));
-    parts.push(rectPart('mark', 77.5, 70.4, 3, 1.2));
-  }
+  parts.push(pathPart('word', 'word', wordCommands));
 
   return parts;
 }
 
-/**
- * `detail` مستقلّ عن `safeZone` تماماً: الأول يختار مستوى تفصيل الهندسة
- * (كامل أم مبسَّط)، والثاني يختار مقياس الرسم (‏١ أم ١٫١٤). كل مقاس مصدَّر
- * يمرّر الاثنين حسب مكانه — أيقونة صغيرة أو مقصوصة دائرياً تأخذ 'icon'
- * بصرف النظر عن قيمة `safeZone` لديها، والعكس صحيح.
- *
- * تكبير العلامة داخل المربّع. المسار النقطي والمسار المتّجه **يقرآن من هنا
- * معاً** — لو كُرِّر الرقم في الاثنين لانحرفت الأيقونة عن الـSVG بصمت عند أول
- * تعديل، وهو بالضبط نوع الانحراف الذي وُجد `buildMarkParts` لمنعه.
- */
 function markScale(safeZone) {
   return safeZone ? 1 : 1.14;
 }
-
-// ---------------------------------------------------------------------------
-// SVG — يُبنى من نفس `buildMarkParts`، لا يُكتب يدوياً أبداً
-// ---------------------------------------------------------------------------
 
 function fmt(n) {
   return String(Math.round(n * 100) / 100);
 }
 
 function shapeToSvgD(shape) {
-  if (shape.type === 'circle') {
-    const { cx, cy, r } = shape;
-    // دائرة كمسار: نصفان مقوَّسان، فلا حاجة لعنصر <circle> منفصل يكسر التجميع في مسار واحد
-    return `M ${fmt(cx + r)} ${fmt(cy)} A ${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(cx - r)} ${fmt(cy)} A ${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(cx + r)} ${fmt(cy)} Z`;
+  if (shape.type === 'annulus') {
+    const { cx, cy, rIn, rOut } = shape;
+    return `M ${fmt(cx + rOut)} ${fmt(cy)} A ${fmt(rOut)} ${fmt(rOut)} 0 1 0 ${fmt(cx - rOut)} ${fmt(cy)} A ${fmt(rOut)} ${fmt(rOut)} 0 1 0 ${fmt(cx + rOut)} ${fmt(cy)} Z M ${fmt(cx + rIn)} ${fmt(cy)} A ${fmt(rIn)} ${fmt(rIn)} 0 1 1 ${fmt(cx - rIn)} ${fmt(cy)} A ${fmt(rIn)} ${fmt(rIn)} 0 1 1 ${fmt(cx + rIn)} ${fmt(cy)} Z`;
   }
   return shape.commands
     .map(([type, ...args]) => (type === 'Z' ? 'Z' : `${type} ${args.map(fmt).join(' ')}`))
@@ -269,9 +210,27 @@ function shapeToSvgD(shape) {
 }
 
 function partsToSvgPaths(parts) {
-  const markD = parts.filter(p => p.fill === 'mark').map(p => shapeToSvgD(p.shape)).join(' ');
+  const markD = parts.filter(p => p.fill !== 'ground').map(p => shapeToSvgD(p.shape)).join(' ');
   const groundD = parts.filter(p => p.fill === 'ground').map(p => shapeToSvgD(p.shape)).join(' ');
   return { markD, groundD };
 }
 
-module.exports = { GROUND, MARK, TENT, HUB, ringBeads, buildMarkParts, markScale, partsToSvgPaths };
+module.exports = {
+  GROUND,
+  MARK,
+  GOLD_DEEP,
+  GOLD_MID,
+  GOLD_HI,
+  BRIGHT_EDGE,
+  WORD_INK,
+  GOLD_GRADIENT,
+  goldGradient,
+  R_OUT,
+  BAND,
+  R_MID,
+  R_IN,
+  buildMarkParts,
+  markScale,
+  partsToSvgPaths,
+  shapeToSvgD
+};

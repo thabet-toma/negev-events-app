@@ -22,9 +22,12 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const { JSDOM, VirtualConsole } = require('jsdom');
-const { createCanvas, loadImage } = require('@napi-rs/canvas');
-const { renderIcon, buildIconSvg } = require('../scripts/brand-icons');
-const { ringBeads, HUB, GROUND, MARK, buildMarkParts, partsToSvgPaths } = require('../src/utils/brandMark');
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+const { renderIcon, buildIconSvg, tracePart } = require('../scripts/brand-icons');
+const { GROUND, MARK, R_IN, buildMarkParts, markScale, partsToSvgPaths } = require('../src/utils/brandMark');
+const BRAND_WORD = require('../src/utils/brandWord');
+
+GlobalFonts.registerFromPath(path.join(__dirname, '../src/assets/fonts/Cairo-Bold.ttf'), 'CairoBold');
 
 // Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
 // server and this fixture must not become a second copy of them (CLAUDE.md,
@@ -396,11 +399,14 @@ function hexToRgb(hex) {
 const MARK_RGB = hexToRgb(MARK);
 const GROUND_RGB = hexToRgb(GROUND);
 
-/** Nearest-colour classification — anti-aliased edge pixels fall on whichever side they lean toward. */
-function classifyPixel(r, g, b) {
-  const distMark = (r - MARK_RGB.r) ** 2 + (g - MARK_RGB.g) ** 2 + (b - MARK_RGB.b) ** 2;
-  const distGround = (r - GROUND_RGB.r) ** 2 + (g - GROUND_RGB.g) ** 2 + (b - GROUND_RGB.b) ** 2;
-  return distMark < distGround ? 'mark' : 'ground';
+/**
+ * Ground-colour tolerance classification — any pixel that departs from the ground
+ * colour beyond a tolerance is classified as 'mark'. This ensures antialiased gradient
+ * pixels at the outer edge cannot be falsely classified as ground.
+ */
+function classifyPixel(r, g, b, tolerance = 25) {
+  const distGround = Math.hypot(r - GROUND_RGB.r, g - GROUND_RGB.g, b - GROUND_RGB.b);
+  return distGround > tolerance ? 'mark' : 'ground';
 }
 
 /**
@@ -3029,25 +3035,149 @@ async function run() {
     }
   });
 
-  /**
-   * The burst used to run into the ring — outer beam lamps overlapped ring
-   * beads, and the mast finial nearly touched the top one. Asserted against
-   * the geometry rather than rendered pixels: at the sizes these icons ship
-   * at (down to 32-48px) the required 3-unit gap is often under one pixel,
-   * so a pixel scan would pass by accident even with the wrong geometry —
-   * the source coordinates are the only place this is actually checkable.
-   */
-  await test('the mast finial keeps at least 3 units of dark space from the ring\'s top bead, in both detail tiers', () => {
-    ['full', 'icon'].forEach(detail => {
-      const topBead = ringBeads(detail).reduce((closest, bead) => (bead.y < closest.y ? bead : closest));
-      const topBeadInnerEdgeY = topBead.y + topBead.r; // closer to the tent, since y grows downward
-      const finialTopEdgeY = HUB.y - HUB.r; // closer to the ring
-      const gap = finialTopEdgeY - topBeadInnerEdgeY;
+  await test('the two detail levels share an identical outer silhouette', () => {
+    function renderSilhouette(detail, size = 200) {
+      const canvas = createCanvas(size, size);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, size, size);
+
+      const u = size / 100;
+      const cx = size / 2;
+      const cy = size / 2;
+
+      ctx.fillStyle = '#ffffff';
+      const parts = buildMarkParts(detail);
+      parts.forEach(part => {
+        tracePart(ctx, part, u);
+        ctx.fill();
+      });
+
+      // Mask the interior hole (everything inside R_IN)
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(cx, cy, R_IN * u, 0, Math.PI * 2);
+      ctx.fill();
+
+      return ctx.getImageData(0, 0, size, size).data;
+    }
+
+    const full = renderSilhouette('full');
+    const icon = renderSilhouette('icon');
+    assert.strictEqual(full.length, icon.length);
+    for (let i = 0; i < full.length; i += 1) {
+      assert.strictEqual(
+        full[i],
+        icon[i],
+        `silhouette mismatch at byte ${i}: full=${full[i]} icon=${icon[i]}`
+      );
+    }
+  });
+
+  await test('nothing is clipped by the circular mask at safe-zone scale', async () => {
+    for (const detail of ['full', 'icon']) {
+      const buffer = renderIcon(512, { safeZone: true, detail });
+      const { data, width, height } = await decodeIconPixels(buffer);
+      const cx = width / 2;
+      const cy = height / 2;
+      const maxRadius = width * 0.40;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          if (dist > maxRadius) {
+            const idx = (y * width + x) * 4;
+            const pixelType = classifyPixel(data[idx], data[idx + 1], data[idx + 2]);
+            assert.strictEqual(
+              pixelType,
+              'ground',
+              `detail=${detail}: non-ground pixel found at (${x}, ${y}), dist ${dist.toFixed(1)}px exceeds safe radius ${maxRadius.toFixed(1)}px`
+            );
+          }
+        }
+      }
+    }
+  });
+
+  await test('the notches are a half, not a shift — every icon-level notch angle is present in the full-level set', () => {
+    const fullNotches = buildMarkParts('full').filter(p => p.role === 'notch');
+    const iconNotches = buildMarkParts('icon').filter(p => p.role === 'notch');
+
+    assert.strictEqual(fullNotches.length, 36, 'expected 36 notches at full detail');
+    assert.strictEqual(iconNotches.length, 18, 'expected 18 notches at icon detail');
+
+    const fullAngles = new Set(fullNotches.map(n => Math.round(n.angle * 1e6)));
+    iconNotches.forEach(n => {
+      const a = Math.round(n.angle * 1e6);
       assert.ok(
-        gap >= 3,
-        `detail=${detail}: only ${gap.toFixed(2)} units of dark space between the mast finial and the ring's top bead, need >= 3`
+        fullAngles.has(a),
+        `icon notch angle ${n.angle} was not found in the full-detail notch set`
       );
     });
+  });
+
+  await test('the shaping parity gate — static vector path matches Cairo ctx.fillText Arabic shaping', () => {
+    const fontSize = 100;
+    const scale = fontSize / 1000;
+    const inkW = BRAND_WORD.width * scale;
+    const inkH = BRAND_WORD.height * scale;
+    const originX = 50;
+    const originY = 150;
+    const inkX = originX + BRAND_WORD.originX * scale;
+    const inkY = originY + BRAND_WORD.originY * scale;
+
+    const c1 = createCanvas(350, 250);
+    const ctx1 = c1.getContext('2d');
+    ctx1.fillStyle = '#000000';
+    ctx1.fillRect(0, 0, 350, 250);
+    ctx1.fillStyle = '#ffffff';
+    ctx1.beginPath();
+    BRAND_WORD.commands.forEach(([type, ...args]) => {
+      if (type === 'M') ctx1.moveTo(inkX + args[0] * inkW, inkY + args[1] * inkH);
+      else if (type === 'L') ctx1.lineTo(inkX + args[0] * inkW, inkY + args[1] * inkH);
+      else if (type === 'Q') ctx1.quadraticCurveTo(inkX + args[0] * inkW, inkY + args[1] * inkH, inkX + args[2] * inkW, inkY + args[3] * inkH);
+      else if (type === 'C') ctx1.bezierCurveTo(inkX + args[0] * inkW, inkY + args[1] * inkH, inkX + args[2] * inkW, inkY + args[3] * inkH, inkX + args[4] * inkW, inkY + args[5] * inkH);
+      else if (type === 'Z') ctx1.closePath();
+    });
+    ctx1.fill();
+
+    const c2 = createCanvas(350, 250);
+    const ctx2 = c2.getContext('2d');
+    ctx2.fillStyle = '#000000';
+    ctx2.fillRect(0, 0, 350, 250);
+    ctx2.fillStyle = '#ffffff';
+    ctx2.font = `${fontSize}px CairoBold`;
+    ctx2.textAlign = 'left';
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.direction = 'ltr';
+    ctx2.fillText('عرس', originX, originY);
+
+    const img1 = ctx1.getImageData(0, 0, 350, 250).data;
+    const img2 = ctx2.getImageData(0, 0, 350, 250).data;
+
+    let ink1 = 0;
+    let ink2 = 0;
+    let diffPixels = 0;
+    for (let i = 0; i < img1.length; i += 4) {
+      const v1 = img1[i];
+      const v2 = img2[i];
+      if (v1 > 20) ink1 += 1;
+      if (v2 > 20) ink2 += 1;
+      if (Math.abs(v1 - v2) > 30) diffPixels += 1;
+    }
+
+    const maxInk = Math.max(ink1, ink2);
+    const diffRatio = diffPixels / maxInk;
+    const inkAreaDiff = Math.abs(ink1 - ink2) / maxInk;
+
+    assert.ok(
+      inkAreaDiff < 0.03,
+      `shaping parity ink area difference ${(inkAreaDiff * 100).toFixed(2)}% exceeds 3%`
+    );
+    assert.ok(
+      diffRatio < 0.10,
+      `shaping parity diff ratio ${(diffRatio * 100).toFixed(2)}% exceeds tight threshold 10%`
+    );
   });
 
   await test('detail \'icon\' and detail \'full\' render different bytes at the same size', () => {

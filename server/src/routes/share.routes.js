@@ -104,15 +104,15 @@ function withAlphaCss(hex, alpha) {
  * from the same `buildMarkParts` geometry every other rendering of the mark
  * reads from (server/src/utils/brandMark.js) — never redrawn by hand here.
  * The 'icon' detail level is the one already used at small sizes elsewhere
- * (shareCard.service.js's own footer mark). `groundD` (the door cut-outs) is
+ * (shareCard.service.js's own footer mark). Any `groundD` cut-outs are
  * painted the palette's own card colour rather than composited transparent,
  * since this SVG always sits directly on a `.card`-coloured surface here.
  */
 const MARK_PATHS = partsToSvgPaths(buildMarkParts('icon'));
 function inlineMarkSvg(palette) {
+  const groundPath = MARK_PATHS.groundD ? `\n  <path d="${MARK_PATHS.groundD}" fill="${palette.card}"/>` : '';
   return `<svg class="mark-svg" viewBox="0 0 100 100" width="34" height="34" role="img" aria-label="${escapeHtml(palette.wordmark)}">
-  <path d="${MARK_PATHS.markD}" fill="${palette.accent}"/>
-  <path d="${MARK_PATHS.groundD}" fill="${palette.card}"/>
+  <path d="${MARK_PATHS.markD}" fill="${palette.accent}"/>${groundPath}
 </svg>`;
 }
 
