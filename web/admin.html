@@ -82,6 +82,20 @@
 
     <div class="admin-main-container">
 
+      <!-- Session expiry warning banner (spec story 55) -->
+      <div id="adminSessionWarning" class="admin-session-warning" style="display:none;">
+        <div class="admin-session-warning-content">
+          <i class="fa-solid fa-hourglass-half"></i>
+          <span>ستنتهي جلستك خلال أقل من ١٥ دقيقة. يرجى تجديد الجلسة لمتابعة العمل دون انقطاع.</span>
+        </div>
+        <div class="admin-session-warning-actions">
+          <button type="button" class="admin-btn-primary session-renew-btn" onclick="openAdminReauthModal()">
+            <i class="fa-solid fa-key"></i> تجديد الجلسة
+          </button>
+          <button type="button" class="session-warn-close" onclick="hideAdminSessionWarning()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+
       <!-- Scope banner (story 21) — من يديره الأدمن المحلي، أو صيغة السوبر أدمن -->
       <div id="adminScopeBanner" class="admin-scope-banner" style="display:none;"></div>
 
@@ -197,6 +211,26 @@
           </div>
 
           <form id="adminDirectAddForm" class="admin-form" onsubmit="handleDirectAdd(event)">
+            <!-- Draft notices (spec stories 58, 59, 60) -->
+            <div id="dirDraftNotice" class="admin-draft-banner" style="display:none;">
+              <div class="admin-draft-banner-content">
+                <i class="fa-solid fa-file-lines"></i>
+                <span>توجد مسودّة محفوظة لهذه المناسبة. هل تريد استرجاع ما كتبته؟</span>
+              </div>
+              <div class="admin-draft-banner-actions">
+                <button type="button" class="admin-btn-primary session-renew-btn" onclick="applyDirectAddDraft()">
+                  <i class="fa-solid fa-rotate-left"></i> استرجاع المسودّة
+                </button>
+                <button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.85rem;" onclick="discardDirectAddDraft()">
+                  <i class="fa-solid fa-trash-can"></i> تجاهل وحذف
+                </button>
+              </div>
+            </div>
+            <div id="dirDraftFileNotice" class="admin-draft-file-alert" style="display:none;">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <span>الصورة والمقطع الصوتي لم يُحفظا — يرجى إعادة رفعهما.</span>
+            </div>
+
             <div class="form-group">
               <label>نوع المناسبة *</label>
               <select id="dirOccasionType" onchange="handleDirOccasionTypeChange()" required></select>
@@ -720,6 +754,32 @@
         </button>
         <button type="button" class="admin-btn-ghost" onclick="closeRejectEventModal()">إلغاء</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ADMIN RE-AUTH MODAL (spec stories 56, 57) -->
+  <div id="adminReauthModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-lock"></i> تجديد الجلسة</h3>
+        <button type="button" class="close-modal-btn" onclick="closeAdminReauthModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="modal-sub" style="margin-bottom:14px; font-size:0.95rem; line-height:1.6; color:var(--text-main);">
+        انتهت جلستك أو أوشكت على الانتهاء. أدخل رمز PIN لمتابعة العمل دون مغادرة الصفحة أو فقدان ما كتبت.
+      </p>
+      <form id="adminReauthForm" onsubmit="handleAdminReauth(event)">
+        <div class="form-group" style="margin-bottom:14px;">
+          <label>رمز PIN الإدارة</label>
+          <input type="password" id="adminReauthPin" placeholder="••••" autocomplete="current-password" required>
+        </div>
+        <div id="adminReauthError" style="display:none; color:var(--danger-red); margin-bottom:12px; font-size:0.9rem; font-weight:600;"></div>
+        <div class="form-row">
+          <button type="submit" class="admin-btn-primary" id="adminReauthBtn" style="flex:1;">
+            <i class="fa-solid fa-key"></i> تجديد الجلسة
+          </button>
+          <button type="button" class="admin-btn-ghost" onclick="handleAdminLogout()">خروج</button>
+        </div>
+      </form>
     </div>
   </div>
 

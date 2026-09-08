@@ -2540,6 +2540,250 @@ async function run() {
     assert.strictEqual(townSelect.value, 'القرى والتجمعات', 'picking villages town must not reset town select back to first option');
   });
 
+  console.log('\nAdmin panel — batch 6e tests (spec stories 55-61: session protection & form drafts)');
+
+  function makeMockJwt({ exp, phone_number = '0501234567', role = 'super_admin' } = {}) {
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ id: 1, phone_number, role, exp })).toString('base64url');
+    const signature = 'fake-sig';
+    return `${header}.${payload}.${signature}`;
+  }
+
+  await test('a token expiring in under 15 minutes triggers the warning, and one expiring in hours does not', () => {
+    // 1. Expiring in 2 hours
+    const longExpToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) + 7200 });
+    const dom1 = buildAdminEnv({ loggedIn: false });
+    dom1.window.localStorage.setItem('negev_admin_token', longExpToken);
+    dom1.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    dom1.window.showDashboard();
+    dom1.window.checkAdminSessionExpiry();
+    const banner1 = dom1.window.document.getElementById('adminSessionWarning');
+    assert.strictEqual(banner1.style.display, 'none', 'Warning must remain hidden when session has hours remaining');
+
+    // 2. Expiring in 10 minutes (< 15 min)
+    const soonExpToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) + 600 });
+    const dom2 = buildAdminEnv({ loggedIn: false });
+    dom2.window.localStorage.setItem('negev_admin_token', soonExpToken);
+    dom2.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    dom2.window.showDashboard();
+    dom2.window.checkAdminSessionExpiry();
+    const banner2 = dom2.window.document.getElementById('adminSessionWarning');
+    assert.strictEqual(banner2.style.display, 'flex', 'Warning must appear when session has < 15 minutes remaining');
+  });
+
+  await test('the warning appears ONCE, not on every tick', () => {
+    const soonExpToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) + 600 });
+    const dom = buildAdminEnv({ loggedIn: false });
+    dom.window.localStorage.setItem('negev_admin_token', soonExpToken);
+    dom.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    dom.window.showDashboard();
+
+    const banner = dom.window.document.getElementById('adminSessionWarning');
+    dom.window.checkAdminSessionExpiry();
+    assert.strictEqual(banner.style.display, 'flex', 'Banner shown on first tick');
+
+    // User dismisses banner
+    dom.window.hideAdminSessionWarning();
+    assert.strictEqual(banner.style.display, 'none', 'Banner dismissed by admin');
+
+    // Second check tick: should NOT re-show (no nag loop)
+    dom.window.checkAdminSessionExpiry();
+    assert.strictEqual(banner.style.display, 'none', 'Banner must stay dismissed and not nag on subsequent ticks');
+  });
+
+  await test('an expired session does NOT tear the dashboard down', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    dom.window.fetch = async () => jsonResponse({ success: false, message: 'الجلسة منتهية' }, { status: 401 });
+
+    await dom.window.adminFetch('/api/admin/test');
+
+    const reauthModal = dom.window.document.getElementById('adminReauthModal');
+    const dashboardScreen = dom.window.document.getElementById('adminDashboardScreen');
+    const loginScreen = dom.window.document.getElementById('adminLoginScreen');
+
+    assert.strictEqual(reauthModal?.style.display, 'flex', 'Re-login prompt must be shown over the dashboard');
+    assert.strictEqual(dashboardScreen.style.display, 'block', 'Dashboard screen must stay displayed');
+    assert.strictEqual(loginScreen.style.display, 'none', 'Login screen must not take over');
+  });
+
+  /*
+   * `handleAdminSessionExpired` reaches openAdminReauthModal from TWO repeating
+   * sources: the 30-second session timer, and every 401 `adminFetch` sees — and
+   * loadAdminDashboard fires many requests through one Promise.all, so several
+   * 401s land together. Since opening the modal clears the PIN field, an
+   * unguarded re-entry wipes whatever the admin is typing underneath it, which
+   * is the exact "thrown out mid-typing" experience story 57 exists to prevent.
+   */
+  await test('re-entering the expired-session path does not wipe a PIN already being typed', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    dom.window.fetch = async () => jsonResponse({ success: false, message: 'الجلسة منتهية' }, { status: 401 });
+
+    await dom.window.adminFetch('/api/admin/test');
+    const pinInput = dom.window.document.getElementById('adminReauthPin');
+    assert.strictEqual(dom.window.document.getElementById('adminReauthModal').style.display, 'flex');
+
+    pinInput.value = '1234';
+
+    // A second 401 from the same Promise.all, then the 30-second timer tick.
+    await dom.window.adminFetch('/api/admin/other');
+    dom.window.checkAdminSessionExpiry();
+
+    assert.strictEqual(pinInput.value, '1234', 'a re-entered expiry must not clear the PIN the admin is typing');
+  });
+
+  await test('a successful re-login swaps the stored token and leaves the dashboard mounted', async () => {
+    const oldToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) - 100 });
+    const newToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) + 3600 * 12 });
+    const dom = buildAdminEnv({ loggedIn: false });
+    dom.window.localStorage.setItem('negev_admin_token', oldToken);
+    dom.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    dom.window.showDashboard();
+    dom.window.checkAdminSessionExpiry();
+
+    const reauthModal = dom.window.document.getElementById('adminReauthModal');
+    assert.strictEqual(reauthModal.style.display, 'flex', 'Reauth modal open on expired token');
+
+    dom.window.fetch = async (url, options) => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/admin/login' && options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        assert.strictEqual(body.pin_code, '9999');
+        return jsonResponse({ success: true, token: newToken, user: { role: 'super_admin' } });
+      }
+      return buildFetchStub()(url, options);
+    };
+
+    dom.window.document.getElementById('adminReauthPin').value = '9999';
+    await dom.window.handleAdminReauth({ preventDefault() {} });
+
+    assert.strictEqual(dom.window.localStorage.getItem('negev_admin_token'), newToken, 'Stored token must be swapped');
+    assert.strictEqual(reauthModal.style.display, 'none', 'Reauth modal must close after success');
+    assert.strictEqual(dom.window.document.getElementById('adminDashboardScreen').style.display, 'block', 'Dashboard remains mounted');
+    assert.strictEqual(dom.window.document.getElementById('adminLoginScreen').style.display, 'none', 'Login screen does not take over');
+  });
+
+  await test('the PIN is not in localStorage or sessionStorage after a successful re-login', async () => {
+    const secretPin = '7391';
+    const newToken = makeMockJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const dom = buildAdminEnv({ loggedIn: true });
+
+    dom.window.fetch = async () => jsonResponse({ success: true, token: newToken, user: { role: 'super_admin' } });
+
+    dom.window.openAdminReauthModal();
+    dom.window.document.getElementById('adminReauthPin').value = secretPin;
+    await dom.window.handleAdminReauth({ preventDefault() {} });
+
+    // Assert PIN is NOT anywhere in localStorage
+    for (let i = 0; i < dom.window.localStorage.length; i++) {
+      const key = dom.window.localStorage.key(i);
+      const val = dom.window.localStorage.getItem(key);
+      assert.ok(!key.includes(secretPin), `Key ${key} must not contain PIN`);
+      assert.ok(!val.includes(secretPin), `Value of ${key} must not contain PIN`);
+    }
+
+    // Assert PIN is NOT anywhere in sessionStorage
+    for (let i = 0; i < dom.window.sessionStorage.length; i++) {
+      const key = dom.window.sessionStorage.key(i);
+      const val = dom.window.sessionStorage.getItem(key);
+      assert.ok(!key.includes(secretPin), `Key ${key} in sessionStorage must not contain PIN`);
+      assert.ok(!val.includes(secretPin), `Value of ${key} in sessionStorage must not contain PIN`);
+    }
+
+    // Assert input field was cleared
+    assert.strictEqual(dom.window.document.getElementById('adminReauthPin').value, '', 'PIN input must be cleared');
+  });
+
+  await test('a draft is saved from the direct-add form and offered back after re-login', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    await dom.window.initDirectAddForm();
+
+    // Type into form (wedding fixture defines dirLocationName)
+    const locInput = dom.window.document.getElementById('dirLocationName');
+    assert.ok(locInput, 'dirLocationName must exist');
+    locInput.value = 'قاعة السلام - رهط';
+
+    // Collect draft and save
+    const draft = dom.window.collectDirectAddFormDraft();
+    assert.ok(draft, 'Draft must be collected');
+    assert.strictEqual(draft.values.dirLocationName, 'قاعة السلام - رهط');
+    dom.window.localStorage.setItem('negev_draft_direct_add', JSON.stringify(draft));
+
+    // Simulate session expired + reauth
+    dom.window.handleAdminSessionExpired();
+    assert.strictEqual(dom.window.document.getElementById('adminReauthModal').style.display, 'flex');
+
+    // Direct add form checks draft
+    dom.window.checkDirectAddDraft();
+    const notice = dom.window.document.getElementById('dirDraftNotice');
+    assert.strictEqual(notice.style.display, 'flex', 'Draft notice banner must be displayed');
+
+    // Clear form and restore draft
+    locInput.value = '';
+    dom.window.applyDirectAddDraft();
+    assert.strictEqual(locInput.value, 'قاعة السلام - رهط', 'Draft value must be restored');
+    assert.strictEqual(notice.style.display, 'none', 'Draft banner hidden after restore');
+  });
+
+  await test('declining the restore deletes the draft so it is not offered again', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    await dom.window.initDirectAddForm();
+
+    dom.window.localStorage.setItem('negev_draft_direct_add', JSON.stringify({
+      occasion_type_id: 1,
+      values: { dirLocationName: 'مناسبة ستُحذف' },
+      updated_at: Date.now()
+    }));
+
+    dom.window.checkDirectAddDraft();
+    const notice = dom.window.document.getElementById('dirDraftNotice');
+    assert.strictEqual(notice.style.display, 'flex', 'Draft offer displayed');
+
+    // Admin clicks "discard"
+    dom.window.discardDirectAddDraft();
+    assert.strictEqual(dom.window.localStorage.getItem('negev_draft_direct_add'), null, 'Draft must be deleted from localStorage');
+    assert.strictEqual(notice.style.display, 'none', 'Notice must be hidden');
+
+    // Calling check again should NOT offer
+    dom.window.checkDirectAddDraft();
+    assert.strictEqual(notice.style.display, 'none', 'Draft notice must not appear after being discarded');
+  });
+
+  await test('a draft that had a file field says so in Arabic on restore', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    await dom.window.initDirectAddForm();
+
+    dom.window.localStorage.setItem('negev_draft_direct_add', JSON.stringify({
+      occasion_type_id: 1,
+      values: { dirLocationName: 'مناسبة مع ملف' },
+      hadFiles: true,
+      updated_at: Date.now()
+    }));
+
+    dom.window.applyDirectAddDraft();
+
+    const fileNotice = dom.window.document.getElementById('dirDraftFileNotice');
+    assert.ok(fileNotice, 'File notice element must exist');
+    assert.strictEqual(fileNotice.style.display, 'flex', 'File notice must be shown when draft had files');
+    assert.ok(
+      fileNotice.textContent.includes('الصورة') && fileNotice.textContent.includes('لم يُحفظا'),
+      'Notice must state in Arabic that files were not saved'
+    );
+  });
+
+  await test('logging out clears the drafts', () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    dom.window.localStorage.setItem('negev_draft_direct_add', JSON.stringify({ occasion_type_id: 1, values: { dirTitle: 'مسودة مباشرة' } }));
+    dom.window.localStorage.setItem('negev_draft_event_99', JSON.stringify({ values: { evtTitle: 'مسودة تعديل' } }));
+
+    assert.ok(dom.window.localStorage.getItem('negev_draft_direct_add'), 'direct draft set');
+    assert.ok(dom.window.localStorage.getItem('negev_draft_event_99'), 'edit draft set');
+
+    dom.window.handleAdminLogout();
+
+    assert.strictEqual(dom.window.localStorage.getItem('negev_draft_direct_add'), null, 'direct add draft must be cleared on logout');
+    assert.strictEqual(dom.window.localStorage.getItem('negev_draft_event_99'), null, 'event edit draft must be cleared on logout');
+  });
+
   console.log('\nInstallable on a phone — the manifest, the mark, and the iOS hint');
 
   const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';

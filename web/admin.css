@@ -648,3 +648,84 @@ body {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Session Expiry & Warning (spec stories 55, 56, 57) */
+.admin-session-warning {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  background: var(--warn-wash);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin-bottom: 20px;
+}
+.admin-session-warning-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.admin-session-warning-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-renew-btn {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.session-warn-close {
+  background: transparent;
+  border: none;
+  color: var(--warn);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 1rem;
+}
+
+/* Form Drafts (spec stories 58, 59, 60) */
+.admin-draft-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  border: 1px solid var(--sky-bright);
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+.admin-draft-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.admin-draft-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.admin-draft-file-alert {
+  background: var(--warn-wash);
+  color: var(--warn);
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -137,10 +137,355 @@ const REACTION_TYPES_LABELS = {
 document.addEventListener('DOMContentLoaded', () => {
   if (adminToken) {
     showDashboard();
+    checkAdminSessionExpiry();
   } else {
     showLogin();
   }
 });
+
+function safeAtob(str) {
+  if (typeof atob === 'function') return atob(str);
+  if (typeof Buffer !== 'undefined') return Buffer.from(str, 'base64').toString('binary');
+  return '';
+}
+
+function parseJwtPayload(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4 !== 0) {
+      b64 += '=';
+    }
+    let jsonStr = '';
+    try {
+      jsonStr = decodeURIComponent(
+        safeAtob(b64)
+          .split('')
+          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+    } catch (_) {
+      jsonStr = safeAtob(b64);
+    }
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    return null;
+  }
+}
+
+function getAdminSessionRemainingSeconds(token) {
+  try {
+    let t = token !== undefined ? token : adminToken;
+    if (!t && typeof localStorage !== 'undefined') {
+      t = localStorage.getItem('negev_admin_token');
+    }
+    const payload = parseJwtPayload(t);
+    if (!payload || typeof payload.exp !== 'number') return null;
+    return payload.exp - Math.floor(Date.now() / 1000);
+  } catch (e) {
+    return null;
+  }
+}
+
+let adminSessionWarned = false;
+let adminSessionCheckInterval = null;
+
+function showAdminSessionWarning() {
+  if (adminSessionWarned) return;
+  adminSessionWarned = true;
+  const banner = document.getElementById('adminSessionWarning');
+  if (banner) banner.style.display = 'flex';
+}
+
+function hideAdminSessionWarning() {
+  const banner = document.getElementById('adminSessionWarning');
+  if (banner) banner.style.display = 'none';
+}
+
+/*
+ * تُستدعى من مسارين: مؤقّت الجلسة كل ٣٠ ثانية، و401 من `adminFetch` (وقد يرجع
+ * عدة 401 معاً من `Promise.all` في `loadAdminDashboard`). و`openAdminReauthModal`
+ * تُفرغ حقل الرمز عند كل فتح — فبلا هذا الحارس يُمسح ما يكتبه الأدمن تحته كل
+ * ٣٠ ثانية، وهو بالضبط ما تمنعه القصة 57.
+ */
+function handleAdminSessionExpired() {
+  const modal = document.getElementById('adminReauthModal');
+  if (modal && modal.style.display === 'flex') return;
+  hideAdminSessionWarning();
+  openAdminReauthModal();
+}
+
+function checkAdminSessionExpiry() {
+  if (!adminToken && typeof localStorage !== 'undefined') {
+    adminToken = localStorage.getItem('negev_admin_token');
+  }
+  const remaining = getAdminSessionRemainingSeconds();
+  if (remaining == null) return;
+  if (remaining <= 0) {
+    handleAdminSessionExpired();
+  } else if (remaining <= 15 * 60) {
+    showAdminSessionWarning();
+  } else {
+    hideAdminSessionWarning();
+    adminSessionWarned = false;
+  }
+}
+
+function startAdminSessionWatch() {
+  checkAdminSessionExpiry();
+  if (!adminSessionCheckInterval && typeof setInterval === 'function') {
+    adminSessionCheckInterval = setInterval(checkAdminSessionExpiry, 30000);
+  }
+}
+
+function stopAdminSessionWatch() {
+  if (adminSessionCheckInterval && typeof clearInterval === 'function') {
+    clearInterval(adminSessionCheckInterval);
+    adminSessionCheckInterval = null;
+  }
+}
+
+function openAdminReauthModal() {
+  const modal = document.getElementById('adminReauthModal');
+  const pinInput = document.getElementById('adminReauthPin');
+  const errEl = document.getElementById('adminReauthError');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+  if (pinInput) pinInput.value = '';
+  if (modal) modal.style.display = 'flex';
+  if (pinInput && typeof pinInput.focus === 'function') {
+    setTimeout(() => { try { pinInput.focus(); } catch (_) {} }, 50);
+  }
+}
+
+function closeAdminReauthModal() {
+  const modal = document.getElementById('adminReauthModal');
+  const pinInput = document.getElementById('adminReauthPin');
+  if (pinInput) pinInput.value = '';
+  if (modal) modal.style.display = 'none';
+}
+
+async function handleAdminReauth(e) {
+  if (e && typeof e.preventDefault === 'function') e.preventDefault();
+  const pinInput = document.getElementById('adminReauthPin');
+  const pin = pinInput ? pinInput.value.trim() : '';
+  if (!pin) return;
+
+  const btn = document.getElementById('adminReauthBtn');
+  const errEl = document.getElementById('adminReauthError');
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+  let phone = '';
+  try {
+    const payload = parseJwtPayload(adminToken);
+    if (payload && payload.phone_number) {
+      phone = payload.phone_number;
+    }
+  } catch (_) {}
+  if (!phone) {
+    const phoneEl = document.getElementById('adminPhone');
+    if (phoneEl && phoneEl.value.trim()) {
+      phone = phoneEl.value.trim();
+    }
+  }
+
+  if (btn) {
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التجديد...';
+    btn.disabled = true;
+  }
+
+  try {
+    const bodyPayload = { pin_code: pin };
+    if (phone) bodyPayload.phone_number = phone;
+
+    const res = await apiFetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyPayload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      adminToken = data.token;
+      try {
+        localStorage.setItem('negev_admin_token', adminToken);
+        if (data.user && data.user.role) {
+          localStorage.setItem('negev_admin_role', data.user.role);
+        }
+      } catch (err) {}
+      adminSessionWarned = false;
+      hideAdminSessionWarning();
+      closeAdminReauthModal();
+    } else {
+      if (errEl) {
+        errEl.textContent = data.message || 'رمز الدخول غير صحيح';
+        errEl.style.display = 'block';
+      }
+    }
+  } catch (err) {
+    if (errEl) {
+      errEl.textContent = 'تعذر الاتصال بالخادم';
+      errEl.style.display = 'block';
+    }
+  } finally {
+    // PIN IS NEVER STORED ANYWHERE
+    if (pinInput) pinInput.value = '';
+    if (btn) {
+      btn.innerHTML = '<i class="fa-solid fa-key"></i> تجديد الجلسة';
+      btn.disabled = false;
+    }
+  }
+}
+
+function clearAllAdminDrafts() {
+  try {
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('negev_draft_')) {
+        toRemove.push(key);
+      }
+    }
+    toRemove.forEach(k => {
+      try { localStorage.removeItem(k); } catch (_) {}
+    });
+  } catch (e) {}
+}
+
+let dirDraftDebounceTimer = null;
+
+function collectDirectAddFormDraft() {
+  const form = document.getElementById('adminDirectAddForm');
+  if (!form) return null;
+  const occasionTypeSelect = document.getElementById('dirOccasionType');
+  const occasionTypeId = occasionTypeSelect ? occasionTypeSelect.value : (selectedDirectAddType?.id || null);
+
+  const values = {};
+  const inputs = form.querySelectorAll('input, select, textarea');
+  let hasAnyText = false;
+  let hadFiles = false;
+
+  inputs.forEach(el => {
+    if (!el.id || el.type === 'submit' || el.type === 'button' || el.type === 'password') return;
+    if (el.closest && el.closest('#dirHonoreesList')) return;
+    if (el.type === 'file') {
+      if (el.files && el.files.length > 0) hadFiles = true;
+      return;
+    }
+    const val = el.value;
+    if (val !== undefined && val !== null && val !== '') {
+      values[el.id] = val;
+      if (el.id !== 'dirEventDate' && el.id !== 'dirDinnerTime' && el.id !== 'dirTown') {
+        hasAnyText = true;
+      }
+    }
+  });
+
+  const honorees = collectHonorees('dirHonoreesList');
+  if (honorees.length > 0 && (honorees[0].name || honorees[0].role)) {
+    hasAnyText = true;
+  }
+
+  if (!hasAnyText && !hadFiles) return null;
+
+  return {
+    occasion_type_id: occasionTypeId,
+    values,
+    honorees,
+    hadFiles,
+    updated_at: Date.now()
+  };
+}
+
+function saveDirectAddDraft() {
+  clearTimeout(dirDraftDebounceTimer);
+  dirDraftDebounceTimer = setTimeout(() => {
+    try {
+      const draft = collectDirectAddFormDraft();
+      if (draft) {
+        localStorage.setItem('negev_draft_direct_add', JSON.stringify(draft));
+      }
+    } catch (e) {}
+  }, 500);
+}
+
+function checkDirectAddDraft() {
+  try {
+    const raw = localStorage.getItem('negev_draft_direct_add');
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft || !draft.updated_at) return;
+    if (Date.now() - draft.updated_at > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem('negev_draft_direct_add');
+      return;
+    }
+    const notice = document.getElementById('dirDraftNotice');
+    if (notice) notice.style.display = 'flex';
+  } catch (e) {}
+}
+
+function discardDirectAddDraft() {
+  try {
+    localStorage.removeItem('negev_draft_direct_add');
+  } catch (e) {}
+  const notice = document.getElementById('dirDraftNotice');
+  if (notice) notice.style.display = 'none';
+  const fileNotice = document.getElementById('dirDraftFileNotice');
+  if (fileNotice) fileNotice.style.display = 'none';
+}
+
+function applyDirectAddDraft() {
+  try {
+    const raw = localStorage.getItem('negev_draft_direct_add');
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft) return;
+
+    if (draft.occasion_type_id && directAddOccasionTypes && directAddOccasionTypes.length > 0) {
+      const type = directAddOccasionTypes.find(t => String(t.id) === String(draft.occasion_type_id));
+      if (type) {
+        const select = document.getElementById('dirOccasionType');
+        if (select && select.value !== String(type.id)) {
+          select.value = String(type.id);
+          renderDirectAddFields(type);
+        }
+      }
+    }
+
+    if (draft.values) {
+      Object.keys(draft.values).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.value = draft.values[id];
+          if (id === 'dirTown') {
+            handleDirTownChange();
+          }
+        }
+      });
+      if (draft.values.dirVillage) {
+        const vilEl = document.getElementById('dirVillage');
+        if (vilEl) vilEl.value = draft.values.dirVillage;
+      }
+    }
+
+    if (Array.isArray(draft.honorees) && draft.honorees.length > 0) {
+      const container = document.getElementById('dirHonoreesList');
+      if (container) {
+        container.innerHTML = '';
+        draft.honorees.forEach(h => addHonoreeRow('dirHonoreesList', h.name, h.role));
+      }
+    }
+
+    if (draft.hadFiles) {
+      const fileNotice = document.getElementById('dirDraftFileNotice');
+      if (fileNotice) fileNotice.style.display = 'flex';
+    }
+
+    const notice = document.getElementById('dirDraftNotice');
+    if (notice) notice.style.display = 'none';
+  } catch (e) {}
+}
 
 // 1. Admin Authentication
 async function handleAdminLogin(e) {
@@ -177,8 +522,14 @@ async function handleAdminLogin(e) {
 }
 
 function handleAdminLogout() {
-  localStorage.removeItem('negev_admin_token');
-  localStorage.removeItem('negev_admin_role');
+  clearAllAdminDrafts();
+  stopAdminSessionWatch();
+  hideAdminSessionWarning();
+  closeAdminReauthModal();
+  try {
+    localStorage.removeItem('negev_admin_token');
+    localStorage.removeItem('negev_admin_role');
+  } catch (e) {}
   adminToken = null;
   showLogin();
 }
@@ -189,11 +540,15 @@ function showLogin() {
 }
 
 function showDashboard() {
+  if (!adminToken && typeof localStorage !== 'undefined') {
+    adminToken = localStorage.getItem('negev_admin_token');
+  }
   document.getElementById('adminLoginScreen').style.display = 'none';
   document.getElementById('adminDashboardScreen').style.display = 'block';
 
   applyRoleVisibility();
   loadAdminDashboard();
+  startAdminSessionWatch();
 }
 
 /*
@@ -534,6 +889,14 @@ async function initDirectAddForm() {
   ).join('');
   select.value = directAddOccasionTypes[0].id;
   renderDirectAddFields(directAddOccasionTypes[0]);
+
+  const dirForm = document.getElementById('adminDirectAddForm');
+  if (dirForm && !dirForm.__draftListenersAttached) {
+    dirForm.__draftListenersAttached = true;
+    dirForm.addEventListener('input', saveDirectAddDraft);
+    dirForm.addEventListener('change', saveDirectAddDraft);
+  }
+  checkDirectAddDraft();
 }
 
 function handleDirOccasionTypeChange() {
@@ -740,6 +1103,7 @@ async function handleDirectAdd(e) {
 
     if (data.success) {
       alert('🎉 تم نشر المناسبة بنجاح كمعتمدة مباشرة!');
+      discardDirectAddDraft();
       renderDirectAddFields(type);
       switchAdminTab('tabEvents');
       fetchKPIStats();
@@ -1454,6 +1818,119 @@ function handleAdminEventSearch() {
 // كما هو (قيد ٤).
 // ======================================================================
 
+let evtDraftDebounceTimer = null;
+
+function collectEventEditFormDraft() {
+  if (!editingEventId) return null;
+  const form = document.getElementById('eventEditForm');
+  if (!form) return null;
+
+  const values = {};
+  const inputs = form.querySelectorAll('input, select, textarea');
+  let hadFiles = false;
+
+  inputs.forEach(el => {
+    if (!el.id || el.type === 'submit' || el.type === 'button' || el.type === 'password') return;
+    if (el.closest && el.closest('#evtHonoreesEditor')) return;
+    if (el.type === 'file') {
+      if (el.files && el.files.length > 0) hadFiles = true;
+      return;
+    }
+    const val = el.value;
+    if (val !== undefined && val !== null) {
+      values[el.id] = val;
+    }
+  });
+
+  const honorees = collectEventHonorees();
+
+  return {
+    event_id: editingEventId,
+    values,
+    honorees,
+    hadFiles,
+    updated_at: Date.now()
+  };
+}
+
+function saveEventEditDraft() {
+  if (!editingEventId) return;
+  clearTimeout(evtDraftDebounceTimer);
+  evtDraftDebounceTimer = setTimeout(() => {
+    try {
+      const draft = collectEventEditFormDraft();
+      if (draft && editingEventId) {
+        localStorage.setItem(`negev_draft_event_${editingEventId}`, JSON.stringify(draft));
+      }
+    } catch (e) {}
+  }, 500);
+}
+
+function checkEventEditDraft(eventId) {
+  try {
+    const raw = localStorage.getItem(`negev_draft_event_${eventId}`);
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft || !draft.updated_at) return;
+    if (Date.now() - draft.updated_at > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(`negev_draft_event_${eventId}`);
+      return;
+    }
+    const notice = document.getElementById('evtDraftNotice');
+    if (notice) notice.style.display = 'flex';
+  } catch (e) {}
+}
+
+function discardEventEditDraft() {
+  if (editingEventId) {
+    try {
+      localStorage.removeItem(`negev_draft_event_${editingEventId}`);
+    } catch (e) {}
+  }
+  const notice = document.getElementById('evtDraftNotice');
+  if (notice) notice.style.display = 'none';
+  const fileNotice = document.getElementById('evtDraftFileNotice');
+  if (fileNotice) fileNotice.style.display = 'none';
+}
+
+function applyEventEditDraft() {
+  if (!editingEventId) return;
+  try {
+    const raw = localStorage.getItem(`negev_draft_event_${editingEventId}`);
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft) return;
+
+    if (draft.values) {
+      Object.keys(draft.values).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.value = draft.values[id];
+          if (id === 'evtTown') {
+            handleEventEditTownChange();
+          }
+        }
+      });
+      if (draft.values.evtVillage) {
+        const vilEl = document.getElementById('evtVillage');
+        if (vilEl) vilEl.value = draft.values.evtVillage;
+      }
+    }
+
+    if (Array.isArray(draft.honorees) && draft.honorees.length > 0) {
+      renderEventHonoreesEditor(draft.honorees);
+    }
+
+    if (draft.hadFiles) {
+      const fileNotice = document.getElementById('evtDraftFileNotice');
+      if (fileNotice) fileNotice.style.display = 'flex';
+    }
+
+    const notice = document.getElementById('evtDraftNotice');
+    if (notice) notice.style.display = 'none';
+  } catch (e) {}
+}
+
 function ensureEventEditFormMounted() {
   if (document.getElementById('eventEditFormWrapper')) return;
   const tabEvents = document.getElementById('tabEvents');
@@ -1474,6 +1951,26 @@ function ensureEventEditFormMounted() {
     </div>
 
     <div id="eventEditForbiddenNotice" style="display:none; padding:16px; margin-bottom:16px; border-radius:8px; background:var(--surface-sunk); color:var(--danger-red); text-align:center;"></div>
+
+    <!-- Draft notices (spec stories 58, 59, 60) -->
+    <div id="evtDraftNotice" class="admin-draft-banner" style="display:none;">
+      <div class="admin-draft-banner-content">
+        <i class="fa-solid fa-file-lines"></i>
+        <span>توجد مسودّة محفوظة لتعديل هذه المناسبة. هل تريد استرجاع التعديلات؟</span>
+      </div>
+      <div class="admin-draft-banner-actions">
+        <button type="button" class="admin-btn-primary session-renew-btn" onclick="applyEventEditDraft()">
+          <i class="fa-solid fa-rotate-left"></i> استرجاع المسودّة
+        </button>
+        <button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.85rem;" onclick="discardEventEditDraft()">
+          <i class="fa-solid fa-trash-can"></i> تجاهل وحذف
+        </button>
+      </div>
+    </div>
+    <div id="evtDraftFileNotice" class="admin-draft-file-alert" style="display:none;">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <span>الصورة والملف المرفق لم يُحفظا لأسباب أمنية — يرجى إعادة اختيارهما إن رغبت في تعديلهما.</span>
+    </div>
 
     <form id="eventEditForm" class="admin-form" onsubmit="handleEventEditSubmit(event)">
       <div class="form-row">
@@ -1617,6 +2114,13 @@ function ensureEventEditFormMounted() {
   `;
 
   tabEvents.appendChild(wrapper);
+
+  const editForm = document.getElementById('eventEditForm');
+  if (editForm && !editForm.__draftListenersAttached) {
+    editForm.__draftListenersAttached = true;
+    editForm.addEventListener('input', saveEventEditDraft);
+    editForm.addEventListener('change', saveEventEditDraft);
+  }
 }
 
 function populateEvtTownSelect(selectedVal) {
@@ -1877,10 +2381,15 @@ async function openEventEditForm(id) {
   wrapper.style.display = 'block';
   // بعد إظهار الحاوية لا قبلها — Leaflet يقيس حاوية بعرض صفر وهي مخفية.
   initEventLocationMap(editingEventOriginal.latitude, editingEventOriginal.longitude);
+  checkEventEditDraft(editingEventId);
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function closeEventEditForm() {
+  const notice = document.getElementById('evtDraftNotice');
+  if (notice) notice.style.display = 'none';
+  const fileNotice = document.getElementById('evtDraftFileNotice');
+  if (fileNotice) fileNotice.style.display = 'none';
   editingEventId = null;
   editingEventOriginal = null;
   const wrapper = document.getElementById('eventEditFormWrapper');
@@ -2208,6 +2717,7 @@ async function handleEventEditSubmit(e) {
       let fullMessage = data.message || 'تم الحفظ بنجاح';
       if (data.location_warning) fullMessage += `\n\n⚠️ ${data.location_warning}`;
       alert(fullMessage);
+      discardEventEditDraft();
       closeEventEditForm();
       await fetchAdminEvents();
       await fetchKPIStats();

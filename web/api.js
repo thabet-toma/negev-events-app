@@ -33,6 +33,12 @@ function apiFetch(path, options = {}) {
 }
 
 /** نداء يحمل رمز الإدارة. */
-function adminFetch(path, options = {}) {
-  return apiFetch(path, { ...options, auth: true, tokenKey: 'negev_admin_token' });
+async function adminFetch(path, options = {}) {
+  const res = await apiFetch(path, { ...options, auth: true, tokenKey: 'negev_admin_token' });
+  if (res.status === 401) {
+    if (typeof window !== 'undefined' && typeof window.handleAdminSessionExpired === 'function') {
+      window.handleAdminSessionExpired();
+    }
+  }
+  return res;
 }
