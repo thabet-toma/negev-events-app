@@ -50,6 +50,15 @@ services:
       APP_MIN_VERSION: ${APP_MIN_VERSION:-}
       APP_APK_URL: ${APP_APK_URL:-}
       APP_RELEASE_NOTES: ${APP_RELEASE_NOTES:-}
+      # Web Push (issue #85). هذه القائمة صريحة ولا يوجد `env_file`، فمتغيّر
+      # غير مذكور هنا لا يصل الحاوية مهما كُتب في `.env` — وغياب هذه الثلاثة
+      # كان يعني أن لصق زوج VAPID في `.env` لا يفعل شيئاً، بلا رسالة خطأ:
+      # الخادم يقلع سليماً، ويُرفض كل اشتراك دفع، ولا شيء يقول لماذا.
+      # فارغة افتراضياً عمداً — الخادم يعمل بلا الزوج، ويرفض الاشتراك برسالة
+      # عربية واضحة بدل أن يتعطّل.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-30}
     ports:
       - "${BIND_HOST:-127.0.0.1}:${PORT:-3000}:3000"
