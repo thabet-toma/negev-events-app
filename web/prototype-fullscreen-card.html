@@ -1,0 +1,558 @@
+<title>كرت المناسبة بملء الشاشة</title>
+<!--
+  نموذج أوّلي — يُرمى بعد الحكم. لا يُدمَج في `main`.
+  ثلاث نسخ من كرت التغذية بملء الشاشة، تُبدَّل بـ`?variant=A|B|C`، على مسار
+  مستقلّ لأن `web/` بلا موجّه ولا خطوة بناء.
+  السؤال: https://github.com/thabet-toma/negev-events-app/issues/92
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Cairo:wght@400;600;700&display=swap">
+<style>
+  /* ------------------------------------------------------------------ *
+   * عالم بصري واحد مقصود: شاشة هاتف ليلاً وفيها دعوات مطبوعة.
+   * كل لون هنا من لوحة المشروع نفسها (brandMark.js + styles.css).
+   * ------------------------------------------------------------------ */
+  :root {
+    --ink:        #0c1b2a;
+    --ink-lift:   #122438;
+    --gold:       #8f6a20;
+    --gold-lit:   #e3c08a;
+    --paper:      #f6f2ea;
+    --paper-ink:  #2a2118;
+    --slate-a:    #334155;
+    --slate-b:    #64748b;
+    --chrome:     #e8eef5;
+    --chrome-dim: #94a7bd;
+    --tone: var(--gold);
+    --tone-lit: var(--gold-lit);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #05101a;
+    color: var(--chrome);
+    font-family: 'Cairo', system-ui, 'Segoe UI', sans-serif;
+    direction: rtl;
+    display: flex;
+    justify-content: center;
+    min-height: 100dvh;
+  }
+
+  /* هيكل الهاتف — على الهاتف نفسه يختفي ويملأ الشاشة */
+  .phone {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+    height: 100dvh;
+    background: var(--ink);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  @media (min-width: 460px) {
+    .phone {
+      height: min(880px, 100dvh);
+      margin: auto;
+      border-radius: 28px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(227,192,138,.14);
+    }
+  }
+
+  /* ترويسة رفيعة — الاسم يتبع النغمة (قرار ٦٧: لا «أعراسنا» على عزاء) */
+  .topbar {
+    position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 6;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 34px;
+    background: linear-gradient(to bottom, rgba(6,16,26,.9) 55%, rgba(6,16,26,0));
+    pointer-events: none;
+  }
+  .wordmark { font-family: 'Amiri', serif; font-size: 20px; font-weight: 700; letter-spacing: .3px; color: var(--gold-lit); }
+  .wordmark.solemn { color: #cbd5e1; }
+  .topbar-note { font-size: 10.5px; color: var(--chrome-dim); }
+
+  /* ------------------------------------------------------------------ *
+   * التمرير القافز — هذا هو جوهر السؤال
+   * ------------------------------------------------------------------ */
+  .feed {
+    flex: 1;
+    overflow-y: auto;
+    scroll-snap-type: y mandatory;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+  .feed::-webkit-scrollbar { display: none; }
+
+  .card {
+    position: relative;
+    height: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;   /* كرت واحد لكل حركة إصبع — الفارق عن فيسبوك */
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  /* قراءة النموذج: ماذا فعلت هذه النسخة بهذا الملصق بالضبط */
+  .probe {
+    position: absolute; inset-block-start: 50px; inset-inline-start: 12px; z-index: 7;
+    font-size: 10.5px; line-height: 1.5; letter-spacing: .2px;
+    padding: 5px 9px; border-radius: 8px;
+    border: 1px dashed rgba(232,238,245,.42);
+    background: rgba(5,16,26,.6);
+    color: #d7e2ee;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .probe b { color: var(--tone-lit); font-weight: 700; }
+
+  /* ------------------------------------------------------------------ *
+   * الملصق
+   * ------------------------------------------------------------------ */
+  .poster { display: block; width: 100%; height: 100%; max-width: none; max-height: none; }
+  .poster-whole { display: block; width: 100%; height: 100%; }
+
+  /* الإطار الذهبي: يُرسم فوق الصورة، لا يزيحها (قرار ٩٣) */
+  .goldframe {
+    position: absolute; inset: 3px; z-index: 3;
+    border: 2px solid transparent;
+    border-radius: inherit;
+    box-shadow: 0 0 0 1px rgba(12,27,42,.35);
+    background: linear-gradient(140deg, var(--tone-lit), var(--tone) 52%, var(--tone-lit)) border-box;
+    -webkit-mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * النسخة أ — الملصق يملأ اللوح داخل إطار، وشريط تعريف مصمت تحته
+   * الحجاب المتدرّج الطويل سقط: كان يلطّخ نصف الدعوة رماداً.
+   * ------------------------------------------------------------------ */
+  .bezel {          /* الحافّة المزخرفة التي يقف عليها الإطار */
+    position: absolute; inset: 0; z-index: 1;
+    padding: 44px 10px 10px;
+    background-color: var(--ink);
+    background-position: center;
+  }
+  .framed {
+    position: relative; width: 100%; height: 100%;
+    display: flex; flex-direction: column;
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 12px 34px rgba(0,0,0,.55);
+    background: var(--ink);
+  }
+  .media { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+  .caption {
+    position: relative; z-index: 2;
+    padding: 12px 16px 15px;
+    background: var(--ink);
+    border-block-start: 1px solid color-mix(in srgb, var(--tone-lit) 40%, transparent);
+  }
+  .caption .chips { margin-bottom: 8px; }
+  .caption .title { font-size: 24px; }
+  /* الإطار على حافّة اللوح نفسه، لا منزاحاً داخله */
+  .goldframe.gf-edge { inset: 0; box-shadow: none; }
+
+  /* ------------------------------------------------------------------ *
+   * النسخة ب — الدعوة كاملة على منصّة مزخرفة
+   * ------------------------------------------------------------------ */
+  .stage {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px;
+    padding: 64px 22px 20px;
+    background-color: var(--ink);
+    background-position: center;
+  }
+  .stage::after {   /* وهج خفيف خلف الدعوة كي لا تبدو الأرضية ميتة */
+    content: ''; position: absolute; inset: 0; z-index: 0;
+    background:
+      radial-gradient(62% 40% at 50% 38%, rgba(143,106,32,.22), transparent 72%),
+      linear-gradient(to top, rgba(12,27,42,.95) 4%, rgba(12,27,42,.74) 24%, rgba(12,27,42,0) 46%);
+    pointer-events: none;
+  }
+  .stage > * { position: relative; z-index: 1; }
+
+  .plate {
+    position: relative;
+    display: flex;
+    max-width: 100%;
+    border-radius: 4px;
+    box-shadow: 0 18px 42px rgba(0,0,0,.55);
+    overflow: hidden;
+  }
+  .plate .poster-whole {
+    display: block;
+    width: auto; height: auto;
+    max-width: 100%;
+    max-height: min(56dvh, 520px);
+  }
+  /* زوايا مذهَّبة — الزخرفة التي طلبها صاحب المنتج، لا طمس */
+  .corner { position: absolute; width: 22px; height: 22px; z-index: 4; opacity: .95; }
+  .corner { filter: drop-shadow(0 0 2px rgba(12,27,42,.85)); }
+  .corner path { fill: none; stroke: var(--tone-lit); stroke-width: 2; }
+  .c-tr { top: 5px; right: 5px; }
+  .c-tl { top: 5px; left: 5px; transform: scaleX(-1); }
+  .c-br { bottom: 5px; right: 5px; transform: scaleY(-1); }
+  .c-bl { bottom: 5px; left: 5px; transform: scale(-1); }
+
+  /* ------------------------------------------------------------------ *
+   * كتلة النصّ — مشتركة بين النسخ، بنغمتين
+   * ------------------------------------------------------------------ */
+  .title {
+    margin: 0;
+    font-family: 'Amiri', serif;
+    font-size: 27px; line-height: 1.28; font-weight: 700;
+    color: #fbf6ec;
+    text-wrap: balance;
+  }
+  .sub { margin: 6px 0 0; font-size: 13.5px; font-weight: 600; color: var(--tone-lit); }
+  .meta { margin: 3px 0 0; font-size: 12.5px; color: var(--chrome-dim); }
+  .stage .title, .stage .sub, .stage .meta { text-align: center; }
+
+  .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip {
+    font-size: 11.5px; font-weight: 700; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--tone-lit) 45%, transparent);
+    color: var(--tone-lit);
+    background: rgba(6,16,26,.55);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip.solid { background: var(--tone); color: #120d02; border-color: transparent; }
+
+  .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .act {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    padding: 9px 6px; border-radius: 11px; cursor: pointer;
+    color: #e8eef5;
+    background: rgba(232,238,245,.09);
+    border: 1px solid rgba(232,238,245,.16);
+  }
+  .act:hover { background: rgba(232,238,245,.15); }
+  .act:focus-visible { outline: 2px solid var(--tone-lit); outline-offset: 2px; }
+  .act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ------------------------------------------------------------------ *
+   * النسخة ج — ملء الشاشة، والدعوة كاملة بضغطة
+   * ------------------------------------------------------------------ */
+  .hint {
+    position: absolute; inset-block-start: 88px; inset-inline: 0; z-index: 5;
+    text-align: center; font-size: 11.5px; color: rgba(232,238,245,.8);
+    pointer-events: none;
+  }
+  .hint span {
+    background: rgba(6,16,26,.66); padding: 5px 12px; border-radius: 999px;
+    border: 1px solid rgba(232,238,245,.16);
+  }
+  .card.revealed .hint span::after { content: ' — اضغط للرجوع'; }
+
+  /* ------------------------------------------------------------------ *
+   * شريط تبديل النسخ — أداة النموذج، ليست جزءاً من التصميم المُحكَم عليه
+   * ------------------------------------------------------------------ */
+  .switcher {
+    position: fixed; inset-block-end: 14px; inset-inline-start: 50%;
+    transform: translateX(50%); z-index: 40;
+    display: flex; align-items: stretch; gap: 2px;
+    background: #fdfdfd; color: #0c1b2a;
+    border-radius: 999px; padding: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    font-family: 'Cairo', sans-serif;
+  }
+  .switcher button {
+    font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+    border: 0; background: transparent; color: inherit;
+    padding: 0 12px; border-radius: 999px;
+  }
+  .switcher button:hover { background: #e6ebf1; }
+  .switcher button:focus-visible { outline: 2px solid #8f6a20; outline-offset: 1px; }
+  .switcher .label { padding: 6px 10px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+  .switcher .label small { display: block; font-weight: 400; font-size: 10.5px; color: #5b6b7d; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="phone">
+  <div class="topbar" id="topbar">
+    <span class="wordmark" id="wordmark">أعراسنا</span>
+    <span class="topbar-note">نموذج أوّلي — للحكم لا للنشر</span>
+  </div>
+  <div class="feed" id="feed"></div>
+</div>
+
+<div class="switcher" role="group" aria-label="تبديل نسخة التصميم">
+  <button type="button" id="prev" aria-label="النسخة السابقة">›</button>
+  <span class="label" id="vlabel"></span>
+  <button type="button" id="next" aria-label="النسخة التالية">‹</button>
+</div>
+
+<script>
+/* ==================================================================== *
+ * بيانات النموذج — ملصقات مرسومة بالمقاسات الحقيقية التي تصل المنصّة،
+ * كي يُحكَم على العقد لا على صورة واحدة مريحة.
+ * ==================================================================== */
+const TYPES = {
+  wedding:   { name: 'عرس',   color: '#8f6a20', lit: '#e3c08a', solemn: false },
+  engage:    { name: 'خطوبة', color: '#8c4f5a', lit: '#e8b6bf', solemn: false },
+  success:   { name: 'نجاح',  color: '#1e6b5e', lit: '#8fd6c6', solemn: false },
+  mourning:  { name: 'عزاء',  color: '#475569', lit: '#c3ced9', solemn: true  }
+};
+
+const EVENTS = [
+  { title: 'عرس آل أبو عرار', clan: 'عائلة أبو عرار', town: 'رهط',
+    date: 'الخميس ١٨ أيلول', days: 3, type: 'wedding',
+    poster: { w: 707, h: 1000, label: 'A5 مطبوعة', kind: 'invite',
+              lines: ['بسم الله الرحمن الرحيم', 'يتشرّف', 'سليمان أبو عرار', 'بدعوتكم لحضور حفل زفاف نجله', 'محمّد', 'قاعة الواحة — رهط', 'الخميس ١٨ أيلول ٢٠٢٦'] } },
+
+  { title: 'خطوبة نجاح وأحمد', clan: 'آل الهزيل', town: 'تل السبع',
+    date: 'الجمعة ١٩ أيلول', days: 4, type: 'engage',
+    poster: { w: 750, h: 1000, label: 'صورة هاتف ٣:٤', kind: 'photo' } },
+
+  { title: 'عزاء المرحوم سلمان أبو قويدر', clan: 'عائلة أبو قويدر', town: 'حورة',
+    date: 'اليوم', days: 0, type: 'mourning',
+    poster: { w: 707, h: 1000, label: 'A5 مطبوعة', kind: 'notice',
+              lines: ['إنّا لله وإنّا إليه راجعون', 'انتقل إلى رحمة الله', 'المرحوم', 'سلمان أبو قويدر', 'ويُقام العزاء في ديوان العائلة', 'حورة — من بعد العصر'] } },
+
+  { title: 'تخريج د. سارة الهزيل', clan: 'آل الهزيل', town: 'اللقية',
+    date: 'الأحد ٢١ أيلول', days: 6, type: 'success',
+    poster: { w: 1500, h: 1000, label: 'لافتة عريضة ٣:٢', kind: 'banner',
+              lines: ['مبروك التخرّج', 'د. سارة الهزيل', 'دكتوراه في الصيدلة'] } },
+
+  { title: 'عرس محمّد وفاطمة', clan: 'عائلة النصاصرة', town: 'كسيفة',
+    date: 'السبت ٢٧ أيلول', days: 12, type: 'wedding',
+    poster: { w: 562, h: 1000, label: 'لقطة شاشة ٩:١٦', kind: 'invite',
+              lines: ['دعوة زفاف', 'محمّد وفاطمة', 'قاعة النخيل — كسيفة', 'السبت ٢٧ أيلول', 'الساعة السابعة مساءً', 'حضوركم يُسعدنا'] } }
+];
+
+/* ---- رسم الملصقات كـSVG داخل الصفحة (لا صورة خارجية، والخطّ يعمل) ---- */
+function posterSVG(ev, preserve) {
+  const p = ev.poster, t = TYPES[ev.type];
+  const W = p.w, H = p.h;
+  const ground = p.kind === 'photo' ? '#25313d' : (t.solemn ? '#eceff3' : '#f6f2ea');
+  const fg     = p.kind === 'photo' ? '#f3f6f9' : (t.solemn ? '#2b3440' : '#2a2118');
+  const rule   = t.solemn ? '#7c8899' : t.color;
+
+  let body = '';
+  if (p.kind === 'photo') {
+    // وقوف ثلاثة أشخاص — صورة عائلية مبسّطة، تحلّ محلّ صورة حقيقية
+    body = `
+      <rect width="${W}" height="${H}" fill="#25313d"/>
+      <rect y="${H*0.62}" width="${W}" height="${H*0.38}" fill="#1b242e"/>
+      <circle cx="${W*0.26}" cy="${H*0.40}" r="${W*0.105}" fill="#cf9d76"/>
+      <path d="M${W*0.08} ${H*0.78} q ${W*0.18} -${H*0.22} ${W*0.36} 0 z" fill="#8d9aa6"/>
+      <circle cx="${W*0.52}" cy="${H*0.35}" r="${W*0.125}" fill="#d9a97f"/>
+      <path d="M${W*0.31} ${H*0.80} q ${W*0.21} -${H*0.26} ${W*0.42} 0 z" fill="#4f7f9c"/>
+      <circle cx="${W*0.78}" cy="${H*0.41}" r="${W*0.10}" fill="#cf9d76"/>
+      <path d="M${W*0.62} ${H*0.79} q ${W*0.16} -${H*0.20} ${W*0.32} 0 z" fill="#e4e7ea"/>`;
+  } else {
+    const lines = p.lines;
+    const isBanner = p.kind === 'banner';
+    const top = isBanner ? H * 0.30 : H * 0.20;
+    const step = (H * (isBanner ? 0.24 : 0.10));
+    const big = isBanner ? 1 : (p.kind === 'notice' ? 3 : 4);
+    let text = '';
+    lines.forEach((ln, i) => {
+      const isBig = i === big;
+      const size = isBig ? W * (isBanner ? 0.11 : 0.115) : W * (isBanner ? 0.055 : 0.048);
+      text += `<text x="${W/2}" y="${top + i*step}" text-anchor="middle" direction="rtl"
+        font-family="Amiri, 'Traditional Arabic', serif" font-size="${size}"
+        font-weight="${isBig ? 700 : 400}" fill="${isBig ? rule : fg}">${ln}</text>`;
+    });
+    const inset = W * 0.045;
+    body = `
+      <rect width="${W}" height="${H}" fill="${ground}"/>
+      <rect x="${inset}" y="${inset}" width="${W-inset*2}" height="${H-inset*2}"
+            fill="none" stroke="${rule}" stroke-width="${W*0.008}"/>
+      <rect x="${inset*1.6}" y="${inset*1.6}" width="${W-inset*3.2}" height="${H-inset*3.2}"
+            fill="none" stroke="${rule}" stroke-width="${W*0.003}" opacity=".55"/>
+      ${text}`;
+  }
+  return `<svg class="${preserve.cls}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+            preserveAspectRatio="${preserve.par}"
+            role="img" aria-label="ملصق ${ev.title}" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+}
+
+/* ---- أرضية مزخرفة: شبكة نجوم ثمانية، لا طمس ---- */
+function ornament(color) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+    <g fill="none" stroke="${color}" stroke-width="1.1" opacity="0.24">
+      <rect x="14" y="14" width="36" height="36"/>
+      <rect x="14" y="14" width="36" height="36" transform="rotate(45 32 32)"/>
+    </g></svg>`;
+  return `url('data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}')`;
+}
+
+const CORNER = `<svg class="corner c-tr" viewBox="0 0 24 24" aria-hidden="true"><path d="M23 9 V4 a1 1 0 0 0-1-1 h-5 M23 3 h-3 v3"/></svg>`;
+const corners = () => CORNER + CORNER.replace('c-tr','c-tl') + CORNER.replace('c-tr','c-br') + CORNER.replace('c-tr','c-bl');
+
+const ICON = {
+  heart: '<svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-9.4A3.9 3.9 0 0 1 12 8a3.9 3.9 0 0 1 7 2.6C19 15.4 12 20 12 20z"/></svg>',
+  bell:  '<svg viewBox="0 0 24 24"><path d="M18 15V10a6 6 0 1 0-12 0v5l-2 3h16zM10 21h4"/></svg>',
+  share: '<svg viewBox="0 0 24 24"><path d="M17 8a2.5 2.5 0 1 0-2.4-3.1L9.3 7.6a2.5 2.5 0 1 0 0 4.8l5.3 2.7a2.5 2.5 0 1 0 .7-1.4L10 11a2.6 2.6 0 0 0 0-2l5-2.5A2.5 2.5 0 0 0 17 8z"/></svg>'
+};
+
+/* ---- ماذا فعلت هذه النسخة بهذا الملصق؟ ---- */
+function probeText(ev, mode, screenRatio) {
+  const r = ev.poster.w / ev.poster.h;
+  if (mode === 'whole') return `${ev.poster.label} · <b>كامل</b> · بلا قصّ`;
+  const pct = Math.round((1 - Math.min(r, screenRatio) / Math.max(r, screenRatio)) * 100);
+  return `${ev.poster.label} · <b>مقصوص ${pct}٪</b> · من الأسفل`;
+}
+
+/* ==================================================================== *
+ * النسخ الثلاث
+ * ==================================================================== */
+function textBlock(ev, t, centered) {
+  const chips = `<div class="chips">
+      <span class="chip solid">${t.name}</span>
+      ${t.solemn ? '' : `<span class="chip">${ev.days === 0 ? 'اليوم' : 'باقي ' + ev.days + ' أيام'}</span>`}
+    </div>`;
+  return `${chips}
+    <h2 class="title">${ev.title}</h2>
+    <p class="sub">${ev.clan} — ${ev.town}</p>
+    <p class="meta">${ev.date}</p>
+    <div class="actions">
+      <button class="act" type="button">${ICON.heart}<span>${t.solemn ? 'تعزية' : 'تبريك'}</span></button>
+      <button class="act" type="button">${ICON.bell}<span>ذكّرني</span></button>
+      <button class="act" type="button">${ICON.share}<span>مشاركة</span></button>
+    </div>`;
+}
+
+/* أ — الملصق يملأ اللوح المؤطَّر، وشريط التعريف تحته داخل الإطار */
+function framedFace(ev, t) {
+  return `<div class="bezel" style="background-image:${ornament(t.lit)}">
+      <div class="framed">
+        <div class="media">${posterSVG(ev, { cls: 'poster', par: 'xMidYMin slice' })}</div>
+        <div class="caption">${textBlock(ev, t)}</div>
+        <div class="goldframe gf-edge"></div>
+        ${corners()}
+      </div>
+    </div>`;
+}
+function variantA(ev, t, sr) {
+  return `<div class="card" style="--tone:${t.color};--tone-lit:${t.lit}">
+    ${framedFace(ev, t)}
+    <div class="probe">${probeText(ev, 'cover', sr)}</div>
+  </div>`;
+}
+
+/* ب — الدعوة كاملة على منصّة مزخرفة */
+function variantB(ev, t, sr) {
+  return `<div class="card" style="--tone:${t.color};--tone-lit:${t.lit}">
+    <div class="stage" style="background-image:${ornament(t.lit)}">
+      <div class="plate" style="aspect-ratio:${ev.poster.w}/${ev.poster.h}">
+        ${posterSVG(ev, { cls: 'poster-whole', par: 'xMidYMid meet' })}
+        <div class="goldframe"></div>
+        ${corners()}
+      </div>
+      <div style="width:100%;max-width:330px">${textBlock(ev, t, true)}</div>
+    </div>
+    <div class="probe">${probeText(ev, 'whole', sr)}</div>
+  </div>`;
+}
+
+/* ج — ملء الشاشة، والدعوة كاملة بضغطة */
+function variantC(ev, t, sr) {
+  return `<div class="card js-reveal" style="--tone:${t.color};--tone-lit:${t.lit}">
+    <div class="face-cover">${framedFace(ev, t)}</div>
+    <div class="face-whole" hidden>
+      <div class="stage" style="background-image:${ornament(t.lit)}">
+        <div class="plate" style="aspect-ratio:${ev.poster.w}/${ev.poster.h}">
+          ${posterSVG(ev, { cls: 'poster-whole', par: 'xMidYMid meet' })}
+          <div class="goldframe"></div>
+          ${corners()}
+        </div>
+        <div style="width:100%;max-width:330px">${textBlock(ev, t, true)}</div>
+      </div>
+    </div>
+    <div class="probe">${probeText(ev, 'cover', sr)}</div>
+    <div class="hint"><span>اضغط لرؤية الدعوة كاملة</span></div>
+  </div>`;
+}
+
+const VARIANTS = {
+  A: { name: 'الملصق يملأ الشاشة',       render: variantA },
+  B: { name: 'دعوة مؤطَّرة على منصّة',    render: variantB },
+  C: { name: 'ملء الشاشة، وكشف بضغطة',  render: variantC }
+};
+const KEYS = Object.keys(VARIANTS);
+
+const feed = document.getElementById('feed');
+const wordmark = document.getElementById('wordmark');
+
+let activeKey = (() => {
+  try {
+    const k = new URLSearchParams(location.search).get('variant');
+    if (KEYS.includes(k)) return k;
+  } catch (_) { /* عنوان لا يُقرأ — لا يمنع النموذج من العمل */ }
+  return 'A';
+})();
+function currentKey() { return activeKey; }
+
+function render() {
+  const key = currentKey();
+  const v = VARIANTS[key];
+  const sr = feed.clientWidth / feed.clientHeight;   // نسبة الشاشة الحقيقية
+
+  feed.innerHTML = EVENTS.map(ev => v.render(ev, TYPES[ev.type], sr)).join('');
+
+  // الإطار وشريط التعريف يقلّصان صندوق الصورة، فتتغيّر نسبة القصّ فعلياً —
+  // تُقاس بعد التخطيط لا تُقدَّر قبله.
+  feed.querySelectorAll('.card').forEach((card, i) => {
+    const media = card.querySelector('.media');
+    const probe = card.querySelector('.probe');
+    if (!media || !probe) return;
+    const r = media.getBoundingClientRect();
+    if (r.width && r.height) probe.innerHTML = probeText(EVENTS[i], 'cover', r.width / r.height);
+  });
+  document.getElementById('vlabel').innerHTML = `${key}<small>${v.name}</small>`;
+
+  // النسخة ج: الضغط يقلب الوجه
+  feed.querySelectorAll('.js-reveal').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.closest('.act')) return;
+      const on = card.classList.toggle('revealed');
+      card.querySelector('.face-cover').hidden = on;
+      card.querySelector('.face-whole').hidden = !on;
+      card.querySelector('.probe').innerHTML =
+        probeText(EVENTS[[...feed.children].indexOf(card)], on ? 'whole' : 'cover', sr);
+    });
+  });
+
+  syncTone();
+}
+
+/* الاسم يتبع النغمة: «أعراسنا» تُكتم على العزاء (قرار ٦٧) */
+function syncTone() {
+  // ارتفاع صفر أثناء إعادة التخطيط يعطي NaN، وNaN يسقط الدالّة كلها
+  const h = feed.clientHeight || 1;
+  const raw = Math.round(feed.scrollTop / h);
+  const idx = Number.isFinite(raw) ? Math.max(0, Math.min(raw, EVENTS.length - 1)) : 0;
+  const solemn = TYPES[EVENTS[idx].type].solemn;
+  wordmark.textContent = solemn ? 'مناسبات النقب' : 'أعراسنا';
+  wordmark.classList.toggle('solemn', solemn);
+}
+
+function go(step) {
+  const i = (KEYS.indexOf(activeKey) + step + KEYS.length) % KEYS.length;
+  activeKey = KEYS[i];
+  try { history.replaceState(null, '', `?variant=${activeKey}`); } catch (_) {}
+  feed.scrollTop = 0;
+  render();
+}
+
+document.getElementById('next').addEventListener('click', () => go(1));
+document.getElementById('prev').addEventListener('click', () => go(-1));
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowRight') go(-1);
+  if (e.key === 'ArrowLeft') go(1);
+});
+feed.addEventListener('scroll', syncTone, { passive: true });
+window.addEventListener('resize', render);
+render();
+</script>
