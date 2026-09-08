@@ -20,7 +20,7 @@
 | الحاويات | `negev_events_app` · `negev_events_mysql` · `negev_events_web` |
 | الفرع المنشور | `main` |
 | من | `3bcc12e` |
-| إلى | `4d57d1f` |
+| إلى | رأس `main` — تحقّق منه محلياً بـ`git log --oneline -1` قبل أن تبدأ |
 | نسخة التطبيق | `1.6.0+8` ← **`1.7.0+9`** |
 | ملف الـAPK محلياً | `mobile/build/app/outputs/flutter-apk/app-release.apk` |
 
@@ -103,7 +103,8 @@ ssh -i ~/.ssh/hostenger2/id_ed25519 root@munasbat.ktra-pro.tech \
   'cd /root/munasbat/app && git pull origin main && git log --oneline -1'
 ```
 
-المتوقَّع أن ينتهي عند `4d57d1f`.
+المتوقَّع أن ينتهي عند **نفس الـcommit الذي يعرضه `git log --oneline -1` في نسختك
+المحلية من `main`** — تحقّق من ذلك قبل أن تتابع، لا بعد.
 
 ⚠️ السحب يحدّث `web/` **فوراً** (nginx يربط المجلد بالقرص للقراءة، بلا بناء).
 فمن هذه اللحظة حتى انتهاء الخطوة ٤ يكون الموقع الجديد يخاطب خادماً قديماً —
