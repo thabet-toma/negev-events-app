@@ -97,13 +97,15 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _openAddEvent,
-        tooltip: 'إعلان مناسبة',
-        child: const Icon(Icons.add),
-      ),
-      // في الوسط — RTL لا يعكس الوسط (spec #21 خطوة ١، #4).
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: _index == 2
+          ? null
+          : FloatingActionButton.small(
+              onPressed: _openAddEvent,
+              tooltip: 'إعلان مناسبة',
+              elevation: 4,
+              child: const Icon(Icons.add, size: 20),
+            ),
+      floatingActionButtonLocation: _HomeFabLocation(_index),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
@@ -184,3 +186,25 @@ class _BroadcastBanner extends StatelessWidget {
     );
   }
 }
+
+/// موقع زر الإضافة العائم: في الشريط العلوي لتبويب المناسبات حتى لا يغطي الكرت،
+/// وفي الزاوية السفلية (endFloat) للشاشات الأخرى.
+class _HomeFabLocation extends FloatingActionButtonLocation {
+  const _HomeFabLocation(this.index);
+
+  final int index;
+
+  @override
+  Offset getOffset(ScaffoldPrelayoutGeometry scaffoldGeometry) {
+    if (index == 0) {
+      final double statusBar = scaffoldGeometry.minViewPadding.top;
+      final double y = statusBar + 8.0;
+      final double x = (scaffoldGeometry.scaffoldSize.width -
+              scaffoldGeometry.floatingActionButtonSize.width) /
+          2;
+      return Offset(x, y);
+    }
+    return FloatingActionButtonLocation.endFloat.getOffset(scaffoldGeometry);
+  }
+}
+

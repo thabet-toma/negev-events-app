@@ -378,7 +378,7 @@ class CardMedia extends StatelessWidget {
       content = EventPoster(
         url: event.posterUrl,
         isSolemn: isSolemn,
-        whole: false,
+        whole: true,
         groundColor: mediaGround,
       );
     } else {

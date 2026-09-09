@@ -285,12 +285,51 @@ class _EventDetailsBody extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 28),
       children: [
         if (event.posterUrl != null && event.posterUrl!.isNotEmpty)
-          EventPoster(
-            url: event.posterUrl,
-            height: isSolemn ? _detailsPosterHeightSolemn : _detailsPosterHeight,
-            isSolemn: isSolemn,
-            // سطح قرار: من فتح هذه المناسبة جاء ليرى ملصقها، فيُعرض كاملاً (#53).
-            whole: true,
+          GestureDetector(
+            onTap: () => _openFullScreenImage(context, event.posterUrl!, event.id),
+            child: Stack(
+              alignment: AlignmentDirectional.bottomEnd,
+              children: [
+                Hero(
+                  tag: 'event_poster_${event.id}',
+                  child: EventPoster(
+                    url: event.posterUrl,
+                    height: isSolemn ? _detailsPosterHeightSolemn : _detailsPosterHeight,
+                    isSolemn: isSolemn,
+                    whole: true,
+                  ),
+                ),
+                Positioned(
+                  bottom: 10,
+                  left: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.fullscreen, size: 16, color: Colors.white),
+                        SizedBox(width: 4),
+                        Text(
+                          'عرض كامل',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -711,4 +750,102 @@ class _ReactionButton extends StatelessWidget {
     );
   }
 }
+
+void _openFullScreenImage(BuildContext context, String url, int eventId) {
+  Navigator.of(context).push(
+    PageRouteBuilder(
+      opaque: false,
+      barrierDismissible: true,
+      pageBuilder: (context, _, _) => _FullScreenImageViewer(
+        imageUrl: url,
+        heroTag: 'event_poster_$eventId',
+      ),
+      transitionsBuilder: (context, animation, _, child) {
+        return FadeTransition(opacity: animation, child: child);
+      },
+    ),
+  );
+}
+
+class _FullScreenImageViewer extends StatelessWidget {
+  const _FullScreenImageViewer({
+    required this.imageUrl,
+    required this.heroTag,
+  });
+
+  final String imageUrl;
+  final String heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 4.0,
+              child: Hero(
+                tag: heroTag,
+                child: CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.contain,
+                  placeholder: (_, _) => const Center(
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  errorWidget: (_, _, _) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white70,
+                    size: 48,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.60),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.close,
+                            color: Colors.white, size: 22),
+                        tooltip: 'إغلاق',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                    const Spacer(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 

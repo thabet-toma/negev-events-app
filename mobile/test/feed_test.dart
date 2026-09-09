@@ -139,8 +139,8 @@ void main() {
         expect(find.byType(CardMedia), findsOneWidget);
         expect(find.byType(CardCaption), findsOneWidget);
 
-        // لا طمس على الإطلاق في كرت التغذية (#98)
-        expect(find.byType(ImageFiltered), findsNothing);
+        // طمس خلفية الصورة لتعبئة الفراغ وحماية الصور العريضة من القص
+        expect(find.byType(ImageFiltered), findsOneWidget);
 
         // لا صندوق 4:5 مقيّد
         final aspectRatioFinder = find.byWidgetPredicate(
@@ -518,7 +518,7 @@ void main() {
     );
 
     testWidgets(
-      'poster is cover and top-aligned',
+      'poster uses contain with blurred background fill to display wide images without cropping',
       (tester) async {
         final event = Event.fromJson({
           'id': 101,
@@ -545,10 +545,10 @@ void main() {
           of: find.byType(CardMedia),
           matching: find.byType(CachedNetworkImage),
         );
-        expect(imageFinder, findsOneWidget);
-        final image = tester.widget<CachedNetworkImage>(imageFinder);
-        expect(image.fit, BoxFit.cover);
-        expect(image.alignment, Alignment.topCenter);
+        expect(imageFinder, findsNWidgets(2));
+        final images = tester.widgetList<CachedNetworkImage>(imageFinder).toList();
+        expect(images.any((img) => img.fit == BoxFit.contain), isTrue);
+        expect(images.any((img) => img.fit == BoxFit.cover), isTrue);
       },
     );
 
