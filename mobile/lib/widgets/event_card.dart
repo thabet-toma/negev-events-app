@@ -171,31 +171,31 @@ class _EventCardState extends State<EventCard> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: CardMedia(
-                          event: event,
-                          toneColor: toneColor,
-                          isSolemn: isSolemn,
-                          onTap: widget.onTap,
-                        ),
-                      ),
-                      CardCaption(
-                        event: event,
-                        type: type,
-                        toneColor: toneColor,
-                        isSolemn: isSolemn,
-                        countdownText: _countdownText,
-                        detailsExpanded: _detailsExpanded,
-                        onToggleDetails: () =>
-                            setState(() => _detailsExpanded = !_detailsExpanded),
-                        onCongratulationsTap: widget.onCongratulationsTap,
-                        onRemindTap: widget.onRemindTap,
-                        onShareTap: () => shareEvent(context, event),
-                      ),
-                    ],
+                  Positioned.fill(
+                    child: CardMedia(
+                      event: event,
+                      toneColor: toneColor,
+                      isSolemn: isSolemn,
+                      onTap: widget.onTap,
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: CardCaption(
+                      event: event,
+                      type: type,
+                      toneColor: toneColor,
+                      isSolemn: isSolemn,
+                      countdownText: _countdownText,
+                      detailsExpanded: _detailsExpanded,
+                      onToggleDetails: () =>
+                          setState(() => _detailsExpanded = !_detailsExpanded),
+                      onCongratulationsTap: widget.onCongratulationsTap,
+                      onRemindTap: widget.onRemindTap,
+                      onShareTap: () => shareEvent(context, event),
+                    ),
                   ),
                   if (_detailsExpanded)
                     _CardDetailsPanel(
@@ -246,7 +246,7 @@ class CardBezel extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(10, 44, 10, 10),
+            padding: const EdgeInsets.all(6),
             child: child,
           ),
         ],
@@ -458,15 +458,18 @@ class CardCaption extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: context.c.surface,
-        border: Border(
-          top: BorderSide(
-            color: toneColor.withValues(alpha: 0.40),
-            width: 1,
-          ),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.transparent,
+            Colors.black.withValues(alpha: 0.68),
+            Colors.black.withValues(alpha: 0.92),
+          ],
+          stops: const [0.0, 0.32, 1.0],
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 15),
+      padding: const EdgeInsets.fromLTRB(16, 28, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -492,10 +495,10 @@ class CardCaption extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             // مطابق لـ`.event-main-title` في الويب: 1.35rem و900.
-            style: TextStyle(
-              fontSize: 21.6,
+            style: const TextStyle(
+              fontSize: 22,
               fontWeight: FontWeight.w900,
-              color: context.c.ink,
+              color: Colors.white,
               height: 1.35,
             ),
           ),
@@ -508,7 +511,7 @@ class CardCaption extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 13,
                 fontWeight: FontWeight.bold,
                 color: toneColor,
               ),
@@ -525,7 +528,7 @@ class CardCaption extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
-                color: context.c.inkFaint,
+                color: Colors.white.withValues(alpha: 0.85),
               ),
             ),
           ],
@@ -605,8 +608,8 @@ class _CaptionActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: isOutline
-          ? Colors.transparent
-          : (highlight ? context.c.skyWash : context.c.surfaceSunk),
+          ? Colors.white.withValues(alpha: 0.12)
+          : (highlight ? context.c.sky.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.18)),
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
@@ -619,8 +622,8 @@ class _CaptionActionButton extends StatelessWidget {
               color: highlight
                   ? context.c.sky
                   : (isOutline
-                      ? context.c.inkFaint.withValues(alpha: 0.5)
-                      : context.c.line),
+                      ? Colors.white.withValues(alpha: 0.35)
+                      : Colors.white.withValues(alpha: 0.22)),
             ),
           ),
           child: Row(
@@ -629,7 +632,7 @@ class _CaptionActionButton extends StatelessWidget {
               Icon(
                 icon,
                 size: 13,
-                color: highlight ? context.c.sky : context.c.inkSoft,
+                color: highlight ? context.c.sky : Colors.white,
               ),
               const SizedBox(width: 4),
               Flexible(
@@ -638,9 +641,9 @@ class _CaptionActionButton extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 12.5,
+                    fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: highlight ? context.c.sky : context.c.ink,
+                    color: highlight ? context.c.sky : Colors.white,
                   ),
                 ),
               ),

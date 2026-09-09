@@ -499,7 +499,10 @@ void main() {
           findsNothing,
         );
 
-        // لكنها موجودة في الكروم الثابت والطبقات الخارجية
+        // لكنها موجودة في الكروم الثابت والطبقات الخارجية (تظهر بالضغط على كبسة الفلاتر والبحث)
+        await tester.tap(find.text('الفلاتر والبحث'));
+        await tester.pumpAndSettle();
+
         expect(find.text('تغيّر موعد المناسبة'), findsOneWidget);
         expect(find.byType(TextField), findsOneWidget);
         expect(find.text('عرض المزيد'), findsOneWidget);
@@ -627,6 +630,10 @@ void main() {
       (tester) async {
         final api = feedScreenApi();
         await pumpFeedScreen(tester, api);
+
+        // نفتح لوحة الفلاتر بالكبسة
+        await tester.tap(find.text('الفلاتر والبحث'));
+        await tester.pumpAndSettle();
 
         expect(find.text('كل الأماكن'), findsOneWidget);
         // «مسح الفلاتر» ظاهرة دائماً من اللحظة الأولى — لا فقط عند وجود اختيار

@@ -533,6 +533,10 @@ void main() {
       // صار رقاقة تفتح ورقة بحث متعدّدة الاختيار، لا شريط تبويبات (#85 خطوة 40-46).
       requests.clear();
 
+      // نفتح لوحة الفلاتر بالكبسة
+      await tester.tap(find.text('الفلاتر والبحث'));
+      await tester.pumpAndSettle();
+
       await tester.tap(find.text('كل الأنواع'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('🕯️ عزا'));

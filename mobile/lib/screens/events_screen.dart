@@ -41,6 +41,9 @@ class _EventsScreenState extends State<EventsScreen> {
   List<int> _selectedOccasionTypeIds = const [];
   String _search = '';
   bool _archive = false;
+  /// إظهار/إخفاء الكروم العلوي (الفلاتر وشريط القصص والبحث) — مخفي افتراضياً
+  /// لعرض الكروت ملء الشاشة بنمط تيك توك، ويظهر بكبسة زر طافٍ.
+  bool _showTopChrome = false;
   Timer? _debounce;
 
   StreamSubscription<Map<String, dynamic>>? _newEventSub;
@@ -230,6 +233,26 @@ class _EventsScreenState extends State<EventsScreen> {
     return '${names.first} +${total - 1}';
   }
 
+  bool get _hasActiveFilters =>
+      _selectedTowns.isNotEmpty ||
+      _selectedVillageIds.isNotEmpty ||
+      _selectedOccasionTypeIds.isNotEmpty ||
+      _search.isNotEmpty ||
+      _archive;
+
+  String get _filterButtonLabel {
+    if (_search.isNotEmpty) return 'بحث: $_search';
+    final totalPlaces = _selectedTowns.length + _selectedVillageIds.length;
+    final totalTypes = _selectedOccasionTypeIds.length;
+    if (totalPlaces > 0 && totalTypes > 0) {
+      return '$_placeChipLabel • $_kindChipLabel';
+    }
+    if (totalPlaces > 0) return _placeChipLabel;
+    if (totalTypes > 0) return _kindChipLabel;
+    if (_archive) return 'المناسبات المنتهية';
+    return 'الفلاتر والبحث';
+  }
+
   /// وصف مكان الفراغ («لا توجد مناسبات في…») — يذكر الأسماء إن أمكن حلّها،
   /// وإلا العدّة، ولا يعود أبداً لـ«النقب» طالما هناك اختيار فعلي.
   String get _placeDescriptionForEmptyState {
@@ -368,82 +391,11 @@ class _EventsScreenState extends State<EventsScreen> {
     final auth = AppServices.of(context).auth;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('مناسبات النقب'),
-        actions: [
-          AnimatedBuilder(
-            animation: auth,
-            builder: (context, _) {
-              if (!auth.isSignedIn) return const SizedBox.shrink();
-              return _NotificationBell(userId: auth.user!.id);
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'تحديث',
-            onPressed: _loadFirstPage,
-          ),
-        ],
-      ),
-      body: Column(
+      body: Stack(
+        fit: StackFit.expand,
         children: [
-          _StoriesStrip(future: _stories),
-          _SearchBar(
-            controller: _searchController,
-            onChanged: _onSearchChanged,
-          ),
-          // رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا يأكلان أعلى
-          // الشاشة (#85 خطوة 40-46) — «مسح الفلاتر» ظاهرة دائماً (قصة 45).
-          _FilterChipsRow(
-            placeLabel: _placeChipLabel,
-            kindLabel: _kindChipLabel,
-            onPlaceTap: _openPlaceFilter,
-            onKindTap: _openKindFilter,
-            onClearTap: _clearFilters,
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.archive_outlined,
-                  size: 17,
-                  color: _archive ? context.c.sky : context.c.inkFaint,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'عرض المناسبات المنتهية',
-                  style: TextStyle(fontSize: 13, color: context.c.inkSoft),
-                ),
-                const Spacer(),
-                Switch(value: _archive, onChanged: _onArchiveToggled),
-              ],
-            ),
-          ),
-          // الإعلانات تغادر قائمة التمرير الانجذابي وتستقر كشريط في الكروم
-          // الثابت (المواصفة #98): القفز الإجباري لا يهبط إلا على كرت، فعنصرٌ
-          // ليس نقطة توقّف لا يصله المُمرِّر أصلاً.
-          //
-          // بسقف ارتفاع وتمرير داخليّ: الكروم هنا غير قابل للتمرير وتحته
-          // `Expanded`، فعدّة إعلانات بلا سقف تخنق التغذية حتى الصفر ثم ترمي
-          // `RenderFlex overflow`. الويب ينحدر بهدوء في نفس الحالة؛ فلاتر لا.
-          if (_announcements.isNotEmpty)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: _announcementsMaxHeight),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-                child: Column(
-                  children: _announcements
-                      .map((announcement) => _AnnouncementCard(
-                            announcement: announcement,
-                            onTap: () => _openEvent(announcement.eventId),
-                          ))
-                      .toList(),
-                ),
-              ),
-            ),
-          const Divider(height: 1),
-          Expanded(
+          // 1. التغذية الرأسية ملء الشاشة (نمط تيك توك)
+          Positioned.fill(
             child: RefreshIndicator(
               onRefresh: () async {
                 setState(() => _stories = AppServices.of(context).api.stories());
@@ -452,6 +404,239 @@ class _EventsScreenState extends State<EventsScreen> {
               child: _buildList(),
             ),
           ),
+
+          // 2. الكروم العلوي العائم (يظهر عندما تكون اللوحة مغلقة)
+          if (!_showTopChrome)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  child: Row(
+                    children: [
+                      // زر الكبسة لفتح الفلاتر وعرض المناسبات
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => setState(() => _showTopChrome = true),
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.60),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: _hasActiveFilters
+                                    ? context.c.sky
+                                    : Colors.white.withValues(alpha: 0.25),
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x40000000),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.tune_rounded,
+                                  size: 16,
+                                  color: _hasActiveFilters
+                                      ? context.c.sky
+                                      : Colors.white,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _filterButtonLabel,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: _hasActiveFilters
+                                        ? context.c.sky
+                                        : Colors.white,
+                                  ),
+                                ),
+                                if (_hasActiveFilters) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: BoxDecoration(
+                                      color: context.c.sky,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      // أزرار التحديث والإشعارات
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.60),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.25),
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x40000000),
+                              blurRadius: 10,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(
+                                Icons.refresh,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              tooltip: 'تحديث',
+                              onPressed: () async {
+                                setState(() => _stories =
+                                    AppServices.of(context).api.stories());
+                                await _loadFirstPage();
+                              },
+                            ),
+                            AnimatedBuilder(
+                              animation: auth,
+                              builder: (context, _) {
+                                if (!auth.isSignedIn) {
+                                  return const SizedBox.shrink();
+                                }
+                                return _NotificationBell(userId: auth.user!.id);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // 3. لوحة الفلاتر والقصص المنسدلة (تظهر عند الضغط على الكبسة)
+          if (_showTopChrome) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _showTopChrome = false),
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.45),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Material(
+                color: context.c.surface,
+                elevation: 12,
+                borderRadius:
+                    const BorderRadius.vertical(bottom: Radius.circular(24)),
+                clipBehavior: Clip.antiAlias,
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+                        child: Row(
+                          children: [
+                            const Text(
+                              'مناسبات النقب',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              tooltip: 'إغلاق',
+                              onPressed: () =>
+                                  setState(() => _showTopChrome = false),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _StoriesStrip(future: _stories),
+                      _SearchBar(
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                      ),
+                      _FilterChipsRow(
+                        placeLabel: _placeChipLabel,
+                        kindLabel: _kindChipLabel,
+                        onPlaceTap: _openPlaceFilter,
+                        onKindTap: _openKindFilter,
+                        onClearTap: _clearFilters,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.archive_outlined,
+                              size: 17,
+                              color: _archive ? context.c.sky : context.c.inkFaint,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'عرض المناسبات المنتهية',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: context.c.inkSoft,
+                              ),
+                            ),
+                            const Spacer(),
+                            Switch(value: _archive, onChanged: _onArchiveToggled),
+                          ],
+                        ),
+                      ),
+                      if (_announcements.isNotEmpty)
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: _announcementsMaxHeight,
+                          ),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                            child: Column(
+                              children: _announcements
+                                  .map((announcement) => _AnnouncementCard(
+                                        announcement: announcement,
+                                        onTap: () =>
+                                            _openEvent(announcement.eventId),
+                                      ))
+                                  .toList(),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
