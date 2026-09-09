@@ -59,7 +59,9 @@ function normalise(raw, index) {
     longitude: coords.lng ?? null,
     event_date: raw.event_date,
     youth_party_date: raw.youth_party_date || null,
-    dinner_time: raw.dinner_time || 'الساعة 8:00 مساءً',
+    // دعوة لم تذكر وقت عشاء تبقى بلا وقت — نفس قاعدة المهارة: لا تخمين.
+    // كانت هنا «الساعة 8:00 مساءً» فتُنشَر ساعة لم تكتبها أي دعوة.
+    dinner_time: raw.dinner_time || '',
     poster_url: raw.poster_url,
     host_phone: raw.host_phone || null,
     // Only a row with a real town and a real location is safe to publish.

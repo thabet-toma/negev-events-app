@@ -1194,6 +1194,20 @@ const steps = [
         `${notifyCountdownResult.affectedRows} occasion_type row(s) set to notify_countdown=0 for tone='solemn'.`
       );
     }
+  },
+  {
+    // The column default used to be the literal 'الساعة 8:00 مساءً', so any
+    // INSERT that omitted dinner_time announced a dinner hour nobody had
+    // chosen. The publish path no longer sends that string, and this closes
+    // the last door it could come back through. Existing rows are left
+    // exactly as they are on purpose: a row already reading 8:00 is
+    // indistinguishable from one whose owner genuinely picked 8:00, and
+    // guessing wrong here would erase a real announced time.
+    name: 'drop-forced-dinner-time-default-2026-09',
+    async run(connection) {
+      await connection.query("ALTER TABLE events ALTER COLUMN dinner_time SET DEFAULT ''");
+      logger.info('[migrations] drop-forced-dinner-time-default-2026-09: events.dinner_time default is now empty.');
+    }
   }
 ];
 

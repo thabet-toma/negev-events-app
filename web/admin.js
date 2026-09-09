@@ -376,7 +376,9 @@ function collectDirectAddFormDraft() {
     const val = el.value;
     if (val !== undefined && val !== null && val !== '') {
       values[el.id] = val;
-      if (el.id !== 'dirEventDate' && el.id !== 'dirDinnerTime' && el.id !== 'dirTown') {
+      // التاريخ والبلدة وحدهما يُملآن تلقائياً عند فتح النموذج، فوجود قيمة
+      // فيهما لا يعني مسودّة. وقت العشاء لم يعد كذلك — صار كتابة المستخدم وحده.
+      if (el.id !== 'dirEventDate' && el.id !== 'dirTown') {
         hasAnyText = true;
       }
     }
@@ -950,10 +952,6 @@ function renderDirectAddFields(type) {
   if (fieldsByKey.event_date) {
     const dateInput = document.getElementById('dirEventDate');
     if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
-  }
-  if (fieldsByKey.dinner_time) {
-    const dinnerInput = document.getElementById('dirDinnerTime');
-    if (dinnerInput) dinnerInput.value = 'الساعة 8:00 مساءً';
   }
   if (fieldsByKey.town) {
     populateDirTownSelect();
@@ -2053,7 +2051,7 @@ function ensureEventEditFormMounted() {
         </div>
         <div class="form-group half">
           <label>وقت العشاء</label>
-          <input type="text" id="evtDinnerTime" maxlength="100">
+          <input type="text" id="evtDinnerTime" maxlength="100" placeholder="مثال: 7:30 مساءً — اتركه فارغاً إن لم يُحدَّد">
         </div>
       </div>
 

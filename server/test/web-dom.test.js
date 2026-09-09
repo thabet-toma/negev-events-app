@@ -1324,6 +1324,49 @@ async function run() {
     assert.strictEqual(card.querySelector('.fa-fire'), null, 'no leftover youth-party detail-item should render either');
   });
 
+  // WEDDING_TYPE above hides dinner_time, so this pair needs a type that shows
+  // it: the point is the VALUE being empty, not the field being hidden.
+  function renderDinnerFixtures() {
+    const dom = buildEnv();
+    const dinnerType = {
+      ...WEDDING_TYPE,
+      fields: [...WEDDING_TYPE.fields, { field_key: 'dinner_time', label: 'طعام العشاء', is_required: false, position: 7 }]
+    };
+
+    dom.window.renderEvents([
+      {
+        id: 920, title: 'عرس بوقت عشاء', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-07-01', location_name: 'ديوان', youth_party_date: null,
+        dinner_time: 'الساعة 7:30 مساءً', poster_url: null, audio_url: null,
+        occasion_type: dinnerType, reactions: {}
+      },
+      {
+        id: 921, title: 'عرس بلا وقت عشاء', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-07-02', location_name: 'ديوان', youth_party_date: null,
+        dinner_time: '', poster_url: null, audio_url: null,
+        occasion_type: dinnerType, reactions: {}
+      }
+    ]);
+
+    return { document: dom.window.document };
+  }
+
+  await test('an event card renders the dinner-time line when dinner_time carries a value', () => {
+    const { document } = renderDinnerFixtures();
+    const card = document.getElementById('eventCard-920');
+    assert.ok(card, 'expected card #eventCard-920 to render');
+    assert.ok(card.textContent.includes('الساعة 7:30 مساءً'), 'expected the announced dinner time in the card');
+  });
+
+  await test('an event card omits the dinner-time line entirely when dinner_time is empty — no invented 8:00', () => {
+    const { document } = renderDinnerFixtures();
+    const card = document.getElementById('eventCard-921');
+    assert.ok(card, 'expected card #eventCard-921 to render');
+    assert.ok(!card.textContent.includes('طعام العشاء'), 'the dinner-time line must not appear when the field is empty');
+    assert.ok(!card.textContent.includes('8:00'), 'no default dinner hour may be invented for an event that announced none');
+    assert.strictEqual(card.querySelector('.fa-utensils'), null, 'no leftover dinner-time detail-item should render either');
+  });
+
   await test('the share button exists on every card and its word follows the occasion type\'s tone', () => {
     const { document } = renderCardFixtures();
 

@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS events (
   event_date       DATE         NOT NULL,
   event_end_date   DATE         DEFAULT NULL,
   youth_party_date DATE         DEFAULT NULL,
-  dinner_time      VARCHAR(100) NOT NULL DEFAULT 'الساعة 8:00 مساءً',
+  -- فارغ = لم يُحدَّد؛ لا ساعة افتراضية تُفرَض على مناسبة لم يعلن صاحبها عشاءها
+  dinner_time      VARCHAR(100) NOT NULL DEFAULT '',
   poster_url       TEXT,
   audio_url        TEXT,
   audio_title      VARCHAR(200) DEFAULT NULL,

@@ -7,7 +7,8 @@ import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/location_picker_map.dart';
-import 'add_event_screen.dart' show HonoreeRow, DateField, kEventTextFieldKeys, formatEventDate;
+import 'add_event_screen.dart'
+    show HonoreeRow, DateField, kEventTextFieldKeys, kEventFieldHints, formatEventDate;
 import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 
 /// الحقول التي يصنّفها الخادم دائماً حرِجة (events.service.js
@@ -521,7 +522,10 @@ class _EditEventScreenState extends State<EditEventScreen> {
           maxLines: maxLines,
           keyboardType: keyboardType,
           onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(labelText: required ? '$label *' : label),
+          decoration: InputDecoration(
+            labelText: required ? '$label *' : label,
+            hintText: kEventFieldHints[key],
+          ),
         ),
       ),
     ];

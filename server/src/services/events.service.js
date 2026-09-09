@@ -630,7 +630,10 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
         data.event_date,
         eventEndDate,
         youthPartyDate,
-        data.dinner_time || 'الساعة 8:00 مساءً',
+        // Left blank on purpose stays blank: an occasion type may leave this
+        // field optional, and inventing a dinner hour nobody announced puts a
+        // wrong time in front of guests. NOT NULL, so '' — never a fixed hour.
+        data.dinner_time || '',
         // The default image belongs to the occasion type: a celebration type
         // carries one, عزا carries none, and neither is decided here by name.
         data.poster_url || data.default_poster_url || null,

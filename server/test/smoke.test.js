@@ -1661,6 +1661,42 @@ async function run() {
     await api('DELETE', `/api/admin/events/${mismatchEventId}`, { token: adminToken });
   });
 
+  await test('A publish that leaves dinner_time blank stores no time at all — not a forced 8:00', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'بلا وقت عشاء' }], event_date: '2027-03-11' })
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne('SELECT dinner_time FROM events WHERE id = ?', [body.eventId]);
+    assert.strictEqual(row.dinner_time, '');
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('An edit may clear dinner_time — an emptied field is a real change, not a fallback to the old value', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'تعديل وقت العشاء' }],
+        event_date: '2027-03-12',
+        dinner_time: 'الساعة 9:30 مساءً'
+      })
+    });
+    const eventId = created.eventId;
+    const seeded = await db.queryOne('SELECT dinner_time FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(seeded.dinner_time, 'الساعة 9:30 مساءً');
+
+    const { status } = await api('PATCH', `/api/events/${eventId}`, {
+      token: adminToken,
+      body: { dinner_time: '' }
+    });
+    assert.strictEqual(status, 200);
+
+    const cleared = await db.queryOne('SELECT dinner_time FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(cleared.dinner_time, '');
+    await api('DELETE', `/api/admin/events/${eventId}`, { token: adminToken });
+  });
+
   await test('An explicit but out-of-range latitude is rejected with an Arabic message', async () => {
     const { status, body } = await api('POST', '/api/events', {
       token: adminToken,

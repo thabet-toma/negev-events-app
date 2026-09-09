@@ -1392,10 +1392,10 @@ function renderSingleEventCardHtml(evt) {
           <i class="fa-solid fa-fire"></i>
           <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
         </div>` : ''}
-        ${typeShowsField(evt, 'dinner_time') ? `
+        ${typeShowsField(evt, 'dinner_time') && evt.dinner_time ? `
         <div class="detail-item">
           <i class="fa-solid fa-utensils"></i>
-          <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time || 'الساعة 8:00 مساءً')}</span>
+          <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time)}</span>
         </div>` : ''}
         <div class="detail-item">
           <i class="fa-solid fa-location-dot"></i>
@@ -1880,8 +1880,9 @@ async function simulateAICardScan() {
       if (townInput) townInput.value = ext.town;
       const dateInput = document.getElementById('addEventDate');
       if (dateInput) dateInput.value = ext.event_date;
+      // وقت العشاء يُملأ فقط إن استُخرج فعلاً — لا ساعة مقترَحة تُزرَع في حقل فارغ
       const dinnerInput = document.getElementById('addDinnerTime');
-      if (dinnerInput) dinnerInput.value = ext.dinner_time;
+      if (dinnerInput && ext.dinner_time) dinnerInput.value = ext.dinner_time;
       const locationInput = document.getElementById('addLocationName');
       if (locationInput) locationInput.value = ext.location_name;
 

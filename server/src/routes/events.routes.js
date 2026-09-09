@@ -323,7 +323,11 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   if (body.event_date !== undefined) changes.event_date = requireDate(body.event_date, 'تاريخ المناسبة');
   if (body.event_end_date !== undefined) changes.event_end_date = optionalDate(body.event_end_date);
   if (body.youth_party_date !== undefined) changes.youth_party_date = optionalDate(body.youth_party_date);
-  if (body.dinner_time !== undefined) changes.dinner_time = cleanString(body.dinner_time, 100) || existing.dinner_time;
+  // Unlike title/location_name above, an emptied dinner_time is a real edit,
+  // not a form glitch: the field is optional per occasion type, so the owner
+  // must be able to take back a time they no longer want announced. `?? ''`
+  // because the column is NOT NULL — cleanString returns null on a blank.
+  if (body.dinner_time !== undefined) changes.dinner_time = cleanString(body.dinner_time, 100) ?? '';
   if (body.poster_url !== undefined) changes.poster_url = cleanString(body.poster_url, 2000) || existing.poster_url;
   if (body.audio_url !== undefined) changes.audio_url = cleanString(body.audio_url, 2000);
   if (body.audio_title !== undefined) changes.audio_title = cleanString(body.audio_title, 200);

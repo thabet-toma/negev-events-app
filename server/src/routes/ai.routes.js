@@ -59,7 +59,8 @@ router.post('/ai/scan-card', (req, res) => {
       family_clan: 'آل النعامي',
       town,
       event_date: inTwoWeeks,
-      dinner_time: 'الساعة 8:00 مساءً',
+      // لا `dinner_time` هنا عمداً: ساعة تبدو معقولة تمرّ كما هي إلى النشر،
+      // بخلاف اسم أو مكان تجريبي يستبدله المستخدم فوراً.
       location_name: `ديوان آل النعامي - ${town} بالقرب من الميدان الرئيسي`
     }
   });

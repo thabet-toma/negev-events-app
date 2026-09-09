@@ -63,6 +63,13 @@ const kEventTextFieldKeys = [
   'host_phone',
 ];
 
+/// تلميح داخل الحقل لا قيمة فيه — يرشد إلى الشكل المتوقَّع بلا أن يُنشَر شيء
+/// لم يكتبه صاحب المناسبة. حلّ محلّ التعبئة المسبقة لـ`dinner_time` التي كانت
+/// تُرسَل كما هي حين لا يلمس المستخدم الحقل. عام كي تشاركه شاشة التعديل.
+const kEventFieldHints = <String, String>{
+  'dinner_time': 'مثال: 7:30 مساءً — اتركه فارغاً إن لم يُحدَّد',
+};
+
 /// بند القرى والتجمعات الجامع — نفس النصّ الحرفي في `AppConfig.towns` وفي
 /// `VILLAGES_TOWN` على الخادم. اختياره وحده يُظهر منتقي القرية الإلزامي.
 const kVillagesTown = 'القرى والتجمعات';
@@ -160,11 +167,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
   }
 
   TextEditingController _controllerFor(String key) {
-    return _controllers.putIfAbsent(key, () {
-      final controller = TextEditingController();
-      if (key == 'dinner_time') controller.text = 'الساعة 8:00 مساءً';
-      return controller;
-    });
+    // كل الحقول تبدأ فارغة — وقت العشاء تحديداً كان يبدأ بـ«الساعة 8:00 مساءً»
+    // فيُنشَر كما هو على مناسبة لم يحدّد صاحبها وقتاً. التلميح في
+    // `_textFieldWidget` يرشد بلا أن يفرض قيمة.
+    return _controllers.putIfAbsent(key, () => TextEditingController());
   }
 
   Future<void> _pickDate({
@@ -400,7 +406,6 @@ class _AddEventScreenState extends State<AddEventScreen> {
     for (final controller in _controllers.values) {
       controller.clear();
     }
-    _controllerFor('dinner_time').text = 'الساعة 8:00 مساءً';
     for (final row in _honorees) {
       row.dispose();
     }
@@ -715,7 +720,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
           controller: _controllerFor(key),
           maxLines: maxLines,
           keyboardType: keyboardType,
-          decoration: InputDecoration(labelText: required ? '$label *' : label),
+          decoration: InputDecoration(
+            labelText: required ? '$label *' : label,
+            hintText: kEventFieldHints[key],
+          ),
         ),
       ),
     ];
