@@ -4,10 +4,36 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
-const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, requireFields, parseId, isValidPhone } = require('../middleware/validate');
+const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { serviceMedia } = require('../middleware/upload');
+const { cleanString, requireFields, parseId, parseAmount, isValidPhone } = require('../middleware/validate');
+const { TOWNS } = require('../constants');
 
 const router = express.Router();
+
+/** Parses a submitted `towns` array — non-empty, deduplicated; membership/containment checked by the service layer. */
+function parseTowns(raw) {
+  if (!Array.isArray(raw) || !raw.length) {
+    throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
+  }
+  const towns = [...new Set(raw.map(town => cleanString(town, 100)).filter(Boolean))];
+  if (!towns.length) {
+    throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
+  }
+  return towns;
+}
+
+/** Parses a `consent_at` timestamp. Required on create — enforcement rule 7. */
+function requireConsentAt(value) {
+  if (value === undefined || value === null || value === '') {
+    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) مطلوب');
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) غير صالح');
+  }
+  return parsed;
+}
 
 // --- Public directory (no auth — story 18) ----------------------------
 
@@ -30,36 +56,73 @@ router.get('/services/providers/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, provider: await services.getPublicProviderById(id) });
 }));
 
+// --- User submissions (authenticated) --------------------------------
+
+router.post('/services/providers', authenticate, serviceMedia, asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  requireFields(body, ['name', 'phone', 'category_id']);
+
+  const phone = cleanString(body.phone, 30);
+  if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
+
+  let towns = [];
+  if (typeof body.towns === 'string') {
+    try {
+      towns = JSON.parse(body.towns);
+    } catch {
+      towns = body.towns.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  } else if (Array.isArray(body.towns)) {
+    towns = body.towns;
+  }
+  towns = parseTowns(towns);
+
+  for (const town of towns) {
+    if (!TOWNS.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
+  }
+
+  const imageFile = req.files?.image?.[0] || req.file;
+  const imageUrl = imageFile ? `/uploads/${imageFile.filename}` : cleanString(body.image_url, 500);
+
+  let price = null;
+  if (body.price !== undefined && body.price !== null && String(body.price).trim() !== '') {
+    price = parseAmount(body.price);
+  }
+
+  const providerId = await services.createProvider({
+    category_id: parseId(body.category_id, 'الفئة'),
+    name: cleanString(body.name, 150),
+    phone,
+    description: cleanString(body.description, 2000),
+    image_url: imageUrl,
+    price,
+    status: 'pending',
+    is_active: true,
+    consent_at: new Date(),
+    consent_by: req.user.id,
+    consent_channel: 'app_submission',
+    created_by: req.user.id,
+    towns
+  });
+
+  res.status(201).json({
+    success: true,
+    providerId,
+    message: 'تم إرسال عرض الخدمة بنجاح وهو قيد مراجعة الإدارة'
+  });
+}));
+
+router.get('/services/my-services', authenticate, asyncHandler(async (req, res) => {
+  const list = await services.listMyServices(req.user.id);
+  res.json({ success: true, services: list });
+}));
+
 // --- Admin: service providers — `admin` role, scoped to their towns ---
 // Guarded on this router itself, same warning as occasionTypes.routes.js:
 // a `router.use('/admin', requireAdmin)` registered elsewhere does not
 // protect these paths just because they share the `/admin` prefix.
 
 router.use('/admin/service-providers', requireAdmin);
-
-/** Parses a `consent_at` timestamp. Required on create — enforcement rule 7. */
-function requireConsentAt(value) {
-  if (value === undefined || value === null || value === '') {
-    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) مطلوب');
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) غير صالح');
-  }
-  return parsed;
-}
-
-/** Parses a submitted `towns` array — non-empty, deduplicated; membership/containment checked by the service layer. */
-function parseTowns(raw) {
-  if (!Array.isArray(raw) || !raw.length) {
-    throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
-  }
-  const towns = [...new Set(raw.map(town => cleanString(town, 100)).filter(Boolean))];
-  if (!towns.length) {
-    throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
-  }
-  return towns;
-}
 
 router.get('/admin/service-providers', asyncHandler(async (req, res) => {
   const { providers, pagination } = await services.listProvidersForAdmin(req.user, {
@@ -94,12 +157,19 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
   // never a silent trim.
   await services.assertTownsWithinScope(req.user, towns);
 
+  let price = null;
+  if (body.price !== undefined && body.price !== null && String(body.price).trim() !== '') {
+    price = parseAmount(body.price);
+  }
+
   const providerId = await services.createProvider({
     category_id: parseId(body.category_id, 'الفئة'),
     name: cleanString(body.name, 150),
     phone,
     description: cleanString(body.description, 2000),
     image_url: cleanString(body.image_url, 500),
+    price,
+    status: 'approved',
     is_active: body.is_active !== false,
     consent_at: consentAt,
     consent_by: req.user.id,
@@ -134,6 +204,9 @@ router.patch('/admin/service-providers/:id', asyncHandler(async (req, res) => {
   }
   if (body.description !== undefined) payload.description = cleanString(body.description, 2000);
   if (body.image_url !== undefined) payload.image_url = cleanString(body.image_url, 500);
+  if (body.price !== undefined) {
+    payload.price = (body.price === null || String(body.price).trim() === '') ? null : parseAmount(body.price);
+  }
   if (body.is_active !== undefined) payload.is_active = Boolean(body.is_active);
 
   if (body.towns !== undefined) {
@@ -144,6 +217,17 @@ router.patch('/admin/service-providers/:id', asyncHandler(async (req, res) => {
 
   await services.updateProvider(id, payload);
   res.json({ success: true, provider: await services.getProviderForAdmin(req.user, id), message: 'تم تحديث مزوّد الخدمة بنجاح' });
+}));
+
+router.patch('/admin/service-providers/:id/status', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  await services.getProviderForAdmin(req.user, id);
+
+  const status = cleanString(req.body.status, 20);
+  const rejectionReason = cleanString(req.body.rejection_reason, 500);
+
+  await services.updateProviderStatus(id, { status, rejectionReason });
+  res.json({ success: true, message: 'تم تحديث حالة مزوّد الخدمة بنجاح' });
 }));
 
 router.delete('/admin/service-providers/:id', asyncHandler(async (req, res) => {

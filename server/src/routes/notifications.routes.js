@@ -24,6 +24,11 @@ router.patch('/notifications/:id/read', authenticate, asyncHandler(async (req, r
   res.json({ success: true });
 }));
 
+router.post('/notifications/clear-all', authenticate, asyncHandler(async (req, res) => {
+  await notifications.clearAll(req.user.id);
+  res.json({ success: true });
+}));
+
 // The remaining countdown fire times for every event this user follows
 // (issue #85, batch 3) — computed on the server so no client re-derives the
 // offsets and drifts from what the scheduler itself will actually send.
@@ -92,6 +97,12 @@ router.post('/notifications/subscribe', authenticate, asyncHandler(async (req, r
 router.delete('/notifications/subscribe', authenticate, asyncHandler(async (req, res) => {
   const endpoint = parseEndpoint((req.body || {}).endpoint);
   await push.unsubscribe(req.user.id, endpoint);
+  res.json({ success: true });
+}));
+
+router.delete('/notifications/:id', authenticate, asyncHandler(async (req, res) => {
+  const notificationId = parseId(req.params.id, 'معرّف الإشعار');
+  await notifications.deleteNotification(notificationId, req.user.id);
   res.json({ success: true });
 }));
 

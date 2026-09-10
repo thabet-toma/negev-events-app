@@ -122,6 +122,32 @@ class _ProviderBody extends StatelessWidget {
                 provider.name,
                 style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold, color: context.c.ink),
               ),
+              if (provider.price != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: context.c.surfaceSunk,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: context.c.line),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.sell_outlined, size: 16, color: context.c.gold),
+                      const SizedBox(width: 6),
+                      Text(
+                        'السعر: ${provider.price} ₪',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                          color: context.c.gold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               if (provider.towns.isNotEmpty)
                 Row(

@@ -13,6 +13,7 @@ import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
+import 'agenda_screen.dart';
 import 'event_details_screen.dart';
 import 'story_viewer_screen.dart';
 
@@ -502,6 +503,19 @@ class _EventsScreenState extends State<EventsScreen> {
                           children: [
                             IconButton(
                               icon: const Icon(
+                                Icons.calendar_month_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              tooltip: 'أجندة المناسبات',
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => const AgendaScreen()),
+                                );
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(
                                 Icons.refresh,
                                 color: Colors.white,
                                 size: 20,
@@ -569,6 +583,15 @@ class _EventsScreenState extends State<EventsScreen> {
                               ),
                             ),
                             const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.calendar_month_rounded),
+                              tooltip: 'أجندة المناسبات',
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => const AgendaScreen()),
+                                );
+                              },
+                            ),
                             IconButton(
                               icon: const Icon(Icons.close),
                               tooltip: 'إغلاق',
@@ -1113,6 +1136,7 @@ class _NotificationBell extends StatefulWidget {
 class _NotificationBellState extends State<_NotificationBell> {
   List<notif.AppNotification> _notifications = const [];
   VoidCallback? _unsubscribe;
+  StreamSubscription<Map<String, dynamic>>? _broadcastSub;
   bool _loaded = false;
 
   @override
@@ -1125,6 +1149,7 @@ class _NotificationBellState extends State<_NotificationBell> {
           widget.userId,
           (_) => _load(),
         );
+    _broadcastSub = AppServices.of(context).realtime.onBroadcast.listen((_) => _load());
   }
 
   Future<void> _load() async {
@@ -1138,6 +1163,7 @@ class _NotificationBellState extends State<_NotificationBell> {
 
   @override
   void dispose() {
+    _broadcastSub?.cancel();
     _unsubscribe?.call();
     super.dispose();
   }
@@ -1151,102 +1177,153 @@ class _NotificationBellState extends State<_NotificationBell> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-          left: 18,
-          right: 18,
-          top: 20,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-        ),
-        child: ConstrainedBox(
-          constraints:
-              BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.75),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'الإشعارات',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: sheetContext.c.ink,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 18,
+            right: 18,
+            top: 20,
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
+          ),
+          child: ConstrainedBox(
+            constraints:
+                BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.75),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'الإشعارات',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: sheetContext.c.ink,
+                      ),
+                    ),
+                    if (_notifications.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () async {
+                          try {
+                            await api.clearAllNotifications();
+                            if (mounted) {
+                              setState(() => _notifications = const []);
+                            }
+                            setSheetState(() {});
+                            if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+                          } catch (_) {}
+                        },
+                        icon: Icon(Icons.clear_all, size: 18, color: sheetContext.c.danger),
+                        label: Text(
+                          'مسح الكل',
+                          style: TextStyle(fontSize: 13, color: sheetContext.c.danger),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 14),
-              if (_notifications.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  child: Text(
-                    'لا توجد إشعارات بعد',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: sheetContext.c.inkFaint),
-                  ),
-                )
-              else
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: _notifications.length,
-                    itemBuilder: (context, index) {
-                      final n = _notifications[index];
-                      // تعميم نبرته وقورة لا يُرسم احتفالياً بأي حال — لا لون
-                      // ولا أيقونة تبتهج فوق نعي.
-                      final iconColor = n.isRead
-                          ? context.c.inkFaint
-                          : n.tone == notif.BroadcastTone.solemn
-                              ? context.c.inkSoft
-                              : n.tone == notif.BroadcastTone.urgent
-                                  ? context.c.warn
-                                  : context.c.sky;
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          n.isBroadcast
-                              ? Icons.campaign_outlined
-                              : (n.isRead ? Icons.notifications_none : Icons.notifications_active),
-                          color: iconColor,
-                        ),
-                        title: Text(
-                          n.title,
-                          style: TextStyle(
-                            fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold,
-                            color: context.c.ink,
+                const SizedBox(height: 14),
+                if (_notifications.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    child: Text(
+                      'لا توجد إشعارات بعد',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: sheetContext.c.inkFaint),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _notifications.length,
+                      itemBuilder: (context, index) {
+                        final n = _notifications[index];
+                        // تعميم نبرته وقورة لا يُرسم احتفالياً بأي حال — لا لون
+                        // ولا أيقونة تبتهج فوق نعي.
+                        final iconColor = n.isRead
+                            ? context.c.inkFaint
+                            : n.tone == notif.BroadcastTone.solemn
+                                ? context.c.inkSoft
+                                : n.tone == notif.BroadcastTone.urgent
+                                    ? context.c.warn
+                                    : context.c.sky;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            n.isBroadcast
+                                ? Icons.campaign_outlined
+                                : (n.isRead ? Icons.notifications_none : Icons.notifications_active),
+                            color: iconColor,
                           ),
-                        ),
-                        subtitle: Text(
-                          n.body,
-                          style: TextStyle(color: context.c.inkSoft),
-                        ),
-                        onTap: () async {
-                          Navigator.of(sheetContext).pop();
-                          if (!n.isRead) {
+                          title: Text(
+                            n.title,
+                            style: TextStyle(
+                              fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold,
+                              color: context.c.ink,
+                            ),
+                          ),
+                          subtitle: Text(
+                            n.body,
+                            style: TextStyle(color: context.c.inkSoft),
+                          ),
+                          trailing: IconButton(
+                            icon: Icon(Icons.close, size: 18, color: sheetContext.c.inkFaint),
+                            tooltip: 'إزالة الإشعار',
+                            onPressed: () async {
+                              try {
+                                if (n.isBroadcast) {
+                                  await api.dismissBroadcast(n.broadcastId!);
+                                } else {
+                                  await api.deleteNotification(n.id!);
+                                }
+                                if (mounted) {
+                                  setState(() {
+                                    _notifications = _notifications.where((item) =>
+                                      n.isBroadcast ? item.broadcastId != n.broadcastId : item.id != n.id
+                                    ).toList();
+                                  });
+                                }
+                                setSheetState(() {});
+                                _load();
+                              } catch (_) {}
+                            },
+                          ),
+                          onTap: () async {
+                            Navigator.of(sheetContext).pop();
                             try {
                               if (n.isBroadcast) {
                                 await api.dismissBroadcast(n.broadcastId!);
                               } else {
-                                await api.markNotificationRead(n.id!);
+                                await api.deleteNotification(n.id!);
+                              }
+                              if (mounted) {
+                                setState(() {
+                                  _notifications = _notifications.where((item) =>
+                                    n.isBroadcast ? item.broadcastId != n.broadcastId : item.id != n.id
+                                  ).toList();
+                                });
                               }
                               _load();
                             } catch (_) {
                               // لا يعطّل فتح المناسبة إن فشل تعليم القراءة.
                             }
-                          }
-                          // تعميم بلا event_id إطلاقاً — لا مكان ينقل إليه النقر.
-                          if (n.eventId != null && context.mounted) {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => EventDetailsScreen(eventId: n.eventId!),
-                              ),
-                            );
-                          }
-                        },
-                      );
-                    },
+                            // تعميم بلا event_id إطلاقاً — لا مكان ينقل إليه النقر.
+                            if (n.eventId != null && context.mounted) {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => EventDetailsScreen(eventId: n.eventId!),
+                                ),
+                              );
+                            }
+                          },
+                        );
+                      },
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

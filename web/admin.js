@@ -2791,6 +2791,7 @@ function renderProvidersList() {
         <tr>
           <th>الاسم</th>
           <th>الفئة</th>
+          <th>السعر</th>
           <th>الهاتف</th>
           <th>البلدات</th>
           <th>الحالة</th>
@@ -2802,11 +2803,22 @@ function renderProvidersList() {
           <tr>
             <td><strong>${escapeHtml(p.name)}</strong></td>
             <td>${escapeHtml(p.category_name || '')}</td>
+            <td>${p.price != null ? escapeHtml(p.price) + ' ₪' : '—'}</td>
             <td><a href="tel:${p.phone}" style="color:var(--gold-main);">${escapeHtml(p.phone)}</a></td>
             <td>${(p.towns || []).map(t => `<span class="town-chip">${escapeHtml(t)}</span>`).join('')}</td>
-            <td><span class="status-tag ${p.is_active ? 'approved' : 'rejected'}">${p.is_active ? 'نشِط' : 'معطَّل'}</span></td>
+            <td>
+              ${p.status === 'pending'
+                ? '<span class="status-tag pending">قيد المراجعة</span>'
+                : p.status === 'rejected'
+                  ? '<span class="status-tag rejected">مرفوض</span>'
+                  : `<span class="status-tag ${p.is_active ? 'approved' : 'rejected'}">${p.is_active ? 'معتمد' : 'معطَّل'}</span>`}
+            </td>
             <td style="white-space:nowrap;">
-              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openProviderForm(${p.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              ${p.status === 'pending' ? `
+                <button class="btn-approve" style="flex:none; padding:6px 10px; margin-left:4px;" onclick="handleApproveProvider(${p.id})" title="موافقة"><i class="fa-solid fa-check"></i> موافقة</button>
+                <button class="btn-delete" style="flex:none; padding:6px 10px; margin-left:4px;" onclick="handleRejectProvider(${p.id})" title="رفض"><i class="fa-solid fa-xmark"></i> رفض</button>
+              ` : ''}
+              <button class="btn-approve" style="flex:none; padding:6px 10px;" onclick="openProviderForm(${p.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
               <button class="btn-delete" onclick="handleDeleteProvider(${p.id})" title="حذف">
                 <i class="fa-solid fa-trash"></i>
               </button>
@@ -2856,6 +2868,7 @@ function openProviderForm(id) {
   renderProviderCategoryOptions(provider ? provider.category_id : null);
   document.getElementById('provName').value = provider ? provider.name : '';
   document.getElementById('provPhone').value = provider ? provider.phone : '';
+  document.getElementById('provPrice').value = provider && provider.price != null ? provider.price : '';
   document.getElementById('provImage').value = provider ? (provider.image_url || '') : '';
   document.getElementById('provDescription').value = provider ? (provider.description || '') : '';
   document.getElementById('provIsActive').checked = provider ? Boolean(provider.is_active) : true;
@@ -2922,10 +2935,12 @@ async function handleProviderSubmit(e) {
   }
 
   const id = document.getElementById('provId').value;
+  const priceVal = document.getElementById('provPrice').value.trim();
   const payload = {
     category_id: parseInt(document.getElementById('provCategory').value, 10),
     name: document.getElementById('provName').value.trim(),
     phone: document.getElementById('provPhone').value.trim(),
+    price: priceVal !== '' ? parseFloat(priceVal) : null,
     description: document.getElementById('provDescription').value.trim(),
     image_url: document.getElementById('provImage').value.trim(),
     is_active: document.getElementById('provIsActive').checked,
@@ -2970,6 +2985,45 @@ async function handleProviderSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ المزوّد';
+  }
+}
+
+async function handleApproveProvider(id) {
+  if (!confirm('هل أنت متأكد من الموافقة على هذا المزوّد واعتماده في الدليل العام؟')) return;
+  try {
+    const res = await adminFetch(`/api/admin/service-providers/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      await fetchAdminServiceProviders();
+    } else {
+      alert(data.message || 'حدث خطأ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+async function handleRejectProvider(id) {
+  const reason = prompt('يرجى كتابة سبب رفض المزوّد (اختياري):', '');
+  if (reason === null) return;
+  try {
+    const res = await adminFetch(`/api/admin/service-providers/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'rejected', rejection_reason: reason.trim() })
+    });
+    const data = await res.json();
+    if (data.success) {
+      await fetchAdminServiceProviders();
+    } else {
+      alert(data.message || 'حدث خطأ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
   }
 }
 

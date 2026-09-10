@@ -734,7 +734,10 @@
         <div class="modal-title-area">
           <h3><i class="fa-solid fa-bell"></i> الإشعارات</h3>
         </div>
-        <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button id="clearAllNotificationsBtn" class="town-pill" style="font-size:0.75rem; padding:4px 10px; cursor:pointer;" onclick="clearAllNotifications()">مسح الكل</button>
+          <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
       </div>
       <!-- التحكّم بالإشعارات الفورية (قصة 18) -->
       <div id="notificationsPushControl" class="notifications-push-bar">

@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -380,6 +379,7 @@ class CardMedia extends StatelessWidget {
         isSolemn: isSolemn,
         whole: true,
         groundColor: mediaGround,
+        toneColor: toneColor,
       );
     } else {
       content = Container(
@@ -969,26 +969,20 @@ class EventPoster extends StatelessWidget {
     this.isSolemn = false,
     this.whole = false,
     this.groundColor,
+    this.toneColor,
   });
 
   final String? url;
   final double? height;
   final bool isSolemn;
+  final bool whole;
+  final Color? groundColor;
+  final Color? toneColor;
 
   /// أرضية التحميل والفشل حين يفرضها المستدعي. كرت التغذية يمرّرها **دائماً**
   /// محسوبةً من لون النوع، فلا يبقى فرع على النبرة يقرّر لوناً هناك (المواصفة
   /// ‏#98: «العزاء أردوازيّ بنفس الرسم تماماً — بلا فرع `isSolemn` في أي عميل»)،
   /// ولا يومض الكرت أبيض ثم يقفز إلى لون النوع أثناء التحميل (القصة ٢٤).
-  final Color? groundColor;
-
-  /// سطح **قرار** لا سطح مسح (#53): يعرض الملصق كاملاً فوق تعبئة مطموسة منه
-  /// بدل قصّه. تستعمله شاشة التفاصيل — من فتح مناسبة بعينها جاء ليراها. والكرت
-  /// يبقى على القصّ: ارتفاعه لا يتّسع لملصق كامل إلا كطابع صغير وسط فراغ.
-  final bool whole;
-
-  /// الخلفية الهادئة تحت التحميل والفشل. حين يمرّر المستدعي [groundColor] —
-  /// وكرت التغذية يمرّرها دائماً — تُستعمل كما هي بلا أي فرع على النبرة. وحين
-  /// لا يمرّرها (شاشة التفاصيل) يبقى تمييز العزاء الأردوازي، وهو قرارها هي.
   BoxDecoration _veil(BuildContext context) {
     if (groundColor != null) return BoxDecoration(color: groundColor);
     return isSolemn
@@ -1040,39 +1034,171 @@ class EventPoster extends StatelessWidget {
     );
   }
 
-  /// الملصق كاملاً فوق نسخة مطموسة منه تملأ ما يتركه الاحتواء — فلا حوافّ
-  /// فارغة والارتفاع يبقى ثابتاً. نفس تركيب `drawHero` في
-  /// `server/src/services/shareCard.service.js`.
+  /// خلفية هندسية إسلامية/بدوية فاخرة بنقوش مذهبة وإطار ناعم بدلاً من التمويه
+  /// المشوه للصورة المكبرة، مع الحفاظ على سلامة أبعاد الصورة بالكامل.
   Widget _buildWhole(BuildContext context) {
+    final ornamentTone = toneColor ?? (isSolemn ? const Color(0xFF94A3B8) : cardGold);
     return SizedBox(
       height: height,
       width: double.infinity,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ClipRect(
-            child: ImageFiltered(
-              imageFilter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-              child: Opacity(
-                opacity: 0.55,
-                child: CachedNetworkImage(
-                  imageUrl: url!,
-                  fit: BoxFit.cover,
-                  placeholder: (_, _) => _placeholder(context),
-                  errorWidget: (_, _, _) => _failed(context),
-                ),
+          _LuxuryLetterboxBackdrop(
+            groundColor: groundColor,
+            toneColor: ornamentTone,
+            isSolemn: isSolemn,
+          ),
+          Center(
+            child: Container(
+              decoration: BoxDecoration(
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.50),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: CachedNetworkImage(
+                imageUrl: url!,
+                fit: BoxFit.contain,
+                placeholder: (_, _) => _placeholder(context),
+                errorWidget: (_, _, _) => _failed(context),
               ),
             ),
-          ),
-          CachedNetworkImage(
-            imageUrl: url!,
-            fit: BoxFit.contain,
-            placeholder: (_, _) => const SizedBox.shrink(),
-            errorWidget: (_, _, _) => _failed(context),
           ),
         ],
       ),
     );
+  }
+}
+
+class _LuxuryLetterboxBackdrop extends StatelessWidget {
+  const _LuxuryLetterboxBackdrop({
+    required this.groundColor,
+    required this.toneColor,
+    required this.isSolemn,
+  });
+
+  final Color? groundColor;
+  final Color toneColor;
+  final bool isSolemn;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = groundColor ?? (isSolemn ? const Color(0xFF1E293B) : cardGround);
+    final darkEdge = isSolemn ? const Color(0xFF0B111A) : const Color(0xFF060D15);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.center,
+              radius: 1.1,
+              colors: [
+                base,
+                darkEdge,
+              ],
+            ),
+          ),
+        ),
+        CustomPaint(
+          painter: _LetterboxPatternPainter(
+            toneColor: toneColor,
+            isSolemn: isSolemn,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LetterboxPatternPainter extends CustomPainter {
+  const _LetterboxPatternPainter({
+    required this.toneColor,
+    required this.isSolemn,
+  });
+
+  final Color toneColor;
+  final bool isSolemn;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final strokePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9
+      ..color = toneColor.withValues(alpha: isSolemn ? 0.14 : 0.20);
+
+    final fillPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = toneColor.withValues(alpha: isSolemn ? 0.05 : 0.08);
+
+    const tileSize = 56.0;
+    final cols = (size.width / tileSize).ceil() + 1;
+    final rows = (size.height / tileSize).ceil() + 1;
+    final offsetX = ((size.width - (cols * tileSize)) / 2);
+    final offsetY = ((size.height - (rows * tileSize)) / 2);
+
+    for (int i = 0; i < cols; i++) {
+      for (int j = 0; j < rows; j++) {
+        final cx = offsetX + i * tileSize + tileSize / 2;
+        final cy = offsetY + j * tileSize + tileSize / 2;
+
+        const r1 = 14.0;
+        const r2 = 9.8;
+        final path = Path();
+        for (int step = 0; step < 16; step++) {
+          final radius = (step % 2 == 0) ? r1 : r2;
+          final angle = (step * math.pi / 8) - (math.pi / 2);
+          final px = cx + radius * math.cos(angle);
+          final py = cy + radius * math.sin(angle);
+          if (step == 0) {
+            path.moveTo(px, py);
+          } else {
+            path.lineTo(px, py);
+          }
+        }
+        path.close();
+
+        canvas.drawPath(path, fillPaint);
+        canvas.drawPath(path, strokePaint);
+
+        canvas.drawCircle(
+          Offset(cx, cy),
+          2.2,
+          fillPaint,
+        );
+      }
+    }
+
+    final cornerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..color = toneColor.withValues(alpha: isSolemn ? 0.28 : 0.40);
+
+    const cornerSize = 28.0;
+    const margin = 10.0;
+
+    // Top-Left
+    canvas.drawLine(const Offset(margin, margin), const Offset(margin + cornerSize, margin), cornerPaint);
+    canvas.drawLine(const Offset(margin, margin), const Offset(margin, margin + cornerSize), cornerPaint);
+    // Top-Right
+    canvas.drawLine(Offset(size.width - margin, margin), Offset(size.width - margin - cornerSize, margin), cornerPaint);
+    canvas.drawLine(Offset(size.width - margin, margin), Offset(size.width - margin, margin + cornerSize), cornerPaint);
+    // Bottom-Left
+    canvas.drawLine(Offset(margin, size.height - margin), Offset(margin + cornerSize, size.height - margin), cornerPaint);
+    canvas.drawLine(Offset(margin, size.height - margin), Offset(margin, size.height - margin - cornerSize), cornerPaint);
+    // Bottom-Right
+    canvas.drawLine(Offset(size.width - margin, size.height - margin), Offset(size.width - margin - cornerSize, size.height - margin), cornerPaint);
+    canvas.drawLine(Offset(size.width - margin, size.height - margin), Offset(size.width - margin, size.height - margin - cornerSize), cornerPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LetterboxPatternPainter oldDelegate) {
+    return oldDelegate.toneColor != toneColor || oldDelegate.isSolemn != isSolemn;
   }
 }
 

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/event.dart';
@@ -180,6 +181,56 @@ class NegevApi {
     return ServiceProviderDetail.fromJson(provider);
   }
 
+  /// تقديم عرض مزوّد خدمة جديد (قيد المراجعة) — يتطلّب تسجيل دخول.
+  Future<int> submitProviderOffer({
+    required int categoryId,
+    required String name,
+    required String phone,
+    String? description,
+    String? imageUrl,
+    num? price,
+    required List<String> towns,
+    http.MultipartFile? image,
+  }) async {
+    if (image != null) {
+      final fields = <String, String>{
+        'category_id': '$categoryId',
+        'name': name,
+        'phone': phone,
+        'towns': jsonEncode(towns),
+        if (description != null && description.isNotEmpty) 'description': description,
+        if (price != null) 'price': '$price',
+      };
+      final data = await _client.postMultipart(
+        '/api/services/providers',
+        fields: fields,
+        files: [image],
+        auth: true,
+      );
+      return int.tryParse('${data['providerId']}') ?? 0;
+    }
+
+    final payload = <String, dynamic>{
+      'category_id': categoryId,
+      'name': name,
+      'phone': phone,
+      'towns': towns,
+      if (description != null && description.isNotEmpty) 'description': description,
+      if (imageUrl != null && imageUrl.isNotEmpty) 'image_url': imageUrl,
+      'price': ?price,
+    };
+    final data = await _client.post('/api/services/providers', body: payload, auth: true);
+    return int.tryParse('${data['providerId']}') ?? 0;
+  }
+
+  /// قائمة عروض وخدمات المستخدم المُسجّل.
+  Future<List<ServiceProviderDetail>> myServices() async {
+    final data = await _client.get('/api/services/my-services', auth: true);
+    final list = data['services'];
+    if (list is! List) return const [];
+    return list.whereType<Map<String, dynamic>>().map(ServiceProviderDetail.fromJson).toList();
+  }
+
   /// أنواع المناسبات النشِطة، مرتّبة، وبحقول كل نوع وتفاعلاته — لا قائمة ثابتة.
   Future<List<OccasionType>> listOccasionTypes() async {
     final data = await _client.get('/api/occasion-types');
@@ -332,6 +383,14 @@ class NegevApi {
 
   Future<void> markNotificationRead(int id) async {
     await _client.patch('/api/notifications/$id/read', auth: true);
+  }
+
+  Future<void> deleteNotification(int id) async {
+    await _client.delete('/api/notifications/$id', auth: true);
+  }
+
+  Future<void> clearAllNotifications() async {
+    await _client.post('/api/notifications/clear-all', auth: true);
   }
 
   /// إغلاق تعميم من مركز الإشعارات — مسار مختلف عن تعليم إشعار شخصي مقروءاً؛

@@ -381,6 +381,7 @@ function initSocket() {
     // دائماً لنحصل على الصفّ كاملاً بدل تركيب واحد ناقص من الحمولة (#85 خطوة 28).
     socket.on('system_broadcast', () => {
       fetchLiveBroadcasts();
+      if (currentUser) fetchNotifications();
     });
 
     // بثّ بلدة — الحمولة بلا عنوان ولا نص عمداً (القناة بلا غرف، تصل كل
@@ -388,6 +389,7 @@ function initSocket() {
     // أعلاه (#85 خطوة 28-31).
     socket.on('town_broadcast', () => {
       fetchLiveBroadcasts();
+      if (currentUser) fetchNotifications();
     });
 
     subscribeToNotificationSocket();
@@ -988,6 +990,7 @@ function initFeedScroller() {
   if (container) {
     container.addEventListener('scroll', handleFeedScroll, { passive: true });
   }
+  window.addEventListener('scroll', handleFeedScroll, { passive: true });
   window.addEventListener('resize', updateFeedDimensions);
   window.addEventListener('load', updateFeedDimensions);
   observeFeedChrome();
@@ -1014,32 +1017,25 @@ function feedBottomChromeEl() {
 }
 
 /*
- * ارتفاع الخلاصة = الشاشة ناقص **الكروم الثابت وحده**: الترويسة `sticky` أعلى
- * الصفحة، والشريط السفلي `fixed` أسفلها. لا شيء غيرهما يبقى على الشاشة.
- *
- * الحساب السابق كان يطرح `getBoundingClientRect().top + scrollY` — أي إزاحة
- * الخلاصة عن أعلى **المستند**، فيدخل فيه كل ما فوقها: شريط التعميم وشريط
- * الستوريات ورقاقتا الفلتر وشريط البحث. وهذه كلها `static` تمرّ عند التمرير
- * ولا تشغل الشاشة بعده، ومع ذلك كانت تُطرح طرحاً دائماً. على 390×844 كان
- * المطروح 630px من 844، فلا يتبقّى للكرت داخل الشاشة إلا 145px.
- *
- * والقيمة تؤدّي وظيفتين معاً بعد أن صارت الخلاصة `position: sticky`: مقدار
- * الطرح من ارتفاع الشاشة، ومسافة التثبيت (`top`) تحت الترويسة.
+ * ارتفاع الخلاصة = الشاشة ناقص **الكروم الثابت وحده** في وضع الموبايل.
+ * على شاشات الديسكتوب (> 768px)، التغذية تتبع سكرول الماوس الحر كفيسبوك (window scroll)
+ * وبلا قيد ارتفاع أو سناب، فتُحذف خاصّيتا top وheight ليأخذ الـCSS الكامل مجراه.
  */
 function updateFeedDimensions() {
   const container = document.getElementById('eventsContainer');
   if (!container) return;
 
+  if (window.innerWidth > 768) {
+    container.style.removeProperty('top');
+    container.style.removeProperty('height');
+    return;
+  }
+
   const measure = (el) => (el ? Math.round(el.getBoundingClientRect().height || el.offsetHeight || 0) : 0);
   const feedTop = measure(document.querySelector('.app-header'));
   const feedBottom = measure(feedBottomChromeEl());
-  // أرضية ٦٠٪ من الشاشة: على هاتف قصير بترويسة ملتفّة قد يصير الباقي أقلّ من
-  // كرت صالح للقراءة، والمطلوب ألّا تختفي المناسبات مهما ضاق الباقي.
   const available = Math.max(Math.round(window.innerHeight * 0.6), window.innerHeight - feedTop - feedBottom);
 
-  // بالبكسل على العنصر نفسه، لا عبر `var()` يُقرأ من أب داخل `calc`: القياس
-  // جرى هنا أصلاً، والكتابة المباشرة تُخرج الأرضية أعلاه من قدرة CSS وحدها
-  // (لا تعرف ارتفاع الكروم) وتُسقط طبقة استبدال كاملة من طريق الخطأ.
   container.style.setProperty('top', `${feedTop}px`, 'important');
   container.style.setProperty('height', `${available}px`, 'important');
 }
@@ -1049,6 +1045,16 @@ function handleFeedScroll() {
   if (!container || isFetchingEvents) return;
   const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
   if (!hasMore) return;
+
+  if (window.innerWidth > 768) {
+    const scrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
+    const windowHeight = window.innerHeight;
+    const documentHeight = document.documentElement.scrollHeight;
+    if (documentHeight - (scrollY + windowHeight) <= 600) {
+      loadMoreEvents();
+    }
+    return;
+  }
 
   const threshold = container.clientHeight || 500;
   const distanceToEnd = container.scrollHeight - (container.scrollTop + container.clientHeight);
@@ -3929,23 +3935,33 @@ async function markNotificationRead(isBroadcast, id) {
 
   const eventId = !isBroadcast ? notification.event_id : null;
 
-  if (!notification.is_read) {
-    const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
-    try {
-      const res = await apiFetch(endpoint, { method: 'PATCH', auth: true });
-      if (res.ok) {
-        notification.is_read = true;
-        renderNotificationsList();
-        updateNotificationsBadge();
-      }
-    } catch (e) {
-      console.error('Mark notification read error:', e);
-    }
+  const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
+  try {
+    await apiFetch(endpoint, { method: 'PATCH', auth: true });
+    notificationsList = notificationsList.filter(n => isBroadcast ? n.broadcast_id !== id : n.id !== id);
+    renderNotificationsList();
+    updateNotificationsBadge();
+  } catch (e) {
+    console.error('Dismiss notification error:', e);
   }
 
   // التوجّه إلى المناسبة نفسها عند النقر على إشعار شخصي مرتبط بمناسبة (قصة 14)
   if (eventId) {
+    closeNotificationsModal();
     await navigateToEvent(eventId);
+  }
+}
+
+async function clearAllNotifications() {
+  try {
+    const res = await apiFetch('/api/notifications/clear-all', { method: 'POST', auth: true });
+    if (res.ok) {
+      notificationsList = [];
+      renderNotificationsList();
+      updateNotificationsBadge();
+    }
+  } catch (e) {
+    console.error('Clear all notifications error:', e);
   }
 }
 

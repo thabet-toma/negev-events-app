@@ -140,7 +140,7 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
   const limitVal = safeLimit(limit);
   const pageVal = safePage(page);
 
-  const conditions = ['sp.is_active = 1'];
+  const conditions = ["sp.is_active = 1", "sp.status = 'approved'"];
   const params = [];
 
   if (categoryId) {
@@ -163,7 +163,7 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
 
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.image_url
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.image_url, sp.price
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE ${whereClause}
@@ -179,6 +179,7 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
     category_id: row.category_id,
     category_name: row.category_name,
     image_url: absoluteMediaUrl(row.image_url),
+    price: row.price ?? null,
     towns: townsMap[row.id] || []
   }));
 
@@ -197,10 +198,10 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
 async function getPublicProviderById(id) {
   const row = await db.queryOne(
     `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.phone,
-            sp.description, sp.image_url
+            sp.description, sp.image_url, sp.price
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
-      WHERE sp.id = ? AND sp.is_active = 1`,
+      WHERE sp.id = ? AND sp.is_active = 1 AND sp.status = 'approved'`,
     [id]
   );
   if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
@@ -214,6 +215,7 @@ async function getPublicProviderById(id) {
     phone: row.phone,
     description: row.description,
     image_url: absoluteMediaUrl(row.image_url),
+    price: row.price ?? null,
     towns: townsMap[id] || []
   };
 }
@@ -269,7 +271,7 @@ async function shapeAdminProvider(row) {
 }
 
 /** Providers serving at least one of `user`'s towns — fail-closed for a scopeless admin. */
-async function listProvidersForAdmin(user, { categoryId, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
+async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
   const limitVal = safeLimit(limit);
   const pageVal = safePage(page);
 
@@ -279,6 +281,10 @@ async function listProvidersForAdmin(user, { categoryId, page = 1, limit = DEFAU
   if (categoryId) {
     conditions.push('sp.category_id = ?');
     params.push(categoryId);
+  }
+  if (status) {
+    conditions.push('sp.status = ?');
+    params.push(status);
   }
 
   const whereClause = conditions.join(' AND ') + scopeClause;
@@ -348,12 +354,15 @@ async function createProvider(data) {
   return db.transaction(async connection => {
     const [result] = await connection.execute(
       `INSERT INTO service_providers
-         (category_id, name, phone, description, image_url, is_active,
+         (category_id, name, phone, description, image_url, price, status, rejection_reason, is_active,
           consent_at, consent_by, consent_channel, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.category_id, data.name, data.phone,
         data.description ?? null, data.image_url ?? null,
+        data.price !== undefined ? data.price : null,
+        data.status ?? 'approved',
+        data.rejection_reason ?? null,
         data.is_active !== false ? 1 : 0,
         data.consent_at, data.consent_by ?? null, data.consent_channel,
         data.created_by ?? null
@@ -380,7 +389,7 @@ async function createProvider(data) {
  * audit trail of the original recorded permission, not a form field.
  */
 async function updateProvider(id, data) {
-  const columns = ['category_id', 'name', 'phone', 'description', 'image_url', 'is_active'];
+  const columns = ['category_id', 'name', 'phone', 'description', 'image_url', 'price', 'status', 'rejection_reason', 'is_active'];
 
   await db.transaction(async connection => {
     const assignments = [];
@@ -408,6 +417,40 @@ async function updateProvider(id, data) {
   });
 }
 
+async function updateProviderStatus(id, { status, rejectionReason }) {
+  if (!['pending', 'approved', 'rejected'].includes(status)) {
+    throw ApiError.badRequest('حالة مزوّد الخدمة غير صالحة');
+  }
+  const existing = await db.queryOne('SELECT id FROM service_providers WHERE id = ?', [id]);
+  if (!existing) throw ApiError.notFound('مزوّد الخدمة غير موجود');
+
+  await db.execute(
+    'UPDATE service_providers SET status = ?, rejection_reason = ? WHERE id = ?',
+    [status, status === 'rejected' ? (rejectionReason ?? null) : null, id]
+  );
+}
+
+async function listMyServices(userId) {
+  const rows = await db.query(
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.phone,
+            sp.description, sp.image_url, sp.price, sp.status, sp.rejection_reason,
+            sp.is_active, sp.created_at
+       FROM service_providers sp
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE sp.created_by = ?
+      ORDER BY sp.created_at DESC`,
+    [userId]
+  );
+  const townsMap = await townsForProviders(rows.map(r => r.id));
+  return rows.map(r => ({
+    ...r,
+    price: r.price !== null && r.price !== undefined ? Number(r.price) : null,
+    is_active: Boolean(r.is_active),
+    image_url: absoluteMediaUrl(r.image_url),
+    towns: townsMap[r.id] || []
+  }));
+}
+
 async function deleteProvider(id) {
   const { affectedRows } = await db.execute('DELETE FROM service_providers WHERE id = ?', [id]);
   if (!affectedRows) throw ApiError.notFound('مزوّد الخدمة غير موجود');
@@ -423,11 +466,13 @@ module.exports = {
 
   listPublicProviders,
   getPublicProviderById,
+  listMyServices,
 
   assertTownsWithinScope,
   listProvidersForAdmin,
   getProviderForAdmin,
   createProvider,
   updateProvider,
+  updateProviderStatus,
   deleteProvider
 };

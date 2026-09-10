@@ -55,7 +55,7 @@ const upload = multer({
 });
 
 /** What each event field is actually allowed to hold, whatever the client claims. */
-const FIELD_KIND = { poster: 'image', artist_image: 'image', audio: 'audio' };
+const FIELD_KIND = { poster: 'image', artist_image: 'image', audio: 'audio', image: 'image' };
 
 /**
  * The real type, read from the file's own leading bytes. Returns null for
@@ -131,4 +131,12 @@ const eventMedia = [
   verifyMedia
 ];
 
-module.exports = { upload, eventMedia, verifyMedia, uploadsDir };
+/** Accepts an optional service offer image. */
+const serviceMedia = [
+  upload.fields([
+    { name: 'image', maxCount: 1 }
+  ]),
+  verifyMedia
+];
+
+module.exports = { upload, eventMedia, serviceMedia, verifyMedia, uploadsDir };

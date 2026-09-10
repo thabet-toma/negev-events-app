@@ -58,6 +58,25 @@ async function markRead(notificationId, userId) {
   if (!affectedRows) throw ApiError.notFound('الإشعار غير موجود');
 }
 
+/** Deletes one notification — `WHERE id = ? AND user_id = ?` */
+async function deleteNotification(notificationId, userId) {
+  await db.execute(
+    'DELETE FROM notifications WHERE id = ? AND user_id = ?',
+    [notificationId, userId]
+  );
+}
+
+/** Clears all personal notifications and dismisses broadcasts for the user */
+async function clearAll(userId) {
+  await db.execute('DELETE FROM notifications WHERE user_id = ?', [userId]);
+  const rows = await broadcasts.listForCenter(userId);
+  for (const b of rows) {
+    if (!b.dismissed) {
+      await broadcasts.dismiss(userId, b.id);
+    }
+  }
+}
+
 /**
  * The full catalogue of notification `type` strings this codebase writes,
  * and the dedupe_key shape each one uses (issue #85, batch 3) — the one
@@ -259,6 +278,8 @@ async function scheduleForUser(userId) {
 module.exports = {
   listForUser,
   markRead,
+  deleteNotification,
+  clearAll,
   TYPES,
   DAILY_SCHEDULED_CAP,
   COUNTDOWN_OFFSETS,

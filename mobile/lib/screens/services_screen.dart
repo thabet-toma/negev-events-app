@@ -1,11 +1,14 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import '../config.dart';
 import '../main.dart';
 import '../models/service.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show showMessage;
+import '../widgets/congratulations.dart' show openSignInGate;
 import 'service_provider_details_screen.dart';
 
 /// دليل الخدمات — تاب عام، بلا حساب (story 18). شريط فئات أوّله «الكل» (نفس
@@ -169,6 +172,22 @@ class _ServicesScreenState extends State<ServicesScreen> {
     );
   }
 
+  Future<void> _openSubmitService() async {
+    final auth = AppServices.of(context).auth;
+    if (!auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لتقديم عرض خدمتك');
+      return;
+    }
+    final categories = await (_categories ?? AppServices.of(context).api.serviceCategories());
+    if (!mounted) return;
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => _SubmitServiceSheet(categories: categories),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -183,6 +202,20 @@ class _ServicesScreenState extends State<ServicesScreen> {
               child: const Icon(Icons.location_on_outlined),
             ),
             onPressed: _pickTown,
+          ),
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                backgroundColor: context.c.skyWash,
+                foregroundColor: context.c.sky,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('قدّم عرضك', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+              onPressed: _openSubmitService,
+            ),
           ),
         ],
       ),
@@ -413,6 +446,26 @@ class _ProviderTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (provider.price != null) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: context.c.surfaceSunk,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: context.c.line),
+                  ),
+                  child: Text(
+                    '${provider.price} ₪',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.gold,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 4),
               Icon(Icons.chevron_left, color: context.c.inkFaint),
             ],
           ),
@@ -455,6 +508,325 @@ class _ProviderAvatar extends StatelessWidget {
           height: size,
           color: context.c.surfaceSunk,
           child: Icon(Icons.handyman_outlined, color: context.c.inkFaint),
+        ),
+      ),
+    );
+  }
+}
+
+/// ورقة تقديم عرض خدمة جديد — يقدّمها صاحب الخدمة وتذهب لقيد المراجعة.
+class _SubmitServiceSheet extends StatefulWidget {
+  const _SubmitServiceSheet({required this.categories});
+
+  final List<ServiceCategory> categories;
+
+  @override
+  State<_SubmitServiceSheet> createState() => _SubmitServiceSheetState();
+}
+
+class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
+  final _formKey = GlobalKey<FormState>();
+  int? _selectedCategoryId;
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final Set<String> _selectedTowns = {};
+  XFile? _pickedImage;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.categories.isNotEmpty) {
+      _selectedCategoryId = widget.categories.first.id;
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _priceController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (picked != null) {
+      setState(() => _pickedImage = picked);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedCategoryId == null) {
+      showMessage(context, 'يرجى اختيار فئة الخدمة', isError: true);
+      return;
+    }
+    if (_selectedTowns.isEmpty) {
+      showMessage(context, 'يرجى اختيار بلدة واحدة على الأقل', isError: true);
+      return;
+    }
+
+    final api = AppServices.of(context).api;
+    setState(() => _submitting = true);
+    try {
+      http.MultipartFile? imageFile;
+      if (_pickedImage != null) {
+        final bytes = await _pickedImage!.readAsBytes();
+        imageFile = http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: _pickedImage!.name,
+        );
+      }
+
+      final priceVal = _priceController.text.trim();
+      final price = priceVal.isNotEmpty ? num.tryParse(priceVal) : null;
+
+      await api.submitProviderOffer(
+            categoryId: _selectedCategoryId!,
+            name: _nameController.text.trim(),
+            phone: _phoneController.text.trim(),
+            description: _descriptionController.text.trim(),
+            price: price,
+            towns: _selectedTowns.toList(),
+            image: imageFile,
+          );
+
+      if (!mounted) return;
+      showMessage(context, 'تم إرسال عرض الخدمة بنجاح، وهو قيد مراجعة الإدارة');
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      showMessage(context, '$e', isError: true);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.88,
+        ),
+        decoration: BoxDecoration(
+          color: context.c.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: context.c.line,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'قدّم عرض خدمتك',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'سيظهر عرضك في دليل الخدمات بعد موافقة الإدارة',
+                style: TextStyle(fontSize: 13, color: context.c.inkSoft),
+              ),
+              const SizedBox(height: 18),
+              DropdownButtonFormField<int>(
+                initialValue: _selectedCategoryId,
+                decoration: const InputDecoration(
+                  labelText: 'فئة الخدمة *',
+                  border: OutlineInputBorder(),
+                ),
+                items: widget.categories
+                    .map(
+                      (c) => DropdownMenuItem(
+                        value: c.id,
+                        child: Text('${c.icon.isNotEmpty ? "${c.icon} " : ""}${c.name}'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (val) => setState(() => _selectedCategoryId = val),
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'اسم الخدمة أو المزوّد *',
+                  hintText: 'مثال: استوديو الأفراح، فرقة الدبكة...',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) =>
+                    (val == null || val.trim().isEmpty) ? 'يرجى كتابة الاسم' : null,
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'رقم الهاتف للتواصل *',
+                  hintText: '05XXXXXXXX',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) {
+                  if (val == null || val.trim().isEmpty) return 'يرجى كتابة رقم الهاتف';
+                  final clean = val.trim().replaceAll(RegExp(r'[\s-]'), '');
+                  if (!RegExp(r'^0\d{8,9}$').hasMatch(clean)) {
+                    return 'رقم الهاتف غير صالح';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _priceController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'السعر التقريبي (₪) (اختياري)',
+                  hintText: 'مثال: 500',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'البلدات التي تخدمها *',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: AppConfig.towns.map((town) {
+                  final isSelected = _selectedTowns.contains(town);
+                  return FilterChip(
+                    label: Text(town),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        if (selected) {
+                          _selectedTowns.add(town);
+                        } else {
+                          _selectedTowns.remove(town);
+                        }
+                      });
+                    },
+                    backgroundColor: context.c.surfaceSunk,
+                    selectedColor: context.c.skyWash,
+                    checkmarkColor: context.c.sky,
+                    labelStyle: TextStyle(
+                      fontSize: 12.5,
+                      color: isSelected ? context.c.sky : context.c.ink,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _descriptionController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'تفاصيل وعرض الخدمة (اختياري)',
+                  hintText: 'اكتب نبذة عن ما تقدمه وما يميز خدمتك...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'صورة توضيحية للخدمة (اختياري)',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_pickedImage != null)
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: context.c.surfaceSunk,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                          const SizedBox(width: 6),
+                          Text(
+                            _pickedImage!.name,
+                            style: TextStyle(fontSize: 12.5, color: context.c.ink),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 16),
+                            onPressed: () => setState(() => _pickedImage = null),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: _pickImage,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  label: const Text('اختيار صورة من المعرض'),
+                ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: _submitting ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: context.c.sky,
+                    foregroundColor: context.c.onSky,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: _submitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        )
+                      : const Text(
+                          'إرسال العرض للمراجعة',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

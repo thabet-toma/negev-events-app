@@ -1208,6 +1208,35 @@ const steps = [
       await connection.query("ALTER TABLE events ALTER COLUMN dinner_time SET DEFAULT ''");
       logger.info('[migrations] drop-forced-dinner-time-default-2026-09: events.dinner_time default is now empty.');
     }
+  },
+  {
+    name: 'add-service-provider-pricing-and-status-2026-09',
+    async run(connection) {
+      if (await tableExists(connection, 'service_providers')) {
+        if (!(await columnExists(connection, 'service_providers', 'price'))) {
+          await connection.query('ALTER TABLE service_providers ADD COLUMN price VARCHAR(100) NULL AFTER image_url');
+        }
+        if (!(await columnExists(connection, 'service_providers', 'status'))) {
+          await connection.query("ALTER TABLE service_providers ADD COLUMN status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved' AFTER price");
+        }
+        if (!(await indexExists(connection, 'service_providers', 'idx_service_providers_status'))) {
+          await connection.query('ALTER TABLE service_providers ADD INDEX idx_service_providers_status (status)');
+        }
+        if (!(await columnExists(connection, 'service_providers', 'rejection_reason'))) {
+          await connection.query('ALTER TABLE service_providers ADD COLUMN rejection_reason VARCHAR(255) NULL AFTER status');
+        }
+        logger.info('[migrations] add-service-provider-pricing-and-status-2026-09: ensured price, status, rejection_reason on service_providers.');
+      }
+    }
+  },
+  {
+    name: 'refresh-demo-event-dates-2026-09',
+    async run(connection) {
+      await connection.query(
+        "UPDATE events SET event_date = '2026-11-20', youth_party_date = '2026-11-19' WHERE title LIKE '%عيسى أبو معمر%' AND event_date < CURDATE()"
+      );
+      logger.info('[migrations] refresh-demo-event-dates-2026-09: refreshed past demo event dates.');
+    }
   }
 ];
 

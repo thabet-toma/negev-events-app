@@ -139,8 +139,8 @@ void main() {
         expect(find.byType(CardMedia), findsOneWidget);
         expect(find.byType(CardCaption), findsOneWidget);
 
-        // طمس خلفية الصورة لتعبئة الفراغ وحماية الصور العريضة من القص
-        expect(find.byType(ImageFiltered), findsOneWidget);
+        // خلفية هندسية عربية فاخرة لتعبئة الفراغ وحماية الصور العريضة من القص بدلاً من الطمس
+        expect(find.byType(CustomPaint), findsWidgets);
 
         // لا صندوق 4:5 مقيّد
         final aspectRatioFinder = find.byWidgetPredicate(
@@ -351,7 +351,7 @@ void main() {
     // شاشة التفاصيل سطح قرار — من فتح مناسبة بعينها جاء ليراها كاملة — فيبقى
     // الطمس هناك. بلا هذا التأكيد، إزالة عامّة للطمس تمرّ صامتة.
     testWidgets(
-      'الطمس باقٍ على سطح القرار: EventPoster بـ whole: true لا يزال يطمس',
+      'الخلفية الهندسية الفاخرة: EventPoster بـ whole: true يرسم نقوشاً فاخرة للصورة العريضة',
       (tester) async {
         await tester.pumpWidget(
           MaterialApp(
@@ -369,7 +369,7 @@ void main() {
         );
 
         expect(find.byType(EventPoster), findsOneWidget);
-        expect(find.byType(ImageFiltered), findsOneWidget);
+        expect(find.byType(CustomPaint), findsWidgets);
       },
     );
 
@@ -545,10 +545,16 @@ void main() {
           of: find.byType(CardMedia),
           matching: find.byType(CachedNetworkImage),
         );
-        expect(imageFinder, findsNWidgets(2));
-        final images = tester.widgetList<CachedNetworkImage>(imageFinder).toList();
-        expect(images.any((img) => img.fit == BoxFit.contain), isTrue);
-        expect(images.any((img) => img.fit == BoxFit.cover), isTrue);
+        expect(imageFinder, findsOneWidget);
+        final image = tester.widget<CachedNetworkImage>(imageFinder);
+        expect(image.fit, BoxFit.contain);
+        expect(
+          find.descendant(
+            of: find.byType(CardMedia),
+            matching: find.byType(CustomPaint),
+          ),
+          findsWidgets,
+        );
       },
     );
 

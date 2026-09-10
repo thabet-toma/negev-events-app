@@ -50,6 +50,8 @@ class ServiceProvider {
   final int categoryId;
   final String categoryName;
   final String? imageUrl;
+  final num? price;
+  final String status;
   final List<String> towns;
 
   const ServiceProvider({
@@ -58,17 +60,22 @@ class ServiceProvider {
     required this.categoryId,
     required this.categoryName,
     this.imageUrl,
+    this.price,
+    this.status = 'approved',
     this.towns = const [],
   });
 
   factory ServiceProvider.fromJson(Map<String, dynamic> json) {
     final rawTowns = json['towns'];
+    final rawPrice = json['price'];
     return ServiceProvider(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
       categoryId: _toInt(json['category_id']),
       categoryName: '${json['category_name'] ?? ''}',
       imageUrl: _nullableString(json['image_url']),
+      price: rawPrice is num ? rawPrice : (num.tryParse('$rawPrice')),
+      status: '${json['status'] ?? 'approved'}',
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
     );
   }
@@ -119,6 +126,9 @@ class ServiceProviderDetail {
   final String phone;
   final String? description;
   final String? imageUrl;
+  final num? price;
+  final String status;
+  final String? rejectionReason;
   final List<String> towns;
 
   const ServiceProviderDetail({
@@ -129,11 +139,15 @@ class ServiceProviderDetail {
     required this.phone,
     this.description,
     this.imageUrl,
+    this.price,
+    this.status = 'approved',
+    this.rejectionReason,
     this.towns = const [],
   });
 
   factory ServiceProviderDetail.fromJson(Map<String, dynamic> json) {
     final rawTowns = json['towns'];
+    final rawPrice = json['price'];
     return ServiceProviderDetail(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
@@ -142,6 +156,9 @@ class ServiceProviderDetail {
       phone: '${json['phone'] ?? ''}',
       description: _nullableString(json['description']),
       imageUrl: _nullableString(json['image_url']),
+      price: rawPrice is num ? rawPrice : (num.tryParse('$rawPrice')),
+      status: '${json['status'] ?? 'approved'}',
+      rejectionReason: _nullableString(json['rejection_reason']),
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
     );
   }
