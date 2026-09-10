@@ -4422,6 +4422,41 @@ async function run() {
     assert.strictEqual(sheet.hidden, true, 'installHint sheet must remain hidden when dismissed forever');
   });
 
+  await test('event card countdown accurately reflects today, tomorrow, and future days without timezone drift', async () => {
+    const dom = buildEnv({ loggedIn: false });
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const inTwoDaysDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+
+    const cardToday = dom.window.renderSingleEventCardHtml({
+      id: 101,
+      title: 'عرس اليوم',
+      event_date: fmt(todayDate),
+      occasion_type: { name: 'عرس', color: '#8f6a20' }
+    });
+    assert(cardToday.includes('card-datechip">اليوم</span>'), 'Today event must show "اليوم"');
+
+    const cardTomorrow = dom.window.renderSingleEventCardHtml({
+      id: 102,
+      title: 'عرس غداً',
+      event_date: fmt(tomorrowDate),
+      occasion_type: { name: 'عرس', color: '#8f6a20' }
+    });
+    assert(cardTomorrow.includes('card-datechip">غداً</span>'), 'Tomorrow event must show "غداً"');
+
+    const cardTwoDays = dom.window.renderSingleEventCardHtml({
+      id: 103,
+      title: 'عرس بعد يومين',
+      event_date: fmt(inTwoDaysDate),
+      occasion_type: { name: 'عرس', color: '#8f6a20' }
+    });
+    assert(cardTwoDays.includes('card-datechip">باقي 2 أيام</span>'), 'Event in 2 days must show "باقي 2 أيام"');
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

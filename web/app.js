@@ -1277,11 +1277,18 @@ function getBezelOrnamentSvg(color) {
 }
 
 function renderSingleEventCardHtml(evt) {
-  const eventDate = new Date(evt.event_date);
+  let eventDate;
+  if (typeof evt.event_date === 'string' && evt.event_date.includes('-')) {
+    const [y, m, d] = evt.event_date.split('T')[0].split('-').map(Number);
+    eventDate = new Date(y, m - 1, d);
+  } else {
+    eventDate = new Date(evt.event_date);
+    eventDate.setHours(0, 0, 0, 0);
+  }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const diffTime = eventDate - today;
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
   // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
   let countdownText = '';
