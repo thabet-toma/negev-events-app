@@ -646,11 +646,18 @@ async function initSupportEntry() {
 /** يبقى الزرّ ظاهراً دائماً بعد وصول الاستجابة — معطَّلاً بصرياً لا مخفياً حين لا رقم محفوظ، كي لا يصير طرفاً ميتاً بلا تفسير. */
 function updateSupportButtonState() {
   const btn = document.getElementById('supportBtn');
-  if (!btn) return;
+  const fab = document.getElementById('supportFab');
   const configured = !!supportWhatsappNumber;
-  btn.hidden = false;
-  btn.classList.toggle('support-btn-disabled', !configured);
-  btn.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
+  if (btn) {
+    btn.hidden = false;
+    btn.classList.toggle('support-btn-disabled', !configured);
+    btn.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
+  }
+  if (fab) {
+    fab.hidden = false;
+    fab.classList.toggle('support-btn-disabled', !configured);
+    fab.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
+  }
 }
 
 /**
@@ -1272,8 +1279,8 @@ function selectedPlacesHtml() {
 }
 
 function getBezelOrnamentSvg(color) {
-  const stroke = encodeURIComponent(color || '#d4af37');
-  return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='${stroke}' stroke-width='1.1' opacity='0.24'%3E%3Crect x='14' y='14' width='36' height='36'/%3E%3Crect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/%3E%3C/g%3E%3C/svg%3E`;
+  const stroke = encodeURIComponent(color || '#C59425');
+  return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='${stroke}' stroke-width='1.1' opacity='0.28'%3E%3Crect x='14' y='14' width='36' height='36'/%3E%3Crect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/%3E%3C/g%3E%3C/svg%3E`;
 }
 
 function renderSingleEventCardHtml(evt) {
@@ -1438,7 +1445,7 @@ function renderSingleEventCardHtml(evt) {
     </div>`;
 
   return `
-    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle}>
+    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle} data-solemn="${isMourning}">
       <div class="card-bezel"${bezelStyle}>
         <div class="card-framed">
           <div class="card-media${hasShot ? '' : ' card-media-empty'}">

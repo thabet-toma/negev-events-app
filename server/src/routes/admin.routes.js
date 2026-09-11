@@ -8,8 +8,10 @@ const adminScope = require('../services/adminScope.service');
 const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
+const notificationsService = require('../services/notifications.service');
+const scheduler = require('../jobs/scheduler');
 const realtime = require('../realtime');
-const { announceNotification } = require('../realtime/announce');
+const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
 const { EVENT_STATUSES, TOWNS } = require('../constants');
@@ -75,16 +77,21 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   // and cleanString on a field the body doesn't carry is already null.
   const reason = status === 'rejected' ? cleanString(req.body.reason, 500) : null;
 
-  const { event, notifications } = await admin.updateEventStatus(eventId, status, {
+  const { event, notifications, isFirstApproval } = await admin.updateEventStatus(eventId, status, {
     reason, actingUserId: req.user.id
   });
-  if (status === 'approved') {
+  if (status === 'approved' && isFirstApproval) {
     realtime.emit('new_event_created', {
       id: event.id,
       title: event.title,
       groom_name: event.groom_name,
       town: event.town,
       event_date: event.event_date
+    });
+    announceGlobalNotification({
+      title: `مناسبة جديدة: ${event.title}`,
+      body: `تم نشر مناسبة جديدة: "${event.title}" في ${event.town}`,
+      event_id: event.id
     });
   }
 
@@ -256,6 +263,11 @@ router.post('/admin/broadcast', asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, message: 'تم بث التعميم بنجاح', broadcasts: rows });
+}));
+
+router.post('/admin/notifications/run-reminders', asyncHandler(async (req, res) => {
+  await scheduler.runDailyPass();
+  res.json({ success: true, message: 'تم تشغيل جولة التذكيرات بنجاح' });
 }));
 
 // --- Admin ↔ town assignment — super_admin only, guarded on this router too

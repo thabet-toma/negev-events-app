@@ -7,6 +7,8 @@ const ApiError = require('../utils/ApiError');
 const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const villages = require('../services/villages.service');
+const notifications = require('../services/notifications.service');
+const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
 const { isAdminForTown } = require('../services/adminScope.service');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
@@ -253,6 +255,11 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   realtime.emit('admin_new_pending_event', created);
   if (created.status === 'approved') {
     realtime.emit('new_event_created', created);
+    announceGlobalNotification({
+      title: `مناسبة جديدة: ${created.title}`,
+      body: `تم نشر مناسبة جديدة: "${created.title}" في ${created.town}`,
+      event_id: created.id
+    });
   }
 
   res.status(201).json({

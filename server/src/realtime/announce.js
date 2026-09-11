@@ -33,4 +33,10 @@ function announceNotification({ id, user_id: userId, title, body, event_id: even
   push.sendToUser(userId, { title, body, notificationId: id, eventId });
 }
 
-module.exports = { announceNotification };
+function announceGlobalNotification({ title, body, event_id: eventId = null }) {
+  realtime.emit('system_notification', { title, body, event_id: eventId });
+  push.sendToAllUsers({ title, body, eventId });
+}
+
+module.exports = { announceNotification, announceGlobalNotification };
+

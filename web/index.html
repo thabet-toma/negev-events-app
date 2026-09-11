@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>أعراسنا | المنصة الأولى لأعراس وأفراح النقب</title>
   
   <!-- تطبيق ويب قابل للتثبيت (#55). الوسمان الأخيران كانا هنا وحدهما يعدان
@@ -896,6 +896,11 @@
       <p class="install-hint-why">وبذلك تُفتح المنصة كأي تطبيق، ويبقى دخولك محفوظاً.</p>
     </div>
   </div>
+
+  <!-- زر الدعم الفني العائم للهاتف وPWA -->
+  <button id="supportFab" class="support-fab" onclick="handleSupportClick()" title="الدعم الفني عبر واتساب" aria-label="الدعم الفني عبر واتساب" hidden>
+    <i class="fa-brands fa-whatsapp"></i>
+  </button>
 
   <!-- Scripts -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>

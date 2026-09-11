@@ -20,10 +20,10 @@
   --gold:          #8f6a20;
   --gold-wash:     #fdf6e3;
 
-  /* ألوان بطاقة التغذية بملء الشاشة (#98) — تتطابق مع لون أرضية الشعار (#0c1b2a) */
-  --card-ground:   #0c1b2a;
-  --card-gold:     #d4af37;
-  --card-gold-soft: rgba(212, 175, 55, 0.4);
+  /* ألوان بطاقة التغذية — أرضية ذهبية فاتحة ومبهجة تتناغم مع هوية المنصة الفاتحة والاحتفالية */
+  --card-ground:   #FFFDF8;
+  --card-gold:     #C59425;
+  --card-gold-soft: rgba(197, 148, 37, 0.4);
 
   --mourn:         #475569;
   --mourn-wash:    #eef1f5;
@@ -93,7 +93,11 @@ body {
   color: var(--ink);
   direction: rtl;
   min-height: 100vh;
-  padding-bottom: 88px;
+  min-height: 100dvh;
+  padding-bottom: max(88px, calc(88px + env(safe-area-inset-bottom, 0px)));
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-inline-start: env(safe-area-inset-left, 0px);
+  padding-inline-end: env(safe-area-inset-right, 0px);
   transition: background-color .2s ease, color .2s ease;
 }
 
@@ -216,7 +220,7 @@ body {
   z-index: 100;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  padding: 14px 18px;
+  padding: max(14px, calc(10px + env(safe-area-inset-top, 0px))) 18px 14px;
   box-shadow: var(--shadow);
 }
 
@@ -817,7 +821,7 @@ body {
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 30px rgba(143, 106, 32, 0.18);
   background-color: var(--card-framed-ground);
   box-sizing: border-box;
 }
@@ -2151,7 +2155,7 @@ body {
 
   .events-feed > .event-card .card-media-img {
     object-fit: contain !important;
-    background-color: var(--card-base-ground);
+    background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
   }
 
   .events-feed > .event-card .card-caption {
@@ -2159,6 +2163,74 @@ body {
     bottom: auto !important;
     left: auto !important;
     right: auto !important;
+  }
+}
+
+/* بطاقات العزاء — الإبقاء على الأرضية الداكنة والوقورة */
+.event-card.tone-mourning,
+.event-card[data-solemn="true"] {
+  --card-ground: #1E293B;
+  --card-gold: var(--mourn);
+  --card-base-ground: #0F172A;
+  --card-bezel-ground: #0B111A;
+  --card-framed-ground: #1E293B;
+}
+
+.event-card.tone-mourning .card-framed,
+.event-card[data-solemn="true"] .card-framed {
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+}
+
+.event-card.tone-mourning .card-media-img,
+.event-card[data-solemn="true"] .card-media-img {
+  background: #0F172A !important;
+}
+
+/* زرّ الدعم الفني العائم (واتساب) للهاتف وPWA */
+.support-fab {
+  display: none;
+  position: fixed;
+  bottom: max(84px, calc(84px + env(safe-area-inset-bottom, 0px)));
+  inset-inline-start: 18px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #25d366 0%, #128c3e 100%);
+  color: #ffffff;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  z-index: 95;
+  box-shadow: 0 4px 16px rgba(37, 211, 102, 0.4);
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.support-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(37, 211, 102, 0.55);
+}
+
+.support-fab[hidden] {
+  display: none !important;
+}
+
+.support-fab.support-btn-disabled {
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+  box-shadow: none;
+}
+
+@media (max-width: 650px) {
+  .support-fab:not([hidden]) {
+    display: flex;
+  }
+}
+
+@media (display-mode: standalone) {
+  .support-fab:not([hidden]) {
+    display: flex;
   }
 }
 

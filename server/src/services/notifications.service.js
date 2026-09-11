@@ -109,7 +109,9 @@ const TYPES = {
   EVENT_DATE_CHANGED: 'event_date_changed',
   EVENT_VENUE_CHANGED: 'event_venue_changed',
   EVENT_APPROVED: 'event_approved',
-  EVENT_REJECTED: 'event_rejected'
+  EVENT_REJECTED: 'event_rejected',
+  EVENT_NEW: 'event_new',
+  EVENT_UPDATED: 'event_updated'
 };
 
 /** Story 10: at most this many *scheduled* notifications reach one user per day. */
@@ -275,6 +277,100 @@ async function scheduleForUser(userId) {
     .filter(entry => entry.offsets.length > 0);
 }
 
+/**
+ * Fans out an in-app notification to all registered users when an event is approved/published.
+ * Deduplicated per user by `event_new_<event_id>`.
+ * Returns the list of created notifications for recipients.
+ */
+async function notifyAllUsersOnNewEvent(event, connection = null) {
+  const title = `مناسبة جديدة: ${event.title}`;
+  const body = `تم نشر مناسبة جديدة: "${event.title}" في ${event.town}`;
+  const dedupeKey = `event_new_${event.id}`;
+  const creatorId = event.created_by ?? 0;
+
+  if (connection) {
+    await connection.execute(
+      `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+       SELECT id, ?, ?, ?, ?, ?
+         FROM users
+        WHERE id <> ?
+       ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
+      [event.id, TYPES.EVENT_NEW, title, body, dedupeKey, creatorId]
+    );
+    const [rows] = await connection.execute(
+      'SELECT id, user_id FROM notifications WHERE event_id = ? AND dedupe_key = ?',
+      [event.id, dedupeKey]
+    );
+    return rows.map(r => ({
+      id: r.id,
+      user_id: r.user_id,
+      title,
+      body,
+      event_id: event.id
+    }));
+  }
+
+  await db.execute(
+    `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+     SELECT id, ?, ?, ?, ?, ?
+       FROM users
+      WHERE id <> ?
+     ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
+    [event.id, TYPES.EVENT_NEW, title, body, dedupeKey, creatorId]
+  );
+  const rows = await db.query(
+    'SELECT id, user_id FROM notifications WHERE event_id = ? AND dedupe_key = ?',
+    [event.id, dedupeKey]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    user_id: r.user_id,
+    title,
+    body,
+    event_id: event.id
+  }));
+}
+
+/**
+ * Notifies all followers of an event (those who clicked "ذكّرني") when it is modified.
+ */
+async function notifyEventFollowersOnUpdate(eventId, event, { updatedBy = null, changeSummary = null } = {}, connection = null) {
+  const runner = connection
+    ? { query: async (sql, p) => (await connection.execute(sql, p))[0] }
+    : db;
+
+  const followers = await runner.query(
+    'SELECT DISTINCT user_id FROM event_reminders WHERE event_id = ? AND user_id <> ?',
+    [eventId, updatedBy ?? 0]
+  );
+  if (!followers.length) return [];
+
+  const title = `تعديل في مناسبة: ${event.title}`;
+  const body = changeSummary || `تم تحديث تفاصيل مناسبة "${event.title}" التي تتابعها`;
+
+  const results = [];
+  for (const f of followers) {
+    const notif = await create({
+      userId: f.user_id,
+      eventId,
+      type: TYPES.EVENT_UPDATED,
+      title,
+      body,
+      dedupeKey: null
+    }, connection);
+    if (notif.inserted) {
+      results.push({
+        id: notif.id,
+        user_id: f.user_id,
+        title,
+        body,
+        event_id: eventId
+      });
+    }
+  }
+  return results;
+}
+
 module.exports = {
   listForUser,
   markRead,
@@ -285,5 +381,8 @@ module.exports = {
   COUNTDOWN_OFFSETS,
   create,
   createScheduled,
-  scheduleForUser
+  scheduleForUser,
+  notifyAllUsersOnNewEvent,
+  notifyEventFollowersOnUpdate
 };
+

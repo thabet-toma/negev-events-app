@@ -608,6 +608,21 @@ class NegevApi {
     return AppRelease.fromJson(data);
   }
 
+  /// رقم واتساب الدعم الفني من GET /api/settings/public.
+  Future<String?> getSupportWhatsappNumber() async {
+    try {
+      final data = await _client.get('/api/settings/public');
+      final settings = data['settings'];
+      if (settings is Map<String, dynamic>) {
+        final number = settings['support_whatsapp_number'];
+        if (number is String && number.trim().isNotEmpty) {
+          return number.trim();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // --- التحليل السلوكي (issue #44) -----------------------------------
 
   /// `POST /api/analytics/events` — النقطة الوحيدة. القائمة المغلقة لأسماء

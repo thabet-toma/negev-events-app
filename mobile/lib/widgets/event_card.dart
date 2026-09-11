@@ -1054,8 +1054,10 @@ class EventPoster extends StatelessWidget {
               decoration: BoxDecoration(
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.50),
-                    blurRadius: 20,
+                    color: isSolemn
+                        ? Colors.black.withValues(alpha: 0.50)
+                        : const Color(0xFF8F6A20).withValues(alpha: 0.22),
+                    blurRadius: 22,
                     offset: const Offset(0, 6),
                   ),
                 ],
@@ -1087,22 +1089,30 @@ class _LuxuryLetterboxBackdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = groundColor ?? (isSolemn ? const Color(0xFF1E293B) : cardGround);
-    final darkEdge = isSolemn ? const Color(0xFF0B111A) : const Color(0xFF060D15);
+    final solemnBase = groundColor ?? const Color(0xFF1E293B);
+    final solemnDarkEdge = const Color(0xFF0B111A);
 
     return Stack(
       fit: StackFit.expand,
       children: [
         DecoratedBox(
           decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.center,
-              radius: 1.1,
-              colors: [
-                base,
-                darkEdge,
-              ],
-            ),
+            gradient: isSolemn
+                ? RadialGradient(
+                    center: Alignment.center,
+                    radius: 1.1,
+                    colors: [solemnBase, solemnDarkEdge],
+                  )
+                : const RadialGradient(
+                    center: Alignment.center,
+                    radius: 1.15,
+                    colors: [
+                      Color(0xFFFFFDF8),
+                      Color(0xFFFBF1D9),
+                      Color(0xFFF3DFAD),
+                    ],
+                    stops: [0.0, 0.55, 1.0],
+                  ),
           ),
         ),
         CustomPaint(
@@ -1127,14 +1137,17 @@ class _LetterboxPatternPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final strokeColor = isSolemn ? toneColor : const Color(0xFFC59425);
+    final fillColor = isSolemn ? toneColor : const Color(0xFFD4AF37);
+
     final strokePaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9
-      ..color = toneColor.withValues(alpha: isSolemn ? 0.14 : 0.20);
+      ..strokeWidth = isSolemn ? 0.9 : 1.1
+      ..color = strokeColor.withValues(alpha: isSolemn ? 0.14 : 0.28);
 
     final fillPaint = Paint()
       ..style = PaintingStyle.fill
-      ..color = toneColor.withValues(alpha: isSolemn ? 0.05 : 0.08);
+      ..color = fillColor.withValues(alpha: isSolemn ? 0.05 : 0.10);
 
     const tileSize = 56.0;
     final cols = (size.width / tileSize).ceil() + 1;

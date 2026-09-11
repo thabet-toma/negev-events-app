@@ -184,4 +184,32 @@ async function sendToUser(userId, payload) {
   deliverToUser(userId, payload).catch(err => logger.error('[push] sendToUser failed:', err.message));
 }
 
-module.exports = { getPublicKey, subscribe, unsubscribe, sendToUser, deliverToUser, shouldDropSubscription };
+/** Fans a notification out to all active push subscriptions across all users. */
+async function deliverToAll({ title, body, notificationId = null, eventId = null }) {
+  const subscriptions = await db.query(
+    'SELECT id, endpoint, p256dh, auth FROM push_subscriptions'
+  );
+  if (!subscriptions.length) return;
+
+  const payload = JSON.stringify({ title, body, notification_id: notificationId, event_id: eventId });
+  await Promise.all(subscriptions.map(sub => deliverToSubscription(sub, payload)));
+}
+
+/** Fans a notification out to all active subscribers asynchronously. */
+async function sendToAllUsers(payload) {
+  if (!isVapidConfigured()) return;
+  deliverToAll(payload).catch(err => logger.error('[push] sendToAllUsers failed:', err.message));
+}
+
+
+module.exports = {
+  getPublicKey,
+  subscribe,
+  unsubscribe,
+  sendToUser,
+  deliverToUser,
+  sendToAllUsers,
+  deliverToAll,
+  shouldDropSubscription
+};
+

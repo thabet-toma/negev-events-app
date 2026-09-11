@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../config.dart';
 import '../main.dart';
 import '../theme.dart';
-import '../widgets/async_view.dart';
+import '../widgets/async_view.dart' show openSupportWhatsApp, showMessage;
 import 'my_events_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
@@ -66,6 +66,16 @@ class AccountScreen extends StatelessWidget {
                           ),
                           icon: const Icon(Icons.login),
                           label: const Text('تسجيل الدخول / إنشاء حساب'),
+                        ),
+                        const SizedBox(height: 14),
+                        ElevatedButton.icon(
+                          onPressed: () => openSupportWhatsApp(context),
+                          icon: const Icon(Icons.support_agent_rounded, color: Colors.white),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF25D366),
+                            foregroundColor: Colors.white,
+                          ),
+                          label: const Text('الدعم الفني عبر واتساب'),
                         ),
                         const SizedBox(height: 26),
                         const _ThemeModeTile(),
@@ -150,6 +160,16 @@ class AccountScreen extends StatelessWidget {
                       ),
                       icon: const Icon(Icons.event_note_outlined),
                       label: const Text('مناسباتي'),
+                    ),
+                    const SizedBox(height: 14),
+                    ElevatedButton.icon(
+                      onPressed: () => openSupportWhatsApp(context),
+                      icon: const Icon(Icons.support_agent_rounded, color: Colors.white),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF25D366),
+                        foregroundColor: Colors.white,
+                      ),
+                      label: const Text('الدعم الفني عبر واتساب'),
                     ),
                     const SizedBox(height: 14),
                     const _ThemeModeTile(),

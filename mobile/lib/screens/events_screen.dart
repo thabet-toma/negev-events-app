@@ -8,7 +8,7 @@ import '../main.dart';
 import '../models/event.dart';
 import '../models/notification.dart' as notif;
 import '../theme.dart';
-import '../widgets/async_view.dart' show showMessage;
+import '../widgets/async_view.dart' show openSupportWhatsApp, showMessage;
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
@@ -527,6 +527,15 @@ class _EventsScreenState extends State<EventsScreen> {
                                 await _loadFirstPage();
                               },
                             ),
+                            IconButton(
+                              icon: const Icon(
+                                Icons.support_agent_rounded,
+                                color: Color(0xFF25D366),
+                                size: 20,
+                              ),
+                              tooltip: 'الدعم الفني عبر واتساب',
+                              onPressed: () => openSupportWhatsApp(context),
+                            ),
                             AnimatedBuilder(
                               animation: auth,
                               builder: (context, _) {
@@ -591,6 +600,11 @@ class _EventsScreenState extends State<EventsScreen> {
                                   MaterialPageRoute(builder: (_) => const AgendaScreen()),
                                 );
                               },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.support_agent_rounded, color: Color(0xFF25D366)),
+                              tooltip: 'الدعم الفني عبر واتساب',
+                              onPressed: () => openSupportWhatsApp(context),
                             ),
                             IconButton(
                               icon: const Icon(Icons.close),

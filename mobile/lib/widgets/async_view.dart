@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../main.dart';
 import '../theme.dart';
 
 /// حالة تحميل / خطأ / فراغ موحّدة لكل الشاشات.
@@ -125,3 +127,49 @@ void showMessage(BuildContext context, String message, {bool isError = false}) {
       ),
     );
 }
+
+/// فتح محادثة الدعم الفني عبر واتساب مع حوار تأكيد الخصوصية (مطابق لقصة 35).
+Future<void> openSupportWhatsApp(BuildContext context) async {
+  final api = AppServices.of(context).api;
+  final number = await api.getSupportWhatsappNumber();
+  if (!context.mounted) return;
+  if (number == null || number.isEmpty) {
+    showMessage(context, 'الدعم الفني غير مُفعَّل بعد على المنصّة — حاول لاحقاً', isError: true);
+    return;
+  }
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('الدعم الفني عبر واتساب'),
+      content: const Text('سيرى فريق الدعم الفني رقم هاتفك عند فتح واتساب — هل تريد المتابعة؟'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('إلغاء'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF25D366),
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('متابعة إلى واتساب'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed != true || !context.mounted) return;
+
+  final cleanNumber = number.replaceAll(RegExp(r'[^0-9]'), '');
+  final uri = Uri.parse('https://wa.me/$cleanNumber');
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    if (context.mounted) {
+      showMessage(context, 'تعذّر فتح تطبيق واتساب', isError: true);
+    }
+  }
+}
+

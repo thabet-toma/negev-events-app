@@ -208,17 +208,22 @@ async function notifyVenueChange(connection, eventId, amendments) {
  * themself (story 15). All writes share one transaction.
  */
 async function updateEventStatus(eventId, status, { reason = null, actingUserId = null } = {}) {
-  const { event, notifications: notificationRows } = await db.transaction(async connection => {
+  const { event, notifications: notificationRows, isFirstApproval } = await db.transaction(async connection => {
     const [result] = await connection.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
     if (!result.affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
 
     let createdNotifications = [];
+    let isFirstApproval = false;
 
     if (status === 'approved' || status === 'rejected') {
       const [pendingRows] = await connection.execute(
         "SELECT * FROM event_amendments WHERE event_id = ? AND status = 'pending' ORDER BY created_at ASC, id ASC",
         [eventId]
       );
+
+      if (status === 'approved' && pendingRows.length === 0) {
+        isFirstApproval = true;
+      }
 
       await connection.execute(
         "UPDATE event_amendments SET status = ? WHERE event_id = ? AND status = 'pending'",
@@ -271,10 +276,10 @@ async function updateEventStatus(eventId, status, { reason = null, actingUserId 
       }
     }
 
-    return { event: updatedEvent, notifications: createdNotifications };
+    return { event: updatedEvent, notifications: createdNotifications, isFirstApproval };
   });
 
-  return { event: withAbsoluteMedia(event), notifications: notificationRows };
+  return { event: withAbsoluteMedia(event), notifications: notificationRows, isFirstApproval };
 }
 
 /** Deleting an event cascades to its reactions and congratulations. */
