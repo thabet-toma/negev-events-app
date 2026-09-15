@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateAuthUI();
   initPlaceFilter();
   initKindFilter();
+  updateFloatingFilterLabel();
   initAppDownload();
   initInstallHint();
   fetchNotifications();
@@ -701,17 +702,20 @@ async function fetchStories() {
     const res = await apiFetch('/api/stories');
     const data = await res.json();
     const container = document.getElementById('storiesContainer');
+    const drawerContainer = document.getElementById('drawerStoriesContainer');
 
     if (data.success && data.stories) {
       allStories = data.stories;
-      container.innerHTML = allStories.map((s, i) => `
-        <div class="story-item" onclick="openStoryViewer(${i})">
+      const html = allStories.map((s, i) => `
+        <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
           <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
             <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
           </div>
           <span class="story-title">${escapeHtml(s.title)}</span>
         </div>
       `).join('');
+      if (container) container.innerHTML = html;
+      if (drawerContainer) drawerContainer.innerHTML = html;
       updateFeedDimensions();
     }
   } catch (e) {
@@ -1038,8 +1042,17 @@ function updateFeedDimensions() {
     return;
   }
 
+  const headerEl = document.querySelector('.app-header');
+  const isHeaderVisible = headerEl && window.getComputedStyle(headerEl).display !== 'none';
   const measure = (el) => (el ? Math.round(el.getBoundingClientRect().height || el.offsetHeight || 0) : 0);
-  const feedTop = measure(document.querySelector('.app-header'));
+
+  if (!isHeaderVisible) {
+    container.style.setProperty('top', '0px', 'important');
+    container.style.setProperty('height', '100dvh', 'important');
+    return;
+  }
+
+  const feedTop = measure(headerEl);
   const feedBottom = measure(feedBottomChromeEl());
   const available = Math.max(Math.round(window.innerHeight * 0.6), window.innerHeight - feedTop - feedBottom);
 
@@ -1176,15 +1189,18 @@ function toggleArchive() {
  * الخادم يرسل الحيّ وحده ضمن `announcements` — لا فلترة ولا منطق انتهاء هنا.
  */
 function renderAnnouncements(announcements) {
-  const container = document.getElementById('announcementsContainer');
-  if (!container) return;
+  const containers = [
+    document.getElementById('announcementsContainer'),
+    document.getElementById('drawerAnnouncementsContainer')
+  ].filter(Boolean);
+  if (!containers.length) return;
   if (!announcements || !announcements.length) {
-    container.innerHTML = '';
+    containers.forEach(c => c.innerHTML = '');
     updateFeedDimensions();
     return;
   }
 
-  container.innerHTML = announcements.map(a => `
+  const html = announcements.map(a => `
     <div class="event-card announcement-card">
       <div class="card-header-bar">
         <div class="card-clan-town">
@@ -1200,6 +1216,7 @@ function renderAnnouncements(announcements) {
       </div>
     </div>
   `).join('');
+  containers.forEach(c => c.innerHTML = html);
   updateFeedDimensions();
 }
 
@@ -1951,9 +1968,7 @@ function switchTab(tabId) {
   const targetTab = document.getElementById(tabId);
   if (targetTab) targetTab.classList.add('active-tab');
 
-  // «إضافة» لم تعد وجهة في الشريط (زرّ عائم بدلاً منها) — لا فهرس لها هنا،
-  // فتبقى بلا تمييز «نشط» في الشريط نفسه، وهذا هو المقصود (تذكرة #31).
-  const navIndex = ['tabHome', 'tabMap', 'tabNokoot', 'tabStickers', 'tabServices'].indexOf(tabId);
+  const navIndex = ['tabHome', 'tabMap', 'tabNokoot', 'tabAccount', 'tabServices'].indexOf(tabId);
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
   if (navBtns[navIndex]) navBtns[navIndex].classList.add('active');
 
@@ -1961,6 +1976,7 @@ function switchTab(tabId) {
 
   if (tabId === 'tabHome') updateFeedDimensions();
   else if (tabId === 'tabNokoot') loadNokootView();
+  else if (tabId === 'tabAccount') loadAccountView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
   else if (tabId === 'tabAdd') {
@@ -1969,6 +1985,81 @@ function switchTab(tabId) {
   } else if (tabId === 'tabServices') {
     if (!servicesInitialized) { servicesInitialized = true; initServicesTab(); }
   }
+}
+
+function openAddEventModal() {
+  if (!requireAuth({ type: 'publish' })) return;
+  switchTab('tabAdd');
+}
+
+function closeAddEventModal() {
+  switchTab('tabHome');
+}
+
+function loadAccountView() {
+  const guestView = document.getElementById('accountGuestView');
+  const loggedInView = document.getElementById('accountLoggedInView');
+  if (!guestView || !loggedInView) return;
+
+  if (currentUser && authToken) {
+    guestView.style.display = 'none';
+    loggedInView.style.display = 'block';
+
+    const nameEl = document.getElementById('accountUserName');
+    if (nameEl) nameEl.textContent = currentUser.full_name || currentUser.name || 'المستخدم';
+
+    const phoneEl = document.getElementById('accountUserPhone');
+    if (phoneEl) phoneEl.textContent = currentUser.phone_number || currentUser.phone || '';
+
+    const roleBadge = document.getElementById('accountUserRoleBadge');
+    if (roleBadge) {
+      if (currentUser.role === 'super_admin') {
+        roleBadge.textContent = 'مدير عام المنصة';
+        roleBadge.className = 'status-tag approved';
+      } else if (currentUser.role === 'admin') {
+        roleBadge.textContent = 'أدمن بلدة';
+        roleBadge.className = 'status-tag approved';
+      } else {
+        roleBadge.textContent = 'مستخدم';
+        roleBadge.className = 'status-tag pending';
+      }
+    }
+
+    const adminEntry = document.getElementById('accountAdminEntry');
+    if (adminEntry) {
+      if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
+        adminEntry.style.display = 'block';
+      } else {
+        adminEntry.style.display = 'none';
+      }
+    }
+
+    // Sync analytics opt-out toggle in account screen
+    const toggle = document.getElementById('accountAnalyticsOptOutToggle');
+    if (toggle) {
+      toggle.checked = localStorage.getItem('negev_analytics_opt_out') === 'true';
+    }
+
+    fetchMyEvents();
+  } else {
+    guestView.style.display = 'block';
+    loggedInView.style.display = 'none';
+  }
+}
+
+function handleLogout() {
+  currentUser = null;
+  authToken = null;
+  localStorage.removeItem('negev_user');
+  localStorage.removeItem('negev_token');
+  updateAuthUI();
+  loadAccountView();
+  showToast('تم تسجيل الخروج بنجاح');
+  switchTab('tabHome');
+}
+
+function openStickerStudioModal() {
+  switchTab('tabStickers');
 }
 
 /**
@@ -2242,9 +2333,19 @@ function filterChipLabelText(cfg, tokens) {
 function updateFilterChipLabel(key) {
   const cfg = FILTER_SHEETS[key];
   if (!cfg) return;
+  const text = filterChipLabelText(cfg, cfg.selected());
   const label = document.getElementById(cfg.chipLabelId);
-  if (!label) return;
-  label.textContent = filterChipLabelText(cfg, cfg.selected());
+  if (label) label.textContent = text;
+
+  if (key === 'place') {
+    const drawerLabel = document.getElementById('drawerPlaceChipLabel');
+    if (drawerLabel) drawerLabel.textContent = text;
+  } else if (key === 'kind') {
+    const drawerLabel = document.getElementById('drawerKindChipLabel');
+    if (drawerLabel) drawerLabel.textContent = text;
+  }
+
+  updateFloatingFilterLabel();
 }
 
 /** «مسح الفلاتر» ظاهر دائماً — لا فقط حين يوجد اختيار — لئلّا تصير التغذية الفارغة لغزاً (#85 خطوة 45). */
@@ -2262,15 +2363,279 @@ function handleSearch() {
   const val = document.getElementById('eventSearchInput').value.trim();
   searchQuery = val;
   const clearBtn = document.getElementById('clearSearchBtn');
-  clearBtn.style.display = val ? 'block' : 'none';
+  if (clearBtn) clearBtn.style.display = val ? 'block' : 'none';
+  const drawerSearch = document.getElementById('drawerSearchInput');
+  if (drawerSearch && drawerSearch.value !== val) drawerSearch.value = val;
+  const drawerClear = document.getElementById('drawerClearSearchBtn');
+  if (drawerClear) drawerClear.style.display = val ? 'block' : 'none';
+
+  updateFloatingFilterLabel();
   fetchEvents();
 }
 
 function clearSearch() {
-  document.getElementById('eventSearchInput').value = '';
+  const input = document.getElementById('eventSearchInput');
+  if (input) input.value = '';
+  const drawerSearch = document.getElementById('drawerSearchInput');
+  if (drawerSearch) drawerSearch.value = '';
   searchQuery = '';
-  document.getElementById('clearSearchBtn').style.display = 'none';
+  const clearBtn = document.getElementById('clearSearchBtn');
+  if (clearBtn) clearBtn.style.display = 'none';
+  const drawerClear = document.getElementById('drawerClearSearchBtn');
+  if (drawerClear) drawerClear.style.display = 'none';
+
+  updateFloatingFilterLabel();
   fetchEvents();
+}
+
+function updateFloatingFilterLabel() {
+  const floatingLabel = document.getElementById('floatingFilterLabel');
+  const floatingDot = document.getElementById('floatingFilterDot');
+  const floatingBtn = document.getElementById('floatingFilterBtn');
+  if (!floatingLabel) return;
+
+  const hasSearch = Boolean(searchQuery && searchQuery.trim());
+  const hasPlaces = (selectedTowns && selectedTowns.length > 0) || (selectedVillageIds && selectedVillageIds.length > 0);
+  const hasKinds = selectedOccasionTypeIds && selectedOccasionTypeIds.length > 0;
+  const hasArchive = Boolean(showArchive);
+  const hasActiveFilters = hasSearch || hasPlaces || hasKinds || hasArchive;
+
+  if (floatingDot) {
+    floatingDot.style.display = hasActiveFilters ? 'inline-block' : 'none';
+  }
+  if (floatingBtn) {
+    if (hasActiveFilters) floatingBtn.classList.add('has-filter');
+    else floatingBtn.classList.remove('has-filter');
+  }
+
+  if (hasSearch) {
+    floatingLabel.textContent = `بحث: ${searchQuery.trim()}`;
+    return;
+  }
+
+  const placeCfg = FILTER_SHEETS.place;
+  const kindCfg = FILTER_SHEETS.kind;
+  const placeText = (hasPlaces && placeCfg) ? filterChipLabelText(placeCfg, placeCfg.selected()) : '';
+  const kindText = (hasKinds && kindCfg) ? filterChipLabelText(kindCfg, kindCfg.selected()) : '';
+
+  if (hasPlaces && hasKinds) {
+    floatingLabel.textContent = `${placeText} • ${kindText}`;
+  } else if (hasPlaces) {
+    floatingLabel.textContent = placeText;
+  } else if (hasKinds) {
+    floatingLabel.textContent = kindText;
+  } else if (hasArchive) {
+    floatingLabel.textContent = 'المناسبات المنتهية';
+  } else {
+    floatingLabel.textContent = 'الفلاتر والبحث';
+  }
+}
+
+function toggleTopChrome(show) {
+  const drawer = document.getElementById('topChromeDrawer');
+  const backdrop = document.getElementById('topChromeBackdrop');
+  if (!drawer || !backdrop) return;
+
+  if (show) {
+    drawer.style.display = 'flex';
+    backdrop.style.display = 'block';
+
+    const drawerStories = document.getElementById('drawerStoriesContainer');
+    if (drawerStories && allStories.length) {
+      drawerStories.innerHTML = allStories.map((s, i) => `
+        <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
+          <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
+            <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
+          </div>
+          <span class="story-title">${escapeHtml(s.title)}</span>
+        </div>
+      `).join('');
+    }
+
+    const drawerSearch = document.getElementById('drawerSearchInput');
+    if (drawerSearch) {
+      drawerSearch.value = searchQuery || '';
+      const clearBtn = document.getElementById('drawerClearSearchBtn');
+      if (clearBtn) clearBtn.style.display = searchQuery ? 'block' : 'none';
+    }
+
+    const archiveSwitch = document.getElementById('drawerArchiveSwitch');
+    if (archiveSwitch) archiveSwitch.checked = Boolean(showArchive);
+
+    const drawerAnnounce = document.getElementById('drawerAnnouncementsContainer');
+    const mainAnnounce = document.getElementById('announcementsContainer');
+    if (drawerAnnounce && mainAnnounce) {
+      drawerAnnounce.innerHTML = mainAnnounce.innerHTML;
+    }
+  } else {
+    drawer.style.display = 'none';
+    backdrop.style.display = 'none';
+  }
+}
+
+let drawerSearchDebounceTimer = null;
+function handleDrawerSearch(query) {
+  searchQuery = query;
+  const mainInput = document.getElementById('eventSearchInput');
+  if (mainInput) mainInput.value = query;
+  const clearBtn = document.getElementById('drawerClearSearchBtn');
+  if (clearBtn) clearBtn.style.display = query ? 'block' : 'none';
+  const mainClear = document.getElementById('clearSearchBtn');
+  if (mainClear) mainClear.style.display = query ? 'block' : 'none';
+
+  clearTimeout(drawerSearchDebounceTimer);
+  drawerSearchDebounceTimer = setTimeout(() => {
+    updateFloatingFilterLabel();
+    fetchEvents();
+  }, 400);
+}
+
+function clearDrawerSearch() {
+  const drawerSearch = document.getElementById('drawerSearchInput');
+  if (drawerSearch) drawerSearch.value = '';
+  const clearBtn = document.getElementById('drawerClearSearchBtn');
+  if (clearBtn) clearBtn.style.display = 'none';
+  handleDrawerSearch('');
+}
+
+function toggleArchiveSwitch(checked) {
+  showArchive = checked;
+  const mainBtn = document.getElementById('archiveToggleBtn');
+  if (mainBtn) mainBtn.classList.toggle('active', showArchive);
+  const drawerSwitch = document.getElementById('drawerArchiveSwitch');
+  if (drawerSwitch) drawerSwitch.checked = showArchive;
+
+  updateFloatingFilterLabel();
+  fetchEvents();
+}
+
+function refreshEventsFeed() {
+  fetchStories();
+  fetchEvents({ page: 1 });
+  showToast('🔄 تم تحديث المناسبات');
+}
+
+// Agenda Calendar state & functions
+let agendaCurrentDate = new Date();
+let agendaSelectedDate = new Date();
+const AR_MONTHS_NAMES = [
+  'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+];
+
+function openAgendaModal() {
+  toggleTopChrome(false);
+  const modal = document.getElementById('agendaModal');
+  if (modal) modal.style.display = 'flex';
+  agendaCurrentDate = new Date();
+  agendaSelectedDate = new Date();
+  renderAgendaCalendar();
+}
+
+function closeAgendaModal() {
+  const modal = document.getElementById('agendaModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function changeAgendaMonth(delta) {
+  agendaCurrentDate.setMonth(agendaCurrentDate.getMonth() + delta);
+  renderAgendaCalendar();
+}
+
+function renderAgendaCalendar() {
+  const year = agendaCurrentDate.getFullYear();
+  const month = agendaCurrentDate.getMonth();
+  const monthDisplay = document.getElementById('agendaMonthDisplay');
+  if (monthDisplay) {
+    monthDisplay.textContent = `${AR_MONTHS_NAMES[month]} ${year}`;
+  }
+
+  const grid = document.getElementById('agendaDaysGrid');
+  if (!grid) return;
+
+  const firstDay = new Date(year, month, 1);
+  const startingDay = firstDay.getDay(); // 0 = Sunday
+  const totalDays = new Date(year, month + 1, 0).getDate();
+  const prevMonthTotalDays = new Date(year, month, 0).getDate();
+
+  const eventDateCounts = {};
+  allEvents.forEach(evt => {
+    if (evt.event_date) {
+      eventDateCounts[evt.event_date] = (eventDateCounts[evt.event_date] || 0) + 1;
+    }
+  });
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const selectedDateStr = agendaSelectedDate.toISOString().slice(0, 10);
+
+  let html = '';
+
+  for (let i = startingDay - 1; i >= 0; i--) {
+    const dayNum = prevMonthTotalDays - i;
+    html += `<div class="agenda-day-cell other-month">${dayNum}</div>`;
+  }
+
+  for (let d = 1; d <= totalDays; d++) {
+    const monthStr = String(month + 1).padStart(2, '0');
+    const dayStr = String(d).padStart(2, '0');
+    const fullDateStr = `${year}-${monthStr}-${dayStr}`;
+    const isToday = fullDateStr === todayStr;
+    const isSelected = fullDateStr === selectedDateStr;
+    const hasEvents = Boolean(eventDateCounts[fullDateStr]);
+
+    html += `
+      <div class="agenda-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" onclick="selectAgendaDate('${fullDateStr}')">
+        <span>${d}</span>
+        ${hasEvents ? '<span class="agenda-day-dot"></span>' : ''}
+      </div>
+    `;
+  }
+
+  const totalCells = startingDay + totalDays;
+  const remainingCells = (7 - (totalCells % 7)) % 7;
+  for (let n = 1; n <= remainingCells; n++) {
+    html += `<div class="agenda-day-cell other-month">${n}</div>`;
+  }
+
+  grid.innerHTML = html;
+  renderAgendaSelectedDayEvents(selectedDateStr);
+}
+
+function selectAgendaDate(dateStr) {
+  agendaSelectedDate = new Date(dateStr + 'T00:00:00');
+  renderAgendaCalendar();
+}
+
+function renderAgendaSelectedDayEvents(dateStr) {
+  const labelEl = document.getElementById('agendaSelectedDateLabel');
+  const countBadge = document.getElementById('agendaDayCountBadge');
+  const listEl = document.getElementById('agendaEventsList');
+  if (!listEl) return;
+
+  const eventsOnDate = allEvents.filter(e => e.event_date === dateStr);
+  const d = new Date(dateStr + 'T00:00:00');
+  const formattedDate = `${d.getDate()} ${AR_MONTHS_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+
+  if (labelEl) labelEl.textContent = `مناسبات ${formattedDate}`;
+  if (countBadge) countBadge.textContent = `${eventsOnDate.length} مناسبة`;
+
+  if (!eventsOnDate.length) {
+    listEl.innerHTML = `<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">لا توجد مناسبات مسجلة في هذا اليوم</p>`;
+    return;
+  }
+
+  listEl.innerHTML = eventsOnDate.map(evt => `
+    <div class="agenda-event-item" onclick="closeAgendaModal(); openEventDetailsModal(${evt.id});">
+      <div>
+        <div class="agenda-event-title">${escapeHtml(evt.title || evt.groom_name)}</div>
+        <div class="agenda-event-meta">
+          <span class="town-badge">${escapeHtml(evt.town)}</span>
+          ${evt.occasion_type?.name ? `<span>${escapeHtml(evt.occasion_type.name)}</span>` : ''}
+        </div>
+      </div>
+      <i class="fa-solid fa-chevron-left" style="color:var(--ink-faint);"></i>
+    </div>
+  `).join('');
 }
 
 // 12. Occasion Type Picker & Dynamic Publish Form (#20 step 9)
@@ -3135,13 +3500,20 @@ async function fetchMyEvents() {
 }
 
 function renderMyEvents(events) {
-  const container = document.getElementById('myEventsList');
+  const containers = [
+    document.getElementById('myEventsList'),
+    document.getElementById('accountMyEventsList')
+  ].filter(Boolean);
+
+  if (!containers.length) return;
+
   if (!events || !events.length) {
-    container.innerHTML = '<div class="empty-state"><p>لم تنشر أي مناسبة بعد</p></div>';
+    const emptyHtml = '<div class="empty-state"><p>لم تنشر أي مناسبة بعد</p></div>';
+    containers.forEach(c => { c.innerHTML = emptyHtml; });
     return;
   }
 
-  container.innerHTML = events.map(evt => `
+  const html = events.map(evt => `
     <div class="event-card">
       <div class="card-header-bar">
         <div class="card-clan-town">
@@ -3156,6 +3528,10 @@ function renderMyEvents(events) {
           <i class="fa-solid fa-calendar-day"></i>
           <span>${evt.event_date}</span>
         </div>
+        ${evt.status === 'rejected' && evt.rejection_reason ? `
+        <div class="rejection-reason-notice" style="margin-top:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; color:#f87171; font-size:0.85rem;">
+          <i class="fa-solid fa-circle-exclamation"></i> سبب الرفض: ${escapeHtml(evt.rejection_reason)}
+        </div>` : ''}
         <div style="display:flex; gap:8px; margin-top:10px;">
           <button class="record-nokoot-btn" style="flex:1;" onclick="openEditEventModal(${evt.id})">
             <i class="fa-solid fa-pen"></i> تعديل
@@ -3167,6 +3543,8 @@ function renderMyEvents(events) {
       </div>
     </div>
   `).join('');
+
+  containers.forEach(c => { c.innerHTML = html; });
 }
 
 // 14b. مراجعة التبريكات/التعازي — طابور مناسبة يملكها المستخدم الحالي (#20 step 10).
@@ -3884,14 +4262,31 @@ async function fetchNotifications() {
 function updateNotificationsBadge() {
   const btn = document.getElementById('notificationsBtn');
   const badge = document.getElementById('notificationsBadge');
-  if (!btn || !badge) return;
-  btn.style.display = currentUser ? 'inline-flex' : 'none';
+  const floatingBtn = document.getElementById('floatingNotifBtn');
+  const floatingBadge = document.getElementById('floatingNotifBadge');
+
+  if (btn) btn.style.display = currentUser ? 'inline-flex' : 'none';
+  if (floatingBtn) floatingBtn.style.display = currentUser ? 'inline-flex' : 'none';
+
   const unread = notificationsList.filter(n => !n.is_read).length;
-  if (unread > 0) {
-    badge.textContent = unread > 99 ? '99+' : String(unread);
-    badge.style.display = 'inline-flex';
-  } else {
-    badge.style.display = 'none';
+  const badgeText = unread > 99 ? '99+' : String(unread);
+
+  if (badge) {
+    if (unread > 0) {
+      badge.textContent = badgeText;
+      badge.style.display = 'inline-flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  if (floatingBadge) {
+    if (unread > 0) {
+      floatingBadge.textContent = badgeText;
+      floatingBadge.style.display = 'inline-flex';
+    } else {
+      floatingBadge.style.display = 'none';
+    }
   }
 }
 
