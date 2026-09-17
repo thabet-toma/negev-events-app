@@ -623,30 +623,46 @@
     <!-- TAB 6: SERVICES DIRECTORY (دليل خدمات الأعراس والمناسبات) -->
     <section id="tabServices" class="tab-content">
       <div class="page-title-box">
-        <h2><i class="fa-solid fa-screwdriver-wrench"></i> دليل الخدمات</h2>
-        <p>طبّاخون ومصوّرون وصالات وفنانون يخدمون مناسبات النقب — بلا تقييمات ولا نجوم، الوجود هنا هو الشهادة</p>
+        <h2><i class="fa-solid fa-screwdriver-wrench"></i> دليل خدمات المناسبات</h2>
+        <p>بيوت شعر، كراسي وضيافة، طهاة، مصوّرون، وفنانون يخدمون مناسبات النقب مع الأسعار والمواصفات التقديرية</p>
       </div>
 
-      <!-- Category chips — "الكل" أولاً، نفس نمط تبويبات نوع المناسبة (#18) -->
-      <div class="town-filter-wrapper">
+      <!-- فلاتر المكان والفئة — رقاقتان مطابقتان للمناسبات مع زر مسح الفلاتر -->
+      <div class="filter-chips-row">
+        <button id="servicePlaceChip" class="filter-chip" onclick="openServicePlaceSheet()">
+          <i class="fa-solid fa-location-dot"></i>
+          <span id="servicePlaceChipLabel">كل البلدات</span>
+        </button>
+        <button id="serviceCategoryChip" class="filter-chip" onclick="openServiceCategorySheet()">
+          <i class="fa-solid fa-layer-group"></i>
+          <span id="serviceCategoryChipLabel">كل الفئات</span>
+        </button>
+        <button id="serviceClearFiltersBtn" class="filter-chip filter-chip-clear" onclick="clearServiceFilters()">
+          <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
+        </button>
+      </div>
+
+      <!-- شريط البحث الفوري -->
+      <div class="search-bar-container" style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+        <div class="search-input-box" style="flex:1;">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+          <input type="text" id="serviceSearchInput" placeholder="ابحث باسم الخدمة، المزوّد، أو المواصفات..." oninput="handleServiceSearch()">
+          <button id="clearServiceSearchBtn" class="clear-btn" style="display:none;" onclick="clearServiceSearch()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+
+      <!-- شريط الفئات السريع -->
+      <div class="town-filter-wrapper" style="margin-bottom:16px;">
         <div class="town-slider" id="serviceCategoryTabs"></div>
       </div>
 
-      <!-- Town Filter -->
-      <div class="form-group">
-        <label>فلترة حسب البلدة</label>
-        <select id="serviceTownFilter" onchange="handleServiceTownFilterChange()">
-          <option value="">كل البلدات</option>
-        </select>
-      </div>
-
-      <!-- Flat, alphabetical provider list — no phone, no contact button on the row -->
+      <!-- Services Feed Container -->
       <div id="servicesListContainer" class="events-feed">
-        <div class="loading-spinner"><div class="spinner"></div></div>
+        <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
       </div>
 
-      <div id="servicesLoadMoreWrapper" style="display:none; text-align:center; margin-top:18px;">
-        <button id="servicesLoadMoreBtn" class="town-pill" onclick="loadMoreServiceProviders()">عرض المزيد</button>
+      <div id="servicesLoadMoreWrapper" style="display:none; text-align:center; margin-top:20px; margin-bottom:40px;">
+        <button id="servicesLoadMoreBtn" class="town-pill" onclick="loadMoreServiceProviders()">عرض المزيد من الخدمات</button>
       </div>
     </section>
 
@@ -990,6 +1006,38 @@
     </div>
   </div>
 
+  <!-- MODAL: SERVICE PLACE FILTER SHEET -->
+  <div id="servicePlaceFilterModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card filter-sheet-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-solid fa-location-dot"></i> اختر البلدة أو المنطقة</h3></div>
+        <button class="close-modal-btn" onclick="closeServiceFilterSheet('place')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="search-input-box filter-sheet-search">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="servicePlaceFilterSearchInput" placeholder="ابحث عن بلدة أو قرية..." oninput="renderServiceFilterSheetList('place')">
+      </div>
+      <div id="servicePlaceFilterList" class="filter-sheet-list"></div>
+      <button type="button" class="submit-btn filter-sheet-apply" onclick="applyServiceFilterSheet('place')">تطبيق</button>
+    </div>
+  </div>
+
+  <!-- MODAL: SERVICE CATEGORY FILTER SHEET -->
+  <div id="serviceCategoryFilterModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card filter-sheet-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-solid fa-layer-group"></i> اختر فئة الخدمة</h3></div>
+        <button class="close-modal-btn" onclick="closeServiceFilterSheet('category')"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="search-input-box filter-sheet-search">
+        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+        <input type="text" id="serviceCategoryFilterSearchInput" placeholder="ابحث عن فئة..." oninput="renderServiceFilterSheetList('category')">
+      </div>
+      <div id="serviceCategoryFilterList" class="filter-sheet-list"></div>
+      <button type="button" class="submit-btn filter-sheet-apply" onclick="applyServiceFilterSheet('category')">تطبيق</button>
+    </div>
+  </div>
+
   <!-- MODAL 7: OWNER'S CONGRATULATIONS/CONDOLENCES REVIEW QUEUE (#20 step 10) -->
   <div id="congratsQueueModal" class="modal-overlay" style="display:none;">
     <div class="modal-card chat-modal-card">
@@ -1040,6 +1088,8 @@
         <button class="close-modal-btn" onclick="closeProviderModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <img id="providerModalImage" class="provider-modal-img" alt="" hidden>
+      <div id="providerModalPackage" class="service-package-banner" style="display:none; margin:12px 0;"></div>
+      <div id="providerModalSpecs" class="service-specs-grid" style="display:none; margin-bottom:14px;"></div>
       <p id="providerModalDescription" class="provider-modal-desc"></p>
       <p id="providerModalTowns" class="provider-modal-towns"></p>
       <!-- الرقم لا يظهر إلا بعد ضغط هذا الزرّ — لا رقم ولا رابط تواصل مقدَّماً -->

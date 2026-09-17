@@ -486,9 +486,33 @@
                 <input type="tel" id="provPhone" placeholder="05XXXXXXXX" required>
               </div>
               <div class="form-group half">
-                <label>السعر التقريبي (₪) (اختياري)</label>
-                <input type="number" id="provPrice" placeholder="مثال: 500" step="any" min="0">
+                <label>نوع التسعير</label>
+                <select id="provPriceType">
+                  <option value="estimated">سعر تقديري</option>
+                  <option value="starting_at">ابتداءً من</option>
+                  <option value="fixed">سعر محدد</option>
+                  <option value="contact">تواصل للسعر</option>
+                </select>
               </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group half">
+                <label>السعر المالي (₪) (اختياري)</label>
+                <input type="number" id="provPrice" placeholder="مثال: 4500" step="any" min="0">
+              </div>
+              <div class="form-group half">
+                <label>وصف الحزمة النموذجية / التسعير التقديري</label>
+                <input type="text" id="provPriceEstimateDesc" placeholder="مثال: 1,000 كرسي + برجين إضاءة = 4,500 ₪ تقديري">
+              </div>
+            </div>
+
+            <div class="form-group" id="provDynamicAttributesWrapper" style="display:none; background:var(--surface-sunk); padding:12px; border-radius:10px; border:1px solid var(--admin-card-border);">
+              <label style="font-weight:700; margin-bottom:8px; display:block;">
+                <i class="fa-solid fa-list-check"></i> مواصفات الحزمة النموذجية الاسترشادية لهذا السعر:
+              </label>
+              <div id="provDynamicAttributesContainer" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;"></div>
+              <span class="hint-text" style="display:block; margin-top:8px;">ملاحظة: هذه المواصفات لحزمة نموذجية معينة (كمثال استرشادي)، والزبون بإمكانه طلب كميات أكبر أو أصغر بالاتفاق المباشر.</span>
             </div>
 
             <div class="form-group">
@@ -646,6 +670,18 @@
               </div>
             </div>
             <label class="ot-check" style="display:block;"><input type="checkbox" id="scIsActive" checked> نشِطة</label>
+
+            <div class="form-group" style="margin-top:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <label style="margin:0;"><i class="fa-solid fa-sliders"></i> خصائص ومواصفات هذه الفئة (مثل: عدد الكراسي، أبراج الإضاءة، عدد الصور)</label>
+                <button type="button" class="town-pill" onclick="addCategoryAttributeRow()" style="font-size:0.8rem; padding:4px 10px; cursor:pointer;">
+                  <i class="fa-solid fa-plus"></i> إضافة خاصية
+                </button>
+              </div>
+              <div id="scAttributesContainer" style="display:flex; flex-direction:column; gap:8px;"></div>
+              <span class="hint-text">تظهر هذه الخصائص تلقائياً عند إضافة مزوّد تحت هذه الفئة لتحديد القيم والوحدات النموذجية.</span>
+            </div>
+
             <div class="form-row" style="margin-top:18px;">
               <button type="submit" class="admin-btn-primary" id="scSubmitBtn" style="flex:1;">
                 <i class="fa-solid fa-check"></i> حفظ الفئة

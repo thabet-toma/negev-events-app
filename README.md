@@ -493,6 +493,25 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/nokoot` | إضافة قيد |
 | `DELETE` | `/api/nokoot/:id` | حذف قيد |
 
+### دليل الخدمات 🛠️
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `GET` | `/api/services/categories` | فئات الخدمات النشِطة مع خصائصها ومواصفاتها النموذجية |
+| `GET` | `/api/services/providers` | قائمة مزوّدي الخدمات النشِطين (`?category_id=` `?town=` `?search=` `?page=` `?limit=`) مع المواصفات ونوع وسعر الحزمة التقديرية — **رقم الهاتف محجوب كلياً عن استجابة القائمة** |
+| `GET` | `/api/services/providers/:id` | تفاصيل المزوّد الكاملة تشمل رقم الهاتف والمواصفات الكاملة |
+| `POST` | `/api/services/providers` | طلب انضمام مزوّد خدمة جديد 🔒 |
+| `GET` | `/api/services/my-services` | الخدمات التي نشرها المستخدم الحالي 🔒 |
+| `GET` | `/api/admin/service-categories` | كل فئات الخدمات مع خصائصها وإحصاءاتها 🛡️ |
+| `POST` | `/api/admin/service-categories` | إنشاء فئة خدمة جديدة مع خصائصها ومواصفاتها 🛡️ |
+| `PATCH` | `/api/admin/service-categories/:id` | تعديل فئة خدمة وخصائصها 🛡️ |
+| `DELETE` | `/api/admin/service-categories/:id` | حذف أو تعطيل فئة خدمة 🛡️ |
+| `GET` | `/api/admin/service-providers` | قائمة المزوّدين للإدارة حسب نطاق البلدات 👑 |
+| `POST` | `/api/admin/service-providers` | إضافة مزوّد خدمة مع إذن النشر الإلزامي والمواصفات والحزمة التقديرية 👑 |
+| `PATCH` | `/api/admin/service-providers/:id` | تعديل بيانات المزوّد 👑 |
+| `DELETE` | `/api/admin/service-providers/:id` | حذف مزوّد خدمة 👑 |
+
+
 ### الإدارة 👑
 
 | الطريقة | المسار | الوصف |

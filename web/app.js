@@ -48,6 +48,11 @@ let publishFormReady = false;
 let serviceCategoriesCache = null;
 let selectedServiceCategoryId = null; // null = "الكل"
 let selectedServiceTown = '';
+let serviceSearchQuery = '';
+let serviceDebounceTimer = null;
+let serviceDraftTown = '';
+let serviceDraftCategoryId = null;
+let providerDetailsCache = {};
 let serviceProvidersCache = [];
 let servicesPage = 1;
 let servicesPagination = null;
@@ -3095,27 +3100,15 @@ function resetPosterCropState({ clearInput } = {}) {
   }
 }
 
-// 12c. Services Directory Tab (تذكرة #31) — فئات مسطَّحة أوّلها "الكل" (نفس
-// نمط تبويبات نوع المناسبة #18)، فلتر بلدة، ثم قائمة مزوّدين أبجدية مسطّحة.
-// بلا رقم وبلا زرّ تواصل على الصفّ — الخادم أصلاً لا يرسل الرقم في هذه
-// القائمة. الرقم يظهر فقط داخل صفحة المزوّد بعد فعل تواصل صريح.
+// 12c. Services Directory Tab (تذكرة #31) — كروت خدمات المناسبات الفاخرة
+// مع المواصفات والخصائص الديناميكية والأسعار التقديرية والفلاتر الذكية.
+// الحفاظ الصارم على الأمان: الخادم لا يرسل رقم الهاتف في استعلام القائمة أبداً (#25)،
+// بل يُجلب حصراً عند طلب التواصل الصريح عبر GET /api/services/providers/:id.
 
 async function initServicesTab() {
-  await loadTownCoordinates(); // townsList + villagesList معاً، نداء واحد مشترك
-  populateServiceTownFilter();
+  await loadTownCoordinates();
+  updateServiceFilterChipLabels();
   await initServiceCategoryTabs();
-  fetchServiceProviders();
-}
-
-function populateServiceTownFilter() {
-  const select = document.getElementById('serviceTownFilter');
-  if (!select) return;
-  select.innerHTML = '<option value="">كل البلدات</option>' +
-    townsList.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-}
-
-function handleServiceTownFilterChange() {
-  selectedServiceTown = document.getElementById('serviceTownFilter').value;
   fetchServiceProviders();
 }
 
@@ -3132,9 +3125,9 @@ async function initServiceCategoryTabs() {
     serviceCategoriesCache = [];
   }
 
-  const allTab = `<button class="town-pill active" data-cat-id="" onclick="selectServiceCategory(null)">الكل</button>`;
+  const allTab = `<button class="town-pill ${!selectedServiceCategoryId ? 'active' : ''}" data-cat-id="" onclick="selectServiceCategory(null)">الكل</button>`;
   const catTabs = serviceCategoriesCache.map(c => `
-    <button class="town-pill" data-cat-id="${c.id}" onclick="selectServiceCategory(${c.id})">
+    <button class="town-pill ${selectedServiceCategoryId === c.id ? 'active' : ''}" data-cat-id="${c.id}" onclick="selectServiceCategory(${c.id})">
       ${c.icon ? escapeHtml(c.icon) + ' ' : ''}${escapeHtml(c.name)}
     </button>
   `).join('');
@@ -3147,6 +3140,159 @@ function selectServiceCategory(categoryId) {
     const pillId = pill.dataset.catId ? Number(pill.dataset.catId) : null;
     pill.classList.toggle('active', pillId === categoryId);
   });
+  updateServiceFilterChipLabels();
+  fetchServiceProviders();
+}
+
+function updateServiceFilterChipLabels() {
+  const placeLabel = document.getElementById('servicePlaceChipLabel');
+  if (placeLabel) {
+    placeLabel.textContent = selectedServiceTown ? selectedServiceTown : 'كل البلدات';
+  }
+  const categoryLabel = document.getElementById('serviceCategoryChipLabel');
+  if (categoryLabel) {
+    if (selectedServiceCategoryId && serviceCategoriesCache) {
+      const cat = serviceCategoriesCache.find(c => c.id === selectedServiceCategoryId);
+      categoryLabel.textContent = cat ? cat.name : 'كل الفئات';
+    } else {
+      categoryLabel.textContent = 'كل الفئات';
+    }
+  }
+  const clearBtn = document.getElementById('serviceClearFiltersBtn');
+  if (clearBtn) {
+    const hasFilters = !!(selectedServiceTown || selectedServiceCategoryId || serviceSearchQuery);
+    clearBtn.style.display = hasFilters ? 'inline-flex' : 'none';
+  }
+}
+
+function openServicePlaceSheet() {
+  serviceDraftTown = selectedServiceTown;
+  const searchInput = document.getElementById('servicePlaceFilterSearchInput');
+  if (searchInput) searchInput.value = '';
+  renderServiceFilterSheetList('place');
+  const modal = document.getElementById('servicePlaceFilterModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function openServiceCategorySheet() {
+  serviceDraftCategoryId = selectedServiceCategoryId;
+  const searchInput = document.getElementById('serviceCategoryFilterSearchInput');
+  if (searchInput) searchInput.value = '';
+  renderServiceFilterSheetList('category');
+  const modal = document.getElementById('serviceCategoryFilterModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeServiceFilterSheet(type) {
+  const modalId = type === 'place' ? 'servicePlaceFilterModal' : 'serviceCategoryFilterModal';
+  const modal = document.getElementById(modalId);
+  if (modal) modal.style.display = 'none';
+}
+
+function renderServiceFilterSheetList(type) {
+  if (type === 'place') {
+    const list = document.getElementById('servicePlaceFilterList');
+    if (!list) return;
+    const query = (document.getElementById('servicePlaceFilterSearchInput')?.value || '').trim();
+    const options = [
+      { id: '', label: 'كل البلدات' },
+      ...townsList.map(t => ({ id: t, label: t }))
+    ].filter(opt => !query || opt.label.includes(query));
+
+    if (!options.length) {
+      list.innerHTML = `<p class="filter-sheet-empty">لا نتائج مطابقة</p>`;
+      return;
+    }
+
+    list.innerHTML = options.map(opt => {
+      const isChecked = serviceDraftTown === opt.id;
+      return `
+        <label class="filter-option-row">
+          <input type="radio" name="servicePlaceRadio" value="${escapeHtml(opt.id)}" ${isChecked ? 'checked' : ''} onchange="serviceDraftTown = this.value">
+          <span>${escapeHtml(opt.label)}</span>
+        </label>`;
+    }).join('');
+  } else if (type === 'category') {
+    const list = document.getElementById('serviceCategoryFilterList');
+    if (!list) return;
+    const query = (document.getElementById('serviceCategoryFilterSearchInput')?.value || '').trim();
+    const options = [
+      { id: null, label: 'كل الفئات', icon: '' },
+      ...(serviceCategoriesCache || []).map(c => ({ id: c.id, label: c.name, icon: c.icon }))
+    ].filter(opt => !query || opt.label.includes(query));
+
+    if (!options.length) {
+      list.innerHTML = `<p class="filter-sheet-empty">لا نتائج مطابقة</p>`;
+      return;
+    }
+
+    list.innerHTML = options.map(opt => {
+      const isChecked = serviceDraftCategoryId === opt.id;
+      return `
+        <label class="filter-option-row">
+          <input type="radio" name="serviceCatRadio" value="${opt.id === null ? '' : opt.id}" ${isChecked ? 'checked' : ''} onchange="serviceDraftCategoryId = this.value ? Number(this.value) : null">
+          <span>${opt.icon ? escapeHtml(opt.icon) + ' ' : ''}${escapeHtml(opt.label)}</span>
+        </label>`;
+    }).join('');
+  }
+}
+
+function applyServiceFilterSheet(type) {
+  if (type === 'place') {
+    selectedServiceTown = serviceDraftTown;
+    closeServiceFilterSheet('place');
+  } else if (type === 'category') {
+    selectedServiceCategoryId = serviceDraftCategoryId;
+    // sync slider pills
+    document.querySelectorAll('#serviceCategoryTabs .town-pill').forEach(pill => {
+      const pillId = pill.dataset.catId ? Number(pill.dataset.catId) : null;
+      pill.classList.toggle('active', pillId === selectedServiceCategoryId);
+    });
+    closeServiceFilterSheet('category');
+  }
+  updateServiceFilterChipLabels();
+  fetchServiceProviders();
+}
+
+function clearServiceFilters() {
+  selectedServiceTown = '';
+  selectedServiceCategoryId = null;
+  serviceSearchQuery = '';
+  const searchInput = document.getElementById('serviceSearchInput');
+  if (searchInput) searchInput.value = '';
+  const clearSearchBtn = document.getElementById('clearServiceSearchBtn');
+  if (clearSearchBtn) clearSearchBtn.style.display = 'none';
+
+  document.querySelectorAll('#serviceCategoryTabs .town-pill').forEach(pill => {
+    const pillId = pill.dataset.catId ? Number(pill.dataset.catId) : null;
+    pill.classList.toggle('active', pillId === null);
+  });
+
+  updateServiceFilterChipLabels();
+  fetchServiceProviders();
+}
+
+function handleServiceSearch() {
+  const input = document.getElementById('serviceSearchInput');
+  const clearBtn = document.getElementById('clearServiceSearchBtn');
+  const val = (input?.value || '').trim();
+  serviceSearchQuery = val;
+  if (clearBtn) clearBtn.style.display = val ? 'inline-block' : 'none';
+  updateServiceFilterChipLabels();
+
+  if (serviceDebounceTimer) clearTimeout(serviceDebounceTimer);
+  serviceDebounceTimer = setTimeout(() => {
+    fetchServiceProviders();
+  }, 250);
+}
+
+function clearServiceSearch() {
+  const input = document.getElementById('serviceSearchInput');
+  if (input) input.value = '';
+  const clearBtn = document.getElementById('clearServiceSearchBtn');
+  if (clearBtn) clearBtn.style.display = 'none';
+  serviceSearchQuery = '';
+  updateServiceFilterChipLabels();
   fetchServiceProviders();
 }
 
@@ -3157,13 +3303,17 @@ async function fetchServiceProviders(options = {}) {
 
   if (!append) {
     servicesPage = 1;
-    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div></div>`;
+    container.innerHTML = `
+      <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+      <div class="card-skeleton skeleton-shimmer"><div class="skeleton-shot"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+    `;
   }
 
   try {
     const params = new URLSearchParams();
     if (selectedServiceCategoryId) params.set('category_id', selectedServiceCategoryId);
     if (selectedServiceTown) params.set('town', selectedServiceTown);
+    if (serviceSearchQuery) params.set('search', serviceSearchQuery);
     params.set('page', servicesPage);
     params.set('limit', 30);
 
@@ -3197,35 +3347,261 @@ function renderServicesLoadMoreButton() {
   wrapper.style.display = hasMore ? 'block' : 'none';
 }
 
-/** قائمة مسطّحة مرتّبة أبجدياً: الاسم · الفئة · البلدات · الصورة — لا رقم ولا زرّ تواصل هنا (#25). */
+function formatProviderAttributes(rawAttrs, categoryId) {
+  if (!rawAttrs) return [];
+  if (Array.isArray(rawAttrs)) {
+    return rawAttrs.filter(a => a && a.value !== undefined && a.value !== null && a.value !== '');
+  }
+  if (typeof rawAttrs === 'object') {
+    const cat = (serviceCategoriesCache || []).find(c => c.id === categoryId);
+    const catAttrs = (cat && Array.isArray(cat.attributes)) ? cat.attributes : [];
+    const result = [];
+    for (const [key, val] of Object.entries(rawAttrs)) {
+      if (val === undefined || val === null || val === '') continue;
+      const def = catAttrs.find(a => a.attr_key === key);
+      result.push({
+        attr_key: key,
+        label: def ? def.label : key,
+        value: val,
+        unit: def ? (def.unit || '') : ''
+      });
+    }
+    return result;
+  }
+  return [];
+}
+
 function renderServiceProviders(providers) {
   const container = document.getElementById('servicesListContainer');
   if (!providers || !providers.length) {
     container.innerHTML = `
       <div class="empty-state">
         <i class="fa-solid fa-screwdriver-wrench"></i>
-        <h3>لا يوجد مزوّدون بعد</h3>
-        <p>سيُضيف الأدمن مزوّدي الخدمات قريباً</p>
+        <h3>لا توجد خدمات مطابقة</h3>
+        <p>${serviceSearchQuery || selectedServiceTown || selectedServiceCategoryId ? 'جرب تغيير أو مسح الفلاتر لعرض مزيد من الخدمات' : 'سيُضيف الأدمن مزوّدي الخدمات قريباً'}</p>
       </div>`;
     return;
   }
 
-  const sorted = [...providers].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
-
-  container.innerHTML = sorted.map(p => `
-    <div class="provider-row" onclick="openProviderModal(${p.id})">
-      <div class="provider-avatar">
-        ${p.image_url ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" loading="lazy">` : `<i class="fa-solid fa-shop"></i>`}
-      </div>
-      <div class="provider-info">
-        <b>${escapeHtml(p.name)}</b>
-        <small>${escapeHtml(p.category_name || '')}${(p.towns && p.towns.length) ? ' · ' + escapeHtml(p.towns.join('، ')) : ''}</small>
-      </div>
-    </div>
-  `).join('');
+  container.innerHTML = providers.map(p => renderSingleServiceCardHtml(p)).join('');
 }
 
-/** فتح صفحة المزوّد: الوصف والصورة أولاً، والرقم خلف زرّ تواصل صريح — لا يُعرَض تلقائياً (#25). */
+function renderSingleServiceCardHtml(p) {
+  const toneColor = p.category_color
+    ? (p.category_color.startsWith('#') ? p.category_color : `#${p.category_color}`)
+    : '#B8860B';
+  const toneStyle = ` style="--tone:${toneColor}"`;
+  const bezelSvg = getBezelOrnamentSvg(toneColor);
+  const bezelStyle = ` style="background-image:url(&quot;${bezelSvg}&quot;)"`;
+
+  // Price Badge text
+  let priceBadgeText = 'سعر تقديري';
+  if (p.price_type === 'contact') priceBadgeText = 'تواصل للسعر';
+  else if (p.price_type === 'starting_at') priceBadgeText = 'ابتداءً من';
+  else if (p.price_type === 'fixed') priceBadgeText = 'سعر محدد';
+
+  // Floating Media Content
+  const mediaHtml = p.image_url ? `
+    <img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" class="card-media-img" loading="lazy">` : `
+    <div class="service-card-media-placeholder">
+      <span class="placeholder-icon">${p.category_icon ? escapeHtml(p.category_icon) : '🛠️'}</span>
+    </div>`;
+
+  // Towns line
+  const townsText = (p.towns && p.towns.length)
+    ? (p.towns.includes('جميع البلدات') || p.towns.length > 5 ? 'يخدم جميع بلدات ومناطق النقب' : `يخدم: ${p.towns.join('، ')}`)
+    : 'يخدم مناطق النقب';
+
+  // Attributes & Specs for Collapsible Details Panel
+  const attrs = formatProviderAttributes(p.attributes, p.category_id);
+
+  // Package Estimate Banner (مختصر وأنيق على الكرت — المواصفات والكميات تظهر كاملة عند النقر أو الضغط على مزيد من التفاصيل)
+  const packageBannerHtml = p.price_estimate_desc ? `
+    <div class="service-package-banner">
+      <div class="service-package-header">
+        <i class="fa-solid fa-calculator"></i>
+        <span>حزمة استرشادية بهذا السعر التقريبي:</span>
+      </div>
+      <div class="service-package-desc">${escapeHtml(p.price_estimate_desc)}</div>
+    </div>` : '';
+
+  // All Specs for Collapsible
+  const allSpecsGridHtml = attrs.length ? `
+    <div class="service-specs-grid">
+      ${attrs.map(a => `
+        <div class="service-spec-item">
+          <span class="spec-label">${escapeHtml(a.label)}</span>
+          <span class="spec-val">${escapeHtml(String(a.value))}${a.unit ? ' ' + escapeHtml(a.unit) : ''}</span>
+        </div>
+      `).join('')}
+    </div>` : '';
+
+  return `
+    <div class="event-card service-card" id="serviceCard-${p.id}"${toneStyle}>
+      <div class="card-bezel"${bezelStyle}>
+        <div class="card-framed">
+          <!-- صورة الخدمة والشارات العائمة — النقر عليها يفتح التفاصيل مثل المناسبات -->
+          <div class="card-media" onclick="toggleServiceDetails(${p.id})">
+            ${mediaHtml}
+            <div class="service-floating-badges">
+              <span class="service-badge-category" style="background:${toneColor}">
+                ${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}
+              </span>
+              <span class="service-badge-price">
+                <i class="fa-solid fa-tag"></i> ${priceBadgeText}
+              </span>
+            </div>
+          </div>
+
+          <!-- جسم الكرت والوصف العام والباكيج -->
+          <div class="service-card-caption">
+            <h2 class="service-card-title" onclick="toggleServiceDetails(${p.id})" style="cursor:pointer;">${escapeHtml(p.name)}</h2>
+            <div class="service-card-towns">
+              <i class="fa-solid fa-location-dot" style="color:var(--tone)"></i>
+              <span>${escapeHtml(townsText)}</span>
+            </div>
+            ${p.description ? `<p class="service-card-desc">${escapeHtml(p.description)}</p>` : ''}
+            ${packageBannerHtml}
+
+            <!-- شريط الأزرار التفاعلية -->
+            <div class="service-card-actions">
+              <button type="button" class="service-action-btn service-contact-btn" onclick="revealServiceContact(${p.id})">
+                <i class="fa-solid fa-phone"></i> <span>تواصل فوري</span>
+              </button>
+              <button type="button" class="service-action-btn service-more-btn" id="serviceMoreBtn-${p.id}" aria-expanded="false" onclick="toggleServiceDetails(${p.id}, this)">
+                <i class="fa-solid fa-chevron-down"></i> <span>مزيد من التفاصيل</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- لوح التفاصيل الموسع القابل للطي -->
+          <div class="service-details-panel" id="serviceDetails-${p.id}" style="display:none;">
+            <div class="service-details-panel-header">
+              <span class="service-details-panel-title"><i class="fa-solid fa-circle-info" style="color:var(--tone)"></i> مواصفات وتفاصيل الحزمة الاسترشادية</span>
+              <button type="button" class="card-details-close-btn" onclick="toggleServiceDetails(${p.id})" aria-label="إغلاق">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+
+            <div class="service-capacity-notice">
+              <i class="fa-solid fa-circle-info"></i>
+              <div>
+                <strong>توضيح مهم بشأن المواصفات والكميات:</strong>
+                <p>المواصفات الموضحة أدناه هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.</p>
+              </div>
+            </div>
+
+            ${p.price_estimate_desc ? `
+              <div class="service-package-banner" style="margin-bottom:12px;">
+                <div class="service-package-header">
+                  <i class="fa-solid fa-receipt"></i>
+                  <span>تفاصيل الحزمة النموذجية المسعرة:</span>
+                </div>
+                <div class="service-package-desc">${escapeHtml(p.price_estimate_desc)}</div>
+              </div>` : ''}
+
+            ${allSpecsGridHtml ? `
+              <div style="font-size:0.84rem; font-weight:800; color:var(--ink); margin-bottom:8px;">
+                <i class="fa-solid fa-list-check" style="color:var(--tone)"></i> بنود ومواصفات هذه الحزمة النموذجية:
+              </div>
+              ${allSpecsGridHtml}` : ''}
+
+            ${p.description ? `<div style="font-size:0.88rem; color:var(--ink); margin-bottom:12px; line-height:1.5;">${escapeHtml(p.description)}</div>` : ''}
+            <div style="font-size:0.8rem; color:var(--ink-faint); margin-bottom:14px;">
+              <i class="fa-solid fa-map-location-dot"></i> <strong>المناطق المخدومة:</strong> ${(p.towns && p.towns.length) ? escapeHtml(p.towns.join('، ')) : 'جميع مناطق النقب'}
+            </div>
+
+            <!-- أزرار التواصل المباشرة المفتوحة بعد النقر -->
+            <div id="serviceContactRow-${p.id}">
+              <button type="button" class="submit-btn" style="width:100%;" onclick="revealServiceContact(${p.id})">
+                <i class="fa-solid fa-phone"></i> إظهار خيارات الاتصال والواتساب
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleServiceDetails(providerId, btnEl) {
+  const panel = document.getElementById(`serviceDetails-${providerId}`);
+  if (!panel) return;
+  const isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+
+  const btn = btnEl || document.getElementById(`serviceMoreBtn-${providerId}`);
+  if (btn) {
+    btn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+    btn.innerHTML = isHidden
+      ? `<i class="fa-solid fa-chevron-up"></i> <span>إخفاء التفاصيل</span>`
+      : `<i class="fa-solid fa-chevron-down"></i> <span>مزيد من التفاصيل</span>`;
+  }
+}
+
+async function revealServiceContact(providerId, preferredAction = null) {
+  try {
+    let p = providerDetailsCache[providerId];
+    if (!p || !p.phone) {
+      const res = await apiFetch(`/api/services/providers/${providerId}`);
+      const data = await res.json();
+      if (!data.success || !data.provider) return;
+      p = data.provider;
+      providerDetailsCache[providerId] = p;
+    }
+
+    const phone = p.phone || '';
+    if (!phone) {
+      alert('رقم التواصل غير متوفر حالياً');
+      return;
+    }
+
+    // تنظيف رقم الهاتف للواتساب الدولي (05... -> 9725...)
+    let intlPhone = phone.replace(/[^\d+]/g, '');
+    if (intlPhone.startsWith('05')) intlPhone = '972' + intlPhone.substring(1);
+    else if (intlPhone.startsWith('+')) intlPhone = intlPhone.substring(1);
+
+    const whatsappMsg = encodeURIComponent(`مرحباً ${p.name}، استفسار بخصوص خدمتك (${p.category_name || ''}) عبر منصة أعراسنا:`);
+    const whatsappUrl = `https://wa.me/${intlPhone}?text=${whatsappMsg}`;
+    const telUrl = `tel:${phone}`;
+
+    // إذا طلب إجراء مباشر
+    if (preferredAction === 'whatsapp') {
+      window.open(whatsappUrl, '_blank');
+      return;
+    } else if (preferredAction === 'call') {
+      window.location.href = telUrl;
+      return;
+    }
+
+    // عرض أزرار التواصل المباشرة داخل اللوح وفي الكرت
+    const contactHtml = `
+      <div class="service-contact-row">
+        <a class="service-btn-whatsapp" href="${whatsappUrl}" target="_blank" rel="noopener">
+          <i class="fa-brands fa-whatsapp"></i> واتساب مباشر
+        </a>
+        <a class="service-btn-call" href="${telUrl}">
+          <i class="fa-solid fa-phone"></i> اتصال (${escapeHtml(phone)})
+        </a>
+      </div>
+    `;
+
+    // تحديث مكان التواصل في اللوح الموسع
+    const rowInPanel = document.getElementById(`serviceContactRow-${providerId}`);
+    if (rowInPanel) rowInPanel.innerHTML = contactHtml;
+
+    // فتح اللوح الموسع تلقائياً إذا كان مغلقاً ليرى المستخدم الرقم والخيارات كاملة
+    const panel = document.getElementById(`serviceDetails-${providerId}`);
+    if (panel && panel.style.display === 'none') {
+      toggleServiceDetails(providerId);
+    }
+  } catch (e) {
+    console.error('Reveal contact error:', e);
+  }
+}
+
+/** فتح نافذة المزوّد المنفصلة إذا تم استدعاؤها مع كامل المواصفات */
 async function openProviderModal(providerId) {
   try {
     const res = await apiFetch(`/api/services/providers/${providerId}`);
@@ -3233,6 +3609,7 @@ async function openProviderModal(providerId) {
     if (!data.success) return;
 
     const p = data.provider;
+    providerDetailsCache[providerId] = p;
     currentProviderPhone = p.phone || '';
 
     document.getElementById('providerModalName').textContent = p.name;
@@ -3245,6 +3622,42 @@ async function openProviderModal(providerId) {
       img.hidden = false;
     } else {
       img.hidden = true;
+    }
+
+    const pkgEl = document.getElementById('providerModalPackage');
+    if (pkgEl) {
+      if (p.price_estimate_desc) {
+        pkgEl.innerHTML = `
+          <div class="service-package-header">
+            <i class="fa-solid fa-calculator"></i>
+            <span>حزمة نموذجية استرشادية بهذا السعر التقريبي:</span>
+          </div>
+          <div class="service-package-desc">${escapeHtml(p.price_estimate_desc)}</div>
+          <div class="service-package-flexible-note">
+            <i class="fa-solid fa-arrows-rotate"></i>
+            <span>الكميات قابلة للزيادة والتعديل (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر</span>
+          </div>
+        `;
+        pkgEl.style.display = 'flex';
+      } else {
+        pkgEl.style.display = 'none';
+      }
+    }
+
+    const specsEl = document.getElementById('providerModalSpecs');
+    if (specsEl) {
+      const attrs = formatProviderAttributes(p.attributes, p.category_id);
+      if (attrs.length) {
+        specsEl.innerHTML = attrs.map(a => `
+          <div class="service-spec-item">
+            <span class="spec-label">${escapeHtml(a.label)}</span>
+            <span class="spec-val">${escapeHtml(String(a.value))}${a.unit ? ' ' + escapeHtml(a.unit) : ''}</span>
+          </div>
+        `).join('');
+        specsEl.style.display = 'grid';
+      } else {
+        specsEl.style.display = 'none';
+      }
     }
 
     document.getElementById('providerModalDescription').textContent = p.description || '';
@@ -3262,7 +3675,7 @@ async function openProviderModal(providerId) {
   }
 }
 
-/** الفعل الصريح الذي يكشف الرقم — لا يظهر بأي مسار آخر. */
+/** الفعل الصريح الذي يكشف الرقم في النافذة المنفصلة */
 function revealProviderPhone() {
   if (!currentProviderPhone) return;
   document.getElementById('providerContactArea').innerHTML = `
@@ -4469,6 +4882,11 @@ function initUrlNavigation() {
       if (!isNaN(num) && num > 0) {
         pendingDeepLinkEventId = num;
       }
+    }
+    const tab = urlParams.get('tab');
+    if (tab) {
+      const target = tab.startsWith('tab') ? tab : ('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+      setTimeout(() => { if (typeof switchTab === 'function') switchTab(target); }, 50);
     }
   } catch (e) {
     // ignore

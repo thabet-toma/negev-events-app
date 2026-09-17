@@ -21,6 +21,64 @@ function shapeCategory(row) {
   return { ...row, position: Number(row.position), is_active: Boolean(row.is_active) };
 }
 
+function parseAttributes(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
+async function attributesForCategories(categoryIds) {
+  if (!categoryIds.length) return {};
+  const placeholders = categoryIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT id, category_id, attr_key, label, attr_type, unit, sample_value, position, is_required
+       FROM service_category_attributes
+      WHERE category_id IN (${placeholders})
+      ORDER BY position ASC, id ASC`,
+    categoryIds
+  );
+  const map = {};
+  for (const row of rows) {
+    (map[row.category_id] || (map[row.category_id] = [])).push({
+      id: row.id,
+      category_id: row.category_id,
+      attr_key: row.attr_key,
+      label: row.label,
+      attr_type: row.attr_type,
+      unit: row.unit,
+      sample_value: row.sample_value,
+      position: Number(row.position),
+      is_required: Boolean(row.is_required)
+    });
+  }
+  return map;
+}
+
+async function saveCategoryAttributes(connection, categoryId, attributes) {
+  if (!Array.isArray(attributes)) return;
+  await connection.execute('DELETE FROM service_category_attributes WHERE category_id = ?', [categoryId]);
+  for (let i = 0; i < attributes.length; i++) {
+    const attr = attributes[i];
+    if (!attr || !attr.label) continue;
+    const attrKey = (attr.attr_key || `attr_${i + 1}`).trim();
+    await connection.execute(
+      `INSERT INTO service_category_attributes
+         (category_id, attr_key, label, attr_type, unit, sample_value, position, is_required)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        categoryId,
+        attrKey,
+        String(attr.label).trim(),
+        ['number', 'text', 'boolean'].includes(attr.attr_type) ? attr.attr_type : 'text',
+        attr.unit ? String(attr.unit).trim() : null,
+        attr.sample_value ? String(attr.sample_value).trim() : null,
+        Number.isInteger(attr.position) ? attr.position : i + 1,
+        attr.is_required ? 1 : 0
+      ]
+    );
+  }
+}
+
 // ======================================================================
 // Service categories — super_admin runtime data (story 34), same shape as
 // occasion types: no deploy, no migration, just rows.
@@ -30,7 +88,13 @@ async function listActiveCategories() {
   const rows = await db.query(
     'SELECT id, name, icon, color, position FROM service_categories WHERE is_active = 1 ORDER BY position ASC, name ASC'
   );
-  return rows.map(row => ({ ...row, position: Number(row.position) }));
+  const catIds = rows.map(r => r.id);
+  const attrMap = await attributesForCategories(catIds);
+  return rows.map(row => ({
+    ...row,
+    position: Number(row.position),
+    attributes: attrMap[row.id] || []
+  }));
 }
 
 async function listAllCategoriesForAdmin() {
@@ -41,23 +105,43 @@ async function listAllCategoriesForAdmin() {
       GROUP BY sc.id
       ORDER BY sc.position ASC, sc.name ASC`
   );
-  return rows.map(row => ({ ...shapeCategory(row), providers_count: Number(row.providers_count) }));
+  const catIds = rows.map(r => r.id);
+  const attrMap = await attributesForCategories(catIds);
+  return rows.map(row => ({
+    ...shapeCategory(row),
+    providers_count: Number(row.providers_count),
+    attributes: attrMap[row.id] || []
+  }));
 }
 
 async function findCategoryByIdForAdmin(id) {
   const row = await db.queryOne('SELECT * FROM service_categories WHERE id = ?', [id]);
-  return row ? shapeCategory(row) : null;
+  if (!row) return null;
+  const attrMap = await attributesForCategories([id]);
+  return {
+    ...shapeCategory(row),
+    attributes: attrMap[id] || []
+  };
 }
 
 async function createCategory(data) {
   const existing = await db.queryOne('SELECT id FROM service_categories WHERE name = ?', [data.name]);
   if (existing) throw ApiError.conflict('توجد فئة خدمة بهذا الاسم مسبقاً');
 
-  const { insertId } = await db.execute(
-    `INSERT INTO service_categories (name, icon, color, position, is_active)
-     VALUES (?, ?, ?, ?, ?)`,
-    [data.name, data.icon, data.color, data.position ?? 0, data.is_active !== false ? 1 : 0]
-  );
+  let insertId;
+  await db.transaction(async connection => {
+    const [result] = await connection.execute(
+      `INSERT INTO service_categories (name, icon, color, position, is_active)
+       VALUES (?, ?, ?, ?, ?)`,
+      [data.name, data.icon, data.color, data.position ?? 0, data.is_active !== false ? 1 : 0]
+    );
+    insertId = result.insertId;
+
+    if (data.attributes) {
+      await saveCategoryAttributes(connection, insertId, data.attributes);
+    }
+  });
+
   return findCategoryByIdForAdmin(insertId);
 }
 
@@ -79,10 +163,15 @@ async function updateCategory(id, data) {
     params.push(column === 'is_active' ? (data[column] ? 1 : 0) : data[column]);
   }
 
-  if (assignments.length) {
-    params.push(id);
-    await db.execute(`UPDATE service_categories SET ${assignments.join(', ')} WHERE id = ?`, params);
-  }
+  await db.transaction(async connection => {
+    if (assignments.length) {
+      params.push(id);
+      await connection.execute(`UPDATE service_categories SET ${assignments.join(', ')} WHERE id = ?`, params);
+    }
+    if (data.attributes !== undefined) {
+      await saveCategoryAttributes(connection, id, data.attributes);
+    }
+  });
 
   return findCategoryByIdForAdmin(id);
 }
@@ -136,7 +225,7 @@ async function townsForProviders(providerIds) {
  * as a hidden field, so it cannot leak by a client rendering it by mistake.
  * It only ever comes back from `getPublicProviderById`.
  */
-async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
+async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
   const limitVal = safeLimit(limit);
   const pageVal = safePage(page);
 
@@ -153,17 +242,26 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
     );
     params.push(town);
   }
+  if (search && search.trim()) {
+    const term = `%${search.trim()}%`;
+    conditions.push('(sp.name LIKE ? OR sp.description LIKE ? OR sc.name LIKE ? OR sp.price_estimate_desc LIKE ?)');
+    params.push(term, term, term, term);
+  }
 
   const whereClause = conditions.join(' AND ');
 
   const { total } = await db.queryOne(
-    `SELECT COUNT(*) AS total FROM service_providers sp WHERE ${whereClause}`,
+    `SELECT COUNT(*) AS total
+       FROM service_providers sp
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE ${whereClause}`,
     params
   );
 
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.image_url, sp.price
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE ${whereClause}
@@ -178,8 +276,13 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
     name: row.name,
     category_id: row.category_id,
     category_name: row.category_name,
+    category_icon: row.category_icon,
+    category_color: row.category_color,
     image_url: absoluteMediaUrl(row.image_url),
     price: row.price ?? null,
+    price_type: row.price_type || 'estimated',
+    price_estimate_desc: row.price_estimate_desc ?? null,
+    attributes: parseAttributes(row.attributes),
     towns: townsMap[row.id] || []
   }));
 
@@ -197,8 +300,8 @@ async function listPublicProviders({ categoryId, town, page = 1, limit = DEFAULT
 /** One active provider, including `phone` — only reached by opening the provider explicitly (story 17). */
 async function getPublicProviderById(id) {
   const row = await db.queryOne(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.phone,
-            sp.description, sp.image_url, sp.price
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE sp.id = ? AND sp.is_active = 1 AND sp.status = 'approved'`,
@@ -212,10 +315,15 @@ async function getPublicProviderById(id) {
     name: row.name,
     category_id: row.category_id,
     category_name: row.category_name,
+    category_icon: row.category_icon,
+    category_color: row.category_color,
     phone: row.phone,
     description: row.description,
     image_url: absoluteMediaUrl(row.image_url),
     price: row.price ?? null,
+    price_type: row.price_type || 'estimated',
+    price_estimate_desc: row.price_estimate_desc ?? null,
+    attributes: parseAttributes(row.attributes),
     towns: townsMap[id] || []
   };
 }
@@ -266,6 +374,7 @@ async function shapeAdminProvider(row) {
     ...row,
     is_active: Boolean(row.is_active),
     image_url: absoluteMediaUrl(row.image_url),
+    attributes: parseAttributes(row.attributes),
     towns: townsMap[row.id] || []
   };
 }
@@ -297,7 +406,7 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
 
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
-    `SELECT sp.*, sc.name AS category_name
+    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE ${whereClause}
@@ -311,6 +420,7 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
     ...row,
     is_active: Boolean(row.is_active),
     image_url: absoluteMediaUrl(row.image_url),
+    attributes: parseAttributes(row.attributes),
     towns: townsMap[row.id] || []
   }));
 
@@ -329,7 +439,7 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
 async function getProviderForAdmin(user, id) {
   const { clause: scopeClause, params: scopeParams } = await providerScopeClause(user);
   const row = await db.queryOne(
-    `SELECT sp.*, sc.name AS category_name
+    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE sp.id = ?${scopeClause}`,
@@ -351,16 +461,24 @@ async function createProvider(data) {
   const category = await db.queryOne('SELECT id FROM service_categories WHERE id = ?', [data.category_id]);
   if (!category) throw ApiError.badRequest('فئة الخدمة غير موجودة');
 
+  const attrJson = data.attributes ? JSON.stringify(data.attributes) : null;
+  const priceType = ['estimated', 'fixed', 'starting_at', 'contact'].includes(data.price_type)
+    ? data.price_type
+    : 'estimated';
+
   return db.transaction(async connection => {
     const [result] = await connection.execute(
       `INSERT INTO service_providers
-         (category_id, name, phone, description, image_url, price, status, rejection_reason, is_active,
-          consent_at, consent_by, consent_channel, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (category_id, name, phone, description, image_url, price, price_type, price_estimate_desc, attributes,
+          status, rejection_reason, is_active, consent_at, consent_by, consent_channel, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.category_id, data.name, data.phone,
         data.description ?? null, data.image_url ?? null,
         data.price !== undefined ? data.price : null,
+        priceType,
+        data.price_estimate_desc ?? null,
+        attrJson,
         data.status ?? 'approved',
         data.rejection_reason ?? null,
         data.is_active !== false ? 1 : 0,
@@ -389,7 +507,11 @@ async function createProvider(data) {
  * audit trail of the original recorded permission, not a form field.
  */
 async function updateProvider(id, data) {
-  const columns = ['category_id', 'name', 'phone', 'description', 'image_url', 'price', 'status', 'rejection_reason', 'is_active'];
+  const columns = [
+    'category_id', 'name', 'phone', 'description', 'image_url',
+    'price', 'price_type', 'price_estimate_desc', 'attributes',
+    'status', 'rejection_reason', 'is_active'
+  ];
 
   await db.transaction(async connection => {
     const assignments = [];
@@ -397,7 +519,13 @@ async function updateProvider(id, data) {
     for (const column of columns) {
       if (data[column] === undefined) continue;
       assignments.push(`${column} = ?`);
-      params.push(column === 'is_active' ? (data[column] ? 1 : 0) : (data[column] ?? null));
+      if (column === 'is_active') {
+        params.push(data[column] ? 1 : 0);
+      } else if (column === 'attributes') {
+        params.push(data[column] ? JSON.stringify(data[column]) : null);
+      } else {
+        params.push(data[column] ?? null);
+      }
     }
 
     if (assignments.length) {
@@ -432,9 +560,9 @@ async function updateProviderStatus(id, { status, rejectionReason }) {
 
 async function listMyServices(userId) {
   const rows = await db.query(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sp.phone,
-            sp.description, sp.image_url, sp.price, sp.status, sp.rejection_reason,
-            sp.is_active, sp.created_at
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
+            sp.status, sp.rejection_reason, sp.is_active, sp.created_at
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE sp.created_by = ?
@@ -445,6 +573,9 @@ async function listMyServices(userId) {
   return rows.map(r => ({
     ...r,
     price: r.price !== null && r.price !== undefined ? Number(r.price) : null,
+    price_type: r.price_type || 'estimated',
+    price_estimate_desc: r.price_estimate_desc || null,
+    attributes: parseAttributes(r.attributes),
     is_active: Boolean(r.is_active),
     image_url: absoluteMediaUrl(r.image_url),
     towns: townsMap[r.id] || []

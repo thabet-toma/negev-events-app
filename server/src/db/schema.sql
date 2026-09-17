@@ -488,20 +488,39 @@ CREATE TABLE IF NOT EXISTS service_categories (
   UNIQUE KEY uq_service_categories_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS service_category_attributes (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  category_id  INT UNSIGNED NOT NULL,
+  attr_key     VARCHAR(60)  NOT NULL,
+  label        VARCHAR(80)  NOT NULL,
+  attr_type    ENUM('number', 'text', 'boolean') NOT NULL DEFAULT 'text',
+  unit         VARCHAR(30)  DEFAULT NULL,
+  sample_value VARCHAR(100) DEFAULT NULL,
+  position     INT          NOT NULL DEFAULT 0,
+  is_required  TINYINT(1)   NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_service_cat_attr (category_id, attr_key),
+  CONSTRAINT fk_service_cat_attr FOREIGN KEY (category_id)
+    REFERENCES service_categories(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- consent_* are not cosmetic fields: they are the only guard once exposing a
 -- provider's phone on request was decided. No provider is published without
 -- a recorded consent (services-directory spec, decision #25).
 CREATE TABLE IF NOT EXISTS service_providers (
-  id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  category_id     INT UNSIGNED NOT NULL,
-  name            VARCHAR(150) NOT NULL,
-  phone           VARCHAR(30)  NOT NULL,
-  description     TEXT         DEFAULT NULL,
-  image_url        TEXT         DEFAULT NULL,
-  price            VARCHAR(100) DEFAULT NULL,
-  status           ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved',
-  rejection_reason VARCHAR(255) DEFAULT NULL,
-  is_active        TINYINT(1)   NOT NULL DEFAULT 1,
+  id                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  category_id         INT UNSIGNED NOT NULL,
+  name                VARCHAR(150) NOT NULL,
+  phone               VARCHAR(30)  NOT NULL,
+  description         TEXT         DEFAULT NULL,
+  image_url           TEXT         DEFAULT NULL,
+  price               VARCHAR(100) DEFAULT NULL,
+  price_type          ENUM('estimated', 'fixed', 'starting_at', 'contact') NOT NULL DEFAULT 'estimated',
+  price_estimate_desc VARCHAR(255) DEFAULT NULL,
+  attributes          JSON         DEFAULT NULL,
+  status              ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved',
+  rejection_reason    VARCHAR(255) DEFAULT NULL,
+  is_active           TINYINT(1)   NOT NULL DEFAULT 1,
   consent_at       TIMESTAMP    NOT NULL,
   consent_by       INT UNSIGNED DEFAULT NULL,
   consent_channel  VARCHAR(20)  NOT NULL,

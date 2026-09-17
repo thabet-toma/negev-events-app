@@ -729,3 +729,61 @@ body {
   align-items: center;
   gap: 8px;
 }
+
+/* Service Category Attributes Editor & Dynamic Provider Attributes */
+.sc-attr-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1.5fr auto;
+  gap: 8px;
+  align-items: center;
+  background: var(--surface-sunk);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--admin-card-border);
+}
+
+.sc-attr-row input {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  background: var(--admin-card);
+  color: var(--text-main);
+  border: 1px solid var(--admin-card-border);
+}
+
+.sc-attr-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--danger-red, #ef4444);
+  cursor: pointer;
+  padding: 6px 8px;
+  font-size: 0.95rem;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.sc-attr-remove-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.prov-attr-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prov-attr-item label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.prov-attr-item input {
+  padding: 8px 10px;
+  font-size: 0.88rem;
+  background: var(--admin-card);
+  color: var(--text-main);
+  border: 1px solid var(--admin-card-border);
+  border-radius: 6px;
+}
+

@@ -4245,6 +4245,92 @@ async function run() {
     assert.strictEqual(body.provider.phone, publicProviderPhone);
   });
 
+  let categoryWithAttrsId = 0;
+  await test('Category attributes: creating a category with custom attributes saves and returns them', async () => {
+    const { status, body } = await api('POST', '/api/admin/service-categories', {
+      token: superAdminToken,
+      body: {
+        name: `فئة بيوت شعر ${Date.now()}`,
+        icon: '⛺',
+        color: '#b8860b',
+        attributes: [
+          { attr_key: 'chairs_count', label: 'عدد الكراسي', unit: 'كرسي', sample_value: '1000' },
+          { attr_key: 'light_towers', label: 'أبراج الإضاءة', unit: 'برج', sample_value: '2' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 201);
+    categoryWithAttrsId = body.category.id;
+    assert.ok(Array.isArray(body.category.attributes), 'expected category.attributes array');
+    assert.strictEqual(body.category.attributes.length, 2);
+    assert.strictEqual(body.category.attributes[0].label, 'عدد الكراسي');
+  });
+
+  await test('Category attributes: GET /api/services/categories returns attributes for active categories', async () => {
+    const { status, body } = await api('GET', '/api/services/categories');
+    assert.strictEqual(status, 200);
+    const cat = body.categories.find(c => c.id === categoryWithAttrsId);
+    assert.ok(cat, 'expected created category in active categories list');
+    assert.ok(Array.isArray(cat.attributes), 'expected attributes on category');
+    assert.strictEqual(cat.attributes.length, 2);
+  });
+
+  let providerWithSpecsId = 0;
+  const providerWithSpecsPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  await test('Provider specs & estimates: creating a provider with package estimate and attributes', async () => {
+    const { status, body } = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: {
+        category_id: categoryWithAttrsId,
+        name: 'ديوان الأفراح والضيافة المميزة',
+        phone: providerWithSpecsPhone,
+        price_type: 'estimated',
+        price_estimate_desc: '1,000 كرسي + برجين إضاءة = 4,500 ₪ تقديري',
+        attributes: [
+          { attr_key: 'chairs_count', label: 'عدد الكراسي', value: '1000', unit: 'كرسي' },
+          { attr_key: 'light_towers', label: 'أبراج الإضاءة', value: '2', unit: 'برج' }
+        ],
+        consent_at: new Date().toISOString(),
+        consent_channel: 'واتساب',
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(status, 201);
+    providerWithSpecsId = body.providerId;
+  });
+
+  await test('Provider specs & estimates: GET /api/services/providers carries specs, price_estimate_desc, price_type, and strictly NO phone', async () => {
+    const { status, body } = await api('GET', `/api/services/providers?category_id=${categoryWithAttrsId}`);
+    assert.strictEqual(status, 200);
+    assert.ok(body.providers.length > 0);
+    const p = body.providers.find(row => row.id === providerWithSpecsId);
+    assert.ok(p, 'expected created provider in providers list');
+    assert.strictEqual(p.price_type, 'estimated');
+    assert.strictEqual(p.price_estimate_desc, '1,000 كرسي + برجين إضاءة = 4,500 ₪ تقديري');
+    assert.ok(Array.isArray(p.attributes) || typeof p.attributes === 'object', 'expected attributes');
+    assert.ok(!('phone' in p), 'phone must strictly NOT be present in list response');
+  });
+
+  await test('Provider search: ?search= filters by name, description, and specs', async () => {
+    const { body: matchRes } = await api('GET', `/api/services/providers?search=${encodeURIComponent('ديوان الأفراح')}`);
+    assert.ok(matchRes.providers.some(row => row.id === providerWithSpecsId), 'expected search to find provider by name');
+
+    const { body: noMatchRes } = await api('GET', `/api/services/providers?search=${encodeURIComponent('اسم_غير_موجود_نهائيا')}`);
+    assert.ok(!noMatchRes.providers.some(row => row.id === providerWithSpecsId), 'expected non-matching search to exclude provider');
+  });
+
+  await test('Provider specs & estimates: GET /api/services/providers/:id carries full details including phone', async () => {
+    const { status, body } = await api('GET', `/api/services/providers/${providerWithSpecsId}`);
+    assert.strictEqual(status, 200);
+    assert.ok(body.provider);
+    assert.strictEqual(body.provider.phone, providerWithSpecsPhone);
+    assert.strictEqual(body.provider.price_type, 'estimated');
+    assert.strictEqual(body.provider.price_estimate_desc, '1,000 كرسي + برجين إضاءة = 4,500 ₪ تقديري');
+  });
+
+  await api('DELETE', `/api/admin/service-providers/${providerWithSpecsId}`, { token: superAdminToken });
+  await api('DELETE', `/api/admin/service-categories/${categoryWithAttrsId}`, { token: superAdminToken });
+
   await api('DELETE', `/api/admin/service-providers/${publicProviderId}`, { token: superAdminToken });
   await api('DELETE', `/api/admin/service-categories/${serviceCategoryId}`, { token: superAdminToken });
 

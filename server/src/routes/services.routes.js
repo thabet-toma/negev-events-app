@@ -35,6 +35,22 @@ function requireConsentAt(value) {
   return parsed;
 }
 
+function parsePriceType(value) {
+  if (!value) return 'estimated';
+  const clean = String(value).trim();
+  return ['estimated', 'fixed', 'starting_at', 'contact'].includes(clean) ? clean : 'estimated';
+}
+
+function parseProviderAttributes(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 // --- Public directory (no auth — story 18) ----------------------------
 
 router.get('/services/categories', asyncHandler(async (req, res) => {
@@ -45,6 +61,7 @@ router.get('/services/providers', asyncHandler(async (req, res) => {
   const { providers, pagination } = await services.listPublicProviders({
     categoryId: req.query.category_id ? parseId(req.query.category_id, 'معرّف الفئة') : null,
     town: cleanString(req.query.town, 100),
+    search: cleanString(req.query.search, 100),
     page: req.query.page,
     limit: req.query.limit
   });
@@ -89,6 +106,10 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
     price = parseAmount(body.price);
   }
 
+  const priceType = parsePriceType(body.price_type);
+  const priceEstimateDesc = cleanString(body.price_estimate_desc, 255);
+  const attributes = parseProviderAttributes(body.attributes);
+
   const providerId = await services.createProvider({
     category_id: parseId(body.category_id, 'الفئة'),
     name: cleanString(body.name, 150),
@@ -96,6 +117,9 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
     description: cleanString(body.description, 2000),
     image_url: imageUrl,
     price,
+    price_type: priceType,
+    price_estimate_desc: priceEstimateDesc,
+    attributes,
     status: 'pending',
     is_active: true,
     consent_at: new Date(),
@@ -162,6 +186,10 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
     price = parseAmount(body.price);
   }
 
+  const priceType = parsePriceType(body.price_type);
+  const priceEstimateDesc = cleanString(body.price_estimate_desc, 255);
+  const attributes = parseProviderAttributes(body.attributes);
+
   const providerId = await services.createProvider({
     category_id: parseId(body.category_id, 'الفئة'),
     name: cleanString(body.name, 150),
@@ -169,6 +197,9 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
     description: cleanString(body.description, 2000),
     image_url: cleanString(body.image_url, 500),
     price,
+    price_type: priceType,
+    price_estimate_desc: priceEstimateDesc,
+    attributes,
     status: 'approved',
     is_active: body.is_active !== false,
     consent_at: consentAt,
@@ -207,6 +238,9 @@ router.patch('/admin/service-providers/:id', asyncHandler(async (req, res) => {
   if (body.price !== undefined) {
     payload.price = (body.price === null || String(body.price).trim() === '') ? null : parseAmount(body.price);
   }
+  if (body.price_type !== undefined) payload.price_type = parsePriceType(body.price_type);
+  if (body.price_estimate_desc !== undefined) payload.price_estimate_desc = cleanString(body.price_estimate_desc, 255);
+  if (body.attributes !== undefined) payload.attributes = parseProviderAttributes(body.attributes);
   if (body.is_active !== undefined) payload.is_active = Boolean(body.is_active);
 
   if (body.towns !== undefined) {
@@ -253,7 +287,8 @@ router.post('/admin/service-categories', asyncHandler(async (req, res) => {
     icon: cleanString(req.body.icon, 60),
     color: cleanString(req.body.color, 20),
     position: Number.isInteger(req.body.position) ? req.body.position : 0,
-    is_active: req.body.is_active !== false
+    is_active: req.body.is_active !== false,
+    attributes: Array.isArray(req.body.attributes) ? req.body.attributes : undefined
   });
 
   res.status(201).json({ success: true, category, message: 'تمت إضافة فئة الخدمة بنجاح' });
@@ -269,6 +304,7 @@ router.patch('/admin/service-categories/:id', asyncHandler(async (req, res) => {
   if (body.color !== undefined) payload.color = cleanString(body.color, 20);
   if (body.position !== undefined) payload.position = Number.isInteger(body.position) ? body.position : 0;
   if (body.is_active !== undefined) payload.is_active = Boolean(body.is_active);
+  if (body.attributes !== undefined && Array.isArray(body.attributes)) payload.attributes = body.attributes;
 
   const category = await services.updateCategory(id, payload);
   res.json({ success: true, category, message: 'تم تحديث فئة الخدمة بنجاح' });

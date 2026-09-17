@@ -2878,7 +2878,19 @@ function openProviderForm(id) {
     : `<i class="fa-solid fa-plus"></i> مزوّد خدمة جديد`;
 
   document.getElementById('provId').value = provider ? provider.id : '';
-  renderProviderCategoryOptions(provider ? provider.category_id : null);
+  const categoryId = provider ? provider.category_id : (allPublicCategories[0] ? allPublicCategories[0].id : null);
+  renderProviderCategoryOptions(categoryId);
+  const catSelect = document.getElementById('provCategory');
+  if (catSelect) {
+    catSelect.onchange = () => {
+      const selectedCatId = parseInt(catSelect.value, 10);
+      renderProviderDynamicAttributes(selectedCatId, null);
+    };
+  }
+  document.getElementById('provPriceType').value = provider ? (provider.price_type || 'estimated') : 'estimated';
+  document.getElementById('provPriceEstimateDesc').value = provider ? (provider.price_estimate_desc || '') : '';
+  renderProviderDynamicAttributes(categoryId, provider ? provider.attributes : null);
+
   document.getElementById('provName').value = provider ? provider.name : '';
   document.getElementById('provPhone').value = provider ? provider.phone : '';
   document.getElementById('provPrice').value = provider && provider.price != null ? provider.price : '';
@@ -2907,6 +2919,44 @@ function openProviderForm(id) {
 
   wrapper.style.display = 'block';
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderProviderDynamicAttributes(categoryId, existingAttributes) {
+  const wrapper = document.getElementById('provDynamicAttributesWrapper');
+  const container = document.getElementById('provDynamicAttributesContainer');
+  if (!wrapper || !container) return;
+
+  const cat = (allServiceCategories || []).find(c => c.id === categoryId) || (allPublicCategories || []).find(c => c.id === categoryId);
+  const catAttrs = (cat && Array.isArray(cat.attributes)) ? cat.attributes : [];
+
+  if (!catAttrs.length) {
+    wrapper.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+
+  let existingMap = {};
+  if (Array.isArray(existingAttributes)) {
+    existingAttributes.forEach(a => {
+      if (a && a.attr_key) existingMap[a.attr_key] = a.value;
+    });
+  } else if (existingAttributes && typeof existingAttributes === 'object') {
+    existingMap = existingAttributes;
+  }
+
+  container.innerHTML = catAttrs.map(attr => {
+    const val = existingMap[attr.attr_key] !== undefined ? existingMap[attr.attr_key] : '';
+    const placeholder = attr.sample_value ? `مثال: ${attr.sample_value}` : '';
+    const unitText = attr.unit ? ` (${attr.unit})` : '';
+    return `
+      <div class="prov-attr-item">
+        <label>${escapeHtml(attr.label)}${escapeHtml(unitText)}</label>
+        <input type="text" class="prov-attr-input" data-key="${escapeHtml(attr.attr_key)}" data-label="${escapeHtml(attr.label)}" data-unit="${escapeHtml(attr.unit || '')}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(String(val))}">
+      </div>
+    `;
+  }).join('');
+
+  wrapper.style.display = 'block';
 }
 
 function closeProviderForm() {
@@ -2949,11 +2999,26 @@ async function handleProviderSubmit(e) {
 
   const id = document.getElementById('provId').value;
   const priceVal = document.getElementById('provPrice').value.trim();
+
+  const attrInputs = document.querySelectorAll('#provDynamicAttributesContainer .prov-attr-input');
+  const attributes = Array.from(attrInputs).map(inp => {
+    const val = inp.value.trim();
+    return {
+      attr_key: inp.dataset.key,
+      label: inp.dataset.label,
+      unit: inp.dataset.unit || null,
+      value: val
+    };
+  }).filter(a => a.value !== '');
+
   const payload = {
     category_id: parseInt(document.getElementById('provCategory').value, 10),
     name: document.getElementById('provName').value.trim(),
     phone: document.getElementById('provPhone').value.trim(),
     price: priceVal !== '' ? parseFloat(priceVal) : null,
+    price_type: document.getElementById('provPriceType').value,
+    price_estimate_desc: document.getElementById('provPriceEstimateDesc').value.trim() || null,
+    attributes,
     description: document.getElementById('provDescription').value.trim(),
     image_url: document.getElementById('provImage').value.trim(),
     is_active: document.getElementById('provIsActive').checked,
@@ -3342,8 +3407,32 @@ function openServiceCategoryForm(id) {
   document.getElementById('scIsActive').checked = category ? Boolean(category.is_active) : true;
   renderIconPicker('scIconPicker', 'scIcon', SERVICE_CATEGORY_ICONS);
 
+  const attrContainer = document.getElementById('scAttributesContainer');
+  if (attrContainer) {
+    attrContainer.innerHTML = '';
+    const attrs = (category && Array.isArray(category.attributes)) ? category.attributes : [];
+    attrs.forEach(a => addCategoryAttributeRow(a));
+  }
+
   wrapper.style.display = 'block';
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function addCategoryAttributeRow(attr = {}) {
+  const container = document.getElementById('scAttributesContainer');
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'sc-attr-row';
+  row.innerHTML = `
+    <input type="text" class="sc-attr-label" placeholder="اسم الخاصية (مثال: عدد الكراسي)" value="${escapeHtml(attr.label || '')}" required>
+    <input type="text" class="sc-attr-unit" placeholder="الوحدة (مثال: كرسي)" value="${escapeHtml(attr.unit || '')}">
+    <input type="text" class="sc-attr-sample" placeholder="قيمة نموذجية (مثال: 1000)" value="${escapeHtml(attr.sample_value || '')}">
+    <input type="hidden" class="sc-attr-key" value="${escapeHtml(attr.attr_key || '')}">
+    <button type="button" class="sc-attr-remove-btn" onclick="this.closest('.sc-attr-row').remove()" title="حذف الخاصية">
+      <i class="fa-solid fa-trash"></i>
+    </button>
+  `;
+  container.appendChild(row);
 }
 
 function closeServiceCategoryForm() {
@@ -3357,12 +3446,31 @@ function closeServiceCategoryForm() {
 async function handleServiceCategorySubmit(e) {
   e.preventDefault();
 
+  const attrRows = document.querySelectorAll('#scAttributesContainer .sc-attr-row');
+  const attributes = Array.from(attrRows).map((row, idx) => {
+    const label = row.querySelector('.sc-attr-label').value.trim();
+    const unit = row.querySelector('.sc-attr-unit').value.trim();
+    const sample_value = row.querySelector('.sc-attr-sample').value.trim();
+    let key = row.querySelector('.sc-attr-key').value.trim();
+    if (!key) {
+      key = 'attr_' + Date.now() + '_' + idx;
+    }
+    return {
+      attr_key: key,
+      label,
+      unit: unit || null,
+      sample_value: sample_value || null,
+      position: idx
+    };
+  }).filter(a => a.label);
+
   const payload = {
     name: document.getElementById('scName').value.trim(),
     icon: document.getElementById('scIcon').value.trim(),
     color: document.getElementById('scColor').value,
     position: parseInt(document.getElementById('scPosition').value, 10) || 0,
-    is_active: document.getElementById('scIsActive').checked
+    is_active: document.getElementById('scIsActive').checked,
+    attributes
   };
 
   const id = document.getElementById('scId').value;

@@ -1248,6 +1248,79 @@ const steps = [
         }
       }
     }
+  },
+  {
+    name: 'add-service-category-attributes-and-provider-specs-2026-09',
+    async run(connection) {
+      if (!(await tableExists(connection, 'service_category_attributes'))) {
+        await connection.query(`
+          CREATE TABLE service_category_attributes (
+            id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            category_id  INT UNSIGNED NOT NULL,
+            attr_key     VARCHAR(60)  NOT NULL,
+            label        VARCHAR(80)  NOT NULL,
+            attr_type    ENUM('number', 'text', 'boolean') NOT NULL DEFAULT 'text',
+            unit         VARCHAR(30)  DEFAULT NULL,
+            sample_value VARCHAR(100) DEFAULT NULL,
+            position     INT          NOT NULL DEFAULT 0,
+            is_required  TINYINT(1)   NOT NULL DEFAULT 0,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_service_cat_attr (category_id, attr_key),
+            CONSTRAINT fk_service_cat_attr FOREIGN KEY (category_id)
+              REFERENCES service_categories(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+      }
+
+      if (await tableExists(connection, 'service_providers')) {
+        if (!(await columnExists(connection, 'service_providers', 'price_type'))) {
+          await connection.query(
+            "ALTER TABLE service_providers ADD COLUMN price_type ENUM('estimated', 'fixed', 'starting_at', 'contact') NOT NULL DEFAULT 'estimated' AFTER price"
+          );
+        }
+        if (!(await columnExists(connection, 'service_providers', 'price_estimate_desc'))) {
+          await connection.query(
+            'ALTER TABLE service_providers ADD COLUMN price_estimate_desc VARCHAR(255) NULL AFTER price_type'
+          );
+        }
+        if (!(await columnExists(connection, 'service_providers', 'attributes'))) {
+          await connection.query(
+            'ALTER TABLE service_providers ADD COLUMN attributes JSON NULL AFTER price_estimate_desc'
+          );
+        }
+      }
+
+      // Seed helpful default attributes for categories that match common domains if not already present
+      if (await tableExists(connection, 'service_categories')) {
+        const [cats] = await connection.query('SELECT id, name FROM service_categories');
+        for (const cat of cats) {
+          const name = cat.name.toLowerCase();
+          if (name.includes('فرح') || name.includes('خيم') || name.includes('لوازم') || name.includes('تجهيز')) {
+            await connection.query(`
+              INSERT IGNORE INTO service_category_attributes
+                (category_id, attr_key, label, attr_type, unit, sample_value, position, is_required)
+              VALUES
+                (?, 'chairs_count', 'عدد الكراسي', 'number', 'كرسي', '1,000', 1, 0),
+                (?, 'lighting_towers', 'أبراج الإضاءة', 'number', 'برج', '2', 2, 0),
+                (?, 'tents_spec', 'بيوت الشعر والخيام', 'text', 'خيمة', 'خيمة ملكية 20×10', 3, 0),
+                (?, 'cooling_heating', 'المكيفات والمراوح', 'text', 'أجهزة', '4 مكيفات صحراوية', 4, 0)
+            `, [cat.id, cat.id, cat.id, cat.id]);
+          } else if (name.includes('تصوير') || name.includes('فيديو') || name.includes('كاميرا')) {
+            await connection.query(`
+              INSERT IGNORE INTO service_category_attributes
+                (category_id, attr_key, label, attr_type, unit, sample_value, position, is_required)
+              VALUES
+                (?, 'photos_count', 'عدد الصور', 'number', 'صورة', '500', 1, 0),
+                (?, 'coverage_hours', 'ساعات التغطية', 'number', 'ساعة', '6', 2, 0),
+                (?, 'video_teaser', 'فيديو ومونتاج', 'text', 'فيديو', 'فيديو تشويقي 3 دقائق + تسجيل كامل', 3, 0),
+                (?, 'printed_album', 'ألبوم مطبوع', 'text', 'ألبوم', 'ألبوم حراري فاخر', 4, 0)
+            `, [cat.id, cat.id, cat.id, cat.id]);
+          }
+        }
+      }
+
+      logger.info('[migrations] add-service-category-attributes-and-provider-specs-2026-09: ensured service_category_attributes, price_type, price_estimate_desc, and attributes.');
+    }
   }
 ];
 

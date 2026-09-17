@@ -2898,4 +2898,445 @@ body {
   }
 }
 
+/* ==========================================================================
+   دليل خدمات المناسبات — كروت الخدمات والمواصفات التقديرية والفلاتر
+   ========================================================================== */
+
+#servicesListContainer,
+#servicesListContainer.events-feed {
+  position: static !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  scroll-snap-type: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+  padding: 0 0 40px 0 !important;
+  z-index: auto !important;
+}
+
+#servicesListContainer > .event-card,
+.service-card {
+  position: relative;
+  height: auto !important;
+  min-height: auto !important;
+  max-height: none !important;
+  flex: none !important;
+  scroll-snap-align: none !important;
+  scroll-snap-stop: normal !important;
+  padding-bottom: 0 !important;
+  margin-bottom: 18px !important;
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--line) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.service-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lift);
+}
+
+.service-card .card-bezel {
+  position: relative !important;
+  inset: auto !important;
+  height: auto !important;
+  padding: 10px !important;
+  background-size: cover;
+  background-position: center;
+}
+
+.service-card .card-framed {
+  height: auto !important;
+  position: relative !important;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.service-card .card-media {
+  position: relative;
+  width: 100%;
+  height: 380px !important;
+  min-height: 280px !important;
+  max-height: 500px !important;
+  cursor: pointer;
+  overflow: hidden;
+  background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+[data-theme="dark"] .service-card .card-media {
+  background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
+}
+
+.service-card .card-media-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover !important;
+  display: block;
+}
+
+.service-card-media-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--card-gold);
+  font-size: 3rem;
+  opacity: 0.85;
+}
+
+.service-card-media-placeholder .placeholder-icon {
+  font-size: 3.5rem;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.15));
+}
+
+/* الشارات العائمة فوق صورة الخدمة */
+.service-floating-badges {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.service-badge-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--tone, var(--primary));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(4px);
+}
+
+.service-badge-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #1A1A1A;
+  background: linear-gradient(135deg, #FFE082, #FFB300);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .service-badge-price {
+  color: #111;
+  background: linear-gradient(135deg, #FDD835, #FFA000);
+}
+
+/* جسم الكرت والتسمية */
+.service-card-caption {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.service-card-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.service-card-towns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+.service-card-desc {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ink);
+  opacity: 0.92;
+}
+
+/* شريط المواصفات السريعة (Quick Specs) */
+.service-quick-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.service-spec-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--ground-card);
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+
+.service-spec-pill strong {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+/* حزمة التسعير النموذجية التقديرية والمواصفات الاسترشادية */
+.service-package-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: color-mix(in srgb, var(--card-gold, #cba135) 12%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--card-gold, #cba135) 50%, var(--line));
+  padding: 11px 13px;
+  border-radius: 12px;
+  font-size: 0.84rem;
+  color: var(--ink);
+  margin-top: 4px;
+}
+
+.service-package-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.83rem;
+  font-weight: 800;
+  color: var(--card-gold, #b8860b);
+}
+
+.service-package-desc {
+  font-size: 0.89rem;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.service-package-flexible-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.77rem;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  padding-top: 6px;
+  border-top: 1px dashed color-mix(in srgb, var(--card-gold, #cba135) 30%, var(--line));
+  line-height: 1.4;
+}
+
+.service-package-flexible-note i {
+  color: var(--primary);
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+.service-capacity-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-right: 4px solid var(--primary);
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.service-capacity-notice i {
+  color: var(--primary);
+  font-size: 1.1rem;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.service-capacity-notice strong {
+  display: block;
+  font-weight: 800;
+  margin-bottom: 2px;
+  color: var(--ink);
+}
+
+.service-capacity-notice p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+
+/* شريط الأزرار الرئيسي */
+.service-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.service-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.service-contact-btn {
+  background: var(--primary);
+  color: #fff;
+}
+
+.service-contact-btn:hover {
+  filter: brightness(1.08);
+}
+
+.service-more-btn {
+  background: var(--ground-card);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.service-more-btn:hover {
+  background: var(--surface);
+  border-color: var(--card-gold);
+}
+
+/* اللوح القابل للطي (Collapsible Details) */
+.service-details-panel {
+  padding: 16px;
+  background: var(--ground-card);
+  border-top: 1px solid var(--line);
+  animation: detailsFadeIn 0.25s ease-out;
+}
+
+@keyframes detailsFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.service-details-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.service-details-panel-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+/* شبكة المواصفات الموسعة (Specs Grid) */
+.service-specs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.service-spec-item {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.service-spec-item .spec-label {
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+}
+
+.service-spec-item .spec-val {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+/* أزرار الاتصال والتواصل المباشرة */
+.service-contact-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.service-btn-whatsapp {
+  background: #25D366;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.service-btn-whatsapp:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+.service-btn-call {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.service-btn-call:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+
 

@@ -1742,6 +1742,27 @@ async function run() {
     assert.strictEqual(document.getElementById('otIcon').value, choices[0].textContent.trim());
   });
 
+  await test('service-category form has attributes editor container and addCategoryAttributeRow adds rows', () => {
+    const dom = buildAdminEnv();
+    dom.window.openServiceCategoryForm();
+    const { document } = dom.window;
+    assert.ok(document.getElementById('scAttributesContainer'), 'expected #scAttributesContainer to exist');
+    dom.window.addCategoryAttributeRow({ label: 'عدد الكراسي', unit: 'كرسي', sample_value: '1000' });
+    const rows = document.querySelectorAll('#scAttributesContainer .sc-attr-row');
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].querySelector('.sc-attr-label').value, 'عدد الكراسي');
+    assert.strictEqual(rows[0].querySelector('.sc-attr-unit').value, 'كرسي');
+    assert.strictEqual(rows[0].querySelector('.sc-attr-sample').value, '1000');
+  });
+
+  await test('provider form has price type, estimate description, and dynamic attributes container', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    assert.ok(document.getElementById('provPriceType'), 'expected #provPriceType to exist');
+    assert.ok(document.getElementById('provPriceEstimateDesc'), 'expected #provPriceEstimateDesc to exist');
+    assert.ok(document.getElementById('provDynamicAttributesWrapper'), 'expected #provDynamicAttributesWrapper to exist');
+  });
+
   console.log('\nAdmin panel — editing an event');
 
   /**
@@ -4458,6 +4479,34 @@ async function run() {
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
     assert(cardTwoDays.includes('card-datechip">باقي 2 أيام</span>'), 'Event in 2 days must show "باقي 2 أيام"');
+  });
+
+  await test('services tab has filter chips, search input, filter modals, and renders luxury service cards', async () => {
+    const dom = buildEnv({ loggedIn: false });
+    const { document } = dom.window;
+    assert.ok(document.getElementById('servicePlaceChip'), 'expected #servicePlaceChip');
+    assert.ok(document.getElementById('serviceCategoryChip'), 'expected #serviceCategoryChip');
+    assert.ok(document.getElementById('serviceClearFiltersBtn'), 'expected #serviceClearFiltersBtn');
+    assert.ok(document.getElementById('serviceSearchInput'), 'expected #serviceSearchInput');
+    assert.ok(document.getElementById('servicePlaceFilterModal'), 'expected #servicePlaceFilterModal');
+    assert.ok(document.getElementById('serviceCategoryFilterModal'), 'expected #serviceCategoryFilterModal');
+    assert.ok(document.getElementById('servicesListContainer'), 'expected #servicesListContainer');
+
+    const cardHtml = dom.window.renderSingleServiceCardHtml({
+      id: 501,
+      name: 'خيام البادية والضيافة',
+      category_name: 'بيوت شعر',
+      category_color: '#B8860B',
+      category_icon: '⛺',
+      price_type: 'estimated',
+      price_estimate_desc: '1000 كرسي + برجين إضاءة = 4500 ₪',
+      attributes: [{ label: 'عدد الكراسي', value: '1000', unit: 'كرسي' }],
+      towns: ['رهط']
+    });
+    assert.ok(cardHtml.includes('service-card'), 'expected cardHtml to include service-card');
+    assert.ok(cardHtml.includes('1000 كرسي + برجين إضاءة = 4500 ₪'), 'expected package description in card');
+    assert.ok(cardHtml.includes('عدد الكراسي'), 'expected attribute in card');
+    assert.ok(cardHtml.includes('الكميات قابلة للتعديل والزيادة'), 'expected flexibility notice in card');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
