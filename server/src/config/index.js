@@ -94,7 +94,7 @@ const config = {
     // Tighter than the global API budget above: this is a fire-and-forget
     // beacon endpoint (POST /api/analytics/events) with no login required,
     // so it is the cheapest route in the API to spam.
-    analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 15)
+    analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 60)
   },
 
   bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 10),

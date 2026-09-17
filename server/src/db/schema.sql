@@ -564,6 +564,7 @@ CREATE TABLE IF NOT EXISTS analytics_events (
   KEY idx_analytics_events_created (created_at),
   KEY idx_analytics_events_name (event_name),
   KEY idx_analytics_events_viewer (viewer_key),
+  KEY idx_analytics_events_device (device_id),
   -- Erasure by the database, not by remembering to: deleting an account
   -- removes its identified rows with it. This is why user_id here carries a
   -- real FK — unlike story_views.user_id, whose viewer_key is STORED and so

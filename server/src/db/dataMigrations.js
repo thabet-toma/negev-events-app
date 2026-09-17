@@ -1237,6 +1237,17 @@ const steps = [
       );
       logger.info('[migrations] refresh-demo-event-dates-2026-09: refreshed past demo event dates.');
     }
+  },
+  {
+    name: 'add-analytics-events-device-id-index-2026-09',
+    async run(connection) {
+      if (await tableExists(connection, 'analytics_events')) {
+        if (!(await indexExists(connection, 'analytics_events', 'idx_analytics_events_device'))) {
+          await connection.query('ALTER TABLE analytics_events ADD INDEX idx_analytics_events_device (device_id)');
+          logger.info('[migrations] add-analytics-events-device-id-index-2026-09: added index idx_analytics_events_device.');
+        }
+      }
+    }
   }
 ];
 

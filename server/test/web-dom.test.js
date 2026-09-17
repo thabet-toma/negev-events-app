@@ -1612,7 +1612,7 @@ async function run() {
     const fetchStub = async (url, options = {}) => {
       const requestPath = String(url).split('?')[0];
       const method = (options && options.method) || 'GET';
-      if (method !== 'GET') calls.push({ url: requestPath, method });
+      if (method === 'PATCH') calls.push({ url: requestPath, method });
 
       if (requestPath === '/api/notifications' && method === 'GET') {
         return jsonResponse({ success: true, notifications: MIXED_NOTIFICATIONS_FIXTURE });
@@ -1621,6 +1621,9 @@ async function run() {
         return jsonResponse({ success: true });
       }
       if (requestPath === '/api/broadcasts/5/dismiss' && method === 'PATCH') {
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/analytics/events' && method === 'POST') {
         return jsonResponse({ success: true });
       }
       // Any other path — e.g. the pre-FIX-1 shape's /api/notifications/undefined/read

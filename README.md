@@ -514,6 +514,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
 | `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` فقط) 🛡️ |
 | `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ 🛡️ |
+| `GET` | `/api/admin/analytics/overview` | مؤشرات النشاط العام (المشاهدات، المشاركات، النقرات، جمهور الأجهزة النشطة والزوار غير المسجلين) مع تصفية المدة (`?period=24h\|7d\|30d\|all`) 🛡️ |
+| `GET` | `/api/admin/analytics/devices` | قائمة الأجهزة والتوكنات النشطة (زوار غير مسجلين ومستخدمين) مع البحث والفلترة (`?type=anonymous\|registered` `?search=`) 🛡️ |
+| `GET` | `/api/admin/analytics/devices/:deviceId/log` | سجل نشاط جهاز/توكن محدد مع الترقيم 🛡️ |
+| `GET` | `/api/admin/analytics/counts` | مجموع الأحداث السلوكية المصنفة حسب النوع 🛡️ |
+| `GET` | `/api/admin/analytics/users/:id` | سجل نشاط مستخدم مسجل محدد 🛡️ |
 
 🔒 يتطلب رمز مستخدم · 👑 يتطلب رمز إدارة · 🛡️ يتطلب رمز مدير عام (`super_admin`)
 

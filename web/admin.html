@@ -678,33 +678,133 @@
         </div>
       </section>
 
-      <!-- TAB: ANALYTICS / TRACKING — سوبر أدمن حصراً. الجلب والتخزين موجودان منذ
-           issue #44 (GET /api/admin/analytics/counts و
-           GET /api/admin/analytics/users/:userId) — هذه هي واجهة قراءتهما التي
-           تُركت خارج النطاق حينها. -->
+      <!-- TAB: ANALYTICS / TRACKING — سوبر أدمن حصراً. لوحة النشاط والتتبع الشاملة -->
       <section id="tabAnalytics" class="admin-tab-pane">
-        <div class="pane-box">
-          <div class="pane-header">
-            <h2><i class="fa-solid fa-chart-line"></i> التتبّع والتحليلات</h2>
-            <p>عدّاد كل حدث مسجَّل على المنصّة — بلا هوية أصحابه هنا</p>
+        <!-- 1. لوحة النشاط والمؤشرات العليا (المشاهدات، المشاركات، النقرات، الأجهزة) -->
+        <div class="pane-box" style="margin-bottom:20px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <h2><i class="fa-solid fa-chart-line"></i> لوحة النشاط والتتبّع الشاملة</h2>
+              <p>المشاهدات والمشاركات والنقرات الحقيقية عبر الويب والتطبيق مع تتبع الزوار غير المسجلين بالتوكن</p>
+            </div>
+            <div class="status-filter-group" id="analyticsPeriodSelector">
+              <button type="button" class="filter-chip active" onclick="switchAnalyticsPeriod('all', this)">الكل</button>
+              <button type="button" class="filter-chip" onclick="switchAnalyticsPeriod('today', this)">اليوم</button>
+              <button type="button" class="filter-chip" onclick="switchAnalyticsPeriod('7d', this)">آخر 7 أيام</button>
+              <button type="button" class="filter-chip" onclick="switchAnalyticsPeriod('30d', this)">آخر 30 يوماً</button>
+            </div>
           </div>
-          <div id="analyticsRetentionNotice" class="occasion-types-notice"></div>
-          <div id="analyticsCountsList" class="admin-table-wrapper"></div>
+
+          <!-- 4 Golden KPI Cards -->
+          <div class="stats-grid" id="analyticsKpiGrid" style="margin-top:18px; margin-bottom:0;">
+            <!-- Views KPI -->
+            <div class="stat-card">
+              <div class="stat-icon" style="background: rgba(234, 179, 8, 0.15); color: var(--gold-main);">
+                <i class="fa-solid fa-eye"></i>
+              </div>
+              <div class="stat-info" style="flex:1;">
+                <span class="stat-label">المشاهدات (كم واحد شاهد)</span>
+                <h2 id="kpiTotalViews">0</h2>
+                <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px; display:flex; justify-content:space-between; gap:6px; flex-wrap:wrap;">
+                  <span><strong id="kpiUniqueViewers" style="color:var(--text-main);">0</strong> مشاهد حقيقي (فريد)</span>
+                  <span id="kpiViewsPlatformRatio">ويب 0 · تطبيق 0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Shares KPI -->
+            <div class="stat-card">
+              <div class="stat-icon" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6;">
+                <i class="fa-solid fa-share-nodes"></i>
+              </div>
+              <div class="stat-info" style="flex:1;">
+                <span class="stat-label">المشاركات (كم واحد شارك)</span>
+                <h2 id="kpiTotalShares">0</h2>
+                <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;">
+                  <span><strong id="kpiUniqueSharers" style="color:var(--text-main);">0</strong> شخص فريد شارك المناسبات</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Clicks KPI -->
+            <div class="stat-card">
+              <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
+                <i class="fa-solid fa-arrow-pointer"></i>
+              </div>
+              <div class="stat-info" style="flex:1;">
+                <span class="stat-label">النقرات والتفاعل (كم واحد كبس)</span>
+                <h2 id="kpiTotalClicks">0</h2>
+                <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;">
+                  <span><strong id="kpiUniqueClickers" style="color:var(--text-main);">0</strong> متفاعل نقر على الاتجاهات/الاتصال</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Audience / Devices KPI -->
+            <div class="stat-card">
+              <div class="stat-icon" style="background: rgba(139, 92, 246, 0.15); color: #8b5cf6;">
+                <i class="fa-solid fa-mobile-screen-button"></i>
+              </div>
+              <div class="stat-info" style="flex:1;">
+                <span class="stat-label">الأجهزة والزوار (التوكنات النشطة)</span>
+                <h2 id="kpiTotalDevices">0</h2>
+                <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;">
+                  <span id="kpiUnregisteredRatio"><strong id="kpiUnregisteredCount" style="color:var(--text-main);">0</strong> زائر غير مسجل بالتوكن</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="pane-box" style="margin-top:20px;">
+        <!-- 2. جدول الأجهزة والزوار النشطين بالتوكن -->
+        <div class="pane-box" style="margin-bottom:20px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <h2><i class="fa-solid fa-fingerprint"></i> الأجهزة والزوار النشطون (التوكنات)</h2>
+              <p>تتبع مباشر للزوار غير المسجلين عبر التوكن مع إمكانية استعراض سجل أي جهاز بالتفصيل</p>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <div class="status-filter-group" id="devicesFilterGroup">
+                <button type="button" class="filter-chip active" onclick="filterAnalyticsDevices('all', this)">الكل</button>
+                <button type="button" class="filter-chip" onclick="filterAnalyticsDevices('anonymous', this)">غير مسجلين فقط</button>
+                <button type="button" class="filter-chip" onclick="filterAnalyticsDevices('registered', this)">مسجلون فقط</button>
+              </div>
+              <input type="text" id="analyticsDeviceSearchInput" placeholder="بحث بالتوكن أو الاسم..." style="padding:7px 12px; border-radius:var(--radius-sm); border:1px solid var(--admin-card-border); background:var(--bg-surface); color:var(--text-main); font-family:inherit; font-size:0.85rem;" oninput="debounceDeviceSearch(this.value)">
+            </div>
+          </div>
+          <div id="analyticsDevicesList" class="admin-table-wrapper">
+            <div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);">
+              <i class="fa-solid fa-spinner fa-spin" style="font-size:1.8rem; color:var(--gold-main); margin-bottom:10px;"></i>
+              <p>جاري تحميل الأجهزة النشطة...</p>
+            </div>
+          </div>
+          <div id="analyticsDevicesPagination" class="pane-controls-bar" style="display:none;"></div>
+        </div>
+
+        <!-- 3. سجل نشاط الجهاز / المستخدم المختار -->
+        <div class="pane-box" style="margin-bottom:20px;">
           <div class="pane-header">
-            <h2><i class="fa-solid fa-user-clock"></i> سجل مستخدم بعينه</h2>
-            <p>اختر مستخدماً من تبويب «إدارة المستخدمين» بزرّ «سجل التتبّع» بجانب اسمه</p>
+            <h2><i class="fa-solid fa-user-clock"></i> سجل نشاط الجهاز أو المستخدم المختار</h2>
+            <p>انقر «عرض السجل» بجانب أي جهاز في الجدول أعلاه، أو بجانب أي مستخدم في «إدارة المستخدمين»</p>
           </div>
           <div id="analyticsUserLogHeader"></div>
           <div id="analyticsUserLog" class="admin-table-wrapper">
             <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
               <i class="fa-solid fa-user-magnifying-glass" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
-              <p>لم يُختَر مستخدم بعد</p>
+              <p>لم يُختَر جهاز أو مستخدم بعد — انقر «عرض السجل» بجانب أي توكن أعلاه لمعاينة تفاعلاته</p>
             </div>
           </div>
           <div id="analyticsUserLogPagination" class="pane-controls-bar" style="display:none;"></div>
+        </div>
+
+        <!-- 4. عدّادات الأحداث المسجَّلة (الجدول القديم المحتفظ به) -->
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-list-check"></i> عدّادات الأحداث المسجَّلة إجمالاً</h2>
+            <p>عدّاد كل حدث مسجَّل على المنصّة — بلا هوية أصحابه هنا</p>
+          </div>
+          <div id="analyticsRetentionNotice" class="occasion-types-notice"></div>
+          <div id="analyticsCountsList" class="admin-table-wrapper"></div>
         </div>
       </section>
 

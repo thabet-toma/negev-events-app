@@ -135,7 +135,12 @@ const ANALYTICS_EVENTS = [
   { key: 'image_upload_failed', label: 'فشل رفع صورة', countOnly: false },
   { key: 'login', label: 'تسجيل الدخول', countOnly: false },
   { key: 'register', label: 'إنشاء حساب جديد', countOnly: false },
-  { key: 'share_page_viewed', label: 'فتح صفحة رابط مناسبة مشارَكة', countOnly: true }
+  { key: 'share_page_viewed', label: 'فتح صفحة رابط مناسبة مشارَكة', countOnly: true },
+  { key: 'app_opened', label: 'فتح التطبيق أو زيارة الموقع', countOnly: false },
+  { key: 'event_viewed', label: 'مشاهدة تفاصيل مناسبة', countOnly: false },
+  { key: 'location_clicked', label: 'الضغط على الاتجاهات أو الخريطة', countOnly: false },
+  { key: 'contact_clicked', label: 'الضغط على الاتصال بأصحاب المناسبة', countOnly: false },
+  { key: 'reminder_clicked', label: 'الضغط على زرّ ذكّرني بالمناسبة', countOnly: false }
 ];
 
 const ANALYTICS_EVENT_KEYS = ANALYTICS_EVENTS.map(event => event.key);

@@ -22,6 +22,15 @@ let analyticsRetentionDays = null; // نفس المصدر — لا رقم ثاب
 let analyticsSelectedUserId = null;
 let analyticsSelectedUserLabel = '';
 let analyticsUserLogPage = 1;
+let analyticsCurrentPeriod = 'all';
+let analyticsOverviewData = null;
+let allAnalyticsDevices = [];
+let analyticsDevicesPage = 1;
+let analyticsDevicesType = 'all';
+let analyticsDevicesSearch = '';
+let analyticsDeviceSearchTimeout = null;
+let analyticsSelectedDeviceId = null;
+let analyticsSelectedIsDevice = false;
 
 // حالة نموذج تعديل المناسبة (#43) — النموذج نفسه يُبنى ديناميكياً في JS (لا لمس
 // لـadmin.html هنا)، فحالته تعيش هنا مع بقية حالة اللوحة.
@@ -605,7 +614,7 @@ async function loadAdminDashboard() {
     tasks.push(
       fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
       fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
-      fetchAdminAnalyticsCounts(), fetchAdminSettings()
+      fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings()
     );
   }
   await Promise.all(tasks);
@@ -1784,6 +1793,10 @@ function switchAdminTab(tabId) {
     renderBroadcastComposer();
   } else if (tabId === 'tabSettings') {
     fetchAdminSettings();
+  } else if (tabId === 'tabAnalytics') {
+    fetchAdminAnalyticsCounts();
+    fetchAdminAnalyticsOverview();
+    fetchAdminAnalyticsDevices(1);
   }
 }
 
@@ -3782,10 +3795,243 @@ function renderAnalyticsRetentionNotice(catalogOk = analyticsRetentionDays !== n
   `;
 }
 
+/**
+ * لوحة النشاط الشاملة (المشاهدات، المشاركات، النقرات، الأجهزة)
+ */
+async function fetchAdminAnalyticsOverview(period = analyticsCurrentPeriod) {
+  analyticsCurrentPeriod = period;
+  try {
+    const res = await adminFetch(`/api/admin/analytics/overview?period=${period}`);
+    const data = await res.json();
+    if (data.success && data.overview) {
+      analyticsOverviewData = data.overview;
+      renderAnalyticsOverview();
+    }
+  } catch (e) {
+    console.error('Analytics overview error:', e);
+  }
+}
+
+function renderAnalyticsOverview() {
+  if (!analyticsOverviewData) return;
+  const o = analyticsOverviewData;
+
+  const kpiTotalViews = document.getElementById('kpiTotalViews');
+  const kpiUniqueViewers = document.getElementById('kpiUniqueViewers');
+  const kpiViewsPlatformRatio = document.getElementById('kpiViewsPlatformRatio');
+  if (kpiTotalViews) kpiTotalViews.textContent = (o.views.total || 0).toLocaleString('ar-EG');
+  if (kpiUniqueViewers) kpiUniqueViewers.textContent = (o.views.unique || 0).toLocaleString('ar-EG');
+  if (kpiViewsPlatformRatio) {
+    const web = o.platforms?.web?.unique_viewers || 0;
+    const mob = o.platforms?.mobile?.unique_viewers || 0;
+    kpiViewsPlatformRatio.textContent = `ويب ${web.toLocaleString('ar-EG')} · تطبيق ${mob.toLocaleString('ar-EG')}`;
+  }
+
+  const kpiTotalShares = document.getElementById('kpiTotalShares');
+  const kpiUniqueSharers = document.getElementById('kpiUniqueSharers');
+  if (kpiTotalShares) kpiTotalShares.textContent = (o.shares.total || 0).toLocaleString('ar-EG');
+  if (kpiUniqueSharers) kpiUniqueSharers.textContent = (o.shares.unique || 0).toLocaleString('ar-EG');
+
+  const kpiTotalClicks = document.getElementById('kpiTotalClicks');
+  const kpiUniqueClickers = document.getElementById('kpiUniqueClickers');
+  if (kpiTotalClicks) kpiTotalClicks.textContent = (o.clicks.total || 0).toLocaleString('ar-EG');
+  if (kpiUniqueClickers) kpiUniqueClickers.textContent = (o.clicks.unique || 0).toLocaleString('ar-EG');
+
+  const kpiTotalDevices = document.getElementById('kpiTotalDevices');
+  const kpiUnregisteredCount = document.getElementById('kpiUnregisteredCount');
+  if (kpiTotalDevices) kpiTotalDevices.textContent = (o.audience.total_active_devices || 0).toLocaleString('ar-EG');
+  if (kpiUnregisteredCount) kpiUnregisteredCount.textContent = (o.audience.unregistered_devices || 0).toLocaleString('ar-EG');
+}
+
+function switchAnalyticsPeriod(period, btnElement) {
+  analyticsCurrentPeriod = period;
+  if (btnElement) {
+    document.querySelectorAll('#analyticsPeriodSelector .filter-chip').forEach(b => b.classList.remove('active'));
+    btnElement.classList.add('active');
+  }
+  fetchAdminAnalyticsOverview(period);
+}
+
+/**
+ * قائمة الأجهزة والزوار النشطين (التوكنات)
+ */
+async function fetchAdminAnalyticsDevices(page = 1) {
+  analyticsDevicesPage = page;
+  const container = document.getElementById('analyticsDevicesList');
+  try {
+    const res = await adminFetch(`/api/admin/analytics/devices?page=${page}&type=${analyticsDevicesType}&search=${encodeURIComponent(analyticsDevicesSearch)}`);
+    const data = await res.json();
+    if (data.success) {
+      allAnalyticsDevices = data.devices || [];
+      renderAnalyticsDevices(data.devices || [], data.pagination);
+    } else if (container) {
+      container.innerHTML = `
+        <div class="empty-state" style="padding: 30px; text-align: center; color: var(--text-dim);">
+          <p>${escapeHtml(data.message || 'تعذر تحميل الأجهزة النشطة')}</p>
+        </div>
+      `;
+    }
+  } catch (e) {
+    console.error('Analytics devices error:', e);
+  }
+}
+
+function renderAnalyticsDevices(devices, pagination) {
+  const container = document.getElementById('analyticsDevicesList');
+  if (!container) return;
+
+  if (!devices.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-mobile-screen-button" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد أجهزة مطابقة للبحث أو الفلتر المختار</p>
+      </div>
+    `;
+    renderAnalyticsDevicesPagination(pagination);
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>رمز الجهاز (التوكن)</th>
+          <th>الهوية</th>
+          <th>المنصة</th>
+          <th>المشاهدات</th>
+          <th>النقرات</th>
+          <th>المشاركات</th>
+          <th>آخر ظهور</th>
+          <th>إجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${devices.map(d => {
+          const isAnonymous = d.is_anonymous;
+          const identityHtml = isAnonymous
+            ? '<span class="status-tag pending"><i class="fa-solid fa-user-secret"></i> زائر غير مسجل</span>'
+            : `<span class="status-tag approved"><i class="fa-solid fa-user-check"></i> ${escapeHtml(d.user.full_name)}</span>`;
+          const platformIcon = (d.platform === 'android' || d.platform === 'mobile')
+            ? '<i class="fa-brands fa-android" style="color:var(--success-green); font-size:1.1rem;"></i> أندرويد'
+            : '<i class="fa-solid fa-globe" style="color:var(--sky-deep); font-size:1.1rem;"></i> ويب';
+          const tokenShort = d.device_id.length > 16 ? `${d.device_id.slice(0, 8)}…${d.device_id.slice(-6)}` : d.device_id;
+          const dateStr = d.last_seen ? new Date(d.last_seen).toLocaleString('ar-EG') : '—';
+
+          return `
+            <tr>
+              <td>
+                <code style="background:var(--surface-sunk); padding:2px 6px; border-radius:4px; font-size:0.8rem;" title="${escapeHtml(d.device_id)}">${escapeHtml(tokenShort)}</code>
+              </td>
+              <td>${identityHtml}</td>
+              <td>${platformIcon}</td>
+              <td><strong>${d.views_count}</strong></td>
+              <td><strong>${d.clicks_count}</strong></td>
+              <td><strong>${d.shares_count}</strong></td>
+              <td style="font-size:0.82rem; color:var(--text-dim);">${dateStr}</td>
+              <td>
+                <button type="button" class="admin-btn-ghost" style="padding:4px 10px; font-size:0.8rem;" onclick="viewDeviceAnalytics('${escapeHtml(d.device_id)}')">
+                  <i class="fa-solid fa-clock-rotate-left"></i> عرض السجل
+                </button>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  renderAnalyticsDevicesPagination(pagination);
+}
+
+function renderAnalyticsDevicesPagination(pagination) {
+  const el = document.getElementById('analyticsDevicesPagination');
+  if (!el) return;
+  if (!pagination || pagination.totalPages <= 1) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+
+  el.style.display = 'flex';
+  el.innerHTML = `
+    <button type="button" class="admin-btn-ghost" ${pagination.page <= 1 ? 'disabled' : ''} onclick="fetchAdminAnalyticsDevices(${pagination.page - 1})">
+      <i class="fa-solid fa-arrow-right"></i> السابق
+    </button>
+    <span style="color:var(--text-dim); font-size:0.85rem;">صفحة ${pagination.page} من ${pagination.totalPages} (إجمالي ${pagination.total})</span>
+    <button type="button" class="admin-btn-ghost" ${pagination.page >= pagination.totalPages ? 'disabled' : ''} onclick="fetchAdminAnalyticsDevices(${pagination.page + 1})">
+      التالي <i class="fa-solid fa-arrow-left"></i>
+    </button>
+  `;
+}
+
+function filterAnalyticsDevices(type, btnElement) {
+  analyticsDevicesType = type;
+  if (btnElement) {
+    document.querySelectorAll('#devicesFilterGroup .filter-chip').forEach(b => b.classList.remove('active'));
+    btnElement.classList.add('active');
+  }
+  fetchAdminAnalyticsDevices(1);
+}
+
+function debounceDeviceSearch(val) {
+  if (analyticsDeviceSearchTimeout) clearTimeout(analyticsDeviceSearchTimeout);
+  analyticsDeviceSearchTimeout = setTimeout(() => {
+    analyticsDevicesSearch = val.trim();
+    fetchAdminAnalyticsDevices(1);
+  }, 350);
+}
+
+function viewDeviceAnalytics(deviceId) {
+  analyticsSelectedDeviceId = deviceId;
+  analyticsSelectedUserId = null;
+  analyticsSelectedIsDevice = true;
+  analyticsSelectedUserLabel = `جهاز: ${deviceId}`;
+  analyticsUserLogPage = 1;
+
+  const headerEl = document.getElementById('analyticsUserLogHeader');
+  if (headerEl) {
+    headerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  fetchAnalyticsDeviceLog();
+}
+
+async function fetchAnalyticsDeviceLog(page = analyticsUserLogPage) {
+  if (!analyticsSelectedDeviceId) return;
+  analyticsUserLogPage = page;
+  if (!analyticsEventCatalog.length) await fetchAnalyticsEventCatalog();
+
+  try {
+    const res = await adminFetch(`/api/admin/analytics/devices/${analyticsSelectedDeviceId}/log?page=${page}`);
+    const data = await res.json();
+
+    if (res.status === 403) {
+      renderAnalyticsUserLogForbidden(data.message);
+      return;
+    }
+
+    if (data.success) {
+      const el = document.getElementById('analyticsUserLogHeader');
+      if (el) {
+        const title = data.is_anonymous
+          ? `<i class="fa-solid fa-fingerprint"></i> زائر غير مسجل — توكن: <code>${escapeHtml(data.device_id)}</code>`
+          : `<i class="fa-solid fa-user-check"></i> ${escapeHtml(data.user ? data.user.full_name : '')} (${escapeHtml(data.user ? data.user.phone_number : '')}) — توكن: <code>${escapeHtml(data.device_id)}</code>`;
+        el.innerHTML = `<p style="color:var(--text-main); font-weight:700; margin-bottom:14px;">${title}</p>`;
+      }
+      renderAnalyticsUserLog(data.events, data.pagination);
+    } else {
+      alert(data.message || 'تعذر تحميل سجل هذا الجهاز');
+    }
+  } catch (e) {
+    console.error('Analytics device log error:', e);
+  }
+}
+
 /** زرّ «سجل التتبّع» بجانب كل مستخدم في تبويب «إدارة المستخدمين» — لا بحث مستخدم ثانٍ هنا، بل انتقال للسجل ممن اختير أصلاً من القائمة والبحث الموجودين. */
 function viewUserAnalytics(userId) {
   const user = allAdminUsers.find(u => u.id === userId);
   analyticsSelectedUserId = userId;
+  analyticsSelectedDeviceId = null;
+  analyticsSelectedIsDevice = false;
   analyticsSelectedUserLabel = user ? `${user.full_name} — ${user.phone_number}` : `مستخدم #${userId}`;
   analyticsUserLogPage = 1;
   switchAdminTab('tabAnalytics');
@@ -3853,7 +4099,7 @@ function renderAnalyticsUserLog(events, pagination) {
     container.innerHTML = `
       <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
         <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
-        <p>لا سجل لهذا المستخدم ضمن نافذة الاحتفاظ الحالية${analyticsRetentionDays ? ` (آخر ${analyticsRetentionDays} يوماً)` : ''} — قد يكون سجلّه أقدم من ذلك وطُوي في العدّادات، لا عطلاً بالضرورة</p>
+        <p>لا سجل لهذا الزائر أو المستخدم ضمن نافذة الاحتفاظ الحالية${analyticsRetentionDays ? ` (آخر ${analyticsRetentionDays} يوماً)` : ''} — قد يكون سجلّه أقدم من ذلك وطُوي في العدّادات، لا عطلاً بالضرورة</p>
       </div>
     `;
   } else {
@@ -3894,13 +4140,20 @@ function renderAnalyticsUserLogPagination(pagination) {
     return;
   }
 
+  const prevCall = analyticsSelectedIsDevice
+    ? `fetchAnalyticsDeviceLog(${pagination.page - 1})`
+    : `fetchAnalyticsUserLog(${pagination.page - 1})`;
+  const nextCall = analyticsSelectedIsDevice
+    ? `fetchAnalyticsDeviceLog(${pagination.page + 1})`
+    : `fetchAnalyticsUserLog(${pagination.page + 1})`;
+
   el.style.display = 'flex';
   el.innerHTML = `
-    <button type="button" class="admin-btn-ghost" ${pagination.page <= 1 ? 'disabled' : ''} onclick="fetchAnalyticsUserLog(${pagination.page - 1})">
+    <button type="button" class="admin-btn-ghost" ${pagination.page <= 1 ? 'disabled' : ''} onclick="${prevCall}">
       <i class="fa-solid fa-arrow-right"></i> السابق
     </button>
     <span style="color:var(--text-dim); font-size:0.85rem;">صفحة ${pagination.page} من ${pagination.totalPages}</span>
-    <button type="button" class="admin-btn-ghost" ${pagination.page >= pagination.totalPages ? 'disabled' : ''} onclick="fetchAnalyticsUserLog(${pagination.page + 1})">
+    <button type="button" class="admin-btn-ghost" ${pagination.page >= pagination.totalPages ? 'disabled' : ''} onclick="${nextCall}">
       التالي <i class="fa-solid fa-arrow-left"></i>
     </button>
   `;

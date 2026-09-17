@@ -219,11 +219,254 @@ async function listForUser(userId, { page = 1, limit = DEFAULT_PAGE_SIZE } = {})
   };
 }
 
+/**
+ * Aggregates high-level analytics for the super-admin activity dashboard:
+ * - Views (total vs unique viewers, breakdown)
+ * - Shares (total vs unique sharers)
+ * - Clicks & interactions (total vs unique clickers, breakdown)
+ * - Platforms (web vs mobile)
+ * - Audience (total active devices, unregistered vs registered)
+ */
+async function getAnalyticsOverview({ period = 'all' } = {}) {
+  let periodClause = '';
+  if (period === 'today') {
+    periodClause = ' AND created_at >= CURDATE()';
+  } else if (period === '7d') {
+    periodClause = ' AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)';
+  } else if (period === '30d') {
+    periodClause = ' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)';
+  }
+
+  const row = await db.queryOne(
+    `SELECT
+       COALESCE(SUM(event_name IN ('app_opened', 'event_viewed', 'share_page_viewed')), 0) AS total_views,
+       COALESCE(COUNT(DISTINCT CASE WHEN event_name IN ('app_opened', 'event_viewed', 'share_page_viewed') AND viewer_key IS NOT NULL THEN viewer_key END), 0) AS unique_viewers,
+       COALESCE(SUM(event_name = 'app_opened'), 0) AS views_app_opened,
+       COALESCE(SUM(event_name = 'event_viewed'), 0) AS views_event_viewed,
+       COALESCE(SUM(event_name = 'share_page_viewed'), 0) AS views_share_page,
+
+       COALESCE(SUM(event_name = 'share_clicked'), 0) AS total_shares,
+       COALESCE(COUNT(DISTINCT CASE WHEN event_name = 'share_clicked' AND viewer_key IS NOT NULL THEN viewer_key END), 0) AS unique_sharers,
+
+       COALESCE(SUM(event_name IN ('location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked')), 0) AS total_clicks,
+       COALESCE(COUNT(DISTINCT CASE WHEN event_name IN ('location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked') AND viewer_key IS NOT NULL THEN viewer_key END), 0) AS unique_clickers,
+       COALESCE(SUM(event_name = 'location_clicked'), 0) AS clicks_location,
+       COALESCE(SUM(event_name = 'contact_clicked'), 0) AS clicks_contact,
+       COALESCE(SUM(event_name = 'reminder_clicked'), 0) AS clicks_reminder,
+       COALESCE(SUM(event_name = 'app_download_clicked'), 0) AS clicks_download,
+
+       COALESCE(SUM(platform = 'web'), 0) AS web_events,
+       COALESCE(COUNT(DISTINCT CASE WHEN platform = 'web' AND viewer_key IS NOT NULL THEN viewer_key END), 0) AS web_unique_viewers,
+
+       COALESCE(SUM(platform IN ('android', 'mobile')), 0) AS mobile_events,
+       COALESCE(COUNT(DISTINCT CASE WHEN platform IN ('android', 'mobile') AND viewer_key IS NOT NULL THEN viewer_key END), 0) AS mobile_unique_viewers,
+
+       COALESCE(COUNT(DISTINCT viewer_key), 0) AS total_active_devices,
+       COALESCE(COUNT(DISTINCT CASE WHEN user_id IS NULL AND device_id IS NOT NULL THEN device_id END), 0) AS unregistered_devices,
+       COALESCE(COUNT(DISTINCT CASE WHEN user_id IS NOT NULL THEN user_id END), 0) AS registered_users
+     FROM analytics_events
+     WHERE 1 = 1 ${periodClause}`
+  );
+
+  let foldedViews = 0;
+  let foldedShares = 0;
+  let foldedClicks = 0;
+  let foldedWeb = 0;
+  let foldedMobile = 0;
+
+  if (period === 'all') {
+    const foldedRows = await db.query(
+      `SELECT event_name, platform, SUM(count) AS cnt FROM analytics_daily_counters GROUP BY event_name, platform`
+    );
+    for (const f of foldedRows) {
+      const cnt = Number(f.cnt) || 0;
+      if (['app_opened', 'event_viewed', 'share_page_viewed'].includes(f.event_name)) {
+        foldedViews += cnt;
+      } else if (f.event_name === 'share_clicked') {
+        foldedShares += cnt;
+      } else if (['location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked'].includes(f.event_name)) {
+        foldedClicks += cnt;
+      }
+      if (f.platform === 'web') foldedWeb += cnt;
+      else if (['android', 'mobile'].includes(f.platform)) foldedMobile += cnt;
+    }
+  }
+
+  return {
+    period,
+    views: {
+      total: Number(row.total_views) + foldedViews,
+      unique: Number(row.unique_viewers),
+      breakdown: {
+        app_opened: Number(row.views_app_opened),
+        event_viewed: Number(row.views_event_viewed),
+        share_page_viewed: Number(row.views_share_page)
+      }
+    },
+    shares: {
+      total: Number(row.total_shares) + foldedShares,
+      unique: Number(row.unique_sharers)
+    },
+    clicks: {
+      total: Number(row.total_clicks) + foldedClicks,
+      unique: Number(row.unique_clickers),
+      breakdown: {
+        location: Number(row.clicks_location),
+        contact: Number(row.clicks_contact),
+        reminder: Number(row.clicks_reminder),
+        download: Number(row.clicks_download)
+      }
+    },
+    platforms: {
+      web: {
+        total_events: Number(row.web_events) + foldedWeb,
+        unique_viewers: Number(row.web_unique_viewers)
+      },
+      mobile: {
+        total_events: Number(row.mobile_events) + foldedMobile,
+        unique_viewers: Number(row.mobile_unique_viewers)
+      }
+    },
+    audience: {
+      total_active_devices: Number(row.total_active_devices),
+      unregistered_devices: Number(row.unregistered_devices),
+      registered_users: Number(row.registered_users)
+    }
+  };
+}
+
+/**
+ * Lists active devices/tokens for super admin, distinguishing anonymous
+ * visitors from registered users.
+ */
+async function listActiveDevices({ page = 1, limit = DEFAULT_PAGE_SIZE, type = 'all', search = null } = {}) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const offset = (safePage - 1) * safeLimit;
+
+  let whereClause = 'WHERE ae.device_id IS NOT NULL';
+  const params = [];
+
+  if (type === 'anonymous') {
+    whereClause += ' AND ae.user_id IS NULL';
+  } else if (type === 'registered') {
+    whereClause += ' AND ae.user_id IS NOT NULL';
+  }
+
+  if (search) {
+    whereClause += ' AND (ae.device_id LIKE ? OR u.full_name LIKE ? OR u.phone_number LIKE ?)';
+    const term = `%${search}%`;
+    params.push(term, term, term);
+  }
+
+  const totalRow = await db.queryOne(
+    `SELECT COUNT(DISTINCT ae.device_id) AS total
+       FROM analytics_events ae
+       LEFT JOIN users u ON u.id = ae.user_id
+       ${whereClause}`,
+    params
+  );
+  const total = Number(totalRow.total);
+
+  const rows = await db.query(
+    `SELECT
+       ae.device_id,
+       MAX(ae.user_id) AS user_id,
+       MAX(u.full_name) AS user_name,
+       MAX(u.phone_number) AS user_phone,
+       MAX(ae.platform) AS platform,
+       MAX(ae.app_version) AS app_version,
+       MAX(ae.created_at) AS last_seen,
+       MIN(ae.created_at) AS first_seen,
+       COUNT(*) AS total_events,
+       COALESCE(SUM(ae.event_name IN ('app_opened', 'event_viewed', 'share_page_viewed')), 0) AS views_count,
+       COALESCE(SUM(ae.event_name = 'share_clicked'), 0) AS shares_count,
+       COALESCE(SUM(ae.event_name IN ('location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked')), 0) AS clicks_count
+     FROM analytics_events ae
+     LEFT JOIN users u ON u.id = ae.user_id
+     ${whereClause}
+     GROUP BY ae.device_id
+     ORDER BY last_seen DESC
+     LIMIT ? OFFSET ?`,
+    [...params, safeLimit, offset]
+  );
+
+  return {
+    devices: rows.map(r => ({
+      device_id: r.device_id,
+      is_anonymous: !r.user_id,
+      user: r.user_id ? { id: r.user_id, full_name: r.user_name, phone_number: r.user_phone } : null,
+      platform: r.platform,
+      app_version: r.app_version,
+      first_seen: r.first_seen,
+      last_seen: r.last_seen,
+      total_events: Number(r.total_events),
+      views_count: Number(r.views_count),
+      shares_count: Number(r.shares_count),
+      clicks_count: Number(r.clicks_count)
+    })),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.ceil(total / safeLimit)
+    }
+  };
+}
+
+/**
+ * Returns paginated events for a specific device_id / token (anonymous or registered).
+ */
+async function listForDevice(deviceId, { page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const offset = (safePage - 1) * safeLimit;
+
+  const { total } = await db.queryOne(
+    'SELECT COUNT(*) AS total FROM analytics_events WHERE device_id = ?',
+    [deviceId]
+  );
+
+  const rows = await db.query(
+    `SELECT event_name, platform, app_version, content_town, created_at
+       FROM analytics_events
+      WHERE device_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?`,
+    [deviceId, safeLimit, offset]
+  );
+
+  const linkedUser = await db.queryOne(
+    `SELECT u.id, u.full_name, u.phone_number
+       FROM analytics_events ae
+       JOIN users u ON u.id = ae.user_id
+      WHERE ae.device_id = ?
+      LIMIT 1`,
+    [deviceId]
+  );
+
+  return {
+    device_id: deviceId,
+    is_anonymous: !linkedUser,
+    user: linkedUser || null,
+    events: rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total: Number(total),
+      totalPages: Math.ceil(Number(total) / safeLimit)
+    }
+  };
+}
+
 module.exports = {
   RETENTION_DAYS,
   record,
   recordSafely,
   foldOldEvents,
   countsByEventName,
-  listForUser
+  listForUser,
+  getAnalyticsOverview,
+  listActiveDevices,
+  listForDevice
 };

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../state/analytics.dart';
 import '../state/share_event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
@@ -48,7 +49,10 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     if (_event != null) return;
 
     final services = AppServices.of(context);
-    _event = services.api.eventDetails(widget.eventId);
+    _event = services.api.eventDetails(widget.eventId).then((ev) {
+      recordAnalyticsEvent(services.api, 'event_viewed', contentTown: ev.town);
+      return ev;
+    });
     if (services.auth.isSignedIn) _queue = _loadQueue();
 
     final realtime = services.realtime;
@@ -117,6 +121,11 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   }
 
   Future<void> _openNavigation(Event event) async {
+    recordAnalyticsEvent(
+      AppServices.of(context).api,
+      'location_clicked',
+      contentTown: event.town,
+    );
     if (event.latitude == null || event.longitude == null) {
       showMessage(context, 'لا توجد إحداثيات لهذه المناسبة', isError: true);
       return;
@@ -135,7 +144,12 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   /// صيغة الرسالة والرابط وحدث التحليل تعيش في مكان واحد لا مكانين.
   Future<void> _share(Event event) => shareEvent(context, event);
 
-  Future<void> _callHost(String phone) async {
+  Future<void> _callHost(String phone, {String? town}) async {
+    recordAnalyticsEvent(
+      AppServices.of(context).api,
+      'contact_clicked',
+      contentTown: town,
+    );
     final uri = Uri(scheme: 'tel', path: phone);
     if (!await launchUrl(uri)) {
       if (mounted) showMessage(context, 'تعذّر إجراء الاتصال', isError: true);
@@ -164,6 +178,11 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
         await services.api.unremind(event.id);
         await services.reminders.onReminderRemoved(event.id);
       } else {
+        recordAnalyticsEvent(
+          services.api,
+          'reminder_clicked',
+          contentTown: event.town,
+        );
         await services.api.remind(event.id);
         final willAlarm = await services.reminders.onReminderAdded();
         if (!willAlarm && mounted) {
@@ -232,7 +251,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
               onToggleAudio: () => _toggleAudio(event.audioUrl!),
               onReact: _react,
               onNavigate: () => _openNavigation(event),
-              onCallHost: () => _callHost(event.hostPhone!),
+              onCallHost: () => _callHost(event.hostPhone!, town: event.town),
               onCongratulate: () => _openCongratulateSheet(event),
               onShare: () => _share(event),
             ),

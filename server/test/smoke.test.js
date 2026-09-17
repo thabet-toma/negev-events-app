@@ -14,7 +14,7 @@ const bcrypt = require('bcryptjs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
-
+process.env.RATE_LIMIT_MAX = process.env.RATE_LIMIT_MAX || '3000';
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
@@ -5168,6 +5168,83 @@ async function run() {
     assert.strictEqual(userRead.status, 403, 'an ordinary signed-in user must not read analytics rows either');
 
     await db.execute('DELETE FROM users WHERE id IN (?, ?)', [rowsUser.id, otherUser.id]);
+  });
+
+  await test('GET /api/admin/analytics/overview, devices, and devices/:deviceId/log — super_admin tracks all viewers and devices while town admins are refused', async () => {
+    const testDeviceId = `smoke-device-${Date.now()}`;
+
+    // Seed events: anonymous events via deviceId, and registered user event
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, device_id, platform, content_town) VALUES ('event_viewed', ?, 'web', 'رهط')`,
+      [testDeviceId]
+    );
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, device_id, platform, content_town) VALUES ('share_clicked', ?, 'web', 'رهط')`,
+      [testDeviceId]
+    );
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, device_id, platform, content_town) VALUES ('location_clicked', ?, 'web', 'رهط')`,
+      [testDeviceId]
+    );
+
+    // 1. Overview
+    const overviewRes = await api('GET', '/api/admin/analytics/overview?period=all', { token: superAdminToken });
+    assert.strictEqual(overviewRes.status, 200);
+    assert.strictEqual(overviewRes.body.success, true);
+    const { overview } = overviewRes.body;
+    assert.ok(overview.views && overview.views.total >= 1, 'expected views in overview');
+    assert.ok(overview.shares && overview.shares.total >= 1, 'expected shares in overview');
+    assert.ok(overview.clicks && overview.clicks.total >= 1, 'expected clicks in overview');
+    assert.ok(overview.audience && overview.audience.total_active_devices >= 1, 'expected audience stats');
+    assert.ok(overview.platforms && 'web' in overview.platforms, 'expected platforms breakdown');
+
+    // Overview permissions
+    const scopedOverview = await api('GET', '/api/admin/analytics/overview', { token: scopedAdminToken });
+    assert.strictEqual(scopedOverview.status, 403, 'town-scoped admin must not access analytics overview');
+    const userOverview = await api('GET', '/api/admin/analytics/overview', { token: userToken });
+    assert.strictEqual(userOverview.status, 403, 'regular user must not access analytics overview');
+
+    // 2. Devices list
+    const devicesRes = await api('GET', `/api/admin/analytics/devices?search=${testDeviceId}`, { token: superAdminToken });
+    assert.strictEqual(devicesRes.status, 200);
+    assert.strictEqual(devicesRes.body.success, true);
+    assert.ok(Array.isArray(devicesRes.body.devices));
+    const matchedDevice = devicesRes.body.devices.find(d => d.device_id === testDeviceId);
+    assert.ok(matchedDevice, 'expected testDeviceId in devices list');
+    assert.strictEqual(matchedDevice.is_anonymous, true);
+    assert.strictEqual(matchedDevice.user, null);
+    assert.ok(matchedDevice.total_events >= 3);
+    assert.ok(!('ip' in matchedDevice), 'must not leak IP');
+    assert.ok(!('user_agent' in matchedDevice), 'must not leak user agent');
+
+    // Devices filter & permissions
+    const anonDevices = await api('GET', '/api/admin/analytics/devices?type=anonymous', { token: superAdminToken });
+    assert.strictEqual(anonDevices.status, 200);
+    const scopedDevices = await api('GET', '/api/admin/analytics/devices', { token: scopedAdminToken });
+    assert.strictEqual(scopedDevices.status, 403, 'town-scoped admin must not access devices list');
+
+    // 3. Device log
+    const logRes = await api('GET', `/api/admin/analytics/devices/${testDeviceId}/log`, { token: superAdminToken });
+    assert.strictEqual(logRes.status, 200);
+    assert.strictEqual(logRes.body.success, true);
+    assert.strictEqual(logRes.body.device_id, testDeviceId);
+    assert.ok(logRes.body.events.length >= 3);
+    for (const evt of logRes.body.events) {
+      assert.ok(!('id' in evt), 'must not carry row id');
+      assert.ok(!('event_id' in evt), 'must not carry event_id');
+      assert.ok(!('ip' in evt), 'must not carry ip');
+      assert.ok(!('user_agent' in evt), 'must not carry user_agent');
+      assert.ok(evt.event_name && evt.created_at);
+    }
+
+    // Device log permissions
+    const scopedLog = await api('GET', `/api/admin/analytics/devices/${testDeviceId}/log`, { token: scopedAdminToken });
+    assert.strictEqual(scopedLog.status, 403, 'town-scoped admin must not access device log');
+    const userLog = await api('GET', `/api/admin/analytics/devices/${testDeviceId}/log`, { token: userToken });
+    assert.strictEqual(userLog.status, 403, 'regular user must not access device log');
+
+    // Cleanup
+    await db.execute('DELETE FROM analytics_events WHERE device_id = ?', [testDeviceId]);
   });
 
   await test('GET /api/privacy/notice is public, names every event in the closed list in Arabic, and leaks no code identifiers', async () => {

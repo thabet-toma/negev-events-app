@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'api/api_client.dart';
 import 'api/negev_api.dart';
 import 'screens/home_shell.dart';
+import 'state/analytics.dart';
 import 'state/auth_store.dart';
 import 'state/deep_link_handler.dart';
 import 'state/realtime.dart';
@@ -38,6 +39,9 @@ void main() {
   final realtime = RealtimeService();
   final themeStore = ThemeStore();
   final reminders = ReminderScheduler(api: api, auth: auth);
+
+  // تسجيل فتح التطبيق بالمعرّف/التوكن العشوائي
+  recordAnalyticsEvent(api, 'app_opened');
 
   // لا ننتظر التحميل: الشاشات تعرض حالتها الخاصة عبر AnimatedBuilder.
   auth.load();

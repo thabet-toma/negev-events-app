@@ -1740,7 +1740,7 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 50));
 
-        final analyticsRequest = requests.firstWhere(
+        final analyticsRequest = requests.lastWhere(
           (r) => r.url.path.endsWith('/api/analytics/events'),
         );
         final body = jsonDecode(analyticsRequest.body) as Map<String, dynamic>;

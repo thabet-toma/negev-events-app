@@ -73,6 +73,43 @@ router.get('/admin/analytics/counts', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * Super-admin analytics overview: views, shares, clicks, platforms, and audience breakdown.
+ */
+router.get('/admin/analytics/overview', asyncHandler(async (req, res) => {
+  const period = cleanString(req.query.period, 20) || 'all';
+  const overview = await analytics.getAnalyticsOverview({ period });
+  res.json({ success: true, overview });
+}));
+
+/**
+ * Super-admin active devices / visitors list (anonymous tokens & registered users).
+ */
+router.get('/admin/analytics/devices', asyncHandler(async (req, res) => {
+  const type = cleanString(req.query.type, 20) || 'all';
+  const search = cleanString(req.query.search, 100);
+  const result = await analytics.listActiveDevices({
+    page: req.query.page,
+    limit: req.query.limit,
+    type,
+    search
+  });
+  res.json({ success: true, ...result });
+}));
+
+/**
+ * Super-admin device activity timeline log for a specific anonymous token or device_id.
+ */
+router.get('/admin/analytics/devices/:deviceId/log', asyncHandler(async (req, res) => {
+  const deviceId = cleanString(req.params.deviceId, 100);
+  if (!deviceId) throw ApiError.badRequest('معرّف الجهاز مطلوب');
+  const result = await analytics.listForDevice(deviceId, {
+    page: req.query.page,
+    limit: req.query.limit
+  });
+  res.json({ success: true, ...result });
+}));
+
+/**
  * One user's own recorded analytics rows (issue #44, user story 45 — see the
  * long comment on `analytics.service.js#listForUser` for exactly why this
  * exists and exactly what it does and does not return). Same guard as the

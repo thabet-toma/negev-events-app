@@ -132,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
+  recordAnalyticsEvent('app_opened');
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -243,6 +244,10 @@ function recordAnalyticsEvent(eventName, { contentTown } = {}) {
   } catch (e) {
     // لا شيء — هذا النداء لا يجوز أن يزعج المستخدم أبداً مهما فشل.
   }
+}
+
+function recordLocationClicked(town) {
+  recordAnalyticsEvent('location_clicked', { contentTown: town || undefined });
 }
 
 /**
@@ -1442,10 +1447,10 @@ function renderSingleEventCardHtml(evt) {
 
       <!-- 1-Click Navigation -->
       <div class="nav-buttons-row">
-        <a href="${wazeUrl}" target="_blank" class="waze-btn">
+        <a href="${wazeUrl}" target="_blank" class="waze-btn" onclick="recordLocationClicked('${escapeHtml(evt.town || '')}')">
           <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
         </a>
-        <a href="${mapsUrl}" target="_blank" class="maps-btn">
+        <a href="${mapsUrl}" target="_blank" class="maps-btn" onclick="recordLocationClicked('${escapeHtml(evt.town || '')}')">
           <i class="fa-solid fa-location-arrow"></i> خرائط Google
         </a>
       </div>
@@ -1543,6 +1548,10 @@ function toggleCardDetails(eventId, btn) {
   if (!panel) return;
   const willShow = panel.hidden;
   panel.hidden = !willShow;
+  if (willShow) {
+    const ev = allEvents.find(e => e.id === eventId);
+    recordAnalyticsEvent('event_viewed', { contentTown: ev ? ev.town : undefined });
+  }
   const toggleBtn = btn || document.querySelector(`#eventCard-${eventId} .card-more-details-btn`);
   if (toggleBtn) {
     toggleBtn.setAttribute('aria-expanded', String(willShow));
@@ -1609,6 +1618,7 @@ async function toggleReminder(eventId, isReminded, btnElement) {
       showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
       // طلب إذن الإشعارات الفورية عند إضافة تذكير فقط — لا عند أول فتح للموقع ولا عند إلغائه (قصة 16)
       if (!isReminded) {
+        recordAnalyticsEvent('reminder_clicked', { contentTown: evt ? evt.town : undefined });
         requestPushNotificationSubscription();
       }
     } else {
@@ -1689,7 +1699,7 @@ async function initLeafletMap() {
               <h4>${escapeHtml(pt.title)}</h4>
               <p><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
               <p><strong>التاريخ:</strong> ${pt.event_date}</p>
-              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn">الملاحة عبر Waze</a>
+              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn" onclick="recordLocationClicked('${escapeHtml(pt.town || '')}')">الملاحة عبر Waze</a>
             </div>
           `);
       });
@@ -3793,8 +3803,8 @@ async function openChatModal(eventId) {
       if (evt.host_phone) {
         hostBar.style.display = 'flex';
         hostBar.innerHTML = `
-          <a href="tel:${evt.host_phone}" class="host-call-btn"><i class="fa-solid fa-phone"></i> اتصال بالمعلن (${evt.host_phone})</a>
-          <a href="https://wa.me/972${evt.host_phone.replace(/^0/, '')}" target="_blank" class="host-wa-btn"><i class="fa-brands fa-whatsapp"></i> واتساب المعلن</a>
+          <a href="tel:${evt.host_phone}" class="host-call-btn" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: '${escapeHtml(evt.town || '')}' })"><i class="fa-solid fa-phone"></i> اتصال بالمعلن (${evt.host_phone})</a>
+          <a href="https://wa.me/972${evt.host_phone.replace(/^0/, '')}" target="_blank" class="host-wa-btn" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: '${escapeHtml(evt.town || '')}' })"><i class="fa-brands fa-whatsapp"></i> واتساب المعلن</a>
         `;
       } else {
         hostBar.style.display = 'none';
