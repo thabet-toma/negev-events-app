@@ -3338,5 +3338,100 @@ body {
   transform: translateY(-1px);
 }
 
+/* زر تقديم عرض خدمة من المستخدم */
+.service-submit-offer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #d97706, #b45309);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(180, 83, 9, 0.3);
+  transition: all 0.2s ease;
+}
+
+.service-submit-offer-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(180, 83, 9, 0.4);
+}
+
+/* إبراز السعر على كرت الخدمة */
+.service-card-price-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 0 4px 0;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--card-gold, #cba135) 10%, var(--surface));
+  border-radius: 8px;
+  border-right: 3.5px solid var(--card-gold, #cba135);
+  width: fit-content;
+}
+
+.service-card-price-hero .price-hero-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.service-card-price-hero .price-hero-num {
+  font-size: 1.18rem;
+  font-weight: 900;
+  color: var(--card-gold, #b8860b);
+}
+
+.service-card-price-hero .price-hero-num .price-currency {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* ملاحظة توضيحية لمرونة الكميات */
+.service-package-subhint {
+  font-size: 0.77rem;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+/* إبراز السعر في لوحة تفاصيل الخدمة */
+.service-details-price-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card-gold, #cba135) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--card-gold, #cba135) 40%, var(--line));
+  margin-bottom: 12px;
+}
+
+.service-details-price-banner .details-price-label {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  display: block;
+}
+
+.service-details-price-banner .details-price-val {
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: var(--card-gold, #b8860b);
+}
+
+.service-details-price-banner .details-price-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 
 

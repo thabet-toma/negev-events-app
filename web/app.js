@@ -2102,6 +2102,8 @@ function resumePendingIntent() {
     // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
     const senderInput = document.getElementById('chatSenderName');
     if (senderInput && currentUser) senderInput.value = currentUser.full_name;
+  } else if (intent.type === 'submit_service') {
+    openSubmitServiceModal();
   }
 }
 
@@ -3420,9 +3422,12 @@ function renderSingleServiceCardHtml(p) {
     <div class="service-package-banner">
       <div class="service-package-header">
         <i class="fa-solid fa-calculator"></i>
-        <span>حزمة استرشادية بهذا السعر التقريبي:</span>
+        <span>📦 حزمة نموذجية استرشادية بهذا السعر:</span>
       </div>
       <div class="service-package-desc">${escapeHtml(p.price_estimate_desc)}</div>
+      <div class="service-package-subhint">
+        * مثال توضيحي لتقدير التكلفة، والكميات قابلة للتعديل والزيادة بالاتفاق المباشر مع المزوّد
+      </div>
     </div>` : '';
 
   // All Specs for Collapsible
@@ -3448,7 +3453,7 @@ function renderSingleServiceCardHtml(p) {
                 ${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}
               </span>
               <span class="service-badge-price">
-                <i class="fa-solid fa-tag"></i> ${priceBadgeText}
+                <i class="fa-solid fa-tag"></i> ${priceBadgeText}${p.price != null ? `: ${Number(p.price).toLocaleString('ar-EG')} ₪` : ''}
               </span>
             </div>
           </div>
@@ -3456,6 +3461,10 @@ function renderSingleServiceCardHtml(p) {
           <!-- جسم الكرت والوصف العام والباكيج -->
           <div class="service-card-caption">
             <h2 class="service-card-title" onclick="toggleServiceDetails(${p.id})" style="cursor:pointer;">${escapeHtml(p.name)}</h2>
+            <div class="service-card-price-hero">
+              <span class="price-hero-label">${priceBadgeText}:</span>
+              <span class="price-hero-num">${p.price != null ? `<strong>${Number(p.price).toLocaleString('ar-EG')}</strong> <span class="price-currency">₪</span>` : '<strong>حسب الطلب</strong>'}</span>
+            </div>
             <div class="service-card-towns">
               <i class="fa-solid fa-location-dot" style="color:var(--tone)"></i>
               <span>${escapeHtml(townsText)}</span>
@@ -3483,11 +3492,21 @@ function renderSingleServiceCardHtml(p) {
               </button>
             </div>
 
+            <div class="service-details-price-banner">
+              <div>
+                <span class="details-price-label">${priceBadgeText}</span>
+                <strong class="details-price-val">${p.price != null ? `${Number(p.price).toLocaleString('ar-EG')} ₪` : 'تواصل للسعر'}</strong>
+              </div>
+              <div class="details-price-badge">
+                <i class="fa-solid fa-handshake"></i> اتفاق مباشر
+              </div>
+            </div>
+
             <div class="service-capacity-notice">
               <i class="fa-solid fa-circle-info"></i>
               <div>
                 <strong>توضيح مهم بشأن المواصفات والكميات:</strong>
-                <p>المواصفات الموضحة أدناه هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.</p>
+                <p>المواصفات والكميات الموضحة هنا تمثل حزمة استرشادية قياسية بهذا السعر كمثال لتقدير التكلفة. بإمكانك دائماً طلب كميات أكبر أو أصغر أو تعديل المواصفات بالاتفاق المباشر مع المزوّد لتناسب حجم مناسبتك تماماً.</p>
               </div>
             </div>
 
@@ -3686,6 +3705,187 @@ function revealProviderPhone() {
 
 function closeProviderModal() {
   document.getElementById('providerModal').style.display = 'none';
+}
+
+// --- Public Service Offer Submission -----------------------------
+function openSubmitServiceModal() {
+  if (!requireAuth({ type: 'submit_service' })) return;
+
+  const modal = document.getElementById('submitServiceModal');
+  const form = document.getElementById('publicSubmitServiceForm');
+  if (!modal || !form) return;
+  form.reset();
+  clearPublicProviderImage();
+
+  // Populate categories
+  const catSelect = document.getElementById('userProvCategory');
+  if (catSelect) {
+    const cats = serviceCategoriesCache || [];
+    catSelect.innerHTML = cats.map(c =>
+      `<option value="${c.id}">${c.icon ? c.icon + ' ' : ''}${escapeHtml(c.name)}</option>`
+    ).join('');
+  }
+
+  // Pre-fill user details if available
+  if (currentUser) {
+    const nameInput = document.getElementById('userProvName');
+    const phoneInput = document.getElementById('userProvPhone');
+    if (nameInput) nameInput.value = currentUser.full_name || '';
+    if (phoneInput) phoneInput.value = currentUser.phone_number || '';
+  }
+
+  // Populate towns
+  const townsContainer = document.getElementById('userProvTownsPicker');
+  if (townsContainer) {
+    const towns = townsList && townsList.length ? townsList : ['رهط', 'تل السبع', 'عرعرة النقب', 'شقيب السلام', 'كسيفة', 'حورة', 'اللقية', 'القرى والتجمعات'];
+    townsContainer.innerHTML = towns.map(t => `
+      <label class="ot-check" style="font-size:0.85rem; cursor:pointer;">
+        <input type="checkbox" class="user-prov-town-check" value="${escapeHtml(t)}"> ${escapeHtml(t)}
+      </label>
+    `).join('');
+  }
+
+  handlePublicServiceCategoryChange();
+
+  modal.style.display = 'flex';
+}
+
+function closeSubmitServiceModal() {
+  const modal = document.getElementById('submitServiceModal');
+  if (modal) modal.style.display = 'none';
+  clearPublicProviderImage();
+  const form = document.getElementById('publicSubmitServiceForm');
+  if (form) form.reset();
+}
+
+function previewPublicProviderImage(input) {
+  const file = input && input.files ? input.files[0] : null;
+  const preview = document.getElementById('userProvImagePreview');
+  const wrapper = document.getElementById('userProvImagePreviewWrapper');
+  if (!file || !preview || !wrapper) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    preview.src = e.target.result;
+    wrapper.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearPublicProviderImage() {
+  const fileInput = document.getElementById('userProvImageFile');
+  if (fileInput) fileInput.value = '';
+  const wrapper = document.getElementById('userProvImagePreviewWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const preview = document.getElementById('userProvImagePreview');
+  if (preview) preview.src = '';
+}
+
+function handlePublicServiceCategoryChange() {
+  const catSelect = document.getElementById('userProvCategory');
+  const wrapper = document.getElementById('userProvDynamicAttributesWrapper');
+  const container = document.getElementById('userProvDynamicAttributesContainer');
+  if (!catSelect || !wrapper || !container) return;
+
+  const catId = parseInt(catSelect.value, 10);
+  const cat = (serviceCategoriesCache || []).find(c => c.id === catId);
+  const attrs = (cat && Array.isArray(cat.attributes)) ? cat.attributes : [];
+
+  if (!attrs.length) {
+    wrapper.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = attrs.map(attr => {
+    const placeholder = attr.sample_value ? `مثال: ${attr.sample_value}` : '';
+    const unitText = attr.unit ? ` (${attr.unit})` : '';
+    return `
+      <div class="user-prov-attr-item">
+        <label style="font-size:0.82rem; font-weight:700; color:var(--ink); display:block; margin-bottom:4px;">
+          ${escapeHtml(attr.label)}${escapeHtml(unitText)}
+        </label>
+        <input type="text" class="user-prov-attr-input" data-key="${escapeHtml(attr.attr_key)}" data-label="${escapeHtml(attr.label)}" data-unit="${escapeHtml(attr.unit || '')}" placeholder="${escapeHtml(placeholder)}" style="width:100%; padding:8px; border-radius:6px; background:var(--surface); border:1px solid var(--border-subtle); color:var(--ink); font-size:0.88rem;">
+      </div>
+    `;
+  }).join('');
+
+  wrapper.style.display = 'block';
+}
+
+async function handlePublicSubmitService(e) {
+  e.preventDefault();
+
+  const selectedTowns = Array.from(document.querySelectorAll('#userProvTownsPicker .user-prov-town-check:checked')).map(cb => cb.value);
+  if (!selectedTowns.length) {
+    alert('يرجى اختيار بلدة أو منطقة واحدة على الأقل تخدمها');
+    return;
+  }
+
+  const consentBox = document.getElementById('userProvConsent');
+  if (!consentBox || !consentBox.checked) {
+    alert('يجب الموافقة على شرط النشر وظهور الاسم ورقم الهاتف في الدليل');
+    return;
+  }
+
+  const name = document.getElementById('userProvName').value.trim();
+  const phone = document.getElementById('userProvPhone').value.trim();
+  const categoryId = document.getElementById('userProvCategory').value;
+  const priceVal = document.getElementById('userProvPrice').value.trim();
+  const priceType = document.getElementById('userProvPriceType').value;
+  const priceEstimateDesc = document.getElementById('userProvPriceDesc').value.trim();
+  const description = document.getElementById('userProvDescription').value.trim();
+
+  // Dynamic attributes
+  const attrInputs = document.querySelectorAll('#userProvDynamicAttributesContainer .user-prov-attr-input');
+  const attributes = Array.from(attrInputs).map(inp => {
+    const val = inp.value.trim();
+    return {
+      attr_key: inp.dataset.key,
+      label: inp.dataset.label,
+      unit: inp.dataset.unit || null,
+      value: val
+    };
+  }).filter(a => a.value !== '');
+
+  const fd = new FormData();
+  fd.append('category_id', categoryId);
+  fd.append('name', name);
+  fd.append('phone', phone);
+  fd.append('price_type', priceType);
+  if (priceVal !== '') fd.append('price', priceVal);
+  if (priceEstimateDesc) fd.append('price_estimate_desc', priceEstimateDesc);
+  if (description) fd.append('description', description);
+  fd.append('towns', JSON.stringify(selectedTowns));
+  if (attributes.length) fd.append('attributes', JSON.stringify(attributes));
+
+  const imageFileInput = document.getElementById('userProvImageFile');
+  if (imageFileInput && imageFileInput.files && imageFileInput.files[0]) {
+    fd.append('image', imageFileInput.files[0]);
+  }
+
+  const btn = document.getElementById('userProvSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
+
+  try {
+    const res = await apiFetch('/api/services/providers', {
+      method: 'POST',
+      body: fd,
+      auth: true
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم إرسال عرض الخدمة بنجاح، وهو قيد مراجعة الإدارة');
+      closeSubmitServiceModal();
+    } else {
+      alert(data.message || 'تعذّر إرسال العرض');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم، يرجى المحاولة لاحقاً');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال العرض للمراجعة';
+  }
 }
 
 // 13. Add Event & Collision Check

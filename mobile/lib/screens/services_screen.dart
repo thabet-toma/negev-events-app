@@ -790,6 +790,34 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: cardGold.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border(
+                      right: BorderSide(color: cardGold, width: 3.5),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${_priceBadgeText()}: ',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: context.c.inkSoft),
+                      ),
+                      Text(
+                        p.price != null ? '${p.price} ₪' : 'حسب الطلب',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                          color: cardGold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 5),
                 Row(
                   children: [
@@ -827,7 +855,7 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                             Icon(Icons.calculate_outlined, size: 15, color: cardGold),
                             const SizedBox(width: 6),
                             Text(
-                              'حزمة استرشادية بهذا السعر التقريبي:',
+                              '📦 حزمة نموذجية استرشادية بهذا السعر:',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
@@ -844,6 +872,16 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                             fontWeight: FontWeight.bold,
                             color: context.c.ink,
                             height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '* مثال توضيحي لتقدير التكلفة، والكميات والمواصفات قابلة للزيادة أو التعديل بالاتفاق المباشر مع المزوّد',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic,
+                            color: context.c.inkFaint,
+                            height: 1.3,
                           ),
                         ),
                       ],
@@ -1071,13 +1109,23 @@ class _SubmitServiceSheet extends StatefulWidget {
 class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
   final _formKey = GlobalKey<FormState>();
   int? _selectedCategoryId;
+  String _priceType = 'estimated';
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _priceController = TextEditingController();
+  final _priceEstimateDescController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final Map<String, TextEditingController> _attrControllers = {};
   final Set<String> _selectedTowns = {};
   XFile? _pickedImage;
   bool _submitting = false;
+
+  ServiceCategory? get _selectedCategory {
+    return widget.categories.cast<ServiceCategory?>().firstWhere(
+          (c) => c?.id == _selectedCategoryId,
+          orElse: () => null,
+        );
+  }
 
   @override
   void initState() {
@@ -1092,7 +1140,11 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
     _nameController.dispose();
     _phoneController.dispose();
     _priceController.dispose();
+    _priceEstimateDescController.dispose();
     _descriptionController.dispose();
+    for (final c in _attrControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -1133,12 +1185,36 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
       final priceVal = _priceController.text.trim();
       final price = priceVal.isNotEmpty ? num.tryParse(priceVal) : null;
 
+      final List<Map<String, dynamic>> attributes = [];
+      final cat = _selectedCategory;
+      if (cat != null && cat.attributes.isNotEmpty) {
+        for (final raw in cat.attributes) {
+          if (raw is Map) {
+            final key = '${raw['attr_key'] ?? raw['key'] ?? ''}';
+            final label = '${raw['label'] ?? raw['name'] ?? key}';
+            final unit = '${raw['unit'] ?? ''}';
+            final val = _attrControllers[key]?.text.trim() ?? '';
+            if (val.isNotEmpty) {
+              attributes.add({
+                'attr_key': key,
+                'label': label,
+                if (unit.isNotEmpty) 'unit': unit,
+                'value': val,
+              });
+            }
+          }
+        }
+      }
+
       await api.submitProviderOffer(
             categoryId: _selectedCategoryId!,
             name: _nameController.text.trim(),
             phone: _phoneController.text.trim(),
             description: _descriptionController.text.trim(),
             price: price,
+            priceType: _priceType,
+            priceEstimateDesc: _priceEstimateDescController.text.trim(),
+            attributes: attributes.isNotEmpty ? attributes : null,
             towns: _selectedTowns.toList(),
             image: imageFile,
           );
@@ -1152,6 +1228,91 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  Widget _buildDynamicAttributesSection() {
+    final cat = _selectedCategory;
+    if (cat == null || cat.attributes.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.c.surfaceSunk,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: context.c.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.checklist_rounded, size: 18, color: context.c.gold),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'مواصفات الحزمة النموذجية الاسترشادية لهذا السعر:',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...cat.attributes.map((raw) {
+            if (raw is! Map) return const SizedBox.shrink();
+            final key = '${raw['attr_key'] ?? raw['key'] ?? ''}';
+            final label = '${raw['label'] ?? raw['name'] ?? key}';
+            final unit = '${raw['unit'] ?? ''}';
+            final sample = '${raw['sample_value'] ?? ''}';
+
+            final controller = _attrControllers.putIfAbsent(
+              key,
+              () => TextEditingController(),
+            );
+
+            final unitText = unit.isNotEmpty ? ' ($unit)' : '';
+            final hintText = sample.isNotEmpty ? 'مثال: $sample' : '';
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: TextFormField(
+                controller: controller,
+                decoration: InputDecoration(
+                  labelText: '$label$unitText',
+                  hintText: hintText,
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+              ),
+            );
+          }),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: context.c.gold.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, size: 15, color: context.c.gold),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'تنبيه توضيحي: هذه المواصفات والكميات تمثل حزمة استرشادية لتقدير السعر فقط، والزبون بإمكانه دائماً طلب كميات أكبر أو أصغر بالاتفاق المباشر معك حسب حجم مناسبته.',
+                    style: TextStyle(fontSize: 11.5, color: context.c.ink, height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1244,15 +1405,40 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
                 },
               ),
               const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                initialValue: _priceType,
+                decoration: const InputDecoration(
+                  labelText: 'نوع التسعير',
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'estimated', child: Text('سعر تقديري')),
+                  DropdownMenuItem(value: 'starting_at', child: Text('ابتداءً من')),
+                  DropdownMenuItem(value: 'fixed', child: Text('سعر محدد')),
+                  DropdownMenuItem(value: 'contact', child: Text('تواصل للسعر')),
+                ],
+                onChanged: (val) => setState(() => _priceType = val ?? 'estimated'),
+              ),
+              const SizedBox(height: 14),
               TextFormField(
                 controller: _priceController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
-                  labelText: 'السعر التقريبي (₪) (اختياري)',
-                  hintText: 'مثال: 500',
+                  labelText: 'السعر المالي (₪) (اختياري)',
+                  hintText: 'مثال: 4500',
                   border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _priceEstimateDescController,
+                decoration: const InputDecoration(
+                  labelText: 'وصف الحزمة النموذجية / التسعير التقديري (اختياري)',
+                  hintText: 'مثال: 1000 كرسي + برجين إضاءة = 4,500 ₪ تقديري',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              _buildDynamicAttributesSection(),
               const SizedBox(height: 16),
               Text(
                 'البلدات التي تخدمها *',

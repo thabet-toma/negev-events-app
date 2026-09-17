@@ -191,6 +191,9 @@ class NegevApi {
     String? description,
     String? imageUrl,
     num? price,
+    String? priceType,
+    String? priceEstimateDesc,
+    List<Map<String, dynamic>>? attributes,
     required List<String> towns,
     http.MultipartFile? image,
   }) async {
@@ -202,6 +205,9 @@ class NegevApi {
         'towns': jsonEncode(towns),
         if (description != null && description.isNotEmpty) 'description': description,
         if (price != null) 'price': '$price',
+        if (priceType != null && priceType.isNotEmpty) 'price_type': priceType,
+        if (priceEstimateDesc != null && priceEstimateDesc.isNotEmpty) 'price_estimate_desc': priceEstimateDesc,
+        if (attributes != null && attributes.isNotEmpty) 'attributes': jsonEncode(attributes),
       };
       final data = await _client.postMultipart(
         '/api/services/providers',
@@ -220,6 +226,9 @@ class NegevApi {
       if (description != null && description.isNotEmpty) 'description': description,
       if (imageUrl != null && imageUrl.isNotEmpty) 'image_url': imageUrl,
       'price': ?price,
+      if (priceType != null && priceType.isNotEmpty) 'price_type': priceType,
+      if (priceEstimateDesc != null && priceEstimateDesc.isNotEmpty) 'price_estimate_desc': priceEstimateDesc,
+      if (attributes != null && attributes.isNotEmpty) 'attributes': attributes,
     };
     final data = await _client.post('/api/services/providers', body: payload, auth: true);
     return int.tryParse('${data['providerId']}') ?? 0;

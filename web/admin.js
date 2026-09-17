@@ -2895,6 +2895,15 @@ function openProviderForm(id) {
   document.getElementById('provPhone').value = provider ? provider.phone : '';
   document.getElementById('provPrice').value = provider && provider.price != null ? provider.price : '';
   document.getElementById('provImage').value = provider ? (provider.image_url || '') : '';
+  clearAdminProviderImage();
+  if (provider && provider.image_url) {
+    const preview = document.getElementById('provImagePreview');
+    const previewWrapper = document.getElementById('provImagePreviewWrapper');
+    if (preview && previewWrapper) {
+      preview.src = provider.image_url;
+      previewWrapper.style.display = 'block';
+    }
+  }
   document.getElementById('provDescription').value = provider ? (provider.description || '') : '';
   document.getElementById('provIsActive').checked = provider ? Boolean(provider.is_active) : true;
 
@@ -2919,6 +2928,28 @@ function openProviderForm(id) {
 
   wrapper.style.display = 'block';
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function previewAdminProviderImage(input) {
+  const file = input && input.files ? input.files[0] : null;
+  const preview = document.getElementById('provImagePreview');
+  const wrapper = document.getElementById('provImagePreviewWrapper');
+  if (!file || !preview || !wrapper) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    preview.src = e.target.result;
+    wrapper.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearAdminProviderImage() {
+  const fileInput = document.getElementById('provImageFile');
+  if (fileInput) fileInput.value = '';
+  const wrapper = document.getElementById('provImagePreviewWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const preview = document.getElementById('provImagePreview');
+  if (preview) preview.src = '';
 }
 
 function renderProviderDynamicAttributes(categoryId, existingAttributes) {
@@ -2961,6 +2992,7 @@ function renderProviderDynamicAttributes(categoryId, existingAttributes) {
 
 function closeProviderForm() {
   editingProviderId = null;
+  clearAdminProviderImage();
   const wrapper = document.getElementById('providerFormWrapper');
   if (wrapper) wrapper.style.display = 'none';
   const form = document.getElementById('providerForm');
@@ -3038,16 +3070,44 @@ async function handleProviderSubmit(e) {
     payload.consent_channel = consentChannel;
   }
 
+  const imageFileInput = document.getElementById('provImageFile');
+  const imageFile = imageFileInput && imageFileInput.files ? imageFileInput.files[0] : null;
+
   const btn = document.getElementById('provSubmitBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
 
   try {
-    const res = await adminFetch(id ? `/api/admin/service-providers/${id}` : '/api/admin/service-providers', {
-      method: id ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    let fetchOptions;
+    if (imageFile) {
+      const fd = new FormData();
+      fd.append('category_id', String(payload.category_id));
+      fd.append('name', payload.name);
+      fd.append('phone', payload.phone);
+      if (payload.price !== null) fd.append('price', String(payload.price));
+      fd.append('price_type', payload.price_type);
+      if (payload.price_estimate_desc) fd.append('price_estimate_desc', payload.price_estimate_desc);
+      fd.append('attributes', JSON.stringify(payload.attributes));
+      fd.append('description', payload.description);
+      fd.append('is_active', String(payload.is_active));
+      fd.append('towns', JSON.stringify(payload.towns));
+      if (payload.consent_at) fd.append('consent_at', payload.consent_at);
+      if (payload.consent_channel) fd.append('consent_channel', payload.consent_channel);
+      fd.append('image', imageFile);
+
+      fetchOptions = {
+        method: id ? 'PATCH' : 'POST',
+        body: fd
+      };
+    } else {
+      fetchOptions = {
+        method: id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      };
+    }
+
+    const res = await adminFetch(id ? `/api/admin/service-providers/${id}` : '/api/admin/service-providers', fetchOptions);
     const data = await res.json();
 
     if (data.success) {

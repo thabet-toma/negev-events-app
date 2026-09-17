@@ -13,10 +13,18 @@ const router = express.Router();
 
 /** Parses a submitted `towns` array — non-empty, deduplicated; membership/containment checked by the service layer. */
 function parseTowns(raw) {
-  if (!Array.isArray(raw) || !raw.length) {
+  let list = raw;
+  if (typeof raw === 'string') {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      list = raw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  }
+  if (!Array.isArray(list) || !list.length) {
     throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
   }
-  const towns = [...new Set(raw.map(town => cleanString(town, 100)).filter(Boolean))];
+  const towns = [...new Set(list.map(town => cleanString(town, 100)).filter(Boolean))];
   if (!towns.length) {
     throw ApiError.badRequest('يجب تحديد بلدة واحدة على الأقل يخدمها المزوّد');
   }
@@ -82,17 +90,7 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
   const phone = cleanString(body.phone, 30);
   if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
 
-  let towns = [];
-  if (typeof body.towns === 'string') {
-    try {
-      towns = JSON.parse(body.towns);
-    } catch {
-      towns = body.towns.split(',').map(s => s.trim()).filter(Boolean);
-    }
-  } else if (Array.isArray(body.towns)) {
-    towns = body.towns;
-  }
-  towns = parseTowns(towns);
+  const towns = parseTowns(body.towns);
 
   for (const town of towns) {
     if (!TOWNS.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
@@ -162,7 +160,7 @@ router.get('/admin/service-providers/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, provider: await services.getProviderForAdmin(req.user, id) });
 }));
 
-router.post('/admin/service-providers', asyncHandler(async (req, res) => {
+router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, res) => {
   const body = req.body || {};
   requireFields(body, ['name', 'phone']);
 
@@ -181,6 +179,9 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
   // never a silent trim.
   await services.assertTownsWithinScope(req.user, towns);
 
+  const imageFile = req.files?.image?.[0] || req.file;
+  const imageUrl = imageFile ? `/uploads/${imageFile.filename}` : cleanString(body.image_url, 500);
+
   let price = null;
   if (body.price !== undefined && body.price !== null && String(body.price).trim() !== '') {
     price = parseAmount(body.price);
@@ -195,13 +196,13 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
     name: cleanString(body.name, 150),
     phone,
     description: cleanString(body.description, 2000),
-    image_url: cleanString(body.image_url, 500),
+    image_url: imageUrl,
     price,
     price_type: priceType,
     price_estimate_desc: priceEstimateDesc,
     attributes,
     status: 'approved',
-    is_active: body.is_active !== false,
+    is_active: body.is_active !== false && body.is_active !== 'false',
     consent_at: consentAt,
     consent_by: req.user.id,
     consent_channel: consentChannel,
@@ -212,7 +213,7 @@ router.post('/admin/service-providers', asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, providerId, message: 'تمت إضافة مزوّد الخدمة بنجاح' });
 }));
 
-router.patch('/admin/service-providers/:id', asyncHandler(async (req, res) => {
+router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
   // Confirms the provider exists AND is in scope before writing anything —
   // out-of-scope is a 404, never a 403 (a 403 would confirm the row exists
@@ -234,14 +235,23 @@ router.patch('/admin/service-providers/:id', asyncHandler(async (req, res) => {
     payload.phone = phone;
   }
   if (body.description !== undefined) payload.description = cleanString(body.description, 2000);
-  if (body.image_url !== undefined) payload.image_url = cleanString(body.image_url, 500);
+
+  const imageFile = req.files?.image?.[0] || req.file;
+  if (imageFile) {
+    payload.image_url = `/uploads/${imageFile.filename}`;
+  } else if (body.image_url !== undefined) {
+    payload.image_url = cleanString(body.image_url, 500);
+  }
+
   if (body.price !== undefined) {
     payload.price = (body.price === null || String(body.price).trim() === '') ? null : parseAmount(body.price);
   }
   if (body.price_type !== undefined) payload.price_type = parsePriceType(body.price_type);
   if (body.price_estimate_desc !== undefined) payload.price_estimate_desc = cleanString(body.price_estimate_desc, 255);
   if (body.attributes !== undefined) payload.attributes = parseProviderAttributes(body.attributes);
-  if (body.is_active !== undefined) payload.is_active = Boolean(body.is_active);
+  if (body.is_active !== undefined) {
+    payload.is_active = body.is_active === 'true' || body.is_active === true || body.is_active === 1;
+  }
 
   if (body.towns !== undefined) {
     const towns = parseTowns(body.towns);

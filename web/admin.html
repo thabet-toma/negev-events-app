@@ -512,12 +512,21 @@
                 <i class="fa-solid fa-list-check"></i> مواصفات الحزمة النموذجية الاسترشادية لهذا السعر:
               </label>
               <div id="provDynamicAttributesContainer" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;"></div>
-              <span class="hint-text" style="display:block; margin-top:8px;">ملاحظة: هذه المواصفات لحزمة نموذجية معينة (كمثال استرشادي)، والزبون بإمكانه طلب كميات أكبر أو أصغر بالاتفاق المباشر.</span>
+              <span class="hint-text" style="display:block; margin-top:8px; color:var(--warn-yellow, #eab308);">
+                <i class="fa-solid fa-circle-info"></i> تنبيه توضيحي: هذه المواصفات والكميات مخصصة لحزمة استرشادية بهذا السعر كمثال لتقدير التكلفة، والزبون بإمكانه دائماً طلب كميات أكبر أو أصغر بالاتفاق المباشر معك حسب حجم مناسبته.
+              </span>
             </div>
 
             <div class="form-group">
-              <label>رابط الصورة (اختياري)</label>
-              <input type="url" id="provImage" placeholder="https://...">
+              <label>صورة المزوّد أو شعار الخدمة (اختياري)</label>
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <input type="file" id="provImageFile" accept="image/*" style="flex:1; min-width:200px;" onchange="previewAdminProviderImage(this)">
+                <input type="url" id="provImage" placeholder="أو أدخل رابط صورة مباشر https://..." style="flex:1; min-width:200px;">
+              </div>
+              <div id="provImagePreviewWrapper" style="margin-top:8px; display:none;">
+                <img id="provImagePreview" src="" alt="معاينة الصورة" style="max-height:90px; border-radius:6px; border:1px solid var(--admin-card-border); object-fit:cover;">
+                <button type="button" class="btn-reject" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="clearAdminProviderImage()">إلغاء الصورة المحددة</button>
+              </div>
             </div>
 
             <div class="form-group">
@@ -673,13 +682,15 @@
 
             <div class="form-group" style="margin-top:16px;">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <label style="margin:0;"><i class="fa-solid fa-sliders"></i> خصائص ومواصفات هذه الفئة (مثل: عدد الكراسي، أبراج الإضاءة، عدد الصور)</label>
+                <label style="margin:0;"><i class="fa-solid fa-sliders"></i> بنود مواصفات هذه الفئة (مثل: عدد الكراسي، نوع الخيمة، عدد المصورين)</label>
                 <button type="button" class="town-pill" onclick="addCategoryAttributeRow()" style="font-size:0.8rem; padding:4px 10px; cursor:pointer;">
                   <i class="fa-solid fa-plus"></i> إضافة خاصية
                 </button>
               </div>
               <div id="scAttributesContainer" style="display:flex; flex-direction:column; gap:8px;"></div>
-              <span class="hint-text">تظهر هذه الخصائص تلقائياً عند إضافة مزوّد تحت هذه الفئة لتحديد القيم والوحدات النموذجية.</span>
+              <span class="hint-text" style="display:block; margin-top:8px;">
+                <i class="fa-solid fa-circle-info"></i> يحدد السوبر أدمن هنا أسماء البنود ووحدات القياس. أما «القيمة النموذجية» فهي مجرد مثال توضيحي يظهر كإرشاد (placeholder) لمقدم الخدمة وليس قيداً ملزماً.
+              </span>
             </div>
 
             <div class="form-row" style="margin-top:18px;">

@@ -188,32 +188,50 @@ class _ProviderBody extends StatelessWidget {
                 provider.name,
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: context.c.ink),
               ),
-              if (provider.price != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: context.c.surfaceSunk,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: context.c.line),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.sell_outlined, size: 16, color: context.c.gold),
-                      const SizedBox(width: 6),
-                      Text(
-                        'السعر: ${provider.price} ₪',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.bold,
-                          color: context.c.gold,
-                        ),
-                      ),
-                    ],
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: context.c.gold.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border(
+                    right: BorderSide(color: context.c.gold, width: 4),
+                    top: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+                    left: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+                    bottom: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
                   ),
                 ),
-              ],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _priceBadgeText(),
+                          style: TextStyle(fontSize: 12, color: context.c.inkSoft, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          provider.price != null ? '${provider.price} ₪' : 'تواصل للسعر',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                            color: context.c.gold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        Icon(Icons.handshake_outlined, size: 16, color: context.c.inkSoft),
+                        const SizedBox(width: 4),
+                        Text('اتفاق مباشر', style: TextStyle(fontSize: 12, color: context.c.inkSoft)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
 
               // Benchmark package description banner
               if (provider.priceEstimateDesc != null && provider.priceEstimateDesc!.isNotEmpty) ...[
@@ -233,7 +251,7 @@ class _ProviderBody extends StatelessWidget {
                           Icon(Icons.calculate_outlined, size: 16, color: context.c.gold),
                           const SizedBox(width: 6),
                           Text(
-                            'حزمة استرشادية بهذا السعر التقريبي:',
+                            '📦 حزمة نموذجية استرشادية بهذا السعر:',
                             style: TextStyle(
                               fontSize: 12.5,
                               fontWeight: FontWeight.bold,
@@ -250,6 +268,16 @@ class _ProviderBody extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                           color: context.c.ink,
                           height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '* مثال توضيحي لتقدير التكلفة، والكميات والمواصفات قابلة للزيادة أو التعديل بالاتفاق المباشر مع المزوّد',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontStyle: FontStyle.italic,
+                          color: context.c.inkFaint,
+                          height: 1.3,
                         ),
                       ),
                     ],
@@ -313,7 +341,7 @@ class _ProviderBody extends StatelessWidget {
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            'المواصفات الموضحة هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.',
+                            'المواصفات والكميات الموضحة هنا تمثل حزمة استرشادية قياسية بهذا السعر كمثال لتقدير التكلفة. بإمكانك دائماً طلب كميات أكبر أو أصغر أو تعديل المواصفات بالاتفاق المباشر مع المزوّد لتناسب حجم مناسبتك تماماً.',
                             style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
                           ),
                         ],
