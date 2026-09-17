@@ -24,6 +24,7 @@ class ServiceCategory {
   final String icon;
   final String color;
   final int position;
+  final List<dynamic> attributes;
 
   const ServiceCategory({
     required this.id,
@@ -31,6 +32,7 @@ class ServiceCategory {
     required this.icon,
     required this.color,
     required this.position,
+    this.attributes = const [],
   });
 
   factory ServiceCategory.fromJson(Map<String, dynamic> json) => ServiceCategory(
@@ -39,7 +41,58 @@ class ServiceCategory {
         icon: '${json['icon'] ?? ''}',
         color: '${json['color'] ?? ''}',
         position: _toInt(json['position']),
+        attributes: json['attributes'] is List ? (json['attributes'] as List) : const [],
       );
+}
+
+/// بند مواصفة محددة ضمن حزمة الخدمة
+class ServiceAttributeItem {
+  final String key;
+  final String label;
+  final String value;
+  final String unit;
+
+  String get name => label.isNotEmpty ? label : key;
+
+  const ServiceAttributeItem({
+    required this.key,
+    required this.label,
+    required this.value,
+    this.unit = '',
+  });
+
+  factory ServiceAttributeItem.fromDynamic(dynamic item) {
+    if (item is Map) {
+      return ServiceAttributeItem(
+        key: '${item['attr_key'] ?? item['key'] ?? ''}',
+        label: '${item['label'] ?? item['name'] ?? ''}',
+        value: '${item['value'] ?? ''}',
+        unit: '${item['unit'] ?? ''}',
+      );
+    }
+    return ServiceAttributeItem(key: '', label: '', value: '$item');
+  }
+}
+
+List<ServiceAttributeItem> _parseAttributes(dynamic raw) {
+  if (raw == null) return const [];
+  if (raw is List) {
+    return raw
+        .where((item) => item != null)
+        .map((item) => ServiceAttributeItem.fromDynamic(item))
+        .where((item) => item.value.trim().isNotEmpty)
+        .toList();
+  }
+  if (raw is Map) {
+    final list = <ServiceAttributeItem>[];
+    raw.forEach((k, v) {
+      if (v != null && '$v'.trim().isNotEmpty) {
+        list.add(ServiceAttributeItem(key: '$k', label: '$k', value: '$v'));
+      }
+    });
+    return list;
+  }
+  return const [];
 }
 
 /// سطر مزوّد في القائمة العامة — من GET /api/services/providers. لا يحمل
@@ -49,8 +102,13 @@ class ServiceProvider {
   final String name;
   final int categoryId;
   final String categoryName;
+  final String categoryIcon;
+  final String categoryColor;
   final String? imageUrl;
   final num? price;
+  final String priceType;
+  final String? priceEstimateDesc;
+  final List<ServiceAttributeItem> attributes;
   final String status;
   final List<String> towns;
 
@@ -59,11 +117,34 @@ class ServiceProvider {
     required this.name,
     required this.categoryId,
     required this.categoryName,
+    this.categoryIcon = '',
+    this.categoryColor = '',
     this.imageUrl,
     this.price,
+    this.priceType = 'estimated',
+    this.priceEstimateDesc,
+    this.attributes = const [],
     this.status = 'approved',
     this.towns = const [],
   });
+
+  String? get displayPriceBadge {
+    switch (priceType) {
+      case 'contact':
+      case 'contact_only':
+        return 'تواصل للسعر';
+      case 'starting_at':
+      case 'starting_from':
+        return 'ابتداءً من';
+      case 'fixed':
+        return 'سعر ثابت';
+      case 'estimated':
+      case 'estimate':
+        return 'سعر تقديري';
+      default:
+        return priceType.isEmpty ? null : 'سعر تقديري';
+    }
+  }
 
   factory ServiceProvider.fromJson(Map<String, dynamic> json) {
     final rawTowns = json['towns'];
@@ -73,8 +154,13 @@ class ServiceProvider {
       name: '${json['name'] ?? ''}',
       categoryId: _toInt(json['category_id']),
       categoryName: '${json['category_name'] ?? ''}',
+      categoryIcon: '${json['category_icon'] ?? ''}',
+      categoryColor: '${json['category_color'] ?? ''}',
       imageUrl: _nullableString(json['image_url']),
       price: rawPrice is num ? rawPrice : (num.tryParse('$rawPrice')),
+      priceType: json['price_type'] != null ? '${json['price_type']}' : '',
+      priceEstimateDesc: _nullableString(json['price_estimate_desc']),
+      attributes: _parseAttributes(json['attributes']),
       status: '${json['status'] ?? 'approved'}',
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
     );
@@ -123,10 +209,15 @@ class ServiceProviderDetail {
   final String name;
   final int categoryId;
   final String categoryName;
+  final String categoryIcon;
+  final String categoryColor;
   final String phone;
   final String? description;
   final String? imageUrl;
   final num? price;
+  final String priceType;
+  final String? priceEstimateDesc;
+  final List<ServiceAttributeItem> attributes;
   final String status;
   final String? rejectionReason;
   final List<String> towns;
@@ -136,10 +227,15 @@ class ServiceProviderDetail {
     required this.name,
     required this.categoryId,
     required this.categoryName,
+    this.categoryIcon = '',
+    this.categoryColor = '',
     required this.phone,
     this.description,
     this.imageUrl,
     this.price,
+    this.priceType = 'estimated',
+    this.priceEstimateDesc,
+    this.attributes = const [],
     this.status = 'approved',
     this.rejectionReason,
     this.towns = const [],
@@ -153,10 +249,15 @@ class ServiceProviderDetail {
       name: '${json['name'] ?? ''}',
       categoryId: _toInt(json['category_id']),
       categoryName: '${json['category_name'] ?? ''}',
+      categoryIcon: '${json['category_icon'] ?? ''}',
+      categoryColor: '${json['category_color'] ?? ''}',
       phone: '${json['phone'] ?? ''}',
       description: _nullableString(json['description']),
       imageUrl: _nullableString(json['image_url']),
       price: rawPrice is num ? rawPrice : (num.tryParse('$rawPrice')),
+      priceType: '${json['price_type'] ?? 'estimated'}',
+      priceEstimateDesc: _nullableString(json['price_estimate_desc']),
+      attributes: _parseAttributes(json['attributes']),
       status: '${json['status'] ?? 'approved'}',
       rejectionReason: _nullableString(json['rejection_reason']),
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],

@@ -1830,4 +1830,77 @@ void main() {
       );
     });
   });
+
+  group('دليل الخدمات والبطاقات الفاخرة', () {
+    test('تحليل مزوّد الخدمة يقرأ شارات الأسعار والمواصفات والحزمة التقديرية بدقة', () {
+      final json = {
+        'id': 12,
+        'category_id': 4,
+        'category_name': 'خيام ولوازم',
+        'category_icon': 'tent',
+        'category_color': '#bfa15f',
+        'name': 'خيام الأصالة الفاخرة',
+        'town': 'رهط',
+        'description': 'تأجير خيام ملكية ومكيفات ومولدات للمناسبات',
+        'price_from': 3500,
+        'price_type': 'estimate',
+        'price_estimate_desc': '1,000 كرسي + برجين إضاءة = 4,500 ₪ تقديري',
+        'capacity': 1000,
+        'verified': 1,
+        'rating': '4.9',
+        'attributes': [
+          {'name': 'المساحة', 'value': '500 متر', 'icon': 'square_foot'},
+          {'name': 'التكييف', 'value': 'مركزي صحراوي', 'icon': 'ac_unit'}
+        ],
+      };
+
+      final provider = ServiceProvider.fromJson(json);
+
+      expect(provider.id, 12);
+      expect(provider.name, 'خيام الأصالة الفاخرة');
+      expect(provider.priceType, 'estimate');
+      expect(provider.displayPriceBadge, 'سعر تقديري');
+      expect(provider.priceEstimateDesc, contains('1,000 كرسي'));
+      expect(provider.categoryIcon, 'tent');
+      expect(provider.attributes, hasLength(2));
+      expect(provider.attributes.first.name, 'المساحة');
+      expect(provider.attributes.first.value, '500 متر');
+    });
+
+    test('شارة السعر تتبدل بدقة حسب نوع السعر', () {
+      final pFixed = ServiceProvider.fromJson({'id': 1, 'price_type': 'fixed'});
+      final pStarting = ServiceProvider.fromJson({'id': 2, 'price_type': 'starting_from'});
+      final pEstimate = ServiceProvider.fromJson({'id': 3, 'price_type': 'estimate'});
+      final pContact = ServiceProvider.fromJson({'id': 4, 'price_type': 'contact_only'});
+      final pNull = ServiceProvider.fromJson({'id': 5});
+
+      expect(pFixed.displayPriceBadge, 'سعر ثابت');
+      expect(pStarting.displayPriceBadge, 'ابتداءً من');
+      expect(pEstimate.displayPriceBadge, 'سعر تقديري');
+      expect(pContact.displayPriceBadge, 'تواصل للسعر');
+      expect(pNull.displayPriceBadge, isNull);
+    });
+
+    test('عميل API يمرّر معامل البحث الفوري search والبلدة والتصنيف', () async {
+      String? capturedQuery;
+      final api = apiReturning(
+        {
+          'success': true,
+          'providers': [],
+        },
+        onRequest: (request) => capturedQuery = request.url.query,
+      );
+
+      await api.serviceProviders(
+        town: 'رهط',
+        categoryId: 3,
+        search: 'خيام',
+      );
+
+      expect(capturedQuery, contains('town=%D8%B1%D9%87%D8%B7'));
+      expect(capturedQuery, contains('category_id=3'));
+      expect(capturedQuery, contains('search=%D8%AE%D9%8A%D8%A7%D9%85'));
+    });
+  });
 }
+

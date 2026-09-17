@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
 import '../main.dart';
@@ -11,13 +14,8 @@ import '../widgets/async_view.dart' show showMessage;
 import '../widgets/congratulations.dart' show openSignInGate;
 import 'service_provider_details_screen.dart';
 
-/// دليل الخدمات — تاب عام، بلا حساب (story 18). شريط فئات أوّله «الكل» (نفس
-/// نمط تبويبات نوع المناسبة في `events_screen.dart`)، وفلتر بلدة في الترويسة،
-/// ثم قائمة مزوّدين مسطّحة مرتّبة أبجدياً (ترتيب الخادم نفسه، لا فرز هنا).
-///
-/// لا رقم ولا زرّ تواصل على أي صفّ — الخادم لا يرسل `phone` في هذه النقطة
-/// إطلاقاً، فلا شيء يُخفى هنا، شيء لا يصل أصلاً. ولا تقييمات ولا نجوم —
-/// غياب مقصود (#25).
+/// دليل الخدمات — كروت فاخرة بمواصفات وحزم تقديرية استرشادية،
+/// وبحث فوري وتواصل مباشر عبر الواتساب والاتصال.
 class ServicesScreen extends StatefulWidget {
   const ServicesScreen({super.key});
 
@@ -30,6 +28,9 @@ class _ServicesScreenState extends State<ServicesScreen> {
 
   int? _categoryId;
   String _town = 'الكل';
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  Timer? _searchDebounce;
 
   List<ServiceProvider> _providers = const [];
   ServiceProvidersPagination? _pagination;
@@ -43,6 +44,13 @@ class _ServicesScreenState extends State<ServicesScreen> {
   int _requestGeneration = 0;
 
   @override
+  void dispose() {
+    _searchController.dispose();
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _categories ??= AppServices.of(context).api.serviceCategories();
@@ -51,6 +59,22 @@ class _ServicesScreenState extends State<ServicesScreen> {
       _didInit = true;
       _loadFirstPage();
     }
+  }
+
+  void _onSearchChanged(String val) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = val.trim());
+      _loadFirstPage();
+    });
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    _searchDebounce?.cancel();
+    setState(() => _searchQuery = '');
+    _loadFirstPage();
   }
 
   Future<void> _loadFirstPage() async {
@@ -64,6 +88,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
       final result = await AppServices.of(context).api.serviceProviders(
             categoryId: _categoryId,
             town: _town,
+            search: _searchQuery.isNotEmpty ? _searchQuery : null,
             page: 1,
           );
       if (!mounted || generation != _requestGeneration) return;
@@ -91,6 +116,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
       final result = await AppServices.of(context).api.serviceProviders(
             categoryId: _categoryId,
             town: _town,
+            search: _searchQuery.isNotEmpty ? _searchQuery : null,
             page: pagination.page + 1,
           );
       if (!mounted || generation != _requestGeneration) return;
@@ -192,7 +218,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('الخدمات'),
+        title: const Text('دليل الخدمات'),
         actions: [
           IconButton(
             tooltip: 'فلترة حسب البلدة',
@@ -223,6 +249,43 @@ class _ServicesScreenState extends State<ServicesScreen> {
         onRefresh: _loadFirstPage,
         child: Column(
           children: [
+            // شريط البحث الفوري
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+              child: TextField(
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'ابحث باسم الخدمة، المزوّد، أو المواصفات...',
+                  hintStyle: TextStyle(fontSize: 13, color: context.c.inkFaint),
+                  prefixIcon: Icon(Icons.search, size: 20, color: context.c.inkFaint),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: _clearSearch,
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: context.c.surfaceSunk,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: context.c.line),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: context.c.line),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: context.c.gold, width: 1.5),
+                  ),
+                ),
+              ),
+            ),
+            // شريط فئات الخدمات
             FutureBuilder<List<ServiceCategory>>(
               future: _categories,
               builder: (context, snapshot) {
@@ -234,16 +297,32 @@ class _ServicesScreenState extends State<ServicesScreen> {
                 );
               },
             ),
-            if (_town != 'الكل')
+            // مؤشر الفلاتر الفعّالة
+            if (_town != 'الكل' || _searchQuery.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-                child: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Chip(
-                    label: Text(_town),
-                    onDeleted: () => _onTownSelected('الكل'),
-                    deleteIcon: const Icon(Icons.close, size: 16),
-                  ),
+                child: Row(
+                  children: [
+                    if (_town != 'الكل') ...[
+                      Chip(
+                        label: Text(_town, style: const TextStyle(fontSize: 12)),
+                        onDeleted: () => _onTownSelected('الكل'),
+                        deleteIcon: const Icon(Icons.close, size: 14),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    if (_searchQuery.isNotEmpty) ...[
+                      Chip(
+                        label: Text('بحث: "$_searchQuery"', style: const TextStyle(fontSize: 12)),
+                        onDeleted: _clearSearch,
+                        deleteIcon: const Icon(Icons.close, size: 14),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ],
                 ),
               ),
             const Divider(height: 1),
@@ -295,10 +374,21 @@ class _ServicesScreenState extends State<ServicesScreen> {
               Icon(Icons.handyman_outlined, size: 46, color: context.c.inkFaint),
               const SizedBox(height: 14),
               Text(
-                'لا يوجد مزوّدو خدمات مطابقون حالياً',
+                'لا توجد خدمات مطابقة حالياً',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: context.c.inkFaint, fontSize: 15),
               ),
+              if (_searchQuery.isNotEmpty || _town != 'الكل' || _categoryId != null) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    _clearSearch();
+                    _onTownSelected('الكل');
+                    _onCategorySelected(null);
+                  },
+                  child: const Text('مسح جميع الفلاتر'),
+                ),
+              ],
             ],
           ),
         ),
@@ -315,7 +405,10 @@ class _ServicesScreenState extends State<ServicesScreen> {
       itemBuilder: (context, index) {
         if (index < _providers.length) {
           final provider = _providers[index];
-          return _ProviderTile(provider: provider, onTap: () => _openProvider(provider));
+          return _LuxuryServiceCard(
+            provider: provider,
+            onTap: () => _openProvider(provider),
+          );
         }
 
         return Padding(
@@ -323,7 +416,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
           child: Center(
             child: _loadingMore
                 ? const CircularProgressIndicator()
-                : OutlinedButton(onPressed: _loadMore, child: const Text('عرض المزيد')),
+                : OutlinedButton(onPressed: _loadMore, child: const Text('عرض المزيد من الخدمات')),
           ),
         );
       },
@@ -399,116 +492,567 @@ class _CategoryTabs extends StatelessWidget {
   }
 }
 
-/// صفّ مزوّد في القائمة المسطّحة: الاسم · الفئة · البلدات · الصورة.
-/// لا رقم ولا زرّ تواصل — لا في البيانات ولا في الواجهة.
-class _ProviderTile extends StatelessWidget {
-  const _ProviderTile({required this.provider, required this.onTap});
+Color _parseColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  var value = hex.trim();
+  if (value.startsWith('#')) value = value.substring(1);
+  if (value.length == 6) value = 'FF$value';
+  if (value.length != 8) return fallback;
+  final parsed = int.tryParse(value, radix: 16);
+  return parsed == null ? fallback : Color(parsed);
+}
+
+/// بطاقة خدمة فاخرة مطابقة لكرت مناسبات المنصة مع الحزم والمواصفات الاسترشادية
+class _LuxuryServiceCard extends StatefulWidget {
+  const _LuxuryServiceCard({
+    required this.provider,
+    required this.onTap,
+  });
 
   final ServiceProvider provider;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final townsText = provider.towns.join('، ');
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
+  State<_LuxuryServiceCard> createState() => _LuxuryServiceCardState();
+}
+
+class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
+  bool _isExpanded = false;
+  bool _loadingContact = false;
+  String? _phone;
+
+  Color _resolveToneColor(BuildContext context) {
+    return _parseColor(widget.provider.categoryColor, context.c.gold);
+  }
+
+  String _priceBadgeText() {
+    return widget.provider.displayPriceBadge ?? 'سعر تقديري';
+  }
+
+  Future<void> _revealContactSheet() async {
+    String? phone = _phone;
+    if (phone == null || phone.isEmpty) {
+      final api = AppServices.of(context).api;
+      setState(() => _loadingContact = true);
+      try {
+        final detail = await api.serviceProviderDetails(widget.provider.id);
+        phone = detail.phone;
+        if (mounted) setState(() => _phone = phone);
+      } catch (e) {
+        if (mounted) showMessage(context, 'تعذّر جلب رقم التواصل: $e', isError: true);
+        return;
+      } finally {
+        if (mounted) setState(() => _loadingContact = false);
+      }
+    }
+
+    if (!mounted || phone.isEmpty) return;
+
+    final provider = widget.provider;
+    var cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
+    if (cleanPhone.startsWith('05')) {
+      cleanPhone = '972${cleanPhone.substring(1)}';
+    } else if (cleanPhone.startsWith('+')) {
+      cleanPhone = cleanPhone.substring(1);
+    }
+
+    final greeting = Uri.encodeComponent(
+      'مرحباً ${provider.name}، استفسار بخصوص خدمتك (${provider.categoryName}) عبر تطبيق أعراسنا:',
+    );
+    final whatsappUrl = Uri.parse('https://wa.me/$cleanPhone?text=$greeting');
+    final telUri = Uri(scheme: 'tel', path: phone);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: context.c.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _ProviderAvatar(imageUrl: provider.imageUrl),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      provider.name,
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.bold,
-                        color: context.c.ink,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      townsText.isEmpty
-                          ? provider.categoryName
-                          : '${provider.categoryName} · $townsText',
-                      style: TextStyle(fontSize: 12.5, color: context.c.inkSoft),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: sheetContext.c.line,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-              if (provider.price != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: context.c.surfaceSunk,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: context.c.line),
-                  ),
-                  child: Text(
-                    '${provider.price} ₪',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.bold,
-                      color: context.c.gold,
-                    ),
-                  ),
+              const SizedBox(height: 16),
+              Text(
+                'تواصل مع ${provider.name}',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: sheetContext.c.ink,
                 ),
-              ],
-              const SizedBox(width: 4),
-              Icon(Icons.chevron_left, color: context.c.inkFaint),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                provider.categoryName,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: sheetContext.c.inkSoft,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF25D366),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.chat, size: 20),
+                label: const Text(
+                  'واتساب مباشر',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  launchUrl(whatsappUrl, mode: LaunchMode.externalApplication);
+                },
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  side: BorderSide(color: sheetContext.c.line),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: Icon(Icons.phone, size: 20, color: sheetContext.c.ink),
+                label: Text(
+                  'اتصال هاتفي ($phone)',
+                  style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold, color: sheetContext.c.ink),
+                ),
+                onPressed: () {
+                  Navigator.of(sheetContext).pop();
+                  launchUrl(telUri);
+                },
+              ),
             ],
           ),
         ),
       ),
     );
   }
-}
-
-class _ProviderAvatar extends StatelessWidget {
-  const _ProviderAvatar({this.imageUrl});
-
-  final String? imageUrl;
 
   @override
   Widget build(BuildContext context) {
-    const size = 48.0;
-    if (imageUrl == null || imageUrl!.isEmpty) {
-      return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: context.c.skyWash,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(Icons.handyman_outlined, color: context.c.sky),
-      );
-    }
+    final p = widget.provider;
+    final toneColor = _resolveToneColor(context);
+    final townsText = p.towns.isNotEmpty
+        ? (p.towns.length > 4 ? 'يخدم جميع بلدات ومناطق النقب' : 'يخدم: ${p.towns.join('، ')}')
+        : 'يخدم مناطق النقب';
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: CachedNetworkImage(
-        imageUrl: imageUrl!,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        placeholder: (_, _) => Container(width: size, height: size, color: context.c.surfaceSunk),
-        errorWidget: (_, _, _) => Container(
-          width: size,
-          height: size,
-          color: context.c.surfaceSunk,
-          child: Icon(Icons.handyman_outlined, color: context.c.inkFaint),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: cardGold.withValues(alpha: 0.35),
+          width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. Media Area with Floating Badges
+          GestureDetector(
+            onTap: widget.onTap,
+            child: SizedBox(
+              height: 220,
+              width: double.infinity,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (p.imageUrl != null && p.imageUrl!.isNotEmpty)
+                    CachedNetworkImage(
+                      imageUrl: p.imageUrl!,
+                      fit: BoxFit.cover,
+                      placeholder: (_, _) => Container(
+                        color: context.c.surfaceSunk,
+                        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                      ),
+                      errorWidget: (_, _, _) => _buildPlaceholderMedia(p, toneColor),
+                    )
+                  else
+                    _buildPlaceholderMedia(p, toneColor),
+
+                  // Top Floating Badges
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: toneColor,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.2),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (p.categoryIcon.isNotEmpty) ...[
+                            Text(p.categoryIcon, style: const TextStyle(fontSize: 12)),
+                            const SizedBox(width: 4),
+                          ],
+                          Text(
+                            p.categoryName,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFFE082), Color(0xFFFFB300)],
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.sell, size: 12, color: Color(0xFF222222)),
+                          const SizedBox(width: 4),
+                          Text(
+                            p.price != null ? '${p.price} ₪ (${_priceBadgeText()})' : _priceBadgeText(),
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF111111),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 2. Card Caption
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InkWell(
+                  onTap: widget.onTap,
+                  child: Text(
+                    p.name,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.ink,
+                      height: 1.25,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Icon(Icons.location_on, size: 14, color: toneColor),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        townsText,
+                        style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Benchmark Package Banner
+                if (p.priceEstimateDesc != null && p.priceEstimateDesc!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: cardGold.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: cardGold.withValues(alpha: 0.35),
+                        style: BorderStyle.solid,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.calculate_outlined, size: 15, color: cardGold),
+                            const SizedBox(width: 6),
+                            Text(
+                              'حزمة استرشادية بهذا السعر التقريبي:',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: cardGold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          p.priceEstimateDesc!,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: context.c.ink,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                // Action Buttons
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: context.c.sky,
+                          foregroundColor: context.c.onSky,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          elevation: 0,
+                        ),
+                        icon: _loadingContact
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.phone, size: 16),
+                        label: const Text(
+                          'تواصل فوري',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: _loadingContact ? null : _revealContactSheet,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          side: BorderSide(color: context.c.line),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: Icon(
+                          _isExpanded ? Icons.expand_less : Icons.expand_more,
+                          size: 18,
+                          color: context.c.ink,
+                        ),
+                        label: Text(
+                          _isExpanded ? 'إخفاء التفاصيل' : 'مزيد من التفاصيل',
+                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: context.c.ink),
+                        ),
+                        onPressed: () => setState(() => _isExpanded = !_isExpanded),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // 3. Collapsible Inline Details Panel
+          if (_isExpanded) ...[
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: context.c.surfaceSunk,
+                border: Border(top: BorderSide(color: context.c.line)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Capacity & Flexibility Notice
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: context.c.surface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border(
+                        right: BorderSide(color: cardGold, width: 3.5),
+                        top: BorderSide(color: context.c.line),
+                        left: BorderSide(color: context.c.line),
+                        bottom: BorderSide(color: context.c.line),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.info_outline, size: 18, color: cardGold),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'توضيح مهم بشأن المواصفات والكميات:',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: context.c.ink,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'المواصفات الموضحة أدناه هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.',
+                                style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Specs Grid
+                  if (p.attributes.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'بنود ومواصفات هذه الحزمة النموذجية:',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.bold,
+                        color: context.c.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: p.attributes.map((attr) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: context.c.surface,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: context.c.line),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                attr.label,
+                                style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                attr.unit.isNotEmpty ? '${attr.value} ${attr.unit}' : attr.value,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: context.c.ink,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+
+                  const SizedBox(height: 14),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: cardGold,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                    ),
+                    icon: const Icon(Icons.phone_in_talk, size: 16),
+                    label: const Text(
+                      'إظهار خيارات الاتصال والواتساب',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                    onPressed: _revealContactSheet,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaceholderMedia(ServiceProvider p, Color toneColor) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: RadialGradient(
+          center: Alignment.center,
+          radius: 0.9,
+          colors: [
+            Color(0xFFFFFDF8),
+            Color(0xFFFBF1D9),
+            Color(0xFFF3DFAD),
+          ],
+        ),
+      ),
+      child: Center(
+        child: p.categoryIcon.isNotEmpty
+            ? Text(
+                p.categoryIcon,
+                style: const TextStyle(fontSize: 48),
+              )
+            : Icon(
+                Icons.handyman_outlined,
+                size: 48,
+                color: toneColor.withValues(alpha: 0.8),
+              ),
       ),
     );
   }

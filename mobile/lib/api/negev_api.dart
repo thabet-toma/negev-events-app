@@ -149,12 +149,14 @@ class NegevApi {
   Future<ServiceProvidersPage> serviceProviders({
     int? categoryId,
     String? town,
+    String? search,
     int page = 1,
     int limit = 30,
   }) async {
     final query = <String, String>{'page': '$page', 'limit': '$limit'};
     if (categoryId != null) query['category_id'] = '$categoryId';
     if (town != null && town.isNotEmpty && town != 'الكل') query['town'] = town;
+    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
 
     final data = await _client.get('/api/services/providers', query: query);
     final list = data['providers'];
