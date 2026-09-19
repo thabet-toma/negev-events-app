@@ -4,11 +4,13 @@ import 'package:http/http.dart' as http;
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../api/api_client.dart';
 import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../state/analytics.dart';
+import '../state/auth_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/location_picker_map.dart';
@@ -74,6 +76,21 @@ const kEventFieldHints = <String, String>{
 /// `VILLAGES_TOWN` على الخادم. اختياره وحده يُظهر منتقي القرية الإلزامي.
 const kVillagesTown = 'القرى والتجمعات';
 
+/// آخر بند في منتقي القرية — «قريتي غير موجودة». قيمة حارسة لا قرية حقيقية
+/// (المعرّف السالب لا يصل الخادم أبداً): اختيارها يُظهر حقل الاسم الحرّ،
+/// والنشر يرسل `requested_village_name` بدل `village_id`. عام كي تشاركه شاشة
+/// تعديل المناسبة.
+const kVillageNotListedOption = Village(
+  id: -1,
+  name: 'قريتي غير موجودة ✎',
+  latitude: 0,
+  longitude: 0,
+  position: 0,
+);
+
+/// أقصى طول لاسم القرية المكتوب — نفس سقف الخادم (`cleanString(..., 100)`).
+const kRequestedVillageNameMaxLength = 100;
+
 /// أقصى ضلع لصورة البوستر بعد القصّ — نفس السقف الذي تستعمله `web/app.js`
 /// (`POSTER_CROP_MAX_DIMENSION`). القصّ اختياري بالكامل: الخادم لا يتغيّر،
 /// ولا إحداثيات قصّ تُخزَّن، والبايتات المقصوصة هي ما يُرفع لا أكثر.
@@ -128,8 +145,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
   final List<HonoreeRow> _honorees = [HonoreeRow()];
 
   String _town = AppConfig.towns.first;
-  // إلزامي فقط تحت بند القرى والتجمعات — `_validate` يرفض النشر بدونه هناك.
+  // إلزامي فقط تحت بند القرى والتجمعات — `_validate` يرفض النشر بدونه هناك،
+  // إلا إن اختار الناشر «قريتي غير موجودة» وكتب اسمها بنفسه.
   Village? _selectedVillage;
+  bool _villageNotListed = false;
+  final _requestedVillageController = TextEditingController();
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -163,6 +183,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     for (final row in _honorees) {
       row.dispose();
     }
+    _requestedVillageController.dispose();
     super.dispose();
   }
 
@@ -269,10 +290,16 @@ class _AddEventScreenState extends State<AddEventScreen> {
       return '${type.labelFor('town') ?? 'البلدة'} مطلوبة';
     }
 
-    // قاعدة تكامل خادمية مطابَقة هنا: قرية إلزامية لنشر جديد تحت البند
-    // الجامع فقط، والخادم يرفض غيابها بـ400 (spec #21 «المخطط»).
-    if (_town == kVillagesTown && _selectedVillage == null) {
-      return 'يرجى اختيار القرية';
+    // قاعدة تكامل خادمية مطابَقة هنا: قرية (من القائمة أو باسمها المكتوب)
+    // إلزامية لنشر جديد تحت البند الجامع فقط، والخادم يرفض غيابها بـ400.
+    if (_town == kVillagesTown) {
+      if (_villageNotListed) {
+        if (_requestedVillageController.text.trim().isEmpty) {
+          return 'اكتب اسم قريتك';
+        }
+      } else if (_selectedVillage == null) {
+        return 'يرجى اختيار القرية';
+      }
     }
 
     if (_eventDate == null) {
@@ -330,8 +357,12 @@ class _AddEventScreenState extends State<AddEventScreen> {
         if (value.isNotEmpty) fields[key] = value;
       }
       fields.addAll(buildLocationFields(latitude: _latitude, longitude: _longitude));
-      if (_town == kVillagesTown && _selectedVillage != null) {
-        fields['village_id'] = '${_selectedVillage!.id}';
+      if (_town == kVillagesTown) {
+        if (_villageNotListed) {
+          fields['requested_village_name'] = _requestedVillageController.text.trim();
+        } else if (_selectedVillage != null) {
+          fields['village_id'] = '${_selectedVillage!.id}';
+        }
       }
       if (type.showsField('event_end_date') && _eventEndDate != null) {
         fields['event_end_date'] = formatEventDate(_eventEndDate!);
@@ -396,7 +427,17 @@ class _AddEventScreenState extends State<AddEventScreen> {
         isMediaUploadErrorMessage('$error') ? 'image_upload_failed' : 'publish_failed',
         contentTown: _town,
       );
-      if (mounted) showMessage(context, '$error', isError: true);
+      if (!mounted) return;
+      // انتهت الجلسة أثناء الملء: النموذج يبقى كما هو تماماً (لا `_reset`)،
+      // وبعد الدخول يعود المستخدم إليه ليعيد الإرسال بنفسه.
+      if (error is ApiException && error.isUnauthorized) {
+        showMessage(context, AuthStore.sessionExpiredMessage, isError: true);
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const SignInScreen()),
+        );
+        return;
+      }
+      showMessage(context, '$error', isError: true);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -409,6 +450,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     for (final row in _honorees) {
       row.dispose();
     }
+    _requestedVillageController.clear();
     setState(() {
       _honorees
         ..clear()
@@ -422,6 +464,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _conflicts = const [];
       _town = AppConfig.towns.first;
       _selectedVillage = null;
+      _villageNotListed = false;
       _latitude = null;
       _longitude = null;
       _locationPickerGeneration++;
@@ -513,7 +556,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
               _town = value;
               // مغادرة البند الجامع تُبطل أي قرية مختارة تحته — نفس القاعدة
               // التي يفرضها الخادم (village_id غير NULL فقط تحت هذا البند).
-              if (value != kVillagesTown) _selectedVillage = null;
+              if (value != kVillagesTown) {
+                _selectedVillage = null;
+                _villageNotListed = false;
+              }
             });
             _checkCollision();
           },
@@ -525,15 +571,33 @@ class _AddEventScreenState extends State<AddEventScreen> {
             builder: (context, snapshot) {
               final villages = snapshot.data ?? const <Village>[];
               return DropdownButtonFormField<Village>(
-                initialValue: _selectedVillage,
+                initialValue: _villageNotListed ? kVillageNotListedOption : _selectedVillage,
                 decoration: const InputDecoration(labelText: 'القرية *'),
-                items: villages
-                    .map((village) => DropdownMenuItem(value: village, child: Text(village.name)))
-                    .toList(),
-                onChanged: (value) => setState(() => _selectedVillage = value),
+                items: [
+                  ...villages.map(
+                    (village) => DropdownMenuItem(value: village, child: Text(village.name)),
+                  ),
+                  const DropdownMenuItem(
+                    value: kVillageNotListedOption,
+                    child: Text('قريتي غير موجودة ✎'),
+                  ),
+                ],
+                onChanged: (value) => setState(() {
+                  _villageNotListed = identical(value, kVillageNotListedOption);
+                  _selectedVillage = _villageNotListed ? null : value;
+                }),
               );
             },
           ),
+          if (_villageNotListed) ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              key: const Key('requested_village_name_field'),
+              controller: _requestedVillageController,
+              maxLength: kRequestedVillageNameMaxLength,
+              decoration: const InputDecoration(labelText: 'اكتب اسم قريتك *'),
+            ),
+          ],
         ],
         const SizedBox(height: 12),
         FutureBuilder<Map<String, TownCoordinate>>(

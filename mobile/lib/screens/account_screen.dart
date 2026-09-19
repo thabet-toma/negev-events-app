@@ -4,6 +4,7 @@ import '../config.dart';
 import '../main.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show openSupportWhatsApp, showMessage;
+import '../widgets/auth_action_button.dart';
 import 'my_events_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
@@ -26,7 +27,10 @@ class AccountScreen extends StatelessWidget {
         final user = auth.user;
 
         return Scaffold(
-          appBar: AppBar(title: const Text('حسابي')),
+          appBar: AppBar(
+            title: const Text('حسابي'),
+            actions: const [AuthActionButton()],
+          ),
           body: user == null
               ? Center(
                   child: Padding(

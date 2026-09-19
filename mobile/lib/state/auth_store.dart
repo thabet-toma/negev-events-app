@@ -11,12 +11,21 @@ import '../models/user.dart';
 ///
 /// رمز المستخدم صالح 90 يوماً في الخادم، فلا حاجة لتسجيل دخول متكرر.
 class AuthStore extends ChangeNotifier {
-  AuthStore(this.api);
+  AuthStore(this.api) {
+    api.client.onUnauthorized = _handleUnauthorized;
+  }
 
   static const _tokenKey = 'negev_token';
   static const _userKey = 'negev_user';
 
+  /// النصّ الموحّد لانتهاء الجلسة — تعرضه main.dart وشاشات الكتابة معاً.
+  static const sessionExpiredMessage = 'انتهت جلستك، يرجى تسجيل الدخول من جديد';
+
   final NegevApi api;
+
+  /// يعرض رسالة انتهاء الجلسة على مستوى التطبيق — تضبطه main.dart بمفتاح
+  /// ScaffoldMessenger العام (هذه الطبقة لا تعرف شجرة الودجت).
+  void Function(String message)? onSessionExpired;
 
   AppUser? _user;
   String? _token;
@@ -50,19 +59,36 @@ class AuthStore extends ChangeNotifier {
     _ready = true;
     notifyListeners();
 
-    // تحقّق صامت: لو انتهت الجلسة على الخادم نُخرج المستخدم بهدوء.
-    if (_token != null) {
+    // تحقّق عند الإقلاع: جلسة انتهت على الخادم (401) تُخرج المستخدم عبر
+    // [_handleUnauthorized]، ورمز مجدَّد في الردّ يحلّ محلّ المحفوظ.
+    final checkedToken = _token;
+    if (checkedToken != null) {
       try {
         final fresh = await api.me();
-        _user = fresh;
+        // تبدّلت الجلسة أثناء الانتظار (خروج أو دخول آخر) — الردّ لم يعد لها.
+        if (_token != checkedToken) return;
+        _user = fresh.user;
+        if (fresh.token != null) {
+          _token = fresh.token;
+          api.client.token = _token;
+        }
         await _persist();
         notifyListeners();
       } on ApiException catch (error) {
-        if (error.isUnauthorized) await signOut();
+        if (error.isUnauthorized && _token == checkedToken) await signOut();
       } catch (_) {
         // انقطاع شبكة — نُبقي الجلسة المحفوظة كما هي.
       }
     }
+  }
+
+  /// طلب برمز فعلي رُفض بـ401 — الجلسة انتهت. خروج محلي مرّة واحدة: طلبان
+  /// متزامنان رُفضا معاً لا يُظهران الرسالة مرّتين، وردّ متأخّر على رمز قديم
+  /// لا يُخرج جلسة جديدة فُتحت بعده.
+  void _handleUnauthorized(String rejectedToken) {
+    if (_token == null || _token != rejectedToken) return;
+    signOut();
+    onSessionExpired?.call(sessionExpiredMessage);
   }
 
   Future<void> signIn(String phone, String pin) async {

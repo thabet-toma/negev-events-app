@@ -7,6 +7,7 @@ import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import 'event_details_screen.dart';
 
 /// خريطة المناسبات — نفس نقاط GET /api/map/events التي تعرضها واجهة الويب.
@@ -123,6 +124,7 @@ class _MapScreenState extends State<MapScreen> {
             tooltip: 'تحديث',
             onPressed: _refresh,
           ),
+          const AuthActionButton(),
         ],
       ),
       body: FutureBuilder<List<MapPoint>>(

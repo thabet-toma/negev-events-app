@@ -26,6 +26,10 @@ class Event {
   final int? villageId;
   final String? villageName;
 
+  /// «قريتي غير موجودة» — اسم كتبه الناشر بنفسه لقرية ليست في القائمة، ينتظر
+  /// أن تعتمدها الإدارة. لا يجتمع مع `villageId` أبداً (قاعدة خادمية).
+  final String? requestedVillageName;
+
   /// حقلا الفنان — من `OCCASION_FIELDS`، ظاهران فقط لنوع يُشعلهما. غيابهما
   /// يعني عدم ظهورهما على الكرت والتفاصيل، لا نصّاً بديلاً.
   final String? artistName;
@@ -69,6 +73,7 @@ class Event {
     this.hostPhone,
     this.villageId,
     this.villageName,
+    this.requestedVillageName,
     this.artistName,
     this.artistImageUrl,
     this.viewsCount = 0,
@@ -86,10 +91,24 @@ class Event {
   int get totalReactions =>
       reactions.values.fold(0, (sum, value) => sum + value);
 
+  /// اسم القرية كما يُعرض: القرية المعتمدة، وإلا — بلا قرية مربوطة — الاسم
+  /// الذي كتبه الناشر بنفسه. `null` حين لا هذا ولا ذاك.
+  String? get villageDisplayName {
+    if (villageName != null && villageName!.isNotEmpty) return villageName;
+    if (villageId == null &&
+        requestedVillageName != null &&
+        requestedVillageName!.isNotEmpty) {
+      return requestedVillageName;
+    }
+    return null;
+  }
+
   /// البلدة كما تُعرض للمستخدم — تُلحق باسم القرية حين تكون معروفة، بلا تغيير
   /// حرفي على `town` نفسها (تبقى القيمة الخام «القرى والتجمعات» كما وصلت).
-  String get townDisplay =>
-      (villageName == null || villageName!.isEmpty) ? town : '$town ($villageName)';
+  String get townDisplay {
+    final village = villageDisplayName;
+    return village == null ? town : '$town ($village)';
+  }
 
   /// نسخة بحالة تذكير محدَّثة — تحدّث محلياً بعد نجاح POST/DELETE .../remind
   /// دون إعادة جلب الصفحة كاملة فتفقد ما تراكم من "عرض المزيد".
@@ -113,6 +132,7 @@ class Event {
         hostPhone: hostPhone,
         villageId: villageId,
         villageName: villageName,
+        requestedVillageName: requestedVillageName,
         artistName: artistName,
         artistImageUrl: artistImageUrl,
         viewsCount: viewsCount,
@@ -188,6 +208,7 @@ class Event {
       hostPhone: _nullableString(json['host_phone']),
       villageId: json['village_id'] == null ? null : _toInt(json['village_id']),
       villageName: _nullableString(json['village_name']),
+      requestedVillageName: _nullableString(json['requested_village_name']),
       artistName: _nullableString(json['artist_name']),
       artistImageUrl: _nullableString(json['artist_image_url']),
       viewsCount: _toInt(json['views_count']),

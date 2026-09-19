@@ -11,6 +11,7 @@ import '../main.dart';
 import '../models/service.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show showMessage;
+import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
 import 'service_provider_details_screen.dart';
 
@@ -229,6 +230,8 @@ class _ServicesScreenState extends State<ServicesScreen> {
             ),
             onPressed: _pickTown,
           ),
+          // الشريط مزدحم أصلاً بزرّ «قدّم عرضك» — أيقونة وحدها تكفي هنا.
+          const AuthActionButton(compact: true),
           Padding(
             padding: const EdgeInsetsDirectional.only(end: 8),
             child: TextButton.icon(

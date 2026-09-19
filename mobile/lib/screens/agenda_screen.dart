@@ -478,9 +478,8 @@ class _AgendaScreenState extends State<AgendaScreen> {
   }
 
   Widget _buildEventItem(Event event) {
-    final locationText = event.villageName != null && event.villageName!.isNotEmpty
-        ? '${event.town} · ${event.villageName}'
-        : event.town;
+    final village = event.villageDisplayName;
+    final locationText = village != null ? '${event.town} · $village' : event.town;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),

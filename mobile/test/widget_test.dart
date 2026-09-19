@@ -20,10 +20,12 @@ import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/analytics.dart';
+import 'package:negev_events/state/audio_coordinator.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/update_checker.dart';
 import 'package:negev_events/theme.dart';
+import 'package:negev_events/widgets/auth_action_button.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -134,7 +136,7 @@ void main() {
     test('يميّز انتهاء الجلسة', () async {
       final api = apiReturning(
         {'success': false, 'message': 'الجلسة منتهية أو غير صالحة'},
-        status: 403,
+        status: 401,
       );
 
       try {
@@ -142,6 +144,20 @@ void main() {
         fail('كان يجب رمي استثناء');
       } on ApiException catch (error) {
         expect(error.isUnauthorized, isTrue);
+      }
+    });
+
+    test('403 «غير مسموح» ليس انتهاء جلسة', () async {
+      final api = apiReturning(
+        {'success': false, 'message': 'لا تملك صلاحية الوصول إلى هذه المناسبة'},
+        status: 403,
+      );
+
+      try {
+        await api.me();
+        fail('كان يجب رمي استثناء');
+      } on ApiException catch (error) {
+        expect(error.isUnauthorized, isFalse);
       }
     });
 
@@ -1900,6 +1916,292 @@ void main() {
       expect(capturedQuery, contains('town=%D8%B1%D9%87%D8%B7'));
       expect(capturedQuery, contains('category_id=3'));
       expect(capturedQuery, contains('search=%D8%AE%D9%8A%D8%A7%D9%85'));
+    });
+  });
+
+  group('الجلسة — 401 وحده يُخرج المستخدم، والرمز المجدَّد يُحفظ', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    const userJson = {
+      'id': 5,
+      'phone_number': '0501234567',
+      'full_name': 'سالم',
+      'clan_town': null,
+      'role': 'user',
+    };
+
+    test('401 على طلب برمز يستدعي onUnauthorized، و403 لا يستدعيه', () async {
+      var calls = 0;
+
+      final expired = apiReturning(
+        {'success': false, 'message': 'الجلسة منتهية أو غير صالحة'},
+        status: 401,
+      );
+      expired.client
+        ..token = 'old-token'
+        ..onUnauthorized = (_) => calls++;
+      await expectLater(expired.nokoot(), throwsA(isA<ApiException>()));
+      expect(calls, 1);
+
+      final forbidden = apiReturning(
+        {'success': false, 'message': 'لا تملك صلاحية الوصول إلى هذه المناسبة'},
+        status: 403,
+      );
+      forbidden.client
+        ..token = 'old-token'
+        ..onUnauthorized = (_) => calls++;
+      await expectLater(forbidden.nokoot(), throwsA(isA<ApiException>()));
+      expect(calls, 1);
+    });
+
+    test('401 على طلب بلا رمز مُرفَق لا يستدعي onUnauthorized — زائر لا جلسة له', () async {
+      var calls = 0;
+      final api = apiReturning(
+        {'success': false, 'message': 'يجب تسجيل الدخول'},
+        status: 401,
+      );
+      api.client.onUnauthorized = (_) => calls++;
+
+      await expectLater(api.nokoot(), throwsA(isA<ApiException>()));
+      expect(calls, 0);
+    });
+
+    test('AuthStore.load يحفظ الرمز المجدَّد من /me في العميل والتخزين المحلي', () async {
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'old-token',
+        'negev_user': jsonEncode(userJson),
+      });
+      String? sentAuth;
+      final api = apiReturning(
+        {'success': true, 'user': userJson, 'token': 'renewed-token'},
+        onRequest: (request) => sentAuth = request.headers['Authorization'],
+      );
+      final auth = AuthStore(api);
+
+      await auth.load();
+
+      expect(sentAuth, 'Bearer old-token');
+      expect(auth.token, 'renewed-token');
+      expect(api.client.token, 'renewed-token');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('negev_token'), 'renewed-token');
+    });
+
+    test('/me بلا token (مدير) يُبقي الرمز المحفوظ كما هو', () async {
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'admin-token',
+        'negev_user': jsonEncode({...userJson, 'role': 'admin'}),
+      });
+      final api = apiReturning({
+        'success': true,
+        'user': {...userJson, 'role': 'admin'},
+      });
+      final auth = AuthStore(api);
+
+      await auth.load();
+
+      expect(auth.token, 'admin-token');
+      expect(auth.isSignedIn, isTrue);
+    });
+
+    test('401 من /me يُخرج المستخدم محلياً ويُعلن انتهاء الجلسة مرّة واحدة', () async {
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'old-token',
+        'negev_user': jsonEncode(userJson),
+      });
+      final api = apiReturning(
+        {'success': false, 'message': 'الجلسة منتهية أو غير صالحة'},
+        status: 401,
+      );
+      final auth = AuthStore(api);
+      final messages = <String>[];
+      auth.onSessionExpired = messages.add;
+
+      await auth.load();
+
+      expect(auth.isSignedIn, isFalse);
+      expect(api.client.token, isNull);
+      expect(messages, [AuthStore.sessionExpiredMessage]);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('negev_token'), isNull);
+    });
+  });
+
+  group('زرّ الدخول/الخروج الظاهر دائماً', () {
+    Future<void> pumpButton(WidgetTester tester, AuthStore auth) async {
+      await tester.pumpWidget(
+        AppServices(
+          api: auth.api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(
+                appBar: AppBar(actions: const [AuthActionButton()]),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('بلا جلسة: «تسجيل الدخول»', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final auth = AuthStore(apiReturning({'success': true}));
+      await tester.runAsync(auth.load);
+
+      await pumpButton(tester, auth);
+
+      expect(find.text('تسجيل الدخول'), findsOneWidget);
+      expect(find.text('تسجيل الخروج'), findsNothing);
+    });
+
+    testWidgets('بجلسة محفوظة: «تسجيل الخروج»، وتأكيده يُخرج المستخدم', (tester) async {
+      final userJson = {
+        'id': 5,
+        'phone_number': '0501234567',
+        'full_name': 'سالم',
+        'clan_town': null,
+        'role': 'user',
+      };
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'a-token',
+        'negev_user': jsonEncode(userJson),
+      });
+      final auth = AuthStore(apiReturning({'success': true, 'user': userJson}));
+      await tester.runAsync(auth.load);
+
+      await pumpButton(tester, auth);
+
+      expect(find.text('تسجيل الخروج'), findsOneWidget);
+      expect(find.text('تسجيل الدخول'), findsNothing);
+
+      await tester.tap(find.text('تسجيل الخروج'));
+      await tester.pumpAndSettle();
+      expect(find.text('هل تريد تسجيل الخروج؟'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(ElevatedButton, 'تسجيل الخروج'));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pumpAndSettle();
+
+      expect(auth.isSignedIn, isFalse);
+      expect(find.text('تسجيل الدخول'), findsOneWidget);
+      expect(find.text('تم تسجيل الخروج'), findsOneWidget);
+    });
+  });
+
+  group('الصوت الفعلي للمناسبة — شيلتها، وإلا الافتراضي لنوع يُظهر الصوت فقط', () {
+    Map<String, dynamic> typeJson({required bool showsAudio}) => {
+      'id': showsAudio ? 1 : 2,
+      'name': showsAudio ? 'عرس' : 'عزا',
+      'icon': '',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'tone': showsAudio ? 'festive' : 'solemn',
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'أصحاب المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        if (showsAudio)
+          {
+            'field_key': 'audio_url',
+            'label': 'الشيلة',
+            'is_visible': true,
+            'is_required': false,
+            'position': 2,
+          },
+      ],
+      'reactions': <String>[],
+    };
+
+    const defaultUrl = 'https://api.example.com/uploads/default.mp3';
+
+    test('نوع يُظهر audio_url بلا شيلة خاصة ⇒ المقطع الافتراضي', () {
+      final event = Event.fromJson({
+        'id': 1,
+        'town': 'رهط',
+        'occasion_type': typeJson(showsAudio: true),
+      });
+      expect(effectiveEventAudioUrl(event, defaultAudioUrl: defaultUrl), defaultUrl);
+    });
+
+    test('شيلة المناسبة نفسها تسبق الافتراضي', () {
+      final event = Event.fromJson({
+        'id': 2,
+        'town': 'رهط',
+        'audio_url': 'https://api.example.com/uploads/own.mp3',
+        'occasion_type': typeJson(showsAudio: true),
+      });
+      expect(
+        effectiveEventAudioUrl(event, defaultAudioUrl: defaultUrl),
+        'https://api.example.com/uploads/own.mp3',
+      );
+    });
+
+    test('نوع يُخفي audio_url (العزاء) ⇒ لا صوت إطلاقاً، ولا حتى شيلة مرفوعة', () {
+      final withoutOwn = Event.fromJson({
+        'id': 3,
+        'town': 'رهط',
+        'occasion_type': typeJson(showsAudio: false),
+      });
+      final withOwn = Event.fromJson({
+        'id': 4,
+        'town': 'رهط',
+        'audio_url': 'https://api.example.com/uploads/own.mp3',
+        'occasion_type': typeJson(showsAudio: false),
+      });
+      expect(effectiveEventAudioUrl(withoutOwn, defaultAudioUrl: defaultUrl), isNull);
+      expect(effectiveEventAudioUrl(withOwn, defaultAudioUrl: defaultUrl), isNull);
+    });
+
+    test('بلا مقطع افتراضي مضبوط ولا شيلة ⇒ لا صوت', () {
+      final event = Event.fromJson({
+        'id': 5,
+        'town': 'رهط',
+        'occasion_type': typeJson(showsAudio: true),
+      });
+      expect(effectiveEventAudioUrl(event), isNull);
+    });
+
+    test('عميل API يقرأ default_event_audio_url من الإعدادات العامة', () async {
+      final api = apiReturning({
+        'success': true,
+        'settings': {'default_event_audio_url': defaultUrl},
+      });
+      expect(await api.getDefaultEventAudioUrl(), defaultUrl);
+    });
+  });
+
+  group('«قريتي غير موجودة» — اسم القرية المكتوب', () {
+    test('يُقرأ requested_village_name ويُعرض حين لا قرية مربوطة', () {
+      final event = Event.fromJson({
+        'id': 9,
+        'town': 'القرى والتجمعات',
+        'village_id': null,
+        'requested_village_name': 'وادي النعم',
+      });
+      expect(event.requestedVillageName, 'وادي النعم');
+      expect(event.townDisplay, 'القرى والتجمعات (وادي النعم)');
+    });
+
+    test('قرية مربوطة تسبق أي اسم مكتوب', () {
+      final event = Event.fromJson({
+        'id': 10,
+        'town': 'القرى والتجمعات',
+        'village_id': 4,
+        'village_name': 'أم بطين',
+        'requested_village_name': 'اسم قديم',
+      });
+      expect(event.townDisplay, 'القرى والتجمعات (أم بطين)');
     });
   });
 }

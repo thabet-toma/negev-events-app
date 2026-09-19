@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
 
+import '../api/api_client.dart';
 import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../state/auth_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/location_picker_map.dart';
+import 'account_screen.dart';
 import 'add_event_screen.dart'
-    show HonoreeRow, DateField, kEventTextFieldKeys, kEventFieldHints, formatEventDate;
+    show
+        HonoreeRow,
+        DateField,
+        kEventTextFieldKeys,
+        kEventFieldHints,
+        formatEventDate,
+        kVillagesTown,
+        kVillageNotListedOption,
+        kRequestedVillageNameMaxLength;
 import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 
 /// الحقول التي يصنّفها الخادم دائماً حرِجة (events.service.js
@@ -19,6 +30,8 @@ const _fieldsThatMayTriggerReview = {
   'event_date',
   'event_end_date',
   'town',
+  'village_id',
+  'requested_village_name',
   'location_name',
   'latitude',
   'longitude',
@@ -58,11 +71,17 @@ class _EditEventScreenState extends State<EditEventScreen> {
   late OccasionType? _type;
   Future<Map<String, TownCoordinate>>? _townCoordsFuture;
   Future<List<Amendment>>? _amendmentsFuture;
+  Future<List<Village>>? _villagesFuture;
 
   final Map<String, TextEditingController> _controllers = {};
   late List<HonoreeRow> _honorees;
 
   late String _town;
+  // القرية تحت البند الجامع فقط: معرّف من القائمة، أو «قريتي غير موجودة»
+  // باسم مكتوب — لا الاثنان معاً (قاعدة خادمية).
+  int? _villageId;
+  bool _villageNotListed = false;
+  final _requestedVillageController = TextEditingController();
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -74,6 +93,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
   late Map<String, String> _originalText;
   late String _originalTown;
+  int? _originalVillageId;
+  String _originalRequestedVillageName = '';
   String? _originalEventDate;
   String? _originalEventEndDate;
   String? _originalYouthDate;
@@ -104,6 +125,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
     for (final row in _honorees) {
       row.dispose();
     }
+    _requestedVillageController.dispose();
     super.dispose();
   }
 
@@ -138,6 +160,13 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
     _town = event.town;
     _originalTown = event.town;
+
+    _villageId = event.villageId;
+    _originalVillageId = event.villageId;
+    _originalRequestedVillageName =
+        event.villageId == null ? (event.requestedVillageName ?? '') : '';
+    _villageNotListed = _originalRequestedVillageName.isNotEmpty;
+    _requestedVillageController.text = _originalRequestedVillageName;
 
     _eventDate = event.eventDate.isEmpty ? null : DateTime.tryParse(event.eventDate);
     _originalEventDate = event.eventDate.isEmpty ? null : event.eventDate;
@@ -201,6 +230,19 @@ class _EditEventScreenState extends State<EditEventScreen> {
     }
 
     if (_town != _originalTown) changes['town'] = _town;
+
+    // خارج البند الجامع لا يُرسَل شيء عن القرية — الخادم يمسحها وحده حين
+    // تغادره البلدة (events.routes.js).
+    if (_town == kVillagesTown) {
+      if (_villageNotListed) {
+        final name = _requestedVillageController.text.trim();
+        if (name != _originalRequestedVillageName || _originalVillageId != null) {
+          changes['requested_village_name'] = name;
+        }
+      } else if (_villageId != _originalVillageId) {
+        changes['village_id'] = _villageId;
+      }
+    }
 
     final eventDateText = _eventDate == null ? null : formatEventDate(_eventDate!);
     if (eventDateText != null && eventDateText != _originalEventDate) {
@@ -270,6 +312,13 @@ class _EditEventScreenState extends State<EditEventScreen> {
     final changes = _computeChanges();
     if (changes.isEmpty) return;
 
+    if (_town == kVillagesTown &&
+        _villageNotListed &&
+        _requestedVillageController.text.trim().isEmpty) {
+      showMessage(context, 'اكتب اسم قريتك', isError: true);
+      return;
+    }
+
     // نلتقط الخدمة قبل أي await حتى لا نلمس context بعد فجوة غير متزامنة —
     // نفس نمط شاشة النشر.
     final api = AppServices.of(context).api;
@@ -292,6 +341,16 @@ class _EditEventScreenState extends State<EditEventScreen> {
           for (final key in kEventTextFieldKeys) key: _controllerFor(key).text.trim(),
         };
         _originalTown = _town;
+        if (_town == kVillagesTown) {
+          _originalVillageId = _villageNotListed ? null : _villageId;
+          _originalRequestedVillageName =
+              _villageNotListed ? _requestedVillageController.text.trim() : '';
+        } else {
+          _villageId = null;
+          _villageNotListed = false;
+          _originalVillageId = null;
+          _originalRequestedVillageName = '';
+        }
         _originalEventDate = _eventDate == null ? null : formatEventDate(_eventDate!);
         _originalEventEndDate = _eventEndDate == null ? null : formatEventDate(_eventEndDate!);
         _originalYouthDate = _youthDate == null ? null : formatEventDate(_youthDate!);
@@ -303,7 +362,17 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
       showMessage(context, composeEventUpdateMessage(result));
     } catch (error) {
-      if (mounted) showMessage(context, '$error', isError: true);
+      if (!mounted) return;
+      // انتهت الجلسة: التعديلات تبقى في النموذج كما هي، وبعد الدخول يعود
+      // المستخدم إليها ليحفظ من جديد.
+      if (error is ApiException && error.isUnauthorized) {
+        showMessage(context, AuthStore.sessionExpiredMessage, isError: true);
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const SignInScreen()),
+        );
+        return;
+      }
+      showMessage(context, '$error', isError: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -361,9 +430,16 @@ class _EditEventScreenState extends State<EditEventScreen> {
                 .toList(),
             onChanged: (value) {
               if (value == null) return;
-              setState(() => _town = value);
+              setState(() {
+                _town = value;
+                if (value != kVillagesTown) {
+                  _villageId = null;
+                  _villageNotListed = false;
+                }
+              });
             },
           ),
+          if (_town == kVillagesTown) ..._villageEditor(),
           const SizedBox(height: 12),
           FutureBuilder<Map<String, TownCoordinate>>(
             future: _townCoordsFuture,
@@ -447,6 +523,56 @@ class _EditEventScreenState extends State<EditEventScreen> {
         ],
       ),
     );
+  }
+
+  /// منتقي القرية تحت البند الجامع — القائمة من الخادم (`GET /api/towns`)،
+  /// وآخر بنودها «قريتي غير موجودة» بحقل اسم حرّ.
+  List<Widget> _villageEditor() {
+    _villagesFuture ??= AppServices.of(context).api.listVillages();
+
+    return [
+      const SizedBox(height: 12),
+      FutureBuilder<List<Village>>(
+        future: _villagesFuture,
+        builder: (context, snapshot) {
+          final villages = snapshot.data ?? const <Village>[];
+          Village? selected;
+          for (final village in villages) {
+            if (village.id == _villageId) selected = village;
+          }
+          return DropdownButtonFormField<Village>(
+            // القائمة تصل بعد أول بناء — مفتاح جديد عند وصولها كي يلتقط
+            // الحقل القرية الحالية بدل بقائه فارغاً.
+            key: ValueKey('village_picker_${snapshot.hasData}'),
+            initialValue: _villageNotListed ? kVillageNotListedOption : selected,
+            decoration: const InputDecoration(labelText: 'القرية'),
+            items: [
+              ...villages.map(
+                (village) => DropdownMenuItem(value: village, child: Text(village.name)),
+              ),
+              const DropdownMenuItem(
+                value: kVillageNotListedOption,
+                child: Text('قريتي غير موجودة ✎'),
+              ),
+            ],
+            onChanged: (value) => setState(() {
+              _villageNotListed = identical(value, kVillageNotListedOption);
+              _villageId = _villageNotListed ? null : value?.id;
+            }),
+          );
+        },
+      ),
+      if (_villageNotListed) ...[
+        const SizedBox(height: 12),
+        TextFormField(
+          key: const Key('requested_village_name_field'),
+          controller: _requestedVillageController,
+          maxLength: kRequestedVillageNameMaxLength,
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(labelText: 'اكتب اسم قريتك *'),
+        ),
+      ],
+    ];
   }
 
   Widget _honoreesEditor(OccasionType? type) {

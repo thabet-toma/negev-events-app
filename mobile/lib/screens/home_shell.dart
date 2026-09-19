@@ -77,12 +77,14 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    const screens = [
-      EventsScreen(),
-      MapScreen(),
-      NokootScreen(),
-      AccountScreen(),
-      ServicesScreen(),
+    // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر صراحةً
+    // متى لم تعد المختارة كي تُسكت صوتها.
+    final screens = [
+      EventsScreen(isActive: _index == 0),
+      const MapScreen(),
+      const NokootScreen(),
+      const AccountScreen(),
+      const ServicesScreen(),
     ];
 
     return Scaffold(

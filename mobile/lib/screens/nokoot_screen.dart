@@ -5,6 +5,7 @@ import '../main.dart';
 import '../models/nokoot.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import 'account_screen.dart';
 
 /// دفتر النقوط — خاص بالمستخدم، والخادم يقصر كل استعلام على صاحبه.
@@ -217,7 +218,10 @@ class _NokootScreenState extends State<NokootScreen> {
       builder: (context, _) {
         if (!auth.isSignedIn) {
           return Scaffold(
-            appBar: AppBar(title: const Text('دفتر النقوط')),
+            appBar: AppBar(
+              title: const Text('دفتر النقوط'),
+              actions: const [AuthActionButton()],
+            ),
             body: const _SignInPrompt(),
           );
         }
@@ -233,6 +237,7 @@ class _NokootScreenState extends State<NokootScreen> {
                 tooltip: 'تحديث',
                 onPressed: _refresh,
               ),
+              const AuthActionButton(),
             ],
           ),
           floatingActionButton: FloatingActionButton.extended(

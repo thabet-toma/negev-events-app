@@ -1,15 +1,17 @@
-import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../state/analytics.dart';
+import '../state/audio_coordinator.dart';
 import '../state/share_event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 
@@ -37,8 +39,11 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   /// لا استنتاج ملكية في العميل — القرار وحده عائد لاستجابة الخادم.
   Future<List<Congratulation>?>? _queue;
 
-  final _player = AudioPlayer();
-  bool _isPlaying = false;
+  /// المشغّل المشترك — يُلتقط هنا لأنّ `dispose` لا يجوز له قراءة الشجرة.
+  AudioCoordinator? _audio;
+
+  /// المقطع الافتراضي للمنصّة كما وصل — `null` حتى يصل أو إن لم يُضبط.
+  String? _defaultAudioUrl;
 
   VoidCallback? _unsubscribeReactions;
   VoidCallback? _unsubscribeCongrats;
@@ -49,8 +54,11 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     if (_event != null) return;
 
     final services = AppServices.of(context);
+    _audio = services.audio;
     _event = services.api.eventDetails(widget.eventId).then((ev) {
       recordAnalyticsEvent(services.api, 'event_viewed', contentTown: ev.town);
+      // تشغيل تلقائي مرّة واحدة عند الفتح — إعادة التحميل الهادئة لا تعيده.
+      _autoplay(ev, services.api);
       return ev;
     });
     if (services.auth.isSignedIn) _queue = _loadQueue();
@@ -76,7 +84,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   void dispose() {
     _unsubscribeReactions?.call();
     _unsubscribeCongrats?.call();
-    _player.dispose();
+    _audio?.release(this);
     super.dispose();
   }
 
@@ -89,18 +97,21 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     });
   }
 
+  Future<void> _autoplay(Event event, NegevApi api) async {
+    final audio = _audio;
+    if (audio == null || !mounted) return;
+    final defaultUrl = await audio.defaultTrack(api);
+    if (!mounted) return;
+    setState(() => _defaultAudioUrl = defaultUrl);
+    await audio.autoplay(
+      effectiveEventAudioUrl(event, defaultAudioUrl: defaultUrl),
+      owner: this,
+    );
+  }
+
   Future<void> _toggleAudio(String url) async {
     try {
-      if (_isPlaying) {
-        await _player.pause();
-        setState(() => _isPlaying = false);
-      } else {
-        await _player.play(UrlSource(url));
-        setState(() => _isPlaying = true);
-        _player.onPlayerComplete.listen((_) {
-          if (mounted) setState(() => _isPlaying = false);
-        });
-      }
+      await _audio?.toggle(url, owner: this);
     } catch (_) {
       if (mounted) showMessage(context, 'تعذّر تشغيل الشيلة', isError: true);
     }
@@ -235,6 +246,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
               );
             },
           ),
+          const AuthActionButton(compact: true),
         ],
       ),
       body: FutureBuilder<Event>(
@@ -243,18 +255,28 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
           return AsyncView<Event>(
             snapshot: snapshot,
             onRetry: _reloadQuietly,
-            builder: (event) => _EventDetailsBody(
-              event: event,
-              isPlaying: _isPlaying,
-              onRemindTap: () => _toggleRemind(event),
-              onReport: (congratulationId) => _report(event.id, congratulationId),
-              onToggleAudio: () => _toggleAudio(event.audioUrl!),
-              onReact: _react,
-              onNavigate: () => _openNavigation(event),
-              onCallHost: () => _callHost(event.hostPhone!, town: event.town),
-              onCongratulate: () => _openCongratulateSheet(event),
-              onShare: () => _share(event),
-            ),
+            builder: (event) {
+              final audioUrl =
+                  effectiveEventAudioUrl(event, defaultAudioUrl: _defaultAudioUrl);
+              return AnimatedBuilder(
+                animation: _audio!,
+                builder: (context, _) => _EventDetailsBody(
+                  event: event,
+                  audioUrl: audioUrl,
+                  isPlaying: audioUrl != null && _audio!.isPlayingUrl(audioUrl),
+                  onRemindTap: () => _toggleRemind(event),
+                  onReport: (congratulationId) => _report(event.id, congratulationId),
+                  onToggleAudio: () {
+                    if (audioUrl != null) _toggleAudio(audioUrl);
+                  },
+                  onReact: _react,
+                  onNavigate: () => _openNavigation(event),
+                  onCallHost: () => _callHost(event.hostPhone!, town: event.town),
+                  onCongratulate: () => _openCongratulateSheet(event),
+                  onShare: () => _share(event),
+                ),
+              );
+            },
           );
         },
       ),
@@ -265,6 +287,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
 class _EventDetailsBody extends StatelessWidget {
   const _EventDetailsBody({
     required this.event,
+    required this.audioUrl,
     required this.isPlaying,
     required this.onToggleAudio,
     required this.onReact,
@@ -277,6 +300,10 @@ class _EventDetailsBody extends StatelessWidget {
   });
 
   final Event event;
+
+  /// الصوت الفعلي (`effectiveEventAudioUrl`) — شيلة المناسبة أو المقطع
+  /// الافتراضي، و`null` لنوع لا صوت له.
+  final String? audioUrl;
   final bool isPlaying;
   final VoidCallback onToggleAudio;
   final ValueChanged<String> onReact;
@@ -292,7 +319,6 @@ class _EventDetailsBody extends StatelessWidget {
     final type = event.occasionType;
     final showYouthParty = type?.showsField('youth_party_date') ?? true;
     final showDinnerTime = type?.showsField('dinner_time') ?? true;
-    final showAudio = type?.showsField('audio_url') ?? true;
     final showEndDate = type?.showsField('event_end_date') ?? false;
     final showSecondaryLocation = type?.showsField('secondary_location_name') ?? false;
     final reactionKeys = type?.reactions ?? const <String>[];
@@ -427,7 +453,7 @@ class _EventDetailsBody extends StatelessWidget {
                   value: event.dinnerTime,
                 ),
               const SizedBox(height: 14),
-              if (showAudio && event.audioUrl != null)
+              if (audioUrl != null)
                 _AudioTile(
                   title: event.audioTitle ?? type?.labelFor('audio_title') ?? 'مقطع صوتي',
                   isPlaying: isPlaying,

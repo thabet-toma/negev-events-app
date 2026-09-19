@@ -559,13 +559,18 @@ class NegevApi {
     return _authResult(data);
   }
 
-  Future<AppUser> me() async {
+  /// `token` يصل فقط لمستخدم عادي (رمز مجدَّد) — غيابه يعني «أبقِ رمزك الحالي».
+  Future<({AppUser user, String? token})> me() async {
     final data = await _client.get('/api/auth/me', auth: true);
     final user = data['user'];
     if (user is! Map<String, dynamic>) {
       throw const ApiException('تعذّر قراءة بيانات الحساب');
     }
-    return AppUser.fromJson(user);
+    final token = data['token'];
+    return (
+      user: AppUser.fromJson(user),
+      token: token is String && token.isNotEmpty ? token : null,
+    );
   }
 
   ({String token, AppUser user}) _authResult(Map<String, dynamic> data) {
@@ -629,6 +634,20 @@ class NegevApi {
         if (number is String && number.trim().isNotEmpty) {
           return number.trim();
         }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// المقطع الصوتي الافتراضي للمناسبات من GET /api/settings/public — رابط
+  /// مطلق أو null. صامت عند الفشل كرقم الدعم: التطبيق يعمل بدونه.
+  Future<String?> getDefaultEventAudioUrl() async {
+    try {
+      final data = await _client.get('/api/settings/public');
+      final settings = data['settings'];
+      if (settings is Map<String, dynamic>) {
+        final url = settings['default_event_audio_url'];
+        if (url is String && url.trim().isNotEmpty) return url.trim();
       }
     } catch (_) {}
     return null;

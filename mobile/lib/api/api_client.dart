@@ -11,7 +11,9 @@ class ApiException implements Exception {
 
   const ApiException(this.message, [this.statusCode]);
 
-  bool get isUnauthorized => statusCode == 401 || statusCode == 403;
+  /// 401 وحده = جلسة منتهية أو رمز غير صالح. 403 يعني «غير مسموح لك» مع
+  /// جلسة سليمة، ولا يُخرج المستخدم أبداً.
+  bool get isUnauthorized => statusCode == 401;
 
   @override
   String toString() => message;
@@ -29,6 +31,11 @@ class ApiClient {
 
   /// يُضبط من AuthStore بعد تسجيل الدخول.
   String? token;
+
+  /// يُستدعى حين يرفض الخادم بـ401 طلباً أُرفق به رمز فعلاً — أي أنّ الجلسة
+  /// انتهت — ومعه الرمز المرفوض نفسه. يسجّله AuthStore؛ طلب عام أو بلا رمز
+  /// لا يستدعيه أبداً.
+  void Function(String rejectedToken)? onUnauthorized;
 
   Uri _uri(String path, [Map<String, String>? query]) {
     final base = Uri.parse(AppConfig.apiBase);
@@ -60,7 +67,10 @@ class ApiClient {
     Map<String, String>? query,
     bool auth = false,
   }) async {
-    return _send(() => _client.get(_uri(path, query), headers: _headers(auth: auth)));
+    return _send(
+      () => _client.get(_uri(path, query), headers: _headers(auth: auth)),
+      auth: auth,
+    );
   }
 
   Future<Map<String, dynamic>> post(
@@ -74,11 +84,15 @@ class ApiClient {
         headers: _headers(auth: auth, json: true),
         body: jsonEncode(body ?? const {}),
       ),
+      auth: auth,
     );
   }
 
   Future<Map<String, dynamic>> delete(String path, {bool auth = false}) async {
-    return _send(() => _client.delete(_uri(path), headers: _headers(auth: auth)));
+    return _send(
+      () => _client.delete(_uri(path), headers: _headers(auth: auth)),
+      auth: auth,
+    );
   }
 
   Future<Map<String, dynamic>> patch(
@@ -92,6 +106,7 @@ class ApiClient {
         headers: _headers(auth: auth, json: true),
         body: jsonEncode(body ?? const {}),
       ),
+      auth: auth,
     );
   }
 
@@ -109,12 +124,15 @@ class ApiClient {
         ..files.addAll(files);
       final streamed = await _client.send(request);
       return http.Response.fromStream(streamed);
-    });
+    }, auth: auth);
   }
 
   Future<Map<String, dynamic>> _send(
-    Future<http.Response> Function() run,
-  ) async {
+    Future<http.Response> Function() run, {
+    bool auth = false,
+  }) async {
+    // الرمز كما أُرفق بهذا الطلب تحديداً — لا كما يصير بعد انتظار الاستجابة.
+    final sentToken = auth && token != null && token!.isNotEmpty ? token : null;
     http.Response response;
     try {
       response = await run().timeout(const Duration(seconds: 20));
@@ -130,6 +148,10 @@ class ApiClient {
       decoded = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
     } catch (_) {
       throw ApiException('استجابة غير مفهومة من الخادم', response.statusCode);
+    }
+
+    if (response.statusCode == 401 && sentToken != null) {
+      onUnauthorized?.call(sentToken);
     }
 
     if (response.statusCode >= 400 || decoded['success'] == false) {

@@ -7,8 +7,10 @@ import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../models/notification.dart' as notif;
+import '../state/audio_coordinator.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show openSupportWhatsApp, showMessage;
+import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
@@ -24,14 +26,21 @@ const double _announcementsMaxHeight = 132;
 
 /// الشاشة الرئيسية: القصص + بحث + فلترة بلدة ونوع + إعلانات + قائمة المناسبات
 /// المرقّمة.
+///
+/// الكرت الظاهر يشغّل صوته الفعلي تلقائياً (`effectiveEventAudioUrl`)، ويسكت
+/// حين يغادر الكرت، أو يُختار تبويب آخر (`isActive`)، أو تُدفع شاشة فوقه.
 class EventsScreen extends StatefulWidget {
-  const EventsScreen({super.key});
+  const EventsScreen({super.key, this.isActive = true});
+
+  /// هل تبويب المناسبات هو المختار الآن؟ `IndexedStack` في `HomeShell` يُبقي
+  /// الشاشة حيّة خلف التبويبات الأخرى، فلا بدّ أن تُخبَر صراحةً.
+  final bool isActive;
 
   @override
   State<EventsScreen> createState() => _EventsScreenState();
 }
 
-class _EventsScreenState extends State<EventsScreen> {
+class _EventsScreenState extends State<EventsScreen> with RouteAware {
   final _searchController = TextEditingController();
   final _pageController = PageController();
 
@@ -76,9 +85,32 @@ class _EventsScreenState extends State<EventsScreen> {
   /// انتظاره)، بدل أن يُلحِق صفحة من فلتر قديم بقائمة الفلتر الجديد.
   int _requestGeneration = 0;
 
+  /// المشغّل المشترك — يُلتقط هنا لأنّ `dispose` لا يجوز له قراءة الشجرة.
+  AudioCoordinator? _audio;
+  String? _defaultAudioUrl;
+  int _currentPage = 0;
+
+  /// شاشة (أو ورقة) مدفوعة فوق التغذية الآن.
+  bool _covered = false;
+  bool _routeSubscribed = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_audio == null) {
+      final services = AppServices.of(context);
+      _audio = services.audio;
+      services.audio.defaultTrack(services.api).then((url) {
+        if (!mounted) return;
+        _defaultAudioUrl = url;
+        _autoplayCurrent();
+      });
+    }
+    final route = ModalRoute.of(context);
+    if (!_routeSubscribed && route != null) {
+      _routeSubscribed = true;
+      routeObserver.subscribe(this, route);
+    }
     _stories ??= AppServices.of(context).api.stories();
     if (_types == null) {
       _types = AppServices.of(context).api.listOccasionTypes();
@@ -105,12 +137,61 @@ class _EventsScreenState extends State<EventsScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant EventsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive == oldWidget.isActive) return;
+    if (widget.isActive) {
+      _autoplayCurrent();
+    } else {
+      _audio?.pause(this);
+    }
+  }
+
+  @override
+  void didPushNext() {
+    _covered = true;
+    _audio?.pause(this);
+  }
+
+  @override
+  void didPopNext() {
+    _covered = false;
+    _autoplayCurrent();
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
+    _audio?.release(this);
     _debounce?.cancel();
     _newEventSub?.cancel();
     _searchController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  /// يشغّل صوت الكرت الظاهر الآن — أو يُسكت ما شغّلته التغذية إن لم يكن له
+  /// صوت. لا شيء والتبويب غير مختار أو شاشة أخرى فوقه.
+  void _autoplayCurrent() {
+    final audio = _audio;
+    if (audio == null || !widget.isActive || _covered) return;
+    if (_events.isEmpty || _currentPage >= _events.length) {
+      audio.release(this);
+      return;
+    }
+    audio.autoplay(
+      effectiveEventAudioUrl(_events[_currentPage], defaultAudioUrl: _defaultAudioUrl),
+      owner: this,
+    );
+  }
+
+  /// الكتم يُسكت فوراً ويوقف التشغيل التلقائي؛ فكّه يشغّل الكرت الظاهر.
+  Future<void> _toggleMute() async {
+    final audio = _audio;
+    if (audio == null) return;
+    final muting = !audio.isMuted;
+    await audio.setMuted(muting);
+    if (!muting) _autoplayCurrent();
   }
 
   Future<void> _loadFirstPage() async {
@@ -147,6 +228,8 @@ class _EventsScreenState extends State<EventsScreen> {
       if (_pageController.hasClients) {
         _pageController.jumpToPage(0);
       }
+      _currentPage = 0;
+      _autoplayCurrent();
     } catch (error) {
       if (!mounted || generation != _requestGeneration) return;
       setState(() {
@@ -415,26 +498,86 @@ class _EventsScreenState extends State<EventsScreen> {
               child: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  child: Row(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    // الصفّ الثاني تحت مجموعة الأيقونات، لا بجانبها: الصفّ
+                    // الأوّل ممتلئ أصلاً على هاتف ضيّق، وزرّ النشر العائم في وسطه.
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      // زر الكبسة لفتح الفلاتر وعرض المناسبات
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => setState(() => _showTopChrome = true),
-                          borderRadius: BorderRadius.circular(999),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
+                      Row(
+                        children: [
+                          // زر الكبسة لفتح الفلاتر وعرض المناسبات
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => setState(() => _showTopChrome = true),
+                              borderRadius: BorderRadius.circular(999),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.60),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: _hasActiveFilters
+                                        ? context.c.sky
+                                        : Colors.white.withValues(alpha: 0.25),
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x40000000),
+                                      blurRadius: 10,
+                                      offset: Offset(0, 3),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.tune_rounded,
+                                      size: 16,
+                                      color: _hasActiveFilters
+                                          ? context.c.sky
+                                          : Colors.white,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _filterButtonLabel,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: _hasActiveFilters
+                                            ? context.c.sky
+                                            : Colors.white,
+                                      ),
+                                    ),
+                                    if (_hasActiveFilters) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        width: 7,
+                                        height: 7,
+                                        decoration: BoxDecoration(
+                                          color: context.c.sky,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
                             ),
+                          ),
+                          const Spacer(),
+                          // أزرار التحديث والإشعارات
+                          Container(
                             decoration: BoxDecoration(
                               color: Colors.black.withValues(alpha: 0.60),
                               borderRadius: BorderRadius.circular(999),
                               border: Border.all(
-                                color: _hasActiveFilters
-                                    ? context.c.sky
-                                    : Colors.white.withValues(alpha: 0.25),
+                                color: Colors.white.withValues(alpha: 0.25),
                               ),
                               boxShadow: const [
                                 BoxShadow(
@@ -447,42 +590,56 @@ class _EventsScreenState extends State<EventsScreen> {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                  Icons.tune_rounded,
-                                  size: 16,
-                                  color: _hasActiveFilters
-                                      ? context.c.sky
-                                      : Colors.white,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _filterButtonLabel,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: _hasActiveFilters
-                                        ? context.c.sky
-                                        : Colors.white,
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.calendar_month_rounded,
+                                    color: Colors.white,
+                                    size: 20,
                                   ),
+                                  tooltip: 'أجندة المناسبات',
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(builder: (_) => const AgendaScreen()),
+                                    );
+                                  },
                                 ),
-                                if (_hasActiveFilters) ...[
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    width: 7,
-                                    height: 7,
-                                    decoration: BoxDecoration(
-                                      color: context.c.sky,
-                                      shape: BoxShape.circle,
-                                    ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.refresh,
+                                    color: Colors.white,
+                                    size: 20,
                                   ),
-                                ],
+                                  tooltip: 'تحديث',
+                                  onPressed: () async {
+                                    setState(() => _stories =
+                                        AppServices.of(context).api.stories());
+                                    await _loadFirstPage();
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.support_agent_rounded,
+                                    color: Color(0xFF25D366),
+                                    size: 20,
+                                  ),
+                                  tooltip: 'الدعم الفني عبر واتساب',
+                                  onPressed: () => openSupportWhatsApp(context),
+                                ),
+                                AnimatedBuilder(
+                                  animation: auth,
+                                  builder: (context, _) {
+                                    if (!auth.isSignedIn) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return _NotificationBell(userId: auth.user!.id);
+                                  },
+                                ),
                               ],
                             ),
                           ),
-                        ),
+                        ],
                       ),
-                      const Spacer(),
-                      // أزرار التحديث والإشعارات
+                      const SizedBox(height: 6),
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.60),
@@ -490,61 +647,26 @@ class _EventsScreenState extends State<EventsScreen> {
                           border: Border.all(
                             color: Colors.white.withValues(alpha: 0.25),
                           ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x40000000),
-                              blurRadius: 10,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            IconButton(
-                              icon: const Icon(
-                                Icons.calendar_month_rounded,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              tooltip: 'أجندة المناسبات',
-                              onPressed: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(builder: (_) => const AgendaScreen()),
-                                );
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.refresh,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              tooltip: 'تحديث',
-                              onPressed: () async {
-                                setState(() => _stories =
-                                    AppServices.of(context).api.stories());
-                                await _loadFirstPage();
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.support_agent_rounded,
-                                color: Color(0xFF25D366),
-                                size: 20,
-                              ),
-                              tooltip: 'الدعم الفني عبر واتساب',
-                              onPressed: () => openSupportWhatsApp(context),
-                            ),
                             AnimatedBuilder(
-                              animation: auth,
-                              builder: (context, _) {
-                                if (!auth.isSignedIn) {
-                                  return const SizedBox.shrink();
-                                }
-                                return _NotificationBell(userId: auth.user!.id);
-                              },
+                              animation: _audio!,
+                              builder: (context, _) => IconButton(
+                                key: const Key('feed_mute_toggle'),
+                                icon: Icon(
+                                  _audio!.isMuted
+                                      ? Icons.volume_off_rounded
+                                      : Icons.volume_up_rounded,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                                tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
+                                onPressed: _toggleMute,
+                              ),
                             ),
+                            const AuthActionButton(color: Colors.white),
                           ],
                         ),
                       ),
@@ -606,6 +728,7 @@ class _EventsScreenState extends State<EventsScreen> {
                               tooltip: 'الدعم الفني عبر واتساب',
                               onPressed: () => openSupportWhatsApp(context),
                             ),
+                            const AuthActionButton(compact: true),
                             IconButton(
                               icon: const Icon(Icons.close),
                               tooltip: 'إغلاق',
@@ -758,6 +881,8 @@ class _EventsScreenState extends State<EventsScreen> {
           ),
           itemCount: _events.length,
           onPageChanged: (index) {
+            _currentPage = index;
+            _autoplayCurrent();
             if (index >= _events.length - 2 && hasMore && !_loadingMore) {
               _loadMore();
             }
