@@ -137,7 +137,7 @@ router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
   const newOwner = await auth.findById(newOwnerId);
   await activity.record({
     actorId: req.user.id, action: 'event_owner_changed', eventId,
-    details: newOwner ? `${newOwner.full_name} (${newOwner.phone_number})` : null
+    details: newOwner ? newOwner.full_name : null
   });
   res.json({ success: true, message: 'تم نقل ملكية المناسبة بنجاح', event });
 }));

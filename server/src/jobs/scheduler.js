@@ -30,15 +30,13 @@ function toArabicNumeral(n) {
  * `notifications.COUNTDOWN_OFFSETS` — built FROM that list, not a second,
  * hand-kept literal, so adding an offset there can never leave this map
  * silently missing an entry and reading «باقي undefined على…» to a user
- * (issue #85 review, FIX 6 — one list, one source). 7, 2 and 1 keep their
- * idiomatic Arabic phrasing; any other offset falls back to a plain
- * "N أيام" built from the same digit.
+ * (issue #85 review, FIX 6 — one list, one source). 2 keeps its dual form
+ * «يومين»; any other offset falls back to a plain "N أيام" built from the
+ * same digit.
  */
 const OFFSET_PHRASES = Object.fromEntries(
   notifications.COUNTDOWN_OFFSETS.filter(offset => offset > 0).map(offset => {
-    if (offset === 7) return [offset, 'أسبوع'];
     if (offset === 2) return [offset, 'يومين'];
-    if (offset === 1) return [offset, 'يوم واحد'];
     return [offset, `${toArabicNumeral(offset)} أيام`];
   })
 );

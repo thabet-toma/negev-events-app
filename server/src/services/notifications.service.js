@@ -94,7 +94,7 @@ async function clearAll(userId) {
  *   event_rejected       | null (always a fresh row)           | no
  *   event_new            | event_new_<event_id>                | no (3 a day, then the digest)
  *   event_new_digest     | event_new_digest_<YYYY-MM-DD>       | no — one row per user per day, updated in place
- *   event_updated        | event_updated_<event_id>_<YYYY-MM-DD> | no — one per follower per event per day
+ *   event_updated        | event_updated_<event_id>_<YYYY-MM-DD> | no — one per follower per event per day, updated in place
  *   event_nudge          | event_nudge_<event_id>_<1|2>        | no — the owner's own event, twice at most
  *
  * Only a NON-exempt `event_soon` row ever competes for DAILY_SCHEDULED_CAP
@@ -168,11 +168,13 @@ async function create({ userId, eventId = null, type, title, body, dedupeKey = n
     affectedRows = result.affectedRows;
   }
 
-  // affectedRows === 1 on a genuine new insert; 0 on a no-op ON DUPLICATE KEY
-  // hit (MySQL never counts a self-assignment `id = id` as a change) — this
-  // is how a caller tells "I actually just created something worth telling a
-  // connected client about" apart from "this already existed, stay quiet".
-  return { id: insertId, inserted: affectedRows === 1, userId, eventId, type };
+  // A genuine new insert reports affectedRows === 1 AND a fresh insertId. A
+  // no-op ON DUPLICATE KEY hit reports insertId 0 — and affectedRows is NOT
+  // enough on its own: mysql2 connects with CLIENT_FOUND_ROWS by default, so
+  // that hit counts as 1 "found" row too. This is how a caller tells "I
+  // actually just created something worth telling a connected client about"
+  // apart from "this already existed, stay quiet".
+  return { id: insertId, inserted: affectedRows === 1 && insertId > 0, userId, eventId, type };
 }
 
 /**
@@ -366,7 +368,8 @@ function describeChanges(changedFields) {
  * لم يُرجعها إلى المراجعة — عدا من عدّلها. تعديل التاريخ أو المكان يصل عند
  * اعتماده (admin.service.js) لا قبله، كي لا يُبلَّغ الناس بما لم يؤكَّد بعد.
  * إشعار واحد لكل متابع في اليوم (`event_updated_<id>_<اليوم>`): عشرة
- * تصحيحات متتالية لا تصير عشرة إشعارات.
+ * تصحيحات متتالية لا تصير عشرة إشعارات — لكن التعديل اللاحق لا يضيع: يُحدِّث
+ * نصّ ذلك الإشعار بآخر ما تغيّر ويعيده غير مقروء (بلا بثّ ولا دفع ثانٍ).
  */
 async function notifyEventFollowersOnUpdate(eventId, { title, changedFields = [], updatedBy = null }) {
   const followers = await db.query(
@@ -383,6 +386,12 @@ async function notifyEventFollowersOnUpdate(eventId, { title, changedFields = []
   for (const { user_id: userId } of followers) {
     const row = await create({ userId, eventId, type: TYPES.EVENT_UPDATED, title: notificationTitle, body, dedupeKey });
     if (row.inserted) results.push({ id: row.id, user_id: userId, title: notificationTitle, body, event_id: eventId });
+  }
+  if (results.length < followers.length) {
+    await db.execute(
+      'UPDATE notifications SET title = ?, body = ?, is_read = 0 WHERE type = ? AND dedupe_key = ?',
+      [notificationTitle, body, TYPES.EVENT_UPDATED, dedupeKey]
+    );
   }
   return results;
 }

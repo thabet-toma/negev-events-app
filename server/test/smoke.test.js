@@ -2501,7 +2501,7 @@ async function run() {
     assert.ok(!strangerList.body.notifications.some(n => n.id === notifId));
   });
 
-  await test('A cosmetic edit publishes no announcement, but tells each follower once — never the stranger, and a second edit the same day adds nothing', async () => {
+  await test('A cosmetic edit publishes no announcement, but tells each follower once — never the stranger, and a second edit the same day refreshes that one row', async () => {
     const beforeAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
     const updatedRows = userId => db.query(
       "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_updated'", [userId, reminderEventId]
@@ -2522,11 +2522,15 @@ async function run() {
     assert.ok(followerRows[0].title.includes('عنوان تجميلي لمناسبة التذكير'), 'the title names the event as it now reads');
     assert.strictEqual((await updatedRows(reminderOther.id)).length, 0, 'a user who never followed the event hears nothing');
 
+    await db.execute('UPDATE notifications SET is_read = 1 WHERE id = ?', [followerRows[0].id]);
     const again = await api('PATCH', `/api/events/${reminderEventId}`, {
       token: adminToken, body: { dinner_time: 'بعد صلاة العشاء' }
     });
     assert.strictEqual(again.status, 200);
-    assert.strictEqual((await updatedRows(reminderFollower.id)).length, 1, 'one «تحديث» per follower per day, however many edits follow');
+    const refreshed = await updatedRows(reminderFollower.id);
+    assert.strictEqual(refreshed.length, 1, 'one «تحديث» per follower per day, however many edits follow');
+    assert.ok(refreshed[0].body.includes('وقت العشاء'), `the later edit must not be lost — got "${refreshed[0].body}"`);
+    assert.ok(!refreshed[0].is_read, 'the refreshed row comes back unread');
   });
 
   await test('A critical edit that is NOT a date change (location) is approved normally, never publishes a date announcement, but does notify as a venue change (issue #85, story 6)', async () => {

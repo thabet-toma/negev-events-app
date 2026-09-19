@@ -95,12 +95,12 @@ async function run() {
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, town, location_name, latitude, longitude,
-          event_date, youth_party_date, dinner_time, poster_url, host_phone, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          event_date, youth_party_date, dinner_time, poster_url, host_phone, status, first_approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
       [
         event.title, event.groom_name, event.family_clan, event.town, event.location_name,
         event.latitude, event.longitude, event.event_date, event.youth_party_date,
-        event.dinner_time, event.poster_url, event.host_phone, event.status
+        event.dinner_time, event.poster_url, event.host_phone, event.status, event.status
       ]
     );
 
