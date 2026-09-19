@@ -18,6 +18,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const analytics = require('../services/analytics.service');
+const activity = require('../services/activity.service');
 const { optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, parseId } = require('../middleware/validate');
 const { TOWNS } = require('../constants');
@@ -67,6 +68,16 @@ router.post('/analytics/events', optionalAuthenticate, asyncHandler(async (req, 
  * two, and this file is still where that boundary is decided.
  */
 router.use('/admin/analytics', requireSuperAdmin);
+
+/**
+ * سجل النشاط: من أضاف/عدّل/اعتمد/رفض/حذف أي مناسبة، الأحدث أولاً
+ * (`?action=` من `activity.ACTIONS`، و`?page=` `?limit=`).
+ */
+router.get('/admin/analytics/activity', asyncHandler(async (req, res) => {
+  const action = cleanString(req.query.action, 40);
+  if (action && !activity.ACTIONS.includes(action)) throw ApiError.badRequest('نوع نشاط غير معروف');
+  res.json({ success: true, ...(await activity.list({ action, page: req.query.page, limit: req.query.limit })) });
+}));
 
 router.get('/admin/analytics/counts', asyncHandler(async (req, res) => {
   res.json({ success: true, counts: await analytics.countsByEventName() });

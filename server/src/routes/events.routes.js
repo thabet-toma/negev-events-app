@@ -8,8 +8,9 @@ const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const villages = require('../services/villages.service');
 const notifications = require('../services/notifications.service');
+const activity = require('../services/activity.service');
 const facebook = require('../services/facebook.service');
-const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
+const { announceNotification, announceNewEvent } = require('../realtime/announce');
 const { isAdminForTown } = require('../services/adminScope.service');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
@@ -272,13 +273,12 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   });
 
   realtime.emit('admin_new_pending_event', created);
+  await activity.record({ actorId: req.user.id, action: 'event_created', eventId: created.id });
   if (created.status === 'approved') {
     realtime.emit('new_event_created', created);
-    announceGlobalNotification({
-      title: `مناسبة جديدة: ${created.title}`,
-      body: `تم نشر مناسبة جديدة: "${created.title}" في ${created.town}`,
-      event_id: created.id
-    });
+    announceNewEvent(await notifications.notifyNewEvent({ ...created, created_by: req.user.id }));
+    const nudge = await notifications.createEventNudge(created.id, 1);
+    if (nudge) announceNotification(nudge);
     facebook.publishEventSafely(created);
   }
 
@@ -455,6 +455,22 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });
+
+  const changedFields = [...result.changedColumns];
+  if (honorees !== null && honorees[0].name !== existing.groom_name) changedFields.push('honorees');
+  if (changedFields.length) {
+    await activity.record({ actorId: req.user.id, action: 'event_edited', eventId, details: changedFields.join(',') });
+  }
+  // تعديل بقيت معه المناسبة منشورة يصل متابعيها الآن؛ تعديل أعادها للمراجعة
+  // يصلهم عند اعتماده (admin.service.js) لا قبله.
+  if (changedFields.length && existing.status === 'approved' && result.status === 'approved') {
+    const followerNotifications = await notifications.notifyEventFollowersOnUpdate(eventId, {
+      title: changes.title || existing.title,
+      changedFields,
+      updatedBy: req.user.id
+    });
+    followerNotifications.forEach(announceNotification);
+  }
 
   let message = result.amendment === 'critical'
     ? 'تم حفظ التعديل، ولأنه يمسّ تاريخ أو مكان المناسبة أُعيدت إلى قائمة المراجعة حتى تُعتمد مجدداً'

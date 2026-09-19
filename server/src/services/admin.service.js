@@ -68,7 +68,10 @@ async function listEvents(status, user) {
   const queryParams = status ? [...params, status] : params;
 
   const rows = await db.query(
-    `SELECT e.* FROM events e WHERE 1 = 1 ${clause}${statusClause} ORDER BY e.created_at DESC`,
+    `SELECT e.*, creator.full_name AS creator_name, creator.phone_number AS creator_phone
+       FROM events e
+       LEFT JOIN users creator ON creator.id = e.created_by
+      WHERE 1 = 1 ${clause}${statusClause} ORDER BY e.created_at DESC`,
     queryParams
   );
   return rows.map(withAbsoluteMedia);
@@ -209,21 +212,25 @@ async function notifyVenueChange(connection, eventId, amendments) {
  */
 async function updateEventStatus(eventId, status, { reason = null, actingUserId = null } = {}) {
   const { event, notifications: notificationRows, isFirstApproval } = await db.transaction(async connection => {
-    const [result] = await connection.execute('UPDATE events SET status = ? WHERE id = ?', [status, eventId]);
-    if (!result.affectedRows) throw ApiError.notFound('المناسبة غير موجودة');
+    const [beforeRows] = await connection.execute('SELECT first_approved_at FROM events WHERE id = ? FOR UPDATE', [eventId]);
+    if (!beforeRows.length) throw ApiError.notFound('المناسبة غير موجودة');
+    // «مناسبة جديدة» مرّة واحدة في عمر المناسبة: إعادة الاعتماد بعد رفض أو
+    // تعديل لا تُعلنها من جديد (ولا تنشرها على فيسبوك ثانيةً).
+    const isFirstApproval = status === 'approved' && beforeRows[0].first_approved_at === null;
+    await connection.execute(
+      `UPDATE events
+          SET status = ?, first_approved_at = IF(? = 'approved' AND first_approved_at IS NULL, NOW(), first_approved_at)
+        WHERE id = ?`,
+      [status, status, eventId]
+    );
 
     let createdNotifications = [];
-    let isFirstApproval = false;
 
     if (status === 'approved' || status === 'rejected') {
       const [pendingRows] = await connection.execute(
         "SELECT * FROM event_amendments WHERE event_id = ? AND status = 'pending' ORDER BY created_at ASC, id ASC",
         [eventId]
       );
-
-      if (status === 'approved' && pendingRows.length === 0) {
-        isFirstApproval = true;
-      }
 
       await connection.execute(
         "UPDATE event_amendments SET status = ? WHERE event_id = ? AND status = 'pending'",

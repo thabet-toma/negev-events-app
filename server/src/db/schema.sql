@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS users (
   -- read at the write in analytics.service.js — an opted-out signed-in user's
   -- identified events are never inserted at all, not written anonymised.
   analytics_opt_out TINYINT(1)   NOT NULL DEFAULT 0,
+  -- «مناسبة جديدة» للجميع قابلة للإطفاء من صاحب الحساب وحده؛ التذكيرات وما
+  -- يخصّ مناسباته هو تبقى تصله دائماً (notifications.service.js).
+  notify_new_events TINYINT(1)   NOT NULL DEFAULT 1,
   created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -139,6 +142,9 @@ CREATE TABLE IF NOT EXISTS events (
   host_phone       VARCHAR(30)  DEFAULT NULL,
   status           ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   views_count      INT UNSIGNED NOT NULL DEFAULT 0,
+  -- أول اعتماد فعلي — «مناسبة جديدة» تُعلَن مرّة واحدة في عمر المناسبة، لا
+  -- عند كل إعادة اعتماد بعد رفض أو تعديل (admin.service.js#updateEventStatus).
+  first_approved_at DATETIME    DEFAULT NULL,
   created_by       INT UNSIGNED DEFAULT NULL,
   created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -257,6 +263,26 @@ CREATE TABLE IF NOT EXISTS notifications (
   UNIQUE KEY uq_notifications_dedupe (user_id, dedupe_key),
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_notifications_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- سجل النشاط في «التتبّع والتحليلات» (سوبر أدمن): من فعل ماذا بأي مناسبة.
+-- بلا مفتاح أجنبي على events عمداً، وعنوانها وبلدتها ونوعها لقطة وقت الفعل —
+-- كي يبقى سطر «حذف فلان مناسبة كذا» مقروءاً بعد أن تختفي المناسبة نفسها.
+CREATE TABLE IF NOT EXISTS activity_log (
+  id                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  actor_user_id      INT UNSIGNED DEFAULT NULL,
+  action             VARCHAR(40)  NOT NULL,
+  event_id           INT UNSIGNED DEFAULT NULL,
+  event_title        VARCHAR(255) DEFAULT NULL,
+  event_town         VARCHAR(100) DEFAULT NULL,
+  occasion_type_name VARCHAR(60)  DEFAULT NULL,
+  details            VARCHAR(500) DEFAULT NULL,
+  created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_activity_log_created (created_at),
+  KEY idx_activity_log_action (action, created_at),
+  KEY idx_activity_log_event (event_id),
+  CONSTRAINT fk_activity_log_actor FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS nokoot_ledger (

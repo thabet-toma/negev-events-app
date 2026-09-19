@@ -18,6 +18,21 @@ router.get('/notifications', authenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, notifications: await notifications.listForUser(req.user.id) });
 }));
 
+/** مفتاح «مناسبة جديدة» للجميع — التذكيرات وما يخصّ مناسبات المستخدم نفسه لا تُطفأ من هنا. */
+router.get('/notifications/preferences', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, preferences: await notifications.getPreferences(req.user.id) });
+}));
+
+router.patch('/notifications/preferences', authenticate, asyncHandler(async (req, res) => {
+  const value = (req.body || {}).notify_new_events;
+  if (typeof value !== 'boolean') throw ApiError.badRequest('قيمة الإعداد يجب أن تكون نعم أو لا');
+  res.json({
+    success: true,
+    message: value ? 'ستصلك إشعارات المناسبات الجديدة' : 'لن تصلك إشعارات المناسبات الجديدة — التذكيرات تبقى كما هي',
+    preferences: await notifications.setPreferences(req.user.id, { notifyNewEvents: value })
+  });
+}));
+
 router.patch('/notifications/:id/read', authenticate, asyncHandler(async (req, res) => {
   const notificationId = parseId(req.params.id, 'معرّف الإشعار');
   await notifications.markRead(notificationId, req.user.id);

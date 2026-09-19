@@ -33,10 +33,17 @@ function announceNotification({ id, user_id: userId, title, body, event_id: even
   push.sendToUser(userId, { title, body, notificationId: id, eventId });
 }
 
-function announceGlobalNotification({ title, body, event_id: eventId = null }) {
+/**
+ * «مناسبة جديدة» بعد أن كتب `notifications.notifyNewEvent` صفوفها: إشارة
+ * واحدة لكل عميل متّصل كي يعيد جلب مركز إشعاراته (بدل إشارة لكل مستخدم)،
+ * ودفع للأجهزة حين يستحقه (`outcome.push` — الملخّص اليومي يُدفَع أول مرّة
+ * فقط). النصّ عن مناسبة معتمدة منشورة للعموم، فلا يسرّب شيئاً لمقبس لا
+ * يخصّه.
+ */
+function announceNewEvent({ title, body, eventId = null, excludeUserId = null, push: shouldPush }) {
   realtime.emit('system_notification', { title, body, event_id: eventId });
-  push.sendToAllUsers({ title, body, eventId });
+  if (shouldPush) push.sendToAllUsers({ title, body, eventId }, { excludeUserId });
 }
 
-module.exports = { announceNotification, announceGlobalNotification };
+module.exports = { announceNotification, announceNewEvent };
 

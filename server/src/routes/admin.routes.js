@@ -9,10 +9,11 @@ const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const notificationsService = require('../services/notifications.service');
+const activity = require('../services/activity.service');
 const facebook = require('../services/facebook.service');
 const scheduler = require('../jobs/scheduler');
 const realtime = require('../realtime');
-const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
+const { announceNotification, announceNewEvent } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
 const { EVENT_STATUSES, TOWNS } = require('../constants');
@@ -81,6 +82,9 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   const { event, notifications, isFirstApproval } = await admin.updateEventStatus(eventId, status, {
     reason, actingUserId: req.user.id
   });
+  if (status === 'approved' || status === 'rejected') {
+    await activity.record({ actorId: req.user.id, action: `event_${status}`, eventId, details: reason });
+  }
   if (status === 'approved' && isFirstApproval) {
     realtime.emit('new_event_created', {
       id: event.id,
@@ -89,11 +93,9 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
       town: event.town,
       event_date: event.event_date
     });
-    announceGlobalNotification({
-      title: `مناسبة جديدة: ${event.title}`,
-      body: `تم نشر مناسبة جديدة: "${event.title}" في ${event.town}`,
-      event_id: event.id
-    });
+    announceNewEvent(await notificationsService.notifyNewEvent(event));
+    const nudge = await notificationsService.createEventNudge(event.id, 1);
+    if (nudge) notifications.push(nudge);
     facebook.publishEventSafely(event);
   }
 
@@ -119,6 +121,8 @@ router.get('/admin/events/:id/amendments', asyncHandler(async (req, res) => {
 router.delete('/admin/events/:id', asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   await adminScope.assertEventInScope(req.user, eventId);
+  // يُسجَّل قبل الحذف — السجل يلتقط عنوان المناسبة من صفّها وهو ما زال موجوداً.
+  await activity.record({ actorId: req.user.id, action: 'event_deleted', eventId });
   await admin.deleteEvent(eventId);
   res.json({ success: true, message: 'تم حذف المناسبة بالكامل' });
 }));
@@ -130,6 +134,11 @@ router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
   await adminScope.assertEventInScope(req.user, eventId);
 
   const event = await admin.transferEventOwnership(eventId, newOwnerId);
+  const newOwner = await auth.findById(newOwnerId);
+  await activity.record({
+    actorId: req.user.id, action: 'event_owner_changed', eventId,
+    details: newOwner ? `${newOwner.full_name} (${newOwner.phone_number})` : null
+  });
   res.json({ success: true, message: 'تم نقل ملكية المناسبة بنجاح', event });
 }));
 

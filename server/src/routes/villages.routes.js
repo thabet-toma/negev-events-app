@@ -4,6 +4,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const villages = require('../services/villages.service');
+const activity = require('../services/activity.service');
 const { requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, parseId } = require('../middleware/validate');
 
@@ -104,6 +105,7 @@ router.post('/admin/events/:id/promote-village', asyncHandler(async (req, res) =
   if (body.longitude !== undefined) options.longitude = requireCoordinate(body.longitude, MAX_LNG, 'خط الطول');
 
   const result = await villages.promoteRequestedVillage(eventId, options);
+  await activity.record({ actorId: req.user.id, action: 'village_promoted', eventId, details: result.village && result.village.name });
   res.json({
     success: true,
     ...result,

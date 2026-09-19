@@ -184,10 +184,18 @@ async function sendToUser(userId, payload) {
   deliverToUser(userId, payload).catch(err => logger.error('[push] sendToUser failed:', err.message));
 }
 
-/** Fans a notification out to all active push subscriptions across all users. */
-async function deliverToAll({ title, body, notificationId = null, eventId = null }) {
+/**
+ * Fans a notification out to every subscribed device of every user who kept
+ * «مناسبة جديدة» on (`users.notify_new_events`) — the one broadcast kind
+ * pushed to everyone — minus `excludeUserId` (the event's own publisher).
+ */
+async function deliverToAll({ title, body, notificationId = null, eventId = null }, { excludeUserId = null } = {}) {
   const subscriptions = await db.query(
-    'SELECT id, endpoint, p256dh, auth FROM push_subscriptions'
+    `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth
+       FROM push_subscriptions ps
+       JOIN users u ON u.id = ps.user_id
+      WHERE u.notify_new_events = 1 AND u.id <> ?`,
+    [excludeUserId ?? 0]
   );
   if (!subscriptions.length) return;
 
@@ -195,10 +203,10 @@ async function deliverToAll({ title, body, notificationId = null, eventId = null
   await Promise.all(subscriptions.map(sub => deliverToSubscription(sub, payload)));
 }
 
-/** Fans a notification out to all active subscribers asynchronously. */
-async function sendToAllUsers(payload) {
+/** Fans a notification out to all opted-in subscribers asynchronously — same fire-and-forget contract as `sendToUser`. */
+async function sendToAllUsers(payload, options = {}) {
   if (!isVapidConfigured()) return;
-  deliverToAll(payload).catch(err => logger.error('[push] sendToAllUsers failed:', err.message));
+  deliverToAll(payload, options).catch(err => logger.error('[push] sendToAllUsers failed:', err.message));
 }
 
 

@@ -92,6 +92,10 @@ async function clearAll(userId) {
  *   event_venue_changed  | null (always a fresh row)           | no
  *   event_approved       | null (always a fresh row)           | no
  *   event_rejected       | null (always a fresh row)           | no
+ *   event_new            | event_new_<event_id>                | no (3 a day, then the digest)
+ *   event_new_digest     | event_new_digest_<YYYY-MM-DD>       | no — one row per user per day, updated in place
+ *   event_updated        | event_updated_<event_id>_<YYYY-MM-DD> | no — one per follower per event per day
+ *   event_nudge          | event_nudge_<event_id>_<1|2>        | no — the owner's own event, twice at most
  *
  * Only a NON-exempt `event_soon` row ever competes for DAILY_SCHEDULED_CAP
  * (story 10) — every admin-triggered kind above is written the moment its
@@ -111,14 +115,16 @@ const TYPES = {
   EVENT_APPROVED: 'event_approved',
   EVENT_REJECTED: 'event_rejected',
   EVENT_NEW: 'event_new',
-  EVENT_UPDATED: 'event_updated'
+  EVENT_NEW_DIGEST: 'event_new_digest',
+  EVENT_UPDATED: 'event_updated',
+  EVENT_NUDGE: 'event_nudge'
 };
 
 /** Story 10: at most this many *scheduled* notifications reach one user per day. */
 const DAILY_SCHEDULED_CAP = 3;
 
 /** The countdown offsets, in days before an event (stories 1-3). Shared by the scheduler and by `scheduleForUser` so both compute the exact same set — a client is never told a fire time the scheduler itself would not also produce. */
-const COUNTDOWN_OFFSETS = [7, 5, 3, 1, 0];
+const COUNTDOWN_OFFSETS = [8, 6, 4, 2, 0];
 
 /**
  * The one INSERT every notification producer in this codebase goes through
@@ -277,98 +283,198 @@ async function scheduleForUser(userId) {
     .filter(entry => entry.offsets.length > 0);
 }
 
-/**
- * Fans out an in-app notification to all registered users when an event is approved/published.
- * Deduplicated per user by `event_new_<event_id>`.
- * Returns the list of created notifications for recipients.
- */
-async function notifyAllUsersOnNewEvent(event, connection = null) {
-  const title = `مناسبة جديدة: ${event.title}`;
-  const body = `تم نشر مناسبة جديدة: "${event.title}" في ${event.town}`;
-  const dedupeKey = `event_new_${event.id}`;
-  const creatorId = event.created_by ?? 0;
+/** «مناسبة جديدة» فرادى حتى هذا العدد في اليوم؛ ما بعده يُجمَع في إشعار ملخّص واحد يتحدّث. */
+const NEW_EVENTS_DAILY_SINGLES = 3;
 
-  if (connection) {
-    await connection.execute(
-      `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
-       SELECT id, ?, ?, ?, ?, ?
-         FROM users
-        WHERE id <> ?
-       ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
-      [event.id, TYPES.EVENT_NEW, title, body, dedupeKey, creatorId]
-    );
-    const [rows] = await connection.execute(
-      'SELECT id, user_id FROM notifications WHERE event_id = ? AND dedupe_key = ?',
-      [event.id, dedupeKey]
-    );
-    return rows.map(r => ({
-      id: r.id,
-      user_id: r.user_id,
-      title,
-      body,
-      event_id: event.id
-    }));
-  }
-
-  await db.execute(
-    `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
-     SELECT id, ?, ?, ?, ?, ?
-       FROM users
-      WHERE id <> ?
-     ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
-    [event.id, TYPES.EVENT_NEW, title, body, dedupeKey, creatorId]
-  );
-  const rows = await db.query(
-    'SELECT id, user_id FROM notifications WHERE event_id = ? AND dedupe_key = ?',
-    [event.id, dedupeKey]
-  );
-  return rows.map(r => ({
-    id: r.id,
-    user_id: r.user_id,
-    title,
-    body,
-    event_id: event.id
-  }));
+async function todayString() {
+  const { today } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+  return today;
 }
 
 /**
- * Notifies all followers of an event (those who clicked "ذكّرني") when it is modified.
+ * «مناسبة جديدة» لكل مستخدم أبقى هذا النوع مفعّلاً (`users.notify_new_events`)،
+ * عدا ناشرها — عند أول اعتماد فقط (`events.first_approved_at`، يحرسه
+ * المستدعي). أول ثلاث مناسبات في اليوم تصل فرادى (`event_new_<id>`)؛ من
+ * الرابعة يتحدّث إشعار ملخّص واحد لكل مستخدم (`event_new_digest_<اليوم>`)
+ * ويعود «غير مقروء»، بدل أن تتكدّس عشرة إشعارات في موسم الأعراس. يعيد ما
+ * يحتاجه المُعلِن: النصّ، وهل يستحق دفعاً للأجهزة (الملخّص يُدفَع أول مرّة فقط).
  */
-async function notifyEventFollowersOnUpdate(eventId, event, { updatedBy = null, changeSummary = null } = {}, connection = null) {
-  const runner = connection
-    ? { query: async (sql, p) => (await connection.execute(sql, p))[0] }
-    : db;
+async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
+  const { total } = await db.queryOne(
+    'SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY'
+  );
+  const publishedToday = Number(total);
 
-  const followers = await runner.query(
+  if (publishedToday <= NEW_EVENTS_DAILY_SINGLES) {
+    const notificationTitle = 'مناسبة جديدة';
+    const body = `تم نشر مناسبة جديدة: "${title}" في ${town}`;
+    await db.execute(
+      `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+       SELECT id, ?, ?, ?, ?, ?
+         FROM users
+        WHERE id <> ? AND notify_new_events = 1
+       ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
+      [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0]
+    );
+    return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, push: true };
+  }
+
+  const extra = publishedToday - NEW_EVENTS_DAILY_SINGLES;
+  const notificationTitle = 'مناسبات جديدة اليوم';
+  const body = `نُشرت اليوم مناسبات جديدة أخرى (${extra}) — آخرها "${title}" في ${town}`;
+  await db.execute(
+    `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+     SELECT id, NULL, ?, ?, ?, ?
+       FROM users
+      WHERE id <> ? AND notify_new_events = 1
+     ON DUPLICATE KEY UPDATE title = ?, body = ?, is_read = 0, created_at = CURRENT_TIMESTAMP`,
+    [
+      TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString()}`, createdBy ?? 0,
+      notificationTitle, body
+    ]
+  );
+  return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, push: extra === 1 };
+}
+
+/** أسماء الحقول كما يفهمها المتابع في «ما الذي تغيّر» — مفاتيح OCCASION_FIELDS ثابتة، فالعبارة ثابتة معها. */
+const CHANGE_PHRASES = {
+  title: 'العنوان',
+  family_clan: 'العائلة',
+  location_name: 'المكان',
+  secondary_location_name: 'المكان الإضافي',
+  event_date: 'التاريخ',
+  event_end_date: 'تاريخ الانتهاء',
+  youth_party_date: 'موعد سهرة الشباب',
+  dinner_time: 'وقت العشاء',
+  poster_url: 'الصورة',
+  audio_url: 'المقطع الصوتي',
+  audio_title: 'عنوان المقطع',
+  artist_name: 'الفنان',
+  artist_image_url: 'صورة الفنان',
+  host_phone: 'رقم التواصل',
+  honorees: 'أصحاب المناسبة'
+};
+
+/** «تغيّر المكان والتاريخ» — ما يُفهَم فقط؛ حقل تقني (الإحداثيات مثلاً) لا يُذكر باسمه. */
+function describeChanges(changedFields) {
+  const phrases = [...new Set(changedFields.map(field => CHANGE_PHRASES[field]).filter(Boolean))];
+  return phrases.length ? `تغيّر ${phrases.slice(0, 3).join(' و')}` : 'تحدّثت التفاصيل';
+}
+
+/**
+ * «ذكّرني» يعني «أبلِغني بما يتغيّر»: كل متابع لمناسبة معتمدة يُبلَّغ بتعديل
+ * لم يُرجعها إلى المراجعة — عدا من عدّلها. تعديل التاريخ أو المكان يصل عند
+ * اعتماده (admin.service.js) لا قبله، كي لا يُبلَّغ الناس بما لم يؤكَّد بعد.
+ * إشعار واحد لكل متابع في اليوم (`event_updated_<id>_<اليوم>`): عشرة
+ * تصحيحات متتالية لا تصير عشرة إشعارات.
+ */
+async function notifyEventFollowersOnUpdate(eventId, { title, changedFields = [], updatedBy = null }) {
+  const followers = await db.query(
     'SELECT DISTINCT user_id FROM event_reminders WHERE event_id = ? AND user_id <> ?',
     [eventId, updatedBy ?? 0]
   );
   if (!followers.length) return [];
 
-  const title = `تعديل في مناسبة: ${event.title}`;
-  const body = changeSummary || `تم تحديث تفاصيل مناسبة "${event.title}" التي تتابعها`;
+  const notificationTitle = `تحديث على "${title}"`;
+  const body = `${describeChanges(changedFields)} — اضغط لرؤية التفاصيل`;
+  const dedupeKey = `event_updated_${eventId}_${await todayString()}`;
 
   const results = [];
-  for (const f of followers) {
-    const notif = await create({
-      userId: f.user_id,
-      eventId,
-      type: TYPES.EVENT_UPDATED,
-      title,
-      body,
-      dedupeKey: null
-    }, connection);
-    if (notif.inserted) {
-      results.push({
-        id: notif.id,
-        user_id: f.user_id,
-        title,
-        body,
-        event_id: eventId
-      });
-    }
+  for (const { user_id: userId } of followers) {
+    const row = await create({ userId, eventId, type: TYPES.EVENT_UPDATED, title: notificationTitle, body, dedupeKey });
+    if (row.inserted) results.push({ id: row.id, user_id: userId, title: notificationTitle, body, event_id: eventId });
   }
   return results;
+}
+
+/**
+ * «قوّي مناسبتك»: ما ينقص المناسبة مرتّباً بأثره على ظهورها، وبعبارة تُقرأ
+ * بعد «أضف». حقل لا يعرضه نوع المناسبة لا يُطلب أبداً (العزاء بلا سهرة شباب).
+ */
+const NUDGE_FIELDS = [
+  { key: 'youth_party_date', phrase: 'موعد سهرة الشباب', missing: e => !e.youth_party_date },
+  { key: 'poster_url', phrase: 'صورة للمناسبة', missing: e => !e.poster_url || e.poster_url === e.default_poster_url },
+  { key: 'audio_url', phrase: 'شيلة أو مقطعاً صوتياً', missing: e => !e.audio_url },
+  { key: 'artist_name', phrase: 'اسم الفنان', missing: e => !e.artist_name },
+  { key: 'host_phone', phrase: 'رقماً للتواصل', missing: e => !e.host_phone },
+  { key: 'dinner_time', phrase: 'وقت العشاء', missing: e => !e.dinner_time },
+  { key: 'location_name', phrase: 'اسم المكان', missing: e => !e.location_name || e.location_name === 'سيُحدَّد لاحقاً' }
+];
+
+/** لا «قوّي مناسبتك» لمناسبة بقي لها أقل من هذا — لا وقت لتحسينها. */
+const NUDGE_MIN_DAYS_LEFT = 2;
+
+/**
+ * يكتب «قوّي مناسبتك» لناشر مناسبة معتمدة ينقصها شيء يعرضه نوعها —
+ * `stage` 1 عند أول اعتماد، و2 مرّة واحدة بعد يومين إن بقي النقص (الجدولة).
+ * لا شيء لنوع حزين (العزاء)، ولا لمناسبة بلا ناشر، ولا قبل موعدها بأقل من
+ * يومين. المفتاح `event_nudge_<id>_<stage>` يجعل كل مرحلة مرّة واحدة في
+ * العمر مهما تكرّر النداء. يعيد صفّ الإشعار للإعلان عنه، أو null.
+ */
+async function createEventNudge(eventId, stage) {
+  const event = await db.queryOne(
+    `SELECT e.id, e.title, e.status, e.created_by, e.youth_party_date, e.poster_url, e.audio_url, e.artist_name,
+            e.host_phone, e.dinner_time, e.location_name, ot.id AS type_id, ot.tone, ot.default_poster_url,
+            DATEDIFF(e.event_date, CURDATE()) AS days_left
+       FROM events e
+       JOIN occasion_types ot ON ot.id = e.occasion_type_id
+      WHERE e.id = ?`,
+    [eventId]
+  );
+  if (!event || event.status !== 'approved' || !event.created_by || event.tone === 'solemn') return null;
+  if (Number(event.days_left) < NUDGE_MIN_DAYS_LEFT) return null;
+
+  const visibleRows = await db.query(
+    'SELECT field_key FROM occasion_type_fields WHERE occasion_type_id = ? AND is_visible = 1',
+    [event.type_id]
+  );
+  const visible = new Set(visibleRows.map(row => row.field_key));
+  const missing = NUDGE_FIELDS.filter(field => visible.has(field.key) && field.missing(event)).slice(0, 2);
+  if (!missing.length) return null;
+
+  const wanted = missing.map(field => field.phrase).join(' و');
+  const title = 'قوّي مناسبتك';
+  const body = stage === 1
+    ? `أضف ${wanted} إلى "${event.title}" — المناسبات المكتملة تظهر أجمل وتصل لناس أكثر`
+    : `"${event.title}" ما زالت تنقصها: ${wanted} — أضفها الآن لتكتمل قبل الموعد`;
+  const row = await create({
+    userId: event.created_by,
+    eventId,
+    type: TYPES.EVENT_NUDGE,
+    title,
+    body,
+    dedupeKey: `event_nudge_${eventId}_${stage}`
+  });
+  return row.inserted ? { id: row.id, user_id: event.created_by, title, body, event_id: eventId } : null;
+}
+
+/** مناسبات حان تذكيرها الثاني: وصل ناشرَها الأولُ قبل يومين على الأقل، ولم يمضِ على اعتمادها شهر. */
+async function listEventsDueSecondNudge() {
+  const rows = await db.query(
+    `SELECT e.id
+       FROM events e
+      WHERE e.status = 'approved' AND e.created_by IS NOT NULL
+        AND e.first_approved_at <= NOW() - INTERVAL ? DAY
+        AND e.first_approved_at >= NOW() - INTERVAL 30 DAY
+        AND DATEDIFF(e.event_date, CURDATE()) >= ?
+        AND EXISTS (SELECT 1 FROM notifications n
+                     WHERE n.user_id = e.created_by AND n.dedupe_key = CONCAT('event_nudge_', e.id, '_1'))
+      ORDER BY e.id ASC`,
+    [NUDGE_MIN_DAYS_LEFT, NUDGE_MIN_DAYS_LEFT]
+  );
+  return rows.map(row => row.id);
+}
+
+/** تفضيلات الإشعارات لصاحب الحساب نفسه — اليوم مفتاح واحد: «مناسبة جديدة» للجميع. */
+async function getPreferences(userId) {
+  const row = await db.queryOne('SELECT notify_new_events FROM users WHERE id = ?', [userId]);
+  if (!row) throw ApiError.notFound('المستخدم غير موجود');
+  return { notify_new_events: Boolean(row.notify_new_events) };
+}
+
+async function setPreferences(userId, { notifyNewEvents }) {
+  await db.execute('UPDATE users SET notify_new_events = ? WHERE id = ?', [notifyNewEvents ? 1 : 0, userId]);
+  return getPreferences(userId);
 }
 
 module.exports = {
@@ -382,7 +488,12 @@ module.exports = {
   create,
   createScheduled,
   scheduleForUser,
-  notifyAllUsersOnNewEvent,
-  notifyEventFollowersOnUpdate
+  NEW_EVENTS_DAILY_SINGLES,
+  notifyNewEvent,
+  notifyEventFollowersOnUpdate,
+  createEventNudge,
+  listEventsDueSecondNudge,
+  getPreferences,
+  setPreferences
 };
 

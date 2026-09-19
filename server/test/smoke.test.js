@@ -2501,9 +2501,11 @@ async function run() {
     assert.ok(!strangerList.body.notifications.some(n => n.id === notifId));
   });
 
-  await test('A cosmetic edit produces no announcement and no notification', async () => {
+  await test('A cosmetic edit publishes no announcement, but tells each follower once — never the stranger, and a second edit the same day adds nothing', async () => {
     const beforeAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
-    const beforeNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
+    const updatedRows = userId => db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_updated'", [userId, reminderEventId]
+    );
 
     const edit = await api('PATCH', `/api/events/${reminderEventId}`, {
       token: adminToken, body: { title: 'عنوان تجميلي لمناسبة التذكير' }
@@ -2512,9 +2514,19 @@ async function run() {
     assert.strictEqual(edit.body.amendment, 'cosmetic');
 
     const afterAnnouncements = await db.queryOne('SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [reminderEventId]);
-    const afterNotifs = await db.queryOne('SELECT COUNT(*) AS total FROM notifications WHERE event_id = ?', [reminderEventId]);
-    assert.strictEqual(Number(afterAnnouncements.total), Number(beforeAnnouncements.total));
-    assert.strictEqual(Number(afterNotifs.total), Number(beforeNotifs.total));
+    assert.strictEqual(Number(afterAnnouncements.total), Number(beforeAnnouncements.total), 'a cosmetic edit is not a public announcement');
+
+    const followerRows = await updatedRows(reminderFollower.id);
+    assert.strictEqual(followerRows.length, 1, 'the follower must hear about the edit');
+    assert.ok(followerRows[0].body.includes('العنوان'), `expected the change to be named in "${followerRows[0].body}"`);
+    assert.ok(followerRows[0].title.includes('عنوان تجميلي لمناسبة التذكير'), 'the title names the event as it now reads');
+    assert.strictEqual((await updatedRows(reminderOther.id)).length, 0, 'a user who never followed the event hears nothing');
+
+    const again = await api('PATCH', `/api/events/${reminderEventId}`, {
+      token: adminToken, body: { dinner_time: 'بعد صلاة العشاء' }
+    });
+    assert.strictEqual(again.status, 200);
+    assert.strictEqual((await updatedRows(reminderFollower.id)).length, 1, 'one «تحديث» per follower per day, however many edits follow');
   });
 
   await test('A critical edit that is NOT a date change (location) is approved normally, never publishes a date announcement, but does notify as a venue change (issue #85, story 6)', async () => {
@@ -2669,14 +2681,14 @@ async function run() {
   let soonWeddingEventId = 0;
   let soonFuneralEventId = 0;
 
-  await test('Set up: a followed wedding 3 days away, and a followed funeral 3 days away (notify_countdown off)', async () => {
+  await test('Set up: a followed wedding 4 days away, and a followed funeral 4 days away (notify_countdown off)', async () => {
     soonFollower = await createDirectUser('متابع مناسبات العدّاد');
 
     const wedding = await api('POST', '/api/events', {
       token: adminToken,
       body: weddingEventBody({
         honorees: [{ name: 'عريس العدّاد' }], town: 'رهط',
-        event_date: addDaysToDate(schedulerToday, 3)
+        event_date: addDaysToDate(schedulerToday, 4)
       })
     });
     soonWeddingEventId = wedding.body.eventId;
@@ -2689,8 +2701,8 @@ async function run() {
         honorees: [{ name: 'متوفَّى اختبار العدّاد' }],
         town: 'رهط',
         location_name: 'ديوان الاختبار',
-        event_date: addDaysToDate(schedulerToday, 3),
-        event_end_date: addDaysToDate(schedulerToday, 4)
+        event_date: addDaysToDate(schedulerToday, 4),
+        event_end_date: addDaysToDate(schedulerToday, 5)
       }
     });
     soonFuneralEventId = funeral.body.eventId;
@@ -2700,7 +2712,7 @@ async function run() {
     await api('POST', `/api/events/${soonFuneralEventId}/remind`, { token: soonFollower.token });
   });
 
-  await test('A follower of an event 3 days away gets exactly one event_soon row', async () => {
+  await test('A follower of an event 4 days away gets exactly one event_soon row', async () => {
     await scheduler.runDailyPass();
 
     const rows = await db.query(
@@ -2708,7 +2720,7 @@ async function run() {
       [soonFollower.id, soonWeddingEventId]
     );
     assert.strictEqual(rows.length, 1);
-    assert.strictEqual(rows[0].dedupe_key, `event_soon_${soonWeddingEventId}_3`);
+    assert.strictEqual(rows[0].dedupe_key, `event_soon_${soonWeddingEventId}_4`);
   });
 
   await test('The countdown body never names a date', async () => {
@@ -2717,7 +2729,7 @@ async function run() {
       [soonFollower.id, soonWeddingEventId]
     );
     assert.ok(!/\d{4}-\d{2}-\d{2}/.test(row.body), `expected no literal date inside "${row.body}"`);
-    assert.ok(row.body.includes('٣ أيام'), 'expected a relative day-count phrase instead');
+    assert.ok(row.body.includes('٤ أيام'), 'expected a relative day-count phrase instead');
   });
 
   await test('An occasion type with notify_countdown = 0 produces NO countdown row, for any offset', async () => {
@@ -2811,8 +2823,10 @@ async function run() {
       'the owner is still told their event was approved — just not that they themself changed its venue'
     );
 
+    // «مناسبة جديدة» وصلت الجميع عند النشر الأول (1.11) — ما يُفحص هنا أنّ
+    // تغيير المكان نفسه لا يصل من لا يتابع.
     const otherNotifs = await db.query(
-      'SELECT * FROM notifications WHERE user_id = ? AND event_id = ?', [venueOther.id, venueEventId]
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type <> 'event_new'", [venueOther.id, venueEventId]
     );
     assert.strictEqual(otherNotifs.length, 0);
   });
@@ -2959,10 +2973,10 @@ async function run() {
 
     // Created in this exact order — the scheduler processes candidate events
     // by ascending id, so A/B/C are guaranteed to be considered before D.
-    capEventA = await createFollowedWedding(7);
-    capEventB = await createFollowedWedding(5);
-    capEventC = await createFollowedWedding(3);
-    capEventD = await createFollowedWedding(1);
+    capEventA = await createFollowedWedding(8);
+    capEventB = await createFollowedWedding(6);
+    capEventC = await createFollowedWedding(4);
+    capEventD = await createFollowedWedding(2);
 
     const own = await api('POST', '/api/events', {
       token: capUser.token,
@@ -3061,9 +3075,9 @@ async function run() {
     // Three events capExemptUser OWNS and follows — every one of them is
     // `exempt: true` and must never consume the daily budget. Created (and
     // therefore processed, ascending id) BEFORE the fourth, unrelated one.
-    capExemptOwnA = await createOwnFollowedWedding(7);
-    capExemptOwnB = await createOwnFollowedWedding(5);
-    capExemptOwnC = await createOwnFollowedWedding(3);
+    capExemptOwnA = await createOwnFollowedWedding(8);
+    capExemptOwnB = await createOwnFollowedWedding(6);
+    capExemptOwnC = await createOwnFollowedWedding(4);
 
     // A fourth event capExemptUser only FOLLOWS (not exempt) — under the old,
     // broken accounting this would already see a count of 3 from the exempt
@@ -3073,7 +3087,7 @@ async function run() {
       token: adminToken,
       body: weddingEventBody({
         honorees: [{ name: 'عريس استثناء غير مملوك' }], town: 'رهط',
-        event_date: addDaysToDate(schedulerToday, 1)
+        event_date: addDaysToDate(schedulerToday, 2)
       })
     });
     capExemptForeignD = foreign.body.eventId;
@@ -3100,6 +3114,210 @@ async function run() {
     [capExemptOwnA, capExemptOwnB, capExemptOwnC, capExemptForeignD]
   );
   await db.execute('DELETE FROM users WHERE phone_number = ?', [capExemptUser.phone]);
+
+  console.log('\nNew-event, update and «قوّي مناسبتك» notifications, preferences, and the activity log (1.11)');
+
+  // «مناسبة جديدة» تُعَدّ باليوم (ثلاث فرادى ثم ملخّص). ما اعتمدته اختبارات
+  // سابقة اليوم يُزاح إلى أمس كي يبدأ هذا القسم من عدّاد نظيف — قاعدة
+  // الاختبار وحدها، ولا يمسّ ذلك أي تأكيد آخر.
+  await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+  const newsListener = await createDirectUser('مستمع المناسبات الجديدة');
+  const newsMuted = await createDirectUser('مستخدم أطفأ المناسبات الجديدة');
+  const newsPublisher = await createDirectUser('ناشر اختبار الإشعارات الجديدة');
+  const newsEventIds = [];
+  let newsFirstEventId = 0;
+  const newsRowsFor = (userId, eventId) => db.query(
+    "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_new'", [userId, eventId]
+  );
+
+  await test('Notification preferences: «مناسبة جديدة» is on by default, can be turned off, and only a boolean is accepted', async () => {
+    const initial = await api('GET', '/api/notifications/preferences', { token: newsMuted.token });
+    assert.strictEqual(initial.status, 200);
+    assert.strictEqual(initial.body.preferences.notify_new_events, true);
+
+    const bad = await api('PATCH', '/api/notifications/preferences', { token: newsMuted.token, body: { notify_new_events: 'no' } });
+    assert.strictEqual(bad.status, 400);
+
+    const off = await api('PATCH', '/api/notifications/preferences', { token: newsMuted.token, body: { notify_new_events: false } });
+    assert.strictEqual(off.status, 200);
+    assert.strictEqual(off.body.preferences.notify_new_events, false);
+
+    const anonymous = await api('GET', '/api/notifications/preferences');
+    assert.strictEqual(anonymous.status, 401);
+  });
+
+  await test('A first approval tells everyone who kept «مناسبة جديدة» on — never the publisher or whoever turned it off — and asks the publisher to strengthen the event', async () => {
+    const created = await api('POST', '/api/events', {
+      token: newsPublisher.token,
+      body: weddingEventBody({ honorees: [{ name: 'عريس إشعار الجديد' }], town: 'رهط', event_date: addDaysToDate(schedulerToday, 30) })
+    });
+    assert.strictEqual(created.body.status, 'pending');
+    newsFirstEventId = created.body.eventId;
+    newsEventIds.push(newsFirstEventId);
+    assert.strictEqual((await newsRowsFor(newsListener.id, newsFirstEventId)).length, 0, 'a pending event is not news yet');
+
+    const approve = await api('PATCH', `/api/admin/events/${newsFirstEventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    assert.strictEqual(approve.status, 200);
+
+    assert.strictEqual((await newsRowsFor(newsListener.id, newsFirstEventId)).length, 1, 'every user who kept it on hears about the new event');
+    assert.strictEqual((await newsRowsFor(newsPublisher.id, newsFirstEventId)).length, 0, 'the publisher is not told about their own event');
+    assert.strictEqual((await newsRowsFor(newsMuted.id, newsFirstEventId)).length, 0, 'a user who turned «مناسبة جديدة» off gets none');
+
+    const nudge = await db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_nudge'", [newsPublisher.id, newsFirstEventId]
+    );
+    assert.strictEqual(nudge.length, 1, 'the publisher is asked to strengthen the event right when it goes live');
+    assert.strictEqual(nudge[0].dedupe_key, `event_nudge_${newsFirstEventId}_1`);
+    assert.strictEqual(nudge[0].title, 'قوّي مناسبتك');
+    assert.ok(nudge[0].body.includes('موعد سهرة الشباب'), `the missing youth-party date must be named: "${nudge[0].body}"`);
+  });
+
+  await test('Rejecting and re-approving never announces the same event twice, and keeps its first approval time', async () => {
+    const before = await db.queryOne('SELECT first_approved_at FROM events WHERE id = ?', [newsFirstEventId]);
+    const reject = await api('PATCH', `/api/admin/events/${newsFirstEventId}/status`, { token: adminToken, body: { status: 'rejected', reason: 'اختبار' } });
+    assert.strictEqual(reject.status, 200);
+    const reapprove = await api('PATCH', `/api/admin/events/${newsFirstEventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    assert.strictEqual(reapprove.status, 200);
+
+    assert.strictEqual((await newsRowsFor(newsListener.id, newsFirstEventId)).length, 1, 'still one «مناسبة جديدة» per user');
+    const after = await db.queryOne('SELECT first_approved_at FROM events WHERE id = ?', [newsFirstEventId]);
+    assert.strictEqual(String(after.first_approved_at), String(before.first_approved_at));
+    const nudges = await db.query("SELECT id FROM notifications WHERE event_id = ? AND type = 'event_nudge'", [newsFirstEventId]);
+    assert.strictEqual(nudges.length, 1, 'and still one «قوّي مناسبتك»');
+  });
+
+  await test('From the fourth new event of a day, each user gets ONE digest that updates in place and turns unread again', async () => {
+    async function publishApproved(name) {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({ honorees: [{ name }], town: 'رهط', event_date: addDaysToDate(schedulerToday, 40) })
+      });
+      assert.strictEqual(created.body.status, 'approved');
+      newsEventIds.push(created.body.eventId);
+      return created.body.eventId;
+    }
+    const second = await publishApproved('عريس الجديد الثاني');
+    const third = await publishApproved('عريس الجديد الثالث');
+    assert.strictEqual((await newsRowsFor(newsListener.id, second)).length, 1);
+    assert.strictEqual((await newsRowsFor(newsListener.id, third)).length, 1);
+
+    const fourth = await publishApproved('عريس الجديد الرابع');
+    assert.strictEqual((await newsRowsFor(newsListener.id, fourth)).length, 0, 'the fourth is folded into the digest');
+    const digestRows = () => db.query("SELECT * FROM notifications WHERE user_id = ? AND type = 'event_new_digest'", [newsListener.id]);
+    let digest = await digestRows();
+    assert.strictEqual(digest.length, 1);
+    assert.ok(digest[0].body.includes('(1)'), `expected one extra event in "${digest[0].body}"`);
+    assert.strictEqual((await db.query("SELECT id FROM notifications WHERE user_id = ? AND type = 'event_new_digest'", [newsMuted.id])).length, 0);
+
+    await api('PATCH', `/api/notifications/${digest[0].id}/read`, { token: newsListener.token });
+    await publishApproved('عريس الجديد الخامس');
+    digest = await digestRows();
+    assert.strictEqual(digest.length, 1, 'still ONE digest row for the day');
+    assert.ok(digest[0].body.includes('(2)') && digest[0].body.includes('عريس الجديد الخامس'), `the digest names the latest: "${digest[0].body}"`);
+    assert.strictEqual(Number(digest[0].is_read), 0, 'an updated digest counts as unread again');
+  });
+
+  await test('A followed event 2 days out reads «باقي يومين», the countdown\'s own idiom', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس اليومين' }], town: 'رهط', event_date: addDaysToDate(schedulerToday, 2) })
+    });
+    newsEventIds.push(created.body.eventId);
+    await api('POST', `/api/events/${created.body.eventId}/remind`, { token: newsListener.token });
+    await scheduler.runDailyPass();
+    const row = await db.queryOne(
+      "SELECT body FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_soon'", [newsListener.id, created.body.eventId]
+    );
+    assert.ok(row && row.body.includes('باقي يومين'), `expected «باقي يومين», got "${row && row.body}"`);
+  });
+
+  await test('The second «قوّي مناسبتك» arrives once, two days after the first, while something is still missing', async () => {
+    const stageTwo = () => db.query(
+      'SELECT * FROM notifications WHERE user_id = ? AND dedupe_key = ?', [newsPublisher.id, `event_nudge_${newsFirstEventId}_2`]
+    );
+    await scheduler.runDailyPass();
+    assert.strictEqual((await stageTwo()).length, 0, 'not before two days have passed');
+
+    await db.execute('UPDATE events SET first_approved_at = NOW() - INTERVAL 3 DAY WHERE id = ?', [newsFirstEventId]);
+    await scheduler.runDailyPass();
+    await scheduler.runDailyPass();
+    const rows = await stageTwo();
+    assert.strictEqual(rows.length, 1, 'exactly once');
+    assert.ok(rows[0].body.includes('ما زالت تنقصها'));
+  });
+
+  await test('A solemn occasion (عزا) is never asked to «strengthen» itself', async () => {
+    const created = await api('POST', '/api/events', {
+      token: newsPublisher.token,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى اختبار التشجيع' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: addDaysToDate(schedulerToday, 5),
+        event_end_date: addDaysToDate(schedulerToday, 6)
+      }
+    });
+    newsEventIds.push(created.body.eventId);
+    await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    const nudges = await db.query("SELECT id FROM notifications WHERE event_id = ? AND type = 'event_nudge'", [created.body.eventId]);
+    assert.strictEqual(nudges.length, 0);
+  });
+
+  await test('The admin event list names who published each event', async () => {
+    const { status, body } = await api('GET', '/api/admin/events', { token: adminToken });
+    assert.strictEqual(status, 200);
+    const row = body.events.find(e => e.id === newsFirstEventId);
+    assert.ok(row, 'expected the test event in the admin list');
+    assert.strictEqual(row.creator_name, 'ناشر اختبار الإشعارات الجديدة');
+    assert.strictEqual(row.creator_phone, newsPublisher.phone);
+  });
+
+  await test('Activity log: who did what to which event — filterable, super admin only, and a deleted event stays readable', async () => {
+    const edit = await api('PATCH', `/api/events/${newsFirstEventId}`, { token: newsPublisher.token, body: { dinner_time: 'بعد المغرب' } });
+    assert.strictEqual(edit.status, 200);
+
+    const all = await api('GET', '/api/admin/analytics/activity?limit=100', { token: adminToken });
+    assert.strictEqual(all.status, 200);
+    const mine = all.body.activity.filter(row => row.event_id === newsFirstEventId);
+    const created = mine.find(row => row.action === 'event_created');
+    assert.ok(created, 'expected «أضاف» for the event');
+    assert.strictEqual(created.actor_name, 'ناشر اختبار الإشعارات الجديدة');
+    assert.strictEqual(created.actor_phone, newsPublisher.phone);
+    assert.ok(created.event_title && created.occasion_type_name, 'the row carries what the event is');
+    assert.strictEqual(created.event_exists, true);
+    assert.ok(mine.some(row => row.action === 'event_approved'), 'expected «اعتمد»');
+    assert.ok(mine.some(row => row.action === 'event_rejected' && row.details === 'اختبار'), 'expected «رفض» with its reason');
+    assert.ok(mine.some(row => row.action === 'event_edited' && row.details.includes('dinner_time')), 'expected «عدّل» naming the field');
+
+    const filtered = await api('GET', '/api/admin/analytics/activity?action=event_rejected', { token: adminToken });
+    assert.strictEqual(filtered.status, 200);
+    assert.ok(filtered.body.activity.length && filtered.body.activity.every(row => row.action === 'event_rejected'));
+    assert.strictEqual((await api('GET', '/api/admin/analytics/activity?action=nope', { token: adminToken })).status, 400);
+
+    const del = await api('DELETE', `/api/admin/events/${newsFirstEventId}`, { token: adminToken });
+    assert.strictEqual(del.status, 200);
+    const afterDelete = await api('GET', '/api/admin/analytics/activity?action=event_deleted', { token: adminToken });
+    const deleted = afterDelete.body.activity.find(row => row.event_id === newsFirstEventId);
+    assert.ok(deleted, 'the deletion itself is logged');
+    assert.strictEqual(deleted.event_title, created.event_title, 'the title survives the event it describes');
+    assert.strictEqual(deleted.event_exists, false, 'no «open» link for an event that is gone');
+
+    const townAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: townAdminId } = await db.execute(
+      "INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, 'أدمن بلدة لسجل النشاط', 'x', 'رهط', 'admin')",
+      [townAdminPhone]
+    );
+    const townAdminToken = signToken({ id: townAdminId, phone_number: townAdminPhone, full_name: 'أدمن بلدة لسجل النشاط', role: 'admin' }, '1h');
+    assert.strictEqual((await api('GET', '/api/admin/analytics/activity', { token: townAdminToken })).status, 403);
+    await db.execute('DELETE FROM users WHERE id = ?', [townAdminId]);
+  });
+
+  await db.execute(`DELETE FROM events WHERE id IN (${newsEventIds.map(() => '?').join(', ')})`, newsEventIds);
+  for (const u of [newsListener, newsMuted, newsPublisher]) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [u.phone]);
+  }
 
   console.log('\nScheduler re-arm across DST (issue #85 review, FIX 5)');
 
@@ -3233,15 +3451,15 @@ async function run() {
     assert.ok(followedEntry, 'expected the followed event in the schedule');
     assert.deepStrictEqual(
       followedEntry.offsets.map(o => o.days_before),
-      [7, 5, 3, 1, 0],
+      [8, 6, 4, 2, 0],
       'an event 10 days away should still carry every countdown offset'
     );
     // fires_on is a full instant (09:00 Asia/Jerusalem), not a bare date
     // (issue #85 review, FIX 10) — a mobile alarm must never have to invent
     // the hour itself.
     assert.strictEqual(
-      followedEntry.offsets.find(o => o.days_before === 3).fires_on,
-      runInstantForDate(addDaysToDate(schedulerToday, 7)).toISOString()
+      followedEntry.offsets.find(o => o.days_before === 4).fires_on,
+      runInstantForDate(addDaysToDate(schedulerToday, 6)).toISOString()
     );
 
     assert.ok(!body.schedule.some(e => e.event_id === scheduleUnfollowedEventId), 'an unfollowed event must not appear');

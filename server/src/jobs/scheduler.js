@@ -30,13 +30,14 @@ function toArabicNumeral(n) {
  * `notifications.COUNTDOWN_OFFSETS` — built FROM that list, not a second,
  * hand-kept literal, so adding an offset there can never leave this map
  * silently missing an entry and reading «باقي undefined على…» to a user
- * (issue #85 review, FIX 6 — one list, one source). 7 and 1 keep their
+ * (issue #85 review, FIX 6 — one list, one source). 7, 2 and 1 keep their
  * idiomatic Arabic phrasing; any other offset falls back to a plain
  * "N أيام" built from the same digit.
  */
 const OFFSET_PHRASES = Object.fromEntries(
   notifications.COUNTDOWN_OFFSETS.filter(offset => offset > 0).map(offset => {
     if (offset === 7) return [offset, 'أسبوع'];
+    if (offset === 2) return [offset, 'يومين'];
     if (offset === 1) return [offset, 'يوم واحد'];
     return [offset, `${toArabicNumeral(offset)} أيام`];
   })
@@ -51,7 +52,7 @@ function countdownBody(offsetDays, eventTitle) {
 /**
  * Every approved event whose occasion type still has its countdown on
  * (`notify_countdown = 1` — never true for a `solemn` type, story 4) and
- * whose date is exactly 7, 5, 3, 1 or 0 days out today, notifies every
+ * whose date is exactly one of `COUNTDOWN_OFFSETS` (8, 6, 4, 2, 0) days out today, notifies every
  * "ذكّرني" follower — the event's own creator included, if they follow it
  * too, but exempt from the daily cap (story 11 — exempt means never counted
  * either, see notifications.service.js#countScheduledToday). `event_soon`'s
@@ -156,7 +157,19 @@ async function runModerationDigestPass() {
 }
 
 /**
- * The scheduler's whole daily job body (issue #85) — countdown then digest,
+ * «قوّي مناسبتك» الثاني والأخير: لناشر وصله الأول قبل يومين وما زالت مناسبته
+ * ينقصها ما يعرضه نوعها (`createEventNudge` يعيد الفحص نفسه ولا يكتب شيئاً
+ * إن اكتملت). مفتاح `event_nudge_<id>_2` يجعل التكرار بلا أثر.
+ */
+async function runNudgePass() {
+  for (const eventId of await notifications.listEventsDueSecondNudge()) {
+    const nudge = await notifications.createEventNudge(eventId, 2);
+    if (nudge) announceNotification(nudge);
+  }
+}
+
+/**
+ * The scheduler's whole daily job body (issue #85) — countdown, digest, then the second nudge,
  * order-free and safe to run twice, since every row either pass writes
  * carries a dedupe key. Exported directly so a test can run one pass
  * deterministically instead of waiting for a timer (tests must never sleep).
@@ -164,6 +177,7 @@ async function runModerationDigestPass() {
 async function runDailyPass() {
   await runCountdownPass();
   await runModerationDigestPass();
+  await runNudgePass();
 }
 
 /** Milliseconds from `now` until the next 09:00 Asia/Jerusalem — today's if it hasn't happened yet, tomorrow's otherwise. DST-safe: re-resolves the zone's offset via `getZonedParts`/`zonedTimeToUtc` on every call rather than caching one. */

@@ -613,8 +613,8 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
          (title, groom_name, family_clan, occasion_type_id, town, village_id, requested_village_name,
           location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
-          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by, first_approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
       [
         title,
         groomName,
@@ -646,7 +646,8 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
         artistImageUrl,
         hostPhone,
         status,
-        createdBy
+        createdBy,
+        status
       ]
     );
     const eventId = result.insertId;
@@ -782,7 +783,7 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, c
     collision = { hasCollision: conflicts.length > 0, count: conflicts.length, conflicts };
   }
 
-  return { amendment, status: nextStatus, collision };
+  return { amendment, status: nextStatus, collision, changedColumns };
 }
 
 /** Every logged change to this event, newest first, with the name of who made it. */

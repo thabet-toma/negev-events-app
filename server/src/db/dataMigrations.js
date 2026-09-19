@@ -1335,6 +1335,37 @@ const steps = [
       }
       logger.info('[migrations] add-events-requested-village-name-2026-09: ensured column. Existing rows stay NULL.');
     }
+  },
+  {
+    // الإشعارات والتتبّع (1.11): أول اعتماد، إطفاء «مناسبة جديدة»، وسجل النشاط.
+    // كل مناسبة معتمدة حالياً تُعَدّ معلَنة من قبل (first_approved_at = created_at)
+    // كي لا تُبثّ «مناسبة جديدة» لمناسبة قديمة أُعيد اعتمادها. سجل النشاط
+    // (جدوله من schema.sql) يُملأ من الماضي بسطر «أضاف» لكل مناسبة معروفة الناشر.
+    name: 'add-activity-log-and-notification-prefs-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'first_approved_at'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN first_approved_at DATETIME NULL DEFAULT NULL AFTER views_count'
+        );
+      }
+      await connection.execute(
+        "UPDATE events SET first_approved_at = created_at WHERE status = 'approved' AND first_approved_at IS NULL"
+      );
+      if (!(await columnExists(connection, 'users', 'notify_new_events'))) {
+        await connection.execute(
+          'ALTER TABLE users ADD COLUMN notify_new_events TINYINT(1) NOT NULL DEFAULT 1 AFTER analytics_opt_out'
+        );
+      }
+      const [result] = await connection.execute(
+        `INSERT INTO activity_log (actor_user_id, action, event_id, event_title, event_town, occasion_type_name, created_at)
+         SELECT e.created_by, 'event_created', e.id, e.title, e.town, ot.name, e.created_at
+           FROM events e
+           LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+          WHERE e.created_by IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM activity_log a WHERE a.action = 'event_created' AND a.event_id = e.id)`
+      );
+      logger.info(`[migrations] add-activity-log-and-notification-prefs-2026-09: ensured columns; backfilled ${result.affectedRows} «event_created» rows.`);
+    }
   }
 ];
 
