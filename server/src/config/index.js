@@ -106,6 +106,13 @@ const config = {
     publicKey: process.env.VAPID_PUBLIC_KEY || null,
     privateKey: process.env.VAPID_PRIVATE_KEY || null,
     subject: process.env.VAPID_SUBJECT || null
+  },
+
+  // Facebook Page Integration (auto-publishing approved events)
+  facebook: {
+    pageId: process.env.FACEBOOK_PAGE_ID || null,
+    accessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || null,
+    autoPublish: process.env.FACEBOOK_AUTO_PUBLISH !== 'false' && Boolean(process.env.FACEBOOK_PAGE_ACCESS_TOKEN)
   }
 };
 

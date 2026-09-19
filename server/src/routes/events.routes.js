@@ -8,6 +8,7 @@ const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const villages = require('../services/villages.service');
 const notifications = require('../services/notifications.service');
+const facebook = require('../services/facebook.service');
 const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
 const { isAdminForTown } = require('../services/adminScope.service');
 const realtime = require('../realtime');
@@ -260,6 +261,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
       body: `تم نشر مناسبة جديدة: "${created.title}" في ${created.town}`,
       event_id: created.id
     });
+    facebook.publishEventSafely(created);
   }
 
   res.status(201).json({

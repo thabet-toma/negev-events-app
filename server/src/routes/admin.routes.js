@@ -9,6 +9,7 @@ const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
 const notificationsService = require('../services/notifications.service');
+const facebook = require('../services/facebook.service');
 const scheduler = require('../jobs/scheduler');
 const realtime = require('../realtime');
 const { announceNotification, announceGlobalNotification } = require('../realtime/announce');
@@ -93,6 +94,7 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
       body: `تم نشر مناسبة جديدة: "${event.title}" في ${event.town}`,
       event_id: event.id
     });
+    facebook.publishEventSafely(event);
   }
 
   // A contentless signal per recipient, never the notification's own
