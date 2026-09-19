@@ -494,6 +494,7 @@ module.exports = {
   createEventNudge,
   listEventsDueSecondNudge,
   getPreferences,
-  setPreferences
+  setPreferences,
+  describeChanges
 };
 

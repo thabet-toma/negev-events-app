@@ -992,6 +992,17 @@
         </div>
         <button id="togglePushNotificationsBtn" type="button" class="push-toggle-btn" onclick="togglePushNotifications()" disabled>تفعيل</button>
       </div>
+      <!-- «مناسبة جديدة» للجميع قابلة للإطفاء؛ التذكيرات وما يخصّ مناسباتك لا -->
+      <div class="notifications-push-bar notifications-pref-row">
+        <div class="push-control-status notifications-pref-text">
+          <span><i class="fa-solid fa-calendar-plus" aria-hidden="true"></i> إشعارات المناسبات الجديدة</span>
+          <small>التذكيرات وما يخصّ مناسباتك تصلك دائماً</small>
+        </div>
+        <label class="privacy-toggle">
+          <input type="checkbox" id="notifyNewEventsToggle" checked onchange="setNotifyNewEventsPreference(this.checked)" aria-label="إشعارات المناسبات الجديدة">
+          <span class="privacy-toggle-slider"></span>
+        </label>
+      </div>
       <div id="notificationsList" class="events-feed" style="gap:10px;"></div>
     </div>
   </div>

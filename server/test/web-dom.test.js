@@ -577,10 +577,10 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
  * admin panel talks to nothing until a token exists, so an unauthenticated load
  * is enough to drive a form open by hand, which is all these tests do.
  */
-function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [] } = {}) {
+function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url = 'http://localhost/admin.html' } = {}) {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(ADMIN_HTML_WITHOUT_SCRIPTS, {
-    url: 'http://localhost/admin.html',
+    url,
     runScripts: 'dangerously',
     virtualConsole
   });
@@ -4776,6 +4776,129 @@ async function run() {
     assert.strictEqual(manual.paused, true, 'a hand-started track stops too when its card is left — muted or not');
     assert.strictEqual(started[started.length - 1], manual, 'muted: nothing new autoplays on the next card');
     assert.deepStrictEqual(sounding(), []);
+  });
+
+  await test('«قوّي مناسبتك» opens the edit form of that very event; the daily digest goes to the feed', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    await flushBoot();
+    const ownEvent = {
+      id: 91, title: 'عرس التشجيع', town: 'رهط', event_date: '2026-10-10', location_name: 'ديوان',
+      groom_name: 'عريس التشجيع', status: 'approved', occasion_type: WEDDING_TYPE
+    };
+    win.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (requestPath === '/api/notifications' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          notifications: [
+            { id: 31, type: 'event_nudge', title: 'قوّي مناسبتك', body: 'أضف موعد سهرة الشباب', is_read: false, event_id: 91, created_at: '2026-09-19T10:00:00.000Z' },
+            { id: 32, type: 'event_new_digest', title: 'مناسبات جديدة اليوم', body: 'نُشرت اليوم مناسبات جديدة أخرى (2)', is_read: false, event_id: null, created_at: '2026-09-19T09:00:00.000Z' }
+          ]
+        });
+      }
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [ownEvent] });
+      if (method === 'PATCH') return jsonResponse({ success: true });
+      return jsonResponse({ success: false });
+    };
+
+    await win.fetchNotifications();
+    await win.markNotificationRead(false, 31);
+    assert.strictEqual(win.document.getElementById('editEventModal').style.display, 'flex', 'the nudge must land on the edit form');
+    assert.strictEqual(win.document.getElementById('editEventId').value, '91', '…of the event it is about');
+
+    win.closeEditEventModal();
+    win.switchTab('tabMap');
+    await win.markNotificationRead(false, 32);
+    assert.ok(win.document.getElementById('tabHome').classList.contains('active-tab'), 'the digest has no single event — it opens the feed');
+  });
+
+  await test('the «new events» switch reads the server, saves a change, and snaps back if the save fails', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    await flushBoot();
+    let failSave = false;
+    const saved = [];
+    win.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (requestPath === '/api/notifications/preferences' && method === 'GET') {
+        return jsonResponse({ success: true, preferences: { notify_new_events: false } });
+      }
+      if (requestPath === '/api/notifications/preferences' && method === 'PATCH') {
+        saved.push(JSON.parse(options.body));
+        return failSave
+          ? jsonResponse({ success: false, message: 'خطأ' }, { status: 500 })
+          : jsonResponse({ success: true, message: 'ستصلك إشعارات المناسبات الجديدة', preferences: { notify_new_events: true } });
+      }
+      return jsonResponse({ success: true, notifications: [] });
+    };
+    const toggle = win.document.getElementById('notifyNewEventsToggle');
+    assert.ok(toggle, 'expected the switch inside the notifications panel');
+
+    await win.loadNotificationPreferences();
+    assert.strictEqual(toggle.checked, false, 'the switch shows what the server has, not a default');
+
+    toggle.checked = true;
+    await win.setNotifyNewEventsPreference(true);
+    assert.deepStrictEqual(saved[0], { notify_new_events: true });
+    assert.strictEqual(toggle.checked, true);
+
+    failSave = true;
+    toggle.checked = false;
+    await win.setNotifyNewEventsPreference(false);
+    assert.strictEqual(toggle.checked, true, 'a failed save must not leave the switch lying');
+  });
+
+  await test('admin activity log reads as a sentence — who, did what, to which event — with «افتح» only while the event exists', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const win = dom.window;
+    const created = win.renderActivityRowHtml({
+      id: 1, action: 'event_created', event_id: 7, event_title: 'عرس <b>سلام</b>', event_town: 'رهط',
+      occasion_type_name: 'عرس', details: null, summary: null, created_at: '2026-09-19T10:00:00.000Z',
+      event_status: 'approved', event_exists: true, actor_id: 501, actor_name: 'محمد الناشر', actor_phone: '0521234567'
+    });
+    assert.ok(created.includes('محمد الناشر') && created.includes('0521234567'), 'who, with a number to reach them');
+    assert.ok(created.includes('أضاف مناسبة عرس «عرس &lt;b&gt;سلام&lt;/b&gt;»'), `the sentence, escaped: ${created}`);
+    assert.ok(created.includes('openAdminEvent(7)'), 'a live event gets «افتح»');
+    assert.ok(created.includes('index.html?event_id=7'), 'and a link to its public page when approved');
+
+    const deleted = win.renderActivityRowHtml({
+      id: 2, action: 'event_deleted', event_id: 8, event_title: 'عرس محذوف', event_town: 'رهط',
+      occasion_type_name: 'عرس', details: null, summary: null, created_at: '2026-09-19T11:00:00.000Z',
+      event_status: null, event_exists: false, actor_id: 1, actor_name: 'الأدمن', actor_phone: null
+    });
+    assert.ok(deleted.includes('حذف مناسبة عرس «عرس محذوف»'));
+    assert.ok(!deleted.includes('openAdminEvent('), 'no «افتح» for an event that is gone');
+
+    const edited = win.renderActivityRowHtml({
+      id: 3, action: 'event_edited', event_id: 7, event_title: 'عرس', event_town: 'رهط', occasion_type_name: 'عرس',
+      details: 'location_name,event_date', summary: 'تغيّر المكان والتاريخ', created_at: '2026-09-19T12:00:00.000Z',
+      event_status: 'pending', event_exists: true, actor_id: 501, actor_name: 'محمد الناشر', actor_phone: null
+    });
+    assert.ok(edited.includes('تغيّر المكان والتاريخ'), 'an edit says what changed');
+    assert.ok(!edited.includes('index.html?event_id='), 'no public link while the event is not published');
+  });
+
+  await test('admin event card names its publisher, and admin.html?event=<id> opens that event for editing', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin', url: 'http://localhost/admin.html?event=7' });
+    const win = dom.window;
+    await waitFor(() => win.document.querySelector('#adminEventsList .admin-event-card'));
+    await waitFor(() => win.location.search === '');
+    assert.strictEqual(win.location.search, '', 'the deep-link parameter is consumed, so a refresh does not reopen it');
+    assert.ok(win.document.getElementById('tabEvents').classList.contains('active-pane'), 'the events tab is open');
+    assert.ok(win.document.getElementById('eventEditFormWrapper'), 'the edit form for the event is mounted');
+
+    const card = win.document.querySelector('#adminEventsList .admin-event-card').textContent;
+    assert.ok(card.includes('أضافها:') && card.includes('غير مرتبطة بحساب'), 'an event with no account says so');
+
+    win.fetch = async url => (String(url).split('?')[0] === '/api/admin/events'
+      ? jsonResponse({ success: true, events: [{ ...ADMIN_EVENT_FIXTURE, creator_name: 'ناشر اللوحة', creator_phone: '0529998888' }] })
+      : jsonResponse({ success: false }));
+    await win.fetchAdminEvents();
+    const named = win.document.querySelector('#adminEventsList .admin-event-card').textContent;
+    assert.ok(named.includes('ناشر اللوحة') && named.includes('0529998888'), 'the publisher and their number are on the card');
   });
 
   await test('the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer', async () => {

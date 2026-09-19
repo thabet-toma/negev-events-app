@@ -2,6 +2,7 @@
 
 const db = require('../db/pool');
 const logger = require('../utils/logger');
+const { describeChanges } = require('./notifications.service');
 
 /**
  * سجل النشاط — «فلان أضاف/عدّل/اعتمد/رفض/حذف مناسبة كذا» لتبويب «التتبّع
@@ -45,7 +46,9 @@ async function record({ actorId = null, action, eventId, details = null }) {
 
 /**
  * الأحدث أولاً، مع اسم الفاعل ورقمه ودوره، وهل ما زالت المناسبة موجودة
- * (`event_exists`) كي لا تعرض الواجهة زرّ «افتح» لمناسبة محذوفة.
+ * (`event_exists`) كي لا تعرض الواجهة زرّ «افتح» لمناسبة محذوفة. سطر
+ * التعديل يحمل أسماء الحقول في `details` ونصّها المقروء في `summary`
+ * («تغيّر المكان والتاريخ»)، بنفس عبارات إشعار المتابعين.
  */
 async function list({ action = null, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
@@ -69,7 +72,11 @@ async function list({ action = null, page = 1, limit = DEFAULT_PAGE_SIZE } = {})
   );
 
   return {
-    activity: rows.map(row => ({ ...row, event_exists: Boolean(Number(row.event_exists)) })),
+    activity: rows.map(row => ({
+      ...row,
+      event_exists: Boolean(Number(row.event_exists)),
+      summary: row.action === 'event_edited' && row.details ? describeChanges(row.details.split(',')) : null
+    })),
     pagination: {
       page: safePage,
       limit: safeLimit,

@@ -615,12 +615,14 @@ async function loadAdminDashboard() {
     tasks.push(
       fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
       fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
-      fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings()
+      fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings(),
+      fetchActivityLog()
     );
   }
   await Promise.all(tasks);
   renderScopeBanner();
   renderBroadcastComposer();
+  await openEventFromUrl();
 }
 
 /*
@@ -762,6 +764,9 @@ function renderAdminEvents() {
             <span><strong>التاريخ:</strong> ${evt.event_date}</span>
             <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
             ${evt.host_phone ? `<span><strong>هاتف المعلن:</strong> <a href="tel:${evt.host_phone}" style="color:var(--gold-main);">${evt.host_phone}</a></span>` : ''}
+            <span><strong>أضافها:</strong> ${evt.creator_name
+              ? `${escapeHtml(evt.creator_name)}${evt.creator_phone ? ` · <a href="tel:${escapeHtml(evt.creator_phone)}" style="color:var(--gold-main);">${escapeHtml(evt.creator_phone)}</a>` : ''}`
+              : 'غير مرتبطة بحساب (مستوردة)'}</span>
           </div>
 
           ${renderRequestedVillageNoticeHtml(evt)}
@@ -1845,10 +1850,144 @@ function switchAdminTab(tabId) {
   } else if (tabId === 'tabSettings') {
     fetchAdminSettings();
   } else if (tabId === 'tabAnalytics') {
+    fetchActivityLog(1);
     fetchAdminAnalyticsCounts();
     fetchAdminAnalyticsOverview();
     fetchAdminAnalyticsDevices(1);
   }
+}
+
+// ======================================================================
+// سجل النشاط (التتبّع والتحليلات) — «فلان أضاف مناسبة كذا» مع رابط إليها
+// ======================================================================
+let activityLogAction = '';
+
+const ACTIVITY_VERBS = {
+  event_created: { icon: 'fa-circle-plus', verb: 'أضاف' },
+  event_edited: { icon: 'fa-pen', verb: 'عدّل' },
+  event_approved: { icon: 'fa-circle-check', verb: 'اعتمد ونشر' },
+  event_rejected: { icon: 'fa-ban', verb: 'رفض أو أوقف' },
+  event_deleted: { icon: 'fa-trash', verb: 'حذف' },
+  event_owner_changed: { icon: 'fa-right-left', verb: 'نقل ملكية' },
+  village_promoted: { icon: 'fa-map-pin', verb: 'اعتمد قرية من' }
+};
+
+async function fetchActivityLog(page = 1) {
+  const container = document.getElementById('activityLogList');
+  const query = `page=${page}${activityLogAction ? `&action=${encodeURIComponent(activityLogAction)}` : ''}`;
+  try {
+    const res = await adminFetch(`/api/admin/analytics/activity?${query}`);
+    const data = await res.json();
+    if (data.success) {
+      renderActivityLog(data.activity || [], data.pagination);
+    } else if (container) {
+      container.innerHTML = `<div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);"><p>${escapeHtml(data.message || 'تعذّر تحميل سجل النشاط')}</p></div>`;
+    }
+  } catch (e) {
+    console.error('Activity log error:', e);
+    if (container) {
+      container.innerHTML = '<div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);"><p>تعذّر الاتصال بالخادم</p></div>';
+    }
+  }
+}
+
+function filterActivityLog(action) {
+  activityLogAction = action;
+  fetchActivityLog(1);
+}
+
+/** سطر واحد يُقرأ جملةً: «فلان أضاف مناسبة عرس «…»» ثم البلدة والوقت والتفصيل. */
+function renderActivityRowHtml(row) {
+  const meta = ACTIVITY_VERBS[row.action] || { icon: 'fa-circle-info', verb: row.action };
+  const actor = row.actor_name
+    ? `<button type="button" class="activity-actor-btn" onclick="viewUserAnalytics(${Number(row.actor_id)})" title="سجل تتبّع هذا المستخدم">${escapeHtml(row.actor_name)}</button>${row.actor_phone ? ` <span class="activity-sub">(${escapeHtml(row.actor_phone)})</span>` : ''}`
+    : '<strong>مستخدم غير معروف</strong>';
+  const typeName = row.occasion_type_name ? ` ${escapeHtml(row.occasion_type_name)}` : '';
+  const title = row.event_title ? `«${escapeHtml(row.event_title)}»` : `رقم ${Number(row.event_id)}`;
+  const detail = row.action === 'event_edited'
+    ? (row.summary || '')
+    : row.action === 'event_rejected' && row.details
+      ? `السبب: ${row.details}`
+      : row.action === 'event_owner_changed' && row.details
+        ? `إلى: ${row.details}`
+        : row.action === 'village_promoted' && row.details
+          ? `القرية: ${row.details}`
+          : '';
+  const sub = [row.event_town, new Date(row.created_at).toLocaleString('ar-EG'), detail].filter(Boolean).map(escapeHtml).join(' · ');
+  const openBtn = row.event_exists
+    ? `<button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.8rem;" onclick="openAdminEvent(${Number(row.event_id)})"><i class="fa-solid fa-arrow-up-right-from-square"></i> افتح</button>`
+    : '<span class="activity-sub">محذوفة</span>';
+  const siteLink = row.event_exists && row.event_status === 'approved'
+    ? `<a class="admin-btn-ghost" style="padding:6px 12px; font-size:0.8rem;" href="index.html?event_id=${Number(row.event_id)}" target="_blank" rel="noopener">بالموقع</a>`
+    : '';
+  return `
+    <div class="activity-row">
+      <span class="activity-icon"><i class="fa-solid ${meta.icon}"></i></span>
+      <div class="activity-main">
+        <div>${actor} ${meta.verb} مناسبة${typeName} ${title}</div>
+        <div class="activity-sub">${sub}</div>
+      </div>
+      <div class="activity-actions">${openBtn}${siteLink}</div>
+    </div>`;
+}
+
+function renderActivityLog(rows, pagination) {
+  const container = document.getElementById('activityLogList');
+  if (!container) return;
+  container.innerHTML = rows.length
+    ? rows.map(renderActivityRowHtml).join('')
+    : '<div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);"><p>لا نشاط مسجَّل بعد لهذا النوع</p></div>';
+
+  const pager = document.getElementById('activityLogPagination');
+  if (!pager) return;
+  if (!pagination || pagination.totalPages <= 1) {
+    pager.style.display = 'none';
+    pager.innerHTML = '';
+    return;
+  }
+  pager.style.display = 'flex';
+  pager.innerHTML = `
+    <button type="button" class="admin-btn-ghost" ${pagination.page <= 1 ? 'disabled' : ''} onclick="fetchActivityLog(${pagination.page - 1})">
+      <i class="fa-solid fa-arrow-right"></i> الأحدث
+    </button>
+    <span style="color:var(--text-dim); font-size:0.85rem;">صفحة ${pagination.page} من ${pagination.totalPages} (إجمالي ${pagination.total})</span>
+    <button type="button" class="admin-btn-ghost" ${pagination.page >= pagination.totalPages ? 'disabled' : ''} onclick="fetchActivityLog(${pagination.page + 1})">
+      الأقدم <i class="fa-solid fa-arrow-left"></i>
+    </button>
+  `;
+}
+
+/**
+ * يفتح مناسبة بعينها في تبويب المناسبات جاهزة للتعديل — من سجل النشاط أو من
+ * رابط `admin.html?event=<id>`. مناسبة لم تعد في القائمة المحمَّلة تُجلب مرّة
+ * أخرى؛ وإن بقيت غائبة (محذوفة أو خارج بلداتك) يُقال ذلك صراحة.
+ */
+async function openAdminEvent(eventId) {
+  if (!allAdminEvents.some(e => e.id === eventId)) await fetchAdminEvents();
+  if (!allAdminEvents.some(e => e.id === eventId)) {
+    alert('هذه المناسبة لم تعد موجودة، أو أنها خارج البلدات التي تديرها');
+    return;
+  }
+  // القائمة تُفتح على «جميع المناسبات» بلا بحث، كي تظهر المناسبة أياً كانت حالتها.
+  searchKeyword = '';
+  const searchInput = document.getElementById('adminEventSearch');
+  if (searchInput) searchInput.value = '';
+  filterEventsByStatus('all', document.querySelector('#tabEvents .filter-chip'));
+  await openEventEditForm(eventId);
+}
+
+/** `admin.html?event=<id>` — يُقرأ مرّة بعد تحميل اللوحة ثم يُمحى من الشريط كي لا يعيد الفتح عند التحديث. */
+async function openEventFromUrl() {
+  if (typeof URLSearchParams === 'undefined' || !window.location) return;
+  const params = new URLSearchParams(window.location.search);
+  const eventId = Number.parseInt(params.get('event'), 10);
+  if (!Number.isInteger(eventId) || eventId <= 0) return;
+  params.delete('event');
+  const rest = params.toString();
+  try {
+    window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
+  } catch (e) { /* history غير متاح — يبقى الرابط كما هو */ }
+  await openAdminEvent(eventId);
 }
 
 function filterEventsByStatus(status, btnElement) {

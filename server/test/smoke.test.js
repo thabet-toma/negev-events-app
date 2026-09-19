@@ -3289,7 +3289,9 @@ async function run() {
     assert.strictEqual(created.event_exists, true);
     assert.ok(mine.some(row => row.action === 'event_approved'), 'expected «اعتمد»');
     assert.ok(mine.some(row => row.action === 'event_rejected' && row.details === 'اختبار'), 'expected «رفض» with its reason');
-    assert.ok(mine.some(row => row.action === 'event_edited' && row.details.includes('dinner_time')), 'expected «عدّل» naming the field');
+    const edited = mine.find(row => row.action === 'event_edited');
+    assert.ok(edited && edited.details.includes('dinner_time'), 'expected «عدّل» naming the field');
+    assert.strictEqual(edited.summary, 'تغيّر وقت العشاء', 'and a readable summary of it');
 
     const filtered = await api('GET', '/api/admin/analytics/activity?action=event_rejected', { token: adminToken });
     assert.strictEqual(filtered.status, 200);

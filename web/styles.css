@@ -1991,6 +1991,18 @@ body {
   font-size: 0.88rem;
 }
 
+/* مركّب عمداً: .push-control-status بعده بنفس الوزن يفرض align-items: center */
+.push-control-status.notifications-pref-text {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.notifications-pref-text small {
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
 .push-control-status {
   display: flex;
   align-items: center;

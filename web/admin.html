@@ -727,6 +727,33 @@
 
       <!-- TAB: ANALYTICS / TRACKING — سوبر أدمن حصراً. لوحة النشاط والتتبع الشاملة -->
       <section id="tabAnalytics" class="admin-tab-pane">
+        <!-- 0. سجل النشاط: من أضاف/عدّل/اعتمد/رفض/حذف أي مناسبة، مع رابط إليها -->
+        <div class="pane-box" style="margin-bottom:20px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div>
+              <h2><i class="fa-solid fa-clock-rotate-left"></i> سجل النشاط — مَن أضاف وعدّل واعتمد</h2>
+              <p>كل مناسبة: مَن أضافها أو غيّرها، ماذا فعل ومتى — «افتح» يأخذك إليها مباشرة</p>
+            </div>
+            <select id="activityActionFilter" class="activity-filter-select" onchange="filterActivityLog(this.value)" aria-label="نوع النشاط">
+              <option value="">كل الأنشطة</option>
+              <option value="event_created">إضافة مناسبة</option>
+              <option value="event_edited">تعديل</option>
+              <option value="event_approved">اعتماد ونشر</option>
+              <option value="event_rejected">رفض أو إيقاف</option>
+              <option value="event_deleted">حذف</option>
+              <option value="event_owner_changed">نقل ملكية</option>
+              <option value="village_promoted">اعتماد قرية</option>
+            </select>
+          </div>
+          <div id="activityLogList" class="activity-log-list">
+            <div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);">
+              <i class="fa-solid fa-spinner fa-spin" style="font-size:1.8rem; color:var(--gold-main); margin-bottom:10px;"></i>
+              <p>جاري تحميل سجل النشاط...</p>
+            </div>
+          </div>
+          <div id="activityLogPagination" class="pane-controls-bar" style="display:none;"></div>
+        </div>
+
         <!-- 1. لوحة النشاط والمؤشرات العليا (المشاهدات، المشاركات، النقرات، الأجهزة) -->
         <div class="pane-box" style="margin-bottom:20px;">
           <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">

@@ -420,6 +420,12 @@ function initSocket() {
       if (currentUser) fetchNotifications();
     });
 
+    // «مناسبة جديدة» كُتبت للجميع دفعة واحدة — إشارة عامة واحدة بدل واحدة
+    // لكل مستخدم؛ نعيد جلب مركزنا نحن فقط (الإعلان نفسه يأتي من new_event_created).
+    socket.on('system_notification', () => {
+      if (currentUser) fetchNotifications();
+    });
+
     subscribeToNotificationSocket();
   } catch (e) {
     console.log('Socket initialization note:', e);
@@ -5314,6 +5320,49 @@ function renderNotificationsList() {
 function toggleNotificationsPanel() {
   document.getElementById('notificationsModal').style.display = 'flex';
   updatePushControlUI();
+  loadNotificationPreferences();
+}
+
+/** مفتاح «إشعارات المناسبات الجديدة» — يُقرأ من الخادم عند كل فتح، فلا يكذب على جهاز ثانٍ غيّره. */
+async function loadNotificationPreferences() {
+  const toggle = document.getElementById('notifyNewEventsToggle');
+  if (!toggle || !currentUser || !authToken) return;
+  try {
+    const res = await apiFetch('/api/notifications/preferences', { auth: true });
+    const data = await res.json();
+    if (data.success) toggle.checked = Boolean(data.preferences.notify_new_events);
+  } catch (e) {
+    console.error('Notification preferences error:', e);
+  }
+}
+
+async function setNotifyNewEventsPreference(enabled) {
+  const toggle = document.getElementById('notifyNewEventsToggle');
+  try {
+    const res = await apiFetch('/api/notifications/preferences', {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notify_new_events: enabled })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.message || 'failed');
+    showToast(data.message);
+  } catch (e) {
+    // الخادم لم يحفظ — المفتاح يعود لما هو محفوظ فعلاً بدل أن يكذب.
+    if (toggle) toggle.checked = !enabled;
+    showToast('تعذّر حفظ الإعداد، حاول مرة أخرى');
+  }
+}
+
+/** «قوّي مناسبتك» يفتح نموذج تعديل المناسبة نفسها؛ إن لم تعد من مناسباتي فصفحتها العامة. */
+async function openOwnEventForEdit(eventId) {
+  if (!myEventsCache.some(e => e.id === eventId)) await fetchMyEvents();
+  if (myEventsCache.some(e => e.id === eventId)) {
+    openEditEventModal(eventId);
+  } else {
+    await navigateToEvent(eventId);
+  }
 }
 
 function closeNotificationsModal() {
@@ -5346,10 +5395,17 @@ async function markNotificationRead(isBroadcast, id) {
     console.error('Dismiss notification error:', e);
   }
 
-  // التوجّه إلى المناسبة نفسها عند النقر على إشعار شخصي مرتبط بمناسبة (قصة 14)
-  if (eventId) {
+  // التوجّه إلى المناسبة نفسها عند النقر على إشعار شخصي مرتبط بمناسبة (قصة 14)؛
+  // «قوّي مناسبتك» إلى نموذج تعديلها، وملخّص «مناسبات جديدة اليوم» إلى التغذية.
+  if (eventId && notification.type === 'event_nudge') {
+    closeNotificationsModal();
+    await openOwnEventForEdit(eventId);
+  } else if (eventId) {
     closeNotificationsModal();
     await navigateToEvent(eventId);
+  } else if (notification.type === 'event_new_digest') {
+    closeNotificationsModal();
+    switchTab('tabHome');
   }
 }
 

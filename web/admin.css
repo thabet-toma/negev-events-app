@@ -796,3 +796,80 @@ body {
   border-radius: 6px;
 }
 
+/* ============================================================
+   Activity log (التتبّع والتحليلات — سجل النشاط)
+   ============================================================ */
+.activity-filter-select {
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--admin-card-border);
+  background: var(--admin-card);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.activity-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  background: var(--admin-card);
+}
+
+.activity-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--gold-main);
+}
+
+.activity-main {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  color: var(--text-main);
+  font-size: 0.9rem;
+}
+
+.activity-sub {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.activity-actor-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--gold-main);
+  cursor: pointer;
+}
+
+.activity-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.activity-actions a { text-decoration: none; }
+
+@media (max-width: 560px) {
+  .activity-row { flex-wrap: wrap; }
+  .activity-actions { width: 100%; justify-content: flex-end; }
+}
