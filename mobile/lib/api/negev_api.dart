@@ -410,6 +410,25 @@ class NegevApi {
     await _client.patch('/api/broadcasts/$broadcastId/dismiss', auth: true);
   }
 
+  /// تفضيل «إشعارات المناسبات الجديدة» وحده — التذكيرات وما يخصّ مناسبات
+  /// المستخدم تصله دائماً ولا تفضيل لها.
+  Future<bool> getNotifyNewEvents() async {
+    final data = await _client.get('/api/notifications/preferences', auth: true);
+    final prefs = data['preferences'];
+    return prefs is Map && prefs['notify_new_events'] == true;
+  }
+
+  /// يعيد القيمة المحفوظة فعلاً على الخادم، لا القيمة المُرسَلة.
+  Future<bool> setNotifyNewEvents(bool value) async {
+    final data = await _client.patch(
+      '/api/notifications/preferences',
+      auth: true,
+      body: {'notify_new_events': value},
+    );
+    final prefs = data['preferences'];
+    return prefs is Map ? prefs['notify_new_events'] == true : value;
+  }
+
   /// مواعيد إطلاق المنبّه المحلي المتبقّية لكل مناسبة يتابعها المستخدم —
   /// الخادم يحسبها كاملة (jerusalemTime.js)، والعميل لا يعيد اشتقاقها.
   Future<List<ReminderScheduleEntry>> remindersSchedule() async {

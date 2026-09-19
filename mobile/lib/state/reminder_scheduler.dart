@@ -27,10 +27,11 @@ class ReminderScheduler {
   final AuthStore _auth;
   final ReminderAlarms _alarms;
 
-  /// الفواصل الممكنة — مطابقة لـ COUNTDOWN_OFFSETS في notifications.service.js
-  /// على الخادم؛ لازمة هنا فقط لحساب معرّفات الإلغاء الفوري لمناسبة واحدة
+  /// الفواصل الممكنة — COUNTDOWN_OFFSETS في notifications.service.js على الخادم
+  /// (٨، ٦، ٤، ٢، ٠)؛ لازمة هنا فقط لحساب معرّفات الإلغاء الفوري لمناسبة واحدة
   /// (onReminderRemoved) بلا انتظار مزامنة كاملة.
-  static const List<int> _offsets = [7, 5, 3, 1, 0];
+  // ومعها الفواصل القديمة (٧، ٥، ٣، ١): جهاز حُدِّث من نسخة سابقة يحمل منبّهات مجدولة عليها.
+  static const List<int> _offsets = [8, 7, 6, 5, 4, 3, 2, 1, 0];
 
   static const int _maxEvents = 20;
   static const int _maxOffsetsPerEvent = 5;
@@ -154,6 +155,7 @@ class ReminderScheduler {
   String _alarmBody(int daysBefore, String title) {
     if (daysBefore == 0) return 'اليوم موعد $title';
     if (daysBefore == 1) return 'باقي يوم واحد على $title';
+    if (daysBefore == 2) return 'باقي يومين على $title';
     return 'باقي $daysBefore أيام على $title';
   }
 }

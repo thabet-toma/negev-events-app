@@ -15,6 +15,7 @@ import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:negev_events/widgets/motion.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// عميل وهمي يوجّه حسب المسار — القصص وأنواع المناسبات فارغة، `/api/towns`
 /// يحمل قرية اختبار من الخادم (لا من أي قائمة في العميل)، و`/api/events`
@@ -698,6 +699,95 @@ void main() {
 
         await tester.pumpWidget(const SizedBox.shrink());
         expect(await opacityAfterFirstPump(disableAnimations: false), lessThan(1.0));
+      },
+    );
+  });
+  group('جرس الإشعارات — مفتاح «إشعارات المناسبات الجديدة»', () {
+    testWidgets(
+      'المفتاح يُحمَّل من GET preferences عند فتح الورقة، والتبديل يرسل PATCH '
+      'بقيمة منطقية',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final patches = <Object?>[];
+        final client = MockClient((request) async {
+          final path = request.url.path;
+          Object body = {'success': true};
+          if (path.endsWith('/api/auth/login')) {
+            body = {
+              'success': true,
+              'token': 'test-token',
+              'user': {
+                'id': 1,
+                'phone_number': '0500000000',
+                'full_name': 'مستخدم اختبار',
+                'role': 'user',
+              },
+            };
+          } else if (path.endsWith('/api/notifications/preferences')) {
+            if (request.method == 'PATCH') {
+              final sent = jsonDecode(request.body) as Map<String, dynamic>;
+              patches.add(sent['notify_new_events']);
+              body = {'success': true, 'preferences': sent};
+            } else {
+              body = {
+                'success': true,
+                'preferences': {'notify_new_events': true},
+              };
+            }
+          } else if (path.endsWith('/api/notifications')) {
+            body = {'success': true, 'notifications': <Map<String, dynamic>>[]};
+          } else if (path.endsWith('/api/events')) {
+            body = {
+              'success': true,
+              'events': <Map<String, dynamic>>[],
+              'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+              'announcements': <Map<String, dynamic>>[],
+            };
+          } else if (path.endsWith('/api/stories')) {
+            body = {'success': true, 'stories': <Map<String, dynamic>>[]};
+          } else if (path.endsWith('/api/occasion-types')) {
+            body = {'success': true, 'types': <Map<String, dynamic>>[]};
+          }
+          return http.Response(
+            jsonEncode(body),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+        final api = NegevApi(ApiClient(client: client));
+        final auth = AuthStore(api);
+        await tester.runAsync(() => auth.signIn('0500000000', '1234'));
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: AppServices(
+                api: api,
+                auth: auth,
+                realtime: RealtimeService(),
+                child: const EventsScreen(),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        await tester.tap(find.byTooltip('الإشعارات'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        final toggle = find.widgetWithText(SwitchListTile, 'إشعارات المناسبات الجديدة');
+        expect(toggle, findsOneWidget);
+        expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+
+        await tester.tap(toggle);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        expect(patches, [false]);
+        expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
       },
     );
   });

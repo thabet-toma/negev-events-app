@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../api/negev_api.dart' show Village;
+import '../api/negev_api.dart' show NegevApi, Village;
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
@@ -16,6 +16,7 @@ import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
 import 'agenda_screen.dart';
+import 'edit_event_screen.dart';
 import 'event_details_screen.dart';
 import 'story_viewer_screen.dart';
 
@@ -1316,6 +1317,7 @@ class _NotificationBellState extends State<_NotificationBell> {
   List<notif.AppNotification> _notifications = const [];
   VoidCallback? _unsubscribe;
   StreamSubscription<Map<String, dynamic>>? _broadcastSub;
+  StreamSubscription<Map<String, dynamic>>? _systemSub;
   bool _loaded = false;
 
   @override
@@ -1329,6 +1331,7 @@ class _NotificationBellState extends State<_NotificationBell> {
           (_) => _load(),
         );
     _broadcastSub = AppServices.of(context).realtime.onBroadcast.listen((_) => _load());
+    _systemSub = AppServices.of(context).realtime.onSystemNotification.listen((_) => _load());
   }
 
   Future<void> _load() async {
@@ -1343,6 +1346,7 @@ class _NotificationBellState extends State<_NotificationBell> {
   @override
   void dispose() {
     _broadcastSub?.cancel();
+    _systemSub?.cancel();
     _unsubscribe?.call();
     super.dispose();
   }
@@ -1402,7 +1406,9 @@ class _NotificationBellState extends State<_NotificationBell> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 6),
+                _NewEventsToggle(api: api),
+                const SizedBox(height: 8),
                 if (_notifications.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 18),
@@ -1488,14 +1494,7 @@ class _NotificationBellState extends State<_NotificationBell> {
                             } catch (_) {
                               // لا يعطّل فتح المناسبة إن فشل تعليم القراءة.
                             }
-                            // تعميم بلا event_id إطلاقاً — لا مكان ينقل إليه النقر.
-                            if (n.eventId != null && context.mounted) {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => EventDetailsScreen(eventId: n.eventId!),
-                                ),
-                              );
-                            }
+                            _openTarget(n);
                           },
                         );
                       },
@@ -1506,6 +1505,38 @@ class _NotificationBellState extends State<_NotificationBell> {
           ),
         ),
       ),
+    );
+  }
+
+  /// وجهة النقر على إشعار — بسياق الجرس نفسه لا سياق الورقة، فالورقة أُغلقت
+  /// قبل انتهاء نداءات الشبكة. تعميم أو ملخّص «مناسبات جديدة اليوم» بلا
+  /// event_id إطلاقاً — التغذية خلف الورقة، فلا مكان ينقل إليه النقر.
+  Future<void> _openTarget(notif.AppNotification n) async {
+    final eventId = n.eventId;
+    if (eventId == null || !mounted) return;
+
+    if (n.type == 'event_nudge') {
+      // «قوّي مناسبتك» موجّه لمالك المناسبة — يفتح التعديل مباشرة. الجلب من
+      // «مناسباتي» كشاشتها، فمناسبة قيد المراجعة تصل أيضاً.
+      try {
+        final mine = await AppServices.of(context).api.myEvents();
+        final event = mine.where((e) => e.id == eventId).firstOrNull;
+        if (!mounted) return;
+        if (event == null) {
+          showMessage(context, 'تعذّر فتح المناسبة للتعديل', isError: true);
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => EditEventScreen(event: event)),
+        );
+      } catch (error) {
+        if (mounted) showMessage(context, '$error', isError: true);
+      }
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => EventDetailsScreen(eventId: eventId)),
     );
   }
 
@@ -1520,6 +1551,75 @@ class _NotificationBellState extends State<_NotificationBell> {
         child: const Icon(Icons.notifications_outlined),
       ),
       onPressed: _open,
+    );
+  }
+}
+
+/// مفتاح «إشعارات المناسبات الجديدة» أعلى ورقة الإشعارات — يُجلب عند فتحها،
+/// ويُحفظ فوراً عند التبديل مع التراجع إن فشل الحفظ. لا يظهر قبل وصول القيمة
+/// كي لا يُعرض وضع غير صحيح. `api` ممرَّر من الجرس كالورقة نفسها.
+class _NewEventsToggle extends StatefulWidget {
+  const _NewEventsToggle({required this.api});
+
+  final NegevApi api;
+
+  @override
+  State<_NewEventsToggle> createState() => _NewEventsToggleState();
+}
+
+class _NewEventsToggleState extends State<_NewEventsToggle> {
+  bool? _value;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final value = await widget.api.getNotifyNewEvents();
+      if (mounted) setState(() => _value = value);
+    } catch (_) {
+      // تحسين لا شرط — يبقى المفتاح مخفياً إن تعذّر الجلب.
+    }
+  }
+
+  Future<void> _toggle(bool next) async {
+    final previous = _value;
+    setState(() {
+      _value = next;
+      _saving = true;
+    });
+    try {
+      final saved = await widget.api.setNotifyNewEvents(next);
+      if (mounted) setState(() => _value = saved);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _value = previous);
+      showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = _value;
+    if (value == null) return const SizedBox.shrink();
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      value: value,
+      onChanged: _saving ? null : _toggle,
+      title: Text(
+        'إشعارات المناسبات الجديدة',
+        style: TextStyle(fontSize: 14, color: context.c.ink),
+      ),
+      subtitle: Text(
+        'التذكيرات وما يخصّ مناسباتك تصلك دائماً',
+        style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+      ),
     );
   }
 }

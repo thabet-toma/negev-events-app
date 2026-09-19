@@ -19,8 +19,12 @@ class RealtimeService {
   /// إشعار عام من الإدارة.
   final _broadcast = StreamController<Map<String, dynamic>>.broadcast();
 
+  /// «مناسبة جديدة» كُتبت في مراكز الإشعارات — يكفي إعادة جلب الإشعارات.
+  final _systemNotification = StreamController<Map<String, dynamic>>.broadcast();
+
   Stream<Map<String, dynamic>> get onNewEvent => _newEvent.stream;
   Stream<Map<String, dynamic>> get onBroadcast => _broadcast.stream;
+  Stream<Map<String, dynamic>> get onSystemNotification => _systemNotification.stream;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -42,6 +46,10 @@ class RealtimeService {
 
     socket.on('system_broadcast', (data) {
       if (data is Map) _broadcast.add(Map<String, dynamic>.from(data));
+    });
+
+    socket.on('system_notification', (data) {
+      if (data is Map) _systemNotification.add(Map<String, dynamic>.from(data));
     });
 
     socket.onConnectError((error) {
@@ -90,5 +98,6 @@ class RealtimeService {
     _socket = null;
     _newEvent.close();
     _broadcast.close();
+    _systemNotification.close();
   }
 }

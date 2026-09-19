@@ -369,6 +369,22 @@ void main() {
       expect(RegExp(r'\d{4}-\d{2}-\d{2}').hasMatch(body), isFalse);
     });
 
+    test('فاصل يومين يُقرأ «باقي يومين» لا «باقي 2 أيام»', () async {
+      final api = scheduleApi(() => {
+            'success': true,
+            'schedule': [
+              scheduleEntryJson(eventId: 5, title: 'عرس آل فلان', daysBefore: [2]),
+            ],
+          });
+      final auth = await signedInAuth();
+      final fake = FakeReminderAlarms();
+      final scheduler = ReminderScheduler(api: api, auth: auth, alarms: fake);
+
+      await scheduler.syncAll();
+
+      expect(fake.scheduleLog.single.body, 'باقي يومين على عرس آل فلان');
+    });
+
     test('مستخدم غير مسجَّل الدخول: لا نداء للخادم ولا أي منبّه يُجدوَل', () async {
       var requested = false;
       final client = MockClient((request) async {
@@ -400,9 +416,26 @@ void main() {
 
       await scheduler.onReminderRemoved(42);
 
-      for (final d in [7, 5, 3, 1, 0]) {
+      for (final d in [8, 6, 4, 2, 0]) {
         expect(fake.cancelLog, contains(ReminderScheduler.stableId(42, d)));
       }
     });
+
+    test(
+      'onReminderRemoved يُلغي أيضاً الفواصل القديمة (٧، ٥، ٣، ١) — جهاز حُدِّث '
+      'من نسخة سابقة يحمل منبّهات مجدولة عليها',
+      () async {
+        final api = apiReturning({'success': true});
+        final auth = await signedInAuth();
+        final fake = FakeReminderAlarms();
+        final scheduler = ReminderScheduler(api: api, auth: auth, alarms: fake);
+
+        await scheduler.onReminderRemoved(42);
+
+        for (final d in [7, 5, 3, 1]) {
+          expect(fake.cancelLog, contains(ReminderScheduler.stableId(42, d)));
+        }
+      },
+    );
   });
 }
