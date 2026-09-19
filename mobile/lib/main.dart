@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'api/api_client.dart';
 import 'api/negev_api.dart';
+import 'screens/account_screen.dart' show SignInScreen;
 import 'screens/home_shell.dart';
 import 'state/analytics.dart';
 import 'state/audio_coordinator.dart';
@@ -50,6 +51,9 @@ void main() {
   final audio = AudioCoordinator();
 
   // خلفية ثابتة كرسائل الخطأ في `showMessage` — لا سياق هنا لقراءة الألوان.
+  // زرّ «تسجيل الدخول» في الرسالة نفسها يفتح شاشة الدخول من أي مكان، بدل دفعها
+  // تلقائياً: نداء في الخلفية قد يُرفض والمستخدم في منتصف قراءة أو نموذج،
+  // وشاشة النشر تدفع شاشة الدخول بنفسها أصلاً حين يُرفض إرسالها.
   auth.onSessionExpired = (message) {
     scaffoldMessengerKey.currentState
       ?..hideCurrentSnackBar()
@@ -57,7 +61,14 @@ void main() {
         SnackBar(
           content: Text(message, style: const TextStyle(color: Colors.white)),
           backgroundColor: const Color(0xFF7F1D1D),
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'تسجيل الدخول',
+            textColor: Colors.white,
+            onPressed: () => navigatorKey.currentState?.push(
+              MaterialPageRoute<void>(builder: (_) => const SignInScreen()),
+            ),
+          ),
         ),
       );
   };

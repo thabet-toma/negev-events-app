@@ -5,6 +5,7 @@ import '../api/negev_api.dart' show Village;
 import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
+import '../widgets/auth_action_button.dart';
 import '../widgets/event_card.dart' show arabicEventDate;
 import 'event_details_screen.dart';
 
@@ -166,6 +167,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
             onPressed: _goToToday,
             child: const Text('اليوم', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
+          const AuthActionButton(),
         ],
       ),
       body: Column(

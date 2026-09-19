@@ -8,6 +8,7 @@ import '../models/event.dart';
 import '../state/auth_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import '../widgets/location_picker_map.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart'
@@ -392,6 +393,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
             tooltip: 'سجلّ التعديلات',
             onPressed: _showAmendmentLog,
           ),
+          const AuthActionButton(),
         ],
       ),
       body: ListView(

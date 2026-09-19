@@ -6,6 +6,7 @@ import '../main.dart';
 import '../models/service.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 
 /// صفحة مزوّد خدمة واحد — الوصف والصورة ظاهران فوراً، **والرقم لا يظهر نصّاً
 /// إطلاقاً**؛ يُكشف فقط عبر فعل تواصل صريح (زرّ «اتصال» يفتح تطبيق الهاتف
@@ -64,7 +65,10 @@ class _ServiceProviderDetailsScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.initialName ?? 'مزوّد خدمة')),
+      appBar: AppBar(
+        title: Text(widget.initialName ?? 'مزوّد خدمة'),
+        actions: const [AuthActionButton()],
+      ),
       body: FutureBuilder<ServiceProviderDetail>(
         future: _provider,
         builder: (context, snapshot) {

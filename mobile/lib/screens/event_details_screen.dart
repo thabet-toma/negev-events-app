@@ -246,7 +246,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
               );
             },
           ),
-          const AuthActionButton(compact: true),
+          const AuthActionButton(),
         ],
       ),
       body: FutureBuilder<Event>(

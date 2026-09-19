@@ -39,6 +39,8 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
   bool _muted = false;
 
   Future<String?>? _defaultTrack;
+  DateTime? _defaultTrackFetchedAt;
+  static const _defaultTrackTtl = Duration(minutes: 10);
 
   bool get isMuted => _muted;
   String? get currentUrl => _url;
@@ -58,9 +60,28 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
   /// يوقف الصوت حين يغادر التطبيق الواجهة ويستأنفه عند العودة.
   void bindLifecycle() => WidgetsBinding.instance.addObserver(this);
 
-  /// المقطع الافتراضي للمنصّة — يُجلب مرّة واحدة لعمر التطبيق.
-  Future<String?> defaultTrack(NegevApi api) =>
-      _defaultTrack ??= api.getDefaultEventAudioUrl();
+  /// المقطع الافتراضي للمنصّة — مخبَّأ عشر دقائق كي يصل مقطع يرفعه الأدمن بلا
+  /// إعادة تشغيل التطبيق. نتيجة فارغة (لا مقطع، أو فشل شبكة يعيده
+  /// `getDefaultEventAudioUrl` null) لا تُخبَّأ: النداء التالي يعيد المحاولة، فلا
+  /// يُسقط انقطاعٌ لحظة الإقلاع المقطعَ الافتراضي طوال الجلسة. `refresh` يتجاوز الخبء.
+  Future<String?> defaultTrack(NegevApi api, {bool refresh = false}) {
+    final fetchedAt = _defaultTrackFetchedAt;
+    final cached = _defaultTrack;
+    if (!refresh &&
+        cached != null &&
+        fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < _defaultTrackTtl) {
+      return cached;
+    }
+    _defaultTrackFetchedAt = DateTime.now();
+    late final Future<String?> future;
+    future = api.getDefaultEventAudioUrl().then((url) {
+      // فارغ من الطلب الحالي نفسه (لا من طلب أقدم تجاوزه) ⇒ لا خبء.
+      if (url == null && identical(_defaultTrack, future)) _defaultTrackFetchedAt = null;
+      return url;
+    });
+    return _defaultTrack = future;
+  }
 
   Future<void> setMuted(bool muted) async {
     _muted = muted;

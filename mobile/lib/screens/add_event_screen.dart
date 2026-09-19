@@ -13,6 +13,7 @@ import '../state/analytics.dart';
 import '../state/auth_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import '../widgets/location_picker_map.dart';
 import 'account_screen.dart';
 
@@ -474,7 +475,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('إعلان مناسبة')),
+      appBar: AppBar(
+        title: const Text('إعلان مناسبة'),
+        actions: const [AuthActionButton()],
+      ),
       body: FutureBuilder<List<OccasionType>>(
         future: _typesFuture,
         builder: (context, snapshot) {

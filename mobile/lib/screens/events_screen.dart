@@ -482,7 +482,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           Positioned.fill(
             child: RefreshIndicator(
               onRefresh: () async {
-                setState(() => _stories = AppServices.of(context).api.stories());
+                final services = AppServices.of(context);
+                setState(() => _stories = services.api.stories());
+                // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
+                services.audio.defaultTrack(services.api, refresh: true).then((url) {
+                  if (mounted) _defaultAudioUrl = url;
+                });
                 await _loadFirstPage();
               },
               child: _buildList(),

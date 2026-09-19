@@ -5270,12 +5270,20 @@ async function run() {
     const expiredAdmin = signToken({ id: 1, phone_number: config.admin.phone, full_name: 'منتهي', role: 'super_admin' }, -10);
     const adminRes = await api('GET', '/api/admin/stats', { token: expiredAdmin });
     assert.strictEqual(adminRes.status, 401, 'an admin route with an expired token is a dead session, not a missing role');
+
+    const forbiddenRes = await api('GET', '/api/admin/stats', { token: privacyUserA.token });
+    assert.strictEqual(forbiddenRes.status, 403, 'a live plain-user token on an admin route is "not allowed", not a dead session');
   });
 
   await test('GET /api/auth/me renews a plain user\'s token (a working one), and never an admin\'s', async () => {
-    const me = await api('GET', '/api/auth/me', { token: privacyUserA.token });
+    // A token one minute from expiry: "renewed" means /me hands back one that
+    // lives far longer — not merely any string, which the same token would pass.
+    const expOf = (token) => JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).exp;
+    const nearlyExpired = signToken({ id: privacyUserA.id, phone_number: privacyUserA.phone, full_name: 'قارب الانتهاء', role: 'user' }, '60s');
+    const me = await api('GET', '/api/auth/me', { token: nearlyExpired });
     assert.strictEqual(me.status, 200);
     assert.strictEqual(typeof me.body.token, 'string', 'a plain user gets a fresh token on every /me');
+    assert.ok(expOf(me.body.token) > expOf(nearlyExpired) + 3600, 'the renewed token must outlive the one it replaced by the full user TTL');
     const again = await api('GET', '/api/auth/me', { token: me.body.token });
     assert.strictEqual(again.status, 200, 'the renewed token must itself be valid');
     assert.strictEqual(again.body.user.id, privacyUserA.id);

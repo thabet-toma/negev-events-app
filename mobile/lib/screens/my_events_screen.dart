@@ -4,6 +4,7 @@ import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
+import '../widgets/auth_action_button.dart';
 import '../widgets/event_card.dart';
 import 'edit_event_screen.dart';
 
@@ -69,7 +70,10 @@ class _MyEventsScreenState extends State<MyEventsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('مناسباتي')),
+      appBar: AppBar(
+        title: const Text('مناسباتي'),
+        actions: const [AuthActionButton()],
+      ),
       body: FutureBuilder<List<Event>>(
         future: _future,
         builder: (context, snapshot) {
