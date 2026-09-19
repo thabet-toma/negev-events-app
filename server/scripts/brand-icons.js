@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * يولّد كل أيقونات العلامة من تعريف واحد — خاتم «عرس» الذهبي المحزَّز (‏#99).
+ * يولّد كل أيقونات العلامة من تعريف واحد — الحلقتان المتشابكتان وكلمة «اعراسنا».
  *
  * الأيقونات صور ثنائية، ولو دخلت المستودع مرسومة يدوياً لصارت غير قابلة
  * لإعادة التوليد: أي تعديل على العلامة يعني إعادة رسم ٢٥ ملفاً بيدك. هندسة
@@ -31,16 +31,12 @@ const path = require('path');
 const { createCanvas, GlobalFonts, loadImage } = require('@napi-rs/canvas');
 const {
   GROUND,
-  MARK,
-  GOLD_DEEP,
-  GOLD_MID,
-  GOLD_HI,
-  BRIGHT_EDGE,
-  WORD_INK,
   GOLD_GRADIENT,
-  goldGradient,
   buildMarkParts,
   markScale,
+  fillStyleFor,
+  tracePart,
+  paintParts,
   shapeToSvgD
 } = require('../src/utils/brandMark');
 
@@ -52,40 +48,6 @@ GlobalFonts.registerFromPath(path.join(__dirname, '../src/assets/fonts/Cairo-Bol
 // الرسم على القماش
 // ---------------------------------------------------------------------------
 
-/** يبني مسار جزء واحد على القماش، بلا ملء — القاعدة نفسها يُبنى عليها ملء الشكل بلون وحذف بكسله معاً. */
-function tracePart(ctx, part, u) {
-  ctx.beginPath();
-  if (part.shape.type === 'annulus') {
-    const { cx, cy, rIn, rOut } = part.shape;
-    ctx.arc(cx * u, cy * u, rOut * u, 0, Math.PI * 2, false);
-    ctx.arc(cx * u, cy * u, rIn * u, 0, Math.PI * 2, true);
-  } else {
-    part.shape.commands.forEach(([type, ...args]) => {
-      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
-      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
-      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
-      else if (type === 'C') ctx.bezierCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u, args[4] * u, args[5] * u);
-      else if (type === 'Z') ctx.closePath();
-    });
-  }
-}
-
-function drawShapesOnCanvas(ctx, parts, u, size) {
-  parts.forEach(part => {
-    if (part.fill === 'band') ctx.fillStyle = goldGradient(ctx, size);
-    else if (part.fill === 'bright') ctx.fillStyle = BRIGHT_EDGE;
-    else if (part.fill === 'bezel') ctx.fillStyle = GOLD_HI;
-    else if (part.fill === 'engrave') ctx.fillStyle = GOLD_DEEP;
-    else if (part.fill === 'floret') ctx.fillStyle = GOLD_MID;
-    else if (part.fill === 'word') ctx.fillStyle = WORD_INK;
-    else if (part.fill === 'ground') ctx.fillStyle = GROUND;
-    else ctx.fillStyle = MARK;
-
-    tracePart(ctx, part, u);
-    ctx.fill();
-  });
-}
-
 function drawRingMark(ctx, size, { safeZone, detail = 'full' }) {
   const u = size / 100;
   const scale = markScale(safeZone);
@@ -95,7 +57,8 @@ function drawRingMark(ctx, size, { safeZone, detail = 'full' }) {
   ctx.scale(scale, scale);
   ctx.translate(-size / 2, -size / 2);
 
-  drawShapesOnCanvas(ctx, buildMarkParts(detail), u, size);
+  // الأرضية مطليّة لا مقصوصة: الأيقونة كلها على أرضية مصمتة بلون `GROUND` نفسه.
+  paintParts(ctx, buildMarkParts(detail), u, size);
 
   ctx.restore();
 }
@@ -119,16 +82,19 @@ function renderIcon(size, { safeZone = false, detail = 'full' } = {}) {
 // SVG — يُبنى من نفس `buildMarkParts`، لا يُكتب يدوياً أبداً
 // ---------------------------------------------------------------------------
 
-/** نسخة متّجهة للفافيكون — تكبر بلا حدّ ووزنها بضع مئات بايت، مبنيّة من نفس `buildMarkParts` تماماً كالقماش. */
+/**
+ * نسخة متّجهة للفافيكون — تكبر بلا حدّ، مبنيّة من نفس `buildMarkParts` تماماً
+ * كالقماش: مسار لكل جزء بترتيب الرسم نفسه (الفراغات الأرضية تغطّي ما تحتها)،
+ * ولون كل دور من `fillStyleFor` نفسه، فلا جدول ألوان ثانٍ هنا.
+ */
 function buildIconSvg(detail, safeZone) {
   const parts = buildMarkParts(detail);
   const scale = markScale(safeZone);
-  const bandD = parts.filter(p => p.fill === 'band').map(p => shapeToSvgD(p.shape)).join(' ');
-  const engraveD = parts.filter(p => p.fill === 'engrave').map(p => shapeToSvgD(p.shape)).join(' ');
-  const brightD = parts.filter(p => p.fill === 'bright').map(p => shapeToSvgD(p.shape)).join(' ');
-  const bezelD = parts.filter(p => p.fill === 'bezel').map(p => shapeToSvgD(p.shape)).join(' ');
-  const floretD = parts.filter(p => p.fill === 'floret').map(p => shapeToSvgD(p.shape)).join(' ');
-  const wordD = parts.filter(p => p.fill === 'word').map(p => shapeToSvgD(p.shape)).join(' ');
+  const solid = fill => fillStyleFor(null, fill, 0);
+  const paths = parts.map(part => {
+    const fill = part.fill === 'band' ? 'url(#gold-grad)' : solid(part.fill);
+    return `<path d="${shapeToSvgD(part.shape)}" fill="${fill}"/>`;
+  }).join('\n    ');
 
   const stops = GOLD_GRADIENT.stops.map(s =>
     `<stop offset="${s.offset * 100}%" stop-color="${s.color}"/>`
@@ -142,7 +108,8 @@ function buildIconSvg(detail, safeZone) {
   </defs>
   <rect width="100" height="100" rx="22" fill="${GROUND}"/>
   <g transform="translate(50 50) scale(${scale}) translate(-50 -50)">
-    ${bandD ? `<path d="${bandD}" fill="url(#gold-grad)"/>\n    ` : ''}${engraveD ? `<path d="${engraveD}" fill="${GOLD_DEEP}"/>\n    ` : ''}${brightD ? `<path d="${brightD}" fill="${BRIGHT_EDGE}"/>\n    ` : ''}${bezelD ? `<path d="${bezelD}" fill="${GOLD_HI}"/>\n    ` : ''}${floretD ? `<path d="${floretD}" fill="${GOLD_MID}"/>\n    ` : ''}${wordD ? `<path d="${wordD}" fill="${WORD_INK}"/>\n    ` : ''}</g>
+    ${paths}
+  </g>
 </svg>
 `;
 }
@@ -159,7 +126,7 @@ function write(relativePath, buffer) {
 
 /**
  * يولّد لقطة مرجع العلامة البصري لـ docs/brand/mark-current-from-code.png
- * كما يحددها docs/brand/README.md: النسختان full و icon مع مقاسات حقيقية غير مكبرة.
+ * كما يحددها docs/brand/README.md: الكاملة وأيقونة أندرويد بمنطقتها الآمنة، مع مقاسات حقيقية غير مكبرة.
  */
 async function generateReferenceImage() {
   const S_CANVAS_W = 1100;
@@ -199,7 +166,7 @@ async function generateReferenceImage() {
   const full420 = await loadImage(renderIcon(heroSize, { detail: 'full', safeZone: false }));
   ctx.drawImage(full420, heroLeftX, topPad);
 
-  const icon420 = await loadImage(renderIcon(heroSize, { detail: 'icon', safeZone: true }));
+  const icon420 = await loadImage(renderIcon(heroSize, { detail: 'full', safeZone: true }));
   ctx.drawImage(icon420, heroRightX, topPad);
 
   ctx.fillStyle = '#222222';
@@ -207,7 +174,7 @@ async function generateReferenceImage() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   ctx.fillText('full — الأسطح الكبيرة', heroLeftX + heroSize / 2, heroLabelY);
-  ctx.fillText('icon + safeZone — أيقونة التطبيق', heroRightX + heroSize / 2, heroLabelY);
+  ctx.fillText('full + safeZone — أيقونة أندرويد', heroRightX + heroSize / 2, heroLabelY);
 
   // رسم عينات المقاسات الحقيقية الثلاث على سطر أساس موحّد مع تسمياتها
   let curX = 60;
@@ -215,7 +182,7 @@ async function generateReferenceImage() {
   ctx.fillStyle = '#222222';
 
   for (const s of sampleSizes) {
-    const img = await loadImage(renderIcon(s, { detail: 'icon', safeZone: false }));
+    const img = await loadImage(renderIcon(s, { detail: detailFor(s), safeZone: false }));
     const imgY = samplesBaselineY - s;
     ctx.drawImage(img, curX, imgY);
 
@@ -252,22 +219,25 @@ async function generateReferenceImage() {
 }
 
 /**
- * قاعدة اختيار الطبقة — **بالغرض لا بمقاس الملف**.
+ * قاعدة اختيار الطبقة — **بما يُرى فعلاً على الشاشة**.
  *
- * كل أيقونة يعرضها النظام **أيقونةَ تطبيق** (شاشة رئيسية، مشغّل، لسان متصفّح)
- * تأخذ `'icon'` مهما كان مقاس الملف، لأن النظام يصغّرها عند العرض: ملف ‎١٨٠px‎
- * يظهر على شاشة آيفون بنحو ‎٦٠px‎، وعندها تسقط الخطوط المحفورة الدقيقة والزهرتان
- * ويُنصَّف عدد الحزوز — وهو العطل الذي وُجدت الطبقتان لمنعه.
- *
- * ولا يأخذ `'full'` إلا ما يُعرض **بحجمه الكبير فعلاً**: صورة المتجر (‏١٠٢٤‎)
- * وأصل الـPWA الكبير المستعمَل في شاشة التثبيت والإقلاع.
+ * الشعار المعتمد يحمل كلمة «اعراسنا» تحت الحلقتين، فكل أيقونة تطبيق تأخذ
+ * `'full'` كما رسمها المالك. تسقط الكلمة (`'icon'`) فقط حيث تصير رذاذاً: ملف
+ * أصغر من `FULL_MIN_SIZE` — لسان المتصفّح ‎٣٢px‎، وأيقونات iOS الصغيرة في
+ * الإعدادات والإشعارات، وأصغر كثافة أندرويد.
  */
+const FULL_MIN_SIZE = 72;
+
+function detailFor(size) {
+  return size >= FULL_MIN_SIZE ? 'full' : 'icon';
+}
+
 const WEB_ICONS = [
-  ['web/icons/favicon-32.png', 32, { detail: 'icon' }],
-  ['web/icons/apple-touch-icon.png', 180, { detail: 'icon' }],
-  ['web/icons/icon-192.png', 192, { detail: 'icon' }],
-  ['web/icons/icon-512.png', 512, { detail: 'full' }],
-  ['web/icons/icon-maskable-512.png', 512, { safeZone: true, detail: 'icon' }]
+  ['web/icons/favicon-32.png', 32, { detail: detailFor(32) }],
+  ['web/icons/apple-touch-icon.png', 180, { detail: detailFor(180) }],
+  ['web/icons/icon-192.png', 192, { detail: detailFor(192) }],
+  ['web/icons/icon-512.png', 512, { detail: detailFor(512) }],
+  ['web/icons/icon-maskable-512.png', 512, { safeZone: true, detail: detailFor(512) }]
 ];
 
 const ANDROID_ICONS = [
@@ -292,19 +262,16 @@ async function main() {
   console.log('  web/icons/icon.svg');
   WEB_ICONS.forEach(([target, size, options]) => write(target, renderIcon(size, options)));
 
-  console.log('\nmobile/android — أندرويد يقصّ الأيقونة بأشكال مختلفة، فكلها بالمنطقة الآمنة وبالتفصيل المبسَّط');
+  console.log('\nmobile/android — أندرويد يقصّ الأيقونة بأشكال مختلفة، فكلها بالمنطقة الآمنة');
   ANDROID_ICONS.forEach(([density, size]) => {
-    write(`mobile/android/app/src/main/res/mipmap-${density}/ic_launcher.png`, renderIcon(size, { safeZone: true, detail: 'icon' }));
+    write(`mobile/android/app/src/main/res/mipmap-${density}/ic_launcher.png`, renderIcon(size, { safeZone: true, detail: detailFor(size) }));
   });
 
-  // iOS يقصّ بزواياه هو (لا منطقة آمنة دائرية)، لكن كل هذه الملفات — عدا صورة
-  // المتجر ‎١٠٢٤‎ — أيقونةُ تطبيق تُعرض صغيرة على الشاشة الرئيسية، فتأخذ الطبقة
-  // المبسَّطة بحكم القاعدة أعلى `WEB_ICONS`. ملف ‎٢٠px‎ بكامل تفاصيل الحفر والزخرفة
-  // رذاذٌ لا علامة.
-  console.log('\nmobile/ios — أيقونات التطبيق مبسَّطة، وصورة المتجر ١٠٢٤ وحدها بكامل التفصيل');
+  // iOS يقصّ بزواياه هو (لا منطقة آمنة دائرية). الملفات الصغيرة (الإعدادات
+  // والإشعارات) بلا الكلمة بحكم `detailFor`، وأيقونة الشاشة الرئيسية وصورة المتجر بها.
+  console.log('\nmobile/ios — أيقونة الشاشة الرئيسية وصورة المتجر بالكلمة، والصغيرة بدونها');
   IOS_ICONS.forEach(([filename, size]) => {
-    const detail = size >= 1024 ? 'full' : 'icon';
-    write(`mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/${filename}`, renderIcon(size, { detail }));
+    write(`mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/${filename}`, renderIcon(size, { detail: detailFor(size) }));
   });
 
   console.log('\ndocs/brand — لقطة أساس فحص الانحراف البصري');

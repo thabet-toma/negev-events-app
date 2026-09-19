@@ -1,7 +1,9 @@
 'use strict';
 
 /**
- * تعريف العلامة — «خاتم زواج ذهبي محزَّز، فصّ مرصَّع على الشريط، وداخله «عرس» بحرف عربي حقيقي» (‏#99).
+ * تعريف العلامة — «حلقتا زواج ذهبيتان متشابكتان، فصّ ماسي فيروزي على الحلقة
+ * اليسرى (بصرياً)، وقلب أحمر فوق اليمنى، وتحتهما كلمة «اعراسنا»» — مرسومة متّجهاً
+ * عن صورة الشعار التي اعتمدها المالك (٢٠٢٦-٠٩)، على أرضية بيضاء مثلها.
  *
  * بلا أي رسم على قماش ولا أي كتابة ملف عند التحميل. هذه الوحدة تحت `server/src/`
  * فقط لأنها تُقرأ من طبقة المسارات (`share.routes.js`) ومن خدمة بطاقة المشاركة
@@ -16,12 +18,15 @@
 const BRAND_WORD = require('./brandWord');
 
 // ---- لوحة ألوان العلامة — معرَّفة هنا ومصدَّرة للمستهلكين كافة ----------------
-const GROUND = '#0c1b2a';
-const GOLD_DEEP = '#8f6a20';
-const GOLD_MID = '#c39a55';
-const GOLD_HI = '#f0d5a8';
-const BRIGHT_EDGE = '#f3dcb4';
-const WORD_INK = '#f6e2c2';
+const GROUND = '#ffffff';
+const GOLD_DEEP = '#a8740c';
+const GOLD_MID = '#d9a632';
+const GOLD_HI = '#f7dc8c';
+const WORD_INK = '#262626';
+const GEM_LIGHT = '#a6e7ee';
+const GEM = '#3bb4c4';
+const GEM_DEEP = '#1f8a9b';
+const HEART = '#e03a4f';
 const MARK = GOLD_MID;
 
 // ---- التدرّج المعدني الموحَّد — تعريف واحد يقرأه القماش وSVG ------------------
@@ -49,13 +54,37 @@ function goldGradient(ctx, size) {
   return g;
 }
 
-// ---- الهندسة، بنسبة إلى ضلع اللوحة، على مقياس منطقة الأمان (المربّع ١٠٠ وحدة) ----
-const R_OUT = 38.3;        // الحافّة الخارجية للشريط
-const BAND = 9.8;          // سماكة الشريط
-const R_MID = 33.4;        // خط منتصف الشريط (R_OUT - BAND / 2)
-const R_IN = 28.5;         // الحافّة الداخلية للشريط
-const BEZEL_W = 1.55 * BAND; // عرض الفص (15.19)
-const BEZEL_H = 1.24 * BAND; // ارتفاع الفص (12.152) — قمّته عند ٠٫٣٩٤٨ داخل حدّ الأمان ٠٫٤٠
+/** لون الملء الثابت لكل دور — `band` وحده تدرّج، فلا يرد هنا (انظر `fillStyleFor`). */
+const SOLID_FILLS = {
+  ground: GROUND,
+  prong: GOLD_DEEP,
+  'gem-light': GEM_LIGHT,
+  gem: GEM,
+  'gem-deep': GEM_DEEP,
+  heart: HEART,
+  word: WORD_INK
+};
+
+/** ملء جزء واحد على قماش — المصدر الوحيد لربط الأدوار بالألوان لكل من يرسم العلامة. */
+function fillStyleFor(ctx, fill, size) {
+  if (fill === 'band') return goldGradient(ctx, size);
+  return SOLID_FILLS[fill] || MARK;
+}
+
+// ---- الهندسة، على مربّع ١٠٠ وحدة، قبل التوسيط ------------------------------
+const R_OUT = 15.5;               // الحافّة الخارجية لكل حلقة
+const BAND = 4.2;                 // سماكة الشريط
+const R_IN = R_OUT - BAND;        // الحافّة الداخلية
+const R_MID = R_OUT - BAND / 2;   // خط منتصف الشريط
+const GAP = 1.1;                  // فراغ أبيض يفصل الحلقتين حيث تعبر إحداهما فوق الأخرى
+const RING_DX = 9.5;              // نصف المسافة بين المركزين
+const RING_Y = 45;
+const LEFT_CX = 50 - RING_DX;
+const RIGHT_CX = 50 + RING_DX;
+
+// نصف القطر الذي تُحشر فيه العلامة كلها بعد التوسيط — منطقة الأمان الدائرية
+// لأندرويد نصف قطرها ٠٫٤٠ من الضلع، ونترك نصف وحدة هامشاً لتنعيم الحواف.
+const SAFE_RADIUS = 39.5;
 
 function pathPart(fill, role, commands) {
   return { fill, role, shape: { type: 'path', commands } };
@@ -65,134 +94,219 @@ function annulusPart(fill, role, cx, cy, rIn, rOut) {
   return { fill, role, shape: { type: 'annulus', cx, cy, rIn, rOut } };
 }
 
-function lozengePart(fill, role, cx, cy, w, h) {
-  const hw = w / 2;
-  const hh = h / 2;
+/**
+ * قوس دائري بمنحنيات بيزييه تكعيبية (قطعة لكل ≤ ٩٠°) — أوامر `C` فقط، لأن
+ * كل مستهلك للهندسة (القماش وSVG) يفهم M/L/Q/C/Z ولا يفهم أقواس SVG.
+ */
+function arcCommands(cx, cy, r, a0, a1) {
+  const segments = Math.max(1, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 2)));
+  const step = (a1 - a0) / segments;
+  const k = (4 / 3) * Math.tan(step / 4);
+  const commands = [];
+  for (let i = 0; i < segments; i += 1) {
+    const s = a0 + i * step;
+    const e = s + step;
+    commands.push(['C',
+      cx + r * (Math.cos(s) - k * Math.sin(s)), cy + r * (Math.sin(s) + k * Math.cos(s)),
+      cx + r * (Math.cos(e) + k * Math.sin(e)), cy + r * (Math.sin(e) - k * Math.cos(e)),
+      cx + r * Math.cos(e), cy + r * Math.sin(e)
+    ]);
+  }
+  return commands;
+}
+
+/** قطاع من طارة بين زاويتين — به تعود الحلقة اليسرى فوق اليمنى عند إحدى نقطتَي التقاطع فقط. */
+function sectorPart(fill, role, cx, cy, rIn, rOut, a0, a1) {
   return pathPart(fill, role, [
-    ['M', cx, cy - hh],
-    ['L', cx + hw, cy],
-    ['L', cx, cy + hh],
-    ['L', cx - hw, cy],
+    ['M', cx + rOut * Math.cos(a0), cy + rOut * Math.sin(a0)],
+    ...arcCommands(cx, cy, rOut, a0, a1),
+    ['L', cx + rIn * Math.cos(a1), cy + rIn * Math.sin(a1)],
+    ...arcCommands(cx, cy, rIn, a1, a0),
     ['Z']
   ]);
 }
 
-function notchPart(cx, cy, r0, r1, angle, thickness) {
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const hw = thickness / 2;
-  const px = -sin * hw;
-  const py = cos * hw;
-
-  const p0x = cx + cos * r0 - px;
-  const p0y = cy + sin * r0 - py;
-  const p1x = cx + cos * r1 - px;
-  const p1y = cy + sin * r1 - py;
-  const p2x = cx + cos * r1 + px;
-  const p2y = cy + sin * r1 + py;
-  const p3x = cx + cos * r0 + px;
-  const p3y = cy + sin * r0 + py;
-
-  const part = pathPart('engrave', 'notch', [
-    ['M', p0x, p0y],
-    ['L', p1x, p1y],
-    ['L', p2x, p2y],
-    ['L', p3x, p3y],
+function polygonPart(fill, role, points) {
+  return pathPart(fill, role, [
+    ['M', points[0][0], points[0][1]],
+    ...points.slice(1).map(([x, y]) => ['L', x, y]),
     ['Z']
   ]);
-  part.angle = angle;
-  return part;
+}
+
+/** قلب بستّ منحنيات، داخل صندوق عرضه `w` وارتفاعه `h` أعلاه اليساري (x, y). */
+function heartPart(fill, role, x, y, w, h) {
+  const p = (nx, ny) => [x + nx * w, y + ny * h];
+  return pathPart(fill, role, [
+    ['M', ...p(0.5, 0.26)],
+    ['C', ...p(0.5, 0.1), ...p(0.38, 0), ...p(0.25, 0)],
+    ['C', ...p(0.1, 0), ...p(0, 0.13), ...p(0, 0.3)],
+    ['C', ...p(0, 0.56), ...p(0.28, 0.76), ...p(0.5, 1)],
+    ['C', ...p(0.72, 0.76), ...p(1, 0.56), ...p(1, 0.3)],
+    ['C', ...p(1, 0.13), ...p(0.9, 0), ...p(0.75, 0)],
+    ['C', ...p(0.62, 0), ...p(0.5, 0.1), ...p(0.5, 0.26)],
+    ['Z']
+  ]);
+}
+
+function wordPart(left, top, width) {
+  const height = width / BRAND_WORD.aspectRatio;
+  const commands = BRAND_WORD.commands.map(([type, ...args]) => {
+    if (type === 'Z') return ['Z'];
+    const out = [type];
+    for (let i = 0; i < args.length; i += 2) out.push(left + args[i] * width, top + args[i + 1] * height);
+    return out;
+  });
+  return pathPart('word', 'word', commands);
+}
+
+/** كل نقطة تحكّم وكل حافّة طارة — غلاف محافظ للحبر (نقاط التحكّم خارج المنحنى أو عليه). */
+function extremePoints(parts) {
+  const points = [];
+  parts.forEach(({ shape }) => {
+    if (shape.type === 'annulus') {
+      points.push([shape.cx - shape.rOut, shape.cy], [shape.cx + shape.rOut, shape.cy],
+        [shape.cx, shape.cy - shape.rOut], [shape.cx, shape.cy + shape.rOut]);
+      return;
+    }
+    shape.commands.forEach(([, ...args]) => {
+      for (let i = 0; i < args.length; i += 2) points.push([args[i], args[i + 1]]);
+    });
+  });
+  return points;
 }
 
 /**
- * هندسة العلامة المعتمدة — خاتم زواج ذهبي وفص وكلمة «عرس».
+ * يوسّط الأجزاء على (٥٠، ٥٠) ويكبّرها حتى يبلغ أبعد حبرها `SAFE_RADIUS` بالضبط —
+ * فالطبقتان (بالكلمة وبدونها) تملآن منطقة الأمان نفسها بلا أرقام يدوية لكلٍّ منهما.
+ */
+function fitToSafeZone(parts) {
+  const points = extremePoints(parts);
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
+  const ox = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const oy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  let maxDist = 0;
+  parts.forEach(({ shape }) => {
+    if (shape.type === 'annulus') {
+      maxDist = Math.max(maxDist, Math.hypot(shape.cx - ox, shape.cy - oy) + shape.rOut);
+    }
+  });
+  points.forEach(([x, y]) => { maxDist = Math.max(maxDist, Math.hypot(x - ox, y - oy)); });
+  const s = SAFE_RADIUS / maxDist;
+  const tx = x => 50 + (x - ox) * s;
+  const ty = y => 50 + (y - oy) * s;
+
+  return parts.map(part => {
+    const { shape } = part;
+    if (shape.type === 'annulus') {
+      return { ...part, shape: { ...shape, cx: tx(shape.cx), cy: ty(shape.cy), rIn: shape.rIn * s, rOut: shape.rOut * s } };
+    }
+    const commands = shape.commands.map(([type, ...args]) => {
+      if (type === 'Z') return ['Z'];
+      const out = [type];
+      for (let i = 0; i < args.length; i += 2) out.push(tx(args[i]), ty(args[i + 1]));
+      return out;
+    });
+    return { ...part, shape: { type: 'path', commands } };
+  });
+}
+
+/**
+ * هندسة العلامة المعتمدة.
  *
  * `detail`:
- *   'full' — ٣٦ حزاً، حلقتان محفورتان، زهرتان بجانب الكلمة.
- *   'icon' — ١٨ حزاً (النصف بالضبط من الـ٣٦)، بلا حلقتين وبلا زهرتين.
+ *   'full' — الحلقتان والفصّ والقلب وكلمة «اعراسنا» تحتها، كما في صورة الشعار.
+ *   'icon' — بلا الكلمة: الفافيكون ‎٣٢px‎ والشارات أحادية اللون بجانب اسم
+ *            التطبيق المكتوب أصلاً، حيث الكلمة إمّا رذاذ أو تكرار.
+ *
+ * ترتيب الأجزاء ترتيب رسم: الفراغات الأرضية (`ground`) تُرسم فوق ما قبلها.
  */
 function buildMarkParts(detail = 'full') {
   const full = detail === 'full';
-  const cx = 50;
-  const cy = 50;
   const parts = [];
 
-  // 1. شريط الخاتم — طارة مفرغة
-  parts.push(annulusPart('band', 'band', cx, cy, R_IN, R_OUT));
+  // 1. الحلقة اليسرى كاملة، ثم فراغ حول اليمنى يقطعها عند نقطتي التقاطع، ثم اليمنى
+  parts.push(annulusPart('band', 'ring', LEFT_CX, RING_Y, R_IN, R_OUT));
+  parts.push(annulusPart('ground', 'gap', RIGHT_CX, RING_Y, R_IN - GAP, R_OUT + GAP));
+  parts.push(annulusPart('band', 'ring', RIGHT_CX, RING_Y, R_IN, R_OUT));
 
-  // 2. الحزوز — ٣٦ في الكامل، ١٨ في الأيقونة (نصف الـ٣٦ بالضبط)
-  const notchStep = (Math.PI * 2) / 36;
-  const rNotchIn = R_IN + 0.26 * BAND;
-  const rNotchOut = R_OUT - 0.26 * BAND;
-  const notchThickness = 0.75; // 0.0075 * 100
+  // 2. التشابك: عند التقاطع السفلي تعود اليسرى فوق اليمنى — قطاع ٢٠°..٧٠° منها
+  //    طرفاه داخل فتحة اليمنى وخارجها، فلا يظهر قطعه المستقيم.
+  const a0 = (20 * Math.PI) / 180;
+  const a1 = (70 * Math.PI) / 180;
+  // الفراغ أضيق زاوياً من القطاع بدرجتين من كل طرف: قطعه الشعاعي يقع داخل
+  // القطاع الذهبي فيُغطّى، فلا يبقى خطّ أبيض رفيع عند طرفيه.
+  const pad = (2 * Math.PI) / 180;
+  parts.push(sectorPart('ground', 'gap', LEFT_CX, RING_Y, R_IN - GAP, R_OUT + GAP, a0 + pad, a1 - pad));
+  parts.push(sectorPart('band', 'ring-over', LEFT_CX, RING_Y, R_IN, R_OUT, a0, a1));
 
-  // تبدأ بزاوية إزاحة نصف خطوة من الساعة ١٢ كي لا يقع حزّ تحت الفص
-  const indexStep = full ? 1 : 2;
-  for (let i = 0; i < 36; i += indexStep) {
-    const angle = -Math.PI / 2 + (i + 0.5) * notchStep;
-    parts.push(notchPart(cx, cy, rNotchIn, rNotchOut, angle, notchThickness));
-  }
+  // 3. الفصّ الماسي على قمّة اليسرى: مخلبان ذهبيان، تاج فاتح، وجناحا قاعدة بظلّين
+  const top = RING_Y - R_OUT;
+  const gx = LEFT_CX;
+  parts.push(polygonPart('prong', 'prong', [[gx - 3.4, top + 1.6], [gx - 2.2, top - 3.4], [gx + 2.2, top - 3.4], [gx + 3.4, top + 1.6]]));
+  const girdleY = top - 5.6;
+  const crownY = top - 9.4;
+  parts.push(polygonPart('gem-light', 'gem', [[gx - 6.4, girdleY], [gx - 3.4, crownY], [gx + 3.4, crownY], [gx + 6.4, girdleY]]));
+  parts.push(polygonPart('gem', 'gem', [[gx - 6.4, girdleY], [gx, girdleY], [gx, top + 0.8]]));
+  parts.push(polygonPart('gem-deep', 'gem', [[gx, girdleY], [gx + 6.4, girdleY], [gx, top + 0.8]]));
 
-  // 3. خطّان محفوران يحصران الحزوز — تفصيل داخلي يسقط في الأيقونة
+  // 4. القلب فوق اليمنى، منفصلاً عنها بفراغ
+  const heartW = 12.4;
+  const heartH = 11;
+  const heartX = RIGHT_CX + 1 - heartW / 2;
+  const heartY = top - 2.2 - heartH;
+  parts.push(heartPart('heart', 'heart', heartX, heartY, heartW, heartH));
+
+  // 5. الكلمة تحت الحلقتين — عرضها يقارب عرض الحلقتين معاً كما في الصورة
   if (full) {
-    const ringThickness = 0.6; // 0.006 * 100
-    const rOuterEngrave = R_OUT - 0.16 * BAND;
-    const rInnerEngrave = R_IN + 0.16 * BAND;
-    parts.push(annulusPart('engrave', 'engraved-ring', cx, cy, rOuterEngrave - ringThickness / 2, rOuterEngrave + ringThickness / 2));
-    parts.push(annulusPart('engrave', 'engraved-ring', cx, cy, rInnerEngrave - ringThickness / 2, rInnerEngrave + ringThickness / 2));
+    const wordW = 2 * (RING_DX + R_OUT) * 0.92;
+    parts.push(wordPart(50 - wordW / 2, RING_Y + R_OUT + 3.6, wordW));
   }
 
-  // 4. خط لامع على الحافة الخارجية — يبقى في المستويين (هو حدّ الجسم)
-  const brightMid = R_OUT - 0.4; // 0.004 * 100
-  const brightThickness = 0.8;   // 0.008 * 100
-  parts.push(annulusPart('bright', 'bright-edge', cx, cy, brightMid - brightThickness / 2, brightMid + brightThickness / 2));
-
-  // 5. الفص — معيّن مرصّع على خط المنتصف عند الساعة ١٢
-  const bezelY = cy - R_MID;
-  parts.push(lozengePart('bezel', 'bezel', cx, bezelY, BEZEL_W, BEZEL_H));
-
-  // 6. خط واجهة الفص المحفور
-  const facetY = bezelY - BEZEL_H * 0.22;
-  const facetHalfW = BEZEL_W * 0.26;
-  const facetThickness = 0.6;
-  parts.push(pathPart('engrave', 'facet', [
-    ['M', cx - facetHalfW, facetY - facetThickness / 2],
-    ['L', cx + facetHalfW, facetY - facetThickness / 2],
-    ['L', cx + facetHalfW, facetY + facetThickness / 2],
-    ['L', cx - facetHalfW, facetY + facetThickness / 2],
-    ['Z']
-  ]));
-
-  // 7. زهرتان تحفّان الكلمة (في المستوى الكامل فقط)
-  if (full) {
-    const floretOffset = 0.82 * R_IN; // 23.37
-    const floretW = 3.3;  // 0.033 * 100
-    const floretH = 5.2;  // 0.052 * 100
-    parts.push(lozengePart('floret', 'floret', cx - floretOffset, cy, floretW, floretH));
-    parts.push(lozengePart('floret', 'floret', cx + floretOffset, cy, floretW, floretH));
-  }
-
-  // 8. كلمة «عرس» — ممركزة على ارتفاع الحبر الحقيقي
-  const wordW = 1.28 * R_IN; // 36.48
-  const wordH = wordW / BRAND_WORD.aspectRatio;
-  const wordLeft = cx - wordW / 2;
-  const wordTop = cy - wordH / 2;
-
-  const wordCommands = BRAND_WORD.commands.map(([type, ...args]) => {
-    if (type === 'M') return ['M', wordLeft + args[0] * wordW, wordTop + args[1] * wordH];
-    if (type === 'L') return ['L', wordLeft + args[0] * wordW, wordTop + args[1] * wordH];
-    if (type === 'Q') return ['Q', wordLeft + args[0] * wordW, wordTop + args[1] * wordH, wordLeft + args[2] * wordW, wordTop + args[3] * wordH];
-    if (type === 'C') return ['C', wordLeft + args[0] * wordW, wordTop + args[1] * wordH, wordLeft + args[2] * wordW, wordTop + args[3] * wordH, wordLeft + args[4] * wordW, wordTop + args[5] * wordH];
-    if (type === 'Z') return ['Z'];
-    return [type, ...args];
-  });
-  parts.push(pathPart('word', 'word', wordCommands));
-
-  return parts;
+  return fitToSafeZone(parts);
 }
 
+/** خارج المنطقة الآمنة (مربّع لا دائرة) تتّسع العلامة لتملأ اللوح أكثر. */
 function markScale(safeZone) {
   return safeZone ? 1 : 1.14;
+}
+
+/** يتتبّع مسار جزء واحد على القماش بمقياس `u`، بلا ملء — التتبّع نفسه يخدم الملء والقصّ معاً. */
+function tracePart(ctx, part, u) {
+  ctx.beginPath();
+  if (part.shape.type === 'annulus') {
+    const { cx, cy, rIn, rOut } = part.shape;
+    ctx.arc(cx * u, cy * u, rOut * u, 0, Math.PI * 2, false);
+    ctx.arc(cx * u, cy * u, rIn * u, 0, Math.PI * 2, true);
+  } else {
+    part.shape.commands.forEach(([type, ...args]) => {
+      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
+      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
+      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
+      else if (type === 'C') ctx.bezierCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u, args[4] * u, args[5] * u);
+      else if (type === 'Z') ctx.closePath();
+    });
+  }
+}
+
+/**
+ * يرسم الأجزاء بترتيبها. `cutGround`: الفراغات تُقصّ شفّافةً (`destination-out`)
+ * بدل أن تُطلى بلون الأرضية — لرسم العلامة على قماش مستقلّ ثم لصقه فوق أي خلفية.
+ */
+function paintParts(ctx, parts, u, size, { cutGround = false } = {}) {
+  parts.forEach(part => {
+    ctx.save();
+    if (part.fill === 'ground' && cutGround) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = '#000';
+    } else {
+      ctx.fillStyle = fillStyleFor(ctx, part.fill, size);
+    }
+    tracePart(ctx, part, u);
+    ctx.fill();
+    ctx.restore();
+  });
 }
 
 function fmt(n) {
@@ -218,19 +332,14 @@ function partsToSvgPaths(parts) {
 module.exports = {
   GROUND,
   MARK,
-  GOLD_DEEP,
-  GOLD_MID,
-  GOLD_HI,
-  BRIGHT_EDGE,
-  WORD_INK,
   GOLD_GRADIENT,
+  SAFE_RADIUS,
   goldGradient,
-  R_OUT,
-  BAND,
-  R_MID,
-  R_IN,
+  fillStyleFor,
   buildMarkParts,
   markScale,
+  tracePart,
+  paintParts,
   partsToSvgPaths,
   shapeToSvgD
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * سكربت استخراج وتشكيل كلمة «عرس» من خط Cairo-Bold.ttf بواسطة HarfBuzz،
+ * سكربت استخراج وتشكيل كلمة العلامة (BRAND_TEXT أدناه) من خط Cairo-Bold.ttf بواسطة HarfBuzz،
  * وتطبيع إحداثيات المسار إلى المجال [0, 1] نسبةً إلى صندوق الحبر،
  * وتوليد ملف الهندسة الثابتة server/src/utils/brandWord.js.
  *
@@ -13,6 +13,10 @@ const fs = require('fs');
 const path = require('path');
 const opentype = require('opentype.js');
 
+// الكلمة كما كُتبت في صورة الشعار المعتمدة حرفياً — «اعراسنا» بلا همزة، بخلاف
+// اسم التطبيق «أعراسنا» في الترويسة، لأن هذا ما رسمه المالك.
+const BRAND_TEXT = 'اعراسنا';
+
 async function generate() {
   const hb = await import('harfbuzzjs');
   const fontPath = path.join(__dirname, '../src/assets/fonts/Cairo-Bold.ttf');
@@ -23,7 +27,7 @@ async function generate() {
   const face = new hb.Face(blob, 0);
   const hbFont = new hb.Font(face);
   const buffer = new hb.Buffer();
-  buffer.addText('عرس');
+  buffer.addText(BRAND_TEXT);
   buffer.guessSegmentProperties();
   hb.shape(hbFont, buffer);
 
@@ -78,7 +82,7 @@ async function generate() {
   const content = `'use strict';
 
 /**
- * مسار متّجه ثابت لكلمة «عرس» مستخرَج من خط Cairo-Bold.ttf ومشكَّل
+ * مسار متّجه ثابت لكلمة «${BRAND_TEXT}» مستخرَج من خط Cairo-Bold.ttf ومشكَّل
  * بـHarfBuzz (قواعد GSUB لربط الحروف العربية سياقياً).
  *
  * مطبَّع إلى صندوق حبره الخاص: الإحداثيات في المجال [0, 1] حيث:
@@ -97,6 +101,7 @@ async function generate() {
  */
 
 const BRAND_WORD = {
+  text: '${BRAND_TEXT}',
   width: ${boxWidth},
   height: ${boxHeight},
   aspectRatio: ${round5(boxWidth / boxHeight)},

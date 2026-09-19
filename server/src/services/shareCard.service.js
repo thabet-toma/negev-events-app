@@ -41,7 +41,7 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { uploadsDir } = require('../middleware/upload');
 const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
-const { buildMarkParts, MARK, markScale, GOLD_DEEP, GOLD_MID, GOLD_HI, BRIGHT_EDGE, WORD_INK, goldGradient } = require('../utils/brandMark');
+const { buildMarkParts, markScale, paintParts } = require('../utils/brandMark');
 
 const WIDTH = 1200;
 const HEIGHT = 1200;
@@ -192,67 +192,26 @@ function wrapLines(ctx, text, maxWidth, maxLines) {
   return lines;
 }
 
-/** Traces one mark part's path onto the current 2D context, at scale `u` — no fill, so the same trace serves both a normal fill and a `destination-out` cut. */
-function traceMarkPart(ctx, part, u) {
-  ctx.beginPath();
-  if (part.shape.type === 'annulus') {
-    const { cx, cy, rIn, rOut } = part.shape;
-    ctx.arc(cx * u, cy * u, rOut * u, 0, Math.PI * 2, false);
-    ctx.arc(cx * u, cy * u, rIn * u, 0, Math.PI * 2, true);
-  } else {
-    part.shape.commands.forEach(([type, ...args]) => {
-      if (type === 'M') ctx.moveTo(args[0] * u, args[1] * u);
-      else if (type === 'L') ctx.lineTo(args[0] * u, args[1] * u);
-      else if (type === 'Q') ctx.quadraticCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u);
-      else if (type === 'C') ctx.bezierCurveTo(args[0] * u, args[1] * u, args[2] * u, args[3] * u, args[4] * u, args[5] * u);
-      else if (type === 'Z') ctx.closePath();
-    });
-  }
-}
-
 /**
  * Draws the brand mark directly into a `size`×`size` box at (`boxX`, `boxY`),
- * from the same `buildMarkParts('icon')` geometry every other rendering of
- * the mark reads from (server/src/utils/brandMark.js) — no PNG asset to keep
- * in sync. Roles match the app's gold gradient and palette so the ring, notches,
- * bezel and word render identically to the mobile icon.
+ * from the same `buildMarkParts('icon')` geometry and `paintParts` colours
+ * every other rendering of the mark reads from (server/src/utils/brandMark.js)
+ * — no PNG asset to keep in sync. Painted on its own transparent canvas first,
+ * with the white gaps between the interlocked rings cut out rather than
+ * painted: cutting straight on the card would punch holes through its
+ * background, and painting them white would draw a white blob on a dark card.
  */
 function drawBrandMark(ctx, boxX, boxY, size) {
-  const u = size / 100;
+  const layer = createCanvas(size, size);
+  const layerCtx = layer.getContext('2d');
   const scale = markScale(false);
-  const parts = buildMarkParts('icon');
 
-  ctx.save();
-  ctx.translate(boxX + size / 2, boxY + size / 2);
-  ctx.scale(scale, scale);
-  ctx.translate(-size / 2, -size / 2);
+  layerCtx.translate(size / 2, size / 2);
+  layerCtx.scale(scale, scale);
+  layerCtx.translate(-size / 2, -size / 2);
+  paintParts(layerCtx, buildMarkParts('icon'), size / 100, size, { cutGround: true });
 
-  parts.filter(p => p.fill !== 'ground').forEach(part => {
-    if (part.fill === 'band') ctx.fillStyle = goldGradient(ctx, size);
-    else if (part.fill === 'bright') ctx.fillStyle = BRIGHT_EDGE;
-    else if (part.fill === 'bezel') ctx.fillStyle = GOLD_HI;
-    else if (part.fill === 'engrave') ctx.fillStyle = GOLD_DEEP;
-    else if (part.fill === 'floret') ctx.fillStyle = GOLD_MID;
-    else if (part.fill === 'word') ctx.fillStyle = WORD_INK;
-    else ctx.fillStyle = MARK;
-
-    traceMarkPart(ctx, part, u);
-    ctx.fill();
-  });
-
-  const groundParts = parts.filter(p => p.fill === 'ground');
-  if (groundParts.length > 0) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = '#000';
-    groundParts.forEach(part => {
-      traceMarkPart(ctx, part, u);
-      ctx.fill();
-    });
-    ctx.restore();
-  }
-
-  ctx.restore();
+  ctx.drawImage(layer, boxX, boxY);
 }
 
 /** `#rrggbb` (or `#rgb`) + an 0–1 alpha → an `rgba(...)` string. */
