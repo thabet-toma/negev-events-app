@@ -354,6 +354,15 @@ body {
 
 .admin-card-meta { font-size: 0.84rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
 
+/* قرية كتبها الناشر لأنها غير مدرجة — تنبيه بلون التحذير، وزرّ «اعتمدها قرية» للسوبر أدمن. */
+.requested-village-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--warn-yellow); border-radius: var(--radius-sm); background: var(--warn-wash); color: var(--warn-yellow); font-size: 0.84rem; }
+.requested-village-notice .hint-text { margin-top: 0; }
+.requested-village-promote-btn { flex: none; width: auto; padding: 7px 14px; }
+
+/* المقطع الافتراضي للمناسبات في إعدادات المنصّة. */
+.default-audio-player { width: 100%; margin-top: 6px; }
+.default-audio-empty { font-size: 0.84rem; color: var(--text-dim); }
+
 .admin-card-actions { display: flex; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--admin-card-border); }
 
 .btn-approve { flex: 1; background: var(--success-green); color: #ffffff; border: none; padding: 9px; border-radius: var(--radius-sm); font-family: var(--font-tajawal); font-weight: 800; font-size: 0.84rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }

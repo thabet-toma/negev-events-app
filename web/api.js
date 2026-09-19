@@ -18,7 +18,7 @@ function apiUrl(path) {
  * options.auth: أرفق رمز الدخول (افتراضياً لا).
  * options.tokenKey: مفتاح الرمز في localStorage — رمز الموقع أو رمز الإدارة.
  */
-function apiFetch(path, options = {}) {
+async function apiFetch(path, options = {}) {
   const { auth = false, tokenKey = 'negev_token', headers = {}, ...rest } = options;
   // يُعلن هذا العميل نفسه حديثاً فيرى كل أنواع المناسبات — القيمة نفسها غير
   // مقروءة على الخادم، وجودها فقط هو ما يهم (#20 خطوة 10).
@@ -29,7 +29,16 @@ function apiFetch(path, options = {}) {
     if (token) finalHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(apiUrl(path), { ...rest, headers: finalHeaders });
+  const res = await fetch(apiUrl(path), { ...rest, headers: finalHeaders });
+  // 401 = جلسة الموقع انتهت أو رمزها غير صالح (403 صار «غير مسموح» وحده) —
+  // معالجة مركزية واحدة لكل نداء يحمل رمز الموقع، كما يفعل adminFetch أدناه
+  // لرمز اللوحة. نداء بلا auth لا يخصّ الجلسة فلا يلمسها.
+  if (auth && tokenKey === 'negev_token' && res.status === 401) {
+    if (typeof window !== 'undefined' && typeof window.handleSessionExpired === 'function') {
+      window.handleSessionExpired();
+    }
+  }
+  return res;
 }
 
 /** نداء يحمل رمز الإدارة. */

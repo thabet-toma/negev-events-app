@@ -90,6 +90,45 @@ function firstMissingRequiredField(type, valueGetters) {
   return null;
 }
 
+// «قريتي غير موجودة» — خيار أخير في منتقي القرية يكشف حقلاً نصّياً، فيُرسَل
+// requested_village_name بدل village_id (الاثنان متنافيان على الخادم،
+// events.routes.js). الشاشات الثلاث (نشر الموقع، النشر المباشر وتعديل مناسبة
+// في اللوحة) تتشارك هذه الدوال بمعرّفات `${prefix}Village` و`${prefix}RequestedVillage`.
+const VILLAGE_OTHER_VALUE = '__other__';
+
+/** خيارات منتقي القرية: عنصر فارغ، القرى المدرجة، ثم «قريتي غير موجودة» أخيراً. */
+function villageSelectOptionsHtml(villages, emptyLabel = 'اختر القرية') {
+  return `<option value="">${escapeHtml(emptyLabel)}</option>` +
+    villages.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('') +
+    `<option value="${VILLAGE_OTHER_VALUE}">قريتي غير موجودة ✎</option>`;
+}
+
+function requestedVillageInputHtml(prefix) {
+  return `<input type="text" id="${prefix}RequestedVillage" class="requested-village-input" maxlength="100" placeholder="اكتب اسم قريتك" style="display:none; margin-top:8px;">`;
+}
+
+/** يُظهر حقل اسم القرية فقط حين يُختار «قريتي غير موجودة» — لا يمسح ما كُتب فيه (قراءته مشروطة بالخيار أصلاً). */
+function syncRequestedVillageInput(prefix) {
+  const select = document.getElementById(`${prefix}Village`);
+  const input = document.getElementById(`${prefix}RequestedVillage`);
+  if (!select || !input) return;
+  input.style.display = select.value === VILLAGE_OTHER_VALUE ? '' : 'none';
+}
+
+/**
+ * اختيار القرية كما سيُرسَل: `{ villageId, requestedName }`، واحد منهما فقط غير
+ * فارغ. «قريتي غير موجودة» ⇒ الاسم المكتوب مقصوصاً ولا معرّف؛ غير ذلك ⇒ المعرّف ولا اسم.
+ */
+function readVillageChoice(prefix) {
+  const select = document.getElementById(`${prefix}Village`);
+  const value = select ? select.value : '';
+  if (value === VILLAGE_OTHER_VALUE) {
+    const input = document.getElementById(`${prefix}RequestedVillage`);
+    return { villageId: '', requestedName: input ? input.value.trim() : '' };
+  }
+  return { villageId: value, requestedName: '' };
+}
+
 // حقول تُعامَل كملفات رفع لا نص — نفس القائمة التي كانت مكرَّرة داخل
 // renderOccasionForm (app.js) وحدها من قبل؛ تُستعمَل فقط حين ctx.groupUploads
 // صحيحة (الموقع العام يفصلها في قسم "upload-section" بصري، اللوحة لا).
@@ -179,6 +218,7 @@ function renderDefaultOccasionFieldHtml(field, ctx, { label, req }) {
         <div class="form-group" id="${p}VillageGroup" style="display:none;">
           <label>القرية *</label>
           <select id="${p}Village"${onchangeAttr(ctx.onVillageChange)}></select>
+          ${requestedVillageInputHtml(p)}
         </div>`;
     case 'event_date':
       return `

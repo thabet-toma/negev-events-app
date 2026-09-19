@@ -100,7 +100,7 @@ const VILLAGES_TOWN = 'القرى والتجمعات';
 // تعديل أيّ منها على مناسبة معتمدة يعيدها إلى pending (قيد ١). تُستخدم هنا
 // فقط لتحذير المستخدم قبل الحفظ وتمييز الحقول بصرياً؛ التصنيف الحقيقي يبقى
 // من الخادم دائماً (result.amendment في الاستجابة).
-const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'village_id', 'location_name', 'latitude', 'longitude'];
+const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'village_id', 'requested_village_name', 'location_name', 'latitude', 'longitude'];
 
 /** الدور المخزَّن محلياً — ادّعاء العميل، يُتحقّق منه فعلياً في كل 403 يرجعه الخادم (نفس منطق fetchOccasionTypes القائم). */
 function currentAdminRole() {
@@ -478,6 +478,7 @@ function applyDirectAddDraft() {
         const vilEl = document.getElementById('dirVillage');
         if (vilEl) vilEl.value = draft.values.dirVillage;
       }
+      syncRequestedVillageInput('dir');
     }
 
     if (Array.isArray(draft.honorees) && draft.honorees.length > 0) {
@@ -763,6 +764,8 @@ function renderAdminEvents() {
             ${evt.host_phone ? `<span><strong>هاتف المعلن:</strong> <a href="tel:${evt.host_phone}" style="color:var(--gold-main);">${evt.host_phone}</a></span>` : ''}
           </div>
 
+          ${renderRequestedVillageNoticeHtml(evt)}
+
           <!-- Actions -->
           <div class="admin-card-actions">
             ${evt.status !== 'approved' ? `
@@ -794,6 +797,48 @@ function renderAdminEvents() {
       </div>
     `;
   }).join('');
+}
+
+/**
+ * قرية كتبها الناشر لأنها غير مدرجة («قريتي غير موجودة»). الاعتماد العادي يُبقي
+ * المناسبة تحت «القرى والتجمعات» بالاسم المكتوب؛ «اعتمدها قرية» (سوبر أدمن
+ * وحده — المسار خلف requireSuperAdmin) ينشئ القرية ويربط بها كل مناسبة طلبت
+ * الاسم نفسه.
+ */
+function renderRequestedVillageNoticeHtml(evt) {
+  if (!evt.requested_village_name || evt.village_id != null) return '';
+  const promoteBtn = isSuperAdminRole() ? `
+      <button type="button" class="btn-approve requested-village-promote-btn" onclick="promoteRequestedVillage(${evt.id})">
+        <i class="fa-solid fa-map-pin"></i> اعتمدها قرية
+      </button>` : '';
+  return `
+    <div class="requested-village-notice">
+      <span><i class="fa-solid fa-circle-question"></i> قرية مقترحة: <strong>${escapeHtml(evt.requested_village_name)}</strong> (غير مدرجة في القائمة)</span>
+      ${promoteBtn}
+      <span class="hint-text">الموافقة وحدها تُبقيها ضمن القرى والتجمعات</span>
+    </div>`;
+}
+
+async function promoteRequestedVillage(eventId) {
+  const evt = allAdminEvents.find(e => e.id === eventId);
+  const name = evt ? evt.requested_village_name : '';
+  if (!confirm(`إضافة «${name}» إلى قائمة القرى وربط كل مناسبة طلبت هذا الاسم بها؟`)) return;
+  try {
+    const res = await adminFetch(`/api/admin/events/${eventId}/promote-village`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showAdminNotice(data.message || 'تمت إضافة القرية', 'تم');
+      fetchAdminEvents();
+      // القرية الجديدة تدخل منتقيات القرى في اللوحة وتبويب القرى بلا إعادة تحميل.
+      townsFetchPromise = null;
+      fetchTowns();
+      fetchAdminVillages();
+    } else {
+      showAdminNotice(data.message || 'تعذّر اعتماد القرية', 'خطأ');
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  }
 }
 
 // 3. Status Actions (Approve / Reject / Delete)
@@ -944,7 +989,8 @@ const DIRECT_ADD_FIELD_CTX = {
         </div>
         <div class="form-group half" id="dirVillageGroup" style="display:none;">
           <label>القرية *</label>
-          <select id="dirVillage"></select>
+          <select id="dirVillage" onchange="syncRequestedVillageInput('dir')"></select>
+          ${requestedVillageInputHtml('dir')}
         </div>
       </div>`
   }
@@ -994,8 +1040,7 @@ async function handleDirTownChange() {
     const select = document.getElementById('dirVillage');
     if (select) {
       const curVillage = select.value;
-      select.innerHTML = '<option value="">اختر القرية</option>' +
-        allTownVillages.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+      select.innerHTML = villageSelectOptionsHtml(allTownVillages);
       if (curVillage) select.value = curVillage;
     }
   } else {
@@ -1003,6 +1048,7 @@ async function handleDirTownChange() {
     const villageSelect = document.getElementById('dirVillage');
     if (villageSelect) villageSelect.value = '';
   }
+  syncRequestedVillageInput('dir');
 }
 
 async function handleDirectAdd(e) {
@@ -1025,11 +1071,15 @@ async function handleDirectAdd(e) {
 
   const town = document.getElementById('dirTown').value;
 
+  // «قريتي غير موجودة» يُرسِل requested_village_name بدل village_id — لا الاثنين معاً.
   let villageId = '';
+  let requestedVillageName = '';
   if (town === VILLAGES_TOWN) {
-    villageId = document.getElementById('dirVillage')?.value || '';
-    if (!villageId) {
-      alert('يرجى اختيار القرية');
+    const choice = readVillageChoice('dir');
+    villageId = choice.villageId;
+    requestedVillageName = choice.requestedName;
+    if (!villageId && !requestedVillageName) {
+      alert('اختر القرية من القائمة أو اكتب اسم قريتك');
       return;
     }
   }
@@ -1073,6 +1123,7 @@ async function handleDirectAdd(e) {
   appendHonoreesToFormData(formData, honorees);
   formData.append('town', town);
   if (villageId) formData.append('village_id', villageId);
+  else if (requestedVillageName) formData.append('requested_village_name', requestedVillageName);
   formData.append('event_date', eventDate);
 
   if (fieldsByKey.title) formData.append('title', document.getElementById('dirTitle').value);
@@ -1926,6 +1977,7 @@ function applyEventEditDraft() {
         const vilEl = document.getElementById('evtVillage');
         if (vilEl) vilEl.value = draft.values.evtVillage;
       }
+      syncRequestedVillageInput('evt');
     }
 
     if (Array.isArray(draft.honorees) && draft.honorees.length > 0) {
@@ -2012,7 +2064,8 @@ function ensureEventEditFormMounted() {
         </div>
         <div class="form-group half" id="evtVillageGroup" style="display:none;">
           <label>القرية ${criticalHint}</label>
-          <select id="evtVillage"></select>
+          <select id="evtVillage" onchange="syncRequestedVillageInput('evt')"></select>
+          ${requestedVillageInputHtml('evt')}
         </div>
       </div>
 
@@ -2192,9 +2245,8 @@ async function fetchTowns() {
 function renderEventVillageOptions(selectedId) {
   const select = document.getElementById('evtVillage');
   if (!select) return;
-  select.innerHTML = '<option value="">— بلا قرية محددة —</option>' + allTownVillages.map(v =>
-    `<option value="${v.id}" ${String(v.id) === String(selectedId ?? '') ? 'selected' : ''}>${escapeHtml(v.name)}</option>`
-  ).join('');
+  select.innerHTML = villageSelectOptionsHtml(allTownVillages, '— بلا قرية محددة —');
+  select.value = selectedId != null ? String(selectedId) : '';
 }
 
 /** إظهار/إخفاء منتقي القرية حسب البلدة — village_id غير مقبول أصلاً إلا ضمن VILLAGES_TOWN (قيد ٣، 400 من الخادم غير ذلك). */
@@ -2208,6 +2260,7 @@ function handleEventEditTownChange() {
     group.style.display = 'none';
     select.value = '';
   }
+  syncRequestedVillageInput('evt');
 }
 
 function renderEventHonoreesEditor(honorees) {
@@ -2338,6 +2391,7 @@ async function openEventEditForm(id) {
     family_clan: evt.family_clan || '',
     town: evt.town || '',
     village_id: evt.village_id ?? null,
+    requested_village_name: evt.requested_village_name || '',
     location_name: evt.location_name || '',
     secondary_location_name: evt.secondary_location_name || '',
     latitude: evt.latitude != null ? String(evt.latitude) : '',
@@ -2380,6 +2434,11 @@ async function openEventEditForm(id) {
 
   renderEventVillageOptions(editingEventOriginal.village_id);
   document.getElementById('evtVillage').value = editingEventOriginal.village_id != null ? String(editingEventOriginal.village_id) : '';
+  // قرية مقترحة غير مدرجة — تُعرَض كما كتبها الناشر تحت «قريتي غير موجودة».
+  document.getElementById('evtRequestedVillage').value = editingEventOriginal.requested_village_name;
+  if (editingEventOriginal.village_id == null && editingEventOriginal.requested_village_name) {
+    document.getElementById('evtVillage').value = VILLAGE_OTHER_VALUE;
+  }
   handleEventEditTownChange();
 
   renderEventHonoreesEditor(editingEventOriginal.honorees);
@@ -2640,13 +2699,17 @@ async function handleEventEditSubmit(e) {
   if (!editingEventId || !editingEventOriginal) return;
 
   const town = document.getElementById('evtTown').value;
-  const villageRaw = town === VILLAGES_TOWN ? document.getElementById('evtVillage').value : '';
+  // «قريتي غير موجودة» ⇒ الاسم المكتوب ولا قرية مدرجة؛ غير ذلك ⇒ القرية ولا اسم —
+  // والفرق وحده يُرسَل كالعادة، فتبديل أحدهما بالآخر يرسل الاثنين (أحدهما فارغاً).
+  const villageChoice = town === VILLAGES_TOWN ? readVillageChoice('evt') : { villageId: '', requestedName: '' };
+  const villageRaw = villageChoice.villageId;
 
   const current = {
     title: document.getElementById('evtTitle').value.trim(),
     family_clan: document.getElementById('evtFamilyClan').value.trim(),
     town,
     village_id: villageRaw === '' ? null : villageRaw,
+    requested_village_name: villageChoice.requestedName,
     location_name: document.getElementById('evtLocationName').value.trim(),
     secondary_location_name: document.getElementById('evtSecondaryLocation').value.trim(),
     latitude: document.getElementById('evtLat').value.trim(),
@@ -4351,6 +4414,7 @@ async function fetchAdminSettings() {
     const data = await res.json();
     if (data.success && data.settings) {
       input.value = data.settings.support_whatsapp_number || '';
+      renderDefaultAudioSetting(data.settings.default_event_audio_url);
       if (notice) notice.style.display = 'none';
     } else if (!data.success) {
       if (notice) {
@@ -4438,5 +4502,80 @@ async function handleClearSupportNumber() {
     showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * المقطع الافتراضي للمناسبات — رابط مطلق من الخادم أو null. لا يُحفَظ عبر
+ * PUT /api/admin/settings إطلاقاً (الخادم يرفض المفتاح هناك): رفعٌ بملف
+ * (POST .../default-audio، حقل `audio`) وحذفٌ (DELETE) فقط.
+ */
+function renderDefaultAudioSetting(url) {
+  const container = document.getElementById('defaultAudioCurrent');
+  if (!container) return;
+  container.innerHTML = url
+    ? `<audio class="default-audio-player" controls preload="none" src="${escapeHtml(url)}"></audio>`
+    : '<span class="default-audio-empty">لا يوجد مقطع افتراضي</span>';
+  const deleteBtn = document.getElementById('deleteDefaultAudioBtn');
+  if (deleteBtn) deleteBtn.disabled = !url;
+}
+
+async function handleUploadDefaultAudio() {
+  const fileInput = document.getElementById('defaultAudioFile');
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if (!file) {
+    showAdminNotice('اختر ملفاً صوتياً أولاً', 'تنبيه');
+    return;
+  }
+
+  const btn = document.getElementById('uploadDefaultAudioBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الرفع...';
+  }
+
+  // FormData بلا Content-Type يدوي — المتصفّح يضع الحدّ (boundary) بنفسه.
+  const formData = new FormData();
+  formData.append('audio', file);
+
+  try {
+    const res = await adminFetch('/api/admin/settings/default-audio', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.success) {
+      renderDefaultAudioSetting(data.settings && data.settings.default_event_audio_url);
+      fileInput.value = '';
+      showAdminNotice(data.message || 'تم رفع المقطع الافتراضي', 'نجاح');
+    } else {
+      showAdminNotice(data.message || 'تعذّر رفع المقطع', 'خطأ');
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-upload"></i> رفع المقطع';
+    }
+  }
+}
+
+async function handleDeleteDefaultAudio() {
+  if (!confirm('حذف المقطع الافتراضي؟ المناسبات التي لا مقطع خاص لها ستبقى بلا صوت.')) return;
+
+  const btn = document.getElementById('deleteDefaultAudioBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await adminFetch('/api/admin/settings/default-audio', { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      renderDefaultAudioSetting(data.settings && data.settings.default_event_audio_url);
+      showAdminNotice(data.message || 'تم حذف المقطع الافتراضي', 'تم الحذف');
+    } else {
+      if (btn) btn.disabled = false;
+      showAdminNotice(data.message || 'تعذّر حذف المقطع', 'خطأ');
+    }
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
   }
 }

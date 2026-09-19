@@ -2,7 +2,6 @@
 let allEvents = [];
 let searchQuery = '';
 let currentAudio = null;
-let currentAudioBtn = null;
 let currentChatEventId = null;
 let currentChatEvent = null; // الحدث الكامل من فتح مودال التبريكات — يغذّي زرّ المشاركة (تذكرة #44)
 let socket = null;
@@ -95,6 +94,20 @@ const BROADCAST_TONES = ['info', 'urgent', 'solemn'];
 // لم يُضبط بعد، وهي الحالة الافتراضية اليوم.
 let supportWhatsappNumber = null;
 
+// المقطع الافتراضي للمناسبات من نفس GET /api/settings/public — يُشغَّل لكل
+// مناسبة بلا مقطع خاص بها، ما دام نوعها يعرض حقل الصوت أصلاً (effectiveEventAudio).
+let defaultEventAudioUrl = null;
+
+// التشغيل التلقائي في التغذية — مقطع واحد في كل لحظة عبر currentAudio نفسه.
+// soundMuted تفضيل الزائر وحده (localStorage)، وaudioUnlockNeeded تعني أن
+// المتصفّح رفض play() قبل أول لمسة على الصفحة (سياسة التشغيل التلقائي).
+const SOUND_MUTED_KEY = 'negev_sound_muted';
+let soundMuted = readSoundMutedPreference();
+let audioUnlockNeeded = false;
+let currentAudioEventId = null;
+let activeFeedEventId = null;
+let feedAudioObserver = null;
+
 // Story viewer (#20 step 18) — the strip's own stories list, plus the
 // viewer's playback state; opened by index into this same array.
 let allStories = [];
@@ -134,6 +147,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initServiceWorker();
   initUrlNavigation();
   initFeedScroller();
+  initFeedAudio();
+  refreshSessionFromServer();
   fetchEvents();
   fetchStories();
   renderStickerCanvas();
@@ -646,6 +661,10 @@ async function initSupportEntry() {
     const data = await res.json();
     if (data.success && data.settings) {
       supportWhatsappNumber = data.settings.support_whatsapp_number || null;
+      defaultEventAudioUrl = data.settings.default_event_audio_url || null;
+      // التغذية قد تكون رُسمت قبل وصول الإعدادات — أعِد رسمها كي تظهر كتلة
+      // المقطع الافتراضي على كروتها بلا انتظار جلب جديد.
+      if (defaultEventAudioUrl && allEvents.length) renderEvents(allEvents);
     }
   } catch (e) {
     console.error('Support settings error:', e);
@@ -1252,6 +1271,20 @@ function typeFieldLabel(evt, fieldKey, fallback) {
   return (field && field.label) || fallback;
 }
 
+/**
+ * المكان الظاهر على الكرت: تحت البند الجامع «القرى والتجمعات» اسم القرية نفسها
+ * أدقّ من البند — القرية المدرجة (village_name من الخادم)، وإلا الاسم الذي
+ * كتبه الناشر لقرية غير مدرجة بعد (requested_village_name). غير ذلك: البلدة.
+ * نصّ خام — المستدعي يهرّبه.
+ */
+function eventPlaceName(evt) {
+  if (evt.town === VILLAGES_TOWN) {
+    if (evt.village_name) return evt.village_name;
+    if (evt.village_id == null && evt.requested_village_name) return evt.requested_village_name;
+  }
+  return evt.town;
+}
+
 const REACTION_EMOJI = { coffee: '☕', horse: '🐎', fireworks: '🎆', rose: '🌹', hand: '🤝' };
 
 /**
@@ -1349,21 +1382,22 @@ function renderSingleEventCardHtml(evt) {
     mapsUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
   }
 
-  const audioBlock = evt.audio_url ? `
+  const effectiveAudio = effectiveEventAudio(evt);
+  const audioBlock = effectiveAudio ? `
     <div class="card-audio-player">
       <div class="audio-info-area">
-        <div class="wave-bars" id="waveBars-${evt.id}">
+        <div class="wave-bars" id="waveBars-${evt.id}" data-audio-event-id="${evt.id}">
           <div class="wave-bar"></div>
           <div class="wave-bar"></div>
           <div class="wave-bar"></div>
           <div class="wave-bar"></div>
         </div>
         <div class="audio-text">
-          <div class="audio-title">${escapeHtml(evt.audio_title || 'شيلة الفرح والترحيب')}</div>
+          <div class="audio-title">${escapeHtml(effectiveAudio.title)}</div>
           <div class="audio-sub">استمع للشيلة أو الترحيب الصوتي</div>
         </div>
       </div>
-      <button class="play-audio-btn" onclick="toggleAudio('${evt.audio_url}', this, ${evt.id})" title="تشغيل / إيقاف">
+      <button class="play-audio-btn" data-audio-event-id="${evt.id}" data-audio-url="${escapeHtml(effectiveAudio.url)}" onclick="toggleEventAudio(${evt.id}, this)" title="تشغيل / إيقاف" aria-pressed="false">
         <i class="fa-solid fa-play"></i>
       </button>
     </div>
@@ -1384,7 +1418,7 @@ function renderSingleEventCardHtml(evt) {
 
   const countdownChipHtml = isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`;
 
-  const clanTownParts = [evt.family_clan, evt.town].filter(Boolean).map(escapeHtml);
+  const clanTownParts = [evt.family_clan, eventPlaceName(evt)].filter(Boolean).map(escapeHtml);
   const clanLineHtml = clanTownParts.length
     ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
 
@@ -1472,7 +1506,7 @@ function renderSingleEventCardHtml(evt) {
     </div>`;
 
   return `
-    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle} data-solemn="${isMourning}">
+    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
       <div class="card-bezel"${bezelStyle}>
         <div class="card-framed">
           <div class="card-media${hasShot ? '' : ' card-media-empty'}">
@@ -1502,12 +1536,20 @@ function renderEvents(events) {
       </div>
     `;
     updateFeedDimensions();
+    // لا كروت بعد الآن — لا كرت نشِط يبقى مقطعه يُسمَع فوق رسالة «لا توجد مناسبات».
+    observeFeedCardsForAudio();
+    activeFeedEventId = null;
+    pauseCurrentAudio();
     return;
   }
 
   container.classList.toggle('events-feed-first-load', isFirstLoad);
   container.innerHTML = events.map(evt => renderSingleEventCardHtml(evt)).join('');
   updateFeedDimensions();
+  // الكروت أُعيد إنشاؤها للتو: المراقب يتبع العناصر الجديدة، وحالة الزرّ تُستعاد
+  // من المقطع الذي ربما لا يزال يُسمَع (إعادة رسم لا توقف الصوت).
+  observeFeedCardsForAudio();
+  syncAudioUi();
 }
 
 /**
@@ -1540,6 +1582,7 @@ function renderSingleEventView(event) {
   if (card) {
     highlightAndScrollToCard(card, isMourningTone(event));
   }
+  syncAudioUi();
 }
 
 function clearSingleEventView() {
@@ -1556,6 +1599,17 @@ function toggleCardDetails(eventId, btn) {
   if (willShow) {
     const ev = allEvents.find(e => e.id === eventId);
     recordAnalyticsEvent('event_viewed', { contentTown: ev ? ev.town : undefined });
+  }
+  // فتح التفاصيل يشغّل مقطع المناسبة (ضغطة حقيقية، فلا ترفضها سياسة التشغيل
+  // التلقائي) ما لم يكن الصوت مكتوماً؛ الإغلاق يوقفه.
+  const card = panel.closest('.event-card');
+  const audioUrl = card && card.dataset.audioUrl;
+  if (willShow && audioUrl && !soundMuted) {
+    manuallyPausedEventId = null;
+    playEventAudio(eventId, audioUrl);
+  } else if (!willShow && currentAudioEventId === eventId) {
+    manuallyPausedEventId = eventId;
+    pauseCurrentAudio();
   }
   const toggleBtn = btn || document.querySelector(`#eventCard-${eventId} .card-more-details-btn`);
   if (toggleBtn) {
@@ -1637,37 +1691,222 @@ async function toggleReminder(eventId, isReminded, btnElement) {
 }
 
 // 5. Audio Player Controller
-function toggleAudio(audioUrl, btnElement, eventId) {
-  const waveBars = document.getElementById(`waveBars-${eventId}`);
+//
+// قناة واحدة (currentAudio) لكل صوت في الصفحة: زرّ التشغيل في الكرت، التشغيل
+// التلقائي للكرت النشِط في التغذية، وفتح تفاصيل مناسبة. حالة الأزرار وموجات
+// الصوت تُشتقّ من حدثَي `playing`/`pause` الفعليين للعنصر لا من النيّة — لا
+// أيقونة «إيقاف مؤقت» ما لم يكن الصوت يُسمَع فعلاً.
 
-  if (currentAudio && !currentAudio.paused && currentAudio.src.includes(audioUrl)) {
-    currentAudio.pause();
-    btnElement.innerHTML = '<i class="fa-solid fa-play"></i>';
-    if (waveBars) waveBars.classList.remove('playing');
+/**
+ * المقطع الفعلي لمناسبة: مقطعها الخاص، وإلا المقطع الافتراضي للمنصّة — لكن
+ * فقط إن كان نوعها يعرض حقل الصوت أصلاً. نوع يُخفي audio_url (العزاء اليوم)
+ * لا صوت له إطلاقاً، لا خاصّاً ولا افتراضياً.
+ */
+function effectiveEventAudio(evt) {
+  if (!evt || !typeShowsField(evt, 'audio_url')) return null;
+  if (evt.audio_url) {
+    return { url: evt.audio_url, title: evt.audio_title || 'شيلة الفرح والترحيب', isDefault: false };
+  }
+  if (defaultEventAudioUrl) {
+    return { url: defaultEventAudioUrl, title: 'مقطع المناسبة', isDefault: true };
+  }
+  return null;
+}
+
+function readSoundMutedPreference() {
+  try {
+    return localStorage.getItem(SOUND_MUTED_KEY) === 'true';
+  } catch (e) {
+    return false;
+  }
+}
+
+let currentAudioPlaying = false;
+let manuallyPausedEventId = null; // أوقفه المستخدم بيده — لا يُعاد تشغيله تلقائياً حتى يغادر الكرت
+
+/** يعكس حالة currentAudio الفعلية على كل زرّ وموجة تخصّ مناسبة (قد يتكرّر الكرت في التغذية وعرض الإشعار معاً). */
+function syncAudioUi() {
+  document.querySelectorAll('.play-audio-btn[data-audio-event-id]').forEach(btn => {
+    const playing = currentAudioPlaying && String(currentAudioEventId) === btn.dataset.audioEventId;
+    btn.innerHTML = playing ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
+    btn.setAttribute('aria-pressed', String(playing));
+  });
+  document.querySelectorAll('.wave-bars[data-audio-event-id]').forEach(bars => {
+    const playing = currentAudioPlaying && String(currentAudioEventId) === bars.dataset.audioEventId;
+    bars.classList.toggle('playing', playing);
+  });
+}
+
+function pauseCurrentAudio() {
+  if (currentAudio) currentAudio.pause();
+  currentAudioPlaying = false;
+  syncAudioUi();
+}
+
+/**
+ * يشغّل مقطع مناسبة عبر القناة الواحدة. نفس المناسبة ⇒ استئناف لا إعادة من
+ * البداية. رفض المتصفّح (NotAllowedError: لا لمسة على الصفحة بعد) يُظهر رقاقة
+ * «اضغط لتشغيل الصوت» بدل التظاهر بالتشغيل؛ أول لمسة تعيد المحاولة.
+ */
+function playEventAudio(eventId, audioUrl) {
+  if (!audioUrl) return;
+  if (!currentAudio || currentAudioEventId !== eventId) {
+    if (currentAudio) currentAudio.pause();
+    currentAudioPlaying = false;
+    const audio = new Audio(audioUrl);
+    currentAudio = audio;
+    currentAudioEventId = eventId;
+    audio.addEventListener('playing', () => {
+      if (audio !== currentAudio) return;
+      currentAudioPlaying = true;
+      audioUnlockNeeded = false;
+      hideSoundUnlockChip();
+      syncAudioUi();
+    });
+    ['pause', 'ended', 'error'].forEach(type => audio.addEventListener(type, () => {
+      if (audio !== currentAudio) return;
+      currentAudioPlaying = false;
+      syncAudioUi();
+    }));
+  } else if (currentAudioPlaying) {
     return;
   }
 
-  if (currentAudio) {
-    currentAudio.pause();
-    if (currentAudioBtn) currentAudioBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
-    document.querySelectorAll('.wave-bars').forEach(wb => wb.classList.remove('playing'));
+  const audio = currentAudio;
+  let attempt;
+  try {
+    attempt = audio.play();
+  } catch (err) {
+    attempt = Promise.reject(err);
   }
-
-  currentAudio = new Audio(audioUrl);
-  currentAudioBtn = btnElement;
-  btnElement.innerHTML = '<i class="fa-solid fa-pause"></i>';
-  if (waveBars) waveBars.classList.add('playing');
-
-  currentAudio.play().catch(err => {
-    console.error('Audio playback error:', err);
-    btnElement.innerHTML = '<i class="fa-solid fa-play"></i>';
-    if (waveBars) waveBars.classList.remove('playing');
+  Promise.resolve(attempt).catch(err => {
+    if (audio !== currentAudio) return;
+    currentAudioPlaying = false;
+    syncAudioUi();
+    if (err && err.name === 'NotAllowedError') {
+      audioUnlockNeeded = true;
+      showSoundUnlockChip();
+    } else {
+      console.error('Audio playback error:', err);
+    }
   });
+}
 
-  currentAudio.onended = () => {
-    btnElement.innerHTML = '<i class="fa-solid fa-play"></i>';
-    if (waveBars) waveBars.classList.remove('playing');
-  };
+/** زرّ التشغيل في الكرت — يعمل دائماً، حتى مع كتم الصوت العام (الكتم يوقف التلقائي وحده). */
+function toggleEventAudio(eventId, btnElement) {
+  if (currentAudio && currentAudioEventId === eventId && currentAudioPlaying) {
+    manuallyPausedEventId = eventId;
+    pauseCurrentAudio();
+    return;
+  }
+  manuallyPausedEventId = null;
+  const url = btnElement && btnElement.dataset.audioUrl;
+  playEventAudio(eventId, url);
+}
+
+/** يشغّل مقطع الكرت النشِط في التغذية إن سمحت كل الشروط — لا شيء غير ذلك يبدأ صوتاً بلا ضغطة. */
+function autoplayActiveFeedCard() {
+  if (soundMuted || document.hidden) return;
+  const home = document.getElementById('tabHome');
+  if (!home || !home.classList.contains('active-tab')) return;
+  if (activeFeedEventId == null || activeFeedEventId === manuallyPausedEventId) return;
+  const card = document.querySelector(`#eventsContainer .event-card[data-event-id="${activeFeedEventId}"]`);
+  const url = card && card.dataset.audioUrl;
+  if (!url) {
+    // الكرت النشِط بلا صوت — لا يبقى مقطع الكرت السابق يُسمَع فوقه.
+    if (currentAudioPlaying) pauseCurrentAudio();
+    return;
+  }
+  playEventAudio(activeFeedEventId, url);
+}
+
+/**
+ * IntersectionObserver واحد على كروت التغذية: الكرت الظاهر بنسبة ≥ 60% هو
+ * النشِط؛ مغادرته توقف مقطعه، أيّاً كان من شغّله.
+ */
+function handleFeedAudioIntersections(entries) {
+  entries.forEach(entry => {
+    const eventId = Number(entry.target.dataset.eventId);
+    if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+      if (activeFeedEventId !== eventId) manuallyPausedEventId = null;
+      activeFeedEventId = eventId;
+    } else if (activeFeedEventId === eventId) {
+      activeFeedEventId = null;
+      if (currentAudioEventId === eventId) pauseCurrentAudio();
+    }
+  });
+  autoplayActiveFeedCard();
+}
+
+function observeFeedCardsForAudio() {
+  if (!feedAudioObserver) return;
+  feedAudioObserver.disconnect();
+  document.querySelectorAll('#eventsContainer .event-card[data-event-id]').forEach(card => feedAudioObserver.observe(card));
+}
+
+/** إعادة المحاولة بعد رفض سياسة التشغيل التلقائي — لمسة/ضغطة حقيقية على الصفحة هي ما يفتح الصوت. */
+function retryBlockedAudio() {
+  if (!audioUnlockNeeded || soundMuted) return;
+  if (currentAudio && currentAudioEventId != null && !currentAudioPlaying) {
+    const card = document.querySelector(`.event-card[data-event-id="${currentAudioEventId}"]`);
+    playEventAudio(currentAudioEventId, (card && card.dataset.audioUrl) || currentAudio.src);
+  } else {
+    autoplayActiveFeedCard();
+  }
+}
+
+function showSoundUnlockChip() {
+  const chip = document.getElementById('soundUnlockChip');
+  if (chip && !soundMuted) chip.hidden = false;
+}
+
+function hideSoundUnlockChip() {
+  const chip = document.getElementById('soundUnlockChip');
+  if (chip) chip.hidden = true;
+}
+
+/** مبدّل الصوت العام (الترويسة والشريط العائم) — تفضيل هذا الزائر وحده في localStorage. */
+function toggleSoundMuted() {
+  soundMuted = !soundMuted;
+  try {
+    localStorage.setItem(SOUND_MUTED_KEY, String(soundMuted));
+  } catch (e) { /* التخزين المحلي معطَّل — التفضيل يبقى لهذه الجلسة فقط */ }
+  if (soundMuted) {
+    audioUnlockNeeded = false;
+    hideSoundUnlockChip();
+    pauseCurrentAudio();
+  } else {
+    autoplayActiveFeedCard();
+  }
+  updateSoundToggleUI();
+}
+
+function updateSoundToggleUI() {
+  ['soundToggleBtn', 'floatingSoundBtn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.title = soundMuted ? 'الصوت مكتوم — اضغط لتفعيل التشغيل التلقائي' : 'الصوت مفعَّل — اضغط لكتمه';
+    btn.setAttribute('aria-label', soundMuted ? 'تفعيل الصوت' : 'كتم الصوت');
+    btn.setAttribute('aria-pressed', String(soundMuted));
+    const icon = btn.querySelector('i');
+    if (icon) icon.className = soundMuted ? 'fa-solid fa-volume-xmark' : 'fa-solid fa-volume-high';
+  });
+}
+
+function initFeedAudio() {
+  if (typeof IntersectionObserver !== 'undefined') {
+    feedAudioObserver = new IntersectionObserver(handleFeedAudioIntersections, { threshold: 0.6 });
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) pauseCurrentAudio();
+    else autoplayActiveFeedCard();
+  });
+  // pointerdown/keydown كما طُلب، وpointerup/touchend/click لأنها ما يمنح المتصفّح
+  // «تفاعل المستخدم» فعلاً على شاشات اللمس (pointerdown باللمس لا يمنحه).
+  ['pointerdown', 'pointerup', 'touchend', 'keydown', 'click'].forEach(type => {
+    document.addEventListener(type, retryBlockedAudio, true);
+  });
+  updateSoundToggleUI();
 }
 
 // 6. Interactive Leaflet Map for Negev
@@ -1989,6 +2228,10 @@ function switchTab(tabId) {
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
+  // صوت التغذية يخصّ تبويبها وحده — مغادرته توقفه، والعودة إليه تستأنف الكرت النشِط.
+  if (tabId === 'tabHome') autoplayActiveFeedCard();
+  else pauseCurrentAudio();
+
   if (tabId === 'tabHome') updateFeedDimensions();
   else if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabAccount') loadAccountView();
@@ -2073,6 +2316,65 @@ function handleLogout() {
   switchTab('tabHome');
 }
 
+/** زرّ الهوية (الترويسة والشريط العائم معاً) — دخول لمن لا جلسة له، وخروج مؤكَّد لمن له جلسة. */
+function handleAuthButtonClick() {
+  if (currentUser) {
+    if (confirm('هل تريد تسجيل الخروج؟')) handleLogout();
+    return;
+  }
+  openAuthModal();
+}
+
+/**
+ * جلسة الموقع انتهت (401 من أي نداء يحمل رمز الموقع — api.js يستدعيها مركزياً).
+ * تمسح الجلسة كما يفعل handleLogout لكن بلا تبديل تبويب: نموذج نصف مكتمل يبقى
+ * كما هو، وpendingIntent (إن ضبطه المستدعي) يُستأنف بعد الدخول من جديد. عدّة
+ * نداءات 401 متوازية تصل هنا معاً — الأولى وحدها تجد جلسة فتُظهر النافذة،
+ * والبقية تجدها ممسوحة فتعود بصمت (نافذة واحدة لا خمس).
+ */
+function handleSessionExpired() {
+  if (!currentUser && !authToken) return;
+  currentUser = null;
+  authToken = null;
+  try {
+    localStorage.removeItem('negev_user');
+    localStorage.removeItem('negev_token');
+  } catch (e) { /* التخزين المحلي معطَّل — الجلسة ممسوحة من الذاكرة على الأقل */ }
+  updateAuthUI();
+  loadAccountView();
+  showToast('انتهت جلستك، يرجى تسجيل الدخول من جديد');
+  openAuthModal();
+}
+
+/**
+ * عند فتح الصفحة: الجلسة المحفوظة محلياً ادّعاء قد يكون قديماً — GET /api/auth/me
+ * يؤكّدها ويحدّث بيانات المستخدم، ويجدّد الرمز للمستخدم العادي حين يرسله الخادم.
+ * 401 يمرّ بمعالجة api.js المركزية (handleSessionExpired)؛ انقطاع الشبكة يُبقي
+ * الجلسة المحفوظة كما هي — غياب الاتصال ليس دليلاً على انتهائها.
+ */
+async function refreshSessionFromServer() {
+  if (!authToken) return;
+  const sentToken = authToken;
+  try {
+    const res = await apiFetch('/api/auth/me', { auth: true });
+    if (res.status === 401) return;
+    const data = await res.json();
+    // خرج المستخدم أو دخل بحساب آخر أثناء الطلب — الاستجابة لم تعد تخصّ جلسته الحالية.
+    if (authToken !== sentToken) return;
+    if (data.success && data.user) {
+      currentUser = data.user;
+      if (data.token) authToken = data.token;
+      try {
+        localStorage.setItem('negev_user', JSON.stringify(currentUser));
+        if (data.token) localStorage.setItem('negev_token', authToken);
+      } catch (e) { /* التخزين المحلي معطَّل — الجلسة الحالية تبقى تعمل */ }
+      updateAuthUI();
+    }
+  } catch (e) {
+    console.error('Session refresh error:', e);
+  }
+}
+
 function openStickerStudioModal() {
   switchTab('tabStickers');
 }
@@ -2098,6 +2400,11 @@ function resumePendingIntent() {
 
   if (intent.type === 'publish') {
     switchTab('tabAdd');
+  } else if (intent.type === 'publish_retry') {
+    // الجلسة انتهت لحظة الإرسال (401) — النموذج بقي بقيمه كما هي، فيُعاد
+    // الإرسال نفسه تلقائياً بالرمز الجديد بدل أن يعيد المستخدم الكتابة.
+    switchTab('tabAdd');
+    handleEventSubmit({ preventDefault() {} });
   } else if (intent.type === 'congratulate') {
     // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
     const senderInput = document.getElementById('chatSenderName');
@@ -2848,17 +3155,18 @@ function updateVillagePickerVisibility() {
     const villageSelect = document.getElementById('addVillage');
     if (villageSelect) villageSelect.value = '';
   }
+  syncRequestedVillageInput('add');
 }
 
 function populateVillageSelect() {
   const select = document.getElementById('addVillage');
   if (!select) return;
-  select.innerHTML = '<option value="">اختر القرية</option>' +
-    villagesList.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+  select.innerHTML = villageSelectOptionsHtml(villagesList);
 }
 
 /** اختيار القرية يوسّط الخريطة على مركزها — ما لم يكن المستخدم قد حرّك الدبّوس يدوياً بالفعل. */
 function handleAddVillageChange() {
+  syncRequestedVillageInput('add');
   const villageId = document.getElementById('addVillage')?.value;
   const village = villagesList.find(v => String(v.id) === String(villageId));
   if (village && locationPickerMap) {
@@ -3961,11 +4269,15 @@ async function handleEventSubmit(e) {
 
   // قاعدة تكامل الخادم نفسها: قرية إلزامية تحت "القرى والتجمعات" فقط، ومُرسَلة
   // فقط عندها — بلدة أخرى لا تُرسِل village_id إطلاقاً (خريطة #21، تذكرة #23).
+  // «قريتي غير موجودة» يُرسِل requested_village_name بدلها، لا الاثنين معاً.
   let villageId = null;
+  let requestedVillageName = '';
   if (town === VILLAGES_TOWN) {
-    villageId = document.getElementById('addVillage')?.value || '';
-    if (!villageId) {
-      alert('يرجى اختيار القرية');
+    const choice = readVillageChoice('add');
+    villageId = choice.villageId;
+    requestedVillageName = choice.requestedName;
+    if (!villageId && !requestedVillageName) {
+      alert('اختر القرية من القائمة أو اكتب اسم قريتك');
       return;
     }
   }
@@ -4009,6 +4321,7 @@ async function handleEventSubmit(e) {
   appendHonoreesToFormData(formData, honorees);
   formData.append('town', town);
   if (villageId) formData.append('village_id', villageId);
+  else if (requestedVillageName) formData.append('requested_village_name', requestedVillageName);
   formData.append('event_date', eventDate);
 
   const latInput = document.getElementById('addLat');
@@ -4054,6 +4367,12 @@ async function handleEventSubmit(e) {
 
   try {
     const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
+    if (res.status === 401) {
+      // api.js مسح الجلسة وفتح نافذة الدخول؛ النموذج لا يُمسَح هنا عمداً،
+      // والإرسال يُعاد تلقائياً بعد الدخول (resumePendingIntent).
+      pendingIntent = { type: 'publish_retry' };
+      return;
+    }
     const data = await res.json();
 
     if (data.success) {
@@ -4409,7 +4728,7 @@ async function openChatModal(eventId) {
       const evt = data.event;
       currentChatEvent = evt;
       document.getElementById('chatModalTitle').textContent = `${congratulationsLabel(evt)}: ${evt.groom_name}`;
-      document.getElementById('chatModalSubtitle').textContent = `${evt.town} - ${evt.event_date}`;
+      document.getElementById('chatModalSubtitle').textContent = `${eventPlaceName(evt)} - ${evt.event_date}`;
       const shareLabel = document.getElementById('shareEventBtnLabel');
       if (shareLabel) shareLabel.textContent = shareButtonLabel(evt);
 
@@ -4573,6 +4892,9 @@ async function sendCongratulation(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message })
     });
+    // الجلسة انتهت — نص التهنئة يبقى في الحقل، وبعد الدخول يُحدَّث اسم المرسِل
+    // (resumePendingIntent) فيكفي ضغط «إرسال» مرة أخرى بلا إعادة كتابة.
+    if (res.status === 401) { pendingIntent = { type: 'congratulate', eventId: currentChatEventId }; return; }
     const data = await res.json();
     if (data.success) {
       document.getElementById('chatInputMessage').value = '';
@@ -5407,32 +5729,51 @@ async function unsubscribeFromPush() {
   }
 }
 
+/**
+ * زرّ الهوية صريح دائماً: «تسجيل الدخول» أو «تسجيل الخروج» — لا اسم المستخدم
+ * مكان الفعل (الاسم الأول في title فقط). الزرّان (الترويسة والشريط العائم
+ * للهاتف) يستدعيان handleAuthButtonClick نفسها. «لوحة الإدارة» زرّ منفصل يظهر
+ * لدوري admin وsuper_admin وحدهما — الدور من استجابة الخادم، لا رقم هاتف ثابت.
+ */
 function updateAuthUI() {
-  const label = document.getElementById('userAuthLabel');
-  const btn = document.getElementById('userAuthBtn');
   updateNotificationsBadge();
   updatePushControlUI();
-  if (currentUser) {
-    if (currentUser.role === 'super_admin' || currentUser.phone_number === '0500000000') {
-      label.innerHTML = `👑 لوحة الإدارة`;
-      btn.onclick = () => { window.location.href = '/admin.html'; };
-      btn.style.borderColor = 'var(--sky)';
-      btn.style.background = 'var(--sky-wash)';
-    } else {
-      label.textContent = currentUser.full_name.split(' ')[0];
-      btn.onclick = () => { switchTab('tabNokoot'); };
-    }
-  } else {
-    label.textContent = 'تسجيل الدخول';
-    btn.onclick = () => { openAuthModal(); };
+
+  const loggedIn = !!currentUser;
+  const firstName = loggedIn ? String(currentUser.full_name || '').split(' ')[0] : '';
+  const title = loggedIn ? (firstName ? `${firstName} — تسجيل الخروج` : 'تسجيل الخروج') : 'تسجيل الدخول';
+  const iconClass = loggedIn ? 'fa-solid fa-right-from-bracket' : 'fa-solid fa-user-lock';
+
+  const label = document.getElementById('userAuthLabel');
+  const btn = document.getElementById('userAuthBtn');
+  if (label) label.textContent = loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول';
+  if (btn) {
+    btn.title = title;
+    const icon = btn.querySelector('i');
+    if (icon) icon.className = iconClass;
+  }
+
+  const floatingLabel = document.getElementById('floatingAuthLabel');
+  const floatingBtn = document.getElementById('floatingAuthBtn');
+  if (floatingLabel) floatingLabel.textContent = loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول';
+  if (floatingBtn) {
+    floatingBtn.title = title;
+    floatingBtn.setAttribute('aria-label', loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول');
+    const icon = floatingBtn.querySelector('i');
+    if (icon) icon.className = iconClass;
+  }
+
+  const adminBtn = document.getElementById('adminPanelBtn');
+  if (adminBtn) {
+    adminBtn.hidden = !(loggedIn && (currentUser.role === 'admin' || currentUser.role === 'super_admin'));
   }
 }
 
 // 17c. Privacy — إشعار الخصوصية، رفض التحليلات، والاطلاع/الحذف (تذكرة #44)
 //
-// لا شاشة "حسابي" مستقلة في هذا العميل بعد؛ هذا القسم يعيش داخل تبويب النقوط
-// (index.html، #privacyAccountSection) لأنه المكان الفعلي الذي يصل إليه
-// المستخدم المسجَّل دخوله اليوم (updateAuthUI أعلاه يفتح tabNokoot).
+// هذا القسم يعيش داخل تبويب النقوط (index.html، #privacyAccountSection)،
+// ووُضع هناك حين كان زرّ الهوية في الترويسة يفتح tabNokoot للمسجَّل دخوله —
+// الزرّ اليوم دخول/خروج صريح (updateAuthUI أعلاه)، والقسم باقٍ في مكانه.
 
 let privacyNoticeCache = null; // نص واحد لا يتغيّر أثناء الجلسة — يُجلب مرة، لا نداء عند كل فتح
 

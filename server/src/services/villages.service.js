@@ -190,7 +190,7 @@ async function promoteRequestedVillage(eventId, { name = null, latitude = null, 
       const villageLatitude = latitude ?? event.latitude ?? null;
       const villageLongitude = longitude ?? event.longitude ?? null;
       if (villageLatitude === null || villageLongitude === null) {
-        throw ApiError.badRequest('إحداثيات القرية مطلوبة — المناسبة نفسها بلا موقع على الخريطة');
+        throw ApiError.badRequest('إحداثيات القرية مطلوبة — المناسبة بلا موقع على الخريطة؛ حدّده من «تعديل» ثم اعتمد القرية');
       }
       const [insert] = await connection.execute(
         `INSERT INTO villages (name, latitude, longitude, position, is_active)

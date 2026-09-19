@@ -24,7 +24,7 @@ const assert = require('assert');
 const { JSDOM, VirtualConsole } = require('jsdom');
 const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
 const { renderIcon, buildIconSvg, tracePart } = require('../scripts/brand-icons');
-const { GROUND, MARK, R_IN, buildMarkParts, markScale, partsToSvgPaths } = require('../src/utils/brandMark');
+const { GROUND, MARK, buildMarkParts, markScale, partsToSvgPaths } = require('../src/utils/brandMark');
 const BRAND_WORD = require('../src/utils/brandWord');
 
 GlobalFonts.registerFromPath(path.join(__dirname, '../src/assets/fonts/Cairo-Bold.ttf'), 'CairoBold');
@@ -3123,43 +3123,11 @@ async function run() {
     }
   });
 
-  await test('the two detail levels share an identical outer silhouette', () => {
-    function renderSilhouette(detail, size = 200) {
-      const canvas = createCanvas(size, size);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, size, size);
-
-      const u = size / 100;
-      const cx = size / 2;
-      const cy = size / 2;
-
-      ctx.fillStyle = '#ffffff';
-      const parts = buildMarkParts(detail);
-      parts.forEach(part => {
-        tracePart(ctx, part, u);
-        ctx.fill();
-      });
-
-      // Mask the interior hole (everything inside R_IN)
-      ctx.fillStyle = '#000000';
-      ctx.beginPath();
-      ctx.arc(cx, cy, R_IN * u, 0, Math.PI * 2);
-      ctx.fill();
-
-      return ctx.getImageData(0, 0, size, size).data;
-    }
-
-    const full = renderSilhouette('full');
-    const icon = renderSilhouette('icon');
-    assert.strictEqual(full.length, icon.length);
-    for (let i = 0; i < full.length; i += 1) {
-      assert.strictEqual(
-        full[i],
-        icon[i],
-        `silhouette mismatch at byte ${i}: full=${full[i]} icon=${icon[i]}`
-      );
-    }
+  await test('detail \'icon\' is the full mark minus the word — nothing else drops or moves out of order', () => {
+    const fullRoles = buildMarkParts('full').map(p => p.role);
+    const iconRoles = buildMarkParts('icon').map(p => p.role);
+    assert.deepStrictEqual(iconRoles, fullRoles.filter(role => role !== 'word'));
+    assert.strictEqual(fullRoles.filter(role => role === 'word').length, 1, 'the full mark carries the word exactly once');
   });
 
   await test('nothing is clipped by the circular mask at safe-zone scale', async () => {
@@ -3187,21 +3155,16 @@ async function run() {
     }
   });
 
-  await test('the notches are a half, not a shift — every icon-level notch angle is present in the full-level set', () => {
-    const fullNotches = buildMarkParts('full').filter(p => p.role === 'notch');
-    const iconNotches = buildMarkParts('icon').filter(p => p.role === 'notch');
-
-    assert.strictEqual(fullNotches.length, 36, 'expected 36 notches at full detail');
-    assert.strictEqual(iconNotches.length, 18, 'expected 18 notches at icon detail');
-
-    const fullAngles = new Set(fullNotches.map(n => Math.round(n.angle * 1e6)));
-    iconNotches.forEach(n => {
-      const a = Math.round(n.angle * 1e6);
-      assert.ok(
-        fullAngles.has(a),
-        `icon notch angle ${n.angle} was not found in the full-detail notch set`
-      );
-    });
+  /**
+   * The interlock is an ordering, not a shape: the right ring is drawn over
+   * the left (with a ground gap around it), then one sector of the left ring
+   * is drawn back over the right (with its own gap). Reorder any of these and
+   * the rings merely overlap — every pixel test above would still pass.
+   */
+  await test('the two rings interlock: right over left, then a left-ring sector back over the right', () => {
+    const roles = buildMarkParts('full').map(p => `${p.fill}:${p.role}`);
+    const expectedPrefix = ['band:ring', 'ground:gap', 'band:ring', 'ground:gap', 'band:ring-over'];
+    assert.deepStrictEqual(roles.slice(0, expectedPrefix.length), expectedPrefix);
   });
 
   await test('the shaping parity gate — static vector path matches Cairo ctx.fillText Arabic shaping', () => {
@@ -3214,10 +3177,10 @@ async function run() {
     const inkX = originX + BRAND_WORD.originX * scale;
     const inkY = originY + BRAND_WORD.originY * scale;
 
-    const c1 = createCanvas(350, 250);
+    const c1 = createCanvas(420, 250);
     const ctx1 = c1.getContext('2d');
     ctx1.fillStyle = '#000000';
-    ctx1.fillRect(0, 0, 350, 250);
+    ctx1.fillRect(0, 0, 420, 250);
     ctx1.fillStyle = '#ffffff';
     ctx1.beginPath();
     BRAND_WORD.commands.forEach(([type, ...args]) => {
@@ -3229,19 +3192,19 @@ async function run() {
     });
     ctx1.fill();
 
-    const c2 = createCanvas(350, 250);
+    const c2 = createCanvas(420, 250);
     const ctx2 = c2.getContext('2d');
     ctx2.fillStyle = '#000000';
-    ctx2.fillRect(0, 0, 350, 250);
+    ctx2.fillRect(0, 0, 420, 250);
     ctx2.fillStyle = '#ffffff';
     ctx2.font = `${fontSize}px CairoBold`;
     ctx2.textAlign = 'left';
     ctx2.textBaseline = 'alphabetic';
     ctx2.direction = 'ltr';
-    ctx2.fillText('عرس', originX, originY);
+    ctx2.fillText(BRAND_WORD.text, originX, originY);
 
-    const img1 = ctx1.getImageData(0, 0, 350, 250).data;
-    const img2 = ctx2.getImageData(0, 0, 350, 250).data;
+    const img1 = ctx1.getImageData(0, 0, 420, 250).data;
+    const img2 = ctx2.getImageData(0, 0, 420, 250).data;
 
     let ink1 = 0;
     let ink2 = 0;
@@ -4507,6 +4470,292 @@ async function run() {
     assert.ok(cardHtml.includes('1000 كرسي + برجين إضاءة = 4500 ₪'), 'expected package description in card');
     assert.ok(cardHtml.includes('عدد الكراسي'), 'expected attribute in card');
     assert.ok(cardHtml.includes('الكميات قابلة للتعديل والزيادة'), 'expected flexibility notice in card');
+  });
+
+  console.log('\nSession expiry, the explicit auth button, «قريتي غير موجودة», and the default event audio');
+
+  const SESSION_EXPIRED_MESSAGE = 'انتهت جلستك، يرجى تسجيل الدخول من جديد';
+
+  await test('a 401 on an auth:true site call runs handleSessionExpired once — token cleared, auth modal open, one notice for two parallel 401s', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+    await delay(20);
+
+    win.fetch = async () => jsonResponse({ success: false, message: SESSION_EXPIRED_MESSAGE }, { status: 401 });
+    const [first, second] = await Promise.all([
+      win.apiFetch('/api/nokoot', { auth: true }),
+      win.apiFetch('/api/notifications', { auth: true })
+    ]);
+    assertNoUnhandledRejections('apiFetch 401');
+
+    assert.strictEqual(first.status, 401, 'apiFetch must still hand the 401 response back to its caller');
+    assert.strictEqual(second.status, 401);
+    assert.strictEqual(win.localStorage.getItem('negev_token'), null, 'the dead site token must be removed from localStorage');
+    assert.strictEqual(win.localStorage.getItem('negev_user'), null, 'the cached user must be removed with it');
+    assert.strictEqual(document.getElementById('authModal').style.display, 'flex', 'the login modal must open so the visitor can sign in again');
+    const notices = Array.from(document.querySelectorAll('.app-toast')).filter(t => t.textContent === SESSION_EXPIRED_MESSAGE);
+    assert.strictEqual(notices.length, 1, `two parallel 401s must surface ONE session-expired notice, got ${notices.length}`);
+    assert.strictEqual(document.getElementById('userAuthLabel').textContent, 'تسجيل الدخول', 'the header must fall back to the logged-out state');
+  });
+
+  await test('a 401 on a call WITHOUT auth:true (or on the admin token) leaves the site session alone', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    await flushBoot();
+    await delay(20);
+
+    win.fetch = async () => jsonResponse({ success: false }, { status: 401 });
+    await win.apiFetch('/api/events');
+    await win.apiFetch('/api/admin/stats', { auth: true, tokenKey: 'negev_admin_token' });
+
+    assert.strictEqual(win.localStorage.getItem('negev_token'), 'test-token-web-dom', 'only a 401 on the site token itself means the site session ended');
+    assert.notStrictEqual(win.document.getElementById('authModal').style.display, 'flex');
+  });
+
+  await test('a 401 on the publish POST keeps the filled form and retries the same submission right after logging in again', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addLocationName') !== null);
+    fillRequiredPublishFields(document);
+
+    const publishAttempts = [];
+    win.fetch = async (url, opts = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/events' && opts.method === 'POST') {
+        publishAttempts.push(opts.headers.Authorization || null);
+        return publishAttempts.length === 1
+          ? jsonResponse({ success: false, message: SESSION_EXPIRED_MESSAGE }, { status: 401 })
+          : jsonResponse({ success: true, status: 'pending' });
+      }
+      if (requestPath === '/api/auth/login') {
+        return jsonResponse({ success: true, token: 'fresh-token', user: { id: 501, full_name: 'مستخدم الاختبار', role: 'user' } });
+      }
+      return buildFetchStub()(url, opts);
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(publishAttempts.length, 1);
+    assert.strictEqual(document.getElementById('authModal').style.display, 'flex', 'the expired session must open the login modal');
+    assert.strictEqual(
+      document.getElementById('addLocationName').value,
+      'ديوان آل تجربة بجانب الجامع',
+      'the publish form must NOT be cleared when the session died mid-submit'
+    );
+
+    document.getElementById('loginPhone').value = '0521234567';
+    document.getElementById('loginPin').value = '1234';
+    await win.handleLogin({ preventDefault() {} });
+    await waitFor(() => publishAttempts.length === 2);
+    assertNoUnhandledRejections('publish retry after re-login');
+
+    assert.strictEqual(publishAttempts.length, 2, 'logging in again must re-send the same publish automatically');
+    assert.strictEqual(publishAttempts[1], 'Bearer fresh-token', 'the retry must carry the NEW token');
+  });
+
+  await test('the header auth button says تسجيل الخروج when logged in and تسجيل الدخول when not — and the floating bar carries its own auth button', async () => {
+    const guest = buildEnv({ loggedIn: false });
+    await flushBoot();
+    const gDoc = guest.window.document;
+    assert.strictEqual(gDoc.getElementById('userAuthLabel').textContent, 'تسجيل الدخول');
+    const floatingAuthBtn = gDoc.querySelector('#floatingTopBar #floatingAuthBtn');
+    assert.ok(floatingAuthBtn, 'the phone/PWA floating bar must hold an auth button — the header is hidden there');
+    assert.strictEqual(gDoc.getElementById('floatingAuthLabel').textContent, 'تسجيل الدخول');
+    assert.strictEqual(gDoc.getElementById('adminPanelBtn').hidden, true, 'no admin link for a visitor');
+    floatingAuthBtn.click();
+    assert.strictEqual(gDoc.getElementById('authModal').style.display, 'flex', 'the floating button must open the login modal for a visitor');
+
+    // A plain user whose phone is the old hard-coded «admin» number gets no admin link — the role decides, not the phone.
+    const user = buildEnv({
+      onBeforeEval: (w) => {
+        w.localStorage.setItem('negev_user', JSON.stringify({ id: 9, full_name: 'سالم الاختبار', role: 'user', phone_number: '0500000000' }));
+        w.localStorage.setItem('negev_token', 'user-token');
+      }
+    });
+    await flushBoot();
+    const uDoc = user.window.document;
+    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'تسجيل الخروج', 'a logged-in visitor must see an explicit logout, not their name');
+    assert.strictEqual(uDoc.getElementById('floatingAuthLabel').textContent, 'تسجيل الخروج');
+    assert.ok(uDoc.getElementById('userAuthBtn').title.includes('سالم'), 'the first name may live in the title, not the label');
+    assert.strictEqual(uDoc.getElementById('adminPanelBtn').hidden, true, 'role user must not get the admin link, whatever the phone number');
+
+    uDoc.getElementById('userAuthBtn').click(); // window.confirm is stubbed to true in buildEnv
+    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'تسجيل الدخول', 'confirming logout must log out');
+    assert.strictEqual(user.window.localStorage.getItem('negev_token'), null);
+
+    const admin = buildEnv({
+      onBeforeEval: (w) => {
+        w.localStorage.setItem('negev_user', JSON.stringify({ id: 1, full_name: 'مدير المنصة', role: 'super_admin', phone_number: '0529999999' }));
+        w.localStorage.setItem('negev_token', 'admin-site-token');
+      }
+    });
+    await flushBoot();
+    const aDoc = admin.window.document;
+    assert.strictEqual(aDoc.getElementById('adminPanelBtn').hidden, false, 'super_admin gets the separate «لوحة الإدارة» link');
+    assert.strictEqual(aDoc.getElementById('userAuthLabel').textContent, 'تسجيل الخروج', 'the auth button stays an explicit logout for admins too');
+  });
+
+  await test('choosing «قريتي غير موجودة» reveals a name field and the publish POST carries requested_village_name with no village_id', async () => {
+    const VILLAGES_TOWN = 'القرى والتجمعات';
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          if (String(url).split('?')[0] === '/api/towns') {
+            return jsonResponse({
+              success: true,
+              towns: TOWNS,
+              town_coordinates: TOWN_COORDINATES,
+              villages: [{ id: 3, name: 'قرية مدرجة', latitude: 31.1, longitude: 34.8 }]
+            });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    const { document } = win;
+    const alerts = [];
+    win.alert = (msg) => alerts.push(msg);
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => {
+      const town = document.getElementById('addTown');
+      return !!town && Array.from(town.options).some(o => o.value === VILLAGES_TOWN);
+    });
+    fillRequiredPublishFields(document);
+
+    const townSelect = document.getElementById('addTown');
+    townSelect.value = VILLAGES_TOWN;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const villageSelect = document.getElementById('addVillage');
+    const lastOption = villageSelect.options[villageSelect.options.length - 1];
+    assert.ok(lastOption.textContent.includes('قريتي غير موجودة'), `expected «قريتي غير موجودة» as the last option, got "${lastOption.textContent}"`);
+    const nameInput = document.getElementById('addRequestedVillage');
+    assert.ok(nameInput, 'expected the typed-village input next to the select');
+    assert.strictEqual(nameInput.style.display, 'none', 'the name field stays hidden until «قريتي غير موجودة» is picked');
+    assert.strictEqual(nameInput.getAttribute('maxlength'), '100');
+
+    villageSelect.value = lastOption.value;
+    villageSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    assert.notStrictEqual(nameInput.style.display, 'none', 'picking «قريتي غير موجودة» must reveal the name field');
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events' && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'pending' });
+      }
+      return buildFetchStub()(url, opts);
+    };
+
+    // Blank name: refused locally with the server's own wording, nothing sent.
+    await win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(capturedRequest, null, 'no POST may leave with neither a village nor a typed name');
+    assert.ok(alerts.includes('اختر القرية من القائمة أو اكتب اسم قريتك'), `expected the either/or message, got ${JSON.stringify(alerts)}`);
+
+    nameInput.value = '  وادي النعم الجديدة  ';
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('publish with a typed village');
+
+    assert.ok(capturedRequest, 'expected the publish POST to fire');
+    assert.strictEqual(capturedRequest.body.get('requested_village_name'), 'وادي النعم الجديدة', 'the typed name must be sent, trimmed');
+    assert.strictEqual(capturedRequest.body.get('village_id'), null, 'village_id and requested_village_name are mutually exclusive — no village_id with a typed name');
+    assert.strictEqual(capturedRequest.body.get('town'), VILLAGES_TOWN);
+  });
+
+  await test('the card shows a typed (unlisted) village name in place of «القرى والتجمعات», escaped', () => {
+    const dom = buildEnv();
+    const html = dom.window.renderSingleEventCardHtml({
+      id: 77,
+      title: 'عرس القرية',
+      town: 'القرى والتجمعات',
+      village_id: null,
+      requested_village_name: 'وادي <b>النعم</b>',
+      event_date: '2026-10-01',
+      location_name: 'ديوان العائلة',
+      occasion_type: WEDDING_TYPE
+    });
+    assert.ok(html.includes('وادي &lt;b&gt;النعم&lt;/b&gt;'), 'the typed village name must appear, HTML-escaped');
+    assert.ok(!html.includes('<b>النعم</b>'), 'the typed name must never be injected raw');
+  });
+
+  await test('effective audio: the platform default plays for a type that shows audio_url, and a type that hides it gets no audio at all', async () => {
+    const DEFAULT_AUDIO = 'https://example.test/uploads/default-track.mp3';
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          if (String(url).split('?')[0] === '/api/settings/public') {
+            return jsonResponse({ success: true, settings: { support_whatsapp_number: null, default_event_audio_url: DEFAULT_AUDIO } });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    const festiveType = {
+      ...WEDDING_TYPE,
+      fields: [...WEDDING_TYPE.fields, { field_key: 'audio_url', label: 'الشيلة', is_required: false, position: 7 }]
+    };
+    const festiveEvent = { id: 81, title: 'عرس', town: 'رهط', event_date: '2026-10-01', location_name: 'قاعة', audio_url: null, occasion_type: festiveType };
+    const ownAudioEvent = { ...festiveEvent, id: 82, audio_url: 'https://example.test/uploads/own.mp3', audio_title: 'شيلة العائلة' };
+    const funeralEvent = { id: 83, title: 'عزاء', town: 'رهط', event_date: '2026-10-01', location_name: 'بيت العزاء', audio_url: 'https://example.test/uploads/should-never-play.mp3', occasion_type: FUNERAL_TYPE };
+
+    await flushBoot();
+    const loaded = await waitFor(() => win.effectiveEventAudio(festiveEvent) !== null);
+    assertNoUnhandledRejections('settings/public with a default track');
+    assert.ok(loaded, 'default_event_audio_url from GET /api/settings/public never reached the client');
+
+    const festive = win.effectiveEventAudio(festiveEvent);
+    assert.strictEqual(festive.url, DEFAULT_AUDIO, 'an event with no audio of its own falls back to the platform default');
+    assert.strictEqual(festive.title, 'مقطع المناسبة');
+    assert.strictEqual(win.effectiveEventAudio(ownAudioEvent).url, ownAudioEvent.audio_url, 'the event\'s own track always wins over the default');
+    assert.strictEqual(win.effectiveEventAudio(funeralEvent), null, 'a type that hides audio_url gets NO audio — not its own, not the default');
+
+    const festiveCard = win.renderSingleEventCardHtml(festiveEvent);
+    assert.ok(festiveCard.includes('card-audio-player'), 'the default track must render the card\'s audio block');
+    assert.ok(festiveCard.includes(`data-audio-url="${DEFAULT_AUDIO}"`), 'the feed card must carry its effective track for autoplay');
+    assert.ok(!win.renderSingleEventCardHtml(funeralEvent).includes('card-audio-player'), 'no audio block at all on a type that hides audio_url');
+  });
+
+  await test('the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+    assert.ok(document.querySelector('.header-actions #soundToggleBtn'), 'expected a sound toggle in the header actions');
+    assert.ok(document.querySelector('#floatingTopBar #floatingSoundBtn'), 'expected a sound toggle in the floating top bar');
+    assert.strictEqual(document.getElementById('soundUnlockChip').hidden, true, 'the «tap to play» chip only appears after the browser refuses autoplay');
+
+    document.getElementById('floatingSoundBtn').click();
+    assert.strictEqual(win.localStorage.getItem('negev_sound_muted'), 'true', 'muting must persist in negev_sound_muted');
+    assert.ok(document.querySelector('#soundToggleBtn i').className.includes('fa-volume-xmark'), 'both toggles must reflect the muted state');
+    document.getElementById('soundToggleBtn').click();
+    assert.strictEqual(win.localStorage.getItem('negev_sound_muted'), 'false');
+  });
+
+  await test('admin moderation card: a typed village shows as «قرية مقترحة», and only super_admin gets «اعتمدها قرية»', async () => {
+    const evt = { ...ADMIN_EVENT_FIXTURE, town: 'القرى والتجمعات', village_id: null, requested_village_name: 'وادي النعم' };
+
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const superHtml = superDom.window.renderRequestedVillageNoticeHtml(evt);
+    assert.ok(superHtml.includes('قرية مقترحة: <strong>وادي النعم</strong> (غير مدرجة في القائمة)'), 'expected the suggested-village line');
+    assert.ok(superHtml.includes('اعتمدها قرية'), 'super_admin must get the promote button');
+    assert.ok(superHtml.includes('الموافقة وحدها تُبقيها ضمن القرى والتجمعات'), 'expected the approve-only hint');
+
+    const localDom = buildAdminEnv({ loggedIn: true, role: 'admin' });
+    const localHtml = localDom.window.renderRequestedVillageNoticeHtml(evt);
+    assert.ok(localHtml.includes('قرية مقترحة'), 'a town admin still sees the suggestion');
+    assert.ok(!localHtml.includes('اعتمدها قرية'), 'the promote route is super_admin-only — no button for a town admin');
+
+    assert.strictEqual(superDom.window.renderRequestedVillageNoticeHtml({ ...evt, village_id: 3 }), '', 'a linked village needs no notice');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

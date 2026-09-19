@@ -336,6 +336,10 @@ body {
 }
 
 .auth-pill-btn:hover { background: var(--sky); color: var(--on-sky); }
+/* نفس علّة .ai-magic-btn[hidden] أدناه: display:flex يغلب [hidden] الافتراضي —
+   زرّ «لوحة الإدارة» يُشحن مخفياً ولا يظهر إلا لدورَي الإدارة. */
+.auth-pill-btn[hidden] { display: none; }
+.admin-panel-btn { text-decoration: none; }
 
 /* مبدّل فاتح/داكن — يعيد استعمال موضع زر الهوية أعلى الصفحة (#20 خطوة 11) */
 .theme-toggle-btn {
@@ -1643,6 +1647,11 @@ body {
 
 .close-modal-btn { background: var(--surface-sunk); border: none; width: 34px; height: 34px; border-radius: 50%; color: var(--ink); cursor: pointer; }
 
+/* تبويبا «تسجيل الدخول / حساب جديد» في مودال الحساب — شريط مقسوم، النشِط مرفوع. */
+.auth-tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 16px; background: var(--surface-sunk); border-radius: var(--radius-pill); }
+.auth-tab-btn { flex: 1; padding: 9px 12px; border: none; border-radius: var(--radius-pill); background: transparent; color: var(--ink-soft); font-family: inherit; font-size: 0.9rem; font-weight: 700; cursor: pointer; }
+.auth-tab-btn.active { background: var(--surface); color: var(--sky); box-shadow: var(--shadow); }
+
 /* زرّ المشاركة في تفاصيل المناسبة (تذكرة #44) — بجانب زرّ الإغلاق في رأس المودال */
 .modal-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .share-event-btn {
@@ -2251,6 +2260,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   width: 100%;
   pointer-events: auto;
 }
@@ -2259,6 +2269,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex-shrink: 1;
   background: rgba(12, 27, 42, 0.75);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -2293,6 +2305,7 @@ body {
 
 .floating-actions-box {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 4px;
   background: rgba(12, 27, 42, 0.75);
@@ -2326,6 +2339,72 @@ body {
 .floating-icon-btn.support-green-btn {
   color: #25d366;
 }
+
+/* زرّ الهوية في الشريط العائم — أيقونة + «تسجيل الدخول/الخروج» كاملة، بارتفاع
+   أزرار الأيقونات نفسها كي لا يكبر الشريط. */
+.floating-auth-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.floating-auth-btn:active {
+  transform: scale(0.94);
+}
+
+/* شاشات ضيّقة (360px): الشريط العائم يحمل رقاقة الفلتر وستة أزرار — تسمية
+   الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً (min-width/flex-shrink
+   على الرقاقة، flex-shrink:0 على صندوق الأزرار)، وتختفي كلياً دون 400px
+   (الأيقونة والنقطة الملوّنة تبقيان تدلّان على فلتر نشِط). */
+#floatingFilterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 400px) {
+  .floating-filter-chip-btn { padding: 8px 12px; }
+  #floatingFilterLabel { display: none; }
+  .floating-actions-box { gap: 2px; padding: 4px 6px; }
+  .floating-icon-btn { width: 31px; height: 31px; }
+  .floating-auth-btn { height: 31px; padding: 0 7px; gap: 4px; font-size: 0.72rem; }
+}
+
+/* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وزرّ النشر العائم، في الوسط. */
+.sound-unlock-chip {
+  position: fixed;
+  bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 102;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  padding: 9px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius-pill);
+  background: rgba(12, 27, 42, 0.85);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #ffffff;
+  font-family: var(--font-main);
+  font-size: 0.86rem;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.sound-unlock-chip[hidden] { display: none; }
 
 .floating-badge {
   position: absolute;
