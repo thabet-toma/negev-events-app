@@ -12,7 +12,12 @@ function extractToken(req) {
   return scheme === 'Bearer' && token ? token : null;
 }
 
-/** Rejects the request unless it carries a valid JWT. */
+/**
+ * Rejects the request unless it carries a valid JWT. An expired or tampered
+ * token is 401 like a missing one, never 403: every client treats 401 as
+ * "sign in again" and 403 as "you may not do this" — answering an expired
+ * session with 403 left clients showing a signed-in user whose token was dead.
+ */
 function authenticate(req, res, next) {
   const token = extractToken(req);
   if (!token) return next(ApiError.unauthorized('مطلوب تسجيل الدخول'));
@@ -21,7 +26,7 @@ function authenticate(req, res, next) {
     req.user = jwt.verify(token, config.jwt.secret);
     return next();
   } catch (err) {
-    return next(ApiError.forbidden('الجلسة منتهية أو غير صالحة'));
+    return next(ApiError.unauthorized('انتهت جلستك، يرجى تسجيل الدخول من جديد'));
   }
 }
 

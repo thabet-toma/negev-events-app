@@ -80,7 +80,10 @@ router.post('/auth/login', asyncHandler(async (req, res) => {
 router.get('/auth/me', authenticate, asyncHandler(async (req, res) => {
   const user = await auth.findById(req.user.id);
   if (!user) throw ApiError.notFound('المستخدم غير موجود');
-  res.json({ success: true, user });
+  // `token` is present only for plain users (see auth.renewToken) — a client
+  // stores it when it is there and keeps its current one otherwise.
+  const token = auth.renewToken(user);
+  res.json({ success: true, user, ...(token ? { token } : {}) });
 }));
 
 /**

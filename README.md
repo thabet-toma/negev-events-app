@@ -220,11 +220,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 |---|---|---|
 | `GET` | `/api/events` | المناسبات المعتمدة **القادمة** فقط، مرقّمة (`?town=` `?date=` `?search=` `?occasion_type_id=` `?village_id=` `?archive=1` `?page=` `?limit=`) — `?town=` و `?occasion_type_id=` و `?village_id=` تقبل كل منها قيمة واحدة أو قائمة مفصولة بفواصل (سقف ٢٠ قيمة لكل معامل، #85 دفعة 5) |
 | `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات |
-| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 |
+| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze — نفس فلاتر `?town=` `?occasion_type_id=` `?village_id=` وقوائمها المفصولة بفواصل |
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة |
-| `GET` | `/api/settings/public` | رقم واتساب الدعم الفني فقط (`support_whatsapp_number`، أو `null` إن لم يُحفَظ بعد) — لا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
+| `GET` | `/api/settings/public` | رقم واتساب الدعم الفني (`support_whatsapp_number`) والمقطع الصوتي الافتراضي للمناسبات التي لا صوت لها (`default_event_audio_url`، رابط مطلق) فقط — كلاهما `null` إن لم يُحفَظ بعد، ولا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
@@ -336,7 +336,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/my-events` | كل ما نشره المستخدم الحالي، بكل حالاته |
-| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة ويعيد فحص التعارض على القيم الجديدة (`collision` في الاستجابة)، وأي تعديل يمسّ الموقع (`latitude`/`longitude`/`town`) يعيد حساب `location_warning`. يقبل JSON أو `multipart/form-data` بنفس حقول ملفات النشر (`poster` و `audio` و `artist_image`) — الملف المرفوع يغلب حقل الرابط المقابل |
+| `PATCH` | `/api/events/:id` | تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة) — تعديل تجميلي يبقى معتمداً، وتعديل حرِج (التاريخ/المكان) يعيدها للمراجعة ويعيد فحص التعارض على القيم الجديدة (`collision` في الاستجابة)، وأي تعديل يمسّ الموقع (`latitude`/`longitude`/`town`) يعيد حساب `location_warning`. يقبل JSON أو `multipart/form-data` بنفس حقول ملفات النشر (`poster` و `audio` و `artist_image`) — الملف المرفوع يغلب حقل الرابط المقابل. `requested_village_name` بنفس قواعد النشر: اختيار `village_id` يمسح الاسم المكتوب والعكس، ومغادرة `'القرى والتجمعات'` تمسح الاثنين، وتغييره تعديل حرِج كتغيير القرية |
 | `GET` | `/api/events/:id/amendments` | سجلّ تعديلات مناسبة يملكها المستخدم (أو أي مناسبة للإدارة)، الأحدث أولاً |
 
 ### إعلانات تعديل التاريخ (#20 خطوة 7)
@@ -483,7 +483,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 |---|---|---|
 | `POST` | `/api/auth/register` | إنشاء حساب |
 | `POST` | `/api/auth/login` | تسجيل الدخول |
-| `GET` | `/api/auth/me` | بيانات الحساب الحالي 🔒 |
+| `GET` | `/api/auth/me` | بيانات الحساب الحالي، و`token` جديد موقَّع لحساب `user` العادي فقط (لا للإدارة) — العميل يستبدل رمزه به عند كل فتح فلا تنتهي جلسة مستخدم نشِط. رمز منتهٍ أو مزوَّر يُرفض بـ**401** في كل المسارات المحمية (لا 403: ‏403 تعني «غير مسموح لك» فقط) 🔒 |
 
 ### دفتر النقوط 🔒
 
@@ -523,6 +523,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/admin/events/:id/amendments` | سجلّ تعديلات مناسبة كاملاً، الأحدث أولاً |
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |
 | `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
+| `POST` | `/api/admin/events/:id/promote-village` | اعتماد اسم «قريتي غير موجودة» قريةً حقيقية — الجسم اختياري `{ name?, latitude?, longitude? }` (الاسم افتراضياً `requested_village_name` للمناسبة، والإحداثيات افتراضياً موقعها). قرية بنفس الاسم (نشِطة أو معطَّلة) يُعاد استعمالها وتُنشَّط بدل إنشاء نسخة ثانية؛ وكل مناسبة تحت `'القرى والتجمعات'` طلبت الاسم نفسه تُربط بها ويُمسح اسمها المكتوب، مع إبقاء إحداثيات كل مناسبة كما هي. يعيد `{ village, linked_events }` 🛡️ |
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
@@ -531,8 +532,10 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
 | `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه) 🛡️ |
 | `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
-| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` فقط) 🛡️ |
-| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ 🛡️ |
+| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق) 🛡️ |
+| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط) 🛡️ |
+| `POST` | `/api/admin/settings/default-audio` | رفع المقطع الصوتي الافتراضي (`multipart/form-data`، حقل `audio`، نفس فحص البايتات كصوت المناسبة) — يُخزَّن نسبياً ويعود مطلقاً، والملف السابق يبقى على القرص 🛡️ |
+| `DELETE` | `/api/admin/settings/default-audio` | حذف المقطع الصوتي الافتراضي (يعود `null`) 🛡️ |
 | `GET` | `/api/admin/analytics/overview` | مؤشرات النشاط العام (المشاهدات، المشاركات، النقرات، جمهور الأجهزة النشطة والزوار غير المسجلين) مع تصفية المدة (`?period=24h\|7d\|30d\|all`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices` | قائمة الأجهزة والتوكنات النشطة (زوار غير مسجلين ومستخدمين) مع البحث والفلترة (`?type=anonymous\|registered` `?search=`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices/:deviceId/log` | سجل نشاط جهاز/توكن محدد مع الترقيم 🛡️ |

@@ -90,4 +90,16 @@ async function setAnalyticsOptOut(userId, optOut) {
   return user;
 }
 
-module.exports = { register, login, adminLogin, findById, publicUser, setAnalyticsOptOut };
+/**
+ * A fresh token for a plain user, so an active account never reaches the end
+ * of its TTL — clients call GET /auth/me on every app open. Admin roles get
+ * null: their short TTL is the protection on the admin panel, and sliding it
+ * on activity would erase it. Takes the row just read from the database, so a
+ * role change since the old token was signed is honoured here.
+ */
+function renewToken(user) {
+  if (ADMIN_ROLES.includes(user.role)) return null;
+  return issueToken(user);
+}
+
+module.exports = { register, login, adminLogin, findById, publicUser, setAnalyticsOptOut, renewToken };

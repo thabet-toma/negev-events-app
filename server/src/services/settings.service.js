@@ -3,21 +3,29 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
+const { absoluteMediaUrl } = require('../utils/mediaUrl');
 
 // A code-owned whitelist: no key outside this list is ever read or written
 // through this service, whatever else ends up in app_settings by other means
 // (issue #85). Adding a setting later means adding its key here — never
 // loosening the check itself.
 const SETTING_KEYS = {
-  SUPPORT_WHATSAPP_NUMBER: 'support_whatsapp_number'
+  SUPPORT_WHATSAPP_NUMBER: 'support_whatsapp_number',
+  // Stored relative (`/uploads/<file>`) like every other media column, and
+  // only ever written by the upload route — never as free text through PUT.
+  DEFAULT_EVENT_AUDIO_URL: 'default_event_audio_url'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
 
-// The one key GET /api/settings/public may ever expose, kept as its own list
-// separate from WHITELISTED_KEYS so a future admin-only setting never leaks
-// through the public route just because it joined the general whitelist.
-const PUBLIC_KEYS = [SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER];
+// The only keys GET /api/settings/public may ever expose, kept as their own
+// list separate from WHITELISTED_KEYS so a future admin-only setting never
+// leaks through the public route just because it joined the general whitelist.
+const PUBLIC_KEYS = [SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER, SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL];
+
+// Settings holding a stored-relative media path, made absolute on the way out
+// for the same reason withAbsoluteMedia exists (CLAUDE.md, «الوسائط»).
+const MEDIA_KEYS = [SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL];
 
 // The single source of truth for the whitelist rule — the route layer calls
 // this directly (instead of re-checking `WHITELISTED_KEYS.includes(key)`
@@ -39,7 +47,10 @@ async function readKeys(keys) {
   for (const row of rows) byKey[row.setting_key] = row.setting_value;
 
   const settings = {};
-  for (const key of keys) settings[key] = key in byKey ? byKey[key] : null;
+  for (const key of keys) {
+    const value = key in byKey ? byKey[key] : null;
+    settings[key] = MEDIA_KEYS.includes(key) ? absoluteMediaUrl(value) : value;
+  }
   return settings;
 }
 
@@ -48,7 +59,7 @@ async function getAllForAdmin() {
   return readKeys(WHITELISTED_KEYS);
 }
 
-/** The support number only, for the public unauthenticated route. */
+/** The PUBLIC_KEYS only, for the public unauthenticated route. */
 async function getPublicSettings() {
   return readKeys(PUBLIC_KEYS);
 }

@@ -1386,12 +1386,13 @@ async function run() {
 
   // Behaviour change (services-directory spec): publishing under the
   // catch-all town used to be accepted with no pin at all. It now REQUIRES a
-  // village_id — the three tests below replace the old single test with the
+  // village_id (or, since M2, a typed requested_village_name — covered right
+  // after these) — the three tests below replace the old single test with the
   // new truth: a village-less publish under the catch-all is rejected (case
-  // 9), a still-existing legacy row with a NULL village_id (which no publish
-  // path can produce any more, so it is created directly here) keeps its
-  // no-pin behaviour, and a fresh village-backed publish gets a real pin
-  // (case 11).
+  // 9), a still-existing legacy row with a NULL village_id and no requested
+  // name (which no publish path can produce any more, so it is created
+  // directly here) keeps its no-pin behaviour, and a fresh village-backed
+  // publish gets a real pin (case 11).
   await test("Publishing under 'القرى والتجمعات' with no village_id is rejected (case 9)", async () => {
     const { status, body } = await api('POST', '/api/events', {
       token: adminToken,
@@ -1405,7 +1406,7 @@ async function run() {
     assert.ok(/القرية/.test(body.message || ''), `expected a village-related Arabic message, got: ${body.message}`);
   });
 
-  await test("A legacy row under 'القرى والتجمعات' with a NULL village_id — inserted directly, since no publish path can produce one any more — still gets no pin", async () => {
+  await test("A legacy row under 'القرى والتجمعات' with a NULL village_id and no requested name — inserted directly, since no publish path can produce one any more — still gets no pin", async () => {
     const { insertId } = await db.execute(
       `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, village_id, location_name, event_date, status)
        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'approved')`,
@@ -1490,6 +1491,168 @@ async function run() {
     await api('DELETE', `/api/admin/villages/${second.body.village.id}`, { token: superAdminToken });
   });
 
+  console.log('\nVillages: "قريتي غير موجودة" — requested_village_name and its promotion into a real village (M2)');
+
+  await test('Publishing under the catch-all with only a typed requested_village_name succeeds, gets no invented pin, and the moderation queue returns the name', async () => {
+    const requestedName = `قرية مطلوبة ${Date.now()}`;
+    const { status, body: created } = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس قريته غير موجودة' }],
+        town: 'القرى والتجمعات',
+        requested_village_name: requestedName,
+        event_date: '2027-01-08'
+      })
+    });
+    assert.strictEqual(status, 201);
+    assert.strictEqual(created.status, 'pending');
+
+    const row = await db.queryOne(
+      'SELECT village_id, requested_village_name, latitude, longitude FROM events WHERE id = ?',
+      [created.eventId]
+    );
+    assert.strictEqual(row.village_id, null);
+    assert.strictEqual(row.requested_village_name, requestedName);
+    assert.strictEqual(row.latitude, null);
+    assert.strictEqual(row.longitude, null);
+
+    const queue = await api('GET', '/api/admin/events?status=pending', { token: superAdminToken });
+    assert.strictEqual(queue.status, 200);
+    const queued = queue.body.events.find(e => e.id === created.eventId);
+    assert.ok(queued, 'expected the new event in the moderation queue');
+    assert.strictEqual(queued.requested_village_name, requestedName);
+
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: superAdminToken });
+  });
+
+  await test('requested_village_name outside the catch-all town is rejected', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'اسم قرية مع بلدة أخرى' }],
+        town: 'رهط',
+        requested_village_name: 'قرية في غير مكانها',
+        event_date: '2027-01-09'
+      })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/القرى والتجمعات/.test(body.message || ''), `expected the villages-catch-all Arabic message, got: ${body.message}`);
+  });
+
+  await test('village_id and requested_village_name together are rejected', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'قرية مختارة ومكتوبة معاً' }],
+        town: 'القرى والتجمعات',
+        village_id: villageFixtureId,
+        requested_village_name: 'قرية مكتوبة',
+        event_date: '2027-01-10'
+      })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/لا الاثنين معاً/.test(body.message || ''), `expected the either-or Arabic message, got: ${body.message}`);
+  });
+
+  await test('A typed name that is already an active village links to it silently and inherits its pin', async () => {
+    const villageName = `قرية موجودة أصلاً ${Date.now()}`;
+    const villageCreate = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: villageName, latitude: 31.33, longitude: 34.77 }
+    });
+    assert.strictEqual(villageCreate.status, 201);
+
+    const { status, body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس كتب اسم قرية موجودة' }],
+        town: 'القرى والتجمعات',
+        requested_village_name: villageName,
+        event_date: '2027-01-11'
+      })
+    });
+    assert.strictEqual(status, 201);
+
+    const row = await db.queryOne(
+      'SELECT village_id, requested_village_name, latitude, longitude FROM events WHERE id = ?',
+      [created.eventId]
+    );
+    assert.strictEqual(row.village_id, villageCreate.body.village.id);
+    assert.strictEqual(row.requested_village_name, null);
+    assert.strictEqual(Number(row.latitude), 31.33);
+    assert.strictEqual(Number(row.longitude), 34.77);
+
+    await api('DELETE', `/api/admin/events/${created.eventId}`, { token: adminToken });
+    await api('DELETE', `/api/admin/villages/${villageCreate.body.village.id}`, { token: superAdminToken });
+  });
+
+  await test('POST /api/admin/events/:id/promote-village: plain admin 403; super_admin links every event that asked for the name, with exactly one village; a second promote reuses (and re-activates) it', async () => {
+    const requestedName = `قرية للاعتماد ${Date.now()}`;
+    const publishRequested = async (honoreeName, eventDate, extra = {}) => {
+      const { status, body } = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({
+          honorees: [{ name: honoreeName }],
+          town: 'القرى والتجمعات',
+          requested_village_name: requestedName,
+          event_date: eventDate,
+          ...extra
+        })
+      });
+      assert.strictEqual(status, 201);
+      return body.eventId;
+    };
+    const firstId = await publishRequested('عريس القرية المطلوبة الأول', '2027-01-12', { latitude: 31.05, longitude: 34.95 });
+    const secondId = await publishRequested('عريس القرية المطلوبة الثاني', '2027-01-13');
+
+    const forbidden = await api('POST', `/api/admin/events/${firstId}/promote-village`, { token: plainAdminToken, body: {} });
+    assert.strictEqual(forbidden.status, 403);
+
+    const promoted = await api('POST', `/api/admin/events/${firstId}/promote-village`, { token: superAdminToken, body: {} });
+    assert.strictEqual(promoted.status, 200, JSON.stringify(promoted.body));
+    assert.strictEqual(promoted.body.linked_events, 2);
+    assert.strictEqual(promoted.body.village.name, requestedName);
+    assert.strictEqual(promoted.body.village.latitude, 31.05);
+    assert.strictEqual(promoted.body.village.longitude, 34.95);
+    const villageId = promoted.body.village.id;
+
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM villages WHERE name = ?', [requestedName]);
+    assert.strictEqual(Number(total), 1);
+    const linked = await db.query(
+      'SELECT id, village_id, requested_village_name, latitude FROM events WHERE id IN (?, ?) ORDER BY id',
+      [firstId, secondId]
+    );
+    for (const row of linked) {
+      assert.strictEqual(row.village_id, villageId);
+      assert.strictEqual(row.requested_village_name, null);
+    }
+    // Each linked event keeps its own pin — the second one never chose one.
+    assert.strictEqual(linked.find(row => row.id === secondId).latitude, null);
+
+    // Disable the village (it holds events, so DELETE disables rather than
+    // deletes); a fresh publish of the same typed name is then NOT
+    // auto-linked, and promoting it must reuse the same village, not insert a
+    // duplicate.
+    const disabled = await api('DELETE', `/api/admin/villages/${villageId}`, { token: superAdminToken });
+    assert.strictEqual(disabled.body.disabled, true);
+    const thirdId = await publishRequested('عريس القرية المطلوبة الثالث', '2027-01-14');
+    const thirdRow = await db.queryOne('SELECT village_id, requested_village_name FROM events WHERE id = ?', [thirdId]);
+    assert.strictEqual(thirdRow.village_id, null);
+    assert.strictEqual(thirdRow.requested_village_name, requestedName);
+
+    const again = await api('POST', `/api/admin/events/${thirdId}/promote-village`, { token: superAdminToken, body: {} });
+    assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+    assert.strictEqual(again.body.village.id, villageId);
+    assert.strictEqual(again.body.village.is_active, true);
+    assert.strictEqual(again.body.linked_events, 1);
+    const recount = await db.queryOne('SELECT COUNT(*) AS total FROM villages WHERE name = ?', [requestedName]);
+    assert.strictEqual(Number(recount.total), 1);
+
+    for (const id of [firstId, secondId, thirdId]) {
+      await api('DELETE', `/api/admin/events/${id}`, { token: adminToken });
+    }
+    await api('DELETE', `/api/admin/villages/${villageId}`, { token: superAdminToken });
+  });
 
   console.log('\nFile upload: the multipart path both clients actually use');
 
@@ -5095,6 +5258,33 @@ async function run() {
     assert.ok(!('pin_code' in me.body.user), 'pin_code must never appear in this response');
   });
 
+  await test('an expired or tampered token is 401 (sign in again), never 403 — 403 stays "not allowed"', async () => {
+    const expired = signToken({ id: privacyUserA.id, phone_number: privacyUserA.phone, full_name: 'منتهي', role: 'user' }, -10);
+    const expiredRes = await api('GET', '/api/auth/me', { token: expired });
+    assert.strictEqual(expiredRes.status, 401, 'an expired token must read as "session over" to every client');
+
+    const tampered = `${privacyUserA.token.slice(0, -2)}xx`;
+    const tamperedRes = await api('GET', '/api/auth/me', { token: tampered });
+    assert.strictEqual(tamperedRes.status, 401);
+
+    const expiredAdmin = signToken({ id: 1, phone_number: config.admin.phone, full_name: 'منتهي', role: 'super_admin' }, -10);
+    const adminRes = await api('GET', '/api/admin/stats', { token: expiredAdmin });
+    assert.strictEqual(adminRes.status, 401, 'an admin route with an expired token is a dead session, not a missing role');
+  });
+
+  await test('GET /api/auth/me renews a plain user\'s token (a working one), and never an admin\'s', async () => {
+    const me = await api('GET', '/api/auth/me', { token: privacyUserA.token });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(typeof me.body.token, 'string', 'a plain user gets a fresh token on every /me');
+    const again = await api('GET', '/api/auth/me', { token: me.body.token });
+    assert.strictEqual(again.status, 200, 'the renewed token must itself be valid');
+    assert.strictEqual(again.body.user.id, privacyUserA.id);
+
+    const adminMe = await api('GET', '/api/auth/me', { token: adminToken });
+    assert.strictEqual(adminMe.status, 200);
+    assert.ok(!('token' in adminMe.body), 'an admin token must not slide — its short TTL is the admin panel\'s protection');
+  });
+
   await test('An opted-out signed-in user triggers an identified analytics event ⇒ zero rows written for them — not an anonymised one', async () => {
     // Exercised directly against analytics.service.record() — the actual
     // enforcement point per the brief ("honoured at the write, not only at
@@ -5356,13 +5546,14 @@ async function run() {
   // users/events this suite creates — start from a known-empty state so "no
   // setting was ever saved" is actually true on a re-run against the same
   // database, not just on a freshly migrated one.
-  await db.execute("DELETE FROM app_settings WHERE setting_key = 'support_whatsapp_number'");
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('support_whatsapp_number', 'default_event_audio_url')");
 
-  await test('GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number', async () => {
+  await test('GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number and the default audio', async () => {
     const { status, body } = await api('GET', '/api/settings/public');
     assert.strictEqual(status, 200);
-    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number']);
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
     assert.strictEqual(body.settings.support_whatsapp_number, null);
+    assert.strictEqual(body.settings.default_event_audio_url, null);
   });
 
   await test('A plain (town-scoped) admin is refused on both GET and PUT /api/admin/settings — super_admin only', async () => {
@@ -5403,7 +5594,7 @@ async function run() {
 
     const publicRead = await api('GET', '/api/settings/public');
     assert.strictEqual(publicRead.status, 200);
-    assert.deepStrictEqual(Object.keys(publicRead.body.settings), ['support_whatsapp_number']);
+    assert.deepStrictEqual(Object.keys(publicRead.body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
     assert.strictEqual(publicRead.body.settings.support_whatsapp_number, '972501234567');
 
     const resave = await api('PUT', '/api/admin/settings', {
@@ -5445,6 +5636,76 @@ async function run() {
     assert.strictEqual(emptyBody.status, 400);
     const stillSet = await api('GET', '/api/admin/settings', { token: superAdminToken });
     assert.strictEqual(stillSet.body.settings.support_whatsapp_number, '972501234567', 'a PUT that names no keys must change nothing');
+  });
+
+  // The smallest byte sequence verifyMedia accepts as audio: an ID3 tag header.
+  const TINY_MP3 = Buffer.concat([Buffer.from('ID3', 'latin1'), Buffer.alloc(13)]);
+
+  await test('POST and DELETE /api/admin/settings/default-audio refuse a plain user and a town-scoped admin — super_admin only', async () => {
+    for (const token of [userToken, scopedAdminToken]) {
+      const post = await apiUpload('/api/admin/settings/default-audio', {
+        token, files: [{ field: 'audio', buffer: TINY_MP3, type: 'audio/mpeg', name: 'a.mp3' }]
+      });
+      assert.strictEqual(post.status, 403);
+
+      const del = await api('DELETE', '/api/admin/settings/default-audio', { token });
+      assert.strictEqual(del.status, 403);
+    }
+  });
+
+  await test('POST /api/admin/settings/default-audio rejects a missing file, and a non-audio file under the audio field', async () => {
+    const empty = await apiUpload('/api/admin/settings/default-audio', { token: superAdminToken });
+    assert.strictEqual(empty.status, 400);
+    assert.strictEqual(empty.body.message, 'اختر ملفاً صوتياً');
+
+    const image = await apiUpload('/api/admin/settings/default-audio', {
+      token: superAdminToken, files: [{ field: 'audio', buffer: TINY_PNG, type: 'audio/mpeg', name: 'fake.mp3' }]
+    });
+    assert.strictEqual(image.status, 400, 'verifyMedia must reject an image posing as audio');
+  });
+
+  await test('A super_admin uploads the default audio — it is stored relative and comes back absolute on the admin and public routes', async () => {
+    const upload = await apiUpload('/api/admin/settings/default-audio', {
+      token: superAdminToken, files: [{ field: 'audio', buffer: TINY_MP3, type: 'audio/mpeg', name: 'default.mp3' }]
+    });
+    assert.strictEqual(upload.status, 200, `expected the upload to succeed, got ${upload.status}: ${upload.body.message}`);
+    assert.strictEqual(upload.body.message, 'تم رفع المقطع الافتراضي');
+
+    const stored = await db.queryOne(
+      "SELECT setting_value FROM app_settings WHERE setting_key = 'default_event_audio_url'"
+    );
+    assert.ok(/^\/uploads\/audio-[^/]+\.mp3$/.test(stored.setting_value), `expected a stored relative path, got: ${stored.setting_value}`);
+
+    const expected = absoluteMediaUrl(stored.setting_value);
+    assert.ok(/^https?:\/\//.test(expected) && expected.endsWith(stored.setting_value));
+    assert.strictEqual(upload.body.settings.default_event_audio_url, expected);
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.status, 200);
+    assert.strictEqual(publicRead.body.settings.default_event_audio_url, expected);
+  });
+
+  await test('PUT /api/admin/settings refuses the default audio as free text — it can only be set by upload', async () => {
+    const before = await api('GET', '/api/settings/public');
+
+    const { status, body } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { default_event_audio_url: 'https://example.com/anything.mp3' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+
+    const after = await api('GET', '/api/settings/public');
+    assert.strictEqual(after.body.settings.default_event_audio_url, before.body.settings.default_event_audio_url, 'a refused PUT must change nothing');
+  });
+
+  await test('DELETE /api/admin/settings/default-audio clears it back to null on the public route', async () => {
+    const del = await api('DELETE', '/api/admin/settings/default-audio', { token: superAdminToken });
+    assert.strictEqual(del.status, 200);
+    assert.strictEqual(del.body.message, 'تم حذف المقطع الافتراضي');
+    assert.strictEqual(del.body.settings.default_event_audio_url, null);
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.body.settings.default_event_audio_url, null);
   });
 
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');

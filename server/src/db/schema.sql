@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS events (
   occasion_type_id INT UNSIGNED DEFAULT NULL,
   town             VARCHAR(100) NOT NULL,
   village_id       INT UNSIGNED NULL,
+  -- "قريتي غير موجودة": free text typed under the villages catch-all while
+  -- village_id stays NULL; a super_admin later promotes it into a real
+  -- village, which clears it back to NULL on every event that asked for it.
+  requested_village_name VARCHAR(100) NULL DEFAULT NULL,
   location_name    TEXT         NOT NULL,
   secondary_location_name TEXT  DEFAULT NULL,
   latitude         DECIMAL(10,7) DEFAULT NULL,

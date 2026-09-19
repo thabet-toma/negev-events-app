@@ -187,22 +187,39 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
-  // Integrity rule enforced here, not by the schema: `village_id` may only be
-  // set under the villages catch-all, and a NEW publish under it must name
-  // one (existing pre-villages rows stay NULL forever — never guessed).
+  // Integrity rule enforced here, not by the schema: `village_id` and
+  // `requested_village_name` ("قريتي غير موجودة") may only be set under the
+  // villages catch-all, never both at once, and a NEW publish under it must
+  // carry one of them (existing pre-villages rows stay NULL forever — never
+  // guessed).
   let villageId = req.body.village_id === undefined || req.body.village_id === null || req.body.village_id === ''
     ? null
     : parseId(req.body.village_id, 'القرية');
+  let requestedVillageName = cleanString(req.body.requested_village_name, 100);
   if (villageId !== null && town !== VILLAGES_TOWN) {
     throw ApiError.badRequest('لا يمكن اختيار قرية إلا ضمن بند "القرى والتجمعات"');
   }
-  if (town === VILLAGES_TOWN && villageId === null) {
-    throw ApiError.badRequest('يرجى اختيار القرية');
+  if (requestedVillageName !== null && town !== VILLAGES_TOWN) {
+    throw ApiError.badRequest('لا يمكن كتابة اسم قرية إلا ضمن بند "القرى والتجمعات"');
+  }
+  if (villageId !== null && requestedVillageName !== null) {
+    throw ApiError.badRequest('اختر القرية من القائمة أو اكتب اسم قريتك — لا الاثنين معاً');
+  }
+  if (town === VILLAGES_TOWN && villageId === null && requestedVillageName === null) {
+    throw ApiError.badRequest('اختر القرية من القائمة أو اكتب اسم قريتك');
   }
   let village = null;
   if (villageId !== null) {
     village = await villages.findActiveById(villageId);
     if (!village) throw ApiError.badRequest('القرية المختارة غير معروفة أو غير نشِطة');
+  } else if (requestedVillageName !== null) {
+    // A typed name that is already an active village is that village — linked
+    // (and its pin inherited) exactly as if it had been picked from the list.
+    village = await villages.findActiveByName(requestedVillageName);
+    if (village) {
+      villageId = village.id;
+      requestedVillageName = null;
+    }
   }
 
   const eventDate = requireDate(req.body.event_date, labelOf('event_date', 'تاريخ المناسبة'));
@@ -225,6 +242,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     honorees,
     town,
     village_id: villageId,
+    requested_village_name: requestedVillageName,
     villageCoords: village ? { lat: village.latitude, lng: village.longitude } : null,
     event_date: eventDate,
     latitude,
@@ -315,10 +333,14 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     const town = cleanString(body.town, 100);
     if (!town || !TOWNS.includes(town)) throw ApiError.badRequest('البلدة المختارة غير معروفة');
     changes.town = town;
-    // Leaving the villages catch-all invalidates any village already on the
-    // row — clear it here unless this same edit sets a new one below.
+    // Leaving the villages catch-all invalidates any village (picked or
+    // typed) already on the row — clear it here unless this same edit sets a
+    // new one below.
     if (town !== VILLAGES_TOWN && body.village_id === undefined) {
       changes.village_id = null;
+    }
+    if (town !== VILLAGES_TOWN && body.requested_village_name === undefined) {
+      changes.requested_village_name = null;
     }
   }
   if (body.location_name !== undefined) {
@@ -361,13 +383,21 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     if (file) changes[field] = `/uploads/${file.filename}`;
   });
 
+  const requestedVillageName = body.requested_village_name === undefined
+    ? undefined
+    : cleanString(body.requested_village_name, 100);
   if (body.village_id !== undefined) {
     const villageId = body.village_id === null || body.village_id === '' ? null : parseId(body.village_id, 'القرية');
     const finalTown = changes.town !== undefined ? changes.town : existing.town;
     if (villageId !== null && finalTown !== VILLAGES_TOWN) {
       throw ApiError.badRequest('لا يمكن اختيار قرية إلا ضمن بند "القرى والتجمعات"');
     }
+    if (villageId !== null && requestedVillageName) {
+      throw ApiError.badRequest('اختر القرية من القائمة أو اكتب اسم قريتك — لا الاثنين معاً');
+    }
     if (villageId !== null) {
+      // A picked village replaces any name typed earlier.
+      changes.requested_village_name = null;
       const village = await villages.findActiveById(villageId);
       if (!village) throw ApiError.badRequest('القرية المختارة غير معروفة أو غير نشِطة');
       // A village is a place, so moving the event to one moves its pin —
@@ -379,6 +409,27 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
       if (body.longitude === undefined) changes.longitude = village.longitude;
     }
     changes.village_id = villageId;
+  }
+
+  // "قريتي غير موجودة" on edit — same rules as on publish. A typed name
+  // replaces any picked village; one that is already an active village is
+  // linked (and moves the pin) exactly like the village_id branch above.
+  // An emptied value clears the typed name, as `village_id: null` does.
+  if (requestedVillageName !== undefined) {
+    const finalTown = changes.town !== undefined ? changes.town : existing.town;
+    if (requestedVillageName !== null && finalTown !== VILLAGES_TOWN) {
+      throw ApiError.badRequest('لا يمكن كتابة اسم قرية إلا ضمن بند "القرى والتجمعات"');
+    }
+    const village = requestedVillageName !== null ? await villages.findActiveByName(requestedVillageName) : null;
+    if (village) {
+      if (body.latitude === undefined) changes.latitude = village.latitude;
+      if (body.longitude === undefined) changes.longitude = village.longitude;
+      changes.village_id = village.id;
+      changes.requested_village_name = null;
+    } else {
+      if (requestedVillageName !== null) changes.village_id = null;
+      changes.requested_village_name = requestedVillageName;
+    }
   }
 
   let honorees = null;

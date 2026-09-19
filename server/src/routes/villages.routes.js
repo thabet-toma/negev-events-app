@@ -37,6 +37,9 @@ function requireCoordinate(value, max, label) {
 // paths just because they share the `/admin` prefix (same warning as
 // occasionTypes.routes.js).
 router.use('/admin/villages', requireSuperAdmin);
+// Same reason, for the one villages path that lives under `/admin/events` —
+// admin.routes.js's requireAdmin lets a plain admin through, this does not.
+router.use('/admin/events/:id/promote-village', requireSuperAdmin);
 
 router.get('/admin/villages', asyncHandler(async (req, res) => {
   res.json({ success: true, villages: await villages.listAllForAdmin() });
@@ -85,6 +88,27 @@ router.delete('/admin/villages/:id', asyncHandler(async (req, res) => {
     ? 'تم حذف القرية بنجاح'
     : 'لا يمكن حذف قرية لها مناسبات مرتبطة — تم تعطيلها بدلاً من ذلك فلن تظهر للناشرين';
   res.json({ success: true, message, ...result });
+}));
+
+/**
+ * "قريتي غير موجودة": turns an event's typed village name into a real
+ * village and links every catch-all event that asked for the same name.
+ * Every body field is optional — the name defaults to the event's own
+ * `requested_village_name`, the coordinates to the event's own pin.
+ */
+router.post('/admin/events/:id/promote-village', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const body = req.body || {};
+  const options = { name: cleanString(body.name, 100) };
+  if (body.latitude !== undefined) options.latitude = requireCoordinate(body.latitude, MAX_LAT, 'خط العرض');
+  if (body.longitude !== undefined) options.longitude = requireCoordinate(body.longitude, MAX_LNG, 'خط الطول');
+
+  const result = await villages.promoteRequestedVillage(eventId, options);
+  res.json({
+    success: true,
+    ...result,
+    message: `تم اعتماد القرية وربط ${result.linked_events} مناسبة`
+  });
 }));
 
 module.exports = router;

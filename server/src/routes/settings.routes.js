@@ -6,8 +6,15 @@ const ApiError = require('../utils/ApiError');
 const settings = require('../services/settings.service');
 const { requireSuperAdmin } = require('../middleware/auth');
 const { cleanString } = require('../middleware/validate');
+const { upload, verifyMedia } = require('../middleware/upload');
 
 const router = express.Router();
+
+/** One audio track under the `audio` field — same multer + byte check as event audio. */
+const defaultAudioMedia = [
+  upload.fields([{ name: 'audio', maxCount: 1 }]),
+  verifyMedia
+];
 
 // أرقام جوال إسرائيلية فقط (05X-XXXXXXX)، محلياً بصفر بادئ أو دولياً بصيغة
 // 972/+972 — وهذا فعلياً ما يقبله رابط واتساب wa.me. يُخزَّن دائماً بصيغة
@@ -35,10 +42,20 @@ function parseWhatsappNumber(raw) {
   return `972${nationalPart}`;
 }
 
+/**
+ * The default audio is a stored `/uploads/<file>` path, never free text: a
+ * value typed into PUT could point every event without its own audio at any
+ * URL on the internet. It is written only by the upload route below.
+ */
+function rejectFreeTextAudio() {
+  throw ApiError.badRequest('المقطع الصوتي الافتراضي لا يُحفَظ كنص — ارفعه ملفاً عبر POST /api/admin/settings/default-audio');
+}
+
 // كل قيمة قابلة للحفظ تمرّ بمُحقِّقها الخاص — إضافة مفتاح جديد لاحقاً تعني
 // إضافته هنا وفي SETTING_KEYS معاً، لا تخفيف هذا التحقق.
 const VALIDATORS = {
-  [settings.SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER]: parseWhatsappNumber
+  [settings.SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER]: parseWhatsappNumber,
+  [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: rejectFreeTextAudio
 };
 
 // Guarded on this router itself — a `router.use('/admin', ...)` registered in
@@ -65,6 +82,28 @@ router.put('/admin/settings', asyncHandler(async (req, res) => {
   await settings.setSettings(updates, req.user.id);
 
   res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم حفظ الإعدادات بنجاح' });
+}));
+
+// Both sub-paths sit under the `router.use('/admin/settings', ...)` guard
+// above — it is a prefix match, and it runs before multer, so a refused
+// caller never gets a file written to disk. A replaced file is left on disk:
+// there is no shared helper for removing an old upload.
+router.post('/admin/settings/default-audio', defaultAudioMedia, asyncHandler(async (req, res) => {
+  const audioFile = req.files && req.files.audio && req.files.audio[0];
+  if (!audioFile) throw ApiError.badRequest('اختر ملفاً صوتياً');
+
+  await settings.setSettings(
+    { [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: `/uploads/${audioFile.filename}` },
+    req.user.id
+  );
+
+  res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم رفع المقطع الافتراضي' });
+}));
+
+router.delete('/admin/settings/default-audio', asyncHandler(async (req, res) => {
+  await settings.setSettings({ [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: null }, req.user.id);
+
+  res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم حذف المقطع الافتراضي' });
 }));
 
 router.get('/settings/public', asyncHandler(async (req, res) => {

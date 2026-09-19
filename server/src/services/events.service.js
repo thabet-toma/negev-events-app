@@ -22,7 +22,7 @@ const MAX_PAGE_SIZE = 100;
  */
 const LIST_COLUMNS = [
   'events.id', 'events.title', 'events.groom_name', 'events.family_clan', 'events.occasion_type_id',
-  'events.town', 'events.village_id', 'events.location_name',
+  'events.town', 'events.village_id', 'events.requested_village_name', 'events.location_name',
   'events.latitude', 'events.longitude', 'events.event_date', 'events.event_end_date', 'events.youth_party_date',
   'events.dinner_time', 'events.poster_url', 'events.audio_url', 'events.audio_title',
   'events.artist_name', 'events.artist_image_url', 'events.host_phone', 'events.views_count'
@@ -595,6 +595,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
   const audioUrl = data.audio_url ?? null;
   const hostPhone = data.host_phone ?? null;
   const villageId = data.village_id ?? null;
+  const requestedVillageName = data.requested_village_name ?? null;
   const artistName = data.artist_name ?? null;
   const artistImageUrl = data.artist_image_url ?? null;
 
@@ -609,10 +610,11 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 
     const [result] = await connection.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, occasion_type_id, town, village_id, location_name, secondary_location_name,
+         (title, groom_name, family_clan, occasion_type_id, town, village_id, requested_village_name,
+          location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
           audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         groomName,
@@ -620,6 +622,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
         data.occasion_type_id,
         data.town,
         villageId,
+        requestedVillageName,
         // No column default exists for this NOT NULL text column; an
         // occasion type may leave it optional, so a blank submission still
         // needs a safe placeholder instead of a raw SQL NULL violation.
@@ -662,7 +665,9 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 }
 
 /** Columns an amendment to this event that touches the map/schedule the public relies on forces re-review. */
-const CRITICAL_AMENDMENT_FIELDS = ['event_date', 'event_end_date', 'town', 'village_id', 'location_name', 'latitude', 'longitude'];
+const CRITICAL_AMENDMENT_FIELDS = [
+  'event_date', 'event_end_date', 'town', 'village_id', 'requested_village_name', 'location_name', 'latitude', 'longitude'
+];
 
 /**
  * Classifies a set of changed column names as 'critical' (event returns to

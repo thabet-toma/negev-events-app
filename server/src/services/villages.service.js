@@ -2,6 +2,8 @@
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
+const logger = require('../utils/logger');
+const { VILLAGES_TOWN } = require('../constants');
 
 /**
  * `latitude`/`longitude` come back from mysql2 as strings (DECIMAL columns) —
@@ -46,6 +48,19 @@ async function findActiveById(id) {
   const row = await db.queryOne(
     'SELECT * FROM villages WHERE id = ? AND is_active = 1',
     [id]
+  );
+  return row ? shapeVillage(row) : null;
+}
+
+/**
+ * One active village by its exact name, or null. Lets a publisher who typed
+ * "قريتي غير موجودة" for a village that does exist be linked to it silently
+ * instead of queuing a duplicate request for the super_admin.
+ */
+async function findActiveByName(name) {
+  const row = await db.queryOne(
+    'SELECT * FROM villages WHERE name = ? AND is_active = 1',
+    [name]
   );
   return row ? shapeVillage(row) : null;
 }
@@ -131,9 +146,81 @@ async function deleteVillage(id) {
   return { deleted: false, disabled: true };
 }
 
+/**
+ * Promotes an event's typed "قريتي غير موجودة" name into a real village and
+ * links every catch-all event that requested that same name (plus the event
+ * itself) — one transaction, so a village never exists half-linked.
+ *
+ * `name` defaults to the event's own `requested_village_name`; a different
+ * `name` is the super_admin correcting the spelling, and events that asked
+ * for either spelling are linked. An existing village with that name (active
+ * or disabled) is reused and re-activated rather than duplicated; only a new
+ * one needs coordinates, which default to the event's own pin. Linked events
+ * keep their own coordinates — each publisher chose that pin.
+ *
+ * The raw `connection.execute` inside `db.transaction` skips pool.js's
+ * normalise(), so every bind value here is coerced to `null` explicitly.
+ */
+async function promoteRequestedVillage(eventId, { name = null, latitude = null, longitude = null } = {}) {
+  const result = await db.transaction(async connection => {
+    const [eventRows] = await connection.execute(
+      'SELECT id, town, requested_village_name, latitude, longitude FROM events WHERE id = ?',
+      [eventId]
+    );
+    const event = eventRows[0];
+    if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+    if (event.town !== VILLAGES_TOWN) {
+      throw ApiError.badRequest('لا يمكن اعتماد قرية إلا لمناسبة ضمن بند "القرى والتجمعات"');
+    }
+
+    const requestedName = event.requested_village_name ?? null;
+    const villageName = name ?? requestedName;
+    if (!villageName) {
+      throw ApiError.badRequest('هذه المناسبة لا تحمل اسم قرية مطلوباً — أرسل اسم القرية');
+    }
+
+    const [villageRows] = await connection.execute('SELECT * FROM villages WHERE name = ?', [villageName]);
+    let villageId;
+    if (villageRows[0]) {
+      villageId = villageRows[0].id;
+      if (!villageRows[0].is_active) {
+        await connection.execute('UPDATE villages SET is_active = 1 WHERE id = ?', [villageId]);
+      }
+    } else {
+      const villageLatitude = latitude ?? event.latitude ?? null;
+      const villageLongitude = longitude ?? event.longitude ?? null;
+      if (villageLatitude === null || villageLongitude === null) {
+        throw ApiError.badRequest('إحداثيات القرية مطلوبة — المناسبة نفسها بلا موقع على الخريطة');
+      }
+      const [insert] = await connection.execute(
+        `INSERT INTO villages (name, latitude, longitude, position, is_active)
+         VALUES (?, ?, ?, 0, 1)`,
+        [villageName, villageLatitude, villageLongitude]
+      );
+      villageId = insert.insertId;
+    }
+
+    const [update] = await connection.execute(
+      `UPDATE events
+          SET village_id = ?, requested_village_name = NULL
+        WHERE town = ?
+          AND (id = ? OR requested_village_name IN (?, ?))`,
+      [villageId, VILLAGES_TOWN, eventId, requestedName ?? villageName, villageName]
+    );
+
+    const [linkedVillageRows] = await connection.execute('SELECT * FROM villages WHERE id = ?', [villageId]);
+    return { village: shapeVillage(linkedVillageRows[0]), linked_events: update.affectedRows };
+  });
+
+  logger.info('villages.promote', { eventId, villageId: result.village.id, linked: result.linked_events });
+  return result;
+}
+
 module.exports = {
   listActive,
   findActiveById,
+  findActiveByName,
+  promoteRequestedVillage,
   listAllForAdmin,
   createVillage,
   updateVillage,

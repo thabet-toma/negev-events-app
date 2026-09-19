@@ -1321,6 +1321,20 @@ const steps = [
 
       logger.info('[migrations] add-service-category-attributes-and-provider-specs-2026-09: ensured service_category_attributes, price_type, price_estimate_desc, and attributes.');
     }
+  },
+  {
+    // "قريتي غير موجودة" (M2): a publisher under the villages catch-all may
+    // type a village name instead of picking one. Existing rows stay NULL —
+    // nothing is inferred for them, same no-guessing rule as village_id.
+    name: 'add-events-requested-village-name-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'requested_village_name'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN requested_village_name VARCHAR(100) NULL DEFAULT NULL AFTER village_id'
+        );
+      }
+      logger.info('[migrations] add-events-requested-village-name-2026-09: ensured column. Existing rows stay NULL.');
+    }
   }
 ];
 
