@@ -33,6 +33,7 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
 
   String? _url;
   Object? _owner;
+  Object? _key;
   bool _playing = false;
   bool _paused = false;
   bool _pausedByLifecycle = false;
@@ -93,28 +94,32 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  /// تشغيل تلقائي — لا شيء إن كان الصوت مكتوماً. نفس المقطع لنفس المالك بعد
-  /// إيقاف مؤقت يُستأنف من موضعه بدل أن يبدأ من أوّله. صامت عند الفشل: مقطع
-  /// لم يُحمَّل لا يستحقّ رسالة خطأ لم يطلبها أحد.
-  Future<void> autoplay(String? url, {required Object owner}) async {
+  /// تشغيل تلقائي — لا شيء إن كان الصوت مكتوماً. [key] هوية ما يُسمَع (رقم
+  /// المناسبة): عزلٌ كالستوري، فمناسبتان تتقاسمان المقطع نفسه (الافتراضي غالباً)
+  /// تبقيان اثنتين — الانتقال بينهما يبدأ المقطع من أوّله، لا يتركه معلّقاً على
+  /// السابقة. نفس المفتاح لنفس المالك بعد إيقاف مؤقت يُستأنف من موضعه. صامت
+  /// عند الفشل: مقطع لم يُحمَّل لا يستحقّ رسالة خطأ لم يطلبها أحد.
+  Future<void> autoplay(String? url, {required Object owner, Object? key}) async {
     if (_muted || url == null) {
       await release(owner);
       return;
     }
-    if (_url == url && _owner == owner && _paused) {
+    final same = _url == url && _owner == owner && _key == key;
+    if (same && _paused) {
       await _resume();
       return;
     }
-    if (_url == url && _owner == owner && _playing) return;
+    if (same && _playing) return;
     try {
-      await play(url, owner: owner);
+      await play(url, owner: owner, key: key);
     } catch (_) {}
   }
 
-  /// تشغيل صريح — يعمل حتى والصوت مكتوم (الكتم يوقف التلقائي وحده).
-  Future<void> play(String url, {required Object owner}) async {
+  /// تشغيل صريح من أوّل المقطع — يعمل حتى والصوت مكتوم (الكتم يوقف التلقائي وحده).
+  Future<void> play(String url, {required Object owner, Object? key}) async {
     _owner = owner;
     _url = url;
+    _key = key;
     _paused = false;
     _pausedByLifecycle = false;
     _playing = true;
@@ -123,8 +128,8 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
       final player = _ensurePlayer();
       await player.stop();
       await player.setReleaseMode(ReleaseMode.stop);
-      // تبدّل المالك أو المقطع أثناء الانتظار ⇒ هذا الطلب لم يعد المطلوب.
-      if (_owner != owner || _url != url) return;
+      // تبدّل المالك أو المقطع أو المناسبة أثناء الانتظار ⇒ هذا الطلب لم يعد المطلوب.
+      if (_owner != owner || _url != url || _key != key) return;
       await player.play(UrlSource(url));
     } catch (_) {
       if (_owner == owner && _url == url) {
@@ -181,6 +186,7 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
     final hadSomething = _url != null;
     _url = null;
     _owner = null;
+    _key = null;
     _playing = false;
     _paused = false;
     _pausedByLifecycle = false;
@@ -200,6 +206,7 @@ class AudioCoordinator extends ChangeNotifier with WidgetsBindingObserver {
       _paused = false;
       _url = null;
       _owner = null;
+      _key = null;
       notifyListeners();
     });
     return _player = player;

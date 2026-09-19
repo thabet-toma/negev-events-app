@@ -106,6 +106,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     await audio.autoplay(
       effectiveEventAudioUrl(event, defaultAudioUrl: defaultUrl),
       owner: this,
+      key: event.id,
     );
   }
 

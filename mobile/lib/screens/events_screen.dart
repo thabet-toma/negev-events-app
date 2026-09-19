@@ -131,9 +131,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _loadFirstPage();
     }
 
-    // مناسبة جديدة نُشرت لحظياً — نُحدّث القائمة من الصفحة الأولى.
+    // مناسبة جديدة نُشرت لحظياً — تحديث صامت يُبقي المستخدم على الكرت الذي أمامه.
     _newEventSub ??=
-        AppServices.of(context).realtime.onNewEvent.listen((_) => _loadFirstPage());
+        AppServices.of(context).realtime.onNewEvent.listen((_) => _refreshInPlace());
   }
 
   @override
@@ -179,9 +179,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       audio.release(this);
       return;
     }
+    final event = _events[_currentPage];
     audio.autoplay(
-      effectiveEventAudioUrl(_events[_currentPage], defaultAudioUrl: _defaultAudioUrl),
+      effectiveEventAudioUrl(event, defaultAudioUrl: _defaultAudioUrl),
       owner: this,
+      key: event.id,
     );
   }
 
@@ -236,6 +238,39 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         _error = error;
         _initialLoading = false;
       });
+    }
+  }
+
+  /// تحديث الصفحة الأولى بلا مؤشّر تحميل ولا قفز إلى أوّل القائمة: الكرت
+  /// المعروض يبقى أمام المستخدم (بموضعه الجديد إن أزاحته مناسبة جديدة) وصوته
+  /// لا ينقطع. من تجاوز الصفحة الأولى لا تُستبدل قائمته أصلاً — يرى الجديد
+  /// عند التحديث التالي بدل أن يُنتزع من مكانه.
+  Future<void> _refreshInPlace() async {
+    if (_initialLoading) return;
+    final shownId = _currentPage < _events.length ? _events[_currentPage].id : null;
+    final generation = _requestGeneration;
+    try {
+      final result = await AppServices.of(context).api.listEvents(
+            towns: _selectedTowns,
+            villageIds: _selectedVillageIds,
+            search: _search,
+            occasionTypeIds: _selectedOccasionTypeIds,
+            archive: _archive,
+            page: 1,
+          );
+      if (!mounted || generation != _requestGeneration) return;
+      final index = shownId == null ? 0 : result.events.indexWhere((e) => e.id == shownId);
+      if (index < 0) return;
+      setState(() {
+        _events = result.events;
+        _pagination = result.pagination;
+        _announcements = result.announcements;
+        _currentPage = index;
+      });
+      if (_pageController.hasClients) _pageController.jumpToPage(index);
+      _autoplayCurrent();
+    } catch (_) {
+      // تحديث خلفي — فشله لا يستحق رسالة؛ القائمة الحالية تبقى كما هي.
     }
   }
 

@@ -4725,6 +4725,59 @@ async function run() {
     assert.ok(!win.renderSingleEventCardHtml(funeralEvent).includes('card-audio-player'), 'no audio block at all on a type that hides audio_url');
   });
 
+  await test('feed audio is isolated per card like a story: moving on stops the old track — even a shared default one — and starts the next from zero', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    const started = [];
+    win.Audio = function FakeAudio(src) {
+      const listeners = {};
+      this.src = src;
+      this.paused = true;
+      this.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
+      this.play = () => { this.paused = false; started.push(this); (listeners.playing || []).forEach(fn => fn()); return Promise.resolve(); };
+      this.pause = () => { this.paused = true; (listeners.pause || []).forEach(fn => fn()); };
+    };
+    const SHARED = 'https://example.test/uploads/default-track.mp3';
+    document.getElementById('eventsContainer').innerHTML = [1, 2].map(id =>
+      `<div class="event-card" id="eventCard-${id}" data-event-id="${id}" data-audio-url="${SHARED}"><div class="wave-bars" data-audio-event-id="${id}"></div></div>`).join('');
+    // ما يُسمَع الآن كما تراه الواجهة: موجة الكرت الذي يعزف (syncAudioUi).
+    const sounding = () => [...document.querySelectorAll('.wave-bars.playing')].map(el => Number(el.dataset.audioEventId));
+    const [card1, card2] = document.querySelectorAll('#eventsContainer .event-card');
+    const entry = (target, ratio) => ({
+      target,
+      isIntersecting: ratio > 0,
+      intersectionRatio: ratio,
+      intersectionRect: { height: ratio * 700 },
+      rootBounds: { height: 800 }
+    });
+
+    win.handleFeedAudioIntersections([entry(card1, 1)]);
+    assert.strictEqual(started.length, 1, 'the card in view must autoplay');
+    assert.deepStrictEqual(sounding(), [1]);
+
+    win.handleFeedAudioIntersections([entry(card1, 0.2), entry(card2, 0.8)]);
+    assert.strictEqual(started[0].paused, true, 'the previous card\'s track must stop the moment another card takes over');
+    assert.strictEqual(started.length, 2, 'the next card must start its OWN playback, even though both cards share the default track');
+    assert.notStrictEqual(started[1], started[0], 'a fresh player — so the next card starts from zero, not mid-way through the old one');
+    assert.deepStrictEqual(sounding(), [2], 'only the card in view may sound');
+
+    win.handleFeedAudioIntersections([entry(card1, 0.55), entry(card2, 0.55)]);
+    assert.strictEqual(started.length, 2, 'a tie keeps the current card — the sound must not flip between two half-visible cards');
+    assert.deepStrictEqual(sounding(), [2]);
+
+    win.toggleSoundMuted();
+    win.playEventAudio(2, SHARED); // تشغيل يدوي والصوت مكتوم
+    const manual = started[started.length - 1];
+    assert.strictEqual(manual.paused, false);
+    win.handleFeedAudioIntersections([entry(card1, 0.9), entry(card2, 0.1)]);
+    assert.strictEqual(manual.paused, true, 'a hand-started track stops too when its card is left — muted or not');
+    assert.strictEqual(started[started.length - 1], manual, 'muted: nothing new autoplays on the next card');
+    assert.deepStrictEqual(sounding(), []);
+  });
+
   await test('the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer', async () => {
     const dom = buildEnv();
     const win = dom.window;

@@ -107,6 +107,8 @@ let audioUnlockNeeded = false;
 let currentAudioEventId = null;
 let activeFeedEventId = null;
 let feedAudioObserver = null;
+const feedCardVisibility = new Map(); // eventId ⇒ درجة ظهور الكرت الآن (feedCardVisibilityScore)
+const FEED_ACTIVE_MIN_SCORE = 0.5;
 
 // Story viewer (#20 step 18) — the strip's own stories list, plus the
 // viewer's playback state; opened by index into this same array.
@@ -793,6 +795,8 @@ function openStoryViewer(index) {
   if (!allStories.length) return;
   storyViewerIndex = index;
   storyViewerPaused = false;
+  // الستوري تُسمَع وحدها — موسيقى التغذية تسكت ما دام العارض مفتوحاً.
+  pauseCurrentAudio();
   document.getElementById('storyViewerOverlay').style.display = 'flex';
   document.addEventListener('keydown', handleStoryViewerKeydown);
   document.addEventListener('visibilitychange', handleStoryViewerVisibilityChange);
@@ -807,6 +811,7 @@ function closeStoryViewer() {
   storyViewerPaused = false;
   document.removeEventListener('keydown', handleStoryViewerKeydown);
   document.removeEventListener('visibilitychange', handleStoryViewerVisibilityChange);
+  autoplayActiveFeedCard();
 }
 
 function renderStoryProgressBars() {
@@ -1810,6 +1815,8 @@ function autoplayActiveFeedCard() {
   const home = document.getElementById('tabHome');
   if (!home || !home.classList.contains('active-tab')) return;
   if (activeFeedEventId == null || activeFeedEventId === manuallyPausedEventId) return;
+  const storyOverlay = document.getElementById('storyViewerOverlay');
+  if (storyOverlay && storyOverlay.style.display === 'flex') return;
   const card = document.querySelector(`#eventsContainer .event-card[data-event-id="${activeFeedEventId}"]`);
   const url = card && card.dataset.audioUrl;
   if (!url) {
@@ -1820,27 +1827,67 @@ function autoplayActiveFeedCard() {
   playEventAudio(activeFeedEventId, url);
 }
 
+/** يوقف المقطع الحالي ويرميه — العودة إلى مناسبته لاحقاً تبدأه من أوّله لا من حيث توقّف. */
+function stopCurrentAudio() {
+  if (currentAudio) currentAudio.pause();
+  currentAudio = null;
+  currentAudioEventId = null;
+  currentAudioPlaying = false;
+  syncAudioUi();
+}
+
 /**
- * IntersectionObserver واحد على كروت التغذية: الكرت الظاهر بنسبة ≥ 60% هو
- * النشِط؛ مغادرته توقف مقطعه، أيّاً كان من شغّله.
+ * «ظهور» كرت في الشاشة: نسبته الظاهرة من نفسه، أو من ارتفاع الشاشة إن كان
+ * أطول منها — وإلا لم يبلغ كرت طويل على الحاسوب عتبة النشاط أبداً.
+ */
+function feedCardVisibilityScore(entry) {
+  if (!entry.isIntersecting) return 0;
+  const viewport = (entry.rootBounds && entry.rootBounds.height) || window.innerHeight || 0;
+  const ofViewport = viewport ? entry.intersectionRect.height / viewport : 0;
+  return Math.max(entry.intersectionRatio, ofViewport);
+}
+
+/**
+ * IntersectionObserver واحد على كروت التغذية: الكرت الأوضح ظهوراً (≥ النصف)
+ * هو النشِط، والتعادل يُبقي النشِط الحالي كي لا يتقلّب الصوت بين كرتين.
  */
 function handleFeedAudioIntersections(entries) {
   entries.forEach(entry => {
     const eventId = Number(entry.target.dataset.eventId);
-    if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-      if (activeFeedEventId !== eventId) manuallyPausedEventId = null;
-      activeFeedEventId = eventId;
-    } else if (activeFeedEventId === eventId) {
-      activeFeedEventId = null;
-      if (currentAudioEventId === eventId) pauseCurrentAudio();
+    const score = feedCardVisibilityScore(entry);
+    if (score > 0) feedCardVisibility.set(eventId, score);
+    else feedCardVisibility.delete(eventId);
+  });
+  let next = null;
+  let best = FEED_ACTIVE_MIN_SCORE;
+  feedCardVisibility.forEach((score, eventId) => {
+    if (score > best) {
+      best = score;
+      next = eventId;
     }
   });
+  const currentScore = feedCardVisibility.get(activeFeedEventId);
+  if (currentScore != null && currentScore >= best) next = activeFeedEventId;
+  setActiveFeedCard(next);
+}
+
+/**
+ * عزل كالستوري: تغيّر الكرت النشِط يُسكت أي مقطع لا يخصّه فوراً — أيّاً كان
+ * من شغّله، ولو كان الصوت مكتوماً — ثم يبدأ مقطع الكرت الجديد من أوّله.
+ */
+function setActiveFeedCard(eventId) {
+  if (eventId !== activeFeedEventId) {
+    activeFeedEventId = eventId;
+    manuallyPausedEventId = null;
+    if (currentAudio && currentAudioEventId !== eventId) stopCurrentAudio();
+  }
   autoplayActiveFeedCard();
 }
 
 function observeFeedCardsForAudio() {
   if (!feedAudioObserver) return;
   feedAudioObserver.disconnect();
+  feedCardVisibility.clear();
   document.querySelectorAll('#eventsContainer .event-card[data-event-id]').forEach(card => feedAudioObserver.observe(card));
 }
 
@@ -1895,7 +1942,7 @@ function updateSoundToggleUI() {
 
 function initFeedAudio() {
   if (typeof IntersectionObserver !== 'undefined') {
-    feedAudioObserver = new IntersectionObserver(handleFeedAudioIntersections, { threshold: 0.6 });
+    feedAudioObserver = new IntersectionObserver(handleFeedAudioIntersections, { threshold: [0, 0.25, 0.5, 0.75, 1] });
   }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) pauseCurrentAudio();
