@@ -4934,6 +4934,236 @@ async function run() {
     assert.strictEqual(superDom.window.renderRequestedVillageNoticeHtml({ ...evt, village_id: 3 }), '', 'a linked village needs no notice');
   });
 
+  console.log('\nTikTok live channel admin panel (LIVE-03)');
+
+  await test('every element id the TikTok live admin.js code reads for actually exists in admin.html', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const ids = [
+      'liveStatusStrip', 'settingTiktokProfileUrl', 'settingTiktokLiveTitle',
+      'settingTiktokLiveUntil', 'liveUntilPreview', 'settingTiktokLiveUrl',
+      'saveTiktokLiveBtn', 'endTiktokLiveBtn', 'copyLiveLinkBtn',
+      'liveShareLinkFallback', 'liveCardPreview'
+    ];
+    for (const id of ids) {
+      assert.ok(document.getElementById(id), `expected #${id} to exist in admin.html — this list is hand-maintained — it proves admin.html declares these ids, not that admin.js reads exactly this set`);
+    }
+  });
+
+  await test('getLiveShareUrl() returns <origin>/live for the default empty apiBase', () => {
+    const dom = buildAdminEnv();
+    assert.strictEqual(dom.window.getLiveShareUrl(), `${dom.window.location.origin}/live`);
+  });
+
+  await test('getLiveShareUrl() follows NEGEV_CONFIG.apiBase when it is set to a non-empty absolute origin', () => {
+    const dom = buildAdminEnv();
+    dom.window.NEGEV_CONFIG.apiBase = 'https://api.example.test';
+    assert.strictEqual(dom.window.getLiveShareUrl(), 'https://api.example.test/live');
+  });
+
+  await test('duration presets compute a future "until", and "حتى منتصف الليل" lands exactly on the next local midnight', () => {
+    const dom = buildAdminEnv();
+    const now = Date.now();
+
+    const oneHour = dom.window.computeLiveDurationUntil('1h');
+    assert.ok(oneHour.getTime() > now, 'the 1h preset must be in the future');
+    assert.ok(oneHour.getTime() >= now + 59 * 60 * 1000, 'the 1h preset must really be an hour out — a one-minute preset would also satisfy a bare in-the-future check');
+    assert.ok(oneHour.getTime() <= now + 61 * 60 * 1000, 'the 1h preset must be roughly one hour out, not some other length');
+
+    const fourHours = dom.window.computeLiveDurationUntil('4h');
+    assert.ok(fourHours.getTime() > oneHour.getTime(), '4h preset must land later than the 1h preset');
+
+    const midnight = dom.window.computeLiveDurationUntil('midnight');
+    assert.ok(midnight.getTime() > now, '"حتى منتصف الليل" must be in the future');
+    assert.strictEqual(midnight.getHours(), 0, 'expected local midnight (hour 0)');
+    assert.strictEqual(midnight.getMinutes(), 0);
+    assert.strictEqual(midnight.getSeconds(), 0);
+    assert.ok(midnight.getTime() <= now + 24 * 60 * 60 * 1000, 'the NEXT local midnight is at most one day away');
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    assert.strictEqual(Math.round((midnight.getTime() - startOfToday.getTime()) / 86400000), 1,
+      'expected the start of TOMORROW — one local day on from the start of today, checked independently of how the code computes it');
+  });
+
+  await test('clicking a duration preset writes the hidden "until" field and the readable preview text', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+
+    dom.window.applyLiveDurationPreset('2h');
+    const untilInput = document.getElementById('settingTiktokLiveUntil');
+    assert.ok(untilInput.value, 'expected the hidden until field to be filled');
+    const untilMs = new Date(untilInput.value).getTime();
+    assert.ok(untilMs > Date.now(), 'the written until value must be in the future');
+
+    const preview = document.getElementById('liveUntilPreview');
+    assert.notStrictEqual(preview.textContent, 'لم يُحدَّد موعد انتهاء بعد', 'the preview text must reflect the chosen duration');
+  });
+
+  await test('status strip: active live shows the badge, topic and remaining time; a saved channel with no live shows the channel-only line; nothing saved shows the unset line', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const strip = document.getElementById('liveStatusStrip');
+
+    dom.window.renderLiveStatusStrip({
+      success: true,
+      profile_url: 'https://www.tiktok.com/@aarasna',
+      live: { title: 'سهرة عرس فلان', until: new Date(Date.now() + 90 * 60 * 1000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: true }
+    });
+    assert.ok(strip.querySelector('.live-badge-active'), 'expected the active-live badge');
+    assert.ok(strip.textContent.includes('سهرة عرس فلان'), 'expected the topic to be shown');
+    assert.match(strip.textContent, /يتبقّى [٠-٩]{2}:[٠-٩]{2}/, 'expected a remaining-time figure');
+    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, false, 'end-live must be enabled while a live is set');
+
+    dom.window.renderLiveStatusStrip({ success: true, profile_url: 'https://www.tiktok.com/@aarasna', live: null });
+    assert.ok(!strip.querySelector('.live-badge-active'), 'no badge once there is no live object');
+    assert.ok(strip.textContent.includes('لا يوجد بث الآن'), 'expected the channel-only line');
+    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, true, 'end-live must be disabled — there is nothing to end');
+
+    dom.window.renderLiveStatusStrip({ success: true, profile_url: null, live: null });
+    assert.ok(strip.textContent.includes('لم تُضبَط قناة تيك توك بعد'), 'expected the fully-unset line');
+  });
+
+  await test('an expired live (until in the past) renders as "no live", never as an active one', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const strip = document.getElementById('liveStatusStrip');
+
+    dom.window.renderLiveStatusStrip({
+      success: true,
+      profile_url: 'https://www.tiktok.com/@aarasna',
+      live: { title: 'بث قديم انتهى', until: new Date(Date.now() - 60 * 60 * 1000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: false }
+    });
+
+    assert.ok(!strip.querySelector('.live-badge-active'), 'an expired live must never render the active badge, regardless of the server\'s own `active` flag');
+    assert.ok(!strip.textContent.includes('بث قديم انتهى'), 'a stale topic must not remain visible once its own until has passed');
+    assert.ok(strip.textContent.includes('لا يوجد بث الآن'), 'expired-but-saved must read the same as channel-only, not as a fourth state');
+  });
+
+  await test('«إنهاء البث الآن» clears title and until together, in a single PUT request body', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    dom.window.confirm = () => true;
+
+    let putCount = 0;
+    let putBody = null;
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'PUT' && requestPath === '/api/admin/settings') {
+        putCount += 1;
+        putBody = JSON.parse(options.body);
+        return jsonResponse({
+          success: true,
+          settings: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna', tiktok_live_title: null, tiktok_live_until: null, tiktok_live_url: null }
+        });
+      }
+      if (requestPath === '/api/live') {
+        return jsonResponse({ success: true, profile_url: 'https://www.tiktok.com/@aarasna', live: null });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.handleEndTiktokLive();
+
+    assert.strictEqual(putCount, 1, 'ending the live must be exactly one PUT — never two calls each clearing one field');
+    assert.ok(putBody, 'expected a PUT body');
+    assert.strictEqual(putBody.tiktok_live_title, '', 'title must be cleared');
+    assert.strictEqual(putBody.tiktok_live_until, '', 'until must be cleared in the very same request body as the title');
+  });
+
+  await test('a topic containing markup is inserted into the status strip as text, never as HTML', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const strip = document.getElementById('liveStatusStrip');
+    const evilTitle = '<img src=x onerror=alert(1)>';
+
+    dom.window.renderLiveStatusStrip({
+      success: true,
+      profile_url: 'https://www.tiktok.com/@aarasna',
+      live: { title: evilTitle, until: new Date(Date.now() + 3600000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: true }
+    });
+
+    assert.strictEqual(strip.querySelectorAll('img').length, 0, 'a malicious topic must not create an <img> element in the strip');
+    assert.ok(strip.textContent.includes(evilTitle), 'the raw text of the topic must still be visible, just not parsed as markup');
+  });
+
+  await test('each duration button in admin.html is wired to a preset key computeLiveDurationUntil actually resolves', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const buttons = [...document.querySelectorAll('.live-duration-presets button')];
+    assert.strictEqual(buttons.length, 4, 'expected the four documented durations');
+
+    const keys = buttons.map(btn => {
+      const handler = btn.getAttribute('onclick') || '';
+      const match = /applyLiveDurationPreset\('([^']+)'\)/.exec(handler);
+      assert.ok(match, `the button «${btn.textContent.trim()}» must carry an applyLiveDurationPreset(...) handler — that attribute IS the whole wiring`);
+      return match[1];
+    });
+    assert.deepStrictEqual(keys, ['1h', '2h', '4h', 'midnight'], 'expected the four keys in the documented order');
+
+    for (const key of keys) {
+      assert.ok(dom.window.computeLiveDurationUntil(key), `preset key "${key}" must be one computeLiveDurationUntil resolves — a typo in the markup does nothing at all when clicked, silently`);
+    }
+  });
+
+  await test('an expired live is not handed back to the form: its topic and until are cleared, and «إنهاء البث الآن» is disabled', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const past = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+
+    dom.window.applyTiktokSettingsToForm({
+      tiktok_profile_url: 'https://www.tiktok.com/@aarasna',
+      tiktok_live_title: 'بث الأمس',
+      tiktok_live_until: past,
+      tiktok_live_url: null
+    });
+
+    assert.strictEqual(document.getElementById('settingTiktokLiveTitle').value, '',
+      'a finished live must not reappear as tonight\'s topic');
+    assert.strictEqual(document.getElementById('settingTiktokLiveUntil').value, '',
+      'the dead until must not ride along on the next save — the server accepts a past until, so this would be saved as a success that is live nowhere');
+    assert.strictEqual(document.getElementById('settingTiktokProfileUrl').value, 'https://www.tiktok.com/@aarasna',
+      'the permanent channel link is not part of the live and must survive');
+
+    dom.window.renderLiveStatusStrip({
+      success: true,
+      profile_url: 'https://www.tiktok.com/@aarasna',
+      live: { title: 'بث الأمس', until: past, url: 'https://www.tiktok.com/@aarasna', active: false }
+    });
+    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, true,
+      'the strip reads «لا يوجد بث الآن» for an expired live, so the button beside it must not offer to end one');
+  });
+
+  await test('a still-running live IS restored into the form untouched', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    const future = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+
+    dom.window.applyTiktokSettingsToForm({
+      tiktok_profile_url: 'https://www.tiktok.com/@aarasna',
+      tiktok_live_title: 'بث الليلة',
+      tiktok_live_until: future,
+      tiktok_live_url: null
+    });
+
+    assert.strictEqual(document.getElementById('settingTiktokLiveTitle').value, 'بث الليلة',
+      'clearing expired values must not also clear a live that is still running');
+    assert.strictEqual(document.getElementById('settingTiktokLiveUntil').value, future);
+  });
+
+  await test('when GET /api/live fails, the strip stops claiming that no channel is configured', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const strip = dom.window.document.getElementById('liveStatusStrip');
+    assert.ok(strip.textContent.includes('لم تُضبَط'), 'precondition: the static default is the definite "nothing saved" claim');
+
+    dom.window.fetch = async () => { throw new Error('network down'); };
+    await dom.window.refreshLiveStatusStrip();
+
+    assert.ok(!strip.textContent.includes('لم تُضبَط'),
+      'a failed request must not leave a definite claim that no channel exists standing');
+    assert.ok(strip.textContent.includes('تعذّر'), 'expected an honest "could not fetch" line instead');
+  });
+
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

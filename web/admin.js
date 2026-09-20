@@ -4554,6 +4554,8 @@ async function fetchAdminSettings() {
     if (data.success && data.settings) {
       input.value = data.settings.support_whatsapp_number || '';
       renderDefaultAudioSetting(data.settings.default_event_audio_url);
+      applyTiktokSettingsToForm(data.settings);
+      renderLiveCardPreview();
       if (notice) notice.style.display = 'none';
     } else if (!data.success) {
       if (notice) {
@@ -4564,6 +4566,8 @@ async function fetchAdminSettings() {
   } catch (e) {
     console.error('Fetch admin settings error:', e);
   }
+
+  await refreshLiveStatusStrip();
 }
 
 async function handleSaveSettings(e) {
@@ -4717,4 +4721,280 @@ async function handleDeleteDefaultAudio() {
     if (btn) btn.disabled = false;
     showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
   }
+}
+
+/**
+ * البث المباشر (LIVE-03) — أول شاشة تُشغِّل الميزة فعلياً، بعد أن كانت المفاتيح
+ * الأربعة (خطوة سابقة) قابلة للكتابة بـcurl فقط. الخادم (settings.service.js)
+ * هو من يحسم التناسق (عنوان بلا موعد، أو العكس، أو الاثنان بلا أي رابط) —
+ * هذه الطبقة تجمع الحقول الأربعة في نداء PUT واحد وتعرض رسالة الخادم كما هي.
+ */
+
+/** يملأ الحقول الأربعة من الشكل الذي يرجعه GET/PUT /api/admin/settings. */
+function applyTiktokSettingsToForm(settingsObj) {
+  const profileInput = document.getElementById('settingTiktokProfileUrl');
+  const titleInput = document.getElementById('settingTiktokLiveTitle');
+  const untilInput = document.getElementById('settingTiktokLiveUntil');
+  const urlInput = document.getElementById('settingTiktokLiveUrl');
+  if (!profileInput || !titleInput || !untilInput || !urlInput) return;
+
+  const until = (settingsObj && settingsObj.tiktok_live_until) || '';
+  // بثّ مضى موعده انتهى فعلاً: الخادم يُبقي صفّيه (موعد ماضٍ هو نفسه طريقة
+  // إنهاء بثّ مبكراً) لكن اللوحة لا تعيدهما كأنهما بثّ الليلة. إعادة موعد
+  // ميت إلى الحقل المخفي هي بالضبط كيف يُحفَظ موضوعٌ كُتب في اليوم التالي
+  // بموعد الأمس: يقبله الخادم، ويقول «تم الحفظ»، ولا بثّ في أي مكان.
+  const expired = Boolean(until) && !(new Date(until).getTime() > Date.now());
+
+  profileInput.value = (settingsObj && settingsObj.tiktok_profile_url) || '';
+  titleInput.value = (expired ? '' : (settingsObj && settingsObj.tiktok_live_title)) || '';
+  untilInput.value = expired ? '' : until;
+  urlInput.value = (settingsObj && settingsObj.tiktok_live_url) || '';
+  renderLiveUntilPreview(untilInput.value);
+}
+
+/**
+ * أزمنة جاهزة بدل حقل تاريخ حرّ — المالك يختار «كم سأبثّ» لا يكتب طابعاً
+ * زمنياً بصيغة ISO، على نفس فكرة EXPIRY_PRESETS في stories.service.js
+ * (مدد جاهزة كبيانات، لا حقل حر مكرَّر في كل مكان يحتاج هذه المشكلة نفسها).
+ * «حتى منتصف الليل» يُحسَب بساعة ٢٤ اليوم — تفيض تلقائياً إلى ٠٠:٠٠ اليوم
+ * التالي بتوقيت المتصفح المحلي.
+ */
+const LIVE_DURATION_PRESET_HOURS = { '1h': 1, '2h': 2, '4h': 4 };
+
+function computeLiveDurationUntil(presetKey) {
+  if (presetKey === 'midnight') {
+    const d = new Date();
+    d.setHours(24, 0, 0, 0);
+    return d;
+  }
+  const hours = LIVE_DURATION_PRESET_HOURS[presetKey];
+  if (!hours) return null;
+  return new Date(Date.now() + hours * 60 * 60 * 1000);
+}
+
+function applyLiveDurationPreset(presetKey) {
+  const until = computeLiveDurationUntil(presetKey);
+  const input = document.getElementById('settingTiktokLiveUntil');
+  if (!until || !input) return;
+  input.value = until.toISOString();
+  renderLiveUntilPreview(input.value);
+}
+
+function renderLiveUntilPreview(untilIso) {
+  const hint = document.getElementById('liveUntilPreview');
+  if (!hint) return;
+  const d = untilIso ? new Date(untilIso) : null;
+  hint.textContent = (d && !Number.isNaN(d.getTime()))
+    ? `ينتهي البث عند ${d.toLocaleString('ar-EG')}`
+    : 'لم يُحدَّد موعد انتهاء بعد';
+}
+
+/** ‏HH:MM المتبقّي حتى `untilIso` بساعة المتصفح — null إن كان الموعد قد مضى. */
+function formatLiveRemaining(untilIso) {
+  const remainingMs = new Date(untilIso).getTime() - Date.now();
+  if (!(remainingMs > 0)) return null;
+  const totalMinutes = Math.floor(remainingMs / 60000);
+  const pad = n => String(n).padStart(2, '0');
+  // أرقام هندية كبقية أرقام اللوحة — تحويل صريح لا عبر اللغة، فلا تتغيّر
+  // النتيجة بتغيّر بيانات ICU في المتصفح.
+  return `${pad(Math.floor(totalMinutes / 60))}:${pad(totalMinutes % 60)}`
+    .replace(/[0-9]/g, d => '٠١٢٣٤٥٦٧٨٩'[Number(d)]);
+}
+
+/**
+ * ثلاث حالات فقط: بثّ نشِط (شارة + الموضوع + المتبقّي)، أو قناة محفوظة بلا
+ * بثّ نشِط الآن (بثّ لم يُحفَظ أصلاً أو حُفظ وانتهى وقته — نفس الرسالة في
+ * الحالتين)، أو لا شيء محفوظ إطلاقاً. النشاط يُحسَب هنا من `until` بساعة
+ * المتصفح لا من `active` الذي أرجعه الخادم لحظة الطلب — فبثّ فُتحت لوحته قبل
+ * دقائق من انتهائه لا يبقى يدّعي أنه لا يزال حيّاً. الموضوع يُدرَج نصّاً
+ * (‏textContent) لا HTML — قادم من مدخل بشري بلا أي تعقيم على هذه الطبقة.
+ */
+function renderLiveStatusStrip(data) {
+  const strip = document.getElementById('liveStatusStrip');
+  const endBtn = document.getElementById('endTiktokLiveBtn');
+  if (!strip) return;
+
+  const live = data && data.live;
+  const remaining = live ? formatLiveRemaining(live.until) : null;
+  // مربوط بالمتبقّي لا بوجود الكائن: بثّ انتهى وقته تقرأ الشريحة عنه «لا
+  // يوجد بث الآن»، فزرّ «إنهاء البث» المفعَّل بجانبها يعرض إنهاء ما لا وجود
+  // له. صفّاه الميتان يُمسحان بحفظ الحقول الفارغة.
+  if (endBtn) endBtn.disabled = !remaining;
+
+  strip.innerHTML = '';
+  if (live && remaining) {
+    const badge = document.createElement('span');
+    badge.className = 'live-badge-active';
+    badge.innerHTML = '<i class="fa-solid fa-circle"></i> مباشر الآن';
+    strip.appendChild(badge);
+
+    const title = document.createElement('span');
+    title.className = 'live-status-title';
+    title.textContent = live.title;
+    strip.appendChild(title);
+
+    const rem = document.createElement('span');
+    rem.className = 'live-status-remaining';
+    rem.textContent = `يتبقّى ${remaining}`;
+    strip.appendChild(rem);
+  } else if (data && data.profile_url) {
+    strip.textContent = 'لا يوجد بث الآن — القناة فقط';
+  } else {
+    strip.textContent = 'لم تُضبَط قناة تيك توك بعد';
+  }
+}
+
+/** ‏GET /api/live عام بلا مصادقة — apiFetch لا adminFetch (api.js). */
+async function refreshLiveStatusStrip() {
+  try {
+    const res = await apiFetch('/api/live');
+    const data = await res.json();
+    if (data.success) renderLiveStatusStrip(data);
+    else showLiveStatusUnavailable();
+  } catch (e) {
+    console.error('Fetch live status error:', e);
+    showLiveStatusUnavailable();
+  }
+}
+
+/**
+ * نداء الحالة فشل — لا نُبقي «لم تُضبَط قناة تيك توك بعد» معروضة: هي ادّعاء
+ * جازم بأن لا قناة، وقد تكون مضبوطة ولم يصل الردّ فحسب.
+ */
+function showLiveStatusUnavailable() {
+  const strip = document.getElementById('liveStatusStrip');
+  if (strip) strip.textContent = 'تعذّر جلب حالة البث — حدّث الصفحة';
+}
+
+async function handleSaveTiktokLive(e) {
+  e.preventDefault();
+  const notice = document.getElementById('settingsNotice');
+  const btn = document.getElementById('saveTiktokLiveBtn');
+  const profileInput = document.getElementById('settingTiktokProfileUrl');
+  const titleInput = document.getElementById('settingTiktokLiveTitle');
+  const untilInput = document.getElementById('settingTiktokLiveUntil');
+  const urlInput = document.getElementById('settingTiktokLiveUrl');
+  if (!profileInput || !titleInput || !untilInput || !urlInput) return;
+
+  const body = {
+    tiktok_profile_url: profileInput.value.trim(),
+    tiktok_live_title: titleInput.value.trim(),
+    tiktok_live_until: untilInput.value,
+    tiktok_live_url: urlInput.value.trim()
+  };
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+  }
+
+  try {
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      if (notice) notice.style.display = 'none';
+      applyTiktokSettingsToForm(data.settings);
+      renderLiveCardPreview();
+      await refreshLiveStatusStrip();
+      showAdminNotice(data.message || 'تم حفظ إعدادات البث', 'نجاح');
+    } else {
+      if (notice) {
+        notice.style.display = 'block';
+        notice.textContent = data.message || 'فشل حفظ إعدادات البث';
+      }
+      showAdminNotice(data.message || 'فشل حفظ إعدادات البث', 'خطأ في الحفظ');
+    }
+  } catch (err) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ';
+    }
+  }
+}
+
+/**
+ * يمسح `tiktok_live_title` و`tiktok_live_until` معاً بنداء PUT واحد — مسح
+ * أحدهما فقط يرفضه الخادم (assertLiveConsistency)، وهذا بالضبط السبب: لا
+ * حالة وسيطة يمكن أن تصل هنا.
+ */
+async function handleEndTiktokLive() {
+  if (!confirm('إنهاء البث الآن؟ سيختفي الموضوع من صفحة المشاركة والغلاف فوراً.')) return;
+
+  const btn = document.getElementById('endTiktokLiveBtn');
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tiktok_live_title: '', tiktok_live_until: '' })
+    });
+    const data = await res.json();
+    if (data.success) {
+      applyTiktokSettingsToForm(data.settings);
+      renderLiveCardPreview();
+      await refreshLiveStatusStrip();
+      showAdminNotice('تم إنهاء البث', 'تم الإنهاء');
+    } else {
+      showAdminNotice(data.message || 'تعذّر إنهاء البث', 'خطأ');
+      if (btn) btn.disabled = false;
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+    if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * أصل رابط المشاركة — نفس الأصل افتراضياً (config.js: كل نشر حقيقي يجلس
+ * الخادم والواجهة خلف دومين واحد)، أو أصل `apiBase` إن كان مضبوطاً رابطاً
+ * مطلقاً. دالة واحدة يستهلكها زر النسخ ومعاينة الغلاف معاً فلا يمكن أن
+ * يشيرا إلى مكانين مختلفين.
+ */
+function getLiveShareUrl() {
+  const apiBase = (window.NEGEV_CONFIG && window.NEGEV_CONFIG.apiBase) || '';
+  const origin = /^https?:\/\//i.test(apiBase) ? apiBase.replace(/\/+$/, '') : window.location.origin;
+  return `${origin}/live`;
+}
+
+/** يُعاد تحميلها بعد كل حفظ ناجح — الغلاف يتغيّر مع الموضوع (؟t= لكسر ذاكرة المتصفح). */
+function renderLiveCardPreview() {
+  const img = document.getElementById('liveCardPreview');
+  if (!img) return;
+  img.onerror = () => { img.style.display = 'none'; };
+  img.onload = () => { img.style.display = ''; };
+  img.src = `${getLiveShareUrl()}/card.jpg?t=${Date.now()}`;
+}
+
+/**
+ * الزر الأهم في هذه البطاقة — يُستعمَل كل مرّة. navigator.clipboard يحتاج
+ * سياقاً آمناً قد لا يتوفّر عند فتح اللوحة من الجوال، فالبديل تحديد نص حقل
+ * جاهز للنسخ اليدوي — لا زر ميت بلا تفسير في أي من الحالتين.
+ */
+async function handleCopyLiveLink() {
+  const url = getLiveShareUrl();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showAdminNotice(`تم نسخ رابط البث: ${url}`, 'تم النسخ');
+      return;
+    } catch (e) {
+      // يتابع إلى بديل التحديد اليدوي أدناه
+    }
+  }
+  const fallback = document.getElementById('liveShareLinkFallback');
+  if (fallback) {
+    fallback.value = url;
+    fallback.style.display = 'block';
+    fallback.focus();
+    fallback.select();
+  }
+  showAdminNotice(`تعذّر النسخ التلقائي — الرابط محدَّد في الحقل تحت الزر، انسخه يدوياً: ${url}`, 'انسخ يدوياً');
 }

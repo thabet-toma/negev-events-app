@@ -387,6 +387,51 @@ body {
 .admin-table td { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); color: var(--text-main); font-variant-numeric: tabular-nums; }
 .admin-table tr:hover td { background: var(--sky-wash); }
 
+/* بث تيك توك المباشر (LIVE-03) */
+.live-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+  border: 1px solid var(--admin-card-border);
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.live-badge-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger-wash);
+  color: var(--danger-red);
+  border: 1px solid var(--danger-red);
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+.live-badge-active i { font-size: 0.55rem; }
+
+.live-status-title { color: var(--text-main); font-weight: 800; }
+.live-status-remaining { color: var(--text-dim); }
+
+.live-duration-presets { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+.live-card-preview {
+  width: 100%;
+  max-width: 320px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--admin-card-border);
+  margin-top: 6px;
+}
+
+.live-share-fallback { width: 100%; margin-top: 10px; }
+
 /* Occasion Types (#20 خطوة 16) */
 .occasion-type-new-btn { width: auto; margin-top: 0; }
 

@@ -932,6 +932,77 @@
             </div>
           </div>
         </div>
+
+        <!-- بث تيك توك المباشر (LIVE-03) — بطاقة داخل إعدادات المنصّة نفسها لا
+             تبويب جديد: هي إعداد منصّة كرقم الدعم، وحراسة السوبر أدمن لهذا
+             التبويب موجودة هنا أصلاً. GET /api/live وPUT /api/admin/settings
+             هما مصدر الحقيقة؛ اللوحة تُرسل طلباً متّسقاً وتعرض رسالة الخادم
+             العربية عند الرفض، لا تكرّر تحققه. -->
+        <div class="pane-box" style="margin-top:24px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-video"></i> بث تيك توك المباشر</h2>
+            <p>رابط واحد يُنسخ ويُلصق في واتساب — يفتح صفحة تحمل هوية المنصّة ويحوّل الزائر إلى تيك توك</p>
+          </div>
+
+          <div id="liveStatusStrip" class="live-status-strip">لم تُضبَط قناة تيك توك بعد</div>
+
+          <form id="tiktokLiveForm" class="admin-form" onsubmit="handleSaveTiktokLive(event)">
+            <div class="form-group">
+              <label>رابط قناة تيك توك</label>
+              <input type="text" id="settingTiktokProfileUrl" placeholder="https://www.tiktok.com/@aarasna">
+              <span class="hint-text">هذا هو الرابط الدائم للحساب. تفريغه يخفي زر تيك توك عن الزوار كلياً.</span>
+            </div>
+
+            <div class="form-group">
+              <label>موضوع البث</label>
+              <input type="text" id="settingTiktokLiveTitle" maxlength="120" placeholder="مثال: سهرة عرس فلان الليلة">
+              <span class="hint-text">هذا ما يراه الناس في معاينة واتساب وعلى صورة الغلاف — هو التسويق نفسه، لا مجرد عنوان داخلي.</span>
+            </div>
+
+            <div class="form-group">
+              <label>مدة البث</label>
+              <div class="live-duration-presets">
+                <button type="button" class="admin-btn-ghost" onclick="applyLiveDurationPreset('1h')">ساعة</button>
+                <button type="button" class="admin-btn-ghost" onclick="applyLiveDurationPreset('2h')">ساعتان</button>
+                <button type="button" class="admin-btn-ghost" onclick="applyLiveDurationPreset('4h')">٤ ساعات</button>
+                <button type="button" class="admin-btn-ghost" onclick="applyLiveDurationPreset('midnight')">حتى منتصف الليل</button>
+              </div>
+              <span class="hint-text" id="liveUntilPreview">لم يُحدَّد موعد انتهاء بعد</span>
+              <input type="hidden" id="settingTiktokLiveUntil">
+            </div>
+
+            <div class="form-group">
+              <label>رابط البث الخاص (اختياري)</label>
+              <input type="text" id="settingTiktokLiveUrl" placeholder="https://www.tiktok.com/@aarasna/live">
+              <span class="hint-text">اتركه فارغاً ليُستخدم رابط القناة نفسه.</span>
+            </div>
+
+            <div class="form-row" style="margin-top:18px; gap:12px;">
+              <button type="submit" class="admin-btn-primary" id="saveTiktokLiveBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ
+              </button>
+              <button type="button" class="btn-reject" id="endTiktokLiveBtn" onclick="handleEndTiktokLive()" disabled>
+                <i class="fa-solid fa-stop"></i> إنهاء البث الآن
+              </button>
+            </div>
+          </form>
+
+          <!-- خارج نموذج الحفظ عمداً، على نفس منطق كتلة الصوت الافتراضي أعلاه:
+               النسخ ومعاينة الغلاف لا يحفظان شيئاً على الخادم. -->
+          <div class="admin-form" style="margin-top:24px;">
+            <div class="form-row" style="gap:12px;">
+              <button type="button" class="admin-btn-primary" id="copyLiveLinkBtn" style="flex:1;" onclick="handleCopyLiveLink()">
+                <i class="fa-solid fa-copy"></i> انسخ رابط المشاركة
+              </button>
+            </div>
+            <input type="text" id="liveShareLinkFallback" class="live-share-fallback" readonly style="display:none;">
+
+            <div class="form-group" style="margin-top:16px;">
+              <label>معاينة صورة المشاركة</label>
+              <img id="liveCardPreview" class="live-card-preview" alt="معاينة صورة مشاركة البث" style="display:none;">
+            </div>
+          </div>
+        </div>
       </section>
 
     </div>

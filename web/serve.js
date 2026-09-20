@@ -4,7 +4,8 @@
  * خادم التطوير المحلي للواجهة — بدون أي اعتماديات.
  *
  * يخدم ملفات هذا المجلد، **ويمرّر** مسارات الخادم (`/api`، `/uploads`،
- * `/downloads`، `/socket.io`) إلى الخادم الحقيقي. بذلك تعمل الواجهة محلياً
+ * `/downloads`، `/socket.io`، و`/e` و`/live` — الصفحتان اللتان يرسمهما
+ * الخادم نفسه) إلى الخادم الحقيقي. بذلك تعمل الواجهة محلياً
  * من أصل واحد تماماً كما تعمل في الإنتاج خلف nginx، فلا يحتاج
  * `config.js` قيمة مختلفة بين البيئتين.
  *
@@ -23,7 +24,7 @@ const PORT = parseInt(process.env.PORT, 10) || 8080;
 const API_ORIGIN = process.env.API_ORIGIN || 'http://localhost:3000';
 
 // المسارات التي يملكها الخادم؛ كل ما عداها ملفات ثابتة.
-const PROXIED = ['/api', '/uploads', '/downloads', '/socket.io', '/e'];
+const PROXIED = ['/api', '/uploads', '/downloads', '/socket.io', '/e', '/live'];
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
