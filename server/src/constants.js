@@ -112,13 +112,18 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
  * it is also what makes a privacy notice about this table writable at all
  * (you can only describe a closed, known set of things to a regulator).
  *
- * `countOnly: true` marks the one kind of event allowed to describe someone
- * opening a specific piece of content (share_page_viewed today). A
- * count-only event is written with user_id and device_id forced to NULL
+ * `countOnly: true` is written with user_id and device_id forced to NULL
  * regardless of what the caller sent — analytics.service.js enforces this in
- * the layer closest to the write, not just here. Every other event may carry
- * identity because it describes an action (a click, a login, a publish
- * attempt), never a read.
+ * the layer closest to the write, not just here. Two kinds of event carry it.
+ * The first is the kind that describes someone OPENING a specific piece of
+ * content (share_page_viewed), where an identified row would be a record of
+ * what a named person read. The second is a click on a marketing surface we
+ * ourselves published (tiktok_page_viewed, tiktok_click_through): knowing
+ * WHICH person tapped a "follow us" link answers no question anyone here is
+ * asking, and identity you never collect is identity you can never leak — so
+ * the count is taken and the person is not. An event stays identity-bearing
+ * only where the identity is actually used for something (a login, a publish
+ * attempt, a reminder the user set).
  *
  * Adding an event name is a product decision, same as OCCASION_FIELDS above
  * — never invent one inline in a route or service.
@@ -140,7 +145,9 @@ const ANALYTICS_EVENTS = [
   { key: 'event_viewed', label: 'مشاهدة تفاصيل مناسبة', countOnly: false },
   { key: 'location_clicked', label: 'الضغط على الاتجاهات أو الخريطة', countOnly: false },
   { key: 'contact_clicked', label: 'الضغط على الاتصال بأصحاب المناسبة', countOnly: false },
-  { key: 'reminder_clicked', label: 'الضغط على زرّ ذكّرني بالمناسبة', countOnly: false }
+  { key: 'reminder_clicked', label: 'الضغط على زرّ ذكّرني بالمناسبة', countOnly: false },
+  { key: 'tiktok_page_viewed', label: 'فتح صفحة بث تيك توك', countOnly: true },
+  { key: 'tiktok_click_through', label: 'الانتقال إلى تيك توك', countOnly: true }
 ];
 
 const ANALYTICS_EVENT_KEYS = ANALYTICS_EVENTS.map(event => event.key);

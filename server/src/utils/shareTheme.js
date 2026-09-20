@@ -55,4 +55,15 @@ function resolvePosterUrl(event) {
   return absoluteMediaUrl(SHARE_FALLBACK_POSTERS[toneOf(event)]);
 }
 
-module.exports = { PALETTES, toneOf, safeHexColour, resolvePosterUrl };
+/**
+ * The "مباشر الآن" alarm red, deliberately NOT inside PALETTES: those two
+ * palettes distinguish occasion TONES (festive vs solemn), and "a live is
+ * happening right now" is neither of those — it is a fixed brand-utility
+ * colour one badge uses regardless of tone. It lives here, beside them, for
+ * the reason written above PALETTES: the share page and the generated card
+ * are the two surfaces that draw this, and neither may be free to keep its
+ * own copy and drift.
+ */
+const LIVE_RED = '#e0293f';
+
+module.exports = { PALETTES, LIVE_RED, toneOf, safeHexColour, resolvePosterUrl };

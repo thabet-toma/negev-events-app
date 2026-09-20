@@ -102,8 +102,12 @@ function createApp() {
   // الصفحة القابلة للمشاركة (issue #44) — HTML حقيقي لعارضات الشبكات
   // الاجتماعية التي لا تُشغّل JavaScript، فلا تلتقط شيئاً من واجهة الـSPA.
   // على جذر التطبيق (`/e/...`) لا تحت `/api` — راجع
-  // docs/adr/0006-server-renders-the-share-page.md.
-  app.use('/e', shareRoutes);
+  // docs/adr/0006-server-renders-the-share-page.md. و`/live/...` توسيعٌ
+  // مُوثَّق لنفس الاستثناء (‏ADR-0006، «توسيع 2026-09-20») لا استثناء ثانٍ
+  // يُخترع هنا: صفحة قناة/بث تيك توك، بنفس القالب ونفس الـCSP في نفس الملف.
+  // كلاهما يحتاج سطر nginx على الإنتاج — `/e/` مضاف، و`/live` لم يُضَف بعد.
+  app.use('/e', shareRoutes.eventRouter);
+  app.use('/live', shareRoutes.liveRouter);
 
   app.use(notFound);
   app.use(errorHandler);

@@ -6082,6 +6082,182 @@ async function run() {
     assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
   });
 
+  console.log('\n/live — the branded TikTok channel/live page (share.routes.js liveRouter)');
+
+  // Independent of the "TikTok live channel" API section above — start from
+  // the same known-empty state so this section never depends on whatever that
+  // one left behind, and restore it at the end so later sections don't
+  // depend on this one either.
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+
+  await test('With no channel and no live saved, /live, /live/card.jpg and /live/go all 404', async () => {
+    const page = await rawGet('/live');
+    const card = await rawGetBinary('/live/card.jpg');
+    const go = await rawGet('/live/go');
+    assert.strictEqual(page.status, 404);
+    assert.strictEqual(card.status, 404);
+    assert.strictEqual(go.status, 404);
+  });
+
+  await test('Set up: a permanent channel link only, no live', async () => {
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna_live_page_test' }
+    });
+    assert.strictEqual(status, 200);
+  });
+
+  await test('/live with a channel link only renders the channel headline and no «مباشر الآن»', async () => {
+    const { status, text } = await rawGet('/live');
+    assert.strictEqual(status, 200);
+    assert.ok(text.includes('قناة أعراسنا على تيك توك'), 'expected the channel headline');
+    assert.ok(!text.includes('مباشر الآن'), 'no live is active — the live badge must not appear');
+  });
+
+  await test('/live/go redirects to the profile url when there is no active live', async () => {
+    const res = await fetch(`${baseUrl}/live/go`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('location'), 'https://www.tiktok.com/@aarasna_live_page_test');
+  });
+
+  await test('Set up: an ACTIVE live (future until, its own live url)', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken,
+      body: {
+        tiktok_live_title: 'جلسة أسئلة وأجوبة',
+        tiktok_live_until: future,
+        tiktok_live_url: 'https://vm.tiktok.com/live-page-test'
+      }
+    });
+    assert.strictEqual(status, 200);
+  });
+
+  await test('/live with an active live shows the topic as the headline, in og:title, and with the «مباشر الآن» badge', async () => {
+    const { status, text } = await rawGet('/live');
+    assert.strictEqual(status, 200);
+    assert.ok(text.includes('جلسة أسئلة وأجوبة'), 'expected the topic in the page body');
+    assert.ok(
+      /property="og:title" content="جلسة أسئلة وأجوبة"/.test(text),
+      'expected the topic as og:title'
+    );
+    // ‏«مباشر الآن» وحدها تَرِد في نصّ الوصف أيضاً، فلو أكّدنا عليها لنجح
+    // الاختبار حتى لو حُذفت الشارة كلّها. الصنف لا يوجد إلا في الشارة.
+    assert.ok(
+      text.includes('class="live-badge"'),
+      'expected the live badge element itself, not merely the words in the description'
+    );
+  });
+
+  await test('/live/go redirects to the live url while active', async () => {
+    const res = await fetch(`${baseUrl}/live/go`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('location'), 'https://vm.tiktok.com/live-page-test');
+  });
+
+  await test('Set up: the same live, now EXPIRED (until moved to the past)', async () => {
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_until: past }
+    });
+    assert.strictEqual(status, 200);
+  });
+
+  await test('/live with an EXPIRED live falls back to the channel state — no stale topic, no stale badge', async () => {
+    const { status, text } = await rawGet('/live');
+    assert.strictEqual(status, 200);
+    assert.ok(text.includes('قناة أعراسنا على تيك توك'), 'expected the channel headline once the live has expired');
+    assert.ok(!text.includes('class="live-badge"'), 'an expired live must not show the live badge');
+    assert.ok(
+      !text.includes('جلسة أسئلة وأجوبة'),
+      'the topic of an ended live must not survive anywhere on the page'
+    );
+  });
+
+  await test('/live/go redirects to the profile url once the live has expired', async () => {
+    const res = await fetch(`${baseUrl}/live/go`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('location'), 'https://www.tiktok.com/@aarasna_live_page_test');
+  });
+
+  await test('A topic carrying an injection attempt renders escaped — the raw <img never appears in the page body', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken,
+      body: { tiktok_live_title: '<img src=x onerror=alert(1)>"', tiktok_live_until: future }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const { status, text } = await rawGet('/live');
+    assert.strictEqual(status, 200);
+    assert.ok(
+      !text.includes('<img src=x onerror=alert(1)>'),
+      'the raw, unescaped <img must never appear in the page body'
+    );
+    assert.ok(text.includes('&lt;img'), 'expected the escaped form instead');
+
+    // ‏og:title هو ما يقرأه زاحف واتساب فعلاً، وهو داخل content="…" —
+    // فالهروب هناك يجب أن يشمل علامة الاقتباس نفسها لا الوسوم وحدها.
+    const titleMeta = text.match(/<meta property="og:title" content="([^"]*)"/);
+    assert.ok(titleMeta, 'expected an og:title meta tag');
+    assert.ok(titleMeta[1].includes('&lt;img'), 'expected the escaped topic inside content="…"');
+    assert.ok(titleMeta[1].includes('&quot;'), 'the quote in the topic must be escaped, not close the attribute');
+  });
+
+  await test('/live/card.jpg is a real, non-empty JPEG, and a different topic produces a different cached file', async () => {
+    const first = await rawGetBinary('/live/card.jpg');
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(first.headers.get('content-type'), 'image/jpeg');
+    assert.ok(first.buffer.length > 0, 'expected a non-empty body');
+
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await api('PUT', '/api/admin/settings', {
+      token: superAdminToken,
+      body: { tiktok_live_title: 'موضوع مختلف تماماً لاختبار ذاكرة التخزين المؤقت', tiktok_live_until: future }
+    });
+
+    const second = await rawGetBinary('/live/card.jpg');
+    assert.strictEqual(second.status, 200);
+    assert.notStrictEqual(
+      first.buffer.toString('base64'),
+      second.buffer.toString('base64'),
+      'a different topic must render into a different cached file, not serve a stale one'
+    );
+  });
+
+  await test('/live/download 302-redirects to the APK url and records app_download_clicked with no content_town', async () => {
+    const res = await fetch(`${baseUrl}/live/download`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    const expectedTarget = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
+    assert.strictEqual(res.headers.get('location'), expectedTarget);
+
+    const row = await db.queryOne(
+      "SELECT * FROM analytics_events WHERE event_name = 'app_download_clicked' ORDER BY id DESC LIMIT 1"
+    );
+    assert.strictEqual(row.content_town, null);
+  });
+
+  await test('Both new analytics event names (tiktok_page_viewed, tiktok_click_through) are accepted by analytics.service.js and stay count-only', async () => {
+    // Through analyticsService.record directly rather than POST
+    // /api/analytics/events — that route's own rate limiter was already
+    // deliberately exhausted for this test run's IP by the "tighter analytics
+    // rate limit" test earlier in this suite, which would make a 429 here
+    // indistinguishable from a real rejection of the event name.
+    for (const eventName of ['tiktok_page_viewed', 'tiktok_click_through']) {
+      const result = await analyticsService.record({
+        eventName, platform: 'web', userId: 999999, deviceId: `device-${Date.now()}-${eventName}`
+      });
+      assert.ok(result.id, `expected ${eventName} to be accepted and written`);
+
+      const row = await db.queryOne('SELECT * FROM analytics_events WHERE id = ?', [result.id]);
+      assert.ok(row, `expected a row for ${eventName}`);
+      assert.strictEqual(row.user_id, null, 'a count-only event must never carry identity, even when one is passed in');
+      assert.strictEqual(row.device_id, null, 'a count-only event must never carry identity, even when one is passed in');
+    }
+  });
+
+  // Clean-up — later sections must not see any setting this section wrote.
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
 
   const filterTownA = 'تل السبع';

@@ -1,19 +1,31 @@
 'use strict';
 
 /**
- * `GET /e/:id` — the shareable event page (issue #44). Real, server-rendered
- * HTML, mounted at the app root (`/e/...`, not `/api/...`) because social
- * crawlers (WhatsApp, Facebook) do not execute JavaScript and the SPA in
- * `web/` can never produce an Open Graph preview on its own — see
- * docs/adr/0006-server-renders-the-share-page.md, which amends the letter
- * (not the justification) of ADR-0001 (`server/` serves JSON only).
+ * Two server-rendered, HTML-emitting routers — real HTML, not JSON, mounted
+ * at the app root rather than under `/api` because social crawlers (WhatsApp,
+ * Facebook) do not execute JavaScript, so a client-only fix can never produce
+ * an Open Graph preview: see docs/adr/0006-server-renders-the-share-page.md,
+ * which amends the letter (not the justification) of ADR-0001 (`server/`
+ * serves JSON only).
+ *
+ * `eventRouter` (mounted at `/e` by app.js) — `GET /e/:id`, the shareable
+ * event page (issue #44).
+ *
+ * `liveRouter` (mounted at `/live` by app.js) — the TikTok channel/live page:
+ * `GET /live` the branded page, `GET /live/card.jpg` its marketing cover,
+ * `GET /live/go` and `GET /live/download` the two click-through redirects.
+ * Same carve-out as `eventRouter`, not a second one — the product framing is
+ * "we are the wrapper, TikTok is the host": a visitor pasted a link into
+ * WhatsApp always lands on our own branded page first, never a bare TikTok
+ * thumbnail.
  *
  * No template engine, no `views/` directory: the HTML lives inline in this
  * file, and every user-controlled value is escaped through `escapeHtml`
  * before interpolation — the single most important rule in this file, since
- * this is the first route in the codebase that ever emits HTML at all.
+ * this is the first route in the codebase that ever emitted HTML at all.
  *
- * All SQL lives in `events.service.getShareEvent` — this file contains none.
+ * All SQL lives in `events.service.getShareEvent` and
+ * `settings.service.getLiveChannel` — this file contains none.
  */
 
 const fs = require('fs');
@@ -23,15 +35,17 @@ const express = require('express');
 const config = require('../config');
 const asyncHandler = require('../utils/asyncHandler');
 const events = require('../services/events.service');
+const settings = require('../services/settings.service');
 const analytics = require('../services/analytics.service');
 const shareCard = require('../services/shareCard.service');
 const logger = require('../utils/logger');
 const { parseId } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
-const { PALETTES, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
+const { PALETTES, LIVE_RED, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
 
-const router = express.Router();
+const eventRouter = express.Router();
+const liveRouter = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
@@ -409,7 +423,7 @@ function sendNotFound(res) {
 // `/assets/<file>` is two path segments, `/:id` matches exactly one, so the
 // two routes can never collide regardless of registration order — registered
 // first anyway, for a reader's sake.
-router.get('/assets/:file', (req, res) => {
+eventRouter.get('/assets/:file', (req, res) => {
   const buffer = ASSETS[req.params.file];
   if (!buffer) {
     res.status(404).end();
@@ -436,7 +450,7 @@ function shareEventIdOrNull(raw) {
   }
 }
 
-router.get('/:id', asyncHandler(async (req, res) => {
+eventRouter.get('/:id', asyncHandler(async (req, res) => {
   const eventId = shareEventIdOrNull(req.params.id);
 
   const event = eventId ? await events.getShareEvent(eventId) : null;
@@ -492,7 +506,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  * fetching og:image, not just by a page view) redirects to the plain poster
  * URL instead of 500ing, same fallback as the page uses.
  */
-router.get('/:id/card.jpg', asyncHandler(async (req, res) => {
+eventRouter.get('/:id/card.jpg', asyncHandler(async (req, res) => {
   const eventId = shareEventIdOrNull(req.params.id);
   const event = eventId ? await events.getShareEvent(eventId) : null;
   if (!event) {
@@ -520,7 +534,7 @@ router.get('/:id/card.jpg', asyncHandler(async (req, res) => {
  * target is exactly what the button used to link to directly — this route
  * adds one hop, not a different destination.
  */
-router.get('/:id/download', asyncHandler(async (req, res) => {
+eventRouter.get('/:id/download', asyncHandler(async (req, res) => {
   const eventId = shareEventIdOrNull(req.params.id);
 
   // The redirect must never depend on the lookup succeeding — a stale or
@@ -539,4 +553,243 @@ router.get('/:id/download', asyncHandler(async (req, res) => {
   res.redirect(302, downloadTarget);
 }));
 
-module.exports = router;
+// ---------------------------------------------------------------------------
+// liveRouter — GET /live, GET /live/card.jpg, GET /live/go, GET /live/download
+// ---------------------------------------------------------------------------
+
+// The headline shown (and drawn on the cover) whenever there is no active
+// live to lead with — a saved channel link with nothing currently happening,
+// or a live whose `until` has already passed. Fixed text, never the stale
+// title of an ended live: settings.service.getLiveChannel already computes
+// `active` for exactly this reason (see that file's own doc comment).
+const LIVE_CHANNEL_HEADLINE = 'قناة أعراسنا على تيك توك';
+
+/**
+ * The one rule the live page needs and the event page does not, kept out of
+ * the shared `pageStyle` so every `/e/:id` response stops shipping a class
+ * it can never use. The red is `LIVE_RED` from utils/shareTheme, the same
+ * value the generated cover's own pill uses — one source, so the page and
+ * the image it links to can never drift apart in colour.
+ */
+function liveOnlyStyle() {
+  return `
+  .live-badge {
+    display: inline-block; margin: 0 0 14px; padding: 7px 18px; border-radius: 999px;
+    background: ${LIVE_RED}; color: #ffffff; font-size: 14px; font-weight: 700;
+  }`;
+}
+
+/**
+ * Everything the three live routes derive from the settings, in one place.
+ * Each of them used to recompute `isLive`, the headline it implies, and the
+ * redirect target separately — three copies of one rule, and the page could
+ * have ended up showing a badge the cover disagreed with. `hasSomewhereToGo`
+ * is the 404 condition: not "is a live on" but "is there anything at all to
+ * send a visitor to", which a saved channel link satisfies on its own.
+ */
+function resolveLiveState(channel) {
+  const isLive = Boolean(channel.live && channel.live.active);
+  return {
+    hasSomewhereToGo: Boolean(channel.profile_url || channel.live),
+    isLive,
+    headline: isLive ? channel.live.title : LIVE_CHANNEL_HEADLINE,
+    target: isLive ? channel.live.url : channel.profile_url
+  };
+}
+/**
+ * Same primary/secondary pairing convention as `actionButtons` above (`.cta`
+ * / `.cta-secondary`, same CSS), but a different pair of destinations: the
+ * event page's secondary is "open in the browser you're already in" — there
+ * is no equivalent "already in the browser" fallback here, so the secondary
+ * is the same "حمّل التطبيق" the event page uses as its PRIMARY. Two separate
+ * functions rather than one made to cover both shapes: the label/URL pairing
+ * differs enough (three fixed strings there vs. a computed primary label and
+ * a fixed secondary here) that a shared function would need its own branching
+ * to tell the two pages apart.
+ */
+function liveActionButtons({ primaryLabel, goUrl, downloadUrl }) {
+  return `<div class="actions">
+<a class="cta" href="${escapeHtml(goUrl)}">${escapeHtml(primaryLabel)}</a>
+<a class="cta-secondary" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+</div>`;
+}
+
+/**
+ * `isLive` drives three things at once: the badge, the headline text, and the
+ * primary CTA's label — kept as one boolean computed once by the handler
+ * (`channel.live && channel.live.active`) rather than re-derived here, so the
+ * page can never show the badge for one state while the headline describes
+ * another. `imageUrl`/`imageDimensions` are both null together, exactly like
+ * the event page's own `imageDimensions === null` case: the cover failed to
+ * render, so neither the `<img>` nor the `og:image`/width/height tags are
+ * emitted — there is nothing here to fall back to (no raw poster; this is a
+ * generated marketing image with no other source).
+ */
+function renderLivePage({ isLive, headline, description, imageUrl, imageDimensions, pageUrl, goUrl, downloadUrl, primaryLabel }) {
+  const palette = PALETTES.festive;
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(headline)}</title>
+<meta property="og:title" content="${escapeHtml(headline)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+${imageUrl ? `<meta property="og:image" content="${escapeHtml(imageUrl)}">
+<meta property="og:image:width" content="${imageDimensions.width}">
+<meta property="og:image:height" content="${imageDimensions.height}">` : ''}
+<meta property="og:url" content="${escapeHtml(pageUrl)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${palette.wordmark}">
+<meta property="og:locale" content="ar_AR">
+<meta name="twitter:card" content="summary_large_image">
+<style>${pageStyle(palette)}${liveOnlyStyle()}</style>
+</head>
+<body>
+<main class="card">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
+${imageUrl ? `<div class="frame">
+<img class="poster" src="${escapeHtml(imageUrl)}" alt="">
+</div>` : ''}
+<div class="body">
+${isLive ? '<span class="live-badge">مباشر الآن</span>' : ''}
+<h1 class="names">${escapeHtml(headline)}</h1>
+<hr class="rule">
+<p class="lead">${escapeHtml(description)}</p>
+${liveActionButtons({ primaryLabel, goUrl, downloadUrl })}
+${reasonsStrip()}
+<p class="mark">${palette.wordmark}</p>
+</div>
+</main>
+</body>
+</html>`;
+}
+
+/**
+ * The branded page a WhatsApp link to the TikTok channel/live actually opens
+ * — "we are the wrapper, TikTok is the host": nobody following this link ever
+ * lands on a bare TikTok thumbnail, they land here first. 404s (via
+ * `sendNotFound`, the same body every other not-found case on this file uses)
+ * only when there is truly nothing to send anyone to — no saved channel link
+ * and no live — never merely because a live is not active right now: a saved
+ * channel-only link still has somewhere real to go.
+ */
+liveRouter.get('/', asyncHandler(async (req, res) => {
+  const { hasSomewhereToGo, isLive, headline } = resolveLiveState(await settings.getLiveChannel());
+  if (!hasSomewhereToGo) {
+    sendNotFound(res);
+    return;
+  }
+
+  const description = isLive
+    ? 'البث مباشر الآن على تيك توك — ادخل وشاهد قبل ما ينتهي'
+    : 'أحدث اللحظات والمناسبات على قناة أعراسنا في تيك توك';
+  const primaryLabel = isLive ? 'ادخل إلى البث الآن' : 'تابعنا وشاهد المقاطع';
+
+  // Same no-<script> reasoning as share_page_viewed on the event page above
+  // (CSP below is default-src 'none') — recorded server-side, in the handler,
+  // because a client-side beacon is simply impossible on this page.
+  await analytics.recordSafely({ eventName: 'tiktok_page_viewed', platform: 'web' });
+
+  const pageUrl = `${config.publicUrl}/live`;
+
+  let imageUrl = `${pageUrl}/card.jpg`;
+  let imageDimensions = { width: shareCard.WIDTH, height: shareCard.HEIGHT };
+  // The buffer is deliberately discarded: this call is here to make the file
+  // exist (or to prove it cannot) before a crawler follows og:image, exactly
+  // as the event page pre-renders its own card. The bytes are served by the
+  // /card.jpg route below, not from here.
+  try {
+    await shareCard.getOrRenderLiveCover({ title: headline, active: isLive });
+  } catch (err) {
+    logger.error(`[share] live cover render failed: ${err.message}`);
+    imageUrl = null;
+    imageDimensions = null;
+  }
+
+  res
+    .status(200)
+    .set('Content-Security-Policy', SHARE_CSP)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .send(renderLivePage({
+      isLive,
+      headline,
+      description,
+      imageUrl,
+      imageDimensions,
+      pageUrl,
+      goUrl: `${pageUrl}/go`,
+      downloadUrl: `${pageUrl}/download`,
+      primaryLabel
+    }));
+}));
+
+/**
+ * The cover itself — see shareCard.service.js's `renderLiveCover` for why it
+ * looks the way it does. 404 (empty body, no crafted page) when there is
+ * nothing to draw at all, same as the event card route.
+ */
+liveRouter.get('/card.jpg', asyncHandler(async (req, res) => {
+  const { hasSomewhereToGo, isLive, headline: title } = resolveLiveState(await settings.getLiveChannel());
+  if (!hasSomewhereToGo) {
+    res.status(404).end();
+    return;
+  }
+
+
+  try {
+    const buffer = await shareCard.getOrRenderLiveCover({ title, active: isLive });
+    res
+      .status(200)
+      .set('Content-Type', 'image/jpeg')
+      // NOT immutable, unlike the event card: that card's cache key is tied
+      // to a row's own updated_at, so a stale file only ever exists for a row
+      // that was actually edited. This cover's key is the topic text and the
+      // active flag (shareCard.service.js) — a super_admin can change either
+      // at any moment with no request of their own hitting this route, so a
+      // crawler or browser has to be allowed to notice within minutes, not a
+      // year.
+      .set('Cache-Control', 'public, max-age=300')
+      .send(buffer);
+  } catch (err) {
+    logger.error(`[share] live cover render failed: ${err.message}`);
+    res.status(404).end();
+  }
+}));
+
+/**
+ * The primary CTA's actual destination — recorded, then handed onward to
+ * TikTok. The target comes ONLY from settings.service.getLiveChannel(), never
+ * from a query parameter: there is no `?url=` this route reads, so it cannot
+ * be turned into an open redirect no matter what a caller appends to the
+ * link. Analytics is recorded before the target is known to exist, mirroring
+ * `/:id/download` above (which records for a non-existent event too) —
+ * "someone followed the click-through link" is the fact being counted, not
+ * "and it worked".
+ */
+liveRouter.get('/go', asyncHandler(async (req, res) => {
+  const { target } = resolveLiveState(await settings.getLiveChannel());
+
+  await analytics.recordSafely({ eventName: 'tiktok_click_through', platform: 'web' });
+
+  if (!target) {
+    sendNotFound(res);
+    return;
+  }
+
+  res.redirect(302, target);
+}));
+
+/**
+ * Same body as `/:id/download` above, minus the event lookup — this page
+ * carries no event, so `contentTown` is always null rather than sometimes
+ * absent.
+ */
+liveRouter.get('/download', asyncHandler(async (req, res) => {
+  await analytics.recordSafely({ eventName: 'app_download_clicked', platform: 'web', contentTown: null });
+
+  const apkUrl = absoluteMediaUrl(config.app.apkUrl);
+  res.redirect(302, apkUrl || config.publicUrl);
+}));
+
+module.exports = { eventRouter, liveRouter };
