@@ -51,11 +51,81 @@ function rejectFreeTextAudio() {
   throw ApiError.badRequest('المقطع الصوتي الافتراضي لا يُحفَظ كنص — ارفعه ملفاً عبر POST /api/admin/settings/default-audio');
 }
 
+/**
+ * Shared by `tiktok_profile_url` and `tiktok_live_url`: the value is later
+ * placed in an HTTP redirect and in HTML attributes by a future step, so a
+ * non-https or non-TikTok host must be impossible to store, not merely
+ * discouraged. `hostname` (not the raw string) is checked so a trick like
+ * `tiktok.com.attacker.net` — where `tiktok.com` is only a *prefix* of the
+ * real, attacker-owned host — is rejected the same as `evil-tiktok.com`.
+ *
+ * What is STORED is `parsed.href`, never the raw string that was validated:
+ * the WHATWG URL parser strips tab, CR and LF from its input, so a value
+ * carrying a newline validates cleanly while the raw string keeps it — and
+ * that newline would later reach a `Location` header, which Node rejects
+ * outright (ERR_INVALID_CHAR), turning the redirect into a 500. Storing the
+ * parsed form also normalises the shape on disk to exactly one spelling,
+ * the same reasoning parseLiveUntil applies with toISOString().
+ */
+function parseTiktokUrl(raw) {
+  const cleaned = cleanString(raw, 300);
+  if (!cleaned) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    throw ApiError.badRequest('رابط تيك توك غير صالح');
+  }
+
+  const host = parsed.hostname;
+  const isTiktokHost = host === 'tiktok.com' || host.endsWith('.tiktok.com');
+  if (parsed.protocol !== 'https:' || !isTiktokHost) {
+    throw ApiError.badRequest('رابط تيك توك غير صالح — يجب أن يكون رابط https على نطاق tiktok.com');
+  }
+
+  // المضيف هنا تيك توك حقيقي، لكن شكل الرابط المعروض للناس خدعة تصيّد
+  // معروفة: العين تقرأ ما قبل الـ@ (‏evil.com) والوجهة الحقيقية ما بعده.
+  // الرابط الذي يُنسخ ويُشارَك يجب أن يقول وجهته بنفسه.
+  if (parsed.username || parsed.password) {
+    throw ApiError.badRequest('رابط تيك توك غير صالح — احذف اسم المستخدم وكلمة المرور من الرابط');
+  }
+
+  return parsed.href;
+}
+
+/** Just the topic of the current live, shown as-is — no format to validate beyond length. */
+function parseLiveTitle(raw) {
+  return cleanString(raw, 120);
+}
+
+/**
+ * Stored as `Date#toISOString()` so the format on disk is always one
+ * shape regardless of what the admin typed. A past datetime is accepted on
+ * purpose — that is how an admin ends a live early — only an unparseable
+ * value is rejected.
+ */
+function parseLiveUntil(raw) {
+  const cleaned = cleanString(raw, 40);
+  if (!cleaned) return null;
+
+  const date = new Date(cleaned);
+  if (Number.isNaN(date.getTime())) {
+    throw ApiError.badRequest('موعد انتهاء البث غير صالح');
+  }
+
+  return date.toISOString();
+}
+
 // كل قيمة قابلة للحفظ تمرّ بمُحقِّقها الخاص — إضافة مفتاح جديد لاحقاً تعني
 // إضافته هنا وفي SETTING_KEYS معاً، لا تخفيف هذا التحقق.
 const VALIDATORS = {
   [settings.SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER]: parseWhatsappNumber,
-  [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: rejectFreeTextAudio
+  [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: rejectFreeTextAudio,
+  [settings.SETTING_KEYS.TIKTOK_PROFILE_URL]: parseTiktokUrl,
+  [settings.SETTING_KEYS.TIKTOK_LIVE_TITLE]: parseLiveTitle,
+  [settings.SETTING_KEYS.TIKTOK_LIVE_UNTIL]: parseLiveUntil,
+  [settings.SETTING_KEYS.TIKTOK_LIVE_URL]: parseTiktokUrl
 };
 
 // Guarded on this router itself — a `router.use('/admin', ...)` registered in
@@ -78,6 +148,12 @@ router.put('/admin/settings', asyncHandler(async (req, res) => {
     settings.assertWhitelisted(key);
     updates[key] = VALIDATORS[key](body[key]);
   }
+
+  // A key absent from this PUT keeps its current value in the check below —
+  // the current row, with only the requested keys overlaid, is what will
+  // actually be true on disk once this write commits.
+  const merged = { ...await settings.getAllForAdmin(), ...updates };
+  settings.assertLiveConsistency(merged);
 
   await settings.setSettings(updates, req.user.id);
 
@@ -108,6 +184,14 @@ router.delete('/admin/settings/default-audio', asyncHandler(async (req, res) => 
 
 router.get('/settings/public', asyncHandler(async (req, res) => {
   res.json({ success: true, settings: await settings.getPublicSettings() });
+}));
+
+// Public and unauthenticated on purpose: this is the one surface every
+// client (web share page, marketing cover, admin tab, app bubble — steps 2
+// to 4) reads to know whether a TikTok live is on right now, so it carries
+// no admin guard and no X-App-Version gating.
+router.get('/live', asyncHandler(async (req, res) => {
+  res.json({ success: true, ...await settings.getLiveChannel() });
 }));
 
 module.exports = router;

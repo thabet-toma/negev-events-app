@@ -13,7 +13,17 @@ const SETTING_KEYS = {
   SUPPORT_WHATSAPP_NUMBER: 'support_whatsapp_number',
   // Stored relative (`/uploads/<file>`) like every other media column, and
   // only ever written by the upload route — never as free text through PUT.
-  DEFAULT_EVENT_AUDIO_URL: 'default_event_audio_url'
+  DEFAULT_EVENT_AUDIO_URL: 'default_event_audio_url',
+  // The permanent TikTok channel link, and the three fields that describe
+  // "there is a live right now" — see getLiveChannel below for how they
+  // combine. None of the four is in PUBLIC_KEYS, but that does NOT make them
+  // private: three of their values are derived and served unauthenticated by
+  // getLiveChannel below, through GET /api/live. PUBLIC_KEYS guards the raw
+  // settings route only — this feature has its own shaped public surface.
+  TIKTOK_PROFILE_URL: 'tiktok_profile_url',
+  TIKTOK_LIVE_TITLE: 'tiktok_live_title',
+  TIKTOK_LIVE_UNTIL: 'tiktok_live_until',
+  TIKTOK_LIVE_URL: 'tiktok_live_url'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
@@ -65,6 +75,73 @@ async function getPublicSettings() {
 }
 
 /**
+ * Derives the public "is there a TikTok live right now" state from the four
+ * whitelisted keys. `live` is null unless both a title and an end time are
+ * set, and its `active` flag is computed here — once, on the server — by
+ * comparing `until` against the current time, so a forgotten flag can never
+ * leave a stale "live now" state visible: it simply expires on its own.
+ *
+ * The `url` guard below is NOT redundant with assertLiveConsistency, which
+ * rejects the same state on write. That check reads the current settings in
+ * the route and writes in a separate transaction, so two concurrent PUTs —
+ * one clearing the live url, one clearing the profile url — can each see the
+ * other still set and both commit, leaving a titled live with nowhere to go.
+ * That write-side check is therefore an admin-facing guard against saving a
+ * state that does nothing; THIS read-side guard is the integrity one, and it
+ * cannot race because it derives the answer at read time. The race stays
+ * harmless precisely because this guard exists: the result is `live: null`,
+ * never a broken link handed to a visitor.
+ */
+async function getLiveChannel() {
+  const raw = await readKeys([
+    SETTING_KEYS.TIKTOK_PROFILE_URL,
+    SETTING_KEYS.TIKTOK_LIVE_TITLE,
+    SETTING_KEYS.TIKTOK_LIVE_UNTIL,
+    SETTING_KEYS.TIKTOK_LIVE_URL
+  ]);
+
+  const profileUrl = raw[SETTING_KEYS.TIKTOK_PROFILE_URL];
+  const title = raw[SETTING_KEYS.TIKTOK_LIVE_TITLE];
+  const until = raw[SETTING_KEYS.TIKTOK_LIVE_UNTIL];
+  const liveUrl = raw[SETTING_KEYS.TIKTOK_LIVE_URL];
+
+  let live = null;
+  if (title && until) {
+    const url = liveUrl || profileUrl;
+    if (url) {
+      live = { title, until, url, active: new Date(until) > new Date() };
+    }
+  }
+
+  return { profile_url: profileUrl, live };
+}
+
+/**
+ * An admin-facing guard against a half-configured live being saved silently:
+ * without an end time (or the reverse) is meaningless, and a fully-timed
+ * live with nowhere to send anyone (no live URL and no profile URL to fall
+ * back to) would produce no visible result and no error — a dead end the
+ * admin has no way to diagnose. `next` is the FULL post-merge settings
+ * object (current values with the request's updates applied), not just the
+ * keys being changed, so clearing one half of an already-saved pair is
+ * caught too.
+ */
+function assertLiveConsistency(next) {
+  const title = next[SETTING_KEYS.TIKTOK_LIVE_TITLE];
+  const until = next[SETTING_KEYS.TIKTOK_LIVE_UNTIL];
+
+  if (title && !until) {
+    throw ApiError.badRequest('حدّد موعد انتهاء البث المباشر، أو امسح عنوانه');
+  }
+  if (until && !title) {
+    throw ApiError.badRequest('حدّد عنوان البث المباشر، أو امسح موعد انتهائه');
+  }
+  if (title && until && !next[SETTING_KEYS.TIKTOK_LIVE_URL] && !next[SETTING_KEYS.TIKTOK_PROFILE_URL]) {
+    throw ApiError.badRequest('لا يمكن تفعيل البث المباشر بلا رابط — أضف رابط البث أو رابط الحساب الدائم');
+  }
+}
+
+/**
  * Writes every key in `updates` ({ key: value | null }) in one transaction —
  * a multi-key PUT must not be able to half-apply. `value` is assumed already
  * validated by the route layer; `null` clears a setting back to unset
@@ -102,5 +179,7 @@ module.exports = {
   assertWhitelisted,
   getAllForAdmin,
   getPublicSettings,
+  getLiveChannel,
+  assertLiveConsistency,
   setSettings
 };

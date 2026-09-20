@@ -225,6 +225,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة |
 | `GET` | `/api/settings/public` | رقم واتساب الدعم الفني (`support_whatsapp_number`) والمقطع الصوتي الافتراضي للمناسبات التي لا صوت لها (`default_event_audio_url`، رابط مطلق) فقط — كلاهما `null` إن لم يُحفَظ بعد، ولا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
+| `GET` | `/api/live` | حالة بث تيك توك المباشر — `profile_url` (رابط الحساب الدائم) و`live` (‏`null` إلا إذا حُفظ عنوان وموعد انتهاء معاً ووُجد رابط يُحال إليه — رابط بث أو رابط الحساب: `{ title, until, url, active }`، و`active` يُحسَب هنا بمقارنة `until` بالوقت الحالي فينتهي البث تلقائياً بلا حاجة لإطفاء يدوي) — عام بلا مصادقة |
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
@@ -545,8 +546,8 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
 | `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه) 🛡️ |
 | `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
-| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق) 🛡️ |
-| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط) 🛡️ |
+| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق، و`tiktok_profile_url` و`tiktok_live_title` و`tiktok_live_until` و`tiktok_live_url` لبث تيك توك المباشر) 🛡️ |
+| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط)، ويرفض `tiktok_profile_url`/`tiktok_live_url` بغير `https` على نطاق `tiktok.com` أو أحد نطاقاته الفرعية، ويرفض حفظ عنوان بث بلا موعد انتهاء أو العكس، وحفظهما معاً بلا أي رابط (لا بث ولا حساب دائم) 🛡️ |
 | `POST` | `/api/admin/settings/default-audio` | رفع المقطع الصوتي الافتراضي (`multipart/form-data`، حقل `audio`، نفس فحص البايتات كصوت المناسبة) — يُخزَّن نسبياً ويعود مطلقاً، والملف السابق يبقى على القرص 🛡️ |
 | `DELETE` | `/api/admin/settings/default-audio` | حذف المقطع الصوتي الافتراضي (يعود `null`) 🛡️ |
 | `GET` | `/api/admin/analytics/activity` | سجل النشاط: مَن أضاف/عدّل/اعتمد/رفض/حذف/نقل ملكية/اعتمد قرية لأي مناسبة، الأحدث أولاً، مع اسم الفاعل ورقمه ولقطة عنوان المناسبة ونوعها وبلدتها (تبقى بعد حذفها، `event_exists`)، و`summary` مقروء للتعديل (`?action=` `?page=` `?limit=`) 🛡️ |

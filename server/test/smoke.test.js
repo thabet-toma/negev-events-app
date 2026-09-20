@@ -5940,6 +5940,148 @@ async function run() {
     assert.strictEqual(publicRead.body.settings.default_event_audio_url, null);
   });
 
+  console.log('\nTikTok live channel: GET /api/live and the four platform settings behind it');
+
+  // Same reasoning as the "Platform settings" section above — app_settings
+  // is not reset between runs.
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+
+  await test('GET /api/live answers cleanly before anything is ever saved', async () => {
+    const { status, body } = await api('GET', '/api/live');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.profile_url, null);
+    assert.strictEqual(body.live, null);
+  });
+
+  await test('A plain (town-scoped) admin is refused on PUT for the TikTok keys — super_admin only', async () => {
+    const put = await api('PUT', '/api/admin/settings', {
+      token: scopedAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna' }
+    });
+    assert.strictEqual(put.status, 403);
+  });
+
+  await test('PUT /api/admin/settings rejects a non-https TikTok URL', async () => {
+    const { status, body } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'http://www.tiktok.com/@x' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+  });
+
+  await test('PUT /api/admin/settings rejects a look-alike host that merely ends with "tiktok.com" as a suffix trick', async () => {
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'https://evil-tiktok.com/@x' }
+    });
+    assert.strictEqual(status, 400, 'evil-tiktok.com must not pass as a tiktok.com subdomain');
+  });
+
+  await test('PUT /api/admin/settings rejects a look-alike host that merely starts with "tiktok.com" as a prefix trick', async () => {
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'https://tiktok.com.attacker.net/@x' }
+    });
+    assert.strictEqual(status, 400, 'tiktok.com.attacker.net is attacker-owned, not tiktok.com');
+  });
+
+  await test('A TikTok URL carrying embedded credentials is rejected — the host is real but the displayed link is a phishing shape', async () => {
+    const { status } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'https://a@evil.com:x@www.tiktok.com/@y' }
+    });
+    assert.strictEqual(status, 400, 'a url whose visible prefix is another domain must not be storable');
+  });
+
+  await test('A TikTok URL carrying a newline is stored normalised, never as the raw string that was validated', async () => {
+    // محلّل URL يحذف CR/LF/TAB من مدخله، فتمرّ القيمة من التحقق بينما يبقى
+    // السطر الجديد في النص الخام — ولو خُزِّن كما هو لوصل لاحقاً إلى ترويسة
+    // Location التي يرفضها Node أصلاً. المخزَّن هو parsed.href لا الخام.
+    const withNewline = 'https://www.tiktok.com/' + String.fromCharCode(10) + '@aarasna_normalised';
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: withNewline }
+    });
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.tiktok_profile_url, 'https://www.tiktok.com/@aarasna_normalised');
+    const hasControlChar = [...save.body.settings.tiktok_profile_url].some(ch => ch.charCodeAt(0) < 32);
+    assert.strictEqual(hasControlChar, false, 'a stored TikTok URL must never carry a control character');
+  });
+
+  await test('A super_admin saves a valid TikTok profile URL — it reads back on both the admin route and GET /api/live', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna' }
+    });
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.tiktok_profile_url, 'https://www.tiktok.com/@aarasna');
+
+    const live = await api('GET', '/api/live');
+    assert.strictEqual(live.status, 200);
+    assert.strictEqual(live.body.profile_url, 'https://www.tiktok.com/@aarasna');
+    assert.strictEqual(live.body.live, null, 'no live is active without both a title and an until');
+  });
+
+  await test('Saving a live title without an until is rejected with an Arabic message, and nothing is saved', async () => {
+    const { status, body } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_title: 'سؤال وجواب' }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+
+    // ‏live يكون null كلما كان until فارغاً، فقراءته لا تُثبت أن شيئاً لم يُكتَب.
+    // القراءة الإدارية وحدها تفرّق بين «لم يُحفَظ» و«حُفِظ ولم يظهر».
+    const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(adminRead.body.settings.tiktok_live_title, null, 'a rejected PUT must not have written the title at all');
+  });
+
+  await test('Saving a live title with a FUTURE until marks the live active, falling back to the profile url', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_title: 'سؤال وجواب', tiktok_live_until: future }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const live = await api('GET', '/api/live');
+    assert.strictEqual(live.status, 200);
+    assert.ok(live.body.live, 'expected a live object once both title and until are set');
+    assert.strictEqual(live.body.live.title, 'سؤال وجواب');
+    assert.strictEqual(live.body.live.active, true, 'a future until must be active');
+    assert.strictEqual(live.body.live.url, 'https://www.tiktok.com/@aarasna', 'url must fall back to the profile url without its own live url');
+  });
+
+  await test('A distinct tiktok_live_url overrides the profile url in live.url', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_url: 'https://vm.tiktok.com/live123' }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const live = await api('GET', '/api/live');
+    assert.strictEqual(live.body.live.url, 'https://vm.tiktok.com/live123');
+  });
+
+  await test('Saving a PAST until keeps the live present but inactive', async () => {
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_until: past }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const live = await api('GET', '/api/live');
+    assert.ok(live.body.live, 'expected the live object to still be present with a past until');
+    assert.strictEqual(live.body.live.active, false, 'a past until must not be active');
+  });
+
+  await test('Clearing the title and until brings live back to null', async () => {
+    const clear = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { tiktok_live_title: '', tiktok_live_until: '' }
+    });
+    assert.strictEqual(clear.status, 200);
+
+    const live = await api('GET', '/api/live');
+    assert.strictEqual(live.body.live, null);
+  });
+
+  await test('GET /api/settings/public still returns exactly its original two keys after the TikTok settings were saved', async () => {
+    const { status, body } = await api('GET', '/api/settings/public');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
+  });
+
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
 
   const filterTownA = 'تل السبع';
