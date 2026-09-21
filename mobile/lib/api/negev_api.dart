@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/event.dart';
+import '../models/live.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
 import '../models/reminder_schedule.dart';
@@ -278,6 +279,22 @@ class NegevApi {
     if (list is! List) return const [];
     return list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList();
   }
+
+  /// حالة قناة/بثّ تيك توك — GET /api/live عام بلا مصادقة (LIVE-04b)، فلا
+  /// `auth: true` هنا: هذا النداء لا علاقة له بالجلسة، تماماً كسبب عدم إرفاق
+  /// الرمز في fetchTikTokLive بـweb/app.js.
+  Future<TikTokLive> tiktokLive() async {
+    final data = await _client.get('/api/live');
+    return TikTokLive.fromJson(data);
+  }
+
+  /// وجهة مدخل تيك توك — `GET /live/go` لا `/live` نفسها: `/live` صفحة الغلاف
+  /// المخصَّصة لغريب يلصق رابطاً في واتساب؛ زائر داخل التطبيق أصلاً داخل
+  /// هويّتنا، فإرساله إلى الغلاف أولاً نقرة إضافية بلا فائدة. `/live/go` يبقى
+  /// عبوراً من خادمنا: يسجّل `tiktok_click_through` ثم يحوّل، فنبقى الوسيط
+  /// («نحن الغلاف، تيك توك المضيف») والنقرة تُحسَب رغم ذلك. بلا نداء شبكة هنا
+  /// إطلاقاً — بناء عنوان فقط يفتحه `url_launcher` لاحقاً في العميل.
+  Uri get tiktokLiveGoUrl => _client.buildUrl('/live/go');
 
   /// تسجيل مشاهدة شريحة ستوري — عتبة "شوهدت" (ثانيتان) يقيسها العارض على
   /// الجهاز، لا هذا النداء نفسه؛ يُستدعى فقط بعدما بقيت الشريحة ظاهرة فعلاً.

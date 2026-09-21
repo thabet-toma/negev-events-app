@@ -6,10 +6,12 @@ import '../api/negev_api.dart' show NegevApi, Village;
 import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
+import '../models/live.dart';
 import '../models/notification.dart' as notif;
 import '../state/audio_coordinator.dart';
 import '../theme.dart';
-import '../widgets/async_view.dart' show openSupportWhatsApp, showMessage;
+import '../widgets/async_view.dart'
+    show openSupportWhatsApp, openTikTokLive, showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
@@ -60,6 +62,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   StreamSubscription<Map<String, dynamic>>? _newEventSub;
 
   Future<List<Story>>? _stories;
+  Future<TikTokLive>? _tiktokLive;
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
 
@@ -113,6 +116,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       routeObserver.subscribe(this, route);
     }
     _stories ??= AppServices.of(context).api.stories();
+    _tiktokLive ??= AppServices.of(context).api.tiktokLive();
     if (_types == null) {
       _types = AppServices.of(context).api.listOccasionTypes();
       _types!.then((list) {
@@ -519,7 +523,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             child: RefreshIndicator(
               onRefresh: () async {
                 final services = AppServices.of(context);
-                setState(() => _stories = services.api.stories());
+                setState(() {
+                  _stories = services.api.stories();
+                  _tiktokLive = services.api.tiktokLive();
+                });
                 // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                 services.audio.defaultTrack(services.api, refresh: true).then((url) {
                   if (mounted) _defaultAudioUrl = url;
@@ -652,8 +659,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                   ),
                                   tooltip: 'تحديث',
                                   onPressed: () async {
-                                    setState(() => _stories =
-                                        AppServices.of(context).api.stories());
+                                    final services = AppServices.of(context);
+                                    setState(() {
+                                      _stories = services.api.stories();
+                                      _tiktokLive = services.api.tiktokLive();
+                                    });
                                     await _loadFirstPage();
                                   },
                                 ),
@@ -779,7 +789,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                           ],
                         ),
                       ),
-                      _StoriesStrip(future: _stories),
+                      _StoriesStrip(future: _stories, liveFuture: _tiktokLive),
                       _SearchBar(
                         controller: _searchController,
                         onChanged: _onSearchChanged,
@@ -1210,93 +1220,167 @@ class _AnnouncementCard extends StatelessWidget {
 }
 
 class _StoriesStrip extends StatelessWidget {
-  const _StoriesStrip({required this.future});
+  const _StoriesStrip({required this.future, required this.liveFuture});
 
   final Future<List<Story>>? future;
 
+  /// حالة قناة/بثّ تيك توك — مستقلّة تماماً عن [future]؛ أيّهما وصل أولاً لا
+  /// يمنع رسم الآخر (كل `FutureBuilder` يُعاد بناؤه بمفرده). فقاعة تيك توك
+  /// تظهر بمجرّد أن يُجيب `liveFuture` بقناة مضبوطة، بصرف النظر عن حالة القصص.
+  final Future<TikTokLive>? liveFuture;
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Story>>(
-      future: future,
-      builder: (context, snapshot) {
-        final stories = snapshot.data;
-        if (stories == null || stories.isEmpty) return const SizedBox.shrink();
+    return FutureBuilder<TikTokLive>(
+      future: liveFuture,
+      builder: (context, liveSnapshot) {
+        final live = liveSnapshot.data;
+        final showBubble = live != null && live.isConfigured;
 
-        return SizedBox(
-          height: 96,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            itemCount: stories.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final story = stories[index];
-              return GestureDetector(
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        StoryViewerScreen(stories: stories, initialIndex: index),
-                  ),
-                ),
-                child: SizedBox(
-                  width: 66,
-                  child: Column(
-                    children: [
-                      Container(
-                        width: 54,
-                        height: 54,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: story.isLive
-                                ? context.c.success
-                                : context.c.line,
-                            width: 2,
+        return FutureBuilder<List<Story>>(
+          future: future,
+          builder: (context, snapshot) {
+            final stories = snapshot.data ?? const <Story>[];
+            // بلا هذا الشرط كانت قناة مضبوطة بلا أي قصة حقيقية تختفي كلياً —
+            // الحارس القديم هنا كان `stories == null || stories.isEmpty` وحده.
+            if (!showBubble && stories.isEmpty) return const SizedBox.shrink();
+
+            // الفقاعة، إن ظهرت، عنصر إضافي في مقدّمة القائمة يزيح كل فهرس
+            // قصة حقيقية بواحد. `storyIndex` أدناه هو الفهرس الحقيقي في
+            // `stories` — لا `index` خام — وهو ما يُمرَّر لكل من الوصول إلى
+            // `stories[...]` وإلى `StoryViewerScreen.initialIndex` معاً، فلا
+            // يمكن أن يفترقا.
+            final itemCount = stories.length + (showBubble ? 1 : 0);
+
+            return SizedBox(
+              height: 96,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                itemCount: itemCount,
+                separatorBuilder: (_, _) => const SizedBox(width: 12),
+                itemBuilder: (context, index) {
+                  if (showBubble && index == 0) {
+                    return _TikTokLiveBubble(live: live);
+                  }
+                  final storyIndex = showBubble ? index - 1 : index;
+                  final story = stories[storyIndex];
+                  return _StripItem(
+                    highlighted: story.isLive,
+                    label: story.title,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => StoryViewerScreen(
+                          stories: stories,
+                          initialIndex: storyIndex,
+                        ),
+                      ),
+                    ),
+                    avatar: story.image == null
+                        ? _storyFallbackAvatar(context)
+                        : Image.network(
+                            story.image!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                _storyFallbackAvatar(context),
                           ),
-                        ),
-                        child: ClipOval(
-                          child: story.image == null
-                              ? ColoredBox(
-                                  color: context.c.surface,
-                                  child: Icon(
-                                    Icons.celebration,
-                                    size: 22,
-                                    color: context.c.sky,
-                                  ),
-                                )
-                              : Image.network(
-                                  story.image!,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => ColoredBox(
-                                    color: context.c.surface,
-                                    child: Icon(
-                                      Icons.celebration,
-                                      size: 22,
-                                      color: context.c.sky,
-                                    ),
-                                  ),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        story.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: context.c.inkSoft,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
+                  );
+                },
+              ),
+            );
+          },
         );
       },
+    );
+  }
+}
+
+/// نائب صورة القصة — حين لا صورة أصلاً، وحين تفشل الصورة الموجودة في التحميل.
+Widget _storyFallbackAvatar(BuildContext context) => ColoredBox(
+      color: context.c.surface,
+      child: Icon(Icons.celebration, size: 22, color: context.c.sky),
+    );
+
+/// الشكل الواحد لعنصر شريط القصص: حلقة دائرية ٥٤ ثم تسمية سطر واحد تحتها.
+/// القصة وفقاعة تيك توك تُبنيان منه معاً عمداً — نسخة ثانية يدوية من هذا
+/// القالب هي بالضبط ما أوقع شريط الويب في #85 (نسخة حرفية ثالثة بنت شريط
+/// الدرج وحدها فمحت الفقاعة المثبَّتة)، وهنا كانت ستجعل حلقتَي القصة والفقاعة
+/// تفترقان عند أول تعديل لأيٍّ منهما.
+class _StripItem extends StatelessWidget {
+  const _StripItem({
+    required this.avatar,
+    required this.label,
+    required this.highlighted,
+    required this.onTap,
+  });
+
+  /// ما يملأ داخل الحلقة — صورة القصة أو أيقونة الفقاعة؛ القصّ الدائري هنا.
+  final Widget avatar;
+  final String label;
+
+  /// لون البثّ الحيّ الخاص بهذا الشريط (`context.c.success`) بدل لون الحدّ
+  /// العادي — للقصة الحيّة وللبثّ النشِط معاً. ليس أحمر صفحة `/live` على الويب.
+  final bool highlighted;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: SizedBox(
+        width: 66,
+        child: Column(
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: highlighted ? context.c.success : context.c.line,
+                  width: 2,
+                ),
+              ),
+              child: ClipOval(child: avatar),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: context.c.inkSoft),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// الفقاعة المثبَّتة أولاً في شريط القصص — قناة/بثّ تيك توك (LIVE-04b). الأفتار
+/// أيقونة عامة داخل حلقة الشريط نفسها، لا شعار تيك توك: الزائر يخرج من عندنا
+/// («نحن الغلاف، تيك توك المضيف»). وتلبس الحلقة لون البثّ الحيّ حين يكون البثّ
+/// نشِطاً فعلاً حسب `active` كما وصلت من الخادم، بلا إعادة اشتقاق هنا.
+class _TikTokLiveBubble extends StatelessWidget {
+  const _TikTokLiveBubble({required this.live});
+
+  final TikTokLive live;
+
+  @override
+  Widget build(BuildContext context) {
+    return _StripItem(
+      highlighted: live.live?.active ?? false,
+      label: 'تيك توك أعراسنا',
+      onTap: () => openTikTokLive(context),
+      avatar: ColoredBox(
+        color: context.c.surface,
+        child: Icon(
+          Icons.video_camera_front_rounded,
+          size: 22,
+          color: context.c.sky,
+        ),
+      ),
     );
   }
 }

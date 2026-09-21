@@ -173,3 +173,23 @@ Future<void> openSupportWhatsApp(BuildContext context) async {
   }
 }
 
+/// فتح مدخل تيك توك — الفقاعة في شريط القصص وصفّ «حسابي» معاً (LIVE-04b)،
+/// كي يبقى تعريف الوجهة والرسالة العربية في مكان واحد لا مكانين. الوجهة نفسها
+/// (`GET /live/go` لا `/live`) موثَّقة في `NegevApi.tiktokLiveGoUrl`.
+Future<void> openTikTokLive(BuildContext context) async {
+  final uri = AppServices.of(context).api.tiktokLiveGoUrl;
+  // `launchUrl` يفشل بطريقتين لا واحدة: يردّ false حين لا يجد من يفتح الرابط،
+  // ويرمي حين يرفض النظام الطلب أصلاً. القيمة المرتدّة وحدها تترك الرمية
+  // تفلت من معالج الضغط، فتصير النقرة ميتة بلا أي رسالة — وهذا بالضبط ما
+  // يحرس منه openSupportWhatsApp أعلاه، وهو المدخل الوحيد لتيك توك.
+  var opened = false;
+  try {
+    opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    opened = false;
+  }
+  if (!opened && context.mounted) {
+    showMessage(context, 'تعذّر فتح صفحة البث', isError: true);
+  }
+}
+
