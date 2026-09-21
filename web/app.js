@@ -121,6 +121,14 @@ let storyViewerLastTickTs = 0;
 let storyViewerRafId = null;
 let storyViewerDeviceId = null;
 
+// TikTok live entry (LIVE-04a) — دخول الزوار من الموقع إلى قناة/بثّ تيك توك
+// («نحن الغلاف، تيك توك المضيف»). null يعني لم يصل GET /api/live بعد؛ كائن
+// {profile_url, live} بعد وصوله. مصدر مستقل تماماً عن fetchStories() —
+// الطلبان قد يصل أيّ منهما أولاً، فالفقاعة (renderStoriesStrip) والمدخل
+// الدائم (updateTikTokEntryVisibility) يُعاد رسمهما عند وصول أيٍّ منهما،
+// ويعتمدان فقط على هذا المتغيّر، فلا يظهر شيء ثم يختفي بحسب ترتيب الشبكة.
+let tiktokLiveState = null;
+
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
 // back up exactly what the visitor was trying to do (#20 step 9).
@@ -144,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
+  fetchTikTokLive();
   initSupportEntry();
   initNotificationsPush();
   initServiceWorker();
@@ -738,26 +747,128 @@ async function fetchStories() {
   try {
     const res = await apiFetch('/api/stories');
     const data = await res.json();
-    const container = document.getElementById('storiesContainer');
-    const drawerContainer = document.getElementById('drawerStoriesContainer');
-
     if (data.success && data.stories) {
       allStories = data.stories;
-      const html = allStories.map((s, i) => `
-        <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
-          <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
-            <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
-          </div>
-          <span class="story-title">${escapeHtml(s.title)}</span>
-        </div>
-      `).join('');
-      if (container) container.innerHTML = html;
-      if (drawerContainer) drawerContainer.innerHTML = html;
-      updateFeedDimensions();
+      renderStoriesStrip();
     }
   } catch (e) {
     console.error('Stories error:', e);
   }
+}
+
+/**
+ * يبني شريط القصص كاملاً: فقاعة تيك توك المثبَّتة أولاً (قد ترجع فارغة —
+ * buildTikTokLiveBubbleHtml) ثم القصص الحقيقية بعدها في نفس السلسلة النصية
+ * — لا كعنصر داخل allStories. openStoryViewer(i) في القصص الحقيقية يعتمد
+ * على i كفهرس في تلك المصفوفة تحديداً، فإضافة الفقاعة إليها كانت ستُزيح كل
+ * فهرس بواحد. يُستدعى من هنا وأيضاً من fetchTikTokLive() لأن الطلبين
+ * مستقلّان تماماً وقد يصل أيّ منهما أولاً (تعليق tiktokLiveState أعلاه) —
+ * كلاهما يعيد بناء الشريط كاملاً فلا يهم أيّهما وصل أولاً ولا فرق في النتيجة.
+ */
+function renderStoriesStrip() {
+  const container = document.getElementById('storiesContainer');
+  const drawerContainer = document.getElementById('drawerStoriesContainer');
+  const storiesHtml = allStories.map((s, i) => `
+    <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
+      <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
+        <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
+      </div>
+      <span class="story-title">${escapeHtml(s.title)}</span>
+    </div>
+  `).join('');
+  const html = buildTikTokLiveBubbleHtml() + storiesHtml;
+  if (container) container.innerHTML = html;
+  if (drawerContainer) drawerContainer.innerHTML = html;
+  updateFeedDimensions();
+}
+
+/**
+ * هل ضبط المالك قناة أو بثّاً أصلاً؟ شرط واحد يقرأه كلٌّ من الفقاعة والمدخل
+ * الدائم — كانا يحملانه بصيغتين متقابلتين، وهو بالضبط ما يفترق لاحقاً. يطابق
+ * شرط الخادم نفسه (share.routes: لا صفحة /live بلا رابط ولا بثّ)، فلا مدخل
+ * يقود إلى 404.
+ */
+function isTikTokLiveConfigured() {
+  return !!(tiktokLiveState && (tiktokLiveState.profile_url || tiktokLiveState.live));
+}
+
+/**
+ * الفقاعة المثبَّتة أولاً في شريط القصص. مخفية تماماً حين profile_url وlive
+ * كلاهما null معاً — لا فقاعة رمادية ولا نائبة، الميزة غير مرئية حتى يضبطها
+ * المالك (LIVE-04a). الأفتار هويّتنا نحن لا شعار تيك توك («نحن الغلاف، تيك
+ * توك المضيف») — أيقونة عامة داخل حلقة القصة العادية، لا صورة مستوردة.
+ */
+function buildTikTokLiveBubbleHtml() {
+  if (!isTikTokLiveConfigured()) return '';
+  const { live } = tiktokLiveState;
+
+  // active من الخادم حصراً (GET /api/live: getLiveChannel يشتقّه من until) —
+  // لا إعادة اشتقاق هنا؛ هذا العميل ليس من يعدّل القيمة (خلافاً للوحة الإدارة
+  // التي تعيد اشتقاقها عمداً لأنها هي نفسها من يحرّر البثّ).
+  const isLive = !!(live && live.active);
+  const titleAttr = isLive && live.title ? ` title="${escapeHtml(live.title)}"` : '';
+
+  return `
+    <div class="story-item tiktok-live-item" onclick="openTikTokLive(); toggleTopChrome(false);"${titleAttr}>
+      <div class="story-avatar-ring ${isLive ? 'live' : ''}">
+        <div class="story-avatar-img tiktok-live-avatar">
+          <i class="fa-solid fa-video"></i>
+        </div>
+      </div>
+      <span class="story-title">تيك توك أعراسنا</span>
+    </div>
+  `;
+}
+
+/**
+ * حالة قناة/بثّ تيك توك — GET /api/live عام بلا مصادقة، فلا auth:true هنا
+ * (كانت سترفق رمزاً لا حاجة له وتُخضع النداء لمنطق انتهاء الجلسة في apiFetch
+ * الذي لا يخص زائراً غير مسجَّل أصلاً). النتيجة تُخزَّن في tiktokLiveState
+ * ثم يُعاد رسم شريط القصص والمدخل الدائم معاً.
+ */
+async function fetchTikTokLive() {
+  try {
+    const res = await apiFetch('/api/live');
+    const data = await res.json();
+    if (data.success) {
+      tiktokLiveState = { profile_url: data.profile_url || null, live: data.live || null };
+      renderStoriesStrip();
+      updateTikTokEntryVisibility();
+    }
+  } catch (e) {
+    console.error('TikTok live error:', e);
+  }
+}
+
+/** مدخل واحد لكل مكان في هذا الملف يحتاج فتح البث — الفقاعة والمدخل الدائم معاً. */
+function openTikTokLive() {
+  window.open(tiktokLiveShareUrl(), '_blank', 'noopener');
+}
+
+/**
+ * نفس قاعدة أصل رابط المشاركة في web/admin.js (getLiveShareUrl) — نفس الأصل
+ * افتراضياً (نشر حقيقي: الخادم والواجهة خلف دومين واحد)، أو أصل apiBase إن
+ * كان مضبوطاً رابطاً مطلقاً. نسخة ثانية مقصودة: القاعدة نفسها في admin.js
+ * (getLiveShareUrl) — الموقع واللوحة لا يُحمّلان ملف بعضهما، وapi.js يلتقط
+ * API_BASE وقت التحميل لا عند الاستدعاء. أي تغيير في هذه القاعدة يُطبَّق في
+ * الموضعين معاً.
+ */
+function tiktokLiveShareUrl() {
+  const apiBase = (window.NEGEV_CONFIG && window.NEGEV_CONFIG.apiBase) || '';
+  const origin = /^https?:\/\//i.test(apiBase) ? apiBase.replace(/\/+$/, '') : window.location.origin;
+  return `${origin}/live`;
+}
+
+/**
+ * المدخل الدائم بعد أن يغادر شريط القصص الشاشة — زرّ الترويسة على الديسكتوب
+ * وزرّ الشريط العائم على الهاتف معاً، بنفس شرط إخفاء الفقاعة بالضبط.
+ */
+function updateTikTokEntryVisibility() {
+  const configured = isTikTokLiveConfigured();
+  const headerBtn = document.getElementById('tiktokLiveBtn');
+  const floatingBtn = document.getElementById('floatingTiktokLiveBtn');
+  if (headerBtn) headerBtn.hidden = !configured;
+  if (floatingBtn) floatingBtn.hidden = !configured;
 }
 
 // 2.5 Story Viewer (#20 step 18) — full-screen viewer opened from the strip
@@ -2817,17 +2928,10 @@ function toggleTopChrome(show) {
     drawer.style.display = 'flex';
     backdrop.style.display = 'block';
 
-    const drawerStories = document.getElementById('drawerStoriesContainer');
-    if (drawerStories && allStories.length) {
-      drawerStories.innerHTML = allStories.map((s, i) => `
-        <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
-          <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
-            <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
-          </div>
-          <span class="story-title">${escapeHtml(s.title)}</span>
-        </div>
-      `).join('');
-    }
+    // كانت هنا نسخة ثالثة من قالب القصة تبني شريط الدرج من allStories وحدها،
+    // فتمسح فقاعة تيك توك المثبَّتة عند أول فتح للدرج. renderStoriesStrip هي
+    // الآن الوحيدة التي تبني الشريطين معاً، فلا يمكن أن يفترقا مرّة أخرى.
+    renderStoriesStrip();
 
     const drawerSearch = document.getElementById('drawerSearchInput');
     if (drawerSearch) {

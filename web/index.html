@@ -83,6 +83,15 @@
           <i class="fa-brands fa-whatsapp"></i>
           <span>الدعم الفني</span>
         </button>
+        <!-- مدخل تيك توك أعراسنا — دائم، يظهر فقط حين يضبط المالك قناة أو
+             بثّاً (GET /api/live، خطوتا 3e4c86d وcd02762). يفتح صفحتنا /live
+             المغلَّفة في تبويب جديد، لا رابط تيك توك مباشرة («نحن الغلاف،
+             تيك توك المضيف» — LIVE-04a). مخفي حتى تجيب GET /api/live كي لا
+             يظهر ثم يختفي، بنفس نمط #supportBtn أعلاه. -->
+        <button id="tiktokLiveBtn" class="ai-magic-btn" onclick="openTikTokLive()" title="تيك توك أعراسنا" hidden>
+          <i class="fa-solid fa-video"></i>
+          <span>تيك توك أعراسنا</span>
+        </button>
         <!-- لوحة الإدارة — زرّ منفصل لدورَي admin وsuper_admin وحدهما (updateAuthUI) -->
         <a id="adminPanelBtn" class="auth-pill-btn admin-panel-btn" href="/admin.html" title="لوحة الإدارة" hidden>
           <span aria-hidden="true">👑</span>
@@ -135,6 +144,11 @@
         </button>
         <button class="floating-icon-btn support-green-btn" onclick="handleSupportClick()" title="الدعم الفني عبر واتساب">
           <i class="fa-brands fa-whatsapp"></i>
+        </button>
+        <!-- المدخل الدائم لتيك توك على الهاتف — نفس شرط إخفاء #tiktokLiveBtn
+             في الترويسة بالضبط (updateTikTokEntryVisibility، LIVE-04a). -->
+        <button id="floatingTiktokLiveBtn" class="floating-icon-btn" onclick="openTikTokLive()" title="تيك توك أعراسنا" hidden>
+          <i class="fa-solid fa-video"></i>
         </button>
         <button id="floatingNotifBtn" class="floating-icon-btn" onclick="toggleNotificationsPanel()" title="الإشعارات" style="display:none; position:relative;">
           <i class="fa-solid fa-bell"></i>

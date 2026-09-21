@@ -282,6 +282,21 @@ function buildFetchStub() {
   };
 }
 
+/**
+ * buildFetchStub() with GET /api/live and/or GET /api/stories overridden —
+ * for the TikTok live entry tests (LIVE-04a). Falls back to buildFetchStub()
+ * for everything else so DOMContentLoaded's other startup fetches still work.
+ */
+function buildLiveFetchStub({ live, stories } = {}) {
+  const base = buildFetchStub();
+  return async (url, options = {}) => {
+    const requestPath = String(url).split('?')[0];
+    if (live && requestPath === '/api/live') return jsonResponse(live);
+    if (stories && requestPath === '/api/stories') return jsonResponse(stories);
+    return base(url, options);
+  };
+}
+
 /** A Leaflet stand-in — every call chains, nothing touches a real canvas/network. */
 function buildFakeLeaflet() {
   const chainable = () => {
@@ -934,6 +949,229 @@ async function run() {
     const posterEntry = capturedRequest.body.get('poster');
     assert.ok(posterEntry, 'expected a "poster" entry even when the publisher never touched the crop rectangle');
     assert.ok(posterEntry.name.endsWith('.jpg'), `expected the filename to end in .jpg, got "${posterEntry.name}"`);
+  });
+
+  console.log('\nTikTok live entry — pinned bubble + permanent entry (LIVE-04a)');
+
+  await test('nothing configured (profile_url null, live null) renders no bubble in either stories container', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = buildLiveFetchStub({ live: { success: true, profile_url: null, live: null } });
+    await dom.window.fetchTikTokLive();
+
+    const container = dom.window.document.getElementById('storiesContainer');
+    const drawerContainer = dom.window.document.getElementById('drawerStoriesContainer');
+    assert.strictEqual(container.querySelector('.tiktok-live-item'), null, 'expected no bubble in the main stories strip when nothing is configured');
+    assert.strictEqual(drawerContainer.querySelector('.tiktok-live-item'), null, 'expected no bubble in the drawer stories strip when nothing is configured');
+  });
+
+  await test('the permanent header/floating-bar entry stays hidden with nothing configured, and appears once a channel is set', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+
+    const headerBtn = dom.window.document.getElementById('tiktokLiveBtn');
+    const floatingBtn = dom.window.document.getElementById('floatingTiktokLiveBtn');
+    assert.strictEqual(headerBtn.hidden, true, 'expected the header entry to ship hidden in the markup, so it never flashes in before a channel is known');
+    assert.strictEqual(floatingBtn.hidden, true, 'expected the floating-bar entry to ship hidden in the markup for the same reason');
+
+    dom.window.fetch = buildLiveFetchStub({
+      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null }
+    });
+    await dom.window.fetchTikTokLive();
+
+    assert.strictEqual(headerBtn.hidden, false, 'expected the header entry to appear once a channel is configured');
+    assert.strictEqual(floatingBtn.hidden, false, 'expected the floating-bar entry to appear once a channel is configured');
+
+    // ...and back again: nothing exercised the hiding direction, so a
+    // one-way toggle would have passed. Clearing the channel must remove the
+    // entry, not leave a button that opens a page the server now 404s.
+    dom.window.fetch = buildLiveFetchStub({ live: { success: true, profile_url: null, live: null } });
+    await dom.window.fetchTikTokLive();
+
+    assert.strictEqual(headerBtn.hidden, true, 'expected the header entry to disappear again once the owner clears the channel');
+    assert.strictEqual(floatingBtn.hidden, true, 'expected the floating-bar entry to disappear again too');
+  });
+
+  await test('a configured channel with no live shows the bubble WITHOUT any live treatment', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = buildLiveFetchStub({
+      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null }
+    });
+    await dom.window.fetchTikTokLive();
+
+    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
+    assert.ok(bubble, 'expected a bubble to exist once a channel is configured');
+    const ring = bubble.querySelector('.story-avatar-ring');
+    assert.ok(ring, 'expected the shared story-avatar-ring element inside the bubble');
+    assert.strictEqual(ring.classList.contains('live'), false, 'expected no "live" class when there is no active live');
+    assert.strictEqual(bubble.getAttribute('title'), null, 'expected no title tooltip when there is no live topic to show');
+  });
+
+  await test('an ACTIVE live shows the bubble WITH the shared red live treatment and the topic as its title', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = buildLiveFetchStub({
+      live: {
+        success: true,
+        profile_url: 'https://www.tiktok.com/@a3rasna',
+        live: { title: 'حفلة زفاف مباشرة', until: '2099-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: true }
+      }
+    });
+    await dom.window.fetchTikTokLive();
+
+    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
+    assert.ok(bubble, 'expected a bubble to exist while a live is active');
+    const ring = bubble.querySelector('.story-avatar-ring');
+    assert.strictEqual(ring.classList.contains('live'), true, 'expected the SAME "live" class the strip already uses for a live story, reused not reinvented');
+    assert.strictEqual(bubble.getAttribute('title'), 'حفلة زفاف مباشرة', 'expected the live topic to be exposed as the bubble title attribute for hover');
+  });
+
+  await test('an EXPIRED live (active:false from the server) keeps the bubble but drops the live treatment', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    // until is in the past AND the server already says active:false — the
+    // client must trust active as-is, never recompute it from until itself
+    // (CLAUDE.md: the server's active is the sole authority for this client).
+    dom.window.fetch = buildLiveFetchStub({
+      live: {
+        success: true,
+        profile_url: 'https://www.tiktok.com/@a3rasna',
+        live: { title: 'حفلة انتهت', until: '2020-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: false }
+      }
+    });
+    await dom.window.fetchTikTokLive();
+
+    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
+    assert.ok(bubble, 'expected the bubble to remain — the channel itself is still configured');
+    const ring = bubble.querySelector('.story-avatar-ring');
+    assert.strictEqual(ring.classList.contains('live'), false, 'expected NO live class once the server reports active:false, even though a title/until are still present in the payload');
+  });
+
+  await test('the pinned bubble does not shift story indices — the first REAL story still opens index 0', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const STORIES_FIXTURE = [
+      { id: 1, title: 'قصة أولى', image: 'https://example.test/s1.jpg', isLive: false },
+      { id: 2, title: 'قصة ثانية', image: 'https://example.test/s2.jpg', isLive: false }
+    ];
+    dom.window.fetch = buildLiveFetchStub({
+      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null },
+      stories: { success: true, stories: STORIES_FIXTURE }
+    });
+    await dom.window.fetchTikTokLive();
+    await dom.window.fetchStories();
+
+    const container = dom.window.document.getElementById('storiesContainer');
+    const items = container.querySelectorAll('.story-item');
+    assert.strictEqual(items.length, 3, 'expected the pinned bubble plus the 2 real stories, three items total');
+    assert.ok(items[0].classList.contains('tiktok-live-item'), 'expected the pinned bubble to be the first item');
+    assert.ok(
+      items[1].getAttribute('onclick').includes('openStoryViewer(0)'),
+      'expected the first REAL story to still carry index 0, unshifted by the bubble ahead of it'
+    );
+
+    dom.window.openStoryViewer(0);
+    assert.strictEqual(
+      dom.window.document.getElementById('storyViewerTitle').textContent,
+      'قصة أولى',
+      'expected index 0 to resolve to the first REAL story (allStories[0]), proving the bubble was never pushed into that array'
+    );
+  });
+
+  await test('the strip renders identically whether GET /api/stories or GET /api/live resolves first', async () => {
+    const STORIES_FIXTURE = [{ id: 9, title: 'قصة', image: 'https://example.test/s9.jpg', isLive: false }];
+    const liveResponse = { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null };
+
+    const domA = buildEnv();
+    await flushBoot();
+    domA.window.fetch = buildLiveFetchStub({ live: liveResponse, stories: { success: true, stories: STORIES_FIXTURE } });
+    await domA.window.fetchStories();
+    await domA.window.fetchTikTokLive();
+
+    const domB = buildEnv();
+    await flushBoot();
+    domB.window.fetch = buildLiveFetchStub({ live: liveResponse, stories: { success: true, stories: STORIES_FIXTURE } });
+    await domB.window.fetchTikTokLive();
+    await domB.window.fetchStories();
+
+    const htmlA = domA.window.document.getElementById('storiesContainer').innerHTML;
+    const htmlB = domB.window.document.getElementById('storiesContainer').innerHTML;
+    assert.strictEqual(htmlA, htmlB, 'expected the exact same final strip regardless of which request landed first');
+  });
+
+  await test('a live topic containing a script/img payload is escaped, never parsed as markup', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    // يحمل علامة اقتباس مزدوجة عمداً: بدونها لا يستطيع النصّ الخروج من
+    // title="…" مهما فعلنا، فكان الاختبار ينجح حتى لو حُذف escapeHtml كلياً.
+    const maliciousTitle = '" onmouseover=alert(1) x="<img src=x onerror=alert(1)><script>window.__xss=true</script>';
+    dom.window.fetch = buildLiveFetchStub({
+      live: {
+        success: true,
+        profile_url: 'https://www.tiktok.com/@a3rasna',
+        live: { title: maliciousTitle, until: '2099-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: true }
+      }
+    });
+    await dom.window.fetchTikTokLive();
+
+    const container = dom.window.document.getElementById('storiesContainer');
+    assert.strictEqual(container.querySelector('img[src="x"]'), null, 'expected no <img> element created from the live topic payload');
+    assert.strictEqual(container.querySelector('script'), null, 'expected no <script> element created from the live topic payload');
+    assert.strictEqual(dom.window.__xss, undefined, 'expected the script payload to never actually execute');
+
+    const bubble = container.querySelector('.tiktok-live-item');
+    assert.strictEqual(
+      bubble.getAttribute('title'), maliciousTitle,
+      'expected the raw text to survive only as an attribute VALUE (HTML-decoded on read-back, as any attribute is) never as parsed child markup'
+    );
+    assert.strictEqual(
+      bubble.getAttribute('onmouseover'), null,
+      'the quote in the topic must not close title="…" and graft a new handler onto the element'
+    );
+    assert.strictEqual(
+      bubble.getAttribute('onclick'), 'openTikTokLive(); toggleTopChrome(false);',
+      'the bubble must keep exactly its own handler — no extra attribute injected from the topic'
+    );
+  });
+
+  await test('opening the top-chrome drawer keeps the pinned bubble — the drawer strip is not rebuilt from allStories alone', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const STORIES_FIXTURE = [{ id: 1, title: 'قصة أولى', image: 'https://example.test/s1.jpg', isLive: false }];
+    dom.window.fetch = buildLiveFetchStub({
+      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null },
+      stories: { success: true, stories: STORIES_FIXTURE }
+    });
+    await dom.window.fetchTikTokLive();
+    await dom.window.fetchStories();
+
+    const drawer = dom.window.document.getElementById('drawerStoriesContainer');
+    assert.ok(drawer.querySelector('.tiktok-live-item'), 'precondition: the bubble is in the drawer strip after the initial render');
+
+    dom.window.toggleTopChrome(true);
+
+    assert.ok(
+      drawer.querySelector('.tiktok-live-item'),
+      'opening the drawer must not wipe the pinned bubble — toggleTopChrome used to keep its own copy of the story template and rebuild from allStories alone'
+    );
+    assert.strictEqual(
+      drawer.querySelectorAll('.story-item').length, 2,
+      'expected the bubble plus the one real story, not the story on its own'
+    );
+    assert.ok(
+      drawer.querySelectorAll('.story-item')[1].getAttribute('onclick').includes('openStoryViewer(0)'),
+      'and the real story in the drawer must still carry index 0, unshifted by the bubble ahead of it'
+    );
+  });
+
+  await test('tiktokLiveShareUrl() returns <origin>/live for the default empty apiBase', () => {
+    const dom = buildEnv();
+    const expected = `${dom.window.location.origin}/live`;
+    assert.strictEqual(
+      dom.window.tiktokLiveShareUrl(), expected,
+      'expected the share URL helper to derive <origin>/live when apiBase is empty (web/config.js default)'
+    );
   });
 
   console.log('\nPlace & kind filter — one searchable multi-select each (#85 batch 6a, stories 40-46)');

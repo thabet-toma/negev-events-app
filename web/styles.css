@@ -429,6 +429,18 @@ body {
 
 .story-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 2.5px solid var(--surface); }
 
+/* فقاعة تيك توك المثبَّتة (LIVE-04a) — .story-avatar-img أعلاه تُعطيها القياس
+   والحدّ، وهذه فقط تتوسّط الأيقونة وتلوّنها بهوية المنصّة (لا شعار تيك توك،
+   والعنصر أصلاً div لا img فلا رابط خارجي مطلقاً). */
+.tiktok-live-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  color: var(--sky);
+  font-size: 1.3rem;
+}
+
 .story-title {
   font-size: 0.72rem;
   color: var(--ink-soft);
@@ -2351,6 +2363,12 @@ body {
 .floating-icon-btn.support-green-btn {
   color: #25d366;
 }
+
+/* .floating-icon-btn's own display:inline-flex beats the browser default
+   [hidden]{display:none} at equal specificity, same class of bug as
+   .ai-magic-btn[hidden] above — #floatingTiktokLiveBtn ships hidden until
+   GET /api/live answers (LIVE-04a), so this override is load-bearing. */
+.floating-icon-btn[hidden] { display: none; }
 
 /* زرّ الهوية في الشريط العائم — أيقونة + «تسجيل الدخول/الخروج» كاملة، بارتفاع
    أزرار الأيقونات نفسها كي لا يكبر الشريط. */
