@@ -61,4 +61,15 @@ function runInstantForDate(dateStr) {
   return zonedTimeToUtc(year, month, day, RUN_HOUR, 0, 0);
 }
 
-module.exports = { ZONE, RUN_HOUR, getZonedParts, zonedTimeToUtc, runInstantForDate };
+/**
+ * The calendar date `date` falls on in `ZONE`, as `YYYY-MM-DD` — "today" for
+ * anything keyed to a local day (a live episode, plan26-9 §3.3). Passed to
+ * SQL as a `?` parameter rather than using CURDATE(), which reads the MySQL
+ * session's zone (UTC here) and is a day off every night after 21:00/22:00 UTC.
+ */
+function jerusalemDateString(date = new Date()) {
+  const { year, month, day } = getZonedParts(date);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+module.exports = { ZONE, RUN_HOUR, getZonedParts, zonedTimeToUtc, runInstantForDate, jerusalemDateString };

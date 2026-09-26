@@ -14,16 +14,17 @@ const SETTING_KEYS = {
   // Stored relative (`/uploads/<file>`) like every other media column, and
   // only ever written by the upload route — never as free text through PUT.
   DEFAULT_EVENT_AUDIO_URL: 'default_event_audio_url',
-  // The permanent TikTok channel link, and the three fields that describe
-  // "there is a live right now" — see getLiveChannel below for how they
-  // combine. None of the four is in PUBLIC_KEYS, but that does NOT make them
-  // private: three of their values are derived and served unauthenticated by
+  // The permanent channel link (any platform), and the three fields that
+  // describe "there is a live right now" — see getLiveChannel below for how
+  // they combine. None of the four is in PUBLIC_KEYS, but that does NOT make
+  // them private: their values are derived and served unauthenticated by
   // getLiveChannel below, through GET /api/live. PUBLIC_KEYS guards the raw
   // settings route only — this feature has its own shaped public surface.
-  TIKTOK_PROFILE_URL: 'tiktok_profile_url',
-  TIKTOK_LIVE_TITLE: 'tiktok_live_title',
-  TIKTOK_LIVE_UNTIL: 'tiktok_live_until',
-  TIKTOK_LIVE_URL: 'tiktok_live_url'
+  // Renamed from the tiktok_* keys by the add-live-episodes-2026-09 step.
+  LIVE_CHANNEL_URL: 'live_channel_url',
+  LIVE_TITLE: 'live_title',
+  LIVE_UNTIL: 'live_until',
+  LIVE_STREAM_URL: 'live_stream_url'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
@@ -74,8 +75,54 @@ async function getPublicSettings() {
   return readKeys(PUBLIC_KEYS);
 }
 
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com'];
+const EMBED_BASE = 'https://www.youtube-nocookie.com/embed/';
+
 /**
- * Derives the public "is there a TikTok live right now" state from the four
+ * The one place a stored stream link becomes an embeddable player URL
+ * (plan26-9 §3.1). Only link shapes that name exactly one video or one
+ * channel's live are recognised; anything else — a YouTube @handle, TikTok,
+ * Facebook, a malformed string — returns null, and clients fall back to a
+ * plain link. The id is re-validated against a strict pattern and the
+ * output is rebuilt from scratch, so nothing from the input but that id
+ * ever reaches the embed URL.
+ */
+function toEmbedUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+
+  const host = parsed.hostname.toLowerCase();
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  let videoId = null;
+
+  if (host === 'youtu.be') {
+    videoId = segments[0] || null;
+  } else if (YOUTUBE_HOSTS.includes(host)) {
+    if (segments[0] === 'watch' && segments.length === 1) {
+      videoId = parsed.searchParams.get('v');
+    } else if (['live', 'embed', 'shorts'].includes(segments[0]) && segments.length === 2) {
+      videoId = segments[1];
+    } else if (segments[0] === 'channel' && segments.length >= 2 && YOUTUBE_CHANNEL_ID.test(segments[1])) {
+      return `${EMBED_BASE}live_stream?channel=${segments[1]}&autoplay=1&playsinline=1`;
+    }
+  }
+
+  if (videoId && YOUTUBE_VIDEO_ID.test(videoId)) {
+    return `${EMBED_BASE}${videoId}?autoplay=1&playsinline=1`;
+  }
+  return null;
+}
+
+/**
+ * Derives the public "is there a live right now" state from the four
  * whitelisted keys. `live` is null unless both a title and an end time are
  * set, and its `active` flag is computed here — once, on the server — by
  * comparing `until` against the current time, so a forgotten flag can never
@@ -94,16 +141,16 @@ async function getPublicSettings() {
  */
 async function getLiveChannel() {
   const raw = await readKeys([
-    SETTING_KEYS.TIKTOK_PROFILE_URL,
-    SETTING_KEYS.TIKTOK_LIVE_TITLE,
-    SETTING_KEYS.TIKTOK_LIVE_UNTIL,
-    SETTING_KEYS.TIKTOK_LIVE_URL
+    SETTING_KEYS.LIVE_CHANNEL_URL,
+    SETTING_KEYS.LIVE_TITLE,
+    SETTING_KEYS.LIVE_UNTIL,
+    SETTING_KEYS.LIVE_STREAM_URL
   ]);
 
-  const profileUrl = raw[SETTING_KEYS.TIKTOK_PROFILE_URL];
-  const title = raw[SETTING_KEYS.TIKTOK_LIVE_TITLE];
-  const until = raw[SETTING_KEYS.TIKTOK_LIVE_UNTIL];
-  const liveUrl = raw[SETTING_KEYS.TIKTOK_LIVE_URL];
+  const profileUrl = raw[SETTING_KEYS.LIVE_CHANNEL_URL];
+  const title = raw[SETTING_KEYS.LIVE_TITLE];
+  const until = raw[SETTING_KEYS.LIVE_UNTIL];
+  const liveUrl = raw[SETTING_KEYS.LIVE_STREAM_URL];
 
   let live = null;
   if (title && until) {
@@ -113,7 +160,16 @@ async function getLiveChannel() {
     }
   }
 
-  return { profile_url: profileUrl, live };
+  // `profile_url` and `live` keep their pre-rename shape for every APK
+  // already published; `live_channel_url` is the same value under its new
+  // name, and `embed_url` is null whenever there is no live or its link is
+  // not a recognisable YouTube one (the client then shows a plain link).
+  return {
+    profile_url: profileUrl,
+    live,
+    embed_url: live ? toEmbedUrl(live.url) : null,
+    live_channel_url: profileUrl
+  };
 }
 
 /**
@@ -127,8 +183,8 @@ async function getLiveChannel() {
  * caught too.
  */
 function assertLiveConsistency(next) {
-  const title = next[SETTING_KEYS.TIKTOK_LIVE_TITLE];
-  const until = next[SETTING_KEYS.TIKTOK_LIVE_UNTIL];
+  const title = next[SETTING_KEYS.LIVE_TITLE];
+  const until = next[SETTING_KEYS.LIVE_UNTIL];
 
   if (title && !until) {
     throw ApiError.badRequest('حدّد موعد انتهاء البث المباشر، أو امسح عنوانه');
@@ -136,7 +192,7 @@ function assertLiveConsistency(next) {
   if (until && !title) {
     throw ApiError.badRequest('حدّد عنوان البث المباشر، أو امسح موعد انتهائه');
   }
-  if (title && until && !next[SETTING_KEYS.TIKTOK_LIVE_URL] && !next[SETTING_KEYS.TIKTOK_PROFILE_URL]) {
+  if (title && until && !next[SETTING_KEYS.LIVE_STREAM_URL] && !next[SETTING_KEYS.LIVE_CHANNEL_URL]) {
     throw ApiError.badRequest('لا يمكن تفعيل البث المباشر بلا رابط — أضف رابط البث أو رابط الحساب الدائم');
   }
 }
@@ -180,6 +236,7 @@ module.exports = {
   getAllForAdmin,
   getPublicSettings,
   getLiveChannel,
+  toEmbedUrl,
   assertLiveConsistency,
   setSettings
 };

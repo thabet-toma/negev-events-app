@@ -1366,6 +1366,66 @@ const steps = [
       );
       logger.info(`[migrations] add-activity-log-and-notification-prefs-2026-09: ensured columns; backfilled ${result.affectedRows} «event_created» rows.`);
     }
+  },
+  {
+    // «البث المباشر» العام + نقاش التطبيق اليومي (plan26-9 §3.3): جدولا
+    // الحلقات والأصوات (نفس تعريفهما في schema.sql، مكرَّرين هنا كي لا تعتمد
+    // الخطوة على ترتيب تطبيق الملف)، وإعادة تسمية مفاتيح إعدادات تيك توك
+    // الأربعة إلى أسماء عامة. النسخ بـ ON DUPLICATE KEY UPDATE (تحديث المفتاح
+    // إلى نفسه، مؤهَّلاً باسم الجدول لأنّ الـSELECT من الجدول نفسه) لا يطغى على مفتاح جديد محفوظ مسبقاً، ثم يُحذف القديم — فتشغيل
+    // الخطوة مرتين لا يجد ما ينسخه في المرة الثانية. لا صفوف مزروعة.
+    name: 'add-live-episodes-2026-09',
+    async run(connection) {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS live_episodes (
+          id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          episode_date     DATE         NOT NULL,
+          topic            VARCHAR(200) DEFAULT NULL,
+          episode_question VARCHAR(255) DEFAULT NULL,
+          poll_question    VARCHAR(255) DEFAULT NULL,
+          poll_options     JSON         DEFAULT NULL,
+          created_by       INT UNSIGNED DEFAULT NULL,
+          created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_live_episodes_date (episode_date),
+          CONSTRAINT fk_live_episodes_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS live_poll_votes (
+          id           INT UNSIGNED     NOT NULL AUTO_INCREMENT,
+          episode_id   INT UNSIGNED     NOT NULL,
+          user_id      INT UNSIGNED     NOT NULL,
+          option_index TINYINT UNSIGNED NOT NULL,
+          created_at   TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_live_poll_vote (episode_id, user_id),
+          KEY idx_live_poll_votes_user (user_id),
+          CONSTRAINT fk_live_poll_votes_episode FOREIGN KEY (episode_id) REFERENCES live_episodes(id) ON DELETE CASCADE,
+          CONSTRAINT fk_live_poll_votes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      const renames = [
+        ['tiktok_profile_url', 'live_channel_url'],
+        ['tiktok_live_url', 'live_stream_url'],
+        ['tiktok_live_title', 'live_title'],
+        ['tiktok_live_until', 'live_until']
+      ];
+      let moved = 0;
+      for (const [oldKey, newKey] of renames) {
+        const [result] = await connection.execute(
+          `INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
+           SELECT ?, src.setting_value, src.updated_by, src.updated_at FROM app_settings AS src WHERE src.setting_key = ?
+           ON DUPLICATE KEY UPDATE app_settings.setting_key = app_settings.setting_key`,
+          [newKey, oldKey]
+        );
+        moved += result.affectedRows;
+        await connection.execute('DELETE FROM app_settings WHERE setting_key = ?', [oldKey]);
+      }
+      logger.info(`[migrations] add-live-episodes-2026-09: ensured live_episodes/live_poll_votes; renamed ${moved} live setting row(s).`);
+    }
   }
 ];
 

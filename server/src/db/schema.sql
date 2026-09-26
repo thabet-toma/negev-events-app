@@ -665,3 +665,40 @@ CREATE TABLE IF NOT EXISTS privacy_requests (
   CONSTRAINT fk_privacy_requests_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_privacy_requests_handler FOREIGN KEY (handled_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The daily app discussion that runs beside the live (plan26-9 §3.3). One
+-- row per Asia/Jerusalem calendar day (episode_date), never a UTC day — the
+-- "today" it is matched against is computed in utils/jerusalemTime.js and
+-- passed as a parameter, never CURDATE(). poll_options is a JSON array of
+-- 2..4 strings, or NULL together with poll_question for "no poll today".
+CREATE TABLE IF NOT EXISTS live_episodes (
+  id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  episode_date     DATE         NOT NULL,
+  topic            VARCHAR(200) DEFAULT NULL,
+  episode_question VARCHAR(255) DEFAULT NULL,
+  poll_question    VARCHAR(255) DEFAULT NULL,
+  poll_options     JSON         DEFAULT NULL,
+  created_by       INT UNSIGNED DEFAULT NULL,
+  created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_live_episodes_date (episode_date),
+  CONSTRAINT fk_live_episodes_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One vote per account per episode, enforced by uq_live_poll_vote rather
+-- than a read-then-write check in the service (which two concurrent requests
+-- could both pass). Deleting an account deletes its votes (privacy), and
+-- deleting an episode deletes its votes with it.
+CREATE TABLE IF NOT EXISTS live_poll_votes (
+  id           INT UNSIGNED     NOT NULL AUTO_INCREMENT,
+  episode_id   INT UNSIGNED     NOT NULL,
+  user_id      INT UNSIGNED     NOT NULL,
+  option_index TINYINT UNSIGNED NOT NULL,
+  created_at   TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_live_poll_vote (episode_id, user_id),
+  KEY idx_live_poll_votes_user (user_id),
+  CONSTRAINT fk_live_poll_votes_episode FOREIGN KEY (episode_id) REFERENCES live_episodes(id) ON DELETE CASCADE,
+  CONSTRAINT fk_live_poll_votes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -29,7 +29,8 @@ const scheduler = require('../src/jobs/scheduler');
 const notificationsService = require('../src/services/notifications.service');
 const pushService = require('../src/services/push.service');
 const webpush = require('web-push');
-const { runInstantForDate } = require('../src/utils/jerusalemTime');
+const { runInstantForDate, jerusalemDateString } = require('../src/utils/jerusalemTime');
+const settingsService = require('../src/services/settings.service');
 const logger = require('../src/utils/logger');
 const shareCard = require('../src/services/shareCard.service');
 const { PALETTES } = require('../src/utils/shareTheme');
@@ -5940,75 +5941,84 @@ async function run() {
     assert.strictEqual(publicRead.body.settings.default_event_audio_url, null);
   });
 
-  console.log('\nTikTok live channel: GET /api/live and the four platform settings behind it');
+  console.log('\nLive channel: GET /api/live and the four platform settings behind it');
 
   // Same reasoning as the "Platform settings" section above — app_settings
   // is not reset between runs.
-  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
 
   await test('GET /api/live answers cleanly before anything is ever saved', async () => {
     const { status, body } = await api('GET', '/api/live');
     assert.strictEqual(status, 200);
     assert.strictEqual(body.profile_url, null);
     assert.strictEqual(body.live, null);
+    assert.strictEqual(body.embed_url, null);
+    assert.strictEqual(body.live_channel_url, null);
   });
 
-  await test('A plain (town-scoped) admin is refused on PUT for the TikTok keys — super_admin only', async () => {
+  await test('A plain (town-scoped) admin is refused on PUT for the live keys — super_admin only', async () => {
     const put = await api('PUT', '/api/admin/settings', {
-      token: scopedAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna' }
+      token: scopedAdminToken, body: { live_channel_url: 'https://www.tiktok.com/@aarasna' }
     });
     assert.strictEqual(put.status, 403);
   });
 
-  await test('PUT /api/admin/settings rejects a non-https TikTok URL', async () => {
+  await test('PUT /api/admin/settings rejects a non-https stream URL', async () => {
     const { status, body } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'http://www.tiktok.com/@x' }
+      token: superAdminToken, body: { live_channel_url: 'http://www.tiktok.com/@x' }
     });
     assert.strictEqual(status, 400);
     assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
   });
 
-  await test('PUT /api/admin/settings rejects a look-alike host that merely ends with "tiktok.com" as a suffix trick', async () => {
-    const { status } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'https://evil-tiktok.com/@x' }
-    });
-    assert.strictEqual(status, 400, 'evil-tiktok.com must not pass as a tiktok.com subdomain');
+  await test('PUT /api/admin/settings rejects a stream URL whose host has no dot, and a value that is not a URL at all', async () => {
+    for (const bad of ['https://localhost/live', 'not a url']) {
+      const { status, body } = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken, body: { live_stream_url: bad }
+      });
+      assert.strictEqual(status, 400, `${bad} must not be storable`);
+      assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+      assert.ok(!body.message.includes('تيك توك'), 'the message must no longer name one platform');
+    }
   });
 
-  await test('PUT /api/admin/settings rejects a look-alike host that merely starts with "tiktok.com" as a prefix trick', async () => {
-    const { status } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'https://tiktok.com.attacker.net/@x' }
+  await test('Any https platform is accepted now — a non-TikTok host is no longer refused', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { live_channel_url: 'https://www.facebook.com/aarasna' }
     });
-    assert.strictEqual(status, 400, 'tiktok.com.attacker.net is attacker-owned, not tiktok.com');
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.live_channel_url, 'https://www.facebook.com/aarasna');
+    await api('PUT', '/api/admin/settings', { token: superAdminToken, body: { live_channel_url: '' } });
   });
 
-  await test('A TikTok URL carrying embedded credentials is rejected — the host is real but the displayed link is a phishing shape', async () => {
-    const { status } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'https://a@evil.com:x@www.tiktok.com/@y' }
+  await test('A stream URL carrying embedded credentials is rejected with an Arabic message — the displayed link is a phishing shape', async () => {
+    const { status, body } = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { live_stream_url: 'https://user:pass@www.youtube.com/live/abcdefghijk' }
     });
-    assert.strictEqual(status, 400, 'a url whose visible prefix is another domain must not be storable');
+    assert.strictEqual(status, 400, 'a url carrying credentials must not be storable');
+    assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
   });
 
-  await test('A TikTok URL carrying a newline is stored normalised, never as the raw string that was validated', async () => {
+  await test('A stream URL carrying a newline is stored normalised, never as the raw string that was validated', async () => {
     // محلّل URL يحذف CR/LF/TAB من مدخله، فتمرّ القيمة من التحقق بينما يبقى
     // السطر الجديد في النص الخام — ولو خُزِّن كما هو لوصل لاحقاً إلى ترويسة
     // Location التي يرفضها Node أصلاً. المخزَّن هو parsed.href لا الخام.
     const withNewline = 'https://www.tiktok.com/' + String.fromCharCode(10) + '@aarasna_normalised';
     const save = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: withNewline }
+      token: superAdminToken, body: { live_channel_url: withNewline }
     });
     assert.strictEqual(save.status, 200);
-    assert.strictEqual(save.body.settings.tiktok_profile_url, 'https://www.tiktok.com/@aarasna_normalised');
-    const hasControlChar = [...save.body.settings.tiktok_profile_url].some(ch => ch.charCodeAt(0) < 32);
-    assert.strictEqual(hasControlChar, false, 'a stored TikTok URL must never carry a control character');
+    assert.strictEqual(save.body.settings.live_channel_url, 'https://www.tiktok.com/@aarasna_normalised');
+    const hasControlChar = [...save.body.settings.live_channel_url].some(ch => ch.charCodeAt(0) < 32);
+    assert.strictEqual(hasControlChar, false, 'a stored stream URL must never carry a control character');
   });
 
-  await test('A super_admin saves a valid TikTok profile URL — it reads back on both the admin route and GET /api/live', async () => {
+  await test('A super_admin saves a valid channel URL — it reads back on both the admin route and GET /api/live', async () => {
     const save = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna' }
+      token: superAdminToken, body: { live_channel_url: 'https://www.tiktok.com/@aarasna' }
     });
     assert.strictEqual(save.status, 200);
-    assert.strictEqual(save.body.settings.tiktok_profile_url, 'https://www.tiktok.com/@aarasna');
+    assert.strictEqual(save.body.settings.live_channel_url, 'https://www.tiktok.com/@aarasna');
 
     const live = await api('GET', '/api/live');
     assert.strictEqual(live.status, 200);
@@ -6018,7 +6028,7 @@ async function run() {
 
   await test('Saving a live title without an until is rejected with an Arabic message, and nothing is saved', async () => {
     const { status, body } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_title: 'سؤال وجواب' }
+      token: superAdminToken, body: { live_title: 'سؤال وجواب' }
     });
     assert.strictEqual(status, 400);
     assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
@@ -6026,13 +6036,13 @@ async function run() {
     // ‏live يكون null كلما كان until فارغاً، فقراءته لا تُثبت أن شيئاً لم يُكتَب.
     // القراءة الإدارية وحدها تفرّق بين «لم يُحفَظ» و«حُفِظ ولم يظهر».
     const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
-    assert.strictEqual(adminRead.body.settings.tiktok_live_title, null, 'a rejected PUT must not have written the title at all');
+    assert.strictEqual(adminRead.body.settings.live_title, null, 'a rejected PUT must not have written the title at all');
   });
 
   await test('Saving a live title with a FUTURE until marks the live active, falling back to the profile url', async () => {
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const save = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_title: 'سؤال وجواب', tiktok_live_until: future }
+      token: superAdminToken, body: { live_title: 'سؤال وجواب', live_until: future }
     });
     assert.strictEqual(save.status, 200);
 
@@ -6044,20 +6054,21 @@ async function run() {
     assert.strictEqual(live.body.live.url, 'https://www.tiktok.com/@aarasna', 'url must fall back to the profile url without its own live url');
   });
 
-  await test('A distinct tiktok_live_url overrides the profile url in live.url', async () => {
+  await test('A distinct live_stream_url overrides the profile url in live.url, and a TikTok link is simply non-embeddable', async () => {
     const save = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_url: 'https://vm.tiktok.com/live123' }
+      token: superAdminToken, body: { live_stream_url: 'https://vm.tiktok.com/live123' }
     });
     assert.strictEqual(save.status, 200);
 
     const live = await api('GET', '/api/live');
     assert.strictEqual(live.body.live.url, 'https://vm.tiktok.com/live123');
+    assert.strictEqual(live.body.embed_url, null, 'a TikTok link has no embeddable player');
   });
 
   await test('Saving a PAST until keeps the live present but inactive', async () => {
     const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const save = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_until: past }
+      token: superAdminToken, body: { live_until: past }
     });
     assert.strictEqual(save.status, 200);
 
@@ -6068,7 +6079,7 @@ async function run() {
 
   await test('Clearing the title and until brings live back to null', async () => {
     const clear = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_title: '', tiktok_live_until: '' }
+      token: superAdminToken, body: { live_title: '', live_until: '' }
     });
     assert.strictEqual(clear.status, 200);
 
@@ -6076,7 +6087,7 @@ async function run() {
     assert.strictEqual(live.body.live, null);
   });
 
-  await test('GET /api/settings/public still returns exactly its original two keys after the TikTok settings were saved', async () => {
+  await test('GET /api/settings/public still returns exactly its original two keys after the live settings were saved', async () => {
     const { status, body } = await api('GET', '/api/settings/public');
     assert.strictEqual(status, 200);
     assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
@@ -6088,7 +6099,7 @@ async function run() {
   // the same known-empty state so this section never depends on whatever that
   // one left behind, and restore it at the end so later sections don't
   // depend on this one either.
-  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
 
   await test('With no channel and no live saved, /live, /live/card.jpg and /live/go all 404', async () => {
     const page = await rawGet('/live');
@@ -6101,7 +6112,7 @@ async function run() {
 
   await test('Set up: a permanent channel link only, no live', async () => {
     const { status } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna_live_page_test' }
+      token: superAdminToken, body: { live_channel_url: 'https://www.tiktok.com/@aarasna_live_page_test' }
     });
     assert.strictEqual(status, 200);
   });
@@ -6124,9 +6135,9 @@ async function run() {
     const { status } = await api('PUT', '/api/admin/settings', {
       token: superAdminToken,
       body: {
-        tiktok_live_title: 'جلسة أسئلة وأجوبة',
-        tiktok_live_until: future,
-        tiktok_live_url: 'https://vm.tiktok.com/live-page-test'
+        live_title: 'جلسة أسئلة وأجوبة',
+        live_until: future,
+        live_stream_url: 'https://vm.tiktok.com/live-page-test'
       }
     });
     assert.strictEqual(status, 200);
@@ -6157,7 +6168,7 @@ async function run() {
   await test('Set up: the same live, now EXPIRED (until moved to the past)', async () => {
     const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const { status } = await api('PUT', '/api/admin/settings', {
-      token: superAdminToken, body: { tiktok_live_until: past }
+      token: superAdminToken, body: { live_until: past }
     });
     assert.strictEqual(status, 200);
   });
@@ -6183,7 +6194,7 @@ async function run() {
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const save = await api('PUT', '/api/admin/settings', {
       token: superAdminToken,
-      body: { tiktok_live_title: '<img src=x onerror=alert(1)>"', tiktok_live_until: future }
+      body: { live_title: '<img src=x onerror=alert(1)>"', live_until: future }
     });
     assert.strictEqual(save.status, 200);
 
@@ -6212,7 +6223,7 @@ async function run() {
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     await api('PUT', '/api/admin/settings', {
       token: superAdminToken,
-      body: { tiktok_live_title: 'موضوع مختلف تماماً لاختبار ذاكرة التخزين المؤقت', tiktok_live_until: future }
+      body: { live_title: 'موضوع مختلف تماماً لاختبار ذاكرة التخزين المؤقت', live_until: future }
     });
 
     const second = await rawGetBinary('/live/card.jpg');
@@ -6256,7 +6267,324 @@ async function run() {
   });
 
   // Clean-up — later sections must not see any setting this section wrote.
-  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
+
+  console.log('\nLive stream embed_url, setting-key rename, and the daily episode poll (plan26-9 M1)');
+
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url', 'tiktok_profile_url', 'tiktok_live_title', 'tiktok_live_until', 'tiktok_live_url')");
+
+  await test('A youtube.com/live/<id> stream link is saved and GET /api/live derives its youtube-nocookie embed_url', async () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken,
+      body: {
+        live_channel_url: 'https://www.youtube.com/@aarasna',
+        live_stream_url: 'https://www.youtube.com/live/abcDEF_-123',
+        live_title: 'نقاش اليوم',
+        live_until: future
+      }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const { status, body } = await api('GET', '/api/live');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.embed_url, 'https://www.youtube-nocookie.com/embed/abcDEF_-123?autoplay=1&playsinline=1');
+    assert.strictEqual(body.live_channel_url, 'https://www.youtube.com/@aarasna');
+  });
+
+  await test('GET /api/live keeps its original shape for published APKs: profile_url and live.{title,until,url,active}', async () => {
+    const { body } = await api('GET', '/api/live');
+    assert.strictEqual(body.profile_url, 'https://www.youtube.com/@aarasna');
+    assert.deepStrictEqual(Object.keys(body.live).sort(), ['active', 'title', 'until', 'url']);
+    assert.strictEqual(body.live.title, 'نقاش اليوم');
+    assert.strictEqual(body.live.url, 'https://www.youtube.com/live/abcDEF_-123');
+    assert.strictEqual(body.live.active, true);
+    assert.ok(!Number.isNaN(new Date(body.live.until).getTime()));
+  });
+
+  await test('toEmbedUrl derives youtu.be, watch?v= (www and m.), embed/, and /channel/UC… links correctly', async () => {
+    const id = 'abcDEF_-123';
+    const expected = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&playsinline=1`;
+    assert.strictEqual(settingsService.toEmbedUrl(`https://youtu.be/${id}?si=share`), expected);
+    assert.strictEqual(settingsService.toEmbedUrl(`https://www.youtube.com/watch?v=${id}&t=10`), expected);
+    assert.strictEqual(settingsService.toEmbedUrl(`https://m.youtube.com/watch?v=${id}`), expected);
+    assert.strictEqual(settingsService.toEmbedUrl(`https://youtube.com/embed/${id}`), expected);
+    const channel = 'UC' + 'a'.repeat(22);
+    assert.strictEqual(
+      settingsService.toEmbedUrl(`https://www.youtube.com/channel/${channel}`),
+      `https://www.youtube-nocookie.com/embed/live_stream?channel=${channel}&autoplay=1&playsinline=1`
+    );
+  });
+
+  await test('toEmbedUrl returns null for an @handle, TikTok, Facebook, a malformed id, and garbage', async () => {
+    for (const url of [
+      'https://www.youtube.com/@aarasna',
+      'https://www.tiktok.com/@aarasna/live',
+      'https://www.facebook.com/aarasna/live',
+      'https://www.youtube.com/watch?v=tooShort',
+      'https://www.youtube.com/channel/UCshort',
+      'https://evil.com/live/abcDEF_-123',
+      'not a url',
+      null
+    ]) {
+      assert.strictEqual(settingsService.toEmbedUrl(url), null, `${url} must not be embeddable`);
+    }
+  });
+
+  await test('A TikTok stream link saves fine but GET /api/live answers embed_url: null (a plain link)', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { live_stream_url: 'https://www.tiktok.com/@aarasna/live' }
+    });
+    assert.strictEqual(save.status, 200);
+    const { body } = await api('GET', '/api/live');
+    assert.strictEqual(body.live.url, 'https://www.tiktok.com/@aarasna/live');
+    assert.strictEqual(body.embed_url, null);
+  });
+
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
+
+  await test('Migration renames tiktok_profile_url to live_channel_url, and running migrate twice in a row is safe', async () => {
+    await db.execute(
+      "INSERT INTO app_settings (setting_key, setting_value) VALUES ('tiktok_profile_url', 'https://www.tiktok.com/@renamed_by_migration')"
+    );
+    await migrate();
+    await migrate();
+
+    const renamed = await db.queryOne("SELECT setting_value FROM app_settings WHERE setting_key = 'live_channel_url'");
+    assert.ok(renamed, 'expected the value under its new key');
+    assert.strictEqual(renamed.setting_value, 'https://www.tiktok.com/@renamed_by_migration');
+    const old = await db.queryOne("SELECT setting_key FROM app_settings WHERE setting_key = 'tiktok_profile_url'");
+    assert.strictEqual(old, null, 'the old key must be gone');
+
+    const { body } = await api('GET', '/api/live');
+    assert.strictEqual(body.profile_url, 'https://www.tiktok.com/@renamed_by_migration');
+  });
+
+  await test('The rename never overwrites a value already saved under the new key', async () => {
+    await db.execute(
+      "INSERT INTO app_settings (setting_key, setting_value) VALUES ('tiktok_profile_url', 'https://www.tiktok.com/@stale_old_value')"
+    );
+    await migrate();
+    const kept = await db.queryOne("SELECT setting_value FROM app_settings WHERE setting_key = 'live_channel_url'");
+    assert.strictEqual(kept.setting_value, 'https://www.tiktok.com/@renamed_by_migration');
+    const old = await db.queryOne("SELECT setting_key FROM app_settings WHERE setting_key = 'tiktok_profile_url'");
+    assert.strictEqual(old, null);
+  });
+
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
+
+  await test('jerusalemDateString returns the Asia/Jerusalem date, not the UTC one, at 22:30Z (summer and winter)', async () => {
+    assert.strictEqual(jerusalemDateString(new Date('2026-07-10T22:30:00Z')), '2026-07-11');
+    assert.strictEqual(jerusalemDateString(new Date('2026-01-10T22:30:00Z')), '2026-01-11');
+    assert.strictEqual(jerusalemDateString(new Date('2026-01-10T12:00:00Z')), '2026-01-10');
+  });
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const liveToday = jerusalemDateString();
+  const liveYesterday = jerusalemDateString(new Date(Date.now() - DAY_MS));
+  const liveTwoDaysAgo = jerusalemDateString(new Date(Date.now() - 2 * DAY_MS));
+  const liveDates = [liveToday, liveYesterday, liveTwoDaysAgo];
+  await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?, ?)', liveDates);
+
+  // Inserted directly and signed like scopedAdminToken above — by this point
+  // the suite has deliberately exhausted the /api/auth/register rate limit.
+  async function createLiveVoter(fullName) {
+    const voterPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId } = await db.execute(
+      "INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, 'user')",
+      [voterPhone, fullName, bcrypt.hashSync('1234', config.bcryptRounds)]
+    );
+    const token = signToken({ id: insertId, phone_number: voterPhone, full_name: fullName, role: 'user' }, '1h');
+    return { id: insertId, token };
+  }
+  const liveVoterA = await createLiveVoter('مصوّت البث الأول');
+  const liveVoterB = await createLiveVoter('مصوّت البث الثاني');
+  let liveTodayId = 0;
+  let liveYesterdayId = 0;
+  let liveTwoDaysAgoId = 0;
+  const todayOptions = ['نعم', 'لا', 'ربما'];
+
+  await test('PUT /api/admin/live/episodes/<today> without a token → 401, from a town admin → 403', async () => {
+    const body = { topic: 'موضوع', poll_question: 'سؤال؟', poll_options: ['أ', 'ب'] };
+    const anon = await api('PUT', `/api/admin/live/episodes/${liveToday}`, { body });
+    assert.strictEqual(anon.status, 401);
+    const scoped = await api('PUT', `/api/admin/live/episodes/${liveToday}`, { token: scopedAdminToken, body });
+    assert.strictEqual(scoped.status, 403);
+    const row = await db.queryOne('SELECT id FROM live_episodes WHERE episode_date = ?', [liveToday]);
+    assert.strictEqual(row, null, 'a refused PUT must not have written anything');
+  });
+
+  await test('A poll with fewer than two or more than four options is refused with 400', async () => {
+    for (const pollOptions of [['وحيد'], ['1', '2', '3', '4', '5']]) {
+      const { status, body } = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+        token: superAdminToken, body: { poll_question: 'سؤال؟', poll_options: pollOptions }
+      });
+      assert.strictEqual(status, 400, `${pollOptions.length} options must be refused`);
+      assert.ok(/[؀-ۿ]/.test(body.message));
+    }
+  });
+
+  await test('A poll question without options, options without a question, a blank option, and a bad date are refused with 400', async () => {
+    const cases = [
+      [liveToday, { poll_question: 'سؤال؟' }],
+      [liveToday, { poll_options: ['أ', 'ب'] }],
+      [liveToday, { poll_question: 'سؤال؟', poll_options: ['أ', '  '] }],
+      ['2026-13-45x', { topic: 'x' }]
+    ];
+    for (const [date, body] of cases) {
+      const res = await api('PUT', `/api/admin/live/episodes/${date}`, { token: superAdminToken, body });
+      assert.strictEqual(res.status, 400, JSON.stringify(body));
+    }
+  });
+
+  await test("A super_admin creates today's episode → 200 with the saved episode", async () => {
+    const { status, body } = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+      token: superAdminToken,
+      body: { topic: 'الأعراس الكبيرة', episode_question: 'ما رأيكم؟', poll_question: 'هل تؤيد؟', poll_options: todayOptions.map(o => ` ${o} `) }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.episode.date, liveToday);
+    assert.deepStrictEqual(body.episode.poll_options, todayOptions, 'options are stored trimmed');
+    assert.strictEqual(body.episode.vote_count, 0);
+    liveTodayId = body.episode.id;
+  });
+
+  await test('Set up: yesterday with no poll, and two days ago with a poll (past dates are allowed)', async () => {
+    const y = await api('PUT', `/api/admin/live/episodes/${liveYesterday}`, {
+      token: superAdminToken, body: { topic: 'أمس بلا استفتاء' }
+    });
+    assert.strictEqual(y.status, 200);
+    assert.strictEqual(y.body.episode.poll_options, null);
+    liveYesterdayId = y.body.episode.id;
+
+    const d = await api('PUT', `/api/admin/live/episodes/${liveTwoDaysAgo}`, {
+      token: superAdminToken, body: { topic: 'قبل يومين', poll_question: 'سؤال قديم؟', poll_options: ['أول', 'ثانٍ'] }
+    });
+    assert.strictEqual(d.status, 200);
+    liveTwoDaysAgoId = d.body.episode.id;
+  });
+
+  await test('GET /api/live/hub (anonymous): today has its poll without results, previous is the latest earlier day WITH a poll', async () => {
+    const { status, body } = await api('GET', '/api/live/hub');
+    assert.strictEqual(status, 200);
+    assert.ok('live' in body && 'profile_url' in body && 'embed_url' in body);
+    assert.ok(body.share_url.endsWith('/live'));
+    assert.strictEqual(body.today.id, liveTodayId);
+    assert.strictEqual(body.today.date, liveToday);
+    assert.strictEqual(body.today.topic, 'الأعراس الكبيرة');
+    assert.strictEqual(body.today.poll.question, 'هل تؤيد؟');
+    assert.deepStrictEqual(body.today.poll.options, todayOptions);
+    assert.strictEqual(body.today.poll.my_vote, null);
+    assert.ok(!('results' in body.today.poll), 'results must be hidden from a non-voter');
+    assert.ok(!('total_votes' in body.today.poll));
+
+    assert.strictEqual(body.previous.date, liveTwoDaysAgo, 'yesterday has no poll, so previous skips to two days ago');
+    assert.strictEqual(body.previous.poll_question, 'سؤال قديم؟');
+    assert.strictEqual(body.previous.total_votes, 0);
+    assert.strictEqual(body.previous.results.length, 2);
+  });
+
+  await test('POST vote without a token → 401', async () => {
+    const { status } = await api('POST', `/api/live/episodes/${liveTodayId}/vote`, { body: { option_index: 0 } });
+    assert.strictEqual(status, 401);
+  });
+
+  await test('POST vote with an out-of-range or non-integer option_index → 400; on an unknown episode → 404', async () => {
+    for (const optionIndex of [3, -1, 1.5, 'x', null]) {
+      const { status } = await api('POST', `/api/live/episodes/${liveTodayId}/vote`, {
+        token: liveVoterA.token, body: { option_index: optionIndex }
+      });
+      assert.strictEqual(status, 400, `option_index ${optionIndex} must be refused`);
+    }
+    const missing = await api('POST', '/api/live/episodes/999999999/vote', { token: liveVoterA.token, body: { option_index: 0 } });
+    assert.strictEqual(missing.status, 404);
+  });
+
+  await test('POST vote on an earlier day\'s episode → 400 «هذا النقاش مغلق»', async () => {
+    const { status, body } = await api('POST', `/api/live/episodes/${liveTwoDaysAgoId}/vote`, {
+      token: liveVoterA.token, body: { option_index: 0 }
+    });
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.message, 'هذا النقاش مغلق');
+    const noPoll = await api('POST', `/api/live/episodes/${liveYesterdayId}/vote`, {
+      token: liveVoterA.token, body: { option_index: 0 }
+    });
+    assert.strictEqual(noPoll.status, 400);
+  });
+
+  await test('The first vote → 200 with results; a second vote by the same account → 409', async () => {
+    const first = await api('POST', `/api/live/episodes/${liveTodayId}/vote`, {
+      token: liveVoterA.token, body: { option_index: 1 }
+    });
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(first.body.poll.my_vote, 1);
+    assert.strictEqual(first.body.poll.total_votes, 1);
+    assert.deepStrictEqual(first.body.poll.results[1], { index: 1, label: 'لا', votes: 1, percentage: 100 });
+
+    const second = await api('POST', `/api/live/episodes/${liveTodayId}/vote`, {
+      token: liveVoterA.token, body: { option_index: 0 }
+    });
+    assert.strictEqual(second.status, 409);
+    assert.strictEqual(second.body.message, 'صوّتَّ مسبقاً في نقاش اليوم');
+
+    const count = await db.queryOne('SELECT COUNT(*) AS n FROM live_poll_votes WHERE episode_id = ?', [liveTodayId]);
+    assert.strictEqual(Number(count.n), 1);
+  });
+
+  await test('GET /api/live/hub shows today\'s results to the voter, and still hides them from a signed-in non-voter', async () => {
+    const voter = await api('GET', '/api/live/hub', { token: liveVoterA.token });
+    assert.strictEqual(voter.body.today.poll.my_vote, 1);
+    assert.strictEqual(voter.body.today.poll.total_votes, 1);
+    assert.strictEqual(voter.body.today.poll.results.length, 3);
+
+    const nonVoter = await api('GET', '/api/live/hub', { token: liveVoterB.token });
+    assert.strictEqual(nonVoter.body.today.poll.my_vote, null);
+    assert.ok(!('results' in nonVoter.body.today.poll));
+  });
+
+  await test('After a vote, changing the poll options → 409; changing only the topic → 200', async () => {
+    const changed = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+      token: superAdminToken,
+      body: { topic: 'الأعراس الكبيرة', poll_question: 'هل تؤيد؟', poll_options: ['نعم', 'لا'] }
+    });
+    assert.strictEqual(changed.status, 409);
+    assert.ok(/[؀-ۿ]/.test(changed.body.message));
+
+    const topicOnly = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+      token: superAdminToken,
+      body: { topic: 'موضوع معدَّل', episode_question: 'سؤال معدَّل', poll_question: 'هل تؤيد؟', poll_options: todayOptions }
+    });
+    assert.strictEqual(topicOnly.status, 200);
+    assert.strictEqual(topicOnly.body.episode.topic, 'موضوع معدَّل');
+    assert.strictEqual(topicOnly.body.episode.vote_count, 1);
+  });
+
+  await test('GET /api/admin/live/episodes lists the recent episodes newest first with vote_count, super_admin only', async () => {
+    const scoped = await api('GET', '/api/admin/live/episodes', { token: scopedAdminToken });
+    assert.strictEqual(scoped.status, 403);
+
+    const { status, body } = await api('GET', '/api/admin/live/episodes', { token: superAdminToken });
+    assert.strictEqual(status, 200);
+    const mine = body.episodes.filter(e => liveDates.includes(e.date));
+    assert.deepStrictEqual(mine.map(e => e.date), [liveToday, liveYesterday, liveTwoDaysAgo]);
+    assert.strictEqual(mine[0].vote_count, 1);
+  });
+
+  await test('DELETE /api/admin/live/episodes/:id removes the episode and its votes; an unknown id → 404', async () => {
+    const del = await api('DELETE', `/api/admin/live/episodes/${liveTodayId}`, { token: superAdminToken });
+    assert.strictEqual(del.status, 200);
+    const votes = await db.queryOne('SELECT COUNT(*) AS n FROM live_poll_votes WHERE episode_id = ?', [liveTodayId]);
+    assert.strictEqual(Number(votes.n), 0);
+
+    const again = await api('DELETE', `/api/admin/live/episodes/${liveTodayId}`, { token: superAdminToken });
+    assert.strictEqual(again.status, 404);
+
+    const hub = await api('GET', '/api/live/hub');
+    assert.strictEqual(hub.body.today, null);
+  });
+
+  await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?, ?)', liveDates);
+  await db.execute('DELETE FROM users WHERE id IN (?, ?)', [liveVoterA.id, liveVoterB.id]);
 
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
 

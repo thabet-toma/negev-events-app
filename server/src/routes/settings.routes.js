@@ -52,12 +52,11 @@ function rejectFreeTextAudio() {
 }
 
 /**
- * Shared by `tiktok_profile_url` and `tiktok_live_url`: the value is later
- * placed in an HTTP redirect and in HTML attributes by a future step, so a
- * non-https or non-TikTok host must be impossible to store, not merely
- * discouraged. `hostname` (not the raw string) is checked so a trick like
- * `tiktok.com.attacker.net` — where `tiktok.com` is only a *prefix* of the
- * real, attacker-owned host — is rejected the same as `evil-tiktok.com`.
+ * Shared by `live_channel_url` and `live_stream_url`. The platform is NOT
+ * fixed in code (plan26-9 §3.4): switching from TikTok to YouTube or
+ * anything else must not need a release, so any https URL with a real
+ * dotted host is accepted. The open-redirect risk that leaves is bounded by
+ * who can write it — a super_admin typing the link themselves.
  *
  * What is STORED is `parsed.href`, never the raw string that was validated:
  * the WHATWG URL parser strips tab, CR and LF from its input, so a value
@@ -67,7 +66,7 @@ function rejectFreeTextAudio() {
  * parsed form also normalises the shape on disk to exactly one spelling,
  * the same reasoning parseLiveUntil applies with toISOString().
  */
-function parseTiktokUrl(raw) {
+function parseStreamUrl(raw) {
   const cleaned = cleanString(raw, 300);
   if (!cleaned) return null;
 
@@ -75,20 +74,18 @@ function parseTiktokUrl(raw) {
   try {
     parsed = new URL(cleaned);
   } catch {
-    throw ApiError.badRequest('رابط تيك توك غير صالح');
+    throw ApiError.badRequest('رابط البث غير صالح');
   }
 
-  const host = parsed.hostname;
-  const isTiktokHost = host === 'tiktok.com' || host.endsWith('.tiktok.com');
-  if (parsed.protocol !== 'https:' || !isTiktokHost) {
-    throw ApiError.badRequest('رابط تيك توك غير صالح — يجب أن يكون رابط https على نطاق tiktok.com');
+  if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.')) {
+    throw ApiError.badRequest('رابط البث غير صالح — يجب أن يكون رابط https كاملاً');
   }
 
-  // المضيف هنا تيك توك حقيقي، لكن شكل الرابط المعروض للناس خدعة تصيّد
-  // معروفة: العين تقرأ ما قبل الـ@ (‏evil.com) والوجهة الحقيقية ما بعده.
-  // الرابط الذي يُنسخ ويُشارَك يجب أن يقول وجهته بنفسه.
+  // شكل الرابط المعروض للناس خدعة تصيّد معروفة: العين تقرأ ما قبل الـ@
+  // (‏evil.com) والوجهة الحقيقية ما بعده. الرابط الذي يُنسخ ويُشارَك يجب أن
+  // يقول وجهته بنفسه.
   if (parsed.username || parsed.password) {
-    throw ApiError.badRequest('رابط تيك توك غير صالح — احذف اسم المستخدم وكلمة المرور من الرابط');
+    throw ApiError.badRequest('رابط البث غير صالح — احذف اسم المستخدم وكلمة المرور من الرابط');
   }
 
   return parsed.href;
@@ -122,10 +119,10 @@ function parseLiveUntil(raw) {
 const VALIDATORS = {
   [settings.SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER]: parseWhatsappNumber,
   [settings.SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL]: rejectFreeTextAudio,
-  [settings.SETTING_KEYS.TIKTOK_PROFILE_URL]: parseTiktokUrl,
-  [settings.SETTING_KEYS.TIKTOK_LIVE_TITLE]: parseLiveTitle,
-  [settings.SETTING_KEYS.TIKTOK_LIVE_UNTIL]: parseLiveUntil,
-  [settings.SETTING_KEYS.TIKTOK_LIVE_URL]: parseTiktokUrl
+  [settings.SETTING_KEYS.LIVE_CHANNEL_URL]: parseStreamUrl,
+  [settings.SETTING_KEYS.LIVE_TITLE]: parseLiveTitle,
+  [settings.SETTING_KEYS.LIVE_UNTIL]: parseLiveUntil,
+  [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl
 };
 
 // Guarded on this router itself — a `router.use('/admin', ...)` registered in
@@ -188,7 +185,7 @@ router.get('/settings/public', asyncHandler(async (req, res) => {
 
 // Public and unauthenticated on purpose: this is the one surface every
 // client (web share page, marketing cover, admin tab, app bubble — steps 2
-// to 4) reads to know whether a TikTok live is on right now, so it carries
+// to 4) reads to know whether a live is on right now, so it carries
 // no admin guard and no X-App-Version gating.
 router.get('/live', asyncHandler(async (req, res) => {
   res.json({ success: true, ...await settings.getLiveChannel() });
