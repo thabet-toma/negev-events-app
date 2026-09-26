@@ -225,7 +225,9 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة |
 | `GET` | `/api/settings/public` | رقم واتساب الدعم الفني (`support_whatsapp_number`) والمقطع الصوتي الافتراضي للمناسبات التي لا صوت لها (`default_event_audio_url`، رابط مطلق) فقط — كلاهما `null` إن لم يُحفَظ بعد، ولا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
-| `GET` | `/api/live` | حالة بث تيك توك المباشر — `profile_url` (رابط الحساب الدائم) و`live` (‏`null` إلا إذا حُفظ عنوان وموعد انتهاء معاً ووُجد رابط يُحال إليه — رابط بث أو رابط الحساب: `{ title, until, url, active }`، و`active` يُحسَب هنا بمقارنة `until` بالوقت الحالي فينتهي البث تلقائياً بلا حاجة لإطفاء يدوي) — عام بلا مصادقة |
+| `GET` | `/api/live` | حالة البث المباشر (أي منصّة) — `profile_url`/`live_channel_url` (رابط القناة الدائم، القيمة نفسها باسمين: الأول للنسخ المنشورة) و`live` (‏`null` إلا إذا حُفظ عنوان وموعد انتهاء معاً ووُجد رابط يُحال إليه — رابط بث أو رابط القناة: `{ title, until, url, active }`، و`active` يُحسَب هنا بمقارنة `until` بالوقت الحالي فينتهي البث تلقائياً بلا حاجة لإطفاء يدوي)، و`embed_url` (مشغّل `youtube-nocookie` يشتقّه `settings.service.toEmbedUrl` من رابط يوتيوب لفيديو/بث/قناة `UC…`؛ `null` لأي منصّة أخرى أو رابط `@handle` — العميل يعرض عندها زرّ رابط) — عام بلا مصادقة |
+| `GET` | `/api/live/hub` | صفحة البث كاملة: كل حقول `/api/live` + `today` (حلقة اليوم بتوقيت القدس: `id` `date` `topic` `episode_question` و`poll` = `{ question, options, my_vote }` — و`results` `total_votes` فقط لمن صوّت) + `previous` (آخر يوم سابق فيه استفتاء، بنتائجه النهائية) + `share_url` — الرمز اختياري (يضيف `my_vote`) |
+| `POST` | `/api/live/episodes/:id/vote` | صوت في نقاش اليوم (`option_index`) — صوت واحد لكل حساب يفرضه مفتاح فريد (409 «صوّتَّ مسبقاً في نقاش اليوم»)، و400 «هذا النقاش مغلق» لحلقة ليست حلقة اليوم أو بلا استفتاء 🔒 |
 | `POST` | `/api/check-collision` | فحص تعارض تاريخ (`date`, `town` — والآن أيضاً `event_end_date` و `occasion_type_id` اختياريان؛ الشكل القديم بلا `occasion_type_id` ما زال يعمل) |
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
@@ -321,10 +323,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/e/:id` | صفحة مشاركة مناسبة مُعتمدة — معاينة Open Graph مصمَّمة بعلامتنا (`أعراسنا`)، وزرّا «حمّل التطبيق»/«افتح في المتصفّح». مناسبة غير موجودة/غير معتمدة/معرّف غير رقمي: الثلاثة تُعيد 404 بجسم مطابق حرفياً |
 | `GET` | `/e/:id/card.jpg` | بطاقة `og:image` (1200×1200 JPEG) المولَّدة من `shareCard.service.js` — مُخزَّنة `immutable` مفتاحها معرّف المناسبة و`updated_at` |
 | `GET` | `/e/:id/download` | يسجّل `app_download_clicked` ثم يوجّه 302 إلى ملف الـAPK |
-| `GET` | `/live` | صفحة قناة/بث تيك توك المصمَّمة بعلامتنا — «نحن الغلاف، تيك توك المضيف»: أي رابط يُلصَق في واتساب يفتح هذه الصفحة أولاً، لا صورة تيك توك المصغَّرة مباشرة. بث نشِط (`active: true` من `GET /api/live`): شارة «مباشر الآن» وعنوان البث نفسه، وزرّ أساسي «ادخل إلى البث الآن»؛ غير ذلك (رابط حساب فقط، أو بث انتهى): عنوان «قناة أعراسنا على تيك توك» وزرّ «تابعنا وشاهد المقاطع». بلا رابط حساب دائم وبلا بث على الإطلاق: 404 بنفس جسم صفحة المناسبة غير الموجودة. يسجّل `tiktok_page_viewed` |
+| `GET` | `/live` | صفحة البث المصمَّمة بعلامتنا، بلا اسم منصّة — أي رابط يُلصَق في واتساب يفتح هذه الصفحة أولاً. بث نشِط: شارة «مباشر الآن» وعنوان البث؛ غير ذلك: «بث أعراسنا المباشر». تحتها حلقة اليوم (الموضوع، سؤال الحلقة، سؤال الاستفتاء وخياراته **للقراءة فقط** بلا نسب) ونتيجة نقاش الأمس بأشرطة نسب، وأزرار «ادخل البث» (`/live/go`) و«شارك بالنقاش في التطبيق» (`/live/download`) و«مشاركة واتساب». بلا رابط قناة وبلا بث على الإطلاق: 404 بنفس جسم صفحة المناسبة غير الموجودة. يسجّل `tiktok_page_viewed` (اسم الحدث التاريخي، لم يُغيَّر كي لا تنقسم السلسلة) |
 | `GET` | `/live/card.jpg` | بطاقة `og:image` تسويقية (1200×1200 JPEG) من `renderLiveCover` في `shareCard.service.js` — العلامة كاملة، شارة حمراء عند بثّ نشِط فقط، وموضوع البث كعنوان رئيسي بحجم يتقلَّص حسب طول النص. مُخزَّنة **بلا** `immutable` (`max-age=300` فقط) لأن مفتاحها نص الموضوع لا معرّف صف — تغيير الموضوع أو انتهاء البث لا يستدعي أي طلب إلى هذا المسار بذاته |
-| `GET` | `/live/go` | يسجّل `tiktok_click_through` ثم يوجّه 302 إلى رابط البث النشِط أو رابط الحساب الدائم (من `settings.service.getLiveChannel` حصراً — لا معامل استعلام يقرَّر منه الوجهة أبداً)، و404 إن لم يوجد أيّ من الرابطين. التسجيل يسبق التحقّق عمداً: المقيس «أحدهم ضغط» لا «ونجح» |
+| `GET` | `/live/go` | يسجّل `tiktok_click_through` ثم يوجّه 302 إلى رابط البث النشِط أو رابط القناة الدائم (من `settings.service.getLiveChannel` حصراً — لا معامل استعلام يقرَّر منه الوجهة أبداً)، و404 إن لم يوجد أيّ من الرابطين. التسجيل يسبق التحقّق عمداً: المقيس «أحدهم ضغط» لا «ونجح» |
 | `GET` | `/live/download` | يسجّل `app_download_clicked` (بلا بلدة) ثم يوجّه 302 إلى ملف الـAPK |
+| `GET` | `/live/embed` | صفحة بلا محتوى سوى `<iframe>` مشغّل يوتيوب (`embed_url`) يملأ الشاشة، بـ`referrerpolicy="strict-origin-when-cross-origin"` — يحمّلها WebView التطبيق كي يرى يوتيوب نطاقنا في ترويسة `Referer` (بدونها خطأ 153). CSP خاصة (`frame-src` يوتيوب فقط) و`no-store`؛ 404 حين لا `embed_url` (أي بث غير يوتيوب) — ADR-0006 |
 
 ### مراجعة التبريكات/التعازي (مالك المناسبة أو إدارة) 🔒
 
@@ -561,10 +564,13 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
 | `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه) 🛡️ |
 | `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
-| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق، و`tiktok_profile_url` و`tiktok_live_title` و`tiktok_live_until` و`tiktok_live_url` لبث تيك توك المباشر) 🛡️ |
-| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط)، ويرفض `tiktok_profile_url`/`tiktok_live_url` بغير `https` على نطاق `tiktok.com` أو أحد نطاقاته الفرعية، ويرفض حفظ عنوان بث بلا موعد انتهاء أو العكس، وحفظهما معاً بلا أي رابط (لا بث ولا حساب دائم) 🛡️ |
+| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق، و`live_channel_url` و`live_title` و`live_until` و`live_stream_url` للبث المباشر — أعادت خطوة `add-live-episodes-2026-09` تسميتها من مفاتيح `tiktok_*` القديمة) 🛡️ |
+| `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط)، ويرفض `live_channel_url`/`live_stream_url` بغير `https` أو بمضيف بلا نقطة أو بحاملٍ لاسم مستخدم/كلمة مرور (المنصّة نفسها حرّة عمداً — تبديلها لا يحتاج نشراً)، ويرفض حفظ عنوان بث بلا موعد انتهاء أو العكس، وحفظهما معاً بلا أي رابط (لا بث ولا حساب دائم) 🛡️ |
 | `POST` | `/api/admin/settings/default-audio` | رفع المقطع الصوتي الافتراضي (`multipart/form-data`، حقل `audio`، نفس فحص البايتات كصوت المناسبة) — يُخزَّن نسبياً ويعود مطلقاً، والملف السابق يبقى على القرص 🛡️ |
 | `DELETE` | `/api/admin/settings/default-audio` | حذف المقطع الصوتي الافتراضي (يعود `null`) 🛡️ |
+| `GET` | `/api/admin/live/episodes` | حلقات البث لآخر ٦٠ يوماً (والمخطَّطة مسبقاً)، الأحدث أولاً، مع `vote_count` 🛡️ |
+| `PUT` | `/api/admin/live/episodes/:date` | إنشاء/استبدال حلقة يوم (`YYYY-MM-DD`): `topic` `episode_question` و`poll_question` + `poll_options` (٢–٤ خيارات، أو كلاهما فارغ = بلا استفتاء) — استبدال كامل، و409 عند تغيير الخيارات بعد أول صوت (باقي الحقول قابلة للتعديل) 🛡️ |
+| `DELETE` | `/api/admin/live/episodes/:id` | حذف حلقة وأصواتها معها 🛡️ |
 | `GET` | `/api/admin/analytics/activity` | سجل النشاط: مَن أضاف/عدّل/اعتمد/رفض/حذف/نقل ملكية/اعتمد قرية لأي مناسبة، الأحدث أولاً، مع اسم الفاعل ورقمه ولقطة عنوان المناسبة ونوعها وبلدتها (تبقى بعد حذفها، `event_exists`)، و`summary` مقروء للتعديل (`?action=` `?page=` `?limit=`) 🛡️ |
 | `GET` | `/api/admin/analytics/overview` | مؤشرات النشاط العام (المشاهدات، المشاركات، النقرات، جمهور الأجهزة النشطة والزوار غير المسجلين) مع تصفية المدة (`?period=24h\|7d\|30d\|all`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices` | قائمة الأجهزة والتوكنات النشطة (زوار غير مسجلين ومستخدمين) مع البحث والفلترة (`?type=anonymous\|registered` `?search=`) 🛡️ |
@@ -574,11 +580,18 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 🔒 يتطلب رمز مستخدم · 👑 يتطلب رمز إدارة · 🛡️ يتطلب رمز مدير عام (`super_admin`)
 
+`PUT /api/admin/settings` الذي يلمس أيّ مفتاح بث يبثّ `live_status` بعد الحفظ، وإن صار البث نشِطاً يكتب إشعار «بدأ البث المباشر» (`type = live_started`) لكل من أبقى `notify_new_events` — **مرة واحدة في اليوم** كحدّ أقصى (مفتاح `live_started_<تاريخ القدس>`) — ويعلنه بـ`system_notification` وWeb Push بـ`kind: live_started`.
+
 ### أحداث Socket.IO
 
 `new_event_created` · `admin_new_pending_event` · `event_reaction_<id>` ·
 `new_congratulation_<id>` · `system_broadcast` · `new_notification_<userId>` · `town_broadcast` ·
-`system_notification`
+`system_notification` · `live_status` · `live_poll_<episodeId>`
+
+⚠️ `live_status` و`live_poll_<episodeId>` (البث المباشر): الأولى حمولتها فارغة `{}` بعد أي حفظ يلمس
+إعدادات البث — العميل يعيد جلب `GET /api/live` بنفسه. الثانية `{ results, total_votes }` بعد كل صوت
+ناجح، **بلا** `my_vote` لأنها تصل كل متصل؛ العميل لا يعرضها إلا لمستخدم صوّت هو نفسه. و`system_notification`
+يحمل أيضاً `kind: 'live_started'` (مع `event_id: null`) لإعلان بدء البث.
 
 ⚠️ `system_notification` (1.11): إشارة **واحدة عامة** بعد أن تُكتب صفوف «مناسبة جديدة» لكل
 المستخدمين دفعة واحدة، بدل `new_notification_<userId>` لكل واحد منهم. الحمولة

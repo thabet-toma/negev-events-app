@@ -146,8 +146,8 @@ const ANALYTICS_EVENTS = [
   { key: 'location_clicked', label: 'الضغط على الاتجاهات أو الخريطة', countOnly: false },
   { key: 'contact_clicked', label: 'الضغط على الاتصال بأصحاب المناسبة', countOnly: false },
   { key: 'reminder_clicked', label: 'الضغط على زرّ ذكّرني بالمناسبة', countOnly: false },
-  { key: 'tiktok_page_viewed', label: 'فتح صفحة بث تيك توك', countOnly: true },
-  { key: 'tiktok_click_through', label: 'الانتقال إلى تيك توك', countOnly: true }
+  { key: 'tiktok_page_viewed', label: 'فتح صفحة البث المباشر', countOnly: true },
+  { key: 'tiktok_click_through', label: 'الانتقال إلى البث', countOnly: true }
 ];
 
 const ANALYTICS_EVENT_KEYS = ANALYTICS_EVENTS.map(event => event.key);
