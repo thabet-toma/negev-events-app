@@ -933,29 +933,29 @@
           </div>
         </div>
 
-        <!-- بث تيك توك المباشر (LIVE-03) — بطاقة داخل إعدادات المنصّة نفسها لا
+        <!-- البث المباشر (LIVE-03) — بطاقة داخل إعدادات المنصّة نفسها لا
              تبويب جديد: هي إعداد منصّة كرقم الدعم، وحراسة السوبر أدمن لهذا
              التبويب موجودة هنا أصلاً. GET /api/live وPUT /api/admin/settings
              هما مصدر الحقيقة؛ اللوحة تُرسل طلباً متّسقاً وتعرض رسالة الخادم
              العربية عند الرفض، لا تكرّر تحققه. -->
         <div class="pane-box" style="margin-top:24px;">
           <div class="pane-header">
-            <h2><i class="fa-solid fa-video"></i> بث تيك توك المباشر</h2>
-            <p>رابط واحد يُنسخ ويُلصق في واتساب — يفتح صفحة تحمل هوية المنصّة ويحوّل الزائر إلى تيك توك</p>
+            <h2><i class="fa-solid fa-video"></i> البث المباشر</h2>
+            <p>رابط واحد يُنسخ ويُلصق في واتساب — يفتح صفحة تحمل هوية المنصّة وتوصل الزائر إلى البث</p>
           </div>
 
-          <div id="liveStatusStrip" class="live-status-strip">لم تُضبَط قناة تيك توك بعد</div>
+          <div id="liveStatusStrip" class="live-status-strip">لم تُضبَط قناة البث بعد</div>
 
-          <form id="tiktokLiveForm" class="admin-form" onsubmit="handleSaveTiktokLive(event)">
+          <form id="liveSettingsForm" class="admin-form" onsubmit="handleSaveLiveSettings(event)">
             <div class="form-group">
-              <label>رابط قناة تيك توك</label>
-              <input type="text" id="settingTiktokProfileUrl" placeholder="https://www.tiktok.com/@aarasna">
-              <span class="hint-text">هذا هو الرابط الدائم للحساب. تفريغه يخفي زر تيك توك عن الزوار كلياً.</span>
+              <label>رابط قناة البث</label>
+              <input type="text" id="settingLiveChannelUrl" placeholder="https://www.youtube.com/@aarasna">
+              <span class="hint-text">هذا هو الرابط الدائم للقناة. تفريغه يخفي زر القناة عن الزوار كلياً.</span>
             </div>
 
             <div class="form-group">
               <label>موضوع البث</label>
-              <input type="text" id="settingTiktokLiveTitle" maxlength="120" placeholder="مثال: سهرة عرس فلان الليلة">
+              <input type="text" id="settingLiveTitle" maxlength="120" placeholder="مثال: سهرة عرس فلان الليلة">
               <span class="hint-text">هذا ما يراه الناس في معاينة واتساب وعلى صورة الغلاف — هو التسويق نفسه، لا مجرد عنوان داخلي.</span>
             </div>
 
@@ -968,20 +968,22 @@
                 <button type="button" class="admin-btn-ghost" onclick="applyLiveDurationPreset('midnight')">حتى منتصف الليل</button>
               </div>
               <span class="hint-text" id="liveUntilPreview">لم يُحدَّد موعد انتهاء بعد</span>
-              <input type="hidden" id="settingTiktokLiveUntil">
+              <input type="hidden" id="settingLiveUntil">
             </div>
 
             <div class="form-group">
               <label>رابط البث الخاص (اختياري)</label>
-              <input type="text" id="settingTiktokLiveUrl" placeholder="https://www.tiktok.com/@aarasna/live">
+              <input type="text" id="settingLiveStreamUrl" placeholder="https://www.youtube.com/live/...">
               <span class="hint-text">اتركه فارغاً ليُستخدم رابط القناة نفسه.</span>
+              <!-- يحسمه الخادم (embed_url في GET /api/live) لا هذه الصفحة. -->
+              <span class="hint-text live-embed-hint" id="liveEmbedHint" style="display:none;"></span>
             </div>
 
             <div class="form-row" style="margin-top:18px; gap:12px;">
-              <button type="submit" class="admin-btn-primary" id="saveTiktokLiveBtn" style="flex:1;">
+              <button type="submit" class="admin-btn-primary" id="saveLiveSettingsBtn" style="flex:1;">
                 <i class="fa-solid fa-check"></i> حفظ
               </button>
-              <button type="button" class="btn-reject" id="endTiktokLiveBtn" onclick="handleEndTiktokLive()" disabled>
+              <button type="button" class="btn-reject" id="endLiveBtn" onclick="handleEndLive()" disabled>
                 <i class="fa-solid fa-stop"></i> إنهاء البث الآن
               </button>
             </div>
@@ -1002,6 +1004,62 @@
               <img id="liveCardPreview" class="live-card-preview" alt="معاينة صورة مشاركة البث" style="display:none;">
             </div>
           </div>
+        </div>
+
+        <!-- حلقات البث — حلقة لكل يوم (بتوقيت القدس): موضوع وسؤال واستفتاء
+             اختياري. PUT /api/admin/live/episodes/:date استبدال كامل، والخادم
+             يرفض (409) تغيير الخيارات بعد أول صوت؛ اللوحة تقفلها مسبقاً وتعرض
+             رسالته إن وصل الرفض رغم ذلك. -->
+        <div class="pane-box" style="margin-top:24px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-comments"></i> حلقات البث</h2>
+            <p>موضوع كل يوم وسؤاله واستفتاؤه — يظهر للزوار في صفحة البث</p>
+          </div>
+
+          <div id="liveEpisodesList" class="admin-table-wrapper"></div>
+
+          <form id="liveEpisodeForm" class="admin-form" style="margin-top:24px;" onsubmit="handleSaveLiveEpisode(event)">
+            <h3 id="liveEpisodeFormTitle" class="live-episode-form-title">حلقة جديدة</h3>
+
+            <div class="form-group">
+              <label>تاريخ الحلقة</label>
+              <input type="date" id="liveEpisodeDate" required onchange="handleLiveEpisodeDateChange()">
+              <span class="hint-text">اختيار يوم له حلقة محفوظة يفتحها للتعديل.</span>
+            </div>
+
+            <div class="form-group">
+              <label>الموضوع</label>
+              <input type="text" id="liveEpisodeTopic" maxlength="200" placeholder="مثال: عادات الأعراس بين الأمس واليوم">
+            </div>
+
+            <div class="form-group">
+              <label>سؤال الحلقة</label>
+              <input type="text" id="liveEpisodeQuestion" maxlength="255" placeholder="السؤال الذي يُطرح للنقاش في البث">
+            </div>
+
+            <div class="form-group">
+              <label>سؤال الاستفتاء (اختياري)</label>
+              <input type="text" id="liveEpisodePollQuestion" maxlength="255" placeholder="اتركه مع خياراته فارغة لحلقة بلا استفتاء">
+            </div>
+
+            <div class="form-group">
+              <label>خيارات الاستفتاء</label>
+              <div id="liveEpisodeOptions" class="live-episode-options"></div>
+              <span class="hint-text" id="liveEpisodeOptionsLockedNote" style="display:none;">الخيارات مقفولة بعد أول صوت — السؤال والموضوع قابلان للتعديل.</span>
+              <button type="button" class="admin-btn-ghost" id="addLiveEpisodeOptionBtn" style="margin-top:8px;" onclick="addLiveEpisodeOption()">
+                <i class="fa-solid fa-plus"></i> إضافة خيار
+              </button>
+            </div>
+
+            <div class="form-row" style="margin-top:18px; gap:12px;">
+              <button type="submit" class="admin-btn-primary" id="saveLiveEpisodeBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ الحلقة
+              </button>
+              <button type="button" class="admin-btn-ghost" onclick="resetLiveEpisodeForm()">
+                <i class="fa-solid fa-rotate-left"></i> حلقة جديدة
+              </button>
+            </div>
+          </form>
         </div>
       </section>
 

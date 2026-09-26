@@ -5172,15 +5172,15 @@ async function run() {
     assert.strictEqual(superDom.window.renderRequestedVillageNoticeHtml({ ...evt, village_id: 3 }), '', 'a linked village needs no notice');
   });
 
-  console.log('\nTikTok live channel admin panel (LIVE-03)');
+  console.log('\nLive channel admin panel (LIVE-03, generalised in M4)');
 
-  await test('every element id the TikTok live admin.js code reads for actually exists in admin.html', () => {
+  await test('every element id the live admin.js code reads for actually exists in admin.html', () => {
     const dom = buildAdminEnv();
     const { document } = dom.window;
     const ids = [
-      'liveStatusStrip', 'settingTiktokProfileUrl', 'settingTiktokLiveTitle',
-      'settingTiktokLiveUntil', 'liveUntilPreview', 'settingTiktokLiveUrl',
-      'saveTiktokLiveBtn', 'endTiktokLiveBtn', 'copyLiveLinkBtn',
+      'liveStatusStrip', 'settingLiveChannelUrl', 'settingLiveTitle',
+      'settingLiveUntil', 'liveUntilPreview', 'settingLiveStreamUrl',
+      'saveLiveSettingsBtn', 'endLiveBtn', 'copyLiveLinkBtn',
       'liveShareLinkFallback', 'liveCardPreview'
     ];
     for (const id of ids) {
@@ -5228,7 +5228,7 @@ async function run() {
     const { document } = dom.window;
 
     dom.window.applyLiveDurationPreset('2h');
-    const untilInput = document.getElementById('settingTiktokLiveUntil');
+    const untilInput = document.getElementById('settingLiveUntil');
     assert.ok(untilInput.value, 'expected the hidden until field to be filled');
     const untilMs = new Date(untilInput.value).getTime();
     assert.ok(untilMs > Date.now(), 'the written until value must be in the future');
@@ -5244,21 +5244,21 @@ async function run() {
 
     dom.window.renderLiveStatusStrip({
       success: true,
-      profile_url: 'https://www.tiktok.com/@aarasna',
-      live: { title: 'سهرة عرس فلان', until: new Date(Date.now() + 90 * 60 * 1000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: true }
+      profile_url: 'https://www.youtube.com/@aarasna',
+      live: { title: 'سهرة عرس فلان', until: new Date(Date.now() + 90 * 60 * 1000).toISOString(), url: 'https://www.youtube.com/@aarasna', active: true }
     });
     assert.ok(strip.querySelector('.live-badge-active'), 'expected the active-live badge');
     assert.ok(strip.textContent.includes('سهرة عرس فلان'), 'expected the topic to be shown');
     assert.match(strip.textContent, /يتبقّى [٠-٩]{2}:[٠-٩]{2}/, 'expected a remaining-time figure');
-    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, false, 'end-live must be enabled while a live is set');
+    assert.strictEqual(document.getElementById('endLiveBtn').disabled, false, 'end-live must be enabled while a live is set');
 
-    dom.window.renderLiveStatusStrip({ success: true, profile_url: 'https://www.tiktok.com/@aarasna', live: null });
+    dom.window.renderLiveStatusStrip({ success: true, profile_url: 'https://www.youtube.com/@aarasna', live: null });
     assert.ok(!strip.querySelector('.live-badge-active'), 'no badge once there is no live object');
     assert.ok(strip.textContent.includes('لا يوجد بث الآن'), 'expected the channel-only line');
-    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, true, 'end-live must be disabled — there is nothing to end');
+    assert.strictEqual(document.getElementById('endLiveBtn').disabled, true, 'end-live must be disabled — there is nothing to end');
 
     dom.window.renderLiveStatusStrip({ success: true, profile_url: null, live: null });
-    assert.ok(strip.textContent.includes('لم تُضبَط قناة تيك توك بعد'), 'expected the fully-unset line');
+    assert.ok(strip.textContent.includes('لم تُضبَط قناة البث بعد'), 'expected the fully-unset line');
   });
 
   await test('an expired live (until in the past) renders as "no live", never as an active one', () => {
@@ -5268,8 +5268,8 @@ async function run() {
 
     dom.window.renderLiveStatusStrip({
       success: true,
-      profile_url: 'https://www.tiktok.com/@aarasna',
-      live: { title: 'بث قديم انتهى', until: new Date(Date.now() - 60 * 60 * 1000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: false }
+      profile_url: 'https://www.youtube.com/@aarasna',
+      live: { title: 'بث قديم انتهى', until: new Date(Date.now() - 60 * 60 * 1000).toISOString(), url: 'https://www.youtube.com/@aarasna', active: false }
     });
 
     assert.ok(!strip.querySelector('.live-badge-active'), 'an expired live must never render the active badge, regardless of the server\'s own `active` flag');
@@ -5291,21 +5291,21 @@ async function run() {
         putBody = JSON.parse(options.body);
         return jsonResponse({
           success: true,
-          settings: { tiktok_profile_url: 'https://www.tiktok.com/@aarasna', tiktok_live_title: null, tiktok_live_until: null, tiktok_live_url: null }
+          settings: { live_channel_url: 'https://www.youtube.com/@aarasna', live_title: null, live_until: null, live_stream_url: null }
         });
       }
       if (requestPath === '/api/live') {
-        return jsonResponse({ success: true, profile_url: 'https://www.tiktok.com/@aarasna', live: null });
+        return jsonResponse({ success: true, profile_url: 'https://www.youtube.com/@aarasna', live: null });
       }
       return jsonResponse({ success: true });
     };
 
-    await dom.window.handleEndTiktokLive();
+    await dom.window.handleEndLive();
 
     assert.strictEqual(putCount, 1, 'ending the live must be exactly one PUT — never two calls each clearing one field');
     assert.ok(putBody, 'expected a PUT body');
-    assert.strictEqual(putBody.tiktok_live_title, '', 'title must be cleared');
-    assert.strictEqual(putBody.tiktok_live_until, '', 'until must be cleared in the very same request body as the title');
+    assert.strictEqual(putBody.live_title, '', 'title must be cleared');
+    assert.strictEqual(putBody.live_until, '', 'until must be cleared in the very same request body as the title');
   });
 
   await test('a topic containing markup is inserted into the status strip as text, never as HTML', () => {
@@ -5316,8 +5316,8 @@ async function run() {
 
     dom.window.renderLiveStatusStrip({
       success: true,
-      profile_url: 'https://www.tiktok.com/@aarasna',
-      live: { title: evilTitle, until: new Date(Date.now() + 3600000).toISOString(), url: 'https://www.tiktok.com/@aarasna', active: true }
+      profile_url: 'https://www.youtube.com/@aarasna',
+      live: { title: evilTitle, until: new Date(Date.now() + 3600000).toISOString(), url: 'https://www.youtube.com/@aarasna', active: true }
     });
 
     assert.strictEqual(strip.querySelectorAll('img').length, 0, 'a malicious topic must not create an <img> element in the strip');
@@ -5348,26 +5348,26 @@ async function run() {
     const { document } = dom.window;
     const past = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
 
-    dom.window.applyTiktokSettingsToForm({
-      tiktok_profile_url: 'https://www.tiktok.com/@aarasna',
-      tiktok_live_title: 'بث الأمس',
-      tiktok_live_until: past,
-      tiktok_live_url: null
+    dom.window.applyLiveSettingsToForm({
+      live_channel_url: 'https://www.youtube.com/@aarasna',
+      live_title: 'بث الأمس',
+      live_until: past,
+      live_stream_url: null
     });
 
-    assert.strictEqual(document.getElementById('settingTiktokLiveTitle').value, '',
+    assert.strictEqual(document.getElementById('settingLiveTitle').value, '',
       'a finished live must not reappear as tonight\'s topic');
-    assert.strictEqual(document.getElementById('settingTiktokLiveUntil').value, '',
+    assert.strictEqual(document.getElementById('settingLiveUntil').value, '',
       'the dead until must not ride along on the next save — the server accepts a past until, so this would be saved as a success that is live nowhere');
-    assert.strictEqual(document.getElementById('settingTiktokProfileUrl').value, 'https://www.tiktok.com/@aarasna',
+    assert.strictEqual(document.getElementById('settingLiveChannelUrl').value, 'https://www.youtube.com/@aarasna',
       'the permanent channel link is not part of the live and must survive');
 
     dom.window.renderLiveStatusStrip({
       success: true,
-      profile_url: 'https://www.tiktok.com/@aarasna',
-      live: { title: 'بث الأمس', until: past, url: 'https://www.tiktok.com/@aarasna', active: false }
+      profile_url: 'https://www.youtube.com/@aarasna',
+      live: { title: 'بث الأمس', until: past, url: 'https://www.youtube.com/@aarasna', active: false }
     });
-    assert.strictEqual(document.getElementById('endTiktokLiveBtn').disabled, true,
+    assert.strictEqual(document.getElementById('endLiveBtn').disabled, true,
       'the strip reads «لا يوجد بث الآن» for an expired live, so the button beside it must not offer to end one');
   });
 
@@ -5376,16 +5376,16 @@ async function run() {
     const { document } = dom.window;
     const future = new Date(Date.now() + 45 * 60 * 1000).toISOString();
 
-    dom.window.applyTiktokSettingsToForm({
-      tiktok_profile_url: 'https://www.tiktok.com/@aarasna',
-      tiktok_live_title: 'بث الليلة',
-      tiktok_live_until: future,
-      tiktok_live_url: null
+    dom.window.applyLiveSettingsToForm({
+      live_channel_url: 'https://www.youtube.com/@aarasna',
+      live_title: 'بث الليلة',
+      live_until: future,
+      live_stream_url: null
     });
 
-    assert.strictEqual(document.getElementById('settingTiktokLiveTitle').value, 'بث الليلة',
+    assert.strictEqual(document.getElementById('settingLiveTitle').value, 'بث الليلة',
       'clearing expired values must not also clear a live that is still running');
-    assert.strictEqual(document.getElementById('settingTiktokLiveUntil').value, future);
+    assert.strictEqual(document.getElementById('settingLiveUntil').value, future);
   });
 
   await test('when GET /api/live fails, the strip stops claiming that no channel is configured', async () => {
@@ -5399,6 +5399,244 @@ async function run() {
     assert.ok(!strip.textContent.includes('لم تُضبَط'),
       'a failed request must not leave a definite claim that no channel exists standing');
     assert.ok(strip.textContent.includes('تعذّر'), 'expected an honest "could not fetch" line instead');
+  });
+
+  console.log('\nLive admin — generic keys, embed hint and daily episodes (M4)');
+
+  /**
+   * Wraps the page's own adminFetch (a global function declaration in the
+   * eval'd script, so admin.js resolves it through the window at call time)
+   * to record every path it is asked for, and routes the network through
+   * `handler`. `rawFetchPaths` records every fetch() — anything in it and
+   * not in `adminPaths` went around adminFetch.
+   */
+  function instrumentAdminLive(dom, handler) {
+    const calls = { adminPaths: [], rawFetch: [] };
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      calls.rawFetch.push({ path: requestPath, method, headers: options.headers || {}, body: options.body });
+      return handler(requestPath, method, options);
+    };
+    const originalAdminFetch = dom.window.adminFetch;
+    dom.window.adminFetch = (path, options) => {
+      calls.adminPaths.push(String(path));
+      return originalAdminFetch(path, options);
+    };
+    return calls;
+  }
+
+  await test('the live section and the episodes section say nothing about TikTok anywhere — text, placeholders or titles', () => {
+    const dom = buildAdminEnv();
+    const pane = dom.window.document.getElementById('tabSettings');
+    assert.ok(pane.textContent.includes('البث المباشر'), 'expected the section to be titled «البث المباشر»');
+    assert.ok(pane.textContent.includes('حلقات البث'), 'expected the «حلقات البث» section');
+    assert.ok(!/تيك توك|tiktok/i.test(pane.textContent), 'no «تيك توك»/TikTok in the visible text of the settings pane');
+    const attrs = [...pane.querySelectorAll('[placeholder], [title], [alt]')]
+      .map(el => `${el.getAttribute('placeholder') || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('alt') || ''}`)
+      .join(' ');
+    assert.ok(!/تيك توك|tiktok/i.test(attrs), 'no «تيك توك»/TikTok in placeholders, titles or alt text either');
+  });
+
+  await test('saving the live form PUTs exactly live_channel_url, live_title, live_until and live_stream_url through adminFetch', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const until = new Date(Date.now() + 2 * 3600000).toISOString();
+    let putBody = null;
+    const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/settings' && method === 'PUT') {
+        putBody = JSON.parse(options.body);
+        return jsonResponse({ success: true, settings: putBody });
+      }
+      if (requestPath === '/api/live') return jsonResponse({ success: true, profile_url: null, live: null, embed_url: null, live_channel_url: null });
+      return jsonResponse({ success: true });
+    });
+
+    document.getElementById('settingLiveChannelUrl').value = ' https://www.youtube.com/@aarasna ';
+    document.getElementById('settingLiveTitle').value = 'سهرة الليلة';
+    document.getElementById('settingLiveUntil').value = until;
+    document.getElementById('settingLiveStreamUrl').value = 'https://www.youtube.com/live/abcdefghijk';
+
+    await dom.window.handleSaveLiveSettings({ preventDefault() {} });
+
+    assert.deepStrictEqual(putBody, {
+      live_channel_url: 'https://www.youtube.com/@aarasna',
+      live_title: 'سهرة الليلة',
+      live_until: until,
+      live_stream_url: 'https://www.youtube.com/live/abcdefghijk'
+    }, 'expected the four new keys and nothing else — a tiktok_* key would be refused by the server');
+    assert.ok(calls.adminPaths.includes('/api/admin/settings'), 'the settings PUT must go through adminFetch');
+    const put = calls.rawFetch.find(c => c.method === 'PUT');
+    assert.strictEqual(put.headers.Authorization, 'Bearer test-admin-token', 'the PUT must carry the admin token — the mark of adminFetch');
+  });
+
+  await test('the stream-url hint follows embed_url from GET /api/live: inside the app when set, outside when null, hidden when nothing is configured', async () => {
+    const dom = buildAdminEnv();
+    const hint = dom.window.document.getElementById('liveEmbedHint');
+    const live = { title: 'سهرة', until: new Date(Date.now() + 3600000).toISOString(), url: 'https://www.youtube.com/live/abcdefghijk', active: true };
+    let response;
+    dom.window.fetch = async () => jsonResponse(response);
+
+    response = { success: true, profile_url: 'https://www.youtube.com/@aarasna', live, embed_url: 'https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1', live_channel_url: 'https://www.youtube.com/@aarasna' };
+    await dom.window.refreshLiveStatusStrip();
+    assert.strictEqual(hint.textContent, 'سيُعرض داخل التطبيق');
+    assert.notStrictEqual(hint.style.display, 'none', 'the hint must be visible');
+
+    response = { ...response, live: { ...live, url: 'https://www.twitch.tv/aarasna' }, embed_url: null };
+    await dom.window.refreshLiveStatusStrip();
+    assert.strictEqual(hint.textContent, 'سيفتح خارج التطبيق');
+    assert.notStrictEqual(hint.style.display, 'none');
+
+    response = { success: true, profile_url: null, live: null, embed_url: null, live_channel_url: null };
+    await dom.window.refreshLiveStatusStrip();
+    assert.strictEqual(hint.style.display, 'none', 'no link and no live — nothing to say, so no hint');
+    assert.ok(!hint.textContent.includes('سيُعرض') && !hint.textContent.includes('سيفتح'), 'and no stale verdict left behind');
+  });
+
+  await test('the episode form defaults its date to today in Asia/Jerusalem, and the episodes list loads through adminFetch', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const calls = instrumentAdminLive(dom, (requestPath) => {
+      if (requestPath === '/api/admin/live/episodes') return jsonResponse({ success: true, episodes: [] });
+      return jsonResponse({ success: true });
+    });
+    document.getElementById('liveEpisodeDate').value = '';
+
+    await dom.window.fetchLiveEpisodes();
+
+    // Computed independently of the code under test (a different locale that also yields YYYY-MM-DD).
+    const expected = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jerusalem' });
+    assert.strictEqual(document.getElementById('liveEpisodeDate').value, expected);
+    assert.ok(calls.adminPaths.includes('/api/admin/live/episodes'), 'the list must be fetched through adminFetch');
+  });
+
+  await test('«إضافة خيار» stops at 4 options and the per-option delete stops at 2', () => {
+    const dom = buildAdminEnv();
+    const { document } = dom.window;
+    dom.window.resetLiveEpisodeForm();
+    const rows = () => document.querySelectorAll('#liveEpisodeOptions .live-episode-option-row');
+    const addBtn = document.getElementById('addLiveEpisodeOptionBtn');
+
+    assert.strictEqual(rows().length, 2, 'a new episode starts with the two-option minimum');
+    assert.ok([...rows()].every(r => r.querySelector('button').disabled), 'at 2 options neither delete button may be enabled');
+
+    addBtn.click();
+    addBtn.click();
+    assert.strictEqual(rows().length, 4);
+    assert.strictEqual(addBtn.disabled, true, 'the add button must be disabled at 4 options');
+    dom.window.addLiveEpisodeOption();
+    assert.strictEqual(rows().length, 4, 'even a direct call cannot add a fifth option');
+
+    rows()[0].querySelector('input').value = 'أ';
+    rows()[1].querySelector('input').value = 'ب';
+    rows()[3].querySelector('input').value = 'د';
+    rows()[2].querySelector('button').click();
+    assert.strictEqual(rows().length, 3);
+    assert.deepStrictEqual([...rows()].map(r => r.querySelector('input').value), ['أ', 'ب', 'د'], 'deleting removes that very option, not the last one');
+    assert.strictEqual(addBtn.disabled, false);
+
+    rows()[0].querySelector('button').click();
+    assert.strictEqual(rows().length, 2);
+    dom.window.removeLiveEpisodeOption(0);
+    assert.strictEqual(rows().length, 2, 'the delete stops at 2 even when called directly');
+  });
+
+  await test('an episode with votes locks its option inputs and add/remove buttons, with the note; one without votes does not', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    instrumentAdminLive(dom, (requestPath) => {
+      if (requestPath === '/api/admin/live/episodes') {
+        return jsonResponse({ success: true, episodes: [
+          { id: 7, date: '2026-09-25', topic: 'موضوع', episode_question: 'سؤال', poll_question: 'استفتاء؟', poll_options: ['نعم', 'لا', 'ربما'], vote_count: 12 },
+          { id: 6, date: '2026-09-24', topic: 'آخر', episode_question: null, poll_question: 'سؤال؟', poll_options: ['أ', 'ب'], vote_count: 0 }
+        ] });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchLiveEpisodes();
+
+    const table = document.getElementById('liveEpisodesList');
+    assert.ok(table.textContent.includes('2026-09-25') && table.textContent.includes('12'), 'expected the date and vote count in the table');
+
+    dom.window.editLiveEpisode(7);
+    const inputs = [...document.querySelectorAll('#liveEpisodeOptions input')];
+    assert.deepStrictEqual(inputs.map(i => i.value), ['نعم', 'لا', 'ربما']);
+    assert.ok(inputs.every(i => i.disabled), 'every option input must be disabled once votes exist');
+    assert.ok([...document.querySelectorAll('#liveEpisodeOptions button')].every(b => b.disabled), 'no option delete after votes');
+    assert.strictEqual(document.getElementById('addLiveEpisodeOptionBtn').disabled, true, 'no option add after votes');
+    const note = document.getElementById('liveEpisodeOptionsLockedNote');
+    assert.notStrictEqual(note.style.display, 'none');
+    assert.ok(note.textContent.includes('الخيارات مقفولة بعد أول صوت'));
+    assert.strictEqual(document.getElementById('liveEpisodePollQuestion').disabled, false, 'the poll question itself stays editable');
+
+    dom.window.editLiveEpisode(6);
+    assert.ok([...document.querySelectorAll('#liveEpisodeOptions input')].every(i => !i.disabled), 'an episode without votes is fully editable');
+    assert.strictEqual(note.style.display, 'none');
+  });
+
+  await test('saving an episode PUTs to /api/admin/live/episodes/:date via adminFetch; an empty poll is sent as no poll; a 409 message is shown as-is', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    let putBody = null;
+    let putStatus = 200;
+    const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/live/episodes/2026-10-01' && method === 'PUT') {
+        putBody = JSON.parse(options.body);
+        if (putStatus === 409) return jsonResponse({ success: false, message: 'لا يمكن تغيير خيارات الاستفتاء بعد أن صوّت الناس' }, { status: 409 });
+        return jsonResponse({ success: true, episode: { id: 9, date: '2026-10-01', ...putBody, vote_count: 0 }, message: 'تم حفظ الحلقة' });
+      }
+      if (requestPath === '/api/admin/live/episodes') return jsonResponse({ success: true, episodes: [] });
+      return jsonResponse({ success: true });
+    });
+
+    dom.window.resetLiveEpisodeForm();
+    document.getElementById('liveEpisodeDate').value = '2026-10-01';
+    document.getElementById('liveEpisodeTopic').value = ' موضوع الغد ';
+    document.getElementById('liveEpisodeQuestion').value = 'ما رأيكم؟';
+    await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
+
+    assert.deepStrictEqual(putBody, { topic: 'موضوع الغد', episode_question: 'ما رأيكم؟', poll_question: '', poll_options: [] },
+      'empty question + empty options must be sent as "no poll" — the server reads [] as none');
+    assert.ok(calls.adminPaths.includes('/api/admin/live/episodes/2026-10-01'), 'the PUT must go through adminFetch');
+
+    let noticeMessage = null;
+    dom.window.showAdminNotice = (message) => { noticeMessage = message; };
+    putStatus = 409;
+    document.getElementById('liveEpisodePollQuestion').value = 'استفتاء؟';
+    const optionInputs = document.querySelectorAll('#liveEpisodeOptions input');
+    optionInputs[0].value = 'نعم';
+    optionInputs[1].value = 'لا';
+    await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
+    assert.deepStrictEqual(putBody.poll_options, ['نعم', 'لا']);
+    assert.strictEqual(putBody.poll_question, 'استفتاء؟');
+    assert.strictEqual(noticeMessage, 'لا يمكن تغيير خيارات الاستفتاء بعد أن صوّت الناس', 'the server\'s own Arabic message must reach the admin');
+  });
+
+  await test('deleting an episode asks confirm() first and sends DELETE through adminFetch only when confirmed', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    let deletes = 0;
+    const calls = instrumentAdminLive(dom, (requestPath, method) => {
+      if (requestPath === '/api/admin/live/episodes/7' && method === 'DELETE') {
+        deletes += 1;
+        return jsonResponse({ success: true, message: 'تم حذف الحلقة' });
+      }
+      if (requestPath === '/api/admin/live/episodes') {
+        return jsonResponse({ success: true, episodes: [{ id: 7, date: '2026-09-25', topic: 'x', episode_question: null, poll_question: null, poll_options: null, vote_count: 0 }] });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchLiveEpisodes();
+
+    dom.window.confirm = () => false;
+    await dom.window.handleDeleteLiveEpisode(7);
+    assert.strictEqual(deletes, 0, 'a cancelled confirm must send nothing');
+
+    dom.window.confirm = () => true;
+    await dom.window.handleDeleteLiveEpisode(7);
+    assert.strictEqual(deletes, 1);
+    assert.ok(calls.adminPaths.includes('/api/admin/live/episodes/7'), 'the DELETE must go through adminFetch');
+    const rawNonAdmin = calls.rawFetch.filter(c => c.path.startsWith('/api/admin/') && c.headers.Authorization !== 'Bearer test-admin-token');
+    assert.strictEqual(rawNonAdmin.length, 0, 'every admin call must carry the admin token — none may bypass adminFetch');
   });
 
 

@@ -387,7 +387,7 @@ body {
 .admin-table td { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); color: var(--text-main); font-variant-numeric: tabular-nums; }
 .admin-table tr:hover td { background: var(--sky-wash); }
 
-/* بث تيك توك المباشر (LIVE-03) */
+/* البث المباشر (LIVE-03) */
 .live-status-strip {
   display: flex;
   flex-wrap: wrap;
@@ -431,6 +431,14 @@ body {
 }
 
 .live-share-fallback { width: 100%; margin-top: 10px; }
+
+.live-embed-hint { color: var(--text-main); font-weight: 700; }
+
+/* حلقات البث */
+.live-episode-form-title { font-size: 1rem; font-weight: 800; color: var(--text-main); margin-bottom: 14px; }
+.live-episode-options { display: flex; flex-direction: column; gap: 8px; }
+.live-episode-option-row { display: flex; gap: 8px; align-items: center; }
+.live-episode-option-row input { flex: 1; }
 
 /* Occasion Types (#20 خطوة 16) */
 .occasion-type-new-btn { width: auto; margin-top: 0; }

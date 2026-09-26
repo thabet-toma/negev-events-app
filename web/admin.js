@@ -615,7 +615,7 @@ async function loadAdminDashboard() {
     tasks.push(
       fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
       fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
-      fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings(),
+      fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings(), fetchLiveEpisodes(),
       fetchActivityLog()
     );
   }
@@ -1849,6 +1849,7 @@ function switchAdminTab(tabId) {
     renderBroadcastComposer();
   } else if (tabId === 'tabSettings') {
     fetchAdminSettings();
+    fetchLiveEpisodes();
   } else if (tabId === 'tabAnalytics') {
     fetchActivityLog(1);
     fetchAdminAnalyticsCounts();
@@ -4554,7 +4555,7 @@ async function fetchAdminSettings() {
     if (data.success && data.settings) {
       input.value = data.settings.support_whatsapp_number || '';
       renderDefaultAudioSetting(data.settings.default_event_audio_url);
-      applyTiktokSettingsToForm(data.settings);
+      applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
       if (notice) notice.style.display = 'none';
     } else if (!data.success) {
@@ -4731,24 +4732,24 @@ async function handleDeleteDefaultAudio() {
  */
 
 /** يملأ الحقول الأربعة من الشكل الذي يرجعه GET/PUT /api/admin/settings. */
-function applyTiktokSettingsToForm(settingsObj) {
-  const profileInput = document.getElementById('settingTiktokProfileUrl');
-  const titleInput = document.getElementById('settingTiktokLiveTitle');
-  const untilInput = document.getElementById('settingTiktokLiveUntil');
-  const urlInput = document.getElementById('settingTiktokLiveUrl');
+function applyLiveSettingsToForm(settingsObj) {
+  const profileInput = document.getElementById('settingLiveChannelUrl');
+  const titleInput = document.getElementById('settingLiveTitle');
+  const untilInput = document.getElementById('settingLiveUntil');
+  const urlInput = document.getElementById('settingLiveStreamUrl');
   if (!profileInput || !titleInput || !untilInput || !urlInput) return;
 
-  const until = (settingsObj && settingsObj.tiktok_live_until) || '';
+  const until = (settingsObj && settingsObj.live_until) || '';
   // بثّ مضى موعده انتهى فعلاً: الخادم يُبقي صفّيه (موعد ماضٍ هو نفسه طريقة
   // إنهاء بثّ مبكراً) لكن اللوحة لا تعيدهما كأنهما بثّ الليلة. إعادة موعد
   // ميت إلى الحقل المخفي هي بالضبط كيف يُحفَظ موضوعٌ كُتب في اليوم التالي
   // بموعد الأمس: يقبله الخادم، ويقول «تم الحفظ»، ولا بثّ في أي مكان.
   const expired = Boolean(until) && !(new Date(until).getTime() > Date.now());
 
-  profileInput.value = (settingsObj && settingsObj.tiktok_profile_url) || '';
-  titleInput.value = (expired ? '' : (settingsObj && settingsObj.tiktok_live_title)) || '';
+  profileInput.value = (settingsObj && settingsObj.live_channel_url) || '';
+  titleInput.value = (expired ? '' : (settingsObj && settingsObj.live_title)) || '';
   untilInput.value = expired ? '' : until;
-  urlInput.value = (settingsObj && settingsObj.tiktok_live_url) || '';
+  urlInput.value = (settingsObj && settingsObj.live_stream_url) || '';
   renderLiveUntilPreview(untilInput.value);
 }
 
@@ -4774,7 +4775,7 @@ function computeLiveDurationUntil(presetKey) {
 
 function applyLiveDurationPreset(presetKey) {
   const until = computeLiveDurationUntil(presetKey);
-  const input = document.getElementById('settingTiktokLiveUntil');
+  const input = document.getElementById('settingLiveUntil');
   if (!until || !input) return;
   input.value = until.toISOString();
   renderLiveUntilPreview(input.value);
@@ -4811,7 +4812,7 @@ function formatLiveRemaining(untilIso) {
  */
 function renderLiveStatusStrip(data) {
   const strip = document.getElementById('liveStatusStrip');
-  const endBtn = document.getElementById('endTiktokLiveBtn');
+  const endBtn = document.getElementById('endLiveBtn');
   if (!strip) return;
 
   const live = data && data.live;
@@ -4840,7 +4841,7 @@ function renderLiveStatusStrip(data) {
   } else if (data && data.profile_url) {
     strip.textContent = 'لا يوجد بث الآن — القناة فقط';
   } else {
-    strip.textContent = 'لم تُضبَط قناة تيك توك بعد';
+    strip.textContent = 'لم تُضبَط قناة البث بعد';
   }
 }
 
@@ -4849,8 +4850,12 @@ async function refreshLiveStatusStrip() {
   try {
     const res = await apiFetch('/api/live');
     const data = await res.json();
-    if (data.success) renderLiveStatusStrip(data);
-    else showLiveStatusUnavailable();
+    if (data.success) {
+      renderLiveStatusStrip(data);
+      renderLiveEmbedHint(data);
+    } else {
+      showLiveStatusUnavailable();
+    }
   } catch (e) {
     console.error('Fetch live status error:', e);
     showLiveStatusUnavailable();
@@ -4858,29 +4863,57 @@ async function refreshLiveStatusStrip() {
 }
 
 /**
- * نداء الحالة فشل — لا نُبقي «لم تُضبَط قناة تيك توك بعد» معروضة: هي ادّعاء
+ * نداء الحالة فشل — لا نُبقي «لم تُضبَط قناة البث بعد» معروضة: هي ادّعاء
  * جازم بأن لا قناة، وقد تكون مضبوطة ولم يصل الردّ فحسب.
  */
 function showLiveStatusUnavailable() {
   const strip = document.getElementById('liveStatusStrip');
   if (strip) strip.textContent = 'تعذّر جلب حالة البث — حدّث الصفحة';
+  renderLiveEmbedHint(null);
 }
 
-async function handleSaveTiktokLive(e) {
+/**
+ * التلميح تحت رابط البث — الخادم وحده يعرف أيّ رابط يُضمَّن (embed_url في
+ * GET /api/live)، فلا تخمين هنا من شكل الرابط. embed_url لا يُحسَب إلا والبث
+ * مضبوط (موضوع + موعد)؛ قبل ذلك نقول ذلك صراحة بدل ادّعاء أيّ من الجوابين.
+ * `data` = null (فشل النداء) يُخفي التلميح.
+ */
+function renderLiveEmbedHint(data) {
+  const hint = document.getElementById('liveEmbedHint');
+  if (!hint) return;
+
+  const streamInput = document.getElementById('settingLiveStreamUrl');
+  const hasUrl = Boolean(data && (data.live_channel_url || data.profile_url))
+    || Boolean(streamInput && streamInput.value.trim());
+
+  let text = '';
+  if (data && data.embed_url) {
+    text = 'سيُعرض داخل التطبيق';
+  } else if (data && data.live) {
+    text = 'سيفتح خارج التطبيق';
+  } else if (data && hasUrl) {
+    text = 'يظهر هنا بعد ضبط موضوع البث ومدّته: هل سيُعرض داخل التطبيق أم سيفتح خارجه';
+  }
+
+  hint.textContent = text;
+  hint.style.display = text ? 'block' : 'none';
+}
+
+async function handleSaveLiveSettings(e) {
   e.preventDefault();
   const notice = document.getElementById('settingsNotice');
-  const btn = document.getElementById('saveTiktokLiveBtn');
-  const profileInput = document.getElementById('settingTiktokProfileUrl');
-  const titleInput = document.getElementById('settingTiktokLiveTitle');
-  const untilInput = document.getElementById('settingTiktokLiveUntil');
-  const urlInput = document.getElementById('settingTiktokLiveUrl');
+  const btn = document.getElementById('saveLiveSettingsBtn');
+  const profileInput = document.getElementById('settingLiveChannelUrl');
+  const titleInput = document.getElementById('settingLiveTitle');
+  const untilInput = document.getElementById('settingLiveUntil');
+  const urlInput = document.getElementById('settingLiveStreamUrl');
   if (!profileInput || !titleInput || !untilInput || !urlInput) return;
 
   const body = {
-    tiktok_profile_url: profileInput.value.trim(),
-    tiktok_live_title: titleInput.value.trim(),
-    tiktok_live_until: untilInput.value,
-    tiktok_live_url: urlInput.value.trim()
+    live_channel_url: profileInput.value.trim(),
+    live_title: titleInput.value.trim(),
+    live_until: untilInput.value,
+    live_stream_url: urlInput.value.trim()
   };
 
   if (btn) {
@@ -4898,7 +4931,7 @@ async function handleSaveTiktokLive(e) {
 
     if (data.success) {
       if (notice) notice.style.display = 'none';
-      applyTiktokSettingsToForm(data.settings);
+      applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
       await refreshLiveStatusStrip();
       showAdminNotice(data.message || 'تم حفظ إعدادات البث', 'نجاح');
@@ -4920,25 +4953,25 @@ async function handleSaveTiktokLive(e) {
 }
 
 /**
- * يمسح `tiktok_live_title` و`tiktok_live_until` معاً بنداء PUT واحد — مسح
+ * يمسح `live_title` و`live_until` معاً بنداء PUT واحد — مسح
  * أحدهما فقط يرفضه الخادم (assertLiveConsistency)، وهذا بالضبط السبب: لا
  * حالة وسيطة يمكن أن تصل هنا.
  */
-async function handleEndTiktokLive() {
+async function handleEndLive() {
   if (!confirm('إنهاء البث الآن؟ سيختفي الموضوع من صفحة المشاركة والغلاف فوراً.')) return;
 
-  const btn = document.getElementById('endTiktokLiveBtn');
+  const btn = document.getElementById('endLiveBtn');
   if (btn) btn.disabled = true;
 
   try {
     const res = await adminFetch('/api/admin/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tiktok_live_title: '', tiktok_live_until: '' })
+      body: JSON.stringify({ live_title: '', live_until: '' })
     });
     const data = await res.json();
     if (data.success) {
-      applyTiktokSettingsToForm(data.settings);
+      applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
       await refreshLiveStatusStrip();
       showAdminNotice('تم إنهاء البث', 'تم الإنهاء');
@@ -4997,4 +5030,274 @@ async function handleCopyLiveLink() {
     fallback.select();
   }
   showAdminNotice(`تعذّر النسخ التلقائي — الرابط محدَّد في الحقل تحت الزر، انسخه يدوياً: ${url}`, 'انسخ يدوياً');
+}
+
+/*
+ * حلقات البث — حلقة واحدة لكل يوم بتوقيت القدس. الخادم يحسم كل قيد
+ * (زوج السؤال/الخيارات، ٢–٤ خيارات، القفل بعد أول صوت) ويُعرض ردّه كما هو؛
+ * اللوحة تمنع فقط ما تعرف مسبقاً أنه سيُرفض: خيار خامس، أو أقلّ من خيارين
+ * ظاهرين، أو تغيير خيارات حلقة صُوِّت عليها.
+ */
+const LIVE_EPISODE_MIN_OPTIONS = 2;
+const LIVE_EPISODE_MAX_OPTIONS = 4;
+let allLiveEpisodes = [];
+let editingLiveEpisode = null; // الحلقة المحمَّلة في النموذج، أو null لحلقة جديدة
+
+/** ‏YYYY-MM-DD اليوم بتوقيت القدس — نفس «اليوم» الذي يحسبه الخادم، لا يوم المتصفح. */
+function getJerusalemToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+}
+
+async function fetchLiveEpisodes() {
+  const container = document.getElementById('liveEpisodesList');
+  if (!container) return;
+  try {
+    const res = await adminFetch('/api/admin/live/episodes');
+    const data = await res.json();
+    if (data.success) {
+      allLiveEpisodes = Array.isArray(data.episodes) ? data.episodes : [];
+      renderLiveEpisodesList();
+      // أول تحميل: نموذج فارغ بتاريخ اليوم — ولو لليوم حلقة محفوظة تُفتح هي.
+      const dateInput = document.getElementById('liveEpisodeDate');
+      if (dateInput && !dateInput.value) resetLiveEpisodeForm();
+    } else {
+      container.innerHTML = `<div class="empty-state" style="padding: 24px; text-align: center; color: var(--text-dim);"><p>${escapeHtml(data.message || 'تعذّر تحميل الحلقات')}</p></div>`;
+    }
+  } catch (e) {
+    console.error('Fetch live episodes error:', e);
+  }
+}
+
+function renderLiveEpisodesList() {
+  const container = document.getElementById('liveEpisodesList');
+  if (!container) return;
+
+  if (!allLiveEpisodes.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد حلقات بعد</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>التاريخ</th>
+          <th>الموضوع</th>
+          <th>سؤال الاستفتاء</th>
+          <th>الأصوات</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allLiveEpisodes.map(ep => `
+          <tr>
+            <td><strong>${escapeHtml(ep.date)}</strong></td>
+            <td>${escapeHtml(ep.topic || '—')}</td>
+            <td>${escapeHtml(ep.poll_question || 'بلا استفتاء')}</td>
+            <td>${Number(ep.vote_count) || 0}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="editLiveEpisode(${Number(ep.id)})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              <button class="btn-delete" onclick="handleDeleteLiveEpisode(${Number(ep.id)})" title="حذف">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** قيم حقول الخيارات الظاهرة الآن، بترتيبها. */
+function readLiveEpisodeOptionValues() {
+  return [...document.querySelectorAll('#liveEpisodeOptions .live-episode-option-row input')].map(input => input.value);
+}
+
+/**
+ * يرسم حقول الخيارات من `values` (يُكمَّل إلى الحدّ الأدنى بحقول فارغة) —
+ * مقفولة كلها، بلا إضافة ولا حذف، حين `locked`.
+ */
+function renderLiveEpisodeOptions(values, locked) {
+  const container = document.getElementById('liveEpisodeOptions');
+  if (!container) return;
+
+  const list = values.slice(0, LIVE_EPISODE_MAX_OPTIONS);
+  while (list.length < LIVE_EPISODE_MIN_OPTIONS) list.push('');
+
+  container.innerHTML = '';
+  list.forEach((value, index) => {
+    const row = document.createElement('div');
+    row.className = 'live-episode-option-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 100;
+    input.placeholder = `الخيار ${index + 1}`;
+    input.value = value;
+    input.disabled = locked;
+    row.appendChild(input);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-delete';
+    removeBtn.title = 'حذف الخيار';
+    removeBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+    removeBtn.disabled = locked || list.length <= LIVE_EPISODE_MIN_OPTIONS;
+    removeBtn.onclick = () => removeLiveEpisodeOption(index);
+    row.appendChild(removeBtn);
+
+    container.appendChild(row);
+  });
+
+  const addBtn = document.getElementById('addLiveEpisodeOptionBtn');
+  if (addBtn) addBtn.disabled = locked || list.length >= LIVE_EPISODE_MAX_OPTIONS;
+
+  const note = document.getElementById('liveEpisodeOptionsLockedNote');
+  if (note) note.style.display = locked ? 'block' : 'none';
+}
+
+function isLiveEpisodeOptionsLocked() {
+  return Boolean(editingLiveEpisode && Number(editingLiveEpisode.vote_count) > 0);
+}
+
+function addLiveEpisodeOption() {
+  if (isLiveEpisodeOptionsLocked()) return;
+  const values = readLiveEpisodeOptionValues();
+  if (values.length >= LIVE_EPISODE_MAX_OPTIONS) return;
+  values.push('');
+  renderLiveEpisodeOptions(values, false);
+}
+
+function removeLiveEpisodeOption(index) {
+  if (isLiveEpisodeOptionsLocked()) return;
+  const values = readLiveEpisodeOptionValues();
+  if (values.length <= LIVE_EPISODE_MIN_OPTIONS) return;
+  values.splice(index, 1);
+  renderLiveEpisodeOptions(values, false);
+}
+
+/** يملأ النموذج من حلقة محفوظة (تعديل) أو يفرّغه لحلقة جديدة في `date`. */
+function fillLiveEpisodeForm(episode, date) {
+  editingLiveEpisode = episode || null;
+  const setValue = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value || '';
+  };
+  setValue('liveEpisodeDate', episode ? episode.date : date);
+  setValue('liveEpisodeTopic', episode && episode.topic);
+  setValue('liveEpisodeQuestion', episode && episode.episode_question);
+  setValue('liveEpisodePollQuestion', episode && episode.poll_question);
+  renderLiveEpisodeOptions((episode && episode.poll_options) || [], isLiveEpisodeOptionsLocked());
+
+  const title = document.getElementById('liveEpisodeFormTitle');
+  if (title) title.textContent = episode ? `تعديل حلقة ${episode.date}` : 'حلقة جديدة';
+}
+
+function resetLiveEpisodeForm() {
+  const today = getJerusalemToday();
+  fillLiveEpisodeForm(allLiveEpisodes.find(ep => ep.date === today) || null, today);
+}
+
+function editLiveEpisode(id) {
+  const episode = allLiveEpisodes.find(ep => ep.id === id);
+  if (!episode) return;
+  fillLiveEpisodeForm(episode);
+  const form = document.getElementById('liveEpisodeForm');
+  if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/**
+ * الحفظ استبدال كامل لحلقة اليوم المختار — فاختيار يوم له حلقة يفتحها بدل
+ * أن يُكتَب فوقها نموذجٌ فارغ بصمت. يوم بلا حلقة يُبقي ما كُتب وينزع قفل
+ * الخيارات (لا أصوات على حلقة لم تُحفَظ بعد).
+ */
+function handleLiveEpisodeDateChange() {
+  const dateInput = document.getElementById('liveEpisodeDate');
+  if (!dateInput) return;
+  const existing = allLiveEpisodes.find(ep => ep.date === dateInput.value);
+  if (existing) {
+    fillLiveEpisodeForm(existing);
+    return;
+  }
+  const wasLocked = isLiveEpisodeOptionsLocked();
+  editingLiveEpisode = null;
+  const title = document.getElementById('liveEpisodeFormTitle');
+  if (title) title.textContent = 'حلقة جديدة';
+  if (wasLocked) renderLiveEpisodeOptions(readLiveEpisodeOptionValues(), false);
+}
+
+async function handleSaveLiveEpisode(e) {
+  e.preventDefault();
+  const date = (document.getElementById('liveEpisodeDate') || {}).value || '';
+  if (!date) {
+    showAdminNotice('اختر تاريخ الحلقة', 'تنبيه');
+    return;
+  }
+
+  const pollQuestion = document.getElementById('liveEpisodePollQuestion').value.trim();
+  const options = readLiveEpisodeOptionValues().map(v => v.trim()).filter(Boolean);
+  // سؤال فارغ وكل الخيارات فارغة = حلقة بلا استفتاء. غير ذلك يُرسَل كما هو
+  // ويحسمه الخادم (سؤال بلا خيارات أو العكس يُرفض برسالته).
+  const body = {
+    topic: document.getElementById('liveEpisodeTopic').value.trim(),
+    episode_question: document.getElementById('liveEpisodeQuestion').value.trim(),
+    poll_question: pollQuestion,
+    poll_options: options
+  };
+
+  const btn = document.getElementById('saveLiveEpisodeBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+  }
+
+  try {
+    const res = await adminFetch(`/api/admin/live/episodes/${encodeURIComponent(date)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.success) {
+      await fetchLiveEpisodes();
+      const saved = data.episode || allLiveEpisodes.find(ep => ep.date === date) || null;
+      fillLiveEpisodeForm(saved, date);
+      showAdminNotice(data.message || 'تم حفظ الحلقة', 'نجاح');
+    } else {
+      showAdminNotice(data.message || 'تعذّر حفظ الحلقة', 'خطأ في الحفظ');
+    }
+  } catch (err) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ الحلقة';
+    }
+  }
+}
+
+async function handleDeleteLiveEpisode(id) {
+  const episode = allLiveEpisodes.find(ep => ep.id === id);
+  const label = episode ? episode.date : '';
+  if (!confirm(`حذف حلقة ${label}؟ ستُحذف معها أصوات استفتائها.`)) return;
+
+  try {
+    const res = await adminFetch(`/api/admin/live/episodes/${Number(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      const wasEditing = Boolean(editingLiveEpisode && editingLiveEpisode.id === id);
+      await fetchLiveEpisodes();
+      if (wasEditing) resetLiveEpisodeForm();
+      showAdminNotice(data.message || 'تم حذف الحلقة', 'تم الحذف');
+    } else {
+      showAdminNotice(data.message || 'تعذّر حذف الحلقة', 'خطأ');
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  }
 }
