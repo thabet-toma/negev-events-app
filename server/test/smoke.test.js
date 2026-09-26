@@ -6094,9 +6094,9 @@ async function run() {
     assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
   });
 
-  console.log('\n/live — the branded TikTok channel/live page (share.routes.js liveRouter)');
+  console.log('\n/live — the branded live stream page (share.routes.js liveRouter)');
 
-  // Independent of the "TikTok live channel" API section above — start from
+  // Independent of the live channel API section above — start from
   // the same known-empty state so this section never depends on whatever that
   // one left behind, and restore it at the end so later sections don't
   // depend on this one either.
@@ -6121,7 +6121,8 @@ async function run() {
   await test('/live with a channel link only renders the channel headline and no «مباشر الآن»', async () => {
     const { status, text } = await rawGet('/live');
     assert.strictEqual(status, 200);
-    assert.ok(text.includes('قناة أعراسنا على تيك توك'), 'expected the channel headline');
+    assert.ok(text.includes('بث أعراسنا المباشر'), 'expected the platform-neutral channel headline');
+    assert.ok(!text.includes('تيك توك'), 'the page must name no platform, even with a TikTok channel link saved');
     assert.ok(!text.includes('مباشر الآن'), 'no live is active — the live badge must not appear');
   });
 
@@ -6177,7 +6178,7 @@ async function run() {
   await test('/live with an EXPIRED live falls back to the channel state — no stale topic, no stale badge', async () => {
     const { status, text } = await rawGet('/live');
     assert.strictEqual(status, 200);
-    assert.ok(text.includes('قناة أعراسنا على تيك توك'), 'expected the channel headline once the live has expired');
+    assert.ok(text.includes('بث أعراسنا المباشر'), 'expected the channel headline once the live has expired');
     assert.ok(!text.includes('class="live-badge"'), 'an expired live must not show the live badge');
     assert.ok(
       !text.includes('جلسة أسئلة وأجوبة'),
@@ -6759,6 +6760,151 @@ async function run() {
   await db.execute(liveKeysSql);
   await db.execute('DELETE FROM live_episodes WHERE episode_date = ?', [liveToday]);
   await db.execute('DELETE FROM users WHERE id IN (?, ?)', [livePollVoter.id, liveOptedOut.id]);
+
+  console.log('\n/live with the day\'s episode, and /live/embed (plan26-9 M3)');
+
+  const m3Dates = [liveToday, liveYesterday];
+  await db.execute(liveKeysSql);
+  await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?)', m3Dates);
+  await db.execute("DELETE FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+  const m3Voters = [
+    await createLiveVoter('مصوّت الأمس الأول'),
+    await createLiveVoter('مصوّت الأمس الثاني'),
+    await createLiveVoter('مصوّت الأمس الثالث')
+  ];
+  const m3StreamUrl = 'https://www.youtube.com/live/abcDEF_-123';
+  const m3Topic = '<img src=x onerror=alert(1)> موضوع الحلقة';
+
+  await test('/live/embed with no link saved at all → 404', async () => {
+    const { status, text } = await rawGet('/live/embed');
+    assert.strictEqual(status, 404);
+    assert.ok(!text.includes('<iframe'));
+  });
+
+  await test('Set up: an active YouTube live, today\'s episode with a poll, and yesterday\'s poll with three votes', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken,
+      body: {
+        live_channel_url: 'https://www.youtube.com/@aarasna',
+        live_title: 'بث حلقة المهر',
+        live_until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        live_stream_url: m3StreamUrl
+      }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const today = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+      token: superAdminToken,
+      body: {
+        topic: m3Topic,
+        episode_question: 'كم يجب أن يكون المهر؟',
+        poll_question: 'هل تؤيد تخفيض المهر؟',
+        poll_options: ['أؤيد بشدة', 'أعارض التخفيض', 'لا رأي عندي']
+      }
+    });
+    assert.strictEqual(today.status, 200);
+
+    const yesterday = await api('PUT', `/api/admin/live/episodes/${liveYesterday}`, {
+      token: superAdminToken,
+      body: { topic: 'حلقة الأمس', poll_question: 'هل حضرت عرساً هذا الأسبوع؟', poll_options: ['حضرت', 'لم أحضر'] }
+    });
+    assert.strictEqual(yesterday.status, 200);
+    // Yesterday's poll is closed to the vote route, so its votes are written directly.
+    for (const [voter, optionIndex] of [[m3Voters[0], 0], [m3Voters[1], 0], [m3Voters[2], 1]]) {
+      await db.execute(
+        'INSERT INTO live_poll_votes (episode_id, user_id, option_index) VALUES (?, ?, ?)',
+        [yesterday.body.episode.id, voter.id, optionIndex]
+      );
+    }
+  });
+
+  await test('GET /live names no platform and shows the topic, episode question, today\'s poll read-only, and yesterday\'s result', async () => {
+    const { status, headers, text } = await rawGet('/live');
+    assert.strictEqual(status, 200);
+    assert.ok(!text.includes('تيك توك'), 'no «تيك توك» anywhere on the page');
+    assert.ok(/default-src 'none'/.test(headers.get('content-security-policy')), 'the page keeps its default-src none CSP');
+    assert.ok(!/<script/i.test(text), 'still no script on the page');
+
+    assert.ok(text.includes('موضوع الحلقة'), 'expected the topic');
+    assert.ok(text.includes('كم يجب أن يكون المهر؟'), 'expected the episode question');
+    assert.ok(text.includes('هل تؤيد تخفيض المهر؟'), 'expected today\'s poll question');
+    for (const option of ['أؤيد بشدة', 'أعارض التخفيض', 'لا رأي عندي']) {
+      assert.ok(text.includes(`<li class="poll-option">${option}</li>`), `expected today's option «${option}» as a read-only list item`);
+    }
+
+    // Yesterday: 2 of 3 votes for the first option → 67% / 33%, with the total.
+    assert.ok(text.includes('نتيجة نقاش الأمس'), 'expected the yesterday section');
+    assert.ok(text.includes('هل حضرت عرساً هذا الأسبوع؟'), 'expected yesterday\'s poll question');
+    assert.ok(text.includes('style="width:67%"') && text.includes('style="width:33%"'), 'expected the two percentage bars');
+    assert.ok(text.includes('<span>حضرت</span><span>67%</span>'), 'expected the first option labelled with its percentage');
+    assert.ok(text.includes('عدد المشاركين: 3'), 'expected yesterday\'s total votes');
+    // Today's results are the voter's to see, never this anonymous page's.
+    assert.strictEqual((text.match(/class="poll-bar-fill"/g) || []).length, 2, 'only yesterday\'s two options carry bars');
+
+    assert.ok(text.includes(`href="${config.publicUrl}/live/go"`), 'expected the «ادخل البث» link');
+    assert.ok(text.includes(`href="${config.publicUrl}/live/download"`), 'expected the app download link');
+    const whatsapp = text.match(/href="(https:\/\/api\.whatsapp\.com\/send\?text=[^"]*)"/);
+    assert.ok(whatsapp, 'expected a WhatsApp share link');
+    assert.ok(whatsapp[1].includes(encodeURIComponent(`${config.publicUrl}/live`)), 'the WhatsApp text carries the absolute /live URL');
+  });
+
+  await test('An <img onerror> in the episode topic renders escaped on /live, never as markup', async () => {
+    const { text } = await rawGet('/live');
+    assert.ok(!text.includes('<img src=x onerror=alert(1)>'), 'the raw <img must never appear');
+    assert.ok(text.includes('&lt;img src=x onerror=alert(1)&gt; موضوع الحلقة'), 'expected the escaped topic');
+  });
+
+  await test('GET /live/embed with a YouTube live → 200, an iframe onto embed_url with referrerpolicy, under its own CSP', async () => {
+    const live = await api('GET', '/api/live');
+    const embedUrl = live.body.embed_url;
+    assert.ok(embedUrl && embedUrl.startsWith('https://www.youtube-nocookie.com/embed/abcDEF_-123'), 'precondition: an embeddable link');
+
+    const { status, headers, text } = await rawGet('/live/embed');
+    assert.strictEqual(status, 200);
+    assert.ok(headers.get('content-type').startsWith('text/html'));
+    const src = text.match(/<iframe src="([^"]*)"/);
+    assert.ok(src, 'expected an iframe');
+    assert.strictEqual(src[1].replace(/&amp;/g, '&'), embedUrl, 'the iframe src is embed_url (HTML-escaped)');
+    assert.ok(text.includes('referrerpolicy="strict-origin-when-cross-origin"'), 'expected the iframe referrerpolicy');
+    assert.ok(text.includes('allowfullscreen'));
+    assert.ok(!/<script/i.test(text), 'no script on the embed page either');
+
+    const csp = headers.get('content-security-policy');
+    assert.ok(csp.includes("default-src 'none'"), csp);
+    assert.ok(csp.includes('frame-src https://www.youtube-nocookie.com'), csp);
+    assert.strictEqual(headers.get('referrer-policy'), 'strict-origin-when-cross-origin', 'our header, not helmet\'s no-referrer');
+    assert.strictEqual(headers.get('cache-control'), 'no-store');
+  });
+
+  await test('/live/go still redirects to the active live\'s own link', async () => {
+    const res = await fetch(`${baseUrl}/live/go`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('location'), m3StreamUrl);
+  });
+
+  await test('/live/embed with a TikTok stream link → 404, and /live/go goes to that link as before', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { live_stream_url: 'https://www.tiktok.com/@aarasna/live' }
+    });
+    assert.strictEqual(save.status, 200);
+
+    const embed = await rawGet('/live/embed');
+    assert.strictEqual(embed.status, 404);
+    assert.ok(!embed.text.includes('<iframe'));
+
+    const res = await fetch(`${baseUrl}/live/go`, { redirect: 'manual' });
+    assert.strictEqual(res.status, 302);
+    assert.strictEqual(res.headers.get('location'), 'https://www.tiktok.com/@aarasna/live');
+
+    const page = await rawGet('/live');
+    assert.strictEqual(page.status, 200);
+    assert.ok(!page.text.includes('تيك توك'), 'still no platform named, whatever the link points at');
+  });
+
+  await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?)', m3Dates);
+  await db.execute(liveKeysSql);
+  await db.execute("DELETE FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+  await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', m3Voters.map(v => v.id));
 
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
 

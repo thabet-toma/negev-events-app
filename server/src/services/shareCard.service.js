@@ -32,7 +32,7 @@
  * takes that row as a plain object, never a request/response.
  *
  * `renderLiveCover`/`getOrRenderLiveCover` near the bottom generate the same
- * kind of image for a different page, `GET /live` — the TikTok channel/live
+ * kind of image for a different page, `GET /live` — the live stream
  * cover. Same 1200×1200 square and the same reason (WhatsApp bubble
  * proportions), but a marketing card rather than an information panel: there
  * is no row and no poster, only a topic string and an active flag.
@@ -106,7 +106,7 @@ function cachePath(key) {
 // Same reasoning as CARD_DESIGN_VERSION above, kept separate because the live
 // cover's own layout (renderLiveCover) changes on its own schedule, unrelated
 // to the event card's.
-const LIVE_CARD_DESIGN_VERSION = 2;
+const LIVE_CARD_DESIGN_VERSION = 3;
 
 /**
  * The live cover has no row and no `updated_at` to key its cache on — the
@@ -230,7 +230,7 @@ function wrapLines(ctx, text, maxWidth, maxLines) {
  *
  * Sizes are walked largest-to-smallest and a step is taken only while it
  * strictly REDUCES the line count — verified by rendering, this is what stops
- * a short phrase like "قناة أعراسنا على تيك توك" from wrapping its last word
+ * a short phrase (the one verified was the old headline "قناة أعراسنا على تيك توك") from wrapping its last word
  * onto an orphan line at the largest size while still keeping a genuinely
  * long topic at its largest 3-line size instead of shrinking it for no gain
  * (a smaller size that still needs the same number of lines is strictly
@@ -741,7 +741,7 @@ async function getOrRenderCard(event) {
 
 /**
  * Renders the marketing cover for `GET /live` (server/src/routes/share.routes.js)
- * — the og:image the owner pastes into WhatsApp for the TikTok channel/live.
+ * — the og:image the owner pastes into WhatsApp for the live stream.
  * Unlike renderCard, this is not an information panel about one row: no
  * poster to frame, nothing pulled from a database column beyond the topic
  * text and the active flag `share.routes.js` already derived from
@@ -826,8 +826,8 @@ async function renderLiveCover({ title, active }) {
 
   // 4. one short teaser line beneath the hero.
   const teaser = active
-    ? 'البث مباشر الآن على تيك توك — ادخل وشاهد'
-    : 'تابعونا على تيك توك لمشاهدة أحدث المقاطع';
+    ? 'البث مباشر الآن — ادخل وشاهد'
+    : 'بث مباشر ونقاش يومي — تابعونا';
   ctx.save();
   ctx.direction = 'rtl';
   ctx.textAlign = 'center';
