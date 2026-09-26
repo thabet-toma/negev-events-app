@@ -2,32 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../config.dart';
 import '../main.dart';
-import '../models/live.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
-    show openSupportWhatsApp, openTikTokLive, showMessage;
+    show openSupportWhatsApp, showMessage;
 import '../widgets/auth_action_button.dart';
+import 'live_screen.dart';
 import 'my_events_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
-class AccountScreen extends StatefulWidget {
+class AccountScreen extends StatelessWidget {
   const AccountScreen({super.key});
-
-  @override
-  State<AccountScreen> createState() => _AccountScreenState();
-}
-
-class _AccountScreenState extends State<AccountScreen> {
-  /// حالة قناة/بثّ تيك توك — تُجلب مرّة واحدة (LIVE-04b)، بمعزل تام عن
-  /// `AnimatedBuilder(animation: auth)` أدناه: صفّ «تابعونا على تيك توك» ظاهر
-  /// لزائر غير مسجَّل أيضاً، فلا يصح أن يعتمد جلبه على حالة الحساب.
-  Future<TikTokLive>? _tiktokLive;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _tiktokLive ??= AppServices.of(context).api.tiktokLive();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -99,7 +83,7 @@ class _AccountScreenState extends State<AccountScreen> {
                           ),
                           label: const Text('الدعم الفني عبر واتساب'),
                         ),
-                        _TikTokLiveRow(future: _tiktokLive),
+                        const _LiveRow(),
                         const SizedBox(height: 26),
                         const _ThemeModeTile(),
                       ],
@@ -194,7 +178,7 @@ class _AccountScreenState extends State<AccountScreen> {
                       ),
                       label: const Text('الدعم الفني عبر واتساب'),
                     ),
-                    _TikTokLiveRow(future: _tiktokLive),
+                    const _LiveRow(),
                     const SizedBox(height: 14),
                     const _ThemeModeTile(),
                     const SizedBox(height: 14),
@@ -226,32 +210,20 @@ class _AccountScreenState extends State<AccountScreen> {
   }
 }
 
-/// «تابعونا على تيك توك» — مدخل دائم للقناة (LIVE-04b)، ظاهر لزائر غير
-/// مسجَّل أيضاً لأنّ القناة عامة ولا علاقة لها بوجود حساب. مخفي تماماً حين لا
-/// قناة ولا بثّ مضبوطان (`TikTokLive.isConfigured`) — بلا زرّ رمادي ولا نائب،
-/// نفس قاعدة فقاعة الشريط في events_screen.dart.
-class _TikTokLiveRow extends StatelessWidget {
-  const _TikTokLiveRow({required this.future});
-
-  final Future<TikTokLive>? future;
+/// «البث المباشر» — نفس وجهة الكبسة الرابعة في التغذية، ظاهر دائماً ولزائر
+/// غير مسجَّل أيضاً: الصفحة نفسها تقول إن لم يكن هناك بث الآن.
+class _LiveRow extends StatelessWidget {
+  const _LiveRow();
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<TikTokLive>(
-      future: future,
-      builder: (context, snapshot) {
-        final live = snapshot.data;
-        if (live == null || !live.isConfigured) return const SizedBox.shrink();
-
-        return Padding(
-          padding: const EdgeInsets.only(top: 14),
-          child: OutlinedButton.icon(
-            onPressed: () => openTikTokLive(context),
-            icon: const Icon(Icons.video_camera_front_rounded),
-            label: const Text('تابعونا على تيك توك'),
-          ),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: OutlinedButton.icon(
+        onPressed: () => openLiveScreen(context),
+        icon: const Icon(Icons.live_tv_rounded),
+        label: const Text('البث المباشر'),
+      ),
     );
   }
 }

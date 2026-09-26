@@ -280,21 +280,43 @@ class NegevApi {
     return list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList();
   }
 
-  /// حالة قناة/بثّ تيك توك — GET /api/live عام بلا مصادقة (LIVE-04b)، فلا
-  /// `auth: true` هنا: هذا النداء لا علاقة له بالجلسة، تماماً كسبب عدم إرفاق
-  /// الرمز في fetchTikTokLive بـweb/app.js.
-  Future<TikTokLive> tiktokLive() async {
+  /// حالة البث المباشر — GET /api/live عام بلا مصادقة، فلا `auth: true`:
+  /// الكبسة الرابعة وشارتها لا علاقة لهما بالجلسة.
+  Future<LiveChannel> liveChannel() async {
     final data = await _client.get('/api/live');
-    return TikTokLive.fromJson(data);
+    return LiveChannel.fromJson(data);
   }
 
-  /// وجهة مدخل تيك توك — `GET /live/go` لا `/live` نفسها: `/live` صفحة الغلاف
-  /// المخصَّصة لغريب يلصق رابطاً في واتساب؛ زائر داخل التطبيق أصلاً داخل
-  /// هويّتنا، فإرساله إلى الغلاف أولاً نقرة إضافية بلا فائدة. `/live/go` يبقى
-  /// عبوراً من خادمنا: يسجّل `tiktok_click_through` ثم يحوّل، فنبقى الوسيط
-  /// («نحن الغلاف، تيك توك المضيف») والنقرة تُحسَب رغم ذلك. بلا نداء شبكة هنا
-  /// إطلاقاً — بناء عنوان فقط يفتحه `url_launcher` لاحقاً في العميل.
-  Uri get tiktokLiveGoUrl => _client.buildUrl('/live/go');
+  /// صفحة البث كاملة — GET /api/live/hub. `auth: true` للمسجَّل وحده كي يصل
+  /// `my_vote` (ونتائج اليوم بعد تصويته)؛ الزائر يرى الخيارات بلا نتائج.
+  Future<LiveHub> liveHub({bool auth = false}) async {
+    final data = await _client.get('/api/live/hub', auth: auth);
+    return LiveHub.fromJson(data);
+  }
+
+  /// صوت واحد لكل حساب في نقاش اليوم — يتطلّب حساباً. يعيد الاستفتاء بنتائجه.
+  Future<LivePoll> voteLive(int episodeId, int optionIndex) async {
+    final data = await _client.post(
+      '/api/live/episodes/$episodeId/vote',
+      auth: true,
+      body: {'option_index': optionIndex},
+    );
+    final poll = data['poll'];
+    if (poll is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة نتيجة التصويت');
+    }
+    return LivePoll.fromJson(poll);
+  }
+
+  /// صفحة المشغّل من خادمنا — `GET /live/embed` لا `embed_url` نفسه: WebView
+  /// التطبيق لا يرسل ترويسة Referer، ويوتيوب يرفض التضمين بدونها. الصفحة تلفّ
+  /// المشغّل بسياسة الإحالة الصحيحة فيرى يوتيوب نطاقنا. بناء عنوان فقط.
+  Uri get liveEmbedUrl => _client.buildUrl('/live/embed');
+
+  /// وجهة «ادخل البث» خارج التطبيق — `GET /live/go` لا `/live` نفسها: `/live`
+  /// صفحة الغلاف لغريب يلصق الرابط في واتساب، ومن داخل التطبيق هي نقرة زائدة.
+  /// `/live/go` عبور من خادمنا يسجّل النقرة ثم يحوّل إلى البث. بناء عنوان فقط.
+  Uri get liveGoUrl => _client.buildUrl('/live/go');
 
   /// تسجيل مشاهدة شريحة ستوري — عتبة "شوهدت" (ثانيتان) يقيسها العارض على
   /// الجهاز، لا هذا النداء نفسه؛ يُستدعى فقط بعدما بقيت الشريحة ظاهرة فعلاً.

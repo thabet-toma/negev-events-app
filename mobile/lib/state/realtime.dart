@@ -26,6 +26,11 @@ class RealtimeService {
   Stream<Map<String, dynamic>> get onBroadcast => _broadcast.stream;
   Stream<Map<String, dynamic>> get onSystemNotification => _systemNotification.stream;
 
+  /// إعدادات البث المباشر تغيّرت (`live_status`) — الحمولة فارغة، والمستمع
+  /// يعيد جلب GET /api/live بنفسه.
+  final _liveStatus = StreamController<void>.broadcast();
+  Stream<void> get onLiveStatus => _liveStatus.stream;
+
   bool get isConnected => _socket?.connected ?? false;
 
   void connect() {
@@ -50,6 +55,10 @@ class RealtimeService {
 
     socket.on('system_notification', (data) {
       if (data is Map) _systemNotification.add(Map<String, dynamic>.from(data));
+    });
+
+    socket.on('live_status', (_) {
+      _liveStatus.add(null);
     });
 
     socket.onConnectError((error) {
@@ -93,11 +102,25 @@ class RealtimeService {
     return () => _socket?.off(channel, listener);
   }
 
+  /// نتائج استفتاء حلقة بعينها بعد كل صوت (`live_poll_<id>`) —
+  /// `{ results, total_votes }` بلا `my_vote`؛ الشاشة لا تعرضها إلا بعد أن
+  /// يصوّت مستخدمها هو.
+  VoidCallback onLivePoll(int episodeId, void Function(Map<String, dynamic>) handler) {
+    final channel = 'live_poll_$episodeId';
+    void listener(dynamic data) {
+      if (data is Map) handler(Map<String, dynamic>.from(data));
+    }
+
+    _socket?.on(channel, listener);
+    return () => _socket?.off(channel, listener);
+  }
+
   void dispose() {
     _socket?.dispose();
     _socket = null;
     _newEvent.close();
     _broadcast.close();
     _systemNotification.close();
+    _liveStatus.close();
   }
 }

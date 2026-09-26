@@ -11,7 +11,7 @@ import '../models/notification.dart' as notif;
 import '../state/audio_coordinator.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
-    show openSupportWhatsApp, openTikTokLive, showMessage;
+    show openSupportWhatsApp, showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
@@ -20,6 +20,7 @@ import '../widgets/motion.dart';
 import 'agenda_screen.dart';
 import 'edit_event_screen.dart';
 import 'event_details_screen.dart';
+import 'live_screen.dart';
 import 'story_viewer_screen.dart';
 
 /// أقصى ارتفاع لشريط الإعلانات في الكروم الثابت: كرت إعلان واحد (‏‎~٩٦px‎)
@@ -55,14 +56,18 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   String _search = '';
   bool _archive = false;
   /// إظهار/إخفاء الكروم العلوي (الفلاتر وشريط القصص والبحث) — مخفي افتراضياً
-  /// لعرض الكروت ملء الشاشة بنمط تيك توك، ويظهر بكبسة زر طافٍ.
+  /// لعرض الكروت ملء الشاشة بتمرير عمودي، ويظهر بكبسة زر طافٍ.
   bool _showTopChrome = false;
   Timer? _debounce;
 
   StreamSubscription<Map<String, dynamic>>? _newEventSub;
+  StreamSubscription<void>? _liveStatusSub;
 
   Future<List<Story>>? _stories;
-  Future<TikTokLive>? _tiktokLive;
+
+  /// حالة البث للكبسة الرابعة وشارتها — `null` قبل أول ردّ أو عند فشله،
+  /// والكبسة ظاهرة وتنكبس في الحالتين.
+  LiveChannel? _liveChannel;
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
 
@@ -116,7 +121,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       routeObserver.subscribe(this, route);
     }
     _stories ??= AppServices.of(context).api.stories();
-    _tiktokLive ??= AppServices.of(context).api.tiktokLive();
     if (_types == null) {
       _types = AppServices.of(context).api.listOccasionTypes();
       _types!.then((list) {
@@ -134,11 +138,23 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (!_didInit) {
       _didInit = true;
       _loadFirstPage();
+      _loadLiveChannel();
     }
 
     // مناسبة جديدة نُشرت لحظياً — تحديث صامت يُبقي المستخدم على الكرت الذي أمامه.
     _newEventSub ??=
         AppServices.of(context).realtime.onNewEvent.listen((_) => _refreshInPlace());
+    // إعدادات البث تغيّرت من اللوحة — الشارة تتبعها بلا سحب للتحديث.
+    _liveStatusSub ??=
+        AppServices.of(context).realtime.onLiveStatus.listen((_) => _loadLiveChannel());
+  }
+
+  /// GET /api/live للكبسة الرابعة. الفشل صامت: الكبسة تبقى بلا شارة.
+  Future<void> _loadLiveChannel() async {
+    try {
+      final channel = await AppServices.of(context).api.liveChannel();
+      if (mounted) setState(() => _liveChannel = channel);
+    } catch (_) {}
   }
 
   @override
@@ -170,6 +186,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _audio?.release(this);
     _debounce?.cancel();
     _newEventSub?.cancel();
+    _liveStatusSub?.cancel();
     _searchController.dispose();
     _pageController.dispose();
     super.dispose();
@@ -518,15 +535,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. التغذية الرأسية ملء الشاشة (نمط تيك توك)
+          // 1. التغذية الرأسية ملء الشاشة
           Positioned.fill(
             child: RefreshIndicator(
               onRefresh: () async {
                 final services = AppServices.of(context);
                 setState(() {
                   _stories = services.api.stories();
-                  _tiktokLive = services.api.tiktokLive();
                 });
+                _loadLiveChannel();
                 // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                 services.audio.defaultTrack(services.api, refresh: true).then((url) {
                   if (mounted) _defaultAudioUrl = url;
@@ -553,73 +570,83 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Row(
+                        // لا `Spacer` هنا: مع `Flexible` بجانبه كان سيقاسمه
+                        // المساحة نصفين فيُختصر نصّ الكبسة بلا حاجة.
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          // زر الكبسة لفتح الفلاتر وعرض المناسبات
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => setState(() => _showTopChrome = true),
-                              borderRadius: BorderRadius.circular(999),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.60),
-                                  borderRadius: BorderRadius.circular(999),
-                                  border: Border.all(
-                                    color: _hasActiveFilters
-                                        ? context.c.sky
-                                        : Colors.white.withValues(alpha: 0.25),
+                          // زر الكبسة لفتح الفلاتر وعرض المناسبات — يتقلّص (ونصّه
+                          // يُختصَر) قبل أن تفيض مجموعة الأيقونات على هاتف ضيّق.
+                          Flexible(
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => setState(() => _showTopChrome = true),
+                                borderRadius: BorderRadius.circular(999),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 8,
                                   ),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x40000000),
-                                      blurRadius: 10,
-                                      offset: Offset(0, 3),
-                                    ),
-                                  ],
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.tune_rounded,
-                                      size: 16,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.60),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
                                       color: _hasActiveFilters
                                           ? context.c.sky
-                                          : Colors.white,
+                                          : Colors.white.withValues(alpha: 0.25),
                                     ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      _filterButtonLabel,
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.bold,
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x40000000),
+                                        blurRadius: 10,
+                                        offset: Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.tune_rounded,
+                                        size: 16,
                                         color: _hasActiveFilters
                                             ? context.c.sky
                                             : Colors.white,
                                       ),
-                                    ),
-                                    if (_hasActiveFilters) ...[
                                       const SizedBox(width: 6),
-                                      Container(
-                                        width: 7,
-                                        height: 7,
-                                        decoration: BoxDecoration(
-                                          color: context.c.sky,
-                                          shape: BoxShape.circle,
+                                      Flexible(
+                                        child: Text(
+                                          _filterButtonLabel,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: _hasActiveFilters
+                                                ? context.c.sky
+                                                : Colors.white,
+                                          ),
                                         ),
                                       ),
+                                      if (_hasActiveFilters) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          width: 7,
+                                          height: 7,
+                                          decoration: BoxDecoration(
+                                            color: context.c.sky,
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                          const Spacer(),
-                          // أزرار التحديث والإشعارات
+                          const SizedBox(width: 8),
+                          // الأجندة · التحديث · الدعم · البث المباشر (+ الجرس للمسجَّل)
                           Container(
                             decoration: BoxDecoration(
                               color: Colors.black.withValues(alpha: 0.60),
@@ -662,8 +689,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                     final services = AppServices.of(context);
                                     setState(() {
                                       _stories = services.api.stories();
-                                      _tiktokLive = services.api.tiktokLive();
                                     });
+                                    _loadLiveChannel();
                                     await _loadFirstPage();
                                   },
                                 ),
@@ -675,6 +702,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                   ),
                                   tooltip: 'الدعم الفني عبر واتساب',
                                   onPressed: () => openSupportWhatsApp(context),
+                                ),
+                                LiveButton(
+                                  channel: _liveChannel,
+                                  color: Colors.white,
+                                  onPressed: () => openLiveScreen(context),
                                 ),
                                 AnimatedBuilder(
                                   animation: auth,
@@ -779,6 +811,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                               tooltip: 'الدعم الفني عبر واتساب',
                               onPressed: () => openSupportWhatsApp(context),
                             ),
+                            LiveButton(
+                              channel: _liveChannel,
+                              onPressed: () => openLiveScreen(context),
+                            ),
                             const AuthActionButton(compact: true),
                             IconButton(
                               icon: const Icon(Icons.close),
@@ -789,7 +825,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                           ],
                         ),
                       ),
-                      _StoriesStrip(future: _stories, liveFuture: _tiktokLive),
+                      _StoriesStrip(future: _stories),
                       _SearchBar(
                         controller: _searchController,
                         onChanged: _onSearchChanged,
@@ -1220,75 +1256,49 @@ class _AnnouncementCard extends StatelessWidget {
 }
 
 class _StoriesStrip extends StatelessWidget {
-  const _StoriesStrip({required this.future, required this.liveFuture});
+  const _StoriesStrip({required this.future});
 
   final Future<List<Story>>? future;
 
-  /// حالة قناة/بثّ تيك توك — مستقلّة تماماً عن [future]؛ أيّهما وصل أولاً لا
-  /// يمنع رسم الآخر (كل `FutureBuilder` يُعاد بناؤه بمفرده). فقاعة تيك توك
-  /// تظهر بمجرّد أن يُجيب `liveFuture` بقناة مضبوطة، بصرف النظر عن حالة القصص.
-  final Future<TikTokLive>? liveFuture;
-
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<TikTokLive>(
-      future: liveFuture,
-      builder: (context, liveSnapshot) {
-        final live = liveSnapshot.data;
-        final showBubble = live != null && live.isConfigured;
+    return FutureBuilder<List<Story>>(
+      future: future,
+      builder: (context, snapshot) {
+        final stories = snapshot.data ?? const <Story>[];
+        if (stories.isEmpty) return const SizedBox.shrink();
 
-        return FutureBuilder<List<Story>>(
-          future: future,
-          builder: (context, snapshot) {
-            final stories = snapshot.data ?? const <Story>[];
-            // بلا هذا الشرط كانت قناة مضبوطة بلا أي قصة حقيقية تختفي كلياً —
-            // الحارس القديم هنا كان `stories == null || stories.isEmpty` وحده.
-            if (!showBubble && stories.isEmpty) return const SizedBox.shrink();
-
-            // الفقاعة، إن ظهرت، عنصر إضافي في مقدّمة القائمة يزيح كل فهرس
-            // قصة حقيقية بواحد. `storyIndex` أدناه هو الفهرس الحقيقي في
-            // `stories` — لا `index` خام — وهو ما يُمرَّر لكل من الوصول إلى
-            // `stories[...]` وإلى `StoryViewerScreen.initialIndex` معاً، فلا
-            // يمكن أن يفترقا.
-            final itemCount = stories.length + (showBubble ? 1 : 0);
-
-            return SizedBox(
-              height: 96,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                itemCount: itemCount,
-                separatorBuilder: (_, _) => const SizedBox(width: 12),
-                itemBuilder: (context, index) {
-                  if (showBubble && index == 0) {
-                    return _TikTokLiveBubble(live: live);
-                  }
-                  final storyIndex = showBubble ? index - 1 : index;
-                  final story = stories[storyIndex];
-                  return _StripItem(
-                    highlighted: story.isLive,
-                    label: story.title,
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => StoryViewerScreen(
-                          stories: stories,
-                          initialIndex: storyIndex,
-                        ),
-                      ),
+        return SizedBox(
+          height: 96,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            itemCount: stories.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              final story = stories[index];
+              return _StripItem(
+                highlighted: story.isLive,
+                label: story.title,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => StoryViewerScreen(
+                      stories: stories,
+                      initialIndex: index,
                     ),
-                    avatar: story.image == null
-                        ? _storyFallbackAvatar(context)
-                        : Image.network(
-                            story.image!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _storyFallbackAvatar(context),
-                          ),
-                  );
-                },
-              ),
-            );
-          },
+                  ),
+                ),
+                avatar: story.image == null
+                    ? _storyFallbackAvatar(context)
+                    : Image.network(
+                        story.image!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            _storyFallbackAvatar(context),
+                      ),
+              );
+            },
+          ),
         );
       },
     );
@@ -1302,10 +1312,6 @@ Widget _storyFallbackAvatar(BuildContext context) => ColoredBox(
     );
 
 /// الشكل الواحد لعنصر شريط القصص: حلقة دائرية ٥٤ ثم تسمية سطر واحد تحتها.
-/// القصة وفقاعة تيك توك تُبنيان منه معاً عمداً — نسخة ثانية يدوية من هذا
-/// القالب هي بالضبط ما أوقع شريط الويب في #85 (نسخة حرفية ثالثة بنت شريط
-/// الدرج وحدها فمحت الفقاعة المثبَّتة)، وهنا كانت ستجعل حلقتَي القصة والفقاعة
-/// تفترقان عند أول تعديل لأيٍّ منهما.
 class _StripItem extends StatelessWidget {
   const _StripItem({
     required this.avatar,
@@ -1314,12 +1320,11 @@ class _StripItem extends StatelessWidget {
     required this.onTap,
   });
 
-  /// ما يملأ داخل الحلقة — صورة القصة أو أيقونة الفقاعة؛ القصّ الدائري هنا.
+  /// ما يملأ داخل الحلقة — صورة القصة أو نائبها؛ القصّ الدائري هنا.
   final Widget avatar;
   final String label;
 
-  /// لون البثّ الحيّ الخاص بهذا الشريط (`context.c.success`) بدل لون الحدّ
-  /// العادي — للقصة الحيّة وللبثّ النشِط معاً. ليس أحمر صفحة `/live` على الويب.
+  /// لون القصة الحيّة (`context.c.success`) بدل لون الحدّ العادي.
   final bool highlighted;
   final VoidCallback onTap;
 
@@ -1352,33 +1357,6 @@ class _StripItem extends StatelessWidget {
               style: TextStyle(fontSize: 11, color: context.c.inkSoft),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// الفقاعة المثبَّتة أولاً في شريط القصص — قناة/بثّ تيك توك (LIVE-04b). الأفتار
-/// أيقونة عامة داخل حلقة الشريط نفسها، لا شعار تيك توك: الزائر يخرج من عندنا
-/// («نحن الغلاف، تيك توك المضيف»). وتلبس الحلقة لون البثّ الحيّ حين يكون البثّ
-/// نشِطاً فعلاً حسب `active` كما وصلت من الخادم، بلا إعادة اشتقاق هنا.
-class _TikTokLiveBubble extends StatelessWidget {
-  const _TikTokLiveBubble({required this.live});
-
-  final TikTokLive live;
-
-  @override
-  Widget build(BuildContext context) {
-    return _StripItem(
-      highlighted: live.live?.active ?? false,
-      label: 'تيك توك أعراسنا',
-      onTap: () => openTikTokLive(context),
-      avatar: ColoredBox(
-        color: context.c.surface,
-        child: Icon(
-          Icons.video_camera_front_rounded,
-          size: 22,
-          color: context.c.sky,
         ),
       ),
     );
@@ -1596,6 +1574,12 @@ class _NotificationBellState extends State<_NotificationBell> {
   /// قبل انتهاء نداءات الشبكة. تعميم أو ملخّص «مناسبات جديدة اليوم» بلا
   /// event_id إطلاقاً — التغذية خلف الورقة، فلا مكان ينقل إليه النقر.
   Future<void> _openTarget(notif.AppNotification n) async {
+    // «بدأ البث المباشر» بلا event_id — وجهته صفحة البث.
+    if (n.type == 'live_started') {
+      if (mounted) openLiveScreen(context);
+      return;
+    }
+
     final eventId = n.eventId;
     if (eventId == null || !mounted) return;
 
