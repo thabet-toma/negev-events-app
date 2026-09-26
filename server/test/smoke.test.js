@@ -32,6 +32,7 @@ const webpush = require('web-push');
 const { runInstantForDate, jerusalemDateString } = require('../src/utils/jerusalemTime');
 const settingsService = require('../src/services/settings.service');
 const logger = require('../src/utils/logger');
+const realtime = require('../src/realtime');
 const shareCard = require('../src/services/shareCard.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
@@ -6585,6 +6586,179 @@ async function run() {
 
   await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?, ?)', liveDates);
   await db.execute('DELETE FROM users WHERE id IN (?, ?)', [liveVoterA.id, liveVoterB.id]);
+
+  console.log('\nLive realtime + «بدأ البث» notification (plan26-9 M2)');
+
+  // The suite boots the app without realtime.init(), so no socket server
+  // exists to connect a client to (and socket.io-client is not a dependency)
+  // — the channel and payload are observed at `realtime.emit` itself, the
+  // one function every route calls. Push is observed the same way at
+  // `pushService.sendToAllUsers` (VAPID is unset here, so it is a no-op).
+  function captureRealtime() {
+    const emits = [];
+    const pushes = [];
+    const originalEmit = realtime.emit;
+    const originalPush = pushService.sendToAllUsers;
+    realtime.emit = (channel, payload) => { emits.push({ channel, payload }); };
+    pushService.sendToAllUsers = (payload, options) => { pushes.push({ payload, options }); };
+    return {
+      emits,
+      pushes,
+      restore() {
+        realtime.emit = originalEmit;
+        pushService.sendToAllUsers = originalPush;
+      }
+    };
+  }
+
+  const liveStartedKey = `live_started_${liveToday}`;
+  const liveKeysSql = "DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')";
+  await db.execute(liveKeysSql);
+  // Earlier live-settings tests in this run saved active lives too — start from a clean day.
+  await db.execute("DELETE FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+
+  const livePollVoter = await createLiveVoter('مصوّت البث اللحظي');
+  const liveOptedOut = await createLiveVoter('مستخدم أطفأ الإشعارات');
+  await db.execute('UPDATE users SET notify_new_events = 0 WHERE id = ?', [liveOptedOut.id]);
+
+  await test('A vote emits live_poll_<episodeId> with { results, total_votes } only — never my_vote', async () => {
+    const saved = await api('PUT', `/api/admin/live/episodes/${liveToday}`, {
+      token: superAdminToken,
+      body: { topic: 'موضوع لحظي', poll_question: 'هل تؤيد؟', poll_options: todayOptions }
+    });
+    assert.strictEqual(saved.status, 200);
+    const episodeId = saved.body.episode.id;
+
+    const spy = captureRealtime();
+    let vote;
+    try {
+      vote = await api('POST', `/api/live/episodes/${episodeId}/vote`, { token: livePollVoter.token, body: { option_index: 2 } });
+    } finally {
+      spy.restore();
+    }
+    assert.strictEqual(vote.status, 200);
+    const polls = spy.emits.filter(e => e.channel === `live_poll_${episodeId}`);
+    assert.strictEqual(polls.length, 1);
+    assert.deepStrictEqual(Object.keys(polls[0].payload).sort(), ['results', 'total_votes']);
+    assert.strictEqual(polls[0].payload.total_votes, 1);
+    assert.deepStrictEqual(polls[0].payload.results, vote.body.poll.results);
+
+    // A refused (duplicate) vote emits nothing.
+    const again = captureRealtime();
+    let dup;
+    try {
+      dup = await api('POST', `/api/live/episodes/${episodeId}/vote`, { token: livePollVoter.token, body: { option_index: 0 } });
+    } finally {
+      again.restore();
+    }
+    assert.strictEqual(dup.status, 409);
+    assert.strictEqual(again.emits.length, 0);
+  });
+
+  await test('PUT /api/admin/settings with only the WhatsApp number emits no live_status and writes no live notification', async () => {
+    const before = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    const original = before.body.settings.support_whatsapp_number;
+
+    const spy = captureRealtime();
+    let save;
+    try {
+      save = await api('PUT', '/api/admin/settings', { token: superAdminToken, body: { support_whatsapp_number: '0501234567' } });
+    } finally {
+      spy.restore();
+    }
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(spy.emits.length, 0);
+    assert.strictEqual(spy.pushes.length, 0);
+
+    const restored = await api('PUT', '/api/admin/settings', { token: superAdminToken, body: { support_whatsapp_number: original || '' } });
+    assert.strictEqual(restored.status, 200);
+  });
+
+  await test('First active live saved today → live_status, one system_notification, rows only for notify_new_events = 1', async () => {
+    const until = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const spy = captureRealtime();
+    let save;
+    try {
+      save = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken,
+        body: { live_stream_url: 'https://www.youtube.com/watch?v=abcDEF_-123', live_title: 'سهرة البث', live_until: until }
+      });
+    } finally {
+      spy.restore();
+    }
+    assert.strictEqual(save.status, 200);
+
+    const statuses = spy.emits.filter(e => e.channel === 'live_status');
+    assert.strictEqual(statuses.length, 1);
+    assert.deepStrictEqual(statuses[0].payload, {});
+
+    const announced = spy.emits.filter(e => e.channel === 'system_notification');
+    assert.strictEqual(announced.length, 1);
+    assert.strictEqual(announced[0].payload.kind, 'live_started');
+    assert.strictEqual(announced[0].payload.event_id, null);
+    assert.strictEqual(announced[0].payload.title, 'بدأ البث المباشر');
+    assert.ok(announced[0].payload.body.includes('سهرة البث'));
+    assert.strictEqual(spy.pushes.length, 1);
+    assert.strictEqual(spy.pushes[0].payload.kind, 'live_started');
+
+    const rows = await db.query(
+      "SELECT user_id, event_id, title FROM notifications WHERE type = 'live_started' AND dedupe_key = ?",
+      [liveStartedKey]
+    );
+    const optedIn = await db.queryOne('SELECT COUNT(*) AS n FROM users WHERE notify_new_events = 1');
+    assert.strictEqual(rows.length, Number(optedIn.n));
+    assert.ok(rows.some(r => r.user_id === livePollVoter.id), 'an opted-in user gets the row');
+    assert.ok(!rows.some(r => r.user_id === liveOptedOut.id), 'an opted-out user never does');
+    assert.ok(rows.every(r => r.event_id === null && r.title === 'بدأ البث المباشر'));
+
+    const feed = await api('GET', '/api/notifications', { token: livePollVoter.token });
+    assert.strictEqual(feed.status, 200);
+    assert.ok(JSON.stringify(feed.body).includes('"type":"live_started"'), 'the feed returns the live_started row');
+  });
+
+  await test('A second save the same day (extending until) → live_status again, but no new rows and no announcement', async () => {
+    const before = await db.queryOne("SELECT COUNT(*) AS n FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+    const spy = captureRealtime();
+    let save;
+    try {
+      save = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken, body: { live_until: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString() }
+      });
+    } finally {
+      spy.restore();
+    }
+    assert.strictEqual(save.status, 200);
+    const after = await db.queryOne("SELECT COUNT(*) AS n FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+    assert.ok(Number(before.n) > 0);
+    assert.strictEqual(Number(after.n), Number(before.n));
+    assert.strictEqual(spy.emits.filter(e => e.channel === 'live_status').length, 1);
+    assert.strictEqual(spy.emits.filter(e => e.channel === 'system_notification').length, 0);
+    assert.strictEqual(spy.pushes.length, 0);
+  });
+
+  await test('Saving a live whose until is already past → live_status, but no notification at all', async () => {
+    await db.execute("DELETE FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+    const spy = captureRealtime();
+    let save;
+    try {
+      save = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken, body: { live_until: new Date(Date.now() - 60 * 1000).toISOString() }
+      });
+    } finally {
+      spy.restore();
+    }
+    assert.strictEqual(save.status, 200);
+    const rows = await db.queryOne("SELECT COUNT(*) AS n FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+    assert.strictEqual(Number(rows.n), 0);
+    assert.strictEqual(spy.emits.filter(e => e.channel === 'live_status').length, 1);
+    assert.strictEqual(spy.emits.filter(e => e.channel === 'system_notification').length, 0);
+    assert.strictEqual(spy.pushes.length, 0);
+  });
+
+  await db.execute("DELETE FROM notifications WHERE type = 'live_started' AND dedupe_key = ?", [liveStartedKey]);
+  await db.execute(liveKeysSql);
+  await db.execute('DELETE FROM live_episodes WHERE episode_date = ?', [liveToday]);
+  await db.execute('DELETE FROM users WHERE id IN (?, ?)', [livePollVoter.id, liveOptedOut.id]);
 
   console.log('\nMulti-value filtering: ?town=, ?occasion_type_id=, ?village_id= on GET /api/events and GET /api/map/events (issue #85 batch 5)');
 

@@ -189,7 +189,7 @@ async function sendToUser(userId, payload) {
  * «مناسبة جديدة» on (`users.notify_new_events`) — the one broadcast kind
  * pushed to everyone — minus `excludeUserId` (the event's own publisher).
  */
-async function deliverToAll({ title, body, notificationId = null, eventId = null }, { excludeUserId = null } = {}) {
+async function deliverToAll({ title, body, notificationId = null, eventId = null, kind = null }, { excludeUserId = null } = {}) {
   const subscriptions = await db.query(
     `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth
        FROM push_subscriptions ps
@@ -199,7 +199,12 @@ async function deliverToAll({ title, body, notificationId = null, eventId = null
   );
   if (!subscriptions.length) return;
 
-  const payload = JSON.stringify({ title, body, notification_id: notificationId, event_id: eventId });
+  // `kind` only when a caller names one (today: 'live_started', whose click
+  // opens the live page rather than an event) — every existing payload keeps
+  // its exact shape.
+  const payload = JSON.stringify({
+    title, body, notification_id: notificationId, event_id: eventId, ...(kind ? { kind } : {})
+  });
   await Promise.all(subscriptions.map(sub => deliverToSubscription(sub, payload)));
 }
 

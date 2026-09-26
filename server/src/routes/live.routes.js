@@ -6,6 +6,7 @@ const ApiError = require('../utils/ApiError');
 const config = require('../config');
 const settings = require('../services/settings.service');
 const liveHub = require('../services/liveHub.service');
+const realtime = require('../realtime');
 const { authenticate, optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, parseId, requireDate } = require('../middleware/validate');
 
@@ -75,6 +76,9 @@ router.post('/live/episodes/:id/vote', authenticate, asyncHandler(async (req, re
   const optionIndex = parseOptionIndex((req.body || {}).option_index);
 
   const poll = await liveHub.vote(episodeId, req.user.id, optionIndex);
+  // Results only, never `my_vote` — this goes to every connected socket;
+  // each client keeps hiding them until its own user has voted (§3.6).
+  realtime.emit(`live_poll_${episodeId}`, { results: poll.results, total_votes: poll.total_votes });
   res.json({ success: true, poll, message: 'تم تسجيل صوتك' });
 }));
 

@@ -4,6 +4,10 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const settings = require('../services/settings.service');
+const notifications = require('../services/notifications.service');
+const realtime = require('../realtime');
+const { announceLiveStarted } = require('../realtime/announce');
+const { jerusalemDateString } = require('../utils/jerusalemTime');
 const { requireSuperAdmin } = require('../middleware/auth');
 const { cleanString } = require('../middleware/validate');
 const { upload, verifyMedia } = require('../middleware/upload');
@@ -125,6 +129,14 @@ const VALIDATORS = {
   [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl
 };
 
+/** The four keys that together describe a live — touching any of them is a live-status change (plan26-9 §3.6). */
+const LIVE_KEYS = new Set([
+  settings.SETTING_KEYS.LIVE_CHANNEL_URL,
+  settings.SETTING_KEYS.LIVE_STREAM_URL,
+  settings.SETTING_KEYS.LIVE_TITLE,
+  settings.SETTING_KEYS.LIVE_UNTIL
+]);
+
 // Guarded on this router itself — a `router.use('/admin', ...)` registered in
 // another file (e.g. admin.routes.js's requireAdmin) does not protect these
 // paths just because they share the `/admin` prefix (same warning as
@@ -153,6 +165,20 @@ router.put('/admin/settings', asyncHandler(async (req, res) => {
   settings.assertLiveConsistency(merged);
 
   await settings.setSettings(updates, req.user.id);
+
+  // Only after the write committed, and only when it touched the live —
+  // saving the WhatsApp number alone is not a live-status change.
+  if (keys.some(key => LIVE_KEYS.has(key))) {
+    realtime.emit('live_status', {});
+
+    // «بدأ البث» at most once per Jerusalem day — the service's dedupe key
+    // decides, so extending `until` or retitling the same live is silent.
+    const { live } = await settings.getLiveChannel();
+    if (live && live.active) {
+      const outcome = await notifications.notifyLiveStarted({ title: live.title, date: jerusalemDateString() });
+      if (outcome.recipients > 0) announceLiveStarted(outcome);
+    }
+  }
 
   res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم حفظ الإعدادات بنجاح' });
 }));

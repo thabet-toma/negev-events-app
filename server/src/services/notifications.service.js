@@ -3,6 +3,7 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const broadcasts = require('./broadcasts.service');
+const logger = require('../utils/logger');
 const { runInstantForDate } = require('../utils/jerusalemTime');
 
 /**
@@ -117,7 +118,8 @@ const TYPES = {
   EVENT_NEW: 'event_new',
   EVENT_NEW_DIGEST: 'event_new_digest',
   EVENT_UPDATED: 'event_updated',
-  EVENT_NUDGE: 'event_nudge'
+  EVENT_NUDGE: 'event_nudge',
+  LIVE_STARTED: 'live_started'
 };
 
 /** Story 10: at most this many *scheduled* notifications reach one user per day. */
@@ -338,6 +340,40 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
   return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, push: extra === 1 };
 }
 
+/**
+ * «بدأ البث المباشر» لكل مستخدم أبقى `users.notify_new_events` مفعّلاً
+ * (plan26-9 §2) — مرّة واحدة في اليوم كحدّ أقصى: `date` هو تاريخ القدس
+ * (`jerusalemDateString`، لا CURDATE الذي يقرأ منطقة جلسة MySQL)، والمفتاح
+ * `live_started_<date>` واحد لكل المستخدمين. تمديد الموعد أو تعديل العنوان
+ * في اليوم نفسه لا يكتب شيئاً: إن وُجد أي صفّ بهذا المفتاح فالإعلان قد خرج
+ * اليوم، فلا صفوف جديدة — ولا لمن فعّل الإشعارات بعده، كي لا يُدفَع الإعلان
+ * للجميع مرّة ثانية بسببه. `ON DUPLICATE KEY` يبقى شبكة الأمان لحفظين
+ * متزامنين. يعيد ما يحتاجه المُعلِن، و`recipients` = 0 يعني «لا تُعلِن».
+ */
+async function notifyLiveStarted({ title, date }) {
+  const notificationTitle = 'بدأ البث المباشر';
+  const body = `${title} — اضغط لمشاهدة البث`;
+  const dedupeKey = `live_started_${date}`;
+
+  const alreadySent = await db.queryOne(
+    'SELECT id FROM notifications WHERE type = ? AND dedupe_key = ? LIMIT 1',
+    [TYPES.LIVE_STARTED, dedupeKey]
+  );
+  if (alreadySent) return { recipients: 0, title: notificationTitle, body };
+
+  const { affectedRows } = await db.execute(
+    `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+     SELECT id, NULL, ?, ?, ?, ?
+       FROM users
+      WHERE notify_new_events = 1
+     ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
+    [TYPES.LIVE_STARTED, notificationTitle, body, dedupeKey]
+  );
+
+  logger.info('live.started.notify', { date, recipients: affectedRows });
+  return { recipients: affectedRows, title: notificationTitle, body };
+}
+
 /** أسماء الحقول كما يفهمها المتابع في «ما الذي تغيّر» — مفاتيح OCCASION_FIELDS ثابتة، فالعبارة ثابتة معها. */
 const CHANGE_PHRASES = {
   title: 'العنوان',
@@ -499,6 +535,7 @@ module.exports = {
   scheduleForUser,
   NEW_EVENTS_DAILY_SINGLES,
   notifyNewEvent,
+  notifyLiveStarted,
   notifyEventFollowersOnUpdate,
   createEventNudge,
   listEventsDueSecondNudge,

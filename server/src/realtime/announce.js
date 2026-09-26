@@ -45,5 +45,17 @@ function announceNewEvent({ title, body, eventId = null, excludeUserId = null, p
   if (shouldPush) push.sendToAllUsers({ title, body, eventId }, { excludeUserId });
 }
 
-module.exports = { announceNotification, announceNewEvent };
+/**
+ * «بدأ البث المباشر» بعد أن كتب `notifications.notifyLiveStarted` صفوفه —
+ * يستدعيه المسار فقط حين كُتب صفّ فعلاً (مرّة في اليوم)، بنفس شكل
+ * `announceNewEvent`: إشارة واحدة لكل عميل متّصل كي يعيد جلب مركز إشعاراته،
+ * ودفع لكل مشترك أبقى الإشعارات مفعّلة. `kind: 'live_started'` (ولا
+ * `event_id`) هو ما يقول للعميل «افتح صفحة البث» عند الكبس.
+ */
+function announceLiveStarted({ title, body }) {
+  realtime.emit('system_notification', { title, body, event_id: null, kind: 'live_started' });
+  push.sendToAllUsers({ title, body, kind: 'live_started' });
+}
+
+module.exports = { announceNotification, announceNewEvent, announceLiveStarted };
 
