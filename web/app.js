@@ -121,13 +121,16 @@ let storyViewerLastTickTs = 0;
 let storyViewerRafId = null;
 let storyViewerDeviceId = null;
 
-// TikTok live entry (LIVE-04a) — دخول الزوار من الموقع إلى قناة/بثّ تيك توك
-// («نحن الغلاف، تيك توك المضيف»). null يعني لم يصل GET /api/live بعد؛ كائن
-// {profile_url, live} بعد وصوله. مصدر مستقل تماماً عن fetchStories() —
-// الطلبان قد يصل أيّ منهما أولاً، فالفقاعة (renderStoriesStrip) والمدخل
-// الدائم (updateTikTokEntryVisibility) يُعاد رسمهما عند وصول أيٍّ منهما،
-// ويعتمدان فقط على هذا المتغيّر، فلا يظهر شيء ثم يختفي بحسب ترتيب الشبكة.
-let tiktokLiveState = null;
+// «البث المباشر» — مصدر مستقل تماماً عن القصص. liveState هو آخر GET /api/live
+// ({profile_url, live, embed_url, live_channel_url}) أو null قبل وصوله، ولا
+// يقرؤه إلا شارة «مباشر» على الزرّين؛ الزرّان نفساهما ظاهران دائماً. liveHubState
+// هو آخر GET /api/live/hub، ولا يُجلب إلا حين تُفتح نافذة البث.
+let liveState = null;
+let liveHubState = null;
+let liveBadgeTimer = null;
+let livePlayerKey = null; // ما يعرضه المشغّل الآن — لا يُعاد بناء iframe يعرض الشيء نفسه
+let livePollChannel = null; // قناة live_poll_<id> المشترَك فيها الآن، أو null
+let liveVoteInFlight = false;
 
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
@@ -152,7 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
-  fetchTikTokLive();
+  fetchLiveStatus();
   initSupportEntry();
   initNotificationsPush();
   initServiceWorker();
@@ -433,6 +436,12 @@ function initSocket() {
     // لكل مستخدم؛ نعيد جلب مركزنا نحن فقط (الإعلان نفسه يأتي من new_event_created).
     socket.on('system_notification', () => {
       if (currentUser) fetchNotifications();
+    });
+
+    // إعدادات البث تغيّرت — الحمولة فارغة عمداً؛ نعيد قراءة الحالة، والنافذة إن كانت مفتوحة.
+    socket.on('live_status', () => {
+      fetchLiveStatus();
+      if (isLiveSectionOpen()) fetchLiveHub();
     });
 
     subscribeToNotificationSocket();
@@ -757,18 +766,13 @@ async function fetchStories() {
 }
 
 /**
- * يبني شريط القصص كاملاً: فقاعة تيك توك المثبَّتة أولاً (قد ترجع فارغة —
- * buildTikTokLiveBubbleHtml) ثم القصص الحقيقية بعدها في نفس السلسلة النصية
- * — لا كعنصر داخل allStories. openStoryViewer(i) في القصص الحقيقية يعتمد
- * على i كفهرس في تلك المصفوفة تحديداً، فإضافة الفقاعة إليها كانت ستُزيح كل
- * فهرس بواحد. يُستدعى من هنا وأيضاً من fetchTikTokLive() لأن الطلبين
- * مستقلّان تماماً وقد يصل أيّ منهما أولاً (تعليق tiktokLiveState أعلاه) —
- * كلاهما يعيد بناء الشريط كاملاً فلا يهم أيّهما وصل أولاً ولا فرق في النتيجة.
+ * يبني شريط القصص في الموضعين (الصفحة والدرج العلوي) من allStories وحدها —
+ * openStoryViewer(i) يعتمد على i كفهرس في تلك المصفوفة تحديداً.
  */
 function renderStoriesStrip() {
   const container = document.getElementById('storiesContainer');
   const drawerContainer = document.getElementById('drawerStoriesContainer');
-  const storiesHtml = allStories.map((s, i) => `
+  const html = allStories.map((s, i) => `
     <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
       <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
         <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
@@ -776,99 +780,366 @@ function renderStoriesStrip() {
       <span class="story-title">${escapeHtml(s.title)}</span>
     </div>
   `).join('');
-  const html = buildTikTokLiveBubbleHtml() + storiesHtml;
   if (container) container.innerHTML = html;
   if (drawerContainer) drawerContainer.innerHTML = html;
   updateFeedDimensions();
 }
 
+// «البث المباشر» — زرّان دائمان (الترويسة والشريط العائم) ونافذة واحدة.
+
 /**
- * هل ضبط المالك قناة أو بثّاً أصلاً؟ شرط واحد يقرأه كلٌّ من الفقاعة والمدخل
- * الدائم — كانا يحملانه بصيغتين متقابلتين، وهو بالضبط ما يفترق لاحقاً. يطابق
- * شرط الخادم نفسه (share.routes: لا صفحة /live بلا رابط ولا بثّ)، فلا مدخل
- * يقود إلى 404.
+ * هل البث قائم الآن؟ active من الخادم أولاً (getLiveChannel يشتقّه من until)،
+ * ثم until نفسه محلياً — كي تنطفئ الشارة في موعدها بلا انتظار حدث ولا إعادة جلب.
  */
-function isTikTokLiveConfigured() {
-  return !!(tiktokLiveState && (tiktokLiveState.profile_url || tiktokLiveState.live));
+function isLiveNow(state) {
+  const live = state && state.live;
+  if (!live || !live.active) return false;
+  const until = Date.parse(live.until);
+  return Number.isNaN(until) || until > Date.now();
+}
+
+/** رابط http(s) فقط يصل href — أي شيء آخر (javascript: مثلاً) يُسقَط. */
+function safeHttpUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
+}
+
+/** نصف البث من GET /api/live أو GET /api/live/hub — الشكل نفسه في الاثنين. */
+function toLiveState(data) {
+  return {
+    profile_url: data.profile_url || null,
+    live: data.live || null,
+    embed_url: data.embed_url || null,
+    live_channel_url: data.live_channel_url || null
+  };
 }
 
 /**
- * الفقاعة المثبَّتة أولاً في شريط القصص. مخفية تماماً حين profile_url وlive
- * كلاهما null معاً — لا فقاعة رمادية ولا نائبة، الميزة غير مرئية حتى يضبطها
- * المالك (LIVE-04a). الأفتار هويّتنا نحن لا شعار تيك توك («نحن الغلاف، تيك
- * توك المضيف») — أيقونة عامة داخل حلقة القصة العادية، لا صورة مستوردة.
+ * حالة البث — GET /api/live عام بلا مصادقة، فلا auth:true هنا. لا يُخفي ولا
+ * يُظهر أي زرّ؛ يضبط الشارة وحدها.
  */
-function buildTikTokLiveBubbleHtml() {
-  if (!isTikTokLiveConfigured()) return '';
-  const { live } = tiktokLiveState;
-
-  // active من الخادم حصراً (GET /api/live: getLiveChannel يشتقّه من until) —
-  // لا إعادة اشتقاق هنا؛ هذا العميل ليس من يعدّل القيمة (خلافاً للوحة الإدارة
-  // التي تعيد اشتقاقها عمداً لأنها هي نفسها من يحرّر البثّ).
-  const isLive = !!(live && live.active);
-  const titleAttr = isLive && live.title ? ` title="${escapeHtml(live.title)}"` : '';
-
-  return `
-    <div class="story-item tiktok-live-item" onclick="openTikTokLive(); toggleTopChrome(false);"${titleAttr}>
-      <div class="story-avatar-ring ${isLive ? 'live' : ''}">
-        <div class="story-avatar-img tiktok-live-avatar">
-          <i class="fa-solid fa-video"></i>
-        </div>
-      </div>
-      <span class="story-title">تيك توك أعراسنا</span>
-    </div>
-  `;
-}
-
-/**
- * حالة قناة/بثّ تيك توك — GET /api/live عام بلا مصادقة، فلا auth:true هنا
- * (كانت سترفق رمزاً لا حاجة له وتُخضع النداء لمنطق انتهاء الجلسة في apiFetch
- * الذي لا يخص زائراً غير مسجَّل أصلاً). النتيجة تُخزَّن في tiktokLiveState
- * ثم يُعاد رسم شريط القصص والمدخل الدائم معاً.
- */
-async function fetchTikTokLive() {
+async function fetchLiveStatus() {
   try {
     const res = await apiFetch('/api/live');
     const data = await res.json();
     if (data.success) {
-      tiktokLiveState = { profile_url: data.profile_url || null, live: data.live || null };
-      renderStoriesStrip();
-      updateTikTokEntryVisibility();
+      liveState = toLiveState(data);
+      updateLiveEntryBadge();
     }
   } catch (e) {
-    console.error('TikTok live error:', e);
+    console.error('Live status error:', e);
   }
 }
 
-/** مدخل واحد لكل مكان في هذا الملف يحتاج فتح البث — الفقاعة والمدخل الدائم معاً. */
-function openTikTokLive() {
-  window.open(tiktokLiveShareUrl(), '_blank', 'noopener');
+/**
+ * شارة «مباشر» على الزرّين معاً، ومؤقّت واحد يطفئها عند until. setTimeout
+ * يفيض بعد ~24 يوماً، فالمؤقّت مسقوف ويعيد الحساب عند انطلاقه لا أكثر.
+ */
+function updateLiveEntryBadge() {
+  const active = isLiveNow(liveState);
+  const headerBtn = document.getElementById('liveEntryBtn');
+  const floatingBtn = document.getElementById('floatingLiveEntryBtn');
+  const headerBadge = document.getElementById('liveEntryBadge');
+  const floatingBadge = document.getElementById('floatingLiveEntryBadge');
+  if (headerBtn) headerBtn.classList.toggle('is-live', active);
+  if (floatingBtn) floatingBtn.classList.toggle('is-live', active);
+  if (headerBadge) headerBadge.hidden = !active;
+  if (floatingBadge) floatingBadge.hidden = !active;
+
+  clearTimeout(liveBadgeTimer);
+  liveBadgeTimer = null;
+  if (active) {
+    const msLeft = Date.parse(liveState.live.until) - Date.now();
+    if (msLeft > 0) liveBadgeTimer = setTimeout(updateLiveEntryBadge, Math.min(msLeft + 500, 2147483647));
+  }
+}
+
+function isLiveSectionOpen() {
+  const modal = document.getElementById('liveModal');
+  return !!modal && modal.style.display === 'flex';
+}
+
+/** مدخل واحد لكل ما يفتح البث: الزرّان، وإشعار «بدأ البث المباشر»، و?live=1. */
+function openLiveSection() {
+  const modal = document.getElementById('liveModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  if (liveHubState) {
+    renderLiveSection();
+  } else {
+    showLiveStatusMessage('<p>جارٍ التحميل…</p>');
+  }
+  fetchLiveHub();
+}
+
+function closeLiveSection() {
+  const modal = document.getElementById('liveModal');
+  if (modal) modal.style.display = 'none';
+  stopLivePlayer();
+  subscribeLivePoll(null);
+}
+
+/** يُفرغ المشغّل كلياً — iframe يبقى في الصفحة يبقى صوته يعمل خلف نافذة مغلقة. */
+function stopLivePlayer() {
+  const box = document.getElementById('livePlayer');
+  if (box) {
+    box.querySelectorAll('iframe').forEach(frame => { frame.src = 'about:blank'; });
+    box.innerHTML = '';
+  }
+  livePlayerKey = null;
 }
 
 /**
- * نفس قاعدة أصل رابط المشاركة في web/admin.js (getLiveShareUrl) — نفس الأصل
- * افتراضياً (نشر حقيقي: الخادم والواجهة خلف دومين واحد)، أو أصل apiBase إن
- * كان مضبوطاً رابطاً مطلقاً. نسخة ثانية مقصودة: القاعدة نفسها في admin.js
- * (getLiveShareUrl) — الموقع واللوحة لا يُحمّلان ملف بعضهما، وapi.js يلتقط
- * API_BASE وقت التحميل لا عند الاستدعاء. أي تغيير في هذه القاعدة يُطبَّق في
- * الموضعين معاً.
+ * GET /api/live/hub — بالرمز حين يوجد فقط (my_vote ونتائج اليوم لمن صوّت)،
+ * وبلا رمز للزائر. نصف البث فيه هو GET /api/live نفسه، فيُحدِّث الشارة أيضاً.
  */
-function tiktokLiveShareUrl() {
-  const apiBase = (window.NEGEV_CONFIG && window.NEGEV_CONFIG.apiBase) || '';
-  const origin = /^https?:\/\//i.test(apiBase) ? apiBase.replace(/\/+$/, '') : window.location.origin;
-  return `${origin}/live`;
+async function fetchLiveHub() {
+  try {
+    const res = await apiFetch('/api/live/hub', { auth: Boolean(authToken) });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.message || 'failed');
+    liveHubState = data;
+    liveState = toLiveState(data);
+    updateLiveEntryBadge();
+    if (isLiveSectionOpen()) renderLiveSection();
+  } catch (e) {
+    console.error('Live hub error:', e);
+    if (isLiveSectionOpen() && !liveHubState) {
+      showLiveStatusMessage(`
+        <p>تعذّر تحميل البث، تحقّق من الاتصال</p>
+        <button type="button" class="live-go-btn" onclick="fetchLiveHub()">إعادة المحاولة</button>
+      `);
+    }
+  }
+}
+
+/** رسالة تحميل/خطأ مكان محتوى النافذة كلّه. */
+function showLiveStatusMessage(html) {
+  const status = document.getElementById('liveStatusMessage');
+  if (status) {
+    status.innerHTML = html;
+    status.hidden = false;
+  }
+  stopLivePlayer();
+  ['liveInfo', 'livePoll', 'livePrevious'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  });
+}
+
+function renderLiveSection() {
+  if (!liveHubState) return;
+  const status = document.getElementById('liveStatusMessage');
+  if (status) status.hidden = true;
+  renderLivePlayer();
+  renderLiveInfo();
+  renderLivePoll();
+  renderLivePrevious();
+  const today = liveHubState.today;
+  subscribeLivePoll(today && today.poll ? today.id : null);
 }
 
 /**
- * المدخل الدائم بعد أن يغادر شريط القصص الشاشة — زرّ الترويسة على الديسكتوب
- * وزرّ الشريط العائم على الهاتف معاً، بنفس شرط إخفاء الفقاعة بالضبط.
+ * المشغّل: embed_url → iframe داخل الصفحة (+ «افتح في يوتيوب» دائماً تحته)؛
+ * بث برابط غير قابل للتضمين → بطاقة و«ادخل البث» عبر /live/go؛ لا بث → «قناتنا».
+ * لا يُعاد بناؤه حين لا يتغيّر ما يعرضه، كي لا تعيد كل إعادة قراءة تشغيل البث.
  */
-function updateTikTokEntryVisibility() {
-  const configured = isTikTokLiveConfigured();
-  const headerBtn = document.getElementById('tiktokLiveBtn');
-  const floatingBtn = document.getElementById('floatingTiktokLiveBtn');
-  if (headerBtn) headerBtn.hidden = !configured;
-  if (floatingBtn) floatingBtn.hidden = !configured;
+function renderLivePlayer() {
+  const box = document.getElementById('livePlayer');
+  if (!box) return;
+  const hub = liveHubState;
+  const live = hub.live;
+  const liveNow = isLiveNow(hub);
+  const embedUrl = liveNow ? safeHttpUrl(hub.embed_url) : null;
+  const channelUrl = safeHttpUrl(hub.live_channel_url || hub.profile_url);
+  const shareUrl = safeHttpUrl(hub.share_url) || `${shareOrigin()}/live`;
+
+  const key = embedUrl ? `embed|${embedUrl}|${live.url}|${live.title}`
+    : liveNow ? `link|${live.title}|${shareUrl}`
+    : `none|${channelUrl || ''}`;
+  if (key === livePlayerKey) return;
+  stopLivePlayer();
+  livePlayerKey = key;
+
+  if (embedUrl) {
+    const externalUrl = safeHttpUrl(live.url);
+    box.innerHTML = `
+      <div class="live-player-frame">
+        <iframe src="${escapeHtml(embedUrl)}" title="${escapeHtml(live.title || 'البث المباشر')}"
+          referrerpolicy="strict-origin-when-cross-origin"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+      </div>
+      ${externalUrl ? `<a class="live-external-link" href="${escapeHtml(externalUrl)}" target="_blank" rel="noopener">
+        <i class="fa-brands fa-youtube" aria-hidden="true"></i> افتح في يوتيوب
+      </a>` : ''}
+    `;
+  } else if (liveNow) {
+    box.innerHTML = `
+      <div class="live-player-card">
+        <span class="live-player-tag"><span class="live-entry-dot" aria-hidden="true"></span> مباشر الآن</span>
+        <strong>${escapeHtml(live.title)}</strong>
+        <a class="live-go-btn" href="${escapeHtml(`${shareUrl}/go`)}" target="_blank" rel="noopener">
+          <i class="fa-solid fa-play" aria-hidden="true"></i> ادخل البث
+        </a>
+      </div>
+    `;
+  } else {
+    box.innerHTML = `
+      <div class="live-player-card">
+        <i class="fa-solid fa-tower-broadcast live-player-idle-icon" aria-hidden="true"></i>
+        <strong>لا يوجد بث الآن</strong>
+        ${channelUrl ? `<a class="live-go-btn" href="${escapeHtml(channelUrl)}" target="_blank" rel="noopener">قناتنا</a>` : ''}
+      </div>
+    `;
+  }
+}
+
+/** عنوان البث (حين لا تحمله بطاقة الرابط أصلاً) · موضوع اليوم · سؤال الحلقة — كلٌّ يُخفى إن كان فارغاً. */
+function renderLiveInfo() {
+  const box = document.getElementById('liveInfo');
+  if (!box) return;
+  const hub = liveHubState;
+  const today = hub.today;
+  const rows = [];
+  if (isLiveNow(hub) && safeHttpUrl(hub.embed_url) && hub.live.title) {
+    rows.push(`<h4 class="live-info-title">${escapeHtml(hub.live.title)}</h4>`);
+  }
+  if (today && today.topic) {
+    rows.push(`<p class="live-info-row"><span>موضوع اليوم</span>${escapeHtml(today.topic)}</p>`);
+  }
+  if (today && today.episode_question) {
+    rows.push(`<p class="live-info-row"><span>سؤال الحلقة</span>${escapeHtml(today.episode_question)}</p>`);
+  }
+  box.innerHTML = rows.join('');
+  box.hidden = rows.length === 0;
+}
+
+/** أشرطة النسب — لنتيجة اليوم بعد التصويت ولنتيجة الأمس معاً. */
+function buildLivePollBarsHtml(results, totalVotes, myVote) {
+  const bars = (Array.isArray(results) ? results : []).map(r => {
+    const pct = Math.max(0, Math.min(100, Math.round(Number(r.percentage) || 0)));
+    const mine = myVote !== null && myVote !== undefined && r.index === myVote;
+    return `
+      <div class="live-poll-bar${mine ? ' is-mine' : ''}">
+        <div class="live-poll-bar-head">
+          <span>${escapeHtml(String(r.label))}${mine ? ' <i class="fa-solid fa-check" aria-label="صوتك"></i>' : ''}</span>
+          <span class="live-poll-bar-pct">${pct}%</span>
+        </div>
+        <div class="live-poll-bar-track"><div class="live-poll-bar-fill" style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }).join('');
+  const total = Math.max(0, Number(totalVotes) || 0);
+  return `<div class="live-poll-bars">${bars}</div><p class="live-poll-total">عدد المشاركين: ${total}</p>`;
+}
+
+/**
+ * نقاش التطبيق: الخيارات للجميع، والنتائج لمن صوّت فقط — الخادم لا يرسلها
+ * قبل ذلك أصلاً. لا استفتاء اليوم → القسم مخفي.
+ */
+function renderLivePoll() {
+  const box = document.getElementById('livePoll');
+  if (!box) return;
+  const today = liveHubState && liveHubState.today;
+  const poll = today && today.poll;
+  if (!poll) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  const voted = poll.my_vote !== null && poll.my_vote !== undefined && Array.isArray(poll.results);
+  const body = voted
+    ? buildLivePollBarsHtml(poll.results, poll.total_votes, poll.my_vote)
+    : `<div class="live-poll-options">${(poll.options || []).map((label, i) => `
+        <button type="button" class="live-poll-option" onclick="voteLivePoll(${i})">${escapeHtml(String(label))}</button>
+      `).join('')}</div>`;
+  box.innerHTML = `
+    <h4 class="live-block-title"><i class="fa-solid fa-comments" aria-hidden="true"></i> نقاش التطبيق</h4>
+    <p class="live-poll-question">${escapeHtml(poll.question)}</p>
+    ${body}
+  `;
+  box.hidden = false;
+}
+
+function renderLivePrevious() {
+  const box = document.getElementById('livePrevious');
+  if (!box) return;
+  const previous = liveHubState && liveHubState.previous;
+  if (!previous) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  box.innerHTML = `
+    <h4 class="live-block-title"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i> نتيجة نقاش الأمس</h4>
+    <p class="live-poll-question">${escapeHtml(previous.poll_question)}</p>
+    ${buildLivePollBarsHtml(previous.results, previous.total_votes, null)}
+  `;
+  box.hidden = false;
+}
+
+/** قناة live_poll_<id> لاستفتاء اليوم المعروض وحده — null يلغي الاشتراك. */
+function subscribeLivePoll(episodeId) {
+  const channel = episodeId ? `live_poll_${episodeId}` : null;
+  if (channel === livePollChannel) return;
+  if (socket && livePollChannel) socket.off(livePollChannel);
+  livePollChannel = channel;
+  if (socket && channel) {
+    socket.on(channel, payload => applyLivePollUpdate(episodeId, payload));
+  }
+}
+
+/** أصوات الآخرين لحظياً — تُعرض فقط لمن صوّت هو نفسه — الخادم يبثّها لكل متصل. */
+function applyLivePollUpdate(episodeId, payload) {
+  const today = liveHubState && liveHubState.today;
+  if (!today || today.id !== episodeId || !today.poll || !payload) return;
+  if (today.poll.my_vote === null || today.poll.my_vote === undefined) return;
+  today.poll.results = payload.results;
+  today.poll.total_votes = payload.total_votes;
+  renderLivePoll();
+}
+
+/**
+ * صوت واحد لا يتغيّر. زائر بلا حساب → نافذة الدخول ولا طلب؛ بعد الدخول
+ * (resumePendingIntent) تُعاد قراءة النقاش إن بقيت النافذة مفتوحة.
+ */
+async function voteLivePoll(optionIndex) {
+  const today = liveHubState && liveHubState.today;
+  if (!today || !today.poll) return;
+  if (!requireAuth({ type: 'live_vote' })) return;
+  if (liveVoteInFlight) return;
+  liveVoteInFlight = true;
+  try {
+    const res = await apiFetch(`/api/live/episodes/${today.id}/vote`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ option_index: optionIndex })
+    });
+    // الجلسة انتهت — apiFetch فتح نافذة الدخول، والنقاش يُعاد بعدها.
+    if (res.status === 401) { pendingIntent = { type: 'live_vote' }; return; }
+    const data = await res.json();
+    if (res.ok && data.success) {
+      today.poll = data.poll;
+      renderLivePoll();
+      return;
+    }
+    showToast(data.message || 'تعذّر تسجيل صوتك، حاول مرة أخرى');
+    // 409 «صوّتَّ مسبقاً» يعرض النتيجة، و400 «هذا النقاش مغلق» يحدّث النافذة —
+    // كلاهما بإعادة القراءة نفسها.
+    if (res.status === 409 || res.status === 400 || res.status === 404) fetchLiveHub();
+  } catch (e) {
+    showToast('تعذّر تسجيل صوتك، حاول مرة أخرى');
+  } finally {
+    liveVoteInFlight = false;
+  }
+}
+
+/** رابط /live نفسه من الخادم (share_url)، بنفس طريقة مشاركة المناسبة. */
+async function shareLiveSection() {
+  const hub = liveHubState;
+  const url = (hub && safeHttpUrl(hub.share_url)) || `${shareOrigin()}/live`;
+  const title = hub && isLiveNow(hub) && hub.live.title ? hub.live.title : 'البث المباشر — أعراسنا';
+  await shareLink({ title, line: title, url, copiedMessage: '📋 تم نسخ رابط البث' });
 }
 
 // 2.5 Story Viewer (#20 step 18) — full-screen viewer opened from the strip
@@ -2575,6 +2846,9 @@ function resumePendingIntent() {
     if (senderInput && currentUser) senderInput.value = currentUser.full_name;
   } else if (intent.type === 'submit_service') {
     openSubmitServiceModal();
+  } else if (intent.type === 'live_vote') {
+    // نافذة البث بقيت مفتوحة تحت نافذة الدخول — تُقرأ من جديد بالرمز فيظهر صوت سابق إن وُجد.
+    if (isLiveSectionOpen()) fetchLiveHub();
   }
 }
 
@@ -2928,9 +3202,7 @@ function toggleTopChrome(show) {
     drawer.style.display = 'flex';
     backdrop.style.display = 'block';
 
-    // كانت هنا نسخة ثالثة من قالب القصة تبني شريط الدرج من allStories وحدها،
-    // فتمسح فقاعة تيك توك المثبَّتة عند أول فتح للدرج. renderStoriesStrip هي
-    // الآن الوحيدة التي تبني الشريطين معاً، فلا يمكن أن يفترقا مرّة أخرى.
+    // renderStoriesStrip هي الوحيدة التي تبني الشريطين معاً، فلا يفترقان.
     renderStoriesStrip();
 
     const drawerSearch = document.getElementById('drawerSearchInput');
@@ -5006,9 +5278,14 @@ async function shareEvent(evt) {
 
   recordAnalyticsEvent('share_clicked', { contentTown: evt.town });
 
+  await shareLink({ title: evt.title, line, url, copiedMessage: '📋 تم نسخ رابط المناسبة' });
+}
+
+/** المسار المشترك لكل زرّ مشاركة في الموقع (المناسبة والبث) — الوصف أعلى shareCurrentEvent. */
+async function shareLink({ title, line, url, copiedMessage }) {
   if (navigator.share) {
     try {
-      await navigator.share({ title: evt.title, text: line, url });
+      await navigator.share({ title, text: line, url });
       return;
     } catch (e) {
       if (e && e.name === 'AbortError') return; // المستخدم أغلق ورقة المشاركة بنفسه — ليس خطأ
@@ -5019,7 +5296,7 @@ async function shareEvent(evt) {
   const fullText = `${line}\n${url}`;
   try {
     await navigator.clipboard.writeText(fullText);
-    showToast('📋 تم نسخ رابط المناسبة');
+    showToast(copiedMessage);
   } catch (e) {
     // لا clipboard API متاح (سياق غير آمن مثلاً) — لا يبقى الزر بلا أثر أبداً.
     alert(fullText);
@@ -5510,6 +5787,9 @@ async function markNotificationRead(isBroadcast, id) {
   } else if (notification.type === 'event_new_digest') {
     closeNotificationsModal();
     switchTab('tabHome');
+  } else if (notification.type === 'live_started') {
+    closeNotificationsModal();
+    openLiveSection();
   }
 }
 
@@ -5612,6 +5892,8 @@ function initUrlNavigation() {
         pendingDeepLinkEventId = num;
       }
     }
+    // إشعار «بدأ البث المباشر» من Web Push يفتح الموقع على ?live=1 (sw.js).
+    if (urlParams.get('live') === '1') openLiveSection();
     const tab = urlParams.get('tab');
     if (tab) {
       const target = tab.startsWith('tab') ? tab : ('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
@@ -5686,6 +5968,9 @@ function initServiceWorker() {
           if (num > 0) {
             navigateToEvent(num);
           }
+        }
+        if (event.data && event.data.type === 'OPEN_LIVE') {
+          openLiveSection();
         }
       });
     }

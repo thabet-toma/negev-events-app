@@ -110,6 +110,7 @@ const CONFIG_JS = fs.readFileSync(path.join(WEB_DIR, 'config.js'), 'utf8');
 const API_JS = fs.readFileSync(path.join(WEB_DIR, 'api.js'), 'utf8');
 const OCCASION_FORM_JS = fs.readFileSync(path.join(WEB_DIR, 'occasionForm.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
+const SW_JS = fs.readFileSync(path.join(WEB_DIR, 'sw.js'), 'utf8');
 
 // index.html's own <script> tags either point at a CDN (Leaflet, Chart.js,
 // Socket.IO — README: "كلها عبر CDN ... لا React ولا خطوة بناء") or at the
@@ -282,19 +283,58 @@ function buildFetchStub() {
   };
 }
 
+// Shaped exactly like GET /api/live and GET /api/live/hub (live.routes.js,
+// settings.service.js#getLiveChannel, liveHub.service.js#getHub).
+const LIVE_CHANNEL_URL = 'https://www.youtube.com/@aarasna';
+const LIVE_SHARE_URL = 'https://munasbat.example/live';
+const LIVE_EMBED_URL = 'https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1&playsinline=1';
+const LIVE_ACTIVE = { title: 'حلقة الليلة', until: '2099-01-01T00:00:00.000Z', url: 'https://www.youtube.com/live/abcdefghijk', active: true };
+
+function buildLiveHubFixture(overrides = {}) {
+  return {
+    success: true,
+    profile_url: LIVE_CHANNEL_URL,
+    live_channel_url: LIVE_CHANNEL_URL,
+    live: LIVE_ACTIVE,
+    embed_url: LIVE_EMBED_URL,
+    today: {
+      id: 42,
+      date: '2026-09-26',
+      topic: 'أعراس الصيف',
+      episode_question: 'ما أجمل عرس حضرته؟',
+      poll: { question: 'ما رأيك؟', options: ['نعم', 'لا'], my_vote: null }
+    },
+    previous: {
+      date: '2026-09-25',
+      poll_question: 'سؤال الأمس',
+      options: ['أ', 'ب'],
+      results: [{ index: 0, label: 'أ', votes: 3, percentage: 75 }, { index: 1, label: 'ب', votes: 1, percentage: 25 }],
+      total_votes: 4
+    },
+    share_url: LIVE_SHARE_URL,
+    ...overrides
+  };
+}
+
 /**
- * buildFetchStub() with GET /api/live and/or GET /api/stories overridden —
- * for the TikTok live entry tests (LIVE-04a). Falls back to buildFetchStub()
- * for everything else so DOMContentLoaded's other startup fetches still work.
+ * buildFetchStub() with the live endpoints (and GET /api/stories) overridden,
+ * recording every call's path, method, headers and body so a test can assert
+ * which ones carried a token. `hub` may be a function for a sequence of
+ * answers; `vote(options)` answers POST /api/live/episodes/:id/vote.
  */
-function buildLiveFetchStub({ live, stories } = {}) {
+function buildLiveHubFetchStub({ live, hub, vote, stories } = {}) {
   const base = buildFetchStub();
-  return async (url, options = {}) => {
+  const calls = [];
+  const fetchFn = async (url, options = {}) => {
     const requestPath = String(url).split('?')[0];
+    calls.push({ path: requestPath, method: options.method || 'GET', headers: options.headers || {}, body: options.body });
     if (live && requestPath === '/api/live') return jsonResponse(live);
+    if (hub && requestPath === '/api/live/hub') return jsonResponse(typeof hub === 'function' ? hub() : hub);
+    if (vote && /^\/api\/live\/episodes\/\d+\/vote$/.test(requestPath)) return vote(options);
     if (stories && requestPath === '/api/stories') return jsonResponse(stories);
     return base(url, options);
   };
+  return { fetchFn, calls };
 }
 
 /** A Leaflet stand-in — every call chains, nothing touches a real canvas/network. */
@@ -951,227 +991,350 @@ async function run() {
     assert.ok(posterEntry.name.endsWith('.jpg'), `expected the filename to end in .jpg, got "${posterEntry.name}"`);
   });
 
-  console.log('\nTikTok live entry — pinned bubble + permanent entry (LIVE-04a)');
+  console.log('\nLive broadcast — permanent entry, live section, app poll');
 
-  await test('nothing configured (profile_url null, live null) renders no bubble in either stories container', async () => {
+  await test('both live buttons are visible with no hidden attribute, even with a channel set and live = null, and no story-strip bubble exists', async () => {
     const dom = buildEnv();
     await flushBoot();
-    dom.window.fetch = buildLiveFetchStub({ live: { success: true, profile_url: null, live: null } });
-    await dom.window.fetchTikTokLive();
+    const doc = dom.window.document;
+    const headerBtn = doc.getElementById('liveEntryBtn');
+    const floatingBtn = doc.getElementById('floatingLiveEntryBtn');
+    assert.ok(headerBtn && floatingBtn, 'expected both entry buttons in the markup');
+    assert.strictEqual(headerBtn.hasAttribute('hidden'), false, 'the header button must not ship hidden');
+    assert.strictEqual(floatingBtn.hasAttribute('hidden'), false, 'the floating button must not ship hidden');
 
-    const container = dom.window.document.getElementById('storiesContainer');
-    const drawerContainer = dom.window.document.getElementById('drawerStoriesContainer');
-    assert.strictEqual(container.querySelector('.tiktok-live-item'), null, 'expected no bubble in the main stories strip when nothing is configured');
-    assert.strictEqual(drawerContainer.querySelector('.tiktok-live-item'), null, 'expected no bubble in the drawer stories strip when nothing is configured');
-  });
+    for (const live of [
+      { success: true, profile_url: 'https://www.youtube.com/@aarasna', live: null, embed_url: null, live_channel_url: 'https://www.youtube.com/@aarasna' },
+      { success: true, profile_url: null, live: null, embed_url: null, live_channel_url: null }
+    ]) {
+      dom.window.fetch = buildLiveHubFetchStub({ live }).fetchFn;
+      await dom.window.fetchLiveStatus();
+      assert.strictEqual(headerBtn.hasAttribute('hidden'), false, 'no GET /api/live answer may hide the header button');
+      assert.strictEqual(floatingBtn.hasAttribute('hidden'), false, 'no GET /api/live answer may hide the floating button');
+      assert.ok(headerBtn.textContent.includes('البث المباشر'), 'the header button is labelled «البث المباشر»');
+      assert.strictEqual(floatingBtn.getAttribute('title'), 'البث المباشر');
+      assert.strictEqual(doc.getElementById('liveEntryBadge').hidden, true, 'no badge without a live');
+      assert.strictEqual(doc.getElementById('floatingLiveEntryBadge').hidden, true, 'no floating badge without a live');
+    }
 
-  await test('the permanent header/floating-bar entry stays hidden with nothing configured, and appears once a channel is set', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-
-    const headerBtn = dom.window.document.getElementById('tiktokLiveBtn');
-    const floatingBtn = dom.window.document.getElementById('floatingTiktokLiveBtn');
-    assert.strictEqual(headerBtn.hidden, true, 'expected the header entry to ship hidden in the markup, so it never flashes in before a channel is known');
-    assert.strictEqual(floatingBtn.hidden, true, 'expected the floating-bar entry to ship hidden in the markup for the same reason');
-
-    dom.window.fetch = buildLiveFetchStub({
-      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null }
-    });
-    await dom.window.fetchTikTokLive();
-
-    assert.strictEqual(headerBtn.hidden, false, 'expected the header entry to appear once a channel is configured');
-    assert.strictEqual(floatingBtn.hidden, false, 'expected the floating-bar entry to appear once a channel is configured');
-
-    // ...and back again: nothing exercised the hiding direction, so a
-    // one-way toggle would have passed. Clearing the channel must remove the
-    // entry, not leave a button that opens a page the server now 404s.
-    dom.window.fetch = buildLiveFetchStub({ live: { success: true, profile_url: null, live: null } });
-    await dom.window.fetchTikTokLive();
-
-    assert.strictEqual(headerBtn.hidden, true, 'expected the header entry to disappear again once the owner clears the channel');
-    assert.strictEqual(floatingBtn.hidden, true, 'expected the floating-bar entry to disappear again too');
-  });
-
-  await test('a configured channel with no live shows the bubble WITHOUT any live treatment', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    dom.window.fetch = buildLiveFetchStub({
-      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null }
-    });
-    await dom.window.fetchTikTokLive();
-
-    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
-    assert.ok(bubble, 'expected a bubble to exist once a channel is configured');
-    const ring = bubble.querySelector('.story-avatar-ring');
-    assert.ok(ring, 'expected the shared story-avatar-ring element inside the bubble');
-    assert.strictEqual(ring.classList.contains('live'), false, 'expected no "live" class when there is no active live');
-    assert.strictEqual(bubble.getAttribute('title'), null, 'expected no title tooltip when there is no live topic to show');
-  });
-
-  await test('an ACTIVE live shows the bubble WITH the shared red live treatment and the topic as its title', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    dom.window.fetch = buildLiveFetchStub({
-      live: {
-        success: true,
-        profile_url: 'https://www.tiktok.com/@a3rasna',
-        live: { title: 'حفلة زفاف مباشرة', until: '2099-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: true }
-      }
-    });
-    await dom.window.fetchTikTokLive();
-
-    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
-    assert.ok(bubble, 'expected a bubble to exist while a live is active');
-    const ring = bubble.querySelector('.story-avatar-ring');
-    assert.strictEqual(ring.classList.contains('live'), true, 'expected the SAME "live" class the strip already uses for a live story, reused not reinvented');
-    assert.strictEqual(bubble.getAttribute('title'), 'حفلة زفاف مباشرة', 'expected the live topic to be exposed as the bubble title attribute for hover');
-  });
-
-  await test('an EXPIRED live (active:false from the server) keeps the bubble but drops the live treatment', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    // until is in the past AND the server already says active:false — the
-    // client must trust active as-is, never recompute it from until itself
-    // (CLAUDE.md: the server's active is the sole authority for this client).
-    dom.window.fetch = buildLiveFetchStub({
-      live: {
-        success: true,
-        profile_url: 'https://www.tiktok.com/@a3rasna',
-        live: { title: 'حفلة انتهت', until: '2020-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: false }
-      }
-    });
-    await dom.window.fetchTikTokLive();
-
-    const bubble = dom.window.document.querySelector('#storiesContainer .tiktok-live-item');
-    assert.ok(bubble, 'expected the bubble to remain — the channel itself is still configured');
-    const ring = bubble.querySelector('.story-avatar-ring');
-    assert.strictEqual(ring.classList.contains('live'), false, 'expected NO live class once the server reports active:false, even though a title/until are still present in the payload');
-  });
-
-  await test('the pinned bubble does not shift story indices — the first REAL story still opens index 0', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    const STORIES_FIXTURE = [
-      { id: 1, title: 'قصة أولى', image: 'https://example.test/s1.jpg', isLive: false },
-      { id: 2, title: 'قصة ثانية', image: 'https://example.test/s2.jpg', isLive: false }
-    ];
-    dom.window.fetch = buildLiveFetchStub({
-      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null },
-      stories: { success: true, stories: STORIES_FIXTURE }
-    });
-    await dom.window.fetchTikTokLive();
+    dom.window.fetch = buildLiveHubFetchStub({
+      stories: { success: true, stories: [{ id: 1, title: 'قصة أولى', image: 'https://example.test/s1.jpg', isLive: false }] }
+    }).fetchFn;
     await dom.window.fetchStories();
-
-    const container = dom.window.document.getElementById('storiesContainer');
-    const items = container.querySelectorAll('.story-item');
-    assert.strictEqual(items.length, 3, 'expected the pinned bubble plus the 2 real stories, three items total');
-    assert.ok(items[0].classList.contains('tiktok-live-item'), 'expected the pinned bubble to be the first item');
-    assert.ok(
-      items[1].getAttribute('onclick').includes('openStoryViewer(0)'),
-      'expected the first REAL story to still carry index 0, unshifted by the bubble ahead of it'
-    );
-
-    dom.window.openStoryViewer(0);
-    assert.strictEqual(
-      dom.window.document.getElementById('storyViewerTitle').textContent,
-      'قصة أولى',
-      'expected index 0 to resolve to the first REAL story (allStories[0]), proving the bubble was never pushed into that array'
-    );
-  });
-
-  await test('the strip renders identically whether GET /api/stories or GET /api/live resolves first', async () => {
-    const STORIES_FIXTURE = [{ id: 9, title: 'قصة', image: 'https://example.test/s9.jpg', isLive: false }];
-    const liveResponse = { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null };
-
-    const domA = buildEnv();
-    await flushBoot();
-    domA.window.fetch = buildLiveFetchStub({ live: liveResponse, stories: { success: true, stories: STORIES_FIXTURE } });
-    await domA.window.fetchStories();
-    await domA.window.fetchTikTokLive();
-
-    const domB = buildEnv();
-    await flushBoot();
-    domB.window.fetch = buildLiveFetchStub({ live: liveResponse, stories: { success: true, stories: STORIES_FIXTURE } });
-    await domB.window.fetchTikTokLive();
-    await domB.window.fetchStories();
-
-    const htmlA = domA.window.document.getElementById('storiesContainer').innerHTML;
-    const htmlB = domB.window.document.getElementById('storiesContainer').innerHTML;
-    assert.strictEqual(htmlA, htmlB, 'expected the exact same final strip regardless of which request landed first');
-  });
-
-  await test('a live topic containing a script/img payload is escaped, never parsed as markup', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    // يحمل علامة اقتباس مزدوجة عمداً: بدونها لا يستطيع النصّ الخروج من
-    // title="…" مهما فعلنا، فكان الاختبار ينجح حتى لو حُذف escapeHtml كلياً.
-    const maliciousTitle = '" onmouseover=alert(1) x="<img src=x onerror=alert(1)><script>window.__xss=true</script>';
-    dom.window.fetch = buildLiveFetchStub({
-      live: {
-        success: true,
-        profile_url: 'https://www.tiktok.com/@a3rasna',
-        live: { title: maliciousTitle, until: '2099-01-01T00:00:00.000Z', url: 'https://www.tiktok.com/@a3rasna/live', active: true }
-      }
-    });
-    await dom.window.fetchTikTokLive();
-
-    const container = dom.window.document.getElementById('storiesContainer');
-    assert.strictEqual(container.querySelector('img[src="x"]'), null, 'expected no <img> element created from the live topic payload');
-    assert.strictEqual(container.querySelector('script'), null, 'expected no <script> element created from the live topic payload');
-    assert.strictEqual(dom.window.__xss, undefined, 'expected the script payload to never actually execute');
-
-    const bubble = container.querySelector('.tiktok-live-item');
-    assert.strictEqual(
-      bubble.getAttribute('title'), maliciousTitle,
-      'expected the raw text to survive only as an attribute VALUE (HTML-decoded on read-back, as any attribute is) never as parsed child markup'
-    );
-    assert.strictEqual(
-      bubble.getAttribute('onmouseover'), null,
-      'the quote in the topic must not close title="…" and graft a new handler onto the element'
-    );
-    assert.strictEqual(
-      bubble.getAttribute('onclick'), 'openTikTokLive(); toggleTopChrome(false);',
-      'the bubble must keep exactly its own handler — no extra attribute injected from the topic'
-    );
-  });
-
-  await test('opening the top-chrome drawer keeps the pinned bubble — the drawer strip is not rebuilt from allStories alone', async () => {
-    const dom = buildEnv();
-    await flushBoot();
-    const STORIES_FIXTURE = [{ id: 1, title: 'قصة أولى', image: 'https://example.test/s1.jpg', isLive: false }];
-    dom.window.fetch = buildLiveFetchStub({
-      live: { success: true, profile_url: 'https://www.tiktok.com/@a3rasna', live: null },
-      stories: { success: true, stories: STORIES_FIXTURE }
-    });
-    await dom.window.fetchTikTokLive();
-    await dom.window.fetchStories();
-
-    const drawer = dom.window.document.getElementById('drawerStoriesContainer');
-    assert.ok(drawer.querySelector('.tiktok-live-item'), 'precondition: the bubble is in the drawer strip after the initial render');
-
     dom.window.toggleTopChrome(true);
-
-    assert.ok(
-      drawer.querySelector('.tiktok-live-item'),
-      'opening the drawer must not wipe the pinned bubble — toggleTopChrome used to keep its own copy of the story template and rebuild from allStories alone'
-    );
-    assert.strictEqual(
-      drawer.querySelectorAll('.story-item').length, 2,
-      'expected the bubble plus the one real story, not the story on its own'
-    );
-    assert.ok(
-      drawer.querySelectorAll('.story-item')[1].getAttribute('onclick').includes('openStoryViewer(0)'),
-      'and the real story in the drawer must still carry index 0, unshifted by the bubble ahead of it'
-    );
+    assert.strictEqual(doc.querySelector('.tiktok-live-item'), null, 'the story-strip bubble is gone for good');
+    const items = doc.querySelectorAll('#storiesContainer .story-item');
+    assert.strictEqual(items.length, 1, 'the strip holds the real stories only');
+    assert.ok(items[0].getAttribute('onclick').includes('openStoryViewer(0)'), 'the first real story keeps index 0');
+    assert.strictEqual(doc.querySelectorAll('#drawerStoriesContainer .story-item').length, 1, 'the drawer strip mirrors the main one');
   });
 
-  await test('tiktokLiveShareUrl() returns <origin>/live for the default empty apiBase', () => {
+  await test('the «مباشر» badge shows on both buttons only while live.active, and turns itself off at until', async () => {
     const dom = buildEnv();
-    const expected = `${dom.window.location.origin}/live`;
-    assert.strictEqual(
-      dom.window.tiktokLiveShareUrl(), expected,
-      'expected the share URL helper to derive <origin>/live when apiBase is empty (web/config.js default)'
-    );
+    await flushBoot();
+    const doc = dom.window.document;
+    const badge = doc.getElementById('liveEntryBadge');
+    const floatingBadge = doc.getElementById('floatingLiveEntryBadge');
+
+    dom.window.fetch = buildLiveHubFetchStub({ live: { success: true, profile_url: null, live: LIVE_ACTIVE, embed_url: null, live_channel_url: null } }).fetchFn;
+    await dom.window.fetchLiveStatus();
+    assert.strictEqual(badge.hidden, false, 'expected the header badge while live.active');
+    assert.strictEqual(floatingBadge.hidden, false, 'expected the floating badge while live.active');
+    assert.ok(badge.textContent.includes('مباشر'));
+    assert.ok(doc.getElementById('liveEntryBtn').classList.contains('is-live'));
+
+    dom.window.fetch = buildLiveHubFetchStub({
+      live: { success: true, profile_url: null, live: { ...LIVE_ACTIVE, until: '2020-01-01T00:00:00.000Z', active: false }, embed_url: null, live_channel_url: null }
+    }).fetchFn;
+    await dom.window.fetchLiveStatus();
+    assert.strictEqual(badge.hidden, true, 'active:false from the server drops the badge');
+    assert.strictEqual(floatingBadge.hidden, true);
+
+    const soon = new Date(Date.now() + 60).toISOString();
+    dom.window.fetch = buildLiveHubFetchStub({
+      live: { success: true, profile_url: null, live: { ...LIVE_ACTIVE, until: soon, active: true }, embed_url: null, live_channel_url: null }
+    }).fetchFn;
+    await dom.window.fetchLiveStatus();
+    assert.strictEqual(badge.hidden, false, 'precondition: the badge is on before until');
+    await waitFor(() => badge.hidden, { timeout: 2000 });
+    assert.strictEqual(badge.hidden, true, 'expected the badge to turn off locally at until, with no event and no refetch');
+    assert.strictEqual(floatingBadge.hidden, true);
+  });
+
+  await test('embed_url → an in-page iframe with referrerpolicy and allowfullscreen, plus «افتح في يوتيوب»; closing removes it', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture() }).fetchFn;
+
+    dom.window.openLiveSection();
+    await waitFor(() => doc.querySelector('#livePlayer iframe'));
+    const frame = doc.querySelector('#livePlayer iframe');
+    assert.ok(frame, 'expected an iframe for an embeddable live');
+    assert.strictEqual(frame.getAttribute('src'), LIVE_EMBED_URL);
+    assert.strictEqual(frame.getAttribute('referrerpolicy'), 'strict-origin-when-cross-origin');
+    assert.ok(frame.hasAttribute('allowfullscreen'), 'expected allowfullscreen');
+    const external = doc.querySelector('#livePlayer .live-external-link');
+    assert.ok(external && external.textContent.includes('افتح في يوتيوب'));
+    assert.strictEqual(external.getAttribute('href'), LIVE_ACTIVE.url);
+    assert.strictEqual(external.getAttribute('target'), '_blank');
+    assert.strictEqual(doc.querySelector('#livePlayer .live-go-btn'), null, 'no «ادخل البث» button when the live plays in the page');
+
+    dom.window.closeLiveSection();
+    assert.strictEqual(doc.getElementById('liveModal').style.display, 'none');
+    assert.strictEqual(doc.querySelector('#liveModal iframe'), null, 'closing must remove the iframe so the audio stops');
+  });
+
+  await test('no embed_url with a live → «ادخل البث» to <share_url>/go and no iframe; no live → «لا يوجد بث الآن» + «قناتنا»', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture({ embed_url: null }) }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.querySelector('#livePlayer .live-go-btn'));
+    const go = doc.querySelector('#livePlayer .live-go-btn');
+    assert.ok(go.textContent.includes('ادخل البث'));
+    assert.strictEqual(go.getAttribute('href'), `${LIVE_SHARE_URL}/go`);
+    assert.strictEqual(go.getAttribute('target'), '_blank');
+    assert.strictEqual(doc.querySelector('#liveModal iframe'), null, 'no iframe for a link that cannot be embedded');
+    assert.ok(doc.getElementById('livePlayer').textContent.includes(LIVE_ACTIVE.title), 'the card carries the live title');
+    dom.window.closeLiveSection();
+
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture({ live: null, embed_url: null }) }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.getElementById('livePlayer').textContent.includes('لا يوجد بث الآن'));
+    const channel = doc.querySelector('#livePlayer .live-go-btn');
+    assert.ok(channel && channel.textContent.includes('قناتنا'));
+    assert.strictEqual(channel.getAttribute('href'), LIVE_CHANNEL_URL);
+    assert.strictEqual(doc.querySelector('#liveModal iframe'), null);
+  });
+
+  await test('the section shows topic, episode question and yesterday\'s result, hides each when empty, and escapes all of them', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    const payload = '<img src=x onerror="window.__xss=true">';
+    dom.window.fetch = buildLiveHubFetchStub({
+      hub: buildLiveHubFixture({
+        today: { id: 42, date: '2026-09-26', topic: payload, episode_question: 'ما أجمل عرس حضرته؟', poll: null }
+      })
+    }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => !doc.getElementById('liveInfo').hidden);
+
+    const info = doc.getElementById('liveInfo');
+    assert.ok(info.textContent.includes(payload), 'the topic is shown as text');
+    assert.ok(info.textContent.includes('ما أجمل عرس حضرته؟'));
+    assert.strictEqual(doc.querySelector('#liveModal img'), null, 'no element is parsed out of the topic');
+    assert.strictEqual(dom.window.__xss, undefined);
+    assert.strictEqual(doc.getElementById('livePoll').hidden, true, 'no poll today → the app poll is hidden');
+
+    const previous = doc.getElementById('livePrevious');
+    assert.strictEqual(previous.hidden, false);
+    assert.ok(previous.textContent.includes('نتيجة نقاش الأمس'));
+    assert.ok(previous.textContent.includes('سؤال الأمس'));
+    assert.ok(previous.textContent.includes('75%') && previous.textContent.includes('25%'), 'yesterday\'s final percentages');
+
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture({ today: null, previous: null }) }).fetchFn;
+    await dom.window.fetchLiveHub();
+    assert.strictEqual(doc.getElementById('liveInfo').hidden, false, 'the live title still shows above an embedded player');
+    assert.strictEqual(doc.getElementById('livePrevious').hidden, true, 'previous = null → the footer is hidden');
+    assert.strictEqual(doc.getElementById('livePoll').hidden, true);
+  });
+
+  await test('a vote without a token opens the login modal and sends no request', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    const stub = buildLiveHubFetchStub({ hub: buildLiveHubFixture(), vote: () => jsonResponse({ success: true }) });
+    dom.window.fetch = stub.fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.querySelector('#livePoll .live-poll-option'));
+
+    doc.querySelectorAll('#livePoll .live-poll-option')[1].click();
+    await delay(20);
+    assert.strictEqual(doc.getElementById('authModal').style.display, 'flex', 'expected the existing login modal');
+    assert.strictEqual(stub.calls.filter(c => c.method === 'POST').length, 0, 'no vote request may leave without a session');
+    assert.strictEqual(doc.getElementById('liveModal').style.display, 'flex', 'the live section stays open underneath');
+  });
+
+  await test('after voting the bars show percentages and a count, and live_poll_<id> updates them — never before voting', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const doc = dom.window.document;
+    const socketHandlers = {};
+    dom.window.io = () => ({
+      on(event, handler) { socketHandlers[event] = handler; },
+      off(event) { delete socketHandlers[event]; },
+      emit() {}
+    });
+    dom.window.initSocket();
+
+    const stub = buildLiveHubFetchStub({
+      hub: buildLiveHubFixture(),
+      vote: () => jsonResponse({
+        success: true,
+        poll: {
+          question: 'ما رأيك؟', options: ['نعم', 'لا'], my_vote: 1,
+          results: [{ index: 0, label: 'نعم', votes: 1, percentage: 50 }, { index: 1, label: 'لا', votes: 1, percentage: 50 }],
+          total_votes: 2
+        }
+      })
+    });
+    dom.window.fetch = stub.fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.querySelector('#livePoll .live-poll-option'));
+    assert.strictEqual(typeof socketHandlers.live_poll_42, 'function', 'expected a subscription to today\'s live_poll_42');
+
+    socketHandlers.live_poll_42({ results: [{ index: 0, label: 'نعم', votes: 5, percentage: 100 }, { index: 1, label: 'لا', votes: 0, percentage: 0 }], total_votes: 5 });
+    assert.strictEqual(doc.querySelector('#livePoll .live-poll-bar'), null, 'others\' votes stay hidden until this user votes');
+
+    doc.querySelectorAll('#livePoll .live-poll-option')[1].click();
+    await waitFor(() => doc.querySelector('#livePoll .live-poll-bar'));
+
+    const post = stub.calls.find(c => c.method === 'POST');
+    assert.ok(post, 'expected the vote POST');
+    assert.strictEqual(post.path, '/api/live/episodes/42/vote');
+    assert.strictEqual(post.headers.Authorization, 'Bearer test-token-web-dom', 'the vote goes with auth:true');
+    assert.deepStrictEqual(JSON.parse(post.body), { option_index: 1 });
+
+    const poll = doc.getElementById('livePoll');
+    assert.strictEqual(poll.querySelectorAll('.live-poll-bar').length, 2);
+    assert.strictEqual(poll.querySelector('.live-poll-option'), null, 'the options give way to the results');
+    assert.ok(poll.textContent.includes('50%'));
+    assert.ok(poll.textContent.includes('عدد المشاركين: 2'));
+    assert.ok(poll.querySelectorAll('.live-poll-bar')[1].classList.contains('is-mine'), 'the user\'s own choice is marked');
+
+    socketHandlers.live_poll_42({
+      results: [{ index: 0, label: 'نعم', votes: 1, percentage: 33 }, { index: 1, label: 'لا', votes: 2, percentage: 67 }],
+      total_votes: 3
+    });
+    assert.ok(poll.textContent.includes('67%') && poll.textContent.includes('33%'), 'expected the live update to redraw the bars');
+    assert.ok(poll.textContent.includes('عدد المشاركين: 3'));
+    assert.strictEqual(poll.querySelector('.live-poll-bar-fill').getAttribute('style'), 'width:33%');
+
+    dom.window.closeLiveSection();
+    assert.strictEqual(socketHandlers.live_poll_42, undefined, 'closing the section drops the poll subscription');
+  });
+
+  await test('a 409 «already voted» shows the message and re-reads the hub to show the results', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const doc = dom.window.document;
+    let hubReads = 0;
+    const votedHub = buildLiveHubFixture({
+      today: {
+        id: 42, date: '2026-09-26', topic: null, episode_question: null,
+        poll: { question: 'ما رأيك؟', options: ['نعم', 'لا'], my_vote: 0, results: [{ index: 0, label: 'نعم', votes: 1, percentage: 100 }, { index: 1, label: 'لا', votes: 0, percentage: 0 }], total_votes: 1 }
+      }
+    });
+    dom.window.fetch = buildLiveHubFetchStub({
+      hub: () => (hubReads++ === 0 ? buildLiveHubFixture() : votedHub),
+      vote: () => jsonResponse({ success: false, message: 'صوّتَّ مسبقاً في نقاش اليوم' }, { status: 409 })
+    }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.querySelector('#livePoll .live-poll-option'));
+    doc.querySelector('#livePoll .live-poll-option').click();
+    await waitFor(() => doc.querySelector('#livePoll .live-poll-bar'));
+    assert.strictEqual(hubReads, 2, 'expected exactly one re-read after the 409');
+    assert.ok(doc.getElementById('livePoll').textContent.includes('100%'));
+    assert.ok(doc.body.textContent.includes('صوّتَّ مسبقاً في نقاش اليوم'), 'the server\'s Arabic message reaches the user');
+  });
+
+  await test('GET /api/live/hub carries the token only when one exists; GET /api/live never does', async () => {
+    for (const loggedIn of [false, true]) {
+      const dom = buildEnv({ loggedIn });
+      await flushBoot();
+      const stub = buildLiveHubFetchStub({ hub: buildLiveHubFixture(), live: { success: true, profile_url: null, live: null, embed_url: null, live_channel_url: null } });
+      dom.window.fetch = stub.fetchFn;
+      await dom.window.fetchLiveStatus();
+      dom.window.openLiveSection();
+      await waitFor(() => stub.calls.some(c => c.path === '/api/live/hub'));
+      const hubCall = stub.calls.find(c => c.path === '/api/live/hub');
+      const liveCall = stub.calls.find(c => c.path === '/api/live');
+      if (loggedIn) {
+        assert.strictEqual(hubCall.headers.Authorization, 'Bearer test-token-web-dom', 'a signed-in reader sends the token so my_vote comes back');
+      } else {
+        assert.strictEqual(hubCall.headers.Authorization, undefined, 'a visitor reads the hub without a token');
+      }
+      assert.strictEqual(liveCall.headers.Authorization, undefined, 'GET /api/live is public');
+    }
+  });
+
+  await test('a live_status signal re-fetches GET /api/live (and the hub while the section is open)', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const socketHandlers = {};
+    dom.window.io = () => ({ on(event, handler) { socketHandlers[event] = handler; }, off() {}, emit() {} });
+    dom.window.initSocket();
+    assert.strictEqual(typeof socketHandlers.live_status, 'function', 'expected a live_status handler');
+
+    const stub = buildLiveHubFetchStub({
+      live: { success: true, profile_url: null, live: LIVE_ACTIVE, embed_url: null, live_channel_url: null },
+      hub: buildLiveHubFixture()
+    });
+    dom.window.fetch = stub.fetchFn;
+    socketHandlers.live_status({});
+    await waitFor(() => !dom.window.document.getElementById('liveEntryBadge').hidden);
+    assert.strictEqual(stub.calls.filter(c => c.path === '/api/live').length, 1);
+    assert.strictEqual(stub.calls.filter(c => c.path === '/api/live/hub').length, 0, 'no hub read while the section is closed');
+    assert.strictEqual(dom.window.document.getElementById('liveEntryBadge').hidden, false, 'the refetched state drives the badge');
+
+    dom.window.openLiveSection();
+    await waitFor(() => stub.calls.filter(c => c.path === '/api/live/hub').length === 1);
+    socketHandlers.live_status({});
+    await waitFor(() => stub.calls.filter(c => c.path === '/api/live/hub').length === 2);
+    assert.strictEqual(stub.calls.filter(c => c.path === '/api/live/hub').length, 2, 'an open section re-reads the hub too');
+  });
+
+  await test('a live_started item in the notification center opens the live section', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const doc = dom.window.document;
+    const stub = buildLiveHubFetchStub({ hub: buildLiveHubFixture() });
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/notifications') {
+        return jsonResponse({ success: true, notifications: [{ id: 9, type: 'live_started', event_id: null, title: 'بدأ البث المباشر: حلقة الليلة', body: 'تابعونا الآن', is_read: false }] });
+      }
+      if (requestPath === '/api/notifications/9/read') return jsonResponse({ success: true });
+      return stub.fetchFn(url, options);
+    };
+    await dom.window.fetchNotifications();
+    dom.window.toggleNotificationsPanel();
+    const item = doc.querySelector('#notificationsList .event-card');
+    assert.ok(item, 'expected the notification to render');
+    item.click();
+    await waitFor(() => doc.getElementById('liveModal').style.display === 'flex');
+    assert.strictEqual(doc.getElementById('liveModal').style.display, 'flex', 'expected the live section to open');
+    assert.strictEqual(doc.getElementById('notificationsModal').style.display, 'none', 'the notification center closes behind it');
+  });
+
+  await test('?live=1 (the Web Push click target) opens the live section on load', async () => {
+    const dom = buildEnv({ url: 'http://localhost/?live=1' });
+    await flushBoot();
+    assert.strictEqual(dom.window.document.getElementById('liveModal').style.display, 'flex');
+    assert.ok(SW_JS.includes("'/?live=1'"), 'sw.js must route a live_started push to /?live=1');
+  });
+
+  await test('the share button shares share_url through the same path as an event share', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    let shared = null;
+    Object.defineProperty(dom.window.navigator, 'share', { value: async data => { shared = data; }, configurable: true });
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture() }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => dom.window.document.querySelector('#livePlayer iframe'));
+    await dom.window.shareLiveSection();
+    assert.ok(shared, 'expected navigator.share to be called');
+    assert.strictEqual(shared.url, LIVE_SHARE_URL);
+    assert.strictEqual(shared.title, LIVE_ACTIVE.title);
+  });
+
+  await test('no TikTok identifier or text is left in web/index.html, app.js or styles.css', () => {
+    for (const [name, text] of [['index.html', INDEX_HTML_RAW], ['app.js', APP_JS], ['styles.css', STYLES_CSS_RAW]]) {
+      assert.ok(!/tiktok|تيك توك/i.test(text), `expected no TikTok trace in web/${name}`);
+    }
   });
 
   console.log('\nPlace & kind filter — one searchable multi-select each (#85 batch 6a, stories 40-46)');

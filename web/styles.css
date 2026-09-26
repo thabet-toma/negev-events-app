@@ -311,6 +311,33 @@ body {
    .install-hint hit before it). */
 .ai-magic-btn[hidden] { display: none; }
 
+/* «البث المباشر» — ظاهر دائماً؛ الشارة البيضاء «● مباشر» داخله حين يكون البث
+   قائماً فقط (updateLiveEntryBadge). أحمر غامق يعبر 4.5:1 مع الأبيض. */
+#liveEntryBtn { background: linear-gradient(135deg, #b91c1c 0%, #7f1d1d 100%); box-shadow: 0 4px 16px rgba(185, 28, 28, 0.35); }
+#liveEntryBtn:hover { box-shadow: 0 6px 20px rgba(185, 28, 28, 0.5); }
+.live-entry-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #ffffff;
+  color: #b91c1c;
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+.live-entry-badge[hidden] { display: none; }
+.live-entry-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: liveDotPulse 1.4s ease-in-out infinite;
+}
+@keyframes liveDotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .live-entry-dot { animation: none; } }
+
 /* مودال إفصاح الدعم الفني (#85 خطوة 35 — مراجعة FIX 5) — هوية المودالات
    القائمة نفسها بدل confirm()/alert() المتصفّح، بجملة واحدة وزرّين كحدّ أقصى. */
 .support-modal-text { font-size: 0.95rem; color: var(--ink); margin-bottom: 16px; line-height: 1.6; }
@@ -428,18 +455,6 @@ body {
 }
 
 .story-avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; border: 2.5px solid var(--surface); }
-
-/* فقاعة تيك توك المثبَّتة (LIVE-04a) — .story-avatar-img أعلاه تُعطيها القياس
-   والحدّ، وهذه فقط تتوسّط الأيقونة وتلوّنها بهوية المنصّة (لا شعار تيك توك،
-   والعنصر أصلاً div لا img فلا رابط خارجي مطلقاً). */
-.tiktok-live-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--surface);
-  color: var(--sky);
-  font-size: 1.3rem;
-}
 
 .story-title {
   font-size: 0.72rem;
@@ -1694,6 +1709,74 @@ body {
   font-size: 0.88rem;
 }
 
+/* نافذة «البث المباشر» — المشغّل 16:9 ثم الحلقة ثم نقاش التطبيق ثم نتيجة الأمس. */
+.live-modal-body { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.live-status-message { text-align: center; color: var(--ink-soft); padding: 24px 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.live-status-message[hidden], .live-info[hidden], .live-block[hidden] { display: none; }
+.live-player-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000000; border-radius: var(--radius-md); overflow: hidden; }
+.live-player-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.live-external-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 0.8rem; font-weight: 700; color: var(--sky); text-decoration: none; }
+.live-player-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 22px 16px;
+  background: var(--surface-sunk);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.live-player-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; font-weight: 900; color: var(--danger); }
+.live-player-idle-icon { font-size: 1.6rem; color: var(--ink-faint); }
+.live-go-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--sky);
+  color: var(--on-sky);
+  border: none;
+  padding: 11px 26px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+.live-info { display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.live-info-title { font-size: 1rem; font-weight: 800; color: var(--ink); }
+.live-info-row { font-size: 0.9rem; color: var(--ink); }
+.live-info-row span { display: block; font-size: 0.72rem; font-weight: 800; color: var(--ink-faint); }
+.live-block { border-top: 1px solid var(--line-soft); padding-top: 12px; overflow-wrap: anywhere; }
+.live-block-title { font-size: 0.95rem; font-weight: 800; color: var(--ink); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.live-poll-question { font-size: 0.9rem; color: var(--ink-soft); margin-bottom: 10px; }
+.live-poll-options { display: flex; flex-direction: column; gap: 8px; }
+.live-poll-option {
+  width: 100%;
+  text-align: start;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-main);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.live-poll-option:hover { border-color: var(--sky); background: var(--sky-wash); }
+.live-poll-bars { display: flex; flex-direction: column; gap: 10px; }
+.live-poll-bar-head { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85rem; color: var(--ink); margin-bottom: 4px; }
+.live-poll-bar-pct { font-weight: 800; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.live-poll-bar-track { height: 8px; background: var(--surface-sunk); border-radius: var(--radius-pill); overflow: hidden; }
+.live-poll-bar-fill { height: 100%; background: var(--ink-faint); border-radius: var(--radius-pill); transition: width 0.3s ease; }
+.live-poll-bar.is-mine .live-poll-bar-fill { background: var(--sky); }
+.live-poll-bar.is-mine .live-poll-bar-head { font-weight: 800; }
+.live-poll-total { margin-top: 8px; font-size: 0.78rem; color: var(--ink-faint); }
+
 /* قسم الخصوصية وحسابي (تذكرة #44) — داخل تبويب النقوط، المكان الفعلي الذي
    يصل إليه المستخدم المسجَّل دخوله اليوم. */
 .privacy-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
@@ -2366,9 +2449,14 @@ body {
 
 /* .floating-icon-btn's own display:inline-flex beats the browser default
    [hidden]{display:none} at equal specificity, same class of bug as
-   .ai-magic-btn[hidden] above — #floatingTiktokLiveBtn ships hidden until
-   GET /api/live answers (LIVE-04a), so this override is load-bearing. */
+   .ai-magic-btn[hidden] above — any floating icon given [hidden] must still hide. */
 .floating-icon-btn[hidden] { display: none; }
+
+/* «البث المباشر» في الشريط العائم — الشارة .floating-badge نفسها بخطّ أصغر
+   لتتّسع لكلمة «مباشر». */
+.live-entry-floating-btn { position: relative; }
+.live-entry-floating-btn.is-live { color: #fecaca; }
+.floating-badge.live-entry-floating-badge { top: -6px; left: -10px; padding: 1px 4px; font-size: 0.55rem; }
 
 /* زرّ الهوية في الشريط العائم — أيقونة + «تسجيل الدخول/الخروج» كاملة، بارتفاع
    أزرار الأيقونات نفسها كي لا يكبر الشريط. */

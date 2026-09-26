@@ -83,14 +83,13 @@
           <i class="fa-brands fa-whatsapp"></i>
           <span>الدعم الفني</span>
         </button>
-        <!-- مدخل تيك توك أعراسنا — دائم، يظهر فقط حين يضبط المالك قناة أو
-             بثّاً (GET /api/live، خطوتا 3e4c86d وcd02762). يفتح صفحتنا /live
-             المغلَّفة في تبويب جديد، لا رابط تيك توك مباشرة («نحن الغلاف،
-             تيك توك المضيف» — LIVE-04a). مخفي حتى تجيب GET /api/live كي لا
-             يظهر ثم يختفي، بنفس نمط #supportBtn أعلاه. -->
-        <button id="tiktokLiveBtn" class="ai-magic-btn" onclick="openTikTokLive()" title="تيك توك أعراسنا" hidden>
-          <i class="fa-solid fa-video"></i>
-          <span>تيك توك أعراسنا</span>
+        <!-- «البث المباشر» — ظاهر دائماً، ولا حالة تُخفيه حتى بلا أي رابط مضبوط:
+             يفتح نافذة البث (المشغّل أو زرّ الرابط، والحلقة، ونقاش التطبيق). الشارة
+             «مباشر» وحدها تتبع live.active من GET /api/live. -->
+        <button id="liveEntryBtn" class="ai-magic-btn" onclick="openLiveSection()" title="البث المباشر">
+          <i class="fa-solid fa-tower-broadcast"></i>
+          <span>البث المباشر</span>
+          <span id="liveEntryBadge" class="live-entry-badge" hidden><span class="live-entry-dot" aria-hidden="true"></span>مباشر</span>
         </button>
         <!-- لوحة الإدارة — زرّ منفصل لدورَي admin وsuper_admin وحدهما (updateAuthUI) -->
         <a id="adminPanelBtn" class="auth-pill-btn admin-panel-btn" href="/admin.html" title="لوحة الإدارة" hidden>
@@ -145,10 +144,10 @@
         <button class="floating-icon-btn support-green-btn" onclick="handleSupportClick()" title="الدعم الفني عبر واتساب">
           <i class="fa-brands fa-whatsapp"></i>
         </button>
-        <!-- المدخل الدائم لتيك توك على الهاتف — نفس شرط إخفاء #tiktokLiveBtn
-             في الترويسة بالضبط (updateTikTokEntryVisibility، LIVE-04a). -->
-        <button id="floatingTiktokLiveBtn" class="floating-icon-btn" onclick="openTikTokLive()" title="تيك توك أعراسنا" hidden>
-          <i class="fa-solid fa-video"></i>
+        <!-- «البث المباشر» على الهاتف — نفس زرّ الترويسة ونفس شارته (updateLiveEntryBadge) -->
+        <button id="floatingLiveEntryBtn" class="floating-icon-btn live-entry-floating-btn" onclick="openLiveSection()" title="البث المباشر" aria-label="البث المباشر">
+          <i class="fa-solid fa-tower-broadcast"></i>
+          <span id="floatingLiveEntryBadge" class="floating-badge live-entry-floating-badge" hidden>مباشر</span>
         </button>
         <button id="floatingNotifBtn" class="floating-icon-btn" onclick="toggleNotificationsPanel()" title="الإشعارات" style="display:none; position:relative;">
           <i class="fa-solid fa-bell"></i>
@@ -813,6 +812,31 @@
         <input type="text" id="chatInputMessage" placeholder="اكتب تبريكتك للعريس..." required>
         <button type="submit" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL: البث المباشر — المشغّل أو زرّ الرابط، ثم الحلقة، ثم نقاش التطبيق،
+       ثم نتيجة الأمس. قبل نافذة الدخول في الترتيب كي تعلوها تلك حين يصوّت زائر. -->
+  <div id="liveModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3><i class="fa-solid fa-tower-broadcast"></i> البث المباشر</h3>
+        </div>
+        <div class="modal-header-actions">
+          <button id="liveShareBtn" class="share-event-btn" onclick="shareLiveSection()">
+            <i class="fa-solid fa-share-nodes"></i> <span>مشاركة</span>
+          </button>
+          <button class="close-modal-btn" onclick="closeLiveSection()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="live-modal-body">
+        <div id="liveStatusMessage" class="live-status-message" hidden></div>
+        <div id="livePlayer"></div>
+        <div id="liveInfo" class="live-info" hidden></div>
+        <section id="livePoll" class="live-block" hidden></section>
+        <section id="livePrevious" class="live-block" hidden></section>
+      </div>
     </div>
   </div>
 

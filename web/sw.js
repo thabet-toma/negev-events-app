@@ -32,7 +32,8 @@ self.addEventListener('push', (event) => {
     lang: 'ar',
     data: {
       notification_id: data.notification_id || null,
-      event_id: data.event_id || null
+      event_id: data.event_id || null,
+      kind: data.kind || null
     }
   };
 
@@ -43,7 +44,9 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const eventId = event.notification.data && event.notification.data.event_id;
-  const targetPath = eventId ? ('/?event_id=' + eventId) : '/';
+  // «بدأ البث المباشر» بلا مناسبة — يفتح نافذة البث في الموقع (app.js، initUrlNavigation).
+  const isLive = !eventId && event.notification.data && event.notification.data.kind === 'live_started';
+  const targetPath = eventId ? ('/?event_id=' + eventId) : (isLive ? '/?live=1' : '/');
   const targetUrl = new URL(targetPath, self.location.origin).href;
 
   event.waitUntil(
@@ -55,6 +58,10 @@ self.addEventListener('notificationclick', (event) => {
             if (eventId && 'postMessage' in target) {
               target.postMessage({ type: 'NAVIGATE_EVENT', event_id: eventId });
             } else if (eventId && 'navigate' in target) {
+              target.navigate(targetUrl);
+            } else if (isLive && 'postMessage' in target) {
+              target.postMessage({ type: 'OPEN_LIVE' });
+            } else if (isLive && 'navigate' in target) {
               target.navigate(targetUrl);
             }
           });
