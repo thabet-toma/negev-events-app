@@ -65,8 +65,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   Future<List<Story>>? _stories;
 
-  /// حالة البث للكبسة الرابعة وشارتها — `null` قبل أول ردّ أو عند فشله،
-  /// والكبسة ظاهرة وتنكبس في الحالتين.
+  /// حالة البث لزر التغذية وشارتها — `null` قبل أول ردّ أو عند فشله،
+  /// والزر ظاهر وقابل للكبس في الحالتين.
   LiveChannel? _liveChannel;
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
@@ -646,7 +646,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // الأجندة · التحديث · الدعم · البث المباشر (+ الجرس للمسجَّل)
+                          // الأجندة · التحديث · الدعم · الجرس للمسجَّل
                           Container(
                             decoration: BoxDecoration(
                               color: Colors.black.withValues(alpha: 0.60),
@@ -703,11 +703,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                   tooltip: 'الدعم الفني عبر واتساب',
                                   onPressed: () => openSupportWhatsApp(context),
                                 ),
-                                LiveButton(
-                                  channel: _liveChannel,
-                                  color: Colors.white,
-                                  onPressed: () => openLiveScreen(context),
-                                ),
                                 AnimatedBuilder(
                                   animation: auth,
                                   builder: (context, _) {
@@ -723,34 +718,62 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.60),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.25),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AnimatedBuilder(
-                              animation: _audio!,
-                              builder: (context, _) => IconButton(
-                                key: const Key('feed_mute_toggle'),
-                                icon: Icon(
-                                  _audio!.isMuted
-                                      ? Icons.volume_off_rounded
-                                      : Icons.volume_up_rounded,
-                                  color: Colors.white,
-                                  size: 20,
+                      SizedBox(
+                        width: double.infinity,
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final narrow = constraints.maxWidth < 390;
+                            final liveButton = LiveButton(
+                              channel: _liveChannel,
+                              onPressed: () => openLiveScreen(context),
+                              compact: narrow,
+                            );
+                            final audioAuth = Container(
+                              key: const Key('feed_audio_auth_container'),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.60),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.25),
                                 ),
-                                tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
-                                onPressed: _toggleMute,
                               ),
-                            ),
-                            const AuthActionButton(color: Colors.white),
-                          ],
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AnimatedBuilder(
+                                    animation: _audio!,
+                                    builder: (context, _) => IconButton(
+                                      key: const Key('feed_mute_toggle'),
+                                      constraints: BoxConstraints.tightFor(
+                                        width: narrow ? 36 : 48,
+                                        height: narrow ? 36 : 48,
+                                      ),
+                                      padding: EdgeInsets.zero,
+                                      visualDensity: VisualDensity.compact,
+                                      icon: Icon(
+                                        _audio!.isMuted
+                                            ? Icons.volume_off_rounded
+                                            : Icons.volume_up_rounded,
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                      tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
+                                      onPressed: _toggleMute,
+                                    ),
+                                  ),
+                                  AuthActionButton(
+                                    stacked: narrow,
+                                    color: Colors.white,
+                                  ),
+                                ],
+                              ),
+                            );
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [liveButton, audioAuth],
+                            );
+                          },
                         ),
                       ),
                     ],
@@ -811,10 +834,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                               tooltip: 'الدعم الفني عبر واتساب',
                               onPressed: () => openSupportWhatsApp(context),
                             ),
-                            LiveButton(
-                              channel: _liveChannel,
-                              onPressed: () => openLiveScreen(context),
-                            ),
                             const AuthActionButton(compact: true),
                             IconButton(
                               icon: const Icon(Icons.close),
@@ -823,6 +842,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                   setState(() => _showTopChrome = false),
                             ),
                           ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 4),
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: LiveButton(
+                            channel: _liveChannel,
+                            onPressed: () => openLiveScreen(context),
+                          ),
                         ),
                       ),
                       _StoriesStrip(future: _stories),

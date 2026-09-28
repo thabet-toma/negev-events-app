@@ -13,29 +13,27 @@ import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
 
-/// يفتح صفحة البث — من الكبسة الرابعة، ومن «حسابي»، ومن إشعار «بدأ البث».
+/// يفتح صفحة البث — من زر التغذية، ومن «حسابي»، ومن إشعار «بدأ البث».
 Future<void> openLiveScreen(BuildContext context) {
   return Navigator.of(context).push(
     MaterialPageRoute<void>(builder: (_) => const LiveScreen()),
   );
 }
 
-/// الكبسة الرابعة «البث المباشر» — ظاهرة وتنكبس دائماً، حتى بلا أي رابط
-/// مضبوط. [channel] من GET /api/live؛ حين يكون البث نشِطاً تظهر عليها شارة
-/// حمراء «مباشر»، وتنطفئ وحدها عند `until` بمؤقّت محلّي بلا انتظار حدث.
+/// زر «بث مباشر» — ظاهر دائماً، حتى بلا أي رابط مضبوط. [channel] من
+/// GET /api/live؛ عند نشاط البث يضيء الزر وتظهر شارة «مباشر»، ثم ينطفئ عند
+/// `until` بمؤقّت محلّي بلا انتظار حدث.
 class LiveButton extends StatefulWidget {
   const LiveButton({
     super.key,
     required this.channel,
     required this.onPressed,
-    this.color,
+    this.compact = false,
   });
 
   final LiveChannel? channel;
   final VoidCallback onPressed;
-
-  /// لون الأيقونة — أبيض فوق التغذية المظلمة، وافتراضي السمة في رأس اللوحة.
-  final Color? color;
+  final bool compact;
 
   @override
   State<LiveButton> createState() => _LiveButtonState();
@@ -89,22 +87,30 @@ class _LiveButtonState extends State<LiveButton> {
 
   @override
   Widget build(BuildContext context) {
-    // الشارة فوق الأيقونة لا بجانبها: الشريط العائم ممتلئ أصلاً على هاتف
-    // ضيّق، فلا يزيد عرض الكبسة حين يبدأ البث.
-    return IconButton(
+    return FilledButton(
       key: const Key('live_button'),
-      tooltip: 'البث المباشر',
       onPressed: widget.onPressed,
-      icon: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
+      style: FilledButton.styleFrom(
+        backgroundColor: _badgeOn ? context.c.danger : const Color(0xFF263238),
+        foregroundColor: Colors.white,
+        padding: EdgeInsets.symmetric(horizontal: widget.compact ? 4 : 14, vertical: 10),
+        minimumSize: const Size(0, 44),
+        side: BorderSide(
+          color: _badgeOn ? context.c.danger : const Color(0xFF455A64),
+          width: 2,
+        ),
+        elevation: _badgeOn ? 8 : 0,
+        shadowColor: context.c.danger,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.live_tv_rounded, size: 20, color: widget.color),
-          if (_badgeOn)
-            const Positioned(
-              top: -15,
-              child: _LiveBadge(key: Key('live_badge'), compact: true),
-            ),
+          const Text('بث مباشر'),
+          if (_badgeOn) ...[
+            SizedBox(width: widget.compact ? 4 : 8),
+            const _LiveBadge(key: Key('live_badge'), compact: true),
+          ],
         ],
       ),
     );
@@ -117,7 +123,7 @@ class _LiveBadge extends StatelessWidget {
 
   final String text;
 
-  /// أصغر فوق أيقونة الكبسة، وبحجمه العادي في بطاقة البث.
+  /// أصغر داخل زر البث، وبحجمه العادي في بطاقة البث.
   final bool compact;
 
   @override

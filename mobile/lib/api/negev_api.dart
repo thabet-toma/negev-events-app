@@ -281,7 +281,7 @@ class NegevApi {
   }
 
   /// حالة البث المباشر — GET /api/live عام بلا مصادقة، فلا `auth: true`:
-  /// الكبسة الرابعة وشارتها لا علاقة لهما بالجلسة.
+  /// زر التغذية وشارة النشاط لا علاقة لهما بالجلسة.
   Future<LiveChannel> liveChannel() async {
     final data = await _client.get('/api/live');
     return LiveChannel.fromJson(data);

@@ -7,12 +7,19 @@ import 'async_view.dart' show showMessage;
 /// زرّ الدخول/الخروج الظاهر دائماً في أعلى كل شاشة رئيسية — يتبع `AuthStore`
 /// فيتبدّل وحده عند الدخول، والخروج، وانتهاء الجلسة.
 ///
-/// `compact` أيقونة وحدها بتلميح، لشريط علوي مزدحم على هاتف ضيّق. `color`
-/// لمن يرسمه فوق التغذية المظلمة لا فوق شريط التطبيق.
+/// `compact` أيقونة وحدها بتلميح، لشريط علوي مزدحم على هاتف ضيّق.
+/// `stacked` يضع الأيقونة فوق النص في تغذية ضيّقة. `color` لمن يرسمه فوق
+/// التغذية المظلمة لا فوق شريط التطبيق.
 class AuthActionButton extends StatelessWidget {
-  const AuthActionButton({super.key, this.compact = false, this.color});
+  const AuthActionButton({
+    super.key,
+    this.compact = false,
+    this.stacked = false,
+    this.color,
+  });
 
   final bool compact;
+  final bool stacked;
   final Color? color;
 
   Future<void> _signIn(BuildContext context) async {
@@ -67,6 +74,28 @@ class AuthActionButton extends StatelessWidget {
             icon: icon,
             color: color,
             onPressed: onPressed,
+          );
+        }
+        if (stacked) {
+          return SizedBox(
+            width: 100,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: color,
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: onPressed,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(signedIn ? Icons.logout : Icons.login, size: 18),
+                  const SizedBox(height: 2),
+                  Text(label, style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
           );
         }
         return TextButton.icon(
