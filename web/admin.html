@@ -165,6 +165,9 @@
         <button class="admin-tab-btn" id="tabVillagesBtn" data-tab="tabVillages" onclick="switchAdminTab('tabVillages')" style="display:none;">
           <i class="fa-solid fa-mountain-city"></i> القرى
         </button>
+        <button class="admin-tab-btn" id="tabTownsBtn" data-tab="tabTowns" onclick="switchAdminTab('tabTowns')" style="display:none;">
+          <i class="fa-solid fa-map-location-dot"></i> البلدات والمحافظات
+        </button>
         <button class="admin-tab-btn" id="tabServiceCategoriesBtn" data-tab="tabServiceCategories" onclick="switchAdminTab('tabServiceCategories')" style="display:none;">
           <i class="fa-solid fa-layer-group"></i> فئات الخدمات
         </button>
@@ -197,6 +200,8 @@
           <div class="admin-search-box">
             <input type="text" id="adminEventSearch" placeholder="بحث باسم العريس، العشيرة، البلدة..." oninput="handleAdminEventSearch()">
           </div>
+          <!-- فلتر بلدة مطابِق حرفياً — يضعه زرّ «عرض المناسبات بلا بلدة» في تبويب البلدات -->
+          <button type="button" class="admin-btn-ghost" id="adminEventsTownFilterChip" style="display:none;" onclick="setAdminEventsTownFilter('')"></button>
         </div>
 
         <div id="adminEventsList" class="admin-events-grid"></div>
@@ -630,6 +635,71 @@
                 <i class="fa-solid fa-check"></i> حفظ القرية
               </button>
               <button type="button" class="btn-reject" onclick="closeVillageForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB: TOWNS & REGIONS — سوبر أدمن حصراً (TWN-4) -->
+      <section id="tabTowns" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-map-location-dot"></i> البلدات والمحافظات</h2>
+            <p>كل بلدة تحتاج إحداثيات حقيقية لدبّوسها على الخريطة. بلدة لها مناسبات لا تُحذف بل تُعطَّل، واسمها لا يتغيّر بعد أول استعمال</p>
+          </div>
+          <div class="pane-controls-bar">
+            <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openTownForm()">
+              <i class="fa-solid fa-plus"></i> بلدة جديدة
+            </button>
+          </div>
+          <div id="townsRegionsList"></div>
+        </div>
+
+        <div class="pane-box" id="townFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="townFormTitle"><i class="fa-solid fa-pen"></i> بلدة جديدة</h2>
+          </div>
+          <form id="townForm" class="admin-form" onsubmit="handleTownSubmit(event)">
+            <input type="hidden" id="twnId">
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم البلدة *</label>
+                <input type="text" id="twnName" required maxlength="100">
+              </div>
+              <div class="form-group half">
+                <label>المحافظة *</label>
+                <select id="twnRegionId"></select>
+              </div>
+            </div>
+            <p class="hint-text" id="twnRenameHint" style="display:none;">
+              <i class="fa-solid fa-circle-info"></i> هذه البلدة مستعملة في مناسبات — الخادم يرفض تغيير اسمها. لتصحيح الاسم أضِف بلدة جديدة بالاسم الصحيح وعطِّل هذه
+            </p>
+            <div class="form-group">
+              <label>موقع البلدة على الخريطة *</label>
+              <div id="townLocationMap" class="admin-map-picker"></div>
+              <div class="map-picker-actions">
+                <button type="button" class="admin-btn-ghost" onclick="useMyLocationForTown()">
+                  <i class="fa-solid fa-location-crosshairs"></i> موقعي الآن
+                </button>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>خط العرض (latitude) *</label>
+                <input type="number" id="twnLat" step="any" placeholder="مثال: 31.2589" required oninput="followManualCoordsInput('townLocationMap')">
+              </div>
+              <div class="form-group half">
+                <label>خط الطول (longitude) *</label>
+                <input type="number" id="twnLng" step="any" placeholder="مثال: 34.7913" required oninput="followManualCoordsInput('townLocationMap')">
+              </div>
+            </div>
+            <span class="hint-text">الإحداثيات إلزامية — انقر على الخريطة أو اسحب الدبّوس لتعبئتها تلقائياً، أو عدّلها هنا يدوياً. هي الدبّوس الاحتياطي لكل مناسبة في البلدة بلا موقع دقيق</span>
+            <label class="ot-check" style="margin-top:14px; display:block;"><input type="checkbox" id="twnIsActive" checked> نشِطة (تظهر لمن ينشر مناسبة)</label>
+            <div class="form-row" style="margin-top:18px;">
+              <button type="submit" class="admin-btn-primary" id="twnSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ البلدة
+              </button>
+              <button type="button" class="btn-reject" onclick="closeTownForm()">إلغاء</button>
             </div>
           </form>
         </div>

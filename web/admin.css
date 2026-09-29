@@ -592,6 +592,20 @@ body {
   margin-bottom: 12px;
 }
 
+/* Towns & regions tab (TWN-4) — بطاقة لكل محافظة، بنفس صندوق pane-box */
+.region-card { margin-top: 16px; }
+.region-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.region-card-head h3 { font-size: 1rem; color: var(--text-main); margin: 0; }
+.region-center-form .form-row { align-items: flex-end; flex-wrap: wrap; }
+.region-center-form .form-group { flex: 1 1 140px; }
+.town-locked-hint { display: inline; margin-top: 0; margin-inline-start: 6px; }
+
 /* Modals (stories 8, 22-27, 36-37) */
 .modal-overlay {
   position: fixed;

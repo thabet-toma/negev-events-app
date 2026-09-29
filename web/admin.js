@@ -9,6 +9,9 @@ let allPublicCategories = [];
 let editingProviderId = null;
 let allVillages = [];
 let editingVillageId = null;
+let adminTownRegions = []; // من GET /api/admin/towns — المحافظات وبلداتها كاملة، معطَّلها أيضاً (سوبر أدمن)
+let editingTownId = null;
+let adminEventsTownFilter = ''; // مطابقة حرفية للبلدة — «عرض المناسبات بلا بلدة» لا البحث النصّي (includes)
 let allServiceCategories = [];
 let editingServiceCategoryId = null;
 let allAdminsWithTowns = [];
@@ -53,6 +56,29 @@ const FALLBACK_TOWNS = [
   'رهط', 'حورة', 'تل السبع', 'كسيفة', 'شقيب السلام', 'اللقية', 'عرعرة النقب', 'القرى والتجمعات'
 ];
 let TOWNS = [...FALLBACK_TOWNS];
+// المحافظات من GET /api/towns (`regions`) — اسم المحافظة نفسه بلدة صالحة للمناسبة
+// تعني «بلا بلدة محدّدة». لا احتياط أوفلاين: بلا الخادم لا تُعرض كخيار إضافي فقط.
+let REGIONS = [];
+
+/** أسماء المحافظات التي ليست بلدة في TOWNS — تُعرض بعد البلدات في كل منتقٍ. */
+function regionTownNames() {
+  return REGIONS.map(r => r && r.name).filter(name => name && !TOWNS.includes(name));
+}
+
+/**
+ * خيارات منتقي البلدة في اللوحة: البلدات، ثم المحافظات «بلا بلدة محدّدة»، ثم
+ * البلدة الحالية إن لم تكن في أيٍّ منهما (بلدة عُطِّلت أو قيمة قديمة) — كي لا
+ * يُرسَل الحفظ بلدةً غير التي عليها المناسبة بصمت.
+ */
+function townSelectOptionsHtml(currentVal) {
+  const regions = regionTownNames();
+  let html = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  html += regions.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)} — بلا بلدة محدّدة</option>`).join('');
+  if (currentVal && !TOWNS.includes(currentVal) && !regions.includes(currentVal)) {
+    html += `<option value="${escapeHtml(currentVal)}">${escapeHtml(currentVal)}</option>`;
+  }
+  return html;
+}
 
 
 // أيقونات جاهزة لحقلَي «الأيقونة» — نوع المناسبة وفئة الخدمة. الحقل في الحالتين
@@ -574,7 +600,7 @@ function applyRoleVisibility() {
   const isSuperAdmin = isSuperAdminRole();
   const superAdminOnlyBtnIds = [
     'tabUsersBtn', 'tabOccasionTypesBtn',
-    'tabVillagesBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
+    'tabVillagesBtn', 'tabTownsBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
     'tabPrivacyRequestsBtn', 'tabAnalyticsBtn', 'tabSettingsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
@@ -613,7 +639,7 @@ async function loadAdminDashboard() {
   ];
   if (isSuperAdmin) {
     tasks.push(
-      fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(),
+      fetchAdminUsers(), fetchOccasionTypes(), fetchAdminVillages(), fetchAdminTowns(),
       fetchAdminServiceCategories(), fetchAdminAdmins(), fetchAdminPrivacyRequests(),
       fetchAdminAnalyticsCounts(), fetchAdminAnalyticsOverview(), fetchAdminAnalyticsDevices(), fetchAdminSettings(), fetchLiveEpisodes(),
       fetchActivityLog()
@@ -712,6 +738,10 @@ function renderAdminEvents() {
 
   if (currentFilterStatus !== 'all') {
     filtered = filtered.filter(e => e.status === currentFilterStatus);
+  }
+
+  if (adminEventsTownFilter) {
+    filtered = filtered.filter(e => e.town === adminEventsTownFilter);
   }
 
   if (searchKeyword) {
@@ -1025,8 +1055,8 @@ function populateDirTownSelect() {
   const select = document.getElementById('dirTown');
   if (!select) return;
   const currentVal = select.value;
-  select.innerHTML = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-  if (currentVal && TOWNS.includes(currentVal)) {
+  select.innerHTML = townSelectOptionsHtml(currentVal);
+  if (currentVal) {
     select.value = currentVal;
   }
 }
@@ -1973,6 +2003,7 @@ async function openAdminEvent(eventId) {
   searchKeyword = '';
   const searchInput = document.getElementById('adminEventSearch');
   if (searchInput) searchInput.value = '';
+  setAdminEventsTownFilter('');
   filterEventsByStatus('all', document.querySelector('#tabEvents .filter-chip'));
   await openEventEditForm(eventId);
 }
@@ -2003,6 +2034,19 @@ function filterEventsByStatus(status, btnElement) {
 
 function handleAdminEventSearch() {
   searchKeyword = document.getElementById('adminEventSearch').value.trim();
+  renderAdminEvents();
+}
+
+/** فلتر بلدة مطابِق حرفياً ('' يلغيه) — مع زرّ ظاهر في شريط المناسبات لإلغائه. */
+function setAdminEventsTownFilter(town) {
+  adminEventsTownFilter = town || '';
+  const chip = document.getElementById('adminEventsTownFilterChip');
+  if (chip) {
+    chip.style.display = adminEventsTownFilter ? '' : 'none';
+    chip.innerHTML = adminEventsTownFilter
+      ? `<i class="fa-solid fa-xmark"></i> البلدة: ${escapeHtml(adminEventsTownFilter)} — إلغاء الفلتر`
+      : '';
+  }
   renderAdminEvents();
 }
 
@@ -2199,7 +2243,7 @@ function ensureEventEditFormMounted() {
         <div class="form-group half">
           <label>البلدة ${criticalHint}</label>
           <select id="evtTown" onchange="handleEventEditTownChange()">
-            ${TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
+            ${townSelectOptionsHtml()}
           </select>
         </div>
         <div class="form-group half" id="evtVillageGroup" style="display:none;">
@@ -2331,8 +2375,10 @@ function populateEvtTownSelect(selectedVal) {
   const select = document.getElementById('evtTown');
   if (!select) return;
   const val = selectedVal !== undefined ? selectedVal : select.value;
-  select.innerHTML = TOWNS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-  if (val && TOWNS.includes(val)) {
+  // بلدة المناسبة الحالية تبقى خياراً مختاراً حتى لو غابت عن TOWNS (معطَّلة
+  // أو قديمة) — وإلا اختار المتصفّح أول بلدة وأرسلها الحفظ فرقاً لم يطلبه أحد.
+  select.innerHTML = townSelectOptionsHtml(val);
+  if (val) {
     select.value = val;
   }
 }
@@ -2367,6 +2413,9 @@ async function fetchTowns() {
         }
         if (Array.isArray(data.villages)) {
           allTownVillages = data.villages;
+        }
+        if (Array.isArray(data.regions)) {
+          REGIONS = data.regions;
         }
         onTownsUpdated();
         return true;
@@ -2787,6 +2836,14 @@ function initVillageLocationMap(latitude, longitude) {
 }
 function useMyLocationForVillage() {
   useMyLocationFor('vilLocationMap');
+}
+
+// نموذج البلدة — مثل القرية: الإحداثيات إلزامية فلا زرّ مسح
+function initTownLocationMap(latitude, longitude) {
+  initLocationPicker('townLocationMap', 'twnLat', 'twnLng', null, latitude, longitude);
+}
+function useMyLocationForTown() {
+  useMyLocationFor('townLocationMap');
 }
 
 /** معاينة فورية للملصق المختار من الجهاز، قبل الحفظ. */
@@ -3568,6 +3625,345 @@ async function handleDeleteVillage(id) {
 }
 
 // ======================================================================
+// 10ب. Towns & Regions — سوبر أدمن حصراً (TWN-4)
+//
+// نفس بنية تبويب القرى أعلاه. كل كتابة ناجحة تعيد جلب هذا التبويب **و**
+// GET /api/towns المشترك (refreshSharedTowns) كي يلتقط كل منتقٍ آخر في اللوحة
+// (نشر فوري، تعديل مناسبة، بلدات الأدمن، مزوّدو الخدمات) التغيير بلا إعادة تحميل.
+// القفل («القرى والتجمعات»، `locked`) يفرضه الخادم؛ الواجهة تُخفي ما سيُرفض فقط.
+// ======================================================================
+
+function refreshSharedTowns() {
+  townsFetchPromise = null;
+  return fetchTowns();
+}
+
+async function fetchAdminTowns() {
+  try {
+    const res = await adminFetch('/api/admin/towns');
+    const data = await res.json();
+    if (res.status === 403) { renderTownsForbidden(data.message); return; }
+    if (data.success) {
+      adminTownRegions = Array.isArray(data.regions) ? data.regions : [];
+      renderTownsRegionsList();
+    }
+  } catch (e) {
+    console.error('Towns error:', e);
+  }
+}
+
+function renderTownsForbidden(message) {
+  closeTownForm();
+  const container = document.getElementById('townsRegionsList');
+  if (container) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-lock" style="font-size: 2.2rem; color: var(--danger-red); margin-bottom: 10px;"></i>
+        <p>${escapeHtml(message || 'صلاحيات المدير العام مطلوبة')}</p>
+      </div>
+    `;
+  }
+}
+
+/** بعد كل كتابة ناجحة: هذا التبويب، ثم كل منتقيات البلدات المشتركة. */
+async function afterTownsWrite() {
+  await fetchAdminTowns();
+  await refreshSharedTowns();
+}
+
+function findAdminTown(id) {
+  for (const region of adminTownRegions) {
+    const town = (region.towns || []).find(t => t.id === id);
+    if (town) return town;
+  }
+  return null;
+}
+
+function renderTownRowHtml(region, town, index, count) {
+  const regionId = Number(region.id);
+  const townId = Number(town.id);
+  const moveBtns = `
+    <button type="button" class="admin-btn-ghost town-move-up" style="padding:6px 10px;" title="تحريك لأعلى" ${index === 0 ? 'disabled' : ''} onclick="moveTown(${regionId}, ${townId}, -1)">▲</button>
+    <button type="button" class="admin-btn-ghost town-move-down" style="padding:6px 10px;" title="تحريك لأسفل" ${index === count - 1 ? 'disabled' : ''} onclick="moveTown(${regionId}, ${townId}, 1)">▼</button>`;
+  const actions = town.locked
+    ? `<span class="hint-text town-locked-hint"><i class="fa-solid fa-lock"></i> ثابت في كل نسخ التطبيق</span>`
+    : `
+      <button class="btn-approve town-edit-btn" style="flex:none; padding:8px 12px;" onclick="openTownForm(${townId})"><i class="fa-solid fa-pen"></i> تعديل</button>
+      <button class="btn-reject town-toggle-btn" style="flex:none; padding:8px 12px;" onclick="handleToggleTownActive(${townId})">
+        <i class="fa-solid ${town.is_active ? 'fa-eye-slash' : 'fa-eye'}"></i> ${town.is_active ? 'تعطيل' : 'تفعيل'}
+      </button>
+      <button class="btn-delete town-delete-btn" onclick="handleDeleteTown(${townId})" title="حذف (أو تعطيل إن كانت مستعملة)">
+        <i class="fa-solid fa-trash"></i>
+      </button>`;
+  return `
+    <tr data-town-id="${townId}">
+      <td><strong>${escapeHtml(town.name)}</strong></td>
+      <td><span class="status-tag ${town.is_active ? 'approved' : 'rejected'}">${town.is_active ? 'نشِطة' : 'معطَّلة'}</span></td>
+      <td>${Number(town.events_count) || 0}</td>
+      <td style="white-space:nowrap;">${moveBtns}${actions}</td>
+    </tr>`;
+}
+
+function renderRegionCardHtml(region) {
+  const regionId = Number(region.id);
+  const towns = region.towns || [];
+  const unplaced = Number(region.unplaced_events) || 0;
+  return `
+    <div class="pane-box region-card" data-region-id="${regionId}">
+      <div class="region-card-head">
+        <h3><i class="fa-solid fa-map"></i> محافظة ${escapeHtml(region.name)}</h3>
+        <span class="status-tag ${unplaced ? 'pending' : 'approved'} region-unplaced-count">${unplaced} مناسبات بلا بلدة محدّدة</span>
+        <button type="button" class="admin-btn-ghost region-unplaced-btn" onclick="showUnplacedEvents(${regionId})">
+          <i class="fa-solid fa-filter"></i> عرض المناسبات بلا بلدة
+        </button>
+      </div>
+      <form class="admin-form region-center-form" onsubmit="handleRegionSubmit(event, ${regionId})">
+        <div class="form-row">
+          <div class="form-group">
+            <label>مركز الخريطة — خط العرض</label>
+            <input type="number" id="regLat-${regionId}" step="any" required value="${region.latitude != null ? escapeHtml(String(region.latitude)) : ''}">
+          </div>
+          <div class="form-group">
+            <label>خط الطول</label>
+            <input type="number" id="regLng-${regionId}" step="any" required value="${region.longitude != null ? escapeHtml(String(region.longitude)) : ''}">
+          </div>
+          <div class="form-group">
+            <label>التقريب (5-16)</label>
+            <input type="number" id="regZoom-${regionId}" step="1" min="5" max="16" required value="${region.map_zoom != null ? escapeHtml(String(region.map_zoom)) : ''}">
+          </div>
+          <button type="submit" class="admin-btn-primary region-center-save"><i class="fa-solid fa-check"></i> حفظ مركز الخريطة</button>
+        </div>
+      </form>
+      ${towns.length ? `
+        <div class="admin-table-wrapper">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>البلدة</th>
+                <th>الحالة</th>
+                <th>مناسبات</th>
+                <th>الإجراء</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${towns.map((t, i) => renderTownRowHtml(region, t, i, towns.length)).join('')}
+            </tbody>
+          </table>
+        </div>` : `
+        <div class="empty-state" style="padding: 24px; text-align: center; color: var(--text-dim);">
+          <p>لا بلدات في هذه المحافظة بعد</p>
+        </div>`}
+    </div>`;
+}
+
+function renderTownsRegionsList() {
+  const container = document.getElementById('townsRegionsList');
+  if (!container) return;
+
+  if (!adminTownRegions.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد محافظات بعد</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = adminTownRegions.map(renderRegionCardHtml).join('');
+}
+
+/** يبدّل البلدة مع جارتها ويرسل ترتيب المحافظة كاملاً — الخادم يطلب كل المعرّفات. */
+async function moveTown(regionId, townId, delta) {
+  const region = adminTownRegions.find(r => r.id === regionId);
+  if (!region) return;
+  const ids = (region.towns || []).map(t => t.id);
+  const from = ids.indexOf(townId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= ids.length) return;
+  [ids[from], ids[to]] = [ids[to], ids[from]];
+
+  try {
+    const res = await adminFetch('/api/admin/towns/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ region_id: regionId, town_ids: ids })
+    });
+    const data = await res.json();
+    if (data.success) {
+      await afterTownsWrite();
+    } else {
+      alert(data.message || 'تعذّر حفظ الترتيب');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+function openTownForm(id) {
+  const town = id ? findAdminTown(id) : null;
+  if (town && town.locked) return; // الخادم يرفض أي تعديل عليها سوى الترتيب
+  editingTownId = town ? town.id : null;
+
+  const wrapper = document.getElementById('townFormWrapper');
+  const title = document.getElementById('townFormTitle');
+  const form = document.getElementById('townForm');
+  form.reset();
+
+  title.innerHTML = town
+    ? `<i class="fa-solid fa-pen"></i> تعديل بلدة: ${escapeHtml(town.name)}`
+    : `<i class="fa-solid fa-plus"></i> بلدة جديدة`;
+
+  const regionSelect = document.getElementById('twnRegionId');
+  regionSelect.innerHTML = adminTownRegions
+    .map(r => `<option value="${Number(r.id)}">${escapeHtml(r.name)}</option>`).join('');
+  if (town) regionSelect.value = String(town.region_id);
+
+  document.getElementById('twnId').value = town ? town.id : '';
+  document.getElementById('twnName').value = town ? town.name : '';
+  // نفس سبب سطرَي القرية: بلا Leaflet (CDN) يبقى الحقلان وحدهما طريق التعديل.
+  document.getElementById('twnLat').value = town && town.latitude != null ? town.latitude : '';
+  document.getElementById('twnLng').value = town && town.longitude != null ? town.longitude : '';
+  document.getElementById('twnIsActive').checked = town ? Boolean(town.is_active) : true;
+  document.getElementById('twnRenameHint').style.display = town && Number(town.events_count) > 0 ? '' : 'none';
+
+  wrapper.style.display = 'block';
+  // بعد إظهار الحاوية لا قبلها — Leaflet يقيس حاوية بعرض صفر وهي مخفية.
+  initTownLocationMap(town ? town.latitude : '', town ? town.longitude : '');
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeTownForm() {
+  editingTownId = null;
+  const wrapper = document.getElementById('townFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const form = document.getElementById('townForm');
+  if (form) form.reset();
+}
+
+/**
+ * الاسم يُرسَل في التعديل فقط إن تغيّر — الخادم يرفض (409) إعادة تسمية بلدة
+ * مستعملة، ورسالته تصل كما هي. التحقق من الإحداثيات هنا وقائي فقط.
+ */
+async function handleTownSubmit(e) {
+  e.preventDefault();
+
+  const lat = document.getElementById('twnLat').value;
+  const lng = document.getElementById('twnLng').value;
+  if (lat === '' || lng === '') {
+    alert('خط العرض وخط الطول إلزاميان — بلدة بلا إحداثيات لن يظهر لمناسباتها دبّوس صحيح');
+    return;
+  }
+
+  const id = document.getElementById('twnId').value;
+  const existing = id ? findAdminTown(Number(id)) : null;
+  const name = document.getElementById('twnName').value.trim();
+  const payload = {
+    region_id: parseInt(document.getElementById('twnRegionId').value, 10),
+    latitude: parseFloat(lat),
+    longitude: parseFloat(lng),
+    is_active: document.getElementById('twnIsActive').checked
+  };
+  if (!existing || existing.name !== name) payload.name = name;
+
+  const btn = document.getElementById('twnSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch(id ? `/api/admin/towns/${id}` : '/api/admin/towns', {
+      method: id ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم الحفظ بنجاح');
+      closeTownForm();
+      await afterTownsWrite();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ البلدة';
+  }
+}
+
+async function handleToggleTownActive(id) {
+  const town = findAdminTown(id);
+  if (!town) return;
+  try {
+    const res = await adminFetch(`/api/admin/towns/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: !town.is_active })
+    });
+    const data = await res.json();
+    if (data.success) {
+      await afterTownsWrite();
+    } else {
+      alert(data.message || 'تعذّر تغيير حالة البلدة');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+/** بلدة مستعملة لا تُحذف بل تُعطَّل — ورسالة الخادم نفسها تقول أيّهما حدث. */
+async function handleDeleteTown(id) {
+  if (!confirm('حذف هذه البلدة؟ إن كانت مستعملة في مناسبات أو صلاحيات سيُعطَّل ظهورها بدلاً من حذفها.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/towns/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    alert(data.message || (data.success ? 'تم الحفظ' : 'حدث خطأ'));
+    if (data.success) await refreshSharedTowns();
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    await fetchAdminTowns();
+  }
+}
+
+async function handleRegionSubmit(e, regionId) {
+  e.preventDefault();
+  const payload = {
+    latitude: parseFloat(document.getElementById(`regLat-${regionId}`).value),
+    longitude: parseFloat(document.getElementById(`regLng-${regionId}`).value),
+    map_zoom: parseInt(document.getElementById(`regZoom-${regionId}`).value, 10)
+  };
+  try {
+    const res = await adminFetch(`/api/admin/regions/${regionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم الحفظ بنجاح');
+      await afterTownsWrite();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+/** طابور «بلا بلدة محدّدة»: قائمة المناسبات القائمة مفلترة على اسم المحافظة حرفياً. */
+function showUnplacedEvents(regionId) {
+  const region = adminTownRegions.find(r => r.id === regionId);
+  if (!region) return;
+  searchKeyword = '';
+  const searchInput = document.getElementById('adminEventSearch');
+  if (searchInput) searchInput.value = '';
+  filterEventsByStatus('all', document.querySelector('#tabEvents .filter-chip'));
+  setAdminEventsTownFilter(region.name);
+}
+
+// ======================================================================
 // 11. Service Categories — سوبر أدمن حصراً (قصة 34)
 // ======================================================================
 
@@ -3844,6 +4240,12 @@ function renderAdminsList() {
       <div class="provider-towns-picker">
         ${TOWNS.map(town => `
           <label class="ot-check"><input type="checkbox" class="admin-town-check" data-admin-id="${a.id}" value="${escapeHtml(town)}" ${a.towns.includes(town) ? 'checked' : ''}> ${escapeHtml(town)}</label>
+        `).join('')}
+        ${regionTownNames().map(name => `
+          <label class="ot-check"><input type="checkbox" class="admin-town-check" data-admin-id="${a.id}" value="${escapeHtml(name)}" ${a.towns.includes(name) ? 'checked' : ''}> ${escapeHtml(name)} (بلا بلدة محدّدة)</label>
+        `).join('')}
+        ${a.towns.filter(t => !TOWNS.includes(t) && !regionTownNames().includes(t)).map(t => `
+          <label class="ot-check"><input type="checkbox" class="admin-town-check" data-admin-id="${a.id}" value="${escapeHtml(t)}" checked> ${escapeHtml(t)} (غير مدرجة حالياً)</label>
         `).join('')}
       </div>
       <div style="display:flex; gap:10px; margin-top:14px;">

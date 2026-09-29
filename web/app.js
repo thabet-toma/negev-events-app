@@ -16,6 +16,9 @@ let pickerPinPlacedByUser = false;
 let townCoordinates = {};
 let townsList = [];
 let villagesList = []; // من GET /api/towns (villages) — لا تُكرَّر في أي عميل (خريطة #21)
+// من GET /api/towns (regions): اسم المنطقة نفسه مكان صالح لمناسبة بلدتها غير معروفة
+let regionsList = [];
+// احتياط ما قبل وصول المناطق فقط — بعدها مركز المنطقة الأولى وتكبيرها (neutralPickerView)
 const NEGEV_NEUTRAL_CENTER = [31.2858, 34.8431];
 
 // «القرى والتجمعات» — البند الجامع الوحيد الذي يطلب قرية إلزامية عند النشر
@@ -1725,7 +1728,7 @@ function isMourningTone(evt) {
  */
 function selectedPlacesHtml() {
   const tokens = FILTER_SHEETS.place.selected();
-  if (!tokens.length) return 'منطقة النقب';
+  if (!tokens.length) return regionsList[0] ? escapeHtml(`منطقة ${regionsList[0].name}`) : 'منطقة النقب';
   const resolvedNames = tokens.map(t => resolveFilterOptionLabel(FILTER_SHEETS.place, t)).filter(Boolean);
   if (resolvedNames.length) return escapeHtml(resolvedNames.join('، '));
   return escapeHtml(tokens.length === 1 ? FILTER_SHEETS.place.nounSingular : FILTER_SHEETS.place.nounPlural(tokens.length));
@@ -2408,6 +2411,7 @@ async function loadTownCoordinates() {
       if (data.town_coordinates) townCoordinates = data.town_coordinates;
       if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
       if (data.villages) villagesList = data.villages;
+      if (data.regions) regionsList = data.regions;
       return true;
     }
     return false;
@@ -2417,11 +2421,27 @@ async function loadTownCoordinates() {
   }
 }
 
-/** يملأ قائمة بلدات منسدلة من townsList (مجلوبة من الخادم، لا قائمة مثبَّتة). */
+/** المنطقة التي اسمها هذا بالضبط (مكان «بلا بلدة محدّدة»)، أو null. */
+function findRegionByName(name) {
+  return regionsList.find(r => r.name === name) || null;
+}
+
+/**
+ * يملأ قائمة بلدات منسدلة من townsList (مجلوبة من الخادم، لا قائمة مثبَّتة)،
+ * وبعدها خيار لكل منطقة «بلا بلدة محدّدة». قيمة حالية ليست بين الخيارات
+ * (بلدة أوقفها الأدمن مثلاً) تُضاف مختارةً — وإلا فرغت القائمة وحُفظ '' بدلها.
+ */
 function populateTownSelect(selectId, selectedValue) {
   const select = document.getElementById(selectId);
   if (!select) return;
-  select.innerHTML = townsList.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  const options = [
+    ...townsList.map(t => ({ value: t, label: t })),
+    ...regionsList.map(r => ({ value: r.name, label: `${r.name} — بلا بلدة محدّدة` }))
+  ];
+  if (selectedValue && !options.some(o => o.value === selectedValue)) {
+    options.push({ value: selectedValue, label: selectedValue });
+  }
+  select.innerHTML = options.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
   if (selectedValue) select.value = selectedValue;
 }
 
@@ -2462,19 +2482,33 @@ function clearPickerMarker() {
  * المستخدم لم يحرّك الدبّوس بنفسه بعد — أول تحريك يدوي (سحب أو نقر) يوقف هذا
  * التتبّع التلقائي نهائياً حتى لا يمحو تصحيحاً تعمّده المستخدم. «القرى
  * والتجمعات» بلا مركز معروف عمداً (#20 step 6, decision ٨): الخريطة تُفتح على
- * منظر عام للنقب بلا دبّوس، والمستخدم مطالَب بوضعه بنفسه.
+ * منظر عام للنقب بلا دبّوس، والمستخدم مطالَب بوضعه بنفسه. والمنطقة نفسها
+ * («النقب — بلا بلدة محدّدة») تُفتح على مركزها وتكبيرها بلا دبّوس أيضاً —
+ * دبّوس في وسط منطقة دبّوس خاطئ — ويُزال دبّوس تلقائي بقي من بلدة سابقة.
  */
 function recenterLocationPicker() {
   if (!locationPickerMap) return;
   const town = document.getElementById('addTown').value;
   const coords = townCoordinates[town];
+  const region = findRegionByName(town);
 
   if (coords) {
     locationPickerMap.setView([coords.lat, coords.lng], 14);
     if (!pickerPinPlacedByUser) placePickerMarker(coords.lat, coords.lng);
+  } else if (region) {
+    locationPickerMap.setView([region.latitude, region.longitude], region.map_zoom);
+    if (!pickerPinPlacedByUser) clearPickerMarker();
   } else {
-    locationPickerMap.setView(NEGEV_NEUTRAL_CENTER, 9);
+    const view = neutralPickerView();
+    locationPickerMap.setView(view.center, view.zoom);
   }
+}
+
+/** منظر عام بلا بلدة: مركز المنطقة الأولى وتكبيرها متى وصلت المناطق، وإلا الثابت الاحتياطي. */
+function neutralPickerView() {
+  const region = regionsList[0];
+  if (region) return { center: [region.latitude, region.longitude], zoom: region.map_zoom };
+  return { center: NEGEV_NEUTRAL_CENTER, zoom: 9 };
 }
 
 async function initLocationPickerMap() {
@@ -2484,7 +2518,8 @@ async function initLocationPickerMap() {
   await loadTownCoordinates();
 
   if (!locationPickerMap) {
-    locationPickerMap = L.map('addLocationPickerMap').setView(NEGEV_NEUTRAL_CENTER, 9);
+    const view = neutralPickerView();
+    locationPickerMap = L.map('addLocationPickerMap').setView(view.center, view.zoom);
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
@@ -2885,6 +2920,8 @@ const FILTER_SHEETS = {
     options() {
       return [
         ...townsList.map(name => ({ kind: 'town', id: name, label: name })),
+        // المنطقة تُرسَل في ?town= كالبلدة تماماً — الخادم يرشّح بها مناسبات «بلا بلدة محدّدة»
+        ...regionsList.map(r => ({ kind: 'town', id: r.name, label: `${r.name} (بلا بلدة محدّدة)` })),
         ...villagesList.map(v => ({ kind: 'village', id: v.id, label: v.name }))
       ];
     },

@@ -5810,6 +5810,320 @@ async function run() {
     assert.strictEqual(rawNonAdmin.length, 0, 'every admin call must carry the admin token — none may bypass adminFetch');
   });
 
+  console.log('\nAdmin towns & regions tab (TWN-4)');
+
+  // Shaped exactly like GET /api/admin/towns (super_admin): one region, two
+  // ordinary towns (one disabled) and the locked «القرى والتجمعات» row.
+  const ADMIN_TOWNS_REGIONS_FIXTURE = [{
+    id: 1, name: 'النقب', latitude: 31.25, longitude: 34.79, map_zoom: 9, position: 0, is_active: 1, unplaced_events: 3,
+    towns: [
+      { id: 11, region_id: 1, name: 'رهط', latitude: 31.39, longitude: 34.75, position: 0, is_active: 1, events_count: 5, locked: false },
+      { id: 12, region_id: 1, name: 'حورة', latitude: 31.29, longitude: 34.93, position: 1, is_active: 0, events_count: 0, locked: false },
+      { id: 13, region_id: 1, name: 'القرى والتجمعات', latitude: null, longitude: null, position: 2, is_active: 1, events_count: 2, locked: true }
+    ]
+  }];
+  // GET /api/towns with the new `regions` key (public shape).
+  const ADMIN_PUBLIC_TOWNS_WITH_REGIONS = {
+    success: true,
+    towns: ['الكل', ...TOWNS],
+    town_coordinates: TOWN_COORDINATES,
+    villages: [],
+    regions: [{ id: 1, name: 'النقب', latitude: 31.25, longitude: 34.79, map_zoom: 9, position: 0, towns: TOWNS }]
+  };
+
+  /** An admin env with a token but no automatic boot — every call below is driven by hand. */
+  function buildTownsAdminEnv(handler) {
+    const dom = buildAdminEnv();
+    dom.window.localStorage.setItem('negev_admin_token', 'test-admin-token');
+    dom.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    const calls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      calls.push({ path: requestPath, method, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
+      const answer = handler(requestPath, method, options);
+      if (answer) return answer;
+      if (requestPath === '/api/admin/towns') return jsonResponse({ success: true, regions: ADMIN_TOWNS_REGIONS_FIXTURE });
+      if (requestPath === '/api/towns') return jsonResponse(ADMIN_PUBLIC_TOWNS_WITH_REGIONS);
+      return jsonResponse({ success: true });
+    };
+    return { dom, calls };
+  }
+
+  await test('the «البلدات والمحافظات» tab button is hidden for a plain admin and shown for super_admin', () => {
+    const townDom = buildAdminEnv({ loggedIn: true, role: 'admin' });
+    const townBtn = townDom.window.document.getElementById('tabTownsBtn');
+    assert.ok(townBtn, 'expected a #tabTownsBtn in admin.html');
+    assert.ok(townDom.window.document.getElementById('tabTowns'), 'expected a #tabTowns pane');
+    townBtn.style.display = 'flex';
+    townDom.window.applyRoleVisibility();
+    assert.strictEqual(townBtn.style.display, 'none', 'a plain admin must not see the towns tab (403 behind it)');
+
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    superDom.window.applyRoleVisibility();
+    assert.strictEqual(superDom.window.document.getElementById('tabTownsBtn').style.display, 'flex');
+  });
+
+  await test('the towns table renders per region from GET /api/admin/towns; the locked row has only the reorder buttons', async () => {
+    const { dom, calls } = buildTownsAdminEnv(() => null);
+    const { document } = dom.window;
+    await dom.window.fetchAdminTowns();
+
+    assert.ok(calls.some(c => c.path === '/api/admin/towns' && c.headers.Authorization === 'Bearer test-admin-token'),
+      'the list must be fetched through adminFetch');
+    const pane = document.getElementById('townsRegionsList');
+    assert.ok(pane.textContent.includes('محافظة النقب'), 'expected the region heading');
+    assert.ok(pane.textContent.includes('مناسبات بلا بلدة محدّدة') && pane.querySelector('.region-unplaced-count').textContent.includes('3'),
+      'expected the unplaced-events count badge');
+
+    const rows = [...pane.querySelectorAll('tr[data-town-id]')];
+    assert.deepStrictEqual(rows.map(r => r.getAttribute('data-town-id')), ['11', '12', '13']);
+    const raht = rows[0];
+    assert.ok(raht.textContent.includes('نشِطة') && raht.textContent.includes('5'));
+    assert.ok(raht.querySelector('.town-edit-btn') && raht.querySelector('.town-toggle-btn') && raht.querySelector('.town-delete-btn'));
+    assert.ok(rows[1].textContent.includes('معطَّلة'));
+    assert.ok(rows[1].querySelector('.town-toggle-btn').textContent.includes('تفعيل'), 'a disabled town offers «تفعيل»');
+
+    const locked = rows[2];
+    assert.ok(locked.textContent.includes('ثابت في كل نسخ التطبيق'), 'the locked row must say why it cannot change');
+    assert.strictEqual(locked.querySelector('.town-edit-btn'), null, 'no edit on the locked row');
+    assert.strictEqual(locked.querySelector('.town-toggle-btn'), null, 'no disable on the locked row');
+    assert.strictEqual(locked.querySelector('.town-delete-btn'), null, 'no delete on the locked row');
+    assert.ok(locked.querySelector('.town-move-up') && locked.querySelector('.town-move-down'), 'the locked row can still be reordered');
+  });
+
+  await test('▼ on the first town PUTs /api/admin/towns/order with the full swapped id list, then refreshes the shared towns list', async () => {
+    const { dom, calls } = buildTownsAdminEnv((requestPath, method) => {
+      if (requestPath === '/api/admin/towns/order' && method === 'PUT') return jsonResponse({ success: true, regions: ADMIN_TOWNS_REGIONS_FIXTURE });
+      return null;
+    });
+    await dom.window.fetchAdminTowns();
+    const publicTownsCalls = () => calls.filter(c => c.path === '/api/towns').length;
+    const before = publicTownsCalls();
+
+    dom.window.document.querySelector('tr[data-town-id="11"] .town-move-down').click();
+    await waitFor(() => publicTownsCalls() > before);
+
+    const put = calls.find(c => c.path === '/api/admin/towns/order');
+    assert.ok(put, 'expected a PUT /api/admin/towns/order');
+    assert.strictEqual(put.method, 'PUT');
+    assert.deepStrictEqual(put.body, { region_id: 1, town_ids: [12, 11, 13] });
+    assert.strictEqual(put.headers.Authorization, 'Bearer test-admin-token', 'must go through adminFetch');
+    assert.ok(publicTownsCalls() > before, 'every other picker must be refreshed from GET /api/towns');
+  });
+
+  await test('submitting the new-town form POSTs name, latitude, longitude and region_id', async () => {
+    const { dom, calls } = buildTownsAdminEnv((requestPath, method) => {
+      if (requestPath === '/api/admin/towns' && method === 'POST') return jsonResponse({ success: true, message: 'تمت إضافة البلدة' }, { status: 201 });
+      return null;
+    });
+    const { document } = dom.window;
+    await dom.window.fetchAdminTowns();
+    dom.window.openTownForm();
+    assert.notStrictEqual(document.getElementById('townFormWrapper').style.display, 'none', 'the form must open');
+    document.getElementById('twnName').value = ' السيد ';
+    document.getElementById('twnLat').value = '31.2667';
+    document.getElementById('twnLng').value = '34.8833';
+
+    await dom.window.handleTownSubmit({ preventDefault() {} });
+
+    const post = calls.find(c => c.path === '/api/admin/towns' && c.method === 'POST');
+    assert.ok(post, 'expected a POST /api/admin/towns');
+    assert.strictEqual(post.body.name, 'السيد');
+    assert.strictEqual(post.body.latitude, 31.2667);
+    assert.strictEqual(post.body.longitude, 34.8833);
+    assert.strictEqual(post.body.region_id, 1);
+    assert.strictEqual(post.headers.Authorization, 'Bearer test-admin-token');
+  });
+
+  await test('the event edit town select offers «النقب — بلا بلدة محدّدة» and keeps an unknown current town selected', async () => {
+    const legacyEvent = { ...ADMIN_EVENT_FIXTURE, id: 71, town: 'بلدة قديمة', latitude: null, longitude: null };
+    const { dom } = buildTownsAdminEnv((requestPath) => {
+      if (requestPath === '/api/admin/events') return jsonResponse({ success: true, events: [legacyEvent] });
+      if (requestPath === '/api/events/71') return jsonResponse({ success: true, event: { ...legacyEvent, honorees: [{ name: 'راني', role: '' }] } });
+      if (requestPath === '/api/events/71/amendments') return jsonResponse({ success: true, amendments: [] });
+      return null;
+    });
+    const { document } = dom.window;
+    await dom.window.fetchAdminEvents();
+    await dom.window.openEventEditForm(71);
+
+    const select = document.getElementById('evtTown');
+    const regionOption = [...select.options].find(o => o.value === 'النقب');
+    assert.ok(regionOption, 'expected the region as a town option');
+    assert.strictEqual(regionOption.textContent.trim(), 'النقب — بلا بلدة محدّدة');
+    assert.strictEqual(select.value, 'بلدة قديمة', 'an unknown current town must stay selected, never silently replaced');
+  });
+
+  await test('the admin → towns grid offers the region as «النقب (بلا بلدة محدّدة)» and «عرض المناسبات بلا بلدة» filters the events list to that exact town', async () => {
+    const { dom } = buildTownsAdminEnv((requestPath) => {
+      if (requestPath === '/api/admin/admins') return jsonResponse({ success: true, admins: [{ id: 9, full_name: 'أدمن', phone_number: '0500000000', towns: ['النقب'] }] });
+      if (requestPath === '/api/admin/events') {
+        return jsonResponse({ success: true, events: [
+          { ...ADMIN_EVENT_FIXTURE, id: 81, title: 'بلا بلدة', town: 'النقب' },
+          { ...ADMIN_EVENT_FIXTURE, id: 82, title: 'في عرعرة', town: 'عرعرة النقب' }
+        ] });
+      }
+      return null;
+    });
+    const { document } = dom.window;
+    await dom.window.fetchAdminAdmins();
+    const regionCheck = [...document.querySelectorAll('.admin-town-check[data-admin-id="9"]')].find(cb => cb.value === 'النقب');
+    assert.ok(regionCheck, 'expected a checkbox for the region itself');
+    assert.strictEqual(regionCheck.checked, true, 'an assigned region must show checked');
+    assert.ok(regionCheck.parentElement.textContent.includes('النقب (بلا بلدة محدّدة)'));
+
+    await dom.window.fetchAdminEvents();
+    await dom.window.fetchAdminTowns();
+    document.querySelector('.region-unplaced-btn').click();
+    const titles = [...document.querySelectorAll('#adminEventsList .admin-event-card h3')].map(h => h.textContent);
+    assert.deepStrictEqual(titles, ['بلا بلدة'], 'only the exact region name — «عرعرة النقب» must not leak in through a substring match');
+    assert.ok(document.getElementById('tabEvents').classList.contains('active-pane'), 'the events tab must be shown');
+  });
+
+  console.log('\nRegions on the public site — a region name as the place «بلا بلدة محدّدة» (TWN-5)');
+
+  // Reused, not re-typed: the one region a fresh server seeds (constants.SEED_REGION),
+  // shaped like towns.service.js#listActiveRegions — the `regions` array GET /api/towns returns.
+  const { SEED_REGION } = require('../src/constants');
+  const REGIONS_FIXTURE = [{ id: 1, ...SEED_REGION, position: 1, towns: TOWNS }];
+  const TOWNS_WITH_REGIONS_FIXTURE = {
+    success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [], regions: REGIONS_FIXTURE
+  };
+  const REGION_OPTION_LABEL = `${SEED_REGION.name} — بلا بلدة محدّدة`;
+
+  /** buildEnv() whose GET /api/towns carries `regions`, and whose Leaflet map records every setView. */
+  function buildRegionsEnv(extraFetch) {
+    const setViews = [];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          if (String(url).split('?')[0] === '/api/towns') return jsonResponse(TOWNS_WITH_REGIONS_FIXTURE);
+          const extra = extraFetch && await extraFetch(url, opts);
+          return extra || base(url, opts);
+        };
+        const fakeL = buildFakeLeaflet();
+        const makeMap = fakeL.map;
+        fakeL.map = (...args) => {
+          const map = makeMap(...args);
+          map.setView = (center, zoom) => { setViews.push({ center, zoom }); return map; };
+          return map;
+        };
+        w.L = fakeL;
+      }
+    });
+    return { dom, setViews };
+  }
+
+  await test('the publish town select offers the region as «النقب — بلا بلدة محدّدة», valued with the bare region name', async () => {
+    const { dom } = buildRegionsEnv();
+    const { document } = dom.window;
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => {
+      const town = document.getElementById('addTown');
+      return !!town && town.options.length > 0;
+    });
+
+    const options = Array.from(document.getElementById('addTown').options);
+    const regionOption = options.find(o => o.value === SEED_REGION.name);
+    assert.ok(regionOption, `expected an option valued «${SEED_REGION.name}», got ${JSON.stringify(options.map(o => o.value))}`);
+    assert.strictEqual(regionOption.textContent, REGION_OPTION_LABEL);
+    assert.strictEqual(options[options.length - 1], regionOption, 'the region comes after the towns, not among them');
+  });
+
+  await test('choosing the region centres the map on it with no pin, and publish sends town=النقب with no latitude/longitude', async () => {
+    const { dom, setViews } = buildRegionsEnv();
+    const win = dom.window;
+    const { document } = win;
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => {
+      const town = document.getElementById('addTown');
+      return !!town && Array.from(town.options).some(o => o.value === SEED_REGION.name);
+    });
+    await waitFor(() => setViews.length > 0);
+    fillRequiredPublishFields(document);
+
+    const townSelect = document.getElementById('addTown');
+    townSelect.value = SEED_REGION.name;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const lastView = setViews[setViews.length - 1];
+    // Copied out of the jsdom realm first — its arrays carry another Array.prototype.
+    assert.deepStrictEqual({ center: Array.from(lastView.center), zoom: lastView.zoom },
+      { center: [SEED_REGION.latitude, SEED_REGION.longitude], zoom: SEED_REGION.map_zoom },
+      'the map must open on the region\'s own centre and zoom');
+    assert.strictEqual(document.getElementById('addLat').value, '', 'no pin in the middle of a region — the auto pin of the previous town must go too');
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events' && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'pending' });
+      }
+      return buildFetchStub()(url, opts);
+    };
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('publish with a region-level town');
+
+    assert.ok(capturedRequest, 'expected the publish POST to fire');
+    assert.strictEqual(capturedRequest.body.get('town'), SEED_REGION.name);
+    assert.strictEqual(capturedRequest.body.get('latitude'), null, 'no pin placed by the user ⇒ no latitude');
+    assert.strictEqual(capturedRequest.body.get('longitude'), null, 'no pin placed by the user ⇒ no longitude');
+  });
+
+  await test('the edit modal keeps an event\'s current town selected even when it is not among the options, and saves it back unchanged', async () => {
+    const UNKNOWN_TOWN = 'بلدة أوقفها الأدمن';
+    const ownEvents = [
+      { id: 93, title: 'عرس', town: UNKNOWN_TOWN, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE },
+      { id: 94, title: 'عرس', town: SEED_REGION.name, event_date: '2026-10-11', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE }
+    ];
+    const patches = [];
+    const { dom } = buildRegionsEnv(async (url, opts) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+      if (opts.method === 'PATCH') {
+        patches.push({ path: requestPath, body: JSON.parse(opts.body) });
+        return jsonResponse({ success: true, event: {} });
+      }
+      return null;
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(93);
+    const editTown = win.document.getElementById('editTown');
+    assert.strictEqual(editTown.value, UNKNOWN_TOWN, 'an unknown current town must stay selected, not collapse to an empty select');
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.strictEqual(patches[0] && patches[0].body.town, UNKNOWN_TOWN, 'saving must send the event\'s own town, never \'\'');
+
+    win.openEditEventModal(94);
+    assert.strictEqual(editTown.value, SEED_REGION.name);
+    assert.strictEqual(editTown.options[editTown.selectedIndex].textContent, REGION_OPTION_LABEL);
+  });
+
+  await test('the place filter offers the region «(بلا بلدة محدّدة)» and selecting it sends ?town=النقب', async () => {
+    const { dom, calls } = await setupFilterEnv(TOWNS_WITH_REGIONS_FIXTURE);
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', `${SEED_REGION.name} (بلا بلدة محدّدة)`);
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => calls.length > 0);
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'town'), SEED_REGION.name);
+  });
+
+  await test('a region-level event\'s card shows the bare region name, and the empty feed names the first region', async () => {
+    const { dom } = await setupFilterEnv(TOWNS_WITH_REGIONS_FIXTURE);
+    const html = dom.window.renderSingleEventCardHtml({
+      id: 95, title: 'عرس', town: SEED_REGION.name, event_date: '2026-10-01', location_name: 'ديوان', occasion_type: WEDDING_TYPE
+    });
+    assert.ok(html.includes(SEED_REGION.name), 'the card must show the region name as the place');
+    assert.ok(!html.includes('بلا بلدة محدّدة'), 'the picker label is for pickers only — the card shows the bare name');
+    assert.strictEqual(dom.window.selectedPlacesHtml(), `منطقة ${SEED_REGION.name}`);
+  });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
