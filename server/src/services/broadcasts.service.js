@@ -104,8 +104,7 @@ async function sendBroadcast({ title, message, sentBy, expiresAt, tone, scopeTow
  * The practical result: a town-scoped broadcast reaches almost nobody today,
  * not just users who genuinely left the field blank. This is a known,
  * separately-raised product decision (no prefix/fuzzy matching or town
- * guessing belongs here — CLAUDE.md: "البلدة يجب أن تكون من جدول towns — لا
- * تخمين") and is deliberately NOT worked around in this function.
+ * guessing belongs here — CLAUDE.md, towns rule: «لا تخمين») and is deliberately NOT worked around in this function.
  */
 async function scopeClauseForUser(userId) {
   if (!userId) return { clause: 'b.scope_town IS NULL', params: [] };

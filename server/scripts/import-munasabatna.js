@@ -6,8 +6,9 @@
  *
  * Every field below was read off the invitation poster itself (the cards are
  * images, so there is no machine-readable source). Anything the card does not
- * state is left null / 'غير محدد' rather than guessed — those rows are inserted
- * as `pending` so an admin completes them before they go public.
+ * state is left null / 'غير محدد' rather than guessed (an unknown town is filed
+ * under the region's name instead) — those rows are inserted as `pending` so an
+ * admin completes them before they go public.
  *
  * Two modes:
  *
@@ -121,6 +122,7 @@ async function run() {
   const townCoordinates = await townsService.coordinatesByName();
   // A card that names no town is filed under the region's own name, never 'غير محدد'.
   const regionName = await townsService.defaultRegionName();
+  if (!regionName) throw new Error('no active region in the regions table — run npm run db:migrate first');
   let imported = 0;
   let skipped = 0;
 

@@ -176,7 +176,7 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
 
   const towns = parseTowns(body.towns);
   // Containment test: an admin may only assign towns within its own scope;
-  // super_admin may assign any active town. Rejects the whole request —
+  // super_admin may assign any known town (a disabled one included, so re-saving an old provider never fails). Rejects the whole request —
   // never a silent trim.
   await services.assertTownsWithinScope(req.user, towns);
 

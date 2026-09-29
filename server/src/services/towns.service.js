@@ -213,7 +213,7 @@ async function countReferences(name) {
   return Number(row.total);
 }
 
-/** Throws 409 unless `name` is free across towns, regions and the reserved sentinel. */
+/** Throws 400 for a reserved name, and 409 unless `name` is free across towns and regions. */
 async function assertNameAvailable(name, { exceptTownId = null, exceptRegionId = null } = {}) {
   const key = nameKey(name);
   if (RESERVED_PLACE_NAMES.some(reserved => nameKey(reserved) === key)) {
@@ -247,14 +247,15 @@ async function findTownRow(id) {
 
 /**
  * Every region (active or not) with every town under it (active or not),
- * each town's event count, and the number of live events filed under the
+ * each town's event count, and the number of events (any status — the same set
+ * the admin list shows under «الكل») filed under the
  * region itself — the "بلا بلدة محدّدة" queue an admin resolves.
  */
 async function listForAdmin() {
   const [regions, towns] = await Promise.all([
     db.query(
       `SELECT r.*,
-              (SELECT COUNT(*) FROM events e WHERE e.town = r.name AND e.status <> 'rejected') AS unplaced_events
+              (SELECT COUNT(*) FROM events e WHERE e.town = r.name) AS unplaced_events
          FROM regions r
         ORDER BY r.position ASC, r.id ASC`
     ),

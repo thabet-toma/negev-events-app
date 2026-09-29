@@ -2259,6 +2259,17 @@ async function run() {
       assert.strictEqual(row.is_active, 0);
       const event = await db.queryOne('SELECT town FROM events WHERE id = ?', [eventId]);
       assert.strictEqual(event.town, 'بلدة جديدة مصحّحة', "a disabled town's events keep their town");
+      // web/app.js re-sends the event's own town on every save — a title-only
+      // edit must not be refused because that town was disabled meanwhile.
+      const titleOnly = await api('PATCH', `/api/events/${eventId}`, {
+        token: userToken, body: { title: 'عنوان معدّل', town: 'بلدة جديدة مصحّحة' }
+      });
+      assert.strictEqual(titleOnly.status, 200, titleOnly.body.message);
+      const moveIn = await api('PATCH', `/api/events/${eventId}`, { token: userToken, body: { town: 'رهط' } });
+      assert.strictEqual(moveIn.status, 200, moveIn.body.message);
+      const moveBack = await api('PATCH', `/api/events/${eventId}`, { token: userToken, body: { town: 'بلدة جديدة مصحّحة' } });
+      assert.strictEqual(moveBack.status, 400, 'choosing a disabled town is still refused');
+      await db.execute('UPDATE events SET town = ? WHERE id = ?', ['بلدة جديدة مصحّحة', eventId]);
 
       await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
       eventId = null;

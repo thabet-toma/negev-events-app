@@ -343,7 +343,10 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
 
   if (body.title !== undefined) changes.title = cleanString(body.title, 255) || existing.title;
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
-  if (body.town !== undefined) {
+  // A client that re-sends the event's own town unchanged (web/app.js does on
+  // every save) is not choosing a town — so a town disabled after publishing
+  // must not block an edit to the title alone.
+  if (body.town !== undefined && cleanString(body.town, 100) !== existing.town) {
     const town = cleanString(body.town, 100);
     if (!town || !(await townsService.isActivePlace(town))) throw ApiError.badRequest('البلدة المختارة غير معروفة');
     changes.town = town;
