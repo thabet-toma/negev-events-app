@@ -119,6 +119,8 @@ const EVENTS = [
 
 async function run() {
   const townCoordinates = await townsService.coordinatesByName();
+  // A card that names no town is filed under the region's own name, never 'غير محدد'.
+  const regionName = await townsService.defaultRegionName();
   let imported = 0;
   let skipped = 0;
 
@@ -134,7 +136,8 @@ async function run() {
       continue;
     }
 
-    const coords = townCoordinates[event.town] || {};
+    const town = event.town === UNKNOWN ? regionName : event.town;
+    const coords = townCoordinates[town] || {};
 
     const { insertId } = await db.execute(
       `INSERT INTO events
@@ -142,7 +145,7 @@ async function run() {
           event_date, youth_party_date, dinner_time, poster_url, host_phone, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        event.title, event.groom_name, event.family_clan, event.town, event.location_name,
+        event.title, event.groom_name, event.family_clan, town, event.location_name,
         coords.lat ?? null, coords.lng ?? null, event.event_date, event.youth_party_date,
         event.dinner_time, event.poster_url, event.host_phone, event.status
       ]

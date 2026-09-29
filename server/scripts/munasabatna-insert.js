@@ -12,9 +12,9 @@
  *
  * Rules enforced here so a mistake upstream cannot corrupt the table:
  *   - poster_url is required and must be unique — it is the dedup key.
- *   - a town that is not an active row of the towns table is stored as
- *     'غير محدد' and the row is forced to `pending`, so an admin completes it
- *     before it goes public.
+ *   - a town that is not an active row of the towns table is stored as the
+ *     region's own name (e.g. 'النقب' — never a guessed town) and the row is
+ *     forced to `pending`, so an admin completes it before it goes public.
  *   - latitude/longitude come from that town's centre, never from the input.
  */
 
@@ -35,7 +35,7 @@ function readStdin() {
   });
 }
 
-function normalise(raw, index, knownTowns, townCoordinates) {
+function normalise(raw, index, knownTowns, townCoordinates, regionName) {
   for (const field of REQUIRED) {
     if (!raw[field]) throw new Error(`event[${index}]: missing "${field}"`);
   }
@@ -47,7 +47,7 @@ function normalise(raw, index, knownTowns, townCoordinates) {
   }
 
   const townIsKnown = knownTowns.includes(raw.town);
-  const town = townIsKnown ? raw.town : UNKNOWN;
+  const town = townIsKnown ? raw.town : regionName;
   const coords = townCoordinates[town] || {};
 
   return {
@@ -76,11 +76,13 @@ async function run() {
 
   const parsed = JSON.parse(input);
   const list = Array.isArray(parsed) ? parsed : [parsed];
-  const [knownTowns, townCoordinates] = await Promise.all([
+  const [knownTowns, townCoordinates, regionName] = await Promise.all([
     townsService.activeNames(),
-    townsService.coordinatesByName()
+    townsService.coordinatesByName(),
+    townsService.defaultRegionName()
   ]);
-  const events = list.map((raw, index) => normalise(raw, index, knownTowns, townCoordinates));
+  if (!regionName) throw new Error('no active region in the regions table — run npm run db:migrate first');
+  const events = list.map((raw, index) => normalise(raw, index, knownTowns, townCoordinates, regionName));
 
   let imported = 0;
   let skipped = 0;

@@ -71,9 +71,94 @@ async function isActiveTown(name) {
   return (await activeNames()).includes(name);
 }
 
+/**
+ * Active regions (محافظات) in display order, each with the names of its own
+ * active towns: `{ id, name, latitude, longitude, map_zoom, position, towns }`.
+ * A region's name is itself a valid place for an event whose town is not
+ * known — its centre only opens a map, it is never written as a pin.
+ */
+async function listActiveRegions() {
+  const [regions, towns] = await Promise.all([
+    db.query(
+      `SELECT id, name, latitude, longitude, map_zoom, position
+         FROM regions
+        WHERE is_active = 1
+        ORDER BY position ASC, id ASC`
+    ),
+    listActive()
+  ]);
+  return regions.map(region => ({
+    id: region.id,
+    name: region.name,
+    latitude: Number(region.latitude),
+    longitude: Number(region.longitude),
+    map_zoom: Number(region.map_zoom),
+    position: Number(region.position),
+    towns: towns.filter(town => town.region_id === region.id).map(town => town.name)
+  }));
+}
+
+/** Names of every active region, in display order. */
+async function activeRegionNames() {
+  return (await listActiveRegions()).map(region => region.name);
+}
+
+/** Whether `name` is a region's name (active or not) — i.e. a region-level place, never a town. */
+async function isRegionName(name) {
+  if (!name) return false;
+  const rows = await db.query('SELECT name FROM regions');
+  return rows.some(row => row.name === name);
+}
+
+/**
+ * Whether `name` may be written as an event's town on publish/edit: an
+ * active town, or an active region's own name ("النقب — بلا بلدة محدّدة").
+ */
+async function isActivePlace(name) {
+  if (!name) return false;
+  const [towns, regions] = await Promise.all([activeNames(), activeRegionNames()]);
+  return towns.includes(name) || regions.includes(name);
+}
+
+/**
+ * Names of every town row, active or disabled. Assignment lists (an admin's
+ * towns, a provider's towns) are saved as a full set, so a town disabled
+ * after it was assigned must not make re-saving the unchanged set fail.
+ */
+async function knownTownNames() {
+  const rows = await db.query('SELECT name FROM towns');
+  return rows.map(row => row.name);
+}
+
+/** `knownTownNames` plus every region's own name — what an admin's scope may hold. */
+async function knownPlaceNames() {
+  const [towns, regions] = await Promise.all([
+    knownTownNames(),
+    db.query('SELECT name FROM regions')
+  ]);
+  return [...towns, ...regions.map(row => row.name)];
+}
+
+/**
+ * The region a place with no known town falls back to — the first active
+ * region. With a single region (today: النقب) this is unambiguous; it is the
+ * one call to revisit when a second region goes live.
+ */
+async function defaultRegionName() {
+  const [first] = await activeRegionNames();
+  return first || null;
+}
+
 module.exports = {
   listActive,
   activeNames,
   coordinatesByName,
-  isActiveTown
+  isActiveTown,
+  listActiveRegions,
+  activeRegionNames,
+  isRegionName,
+  isActivePlace,
+  knownTownNames,
+  knownPlaceNames,
+  defaultRegionName
 };

@@ -1478,6 +1478,25 @@ const steps = [
       );
       logger.info(`[migrations] create-regions-and-towns-2026-09: seeded ${result.affectedRows} town(s) under region #${region.id}.`);
     }
+  },
+  {
+    // The munasabatna importer used to write 'غير محدد' into events.town when
+    // an invitation named no town — a value no filter, scope or map knows.
+    // Such an event is now filed under its region's own name (today: النقب),
+    // which is a real, publishable place with no fallback pin. Safe to repeat:
+    // once moved, no row matches again.
+    name: 'move-unknown-town-to-region-2026-09',
+    async run(connection) {
+      const [[region]] = await connection.execute(
+        'SELECT name FROM regions WHERE is_active = 1 ORDER BY position ASC, id ASC LIMIT 1'
+      );
+      if (!region) return;
+      const [result] = await connection.execute(
+        "UPDATE events SET town = ? WHERE town = 'غير محدد'",
+        [region.name]
+      );
+      logger.info(`[migrations] move-unknown-town-to-region-2026-09: ${result.affectedRows} event(s) moved to "${region.name}".`);
+    }
   }
 ];
 

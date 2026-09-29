@@ -2041,6 +2041,141 @@ async function run() {
     }
   });
 
+  // TWN-2: the region (محافظة) is itself a place — the fallback when an
+  // event's exact town is not known — never a pin, never a town.
+  const regionName = (await db.queryOne('SELECT name FROM regions ORDER BY position ASC, id ASC LIMIT 1')).name;
+
+  await test('GET /api/towns carries the regions key: النقب with its centre and every seeded town, while towns[] stays unchanged (TWN-2)', async () => {
+    const { body } = await api('GET', '/api/towns');
+    assert.strictEqual(regionName, 'النقب');
+    assert.ok(Array.isArray(body.regions) && body.regions.length === 1, 'exactly one active region today');
+    const [region] = body.regions;
+    assert.strictEqual(region.name, 'النقب');
+    assert.strictEqual(typeof region.latitude, 'number');
+    assert.strictEqual(typeof region.longitude, 'number');
+    assert.strictEqual(region.map_zoom, 9);
+    assert.deepStrictEqual(region.towns, SEED_TOWN_NAMES);
+    assert.ok(!body.towns.includes('النقب'), 'the region is offered from regions[], never mixed into the towns list old clients read');
+  });
+
+  await test('Publishing with town = the region name is accepted, gets no fallback pin, and never warns about a nearer town (TWN-2)', async () => {
+    const pinless = await api('POST', '/api/events', { token: userToken, body: weddingEventBody({ town: regionName }) });
+    assert.strictEqual(pinless.status, 201, pinless.body.message);
+    const pinlessRow = await db.queryOne('SELECT town, latitude, longitude FROM events WHERE id = ?', [pinless.body.eventId]);
+    assert.strictEqual(pinlessRow.town, 'النقب');
+    assert.strictEqual(pinlessRow.latitude, null, 'a pin in the middle of a region sends a guest nowhere — none is invented');
+    assert.strictEqual(pinlessRow.longitude, null);
+
+    // A pin sitting right on Rahat's centre, filed under the whole region.
+    const pinned = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ town: regionName, latitude: 31.393364, longitude: 34.754678 })
+    });
+    assert.strictEqual(pinned.status, 201, pinned.body.message);
+    assert.strictEqual(pinned.body.location_warning, null, 'a region contains every town in it — nothing to warn about');
+    const pinnedRow = await db.queryOne('SELECT latitude FROM events WHERE id = ?', [pinned.body.eventId]);
+    assert.strictEqual(Number(pinnedRow.latitude), 31.393364, "the publisher's own pin is kept");
+
+    await db.execute('DELETE FROM events WHERE id IN (?, ?)', [pinless.body.eventId, pinned.body.eventId]);
+  });
+
+  await test("Resolving a pinless region-level event to a real town gives it that town's centre; an existing pin is never overwritten (TWN-2)", async () => {
+    const pinless = await api('POST', '/api/events', { token: userToken, body: weddingEventBody({ town: regionName }) });
+    const pinned = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ town: regionName, latitude: 31.2, longitude: 34.9 })
+    });
+    try {
+      const resolved = await api('PATCH', `/api/events/${pinless.body.eventId}`, { token: userToken, body: { town: 'رهط' } });
+      assert.strictEqual(resolved.status, 200, resolved.body.message);
+      const row = await db.queryOne('SELECT town, latitude, longitude FROM events WHERE id = ?', [pinless.body.eventId]);
+      assert.strictEqual(row.town, 'رهط');
+      assert.strictEqual(Number(row.latitude), 31.393364);
+      assert.strictEqual(Number(row.longitude), 34.754678);
+
+      const kept = await api('PATCH', `/api/events/${pinned.body.eventId}`, { token: userToken, body: { town: 'رهط' } });
+      assert.strictEqual(kept.status, 200, kept.body.message);
+      const keptRow = await db.queryOne('SELECT latitude, longitude FROM events WHERE id = ?', [pinned.body.eventId]);
+      assert.strictEqual(Number(keptRow.latitude), 31.2, "the publisher's pin wins over the town centre");
+      assert.strictEqual(Number(keptRow.longitude), 34.9);
+    } finally {
+      await db.execute('DELETE FROM events WHERE id IN (?, ?)', [pinless.body.eventId, pinned.body.eventId]);
+    }
+  });
+
+  await test("migrate moves every legacy 'غير محدد' town onto the region, and leaves real towns alone (TWN-2)", async () => {
+    const insertLegacy = town => db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, town, location_name, event_date, status)
+       VALUES ('دعوة مستوردة', 'عريس بلا بلدة', '', ?, 'غير محدد', '2026-12-20', 'pending')`,
+      [town]
+    );
+    const { insertId: unknownId } = await insertLegacy('غير محدد');
+    const { insertId: knownId } = await insertLegacy('كسيفة');
+    try {
+      await migrate();
+      const unknown = await db.queryOne('SELECT town, location_name FROM events WHERE id = ?', [unknownId]);
+      assert.strictEqual(unknown.town, 'النقب');
+      assert.strictEqual(unknown.location_name, 'غير محدد', 'only the town moves — an unknown venue stays honestly unknown');
+      const known = await db.queryOne('SELECT town FROM events WHERE id = ?', [knownId]);
+      assert.strictEqual(known.town, 'كسيفة');
+    } finally {
+      await db.execute('DELETE FROM events WHERE id IN (?, ?)', [unknownId, knownId]);
+    }
+  });
+
+  await test('munasabatna-insert files an invitation with no known town under the region, still pending and pinless (TWN-2)', async () => {
+    const { execFileSync } = require('child_process');
+    const posterUrl = `https://munasabatna.com/test-${Date.now()}.jpg`;
+    const output = execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'munasabatna-insert.js')], {
+      input: JSON.stringify([{ groom_name: 'عريس بطاقة بلا بلدة', event_date: '2026-12-21', poster_url: posterUrl, town: 'بلدة لا تعرفها المنصة', location_name: 'ديوان معروف' }]),
+      encoding: 'utf8'
+    });
+    assert.ok(/imported/.test(output), output);
+    const row = await db.queryOne('SELECT id, town, status, latitude FROM events WHERE poster_url = ?', [posterUrl]);
+    try {
+      assert.strictEqual(row.town, 'النقب', "never 'غير محدد', never a guessed town");
+      assert.strictEqual(row.status, 'pending', 'a human still completes the town before it goes public');
+      assert.strictEqual(row.latitude, null);
+    } finally {
+      await db.execute('DELETE FROM events WHERE id = ?', [row.id]);
+    }
+  });
+
+  await test("A super_admin may hand a local admin the region itself, and that admin then sees the region-level queue; a made-up name is still refused (TWN-2)", async () => {
+    const hashedPin = bcrypt.hashSync('1234', config.bcryptRounds);
+    const regionAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: regionAdminId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, NULL, 'admin')`,
+      [regionAdminPhone, 'أدمن النقب العام', hashedPin]
+    );
+    const regionAdminToken = signToken(
+      { id: regionAdminId, phone_number: regionAdminPhone, full_name: 'أدمن النقب العام', role: 'admin' },
+      '1h'
+    );
+    const queued = await api('POST', '/api/events', { token: userToken, body: weddingEventBody({ town: regionName }) });
+    try {
+      const refused = await api('PUT', `/api/admin/admins/${regionAdminId}/towns`, {
+        token: superAdminToken,
+        body: { towns: ['محافظة لا وجود لها'] }
+      });
+      assert.strictEqual(refused.status, 400);
+
+      const assigned = await api('PUT', `/api/admin/admins/${regionAdminId}/towns`, {
+        token: superAdminToken,
+        body: { towns: [regionName] }
+      });
+      assert.strictEqual(assigned.status, 200, assigned.body.message);
+
+      const queue = await api('GET', '/api/admin/events?status=pending', { token: regionAdminToken });
+      assert.strictEqual(queue.status, 200);
+      assert.ok(queue.body.events.some(e => e.id === queued.body.eventId), 'the region-level event is in its admin\'s queue');
+      assert.ok(queue.body.events.every(e => e.town === regionName), 'and nothing from any real town leaks in');
+    } finally {
+      await db.execute('DELETE FROM events WHERE id = ?', [queued.body.eventId]);
+      await db.execute('DELETE FROM users WHERE id = ?', [regionAdminId]);
+    }
+  });
+
   await test('PATCH /api/admin/events/:id/status approves the event', async () => {
     const { status } = await api('PATCH', `/api/admin/events/${createdEventId}/status`, {
       token: adminToken,

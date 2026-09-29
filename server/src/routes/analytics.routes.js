@@ -35,7 +35,7 @@ router.post('/analytics/events', optionalAuthenticate, asyncHandler(async (req, 
   if (!platform) throw ApiError.badRequest('المنصة مطلوبة');
 
   const contentTown = cleanString(body.content_town, 100);
-  if (contentTown && !(await townsService.isActiveTown(contentTown))) {
+  if (contentTown && !(await townsService.knownPlaceNames()).includes(contentTown)) {
     throw ApiError.badRequest('بلدة المحتوى غير معروفة');
   }
 

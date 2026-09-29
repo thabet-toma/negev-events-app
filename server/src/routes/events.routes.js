@@ -115,14 +115,19 @@ router.get('/map/events', asyncHandler(async (req, res) => {
  * disables appears in (or leaves) the two together.
  */
 router.get('/towns', asyncHandler(async (req, res) => {
-  const [townNames, townCoordinates] = await Promise.all([
+  const [townNames, townCoordinates, regions] = await Promise.all([
     townsService.activeNames(),
-    townsService.coordinatesByName()
+    townsService.coordinatesByName(),
+    townsService.listActiveRegions()
   ]);
   res.json({
     success: true,
     towns: ['الكل', ...townNames],
     town_coordinates: townCoordinates,
+    // Additive: each region (محافظة) with its centre and its towns' names. A
+    // region's own name is also a publishable place — the fallback when the
+    // exact town is not known — so clients offer it after that region's towns.
+    regions,
     villages: await villages.listActive(),
     stats: await events.townStats()
   });
@@ -190,8 +195,10 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     throw ApiError.badRequest(`${labelOf('honorees', 'أصحاب المناسبة')} مطلوب`);
   }
 
+  // An active town, or a region's own name when the exact town is not known
+  // (no fallback pin for the latter — see createEvent).
   const town = cleanString(req.body.town, 100);
-  if (!town || !(await townsService.isActiveTown(town))) {
+  if (!town || !(await townsService.isActivePlace(town))) {
     throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
@@ -338,7 +345,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
   if (body.town !== undefined) {
     const town = cleanString(body.town, 100);
-    if (!town || !(await townsService.isActiveTown(town))) throw ApiError.badRequest('البلدة المختارة غير معروفة');
+    if (!town || !(await townsService.isActivePlace(town))) throw ApiError.badRequest('البلدة المختارة غير معروفة');
     changes.town = town;
     // Leaving the villages catch-all invalidates any village (picked or
     // typed) already on the row — clear it here unless this same edit sets a
@@ -447,6 +454,20 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
 
   if (!Object.keys(changes).length && honorees === null) {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
+  }
+
+  // Moving a pinless event (typically one filed under a region because its
+  // town was unknown) into a real town gives it that town's centre — the same
+  // fallback a publish with no pin gets. Without this the row stays off the
+  // map even after an admin resolves its town. An existing pin, a pin sent in
+  // this same request, or one a village branch above already set is kept.
+  if (changes.town !== undefined && body.latitude === undefined && body.longitude === undefined
+      && changes.latitude === undefined && (existing.latitude === null || existing.longitude === null)) {
+    const centre = (await townsService.coordinatesByName())[changes.town];
+    if (centre) {
+      changes.latitude = centre.lat;
+      changes.longitude = centre.lng;
+    }
   }
 
   // Same check as on publish, run on the values this edit actually lands on

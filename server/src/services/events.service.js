@@ -559,6 +559,9 @@ async function checkTownMismatch(town, latitude, longitude) {
   if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
     return null;
   }
+  // A region-level place ("النقب" — town unknown) contains every town in it,
+  // so no pin can be "nearer another town" than it.
+  if (await townsService.isRegionName(town)) return null;
   const nearest = await nearestTownTo(latitude, longitude);
   if (!nearest || nearest === town) return null;
   return {

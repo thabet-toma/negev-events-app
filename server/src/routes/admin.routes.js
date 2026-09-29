@@ -299,9 +299,12 @@ router.put('/admin/admins/:id/towns', asyncHandler(async (req, res) => {
   }
 
   const towns = [...new Set(req.body.towns.map(town => cleanString(town, 100)))];
-  const knownTowns = await townsService.activeNames();
+  // Any town row (a disabled one may still sit in the unchanged set being
+  // re-saved) or a region's own name — the latter lets a super_admin hand a
+  // local admin the events filed with no known town.
+  const knownPlaces = await townsService.knownPlaceNames();
   for (const town of towns) {
-    if (!town || !knownTowns.includes(town)) {
+    if (!town || !knownPlaces.includes(town)) {
       throw ApiError.badRequest(`بلدة غير معروفة: ${town || ''}`);
     }
   }

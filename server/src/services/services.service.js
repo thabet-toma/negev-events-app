@@ -334,9 +334,13 @@ async function getPublicProviderById(id) {
 // service_provider_towns), never by filtering an already-fetched array.
 // ======================================================================
 
-/** Every town in `towns` must be an active town, and one of `user`'s own towns unless `user` is super_admin. */
+/**
+ * Every town in `towns` must be a town row (active or disabled — a provider's
+ * set is re-saved whole, and a town disabled since must not break that), and
+ * one of `user`'s own towns unless `user` is super_admin.
+ */
 async function assertTownsWithinScope(user, towns) {
-  const knownTowns = await townsService.activeNames();
+  const knownTowns = await townsService.knownTownNames();
   for (const town of towns) {
     if (!knownTowns.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
   }
