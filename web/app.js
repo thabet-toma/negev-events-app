@@ -2499,8 +2499,11 @@ function recenterLocationPicker() {
     locationPickerMap.setView([region.latitude, region.longitude], region.map_zoom);
     if (!pickerPinPlacedByUser) clearPickerMarker();
   } else {
+    // بلا مركز («القرى والتجمعات» قبل اختيار القرية): الدبّوس التلقائي للبلدة
+    // السابقة لم يعد يصف المكان، فلا يُرسَل مع المناسبة.
     const view = neutralPickerView();
     locationPickerMap.setView(view.center, view.zoom);
+    if (!pickerPinPlacedByUser) clearPickerMarker();
   }
 }
 
@@ -3415,7 +3418,7 @@ function renderAgendaSelectedDayEvents(dateStr) {
   }
 
   listEl.innerHTML = eventsOnDate.map(evt => `
-    <div class="agenda-event-item" onclick="closeAgendaModal(); openEventDetailsModal(${evt.id});">
+    <div class="agenda-event-item" onclick="closeAgendaModal(); navigateToEvent(${evt.id});">
       <div>
         <div class="agenda-event-title">${escapeHtml(evt.title || evt.groom_name)}</div>
         <div class="agenda-event-meta">
@@ -4696,14 +4699,14 @@ async function checkDateCollisionLive() {
       alertBox.className = 'collision-box warn';
       alertBox.innerHTML = `
         <i class="fa-solid fa-triangle-exclamation"></i>
-        <strong>تنبيه تضارب مواعيد:</strong> يوجد بالفعل (${data.count}) مناسبة مسجلة في <strong>${town}</strong> في تاريخ ${date}.
+        <strong>تنبيه تضارب مواعيد:</strong> يوجد بالفعل (${escapeHtml(String(data.count))}) مناسبة مسجلة في <strong>${escapeHtml(town)}</strong> في تاريخ ${escapeHtml(date)}.
       `;
     } else {
       alertBox.style.display = 'block';
       alertBox.className = 'collision-box safe';
       alertBox.innerHTML = `
         <i class="fa-solid fa-circle-check"></i>
-        <strong>الموعد متاح وممتاز:</strong> لا يوجد تضارب في مناسبات <strong>${town}</strong> في هذا اليوم.
+        <strong>الموعد متاح وممتاز:</strong> لا يوجد تضارب في مناسبات <strong>${escapeHtml(town)}</strong> في هذا اليوم.
       `;
     }
   } catch (e) {

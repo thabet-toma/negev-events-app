@@ -4786,6 +4786,36 @@ async function run() {
     assert.strictEqual(lastScrollBehavior, 'auto', 'solemn occasion card must scroll with auto behavior, never smooth');
   });
 
+  await test('clicking an event in the agenda day list closes the agenda and navigates to that event, with no ReferenceError', async () => {
+    const AGENDA_EVENT = { id: 4321, title: 'عرس الأجندة', town: 'رهط', event_date: '2026-10-05', occasion_type: WEDDING_TYPE };
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts) => (String(url).split('?')[0] === '/api/events'
+          ? jsonResponse({ success: true, events: [AGENDA_EVENT], pagination: { page: 1, totalPages: 1 }, announcements: [] })
+          : base(url, opts));
+      }
+    });
+    const win = dom.window;
+    // The feed load is what fills the agenda — wait for its card, as a user would.
+    await waitFor(() => win.document.getElementById(`eventCard-${AGENDA_EVENT.id}`));
+    const navigated = [];
+    win.navigateToEvent = async (id) => { navigated.push(id); };
+    const pageErrors = [];
+    win.addEventListener('error', (e) => pageErrors.push(e.message));
+
+    win.document.getElementById('agendaModal').style.display = 'flex';
+    win.renderAgendaSelectedDayEvents(AGENDA_EVENT.event_date);
+    const item = win.document.querySelector('#agendaEventsList .agenda-event-item');
+    assert.ok(item, 'expected the day list to render the event');
+    item.click();
+
+    assert.deepStrictEqual(pageErrors, [], 'the agenda item handler must not call an undefined function');
+    assert.deepStrictEqual(navigated, [AGENDA_EVENT.id]);
+    assert.strictEqual(win.document.getElementById('agendaModal').style.display, 'none');
+  });
+
   await test('iOS install hint is not shown unbidden if already dismissed (FIX 3, story 17)', async () => {
     const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
     let pushFakes;
@@ -6123,6 +6153,71 @@ async function run() {
     assert.ok(html.includes(SEED_REGION.name), 'the card must show the region name as the place');
     assert.ok(!html.includes('بلا بلدة محدّدة'), 'the picker label is for pickers only — the card shows the bare name');
     assert.strictEqual(dom.window.selectedPlacesHtml(), `منطقة ${SEED_REGION.name}`);
+  });
+
+  console.log('\nPublish form — collision alert and the villages catch-all pin');
+
+  await test('the collision alert shows the town and date as text — markup in them is never parsed', async () => {
+    const HOSTILE_TOWN = '<img src=x id="injectedTown">';
+    const { dom } = buildRegionsEnv(async (url) => (String(url).split('?')[0] === '/api/check-collision'
+      ? jsonResponse({ success: true, hasCollision: true, count: 2 })
+      : null));
+    const { document } = dom.window;
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addTown') && document.getElementById('addEventDate'));
+
+    const townSelect = document.getElementById('addTown');
+    const hostile = document.createElement('option');
+    hostile.value = HOSTILE_TOWN;
+    hostile.textContent = HOSTILE_TOWN;
+    townSelect.appendChild(hostile);
+    townSelect.value = HOSTILE_TOWN;
+    document.getElementById('addEventDate').value = '2026-10-05';
+
+    await dom.window.checkDateCollisionLive();
+    const alertBox = document.getElementById('collisionAlert');
+    assert.strictEqual(alertBox.querySelector('#injectedTown'), null, 'a town value must never become an element');
+    assert.ok(alertBox.textContent.includes(HOSTILE_TOWN), 'the town is still shown, as literal text');
+    assert.ok(alertBox.textContent.includes('(2)'));
+  });
+
+  await test("switching to «القرى والتجمعات» drops the previous town's automatic pin, but never a pin the user placed", async () => {
+    const { dom } = buildRegionsEnv();
+    const win = dom.window;
+    const { document } = win;
+    // The fake map drops its handlers; keep the picker's 'click' so the test can tap the map like a user.
+    let mapClick = null;
+    const makeMap = win.L.map;
+    win.L.map = (...args) => {
+      const map = makeMap(...args);
+      const on = map.on;
+      map.on = (name, handler) => { if (name === 'click') mapClick = handler; return on.call(map, name, handler); };
+      return map;
+    };
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => {
+      const town = document.getElementById('addTown');
+      return !!town && Array.from(town.options).some(o => o.value === 'القرى والتجمعات') && mapClick;
+    });
+    const townSelect = document.getElementById('addTown');
+    const choose = (value) => {
+      townSelect.value = value;
+      townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    };
+
+    choose('رهط');
+    await waitFor(() => document.getElementById('addLat').value !== '');
+    choose('القرى والتجمعات');
+    assert.strictEqual(document.getElementById('addLat').value, '', "Rahat's centre must not travel with a village event");
+    assert.strictEqual(document.getElementById('addLng').value, '');
+
+    choose('رهط');
+    await waitFor(() => document.getElementById('addLat').value !== '');
+    mapClick({ latlng: { lat: 31.111, lng: 34.777 } });
+    const userLat = document.getElementById('addLat').value;
+    assert.ok(userLat.startsWith('31.111'), 'the tap must have set the pin');
+    choose('القرى والتجمعات');
+    assert.strictEqual(document.getElementById('addLat').value, userLat, "the user's own pin stays");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
