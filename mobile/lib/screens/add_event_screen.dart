@@ -11,6 +11,7 @@ import '../main.dart';
 import '../models/event.dart';
 import '../state/analytics.dart';
 import '../state/auth_store.dart';
+import '../state/places_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
@@ -140,6 +141,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
   Future<List<OccasionType>>? _typesFuture;
   Future<Map<String, TownCoordinate>>? _townCoordsFuture;
   Future<List<Village>>? _villagesFuture;
+  bool _placesRequested = false;
   OccasionType? _type;
 
   final Map<String, TextEditingController> _controllers = {};
@@ -172,8 +174,24 @@ class _AddEventScreenState extends State<AddEventScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _typesFuture ??= AppServices.of(context).api.listOccasionTypes();
-    _townCoordsFuture ??= AppServices.of(context).api.townCoordinates();
-    _villagesFuture ??= AppServices.of(context).api.listVillages();
+    // المراكز والقرى من نفس الكتالوج المشترك — طلب واحد إلى GET /api/towns،
+    // ولا خطأ يفلت منه (الفشل يعيد البلدات الاحتياطية بلا مراكز ولا قرى).
+    _townCoordsFuture ??=
+        AppServices.of(context).places.load().then((c) => c.townCoordinates);
+    _villagesFuture ??= AppServices.of(context).places.load().then((c) => c.villages);
+    if (!_placesRequested) {
+      _placesRequested = true;
+      // وصول بلدات الخادم قد يُسقط البلدة المختارة افتراضياً (بلدة احتياطية
+      // عطّلها السوبر أدمن) — نعود حينها لأول بند كي لا يُبنى منتقٍ بقيمة
+      // خارج بنوده.
+      AppServices.of(context).places.load().then((catalog) {
+        if (!mounted) return;
+        final options = eventTownOptions(catalog);
+        setState(() {
+          if (!options.any((o) => o.value == _town)) _town = options.first.value;
+        });
+      });
+    }
   }
 
   @override
@@ -287,7 +305,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       return '${type.labelFor('honorees') ?? 'أصحاب المناسبة'} مطلوب';
     }
 
-    if (!AppConfig.towns.contains(_town)) {
+    if (!eventTownOptions(AppServices.of(context).places.catalog).any((o) => o.value == _town)) {
       return '${type.labelFor('town') ?? 'البلدة'} مطلوبة';
     }
 
@@ -463,7 +481,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _audio = null;
       _artistImage = null;
       _conflicts = const [];
-      _town = AppConfig.towns.first;
+      _town = AppServices.of(context).places.catalog.towns.first;
       _selectedVillage = null;
       _villageNotListed = false;
       _latitude = null;
@@ -551,8 +569,8 @@ class _AddEventScreenState extends State<AddEventScreen> {
           decoration: InputDecoration(
             labelText: '${type.labelFor('town') ?? 'البلدة'} *',
           ),
-          items: AppConfig.towns
-              .map((town) => DropdownMenuItem(value: town, child: Text(town)))
+          items: eventTownOptions(AppServices.of(context).places.catalog)
+              .map((o) => DropdownMenuItem(value: o.value, child: Text(o.label)))
               .toList(),
           onChanged: (value) {
             if (value == null) return;
@@ -622,6 +640,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
               key: ValueKey(_locationPickerGeneration),
               town: _town,
               townCoordinates: coords,
+              regions: AppServices.of(context).places.catalog.regions,
               onChanged: (lat, lng) => setState(() {
                 _latitude = lat;
                 _longitude = lng;

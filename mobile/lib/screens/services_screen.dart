@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../config.dart';
 import '../main.dart';
 import '../models/service.dart';
 import '../theme.dart';
@@ -144,7 +143,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
   }
 
   Future<void> _pickTown() async {
-    final towns = ['الكل', ...AppConfig.towns];
+    final towns = ['الكل', ...AppServices.of(context).places.catalog.towns];
     final picked = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: context.c.surfaceSunk,
@@ -1455,7 +1454,7 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: AppConfig.towns.map((town) {
+                children: AppServices.of(context).places.catalog.towns.map((town) {
                   final isSelected = _selectedTowns.contains(town);
                   return FilterChip(
                     label: Text(town),

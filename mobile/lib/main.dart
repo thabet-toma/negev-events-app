@@ -11,6 +11,7 @@ import 'state/analytics.dart';
 import 'state/audio_coordinator.dart';
 import 'state/auth_store.dart';
 import 'state/deep_link_handler.dart';
+import 'state/places_store.dart';
 import 'state/realtime.dart';
 import 'state/reminder_scheduler.dart';
 import 'state/theme_store.dart';
@@ -49,6 +50,7 @@ void main() {
   final themeStore = ThemeStore();
   final reminders = ReminderScheduler(api: api, auth: auth);
   final audio = AudioCoordinator();
+  final places = PlacesStore(api);
 
   // خلفية ثابتة كرسائل الخطأ في `showMessage` — لا سياق هنا لقراءة الألوان.
   // زرّ «تسجيل الدخول» في الرسالة نفسها يفتح شاشة الدخول من أي مكان، بدل دفعها
@@ -83,6 +85,7 @@ void main() {
   audio.load();
   audio.bindLifecycle();
   audio.defaultTrack(api);
+  places.load();
   // إعادة بناء خطّة المنبّهات كل ما تغيّرت هويّة الحساب المسجَّل — يغطّي فتح
   // التطبيق (أول notifyListeners بعد auth.load())، تسجيل الدخول، وتبديل
   // الحساب معاً بمسار واحد؛ تسجيل الخروج يُلغي كل منبّه بلا استثناء (قصة ١٩
@@ -100,6 +103,7 @@ void main() {
       themeStore: themeStore,
       reminders: reminders,
       audio: audio,
+      places: places,
       child: const NegevApp(),
     ),
   );
@@ -109,7 +113,8 @@ void main() {
 ///
 /// `themeStore` اختياري (يُبنى افتراضياً بوضع `system`) كي لا تحتاج شاشات
 /// الاختبار الحالية التي تُنشئ `AppServices` مباشرة أن تعرف عنه — و`audio`
-/// كذلك (منسّق بلا مشغّل حتى أول تشغيل فعلي).
+/// كذلك (منسّق بلا مشغّل حتى أول تشغيل فعلي)، و`places` (يبدأ بالبلدات
+/// الاحتياطية ويحمّل الخادم عند أول طلب من شاشة).
 class AppServices extends InheritedWidget {
   AppServices({
     super.key,
@@ -119,10 +124,12 @@ class AppServices extends InheritedWidget {
     ThemeStore? themeStore,
     ReminderScheduler? reminders,
     AudioCoordinator? audio,
+    PlacesStore? places,
     required super.child,
   })  : themeStore = themeStore ?? ThemeStore(),
         reminders = reminders ?? ReminderScheduler(api: api, auth: auth),
-        audio = audio ?? AudioCoordinator();
+        audio = audio ?? AudioCoordinator(),
+        places = places ?? PlacesStore(api);
 
   final NegevApi api;
   final AuthStore auth;
@@ -130,6 +137,7 @@ class AppServices extends InheritedWidget {
   final ThemeStore themeStore;
   final ReminderScheduler reminders;
   final AudioCoordinator audio;
+  final PlacesStore places;
 
   static AppServices of(BuildContext context) {
     final services =
@@ -145,7 +153,8 @@ class AppServices extends InheritedWidget {
       realtime != oldWidget.realtime ||
       themeStore != oldWidget.themeStore ||
       reminders != oldWidget.reminders ||
-      audio != oldWidget.audio;
+      audio != oldWidget.audio ||
+      places != oldWidget.places;
 }
 
 class NegevApp extends StatelessWidget {

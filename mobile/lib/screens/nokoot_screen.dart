@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../config.dart';
 import '../main.dart';
 import '../models/nokoot.dart';
 import '../theme.dart';
@@ -27,7 +26,8 @@ class _NokootScreenState extends State<NokootScreen> {
     final recipientController = TextEditingController();
     final amountController = TextEditingController();
     final notesController = TextEditingController();
-    String town = AppConfig.towns.first;
+    final towns = AppServices.of(context).places.catalog.towns;
+    String town = towns.first;
     DateTime? date;
     var saving = false;
 
@@ -76,7 +76,7 @@ class _NokootScreenState extends State<NokootScreen> {
                 DropdownButtonFormField<String>(
                   initialValue: town,
                   decoration: const InputDecoration(labelText: 'البلدة'),
-                  items: AppConfig.towns
+                  items: towns
                       .map((item) =>
                           DropdownMenuItem(value: item, child: Text(item)))
                       .toList(),

@@ -398,13 +398,19 @@ class _SignInScreenState extends State<SignInScreen> {
           ),
           if (_isRegistering) ...[
             const SizedBox(height: 14),
-            DropdownButtonFormField<String>(
-              initialValue: _clanTown,
-              decoration: const InputDecoration(labelText: 'البلدة (اختياري)'),
-              items: AppConfig.towns
-                  .map((town) => DropdownMenuItem(value: town, child: Text(town)))
-                  .toList(),
-              onChanged: (value) => setState(() => _clanTown = value),
+            ListenableBuilder(
+              listenable: AppServices.of(context).places,
+              builder: (context, _) => DropdownButtonFormField<String>(
+                initialValue: _clanTown,
+                decoration: const InputDecoration(labelText: 'البلدة (اختياري)'),
+                items: AppServices.of(context)
+                    .places
+                    .catalog
+                    .towns
+                    .map((town) => DropdownMenuItem(value: town, child: Text(town)))
+                    .toList(),
+                onChanged: (value) => setState(() => _clanTown = value),
+              ),
             ),
           ],
           const SizedBox(height: 26),

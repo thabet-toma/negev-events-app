@@ -47,6 +47,18 @@ NegevApi apiReturning(
   return NegevApi(ApiClient(client: client));
 }
 
+/// المحافظة الوحيدة اليوم كما يعيدها GET /api/towns — اسمها نفسه مكانٌ صالح
+/// لمناسبة لم تُعرف بلدتها بالضبط.
+const negevRegionJson = {
+  'id': 1,
+  'name': 'النقب',
+  'latitude': 31.25,
+  'longitude': 34.79,
+  'map_zoom': 10,
+  'position': 1,
+  'towns': ['رهط', 'حورة'],
+};
+
 void main() {
   group('تحليل المناسبة', () {
     test('يقرأ الحقول والتفاعلات ويطبّع التاريخ', () {
@@ -1047,6 +1059,7 @@ void main() {
               'success': true,
               'towns': ['الكل', 'رهط', 'حورة'],
               'town_coordinates': <String, dynamic>{},
+              'regions': [negevRegionJson],
               'stats': <Map<String, dynamic>>[],
             }),
             200,
@@ -1179,6 +1192,7 @@ void main() {
                 'success': true,
                 'towns': ['الكل', 'رهط', 'حورة'],
                 'town_coordinates': <String, dynamic>{},
+                'regions': [negevRegionJson],
                 'stats': <Map<String, dynamic>>[],
               }),
               200,
@@ -2204,5 +2218,223 @@ void main() {
       expect(event.townDisplay, 'القرى والتجمعات (أم بطين)');
     });
   });
-}
 
+  group('البلدات والمحافظات من الخادم (TWN-6)', () {
+    Map<String, dynamic> weddingTypeJson() => {
+      'id': 1,
+      'name': 'عرس',
+      'icon': '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'tone': 'festive',
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'العريس/العروس',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        {
+          'field_key': 'town',
+          'label': 'البلدة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 2,
+        },
+        {
+          'field_key': 'event_date',
+          'label': 'تاريخ المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 3,
+        },
+      ],
+      'reactions': <String>['coffee'],
+    };
+
+    http.Response jsonResponse(Object body, [int status = 200]) => http.Response(
+          jsonEncode(body),
+          status,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+
+    /// `/api/towns` يحمل بلدة لا يعرفها `AppConfig.towns` ومحافظة «النقب» —
+    /// أو يفشل بـ500 حين `townsFail`. كل POST إلى /api/events يُلتقط جسمه.
+    NegevApi placesApi({bool townsFail = false, List<String>? postedBodies}) {
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/api/towns')) {
+          if (townsFail) return jsonResponse({'success': false, 'message': 'خطأ'}, 500);
+          return jsonResponse({
+            'success': true,
+            'towns': ['الكل', 'رهط', 'بلدة جديدة'],
+            'town_coordinates': {
+              'رهط': {'lat': 31.39, 'lng': 34.75},
+            },
+            'regions': [negevRegionJson],
+            'villages': <Map<String, dynamic>>[],
+            'stats': <Map<String, dynamic>>[],
+          });
+        }
+        if (path.endsWith('/api/occasion-types')) {
+          return jsonResponse({
+            'success': true,
+            'types': [weddingTypeJson()],
+          });
+        }
+        if (path.endsWith('/api/auth/me')) {
+          return jsonResponse({
+            'success': true,
+            'user': {'id': 7, 'phone_number': '0500000000', 'full_name': 'مستخدم', 'role': 'user'},
+          });
+        }
+        if (request.method == 'POST' && path.endsWith('/api/events')) {
+          postedBodies?.add(utf8.decode(request.bodyBytes));
+          return jsonResponse({
+            'success': true,
+            'message': 'تم استلام المناسبة وستظهر بعد المراجعة',
+            'eventId': 5,
+            'status': 'pending',
+          }, 201);
+        }
+        if (path.contains('/amendments')) {
+          return jsonResponse({'success': true, 'amendments': <Map<String, dynamic>>[]});
+        }
+        return jsonResponse({'success': true});
+      });
+      return NegevApi(ApiClient(client: client));
+    }
+
+    Future<void> pumpScreen(WidgetTester tester, NegevApi api, Widget screen) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'test-token',
+        'negev_user': jsonEncode(
+          {'id': 7, 'phone_number': '0500000000', 'full_name': 'مستخدم', 'role': 'user'},
+        ),
+      });
+      final auth = AuthStore(api);
+      await auth.load();
+
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            home: Directionality(textDirection: TextDirection.rtl, child: screen),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    List<String?> townDropdownValues(WidgetTester tester) {
+      final dropdown = tester.widget<DropdownButton<String>>(find.byType(DropdownButton<String>));
+      return dropdown.items!.map((item) => item.value).toList();
+    }
+
+    test('placesCatalog يقرأ البلدات بلا «الكل» والمحافظات بمراكزها', () async {
+      final catalog = await placesApi().placesCatalog();
+      expect(catalog.fromServer, isTrue);
+      expect(catalog.towns, ['رهط', 'بلدة جديدة']);
+      expect(catalog.regions.single.name, 'النقب');
+      expect(catalog.regions.single.mapZoom, 10);
+      expect(catalog.regions.single.towns, ['رهط', 'حورة']);
+      expect(catalog.townCoordinates['رهط']?.lat, 31.39);
+    });
+
+    test('فشل GET /api/towns يعيد بلدات config.dart بلا محافظات — لا خطأً', () async {
+      final catalog = await placesApi(townsFail: true).placesCatalog();
+      expect(catalog.fromServer, isFalse);
+      expect(catalog.towns, AppConfig.towns);
+      expect(catalog.regions, isEmpty);
+    });
+
+    testWidgets(
+      'منتقي بلدة النشر: بلدة يعرفها الخادم وحده، وبند المحافظة، والنشر به يرسل town=النقب',
+      (tester) async {
+        final posted = <String>[];
+        await pumpScreen(tester, placesApi(postedBodies: posted), const AddEventScreen());
+
+        final values = townDropdownValues(tester);
+        expect(values, containsAllInOrder(['رهط', 'بلدة جديدة', 'النقب']));
+        // البلدات الاحتياطية لا تظهر حين يجيب الخادم.
+        expect(values, isNot(contains('عرعرة النقب')));
+
+        await tester.enterText(find.widgetWithText(TextFormField, 'العريس/العروس'), 'محمد');
+
+        await tester.tap(find.text('رهط').first);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.text('بلدة جديدة'), findsWidgets);
+        await tester.tap(find.text('النقب — بلا بلدة محدّدة').last);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        await tester.tap(find.text('اختر التاريخ'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        await tester.tap(find.text('إرسال المناسبة'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(posted, hasLength(1));
+        final townPart = posted.single
+            .split('--')
+            .firstWhere((part) => part.contains('name="town"'));
+        expect(townPart, contains('\r\n\r\nالنقب\r\n'));
+        // المحافظة لا تُكتب دبّوساً — لا إحداثيات بلا نقرة من المستخدم.
+        expect(posted.single, isNot(contains('name="latitude"')));
+      },
+    );
+
+    testWidgets('فشل GET /api/towns: منتقي النشر يعرض بلدات config.dart بلا بند محافظة',
+        (tester) async {
+      await pumpScreen(tester, placesApi(townsFail: true), const AddEventScreen());
+
+      expect(townDropdownValues(tester), AppConfig.towns);
+      expect(find.textContaining('بلا بلدة محدّدة'), findsNothing);
+    });
+
+    testWidgets(
+      'شاشة التعديل ببلدة لم يعد الخادم يعرضها: تُبنى بلا استثناء ولا يُرسَل شيء',
+      (tester) async {
+        final event = Event.fromJson({
+          'id': 1,
+          'title': 'زفاف محمد',
+          'groom_name': 'محمد',
+          'town': 'بلدة معطّلة',
+          'event_date': '2026-10-01',
+          'status': 'approved',
+          'occasion_type': weddingTypeJson(),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        await pumpScreen(tester, placesApi(), EditEventScreen(event: event));
+
+        expect(tester.takeException(), isNull);
+        final values = townDropdownValues(tester);
+        expect(values, containsAll(['رهط', 'بلدة جديدة', 'النقب', 'بلدة معطّلة']));
+        expect(find.text('بلدة معطّلة'), findsOneWidget);
+        final save = tester.widget<ElevatedButton>(find.byKey(const Key('save_event_button')));
+        expect(save.onPressed, isNull);
+      },
+    );
+  });
+}

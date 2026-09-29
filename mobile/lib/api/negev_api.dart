@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../config.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/nokoot.dart';
@@ -103,13 +104,52 @@ class NegevApi {
     return EventsPage(events: events, pagination: pagination, announcements: announcements);
   }
 
+  /// كتالوج الأماكن كاملاً بطلب واحد إلى GET /api/towns: البلدات النشِطة
+  /// (بلا «الكل»)، ومراكزها، والقرى، والمحافظات. البلدات صارت بيانات وقت
+  /// تشغيل يديرها السوبر أدمن، فلا تُقرأ من `lib/config.dart` إلا احتياطاً:
+  /// أي فشل (انقطاع، ردّ غير متوقَّع) يعيد [PlacesCatalog.fallback] لا خطأً،
+  /// كي لا يبقى منتقٍ بلا بلدات أبداً.
+  Future<PlacesCatalog> placesCatalog() async {
+    try {
+      final data = await _client.get('/api/towns');
+      final rawTowns = data['towns'];
+      final towns = rawTowns is List
+          ? rawTowns.map((t) => '$t').where((t) => t.isNotEmpty && t != 'الكل').toList()
+          : <String>[];
+      if (towns.isEmpty) return PlacesCatalog.fallback();
+
+      final rawVillages = data['villages'];
+      final rawRegions = data['regions'];
+      return PlacesCatalog(
+        towns: towns,
+        townCoordinates: _parseTownCoordinates(data['town_coordinates']),
+        villages: rawVillages is List
+            ? rawVillages.whereType<Map<String, dynamic>>().map(Village.fromJson).toList()
+            : const [],
+        regions: rawRegions is List
+            ? rawRegions
+                .whereType<Map<String, dynamic>>()
+                .map(Region.fromJson)
+                .where((r) => r.name.isNotEmpty)
+                .toList()
+            : const [],
+        fromServer: true,
+      );
+    } catch (_) {
+      return PlacesCatalog.fallback();
+    }
+  }
+
   /// مراكز البلدات — من GET /api/towns. `lib/config.dart` يحمل أسماء البلدات
   /// فقط؛ الإحداثيات من الخادم حصراً (كانت مغلوطة حتى ٨.٤ كم حين عاشت في
   /// العميل — نسخة ثانية تعني عطلاً يُصحَّح مرّتين). 'القرى والتجمعات' سلّة
   /// تجميع لا مكان، فلا مدخل لها هنا عمداً.
   Future<Map<String, TownCoordinate>> townCoordinates() async {
     final data = await _client.get('/api/towns');
-    final raw = data['town_coordinates'];
+    return _parseTownCoordinates(data['town_coordinates']);
+  }
+
+  static Map<String, TownCoordinate> _parseTownCoordinates(Object? raw) {
     final result = <String, TownCoordinate>{};
     if (raw is Map) {
       raw.forEach((key, value) {
@@ -127,8 +167,7 @@ class NegevApi {
   }
 
   /// القرى النشِطة — من مفتاح `villages` في GET /api/towns. بيانات وقت تشغيل
-  /// حصراً: لا تُكرَّر في `lib/config.dart` مهما كثرت (خلافاً لـ `TOWNS`
-  /// الثمانية، التي تبقى ثابتاً بالكود لأنها لا تتغيّر إلا بنشر جديد).
+  /// حصراً: لا تُكرَّر في `lib/config.dart` مهما كثرت.
   Future<List<Village>> listVillages() async {
     final data = await _client.get('/api/towns');
     final raw = data['villages'];
@@ -796,6 +835,65 @@ class Village {
       position: position is int ? position : int.tryParse('${position ?? ''}') ?? 0,
     );
   }
+}
+
+/// محافظة (منطقة) — من مفتاح `regions` في GET /api/towns. اسمها نفسه مكانٌ
+/// صالح لمناسبة لم تُعرف بلدتها بالضبط («النقب»): مركزها يفتح الخريطة فقط،
+/// ولا يُكتب دبّوساً أبداً.
+class Region {
+  final int id;
+  final String name;
+  final double latitude;
+  final double longitude;
+  final double mapZoom;
+  final List<String> towns;
+
+  const Region({
+    required this.id,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.mapZoom,
+    this.towns = const [],
+  });
+
+  factory Region.fromJson(Map<String, dynamic> json) {
+    double toDouble(Object? value, double fallback) =>
+        value is num ? value.toDouble() : double.tryParse('${value ?? ''}') ?? fallback;
+    final id = json['id'];
+    final towns = json['towns'];
+    return Region(
+      id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
+      name: '${json['name'] ?? ''}',
+      latitude: toDouble(json['latitude'], 0),
+      longitude: toDouble(json['longitude'], 0),
+      mapZoom: toDouble(json['map_zoom'], 9),
+      towns: towns is List ? towns.map((t) => '$t').toList() : const [],
+    );
+  }
+}
+
+/// ردّ GET /api/towns مقروءاً مرّة واحدة — انظر [NegevApi.placesCatalog].
+class PlacesCatalog {
+  /// البلدات النشِطة بترتيب الخادم، بلا «الكل» وبلا أسماء المحافظات.
+  final List<String> towns;
+  final Map<String, TownCoordinate> townCoordinates;
+  final List<Village> villages;
+  final List<Region> regions;
+
+  /// `false` للنسخة الاحتياطية من `lib/config.dart` — المخزن يعيد المحاولة.
+  final bool fromServer;
+
+  const PlacesCatalog({
+    required this.towns,
+    this.townCoordinates = const {},
+    this.villages = const [],
+    this.regions = const [],
+    this.fromServer = false,
+  });
+
+  /// بلا اتصال: بلدات `AppConfig.towns`، بلا محافظات ولا قرى ولا مراكز.
+  factory PlacesCatalog.fallback() => const PlacesCatalog(towns: AppConfig.towns);
 }
 
 /// ردّ POST /api/events — الرسالة إلزامية، والتحذير اللين اختياري.

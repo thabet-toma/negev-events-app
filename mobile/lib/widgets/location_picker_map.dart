@@ -27,12 +27,17 @@ class LocationPickerMap extends StatefulWidget {
     required this.town,
     required this.townCoordinates,
     required this.onChanged,
+    this.regions = const [],
     this.initialLatitude,
     this.initialLongitude,
   });
 
   final String town;
   final Map<String, TownCoordinate> townCoordinates;
+
+  /// المحافظات — اسم محافظة مختاراً بلدةً («النقب») يفتح الخريطة على مركزها
+  /// وتكبيرها هي، بلا دبّوس: مركز المحافظة ليس موقع قاعة.
+  final List<Region> regions;
 
   /// يُستدعى بالإحداثيات المختارة عند كل نقرة على الخريطة، وبـ`null` حين
   /// يمسح المستخدم تحديده فيعود الحقل إلى الغياب التامّ.
@@ -65,9 +70,24 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
 
   bool get _hasKnownCenter => widget.townCoordinates.containsKey(widget.town);
 
-  LatLng _resolvedCenter(String town, Map<String, TownCoordinate> coords) {
+  Region? _regionNamed(String town, List<Region> regions) {
+    for (final region in regions) {
+      if (region.name == town) return region;
+    }
+    return null;
+  }
+
+  LatLng _resolvedCenter(String town, Map<String, TownCoordinate> coords, List<Region> regions) {
     final coord = coords[town];
-    return coord == null ? _negevFallbackCenter : LatLng(coord.lat, coord.lng);
+    if (coord != null) return LatLng(coord.lat, coord.lng);
+    final region = _regionNamed(town, regions);
+    if (region != null) return LatLng(region.latitude, region.longitude);
+    return _negevFallbackCenter;
+  }
+
+  double get _resolvedZoom {
+    if (_hasKnownCenter) return _townZoom;
+    return _regionNamed(widget.town, widget.regions)?.mapZoom ?? _negevFallbackZoom;
   }
 
   @override
@@ -77,10 +97,11 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
     // مركزها — إلا إن كان المستخدم قد وضع دبّوساً بنفسه فعلاً، فنُبقي دبّوسه
     // وموضع الخريطة كما هما ولا نزيحهما من تحته.
     if (_pinPlacedByUser) return;
-    final oldCenter = _resolvedCenter(oldWidget.town, oldWidget.townCoordinates);
-    final newCenter = _resolvedCenter(widget.town, widget.townCoordinates);
+    final oldCenter =
+        _resolvedCenter(oldWidget.town, oldWidget.townCoordinates, oldWidget.regions);
+    final newCenter = _resolvedCenter(widget.town, widget.townCoordinates, widget.regions);
     if (oldCenter != newCenter) {
-      _mapController.move(newCenter, _hasKnownCenter ? _townZoom : _negevFallbackZoom);
+      _mapController.move(newCenter, _resolvedZoom);
     }
   }
 
@@ -213,8 +234,9 @@ class _LocationPickerMapState extends State<LocationPickerMap> {
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
-                initialCenter: _pin ?? _resolvedCenter(widget.town, widget.townCoordinates),
-                initialZoom: _pin != null || _hasKnownCenter ? _townZoom : _negevFallbackZoom,
+                initialCenter:
+                    _pin ?? _resolvedCenter(widget.town, widget.townCoordinates, widget.regions),
+                initialZoom: _pin != null ? _townZoom : _resolvedZoom,
                 minZoom: 6,
                 maxZoom: 18,
                 onTap: (_, point) => _setPin(point),

@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/negev_api.dart';
-import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../state/auth_store.dart';
+import '../state/places_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
@@ -73,6 +73,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
   Future<Map<String, TownCoordinate>>? _townCoordsFuture;
   Future<List<Amendment>>? _amendmentsFuture;
   Future<List<Village>>? _villagesFuture;
+  bool _placesRequested = false;
 
   final Map<String, TextEditingController> _controllers = {};
   late List<HonoreeRow> _honorees;
@@ -114,8 +115,16 @@ class _EditEventScreenState extends State<EditEventScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _townCoordsFuture ??= AppServices.of(context).api.townCoordinates();
+    _townCoordsFuture ??=
+        AppServices.of(context).places.load().then((c) => c.townCoordinates);
     _amendmentsFuture ??= AppServices.of(context).api.eventAmendments(widget.event.id);
+    if (!_placesRequested) {
+      _placesRequested = true;
+      // بلدات الخادم ومحافظاته تصل بعد أول بناء — إعادة بناء واحدة تكفي.
+      AppServices.of(context).places.load().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   @override
@@ -422,13 +431,15 @@ class _EditEventScreenState extends State<EditEventScreen> {
           const SizedBox(height: 12),
           ..._textFieldWidget(type, 'title'),
           ..._textFieldWidget(type, 'family_clan'),
+          // بلدة المناسبة الأصلية تبقى بنداً حتى لو لم يعد الخادم يعرضها — وإلا
+          // سقط المنتقي بتأكيد «لا بند بهذه القيمة» قبل أن يلمسه أحد.
           DropdownButtonFormField<String>(
             initialValue: _town,
             decoration: InputDecoration(
               labelText: '${type?.labelFor('town') ?? 'البلدة'} *',
             ),
-            items: AppConfig.towns
-                .map((town) => DropdownMenuItem(value: town, child: Text(town)))
+            items: eventTownOptions(AppServices.of(context).places.catalog, keep: _originalTown)
+                .map((o) => DropdownMenuItem(value: o.value, child: Text(o.label)))
                 .toList(),
             onChanged: (value) {
               if (value == null) return;
@@ -449,6 +460,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
               return LocationPickerMap(
                 town: _town,
                 townCoordinates: snapshot.data ?? const {},
+                regions: AppServices.of(context).places.catalog.regions,
                 initialLatitude: widget.event.latitude,
                 initialLongitude: widget.event.longitude,
                 onChanged: (lat, lng) => setState(() {
@@ -530,7 +542,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
   /// منتقي القرية تحت البند الجامع — القائمة من الخادم (`GET /api/towns`)،
   /// وآخر بنودها «قريتي غير موجودة» بحقل اسم حرّ.
   List<Widget> _villageEditor() {
-    _villagesFuture ??= AppServices.of(context).api.listVillages();
+    _villagesFuture ??= AppServices.of(context).places.load().then((c) => c.villages);
 
     return [
       const SizedBox(height: 12),

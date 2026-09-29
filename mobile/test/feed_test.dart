@@ -18,10 +18,11 @@ import 'package:negev_events/widgets/motion.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// عميل وهمي يوجّه حسب المسار — القصص وأنواع المناسبات فارغة، `/api/towns`
-/// يحمل قرية اختبار من الخادم (لا من أي قائمة في العميل)، و`/api/events`
-/// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً.
-NegevApi feedScreenApi({Object? eventsBody}) {
+/// يحمل بلدة وقرية ومحافظة من الخادم (لا من أي قائمة في العميل)، و`/api/events`
+/// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً. [requests] يلتقط كل طلب.
+NegevApi feedScreenApi({Object? eventsBody, List<Uri>? requests}) {
   final client = MockClient((request) async {
+    requests?.add(request.url);
     if (request.url.path.endsWith('/api/stories')) {
       return http.Response(
         jsonEncode({'success': true, 'stories': <Map<String, dynamic>>[]}),
@@ -40,7 +41,18 @@ NegevApi feedScreenApi({Object? eventsBody}) {
       return http.Response(
         jsonEncode({
           'success': true,
-          'towns': ['الكل', 'رهط', 'حورة'],
+          'towns': ['الكل', 'رهط', 'حورة', 'بلدة جديدة'],
+          'regions': [
+            {
+              'id': 1,
+              'name': 'النقب',
+              'latitude': 31.25,
+              'longitude': 34.79,
+              'map_zoom': 10,
+              'position': 1,
+              'towns': ['رهط', 'حورة', 'بلدة جديدة'],
+            },
+          ],
           'villages': [
             {'id': 4, 'name': 'أم بطين', 'latitude': '31.25', 'longitude': '34.85', 'position': 1},
           ],
@@ -650,8 +662,8 @@ void main() {
         await tester.tap(find.text('كل الأماكن'));
         await tester.pumpAndSettle();
 
-        // القرية «أم بطين» آخر خيار في القائمة (بعد ثماني بلدات) فتحتاج تمريراً
-        // كي تُبنى — القائمة الكسولة لا تبني ما هو خارج نطاق العرض.
+        // القرية «أم بطين» آخر خيار في القائمة (بعد البلدات والمحافظة) فقد تحتاج
+        // تمريراً كي تُبنى — القائمة الكسولة لا تبني ما هو خارج نطاق العرض.
         await tester.dragUntilVisible(
           find.textContaining('بطين'),
           find.byType(ListView).first,
@@ -674,6 +686,34 @@ void main() {
 
         expect(find.text('كل الأماكن'), findsNothing);
         expect(find.text('رهط'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'place filter offers a town only the server knows and the region, and the region reaches the request',
+      (tester) async {
+        final requests = <Uri>[];
+        final api = feedScreenApi(requests: requests);
+        await pumpFeedScreen(tester, api);
+
+        await tester.tap(find.text('الفلاتر والبحث'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('كل الأماكن'));
+        await tester.pumpAndSettle();
+
+        // «بلدة جديدة» ليست في `AppConfig.towns` — وصلت من GET /api/towns وحده.
+        expect(find.text('بلدة جديدة'), findsOneWidget);
+        await tester.dragUntilVisible(
+          find.text('النقب (بلا بلدة محدّدة)'),
+          find.byType(ListView).first,
+          const Offset(0, -80),
+        );
+        await tester.tap(find.text('النقب (بلا بلدة محدّدة)'));
+        await tester.tap(find.text('تطبيق'));
+        await tester.pumpAndSettle();
+
+        final last = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(last.queryParameters['town'], 'النقب');
       },
     );
 

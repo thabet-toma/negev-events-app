@@ -43,7 +43,10 @@ class AppConfig {
         platform: defaultTargetPlatform,
       );
 
-  /// البلدات — مطابقة لـ server/src/constants.js. الخادم يرفض أي بلدة خارجها.
+  /// البلدات الاحتياطية بلا اتصال فقط — مطابقة لـ `SEED_TOWNS` في
+  /// server/src/constants.js. البلدات الفعلية بيانات وقت تشغيل يديرها السوبر
+  /// أدمن وتصل من GET /api/towns عبر `PlacesStore` (lib/state/places_store.dart)،
+  /// ولا تقرأ الشاشات هذه القائمة مباشرةً.
   static const List<String> towns = [
     'رهط',
     'حورة',

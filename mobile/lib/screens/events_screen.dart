@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/negev_api.dart' show NegevApi, Village;
-import '../config.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../models/live.dart';
@@ -127,9 +126,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         if (mounted) setState(() => _typesList = list);
       });
     }
-    // القرى من الخادم حصراً — لا تُكرَّر في أي عميل (`GET /api/towns`).
+    // القرى من الخادم حصراً — لا تُكرَّر في أي عميل (`GET /api/towns`)، وتصل
+    // مع البلدات والمحافظات في نفس الكتالوج المشترك.
     if (_villages == null) {
-      _villages = AppServices.of(context).api.listVillages();
+      _villages = AppServices.of(context).places.load().then((c) => c.villages);
       _villages!.then((list) {
         if (mounted) setState(() => _villagesList = list);
       });
@@ -408,8 +408,14 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   }
 
   Future<void> _openPlaceFilter() async {
+    // المحافظة («النقب») بند مكان كالبلدة: قيمتها اسمها، وتمسك المناسبات
+    // التي لم تُعرف بلدتها بالضبط.
+    final places = AppServices.of(context).places.catalog;
     final options = <FilterOption>[
-      ...AppConfig.towns.map((t) => FilterOption(kind: 'town', id: t, label: t)),
+      ...places.towns.map((t) => FilterOption(kind: 'town', id: t, label: t)),
+      ...places.regions.map(
+        (r) => FilterOption(kind: 'town', id: r.name, label: '${r.name} (بلا بلدة محدّدة)'),
+      ),
       ..._villagesList.map((v) => FilterOption(kind: 'village', id: v.id, label: v.name)),
     ];
     final selected = <FilterToken>[
