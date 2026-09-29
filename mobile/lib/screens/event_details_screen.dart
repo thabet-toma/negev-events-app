@@ -521,6 +521,11 @@ class _EventDetailsBody extends StatelessWidget {
                   ],
                 ],
               ),
+              // الخادم وحده يقرّر متى تصل الصور (عرس معتمد انتهى) — لا شرط نوع هنا.
+              if (event.archivePhotos.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _ArchiveSection(photos: event.archivePhotos),
+              ],
               if (reactionKeys.isNotEmpty) ...[
                 const SizedBox(height: 20),
                 Text(
@@ -811,6 +816,183 @@ void _openFullScreenImage(BuildContext context, String url, int eventId) {
       },
     ),
   );
+}
+
+/// «أرشيف العرس» — شبكة مصغّرات، والنقر يفتح عارضاً بملء الشاشة يُسحب فيه
+/// بين الصور.
+class _ArchiveSection extends StatelessWidget {
+  const _ArchiveSection({required this.photos});
+
+  final List<ArchivePhoto> photos;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const Key('wedding_archive_section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              'أرشيف العرس',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '(${photos.length})',
+              style: TextStyle(color: context.c.inkFaint),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: photos.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 6,
+          ),
+          itemBuilder: (context, index) => GestureDetector(
+            key: Key('archive_photo_$index'),
+            onTap: () => _openArchiveViewer(context, photos, index),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: CachedNetworkImage(
+                imageUrl: photos[index].imageUrl,
+                fit: BoxFit.cover,
+                // مصغّر لا الصورة كاملة في ذاكرة الشبكة.
+                memCacheWidth: 360,
+                placeholder: (_, _) => ColoredBox(color: context.c.surfaceSunk),
+                errorWidget: (_, _, _) => ColoredBox(
+                  color: context.c.surfaceSunk,
+                  child: Icon(Icons.broken_image_outlined, color: context.c.inkFaint),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+void _openArchiveViewer(BuildContext context, List<ArchivePhoto> photos, int index) {
+  Navigator.of(context).push(
+    PageRouteBuilder(
+      opaque: false,
+      barrierDismissible: true,
+      pageBuilder: (context, _, _) => _ArchiveGalleryViewer(photos: photos, initialIndex: index),
+      transitionsBuilder: (context, animation, _, child) {
+        return FadeTransition(opacity: animation, child: child);
+      },
+    ),
+  );
+}
+
+/// عارض الأرشيف: سحب أفقي بين الصور، تكبير بالقرص، عدّاد، وزر إغلاق.
+class _ArchiveGalleryViewer extends StatefulWidget {
+  const _ArchiveGalleryViewer({required this.photos, required this.initialIndex});
+
+  final List<ArchivePhoto> photos;
+  final int initialIndex;
+
+  @override
+  State<_ArchiveGalleryViewer> createState() => _ArchiveGalleryViewerState();
+}
+
+class _ArchiveGalleryViewerState extends State<_ArchiveGalleryViewer> {
+  late final PageController _pages = PageController(initialPage: widget.initialIndex);
+  late int _index = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.photos.length;
+    return Scaffold(
+      key: const Key('archive_viewer'),
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _pages,
+            itemCount: total,
+            onPageChanged: (index) => setState(() => _index = index),
+            itemBuilder: (context, index) => InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 4.0,
+              child: Center(
+                child: CachedNetworkImage(
+                  imageUrl: widget.photos[index].imageUrl,
+                  fit: BoxFit.contain,
+                  placeholder: (_, _) => const Center(
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    ),
+                  ),
+                  errorWidget: (_, _, _) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white70,
+                    size: 48,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.60),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white, size: 22),
+                        tooltip: 'إغلاق',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                    const Spacer(),
+                    if (total > 1)
+                      Text(
+                        '${_index + 1} / $total',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _FullScreenImageViewer extends StatelessWidget {

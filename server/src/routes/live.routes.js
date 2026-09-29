@@ -56,17 +56,36 @@ function parsePoll(body) {
   return { poll_question: question, poll_options: options };
 }
 
+/**
+ * An episode's broadcast link (ADR-0008): empty clears it; otherwise it must
+ * name ONE YouTube video — a channel link would replay whatever that channel
+ * streams next, never this episode. Stored in its canonical watch form.
+ */
+function parseEpisodeVideoUrl(raw) {
+  const cleaned = cleanString(raw, 300);
+  if (!cleaned) return null;
+  const watchUrl = settings.toWatchUrl(cleaned);
+  if (!watchUrl) {
+    throw ApiError.badRequest('رابط الحلقة يجب أن يكون رابط فيديو يوتيوب محدّداً — لا رابط القناة');
+  }
+  return watchUrl;
+}
+
 // Public; a signed-in caller additionally gets `my_vote` (and today's
 // results once they have voted). The live half is the exact GET /api/live
 // payload, so both surfaces can never disagree about whether a live is on.
 router.get('/live/hub', optionalAuthenticate, asyncHandler(async (req, res) => {
   const userId = req.user ? req.user.id : null;
   const [channel, hub] = await Promise.all([settings.getLiveChannel(), liveHub.getHub(userId)]);
+  // «الحلقات السابقة» under the live (ADR-0008). A field no published APK
+  // reads, so it is simply added.
+  const pastEpisodes = await liveHub.listPastEpisodes({ includeToday: !(channel.live && channel.live.active) });
 
   res.json({
     success: true,
     ...channel,
     ...hub,
+    past_episodes: pastEpisodes,
     share_url: `${config.publicUrl}/live`
   });
 }));
@@ -98,10 +117,38 @@ router.put('/admin/live/episodes/:date', asyncHandler(async (req, res) => {
   const episode = await liveHub.saveEpisode(date, {
     topic: cleanString(body.topic, 200),
     episode_question: cleanString(body.episode_question, 255),
+    // Absent = keep the stored link: a broadcast may have recorded it after
+    // the admin's form was loaded, and saving the topic must not erase it.
+    video_url: Object.prototype.hasOwnProperty.call(body, 'video_url') ? parseEpisodeVideoUrl(body.video_url) : undefined,
     ...parsePoll(body)
   }, req.user.id);
 
   res.json({ success: true, episode, message: 'تم حفظ الحلقة' });
+}));
+
+// The episode's share image — optional (the owner's call): without one the
+// share card is drawn from the title alone. Uploaded by the browser straight
+// to Cloudinary with a signature from here, then registered once verified.
+router.post('/admin/live/episodes/:id/share-image/signature', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف الحلقة');
+  res.json({ success: true, upload: await liveHub.signShareImageUpload(id) });
+}));
+
+router.put('/admin/live/episodes/:id/share-image', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف الحلقة');
+  const body = req.body || {};
+  const episode = await liveHub.setShareImage(
+    id,
+    { public_id: body.public_id, version: body.version, signature: body.signature },
+    req.user.id
+  );
+  res.json({ success: true, episode, message: 'تم حفظ صورة المشاركة' });
+}));
+
+router.delete('/admin/live/episodes/:id/share-image', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف الحلقة');
+  const episode = await liveHub.clearShareImage(id, req.user.id);
+  res.json({ success: true, episode, message: 'تمت إزالة صورة المشاركة' });
 }));
 
 router.delete('/admin/live/episodes/:id', asyncHandler(async (req, res) => {

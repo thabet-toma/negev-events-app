@@ -1497,6 +1497,61 @@ const steps = [
       );
       logger.info(`[migrations] move-unknown-town-to-region-2026-09: ${result.affectedRows} event(s) moved to "${region.name}".`);
     }
+  },
+  {
+    // Episodes become saved broadcasts, and ended weddings get a photo
+    // archive (ADR-0008): three columns on live_episodes, the archive_gallery
+    // flag on occasion_types, and the event_photos table (same definition as
+    // schema.sql). archive_gallery is NULL until decided: every NULL becomes
+    // 1 for the wedding type and 0 for the rest, and no write ever stores
+    // NULL again — so a super_admin who later turns it off is not overridden
+    // by the next deploy, on a live database or a fresh one alike.
+    name: 'add-episode-media-and-archive-photos-2026-09',
+    async run(connection) {
+      if (!(await columnExists(connection, 'live_episodes', 'video_url'))) {
+        await connection.query(
+          'ALTER TABLE live_episodes ADD COLUMN video_url VARCHAR(300) DEFAULT NULL AFTER poll_options'
+        );
+      }
+      if (!(await columnExists(connection, 'live_episodes', 'share_image_url'))) {
+        await connection.query(
+          'ALTER TABLE live_episodes ADD COLUMN share_image_url VARCHAR(500) DEFAULT NULL AFTER video_url'
+        );
+      }
+      if (!(await columnExists(connection, 'live_episodes', 'share_image_public_id'))) {
+        await connection.query(
+          'ALTER TABLE live_episodes ADD COLUMN share_image_public_id VARCHAR(255) DEFAULT NULL AFTER share_image_url'
+        );
+      }
+
+      if (!(await columnExists(connection, 'occasion_types', 'archive_gallery'))) {
+        await connection.query(
+          'ALTER TABLE occasion_types ADD COLUMN archive_gallery TINYINT(1) DEFAULT NULL AFTER notify_countdown'
+        );
+      }
+      await connection.execute(
+        "UPDATE occasion_types SET archive_gallery = IF(name = 'عرس', 1, 0) WHERE archive_gallery IS NULL"
+      );
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS event_photos (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          event_id     INT UNSIGNED NOT NULL,
+          public_id    VARCHAR(255) NOT NULL,
+          image_url    VARCHAR(500) NOT NULL,
+          width        INT UNSIGNED DEFAULT NULL,
+          height       INT UNSIGNED DEFAULT NULL,
+          uploaded_by  INT UNSIGNED DEFAULT NULL,
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_event_photos_public_id (public_id),
+          KEY idx_event_photos_event (event_id),
+          CONSTRAINT fk_event_photos_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_photos_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] add-episode-media-and-archive-photos-2026-09: episode media columns, archive_gallery and event_photos ensured.');
+    }
   }
 ];
 

@@ -357,6 +357,10 @@ class NegevApi {
   /// `/live/go` عبور من خادمنا يسجّل النقرة ثم يحوّل إلى البث. بناء عنوان فقط.
   Uri get liveGoUrl => _client.buildUrl('/live/go');
 
+  /// مشغّل حلقة سابقة — `/live/e/<id>/embed` من خادمنا، لنفس سبب
+  /// [liveEmbedUrl]: يوتيوب يرفض التضمين بلا Referer. بناء عنوان فقط.
+  Uri pastEpisodeEmbedUrl(int episodeId) => _client.buildUrl('/live/e/$episodeId/embed');
+
   /// تسجيل مشاهدة شريحة ستوري — عتبة "شوهدت" (ثانيتان) يقيسها العارض على
   /// الجهاز، لا هذا النداء نفسه؛ يُستدعى فقط بعدما بقيت الشريحة ظاهرة فعلاً.
   /// `auth: true` لتُنسَب لحساب المستخدم إن كان مسجَّلاً (الخادم يفضّله على

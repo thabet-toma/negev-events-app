@@ -41,6 +41,42 @@ async function apiFetch(path, options = {}) {
   return res;
 }
 
+/**
+ * رفع ملف صورة مباشرةً إلى Cloudinary بتوقيع أصدره خادمنا (ADR-0008).
+ *
+ * النداء الوحيد هنا الذي لا يمرّ عبر apiFetch، وعمداً: الوجهة خدمة طرف ثالث
+ * لا خادمنا (upload.upload_url يأتي من الخادم لا من config.js)، ولا يجوز أن
+ * يصلها رمز دخولنا ولا ترويسة X-App-Version — والتوقيع نفسه هو التفويض.
+ * تُرسَل الحقول الموقَّعة كما أعادها الخادم حرفياً، لا أقلّ ولا أكثر، وإلا
+ * رفضت Cloudinary التوقيع. يعيد جسم ردّها (public_id، version، signature، …)
+ * أو يرمي Error برسالة عربية.
+ */
+async function uploadToCloudinary(upload, file) {
+  if (!upload || !upload.upload_url) throw new Error('تعذّر تجهيز رفع الصورة — حاول مرة أخرى');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('api_key', upload.api_key);
+  form.append('timestamp', upload.timestamp);
+  form.append('public_id', upload.public_id);
+  form.append('allowed_formats', upload.allowed_formats);
+  form.append('signature', upload.signature);
+
+  let res;
+  try {
+    res = await fetch(upload.upload_url, { method: 'POST', body: form });
+  } catch (e) {
+    throw new Error('تعذّر رفع الصورة — تحقّق من الاتصال وحاول مرة أخرى');
+  }
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok || !data || data.error || !data.public_id) {
+    // تفصيل Cloudinary إنجليزي — للسجلّ فقط؛ المستخدم يرى رسالة عربية.
+    if (data && data.error) console.warn('Cloudinary upload error:', data.error.message);
+    throw new Error('رفضت خدمة الصور هذا الملف — تأكّد أنه صورة (JPG أو PNG أو WEBP) وحاول مرة أخرى');
+  }
+  return data;
+}
+
 /** نداء يحمل رمز الإدارة. */
 async function adminFetch(path, options = {}) {
   const res = await apiFetch(path, { ...options, auth: true, tokenKey: 'negev_admin_token' });

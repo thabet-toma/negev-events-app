@@ -53,6 +53,10 @@ class Event {
   /// عمداً (events.service.js LIST_COLUMNS) فيبقى `null` هناك.
   final String? status;
 
+  /// صور أرشيف العرس — من `GET /api/events/:id` وحده، ولا تصل غير فارغة إلا
+  /// لعرس معتمد انتهى. خادم أقدم لا يرسل المفتاح أصلاً ← قائمة فارغة.
+  final List<ArchivePhoto> archivePhotos;
+
   const Event({
     required this.id,
     required this.title,
@@ -86,6 +90,7 @@ class Event {
     this.followersCount,
     this.isReminded = false,
     this.status,
+    this.archivePhotos = const [],
   });
 
   int get totalReactions =>
@@ -145,6 +150,7 @@ class Event {
         followersCount: followersCount,
         isReminded: isReminded,
         status: status,
+        archivePhotos: archivePhotos,
       );
 
   /// عنوان بديل حين لا عنوان مخصّص — من النوع وأصحاب المناسبة، لا نص فرح ثابت.
@@ -183,6 +189,15 @@ class Event {
         : <Honoree>[];
 
     final rawLatest = json['latest_congratulation'];
+
+    final rawArchive = json['archive_photos'];
+    final archivePhotos = rawArchive is List
+        ? rawArchive
+            .whereType<Map>()
+            .map((m) => ArchivePhoto.fromJson(Map<String, dynamic>.from(m)))
+            .where((photo) => photo.imageUrl.isNotEmpty)
+            .toList()
+        : <ArchivePhoto>[];
 
     return Event(
       id: _toInt(json['id']),
@@ -227,8 +242,35 @@ class Event {
           : null,
       isReminded: json['is_reminded'] == true,
       status: _nullableString(json['status']),
+      archivePhotos: archivePhotos,
     );
   }
+}
+
+/// صورة واحدة من أرشيف العرس — رابط Cloudinary مطلق كما خزّنه الخادم (ADR-0008).
+/// الأبعاد اختيارية: صورة قديمة قد تصل بلا عرض ولا ارتفاع.
+class ArchivePhoto {
+  final int id;
+  final String imageUrl;
+  final int? width;
+  final int? height;
+  final String? createdAt;
+
+  const ArchivePhoto({
+    required this.id,
+    required this.imageUrl,
+    this.width,
+    this.height,
+    this.createdAt,
+  });
+
+  factory ArchivePhoto.fromJson(Map<String, dynamic> json) => ArchivePhoto(
+        id: _toInt(json['id']),
+        imageUrl: _nullableString(json['image_url']) ?? '',
+        width: json['width'] == null ? null : _toInt(json['width']),
+        height: json['height'] == null ? null : _toInt(json['height']),
+        createdAt: _nullableString(json['created_at']),
+      );
 }
 
 /// تبريكة على مناسبة.

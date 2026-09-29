@@ -440,6 +440,43 @@ body {
 .live-episode-option-row { display: flex; gap: 8px; align-items: center; }
 .live-episode-option-row input { flex: 1; }
 
+/* نتيجة حفظ البث على حلقة اليوم، وصورة مشاركة الحلقة (ADR-0008) */
+.live-episode-save-result { margin-top: 16px; }
+.live-episode-save-note { padding: 10px 14px; border-radius: var(--radius-sm); font-size: 0.86rem; font-weight: 700; line-height: 1.6; display: flex; gap: 8px; align-items: flex-start; }
+.live-episode-save-note.is-success { background: var(--success-wash); color: var(--success-green); }
+.live-episode-save-note.is-warning { background: var(--warn-wash); color: var(--warn-yellow); }
+.share-image-control { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.share-image-preview { width: 100%; max-width: 320px; border-radius: var(--radius-sm); border: 1px solid var(--admin-card-border); }
+.share-image-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-image-pick { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.share-image-pick:has(input:disabled) { opacity: 0.55; pointer-events: none; }
+.live-episode-share-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.live-episode-thumb { width: 64px; height: 34px; object-fit: cover; border-radius: 6px; border: 1px solid var(--admin-card-border); }
+.live-episode-link { display: inline-flex; align-items: center; text-decoration: none; }
+
+/* «أرشيف الأعراس» — زرّ البطاقة ونافذة الصور */
+.archive-photos-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 10px; }
+.archive-photos-card { max-width: 720px; }
+.archive-photos-card > * { flex-shrink: 0; }
+.archive-photos-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.archive-photos-count { font-weight: 800; color: var(--text-main); font-variant-numeric: tabular-nums; }
+.archive-photos-upload { display: inline-flex; align-items: center; gap: 6px; width: auto; margin-top: 0; padding: 10px 18px; font-size: 0.9rem; cursor: pointer; }
+.archive-photos-upload.is-disabled { opacity: 0.55; pointer-events: none; }
+.archive-photos-error { background: var(--danger-wash); color: var(--danger-red); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 0.86rem; font-weight: 700; margin-bottom: 10px; }
+.archive-upload-queue { list-style: none; display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; max-height: 20vh; overflow-y: auto; }
+.archive-upload-queue:empty { display: none; }
+.archive-upload-row { display: flex; justify-content: space-between; gap: 10px; font-size: 0.8rem; padding: 6px 10px; border-radius: 8px; background: var(--surface-sunk); }
+.archive-upload-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; unicode-bidi: plaintext; }
+.archive-upload-status { flex-shrink: 0; font-weight: 700; color: var(--text-dim); }
+.archive-upload-row[data-state="done"] .archive-upload-status { color: var(--success-green); }
+.archive-upload-row[data-state="error"] .archive-upload-status { color: var(--danger-red); white-space: normal; }
+.archive-photos-grid { flex-shrink: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.archive-photo { position: relative; margin: 0; aspect-ratio: 1 / 1; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-sunk); }
+.archive-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.archive-photo-delete { position: absolute; inset-block-start: 6px; inset-inline-end: 6px; width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(12, 27, 42, 0.65); color: #ffffff; cursor: pointer; }
+.archive-photo-delete:hover { background: var(--danger-red); }
+.archive-photos-empty { grid-column: 1 / -1; text-align: center; padding: 24px 0; }
+
 /* Occasion Types (#20 خطوة 16) */
 .occasion-type-new-btn { width: auto; margin-top: 0; }
 

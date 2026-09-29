@@ -801,6 +801,8 @@ function renderAdminEvents() {
 
           ${renderRequestedVillageNoticeHtml(evt)}
 
+          ${renderArchivePhotosButtonHtml(evt)}
+
           <!-- Actions -->
           <div class="admin-card-actions">
             ${evt.status !== 'approved' ? `
@@ -852,6 +854,224 @@ function renderRequestedVillageNoticeHtml(evt) {
       ${promoteBtn}
       <span class="hint-text">الموافقة وحدها تُبقيها ضمن القرى والتجمعات</span>
     </div>`;
+}
+
+/*
+ * «أرشيف الأعراس» (ADR-0008) — super_admin وحده (المسارات خلف
+ * requireSuperAdmin). الزرّ يظهر لمناسبة انتهت (آخر أيامها قبل اليوم بتوقيت
+ * القدس) ونوعها يسمح بالأرشيف؛ الخادم يعيد الفحص نفسه عند كل رفع ويرفض
+ * برسالة عربية. عدد الصور لا يأتي مع قائمة المناسبات، فيظهر بين قوسين بعد
+ * أول فتح للنافذة.
+ */
+const archivePhotoCounts = {};
+let archiveModalEventId = null;
+let archiveModalPhotos = [];
+let archiveModalMax = 60;
+
+function isArchivableAdminEvent(evt) {
+  if (!evt) return false;
+  const type = allOccasionTypes.find(t => Number(t.id) === Number(evt.occasion_type_id));
+  if (!type || !type.archive_gallery) return false;
+  const lastDay = toDateInputValue(evt.event_end_date || evt.event_date);
+  return Boolean(lastDay) && lastDay < getJerusalemToday();
+}
+
+function renderArchivePhotosButtonHtml(evt) {
+  if (!isSuperAdminRole() || !isArchivableAdminEvent(evt)) return '';
+  const count = archivePhotoCounts[evt.id];
+  return `
+    <button type="button" class="admin-btn-ghost archive-photos-btn" onclick="openArchivePhotosModal(${Number(evt.id)})">
+      <i class="fa-solid fa-images"></i> صور الأرشيف${count !== undefined ? ` (${Number(count)})` : ''}
+    </button>`;
+}
+
+/** رسالة الخطأ إن كانت عربية (من خادمنا أو من uploadToCloudinary)، وإلا البديل — لا نصّ متصفح إنجليزي أمام الأدمن. */
+function arabicErrorMessage(err, fallback) {
+  const message = err && err.message;
+  return message && /[\u0600-\u06FF]/.test(message) ? message : fallback;
+}
+
+function setArchivePhotosError(message) {
+  const el = document.getElementById('archivePhotosError');
+  if (!el) return;
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+}
+
+function recordArchivePhotoCount(eventId, count) {
+  if (archivePhotoCounts[eventId] === count) return;
+  archivePhotoCounts[eventId] = count;
+  renderAdminEvents();
+}
+
+async function openArchivePhotosModal(eventId) {
+  archiveModalEventId = Number(eventId);
+  archiveModalPhotos = [];
+  const evt = allAdminEvents.find(e => e.id === archiveModalEventId);
+  const title = document.getElementById('archivePhotosTitle');
+  if (title) {
+    const name = evt ? (evt.title || evt.groom_name || '') : '';
+    title.innerHTML = `<i class="fa-solid fa-images"></i> صور الأرشيف${name ? ` — ${escapeHtml(String(name))}` : ''}`;
+  }
+  const queue = document.getElementById('archiveUploadQueue');
+  if (queue) queue.innerHTML = '';
+  const count = document.getElementById('archivePhotosCount');
+  if (count) count.textContent = '';
+  const grid = document.getElementById('archivePhotosGrid');
+  if (grid) grid.innerHTML = '<p class="hint-text">جارٍ التحميل…</p>';
+  setArchivePhotosError(null);
+  const modal = document.getElementById('archivePhotosModal');
+  if (modal) modal.style.display = 'flex';
+  await fetchArchivePhotos(archiveModalEventId);
+}
+
+function closeArchivePhotosModal() {
+  archiveModalEventId = null;
+  const modal = document.getElementById('archivePhotosModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function fetchArchivePhotos(eventId) {
+  const grid = document.getElementById('archivePhotosGrid');
+  try {
+    const res = await adminFetch(`/api/admin/events/${Number(eventId)}/photos`);
+    const data = await res.json();
+    if (eventId !== archiveModalEventId) return;
+    if (!data.success) {
+      if (grid) grid.innerHTML = '';
+      setArchivePhotosError(data.message || 'تعذّر تحميل صور الأرشيف');
+      return;
+    }
+    archiveModalPhotos = Array.isArray(data.photos) ? data.photos : [];
+    if (Number(data.max_photos) > 0) archiveModalMax = Number(data.max_photos);
+    renderArchivePhotosModal();
+    recordArchivePhotoCount(eventId, archiveModalPhotos.length);
+  } catch (e) {
+    if (eventId !== archiveModalEventId) return;
+    if (grid) grid.innerHTML = '';
+    setArchivePhotosError('تعذر الاتصال بالخادم');
+  }
+}
+
+function renderArchivePhotosModal() {
+  const count = archiveModalPhotos.length;
+  const full = count >= archiveModalMax;
+  const countEl = document.getElementById('archivePhotosCount');
+  if (countEl) countEl.textContent = `${count} / ${archiveModalMax} صورة`;
+  const input = document.getElementById('archivePhotosInput');
+  if (input) input.disabled = full;
+  const label = document.getElementById('archivePhotosUploadLabel');
+  if (label) label.classList.toggle('is-disabled', full);
+
+  const grid = document.getElementById('archivePhotosGrid');
+  if (!grid) return;
+  grid.innerHTML = count
+    ? archiveModalPhotos.map(photo => `
+        <figure class="archive-photo" data-photo-id="${Number(photo.id)}">
+          <img src="${escapeHtml(String(photo.image_url || ''))}" alt="" loading="lazy">
+          <button type="button" class="archive-photo-delete" onclick="deleteArchivePhoto(${Number(photo.id)})" title="حذف الصورة" aria-label="حذف الصورة">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </figure>
+      `).join('')
+    : '<p class="hint-text archive-photos-empty">لا صور في أرشيف هذه المناسبة بعد</p>';
+}
+
+async function deleteArchivePhoto(photoId) {
+  const eventId = archiveModalEventId;
+  if (!eventId) return;
+  if (!confirm('حذف هذه الصورة من الأرشيف نهائياً؟')) return;
+  setArchivePhotosError(null);
+  try {
+    const res = await adminFetch(`/api/admin/events/${eventId}/photos/${Number(photoId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) {
+      setArchivePhotosError(data.message || 'تعذّر حذف الصورة');
+      return;
+    }
+    if (eventId !== archiveModalEventId) return;
+    archiveModalPhotos = archiveModalPhotos.filter(photo => Number(photo.id) !== Number(photoId));
+    renderArchivePhotosModal();
+    recordArchivePhotoCount(eventId, archiveModalPhotos.length);
+  } catch (e) {
+    setArchivePhotosError('تعذر الاتصال بالخادم');
+  }
+}
+
+/**
+ * رفع عدّة صور، واحدة بعد أخرى، بحالة لكل ملف: توقيع من الخادم ← رفع مباشر
+ * إلى Cloudinary ← تسجيل الصورة عندنا. ما يتجاوز الحدّ الأقصى يُعلَّم ولا
+ * يُرسَل، وفشل ملف لا يوقف البقية.
+ */
+async function handleArchivePhotosPick(input) {
+  const eventId = archiveModalEventId;
+  const files = input && input.files ? Array.from(input.files) : [];
+  if (input) input.value = '';
+  if (!eventId || !files.length) return;
+  setArchivePhotosError(null);
+
+  const queue = document.getElementById('archiveUploadQueue');
+  const room = Math.max(0, archiveModalMax - archiveModalPhotos.length);
+  const rows = files.map((file, index) => {
+    const li = document.createElement('li');
+    li.className = 'archive-upload-row';
+    const name = document.createElement('span');
+    name.className = 'archive-upload-name';
+    name.textContent = file.name || `صورة ${index + 1}`;
+    const status = document.createElement('span');
+    status.className = 'archive-upload-status';
+    li.append(name, status);
+    if (queue) queue.appendChild(li);
+    return { file, li, status };
+  });
+  const setRow = (row, text, state) => {
+    row.status.textContent = text;
+    row.li.dataset.state = state;
+  };
+  rows.forEach((row, index) => {
+    if (index < room) setRow(row, 'في الانتظار', 'waiting');
+    else setRow(row, `لم تُرفع — الحدّ الأقصى ${archiveModalMax} صورة`, 'error');
+  });
+
+  for (const row of rows.slice(0, room)) {
+    if (eventId !== archiveModalEventId) {
+      setRow(row, 'أُلغي — أُغلقت النافذة', 'error');
+      continue;
+    }
+    try {
+      setRow(row, 'جارٍ التجهيز…', 'busy');
+      const sigRes = await adminFetch(`/api/admin/events/${eventId}/photos/signature`, { method: 'POST' });
+      const sig = await sigRes.json();
+      if (!sig.success) throw new Error(sig.message || 'تعذّر تجهيز رفع الصورة');
+
+      setRow(row, 'جارٍ الرفع…', 'busy');
+      const uploaded = await uploadToCloudinary(sig.upload, row.file);
+
+      setRow(row, 'جارٍ الحفظ…', 'busy');
+      const res = await adminFetch(`/api/admin/events/${eventId}/photos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          public_id: uploaded.public_id,
+          version: uploaded.version,
+          signature: uploaded.signature,
+          width: uploaded.width,
+          height: uploaded.height
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'تعذّر حفظ الصورة');
+
+      setRow(row, 'تمت الإضافة', 'done');
+      if (eventId === archiveModalEventId && data.photo) {
+        archiveModalPhotos.push(data.photo);
+        renderArchivePhotosModal();
+        recordArchivePhotoCount(eventId, archiveModalPhotos.length);
+      }
+    } catch (err) {
+      setRow(row, arabicErrorMessage(err, 'تعذّر رفع الصورة — تحقّق من الاتصال'), 'error');
+    }
+  }
 }
 
 async function promoteRequestedVillage(eventId) {
@@ -1561,6 +1781,9 @@ async function fetchOccasionTypes() {
       allOccasionTypes = data.types;
       renderOccasionTypesNotice(data.notice);
       renderOccasionTypesList();
+      // زرّ «صور الأرشيف» على بطاقات المناسبات يقرأ archive_gallery من هذه
+      // القائمة — والمناسبات قد تكون رُسمت قبل وصولها (النداءان متوازيان).
+      if (allAdminEvents.length) renderAdminEvents();
     } else {
       alert(data.message || 'تعذر تحميل أنواع المناسبات');
     }
@@ -1693,6 +1916,7 @@ function openOccasionTypeForm(id) {
   document.getElementById('otShowCongrats').checked = type ? Boolean(type.show_congratulations_count) : true;
   document.getElementById('otShowFollowers').checked = type ? Boolean(type.show_followers_count) : true;
   document.getElementById('otShowViews').checked = type ? Boolean(type.show_views_count) : true;
+  document.getElementById('otArchiveGallery').checked = type ? Boolean(type.archive_gallery) : false;
   // يبدأ مطفأً عمداً عند الإنشاء — لا يظهر على أي تطبيق منشور اليوم إلا بعد
   // إصدار نسخة تدعمه، ولا يُقلَب هنا تلقائياً حتى عند التعديل.
   document.getElementById('otLegacySupported').checked = type ? Boolean(type.legacy_client_supported) : false;
@@ -1817,6 +2041,7 @@ async function handleOccasionTypeSubmit(e) {
     show_congratulations_count: document.getElementById('otShowCongrats').checked,
     show_followers_count: document.getElementById('otShowFollowers').checked,
     show_views_count: document.getElementById('otShowViews').checked,
+    archive_gallery: document.getElementById('otArchiveGallery').checked,
     legacy_client_supported: document.getElementById('otLegacySupported').checked,
     fields,
     reactions: collectOccasionTypeReactions()
@@ -5335,7 +5560,9 @@ async function handleSaveLiveSettings(e) {
       if (notice) notice.style.display = 'none';
       applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
+      renderLiveEpisodeSaveResult(data);
       await refreshLiveStatusStrip();
+      if (data.live_episode) await fetchLiveEpisodes();
       showAdminNotice(data.message || 'تم حفظ إعدادات البث', 'نجاح');
     } else {
       if (notice) {
@@ -5352,6 +5579,154 @@ async function handleSaveLiveSettings(e) {
       btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ';
     }
   }
+}
+
+/*
+ * كل بثّ يُحفظ أيضاً حلقةَ اليوم (ADR-0008) — حين يسمّي رابطه فيديو يوتيوب
+ * واحداً. الخادم يقول أيّ الحالتين وقعت: `live_episode` (الحلقة المحفوظة،
+ * ومعها صورة مشاركة اختيارية) أو `live_episode_notice` (رابط قناة لن يُحفظ
+ * كحلقة — تنبيه بنصّ الخادم كما هو). لا هذا ولا ذاك → لا شيء يُعرض.
+ */
+let liveSavedEpisode = null;
+
+function renderLiveEpisodeSaveResult(data) {
+  const box = document.getElementById('liveEpisodeSaveResult');
+  if (!box) return;
+  liveSavedEpisode = (data && data.live_episode) || null;
+  const notice = data && data.live_episode_notice;
+  if (liveSavedEpisode) {
+    box.innerHTML = `
+      <p class="live-episode-save-note is-success"><i class="fa-solid fa-circle-check"></i> حُفظ البث كحلقة اليوم</p>
+      <div id="liveSavedEpisodeShareImage"></div>
+    `;
+    box.style.display = 'block';
+    renderEpisodeShareImageControl('liveSavedEpisodeShareImage', liveSavedEpisode);
+  } else if (notice) {
+    box.innerHTML = `<p class="live-episode-save-note is-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(String(notice))}</p>`;
+    box.style.display = 'block';
+  } else {
+    box.innerHTML = '';
+    box.style.display = 'none';
+  }
+}
+
+/*
+ * صورة مشاركة الحلقة — اختيارية (قرار المالك): بلا صورة تُرسَم البطاقة من
+ * العنوان وحده. تُرفع من المتصفح إلى Cloudinary مباشرةً بتوقيع من الخادم، ثم
+ * تُسجَّل عندنا بعد تحقّقه منها. العنصر نفسه يُرسم في مكانين (نتيجة حفظ البث،
+ * ونموذج الحلقة) ويُحدَّث في كليهما معاً.
+ */
+function renderEpisodeShareImageControl(containerId, episode) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  if (!episode || !episode.id) {
+    box.innerHTML = '';
+    box.style.display = 'none';
+    return;
+  }
+  const id = Number(episode.id);
+  const image = episode.share_image_url ? String(episode.share_image_url) : '';
+  box.innerHTML = `
+    <div class="share-image-control" data-episode-id="${id}">
+      <label>صورة المشاركة (اختيارية)</label>
+      ${image
+        ? `<img class="share-image-preview" src="${escapeHtml(image)}" alt="صورة مشاركة الحلقة">`
+        : '<span class="hint-text">بلا صورة تُرسَم بطاقة المشاركة من عنوان الحلقة تلقائياً.</span>'}
+      <div class="share-image-actions">
+        <label class="admin-btn-ghost share-image-pick">
+          <i class="fa-solid fa-image"></i> ${image ? 'استبدال الصورة' : 'اختيار صورة'}
+          <input type="file" accept="image/jpeg,image/png,image/webp,image/heic" hidden onchange="handleEpisodeShareImagePick(${id}, this)">
+        </label>
+        ${image ? `<button type="button" class="btn-reject" onclick="handleRemoveEpisodeShareImage(${id})"><i class="fa-solid fa-trash"></i> إزالة الصورة</button>` : ''}
+      </div>
+      <span class="hint-text share-image-status" role="status"></span>
+    </div>
+  `;
+  box.style.display = 'block';
+}
+
+function setEpisodeShareImageStatus(id, text, busy) {
+  document.querySelectorAll(`.share-image-control[data-episode-id="${Number(id)}"]`).forEach(control => {
+    const status = control.querySelector('.share-image-status');
+    if (status) status.textContent = text || '';
+    control.querySelectorAll('input, button').forEach(el => { el.disabled = Boolean(busy); });
+  });
+}
+
+/** حلقة أعادها الخادم بعد تغيير صورتها — تُحدَّث في القائمة وفي كل مكان تُعرض فيه. */
+function applyLiveEpisodeUpdate(episode) {
+  if (!episode || !episode.id) return;
+  const index = allLiveEpisodes.findIndex(ep => ep.id === episode.id);
+  if (index >= 0) allLiveEpisodes[index] = { ...allLiveEpisodes[index], ...episode };
+  renderLiveEpisodesList();
+  if (editingLiveEpisode && editingLiveEpisode.id === episode.id) {
+    editingLiveEpisode = { ...editingLiveEpisode, ...episode };
+    renderEpisodeShareImageControl('liveEpisodeShareImage', editingLiveEpisode);
+  }
+  if (liveSavedEpisode && liveSavedEpisode.id === episode.id) {
+    liveSavedEpisode = { ...liveSavedEpisode, ...episode };
+    renderEpisodeShareImageControl('liveSavedEpisodeShareImage', liveSavedEpisode);
+  }
+}
+
+async function handleEpisodeShareImagePick(id, input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  setEpisodeShareImageStatus(id, 'جارٍ رفع الصورة…', true);
+  try {
+    const sigRes = await adminFetch(`/api/admin/live/episodes/${Number(id)}/share-image/signature`, { method: 'POST' });
+    const sig = await sigRes.json();
+    if (!sig.success) throw new Error(sig.message || 'تعذّر تجهيز رفع الصورة');
+
+    const uploaded = await uploadToCloudinary(sig.upload, file);
+
+    const res = await adminFetch(`/api/admin/live/episodes/${Number(id)}/share-image`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ public_id: uploaded.public_id, version: uploaded.version, signature: uploaded.signature })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حفظ صورة المشاركة');
+
+    applyLiveEpisodeUpdate(data.episode);
+    showAdminNotice(data.message || 'تم حفظ صورة المشاركة', 'نجاح');
+  } catch (err) {
+    const message = arabicErrorMessage(err, 'تعذّر رفع الصورة — تحقّق من الاتصال');
+    setEpisodeShareImageStatus(id, message, false);
+    showAdminNotice(message, 'خطأ في الرفع');
+  }
+}
+
+async function handleRemoveEpisodeShareImage(id) {
+  if (!confirm('إزالة صورة المشاركة؟ ستعود بطاقة المشاركة المولَّدة من العنوان.')) return;
+  setEpisodeShareImageStatus(id, 'جارٍ الإزالة…', true);
+  try {
+    const res = await adminFetch(`/api/admin/live/episodes/${Number(id)}/share-image`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّرت إزالة الصورة');
+    applyLiveEpisodeUpdate(data.episode);
+    showAdminNotice(data.message || 'تمت إزالة صورة المشاركة', 'تم');
+  } catch (err) {
+    const message = arabicErrorMessage(err, 'تعذر الاتصال بالخادم');
+    setEpisodeShareImageStatus(id, message, false);
+    showAdminNotice(message, 'خطأ');
+  }
+}
+
+async function copyLiveEpisodeShareUrl(id) {
+  const episode = allLiveEpisodes.find(ep => ep.id === id);
+  const url = episode && episode.share_url;
+  if (!url) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showAdminNotice(`تم نسخ رابط الحلقة: ${url}`, 'تم النسخ');
+      return;
+    } catch (e) {
+      // يتابع إلى عرض الرابط للنسخ اليدوي
+    }
+  }
+  showAdminNotice(`تعذّر النسخ التلقائي — انسخ الرابط يدوياً: ${url}`, 'انسخ يدوياً');
 }
 
 /**
@@ -5492,6 +5867,7 @@ function renderLiveEpisodesList() {
           <th>الموضوع</th>
           <th>سؤال الاستفتاء</th>
           <th>الأصوات</th>
+          <th>الفيديو والمشاركة</th>
           <th>الإجراء</th>
         </tr>
       </thead>
@@ -5502,6 +5878,16 @@ function renderLiveEpisodesList() {
             <td>${escapeHtml(ep.topic || '—')}</td>
             <td>${escapeHtml(ep.poll_question || 'بلا استفتاء')}</td>
             <td>${Number(ep.vote_count) || 0}</td>
+            <td>
+              <div class="live-episode-share-cell">
+                <span class="status-tag ${ep.video_url ? 'approved' : 'pending'}">${ep.video_url ? 'فيها فيديو' : 'بلا فيديو'}</span>
+                ${ep.share_image_url ? `<img class="live-episode-thumb" src="${escapeHtml(String(ep.share_image_url))}" alt="صورة المشاركة" loading="lazy">` : ''}
+                ${ep.share_url ? `
+                  <a class="btn-delete live-episode-link" href="${escapeHtml(String(ep.share_url))}" target="_blank" rel="noopener" title="فتح صفحة الحلقة"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+                  <button type="button" class="btn-delete" onclick="copyLiveEpisodeShareUrl(${Number(ep.id)})" title="نسخ رابط الحلقة"><i class="fa-solid fa-copy"></i></button>
+                ` : ''}
+              </div>
+            </td>
             <td style="white-space:nowrap;">
               <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="editLiveEpisode(${Number(ep.id)})"><i class="fa-solid fa-pen"></i> تعديل</button>
               <button class="btn-delete" onclick="handleDeleteLiveEpisode(${Number(ep.id)})" title="حذف">
@@ -5592,9 +5978,11 @@ function fillLiveEpisodeForm(episode, date) {
   };
   setValue('liveEpisodeDate', episode ? episode.date : date);
   setValue('liveEpisodeTopic', episode && episode.topic);
+  setValue('liveEpisodeVideoUrl', episode && episode.video_url);
   setValue('liveEpisodeQuestion', episode && episode.episode_question);
   setValue('liveEpisodePollQuestion', episode && episode.poll_question);
   renderLiveEpisodeOptions((episode && episode.poll_options) || [], isLiveEpisodeOptionsLocked());
+  renderEpisodeShareImageControl('liveEpisodeShareImage', editingLiveEpisode);
 
   const title = document.getElementById('liveEpisodeFormTitle');
   if (title) title.textContent = episode ? `تعديل حلقة ${episode.date}` : 'حلقة جديدة';
@@ -5628,6 +6016,7 @@ function handleLiveEpisodeDateChange() {
   }
   const wasLocked = isLiveEpisodeOptionsLocked();
   editingLiveEpisode = null;
+  renderEpisodeShareImageControl('liveEpisodeShareImage', null);
   const title = document.getElementById('liveEpisodeFormTitle');
   if (title) title.textContent = 'حلقة جديدة';
   if (wasLocked) renderLiveEpisodeOptions(readLiveEpisodeOptionValues(), false);
@@ -5651,6 +6040,11 @@ async function handleSaveLiveEpisode(e) {
     poll_question: pollQuestion,
     poll_options: options
   };
+  // رابط الفيديو يُرسَل فقط إن غيّره المشرف (حقل مُفرَغ تغييرٌ يمسحه): بثٌّ
+  // سجّل الحلقة بعد فتح النموذج لا يُمحى بحفظ الموضوع — الخادم يُبقي الرابط
+  // المحفوظ حين يغيب الحقل (ADR-0008).
+  const videoUrl = document.getElementById('liveEpisodeVideoUrl').value.trim();
+  if (videoUrl !== ((editingLiveEpisode && editingLiveEpisode.video_url) || '')) body.video_url = videoUrl;
 
   const btn = document.getElementById('saveLiveEpisodeBtn');
   if (btn) {

@@ -56,7 +56,7 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 
 1. `README.md` — المزايا، البنية، جدول واجهة API كاملاً، أحداث Socket.IO، ودليل النشر
 2. `server/src/db/schema.sql` — المخطط هو مصدر الحقيقة للدومين: ما الحقول الموجودة فعلاً وما ليس موجوداً
-3. `docs/adr/` — **لماذا** المشروع على ما هو عليه. سبعة قرارات لا يفصح عنها الكود،
+3. `docs/adr/` — **لماذا** المشروع على ما هو عليه. ثمانية قرارات لا يفصح عنها الكود،
    وبعضها يبدو قابلاً للتبسيط حتى تقرأ سببه. اقرأ ما يمسّ منطقتك قبل أن تغيّرها.
 
 عند الحاجة فقط: `server/src/constants.js` (البلدات والإحداثيات وأنواع التفاعل وأنواع المناسبات) ·
@@ -74,6 +74,8 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | رفع صورة أو صوت | `server/src/middleware/upload.js` |
 | بث لحظي | `server/src/realtime/index.js` + `realtime.emit` من طبقة المسارات |
 | البث المباشر ونقاش اليوم | `server/src/routes/live.routes.js` + `server/src/services/liveHub.service.js` (الحلقات والتصويت)؛ إعدادات البث و`toEmbedUrl` في `settings.service.js`؛ صفحتا `/live` و`/live/embed` في `share.routes.js` (ADR-0006) |
+| الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
+| أرشيف الأعراس (صور بعد انتهاء المناسبة) | `server/src/routes/archivePhotos.routes.js` + `server/src/services/archivePhotos.service.js`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `server/src/services/cloudinary.service.js` (توقيع وتحقّق بلا مكتبة) — ADR-0008 |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
@@ -190,11 +192,12 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 ### الوسائط
 - الوسائط تُخزَّن نسبية (`/uploads/<ملف>`) وتخرج **مطلقة دائماً** عبر `withAbsoluteMedia` في `server/src/utils/mediaUrl.js`. أي استعلام جديد يرجّع `poster_url` أو `audio_url` أو `image` يمرّ من هناك — الرابط النسبي يعمل بالصدفة في الويب ويكسر كل عميل آخر
 - `PUBLIC_URL` مطلوب في الإنتاج، وإلا خرجت الروابط على `localhost`
+- **الاستثناء الوحيد: Cloudinary** (ADR-0008) — صور «أرشيف الأعراس» وصور مشاركة الحلقات تُخزَّن رابطاً مطلقاً (`https://res.cloudinary.com/…`) لأن الملف ليس على خادمنا أصلاً، و`absoluteMediaUrl` يتركه كما هو. الرفع من المتصفّح مباشرةً إلى Cloudinary بتوقيع من `cloudinary.service.js`، والصفّ لا يُكتب إلا بعد التحقّق من توقيع ردّ Cloudinary وأن `public_id` داخل مجلّد الهدف نفسه. السرّ `CLOUDINARY_API_SECRET` لا يغادر الخادم، ولا يُضاف SDK
 
 ### الأمان
 - `pin_code` مخزّن بـ bcrypt و**لا يخرج في أي استجابة** — مرّر المستخدم دائماً عبر `auth.service.publicUser`
 - **دفتر النقوط خاص على مستوى الاستعلام نفسه**: كل استعلام في `nokoot.service.js` يحمل `WHERE user_id = ?` (والحذف `WHERE id = ? AND user_id = ?`). فلترة بعد الجلب في الـJS = تسريب بيانات
-- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/events/:id/promote-village` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/live/*` و `/admin/admins/*` و `/admin/analytics/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
+- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/events/:id/promote-village` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/live/*` و `/admin/events/:id/photos/*` و `/admin/admins/*` و `/admin/analytics/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
 - **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
 - **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel`
 - المدخلات كلها عبر `server/src/middleware/validate.js` (`cleanString` يقصّ الطول، `parseId`، `parseAmount`، `requireDate`) — لا تحقق يدوي جديد
@@ -229,7 +232,7 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 
 - ملفات ثابتة يخدمها Express — لا خطوة بناء. أي `import`/`export` أو JSX سيكسر الصفحة
 - الحالة متغيرات عامة أعلى `app.js`، والرمز في `localStorage` تحت `negev_token` و `negev_user`
-- **كل نداء يمر عبر `web/api.js`** — `apiFetch` للموقع و `adminFetch` للوحة. **لا `fetch()` مباشر جديد**: عنوان الخادم يعيش في `web/config.js` وحده
+- **كل نداء يمر عبر `web/api.js`** — `apiFetch` للموقع و `adminFetch` للوحة. **لا `fetch()` مباشر جديد**: عنوان الخادم يعيش في `web/config.js` وحده. الاستثناء الوحيد `uploadToCloudinary` في `web/api.js` نفسه — رفع موقَّع إلى Cloudinary بلا رمز ولا ترويسة (ADR-0008)
 - `apiFetch` يرفق رمز الدخول فقط عند `auth: true`. لا تجعله افتراضياً — `POST /api/events` ينشر فوراً إذا وصله رمز مدير، فإرفاق الرمز في كل مكان يكسر طابور المراجعة
 - الواجهة RTL عربية — أي نص جديد بالعربية وبنفس نبرة الموجود
 

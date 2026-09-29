@@ -420,6 +420,10 @@
               <label class="ot-check"><input type="checkbox" id="otShowFollowers" checked> إظهار عدد المتابعين</label>
               <label class="ot-check"><input type="checkbox" id="otShowViews" checked> إظهار عدد المشاهدات</label>
             </div>
+            <div class="form-group">
+              <label class="ot-check"><input type="checkbox" id="otArchiveGallery"> أرشيف صور بعد انتهاء المناسبة</label>
+              <span class="hint-text">يسمح للمدير العام برفع صور المناسبة بعد انتهائها، فتظهر للزوار في تفاصيلها تحت «أرشيف العرس».</span>
+            </div>
 
             <div class="form-group occasion-type-legacy-box">
               <label class="ot-check"><input type="checkbox" id="otLegacySupported"> يظهر على نسخ التطبيق المنشورة حالياً (legacy_client_supported)</label>
@@ -1059,6 +1063,10 @@
             </div>
           </form>
 
+          <!-- نتيجة الحفظ على حلقة اليوم (ADR-0008): بثّ برابط فيديو محدّد يُحفظ
+               حلقةً — مع صورة مشاركة اختيارية؛ وبرابط قناة يُعرض تنبيه الخادم. -->
+          <div id="liveEpisodeSaveResult" class="live-episode-save-result" style="display:none;"></div>
+
           <!-- خارج نموذج الحفظ عمداً، على نفس منطق كتلة الصوت الافتراضي أعلاه:
                النسخ ومعاينة الغلاف لا يحفظان شيئاً على الخادم. -->
           <div class="admin-form" style="margin-top:24px;">
@@ -1103,6 +1111,12 @@
             </div>
 
             <div class="form-group">
+              <label>رابط فيديو الحلقة على يوتيوب</label>
+              <input type="text" id="liveEpisodeVideoUrl" maxlength="300" dir="ltr" placeholder="https://www.youtube.com/watch?v=...">
+              <span class="hint-text">رابط فيديو واحد محدّد (لا رابط القناة) — به تظهر الحلقة في «الحلقات السابقة». تفريغه يزيلها منها.</span>
+            </div>
+
+            <div class="form-group">
               <label>سؤال الحلقة</label>
               <input type="text" id="liveEpisodeQuestion" maxlength="255" placeholder="السؤال الذي يُطرح للنقاش في البث">
             </div>
@@ -1120,6 +1134,9 @@
                 <i class="fa-solid fa-plus"></i> إضافة خيار
               </button>
             </div>
+
+            <!-- صورة المشاركة — للحلقة المحفوظة فقط (الرفع يحتاج معرّفها). -->
+            <div id="liveEpisodeShareImage" class="form-group" style="display:none;"></div>
 
             <div class="form-row" style="margin-top:18px; gap:12px;">
               <button type="submit" class="admin-btn-primary" id="saveLiveEpisodeBtn" style="flex:1;">
@@ -1155,6 +1172,26 @@
         </button>
         <button type="button" class="admin-btn-ghost" onclick="closeRejectEventModal()">إلغاء</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ARCHIVE PHOTOS MODAL — «أرشيف الأعراس» (ADR-0008، super_admin) -->
+  <div id="archivePhotosModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card archive-photos-card">
+      <div class="modal-header">
+        <h3 id="archivePhotosTitle"><i class="fa-solid fa-images"></i> صور الأرشيف</h3>
+        <button type="button" class="close-modal-btn" onclick="closeArchivePhotosModal()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="archive-photos-toolbar">
+        <span id="archivePhotosCount" class="archive-photos-count"></span>
+        <label class="admin-btn-primary archive-photos-upload" id="archivePhotosUploadLabel">
+          <i class="fa-solid fa-upload"></i> إضافة صور
+          <input type="file" id="archivePhotosInput" accept="image/jpeg,image/png,image/webp,image/heic" multiple hidden onchange="handleArchivePhotosPick(this)">
+        </label>
+      </div>
+      <div id="archivePhotosError" class="archive-photos-error" style="display:none;"></div>
+      <ul id="archiveUploadQueue" class="archive-upload-queue"></ul>
+      <div id="archivePhotosGrid" class="archive-photos-grid"></div>
     </div>
   </div>
 

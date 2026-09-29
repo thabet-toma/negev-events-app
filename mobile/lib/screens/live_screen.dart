@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -12,6 +13,7 @@ import '../state/auth_store.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
+import '../widgets/event_card.dart' show arabicEventDate;
 
 /// يفتح صفحة البث — من زر التغذية، ومن «حسابي»، ومن إشعار «بدأ البث».
 Future<void> openLiveScreen(BuildContext context) {
@@ -162,7 +164,7 @@ class _LiveBadge extends StatelessWidget {
 }
 
 /// صفحة البث: المشغّل أو زرّ الدخول، ثم موضوع الحلقة وسؤالها، ثم نقاش
-/// التطبيق (استفتاء اليوم)، ثم نتيجة نقاش الأمس.
+/// التطبيق (استفتاء اليوم)، ثم نتيجة نقاش الأمس، ثم «الحلقات السابقة» في الذيل.
 ///
 /// المشغّل WebView على `/live/embed` من خادمنا (لا `embed_url` مباشرة — انظر
 /// `NegevApi.liveEmbedUrl`)، ويُنشأ فقط حين يصل `embed_url`؛ ويُفرَّغ عند
@@ -181,6 +183,10 @@ class _LiveScreenState extends State<LiveScreen> {
 
   WebViewController? _web;
   String? _webEmbedUrl;
+
+  /// مشغّل حلقة سابقة مفتوح فوق الصفحة — تحديث صامت (تغيّر حالة البث) لا
+  /// يُعيد مشغّل البث خلفه فيعمل صوتان معاً.
+  bool _pastPlayerOpen = false;
 
   AuthStore? _auth;
   bool _wasSignedIn = false;
@@ -246,7 +252,9 @@ class _LiveScreenState extends State<LiveScreen> {
     _hub = hub;
     // المشغّل للبث القائم فقط، كالموقع: بث انتهى موعده لا يُعرض كأنه مباشر.
     final live = hub.channel.live;
-    _syncPlayer(live != null && live.active ? hub.channel.embedUrl : null);
+    if (!_pastPlayerOpen) {
+      _syncPlayer(live != null && live.active ? hub.channel.embedUrl : null);
+    }
     _syncPollChannel(hub.today);
   }
 
@@ -348,6 +356,52 @@ class _LiveScreenState extends State<LiveScreen> {
     }
   }
 
+  /// «شاهد هنا» — مشغّل الحلقة في شاشة مستقلة. بث قائم يُفرَّغ قبل الفتح كي
+  /// لا يعمل صوتان معاً، ويعود من آخر حالة معروفة عند الرجوع.
+  Future<void> _watchPastEpisode(PastEpisode episode) async {
+    final uri = AppServices.of(context).api.pastEpisodeEmbedUrl(episode.id);
+    setState(() {
+      _pastPlayerOpen = true;
+      _releasePlayer();
+    });
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PastEpisodePlayerScreen(
+          title: episode.title.isEmpty ? 'حلقة سابقة' : episode.title,
+          embedUri: uri,
+          videoUrl: episode.videoUrl,
+        ),
+      ),
+    );
+    _pastPlayerOpen = false;
+    final hub = _hub;
+    if (mounted && hub != null) setState(() => _applyHub(hub));
+  }
+
+  void _openPastEpisodeOnYoutube(PastEpisode episode) {
+    final target = Uri.tryParse(episode.videoUrl ?? '');
+    if (target == null || !target.hasScheme) {
+      showMessage(context, 'تعذّر فتح يوتيوب', isError: true);
+      return;
+    }
+    openExternalLink(context, target, failureMessage: 'تعذّر فتح يوتيوب');
+  }
+
+  /// نفس نمط مشاركة البث: العنوان ثم رابط صفحة الحلقة على خادمنا.
+  Future<void> _sharePastEpisode(PastEpisode episode) async {
+    final url = episode.shareUrl ?? episode.videoUrl;
+    if (url == null) {
+      showMessage(context, 'لا يوجد رابط لهذه الحلقة', isError: true);
+      return;
+    }
+    final title = episode.title.isEmpty ? 'حلقة من البث — مناسبات النقب' : episode.title;
+    try {
+      await SharePlus.instance.share(ShareParams(text: '$title\n$url'));
+    } catch (_) {
+      if (mounted) showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -403,6 +457,7 @@ class _LiveScreenState extends State<LiveScreen> {
                 _LabelledText(label: 'سؤال الحلقة', text: today!.episodeQuestion!),
               if (today != null && poll != null) _buildPoll(today, poll),
               if (previous != null) _buildPrevious(previous),
+              if (hub.pastEpisodes.isNotEmpty) _buildPastEpisodes(hub.pastEpisodes),
             ],
           ),
         ),
@@ -562,6 +617,219 @@ class _LiveScreenState extends State<LiveScreen> {
       ],
     );
   }
+
+  Widget _buildPastEpisodes(List<PastEpisode> episodes) {
+    return _Section(
+      key: const Key('past_episodes_section'),
+      title: 'الحلقات السابقة',
+      children: [
+        for (final episode in episodes)
+          _PastEpisodeTile(
+            key: Key('past_episode_${episode.id}'),
+            episode: episode,
+            onWatch: () => _watchPastEpisode(episode),
+            onYoutube: episode.videoUrl == null
+                ? null
+                : () => _openPastEpisodeOnYoutube(episode),
+            onShare: () => _sharePastEpisode(episode),
+          ),
+      ],
+    );
+  }
+}
+
+/// بطاقة حلقة سابقة: الصورة (أو بديل بهوية المنصّة)، العنوان والتاريخ، ثم
+/// الأفعال الثلاثة.
+class _PastEpisodeTile extends StatelessWidget {
+  const _PastEpisodeTile({
+    super.key,
+    required this.episode,
+    required this.onWatch,
+    required this.onYoutube,
+    required this.onShare,
+  });
+
+  final PastEpisode episode;
+  final VoidCallback onWatch;
+
+  /// `null` حين لا رابط يوتيوب للحلقة — يُعطَّل الزر بدل أن يختفي.
+  final VoidCallback? onYoutube;
+  final VoidCallback onShare;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = episode.shareImageUrl;
+    final date = episode.date;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: context.c.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 120,
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: image == null
+                        ? const _EpisodePlaceholder()
+                        : CachedNetworkImage(
+                            imageUrl: image,
+                            fit: BoxFit.cover,
+                            placeholder: (_, _) => const _EpisodePlaceholder(),
+                            errorWidget: (_, _, _) => const _EpisodePlaceholder(),
+                          ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      episode.title.isEmpty ? 'حلقة سابقة' : episode.title,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        height: 1.45,
+                      ),
+                    ),
+                    if (date != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        arabicEventDate(date),
+                        style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 4,
+            children: [
+              TextButton.icon(
+                onPressed: onWatch,
+                icon: const Icon(Icons.play_circle_outline_rounded, size: 18),
+                label: const Text('شاهد هنا'),
+              ),
+              TextButton.icon(
+                onPressed: onYoutube,
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('افتح على يوتيوب'),
+              ),
+              TextButton.icon(
+                onPressed: onShare,
+                icon: const Icon(Icons.share_rounded, size: 18),
+                label: const Text('شارك'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// بديل الصورة: أرضية بلون المنصّة وأيقونة تشغيل — لا مساحة رمادية فارغة.
+class _EpisodePlaceholder extends StatelessWidget {
+  const _EpisodePlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [context.c.skyDeep, context.c.sky],
+        ),
+      ),
+      child: const Center(
+        child: Icon(Icons.live_tv_rounded, color: Colors.white, size: 30),
+      ),
+    );
+  }
+}
+
+/// مشغّل حلقة سابقة — WebView على `/live/e/<id>/embed` من خادمنا بنفس إعداد
+/// مشغّل البث، ويُفرَّغ عند الخروج كي يتوقّف الصوت.
+class PastEpisodePlayerScreen extends StatefulWidget {
+  const PastEpisodePlayerScreen({
+    super.key,
+    required this.title,
+    required this.embedUri,
+    this.videoUrl,
+  });
+
+  final String title;
+  final Uri embedUri;
+  final String? videoUrl;
+
+  @override
+  State<PastEpisodePlayerScreen> createState() => _PastEpisodePlayerScreenState();
+}
+
+class _PastEpisodePlayerScreenState extends State<PastEpisodePlayerScreen> {
+  late final WebViewController _web = WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setBackgroundColor(Colors.black)
+    ..loadRequest(widget.embedUri);
+
+  @override
+  void dispose() {
+    // المنصّة قد تكون أزالت العرض فعلاً عند الخروج — لا رمية تفلت من هنا.
+    unawaited(_web.loadRequest(Uri.parse('about:blank')).catchError((Object _) {}));
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final target = Uri.tryParse(widget.videoUrl ?? '');
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ),
+      body: ListView(
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: ColoredBox(
+              color: Colors.black,
+              child: WebViewWidget(controller: _web),
+            ),
+          ),
+          if (target != null && target.hasScheme)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: () => openExternalLink(
+                  context,
+                  target,
+                  failureMessage: 'تعذّر فتح يوتيوب',
+                ),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('افتح على يوتيوب'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Card extends StatelessWidget {
@@ -585,7 +853,7 @@ class _Card extends StatelessWidget {
 }
 
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
+  const _Section({super.key, required this.title, required this.children});
 
   final String title;
   final List<Widget> children;

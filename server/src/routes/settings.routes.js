@@ -4,6 +4,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const settings = require('../services/settings.service');
+const liveHub = require('../services/liveHub.service');
 const notifications = require('../services/notifications.service');
 const realtime = require('../realtime');
 const { announceLiveStarted } = require('../realtime/announce');
@@ -168,6 +169,8 @@ router.put('/admin/settings', asyncHandler(async (req, res) => {
 
   // Only after the write committed, and only when it touched the live —
   // saving the WhatsApp number alone is not a live-status change.
+  let liveEpisode = null;
+  let liveEpisodeNotice = null;
   if (keys.some(key => LIVE_KEYS.has(key))) {
     realtime.emit('live_status', {});
 
@@ -177,10 +180,27 @@ router.put('/admin/settings', asyncHandler(async (req, res) => {
     if (live && live.active) {
       const outcome = await notifications.notifyLiveStarted({ title: live.title, date: jerusalemDateString() });
       if (outcome.recipients > 0) announceLiveStarted(outcome);
+
+      // Every live is also today's saved episode (ADR-0008) — but only when
+      // its link names ONE video: a channel link would later replay whatever
+      // that channel streams next, so it is not saved, and the admin is told
+      // why rather than finding an empty «الحلقات السابقة» tomorrow.
+      const watchUrl = settings.toWatchUrl(live.url);
+      if (watchUrl) {
+        liveEpisode = await liveHub.recordBroadcast(jerusalemDateString(), { videoUrl: watchUrl, title: live.title }, req.user.id);
+      } else {
+        liveEpisodeNotice = 'البث يعمل، لكنه لن يُحفظ كحلقة سابقة: الرابط ليس رابط فيديو يوتيوب محدّداً. الصق رابط البث نفسه (youtube.com/live/… أو watch?v=…) في «رابط البث».';
+      }
     }
   }
 
-  res.json({ success: true, settings: await settings.getAllForAdmin(), message: 'تم حفظ الإعدادات بنجاح' });
+  res.json({
+    success: true,
+    settings: await settings.getAllForAdmin(),
+    live_episode: liveEpisode,
+    live_episode_notice: liveEpisodeNotice,
+    message: 'تم حفظ الإعدادات بنجاح'
+  });
 }));
 
 // Both sub-paths sit under the `router.use('/admin/settings', ...)` guard

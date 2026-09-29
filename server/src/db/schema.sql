@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   -- would be silently reverted on the next deploy; to get a countdown,
   -- change the type's tone instead.
   notify_countdown            TINYINT(1)   NOT NULL DEFAULT 1,
+  -- Whether an ended event of this type gets a photo gallery in «أرشيف
+  -- الأعراس» (ADR-0008). NULL means "not decided yet": the
+  -- add-episode-media-and-archive-photos-2026-09 step turns every NULL into
+  -- 1 for the wedding type and 0 for the rest, and every write after that
+  -- (createType, the admin toggle) stores 0 or 1 — so a super_admin's choice
+  -- is never overridden by a later deploy. A funeral's photos are not
+  -- something the platform should invite.
+  archive_gallery             TINYINT(1)   DEFAULT NULL,
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -717,6 +725,13 @@ CREATE TABLE IF NOT EXISTS live_episodes (
   episode_question VARCHAR(255) DEFAULT NULL,
   poll_question    VARCHAR(255) DEFAULT NULL,
   poll_options     JSON         DEFAULT NULL,
+  -- The broadcast itself (ADR-0008): ONE YouTube video's own link — never
+  -- the channel's /live, which moves on to the next stream — so the same
+  -- URL keeps playing the recording once the live ends. The share image is
+  -- optional; its Cloudinary public_id is kept to delete it when replaced.
+  video_url             VARCHAR(300) DEFAULT NULL,
+  share_image_url       VARCHAR(500) DEFAULT NULL,
+  share_image_public_id VARCHAR(255) DEFAULT NULL,
   created_by       INT UNSIGNED DEFAULT NULL,
   created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -740,4 +755,24 @@ CREATE TABLE IF NOT EXISTS live_poll_votes (
   KEY idx_live_poll_votes_user (user_id),
   CONSTRAINT fk_live_poll_votes_episode FOREIGN KEY (episode_id) REFERENCES live_episodes(id) ON DELETE CASCADE,
   CONSTRAINT fk_live_poll_votes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- «أرشيف الأعراس» (ADR-0008): photos a super_admin adds to an ENDED event
+-- whose type has archive_gallery on. The file lives on Cloudinary; this row
+-- is what the product shows. public_id is unique because it was generated
+-- and signed by the server for exactly one upload.
+CREATE TABLE IF NOT EXISTS event_photos (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id     INT UNSIGNED NOT NULL,
+  public_id    VARCHAR(255) NOT NULL,
+  image_url    VARCHAR(500) NOT NULL,
+  width        INT UNSIGNED DEFAULT NULL,
+  height       INT UNSIGNED DEFAULT NULL,
+  uploaded_by  INT UNSIGNED DEFAULT NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_event_photos_public_id (public_id),
+  KEY idx_event_photos_event (event_id),
+  CONSTRAINT fk_event_photos_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_photos_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

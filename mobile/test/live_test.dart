@@ -125,13 +125,38 @@ Map<String, dynamic> _hub({
   Map<String, dynamic>? live,
   Map<String, dynamic>? today,
   Map<String, dynamic>? previous,
+  List<Map<String, dynamic>>? pastEpisodes,
 }) =>
     {
       ...(live ?? _nothingConfigured),
       'today': today,
       'previous': previous,
       'share_url': 'https://example.com/live',
+      'past_episodes': ?pastEpisodes,
     };
+
+/// ما يردّه الخادم في `past_episodes` — الأحدث أولاً؛ الثانية بلا صورة
+/// مشاركة ولا embed_url.
+const List<Map<String, dynamic>> _pastEpisodes = [
+  {
+    'id': 12,
+    'date': '2026-09-27',
+    'title': 'حلقة الأعراس الكبيرة',
+    'video_url': 'https://www.youtube.com/watch?v=abcdefghijk',
+    'embed_url': 'https://www.youtube-nocookie.com/embed/abcdefghijk',
+    'share_url': 'https://example.com/live/e/12',
+    'share_image_url': 'https://example.com/share/12.png',
+  },
+  {
+    'id': 11,
+    'date': '2026-09-20',
+    'title': 'حلقة المهور',
+    'video_url': 'https://www.youtube.com/watch?v=bcdefghijkl',
+    'embed_url': null,
+    'share_url': 'https://example.com/live/e/11',
+    'share_image_url': null,
+  },
+];
 
 const Map<String, dynamic> _todayWithPoll = {
   'id': 5,
@@ -226,6 +251,36 @@ void main() {
       expect(hub.shareUrl, isNull);
     });
 
+    test('past_episodes: يُقرأ بترتيبه، وتُسقط المداخل التالفة', () {
+      final hub = LiveHub.fromJson({
+        ..._nothingConfigured,
+        'past_episodes': [
+          ..._pastEpisodes,
+          {'id': null, 'title': 'بلا معرّف'},
+          'ليست حلقة',
+        ],
+      });
+
+      expect(hub.pastEpisodes.map((e) => e.id), [12, 11]);
+      final first = hub.pastEpisodes.first;
+      expect(first.date, '2026-09-27');
+      expect(first.title, 'حلقة الأعراس الكبيرة');
+      expect(first.videoUrl, 'https://www.youtube.com/watch?v=abcdefghijk');
+      expect(first.embedUrl, 'https://www.youtube-nocookie.com/embed/abcdefghijk');
+      expect(first.shareUrl, 'https://example.com/live/e/12');
+      expect(first.shareImageUrl, 'https://example.com/share/12.png');
+      final second = hub.pastEpisodes.last;
+      expect(second.embedUrl, isNull);
+      expect(second.shareImageUrl, isNull);
+      // copyWith (بعد التصويت) لا يُسقط الحلقات السابقة.
+      expect(hub.copyWith().pastEpisodes, hasLength(2));
+    });
+
+    test('past_episodes غائب أو null من خادم أقدم — قائمة فارغة', () {
+      expect(LiveHub.fromJson(const {}).pastEpisodes, isEmpty);
+      expect(LiveHub.fromJson(const {'past_episodes': null}).pastEpisodes, isEmpty);
+    });
+
     test('profile_url يُقرأ رابطاً للقناة إن غاب live_channel_url', () {
       final channel = LiveChannel.fromJson(const {'profile_url': 'https://example.com/c'});
       expect(channel.channelUrl, 'https://example.com/c');
@@ -241,6 +296,8 @@ void main() {
       expect(api.liveEmbedUrl.origin, origin);
       expect(api.liveGoUrl.path, '/live/go');
       expect(api.liveGoUrl.origin, origin);
+      expect(api.pastEpisodeEmbedUrl(12).path, '/live/e/12/embed');
+      expect(api.pastEpisodeEmbedUrl(12).origin, origin);
     });
   });
 
@@ -469,6 +526,83 @@ void main() {
       expect(find.text('سؤال الأمس'), findsOneWidget);
       expect(find.text('67%'), findsOneWidget);
       expect(find.text('عدد المشاركين: 3'), findsOneWidget);
+    });
+
+    testWidgets('«الحلقات السابقة»: غائبة حين القائمة فارغة أو المفتاح غائب', (tester) async {
+      final api = _api(hubBody: _hub(pastEpisodes: const []));
+      await _pump(tester, api, await _auth(api), const LiveScreen());
+      expect(find.text('الحلقات السابقة'), findsNothing);
+      expect(find.text('شاهد هنا'), findsNothing);
+
+      final older = _api(hubBody: _hub());
+      await _pump(tester, older, await _auth(older), const LiveScreen(key: ValueKey('older')));
+      expect(find.text('لا يوجد بث الآن'), findsOneWidget);
+      expect(find.text('الحلقات السابقة'), findsNothing);
+    });
+
+    testWidgets('«الحلقات السابقة» في ذيل الصفحة: كل حلقة بعنوانها وتاريخها وأفعالها الثلاثة', (tester) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final api = _api(
+        hubBody: _hub(
+          today: _todayWithPoll,
+          previous: {
+            'date': '2026-09-25',
+            'poll_question': 'سؤال الأمس',
+            'results': [
+              {'index': 0, 'label': 'أ', 'votes': 1, 'percentage': 100},
+            ],
+            'total_votes': 1,
+          },
+          pastEpisodes: _pastEpisodes,
+        ),
+      );
+      await _pump(tester, api, await _auth(api), const LiveScreen());
+
+      expect(find.text('الحلقات السابقة'), findsOneWidget);
+      expect(find.text('حلقة الأعراس الكبيرة'), findsOneWidget);
+      expect(find.text('حلقة المهور'), findsOneWidget);
+      expect(find.text('الأحد، ٢٧ سبتمبر ٢٠٢٦'), findsOneWidget);
+
+      for (final id in [12, 11]) {
+        final tile = find.byKey(Key('past_episode_$id'));
+        expect(tile, findsOneWidget);
+        for (final label in ['شاهد هنا', 'افتح على يوتيوب', 'شارك']) {
+          expect(find.descendant(of: tile, matching: find.text(label)), findsOneWidget);
+        }
+      }
+      // بلا صورة مشاركة: البديل بهوية المنصّة داخل بطاقة الحلقة الثانية.
+      expect(
+        find.descendant(of: find.byKey(const Key('past_episode_11')), matching: find.byIcon(Icons.live_tv_rounded)),
+        findsOneWidget,
+      );
+
+      // الذيل فعلاً: تحت المشغّل ونقاش اليوم ونتيجة الأمس.
+      final sectionTop = tester.getTopLeft(find.text('الحلقات السابقة')).dy;
+      expect(sectionTop, greaterThan(tester.getTopLeft(find.text('لا يوجد بث الآن')).dy));
+      expect(sectionTop, greaterThan(tester.getTopLeft(find.text('نقاش التطبيق')).dy));
+      expect(sectionTop, greaterThan(tester.getTopLeft(find.text('نتيجة نقاش الأمس')).dy));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('حلقة بلا video_url: «افتح على يوتيوب» معطَّل لا مخفي', (tester) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final api = _api(
+        hubBody: _hub(pastEpisodes: const [
+          {'id': 7, 'date': '2026-09-01', 'title': 'حلقة قديمة', 'video_url': null, 'share_url': 'https://example.com/live/e/7'},
+        ]),
+      );
+      await _pump(tester, api, await _auth(api), const LiveScreen());
+
+      final button = find.ancestor(of: find.text('افتح على يوتيوب'), matching: find.bySubtype<ButtonStyleButton>());
+      expect(tester.widget<ButtonStyleButton>(button).onPressed, isNull);
+      final watch = find.ancestor(of: find.text('شاهد هنا'), matching: find.bySubtype<ButtonStyleButton>());
+      expect(tester.widget<ButtonStyleButton>(watch).onPressed, isNotNull);
     });
   });
 }

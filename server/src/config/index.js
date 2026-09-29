@@ -108,6 +108,15 @@ const config = {
     subject: process.env.VAPID_SUBJECT || null
   },
 
+  // Cloudinary (ADR-0008) — where archive photos and episode share images
+  // live. Absent by default: the platform runs normally, and the two upload
+  // buttons answer with a clear Arabic message instead (cloudinary.service.js).
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || null,
+    apiKey: process.env.CLOUDINARY_API_KEY || null,
+    apiSecret: process.env.CLOUDINARY_API_SECRET || null
+  },
+
   // Facebook Page Integration (auto-publishing approved events)
   facebook: {
     pageId: process.env.FACEBOOK_PAGE_ID || null,

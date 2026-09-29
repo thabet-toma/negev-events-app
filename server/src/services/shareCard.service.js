@@ -49,6 +49,7 @@ const logger = require('../utils/logger');
 const { uploadsDir } = require('../middleware/upload');
 const { PALETTES, LIVE_RED, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 const { buildMarkParts, markScale, paintParts } = require('../utils/brandMark');
+const { jpegVariant } = require('./cloudinary.service');
 
 const WIDTH = 1200;
 const HEIGHT = 1200;
@@ -122,16 +123,27 @@ function liveCacheKey(title, active) {
   return `live-${hash}-${active ? 'on' : 'off'}-v${LIVE_CARD_DESIGN_VERSION}`;
 }
 
+const EPISODE_CARD_DESIGN_VERSION = 1;
+
 /**
- * Removes any cached card for this event id that is *not* the current key —
- * a stale file from before the last edit. Best-effort: a leftover file here
- * is disk usage, not a correctness bug (the current key is what gets served),
- * so a failure to clean up is logged and swallowed rather than allowed to
- * fail the render it is tidying up after.
+ * An episode card changes only with its title and its share image, so both
+ * are hashed into the key (ADR-0008) — replacing the image or retitling the
+ * episode draws a fresh card, and the old file is evicted by id prefix.
  */
-async function evictStale(event, currentKey) {
+function episodeCacheKey({ id, title, imageUrl }) {
+  const hash = crypto.createHash('sha1').update(`${title}\n${imageUrl || ''}`).digest('hex').slice(0, 16);
+  return `episode-${id}-${hash}-v${EPISODE_CARD_DESIGN_VERSION}`;
+}
+
+/**
+ * Removes every cached card whose name starts with `prefix` but is *not* the
+ * current key — a stale file from before the last edit. Best-effort: a
+ * leftover file here is disk usage, not a correctness bug (the current key
+ * is what gets served), so a failure to clean up is logged and swallowed
+ * rather than allowed to fail the render it is tidying up after.
+ */
+async function evictStale(prefix, currentKey) {
   try {
-    const prefix = `${event.id}-`;
     const entries = await fsp.readdir(CACHE_DIR);
     await Promise.all(
       entries
@@ -139,7 +151,7 @@ async function evictStale(event, currentKey) {
         .map(name => fsp.unlink(path.join(CACHE_DIR, name)).catch(() => {}))
     );
   } catch (err) {
-    logger.warn(`[shareCard] failed to evict stale cache entries for event ${event.id}: ${err.message}`);
+    logger.warn(`[shareCard] failed to evict stale cache entries for ${prefix}: ${err.message}`);
   }
 }
 
@@ -735,7 +747,7 @@ async function getOrRenderCard(event) {
 
   const buffer = await renderCard(event);
   await fsp.writeFile(file, buffer);
-  await evictStale(event, key);
+  await evictStale(`${event.id}-`, key);
   return buffer;
 }
 
@@ -875,6 +887,126 @@ async function getOrRenderLiveCover({ title, active }) {
   return buffer;
 }
 
+/**
+ * One saved broadcast's card — what WhatsApp shows for /live/e/:id
+ * (ADR-0008): the admin's share image, whole and sharp, over a blurred copy
+ * of itself (the same `drawHero` the event card frames a poster with), and
+ * under it the band — «حلقة من البث المباشر», the episode's title, and the
+ * site's own line — all inside the brand frame. With no image (it is
+ * optional) the band alone is centred on the palette wash, exactly like an
+ * event with no poster: a typographic card, not a picture that failed.
+ */
+async function renderEpisodeCard({ title, imageUrl }) {
+  const palette = PALETTES.festive;
+  const canvas = createCanvas(WIDTH, HEIGHT);
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  let image = null;
+  const buffer = imageUrl ? await loadPosterBuffer(jpegVariant(imageUrl)) : null;
+  if (buffer) {
+    try {
+      image = await loadImage(buffer);
+    } catch (err) {
+      logger.warn(`[shareCard] failed to decode episode share image: ${err.message}`);
+    }
+  }
+
+  if (image) {
+    drawHero(ctx, image, palette);
+  } else {
+    const wash = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    wash.addColorStop(0, palette.card);
+    wash.addColorStop(1, palette.bg);
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+
+  // Without an image the brand mark itself leads, large, above the band —
+  // the same "the mark is the picture" answer as the live cover — and the
+  // whole block (mark + band content) is centred on the card.
+  let bandTop = HERO_HEIGHT;
+  if (!image) {
+    const bigMark = 220;
+    const gapAfterMark = 70;
+    const blockHeight = bigMark + gapAfterMark + BAND_HEIGHT - 40;
+    const top = Math.round((HEIGHT - blockHeight) / 2);
+    drawBrandMark(ctx, WIDTH / 2 - bigMark / 2, top, bigMark);
+    bandTop = top + bigMark + gapAfterMark;
+  }
+  if (image) {
+    const bandWash = ctx.createLinearGradient(0, bandTop, 0, bandTop + BAND_HEIGHT);
+    bandWash.addColorStop(0, palette.card);
+    bandWash.addColorStop(1, palette.bg);
+    ctx.fillStyle = bandWash;
+    ctx.fillRect(0, bandTop, WIDTH, BAND_HEIGHT);
+    ctx.fillStyle = LIVE_RED;
+    ctx.fillRect(0, bandTop, WIDTH, 3);
+  } else {
+    ctx.fillStyle = LIVE_RED;
+    ctx.fillRect(WIDTH / 2 - 60, bandTop - 12, 120, 4);
+  }
+
+  const centreX = WIDTH / 2;
+  drawChip(ctx, { occasion_type_name: 'حلقة من البث المباشر' }, palette, centreX, bandTop + 52, readableOnDark(LIVE_RED));
+
+  // Up to two lines — an episode title is a sentence more often than a name.
+  ctx.save();
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = palette.ink;
+  ctx.font = `700 44px "${BOLD_FAMILY}"`;
+  const titleLines = wrapLines(ctx, String(title || ''), WIDTH - MARGIN * 2, 2);
+  const firstLineY = titleLines.length > 1 ? bandTop + 118 : bandTop + 140;
+  titleLines.forEach((line, i) => ctx.fillText(line, centreX, firstLineY + i * 52));
+  ctx.restore();
+
+  // The site's line — same group as the event card's (mark + text, centred);
+  // the small mark is dropped when the large one already leads the card.
+  const brandFont = `600 24px "${BOLD_FAMILY}"`;
+  const brandText = `${palette.wordmark} · شاهد الحلقة في التطبيق`;
+  ctx.font = brandFont;
+  const brandTextWidth = ctx.measureText(brandText).width;
+  const markSize = image ? 44 : 0;
+  const markGap = image ? 14 : 0;
+  const rowY = image ? HEIGHT - 80 : bandTop + BAND_HEIGHT - 60;
+  const groupRight = centreX + (markSize + markGap + brandTextWidth) / 2;
+  const markX = groupRight - markSize;
+  if (image) drawBrandMark(ctx, markX, rowY - markSize / 2, markSize);
+  ctx.save();
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = brandFont;
+  ctx.fillStyle = withAlpha(palette.accent, 0.95);
+  ctx.fillText(brandText, markX - markGap, rowY + 2);
+  ctx.restore();
+
+  drawFrame(ctx, palette, 'festive');
+
+  return canvas.toBuffer('image/jpeg', 88);
+}
+
+/** Render-once-reuse for an episode card — see episodeCacheKey for what invalidates it. */
+async function getOrRenderEpisodeCard({ id, title, imageUrl }) {
+  const key = episodeCacheKey({ id, title, imageUrl });
+  const file = cachePath(key);
+
+  try {
+    return await fsp.readFile(file);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+
+  const buffer = await renderEpisodeCard({ title, imageUrl });
+  await fsp.writeFile(file, buffer);
+  await evictStale(`episode-${id}-`, key);
+  return buffer;
+}
+
 module.exports = {
   WIDTH,
   HEIGHT,
@@ -882,5 +1014,7 @@ module.exports = {
   renderCard,
   getOrRenderCard,
   renderLiveCover,
-  getOrRenderLiveCover
+  getOrRenderLiveCover,
+  renderEpisodeCard,
+  getOrRenderEpisodeCard
 };

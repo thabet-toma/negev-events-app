@@ -21,6 +21,7 @@ const analyticsRoutes = require('./analytics.routes');
 const privacyRoutes = require('./privacy.routes');
 const settingsRoutes = require('./settings.routes');
 const liveRoutes = require('./live.routes');
+const archivePhotosRoutes = require('./archivePhotos.routes');
 
 const router = express.Router();
 
@@ -65,5 +66,6 @@ router.use(analyticsRoutes);
 router.use(privacyRoutes);
 router.use(settingsRoutes);
 router.use(liveRoutes);
+router.use(archivePhotosRoutes);
 
 module.exports = router;

@@ -5822,6 +5822,8 @@ async function run() {
     document.getElementById('liveEpisodeQuestion').value = 'ما رأيكم؟';
     await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
 
+    // An untouched video field is left out: the server then keeps whatever a
+    // broadcast recorded after this form was loaded (ADR-0008).
     assert.deepStrictEqual(putBody, { topic: 'موضوع الغد', episode_question: 'ما رأيكم؟', poll_question: '', poll_options: [] },
       'empty question + empty options must be sent as "no poll" — the server reads [] as none');
     assert.ok(calls.adminPaths.includes('/api/admin/live/episodes/2026-10-01'), 'the PUT must go through adminFetch');
@@ -5864,6 +5866,366 @@ async function run() {
     assert.ok(calls.adminPaths.includes('/api/admin/live/episodes/7'), 'the DELETE must go through adminFetch');
     const rawNonAdmin = calls.rawFetch.filter(c => c.path.startsWith('/api/admin/') && c.headers.Authorization !== 'Bearer test-admin-token');
     assert.strictEqual(rawNonAdmin.length, 0, 'every admin call must carry the admin token — none may bypass adminFetch');
+  });
+
+  console.log('\nPast episodes, share images & archive photos (ADR-0008)');
+
+  const CLOUDINARY_UPLOAD = {
+    upload_url: 'https://api.cloudinary.com/v1_1/demo/image/upload',
+    api_key: '123456',
+    public_id: 'negev-events/archive/event-7/abc123',
+    timestamp: 1790000000,
+    allowed_formats: 'jpg,jpeg,png,webp,heic',
+    signature: 'deadbeef'
+  };
+  const PAST_EPISODES = [
+    {
+      id: 11, date: '2026-09-20', title: '<img src=x onerror="window.__pwned=1">حلقة الأسبوع',
+      video_url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      embed_url: 'https://www.youtube-nocookie.com/embed/aaaaaaaaaaa?autoplay=1&playsinline=1',
+      share_url: 'https://munasbat.example/live/e/11',
+      share_image_url: 'https://res.cloudinary.com/demo/image/upload/v1/negev-events/live/e11.jpg'
+    },
+    {
+      id: 10, date: '2026-09-19', title: 'حلقة الأمس',
+      video_url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb',
+      embed_url: 'https://www.youtube-nocookie.com/embed/bbbbbbbbbbb?autoplay=1&playsinline=1',
+      share_url: 'https://munasbat.example/live/e/10',
+      share_image_url: null
+    }
+  ];
+
+  await test('«الحلقات السابقة» is the last section of the live page: escaped titles, image or placeholder, and «شاهد هنا» / «افتح على يوتيوب» / «شارك»', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture({ past_episodes: PAST_EPISODES }) }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => doc.getElementById('livePastEpisodes') && !doc.getElementById('livePastEpisodes').hidden);
+
+    const box = doc.getElementById('livePastEpisodes');
+    assert.ok(box, 'expected a #livePastEpisodes section in the live modal');
+    assert.strictEqual(box.hidden, false);
+    assert.strictEqual(doc.querySelector('#liveModal .live-modal-body').lastElementChild, box, 'it lives inside the live page, under everything');
+    assert.ok(box.textContent.includes('الحلقات السابقة'));
+
+    const items = box.querySelectorAll('.live-past-item');
+    assert.strictEqual(items.length, 2);
+    const first = items[0];
+    assert.strictEqual(first.querySelector('.live-past-title').textContent, PAST_EPISODES[0].title, 'the hostile title is shown as text');
+    assert.strictEqual(first.querySelector('.live-past-title').children.length, 0, 'the title must not become markup');
+    assert.strictEqual(dom.window.__pwned, undefined);
+    assert.ok(first.textContent.includes('2026-09-20'), 'the date is shown');
+    assert.strictEqual(first.querySelector('.live-past-media > img').getAttribute('src'), PAST_EPISODES[0].share_image_url);
+    assert.ok(items[1].querySelector('.live-past-placeholder'), 'no share image → the branded placeholder');
+
+    assert.deepStrictEqual([...first.querySelectorAll('.live-past-btn')].map(b => b.textContent.trim()), ['شاهد هنا', 'افتح على يوتيوب', 'شارك']);
+    const youtube = first.querySelector('a.live-past-btn');
+    assert.strictEqual(youtube.getAttribute('href'), PAST_EPISODES[0].video_url);
+    assert.strictEqual(youtube.getAttribute('target'), '_blank');
+    assert.strictEqual(youtube.getAttribute('rel'), 'noopener');
+
+    first.querySelector('.live-past-btn-primary').click();
+    const frame = first.querySelector('.live-past-media iframe');
+    assert.ok(frame, '«شاهد هنا» plays inside the modal');
+    assert.strictEqual(frame.getAttribute('src'), PAST_EPISODES[0].embed_url);
+    assert.ok(/allowfullscreen/i.test(first.querySelector('.live-past-media').innerHTML));
+
+    items[1].querySelector('.live-past-btn-primary').click();
+    assert.strictEqual(first.querySelector('iframe'), null, 'only one episode plays at a time');
+    assert.ok(first.querySelector('.live-past-media > img'), 'the stopped episode gets its image back');
+    assert.ok(items[1].querySelector('iframe'));
+
+    let shared = null;
+    Object.defineProperty(dom.window.navigator, 'share', { value: async data => { shared = data; }, configurable: true });
+    first.querySelectorAll('.live-past-btn')[2].click();
+    await waitFor(() => shared);
+    assert.strictEqual(shared.url, PAST_EPISODES[0].share_url, '«شارك» shares the episode page');
+    assert.strictEqual(shared.title, PAST_EPISODES[0].title);
+
+    dom.window.closeLiveSection();
+    assert.strictEqual(box.querySelector('iframe'), null, 'closing the live page stops a playing episode');
+  });
+
+  await test('«الحلقات السابقة» stays hidden when past_episodes is empty', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    dom.window.fetch = buildLiveHubFetchStub({ hub: buildLiveHubFixture({ past_episodes: [] }) }).fetchFn;
+    dom.window.openLiveSection();
+    await waitFor(() => !doc.getElementById('livePoll').hidden);
+    const box = doc.getElementById('livePastEpisodes');
+    assert.ok(box, 'expected a #livePastEpisodes section in the live modal');
+    assert.strictEqual(box.hidden, true);
+    assert.strictEqual(box.querySelector('.live-past-item'), null);
+  });
+
+  await test('«أرشيف العرس» appears in the event details only when archive_photos is non-empty, and opens a full-screen viewer', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    const baseEvent = { title: 'عرس', groom_name: 'راني', town: 'رهط', event_date: '2026-09-01', congratulations: [] };
+    const hostileUrl = 'https://res.cloudinary.com/demo/b.jpg" onerror="window.__pwned=1';
+    const events = {
+      55: { ...baseEvent, id: 55, archive_photos: [] },
+      56: { ...baseEvent, id: 56, archive_photos: [
+        { id: 1, image_url: 'https://res.cloudinary.com/demo/a.jpg', width: 800, height: 600 },
+        { id: 2, image_url: hostileUrl, width: 800, height: 600 }
+      ] }
+    };
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options) => {
+      const match = /^\/api\/events\/(\d+)$/.exec(String(url).split('?')[0]);
+      if (match) return jsonResponse({ success: true, event: events[match[1]] });
+      return base(url, options);
+    };
+
+    await dom.window.openChatModal(55);
+    const box = doc.getElementById('chatArchive');
+    assert.ok(box, 'expected a #chatArchive section in the details modal');
+    assert.strictEqual(box.hidden, true, 'no photos → no section');
+
+    await dom.window.openChatModal(56);
+    assert.strictEqual(box.hidden, false);
+    assert.ok(box.textContent.includes('أرشيف العرس'));
+    const imgs = box.querySelectorAll('.event-archive-grid img');
+    assert.strictEqual(imgs.length, 2);
+    assert.ok([...imgs].every(img => img.getAttribute('loading') === 'lazy'), 'grid images load lazily');
+    assert.strictEqual(imgs[1].getAttribute('src'), hostileUrl, 'a hostile URL stays one attribute value');
+    assert.strictEqual(imgs[1].getAttribute('onerror'), null);
+
+    const viewer = doc.getElementById('archiveViewer');
+    assert.strictEqual(viewer.hidden, true);
+    box.querySelectorAll('.event-archive-thumb')[1].click();
+    assert.strictEqual(viewer.hidden, false, 'a tap opens the viewer');
+    assert.strictEqual(doc.getElementById('archiveViewerImage').getAttribute('src'), hostileUrl);
+    assert.strictEqual(doc.getElementById('archiveViewerCounter').textContent, '2 / 2');
+    viewer.querySelector('.archive-viewer-next').click();
+    assert.strictEqual(doc.getElementById('archiveViewerImage').getAttribute('src'), 'https://res.cloudinary.com/demo/a.jpg', 'next wraps around');
+    viewer.querySelector('.archive-viewer-prev').click();
+    assert.strictEqual(doc.getElementById('archiveViewerCounter').textContent, '2 / 2');
+    viewer.querySelector('.archive-viewer-close').click();
+    assert.strictEqual(viewer.hidden, true);
+
+    await dom.window.openChatModal(55);
+    assert.strictEqual(box.hidden, true, 'the previous event\'s photos do not linger');
+  });
+
+  await test('uploadToCloudinary POSTs exactly the signed fields plus the file to upload_url, with no token, and throws an Arabic message on refusal', async () => {
+    const dom = buildAdminEnv();
+    let captured = null;
+    let answer = jsonResponse({ public_id: CLOUDINARY_UPLOAD.public_id, version: 1790000001, signature: 'cafe', width: 800, height: 600 });
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url) === CLOUDINARY_UPLOAD.upload_url) captured = { url: String(url), options };
+      return answer;
+    };
+    const file = new dom.window.File(['x'], 'a.jpg', { type: 'image/jpeg' });
+
+    const data = await dom.window.uploadToCloudinary(CLOUDINARY_UPLOAD, file);
+    assert.strictEqual(data.version, 1790000001);
+    assert.strictEqual(captured.url, CLOUDINARY_UPLOAD.upload_url);
+    assert.strictEqual(captured.options.method, 'POST');
+    assert.strictEqual(captured.options.headers, undefined, 'no Authorization / X-App-Version may reach a third-party host');
+    const body = captured.options.body;
+    assert.deepStrictEqual([...body.keys()].sort(), ['allowed_formats', 'api_key', 'file', 'public_id', 'signature', 'timestamp']);
+    for (const key of ['api_key', 'public_id', 'allowed_formats', 'signature']) {
+      assert.strictEqual(body.get(key), CLOUDINARY_UPLOAD[key], key);
+    }
+    assert.strictEqual(body.get('timestamp'), String(CLOUDINARY_UPLOAD.timestamp));
+    assert.strictEqual(body.get('file').name, 'a.jpg');
+
+    answer = jsonResponse({ error: { message: 'Invalid image file' } }, { status: 400 });
+    await assert.rejects(() => dom.window.uploadToCloudinary(CLOUDINARY_UPLOAD, file), err => /[؀-ۿ]/.test(err.message));
+  });
+
+  await test('the episode form prefills and sends video_url; a saved episode lists its video, thumbnail and share link', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const episode = {
+      id: 7, date: '2026-09-25', topic: 'موضوع', episode_question: null, poll_question: null, poll_options: null, vote_count: 0,
+      video_url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+      share_image_url: 'https://res.cloudinary.com/demo/e7.jpg',
+      share_url: 'https://munasbat.example/live/e/7'
+    };
+    let putBody = null;
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/live/episodes') return jsonResponse({ success: true, episodes: [episode] });
+      if (requestPath === '/api/admin/live/episodes/2026-09-25' && method === 'PUT') {
+        putBody = JSON.parse(options.body);
+        return jsonResponse({ success: true, episode: { ...episode, ...putBody } });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchLiveEpisodes();
+
+    const row = document.querySelector('#liveEpisodesList tbody tr');
+    assert.ok(row.textContent.includes('فيها فيديو'));
+    assert.strictEqual(row.querySelector('.live-episode-thumb').getAttribute('src'), episode.share_image_url);
+    assert.strictEqual(row.querySelector('a.live-episode-link').getAttribute('href'), episode.share_url);
+
+    dom.window.editLiveEpisode(7);
+    const input = document.getElementById('liveEpisodeVideoUrl');
+    assert.strictEqual(input.value, episode.video_url, 'the saved video link is prefilled');
+    assert.ok(document.querySelector('#liveEpisodeShareImage .share-image-preview'), 'a saved episode shows its share-image uploader with the preview');
+
+    input.value = ' https://www.youtube.com/watch?v=ccccccccccc ';
+    await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
+    assert.strictEqual(putBody.video_url, 'https://www.youtube.com/watch?v=ccccccccccc');
+
+    // An untouched field is left out, so a video recorded meanwhile survives;
+    // an emptied field is a change and is sent, which clears it.
+    dom.window.editLiveEpisode(7);
+    await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
+    assert.ok(!('video_url' in putBody), 'an unchanged video link must not be sent');
+    dom.window.editLiveEpisode(7);
+    input.value = '';
+    await dom.window.handleSaveLiveEpisode({ preventDefault() {} });
+    assert.strictEqual(putBody.video_url, '', 'an emptied field is sent to clear the link');
+  });
+
+  await test('saving the live shows live_episode_notice as a warning, or «حُفظ البث كحلقة اليوم» with an optional share-image upload', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const notice = 'البث يعمل، لكنه لن يُحفظ كحلقة سابقة: الرابط ليس رابط فيديو يوتيوب محدّداً.';
+    const savedEpisode = { id: 31, date: '2026-09-29', topic: 'سهرة', vote_count: 0, video_url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa', share_image_url: null, share_url: 'https://munasbat.example/live/e/31' };
+    let putAnswer = { success: true, settings: {}, live_episode: null, live_episode_notice: notice };
+    let sharePut = null;
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/settings' && method === 'PUT') return jsonResponse(putAnswer);
+      if (requestPath === '/api/live') return jsonResponse({ success: true, profile_url: null, live: null, embed_url: null, live_channel_url: null });
+      if (requestPath === '/api/admin/live/episodes') return jsonResponse({ success: true, episodes: [savedEpisode] });
+      if (requestPath === '/api/admin/live/episodes/31/share-image/signature' && method === 'POST') return jsonResponse({ success: true, upload: CLOUDINARY_UPLOAD });
+      if (requestPath === CLOUDINARY_UPLOAD.upload_url) return jsonResponse({ public_id: CLOUDINARY_UPLOAD.public_id, version: 5, signature: 'cafe' });
+      if (requestPath === '/api/admin/live/episodes/31/share-image' && method === 'PUT') {
+        sharePut = JSON.parse(options.body);
+        return jsonResponse({ success: true, episode: { ...savedEpisode, share_image_url: 'https://res.cloudinary.com/demo/e31.jpg' } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await dom.window.handleSaveLiveSettings({ preventDefault() {} });
+    const result = document.getElementById('liveEpisodeSaveResult');
+    assert.notStrictEqual(result.style.display, 'none');
+    assert.ok(result.querySelector('.is-warning'), 'the notice is a warning');
+    assert.ok(result.textContent.includes(notice), 'the server\'s own notice text is shown');
+    assert.strictEqual(result.querySelector('.share-image-control'), null);
+
+    putAnswer = { success: true, settings: {}, live_episode: savedEpisode, live_episode_notice: null };
+    await dom.window.handleSaveLiveSettings({ preventDefault() {} });
+    assert.ok(result.textContent.includes('حُفظ البث كحلقة اليوم'));
+    assert.strictEqual(result.querySelector('.is-warning'), null);
+    assert.ok(result.querySelector('.share-image-control[data-episode-id="31"]'), 'the optional share-image picker is offered');
+    assert.strictEqual(result.querySelector('.share-image-preview'), null);
+
+    const file = new dom.window.File(['x'], 'cover.png', { type: 'image/png' });
+    await dom.window.handleEpisodeShareImagePick(31, { files: [file] });
+    assert.deepStrictEqual(sharePut, { public_id: CLOUDINARY_UPLOAD.public_id, version: 5, signature: 'cafe' }, 'Cloudinary\'s answer is relayed for the server to verify');
+    assert.strictEqual(result.querySelector('.share-image-preview').getAttribute('src'), 'https://res.cloudinary.com/demo/e31.jpg', 'the preview appears after the upload');
+    assert.ok(result.textContent.includes('إزالة الصورة'));
+  });
+
+  await test('the occasion-type form prefills and sends archive_gallery', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const type = {
+      id: 3, name: 'عرس', icon: '💍', color: '#0369a1', position: 0, tone: 'festive', congratulations_label: 'تبريكات',
+      default_badge_title: null, is_active: true, creates_collision: false, warns_others: false, premoderate_messages: false,
+      show_congratulations_count: true, show_followers_count: true, show_views_count: true, legacy_client_supported: true,
+      archive_gallery: true, events_count: 0, fields: [], reactions: []
+    };
+    let body = null;
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/occasion-types') return jsonResponse({ success: true, types: [type] });
+      if (requestPath === '/api/admin/occasion-types/3' && method === 'PATCH') {
+        body = JSON.parse(options.body);
+        return jsonResponse({ success: true, type });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchOccasionTypes();
+    dom.window.openOccasionTypeForm(3);
+    const box = document.getElementById('otArchiveGallery');
+    assert.strictEqual(box.checked, true, 'prefilled from the type');
+    box.checked = false;
+    await dom.window.handleOccasionTypeSubmit({ preventDefault() {} });
+    assert.ok(body, 'expected the PATCH to be sent');
+    assert.strictEqual(body.archive_gallery, false);
+  });
+
+  await test('an ended event of an archive type gets «صور الأرشيف» (super_admin); the modal lists photos, deletes after confirm, and uploads with per-file status', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const types = [
+      { id: 1, name: 'عرس', archive_gallery: true, fields: [], reactions: [] },
+      { id: 2, name: 'عزا', archive_gallery: false, fields: [], reactions: [] }
+    ];
+    const events = [
+      { ...ADMIN_EVENT_FIXTURE, id: 7, title: 'عرس منتهٍ', occasion_type_id: 1, event_date: '2020-01-01', event_end_date: null },
+      { ...ADMIN_EVENT_FIXTURE, id: 8, title: 'عزاء منتهٍ', occasion_type_id: 2, event_date: '2020-01-01', event_end_date: null },
+      { ...ADMIN_EVENT_FIXTURE, id: 9, title: 'عرس قادم', occasion_type_id: 1, event_date: '2099-01-01', event_end_date: null }
+    ];
+    let photos = [
+      { id: 1, image_url: 'https://res.cloudinary.com/demo/p1.jpg', width: 800, height: 600, created_at: '2026-09-01' },
+      { id: 2, image_url: 'https://res.cloudinary.com/demo/p2.jpg', width: 800, height: 600, created_at: '2026-09-01' }
+    ];
+    let deletes = 0;
+    let registered = null;
+    let signatureCalls = 0;
+    const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/occasion-types') return jsonResponse({ success: true, types });
+      if (requestPath === '/api/admin/events') return jsonResponse({ success: true, events });
+      if (requestPath === '/api/admin/events/7/photos' && method === 'GET') return jsonResponse({ success: true, photos, max_photos: 60 });
+      if (requestPath === '/api/admin/events/7/photos/2' && method === 'DELETE') {
+        deletes += 1;
+        photos = photos.filter(p => p.id !== 2);
+        return jsonResponse({ success: true });
+      }
+      if (requestPath === '/api/admin/events/7/photos/signature' && method === 'POST') {
+        signatureCalls += 1;
+        if (signatureCalls === 2) return jsonResponse({ success: false, message: 'رفع الصور غير مفعَّل بعد' }, { status: 400 });
+        return jsonResponse({ success: true, upload: CLOUDINARY_UPLOAD });
+      }
+      if (requestPath === CLOUDINARY_UPLOAD.upload_url) return jsonResponse({ public_id: CLOUDINARY_UPLOAD.public_id, version: 9, signature: 'cafe', width: 1200, height: 900 });
+      if (requestPath === '/api/admin/events/7/photos' && method === 'POST') {
+        registered = JSON.parse(options.body);
+        return jsonResponse({ success: true, photo: { id: 3, image_url: 'https://res.cloudinary.com/demo/p3.jpg', width: 1200, height: 900 } }, { status: 201 });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchAdminEvents();
+    await dom.window.fetchOccasionTypes();
+
+    const cardFor = title => [...document.querySelectorAll('#adminEventsList .admin-event-card')].find(c => c.querySelector('h3').textContent === title);
+    assert.ok(cardFor('عرس منتهٍ').querySelector('.archive-photos-btn'), 'an ended event of an archive type gets the button');
+    assert.strictEqual(cardFor('عزاء منتهٍ').querySelector('.archive-photos-btn'), null, 'a type without archive_gallery does not');
+    assert.strictEqual(cardFor('عرس قادم').querySelector('.archive-photos-btn'), null, 'an event that has not ended does not');
+
+    cardFor('عرس منتهٍ').querySelector('.archive-photos-btn').click();
+    await waitFor(() => document.querySelectorAll('#archivePhotosGrid .archive-photo').length === 2);
+    assert.strictEqual(document.getElementById('archivePhotosModal').style.display, 'flex');
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 / 60 صورة');
+    assert.ok(cardFor('عرس منتهٍ').querySelector('.archive-photos-btn').textContent.includes('صور الأرشيف (2)'), 'the button learns its count');
+    assert.ok(calls.adminPaths.includes('/api/admin/events/7/photos'), 'through adminFetch');
+
+    dom.window.confirm = () => false;
+    await dom.window.deleteArchivePhoto(2);
+    assert.strictEqual(deletes, 0, 'a cancelled confirm sends nothing');
+    dom.window.confirm = () => true;
+    document.querySelector('#archivePhotosGrid .archive-photo[data-photo-id="2"] .archive-photo-delete').click();
+    await waitFor(() => document.querySelectorAll('#archivePhotosGrid .archive-photo').length === 1);
+    assert.strictEqual(deletes, 1);
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '1 / 60 صورة');
+
+    const files = [new dom.window.File(['a'], 'one.jpg', { type: 'image/jpeg' }), new dom.window.File(['b'], 'two.jpg', { type: 'image/jpeg' })];
+    await dom.window.handleArchivePhotosPick({ files, value: '' });
+    const rows = [...document.querySelectorAll('#archiveUploadQueue .archive-upload-row')];
+    assert.strictEqual(rows.length, 2, 'one status row per file');
+    assert.strictEqual(rows[0].dataset.state, 'done');
+    assert.strictEqual(rows[1].dataset.state, 'error');
+    assert.ok(rows[1].textContent.includes('رفع الصور غير مفعَّل بعد'), 'the server\'s Arabic refusal is shown on that file');
+    assert.deepStrictEqual(registered, { public_id: CLOUDINARY_UPLOAD.public_id, version: 9, signature: 'cafe', width: 1200, height: 900 });
+    assert.strictEqual(document.querySelectorAll('#archivePhotosGrid .archive-photo').length, 2);
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 / 60 صورة');
   });
 
   console.log('\nAdmin towns & regions tab (TWN-4)');

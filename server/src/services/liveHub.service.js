@@ -11,13 +11,18 @@
  */
 
 const db = require('../db/pool');
+const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const { jerusalemDateString } = require('../utils/jerusalemTime');
+const { toEmbedUrl } = require('./settings.service');
+const cloudinary = require('./cloudinary.service');
 
 const ADMIN_LIST_DAYS = 60;
+// How many past broadcasts «الحلقات السابقة» lists under the live.
+const PAST_EPISODES_LIMIT = 30;
 
-const EPISODE_COLUMNS = 'id, episode_date, topic, episode_question, poll_question, poll_options, created_at, updated_at';
+const EPISODE_COLUMNS = 'id, episode_date, topic, episode_question, poll_question, poll_options, video_url, share_image_url, created_at, updated_at';
 
 /**
  * The pool returns DATE columns as strings (`dateStrings: ['DATE']`), but a
@@ -170,6 +175,11 @@ async function vote(episodeId, userId, optionIndex) {
   };
 }
 
+/** The episode's own page — the link that is shared, and the one its card is drawn for (share.routes.js). */
+function episodeShareUrl(id) {
+  return `${config.publicUrl}/live/e/${id}`;
+}
+
 function toAdminEpisode(row, voteCount) {
   return {
     id: row.id,
@@ -178,10 +188,132 @@ function toAdminEpisode(row, voteCount) {
     episode_question: row.episode_question,
     poll_question: row.poll_question,
     poll_options: parseOptions(row.poll_options),
+    video_url: row.video_url,
+    share_image_url: row.share_image_url,
+    share_url: row.video_url ? episodeShareUrl(row.id) : null,
     vote_count: Number(voteCount) || 0,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
+}
+
+/**
+ * A saved broadcast as every public surface shows it (ADR-0008). `title`
+ * never comes back empty: an episode recorded from a live with no topic
+ * typed still has to say something on its card and in the list.
+ */
+function toPublicEpisode(row) {
+  const date = toDateString(row.episode_date);
+  return {
+    id: row.id,
+    date,
+    title: row.topic || `حلقة ${date}`,
+    video_url: row.video_url,
+    embed_url: toEmbedUrl(row.video_url),
+    share_url: episodeShareUrl(row.id),
+    share_image_url: row.share_image_url
+  };
+}
+
+/**
+ * «الحلقات السابقة»: every episode that has a broadcast, newest first.
+ * Today's is included only once no live is on (`includeToday`) — while it
+ * is on, it is the live itself above the list, not a past episode.
+ */
+async function listPastEpisodes({ includeToday }) {
+  const today = jerusalemDateString();
+  const rows = await db.query(
+    `SELECT ${EPISODE_COLUMNS} FROM live_episodes
+      WHERE video_url IS NOT NULL AND (episode_date < ? OR (episode_date = ? AND ?))
+      ORDER BY episode_date DESC
+      LIMIT ?`,
+    [today, today, includeToday ? 1 : 0, PAST_EPISODES_LIMIT]
+  );
+  return rows.map(toPublicEpisode);
+}
+
+/** One saved broadcast for its share page, or null — an episode with no video is not a page. */
+async function getPublicEpisode(id) {
+  const row = await db.queryOne(
+    `SELECT ${EPISODE_COLUMNS} FROM live_episodes WHERE id = ? AND video_url IS NOT NULL`,
+    [id]
+  );
+  return row ? toPublicEpisode(row) : null;
+}
+
+async function loadAdminEpisode(id) {
+  const row = await db.queryOne(
+    `SELECT ${EPISODE_COLUMNS},
+            (SELECT COUNT(*) FROM live_poll_votes v WHERE v.episode_id = live_episodes.id) AS vote_count
+       FROM live_episodes WHERE id = ?`,
+    [id]
+  );
+  return row ? toAdminEpisode(row, row.vote_count) : null;
+}
+
+/**
+ * Saves the broadcast that just went live as `date`'s episode — what makes
+ * every live a saved episode without the admin filling a second form
+ * (ADR-0008; one broadcast per day, the approved D1). The video link is
+ * replaced (the latest broadcast of the day wins); a topic the admin already
+ * typed for the day is kept, and only an empty one takes the live's title.
+ */
+async function recordBroadcast(date, { videoUrl, title }, userId) {
+  await db.execute(
+    `INSERT INTO live_episodes (episode_date, topic, video_url, created_by)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE video_url = VALUES(video_url), topic = COALESCE(topic, VALUES(topic))`,
+    [date, title || null, videoUrl, userId ?? null]
+  );
+  logger.info('live.episode.broadcast', { updatedBy: userId, date });
+  const row = await db.queryOne('SELECT id FROM live_episodes WHERE episode_date = ?', [date]);
+  return loadAdminEpisode(row.id);
+}
+
+function episodeFolder(id) {
+  return cloudinary.folderFor('episodes', `episode-${id}`);
+}
+
+async function assertEpisodeExists(id) {
+  const row = await db.queryOne('SELECT id, share_image_public_id FROM live_episodes WHERE id = ?', [id]);
+  if (!row) throw ApiError.notFound('الحلقة غير موجودة');
+  return row;
+}
+
+/** A signed upload slot for this episode's share image (optional — ADR-0008). */
+async function signShareImageUpload(id) {
+  await assertEpisodeExists(id);
+  return cloudinary.signUpload(episodeFolder(id));
+}
+
+/**
+ * Sets the episode's share image from a verified Cloudinary upload; the
+ * image it replaces is removed from Cloudinary afterwards (best-effort).
+ */
+async function setShareImage(id, upload, updatedBy) {
+  const existing = await assertEpisodeExists(id);
+  const verified = cloudinary.verifyUpload(episodeFolder(id), upload);
+  await db.execute(
+    'UPDATE live_episodes SET share_image_url = ?, share_image_public_id = ? WHERE id = ?',
+    [cloudinary.deliveryUrl(verified), verified.public_id, id]
+  );
+  logger.info('live.episode.share_image', { updatedBy, id });
+  if (existing.share_image_public_id && existing.share_image_public_id !== verified.public_id) {
+    await cloudinary.destroy(existing.share_image_public_id);
+  }
+  return loadAdminEpisode(id);
+}
+
+/** Back to the generated cover (no image). */
+async function clearShareImage(id, updatedBy) {
+  const existing = await assertEpisodeExists(id);
+  await db.execute(
+    'UPDATE live_episodes SET share_image_url = NULL, share_image_public_id = NULL WHERE id = ?',
+    [id]
+  );
+  logger.info('live.episode.share_image_clear', { updatedBy, id });
+  await cloudinary.destroy(existing.share_image_public_id);
+  return loadAdminEpisode(id);
 }
 
 /** The last ADMIN_LIST_DAYS Jerusalem days (and anything planned ahead), newest first. */
@@ -189,7 +321,7 @@ async function listEpisodesForAdmin() {
   const cutoff = jerusalemDateString(new Date(Date.now() - ADMIN_LIST_DAYS * 24 * 60 * 60 * 1000));
   const rows = await db.query(
     `SELECT e.id, e.episode_date, e.topic, e.episode_question, e.poll_question, e.poll_options,
-            e.created_at, e.updated_at,
+            e.video_url, e.share_image_url, e.created_at, e.updated_at,
             (SELECT COUNT(*) FROM live_poll_votes v WHERE v.episode_id = e.id) AS vote_count
        FROM live_episodes e
       WHERE e.episode_date >= ?
@@ -205,14 +337,20 @@ function sameOptions(a, b) {
 
 /**
  * Creates or replaces the episode for `date` (a full replace — every field
- * absent from `fields` is cleared). Once anyone has voted, the options are
+ * absent from `fields` is cleared, except `video_url`: undefined keeps the
+ * stored link, which a broadcast may have recorded meanwhile; null clears
+ * it). Once anyone has voted, the options are
  * frozen: changing them would silently re-label votes already cast. The
  * episode row is locked FOR UPDATE, and a vote's FK check needs a shared
  * lock on that same row, so no vote can land between the count and the write.
  */
 async function saveEpisode(date, fields, updatedBy) {
-  const { topic, episode_question: episodeQuestion, poll_question: pollQuestion, poll_options: pollOptions } = fields;
+  const {
+    topic, episode_question: episodeQuestion, poll_question: pollQuestion, poll_options: pollOptions,
+    video_url: videoUrl
+  } = fields;
   const optionsJson = pollOptions ? JSON.stringify(pollOptions) : null;
+  const keepVideo = videoUrl === undefined;
 
   const episodeId = await db.transaction(async connection => {
     const [existingRows] = await connection.execute(
@@ -231,18 +369,19 @@ async function saveEpisode(date, fields, updatedBy) {
       }
       await connection.execute(
         `UPDATE live_episodes
-            SET topic = ?, episode_question = ?, poll_question = ?, poll_options = ?
+            SET topic = ?, episode_question = ?, poll_question = ?, poll_options = ?,
+                video_url = IF(?, video_url, ?)
           WHERE id = ?`,
-        [topic ?? null, episodeQuestion ?? null, pollQuestion ?? null, optionsJson, existing.id]
+        [topic ?? null, episodeQuestion ?? null, pollQuestion ?? null, optionsJson, keepVideo, videoUrl ?? null, existing.id]
       );
       return existing.id;
     }
 
     try {
       const [result] = await connection.execute(
-        `INSERT INTO live_episodes (episode_date, topic, episode_question, poll_question, poll_options, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [date, topic ?? null, episodeQuestion ?? null, pollQuestion ?? null, optionsJson, updatedBy ?? null]
+        `INSERT INTO live_episodes (episode_date, topic, episode_question, poll_question, poll_options, video_url, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [date, topic ?? null, episodeQuestion ?? null, pollQuestion ?? null, optionsJson, videoUrl ?? null, updatedBy ?? null]
       );
       return result.insertId;
     } catch (err) {
@@ -253,19 +392,14 @@ async function saveEpisode(date, fields, updatedBy) {
 
   logger.info('live.episode.save', { updatedBy, date });
 
-  const row = await db.queryOne(
-    `SELECT ${EPISODE_COLUMNS},
-            (SELECT COUNT(*) FROM live_poll_votes v WHERE v.episode_id = live_episodes.id) AS vote_count
-       FROM live_episodes WHERE id = ?`,
-    [episodeId]
-  );
-  return toAdminEpisode(row, row.vote_count);
+  return loadAdminEpisode(episodeId);
 }
 
-/** Deletes an episode; its votes go with it (ON DELETE CASCADE). */
+/** Deletes an episode; its votes go with it (ON DELETE CASCADE), and its share image with it (best-effort). */
 async function deleteEpisode(id) {
-  const { affectedRows } = await db.execute('DELETE FROM live_episodes WHERE id = ?', [id]);
-  if (!affectedRows) throw ApiError.notFound('الحلقة غير موجودة');
+  const existing = await assertEpisodeExists(id);
+  await db.execute('DELETE FROM live_episodes WHERE id = ?', [id]);
+  await cloudinary.destroy(existing.share_image_public_id);
 }
 
 module.exports = {
@@ -273,5 +407,11 @@ module.exports = {
   vote,
   listEpisodesForAdmin,
   saveEpisode,
-  deleteEpisode
+  deleteEpisode,
+  recordBroadcast,
+  listPastEpisodes,
+  getPublicEpisode,
+  signShareImageUpload,
+  setShareImage,
+  clearShareImage
 };

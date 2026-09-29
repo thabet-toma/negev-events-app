@@ -4,6 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
+const archivePhotos = require('./archivePhotos.service');
 const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
@@ -455,7 +456,7 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
 
   await db.execute('UPDATE events SET views_count = views_count + 1 WHERE id = ?', [eventId]);
 
-  const [congratulations, reactionRows, [withRelations]] = await Promise.all([
+  const [congratulations, reactionRows, [withRelations], archivePhotoRows] = await Promise.all([
     db.query(
       `SELECT * FROM congratulations
         WHERE event_id = ? AND (status = 'approved' OR (user_id = ? AND status = 'pending'))
@@ -466,7 +467,10 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
       'SELECT reaction_type, COUNT(*) AS count FROM reactions WHERE event_id = ? GROUP BY reaction_type',
       [eventId]
     ),
-    attachHonoreesAndTypes([withAbsoluteMedia(event)])
+    attachHonoreesAndTypes([withAbsoluteMedia(event)]),
+    // «أرشيف الأعراس» (ADR-0008): empty unless the event is approved, has
+    // ended and its type carries the archive — the rule is in the query.
+    archivePhotos.listPublic(eventId)
   ]);
 
   const reactions = EMPTY_REACTIONS();
@@ -478,7 +482,8 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
     ...withReminderState,
     views_count: event.views_count + 1,
     reactions,
-    congratulations: congratulations.map(withAbsoluteMedia)
+    congratulations: congratulations.map(withAbsoluteMedia),
+    archive_photos: archivePhotoRows
   };
 }
 

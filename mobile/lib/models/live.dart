@@ -53,18 +53,22 @@ class LiveBroadcast {
 }
 
 /// صفحة البث كاملة — GET /api/live/hub: حالة البث + حلقة اليوم + نتيجة
-/// آخر نقاش قبل اليوم + رابط المشاركة.
+/// آخر نقاش قبل اليوم + رابط المشاركة + الحلقات السابقة.
 class LiveHub {
   final LiveChannel channel;
   final LiveEpisode? today;
   final LivePreviousPoll? previous;
   final String? shareUrl;
 
+  /// الأحدث أولاً (حتى ٣٠ من الخادم). خادم أقدم لا يرسل المفتاح ← فارغة.
+  final List<PastEpisode> pastEpisodes;
+
   const LiveHub({
     required this.channel,
     this.today,
     this.previous,
     this.shareUrl,
+    this.pastEpisodes = const [],
   });
 
   factory LiveHub.fromJson(Map<String, dynamic> json) {
@@ -78,6 +82,7 @@ class LiveHub {
       today: rawToday is Map<String, dynamic> ? LiveEpisode.fromJson(rawToday) : null,
       previous: (previous == null || previous.results.isEmpty) ? null : previous,
       shareUrl: _nullableString(json['share_url']),
+      pastEpisodes: _pastEpisodes(json['past_episodes']),
     );
   }
 
@@ -86,7 +91,53 @@ class LiveHub {
         today: today ?? this.today,
         previous: previous,
         shareUrl: shareUrl,
+        pastEpisodes: pastEpisodes,
       );
+}
+
+/// حلقة سابقة — تُشاهَد داخل التطبيق عبر `/live/e/<id>/embed` من خادمنا (لا
+/// `embed_url` مباشرة، لنفس سبب البث: يوتيوب يرفض التضمين بلا Referer).
+class PastEpisode {
+  final int id;
+  final String? date;
+  final String title;
+
+  /// رابط يوتيوب للمشاهدة خارج التطبيق.
+  final String? videoUrl;
+  final String? embedUrl;
+
+  /// صفحة الحلقة على خادمنا — ما يُرسَل عند المشاركة.
+  final String? shareUrl;
+  final String? shareImageUrl;
+
+  const PastEpisode({
+    required this.id,
+    required this.title,
+    this.date,
+    this.videoUrl,
+    this.embedUrl,
+    this.shareUrl,
+    this.shareImageUrl,
+  });
+
+  factory PastEpisode.fromJson(Map<String, dynamic> json) => PastEpisode(
+        id: _toInt(json['id']) ?? 0,
+        date: _nullableString(json['date']),
+        title: '${json['title'] ?? ''}'.trim(),
+        videoUrl: _nullableString(json['video_url']),
+        embedUrl: _nullableString(json['embed_url']),
+        shareUrl: _nullableString(json['share_url']),
+        shareImageUrl: _nullableString(json['share_image_url']),
+      );
+}
+
+List<PastEpisode> _pastEpisodes(Object? raw) {
+  if (raw is! List) return const [];
+  return raw
+      .whereType<Map>()
+      .map((m) => PastEpisode.fromJson(Map<String, dynamic>.from(m)))
+      .where((episode) => episode.id > 0)
+      .toList();
 }
 
 /// حلقة اليوم: موضوعها وسؤالها واستفتاؤها (إن وُجد).

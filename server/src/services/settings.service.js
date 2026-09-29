@@ -81,15 +81,13 @@ const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com'];
 const EMBED_BASE = 'https://www.youtube-nocookie.com/embed/';
 
 /**
- * The one place a stored stream link becomes an embeddable player URL
- * (plan26-9 §3.1). Only link shapes that name exactly one video or one
- * channel's live are recognised; anything else — a YouTube @handle, TikTok,
- * Facebook, a malformed string — returns null, and clients fall back to a
- * plain link. The id is re-validated against a strict pattern and the
- * output is rebuilt from scratch, so nothing from the input but that id
- * ever reaches the embed URL.
+ * What a YouTube link names: `{ videoId }` for exactly one video (watch?v=,
+ * youtu.be, /live/<id>, /embed/<id>, /shorts/<id>), `{ channelId }` for a
+ * /channel/UC… link, or null for anything else — a YouTube @handle, TikTok,
+ * Facebook, a malformed string. Both ids are re-validated against a strict
+ * pattern, so callers can rebuild a URL from them and nothing else.
  */
-function toEmbedUrl(url) {
+function parseYoutubeLink(url) {
   if (!url) return null;
   let parsed;
   try {
@@ -111,14 +109,36 @@ function toEmbedUrl(url) {
     } else if (['live', 'embed', 'shorts'].includes(segments[0]) && segments.length === 2) {
       videoId = segments[1];
     } else if (segments[0] === 'channel' && segments.length >= 2 && YOUTUBE_CHANNEL_ID.test(segments[1])) {
-      return `${EMBED_BASE}live_stream?channel=${segments[1]}&autoplay=1&playsinline=1`;
+      return { channelId: segments[1] };
     }
   }
 
-  if (videoId && YOUTUBE_VIDEO_ID.test(videoId)) {
-    return `${EMBED_BASE}${videoId}?autoplay=1&playsinline=1`;
-  }
-  return null;
+  return videoId && YOUTUBE_VIDEO_ID.test(videoId) ? { videoId } : null;
+}
+
+/**
+ * The one place a stored stream link becomes an embeddable player URL
+ * (plan26-9 §3.1). Only link shapes that name exactly one video or one
+ * channel's live are recognised; anything else returns null, and clients
+ * fall back to a plain link. The output is rebuilt from scratch, so nothing
+ * from the input but the validated id ever reaches the embed URL.
+ */
+function toEmbedUrl(url) {
+  const link = parseYoutubeLink(url);
+  if (!link) return null;
+  if (link.channelId) return `${EMBED_BASE}live_stream?channel=${link.channelId}&autoplay=1&playsinline=1`;
+  return `${EMBED_BASE}${link.videoId}?autoplay=1&playsinline=1`;
+}
+
+/**
+ * The permanent link of ONE video — what an episode keeps (ADR-0008): a
+ * YouTube live and its recording share one video id, so this same URL plays
+ * the broadcast while it is on and the replay after. A channel link is null
+ * on purpose: it always points at whatever that channel streams next.
+ */
+function toWatchUrl(url) {
+  const link = parseYoutubeLink(url);
+  return link && link.videoId ? `https://www.youtube.com/watch?v=${link.videoId}` : null;
 }
 
 /**
@@ -237,6 +257,7 @@ module.exports = {
   getPublicSettings,
   getLiveChannel,
   toEmbedUrl,
+  toWatchUrl,
   assertLiveConsistency,
   setSettings
 };

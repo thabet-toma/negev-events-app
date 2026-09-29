@@ -604,6 +604,8 @@ function liveOnlyStyle(palette) {
   .poll-bar { height: 8px; border-radius: 4px; margin: 4px 0 0; background: ${withAlphaCss(palette.faint, 0.2)}; overflow: hidden; }
   .poll-bar-fill { height: 100%; border-radius: 4px; background: ${palette.accent}; }
   .poll-total { font-size: 12px; color: ${palette.faint}; margin: 10px 0 0; }
+  .episode-link { color: inherit; text-decoration: none; display: flex; justify-content: space-between; gap: 10px; }
+  .episode-date { color: ${palette.faint}; font-size: 12px; white-space: nowrap; }
   .cta-whatsapp {
     display: block; background: #25d366; color: #0b1f12;
     text-decoration: none; font-size: 15px; font-weight: 700;
@@ -712,6 +714,20 @@ ${rows}
 }
 
 /**
+ * «الحلقات السابقة» (ADR-0008) — each saved broadcast as a plain link to its
+ * own page, `/live/e/:id`. '' when there is none yet.
+ */
+function livePastEpisodesBlock(pastEpisodes) {
+  if (!pastEpisodes || !pastEpisodes.length) return '';
+  return `<section class="poll">
+<p class="episode-label">الحلقات السابقة</p>
+<ul class="poll-options">
+${pastEpisodes.map(e => `<li class="poll-option"><a class="episode-link" href="${escapeHtml(e.share_url)}"><span>${escapeHtml(e.title)}</span><span class="episode-date">${escapeHtml(e.date)}</span></a></li>`).join('\n')}
+</ul>
+</section>`;
+}
+
+/**
  * `isLive` drives two things at once: the badge and the headline text — kept
  * as one boolean computed once by the handler (`channel.live &&
  * channel.live.active`) rather than re-derived here, so the page can never
@@ -722,7 +738,7 @@ ${rows}
  * there is nothing here to fall back to (no raw poster; this is a generated
  * marketing image with no other source).
  */
-function renderLivePage({ isLive, headline, description, imageUrl, imageDimensions, pageUrl, goUrl, downloadUrl, whatsappUrl, hub }) {
+function renderLivePage({ isLive, headline, description, imageUrl, imageDimensions, pageUrl, goUrl, downloadUrl, whatsappUrl, hub, pastEpisodes }) {
   const palette = PALETTES.festive;
   return `<!doctype html>
 <html lang="ar" dir="rtl">
@@ -756,6 +772,7 @@ ${isLive ? '<span class="live-badge">مباشر الآن</span>' : ''}
 ${liveEpisodeBlock(hub.today)}
 ${livePreviousBlock(hub.previous)}
 ${liveActionButtons({ goUrl, downloadUrl, whatsappUrl })}
+${livePastEpisodesBlock(pastEpisodes)}
 ${reasonsStrip()}
 <p class="mark">${palette.wordmark}</p>
 </div>
@@ -795,6 +812,7 @@ liveRouter.get('/', asyncHandler(async (req, res) => {
   // `null`: this page has no signed-in reader, so today's poll comes back
   // without results — exactly the anonymous view of GET /api/live/hub.
   const hub = await liveHub.getHub(null);
+  const pastEpisodes = await liveHub.listPastEpisodes({ includeToday: !isLive });
 
   const pageUrl = `${config.publicUrl}/live`;
   const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(`${headline}\n${pageUrl}`)}`;
@@ -827,7 +845,8 @@ liveRouter.get('/', asyncHandler(async (req, res) => {
       goUrl: `${pageUrl}/go`,
       downloadUrl: `${pageUrl}/download`,
       whatsappUrl,
-      hub
+      hub,
+      pastEpisodes
     }));
 }));
 
@@ -919,6 +938,15 @@ liveRouter.get('/download', asyncHandler(async (req, res) => {
  */
 liveRouter.get('/embed', asyncHandler(async (req, res) => {
   const { embed_url: embedUrl } = await settings.getLiveChannel();
+  sendEmbedPage(res, embedUrl);
+}));
+
+/**
+ * The player page itself, shared by the live's `/live/embed` and each saved
+ * episode's `/live/e/:id/embed` (ADR-0008). `embedUrl` is always one that
+ * settings.service's `toEmbedUrl` rebuilt from a validated id; null → 404.
+ */
+function sendEmbedPage(res, embedUrl) {
   if (!embedUrl) {
     res.status(404).set('Cache-Control', 'no-store').end();
     return;
@@ -945,6 +973,143 @@ liveRouter.get('/embed', asyncHandler(async (req, res) => {
 <iframe src="${escapeHtml(embedUrl)}" title="${escapeHtml(LIVE_CHANNEL_HEADLINE)}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
 </body>
 </html>`);
+}
+
+// ---------------------------------------------------------------------------
+// Saved episodes (ADR-0008) — GET /live/e/:id, /card.jpg, /go, /embed
+// ---------------------------------------------------------------------------
+
+/**
+ * The episode for `raw`, or null for a malformed id, a missing episode, or
+ * one with no broadcast — all three answered with the same not-found body,
+ * for the same reason as shareEventIdOrNull above.
+ */
+async function publicEpisodeOrNull(raw) {
+  let id;
+  try {
+    id = parseId(raw, 'معرّف الحلقة');
+  } catch (err) {
+    return null;
+  }
+  return liveHub.getPublicEpisode(id);
+}
+
+/**
+ * One saved broadcast's page — what a shared episode link opens: its card,
+ * its title, «شاهد الحلقة» (to YouTube through /go), the app, WhatsApp, and
+ * a way to the live page with every other episode. Same no-script, same
+ * CSP, same brand shell as the live page.
+ */
+function renderEpisodePage({ episode, pageUrl, imageUrl, whatsappUrl }) {
+  const palette = PALETTES.festive;
+  const description = 'حلقة من بث أعراسنا المباشر — شاهدها الآن';
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(episode.title)}</title>
+<meta property="og:title" content="${escapeHtml(episode.title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+${imageUrl ? `<meta property="og:image" content="${escapeHtml(imageUrl)}">
+<meta property="og:image:width" content="${shareCard.WIDTH}">
+<meta property="og:image:height" content="${shareCard.HEIGHT}">` : ''}
+<meta property="og:url" content="${escapeHtml(pageUrl)}">
+<meta property="og:type" content="video.other">
+<meta property="og:site_name" content="${palette.wordmark}">
+<meta property="og:locale" content="ar_AR">
+<meta name="twitter:card" content="summary_large_image">
+<style>${pageStyle(palette)}${liveOnlyStyle(palette)}</style>
+</head>
+<body>
+<main class="card">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
+${imageUrl ? `<div class="frame">
+<img class="poster" src="${escapeHtml(imageUrl)}" alt="">
+</div>` : ''}
+<div class="body">
+<p class="episode-label">حلقة ${escapeHtml(episode.date)}</p>
+<h1 class="names">${escapeHtml(episode.title)}</h1>
+<hr class="rule">
+<p class="lead">${escapeHtml(description)}</p>
+<div class="actions">
+<a class="cta" href="${escapeHtml(`${pageUrl}/go`)}">شاهد الحلقة</a>
+<a class="cta-secondary" href="${escapeHtml(`${config.publicUrl}/live/download`)}">حمّل التطبيق</a>
+<a class="cta-whatsapp" href="${escapeHtml(whatsappUrl)}">مشاركة واتساب</a>
+<a class="cta-secondary" href="${escapeHtml(`${config.publicUrl}/live`)}">البث المباشر وكل الحلقات</a>
+</div>
+${reasonsStrip()}
+<p class="mark">${palette.wordmark}</p>
+</div>
+</main>
+</body>
+</html>`;
+}
+
+liveRouter.get('/e/:id', asyncHandler(async (req, res) => {
+  const episode = await publicEpisodeOrNull(req.params.id);
+  if (!episode) {
+    sendNotFound(res);
+    return;
+  }
+
+  const pageUrl = episode.share_url;
+  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(`${episode.title}\n${pageUrl}`)}`;
+
+  // Pre-rendered before the crawler follows og:image, as the live page does;
+  // a render failure drops the image tags rather than pointing at a 404.
+  let imageUrl = `${pageUrl}/card.jpg`;
+  try {
+    await shareCard.getOrRenderEpisodeCard({ id: episode.id, title: episode.title, imageUrl: episode.share_image_url });
+  } catch (err) {
+    logger.error(`[share] episode card render failed: ${err.message}`);
+    imageUrl = null;
+  }
+
+  res
+    .status(200)
+    .set('Content-Security-Policy', SHARE_CSP)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .send(renderEpisodePage({ episode, pageUrl, imageUrl, whatsappUrl }));
+}));
+
+liveRouter.get('/e/:id/card.jpg', asyncHandler(async (req, res) => {
+  const episode = await publicEpisodeOrNull(req.params.id);
+  if (!episode) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const buffer = await shareCard.getOrRenderEpisodeCard({
+      id: episode.id, title: episode.title, imageUrl: episode.share_image_url
+    });
+    res
+      .status(200)
+      .set('Content-Type', 'image/jpeg')
+      // Short, like the live cover: the admin can retitle the episode or
+      // swap its image at any time, with no request of theirs hitting here.
+      .set('Cache-Control', 'public, max-age=300')
+      .send(buffer);
+  } catch (err) {
+    logger.error(`[share] episode card render failed: ${err.message}`);
+    res.status(404).end();
+  }
+}));
+
+// The stored watch URL only — never a query parameter, so no open redirect.
+liveRouter.get('/e/:id/go', asyncHandler(async (req, res) => {
+  const episode = await publicEpisodeOrNull(req.params.id);
+  if (!episode) {
+    sendNotFound(res);
+    return;
+  }
+  res.redirect(302, episode.video_url);
+}));
+
+liveRouter.get('/e/:id/embed', asyncHandler(async (req, res) => {
+  const episode = await publicEpisodeOrNull(req.params.id);
+  sendEmbedPage(res, episode ? episode.embed_url : null);
 }));
 
 module.exports = { eventRouter, liveRouter };

@@ -134,6 +134,14 @@ let liveBadgeTimer = null;
 let livePlayerKey = null; // ما يعرضه المشغّل الآن — لا يُعاد بناء iframe يعرض الشيء نفسه
 let livePollChannel = null; // قناة live_poll_<id> المشترَك فيها الآن، أو null
 let liveVoteInFlight = false;
+// «الحلقات السابقة» أسفل نافذة البث (ADR-0008): ما رُسم آخر مرة (لا يُعاد
+// رسمه — ولا يُقطع تشغيل حلقة — حين تعيد قراءة الـhub القائمة نفسها)، والحلقة
+// المشغَّلة الآن داخل النافذة أو null.
+let livePastKey = null;
+let livePastPlayingId = null;
+// عارض صور «أرشيف العرس» في تفاصيل المناسبة.
+let archiveViewerPhotos = [];
+let archiveViewerIndex = 0;
 
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
@@ -878,6 +886,7 @@ function closeLiveSection() {
   const modal = document.getElementById('liveModal');
   if (modal) modal.style.display = 'none';
   stopLivePlayer();
+  stopLivePastEpisode();
   subscribeLivePoll(null);
 }
 
@@ -923,7 +932,9 @@ function showLiveStatusMessage(html) {
     status.hidden = false;
   }
   stopLivePlayer();
-  ['liveInfo', 'livePoll', 'livePrevious'].forEach(id => {
+  stopLivePastEpisode();
+  livePastKey = null; // أُخفيت القائمة — الرسم التالي يعيدها ولو لم تتغيّر
+  ['liveInfo', 'livePoll', 'livePrevious', 'livePastEpisodes'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
   });
@@ -937,6 +948,7 @@ function renderLiveSection() {
   renderLiveInfo();
   renderLivePoll();
   renderLivePrevious();
+  renderLivePastEpisodes();
   const today = liveHubState.today;
   subscribeLivePoll(today && today.poll ? today.id : null);
 }
@@ -1078,6 +1090,123 @@ function renderLivePrevious() {
     ${buildLivePollBarsHtml(previous.results, previous.total_votes, null)}
   `;
   box.hidden = false;
+}
+
+/*
+ * «الحلقات السابقة» — آخر قسم في صفحة البث (ADR-0008). past_episodes من
+ * GET /api/live/hub، الأحدث أولاً؛ حلقة اليوم لا تظهر فيها ما دام البث قائماً
+ * (هي البث نفسه). قائمة فارغة → القسم مخفي. كل حلقة: صورة المشاركة أو بديل
+ * بالعلامة، العنوان والتاريخ، و«شاهد هنا» (iframe داخل النافذة بنفس خصائص
+ * المشغّل أعلاه) و«افتح على يوتيوب» و«شارك».
+ */
+function livePastEpisodes() {
+  return liveHubState && Array.isArray(liveHubState.past_episodes) ? liveHubState.past_episodes : [];
+}
+
+function findLivePastEpisode(id) {
+  return livePastEpisodes().find(ep => Number(ep.id) === Number(id)) || null;
+}
+
+function buildLivePastMediaHtml(ep) {
+  const image = safeHttpUrl(ep.share_image_url);
+  if (image) return `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async">`;
+  return `
+    <div class="live-past-placeholder" aria-hidden="true">
+      <img src="icons/icon.svg" alt="" loading="lazy">
+    </div>
+  `;
+}
+
+function buildLivePastEpisodeHtml(ep) {
+  const id = Number(ep.id);
+  const title = String(ep.title || '');
+  const embedUrl = safeHttpUrl(ep.embed_url);
+  const videoUrl = safeHttpUrl(ep.video_url);
+  const shareUrl = safeHttpUrl(ep.share_url);
+  return `
+    <article class="live-past-item" data-episode-id="${id}">
+      <div class="live-past-media">${buildLivePastMediaHtml(ep)}</div>
+      <div class="live-past-body">
+        <strong class="live-past-title">${escapeHtml(title)}</strong>
+        <span class="live-past-date">${escapeHtml(String(ep.date || ''))}</span>
+        <div class="live-past-actions">
+          ${embedUrl ? `<button type="button" class="live-past-btn live-past-btn-primary" onclick="playLivePastEpisode(${id})">
+            <i class="fa-solid fa-play" aria-hidden="true"></i> شاهد هنا
+          </button>` : ''}
+          ${videoUrl ? `<a class="live-past-btn" href="${escapeHtml(videoUrl)}" target="_blank" rel="noopener">
+            <i class="fa-brands fa-youtube" aria-hidden="true"></i> افتح على يوتيوب
+          </a>` : ''}
+          ${shareUrl ? `<button type="button" class="live-past-btn" onclick="shareLivePastEpisode(${id})">
+            <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> شارك
+          </button>` : ''}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderLivePastEpisodes() {
+  const box = document.getElementById('livePastEpisodes');
+  if (!box) return;
+  const list = livePastEpisodes();
+  const key = JSON.stringify(list.map(ep => [ep.id, ep.title, ep.date, ep.share_image_url, ep.embed_url, ep.video_url, ep.share_url]));
+  if (key === livePastKey) return;
+  stopLivePastEpisode();
+  livePastKey = key;
+  if (!list.length) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  box.innerHTML = `
+    <h4 class="live-block-title"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> الحلقات السابقة</h4>
+    <div class="live-past-list">${list.map(buildLivePastEpisodeHtml).join('')}</div>
+  `;
+  box.hidden = false;
+}
+
+/** يشغّل حلقة داخل بطاقتها — وحلقة واحدة فقط في كل مرة. */
+function playLivePastEpisode(id) {
+  const ep = findLivePastEpisode(id);
+  const embedUrl = ep && safeHttpUrl(ep.embed_url);
+  const box = document.getElementById('livePastEpisodes');
+  const item = box && box.querySelector(`.live-past-item[data-episode-id="${Number(id)}"]`);
+  if (!embedUrl || !item) return;
+  stopLivePastEpisode();
+  livePastPlayingId = Number(id);
+  item.classList.add('is-playing');
+  const media = item.querySelector('.live-past-media');
+  if (media) {
+    media.innerHTML = `
+      <iframe src="${escapeHtml(embedUrl)}" title="${escapeHtml(String(ep.title || 'حلقة سابقة'))}"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+    `;
+  }
+}
+
+/** يوقف الحلقة المشغَّلة ويعيد صورتها — iframe يبقى في الصفحة يبقى صوته يعمل. */
+function stopLivePastEpisode() {
+  const box = document.getElementById('livePastEpisodes');
+  if (box) box.querySelectorAll('iframe').forEach(frame => { frame.src = 'about:blank'; });
+  const playingId = livePastPlayingId;
+  livePastPlayingId = null;
+  if (playingId === null || !box) return;
+  const item = box.querySelector(`.live-past-item[data-episode-id="${playingId}"]`);
+  if (!item) return;
+  item.classList.remove('is-playing');
+  const ep = findLivePastEpisode(playingId);
+  const media = item.querySelector('.live-past-media');
+  if (media) media.innerHTML = ep ? buildLivePastMediaHtml(ep) : '';
+}
+
+/** رابط صفحة الحلقة على الخادم (share_url) — بنفس طريقة مشاركة البث والمناسبة. */
+async function shareLivePastEpisode(id) {
+  const ep = findLivePastEpisode(id);
+  const url = ep && safeHttpUrl(ep.share_url);
+  if (!url) return;
+  const title = String(ep.title || 'حلقة من البث — أعراسنا');
+  await shareLink({ title, line: title, url, copiedMessage: '📋 تم نسخ رابط الحلقة' });
 }
 
 /** قناة live_poll_<id> لاستفتاء اليوم المعروض وحده — null يلغي الاشتراك. */
@@ -5176,6 +5305,7 @@ async function openChatModal(eventId) {
   currentChatEvent = null; // يُعاد ضبطه أدناه بعد نجاح الجلب — لا زرّ مشاركة على بيانات مناسبة سابقة
   const modal = document.getElementById('chatModal');
   modal.style.display = 'flex';
+  renderEventArchive(null); // لا تبقى صور مناسبة سابقة ظاهرة أثناء الجلب
 
   const hostBar = document.getElementById('chatHostBar');
   const stream = document.getElementById('chatMessagesStream');
@@ -5211,11 +5341,90 @@ async function openChatModal(eventId) {
         hostBar.style.display = 'none';
       }
 
+      renderEventArchive(evt);
       renderChatMessages(evt.congratulations);
     }
   } catch (e) {
     console.error('Chat error:', e);
   }
+}
+
+/*
+ * «أرشيف العرس» (ADR-0008) — صور ما بعد المناسبة. الخادم وحده يقرّر متى تظهر
+ * (معتمدة + انتهت + النوع يسمح بالأرشيف) فيعيد archive_photos فارغة في كل
+ * حالة أخرى؛ هنا يكفي: فارغة → القسم مخفي. الشبكة كسولة التحميل، والنقر يفتح
+ * عارضاً بملء الشاشة بإغلاق وسابق/تالي.
+ */
+function renderEventArchive(evt) {
+  const box = document.getElementById('chatArchive');
+  if (!box) return;
+  const photos = (evt && Array.isArray(evt.archive_photos) ? evt.archive_photos : [])
+    .filter(photo => photo && safeHttpUrl(photo.image_url));
+  archiveViewerPhotos = photos;
+  if (!photos.length) {
+    box.innerHTML = '';
+    box.hidden = true;
+    return;
+  }
+  box.innerHTML = `
+    <h4 class="event-archive-title">
+      <i class="fa-solid fa-images" aria-hidden="true"></i> أرشيف العرس
+      <span class="event-archive-count">${photos.length}</span>
+    </h4>
+    <div class="event-archive-grid">
+      ${photos.map((photo, index) => `
+        <button type="button" class="event-archive-thumb" onclick="openArchiveViewer(${index})" aria-label="عرض الصورة ${index + 1}">
+          <img src="${escapeHtml(photo.image_url)}" alt="" loading="lazy" decoding="async">
+        </button>
+      `).join('')}
+    </div>
+  `;
+  box.hidden = false;
+}
+
+function openArchiveViewer(index) {
+  if (!archiveViewerPhotos.length) return;
+  const viewer = document.getElementById('archiveViewer');
+  if (!viewer) return;
+  archiveViewerIndex = Math.max(0, Math.min(archiveViewerPhotos.length - 1, Number(index) || 0));
+  viewer.hidden = false;
+  document.addEventListener('keydown', handleArchiveViewerKeydown);
+  showArchiveViewerPhoto();
+}
+
+/** نفس مفاتيح عارض الستوري: Escape يغلق، والسهمان بترتيب القراءة من اليمين. */
+function handleArchiveViewerKeydown(e) {
+  if (e.key === 'Escape') { closeArchiveViewer(); return; }
+  if (e.key === 'ArrowRight') archiveViewerStep(-1);
+  else if (e.key === 'ArrowLeft') archiveViewerStep(1);
+}
+
+function closeArchiveViewer() {
+  const viewer = document.getElementById('archiveViewer');
+  if (!viewer || viewer.hidden) return;
+  viewer.hidden = true;
+  document.removeEventListener('keydown', handleArchiveViewerKeydown);
+  const img = document.getElementById('archiveViewerImage');
+  if (img) img.removeAttribute('src');
+}
+
+/** ‏+1 التالية، ‎-1 السابقة — تدور من الأخيرة إلى الأولى وبالعكس. */
+function archiveViewerStep(delta) {
+  const total = archiveViewerPhotos.length;
+  if (!total) return;
+  archiveViewerIndex = (archiveViewerIndex + delta + total) % total;
+  showArchiveViewerPhoto();
+}
+
+function showArchiveViewerPhoto() {
+  const photo = archiveViewerPhotos[archiveViewerIndex];
+  const img = document.getElementById('archiveViewerImage');
+  const counter = document.getElementById('archiveViewerCounter');
+  if (!photo || !img) return;
+  img.src = photo.image_url;
+  if (counter) counter.textContent = `${archiveViewerIndex + 1} / ${archiveViewerPhotos.length}`;
+  const single = archiveViewerPhotos.length < 2;
+  document.querySelectorAll('#archiveViewer .archive-viewer-nav').forEach(btn => { btn.hidden = single; });
 }
 
 /**
@@ -5274,6 +5483,7 @@ async function reportCongratulation(eventId, congratulationId, btnElement) {
 
 function closeChatModal() {
   document.getElementById('chatModal').style.display = 'none';
+  closeArchiveViewer();
   currentChatEventId = null;
   currentChatEvent = null;
 }

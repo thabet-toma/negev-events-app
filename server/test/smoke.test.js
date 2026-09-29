@@ -7492,6 +7492,387 @@ async function run() {
   await api('DELETE', `/api/admin/events/${filterVillageEventId}`, { token: adminToken });
   await api('DELETE', `/api/admin/villages/${filterVillageId}`, { token: superAdminToken });
 
+  // --- Saved episodes, their share page, and «أرشيف الأعراس» (ADR-0008) ---
+  console.log('\nEpisodes, share cards and the wedding archive (ADR-0008)');
+
+  // Cloudinary is the one outside service here, and this server runs in this
+  // process — so only its two hosts are answered locally; every other fetch
+  // (this suite's own API calls) goes through untouched.
+  const realFetch = globalThis.fetch;
+  const cloudinaryCalls = [];
+  globalThis.fetch = async (url, options) => {
+    const target = String(url);
+    if (target.startsWith('https://api.cloudinary.com/') || target.startsWith('https://res.cloudinary.com/')) {
+      cloudinaryCalls.push({ url: target, body: options && options.body ? String(options.body) : '' });
+      return target.startsWith('https://res.cloudinary.com/')
+        ? new Response(TINY_PNG, { status: 200, headers: { 'Content-Type': 'image/png' } })
+        : new Response('{"result":"ok"}', { status: 200 });
+    }
+    return realFetch(url, options);
+  };
+  const savedCloudinary = { ...config.cloudinary };
+  const cloudinarySign = (publicId, version) => require('crypto')
+    .createHash('sha1').update(`public_id=${publicId}&version=${version}test-cloudinary-secret`).digest('hex');
+
+  const episodeDay = jerusalemDateString();
+  const oldEpisodeDay = '2024-01-15';
+  await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?)', [episodeDay, oldEpisodeDay]);
+  const liveUntilFuture = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  let episodeId = 0;
+
+  try {
+    await test('the migration turned the archive on for the wedding type only', async () => {
+      const wedding = await db.queryOne('SELECT archive_gallery FROM occasion_types WHERE id = ?', [weddingType.id]);
+      const funeral = await db.queryOne('SELECT archive_gallery FROM occasion_types WHERE id = ?', [funeralType.id]);
+      assert.strictEqual(Number(wedding.archive_gallery), 1);
+      assert.strictEqual(Number(funeral.archive_gallery), 0);
+    });
+
+    await test('a live on a CHANNEL link is not saved as an episode, and the admin is told why', async () => {
+      const { status, body } = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken,
+        body: {
+          live_title: 'بث على رابط القناة',
+          live_until: liveUntilFuture,
+          live_stream_url: 'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv'
+        }
+      });
+      assert.strictEqual(status, 200, JSON.stringify(body));
+      assert.strictEqual(body.live_episode, null);
+      assert.ok(/لن يُحفظ كحلقة/.test(body.live_episode_notice || ''), body.live_episode_notice);
+      const row = await db.queryOne('SELECT id FROM live_episodes WHERE episode_date = ? AND video_url IS NOT NULL', [episodeDay]);
+      assert.strictEqual(row, null);
+    });
+
+    await test("a live on ONE video's link becomes today's episode, kept in its canonical watch form", async () => {
+      const { status, body } = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken,
+        body: { live_title: 'سهرة <الحنّة>', live_until: liveUntilFuture, live_stream_url: 'https://www.youtube.com/live/abcdefghijk?si=x' }
+      });
+      assert.strictEqual(status, 200, JSON.stringify(body));
+      assert.ok(body.live_episode, 'the recorded episode comes back to the admin');
+      assert.strictEqual(body.live_episode.video_url, 'https://www.youtube.com/watch?v=abcdefghijk');
+      assert.strictEqual(body.live_episode.topic, 'سهرة <الحنّة>');
+      assert.strictEqual(body.live_episode.date, episodeDay);
+      assert.ok(body.live_episode.share_url.endsWith(`/live/e/${body.live_episode.id}`));
+      assert.strictEqual(body.live_episode_notice, null);
+      episodeId = body.live_episode.id;
+    });
+
+    await test('while the live is on, today is the live itself — not in «الحلقات السابقة»', async () => {
+      const { status, body } = await api('GET', '/api/live/hub');
+      assert.strictEqual(status, 200);
+      assert.ok(Array.isArray(body.past_episodes));
+      assert.ok(!body.past_episodes.some(e => e.id === episodeId));
+    });
+
+    await test('a topic the admin already typed for the day is kept when the live is re-saved', async () => {
+      await db.execute('UPDATE live_episodes SET topic = ? WHERE id = ?', ['موضوع كتبه الأدمن', episodeId]);
+      const { body } = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken,
+        body: { live_title: 'عنوان آخر', live_until: liveUntilFuture, live_stream_url: 'https://youtu.be/abcdefghijk' }
+      });
+      assert.strictEqual(body.live_episode.topic, 'موضوع كتبه الأدمن');
+      await db.execute('UPDATE live_episodes SET topic = ? WHERE id = ?', ['سهرة <الحنّة>', episodeId]);
+    });
+
+    await test('once the live ends, today\'s episode is listed under «الحلقات السابقة» with its own link and player', async () => {
+      await api('PUT', '/api/admin/settings', {
+        token: superAdminToken,
+        body: { live_until: new Date(Date.now() - 60 * 1000).toISOString() }
+      });
+      const { body } = await api('GET', '/api/live/hub');
+      const episode = body.past_episodes.find(e => e.id === episodeId);
+      assert.ok(episode, 'the ended broadcast is a past episode');
+      assert.strictEqual(episode.title, 'سهرة <الحنّة>');
+      assert.strictEqual(episode.video_url, 'https://www.youtube.com/watch?v=abcdefghijk');
+      assert.ok(episode.embed_url.startsWith('https://www.youtube-nocookie.com/embed/abcdefghijk'));
+      assert.strictEqual(episode.share_url, `${config.publicUrl}/live/e/${episodeId}`);
+      assert.strictEqual(episode.share_image_url, null);
+    });
+
+    await test('the /live page lists «الحلقات السابقة» as links to each episode page, titles escaped', async () => {
+      const html = await (await fetch(`${baseUrl}/live`)).text();
+      assert.ok(html.includes('الحلقات السابقة'));
+      assert.ok(html.includes(`href="${config.publicUrl}/live/e/${episodeId}"`));
+      assert.ok(html.includes('سهرة &lt;الحنّة&gt;') && !html.includes('<الحنّة>'));
+    });
+
+    await test('PUT /api/admin/live/episodes/:date refuses a channel link as an episode video, and stores a video link canonically', async () => {
+      const refused = await api('PUT', `/api/admin/live/episodes/${oldEpisodeDay}`, {
+        token: superAdminToken,
+        body: { topic: 'حلقة قديمة', video_url: 'https://www.youtube.com/@aarasna/live' }
+      });
+      assert.strictEqual(refused.status, 400);
+      assert.ok(/رابط فيديو يوتيوب محدّد/.test(refused.body.message));
+
+      const saved = await api('PUT', `/api/admin/live/episodes/${oldEpisodeDay}`, {
+        token: superAdminToken,
+        body: { topic: 'حلقة قديمة', video_url: 'https://m.youtube.com/watch?v=ZYXWVUTSRQP&t=40' }
+      });
+      assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+      assert.strictEqual(saved.body.episode.video_url, 'https://www.youtube.com/watch?v=ZYXWVUTSRQP');
+    });
+
+    await test('an episode save without video_url keeps the recorded video (a broadcast may have landed after the form loaded); an empty one clears it', async () => {
+      const kept = await api('PUT', `/api/admin/live/episodes/${oldEpisodeDay}`, {
+        token: superAdminToken,
+        body: { topic: 'حلقة قديمة — موضوع معدَّل' }
+      });
+      assert.strictEqual(kept.status, 200, JSON.stringify(kept.body));
+      assert.strictEqual(kept.body.episode.topic, 'حلقة قديمة — موضوع معدَّل');
+      assert.strictEqual(kept.body.episode.video_url, 'https://www.youtube.com/watch?v=ZYXWVUTSRQP', 'absent must not erase the video');
+
+      const cleared = await api('PUT', `/api/admin/live/episodes/${oldEpisodeDay}`, {
+        token: superAdminToken,
+        body: { topic: 'حلقة قديمة', video_url: '' }
+      });
+      assert.strictEqual(cleared.status, 200, JSON.stringify(cleared.body));
+      assert.strictEqual(cleared.body.episode.video_url, null, 'an explicit empty link clears it');
+
+      const restored = await api('PUT', `/api/admin/live/episodes/${oldEpisodeDay}`, {
+        token: superAdminToken,
+        body: { topic: 'حلقة قديمة', video_url: 'https://www.youtube.com/watch?v=ZYXWVUTSRQP' }
+      });
+      assert.strictEqual(restored.body.episode.video_url, 'https://www.youtube.com/watch?v=ZYXWVUTSRQP');
+    });
+
+    await test('GET /live/e/:id is the branded episode page: escaped title, its own card as og:image, and «شاهد الحلقة»', async () => {
+      const res = await fetch(`${baseUrl}/live/e/${episodeId}`);
+      assert.strictEqual(res.status, 200);
+      const html = await res.text();
+      assert.ok(html.includes('سهرة &lt;الحنّة&gt;'), 'the title is escaped');
+      assert.ok(!html.includes('<الحنّة>'));
+      assert.ok(html.includes(`<meta property="og:image" content="${config.publicUrl}/live/e/${episodeId}/card.jpg">`));
+      assert.ok(html.includes(`href="${config.publicUrl}/live/e/${episodeId}/go"`));
+      assert.ok(!/<script/i.test(html), 'no script on a share page');
+      assert.ok((res.headers.get('content-security-policy') || '').includes("default-src 'none'"));
+    });
+
+    await test('the episode card is a 1200×1200 JPEG; /go redirects to the stored video only; /embed frames it', async () => {
+      const card = await fetch(`${baseUrl}/live/e/${episodeId}/card.jpg`);
+      assert.strictEqual(card.status, 200);
+      assert.strictEqual(card.headers.get('content-type'), 'image/jpeg');
+      const image = await loadImage(Buffer.from(await card.arrayBuffer()));
+      assert.strictEqual(image.width, 1200);
+      assert.strictEqual(image.height, 1200);
+
+      const go = await fetch(`${baseUrl}/live/e/${episodeId}/go?url=https://evil.example`, { redirect: 'manual' });
+      assert.strictEqual(go.status, 302);
+      assert.strictEqual(go.headers.get('location'), 'https://www.youtube.com/watch?v=abcdefghijk');
+
+      const embed = await fetch(`${baseUrl}/live/e/${episodeId}/embed`);
+      assert.strictEqual(embed.status, 200);
+      assert.ok((await embed.text()).includes('https://www.youtube-nocookie.com/embed/abcdefghijk'));
+    });
+
+    await test('an unknown, malformed or video-less episode id is a 404 on every episode route', async () => {
+      const noVideo = await db.execute('INSERT INTO live_episodes (episode_date, topic) VALUES (?, ?)', ['2024-01-14', 'بلا بث']);
+      try {
+        for (const id of ['999999999', 'abc', String(noVideo.insertId)]) {
+          assert.strictEqual((await fetch(`${baseUrl}/live/e/${id}`)).status, 404, `page ${id}`);
+          assert.strictEqual((await fetch(`${baseUrl}/live/e/${id}/card.jpg`)).status, 404, `card ${id}`);
+          assert.strictEqual((await fetch(`${baseUrl}/live/e/${id}/go`, { redirect: 'manual' })).status, 404, `go ${id}`);
+          assert.strictEqual((await fetch(`${baseUrl}/live/e/${id}/embed`)).status, 404, `embed ${id}`);
+        }
+      } finally {
+        await db.execute('DELETE FROM live_episodes WHERE id = ?', [noVideo.insertId]);
+      }
+    });
+
+    await test('without Cloudinary keys, asking to upload a share image answers in Arabic instead of failing', async () => {
+      Object.assign(config.cloudinary, { cloudName: null, apiKey: null, apiSecret: null });
+      const { status, body } = await api('POST', `/api/admin/live/episodes/${episodeId}/share-image/signature`, { token: superAdminToken });
+      assert.strictEqual(status, 400);
+      assert.ok(/Cloudinary/.test(body.message) && /رفع الصور غير مفعَّل/.test(body.message), body.message);
+    });
+
+    Object.assign(config.cloudinary, { cloudName: 'test-cloud', apiKey: '111222333', apiSecret: 'test-cloudinary-secret' });
+
+    await test('share-image signing is super_admin only', async () => {
+      const anon = await api('POST', `/api/admin/live/episodes/${episodeId}/share-image/signature`);
+      assert.strictEqual(anon.status, 401);
+      const scoped = await api('POST', `/api/admin/live/episodes/${episodeId}/share-image/signature`, { token: scopedAdminToken });
+      assert.strictEqual(scoped.status, 403);
+    });
+
+    let shareUpload = null;
+    await test("the signature names a public_id inside this episode's own folder, and never carries the secret", async () => {
+      const { status, body } = await api('POST', `/api/admin/live/episodes/${episodeId}/share-image/signature`, { token: superAdminToken });
+      assert.strictEqual(status, 200);
+      shareUpload = body.upload;
+      assert.ok(shareUpload.public_id.startsWith(`negev-events/episodes/episode-${episodeId}/`), shareUpload.public_id);
+      assert.strictEqual(shareUpload.upload_url, 'https://api.cloudinary.com/v1_1/test-cloud/image/upload');
+      assert.strictEqual(shareUpload.api_key, '111222333');
+      assert.ok(/^[a-f0-9]{64}$/.test(shareUpload.signature), 'SHA-256 hex');
+      assert.ok(!JSON.stringify(body).includes('test-cloudinary-secret'));
+      const expected = require('crypto').createHash('sha256')
+        .update(`allowed_formats=${shareUpload.allowed_formats}&public_id=${shareUpload.public_id}&timestamp=${shareUpload.timestamp}test-cloudinary-secret`)
+        .digest('hex');
+      assert.strictEqual(shareUpload.signature, expected, 'Cloudinary signing rule: sorted params + secret');
+    });
+
+    await test('registering a share image needs a real Cloudinary response signature for THIS episode', async () => {
+      const forged = await api('PUT', `/api/admin/live/episodes/${episodeId}/share-image`, {
+        token: superAdminToken,
+        body: { public_id: shareUpload.public_id, version: '1700000000', signature: 'f'.repeat(40) }
+      });
+      assert.strictEqual(forged.status, 400);
+
+      const elsewhere = 'negev-events/episodes/episode-999999/abc123';
+      const wrongFolder = await api('PUT', `/api/admin/live/episodes/${episodeId}/share-image`, {
+        token: superAdminToken,
+        body: { public_id: elsewhere, version: '1700000000', signature: cloudinarySign(elsewhere, '1700000000') }
+      });
+      assert.strictEqual(wrongFolder.status, 400, 'a validly signed image of another episode is still refused');
+    });
+
+    await test('a verified share image is stored and drawn into the episode card', async () => {
+      const { status, body } = await api('PUT', `/api/admin/live/episodes/${episodeId}/share-image`, {
+        token: superAdminToken,
+        body: { public_id: shareUpload.public_id, version: '1700000000', signature: cloudinarySign(shareUpload.public_id, '1700000000') }
+      });
+      assert.strictEqual(status, 200, JSON.stringify(body));
+      assert.strictEqual(
+        body.episode.share_image_url,
+        `https://res.cloudinary.com/test-cloud/image/upload/f_auto,q_auto,c_limit,w_1600/v1700000000/${shareUpload.public_id}`
+      );
+      cloudinaryCalls.length = 0;
+      const card = await fetch(`${baseUrl}/live/e/${episodeId}/card.jpg`);
+      assert.strictEqual(card.status, 200);
+      assert.ok(cloudinaryCalls.some(c => c.url.includes('/image/upload/f_jpg,')), 'the card fetched the JPEG variant of the share image');
+      const hub = await api('GET', '/api/live/hub');
+      assert.strictEqual(hub.body.past_episodes.find(e => e.id === episodeId).share_image_url, body.episode.share_image_url);
+    });
+
+    await test('removing the share image goes back to the generated card, and deletes the file on Cloudinary', async () => {
+      cloudinaryCalls.length = 0;
+      const { status, body } = await api('DELETE', `/api/admin/live/episodes/${episodeId}/share-image`, { token: superAdminToken });
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.episode.share_image_url, null);
+      const destroyed = cloudinaryCalls.find(c => c.url === 'https://api.cloudinary.com/v1_1/test-cloud/image/destroy');
+      assert.ok(destroyed && destroyed.body.includes(encodeURIComponent(shareUpload.public_id)), 'destroy was called for the old image');
+    });
+
+    // «أرشيف الأعراس»
+    const insertArchiveEvent = async (typeId, date, status = 'approved') => {
+      const { insertId } = await db.execute(
+        `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, location_name, event_date, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['عرس الأرشيف', 'عريس الأرشيف', 'آل الأرشيف', typeId, 'رهط', 'الديوان', date, status]
+      );
+      return insertId;
+    };
+    const endedWedding = await insertArchiveEvent(weddingType.id, '2025-05-05');
+    const upcomingWedding = await insertArchiveEvent(weddingType.id, '2031-05-05');
+    const endedFuneral = await insertArchiveEvent(funeralType.id, '2025-05-06');
+    const signFor = eventId => api('POST', `/api/admin/events/${eventId}/photos/signature`, { token: superAdminToken });
+    let archiveUpload = null;
+    let archivePhotoId = 0;
+
+    try {
+      await test('archive photos: only an ENDED event whose type carries the archive can take them', async () => {
+        const upcoming = await signFor(upcomingWedding);
+        assert.strictEqual(upcoming.status, 400);
+        assert.ok(/بعد انتهاء المناسبة/.test(upcoming.body.message));
+        const funeral = await signFor(endedFuneral);
+        assert.strictEqual(funeral.status, 400);
+        assert.ok(/لا يحمل أرشيف صور/.test(funeral.body.message));
+        const missing = await signFor(999999999);
+        assert.strictEqual(missing.status, 404);
+        const ok = await signFor(endedWedding);
+        assert.strictEqual(ok.status, 200);
+        archiveUpload = ok.body.upload;
+        assert.ok(archiveUpload.public_id.startsWith(`negev-events/archive/event-${endedWedding}/`));
+      });
+
+      await test('archive routes are super_admin only (a town admin gets 403)', async () => {
+        for (const [method, path] of [
+          ['GET', `/api/admin/events/${endedWedding}/photos`],
+          ['POST', `/api/admin/events/${endedWedding}/photos/signature`],
+          ['POST', `/api/admin/events/${endedWedding}/photos`],
+          ['DELETE', `/api/admin/events/${endedWedding}/photos/1`]
+        ]) {
+          assert.strictEqual((await api(method, path, { token: scopedAdminToken })).status, 403, `${method} ${path}`);
+          assert.strictEqual((await api(method, path)).status, 401, `${method} ${path} anonymous`);
+        }
+      });
+
+      await test('a verified photo is added and shows under the ended wedding in GET /api/events/:id', async () => {
+        const forged = await api('POST', `/api/admin/events/${endedWedding}/photos`, {
+          token: superAdminToken,
+          body: { public_id: archiveUpload.public_id, version: '1700000001', signature: '0'.repeat(40) }
+        });
+        assert.strictEqual(forged.status, 400);
+
+        const { status, body } = await api('POST', `/api/admin/events/${endedWedding}/photos`, {
+          token: superAdminToken,
+          body: {
+            public_id: archiveUpload.public_id, version: '1700000001',
+            signature: cloudinarySign(archiveUpload.public_id, '1700000001'), width: 1200, height: 'x'
+          }
+        });
+        assert.strictEqual(status, 201, JSON.stringify(body));
+        archivePhotoId = body.photo.id;
+        assert.strictEqual(body.photo.width, 1200);
+        assert.strictEqual(body.photo.height, null, 'a junk dimension is dropped, not stored');
+
+        const dup = await api('POST', `/api/admin/events/${endedWedding}/photos`, {
+          token: superAdminToken,
+          body: { public_id: archiveUpload.public_id, version: '1700000001', signature: cloudinarySign(archiveUpload.public_id, '1700000001') }
+        });
+        assert.strictEqual(dup.status, 409);
+
+        const details = await api('GET', `/api/events/${endedWedding}`);
+        assert.strictEqual(details.status, 200);
+        assert.deepStrictEqual(details.body.event.archive_photos.map(p => p.id), [archivePhotoId]);
+        assert.ok(details.body.event.archive_photos[0].image_url.startsWith('https://res.cloudinary.com/test-cloud/'));
+
+        const admin = await api('GET', `/api/admin/events/${endedWedding}/photos`, { token: superAdminToken });
+        assert.strictEqual(admin.body.photos.length, 1);
+        assert.strictEqual(admin.body.max_photos, 60);
+      });
+
+      await test('the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off', async () => {
+        await db.execute("UPDATE events SET status = 'rejected' WHERE id = ?", [endedWedding]);
+        const rejected = await api('GET', `/api/events/${endedWedding}`);
+        assert.deepStrictEqual(rejected.body.event.archive_photos, []);
+        await db.execute("UPDATE events SET status = 'approved' WHERE id = ?", [endedWedding]);
+
+        const off = await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, { token: superAdminToken, body: { archive_gallery: false } });
+        assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+        try {
+          const hidden = await api('GET', `/api/events/${endedWedding}`);
+          assert.deepStrictEqual(hidden.body.event.archive_photos, []);
+          const row = await db.queryOne('SELECT COUNT(*) AS cnt FROM event_photos WHERE event_id = ?', [endedWedding]);
+          assert.strictEqual(Number(row.cnt), 1, 'the photo itself is kept');
+        } finally {
+          await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, { token: superAdminToken, body: { archive_gallery: true } });
+        }
+        const back = await api('GET', `/api/events/${endedWedding}`);
+        assert.strictEqual(back.body.event.archive_photos.length, 1);
+      });
+
+      await test('deleting an archive photo removes the row and its Cloudinary file; a wrong event id is 404', async () => {
+        const wrong = await api('DELETE', `/api/admin/events/${upcomingWedding}/photos/${archivePhotoId}`, { token: superAdminToken });
+        assert.strictEqual(wrong.status, 404, 'a photo is only reachable through its own event');
+        cloudinaryCalls.length = 0;
+        const { status } = await api('DELETE', `/api/admin/events/${endedWedding}/photos/${archivePhotoId}`, { token: superAdminToken });
+        assert.strictEqual(status, 200);
+        assert.ok(cloudinaryCalls.some(c => c.url.endsWith('/image/destroy') && c.body.includes(encodeURIComponent(archiveUpload.public_id))));
+        const details = await api('GET', `/api/events/${endedWedding}`);
+        assert.deepStrictEqual(details.body.event.archive_photos, []);
+      });
+    } finally {
+      await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral]);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    Object.assign(config.cloudinary, savedCloudinary);
+    await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?)', [episodeDay, oldEpisodeDay]);
+    await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
+  }
+
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 
   // Clean up the throwaway accounts.

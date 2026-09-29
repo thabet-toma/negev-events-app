@@ -91,6 +91,49 @@ void main() {
       expect(event.posterUrl, isNull);
       expect(event.reactions, isEmpty);
       expect(event.congratulations, isEmpty);
+      // خادم أقدم لا يرسل archive_photos — قائمة فارغة لا رمية.
+      expect(event.archivePhotos, isEmpty);
+    });
+
+    test('archive_photos: يُقرأ بأبعاد اختيارية، ويُسقط صفاً بلا رابط أو ليس خريطة', () {
+      final event = Event.fromJson({
+        'id': 8,
+        'groom_name': 'محمد',
+        'archive_photos': [
+          {
+            'id': 1,
+            'image_url': 'https://api.example.com/uploads/p1.jpg',
+            'width': 1200,
+            'height': 800,
+            'created_at': '2026-09-20T10:00:00.000Z',
+          },
+          {'id': '2', 'image_url': 'https://api.example.com/uploads/p2.jpg', 'width': null, 'height': null},
+          {'id': 3, 'image_url': null},
+          'ليست صورة',
+        ],
+      });
+
+      expect(event.archivePhotos, hasLength(2));
+      expect(event.archivePhotos[0].id, 1);
+      expect(event.archivePhotos[0].imageUrl, 'https://api.example.com/uploads/p1.jpg');
+      expect(event.archivePhotos[0].width, 1200);
+      expect(event.archivePhotos[0].height, 800);
+      expect(event.archivePhotos[1].id, 2);
+      expect(event.archivePhotos[1].width, isNull);
+      expect(event.archivePhotos[1].height, isNull);
+
+      // null صريح من الخادم كالغياب.
+      expect(Event.fromJson({'id': 9, 'archive_photos': null}).archivePhotos, isEmpty);
+    });
+
+    test('copyWithReminder يحتفظ بصور الأرشيف', () {
+      final event = Event.fromJson({
+        'id': 10,
+        'archive_photos': [
+          {'id': 1, 'image_url': 'https://api.example.com/uploads/p1.jpg'},
+        ],
+      });
+      expect(event.copyWithReminder(isReminded: true).archivePhotos, hasLength(1));
     });
   });
 
@@ -1677,6 +1720,67 @@ void main() {
         expect(youthY, lessThan(dinnerY));
       },
     );
+
+    testWidgets('أرشيف العرس: غائب تماماً حين لا صور', (tester) async {
+      await pumpDetails(tester, {
+        'id': 44,
+        'groom_name': 'محمد',
+        'family_clan': 'آل فلان',
+        'town': 'رهط',
+        'occasion_type': occasionTypeJson(tone: 'festive'),
+        'archive_photos': <Map<String, dynamic>>[],
+      });
+      expect(find.text('شارك المناسبة'), findsOneWidget);
+      expect(find.text('أرشيف العرس'), findsNothing);
+      expect(find.byKey(const Key('wedding_archive_section')), findsNothing);
+    });
+
+    testWidgets('أرشيف العرس: شبكة بالصور، والنقر يفتح عارضاً يُسحب ويُغلق', (tester) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await pumpDetails(tester, {
+        'id': 45,
+        'groom_name': 'محمد',
+        'family_clan': 'آل فلان',
+        'town': 'رهط',
+        'occasion_type': occasionTypeJson(tone: 'festive'),
+        'archive_photos': [
+          for (var i = 1; i <= 3; i++)
+            {'id': i, 'image_url': 'https://api.example.com/uploads/p$i.jpg', 'width': 800, 'height': 600},
+        ],
+      });
+
+      expect(find.text('أرشيف العرس'), findsOneWidget);
+      expect(find.text('(3)'), findsOneWidget);
+      expect(find.byKey(const Key('archive_photo_0')), findsOneWidget);
+      expect(find.byKey(const Key('archive_photo_2')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('archive_photo_1')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byKey(const Key('archive_viewer')), findsOneWidget);
+      expect(find.text('2 / 3'), findsOneWidget);
+
+      // الصفحة التالية بالسحب عكس اتجاه القراءة — نحو اليمين في RTL. المسار
+      // المدفوع هنا فوق Directionality الاختبار، فيُقرأ الاتجاه من العارض نفسه.
+      final rtl = Directionality.of(tester.element(find.byType(PageView))) == TextDirection.rtl;
+      await tester.fling(find.byType(PageView), Offset(rtl ? 600 : -600, 0), 1500);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('3 / 3'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('إغلاق'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('archive_viewer')), findsNothing);
+      expect(find.text('أرشيف العرس'), findsOneWidget);
+    });
   });
 
   group('التحليل السلوكي في الموبايل (issue #44)', () {

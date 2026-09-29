@@ -118,6 +118,9 @@ router.post('/admin/occasion-types', asyncHandler(async (req, res) => {
     // by a build already on people's phones. It is flipped when a build
     // that understands it ships — which is what the standing notice says.
     legacy_client_supported: Boolean(req.body.legacy_client_supported),
+    // «أرشيف الأعراس» (ADR-0008) — off unless asked for, like every flag
+    // that invites something the type may not want.
+    archive_gallery: Boolean(req.body.archive_gallery),
     tone: parseTone(req.body.tone),
     congratulations_label: cleanString(req.body.congratulations_label, 40) || 'تبريكات',
     default_badge_title: cleanString(req.body.default_badge_title, 80),
@@ -150,6 +153,7 @@ router.patch('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
   if (body.legacy_client_supported !== undefined) {
     payload.legacy_client_supported = Boolean(body.legacy_client_supported);
   }
+  if (body.archive_gallery !== undefined) payload.archive_gallery = Boolean(body.archive_gallery);
   if (body.tone !== undefined) payload.tone = parseTone(body.tone);
   if (body.congratulations_label !== undefined) payload.congratulations_label = cleanString(body.congratulations_label, 40);
   if (body.default_badge_title !== undefined) payload.default_badge_title = cleanString(body.default_badge_title, 80);
