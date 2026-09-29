@@ -746,7 +746,7 @@ function renderAdminEvents() {
 
   if (searchKeyword) {
     filtered = filtered.filter(e => 
-      e.groom_name.includes(searchKeyword) ||
+      (e.groom_name && e.groom_name.includes(searchKeyword)) ||
       e.town.includes(searchKeyword) ||
       (e.family_clan && e.family_clan.includes(searchKeyword))
     );
@@ -782,8 +782,8 @@ function renderAdminEvents() {
 
         ${evt.poster_url ? `
           <div class="admin-card-shot">
-            <img src="${evt.poster_url}" class="admin-card-poster-fill" alt="" aria-hidden="true">
-            <img src="${evt.poster_url}" class="admin-card-poster" alt="poster">
+            <img src="${escapeHtml(evt.poster_url)}" class="admin-card-poster-fill" alt="" aria-hidden="true">
+            <img src="${escapeHtml(evt.poster_url)}" class="admin-card-poster" alt="poster">
           </div>` : ''}
 
         <div class="admin-card-content">
@@ -793,7 +793,7 @@ function renderAdminEvents() {
             <span><strong>العريس:</strong> ${escapeHtml(evt.groom_name)}</span>
             <span><strong>التاريخ:</strong> ${evt.event_date}</span>
             <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
-            ${evt.host_phone ? `<span><strong>هاتف المعلن:</strong> <a href="tel:${evt.host_phone}" style="color:var(--gold-main);">${evt.host_phone}</a></span>` : ''}
+            ${evt.host_phone ? `<span><strong>هاتف المعلن:</strong> <a href="tel:${escapeHtml(evt.host_phone)}" style="color:var(--gold-main);">${escapeHtml(evt.host_phone)}</a></span>` : ''}
             <span><strong>أضافها:</strong> ${evt.creator_name
               ? `${escapeHtml(evt.creator_name)}${evt.creator_phone ? ` · <a href="tel:${escapeHtml(evt.creator_phone)}" style="color:var(--gold-main);">${escapeHtml(evt.creator_phone)}</a>` : ''}`
               : 'غير مرتبطة بحساب (مستوردة)'}</span>

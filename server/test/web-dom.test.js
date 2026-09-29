@@ -5340,6 +5340,32 @@ async function run() {
     assert.ok(named.includes('ناشر اللوحة') && named.includes('0529998888'), 'the publisher and their number are on the card');
   });
 
+  await test('admin events: search survives an event with no groom, and phone/poster values stay text', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const win = dom.window;
+    const { document } = win;
+    await waitFor(() => document.querySelector('#adminEventsList .admin-event-card'));
+    win.fetch = async url => (String(url).split('?')[0] === '/api/admin/events'
+      ? jsonResponse({ success: true, events: [
+        { ...ADMIN_EVENT_FIXTURE, id: 8, groom_name: null, title: 'عزاء بلا عريس', host_phone: '050"><b id="injectedPhone">x</b>',
+          poster_url: 'https://example.test/p.jpg" onerror="window.__posterInjected=1' },
+        ADMIN_EVENT_FIXTURE
+      ] })
+      : jsonResponse({ success: false }));
+    await win.fetchAdminEvents();
+
+    const list = document.getElementById('adminEventsList');
+    assert.strictEqual(list.querySelector('#injectedPhone'), null, 'a phone value must never become markup');
+    assert.ok(list.textContent.includes('<b id="injectedPhone">'), 'the phone is still shown, as literal text');
+    const posters = [...list.querySelectorAll('img.admin-card-poster')];
+    assert.ok(posters.every(img => !img.hasAttribute('onerror')), 'a poster URL must not open a new attribute');
+
+    document.getElementById('adminEventSearch').value = 'سلام';
+    win.handleAdminEventSearch();
+    const titles = [...list.querySelectorAll('.admin-event-card h3')].map(h => h.textContent);
+    assert.ok(titles.includes('شقيب سلام'), `the search still finds the matching event: ${titles}`);
+  });
+
   await test('the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer', async () => {
     const dom = buildEnv();
     const win = dom.window;
