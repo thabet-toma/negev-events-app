@@ -6,32 +6,12 @@ const ApiError = require('../utils/ApiError');
 const villages = require('../services/villages.service');
 const activity = require('../services/activity.service');
 const { requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, parseId } = require('../middleware/validate');
+const { cleanString, parseId, requireCoordinate } = require('../middleware/validate');
 
 const router = express.Router();
 
 const MAX_LAT = 90;
 const MAX_LNG = 180;
-
-/**
- * Coordinates are required for a village — unlike `parseCoordinate` in
- * `middleware/validate.js` (which treats "absent" as a valid `null`), a
- * village without them reproduces the exact pin bug the catch-all town has
- * today, which is the whole reason villages exist (story 32/33).
- */
-function requireCoordinate(value, max, label) {
-  if (value === undefined || value === null || value === '') {
-    // Both labels ("خط العرض" / "خط الطول") share "خط" (masculine), so the
-    // agreement is fixed — unlike parseCoordinate's own message, which has to
-    // handle an admin-supplied label of unknown gender.
-    throw ApiError.badRequest(`${label} مطلوب`);
-  }
-  const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed) || Math.abs(parsed) > max) {
-    throw ApiError.badRequest(`قيمة ${label} غير صالحة`);
-  }
-  return parsed;
-}
 
 // Guarded on this router itself — a `router.use('/admin', ...)` registered in
 // another file (e.g. admin.routes.js's requireAdmin) does not protect these

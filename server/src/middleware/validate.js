@@ -80,6 +80,26 @@ function parseCoordinate(value, max, label = 'الإحداثية') {
   return parsed;
 }
 
+/**
+ * Like `parseCoordinate`, but absence is an error too. For a place that must
+ * have a centre (a village, a town) — one without it reproduces the exact
+ * no-pin bug the villages catch-all has, which is the whole reason villages
+ * and managed towns carry coordinates at all.
+ */
+function requireCoordinate(value, max, label) {
+  if (value === undefined || value === null || value === '') {
+    // Both labels used ("خط العرض" / "خط الطول") share "خط" (masculine), so the
+    // agreement is fixed — unlike parseCoordinate's own message, which has to
+    // handle an admin-supplied label of unknown gender.
+    throw ApiError.badRequest(`${label} مطلوب`);
+  }
+  const parsed = Number.parseFloat(value);
+  if (Number.isNaN(parsed) || Math.abs(parsed) > max) {
+    throw ApiError.badRequest(`قيمة ${label} غير صالحة`);
+  }
+  return parsed;
+}
+
 /** Parses a positive integer id from a route parameter. */
 function parseId(value, label = 'المعرّف') {
   const id = Number.parseInt(value, 10);
@@ -166,6 +186,7 @@ module.exports = {
   optionalDateTime,
   isValidPhone,
   parseCoordinate,
+  requireCoordinate,
   parseId,
   parseAmount,
   parseHonorees,

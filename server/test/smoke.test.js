@@ -2176,6 +2176,152 @@ async function run() {
     }
   });
 
+  // TWN-3: super_admin management of towns and regions.
+  const negevRegionId = (await db.queryOne('SELECT id FROM regions ORDER BY position ASC, id ASC LIMIT 1')).id;
+
+  await test('Town management is super_admin only — a plain admin gets 403 on every /admin/towns and /admin/regions path (TWN-3)', async () => {
+    const plainPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: plainId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, 'أدمن عادي', ?, 'admin')`,
+      [plainPhone, bcrypt.hashSync('1234', config.bcryptRounds)]
+    );
+    const plainToken = signToken({ id: plainId, phone_number: plainPhone, full_name: 'أدمن عادي', role: 'admin' }, '1h');
+    try {
+      for (const [method, url] of [
+        ['GET', '/api/admin/towns'],
+        ['POST', '/api/admin/towns'],
+        ['PUT', '/api/admin/towns/order'],
+        ['PATCH', '/api/admin/towns/1'],
+        ['DELETE', '/api/admin/towns/1'],
+        ['PATCH', `/api/admin/regions/${negevRegionId}`]
+      ]) {
+        const { status } = await api(method, url, { token: plainToken, body: method === 'GET' ? undefined : {} });
+        assert.strictEqual(status, 403, `${method} ${url}`);
+      }
+    } finally {
+      await db.execute('DELETE FROM users WHERE id = ?', [plainId]);
+    }
+  });
+
+  await test('GET /api/admin/towns lists the region with every town, its event count, and the villages catch-all marked locked (TWN-3)', async () => {
+    const { status, body } = await api('GET', '/api/admin/towns', { token: superAdminToken });
+    assert.strictEqual(status, 200);
+    const region = body.regions.find(r => r.id === negevRegionId);
+    assert.strictEqual(region.name, 'النقب');
+    assert.strictEqual(typeof region.unplaced_events, 'number');
+    assert.deepStrictEqual(region.towns.map(t => t.name), SEED_TOWN_NAMES);
+    assert.ok(region.towns.every(t => typeof t.events_count === 'number'));
+    assert.deepStrictEqual(region.towns.filter(t => t.locked).map(t => t.name), ['القرى والتجمعات']);
+  });
+
+  await test('Adding a town validates coordinates, refuses spelling-variant duplicates, the reserved sentinel and a region name (TWN-3)', async () => {
+    const base = { region_id: negevRegionId, latitude: 31.1, longitude: 34.8 };
+    const noCoords = await api('POST', '/api/admin/towns', { token: superAdminToken, body: { region_id: negevRegionId, name: 'بلدة بلا مركز' } });
+    assert.strictEqual(noCoords.status, 400);
+    assert.ok(/خط العرض مطلوب/.test(noCoords.body.message), noCoords.body.message);
+
+    const variant = await api('POST', '/api/admin/towns', { token: superAdminToken, body: { ...base, name: 'عرعره النقب' } });
+    assert.strictEqual(variant.status, 409, 'ة/ه is the same town to a reader');
+    assert.ok(/عرعرة النقب/.test(variant.body.message), 'the message names the existing spelling');
+
+    const reserved = await api('POST', '/api/admin/towns', { token: superAdminToken, body: { ...base, name: 'الكل' } });
+    assert.strictEqual(reserved.status, 400);
+
+    const regionClash = await api('POST', '/api/admin/towns', { token: superAdminToken, body: { ...base, name: 'النقب' } });
+    assert.strictEqual(regionClash.status, 409);
+  });
+
+  await test('A new town lands last; renaming is allowed until something stores its name, then refused; delete disables a used town and removes an unused one (TWN-3)', async () => {
+    const created = await api('POST', '/api/admin/towns', {
+      token: superAdminToken,
+      body: { region_id: negevRegionId, name: 'بلدة جديدة للاختبار', latitude: 31.05, longitude: 34.95 }
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    const townId = created.body.town.id;
+    let eventId = null;
+    try {
+      assert.strictEqual(created.body.town.position, SEED_TOWN_NAMES.length, 'appended after the seeded towns');
+      const typoFix = await api('PATCH', `/api/admin/towns/${townId}`, { token: superAdminToken, body: { name: 'بلدة جديدة مصحّحة' } });
+      assert.strictEqual(typoFix.status, 200, 'an unused name is still a typo that can be fixed');
+      assert.strictEqual(typoFix.body.town.name, 'بلدة جديدة مصحّحة');
+
+      const published = await api('POST', '/api/events', { token: userToken, body: weddingEventBody({ town: 'بلدة جديدة مصحّحة' }) });
+      assert.strictEqual(published.status, 201, published.body.message);
+      eventId = published.body.eventId;
+
+      const rename = await api('PATCH', `/api/admin/towns/${townId}`, { token: superAdminToken, body: { name: 'اسم ثالث' } });
+      assert.strictEqual(rename.status, 409, 'renaming a used town would orphan its events');
+
+      const del = await api('DELETE', `/api/admin/towns/${townId}`, { token: superAdminToken });
+      assert.strictEqual(del.status, 200);
+      assert.deepStrictEqual([del.body.deleted, del.body.disabled], [false, true]);
+      const row = await db.queryOne('SELECT is_active FROM towns WHERE id = ?', [townId]);
+      assert.strictEqual(row.is_active, 0);
+      const event = await db.queryOne('SELECT town FROM events WHERE id = ?', [eventId]);
+      assert.strictEqual(event.town, 'بلدة جديدة مصحّحة', "a disabled town's events keep their town");
+
+      await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+      eventId = null;
+      const gone = await api('DELETE', `/api/admin/towns/${townId}`, { token: superAdminToken });
+      assert.deepStrictEqual([gone.body.deleted, gone.body.disabled], [true, false]);
+      assert.strictEqual(await db.queryOne('SELECT id FROM towns WHERE id = ?', [townId]), null);
+    } finally {
+      if (eventId) await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+      await db.execute('DELETE FROM towns WHERE id = ?', [townId]);
+    }
+  });
+
+  await test('The villages catch-all can be reordered but never renamed, disabled, moved, given a centre or deleted (TWN-3)', async () => {
+    const bucket = await db.queryOne("SELECT id, position FROM towns WHERE name = 'القرى والتجمعات'");
+    for (const body of [{ name: 'القرى' }, { is_active: false }, { latitude: 31.2, longitude: 34.8 }]) {
+      const { status } = await api('PATCH', `/api/admin/towns/${bucket.id}`, { token: superAdminToken, body });
+      assert.strictEqual(status, 400, JSON.stringify(body));
+    }
+    const del = await api('DELETE', `/api/admin/towns/${bucket.id}`, { token: superAdminToken });
+    assert.strictEqual(del.status, 400);
+    const moved = await api('PATCH', `/api/admin/towns/${bucket.id}`, { token: superAdminToken, body: { position: 50 } });
+    assert.strictEqual(moved.status, 200);
+    await db.execute('UPDATE towns SET position = ? WHERE id = ?', [bucket.position, bucket.id]);
+  });
+
+  await test('PUT /api/admin/towns/order rewrites the order the public list follows, and refuses a partial list (TWN-3)', async () => {
+    const rows = await db.query('SELECT id FROM towns WHERE region_id = ? ORDER BY position ASC, id ASC', [negevRegionId]);
+    const ids = rows.map(r => r.id);
+    const partial = await api('PUT', '/api/admin/towns/order', { token: superAdminToken, body: { region_id: negevRegionId, town_ids: ids.slice(1) } });
+    assert.strictEqual(partial.status, 400);
+    try {
+      const reversed = await api('PUT', '/api/admin/towns/order', { token: superAdminToken, body: { region_id: negevRegionId, town_ids: [...ids].reverse() } });
+      assert.strictEqual(reversed.status, 200, reversed.body.message);
+      const { body } = await api('GET', '/api/towns');
+      assert.deepStrictEqual(body.towns, ['الكل', ...[...SEED_TOWN_NAMES].reverse()]);
+    } finally {
+      await api('PUT', '/api/admin/towns/order', { token: superAdminToken, body: { region_id: negevRegionId, town_ids: ids } });
+    }
+    const { body } = await api('GET', '/api/towns');
+    assert.deepStrictEqual(body.towns, ['الكل', ...SEED_TOWN_NAMES], 'order restored');
+  });
+
+  await test('PATCH /api/admin/regions/:id edits the map centre/zoom, refuses an out-of-range zoom, and refuses renaming a region events are filed under (TWN-3)', async () => {
+    const before = await db.queryOne('SELECT * FROM regions WHERE id = ?', [negevRegionId]);
+    const badZoom = await api('PATCH', `/api/admin/regions/${negevRegionId}`, { token: superAdminToken, body: { map_zoom: 30 } });
+    assert.strictEqual(badZoom.status, 400);
+
+    const zoomed = await api('PATCH', `/api/admin/regions/${negevRegionId}`, { token: superAdminToken, body: { map_zoom: 10 } });
+    assert.strictEqual(zoomed.status, 200, zoomed.body.message);
+    const { body: towns } = await api('GET', '/api/towns');
+    assert.strictEqual(towns.regions[0].map_zoom, 10);
+    await db.execute('UPDATE regions SET map_zoom = ? WHERE id = ?', [before.map_zoom, negevRegionId]);
+
+    const filed = await api('POST', '/api/events', { token: userToken, body: weddingEventBody({ town: 'النقب' }) });
+    try {
+      const rename = await api('PATCH', `/api/admin/regions/${negevRegionId}`, { token: superAdminToken, body: { name: 'محافظة الجنوب' } });
+      assert.strictEqual(rename.status, 409);
+      assert.strictEqual((await db.queryOne('SELECT name FROM regions WHERE id = ?', [negevRegionId])).name, 'النقب');
+    } finally {
+      await db.execute('DELETE FROM events WHERE id = ?', [filed.body.eventId]);
+    }
+  });
+
   await test('PATCH /api/admin/events/:id/status approves the event', async () => {
     const { status } = await api('PATCH', `/api/admin/events/${createdEventId}/status`, {
       token: adminToken,
