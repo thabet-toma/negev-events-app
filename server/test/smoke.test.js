@@ -21,7 +21,12 @@ const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
+
+// The eight towns (and their centres) exactly as they stood as constants
+// before towns moved into the `towns` table — what the seeded table must
+// reproduce byte for byte, since every published APK was built against it.
+const SEED_TOWN_NAMES = SEED_TOWNS.map(town => town.name);
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
@@ -1962,6 +1967,78 @@ async function run() {
       body: weddingEventBody({ town: 'مدينة وهمية' })
     });
     assert.strictEqual(status, 400);
+  });
+
+  // TWN-1: towns moved from constants.js into the `towns` table. The first
+  // test proves the move changed nothing a client can see; the next two
+  // prove the table — not a leftover constant — is what the server now reads.
+  await test('GET /api/towns returns exactly the pre-table town list and centres, in the same order (TWN-1)', async () => {
+    const { body } = await api('GET', '/api/towns');
+    assert.deepStrictEqual(body.towns, ['الكل', ...SEED_TOWN_NAMES]);
+    const expectedCoordinates = {};
+    for (const town of SEED_TOWNS) {
+      if (town.latitude !== null) expectedCoordinates[town.name] = { lat: town.latitude, lng: town.longitude };
+    }
+    assert.deepStrictEqual(body.town_coordinates, expectedCoordinates);
+  });
+
+  await test('A town added to the towns table is listed and publishable with no deploy; disabling it withdraws both (TWN-1)', async () => {
+    const region = await db.queryOne('SELECT id FROM regions ORDER BY position ASC, id ASC LIMIT 1');
+    const townName = 'بلدة اختبار الجدول';
+    const { insertId: townId } = await db.execute(
+      'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, 99, 1)',
+      [region.id, townName, 31.111111, 34.777777]
+    );
+    let eventId = null;
+    try {
+      const listed = await api('GET', '/api/towns');
+      assert.strictEqual(listed.body.towns[listed.body.towns.length - 1], townName, 'a new town (position 99) must be listed last');
+      assert.deepStrictEqual(listed.body.town_coordinates[townName], { lat: 31.111111, lng: 34.777777 });
+
+      const published = await api('POST', '/api/events', {
+        token: userToken,
+        body: weddingEventBody({ town: townName })
+      });
+      assert.strictEqual(published.status, 201, published.body.message);
+      eventId = published.body.eventId;
+      const row = await db.queryOne('SELECT town, latitude, longitude FROM events WHERE id = ?', [eventId]);
+      assert.strictEqual(row.town, townName);
+      assert.strictEqual(Number(row.latitude), 31.111111, "a publish with no pin falls back to the new town's own centre");
+      assert.strictEqual(Number(row.longitude), 34.777777);
+
+      await db.execute('UPDATE towns SET is_active = 0 WHERE id = ?', [townId]);
+      const afterDisable = await api('GET', '/api/towns');
+      assert.ok(!afterDisable.body.towns.includes(townName), 'a disabled town leaves the list');
+      assert.strictEqual(afterDisable.body.town_coordinates[townName], undefined, 'and takes its centre with it');
+      const refused = await api('POST', '/api/events', {
+        token: userToken,
+        body: weddingEventBody({ town: townName })
+      });
+      assert.strictEqual(refused.status, 400, 'a disabled town can no longer be published into');
+    } finally {
+      if (eventId) await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+      await db.execute('DELETE FROM towns WHERE id = ?', [townId]);
+    }
+  });
+
+  await test('Re-running migrate never duplicates towns nor resurrects one the super_admin deleted (TWN-1)', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM towns');
+    const deleted = await db.queryOne("SELECT * FROM towns WHERE name = 'اللقية'");
+    await db.execute('DELETE FROM towns WHERE id = ?', [deleted.id]);
+    try {
+      await migrate();
+      const after = await db.queryOne('SELECT COUNT(*) AS total FROM towns');
+      assert.strictEqual(Number(after.total), Number(before.total) - 1, 'the seed runs into an empty table only');
+      const resurrected = await db.queryOne("SELECT id FROM towns WHERE name = 'اللقية'");
+      assert.strictEqual(resurrected, null, 'a deleted town must stay deleted across deploys');
+      const regions = await db.queryOne('SELECT COUNT(*) AS total FROM regions');
+      assert.strictEqual(Number(regions.total), 1, 'the first region is seeded once');
+    } finally {
+      await db.execute(
+        'INSERT INTO towns (id, region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [deleted.id, deleted.region_id, deleted.name, deleted.latitude, deleted.longitude, deleted.position, deleted.is_active]
+      );
+    }
   });
 
   await test('PATCH /api/admin/events/:id/status approves the event', async () => {
@@ -4121,7 +4198,7 @@ async function run() {
 
     const boss = await api('GET', '/api/admin/me', { token: superAdminToken });
     assert.strictEqual(boss.body.role, 'super_admin');
-    assert.ok(boss.body.towns.length >= TOWNS.length, 'a super_admin implicitly holds every town');
+    assert.ok(boss.body.towns.length >= SEED_TOWN_NAMES.length, 'a super_admin implicitly holds every town');
   });
 
   await test("Case 8: an admin publishing in their own town is approved immediately; the same admin publishing outside it lands pending, never rejected", async () => {
@@ -4505,7 +4582,7 @@ async function run() {
 
   await test('Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key', async () => {
     const { body } = await api('GET', '/api/towns', { legacy: true });
-    assert.deepStrictEqual(body.towns, ['الكل', ...TOWNS]);
+    assert.deepStrictEqual(body.towns, ['الكل', ...SEED_TOWN_NAMES]);
     assert.ok(Array.isArray(body.villages), 'expected a villages array');
   });
 
@@ -7065,11 +7142,11 @@ async function run() {
     assert.ok(ids.includes(filterEventC));
   });
 
-  // FIX 1: TOWNS is duplicated by hand in mobile/lib/config.dart (CLAUDE.md)
+  // FIX 1: towns are duplicated by hand in mobile/lib/config.dart (CLAUDE.md)
   // and a published APK cannot be pushed a fix, so a stale town value must
   // stay exactly as forgiving on the read path as it always was — matching
   // nothing, never a 400 that takes the whole feed down. Publishing (POST
-  // /api/events) is a different codepath and stays strict against TOWNS.
+  // /api/events) is a different codepath and stays strict against the towns table.
   await test('An unknown town value matches nothing, exactly like before list support existed — 200 with an empty list, not a 400', async () => {
     const { status, body } = await api('GET', '/api/events?town=بلدة_وهمية_غير_موجودة');
     assert.strictEqual(status, 200);

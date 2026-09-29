@@ -11,7 +11,7 @@ const bcrypt = require('bcryptjs');
 const db = require('./pool');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { TOWN_COORDINATES } = require('../constants');
+const townsService = require('../services/towns.service');
 
 const DEMO_EVENTS = [
   {
@@ -144,10 +144,12 @@ async function seedEvents() {
     return;
   }
 
+  // Read after migrate.js seeded the towns table (seed always runs second).
+  const townCoordinates = await townsService.coordinatesByName();
   for (const event of DEMO_EVENTS) {
-    // No fallback to another town's coordinates: a town missing from
-    // TOWN_COORDINATES (e.g. 'القرى والتجمعات') gets no pin, not a wrong one.
-    const coords = TOWN_COORDINATES[event.town] || {};
+    // No fallback to another town's coordinates: a town with no centre
+    // (e.g. 'القرى والتجمعات') gets no pin, not a wrong one.
+    const coords = townCoordinates[event.town] || {};
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, town, location_name, latitude, longitude,

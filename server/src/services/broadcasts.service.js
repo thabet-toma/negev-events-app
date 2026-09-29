@@ -96,7 +96,7 @@ async function sendBroadcast({ title, message, sentBy, expiresAt, tone, scopeTow
  * far weaker than "nullable and self-reported" alone suggests:
  *   - `auth.service.js`'s `register()` defaults a blank `clan_town` to
  *     `'النقب'` (server/src/services/auth.service.js:39) — a value that is
- *     not, and was never meant to be, one of the eight real `TOWNS`.
+ *     not, and was never meant to be, a row of the `towns` table.
  *   - The registration field itself is free text, and its own placeholder
  *     teaches users to type a clan alongside the town — `web/index.html:570`
  *     ("مثال: رهط - آل فلان") — which never equals the bare town string
@@ -104,7 +104,7 @@ async function sendBroadcast({ title, message, sentBy, expiresAt, tone, scopeTow
  * The practical result: a town-scoped broadcast reaches almost nobody today,
  * not just users who genuinely left the field blank. This is a known,
  * separately-raised product decision (no prefix/fuzzy matching or town
- * guessing belongs here — CLAUDE.md: "البلدة يجب أن تكون من TOWNS — لا
+ * guessing belongs here — CLAUDE.md: "البلدة يجب أن تكون من جدول towns — لا
  * تخمين") and is deliberately NOT worked around in this function.
  */
 async function scopeClauseForUser(userId) {

@@ -23,7 +23,7 @@
  * Safe to re-run in both modes: an event with the same groom_name + event_date
  * is skipped.
  *
- * Note: the POST /api/events route rejects any town outside constants.TOWNS,
+ * Note: the POST /api/events route rejects any town outside the towns table,
  * so in API mode the two events whose poster states no town are skipped. Give
  * them a town with --town-<key>=<town> to publish them too, e.g.
  *   --town-zayadna="رهط" --town-athman="تل السبع"
@@ -31,7 +31,7 @@
 
 const db = require('../src/db/pool');
 const logger = require('../src/utils/logger');
-const { TOWN_COORDINATES, TOWNS } = require('../src/constants');
+const townsService = require('../src/services/towns.service');
 
 const UNKNOWN = 'غير محدد';
 const SOURCE = 'https://munasabatna.com/weddings/';
@@ -118,6 +118,7 @@ const EVENTS = [
 ];
 
 async function run() {
+  const townCoordinates = await townsService.coordinatesByName();
   let imported = 0;
   let skipped = 0;
 
@@ -133,7 +134,7 @@ async function run() {
       continue;
     }
 
-    const coords = TOWN_COORDINATES[event.town] || {};
+    const coords = townCoordinates[event.town] || {};
 
     const { insertId } = await db.execute(
       `INSERT INTO events

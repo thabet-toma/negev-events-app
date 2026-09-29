@@ -11,7 +11,19 @@
  */
 
 const logger = require('../utils/logger');
-const { TOWNS, TOWN_COORDINATES, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
+const { SEED_REGION, SEED_TOWNS, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
+
+// The two pre-towns-table steps below read the town list/centres they were
+// written against. Those values now live only as seed data (towns moved into
+// the `towns` table, see create-regions-and-towns-2026-09), so they are
+// derived from it here — same names, same order, same coordinates as the
+// constants these steps originally used.
+const TOWNS = SEED_TOWNS.map(town => town.name);
+const TOWN_COORDINATES = Object.fromEntries(
+  SEED_TOWNS
+    .filter(town => town.latitude !== null)
+    .map(town => [town.name, { lat: town.latitude, lng: town.longitude }])
+);
 
 async function columnExists(connection, table, column) {
   const [rows] = await connection.execute(
@@ -1425,6 +1437,46 @@ const steps = [
         await connection.execute('DELETE FROM app_settings WHERE setting_key = ?', [oldKey]);
       }
       logger.info(`[migrations] add-live-episodes-2026-09: ensured live_episodes/live_poll_votes; renamed ${moved} live setting row(s).`);
+    }
+  },
+  {
+    // Towns move from constants.js into runtime tables a super_admin manages.
+    // schema.sql (always applied before these steps) already created both
+    // tables on every database, new or live — so, like create-admin-towns
+    // above, this step gates on ROW COUNT, not on table existence: it seeds
+    // the first region and today's eight towns exactly once, into empty
+    // tables, and never again. A town the super_admin later deletes is
+    // therefore never resurrected by a redeploy.
+    name: 'create-regions-and-towns-2026-09',
+    async run(connection) {
+      const [[{ regionCount }]] = await connection.execute('SELECT COUNT(*) AS regionCount FROM regions');
+      if (Number(regionCount) === 0) {
+        await connection.execute(
+          `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+           VALUES (?, ?, ?, ?, 0, 1)`,
+          [SEED_REGION.name, SEED_REGION.latitude, SEED_REGION.longitude, SEED_REGION.map_zoom]
+        );
+      }
+
+      const [[{ townCount }]] = await connection.execute('SELECT COUNT(*) AS townCount FROM towns');
+      if (Number(townCount) > 0) {
+        logger.info(`[migrations] create-regions-and-towns-2026-09: towns already present (${townCount}) — no seeding.`);
+        return;
+      }
+
+      const [[region]] = await connection.execute('SELECT id FROM regions ORDER BY position ASC, id ASC LIMIT 1');
+      const placeholders = [];
+      const values = [];
+      SEED_TOWNS.forEach((town, index) => {
+        placeholders.push('(?, ?, ?, ?, ?, 1)');
+        values.push(region.id, town.name, town.latitude, town.longitude, index);
+      });
+      const [result] = await connection.execute(
+        `INSERT IGNORE INTO towns (region_id, name, latitude, longitude, position, is_active)
+         VALUES ${placeholders.join(', ')}`,
+        values
+      );
+      logger.info(`[migrations] create-regions-and-towns-2026-09: seeded ${result.affectedRows} town(s) under region #${region.id}.`);
     }
   }
 ];

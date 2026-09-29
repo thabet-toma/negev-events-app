@@ -2,7 +2,7 @@
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
-const { TOWNS } = require('../constants');
+const townsService = require('./towns.service');
 
 // A caller-supplied SQL alias is interpolated directly into query text — the
 // one deliberate exception to "never concatenate SQL" in this project. It is
@@ -25,7 +25,7 @@ function assertValidAlias(alias) {
  */
 async function listTownsFor(user) {
   if (!user) return [];
-  if (user.role === 'super_admin') return [...TOWNS];
+  if (user.role === 'super_admin') return townsService.activeNames();
   if (user.role !== 'admin') return [];
 
   const rows = await db.query('SELECT town FROM admin_towns WHERE user_id = ?', [user.id]);

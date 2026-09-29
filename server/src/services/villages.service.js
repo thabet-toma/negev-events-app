@@ -7,7 +7,7 @@ const { VILLAGES_TOWN } = require('../constants');
 
 /**
  * `latitude`/`longitude` come back from mysql2 as strings (DECIMAL columns) —
- * every response shapes them as numbers, the same way `TOWN_COORDINATES`
+ * every response shapes them as numbers, the same way `town_coordinates`
  * values already are, so a client never has to parse them itself.
  */
 function shapeVillage(row) {

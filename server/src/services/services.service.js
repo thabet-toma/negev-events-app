@@ -3,8 +3,8 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const adminScope = require('./adminScope.service');
+const townsService = require('./towns.service');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
-const { TOWNS } = require('../constants');
 
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
@@ -334,10 +334,11 @@ async function getPublicProviderById(id) {
 // service_provider_towns), never by filtering an already-fetched array.
 // ======================================================================
 
-/** Every town in `towns` must belong to `TOWNS`, and to `user`'s own towns unless `user` is super_admin. */
+/** Every town in `towns` must be an active town, and one of `user`'s own towns unless `user` is super_admin. */
 async function assertTownsWithinScope(user, towns) {
+  const knownTowns = await townsService.activeNames();
   for (const town of towns) {
-    if (!TOWNS.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
+    if (!knownTowns.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
   }
   if (user.role === 'super_admin') return;
 

@@ -7,6 +7,7 @@ const ApiError = require('../utils/ApiError');
 const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const villages = require('../services/villages.service');
+const townsService = require('../services/towns.service');
 const notifications = require('../services/notifications.service');
 const activity = require('../services/activity.service');
 const facebook = require('../services/facebook.service');
@@ -18,7 +19,7 @@ const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middlewa
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, MAX_HONOREES
 } = require('../middleware/validate');
-const { TOWNS, VILLAGES_TOWN, TOWN_COORDINATES, REACTION_TYPES } = require('../constants');
+const { VILLAGES_TOWN, REACTION_TYPES } = require('../constants');
 
 const router = express.Router();
 
@@ -53,8 +54,8 @@ function parseIdListParam(raw, label) {
  * already carried — so a filter UI can add it to a selection without a
  * special case.
  *
- * Deliberately NOT validated against `TOWNS`, unlike publishing an event:
- * `TOWNS` is duplicated by hand in `mobile/lib/config.dart` (CLAUDE.md), so a
+ * Deliberately NOT validated against the towns table, unlike publishing an
+ * event: towns are duplicated by hand in `mobile/lib/config.dart`, so a
  * published APK can legitimately be filtering on a name the server no longer
  * recognises, and a live APK cannot be pushed a fix. Rejecting the request
  * would take the caller's whole feed down over one stale filter value; the
@@ -107,15 +108,21 @@ router.get('/map/events', asyncHandler(async (req, res) => {
  * `town_coordinates` lives on this same endpoint (not a new one) — the map
  * picker already calls `GET /api/towns` to fill the town dropdown, so it
  * opens on the right centre from that one response instead of a second
- * round trip or a copy of `TOWN_COORDINATES` hardcoded into the web bundle
+ * round trip or a copy of the town centres hardcoded into the web bundle
  * (#20 step 6, decision ١). 'القرى والتجمعات' has no key here on purpose —
- * it is a catch-all bucket, not a place a map can centre on.
+ * it is a catch-all bucket, not a place a map can centre on. Both keys are
+ * built from the same `towns` rows, so a town a super_admin adds or
+ * disables appears in (or leaves) the two together.
  */
 router.get('/towns', asyncHandler(async (req, res) => {
+  const [townNames, townCoordinates] = await Promise.all([
+    townsService.activeNames(),
+    townsService.coordinatesByName()
+  ]);
   res.json({
     success: true,
-    towns: ['الكل', ...TOWNS],
-    town_coordinates: TOWN_COORDINATES,
+    towns: ['الكل', ...townNames],
+    town_coordinates: townCoordinates,
     villages: await villages.listActive(),
     stats: await events.townStats()
   });
@@ -184,7 +191,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   }
 
   const town = cleanString(req.body.town, 100);
-  if (!town || !TOWNS.includes(town)) {
+  if (!town || !(await townsService.isActiveTown(town))) {
     throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
@@ -234,7 +241,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   // Computed on the values as submitted, before createEvent falls back to the
   // town's own centre for a missing pin — that fallback obviously agrees with
   // the chosen town, so it would never have anything to warn about anyway.
-  const locationWarning = events.checkTownMismatch(town, latitude, longitude);
+  const locationWarning = await events.checkTownMismatch(town, latitude, longitude);
 
   const payload = {
     occasion_type_id: occasionTypeId,
@@ -331,7 +338,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
   if (body.town !== undefined) {
     const town = cleanString(body.town, 100);
-    if (!town || !TOWNS.includes(town)) throw ApiError.badRequest('البلدة المختارة غير معروفة');
+    if (!town || !(await townsService.isActiveTown(town))) throw ApiError.badRequest('البلدة المختارة غير معروفة');
     changes.town = town;
     // Leaving the villages catch-all invalidates any village (picked or
     // typed) already on the row — clear it here unless this same edit sets a
@@ -451,7 +458,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     const finalTown = changes.town !== undefined ? changes.town : existing.town;
     const finalLatitude = changes.latitude !== undefined ? changes.latitude : existing.latitude;
     const finalLongitude = changes.longitude !== undefined ? changes.longitude : existing.longitude;
-    locationWarning = events.checkTownMismatch(finalTown, finalLatitude, finalLongitude);
+    locationWarning = await events.checkTownMismatch(finalTown, finalLatitude, finalLongitude);
   }
 
   const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });

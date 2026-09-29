@@ -12,7 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const db = require('../src/db/pool');
 const logger = require('../src/utils/logger');
-const { TOWN_COORDINATES, REACTION_TYPES } = require('../src/constants');
+const townsService = require('../src/services/towns.service');
+const { REACTION_TYPES } = require('../src/constants');
 
 const DEFAULT_PATH = path.join(__dirname, '..', 'database', 'negev_events_data.json');
 
@@ -54,6 +55,7 @@ async function importUsers(users) {
 }
 
 async function importEvents(events, userIdMap) {
+  const townCoordinates = await townsService.coordinatesByName();
   const idMap = new Map();
   let imported = 0;
 
@@ -73,7 +75,7 @@ async function importEvents(events, userIdMap) {
       continue;
     }
 
-    const coords = TOWN_COORDINATES[event.town] || {};
+    const coords = townCoordinates[event.town] || {};
     const status = ['pending', 'approved', 'rejected'].includes(event.status) ? event.status : 'approved';
 
     const { insertId } = await db.execute(

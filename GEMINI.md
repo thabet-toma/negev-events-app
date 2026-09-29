@@ -78,7 +78,7 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
 | أي شيء في تطبيق الموبايل | `mobile/lib/screens/` ثم `mobile/lib/api/negev_api.dart` |
 | أيقونة أو شعار | العلامة (حلقتا زواج ذهبيتان متشابكتان، فصّ ماسي فيروزي على اليسرى وقلب أحمر فوق اليمنى، وتحتهما كلمة «اعراسنا» — على أرضية بيضاء، كصورة الشعار التي اعتمدها المالك) معرَّفة مرة واحدة في `buildMarkParts` بـ`server/src/utils/brandMark.js` — لا مكان آخر، وألوان أدوارها في `fillStyleFor` هناك. كلمة «اعراسنا» مسار متّجه ثابت في `server/src/utils/brandWord.js` يُعاد توليده بـ`server/scripts/generate-brand-word.js` عند الحاجة. `server/scripts/brand-icons.js` يستهلكها ويولّد منها ٢٥ ملف PNG + `icon.svg` في `web/icons/` و`mobile/`؛ `server/src/routes/share.routes.js` و`server/src/services/shareCard.service.js` يستهلكانها مباشرة أيضاً، والشارات أحادية اللون في ترويستَي `web/index.html` و`web/admin.html` نسخ من مسارها يحرسها اختبار. طبقتان بعلَم `detail`: `'full'` (بالكلمة) لكل أيقونة تطبيق مقاسها ‎٧٢px‎ فأكثر، و`'icon'` (بلا الكلمة) لما هو أصغر وللشارات بجانب اسم التطبيق المكتوب. لا تحرّر PNG ولا SVG بيدك؛ عدّل الهندسة في `brandMark.js` وأعد تشغيل `node scripts/brand-icons.js` |
-| بلدة جديدة | `server/src/constants.js` — `TOWNS` و `TOWN_COORDINATES` معاً |
+| بلدة جديدة | صفّ في جدول `towns` (تحت محافظته في `regions`) — لا كود. المصدر الوحيد وقت التشغيل `server/src/services/towns.service.js`؛ `SEED_TOWNS` في `constants.js` بذرة تُكتب مرة واحدة في جدول فارغ، لا قائمة يُتحقَّق منها. شاشة إدارتها من اللوحة لم تُبنَ بعد |
 | نوع مناسبة (عرس/عزا/…) | `server/src/services/occasionTypes.service.js` + `server/src/routes/occasionTypes.routes.js` — بيانات وقت تشغيل، لا `ENUM` ولا كود جديد لكل نوع |
 
 ---
@@ -197,8 +197,8 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 - **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
 - **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel`
 - المدخلات كلها عبر `server/src/middleware/validate.js` (`cleanString` يقصّ الطول، `parseId`، `parseAmount`، `requireDate`) — لا تحقق يدوي جديد
-- البلدة يجب أن تكون من `TOWNS`، والإحداثيات الاحتياطية من `TOWN_COORDINATES` — لا تخمين
-- **البلدات ثابتة بالكود في `server/src/constants.js`.** `mobile/lib/config.dart` ينسخها حرفياً (قاعدة الموبايل أدناه). `web/app.js` و`web/admin.js` يجلبانها ديناميكياً من `GET /api/towns` (مع استبعاد 'الكل') منذ #85 دفعة 6أ و6د، مع احتفاظ `web/admin.js` بمصفوفة احتياطية للإقلاع عند انقطاع الاتصال (story 46). **القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو أي عميل جديد يعيد المشكلة التي وُجدت القرى لحلّها
+- البلدة يجب أن تكون بلدة نشِطة من جدول `towns` عبر `towns.service.js` (`isActiveTown` / `activeNames`)، والإحداثيات الاحتياطية مركزها هناك (`coordinatesByName`) — لا تخمين، ولا تحقّق ضد `SEED_TOWNS`
+- **البلدات بيانات وقت تشغيل في جدولَي `regions`/`towns`**، والاسم لا المعرّف هو ما يُخزَّن في كل جدول آخر (`events.town`، `admin_towns`، …) لأن كل APK منشور يحمل الأسماء مكتوبة داخله. `mobile/lib/config.dart` لا يزال ينسخ البذرة حرفياً (قاعدة الموبايل أدناه). `web/app.js` و`web/admin.js` يجلبانها ديناميكياً من `GET /api/towns` (مع استبعاد 'الكل') منذ #85 دفعة 6أ و6د، مع احتفاظ `web/admin.js` بمصفوفة احتياطية للإقلاع عند انقطاع الاتصال (story 46). **القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو أي عميل جديد يعيد المشكلة التي وُجدت القرى لحلّها
 - `events.village_id` غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`) — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**
 - الرفع عبر `middleware/upload.js` فقط: قائمة MIME بيضاء، وأسماء ملفات تُولَّد على الخادم ولا تُؤخذ من العميل
 
@@ -220,7 +220,7 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 
 - **كل نداء عبر `mobile/lib/api/negev_api.dart`** — لا `http` مباشر في الشاشات
 - الرمز يُرفق عند `auth: true` فقط — نفس سبب الويب: `POST /api/events` ينشر فوراً برمز مدير
-- البلدات في `mobile/lib/config.dart` تطابق `server/src/constants.js` حرفياً — أي بلدة جديدة تُضاف في الاثنين
+- البلدات في `mobile/lib/config.dart` تطابق `SEED_TOWNS` في `server/src/constants.js` حرفياً — وبلدة تُضاف إلى جدول `towns` لا تظهر في منتقيات التطبيق حتى يقرأها من `GET /api/towns`
 - `flutter test` قبل أي commit يلمس `mobile/`، و`flutter analyze` يجب أن يكون نظيفاً
 - كل نص يراه المستخدم بالعربية، مثل باقي المشروع
 

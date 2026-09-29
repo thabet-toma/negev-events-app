@@ -21,7 +21,7 @@ const analytics = require('../services/analytics.service');
 const activity = require('../services/activity.service');
 const { optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, parseId } = require('../middleware/validate');
-const { TOWNS } = require('../constants');
+const townsService = require('../services/towns.service');
 
 const router = express.Router();
 
@@ -35,7 +35,7 @@ router.post('/analytics/events', optionalAuthenticate, asyncHandler(async (req, 
   if (!platform) throw ApiError.badRequest('المنصة مطلوبة');
 
   const contentTown = cleanString(body.content_town, 100);
-  if (contentTown && !TOWNS.includes(contentTown)) {
+  if (contentTown && !(await townsService.isActiveTown(contentTown))) {
     throw ApiError.badRequest('بلدة المحتوى غير معروفة');
   }
 

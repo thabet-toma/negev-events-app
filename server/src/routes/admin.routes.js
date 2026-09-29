@@ -5,6 +5,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const admin = require('../services/admin.service');
 const adminScope = require('../services/adminScope.service');
+const townsService = require('../services/towns.service');
 const broadcastsService = require('../services/broadcasts.service');
 const events = require('../services/events.service');
 const auth = require('../services/auth.service');
@@ -16,7 +17,7 @@ const realtime = require('../realtime');
 const { announceNotification, announceNewEvent } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
-const { EVENT_STATUSES, TOWNS } = require('../constants');
+const { EVENT_STATUSES } = require('../constants');
 
 const router = express.Router();
 
@@ -298,8 +299,9 @@ router.put('/admin/admins/:id/towns', asyncHandler(async (req, res) => {
   }
 
   const towns = [...new Set(req.body.towns.map(town => cleanString(town, 100)))];
+  const knownTowns = await townsService.activeNames();
   for (const town of towns) {
-    if (!town || !TOWNS.includes(town)) {
+    if (!town || !knownTowns.includes(town)) {
       throw ApiError.badRequest(`بلدة غير معروفة: ${town || ''}`);
     }
   }

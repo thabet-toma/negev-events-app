@@ -12,13 +12,14 @@
  *
  * Rules enforced here so a mistake upstream cannot corrupt the table:
  *   - poster_url is required and must be unique — it is the dedup key.
- *   - a town outside constants.TOWNS is stored as 'غير محدد' and the row is
- *     forced to `pending`, so an admin completes it before it goes public.
- *   - latitude/longitude come from TOWN_COORDINATES, never from the input.
+ *   - a town that is not an active row of the towns table is stored as
+ *     'غير محدد' and the row is forced to `pending`, so an admin completes it
+ *     before it goes public.
+ *   - latitude/longitude come from that town's centre, never from the input.
  */
 
 const db = require('../src/db/pool');
-const { TOWNS, TOWN_COORDINATES } = require('../src/constants');
+const townsService = require('../src/services/towns.service');
 
 const UNKNOWN = 'غير محدد';
 const REQUIRED = ['groom_name', 'event_date', 'poster_url'];
@@ -34,7 +35,7 @@ function readStdin() {
   });
 }
 
-function normalise(raw, index) {
+function normalise(raw, index, knownTowns, townCoordinates) {
   for (const field of REQUIRED) {
     if (!raw[field]) throw new Error(`event[${index}]: missing "${field}"`);
   }
@@ -45,9 +46,9 @@ function normalise(raw, index) {
     throw new Error(`event[${index}]: youth_party_date must be YYYY-MM-DD`);
   }
 
-  const townIsKnown = TOWNS.includes(raw.town);
+  const townIsKnown = knownTowns.includes(raw.town);
   const town = townIsKnown ? raw.town : UNKNOWN;
-  const coords = TOWN_COORDINATES[town] || {};
+  const coords = townCoordinates[town] || {};
 
   return {
     title: raw.title || `أفراح ${raw.family_clan || ''} — زفاف العريس ${raw.groom_name}`.trim(),
@@ -75,7 +76,11 @@ async function run() {
 
   const parsed = JSON.parse(input);
   const list = Array.isArray(parsed) ? parsed : [parsed];
-  const events = list.map(normalise);
+  const [knownTowns, townCoordinates] = await Promise.all([
+    townsService.activeNames(),
+    townsService.coordinatesByName()
+  ]);
+  const events = list.map((raw, index) => normalise(raw, index, knownTowns, townCoordinates));
 
   let imported = 0;
   let skipped = 0;

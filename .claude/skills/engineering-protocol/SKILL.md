@@ -261,7 +261,7 @@ are the ones that end a task on sight):
   Arabic.
 - `realtime.emit` fires from the route layer after the service succeeded, never
   from inside a service.
-- Town values come from `TOWNS`, fallback coordinates from `TOWN_COORDINATES`.
+- Town values come from the `towns` table via `towns.service.js`, fallback coordinates from the same rows — never from the `SEED_TOWNS` seed.
 - `migrate.js` and `seed.js` stay idempotent, and `seed.js` never overwrites an
   existing row.
 - `public/` stays buildless vanilla JS with plain CSS — no framework, no bundler,

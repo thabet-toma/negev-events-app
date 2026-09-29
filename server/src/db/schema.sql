@@ -113,6 +113,45 @@ CREATE TABLE IF NOT EXISTS villages (
   UNIQUE KEY uq_villages_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Regions (محافظات) sit above towns so the platform can grow past the Negev
+-- one region at a time. The centre/zoom open a map picker on a region-level
+-- place, and is never written onto an event as a pin (a pin in the middle
+-- of a region sends a guest nowhere useful).
+CREATE TABLE IF NOT EXISTS regions (
+  id         INT UNSIGNED     NOT NULL AUTO_INCREMENT,
+  name       VARCHAR(100)     NOT NULL,
+  latitude   DECIMAL(10,7)    NOT NULL,
+  longitude  DECIMAL(10,7)    NOT NULL,
+  map_zoom   TINYINT UNSIGNED NOT NULL DEFAULT 9,
+  position   INT              NOT NULL DEFAULT 0,
+  is_active  TINYINT(1)       NOT NULL DEFAULT 1,
+  created_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_regions_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Towns are runtime data (rows, not constants). Every other
+-- table keeps storing the town by NAME (events.town, admin_towns.town, …),
+-- because published APKs carry those names hardcoded — the name is the key,
+-- this row is where it is defined. latitude/longitude are NULL only for the
+-- villages catch-all — a rule of the code that writes towns, not of the schema.
+CREATE TABLE IF NOT EXISTS towns (
+  id         INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  region_id  INT UNSIGNED  NOT NULL,
+  name       VARCHAR(100)  NOT NULL,
+  latitude   DECIMAL(10,7) DEFAULT NULL,
+  longitude  DECIMAL(10,7) DEFAULT NULL,
+  position   INT           NOT NULL DEFAULT 0,
+  is_active  TINYINT(1)    NOT NULL DEFAULT 1,
+  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_towns_name (name),
+  KEY idx_towns_region_position (region_id, position),
+  CONSTRAINT fk_towns_region FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS events (
   id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
   title            VARCHAR(255) NOT NULL,

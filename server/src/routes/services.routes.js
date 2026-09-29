@@ -7,7 +7,7 @@ const services = require('../services/services.service');
 const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { serviceMedia } = require('../middleware/upload');
 const { cleanString, requireFields, parseId, parseAmount, isValidPhone } = require('../middleware/validate');
-const { TOWNS } = require('../constants');
+const townsService = require('../services/towns.service');
 
 const router = express.Router();
 
@@ -92,8 +92,9 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
 
   const towns = parseTowns(body.towns);
 
+  const knownTowns = await townsService.activeNames();
   for (const town of towns) {
-    if (!TOWNS.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
+    if (!knownTowns.includes(town)) throw ApiError.badRequest(`البلدة "${town}" غير معروفة`);
   }
 
   const imageFile = req.files?.image?.[0] || req.file;
@@ -175,7 +176,7 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
 
   const towns = parseTowns(body.towns);
   // Containment test: an admin may only assign towns within its own scope;
-  // super_admin may assign any town in TOWNS. Rejects the whole request —
+  // super_admin may assign any active town. Rejects the whole request —
   // never a silent trim.
   await services.assertTownsWithinScope(req.user, towns);
 

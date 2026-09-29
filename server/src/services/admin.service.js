@@ -372,7 +372,7 @@ async function listAdminsWithTowns() {
 /**
  * Replaces the full set of towns an `admin`-role user administers, inside a
  * transaction so a partial write never leaves a stale mix of old and new
- * rows. Every `town` value here already passed `TOWNS.includes(...)` in the
+ * rows. Every `town` value here was already checked against the active towns in the
  * route layer, so nothing here is unvalidated — but nothing here is string
  * concatenation either, every value still travels through `?`.
  */

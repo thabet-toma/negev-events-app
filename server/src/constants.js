@@ -1,35 +1,36 @@
 'use strict';
 
-/** Recognised Negev towns, in the order the UI presents them. */
-const TOWNS = [
-  'رهط',
-  'حورة',
-  'تل السبع',
-  'كسيفة',
-  'شقيب السلام',
-  'اللقية',
-  'عرعرة النقب',
-  'القرى والتجمعات'
+/**
+ * The first region (محافظة) and its towns as they stood when towns moved
+ * into the `towns`/`regions` tables. SEED DATA ONLY — dataMigrations.js
+ * writes them once into empty tables, and the tables are the runtime source
+ * from then on. Never validate against these arrays: that is what
+ * `towns.service.js` is for.
+ *
+ * 'القرى والتجمعات' has no coordinates on purpose: it is a catch-all bucket,
+ * not a place, so events filed under it get no pin unless the publisher (or
+ * a chosen village) supplies one.
+ */
+const SEED_REGION = { name: 'النقب', latitude: 31.2858, longitude: 34.8431, map_zoom: 9 };
+
+const SEED_TOWNS = [
+  { name: 'رهط', latitude: 31.393364, longitude: 34.754678 },
+  { name: 'حورة', latitude: 31.298567, longitude: 34.926782 },
+  { name: 'تل السبع', latitude: 31.245649, longitude: 34.857768 },
+  { name: 'كسيفة', latitude: 31.245249, longitude: 35.095151 },
+  { name: 'شقيب السلام', latitude: 31.194398, longitude: 34.840581 },
+  { name: 'اللقية', latitude: 31.324231, longitude: 34.863202 },
+  { name: 'عرعرة النقب', latitude: 31.157671, longitude: 35.013021 },
+  { name: 'القرى والتجمعات', latitude: null, longitude: null }
 ];
 
-/** The catch-all bucket, the last entry of `TOWNS` — the only town a village may live under (services-directory spec). */
-const VILLAGES_TOWN = 'القرى والتجمعات';
-
 /**
- * Fallback map coordinates used when an event has no explicit location.
- * 'القرى والتجمعات' is deliberately absent: it is a catch-all bucket, not a
- * place, so no geocoder can resolve it — events filed under it get no pin
- * unless the publisher supplies explicit coordinates.
+ * The catch-all bucket — the only town a village may live under
+ * (services-directory spec). Identified by this exact name in the server and
+ * in every published APK, so its `towns` row must keep this name and stay
+ * active.
  */
-const TOWN_COORDINATES = {
-  'رهط': { lat: 31.393364, lng: 34.754678 },
-  'حورة': { lat: 31.298567, lng: 34.926782 },
-  'تل السبع': { lat: 31.245649, lng: 34.857768 },
-  'كسيفة': { lat: 31.245249, lng: 35.095151 },
-  'شقيب السلام': { lat: 31.194398, lng: 34.840581 },
-  'اللقية': { lat: 31.324231, lng: 34.863202 },
-  'عرعرة النقب': { lat: 31.157671, lng: 35.013021 }
-};
+const VILLAGES_TOWN = 'القرى والتجمعات';
 
 /**
  * نغمة النوع — تحكم العرض لا المنطق: الاحتفالية تحمل صورة وشارة تاريخ فوقها،
@@ -174,9 +175,9 @@ const PRIVACY_REQUEST_TYPES = ['access', 'erasure'];
 const PRIVACY_REQUEST_DEADLINE_DAYS = 30;
 
 module.exports = {
-  TOWNS,
+  SEED_REGION,
+  SEED_TOWNS,
   VILLAGES_TOWN,
-  TOWN_COORDINATES,
   REACTION_TYPES,
   EVENT_STATUSES,
   DEFAULT_POSTER,

@@ -29,10 +29,18 @@ const BRAND_WORD = require('../src/utils/brandWord');
 
 GlobalFonts.registerFromPath(path.join(__dirname, '../src/assets/fonts/Cairo-Bold.ttf'), 'CairoBold');
 
-// Reused, not re-typed: TOWNS/TOWN_COORDINATES are fixed-in-code on the
-// server and this fixture must not become a second copy of them (CLAUDE.md,
-// "البلدات ثابتة بالكود ومكرَّرة في العميلين ... نسخها ... يعيد المشكلة").
-const { TOWNS, TOWN_COORDINATES, ANALYTICS_EVENTS } = require('../src/constants');
+// Reused, not re-typed: the towns a fresh server seeds into its `towns`
+// table (constants.SEED_TOWNS) are what GET /api/towns returns until a
+// super_admin changes them, so the fixture is derived from that one seed —
+// never a hand-typed second copy of it.
+const { SEED_TOWNS, ANALYTICS_EVENTS } = require('../src/constants');
+
+const TOWNS = SEED_TOWNS.map(town => town.name);
+const TOWN_COORDINATES = Object.fromEntries(
+  SEED_TOWNS
+    .filter(town => town.latitude !== null)
+    .map(town => [town.name, { lat: town.latitude, lng: town.longitude }])
+);
 
 // The analytics tab fetches its event catalogue and retention window from the
 // real GET /api/privacy/notice (privacyNotice.js), not a copy in web/admin.js

@@ -10,8 +10,10 @@
  */
 
 const express = require('express');
+const asyncHandler = require('../utils/asyncHandler');
 const { cleanString } = require('../middleware/validate');
-const { TOWNS } = require('../constants');
+const townsService = require('../services/towns.service');
+const { VILLAGES_TOWN } = require('../constants');
 
 const router = express.Router();
 
@@ -46,8 +48,10 @@ router.post('/ai/generate-poem', (req, res) => {
   res.json({ success: true, simulated: true, poem });
 });
 
-router.post('/ai/scan-card', (req, res) => {
-  const town = TOWNS[Math.floor(Math.random() * (TOWNS.length - 1))];
+router.post('/ai/scan-card', asyncHandler(async (req, res) => {
+  // A demo card names a real place — never the villages catch-all.
+  const places = (await townsService.activeNames()).filter(name => name !== VILLAGES_TOWN);
+  const town = places[Math.floor(Math.random() * places.length)];
   const inTwoWeeks = new Date(Date.now() + 86400000 * 14).toISOString().split('T')[0];
 
   res.json({
@@ -64,6 +68,6 @@ router.post('/ai/scan-card', (req, res) => {
       location_name: `ديوان آل النعامي - ${town} بالقرب من الميدان الرئيسي`
     }
   });
-});
+}));
 
 module.exports = router;

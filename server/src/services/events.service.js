@@ -3,7 +3,8 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
-const { REACTION_TYPES, TOWN_COORDINATES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
+const townsService = require('./towns.service');
+const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 
@@ -532,11 +533,11 @@ function buildDefaultTitle(occasionTypeName, honorees, familyClan, town) {
   return `${prefix}${names}${place ? ` — ${place}` : ''}`.trim();
 }
 
-/** The Negev town whose centre sits closest to a coordinate pair — 'القرى والتجمعات' has none, so it can never win. */
-function nearestTownTo(latitude, longitude) {
+/** The active town whose centre sits closest to a coordinate pair — 'القرى والتجمعات' has none, so it can never win. */
+async function nearestTownTo(latitude, longitude) {
   let nearest = null;
   let nearestDistance = Infinity;
-  for (const [town, coords] of Object.entries(TOWN_COORDINATES)) {
+  for (const [town, coords] of Object.entries(await townsService.coordinatesByName())) {
     const distance = haversineDistanceKm({ lat: latitude, lng: longitude }, coords);
     if (distance < nearestDistance) {
       nearestDistance = distance;
@@ -554,11 +555,11 @@ function nearestTownTo(latitude, longitude) {
  * town the publisher chose. Returns `null` when there is nothing to warn
  * about (no explicit coordinate, or it agrees with the chosen town).
  */
-function checkTownMismatch(town, latitude, longitude) {
+async function checkTownMismatch(town, latitude, longitude) {
   if (latitude === null || latitude === undefined || longitude === null || longitude === undefined) {
     return null;
   }
-  const nearest = nearestTownTo(latitude, longitude);
+  const nearest = await nearestTownTo(latitude, longitude);
   if (!nearest || nearest === town) return null;
   return {
     nearest_town: nearest,
@@ -575,11 +576,11 @@ function checkTownMismatch(town, latitude, longitude) {
  * everyone else lands in the moderation queue.
  */
 async function createEvent(data, { autoApprove = false, createdBy = null } = {}) {
-  // `TOWN_COORDINATES` has no entry for the villages catch-all — `data.villageCoords`
+  // The villages catch-all has no centre of its own — `data.villageCoords`
   // (the chosen village's own lat/lng, looked up by the route) fills that gap
   // the exact same way a real town's centre does, so a village event gets a
   // correct pin on every published client with no query-time logic at all.
-  const coords = TOWN_COORDINATES[data.town] || data.villageCoords || {};
+  const coords = (await townsService.coordinatesByName())[data.town] || data.villageCoords || {};
   const latitude = data.latitude ?? coords.lat ?? null;
   const longitude = data.longitude ?? coords.lng ?? null;
   const status = autoApprove ? 'approved' : 'pending';
