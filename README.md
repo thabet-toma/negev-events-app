@@ -223,7 +223,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze — نفس فلاتر `?town=` `?occasion_type_id=` `?village_id=` وقوائمها المفصولة بفواصل |
 | `GET` | `/api/stories` | القصص المباشرة |
-| `GET` | `/api/towns` | البلدات وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة |
+| `GET` | `/api/towns` | البلدات النشِطة بترتيبها وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة، و`regions` (إضافة): كل محافظة نشِطة `{ id, name, latitude, longitude, map_zoom, position, towns[] }`. اسم المحافظة نفسه (اليوم «النقب») مكان صالح للنشر حين لا تُعرف البلدة — بلا دبّوس احتياطي — ولا يظهر ضمن `towns[]` التي تقرؤها التطبيقات القديمة |
 | `GET` | `/api/settings/public` | رقم واتساب الدعم الفني (`support_whatsapp_number`) والمقطع الصوتي الافتراضي للمناسبات التي لا صوت لها (`default_event_audio_url`، رابط مطلق) فقط — كلاهما `null` إن لم يُحفَظ بعد، ولا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
 | `GET` | `/api/live` | حالة البث المباشر (أي منصّة) — `profile_url`/`live_channel_url` (رابط القناة الدائم، القيمة نفسها باسمين: الأول للنسخ المنشورة) و`live` (‏`null` إلا إذا حُفظ عنوان وموعد انتهاء معاً ووُجد رابط يُحال إليه — رابط بث أو رابط القناة: `{ title, until, url, active }`، و`active` يُحسَب هنا بمقارنة `until` بالوقت الحالي فينتهي البث تلقائياً بلا حاجة لإطفاء يدوي)، و`embed_url` (مشغّل `youtube-nocookie` يشتقّه `settings.service.toEmbedUrl` من رابط يوتيوب لفيديو/بث/قناة `UC…`؛ `null` لأي منصّة أخرى أو رابط `@handle` — العميل يعرض عندها زرّ رابط) — عام بلا مصادقة |
 | `GET` | `/api/live/hub` | صفحة البث كاملة: كل حقول `/api/live` + `today` (حلقة اليوم بتوقيت القدس: `id` `date` `topic` `episode_question` و`poll` = `{ question, options, my_vote }` — و`results` `total_votes` فقط لمن صوّت) + `previous` (آخر يوم سابق فيه استفتاء، بنتائجه النهائية) + `share_url` — الرمز اختياري (يضيف `my_vote`) |
@@ -556,6 +556,12 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |
 | `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
 | `POST` | `/api/admin/events/:id/promote-village` | اعتماد اسم «قريتي غير موجودة» قريةً حقيقية — الجسم اختياري `{ name?, latitude?, longitude? }` (الاسم افتراضياً `requested_village_name` للمناسبة، والإحداثيات افتراضياً موقعها). قرية بنفس الاسم (نشِطة أو معطَّلة) يُعاد استعمالها وتُنشَّط بدل إنشاء نسخة ثانية؛ وكل مناسبة تحت `'القرى والتجمعات'` طلبت الاسم نفسه تُربط بها ويُمسح اسمها المكتوب، مع إبقاء إحداثيات كل مناسبة كما هي. يعيد `{ village, linked_events }` 🛡️ |
+| `GET` | `/api/admin/towns` | كل المحافظات وبلداتها (نشِطة ومعطَّلة) مع عدد مناسبات كل بلدة، و`locked` لبند «القرى والتجمعات»، و`unplaced_events` لكل محافظة (مناسبات بلا بلدة محدّدة) 🛡️ |
+| `POST` | `/api/admin/towns` | إضافة بلدة `{ region_id, name, latitude, longitude, position?, is_active? }` — الإحداثيات إلزامية، والتكرار يُرفض 409 بمقارنة لا تتأثر بالإملاء (التشكيل، أ/إ/آ، ة/ه، ى/ي)، و`الكل` وأسماء المحافظات محجوزة 🛡️ |
+| `PATCH` | `/api/admin/towns/:id` | تعديل بلدة — إعادة التسمية مسموحة فقط ما دام لا يخزّن اسمَها أي صفّ (مناسبات، صلاحيات أدمن، مزوّدون، تعاميم، ستوريات)، وإلا 409. «القرى والتجمعات» يقبل تغيير `position` فقط 🛡️ |
+| `DELETE` | `/api/admin/towns/:id` | حذف بلدة غير مستعملة، أو تعطيلها إن كانت مستعملة (`{ deleted, disabled }`) 🛡️ |
+| `PUT` | `/api/admin/towns/order` | إعادة ترتيب بلدات محافظة `{ region_id, town_ids }` — القائمة يجب أن تشمل كل بلداتها، في معاملة واحدة 🛡️ |
+| `PATCH` | `/api/admin/regions/:id` | تعديل اسم المحافظة (بنفس قيد الاسم المستعمل) أو مركزها أو `map_zoom` (٥–١٦) 🛡️ |
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
