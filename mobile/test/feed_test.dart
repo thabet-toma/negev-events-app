@@ -518,7 +518,9 @@ void main() {
 
         expect(find.text('تغيّر موعد المناسبة'), findsOneWidget);
         expect(find.byType(TextField), findsOneWidget);
-        expect(find.text('عرض المزيد'), findsOneWidget);
+        // ولا زرّ «عرض المزيد» عائماً في أيّ طبقة: كان يغطّي صفّ أزرار الكرت،
+        // والصفحة التالية تُجلب تلقائياً من `onPageChanged`.
+        expect(find.text('عرض المزيد'), findsNothing);
 
         // وهذا هو التوكيد الذي يحرس قرار الملحق فعلاً: محور القفز يحمل
         // **الكروت وحدها**، فعدد صفحاته يساوي عدد المناسبات بالضبط — لا صفحة
@@ -635,12 +637,11 @@ void main() {
         expect(find.textContaining('باقي'), findsNothing);
         expect(find.text('اليوم'), findsNothing);
         expect(find.text('غداً'), findsNothing);
-        // لكن التاريخ نفسه ظاهر في الجزء المرئي من الكرت — بلا فتح «مزيد من
-        // التفاصيل» (الزرّ لا يزال بحالته المطوية الافتراضية هنا).
+        // لكن التاريخ نفسه ظاهر في لوح المعلومات — بلا فتح صفحة المناسبة.
         // نصّ حرفيّ لا `arabicEventDate('2026-09-20')`: لو نُقِض التنسيق فرجّعت
         // الدالة الخام، لصار الكرت والتوقّع كلاهما خاماً ونجح التأكيد على عطل.
         expect(find.textContaining('الأحد، ٢٠ سبتمبر ٢٠٢٦'), findsOneWidget);
-        expect(find.text('مزيد من التفاصيل'), findsOneWidget);
+        expect(find.text('التفاصيل'), findsOneWidget);
       },
     );
 
@@ -714,6 +715,210 @@ void main() {
 
         final last = requests.lastWhere((u) => u.path.endsWith('/api/events'));
         expect(last.queryParameters['town'], 'النقب');
+      },
+    );
+
+    testWidgets(
+      'the card headline is the type and the honoree, the photo carries no text, and «التفاصيل» opens the event',
+      (tester) async {
+        // الحالة التي أبلغ عنها المالك: عنوان حرّ هو اسم البلدة وحده («اللد»)
+        // واسم العريس غائب عن الكرت كلّه.
+        final event = Event.fromJson({
+          'id': 501,
+          'title': 'اللد',
+          'groom_name': '',
+          'family_clan': 'ابو صيام',
+          'town': 'القرى والتجمعات',
+          'village_id': 7,
+          'village_name': 'اللد',
+          'location_name': 'قاعة رويال بالاس',
+          'event_date': '2026-10-02',
+          'dinner_time': '17:00',
+          'honorees': [
+            {'name': 'معاذ انور النباري', 'position': 0},
+          ],
+          'occasion_type': {
+            'id': 1,
+            'name': 'عرس',
+            'icon': '💍',
+            'color': '#b8860b',
+            'tone': 'festive',
+            'fields': [
+              {'field_key': 'dinner_time', 'label': 'موعد العشاء', 'is_visible': true, 'is_required': false, 'position': 1},
+            ],
+            'reactions': <String>[],
+          },
+        });
+        expect(event.cardHeadline, 'عرس معاذ انور النباري');
+        // «اللد» اسم القرية — في سطر المكان أصلاً، فلا يتكرّر عنواناً فرعياً.
+        expect(event.cardSubtitle, isNull);
+
+        var opened = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(body: EventCard(event: event, onTap: () => opened++)),
+            ),
+          ),
+        );
+
+        expect(find.text('عرس معاذ انور النباري'), findsOneWidget);
+        expect(find.text('اللد'), findsNothing);
+        // سطر لكل معلومة، لا سطر واحد محشور بالفواصل.
+        expect(find.textContaining('الجمعة، ٢ أكتوبر ٢٠٢٦'), findsOneWidget);
+        expect(find.text('17:00'), findsOneWidget);
+        expect(find.text('القرى والتجمعات (اللد) — قاعة رويال بالاس'), findsOneWidget);
+        expect(find.text('ابو صيام'), findsOneWidget);
+        // لا نصّ فوق الصورة: لوح المعلومات شقيق تحت صندوق الوسائط.
+        expect(
+          find.descendant(of: find.byType(CardMedia), matching: find.byType(Text)),
+          findsNothing,
+        );
+
+        await tester.tap(find.text('التفاصيل'));
+        expect(opened, 1);
+      },
+    );
+
+    test('a free title that adds something shows under the headline; one repeating the honoree does not', () {
+      Event build(String title) => Event.fromJson({
+            'id': 1,
+            'title': title,
+            'town': 'رهط',
+            'honorees': [
+              {'name': 'سالم', 'position': 0},
+              {'name': 'علي', 'position': 1},
+            ],
+            'occasion_type': {'id': 1, 'name': 'عرس', 'fields': <Map<String, dynamic>>[], 'reactions': <String>[]},
+          });
+      expect(build('').cardHeadline, 'عرس سالم و علي');
+      expect(build('أفراح آل فلان — زفاف العريس سالم').cardSubtitle, isNull);
+      // المستورَد بلا اسم الأب يبقى تكراراً للاسم نفسه.
+      expect(
+        Event.fromJson({
+          'id': 3,
+          'title': 'زفاف العريس سلمان أبو عصا',
+          'town': 'رهط',
+          'honorees': [
+            {'name': 'سلمان جمعة أبو عصا'},
+          ],
+        }).cardSubtitle,
+        isNull,
+      );
+      expect(build('ليلة الحنّاء الكبرى').cardSubtitle, 'ليلة الحنّاء الكبرى');
+      // صفّ قديم بلا honorees: `groom_name` يكفي للعنوان.
+      final legacy = Event.fromJson({'id': 2, 'title': 'x', 'groom_name': 'حمد', 'town': 'رهط'});
+      expect(legacy.cardHeadline, 'حمد');
+    });
+
+    testWidgets(
+      'returning from an opened event keeps the feed on the same card, not the first',
+      (tester) async {
+        Map<String, dynamic> row(int id, String day) => {
+              'id': id,
+              'title': 'مناسبة $id',
+              'groom_name': 'اسم $id',
+              'town': 'رهط',
+              'event_date': day,
+            };
+        final api = feedScreenApi(
+          eventsBody: {
+            'success': true,
+            'events': [row(401, '2026-09-20'), row(402, '2026-09-21'), row(403, '2026-09-22')],
+            'pagination': {'page': 1, 'limit': 30, 'total': 3, 'totalPages': 1},
+            'announcements': <Map<String, dynamic>>[],
+          },
+        );
+
+        // `AppServices` فوق `MaterialApp` كما في `main.dart` — لا تحته كما في
+        // `pumpFeedScreen`: شاشة التفاصيل المدفوعة تحتاجه من خارج مسار التغذية.
+        await tester.pumpWidget(
+          AppServices(
+            api: api,
+            auth: AuthStore(api),
+            realtime: RealtimeService(),
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: const Directionality(
+                textDirection: TextDirection.rtl,
+                child: EventsScreen(),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final pageView = tester.widget<PageView>(find.byType(PageView));
+        pageView.controller!.jumpToPage(2);
+        await tester.pumpAndSettle();
+        expect(pageView.controller!.page, 2);
+
+        // فتح المناسبة من الكرت الثالث ثم الرجوع — المسار نفسه الذي كان يعيد
+        // المستخدم إلى أوّل كرت (`_loadFirstPage` ← `jumpToPage(0)`).
+        await tester.tap(find.byType(CardMedia).last);
+        await tester.pumpAndSettle();
+        tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+        await tester.pumpAndSettle();
+
+        expect(pageView.controller!.page, 2);
+      },
+    );
+
+    test('date filter ranges: today, tomorrow, the week to Saturday, and the coming Thursday–Saturday', () {
+      String range(String key, DateTime now) {
+        final f = FeedDateFilter.preset(key, now);
+        return '${f.fromParam}..${f.toParam}';
+      }
+
+      final wednesday = DateTime(2026, 9, 30, 21, 15);
+      expect(range('today', wednesday), '2026-09-30..2026-09-30');
+      expect(range('tomorrow', wednesday), '2026-10-01..2026-10-01');
+      expect(range('week', wednesday), '2026-09-30..2026-10-03');
+      expect(range('weekend', wednesday), '2026-10-01..2026-10-03');
+
+      // داخل الخميس–السبت: من اليوم نفسه لا من الخميس الماضي ولا القادم.
+      expect(range('weekend', DateTime(2026, 10, 2)), '2026-10-02..2026-10-03');
+      expect(range('week', DateTime(2026, 10, 3)), '2026-10-03..2026-10-03');
+      // الأحد يفتح أسبوعاً جديداً، وخميسه بعد أربعة أيام.
+      expect(range('week', DateTime(2026, 10, 4)), '2026-10-04..2026-10-10');
+      expect(range('weekend', DateTime(2026, 10, 4)), '2026-10-08..2026-10-10');
+      // آخر الشهر لا يكسر الحساب.
+      expect(range('tomorrow', DateTime(2026, 12, 31)), '2027-01-01..2027-01-01');
+
+      final picked = FeedDateFilter.day(DateTime(2026, 10, 2, 13));
+      expect('${picked.fromParam}..${picked.toParam}', '2026-10-02..2026-10-02');
+      expect(picked.label, 'الجمعة، ٢ أكتوبر ٢٠٢٦');
+    });
+
+    testWidgets(
+      'picking «اليوم» in the date chip sends date_from and date_to for today, and «مسح الفلاتر» drops them',
+      (tester) async {
+        final requests = <Uri>[];
+        final api = feedScreenApi(requests: requests);
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('الفلاتر والبحث'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('كل التواريخ'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('اليوم'));
+        await tester.pumpAndSettle();
+
+        final today = FeedDateFilter.preset('today', DateTime.now());
+        final withDate = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(withDate.queryParameters['date_from'], today.fromParam);
+        expect(withDate.queryParameters['date_to'], today.toParam);
+        // الرقاقة تحمل الاختيار لا «كل التواريخ».
+        expect(find.text('كل التواريخ'), findsNothing);
+
+        await tester.tap(find.text('مسح الفلاتر'));
+        await tester.pumpAndSettle();
+        final cleared = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(cleared.queryParameters.containsKey('date_from'), isFalse);
+        expect(cleared.queryParameters.containsKey('date_to'), isFalse);
       },
     );
 

@@ -753,6 +753,29 @@ async function run() {
     assert.ok(list.events.some(e => e.id === spanningFuneralId), 'expected the spanning funeral to still be listed today');
   });
 
+  await test('?date_from=/?date_to= return the events on those days — a past day too, and a spanning عزا by overlap', async () => {
+    // The past wedding (2020-01-15) is outside the upcoming cut, yet a range
+    // naming its day finds it without ?archive=1 — the range replaces the cut.
+    const { status, body: pastDay } = await api('GET', '/api/events?date_from=2020-01-15&date_to=2020-01-15&limit=100');
+    assert.strictEqual(status, 200);
+    assert.ok(pastDay.events.some(e => e.id === pastEventId), 'a picked past day must list its event');
+
+    const { body: dayBefore } = await api('GET', '/api/events?date_from=2020-01-14&date_to=2020-01-14&limit=100');
+    assert.ok(!dayBefore.events.some(e => e.id === pastEventId), 'the day before must not list it');
+
+    // The spanning funeral started yesterday; a range of today alone still holds it.
+    const today = new Date().toISOString().slice(0, 10);
+    const { body: todayOnly } = await api('GET', `/api/events?date_from=${today}&date_to=${today}&limit=100`);
+    assert.ok(todayOnly.events.some(e => e.id === spanningFuneralId), 'a multi-day عزا covering today is in today');
+
+    // One end alone works; from after to is a 400 in Arabic, not an empty list.
+    const { body: fromOnly } = await api('GET', '/api/events?date_from=2020-01-15&limit=100');
+    assert.ok(fromOnly.events.some(e => e.id === pastEventId));
+    const bad = await api('GET', '/api/events?date_from=2020-02-01&date_to=2020-01-01');
+    assert.strictEqual(bad.status, 400);
+    assert.ok(/نطاق التاريخ/.test(bad.body.message));
+  });
+
   await test('Default page size is 30, and the hard ceiling on ?limit= is enforced', async () => {
     const { body: defaultList } = await api('GET', '/api/events');
     assert.strictEqual(defaultList.pagination.limit, 30);

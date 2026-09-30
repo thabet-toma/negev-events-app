@@ -162,6 +162,47 @@ class Event {
     return typeName.isEmpty ? honoreeName : '$typeName — $honoreeName';
   }
 
+  /// أسماء أصحاب المناسبة، و`groomName` للصفوف القديمة بلا `honorees`.
+  List<String> get _honoreeNames {
+    final names = honorees
+        .map((h) => h.name.trim())
+        .where((n) => n.isNotEmpty)
+        .toList();
+    if (names.isEmpty && groomName.trim().isNotEmpty) names.add(groomName.trim());
+    return names;
+  }
+
+  /// عنوان كرت التغذية: النوع واسم صاحب المناسبة («عرس معاذ النباري») دائماً،
+  /// لا حقل العنوان الحرّ — ذاك قد يحمل اسم بلدة وحدها («اللد»). الأسماء
+  /// موصولة بـ« و » كما يصلها `buildDefaultTitle` على الخادم. بلا اسم إطلاقاً
+  /// يعود إلى [displayTitle].
+  String get cardHeadline {
+    final names = _honoreeNames;
+    if (names.isEmpty) return displayTitle;
+    final typeName = occasionType?.name ?? '';
+    final joined = names.join(' و ');
+    return typeName.isEmpty ? joined : '$typeName $joined';
+  }
+
+  /// العنوان الحرّ سطراً صغيراً تحت [cardHeadline] — فقط حين يضيف شيئاً: لا
+  /// حين يذكر صاحب المناسبة باسمه الأوّل (العنوان الافتراضي والمستورَد يحملانه،
+  /// والمستورَد كثيراً بلا اسم الأب: «زفاف العريس سلمان أبو عصا») ولا
+  /// حين يكون اسم البلدة أو القرية نفسها، وهي في سطر المكان أصلاً.
+  String? get cardSubtitle {
+    final custom = title.trim();
+    if (custom.isEmpty ||
+        custom == cardHeadline ||
+        custom == town ||
+        custom == villageDisplayName) {
+      return null;
+    }
+    final names = _honoreeNames;
+    if (names.isNotEmpty && custom.contains(names.first.split(' ').first)) {
+      return null;
+    }
+    return custom;
+  }
+
   factory Event.fromJson(Map<String, dynamic> json) {
     final rawReactions = json['reactions'];
     final reactions = <String, int>{};

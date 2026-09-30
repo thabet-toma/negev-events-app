@@ -1565,6 +1565,61 @@ async function run() {
     assert.strictEqual(document.getElementById('kindFilterChipLabel').textContent, 'كل الأنواع');
   });
 
+  await test('date filter ranges match the mobile client: the week runs to Saturday, Thursday–Saturday is the coming wedding nights', async () => {
+    const { dom } = await setupFilterEnv();
+    const range = (key, y, m, d) => {
+      const r = dom.window.feedDateRange(key, new Date(y, m - 1, d, 21, 15));
+      return `${r.from}..${r.to}`;
+    };
+    // الأربعاء ٣٠ سبتمبر ٢٠٢٦ — نفس الأيام في اختبار الموبايل.
+    assert.strictEqual(range('today', 2026, 9, 30), '2026-09-30..2026-09-30');
+    assert.strictEqual(range('tomorrow', 2026, 9, 30), '2026-10-01..2026-10-01');
+    assert.strictEqual(range('week', 2026, 9, 30), '2026-09-30..2026-10-03');
+    assert.strictEqual(range('weekend', 2026, 9, 30), '2026-10-01..2026-10-03');
+    assert.strictEqual(range('weekend', 2026, 10, 2), '2026-10-02..2026-10-03');
+    assert.strictEqual(range('week', 2026, 10, 3), '2026-10-03..2026-10-03');
+    assert.strictEqual(range('week', 2026, 10, 4), '2026-10-04..2026-10-10');
+    assert.strictEqual(range('weekend', 2026, 10, 4), '2026-10-08..2026-10-10');
+    assert.strictEqual(range('tomorrow', 2026, 12, 31), '2027-01-01..2027-01-01');
+  });
+
+  await test('the date chip sends date_from/date_to, a picked day needs a day, and «مسح الفلاتر» drops the range', async () => {
+    const { dom, calls } = await setupFilterEnv();
+    const { document } = dom.window;
+
+    dom.window.openDateFilterSheet();
+    document.querySelector('input[name="feedDateOption"][value="weekend"]').checked = true;
+    dom.window.applyDateFilterSheet();
+    await waitFor(() => calls.length > 0);
+    const expected = dom.window.feedDateRange('weekend');
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_from'), expected.from);
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_to'), expected.to);
+    assert.strictEqual(document.getElementById('dateFilterChipLabel').textContent, 'الخميس – السبت');
+    assert.strictEqual(document.getElementById('drawerDateChipLabel').textContent, 'الخميس – السبت');
+
+    // «اختر يوماً» بلا يوم لا يطبّق شيئاً ولا يجلب.
+    calls.length = 0;
+    dom.window.openDateFilterSheet();
+    document.querySelector('input[name="feedDateOption"][value="day"]').checked = true;
+    dom.window.applyDateFilterSheet();
+    assert.strictEqual(calls.length, 0, 'no day picked — nothing is fetched');
+    assert.strictEqual(document.getElementById('dateFilterModal').style.display, 'flex', 'the sheet stays open');
+
+    document.getElementById('dateFilterDayInput').value = '2026-10-02';
+    dom.window.applyDateFilterSheet();
+    await waitFor(() => calls.length > 0);
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_from'), '2026-10-02');
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_to'), '2026-10-02');
+    assert.ok(document.getElementById('dateFilterChipLabel').textContent.includes('أكتوبر'), 'a picked day is named in Arabic');
+
+    calls.length = 0;
+    dom.window.clearAllFilters();
+    await waitFor(() => calls.length > 0);
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_from'), null);
+    assert.strictEqual(queryParam(calls[calls.length - 1], 'date_to'), null);
+    assert.strictEqual(document.getElementById('dateFilterChipLabel').textContent, 'كل التواريخ');
+  });
+
   await test('«مسح الفلاتر» is always visible, not only once something is selected', () => {
     const markup = new JSDOM(INDEX_HTML_RAW).window.document;
     const clearBtn = markup.getElementById('clearFiltersBtn');
@@ -1936,10 +1991,10 @@ async function run() {
   /**
    * Review round 2, FIX 3: removing the countdown badge (story 52) is not the
    * same as removing the date. A مناسبة عزاء must still show WHEN it is,
-   * plainly, on the card's visible face — not behind "مزيد من التفاصيل" like
-   * the rest of the grid, and never as a countdown.
+   * plainly, on the card's visible face — not behind "التفاصيل" like the
+   * rest of the grid, and never as a countdown.
    */
-  await test('a mourning card shows a plain, visible date on its face — never a countdown, never hidden behind "مزيد من التفاصيل"', () => {
+  await test('a mourning card shows a plain, visible date on its face — never a countdown, never hidden behind "التفاصيل"', () => {
     const { document } = renderCardFixtures();
     const card = document.getElementById('eventCard-903');
 
@@ -1950,11 +2005,11 @@ async function run() {
 
     const festiveCard = document.getElementById('eventCard-901');
     const festiveDateLine = festiveCard.querySelector('.card-date-line');
-    assert.ok(festiveDateLine, 'a festive card now carries the date and venue line too (issue #98 story 15)');
-    assert.ok(festiveDateLine.textContent.length > 0, 'expected formatted date and venue text');
+    assert.ok(festiveDateLine, 'a festive card now carries the date line too (issue #98 story 15)');
+    assert.ok(festiveDateLine.textContent.length > 0, 'expected formatted date text');
   });
 
-  await test('the details grid, nav buttons and artist line start collapsed behind "مزيد من التفاصيل"', () => {
+  await test('the details grid, nav buttons and artist line start collapsed behind "التفاصيل"', () => {
     const { document } = renderCardFixtures();
     const card = document.getElementById('eventCard-901');
 
@@ -1972,23 +2027,77 @@ async function run() {
   });
 
   /**
-   * Review round 2, FIX 4: `.card-clan-line` was unclamped, so a long
-   * `family_clan — town` pair could wrap the visible text block to three
-   * lines on a narrow screen (spec: «كتلة النصّ سطران»). jsdom has no layout
-   * engine, so this asserts the STRUCTURE (the clamp class is actually on the
-   * element) and reads styles.css directly for the clamp rule itself — the
-   * actual wrapping behaviour cannot be proven here.
+   * Review round 2, FIX 4: `.card-clan-line` was unclamped, so a long clan
+   * name could wrap the visible text block on a narrow screen. Every info
+   * line (date, time, place, clan) is now a flex row of icon + text, so the
+   * clamp sits on the TEXT inside it — `-webkit-line-clamp` needs
+   * `display: -webkit-box`, which the flex row itself cannot be. jsdom has
+   * no layout engine, so this asserts the STRUCTURE and reads styles.css for
+   * the clamp rule itself — the actual wrapping cannot be proven here.
    */
-  await test('the clan/town line carries the same one-line clamp as the title, structurally', () => {
+  await test('every info line clamps its text to one line, structurally', () => {
     const { document } = renderCardFixtures();
     const clanLine = document.querySelector('#eventCard-901 .card-clan-line');
-    assert.ok(clanLine, 'expected a clan/town line on a card with a family_clan');
-    assert.ok(clanLine.classList.contains('card-clamp-1-line'), 'expected the shared one-line clamp class on the clan/town line');
+    assert.ok(clanLine, 'expected a clan line on a card with a family_clan');
+    const lines = document.querySelectorAll('#eventCard-901 .card-info-line');
+    assert.ok(lines.length >= 3, 'expected date, place and clan on their own lines');
+    lines.forEach(line => {
+      const text = line.querySelector('span');
+      assert.ok(text && text.classList.contains('card-clamp-1-line'), `expected the one-line clamp on the text of ${line.className}`);
+    });
 
     assert.ok(
       /\.card-clamp-1-line\s*\{[^}]*-webkit-line-clamp:\s*1/.test(STYLES_CSS),
       'expected the shared clamp class to actually set -webkit-line-clamp: 1 in styles.css'
     );
+  });
+
+  /**
+   * Owner request 2026-09-30: the card headline names the occasion and the
+   * person («عرس معاذ انور النباري») — a free title that is only the place
+   * («اللد») used to BE the headline, with the groom's name nowhere on the
+   * card. One fact per line with its icon, and «التفاصيل» leads the row.
+   */
+  await test('the card headline is the type and the honoree, never a place-only title, and «التفاصيل» leads the actions', () => {
+    const dom = buildEnv();
+    dom.window.renderEvents([
+      {
+        id: 950, title: 'اللد', groom_name: '', family_clan: 'ابو صيام', town: 'القرى والتجمعات',
+        village_id: 7, village_name: 'اللد', event_date: '2027-01-10', location_name: 'قاعة رويال بالاس',
+        dinner_time: '17:00', poster_url: null, audio_url: null, occasion_type: WEDDING_TYPE, reactions: {},
+        honorees: [{ name: 'معاذ انور النباري', position: 0 }]
+      },
+      {
+        id: 951, title: 'ليلة الحنّاء الكبرى', groom_name: 'سالم', family_clan: '', town: 'رهط',
+        event_date: '2027-01-11', location_name: 'ديوان', poster_url: null, audio_url: null,
+        occasion_type: FUNERAL_TYPE, reactions: {}, honorees: [{ name: 'سالم' }, { name: 'علي' }]
+      },
+      {
+        id: 952, title: 'زفاف العريس سلمان أبو عصا', groom_name: '', family_clan: '', town: 'رهط',
+        event_date: '2027-01-12', location_name: 'ديوان', poster_url: null, audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}, honorees: [{ name: 'سلمان جمعة أبو عصا' }]
+      }
+    ]);
+    const card = dom.window.document.getElementById('eventCard-950');
+    assert.strictEqual(card.querySelector('.event-main-title').textContent, 'عرس معاذ انور النباري');
+    assert.strictEqual(card.querySelector('.card-subtitle'), null, 'a title that is only the village name is not repeated under the headline');
+    assert.strictEqual(card.querySelector('.card-place-line').textContent, 'اللد — قاعة رويال بالاس');
+    assert.strictEqual(card.querySelector('.card-clan-line').textContent, 'ابو صيام');
+    const actions = card.querySelectorAll('.card-caption-actions button');
+    assert.ok(actions[0].classList.contains('card-more-details-btn'), '«التفاصيل» must be the first button');
+    assert.strictEqual(actions[0].textContent.trim(), 'التفاصيل');
+    // الذهبي الفاتح لا يحمل نصاً أبيض — نصّ الزرّ المصمت داكن عليه.
+    assert.ok(card.getAttribute('style').includes('--tone-ink:#1F2937'), 'a light tone gets dark ink on the filled button');
+
+    const other = dom.window.document.getElementById('eventCard-951');
+    assert.strictEqual(other.querySelector('.event-main-title').textContent, 'عزا سالم و علي');
+    assert.strictEqual(other.querySelector('.card-subtitle').textContent, 'ليلة الحنّاء الكبرى', 'a free title that adds something shows under the headline');
+    assert.ok(other.getAttribute('style').includes('--tone-ink:#FFFFFF'), 'a dark tone gets white ink');
+    assert.strictEqual(
+      dom.window.document.querySelector('#eventCard-952 .card-subtitle'), null,
+      'an imported title naming the groom without his father\'s name still repeats the headline'
+    );
+    assert.ok(/\.card-clamp-2-line\s*\{[^}]*-webkit-line-clamp:\s*2/.test(STYLES_CSS), 'the headline may take two lines, no more');
   });
 
   console.log('\nNotification centre — merged personal + broadcast feed (issue #85, review round 2 FIX 1)');
@@ -5251,6 +5360,26 @@ async function run() {
     win.switchTab('tabMap');
     await win.markNotificationRead(false, 32);
     assert.ok(win.document.getElementById('tabHome').classList.contains('active-tab'), 'the digest has no single event — it opens the feed');
+  });
+
+  await test('leaving the feed for another tab and coming back returns to the same card, not the first', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    await flushBoot();
+    const feed = win.document.getElementById('eventsContainer');
+    // jsdom بلا تخطيط: `scrollTop` قيمة عادية هنا، و«صفرها» أدناه هو ما يفعله
+    // المتصفّح فعلاً بحاوية صارت `display:none` مع تبويبها.
+    Object.defineProperty(feed, 'scrollTop', { value: 1800, writable: true, configurable: true });
+
+    win.switchTab('tabMap');
+    feed.scrollTop = 0;
+    win.switchTab('tabHome');
+    assert.strictEqual(feed.scrollTop, 1800, 'the feed must come back to where the reader left it');
+
+    // وتبويب الرئيسية وهو مختار أصلاً لا يستعيد موضعاً قديماً.
+    feed.scrollTop = 600;
+    win.switchTab('tabHome');
+    assert.strictEqual(feed.scrollTop, 600, 'switching to the tab already shown must not move the feed');
   });
 
   await test('the «new events» switch reads the server, saves a change, and snaps back if the save fails', async () => {

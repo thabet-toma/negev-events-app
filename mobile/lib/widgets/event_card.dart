@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
-import '../config.dart';
 import '../models/event.dart';
 import '../state/share_event.dart';
 import '../theme.dart';
@@ -89,13 +88,14 @@ const _mourningGradient = LinearGradient(
   colors: [Color(0xFF334155), Color(0xFF64748B)],
 );
 
-/// بطاقة مناسبة بملء الشاشة بأربع طبقات مطابقة للويب تماماً (المواصفة #98):
-/// 1. Bezel: أرضية داكنة + زخرفة متكرّرة، حشو 44 بالأعلى و10 بالجوانب والأسفل.
+/// بطاقة مناسبة بملء الشاشة على نمط بطاقة الدعوة: الصورة كاملة في الأعلى،
+/// وتحتها لوح معلومات مصمت. لا نصّ فوق الصورة — التفاصيل على تدرّج غامق فوق
+/// أسفل الملصق لم تكن تُقرأ (طلب المالك 2026-09-30).
+/// 1. Bezel: أرضية داكنة + زخرفة متكرّرة.
 /// 2. Framed: لوح بنصف قطر 14، إطار ذهبي 2 على الحافة بلا إزاحة، وظلّ ناعم.
-/// 3. Media: يأخذ كامل الارتفاع المتبقي، الملصق cover ومحاذى للأعلى.
-/// 4. Caption: شريط تعريف مصمت بارتفاع محتواه وشعرية 1px بلون النوع بنسبة 40%،
-/// وهو شقيق عمودي لصندوق الوسائط لا طبقة تطفو فوقه.
-class EventCard extends StatefulWidget {
+/// 3. Media: يأخذ كل الارتفاع فوق لوح المعلومات، والملصق كاملاً بلا قصّ.
+/// 4. Caption: لوح المعلومات — شقيق عمودي تحت صندوق الوسائط لا طبقة فوقه.
+class EventCard extends StatelessWidget {
   const EventCard({
     super.key,
     required this.event,
@@ -105,23 +105,18 @@ class EventCard extends StatefulWidget {
   });
 
   final Event event;
+
+  /// يفتح صفحة المناسبة — من الصورة ومن زرّ «التفاصيل» معاً.
   final VoidCallback onTap;
 
   /// `null` يعطل النقر على التبريكات في الشريط.
   final VoidCallback? onCongratulationsTap;
 
-  /// `null` يعطل زرّ «ذكّرني» في شريط التعريف، ويُخفي سطره في ورقة التفاصيل.
+  /// `null` يعطل زرّ «ذكّرني» في لوح المعلومات.
   final VoidCallback? onRemindTap;
 
-  @override
-  State<EventCard> createState() => _EventCardState();
-}
-
-class _EventCardState extends State<EventCard> {
-  bool _detailsExpanded = false;
-
   String get _countdownText {
-    final eventDate = DateTime.tryParse(widget.event.eventDate);
+    final eventDate = DateTime.tryParse(event.eventDate);
     if (eventDate == null) return '';
     final today = DateTime.now();
     final todayOnly = DateTime(today.year, today.month, today.day);
@@ -136,7 +131,6 @@ class _EventCardState extends State<EventCard> {
 
   @override
   Widget build(BuildContext context) {
-    final event = widget.event;
     final type = event.occasionType;
     final toneColor = occasionTypeColor(type?.color, cardGold);
     final isSolemn = type?.isSolemn ?? false;
@@ -158,56 +152,37 @@ class _EventCardState extends State<EventCard> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: _cardMaxWidth),
             child: SizedBox(
-          height: cardHeight,
-          child: CardBezel(
-            toneColor: toneColor,
-            child: CardFramed(
-              toneColor: toneColor,
-              // ورقة التفاصيل تغطّي **اللوح كلّه** — الصورة وشريط التعريف معاً —
-              // تماماً كـ`.card-details-collapsible { position:absolute; inset:0 }`
-              // داخل `.card-framed` في الويب. لو غطّت الصورة وحدها لبقي الشريط
-              // ظاهراً تحتها، وهو فارق بين العميلين لا اختلاف منصّة.
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Positioned.fill(
-                    child: CardMedia(
-                      event: event,
-                      toneColor: toneColor,
-                      isSolemn: isSolemn,
-                      onTap: widget.onTap,
-                    ),
+              height: cardHeight,
+              child: CardBezel(
+                toneColor: toneColor,
+                child: CardFramed(
+                  toneColor: toneColor,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: CardMedia(
+                          event: event,
+                          toneColor: toneColor,
+                          isSolemn: isSolemn,
+                          onTap: onTap,
+                        ),
+                      ),
+                      CardCaption(
+                        event: event,
+                        type: type,
+                        toneColor: toneColor,
+                        isSolemn: isSolemn,
+                        countdownText: _countdownText,
+                        onDetailsTap: onTap,
+                        onCongratulationsTap: onCongratulationsTap,
+                        onRemindTap: onRemindTap,
+                        onShareTap: () => shareEvent(context, event),
+                      ),
+                    ],
                   ),
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: CardCaption(
-                      event: event,
-                      type: type,
-                      toneColor: toneColor,
-                      isSolemn: isSolemn,
-                      countdownText: _countdownText,
-                      detailsExpanded: _detailsExpanded,
-                      onToggleDetails: () =>
-                          setState(() => _detailsExpanded = !_detailsExpanded),
-                      onCongratulationsTap: widget.onCongratulationsTap,
-                      onRemindTap: widget.onRemindTap,
-                      onShareTap: () => shareEvent(context, event),
-                    ),
-                  ),
-                  if (_detailsExpanded)
-                    _CardDetailsPanel(
-                      event: event,
-                      type: type,
-                      onClose: () => setState(() => _detailsExpanded = false),
-                      onCongratulationsTap: widget.onCongratulationsTap,
-                      onRemindTap: widget.onRemindTap,
-                    ),
-                ],
+                ),
               ),
-            ),
-          ),
             ),
           ),
         );
@@ -411,9 +386,10 @@ class CardMedia extends StatelessWidget {
   }
 }
 
-/// الطبقة الرابعة: شريط التعريف (Caption)
-/// شقيق عمودي لصندوق الوسائط؛ خلفية مصمتة؛ شعرية 1px بلون النغمة بنسبة 40%؛
-/// حشو 12 أعلى و16 جوانب و15 أسفل.
+/// الطبقة الرابعة: لوح المعلومات (Caption)
+/// خلفية السطح المصمتة فيُقرأ بأي صورة، وشعرية بلون النوع فوقه تفصله عنها.
+/// العنوان النوع واسم صاحب المناسبة، ثم سطر لكل معلومة بأيقونتها — لا سطر
+/// واحد تُحشر فيه كلها بفواصل — ثم صفّ الأزرار يتقدّمه «التفاصيل».
 class CardCaption extends StatelessWidget {
   const CardCaption({
     super.key,
@@ -422,8 +398,7 @@ class CardCaption extends StatelessWidget {
     required this.toneColor,
     required this.isSolemn,
     required this.countdownText,
-    required this.detailsExpanded,
-    required this.onToggleDetails,
+    required this.onDetailsTap,
     this.onCongratulationsTap,
     this.onRemindTap,
     this.onShareTap,
@@ -434,23 +409,20 @@ class CardCaption extends StatelessWidget {
   final Color toneColor;
   final bool isSolemn;
   final String countdownText;
-  final bool detailsExpanded;
-  final VoidCallback onToggleDetails;
+  final VoidCallback onDetailsTap;
   final VoidCallback? onCongratulationsTap;
   final VoidCallback? onRemindTap;
   final VoidCallback? onShareTap;
 
   @override
   Widget build(BuildContext context) {
-    final clanTownParts = [event.familyClan, event.townDisplay]
+    final subtitle = event.cardSubtitle;
+    final showDinnerTime = (type?.showsField('dinner_time') ?? true) &&
+        event.dinnerTime.trim().isNotEmpty;
+    final placeLine = [event.townDisplay, event.locationName]
         .where((part) => part.trim().isNotEmpty)
-        .toList();
-    final clanTownLine = clanTownParts.join(' — ');
-
-    final dateVenueParts = [arabicEventDate(event.eventDate), event.locationName]
-        .where((part) => part.trim().isNotEmpty)
-        .toList();
-    final dateVenueLine = dateVenueParts.join(' — ');
+        .join(' — ');
+    final clan = event.familyClan.trim();
 
     final congratulationsLabel =
         type?.congratulationsLabel ?? 'تبريكات';
@@ -458,18 +430,12 @@ class CardCaption extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.transparent,
-            Colors.black.withValues(alpha: 0.68),
-            Colors.black.withValues(alpha: 0.92),
-          ],
-          stops: const [0.0, 0.32, 1.0],
+        color: context.c.surface,
+        border: Border(
+          top: BorderSide(color: toneColor.withValues(alpha: 0.4)),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 28, 16, 16),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -485,68 +451,71 @@ class CardCaption extends StatelessWidget {
                 _DateChip(text: countdownText),
             ],
           ),
-          // المسافات مطابقة للويب: الشارات 8 تحتها، سطر العشيرة 2 فوقه و4 تحته،
-          // سطر التاريخ 6 تحته، وصفّ الأزرار 8 فوقه.
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
 
-          // 2. العنوان الرئيسي
+          // 2. العنوان: النوع واسم صاحب المناسبة، على سطرين إن طال الاسم
           Text(
-            event.displayTitle,
-            maxLines: 1,
+            event.cardHeadline,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            // مطابق لـ`.event-main-title` في الويب: 1.35rem و900.
-            style: const TextStyle(
-              fontSize: 22,
+            style: TextStyle(
+              fontSize: 19,
               fontWeight: FontWeight.w900,
-              color: Colors.white,
-              height: 1.35,
+              color: context.c.ink,
+              height: 1.3,
             ),
           ),
-
-          // 3. سطر العشيرة والبلدة بلون النوع
-          if (clanTownLine.isNotEmpty) ...[
-            const SizedBox(height: 2),
+          if (subtitle != null)
             Text(
-              clanTownLine,
+              subtitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: toneColor,
-              ),
+              style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
             ),
-          ],
+          const SizedBox(height: 6),
 
-          // 4. سطر التاريخ والمكان لكل الأنواع بلا استثناء
-          if (dateVenueLine.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              dateVenueLine,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: Colors.white.withValues(alpha: 0.85),
-              ),
+          // 3. سطر لكل معلومة: التاريخ، الوقت، المكان، العائلة
+          _InfoLine(
+            icon: Icons.event_outlined,
+            color: toneColor,
+            text: arabicEventDate(event.eventDate),
+          ),
+          if (showDinnerTime)
+            _InfoLine(
+              icon: Icons.schedule,
+              color: toneColor,
+              text: event.dinnerTime,
             ),
-          ],
-
-          // عدّاد المتابعين **لا يظهر في الشريط**: الويب حذفه من صفّه المدمج في
-          // `be32907` لأنّ أربعة أزرار وعدّاداً لا يتّسع لها عرض هاتف. مكانه
-          // ورقة التفاصيل، وهو معروض فيها فعلاً.
+          _InfoLine(
+            icon: Icons.location_on_outlined,
+            color: toneColor,
+            text: placeLine,
+          ),
+          if (clan.isNotEmpty)
+            _InfoLine(
+              icon: Icons.groups_outlined,
+              color: toneColor,
+              text: clan,
+            ),
           const SizedBox(height: 8),
 
-          // 5. صف الأزرار المدمج: تبريكات، تذكير، مشاركة، تفاصيل
+          // 4. صفّ الأزرار: التفاصيل (مصمت بلون النوع)، تبريكات، تذكير، مشاركة
           Row(
             children: [
               Expanded(
                 child: _CaptionActionButton(
+                  icon: Icons.info_outline,
+                  label: 'التفاصيل',
+                  fill: toneColor,
+                  onTap: onDetailsTap,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _CaptionActionButton(
                   icon: Icons.chat_bubble_outline,
-                  // التسمية وحدها بلا عدّاد — نفس زرّ الويب في صفّه المدمج.
-                  // العدّاد شأن ورقة التفاصيل، وهناك يحكمه النوع: نوعٌ يُخفي
-                  // العدّاد يرسل `congratulationsCount == null` فلا يُرسَم سطره.
+                  // التسمية وحدها بلا عدّاد — العدّاد في صفحة المناسبة، وهناك
+                  // يحكمه النوع.
                   label: congratulationsLabel,
                   onTap: onCongratulationsTap,
                 ),
@@ -570,17 +539,6 @@ class CardCaption extends StatelessWidget {
                   onTap: onShareTap,
                 ),
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _CaptionActionButton(
-                  icon: detailsExpanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  label: detailsExpanded ? 'إخفاء التفاصيل' : 'مزيد من التفاصيل',
-                  isOutline: true,
-                  onTap: onToggleDetails,
-                ),
-              ),
             ],
           ),
         ],
@@ -589,51 +547,50 @@ class CardCaption extends StatelessWidget {
   }
 }
 
+/// زرّ في صفّ لوح المعلومات: محدّد على السطح، أو مصمت بلون [fill] («التفاصيل»)
+/// ونصّه أبيض أو داكن حسب سطوع اللون — لون نوع فاتح (ذهبي) لا يحمل نصاً أبيض.
 class _CaptionActionButton extends StatelessWidget {
   const _CaptionActionButton({
     required this.icon,
     required this.label,
     required this.onTap,
     this.highlight = false,
-    this.isOutline = false,
+    this.fill,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
   final bool highlight;
-  final bool isOutline;
+  final Color? fill;
 
   @override
   Widget build(BuildContext context) {
+    final fill = this.fill;
+    final foreground = fill != null
+        ? (ThemeData.estimateBrightnessForColor(fill) == Brightness.dark
+            ? Colors.white
+            : Colors.black87)
+        : (highlight ? context.c.sky : context.c.ink);
+
     return Material(
-      color: isOutline
-          ? Colors.white.withValues(alpha: 0.12)
-          : (highlight ? context.c.sky.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.18)),
-      borderRadius: BorderRadius.circular(6),
+      color: fill ?? (highlight ? context.c.skyWash : Colors.transparent),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: highlight
-                  ? context.c.sky
-                  : (isOutline
-                      ? Colors.white.withValues(alpha: 0.35)
-                      : Colors.white.withValues(alpha: 0.22)),
+              color: fill ?? (highlight ? context.c.sky : context.c.line),
             ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                icon,
-                size: 13,
-                color: highlight ? context.c.sky : Colors.white,
-              ),
+              Icon(icon, size: 14, color: foreground),
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
@@ -643,7 +600,7 @@ class _CaptionActionButton extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: highlight ? context.c.sky : Colors.white,
+                    color: foreground,
                   ),
                 ),
               ),
@@ -654,156 +611,6 @@ class _CaptionActionButton extends StatelessWidget {
     );
   }
 }
-
-/// ورقة التفاصيل المفتوحة فوق صندوق الوسائط داخل الكرت نفسه مع تمرير مستقل.
-class _CardDetailsPanel extends StatelessWidget {
-  const _CardDetailsPanel({
-    required this.event,
-    required this.type,
-    required this.onClose,
-    this.onCongratulationsTap,
-    this.onRemindTap,
-  });
-
-  final Event event;
-  final OccasionType? type;
-  final VoidCallback onClose;
-  final VoidCallback? onCongratulationsTap;
-  final VoidCallback? onRemindTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final showDinnerTime = type?.showsField('dinner_time') ?? true;
-    final showYouthParty = type?.showsField('youth_party_date') ?? true;
-    final reactionKeys = type?.reactions ?? const <String>[];
-    final showViews = type?.showViewsCount ?? true;
-
-    return Container(
-      color: context.c.surface,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // رأس الورقة مع زر الإغلاق
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: context.c.line)),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  'تفاصيل المناسبة',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: context.c.ink,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 20),
-                  tooltip: 'إغلاق',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: onClose,
-                ),
-              ],
-            ),
-          ),
-          // جسم الورقة القابل للتمرير
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (event.artistName != null &&
-                      event.artistName!.trim().isNotEmpty)
-                    Padding(
-                      padding:
-                          const EdgeInsetsDirectional.only(start: 6, bottom: 8),
-                      child: Text(
-                        'يحيي الحفلة الفنان ${event.artistName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(fontSize: 12.5, color: context.c.inkFaint),
-                      ),
-                    ),
-                  _IconLine(
-                    icon: Icons.event_outlined,
-                    text: showDinnerTime && event.dinnerTime.isNotEmpty
-                        ? '${arabicEventDate(event.eventDate)}  •  ${event.dinnerTime}'
-                        : arabicEventDate(event.eventDate),
-                  ),
-                  if (showYouthParty && event.youthPartyDate != null)
-                    _IconLine(
-                      icon: Icons.nightlife_outlined,
-                      text: event.youthPartyDate!,
-                    ),
-                  _IconLine(
-                    icon: Icons.location_on_outlined,
-                    text: event.locationName,
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      ...reactionKeys.map((key) {
-                        final count = event.reactions[key] ?? 0;
-                        if (count == 0) return const SizedBox.shrink();
-                        final emoji = AppConfig.reactions[key] ?? key;
-                        return Padding(
-                          padding: const EdgeInsetsDirectional.only(end: 10),
-                          child: Text(
-                            '$emoji $count',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: context.c.inkSoft,
-                            ),
-                          ),
-                        );
-                      }),
-                      const Spacer(),
-                      if (showViews) ...[
-                        Icon(
-                          Icons.visibility_outlined,
-                          size: 15,
-                          color: context.c.inkFaint,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${event.viewsCount}',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            color: context.c.inkFaint,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  // `congratulationsCount == null` يعني أنّ النوع أخفى العدّاد،
-                  // فلا يُرسَم السطر أصلاً — النوع يقرّر، لا التخطيط.
-                  if (event.congratulationsCount != null) ...[
-                    const SizedBox(height: 10),
-                    _CongratulationsRow(
-                      event: event,
-                      onTap: onCongratulationsTap,
-                    ),
-                  ],
-                  if (event.followersCount != null) ...[
-                    const SizedBox(height: 10),
-                    _FollowersLine(event: event),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 
 /// شارة عدّاد/تاريخ
 class _DateChip extends StatelessWidget {
@@ -869,88 +676,6 @@ class _TypeBadge extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// سطر التبريكات في ورقة التفاصيل
-class _CongratulationsRow extends StatelessWidget {
-  const _CongratulationsRow({required this.event, required this.onTap});
-
-  final Event event;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final label = event.occasionType?.congratulationsLabel ?? 'تبريكات';
-    final latest = event.latestCongratulation;
-
-    final content = Row(
-      children: [
-        Icon(Icons.forum_outlined, size: 15, color: context.c.sky),
-        const SizedBox(width: 6),
-        Text(
-          '$label (${event.congratulationsCount})',
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.bold,
-            color: context.c.inkSoft,
-          ),
-        ),
-        if (latest != null) ...[
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              '${latest.senderName}: ${latest.message}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: context.c.inkFaint),
-            ),
-          ),
-        ],
-        if (onTap != null)
-          Icon(Icons.chevron_left, size: 16, color: context.c.inkFaint),
-      ],
-    );
-
-    if (onTap == null) return content;
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: content,
-      ),
-    );
-  }
-}
-
-/// سطر «ذكّرني» في ورقة التفاصيل
-/// عدّاد المتابعين في ورقة التفاصيل.
-///
-/// **بلا زرّ «ذكّرني» ثانٍ**: الزرّ صار في شريط التعريف مع بقية الأزرار، تماماً
-/// كما في الويب حيث يظهر مرّة واحدة. زرّان لنفس الفعل على كرت واحد فارقٌ عن
-/// الويب وارتباكٌ للقارئ معاً.
-///
-/// و`followersCount == null` يعني أنّ النوع أخفى العدّاد — فلا يُرسم شيء، لا
-/// صفر ولا شرطة (#20 خطوة ١٣).
-class _FollowersLine extends StatelessWidget {
-  const _FollowersLine({required this.event});
-
-  final Event event;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(Icons.people_outline, size: 15, color: context.c.inkFaint),
-        const SizedBox(width: 6),
-        Text(
-          'متابعون: ${event.followersCount}',
-          style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
-        ),
-      ],
     );
   }
 }
@@ -1215,10 +940,13 @@ class _LetterboxPatternPainter extends CustomPainter {
   }
 }
 
-class _IconLine extends StatelessWidget {
-  const _IconLine({required this.icon, required this.text});
+/// سطر معلومة واحد في لوح المعلومات: أيقونة بلون النوع ثم النصّ. سطر فارغ لا
+/// يُرسم إطلاقاً.
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({required this.icon, required this.color, required this.text});
 
   final IconData icon;
+  final Color color;
   final String text;
 
   @override
@@ -1226,22 +954,21 @@ class _IconLine extends StatelessWidget {
     if (text.trim().isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.only(bottom: 3),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 15, color: context.c.sky),
+          Icon(icon, size: 16, color: color),
           const SizedBox(width: 7),
           Expanded(
             child: Text(
               text,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: context.c.inkSoft,
-                height: 1.4,
-              ),
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: context.c.inkSoft,
+              ),
             ),
           ),
         ],

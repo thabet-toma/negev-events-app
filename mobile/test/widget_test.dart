@@ -443,42 +443,11 @@ void main() {
   });
 
   group('عدّادات التبريكات والمتابعين — الغياب لا يصير صفراً (سطح القراءة #20 خطوة ١٣)', () {
-    testWidgets('النموذج والكرت: الغياب لا يُقرأ ولا يُرسم كصفر، والصفر الحقيقي يُقرأ ويُرسم', (tester) async {
+    testWidgets('النموذج: الغياب لا يُقرأ كصفر، والصفر الحقيقي يُقرأ صفراً — والكرت لا يرسم أيّاً منهما', (tester) async {
       final missing = Event.fromJson({'id': 1, 'groom_name': 'م', 'town': 'رهط'});
       // النموذج: مفتاح غائب من الـJSON يُقرأ null، لا صفراً.
       expect(missing.congratulationsCount, isNull);
       expect(missing.followersCount, isNull);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Directionality(
-            textDirection: TextDirection.rtl,
-            child: Scaffold(
-              body: EventCard(
-                // مفتاح لكل حالة: بلا مفاتيح تُعاد الحالة نفسها بين الضخّتين
-                // (نفس النوع ونفس الموضع)، فتبقى ورقة التفاصيل مفتوحة من
-                // الشطر الأوّل ويقرأ الزرّ «إخفاء التفاصيل».
-                key: const ValueKey('missing'),
-                event: missing,
-                onTap: () {},
-                onCongratulationsTap: () {},
-                onRemindTap: () {},
-              ),
-            ),
-          ),
-        ),
-      );
-
-      // العدّادان صارا داخل ورقة التفاصيل (المواصفة #98): شريط التعريف يحمل
-      // التسمية وحدها كما في الويب. فتُفتح الورقة أوّلاً، وإلا كان توكيد
-      // الغياب أدناه ناجحاً لمجرّد أنّ الورقة مطويّة — لا لأنّ العدّاد غائب.
-      await tester.tap(find.text('مزيد من التفاصيل'));
-      await tester.pumpAndSettle();
-
-      // النوع مطفئ العدّادين (بلا congratulations_count ولا followers_count
-      // في الـJSON إطلاقاً) — لا يظهر أي عدّاد، لا صفراً ولا شرطة.
-      expect(find.textContaining('تبريكات ('), findsNothing);
-      expect(find.textContaining('متابعون:'), findsNothing);
 
       final zeroed = Event.fromJson({
         'id': 2,
@@ -491,13 +460,15 @@ void main() {
       expect(zeroed.congratulationsCount, 0);
       expect(zeroed.followersCount, 0);
 
+      // الكرت بلا ورقة تفاصيل داخله: العدّادان في صفحة المناسبة وحدها (شاشة
+      // `EventDetailsScreen`، ويحرسها اختبار «متابعون» هناك)، فلا يُرسم على
+      // الكرت عدّاد لأيّ من الحالتين — لا صفر ولا رقم.
       await tester.pumpWidget(
         MaterialApp(
           home: Directionality(
             textDirection: TextDirection.rtl,
             child: Scaffold(
               body: EventCard(
-                key: const ValueKey('zeroed'),
                 event: zeroed,
                 onTap: () {},
                 onCongratulationsTap: () {},
@@ -507,13 +478,8 @@ void main() {
           ),
         ),
       );
-
-      await tester.tap(find.text('مزيد من التفاصيل'));
-      await tester.pumpAndSettle();
-
-      // وفي ورقة التفاصيل: يُرسم كصفر فعلاً.
-      expect(find.text('تبريكات (0)'), findsOneWidget);
-      expect(find.text('متابعون: 0'), findsOneWidget);
+      expect(find.textContaining('تبريكات ('), findsNothing);
+      expect(find.textContaining('متابعون'), findsNothing);
     });
   });
 
@@ -1322,7 +1288,7 @@ void main() {
     });
 
     testWidgets(
-      'سطر الفنان يظهر داخل «مزيد من التفاصيل» فقط حين يُملأ الحقل، ويغيب تماماً من الشجرة حين يفرغ',
+      'الكرت لا يحمل سطر الفنان — مكانه صفحة المناسبة',
       (tester) async {
         final withArtist = Event.fromJson({
           'id': 1,
@@ -1336,34 +1302,10 @@ void main() {
           MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(key: ValueKey(withArtist.id), event: withArtist, onTap: () {})),
+              child: Scaffold(body: EventCard(event: withArtist, onTap: () {})),
             ),
           ),
         );
-        // سطر الفنان صار خلف «مزيد من التفاصيل» (#85 قصة 48) — يُفتح الزرّ أوّلاً.
-        await tester.tap(find.text('مزيد من التفاصيل'));
-        await tester.pump();
-        expect(find.textContaining('يحيي الحفلة الفنان راشد الماجد'), findsOneWidget);
-
-        final withoutArtist = Event.fromJson({
-          'id': 2,
-          'groom_name': 'أحمد',
-          'family_clan': 'آل فلان',
-          'town': 'رهط',
-        });
-
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Directionality(
-              textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(key: ValueKey(withoutArtist.id), event: withoutArtist, onTap: () {})),
-            ),
-          ),
-        );
-        // نفتح الطيّ هنا أيضاً — الغياب المُثبَت هو غياب عن الشجرة كاملةً، لا
-        // مجرّد اختباء خلف زرّ لم يُضغَط بعد.
-        await tester.tap(find.text('مزيد من التفاصيل'));
-        await tester.pump();
         expect(find.textContaining('يحيي الحفلة الفنان'), findsNothing);
       },
     );
@@ -1595,67 +1537,69 @@ void main() {
       },
     );
 
+    // سهرة الشباب والفنان وعدّاد المتابعين خرجت من الكرت مع ورقة «مزيد من
+    // التفاصيل» (طلب المالك 2026-09-30): «التفاصيل» يفتح هذه الصفحة، وهنا
+    // يُحرس الحضور والغياب. حضور سهرة الشباب يحرسه اختبار الترتيب أدناه.
     testWidgets(
-      'سطر سهرة الشباب على الكرت: يظهر حين تُملأ القيمة، ويغيب تماماً من شجرة الودجت حين تفرغ',
+      'صفحة المناسبة: سطر سهرة الشباب يغيب تماماً حين تفرغ القيمة',
       (tester) async {
-        final typeShowingField = occasionTypeJson(
-          tone: 'festive',
-          fields: const [
-            {
-              'field_key': 'youth_party_date',
-              'label': 'سهرة الشباب',
-              'is_visible': true,
-              'is_required': false,
-              'position': 1,
-            },
-          ],
-        );
-
-        final withParty = Event.fromJson({
-          'id': 41,
-          'groom_name': 'محمد',
-          'family_clan': 'آل فلان',
-          'town': 'رهط',
-          'youth_party_date': '2026-09-20',
-          'occasion_type': typeShowingField,
-        });
-
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Directionality(
-              textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(key: ValueKey(withParty.id), event: withParty, onTap: () {})),
-            ),
-          ),
-        );
-        // سطر سهرة الشباب صار خلف «مزيد من التفاصيل» (#85 قصة 48) — يُفتح أولاً.
-        await tester.tap(find.text('مزيد من التفاصيل'));
-        await tester.pump();
-        expect(find.text('2026-09-20'), findsOneWidget);
-        expect(find.byIcon(Icons.nightlife_outlined), findsOneWidget);
-
-        final withoutParty = Event.fromJson({
+        await pumpDetails(tester, {
           'id': 42,
           'groom_name': 'محمد',
           'family_clan': 'آل فلان',
           'town': 'رهط',
-          'occasion_type': typeShowingField,
-        });
-
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Directionality(
-              textDirection: TextDirection.rtl,
-              child: Scaffold(body: EventCard(key: ValueKey(withoutParty.id), event: withoutParty, onTap: () {})),
-            ),
+          'occasion_type': occasionTypeJson(
+            tone: 'festive',
+            fields: const [
+              {
+                'field_key': 'youth_party_date',
+                'label': 'سهرة الشباب',
+                'is_visible': true,
+                'is_required': false,
+                'position': 1,
+              },
+            ],
           ),
-        );
-        // نفتح الطيّ هنا أيضاً — الغياب المُثبَت هو غياب عن الشجرة كاملةً، لا
-        // مجرّد اختباء خلف زرّ لم يُضغَط بعد.
-        await tester.tap(find.text('مزيد من التفاصيل'));
-        await tester.pump();
-        expect(find.text('2026-09-20'), findsNothing);
+        });
         expect(find.byIcon(Icons.nightlife_outlined), findsNothing);
+        expect(find.text('سهرة الشباب'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'صفحة المناسبة: سطر الفنان يظهر حين يُملأ الحقل',
+      (tester) async {
+        await pumpDetails(tester, {
+          'id': 44,
+          'groom_name': 'أحمد',
+          'town': 'رهط',
+          'artist_name': 'راشد الماجد',
+        });
+        expect(find.textContaining('يحيي الحفلة الفنان راشد الماجد'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'صفحة المناسبة: سطر الفنان يغيب تماماً حين يفرغ الحقل',
+      (tester) async {
+        await pumpDetails(tester, {'id': 45, 'groom_name': 'أحمد', 'town': 'رهط'});
+        expect(find.textContaining('يحيي الحفلة الفنان'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'صفحة المناسبة: صفر المتابعين الحقيقي يُرسم صفراً',
+      (tester) async {
+        await pumpDetails(tester, {'id': 46, 'groom_name': 'م', 'town': 'رهط', 'followers_count': 0});
+        expect(find.text('متابعون: 0'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'صفحة المناسبة: غياب عدّاد المتابعين (النوع مطفئه) لا يُرسم صفراً',
+      (tester) async {
+        await pumpDetails(tester, {'id': 47, 'groom_name': 'م', 'town': 'رهط'});
+        expect(find.textContaining('متابعون'), findsNothing);
       },
     );
 

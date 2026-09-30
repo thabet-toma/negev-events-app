@@ -27,8 +27,62 @@ import 'story_viewer_screen.dart';
 /// لازم لأنّ الكروم غير قابل للتمرير وتحته `Expanded`.
 const double _announcementsMaxHeight = 132;
 
-/// الشاشة الرئيسية: القصص + بحث + فلترة بلدة ونوع + إعلانات + قائمة المناسبات
-/// المرقّمة.
+/// فلتر التاريخ في التغذية: يوم أو أيام متتالية تُرسَل `date_from`/`date_to`.
+/// الأسبوع هنا من الأحد إلى السبت، و«الخميس – السبت» ليالي الأعراس القادمة —
+/// من اليوم نفسه إن كنّا فيها. نفس الحساب في `feedDateRange` بـ`web/app.js`.
+class FeedDateFilter {
+  const FeedDateFilter._(this.key, this.label, this.from, this.to);
+
+  /// `today` · `tomorrow` · `week` · `weekend` · `day` (يوم مختار).
+  final String key;
+  final String label;
+  final DateTime from;
+  final DateTime to;
+
+  static const presets = ['today', 'tomorrow', 'week', 'weekend'];
+
+  static const _labels = {
+    'today': 'اليوم',
+    'tomorrow': 'غداً',
+    'week': 'هذا الأسبوع',
+    'weekend': 'الخميس – السبت',
+  };
+
+  static String presetLabel(String key) => _labels[key]!;
+
+  /// [now] يُمرَّر لا يُقرأ هنا، كي يُختبر الحساب على أي يوم من الأسبوع.
+  factory FeedDateFilter.preset(String key, DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    // الأحد ٠ … السبت ٦ (‏`DateTime.weekday`: الإثنين ١ … الأحد ٧).
+    final dayOfWeek = today.weekday % 7;
+    DateTime plus(int days) => DateTime(today.year, today.month, today.day + days);
+    switch (key) {
+      case 'tomorrow':
+        return FeedDateFilter._(key, _labels[key]!, plus(1), plus(1));
+      case 'week':
+        return FeedDateFilter._(key, _labels[key]!, today, plus(6 - dayOfWeek));
+      case 'weekend':
+        final from = dayOfWeek >= 4 ? today : plus(4 - dayOfWeek);
+        return FeedDateFilter._(key, _labels[key]!, from, plus(6 - dayOfWeek));
+      default:
+        return FeedDateFilter._('today', _labels['today']!, today, today);
+    }
+  }
+
+  factory FeedDateFilter.day(DateTime day) {
+    final only = DateTime(day.year, day.month, day.day);
+    return FeedDateFilter._('day', arabicEventDate(_iso(only)), only, only);
+  }
+
+  String get fromParam => _iso(from);
+  String get toParam => _iso(to);
+
+  static String _iso(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+/// الشاشة الرئيسية: القصص + بحث + فلترة بلدة ونوع وتاريخ + إعلانات + قائمة
+/// المناسبات المرقّمة.
 ///
 /// الكرت الظاهر يشغّل صوته الفعلي تلقائياً (`effectiveEventAudioUrl`)، ويسكت
 /// حين يغادر الكرت، أو يُختار تبويب آخر (`isActive`)، أو تُدفع شاشة فوقه.
@@ -54,6 +108,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   List<int> _selectedOccasionTypeIds = const [];
   String _search = '';
   bool _archive = false;
+
+  /// `null` = كل التواريخ.
+  FeedDateFilter? _dateFilter;
   /// إظهار/إخفاء الكروم العلوي (الفلاتر وشريط القصص والبحث) — مخفي افتراضياً
   /// لعرض الكروت ملء الشاشة بتمرير عمودي، ويظهر بكبسة زر طافٍ.
   bool _showTopChrome = false;
@@ -234,6 +291,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            dateFrom: _dateFilter?.fromParam,
+            dateTo: _dateFilter?.toParam,
             page: 1,
           );
       if (!mounted || generation != _requestGeneration) return;
@@ -278,6 +337,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            dateFrom: _dateFilter?.fromParam,
+            dateTo: _dateFilter?.toParam,
             page: 1,
           );
       if (!mounted || generation != _requestGeneration) return;
@@ -309,6 +370,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            dateFrom: _dateFilter?.fromParam,
+            dateTo: _dateFilter?.toParam,
             page: pagination.page + 1,
           );
       // فلتر تغيّر أثناء الانتظار (فبدأ _loadFirstPage جيلاً جديداً) ⇒ هذه
@@ -374,10 +437,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     return '${names.first} +${total - 1}';
   }
 
+  String get _dateChipLabel => _dateFilter?.label ?? 'كل التواريخ';
+
   bool get _hasActiveFilters =>
       _selectedTowns.isNotEmpty ||
       _selectedVillageIds.isNotEmpty ||
       _selectedOccasionTypeIds.isNotEmpty ||
+      _dateFilter != null ||
       _search.isNotEmpty ||
       _archive;
 
@@ -385,11 +451,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (_search.isNotEmpty) return 'بحث: $_search';
     final totalPlaces = _selectedTowns.length + _selectedVillageIds.length;
     final totalTypes = _selectedOccasionTypeIds.length;
-    if (totalPlaces > 0 && totalTypes > 0) {
-      return '$_placeChipLabel • $_kindChipLabel';
-    }
-    if (totalPlaces > 0) return _placeChipLabel;
-    if (totalTypes > 0) return _kindChipLabel;
+    final parts = [
+      if (totalPlaces > 0) _placeChipLabel,
+      if (totalTypes > 0) _kindChipLabel,
+      if (_dateFilter != null) _dateFilter!.label,
+    ];
+    if (parts.isNotEmpty) return parts.join(' • ');
     if (_archive) return 'المناسبات المنتهية';
     return 'الفلاتر والبحث';
   }
@@ -457,11 +524,97 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _loadFirstPage();
   }
 
+  /// ورقة التاريخ: كل التواريخ، الأيام الجاهزة، أو يوم من منتقي التاريخ.
+  Future<void> _openDateFilter() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      // ستّة بنود وعنوان تتجاوز سقف ٩/١٦ الافتراضي على هاتف قصير؛ الورقة
+      // بارتفاع محتواها، وتُمرَّر إن لم تتّسع الشاشة.
+      isScrollControlled: true,
+      backgroundColor: context.c.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) {
+        Widget option(String key, String label, IconData icon) {
+          final selected = key == 'all'
+              ? _dateFilter == null
+              : _dateFilter?.key == key;
+          return ListTile(
+            leading: Icon(icon, color: selected ? sheetContext.c.sky : sheetContext.c.inkFaint),
+            title: Text(
+              label,
+              style: TextStyle(
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                color: sheetContext.c.ink,
+              ),
+            ),
+            trailing: selected ? Icon(Icons.check, color: sheetContext.c.sky) : null,
+            onTap: () => Navigator.of(sheetContext).pop(key),
+          );
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 6),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      'تاريخ المناسبة',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: sheetContext.c.ink,
+                      ),
+                    ),
+                  ),
+                ),
+                option('all', 'كل التواريخ', Icons.all_inclusive),
+                for (final key in FeedDateFilter.presets)
+                  option(key, FeedDateFilter.presetLabel(key), Icons.event_outlined),
+                option(
+                  'day',
+                  _dateFilter?.key == 'day' ? _dateFilter!.label : 'اختر يوماً…',
+                  Icons.calendar_month_outlined,
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (choice == null || !mounted) return;
+
+    FeedDateFilter? next;
+    if (choice == 'day') {
+      final now = DateTime.now();
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: _dateFilter?.key == 'day' ? _dateFilter!.from : now,
+        firstDate: DateTime(2020),
+        lastDate: DateTime(now.year + 2, 12, 31),
+        helpText: 'اختر يوم المناسبة',
+      );
+      if (picked == null || !mounted) return;
+      next = FeedDateFilter.day(picked);
+    } else if (choice != 'all') {
+      next = FeedDateFilter.preset(choice, DateTime.now());
+    }
+    setState(() => _dateFilter = next);
+    _loadFirstPage();
+  }
+
   void _clearFilters() {
     setState(() {
       _selectedTowns = const [];
       _selectedVillageIds = const [];
       _selectedOccasionTypeIds = const [];
+      _dateFilter = null;
     });
     _loadFirstPage();
   }
@@ -475,17 +628,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => EventDetailsScreen(eventId: eventId)),
     );
-    // إعادة تحميل الصفحة الأولى تمحو كل ما جمعه المستخدم بـ«عرض المزيد»؛ لا
-    // نفعلها إلا وهو ما يزال على الصفحة الأولى أصلاً، فلا شيء يُفقَد. غير ذلك
-    // تبقى القائمة كما هي — العدّادات قد تتأخّر، والسحب للتحديث متاح.
-    if ((_pagination?.page ?? 1) <= 1) _loadFirstPage();
+    // تحديث في المكان لا `_loadFirstPage`: تلك تقفز إلى أوّل كرت، فمن نزل في
+    // التغذية وفتح مناسبة كان يعود إلى رأس القائمة لا إلى حيث وصل.
+    _refreshInPlace();
   }
 
   Future<void> _openCongratulations(Event event) async {
     await showCongratulationsListSheet(
       context,
       eventId: event.id,
-      onChanged: _loadFirstPage,
+      onChanged: _refreshInPlace,
     );
   }
 
@@ -868,8 +1020,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                       _FilterChipsRow(
                         placeLabel: _placeChipLabel,
                         kindLabel: _kindChipLabel,
+                        dateLabel: _dateChipLabel,
                         onPlaceTap: _openPlaceFilter,
                         onKindTap: _openKindFilter,
+                        onDateTap: _openDateFilter,
                         onClearTap: _clearFilters,
                       ),
                       Padding(
@@ -977,9 +1131,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                 Text(
                   _search.isNotEmpty
                       ? 'لا توجد مناسبات تطابق بحثك'
-                      : _archive
-                          ? 'لا توجد مناسبات منتهية في $_placeDescriptionForEmptyState'
-                          : 'لا توجد مناسبات معتمدة في $_placeDescriptionForEmptyState حالياً',
+                      : _dateFilter != null
+                          ? 'لا توجد مناسبات في $_placeDescriptionForEmptyState — ${_dateFilter!.label}'
+                          : _archive
+                              ? 'لا توجد مناسبات منتهية في $_placeDescriptionForEmptyState'
+                              : 'لا توجد مناسبات معتمدة في $_placeDescriptionForEmptyState حالياً',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: context.c.inkFaint, fontSize: 15),
                 ),
@@ -1064,29 +1220,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                 ],
               ),
             ),
-          )
-        else if (hasMore)
-          Positioned(
-            bottom: 16,
-            child: ElevatedButton(
-              onPressed: _loadMore,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: context.c.surface,
-                foregroundColor: context.c.ink,
-                elevation: 4,
-                shape: const StadiumBorder(),
-                side: BorderSide(color: context.c.line),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              ),
-              child: const Text(
-                'عرض المزيد',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-            ),
           ),
+        // لا زرّ «عرض المزيد» عائم: كان يغطّي صفّ أزرار الكرت نفسه، والصفحة
+        // التالية تُجلب تلقائياً من `onPageChanged` قبل آخر كرتين أصلاً.
       ],
     );
   }
@@ -1125,7 +1261,7 @@ class _SearchBar extends StatelessWidget {
   }
 }
 
-/// صفّ رقاقتَي المكان والنوع + «مسح الفلاتر» — بدل شريطين زاحفين كانا يأكلان
+/// صفّ رقاقات المكان والنوع والتاريخ + «مسح الفلاتر» — بدل شريطين زاحفين كانا يأكلان
 /// أعلى الشاشة (#85 خطوة 40-46). ارتفاع ثابت ٥٢ بكسل (٨ حشو + ٣٦ رقاقة + ٨
 /// حشو) — نفس الرقم الذي تنصّ عليه المواصفة لِما تستردّه هذه الدفعة من أعلى
 /// كل شاشة. «مسح الفلاتر» ظاهرة دائماً لا فقط عند وجود اختيار (قصة 45): تغذية
@@ -1134,15 +1270,19 @@ class _FilterChipsRow extends StatelessWidget {
   const _FilterChipsRow({
     required this.placeLabel,
     required this.kindLabel,
+    required this.dateLabel,
     required this.onPlaceTap,
     required this.onKindTap,
+    required this.onDateTap,
     required this.onClearTap,
   });
 
   final String placeLabel;
   final String kindLabel;
+  final String dateLabel;
   final VoidCallback onPlaceTap;
   final VoidCallback onKindTap;
+  final VoidCallback onDateTap;
   final VoidCallback onClearTap;
 
   @override
@@ -1158,6 +1298,8 @@ class _FilterChipsRow extends StatelessWidget {
               _FilterChip(icon: Icons.location_on_outlined, label: placeLabel, onTap: onPlaceTap),
               const SizedBox(width: 8),
               _FilterChip(icon: Icons.category_outlined, label: kindLabel, onTap: onKindTap),
+              const SizedBox(width: 8),
+              _FilterChip(icon: Icons.event_outlined, label: dateLabel, onTap: onDateTap),
               const SizedBox(width: 8),
               _FilterChip(
                 icon: Icons.filter_alt_off_outlined,

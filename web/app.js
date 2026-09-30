@@ -72,6 +72,9 @@ let showArchive = false;
 let selectedTowns = []; // أسماء بلدات، من TOWNS على الخادم
 let selectedVillageIds = []; // معرّفات قرى رقمية
 let selectedOccasionTypeIds = []; // معرّفات أنواع مناسبات رقمية
+// فلتر التاريخ {key, label, from, to} — `null` = كل التواريخ. لا يُحفظ بين
+// الزيارات كالمكان والنوع: «اليوم» محفوظاً يصير أمس في الزيارة التالية.
+let selectedDateFilter = null;
 let filterSheetActiveKey = null; // 'place' أو 'kind' — أيّ ورقة فلترة مفتوحة الآن (ورقة واحدة في كل لحظة)
 let filterSheetDraft = []; // رموز {kind, id} داخل الورقة المفتوحة فقط — لا تُطبَّق إلا بزرّ «تطبيق»
 let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة الأولى فقط (#85 خطوة 54)
@@ -424,6 +427,10 @@ function initSocket() {
     socket = io(API_BASE || undefined);
     socket.on('new_event_created', (data) => {
       showToast(`🎉 تم نشر مناسبة جديدة في ${data.town}: ${data.title}`);
+      // `fetchEvents` يعيد رسم التغذية من أوّلها — من نزل فيها (أو غادر تبويبها
+      // وموضعه محفوظ) لا يُنتزع من مكانه، ويرى الجديد بزرّ التحديث.
+      const position = feedScrollPosition();
+      if (position.feed > 0 || position.page > 0 || feedScrollMemory) return;
       fetchEvents();
     });
 
@@ -1550,6 +1557,18 @@ function renderEventSkeletons(container, count = 3) {
 
 let isFetchingEvents = false;
 
+/*
+ * موضع التغذية لحظة مغادرة تبويبها — `display:none` على `#tabHome` يمحو
+ * `scrollTop` حاوية القفز (الموبايل)، و`switchTab` يمرّر النافذة إلى أعلاها
+ * (الديسكتوب). بلا هذا يعود من فتح تبويباً آخر إلى أوّل كرت لا إلى حيث وصل.
+ */
+let feedScrollMemory = null;
+
+function feedScrollPosition() {
+  const feed = document.getElementById('eventsContainer');
+  return { feed: feed ? feed.scrollTop : 0, page: window.scrollY || 0 };
+}
+
 function initFeedScroller() {
   const container = document.getElementById('eventsContainer');
   if (container) {
@@ -1643,12 +1662,10 @@ async function fetchEvents(options = {}) {
   if (append && isFetchingEvents) return;
   isFetchingEvents = true;
 
-  const loadMoreBtn = document.getElementById('loadMoreBtn');
   const loadingPill = document.getElementById('feedLoadingSpinner');
   const loadWrapper = document.getElementById('loadMoreWrapper');
 
   if (append) {
-    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
     if (loadingPill) loadingPill.style.display = 'inline-flex';
     if (loadWrapper) loadWrapper.style.display = 'block';
   } else {
@@ -1666,6 +1683,10 @@ async function fetchEvents(options = {}) {
     if (selectedOccasionTypeIds.length) params.set('occasion_type_id', selectedOccasionTypeIds.join(','));
     if (searchQuery) params.set('search', searchQuery);
     if (showArchive) params.set('archive', '1');
+    if (selectedDateFilter) {
+      params.set('date_from', selectedDateFilter.from);
+      params.set('date_to', selectedDateFilter.to);
+    }
     params.set('page', currentPage);
     params.set('limit', EVENTS_PAGE_SIZE);
 
@@ -1677,7 +1698,7 @@ async function fetchEvents(options = {}) {
       currentPagination = data.pagination || null;
       renderEvents(allEvents);
       renderAnnouncements(data.announcements);
-      renderLoadMoreButton();
+      renderFeedLoadingPill();
       updateFeedDimensions();
       // فحص أي رابط عميق بعد اكتمال جلب التغذية (FIX 5)
       if (!append) {
@@ -1694,11 +1715,11 @@ async function fetchEvents(options = {}) {
   } finally {
     isFetchingEvents = false;
     if (loadingPill) loadingPill.style.display = 'none';
-    renderLoadMoreButton();
+    renderFeedLoadingPill();
   }
 }
 
-/** زرّ «عرض المزيد» — يحافظ على الفلاتر النشِطة (يستخدم fetchEvents نفسها بصفحة تالية). */
+/** الصفحة التالية من `handleFeedScroll` قرب آخر التغذية — يحافظ على الفلاتر النشِطة (يستخدم fetchEvents نفسها بصفحة تالية). */
 function loadMoreEvents() {
   if (isFetchingEvents) return;
   if (!currentPagination || currentPagination.page >= currentPagination.totalPages) return;
@@ -1706,27 +1727,17 @@ function loadMoreEvents() {
   fetchEvents({ append: true });
 }
 
-function renderLoadMoreButton() {
+/*
+ * حبّة «جاري تحميل المزيد» وحدها — لا زرّ «عرض المزيد»: كان عائماً فوق صفّ
+ * أزرار الكرت نفسه، والصفحة التالية تُجلب تلقائياً من `handleFeedScroll`.
+ */
+function renderFeedLoadingPill() {
   const wrapper = document.getElementById('loadMoreWrapper');
-  const btn = document.getElementById('loadMoreBtn');
   const loadingPill = document.getElementById('feedLoadingSpinner');
   if (!wrapper) return;
   const isLoading = isFetchingEvents;
-  const hasMore = !!(currentPagination && currentPagination.page < currentPagination.totalPages);
-
-  if (isLoading) {
-    wrapper.style.display = 'block';
-    if (btn) btn.style.display = 'none';
-    if (loadingPill) loadingPill.style.display = 'inline-flex';
-  } else if (hasMore) {
-    wrapper.style.display = 'block';
-    if (btn) btn.style.display = 'inline-block';
-    if (loadingPill) loadingPill.style.display = 'none';
-  } else {
-    wrapper.style.display = 'none';
-    if (btn) btn.style.display = 'none';
-    if (loadingPill) loadingPill.style.display = 'none';
-  }
+  wrapper.style.display = isLoading ? 'block' : 'none';
+  if (loadingPill) loadingPill.style.display = isLoading ? 'inline-flex' : 'none';
 }
 
 /** المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط عبر ?archive=1 (#20 step 10). */
@@ -1808,6 +1819,51 @@ function eventPlaceName(evt) {
     if (evt.village_id == null && evt.requested_village_name) return evt.requested_village_name;
   }
   return evt.town;
+}
+
+/** أسماء أصحاب المناسبة، و`groom_name` للصفوف القديمة بلا `honorees`. */
+function eventHonoreeNames(evt) {
+  const names = (evt.honorees || []).map(h => String(h.name || '').trim()).filter(Boolean);
+  if (!names.length && evt.groom_name && String(evt.groom_name).trim()) names.push(String(evt.groom_name).trim());
+  return names;
+}
+
+/*
+ * عنوان الكرت: النوع واسم صاحب المناسبة («عرس معاذ النباري») دائماً، لا
+ * `title` الحرّ — ذاك قد يحمل اسم بلدة وحدها («اللد»). الأسماء موصولة بـ« و »
+ * كما يصلها `buildDefaultTitle` على الخادم، ونفس `cardHeadline` في
+ * `mobile/lib/models/event.dart`. بلا اسم إطلاقاً يعود إلى العنوان الحرّ.
+ */
+function eventCardHeadline(evt) {
+  const names = eventHonoreeNames(evt);
+  if (!names.length) return evt.title || (evt.occasion_type && evt.occasion_type.name) || '';
+  const typeName = evt.occasion_type && evt.occasion_type.name ? evt.occasion_type.name : '';
+  const joined = names.join(' و ');
+  return typeName ? `${typeName} ${joined}` : joined;
+}
+
+/**
+ * العنوان الحرّ سطراً صغيراً تحت العنوان — فقط حين يضيف شيئاً: لا حين يذكر
+ * صاحب المناسبة باسمه الأوّل (العنوان الافتراضي والمستورَد يحملانه، والمستورَد
+ * كثيراً بلا اسم الأب: «زفاف العريس سلمان أبو عصا») ولا حين يكون اسم البلدة
+ * أو القرية، وهي في سطر المكان أصلاً. `null` يعني لا سطر.
+ */
+function eventCardSubtitle(evt) {
+  const custom = String(evt.title || '').trim();
+  if (!custom || custom === eventCardHeadline(evt) || custom === evt.town || custom === eventPlaceName(evt)) return null;
+  const names = eventHonoreeNames(evt);
+  if (names.length && custom.includes(names[0].split(' ')[0])) return null;
+  return custom;
+}
+
+/** لون نصّ مقروء فوق لون النوع المصمت — أبيض على الداكن، داكن على الفاتح (الذهبي). */
+function readableInkOn(hexColor) {
+  const hex = String(hexColor || '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(hex)) return '#1F2937';
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminance > 0.4 ? '#1F2937' : '#FFFFFF';
 }
 
 const REACTION_EMOJI = { coffee: '☕', horse: '🐎', fireworks: '🎆', rose: '🌹', hand: '🤝' };
@@ -1932,7 +1988,7 @@ function renderSingleEventCardHtml(evt) {
   const toneColor = evt.occasion_type && evt.occasion_type.color
     ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
     : null;
-  const toneStyle = toneColor ? ` style="--tone:${toneColor}"` : '';
+  const toneStyle = toneColor ? ` style="--tone:${toneColor};--tone-ink:${readableInkOn(toneColor)}"` : '';
   const bezelSvg = getBezelOrnamentSvg(toneColor);
   const bezelStyle = ` style="background-image:url(&quot;${bezelSvg}&quot;)"`;
   const hasShot = !!evt.poster_url;
@@ -1943,14 +1999,20 @@ function renderSingleEventCardHtml(evt) {
 
   const countdownChipHtml = isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`;
 
-  const clanTownParts = [evt.family_clan, eventPlaceName(evt)].filter(Boolean).map(escapeHtml);
-  const clanLineHtml = clanTownParts.length
-    ? `<div class="card-clan-line card-clamp-1-line">${clanTownParts.join(' — ')}</div>` : '';
-
-  // التاريخ والمكان يظهران في شريط التعريف لكل الأنواع دون استثناء؛ قصة 15 تقتضي قراءتهما مباشرة دون الحاجة لفتح التفاصيل.
-  const dateVenueParts = [formattedDate, evt.location_name].filter(Boolean).map(escapeHtml);
-  const dateVenueLineHtml = dateVenueParts.length
-    ? `<div class="card-date-line card-clamp-1-line">${dateVenueParts.join(' — ')}</div>` : '';
+  // سطر لكل معلومة بأيقونتها — لا سطر واحد تُحشر فيه كلها بفواصل (طلب المالك
+  // 2026-09-30). التاريخ والمكان لكل الأنواع دون استثناء؛ قصة 15 تقتضي
+  // قراءتهما مباشرة دون الحاجة لفتح التفاصيل.
+  const infoLine = (className, icon, text) => text
+    ? `<div class="card-info-line ${className}"><i class="${icon}" aria-hidden="true"></i><span class="card-clamp-1-line">${escapeHtml(text)}</span></div>` : '';
+  const placeText = [eventPlaceName(evt), evt.location_name].filter(Boolean).join(' — ');
+  const infoLinesHtml = [
+    infoLine('card-date-line', 'fa-regular fa-calendar', formattedDate),
+    typeShowsField(evt, 'dinner_time') ? infoLine('card-time-line', 'fa-regular fa-clock', evt.dinner_time) : '',
+    infoLine('card-place-line', 'fa-solid fa-location-dot', placeText),
+    infoLine('card-clan-line', 'fa-solid fa-people-group', evt.family_clan),
+  ].join('');
+  const subtitle = eventCardSubtitle(evt);
+  const subtitleHtml = subtitle ? `<div class="card-subtitle card-clamp-1-line">${escapeHtml(subtitle)}</div>` : '';
 
   const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
     ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
@@ -1961,19 +2023,19 @@ function renderSingleEventCardHtml(evt) {
         <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
         ${countdownChipHtml}
       </div>
-      <h2 class="event-main-title card-clamp-1-line">${escapeHtml(evt.title)}</h2>
-      ${clanLineHtml}
-      ${dateVenueLineHtml}
+      <h2 class="event-main-title card-clamp-2-line">${escapeHtml(eventCardHeadline(evt))}</h2>
+      ${subtitleHtml}
+      <div class="card-info-lines">${infoLinesHtml}</div>
       <div class="card-caption-actions">
+        <button type="button" class="card-more-details-btn card-action-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
+          <i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>
+        </button>
         <button type="button" class="chat-trigger-btn card-action-btn" onclick="openChatModal(${evt.id})">
           <i class="fa-regular fa-comments"></i> <span>${escapeHtml(congratulationsLabel(evt))}</span>
         </button>
         ${renderReminderButtonHtml(evt)}
         <button type="button" class="share-event-btn card-action-btn" onclick="shareEventById(${evt.id})">
           <i class="fa-solid fa-share-nodes"></i> <span>${escapeHtml(shareButtonLabel(evt))}</span>
-        </button>
-        <button type="button" class="card-more-details-btn card-action-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
-          <i class="fa-solid fa-chevron-down"></i> <span>مزيد من التفاصيل</span>
         </button>
       </div>
     </div>`;
@@ -2057,7 +2119,9 @@ function renderEvents(events) {
       <div class="empty-state">
         <i class="fa-solid fa-calendar-xmark"></i>
         <h3>لا توجد مناسبات مسجلة</h3>
-        <p>كن أول من يعلن عن مناسبة في ${selectedPlacesHtml()}</p>
+        <p>${selectedDateFilter
+          ? `لا مناسبات في ${selectedPlacesHtml()} — ${escapeHtml(selectedDateFilter.label)}`
+          : `كن أول من يعلن عن مناسبة في ${selectedPlacesHtml()}`}</p>
       </div>
     `;
     updateFeedDimensions();
@@ -2140,8 +2204,8 @@ function toggleCardDetails(eventId, btn) {
   if (toggleBtn) {
     toggleBtn.setAttribute('aria-expanded', String(willShow));
     toggleBtn.innerHTML = willShow
-      ? '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل'
-      : '<i class="fa-solid fa-chevron-down"></i> مزيد من التفاصيل';
+      ? '<i class="fa-solid fa-chevron-up"></i> <span>إخفاء التفاصيل</span>'
+      : '<i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>';
   }
 }
 
@@ -2818,6 +2882,11 @@ async function sendReaction(eventId, type, btnElement) {
 function switchTab(tabId) {
   if (tabId === 'tabAdd' && !requireAuth({ type: 'publish' })) return;
 
+  const homeTab = document.getElementById('tabHome');
+  const wasOnHome = !!(homeTab && homeTab.classList.contains('active-tab'));
+  if (wasOnHome && tabId !== 'tabHome') feedScrollMemory = feedScrollPosition();
+  const feedToRestore = tabId === 'tabHome' && !wasOnHome ? feedScrollMemory : null;
+
   document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active-tab'));
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
 
@@ -2828,13 +2897,19 @@ function switchTab(tabId) {
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
   if (navBtns[navIndex]) navBtns[navIndex].classList.add('active');
 
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (feedToRestore) window.scrollTo(0, feedToRestore.page);
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
 
   // صوت التغذية يخصّ تبويبها وحده — مغادرته توقفه، والعودة إليه تستأنف الكرت النشِط.
   if (tabId === 'tabHome') autoplayActiveFeedCard();
   else pauseCurrentAudio();
 
-  if (tabId === 'tabHome') updateFeedDimensions();
+  if (tabId === 'tabHome') {
+    updateFeedDimensions();
+    const feed = document.getElementById('eventsContainer');
+    if (feedToRestore && feed) feed.scrollTop = feedToRestore.feed;
+    feedScrollMemory = null;
+  }
   else if (tabId === 'tabNokoot') loadNokootView();
   else if (tabId === 'tabAccount') loadAccountView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
@@ -3284,10 +3359,109 @@ function clearAllFilters() {
   selectedTowns = [];
   selectedVillageIds = [];
   selectedOccasionTypeIds = [];
+  selectedDateFilter = null;
   persistFilterSelection();
   updateFilterChipLabel('place');
   updateFilterChipLabel('kind');
+  updateDateFilterChipLabel();
   fetchEvents();
+}
+
+const FEED_DATE_PRESETS = { today: 'اليوم', tomorrow: 'غداً', week: 'هذا الأسبوع', weekend: 'الخميس – السبت' };
+
+/** `YYYY-MM-DD` بالتوقيت المحلي — `toISOString` يقلب اليوم قرب منتصف الليل. */
+function isoLocalDay(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/*
+ * نطاق فلتر التاريخ — نفس `FeedDateFilter.preset` في
+ * `mobile/lib/screens/events_screen.dart`. الأسبوع من الأحد إلى السبت،
+ * و«الخميس – السبت» ليالي الأعراس القادمة، من اليوم نفسه إن كنّا فيها.
+ */
+function feedDateRange(key, now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayOfWeek = today.getDay();
+  const plus = days => new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
+  let from = today;
+  let to = today;
+  if (key === 'tomorrow') {
+    from = plus(1);
+    to = plus(1);
+  } else if (key === 'week') {
+    to = plus(6 - dayOfWeek);
+  } else if (key === 'weekend') {
+    from = dayOfWeek >= 4 ? today : plus(4 - dayOfWeek);
+    to = plus(6 - dayOfWeek);
+  } else {
+    key = 'today';
+  }
+  return { key, label: FEED_DATE_PRESETS[key], from: isoLocalDay(from), to: isoLocalDay(to) };
+}
+
+/** يوم من منتقي التاريخ (`YYYY-MM-DD`)، مسمّى بالصيغة العربية الطويلة نفسها على الكرت. */
+function feedDayRange(isoDay) {
+  const [y, m, d] = isoDay.split('-').map(Number);
+  const label = new Intl.DateTimeFormat('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    .format(new Date(y, m - 1, d));
+  return { key: 'day', label, from: isoDay, to: isoDay };
+}
+
+function openDateFilterSheet() {
+  const list = document.getElementById('dateFilterList');
+  const modal = document.getElementById('dateFilterModal');
+  if (!list || !modal) return;
+  const current = selectedDateFilter ? selectedDateFilter.key : 'all';
+  const row = (key, label) => `
+      <label class="filter-option-row">
+        <input type="radio" name="feedDateOption" value="${key}" ${current === key ? 'checked' : ''}>
+        <span>${escapeHtml(label)}</span>
+      </label>`;
+  const pickedDay = current === 'day' ? selectedDateFilter.from : '';
+  list.innerHTML = [
+    row('all', 'كل التواريخ'),
+    ...Object.entries(FEED_DATE_PRESETS).map(([key, label]) => row(key, label)),
+    `<label class="filter-option-row">
+        <input type="radio" name="feedDateOption" value="day" ${current === 'day' ? 'checked' : ''}>
+        <span>اختر يوماً</span>
+        <input type="date" id="dateFilterDayInput" class="filter-date-input" value="${pickedDay}"
+               onchange="this.closest('label').querySelector('input[type=radio]').checked = true">
+      </label>`
+  ].join('');
+  modal.style.display = 'flex';
+}
+
+function closeDateFilterSheet() {
+  const modal = document.getElementById('dateFilterModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function applyDateFilterSheet() {
+  const chosen = document.querySelector('input[name="feedDateOption"]:checked');
+  const key = chosen ? chosen.value : 'all';
+  if (key === 'day') {
+    const dayInput = document.getElementById('dateFilterDayInput');
+    const day = dayInput ? dayInput.value : '';
+    if (!day) {
+      showToast('اختر اليوم أولاً');
+      return;
+    }
+    selectedDateFilter = feedDayRange(day);
+  } else {
+    selectedDateFilter = key === 'all' ? null : feedDateRange(key);
+  }
+  closeDateFilterSheet();
+  updateDateFilterChipLabel();
+  fetchEvents();
+}
+
+function updateDateFilterChipLabel() {
+  const text = selectedDateFilter ? selectedDateFilter.label : 'كل التواريخ';
+  ['dateFilterChipLabel', 'drawerDateChipLabel'].forEach(id => {
+    const label = document.getElementById(id);
+    if (label) label.textContent = text;
+  });
+  updateFloatingFilterLabel();
 }
 
 function handleSearch() {
@@ -3328,8 +3502,9 @@ function updateFloatingFilterLabel() {
   const hasSearch = Boolean(searchQuery && searchQuery.trim());
   const hasPlaces = (selectedTowns && selectedTowns.length > 0) || (selectedVillageIds && selectedVillageIds.length > 0);
   const hasKinds = selectedOccasionTypeIds && selectedOccasionTypeIds.length > 0;
+  const hasDate = Boolean(selectedDateFilter);
   const hasArchive = Boolean(showArchive);
-  const hasActiveFilters = hasSearch || hasPlaces || hasKinds || hasArchive;
+  const hasActiveFilters = hasSearch || hasPlaces || hasKinds || hasDate || hasArchive;
 
   if (floatingDot) {
     floatingDot.style.display = hasActiveFilters ? 'inline-block' : 'none';
@@ -3349,12 +3524,9 @@ function updateFloatingFilterLabel() {
   const placeText = (hasPlaces && placeCfg) ? filterChipLabelText(placeCfg, placeCfg.selected()) : '';
   const kindText = (hasKinds && kindCfg) ? filterChipLabelText(kindCfg, kindCfg.selected()) : '';
 
-  if (hasPlaces && hasKinds) {
-    floatingLabel.textContent = `${placeText} • ${kindText}`;
-  } else if (hasPlaces) {
-    floatingLabel.textContent = placeText;
-  } else if (hasKinds) {
-    floatingLabel.textContent = kindText;
+  const parts = [placeText, kindText, hasDate ? selectedDateFilter.label : ''].filter(Boolean);
+  if (parts.length) {
+    floatingLabel.textContent = parts.join(' • ');
   } else if (hasArchive) {
     floatingLabel.textContent = 'المناسبات المنتهية';
   } else {

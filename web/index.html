@@ -238,6 +238,10 @@
         <i class="fa-solid fa-icons"></i>
         <span id="drawerKindChipLabel">كل الأنواع</span>
       </button>
+      <button id="drawerDateChip" class="filter-chip" onclick="openDateFilterSheet()">
+        <i class="fa-regular fa-calendar"></i>
+        <span id="drawerDateChipLabel">كل التواريخ</span>
+      </button>
       <button id="drawerClearChip" class="filter-chip filter-chip-clear" onclick="clearAllFilters()">
         <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
       </button>
@@ -314,6 +318,10 @@
           <i class="fa-solid fa-icons"></i>
           <span id="kindFilterChipLabel">كل الأنواع</span>
         </button>
+        <button id="dateFilterChip" class="filter-chip" onclick="openDateFilterSheet()">
+          <i class="fa-regular fa-calendar"></i>
+          <span id="dateFilterChipLabel">كل التواريخ</span>
+        </button>
         <button id="clearFiltersBtn" class="filter-chip filter-chip-clear" onclick="clearAllFilters()">
           <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
         </button>
@@ -345,7 +353,6 @@
       </div>
 
       <div id="loadMoreWrapper" style="display:none;">
-        <button id="loadMoreBtn" class="town-pill" onclick="loadMoreEvents()">عرض المزيد</button>
         <div id="feedLoadingSpinner" class="feed-loading-pill" style="display:none;">
           <i class="fa-solid fa-spinner fa-spin"></i> <span>جاري تحميل المزيد...</span>
         </div>
@@ -1113,6 +1120,19 @@
       <div id="kindFilterList" class="filter-sheet-list"></div>
       <p id="kindFilterWarning" class="filter-sheet-warning" hidden></p>
       <button type="button" class="submit-btn filter-sheet-apply" onclick="applyFilterSheet()">تطبيق</button>
+    </div>
+  </div>
+
+  <!-- MODAL: DATE FILTER SHEET — كل التواريخ، أيام جاهزة، أو يوم مختار. نفس بطاقة
+       الورقتين أعلاه، والقائمة يرسمها app.js#openDateFilterSheet. -->
+  <div id="dateFilterModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card filter-sheet-card">
+      <div class="modal-header">
+        <div class="modal-title-area"><h3><i class="fa-regular fa-calendar"></i> تاريخ المناسبة</h3></div>
+        <button class="close-modal-btn" onclick="closeDateFilterSheet()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="dateFilterList" class="filter-sheet-list"></div>
+      <button type="button" class="submit-btn filter-sheet-apply" onclick="applyDateFilterSheet()">تطبيق</button>
     </div>
   </div>
 

@@ -76,6 +76,12 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const towns = parseTownListParam(req.query.town);
   const search = cleanString(req.query.search, 100);
   const date = optionalDate(req.query.date);
+  // فلتر التاريخ في العملاء (اليوم، غداً، هذا الأسبوع، الخميس–السبت، يوم مختار).
+  const dateFrom = optionalDate(req.query.date_from);
+  const dateTo = optionalDate(req.query.date_to);
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw ApiError.badRequest('نطاق التاريخ غير صالح: البداية بعد النهاية');
+  }
   const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
   const villageIds = parseIdListParam(req.query.village_id, 'القرية');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
@@ -83,7 +89,7 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
-      towns, search, date, occasionTypeIds, villageIds, archive, legacyOnly,
+      towns, search, date, dateFrom, dateTo, occasionTypeIds, villageIds, archive, legacyOnly,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null

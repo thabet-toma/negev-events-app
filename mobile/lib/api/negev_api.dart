@@ -23,6 +23,8 @@ class NegevApi {
 
   /// صفحة من المناسبات العامة — القادمة افتراضياً، `archive: true` للمنتهية.
   /// الترشيح كله على الخادم؛ لا تُرشَّح النتيجة ثانيةً في العميل.
+  /// [dateFrom]/[dateTo] (‏`YYYY-MM-DD`) فلتر التاريخ: الخادم يطابق بالتقاطع،
+  /// والنطاق يحلّ محلّ شرط «القادم» فيوم ماضٍ مختار يعيد مناسباته.
   Future<EventsPage> listEvents({
     Object? town,
     Iterable<String>? towns,
@@ -32,6 +34,8 @@ class NegevApi {
     Object? villageId,
     Iterable<int>? villageIds,
     bool archive = false,
+    String? dateFrom,
+    String? dateTo,
     int page = 1,
     int limit = 30,
   }) async {
@@ -81,6 +85,8 @@ class NegevApi {
       query['search'] = search.trim();
     }
     if (archive) query['archive'] = '1';
+    if (dateFrom != null) query['date_from'] = dateFrom;
+    if (dateTo != null) query['date_to'] = dateTo;
 
     final data = await _client.get('/api/events', query: query);
     final list = data['events'];

@@ -318,6 +318,13 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  * already ended, newest-ended first, reached only on explicit request so it
  * never crowds out what's upcoming (#20 step 4, decision أ).
  *
+ * `dateFrom`/`dateTo` (either may be alone) are the clients' date filter. An
+ * event is in the range when any of its days is — overlap, not start date, so
+ * a multi-day عزا covering the range is in it. The range REPLACES the
+ * upcoming/archive cut instead of intersecting it: the reader asked for these
+ * days, and a day picked in the past must not come back empty just because
+ * the archive switch is off. `archive` then only sets the order.
+ *
  * `towns`, `occasionTypeIds` and `villageIds` are each either `null` (no
  * filter) or a non-empty array — a single value is simply a one-element
  * array, built as a one-element `IN (?)` (#85 batch 5). `towns`/`villageIds`
@@ -328,8 +335,8 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  * decision و).
  */
 async function listPublicEvents({
-  towns = null, date, search, occasionTypeIds = null, villageIds = null, legacyOnly = false, archive = false,
-  page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
+  towns = null, date, dateFrom = null, dateTo = null, search, occasionTypeIds = null, villageIds = null,
+  legacyOnly = false, archive = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -337,9 +344,20 @@ async function listPublicEvents({
   const conditions = ["status = 'approved'"];
   const params = [];
 
-  conditions.push(archive
-    ? 'COALESCE(event_end_date, event_date) < CURDATE()'
-    : 'COALESCE(event_end_date, event_date) >= CURDATE()');
+  if (dateFrom || dateTo) {
+    if (dateFrom) {
+      conditions.push('COALESCE(event_end_date, event_date) >= ?');
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      conditions.push('event_date <= ?');
+      params.push(dateTo);
+    }
+  } else {
+    conditions.push(archive
+      ? 'COALESCE(event_end_date, event_date) < CURDATE()'
+      : 'COALESCE(event_end_date, event_date) >= CURDATE()');
+  }
 
   const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
   if (typeFilterIds && !typeFilterIds.length) {
