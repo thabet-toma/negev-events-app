@@ -49,6 +49,19 @@ class AppNotification {
 
   bool get isBroadcast => broadcastId != null;
 
+  /// نفس السطر مقروءاً — يبقى في المركز باهتاً بدل أن يُحذف بالنقر.
+  AppNotification asRead() => AppNotification(
+        id: id,
+        broadcastId: broadcastId,
+        eventId: eventId,
+        type: type,
+        title: title,
+        body: body,
+        isRead: true,
+        createdAt: createdAt,
+        tone: tone,
+      );
+
   factory AppNotification.fromJson(Map<String, dynamic> json) {
     final broadcastId =
         json['broadcast_id'] == null ? null : _toInt(json['broadcast_id']);

@@ -778,8 +778,7 @@ body {
   scroll-snap-stop: always;
 }
 
-:not(.events-feed) > .event-card:not(.announcement-card),
-#singleEventContainer .event-card {
+:not(.events-feed) > .event-card:not(.announcement-card) {
   height: auto;
   border: none;
   border-radius: 0;
@@ -787,20 +786,17 @@ body {
   background: transparent;
 }
 
-:not(.events-feed) > .event-card:not(.announcement-card) .card-bezel,
-#singleEventContainer .card-bezel {
+:not(.events-feed) > .event-card:not(.announcement-card) .card-bezel {
   position: relative;
   inset: auto;
   height: auto;
 }
 
-:not(.events-feed) > .event-card:not(.announcement-card) .card-framed,
-#singleEventContainer .card-framed {
+:not(.events-feed) > .event-card:not(.announcement-card) .card-framed {
   height: auto;
 }
 
-:not(.events-feed) > .event-card:not(.announcement-card) .card-media,
-#singleEventContainer .card-media {
+:not(.events-feed) > .event-card:not(.announcement-card) .card-media {
   min-height: 340px;
 }
 
@@ -1076,36 +1072,6 @@ body {
 }
 .card-more-details-btn:hover { text-decoration: underline; }
 
-.card-details-collapsible {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  background: var(--surface);
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  box-sizing: border-box;
-}
-
-.card-details-collapsible[hidden] { display: none; }
-
-.card-details-sheet-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.card-details-sheet-title {
-  font-weight: 800;
-  font-size: 0.95rem;
-  color: var(--ink);
-}
-
 .card-details-close-btn {
   background: var(--surface-sunk);
   border: none;
@@ -1147,10 +1113,6 @@ body {
   gap: 8px;
   font-size: 0.88rem;
 }
-
-/* «يحيي الحفلة الفنان فلان» — بوزن أخفّ من سطر العشيرة، ويغيب كلياً حين
-   يفرغ الحقل (الـHTML نفسه لا يُطبَع، لا display:none) (خريطة #21، تذكرة #23) */
-.card-artist-line { font-size: 12px; font-weight: 500; color: var(--ink-faint); margin-top: -6px; margin-bottom: 10px; }
 
 /* Audio Player */
 .card-audio-player {
@@ -1198,8 +1160,6 @@ body {
 .card-body { padding: 16px 18px 18px; }
 
 .event-main-title { font-weight: 900; font-size: 1.35rem; color: var(--ink); margin-bottom: 4px; line-height: 1.35; }
-
-.event-details-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 18px; }
 
 .detail-item { display: flex; align-items: flex-start; gap: 10px; font-size: 0.9rem; color: var(--ink-soft); line-height: 1.45; }
 .detail-item i { color: var(--sky); margin-top: 3px; width: 18px; font-size: 0.95rem; }
@@ -1274,9 +1234,6 @@ body {
   transition: all 0.15s ease;
 }
 .reaction-btn:active { transform: scale(1.15); background: var(--sky-wash); color: var(--sky-deep); }
-
-/* Card Action Footer */
-.card-footer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .chat-trigger-btn {
   background: var(--sky-wash);
@@ -1740,16 +1697,6 @@ body {
   transition: all 0.2s;
 }
 .share-event-btn:hover { background: var(--sky); color: var(--on-sky); }
-
-/* على البطاقة، الشبكة عمودان — فالمشاركة تمتدّ عليهما معاً في سطرها الخاص
-   فوقهما، بدل أن تترك خانة فارغة بجانبها. */
-.card-footer-actions .share-event-btn {
-  grid-column: 1 / -1;
-  justify-content: center;
-  padding: 11px;
-  border-radius: var(--radius-md);
-  font-size: 0.88rem;
-}
 
 /* نافذة «البث المباشر» — المشغّل 16:9 ثم الحلقة ثم نقاش التطبيق ثم نتيجة الأمس. */
 .live-modal-body { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -2215,6 +2162,26 @@ body {
   font-size: 0.88rem;
 }
 
+/* مقروء/غير مقروء في مركز الإشعارات (طلب المالك 2026-10-02): غير المقروء
+   بنقطة حمراء وعنوان بلون السماء، والمقروء يبقى باهتاً بلا نقطة. */
+.notif-item-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sky);
+}
+
+.notif-item.is-read { opacity: 0.68; }
+.notif-item.is-read .notif-item-title { color: var(--ink-soft); font-weight: 600; }
+
+.notif-unread-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
 /* مركّب عمداً: .push-control-status بعده بنفس الوزن يفرض align-items: center */
 .push-control-status.notifications-pref-text {
   flex-direction: column;
@@ -2274,61 +2241,6 @@ body {
 .push-toggle-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.event-card-highlight {
-  outline: 2px solid var(--sky);
-  outline-offset: 2px;
-  transition: outline-color 0.3s ease;
-}
-
-/* ===== عرض مناسبة مفردة من إشعار (قصة 14) ===== */
-#singleEventContainer {
-  margin-block-end: 18px;
-}
-
-.single-event-box {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  box-shadow: var(--shadow-sm);
-}
-
-.single-event-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-block-end: 10px;
-  font-size: 0.88rem;
-  color: var(--ink-soft);
-  border-block-end: 1px solid var(--line-soft);
-  padding-block-end: 8px;
-}
-
-.single-event-header-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  color: var(--sky);
-}
-
-.single-event-close-btn {
-  background: transparent;
-  border: none;
-  color: var(--ink-faint);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.single-event-close-btn:hover {
-  background: var(--surface-sunk);
-  color: var(--ink);
 }
 
 /* ==========================================================================
@@ -3770,3 +3682,240 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
 
 
+/* ===== نافذة المشاركة الخاصة بالموقع (على الكمبيوتر) — طلب المالك 2026-10-02 =====
+   نافذة صغيرة بدل نافذة النظام: الرابط ظاهر، ثم واتساب/فيسبوك/نسخ، ثم إلغاء.
+   لا شيء يُنسخ أو يُرسل إلا بزرّ صريح. */
+.share-sheet-card { max-width: 420px; gap: 14px; }
+
+.share-sheet-url {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.share-sheet-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.share-sheet-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 72px;
+  padding: 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.share-sheet-btn i { font-size: 1.45rem; }
+.share-sheet-btn:hover { border-color: var(--sky); }
+.share-sheet-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+.share-sheet-whatsapp i { color: #25D366; }
+.share-sheet-facebook i { color: #1877F2; }
+.share-sheet-copy i { color: var(--sky); }
+.share-sheet-copy.is-copied { border-color: var(--success); background: var(--success-wash); color: var(--success); }
+.share-sheet-copy.is-copied i { color: var(--success); }
+
+.share-sheet-cancel {
+  width: 100%;
+  padding: 11px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ===== صفحة المناسبة (طلب المالك 2026-10-02) =====
+   مثل «تفاصيل المناسبة» في الموبايل: شريط رجوع، البوستر كاملاً، ثم عمود واحد
+   مقروء. فوق التغذية (لا تمسّها، فالرجوع على نفس الكرت) وتحت النوافذ (1000)
+   كي تفتح غرفة التبريكات والمشاركة والدخول فوقها؛ عارض الصور (1100) فوق الكل. */
+.event-page {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+}
+
+.event-page[hidden] { display: none; }
+
+body.event-page-open { overflow: hidden; }
+
+.event-page-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.event-page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.event-page-back:hover { border-color: var(--sky); }
+.event-page-back:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+.event-page-bar-title { font-weight: 800; font-size: 1rem; color: var(--ink); }
+
+.event-page-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.event-page-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0;
+  border: none;
+  background: var(--surface-sunk);
+  cursor: zoom-in;
+}
+
+/* الصورة كاملة بلا قصّ — كـ`whole: true` في الموبايل. */
+.event-page-poster img {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.event-page-poster-chip {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.65);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.event-page-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px calc(40px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.event-page-title { font-weight: 900; font-size: 1.4rem; line-height: 1.35; color: var(--ink); margin: 0; }
+.event-page-subtitle { margin-top: -8px; color: var(--ink-soft); font-size: 0.92rem; }
+
+.event-page-info { display: flex; flex-direction: column; gap: 12px; }
+
+.event-page-info-row { display: flex; align-items: flex-start; gap: 12px; }
+
+.event-page-info-row > i {
+  width: 20px;
+  margin-top: 3px;
+  text-align: center;
+  color: var(--tone, var(--sky));
+  font-size: 1rem;
+}
+
+.event-page-info-label { font-size: 0.76rem; color: var(--ink-faint); }
+.event-page-info-value { font-size: 0.97rem; font-weight: 600; color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
+
+.event-page-artist-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex: none; }
+
+.event-page .nav-buttons-row { margin-bottom: 0; }
+.event-page .reaction-bar { margin-bottom: 0; }
+
+.event-page-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.event-page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.event-page-btn:hover { border-color: var(--sky); }
+.event-page-share-btn { width: 100%; }
+
+.event-page-followers { margin-top: -6px; font-size: 0.8rem; color: var(--ink-faint); }
+
+.event-page-congrats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.event-page-congrats-head h3 { margin: 0; font-size: 1.05rem; font-weight: 800; color: var(--ink); }
+.event-page-count { font-weight: 600; color: var(--ink-faint); }
+.event-page-congrats { display: flex; flex-direction: column; gap: 10px; }
+.event-page-empty { text-align: center; color: var(--ink-faint); padding: 14px 0; }
+.event-page .event-archive { max-height: none; margin-bottom: 0; }
+
+.event-page-congrats .chat-bubble {
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.event-page-congrats .chat-bubble-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+.event-page-congrats .sender-name { font-weight: 800; color: var(--ink); font-size: 0.9rem; }
+.event-page-congrats .sender-badge { font-size: 0.72rem; color: var(--tone, var(--sky)); }
+.event-page-congrats .chat-msg-text { color: var(--ink-soft); font-size: 0.92rem; line-height: 1.5; overflow-wrap: anywhere; }

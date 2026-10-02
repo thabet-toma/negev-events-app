@@ -39,6 +39,11 @@ router.patch('/notifications/:id/read', authenticate, asyncHandler(async (req, r
   res.json({ success: true });
 }));
 
+router.post('/notifications/read-all', authenticate, asyncHandler(async (req, res) => {
+  await notifications.markAllRead(req.user.id);
+  res.json({ success: true });
+}));
+
 router.post('/notifications/clear-all', authenticate, asyncHandler(async (req, res) => {
   await notifications.clearAll(req.user.id);
   res.json({ success: true });

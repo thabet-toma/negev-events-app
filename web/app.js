@@ -144,6 +144,7 @@ let livePastKey = null;
 let livePastPlayingId = null;
 // عارض صور «أرشيف العرس» في تفاصيل المناسبة.
 let archiveViewerPhotos = [];
+const archivePhotosByBox = {};
 let archiveViewerIndex = 0;
 
 // Write actions (publish, congratulate) require login; browsing never does.
@@ -174,6 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initNotificationsPush();
   initServiceWorker();
   initUrlNavigation();
+  window.addEventListener('popstate', handleEventPagePopstate);
   initFeedScroller();
   initFeedAudio();
   refreshSessionFromServer();
@@ -1924,47 +1926,47 @@ function getBezelOrnamentSvg(color) {
   return `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke='${stroke}' stroke-width='1.1' opacity='0.28'%3E%3Crect x='14' y='14' width='36' height='36'/%3E%3Crect x='14' y='14' width='36' height='36' transform='rotate(45 32 32)'/%3E%3C/g%3E%3C/svg%3E`;
 }
 
-function renderSingleEventCardHtml(evt) {
-  let eventDate;
+/** يوم المناسبة تاريخاً محلياً بلا ساعة — 'YYYY-MM-DD' يُقرأ رقماً رقماً كي لا ينزاح يوماً بالمنطقة الزمنية. */
+function eventDayDate(evt) {
   if (typeof evt.event_date === 'string' && evt.event_date.includes('-')) {
     const [y, m, d] = evt.event_date.split('T')[0].split('-').map(Number);
-    eventDate = new Date(y, m - 1, d);
-  } else {
-    eventDate = new Date(evt.event_date);
-    eventDate.setHours(0, 0, 0, 0);
+    return new Date(y, m - 1, d);
   }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diffTime = eventDate - today;
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const eventDate = new Date(evt.event_date);
+  eventDate.setHours(0, 0, 0, 0);
+  return eventDate;
+}
 
-  // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
-  let countdownText = '';
-  if (diffDays === 0) countdownText = 'اليوم';
-  else if (diffDays === 1) countdownText = 'غداً';
-  else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
-  else countdownText = 'مناسبة سابقة';
-
-  const formattedDate = new Intl.DateTimeFormat('ar-EG', {
+/** «الخميس، ٣ أكتوبر ٢٠٢٦» — نفس الصيغة في الكرت وصفحة المناسبة. */
+function formatEventDayLong(evt) {
+  return new Intl.DateTimeFormat('ar-EG', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric'
-  }).format(eventDate);
+  }).format(eventDayDate(evt));
+}
 
-  let wazeUrl = '';
-  let mapsUrl = '';
+/** روابط Waze وخرائط Google: الإحداثيات إن وُجدت، وإلا بحث باسم المكان والبلدة. */
+function eventNavUrls(evt) {
   if (evt.latitude && evt.longitude) {
-    wazeUrl = `https://waze.com/ul?ll=${evt.latitude},${evt.longitude}&navigate=yes`;
-    mapsUrl = `https://www.google.com/maps/search/?api=1&query=${evt.latitude},${evt.longitude}`;
-  } else {
-    const q = encodeURIComponent(`${evt.location_name} ${evt.town} النقب`);
-    wazeUrl = `https://waze.com/ul?q=${q}&navigate=yes`;
-    mapsUrl = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    return {
+      wazeUrl: `https://waze.com/ul?ll=${evt.latitude},${evt.longitude}&navigate=yes`,
+      mapsUrl: `https://www.google.com/maps/search/?api=1&query=${evt.latitude},${evt.longitude}`
+    };
   }
+  const q = encodeURIComponent(`${evt.location_name} ${evt.town} النقب`);
+  return {
+    wazeUrl: `https://waze.com/ul?q=${q}&navigate=yes`,
+    mapsUrl: `https://www.google.com/maps/search/?api=1&query=${q}`
+  };
+}
 
+/** مشغّل مقطع المناسبة (خاصّ أو افتراضي) — فارغ لنوع لا صوت له. أزراره وموجاته تتبع syncAudioUi. */
+function renderEventAudioBlockHtml(evt) {
   const effectiveAudio = effectiveEventAudio(evt);
-  const audioBlock = effectiveAudio ? `
+  if (!effectiveAudio) return '';
+  return `
     <div class="card-audio-player">
       <div class="audio-info-area">
         <div class="wave-bars" id="waveBars-${evt.id}" data-audio-event-id="${evt.id}">
@@ -1982,7 +1984,25 @@ function renderSingleEventCardHtml(evt) {
         <i class="fa-solid fa-play"></i>
       </button>
     </div>
-  ` : '';
+  `;
+}
+
+function renderSingleEventCardHtml(evt) {
+  const eventDate = eventDayDate(evt);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffTime = eventDate - today;
+  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+  // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
+  let countdownText = '';
+  if (diffDays === 0) countdownText = 'اليوم';
+  else if (diffDays === 1) countdownText = 'غداً';
+  else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
+  else countdownText = 'مناسبة سابقة';
+
+  const formattedDate = formatEventDayLong(evt);
+  const effectiveAudio = effectiveEventAudio(evt);
 
   const isMourning = isMourningTone(evt);
   const toneColor = evt.occasion_type && evt.occasion_type.color
@@ -2014,9 +2034,6 @@ function renderSingleEventCardHtml(evt) {
   const subtitle = eventCardSubtitle(evt);
   const subtitleHtml = subtitle ? `<div class="card-subtitle card-clamp-1-line">${escapeHtml(subtitle)}</div>` : '';
 
-  const artistLineHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name)
-    ? `<div class="card-artist-line">يحيي الحفلة الفنان ${escapeHtml(evt.artist_name)}</div>` : '';
-
   const captionHtml = `
     <div class="card-caption">
       <div class="card-caption-chips">
@@ -2027,7 +2044,7 @@ function renderSingleEventCardHtml(evt) {
       ${subtitleHtml}
       <div class="card-info-lines">${infoLinesHtml}</div>
       <div class="card-caption-actions">
-        <button type="button" class="card-more-details-btn card-action-btn" aria-expanded="false" onclick="toggleCardDetails(${evt.id}, this)">
+        <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${evt.id})">
           <i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>
         </button>
         <button type="button" class="chat-trigger-btn card-action-btn" onclick="openChatModal(${evt.id})">
@@ -2040,68 +2057,15 @@ function renderSingleEventCardHtml(evt) {
       </div>
     </div>`;
 
-  const collapsibleHtml = `
-    <div class="card-details-collapsible" id="cardDetails-${evt.id}" hidden>
-      <div class="card-details-sheet-header">
-        <span class="card-details-sheet-title">تفاصيل المناسبة</span>
-        <button type="button" class="card-details-close-btn" onclick="toggleCardDetails(${evt.id})" aria-label="إغلاق">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      ${artistLineHtml}
-      ${audioBlock}
-      <div class="event-details-grid">
-        <div class="detail-item">
-          <i class="fa-solid fa-calendar-day"></i>
-          <span><strong>التاريخ:</strong> ${formattedDate}</span>
-        </div>
-        ${typeShowsField(evt, 'youth_party_date') && evt.youth_party_date ? `
-        <div class="detail-item">
-          <i class="fa-solid fa-fire"></i>
-          <span><strong>${escapeHtml(typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'))}:</strong> ${evt.youth_party_date}</span>
-        </div>` : ''}
-        ${typeShowsField(evt, 'dinner_time') && evt.dinner_time ? `
-        <div class="detail-item">
-          <i class="fa-solid fa-utensils"></i>
-          <span><strong>${escapeHtml(typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'))}:</strong> ${escapeHtml(evt.dinner_time)}</span>
-        </div>` : ''}
-        <div class="detail-item">
-          <i class="fa-solid fa-location-dot"></i>
-          <span><strong>الموقع:</strong> ${escapeHtml(evt.location_name)}</span>
-        </div>
-      </div>
-
-      <!-- 1-Click Navigation -->
-      <div class="nav-buttons-row">
-        <a href="${wazeUrl}" target="_blank" class="waze-btn" onclick="recordLocationClicked('${escapeHtml(evt.town || '')}')">
-          <i class="fa-brands fa-waze"></i> الملاحة عبر Waze
-        </a>
-        <a href="${mapsUrl}" target="_blank" class="maps-btn" onclick="recordLocationClicked('${escapeHtml(evt.town || '')}')">
-          <i class="fa-solid fa-location-arrow"></i> خرائط Google
-        </a>
-      </div>
-
-      ${renderReactionBarHtml(evt)}
-      ${renderCongratsPreviewHtml(evt)}
-
-      <!-- Action Buttons Footer -->
-      <div class="card-footer-actions">
-        <button class="record-nokoot-btn" onclick="quickRecordNokoot('${escapeHtml(evt.groom_name)}', '${evt.event_date}', '${escapeHtml(evt.town)}')">
-          <i class="fa-solid fa-wallet"></i> تسجيل نقوط
-        </button>
-      </div>
-    </div>`;
-
   return `
     <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
       <div class="card-bezel"${bezelStyle}>
         <div class="card-framed">
-          <div class="card-media${hasShot ? '' : ' card-media-empty'}">
+          <div class="card-media${hasShot ? '' : ' card-media-empty'}" onclick="openEventPage(${evt.id})">
             ${mediaContent}
           </div>
           ${captionHtml}
           <div class="card-goldframe" aria-hidden="true"></div>
-          ${collapsibleHtml}
         </div>
       </div>
     </div>
@@ -2141,72 +2105,328 @@ function renderEvents(events) {
   syncAudioUi();
 }
 
-/**
- * يعرض مناسبة مفردة في الحاوية المخصصة (#singleEventContainer) عند الوصول
- * إليها عبر إشعار أو رابط عميق، دون تلويث allEvents أو الإخلال بفلاتر التغذية (قصة 14، FIX 6).
+/*
+ * صفحة المناسبة — نفس صفحة «تفاصيل المناسبة» في تطبيق الموبايل
+ * (mobile/lib/screens/event_details_screen.dart) وبترتيبها: البوستر كاملاً،
+ * النوع والعنوان، سطر بتسميته لكل معلومة، المقطع، الملاحة والاتصال، المشاركة
+ * و«ذكّرني» والنقوط، الأرشيف، التفاعلات، ثم التبريكات (طلب المالك 2026-10-02،
+ * بدل ورقة التفاصيل داخل الكرت). تُفتح فوق التغذية ولا تمسّها، فالرجوع — بزرّها
+ * أو بزرّ رجوع المتصفّح أو Escape — يعيد إلى نفس الكرت لا الأول.
  */
-function renderSingleEventView(event) {
-  const container = document.getElementById('singleEventContainer');
-  if (!container) return;
+let eventPageEvent = null;
+let eventPageHistoryPushed = false;
+let ignoreNextEventPagePopstate = false;
+// يزيد مع كل فتح — ردّ جلب متأخّر لمناسبة سابقة لا يُرسم فوق التالية.
+let eventPageOpenSeq = 0;
 
-  const cardHtml = renderSingleEventCardHtml(event);
-  container.innerHTML = `
-    <div class="single-event-box">
-      <div class="single-event-header">
-        <span class="single-event-header-title">
-          <i class="fa-solid fa-bell" aria-hidden="true"></i>
-          <span>مناسبة من إشعار</span>
-        </span>
-        <button type="button" class="single-event-close-btn" onclick="clearSingleEventView()" title="إغلاق العرض الخاص">
-          <i class="fa-solid fa-xmark" aria-hidden="true"></i> إغلاق
-        </button>
-      </div>
-      <div class="single-event-card-wrap">
-        ${cardHtml}
-      </div>
-    </div>
-  `;
-
-  const card = document.getElementById(`eventCard-${event.id}`);
-  if (card) {
-    highlightAndScrollToCard(card, isMourningTone(event));
-  }
-  syncAudioUi();
+function isEventPageOpen() {
+  const page = document.getElementById('eventPage');
+  return !!(page && !page.hidden);
 }
 
-function clearSingleEventView() {
-  const container = document.getElementById('singleEventContainer');
-  if (container) container.innerHTML = '';
+/**
+ * يفتح الصفحة فوراً ببيانات الكرت المحمّلة إن وُجدت، ثم يكملها من
+ * `GET /api/events/:id` (التبريكات والأرشيف). مناسبة ليست في التغذية (إشعار،
+ * رابط، فلتر آخر) تُجلب وحدها دون أن تلوّث allEvents.
+ */
+async function openEventPage(eventId) {
+  const page = document.getElementById('eventPage');
+  const body = document.getElementById('eventPageBody');
+  if (!page || !body || !eventId) return;
+
+  const openSeq = ++eventPageOpenSeq;
+  const wasOpen = isEventPageOpen();
+  const known = allEvents.find(e => e.id === eventId)
+    || (eventPageEvent && eventPageEvent.id === eventId ? eventPageEvent : null);
+  eventPageEvent = known;
+  page.hidden = false;
+  document.body.classList.add('event-page-open');
+  body.scrollTop = 0;
+  if (known) {
+    renderEventPage(known);
+  } else {
+    body.innerHTML = '<div class="loading-spinner"><div class="spinner"></div><p>جاري تحميل المناسبة...</p></div>';
+  }
+
+  if (!wasOpen) {
+    document.addEventListener('keydown', handleEventPageKeydown);
+    try {
+      history.pushState({ eventPage: eventId }, '');
+      eventPageHistoryPushed = true;
+    } catch (e) {
+      eventPageHistoryPushed = false;
+    }
+  }
+
+  recordAnalyticsEvent('event_viewed', { contentTown: known ? known.town : undefined });
+  if (known) playEventPageAudioOnOpen(known);
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`, { auth: Boolean(authToken) });
+    const data = await res.json();
+    if (!isEventPageOpen() || openSeq !== eventPageOpenSeq) return;
+    if (data && data.success && data.event) {
+      eventPageEvent = { ...(known || {}), ...data.event };
+      renderEventPage(eventPageEvent);
+      if (!known) playEventPageAudioOnOpen(eventPageEvent);
+    } else if (!known) {
+      body.innerHTML = `<div class="empty-state"><i class="fa-solid fa-calendar-xmark"></i><h3>${escapeHtml((data && data.message) || 'المناسبة غير موجودة')}</h3></div>`;
+    }
+  } catch (e) {
+    console.error('Event page error:', e);
+    if (!known && isEventPageOpen() && openSeq === eventPageOpenSeq) {
+      body.innerHTML = '<div class="empty-state"><i class="fa-solid fa-wifi"></i><h3>تعذّر تحميل المناسبة — تحقق من الاتصال</h3></div>';
+    }
+  }
 }
 
-/** يطوي/يبسط كتلة تفاصيل الكرت خلف زرّ واحد أو زر الإغلاق (#85 خطوة 48). */
-function toggleCardDetails(eventId, btn) {
-  const panel = document.getElementById(`cardDetails-${eventId}`);
-  if (!panel) return;
-  const willShow = panel.hidden;
-  panel.hidden = !willShow;
-  if (willShow) {
-    const ev = allEvents.find(e => e.id === eventId);
-    recordAnalyticsEvent('event_viewed', { contentTown: ev ? ev.town : undefined });
+/** فتح الصفحة يشغّل مقطع المناسبة (ضغطة حقيقية، فلا ترفضها سياسة التشغيل التلقائي) ما لم يكن الصوت مكتوماً — كفتح التفاصيل في الموبايل. */
+function playEventPageAudioOnOpen(evt) {
+  const audio = effectiveEventAudio(evt);
+  if (!audio || soundMuted) return;
+  manuallyPausedEventId = null;
+  playEventAudio(evt.id, audio.url);
+}
+
+/** يعيد جلب المناسبة المعروضة — بعد تبريكة من الغرفة أو تغيير «ذكّرني». */
+async function refreshEventPage() {
+  if (!isEventPageOpen() || !eventPageEvent) return;
+  const eventId = eventPageEvent.id;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`, { auth: Boolean(authToken) });
+    const data = await res.json();
+    if (data && data.success && data.event && isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
+      eventPageEvent = { ...eventPageEvent, ...data.event };
+      renderEventPage(eventPageEvent);
+    }
+  } catch (e) {
+    console.error('Event page refresh error:', e);
   }
-  // فتح التفاصيل يشغّل مقطع المناسبة (ضغطة حقيقية، فلا ترفضها سياسة التشغيل
-  // التلقائي) ما لم يكن الصوت مكتوماً؛ الإغلاق يوقفه.
-  const card = panel.closest('.event-card');
-  const audioUrl = card && card.dataset.audioUrl;
-  if (willShow && audioUrl && !soundMuted) {
-    manuallyPausedEventId = null;
-    playEventAudio(eventId, audioUrl);
-  } else if (!willShow && currentAudioEventId === eventId) {
-    manuallyPausedEventId = eventId;
+}
+
+function closeEventPage() {
+  if (!isEventPageOpen()) return;
+  hideEventPage();
+  if (eventPageHistoryPushed) {
+    eventPageHistoryPushed = false;
+    ignoreNextEventPagePopstate = true;
+    try {
+      history.back();
+    } catch (e) {
+      ignoreNextEventPagePopstate = false;
+    }
+  }
+}
+
+function hideEventPage() {
+  const page = document.getElementById('eventPage');
+  if (page) page.hidden = true;
+  document.body.classList.remove('event-page-open');
+  document.removeEventListener('keydown', handleEventPageKeydown);
+  closeArchiveViewer();
+  // مقطع هذه المناسبة يقف بخروجها — كإغلاق الورقة القديمة؛ التغذية تقرّر بعدها.
+  if (eventPageEvent && currentAudioEventId === eventPageEvent.id) {
+    manuallyPausedEventId = eventPageEvent.id;
     pauseCurrentAudio();
   }
-  const toggleBtn = btn || document.querySelector(`#eventCard-${eventId} .card-more-details-btn`);
-  if (toggleBtn) {
-    toggleBtn.setAttribute('aria-expanded', String(willShow));
-    toggleBtn.innerHTML = willShow
-      ? '<i class="fa-solid fa-chevron-up"></i> <span>إخفاء التفاصيل</span>'
-      : '<i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>';
+  eventPageEvent = null;
+}
+
+/** زرّ رجوع المتصفّح (أو إيماءة الرجوع في الهاتف) يغلق الصفحة بدل مغادرة الموقع. */
+function handleEventPagePopstate() {
+  if (ignoreNextEventPagePopstate) {
+    ignoreNextEventPagePopstate = false;
+    return;
   }
+  if (isEventPageOpen()) {
+    eventPageHistoryPushed = false;
+    hideEventPage();
+  }
+}
+
+/** Escape يغلق الصفحة — ما لم تكن نافذة فوقها (تبريكات، مشاركة، عارض صور) هي المقصودة. */
+function handleEventPageKeydown(e) {
+  if (e.key !== 'Escape') return;
+  const archiveViewer = document.getElementById('archiveViewer');
+  if (archiveViewer && !archiveViewer.hidden) return;
+  const modalAbove = [...document.querySelectorAll('.modal-overlay')].some(m => m.style.display === 'flex');
+  if (modalAbove) return;
+  closeEventPage();
+}
+
+/** البوستر بملء الشاشة — في عارض الأرشيف نفسه، صورة واحدة. */
+function openEventPagePoster() {
+  if (!eventPageEvent || !safeHttpUrl(eventPageEvent.poster_url)) return;
+  archivePhotosByBox.eventPagePoster = [{ image_url: eventPageEvent.poster_url }];
+  openArchiveViewer(0, 'eventPagePoster');
+}
+
+function recordEventPageLocationClicked() {
+  if (eventPageEvent) recordLocationClicked(eventPageEvent.town || '');
+}
+
+function recordEventPageContactClicked() {
+  if (eventPageEvent) recordAnalyticsEvent('contact_clicked', { contentTown: eventPageEvent.town || '' });
+}
+
+/** «تسجيل نقوط» بقيم المناسبة المعروضة — تُقرأ هنا لا تُحشر نصّاً داخل onclick. */
+function recordNokootFromEventPage() {
+  if (!eventPageEvent) return;
+  const names = eventHonoreeNames(eventPageEvent);
+  quickRecordNokoot(names[0] || eventPageEvent.groom_name || '', String(eventPageEvent.event_date || '').split('T')[0], eventPageEvent.town || '');
+}
+
+/** سطر «تسمية: قيمة» بأيقونته — فارغ إن لم تكن قيمة، كـ_InfoRow في الموبايل. */
+function eventPageInfoRowHtml(icon, label, value) {
+  if (value === null || value === undefined || String(value).trim() === '') return '';
+  return `
+    <div class="event-page-info-row">
+      <i class="${icon}" aria-hidden="true"></i>
+      <div>
+        <div class="event-page-info-label">${escapeHtml(label)}</div>
+        <div class="event-page-info-value">${escapeHtml(String(value))}</div>
+      </div>
+    </div>`;
+}
+
+function renderEventPage(evt) {
+  const body = document.getElementById('eventPageBody');
+  if (!body) return;
+  const isMourning = isMourningTone(evt);
+  const toneColor = evt.occasion_type && evt.occasion_type.color
+    ? (evt.occasion_type.color.startsWith('#') ? evt.occasion_type.color : `#${evt.occasion_type.color}`)
+    : null;
+  const page = document.getElementById('eventPage');
+  if (page) {
+    page.classList.toggle('tone-mourning', isMourning);
+    if (toneColor) {
+      page.style.setProperty('--tone', toneColor);
+      page.style.setProperty('--tone-ink', readableInkOn(toneColor));
+    } else {
+      page.style.removeProperty('--tone');
+      page.style.removeProperty('--tone-ink');
+    }
+  }
+
+  const posterUrl = safeHttpUrl(evt.poster_url) ? evt.poster_url : null;
+  const posterHtml = posterUrl ? `
+    <button type="button" class="event-page-poster" onclick="openEventPagePoster()" aria-label="عرض الصورة كاملة">
+      <img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(evt.title || '')}">
+      <span class="event-page-poster-chip"><i class="fa-solid fa-expand" aria-hidden="true"></i> عرض كامل</span>
+    </button>` : '';
+
+  const honorees = Array.isArray(evt.honorees) && evt.honorees.length
+    ? evt.honorees
+    : (evt.groom_name ? [{ name: evt.groom_name }] : []);
+  const honoreeLabel = typeFieldLabel(evt, 'honorees', 'أصحاب المناسبة');
+  const honoreeRows = honorees.map(h => eventPageInfoRowHtml(
+    'fa-regular fa-user',
+    honoreeLabel,
+    h.role ? `${h.name} (${h.role})` : h.name
+  )).join('');
+
+  const artistHtml = (typeShowsField(evt, 'artist_name') && evt.artist_name && String(evt.artist_name).trim()) ? `
+    <div class="event-page-info-row event-page-artist">
+      ${safeHttpUrl(evt.artist_image_url)
+        ? `<img src="${escapeHtml(evt.artist_image_url)}" alt="" class="event-page-artist-img">`
+        : '<i class="fa-solid fa-music" aria-hidden="true"></i>'}
+      <div>
+        <div class="event-page-info-label">${escapeHtml(typeFieldLabel(evt, 'artist_name', 'الفنان'))}</div>
+        <div class="event-page-info-value">${escapeHtml(evt.artist_name)}</div>
+      </div>
+    </div>` : '';
+
+  const placeValue = [eventPlaceName(evt), evt.location_name].filter(Boolean).join(' — ');
+  const infoRows = [
+    honoreeRows,
+    eventPageInfoRowHtml('fa-solid fa-people-group', typeFieldLabel(evt, 'family_clan', 'العائلة'), evt.family_clan),
+    artistHtml,
+    eventPageInfoRowHtml('fa-solid fa-location-dot', typeFieldLabel(evt, 'location_name', 'المكان'), placeValue),
+    typeShowsField(evt, 'secondary_location_name')
+      ? eventPageInfoRowHtml('fa-solid fa-location-dot', typeFieldLabel(evt, 'secondary_location_name', 'مكان آخر'), evt.secondary_location_name) : '',
+    eventPageInfoRowHtml('fa-regular fa-calendar', typeFieldLabel(evt, 'event_date', 'التاريخ'), formatEventDayLong(evt)),
+    typeShowsField(evt, 'event_end_date') && evt.event_end_date
+      ? eventPageInfoRowHtml('fa-regular fa-calendar', typeFieldLabel(evt, 'event_end_date', 'حتى'), formatEventDayLong({ event_date: evt.event_end_date })) : '',
+    typeShowsField(evt, 'youth_party_date')
+      ? eventPageInfoRowHtml('fa-solid fa-fire', typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'), evt.youth_party_date) : '',
+    typeShowsField(evt, 'dinner_time')
+      ? eventPageInfoRowHtml('fa-regular fa-clock', typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'), evt.dinner_time) : ''
+  ].join('');
+
+  const subtitle = eventCardSubtitle(evt);
+  const { wazeUrl, mapsUrl } = eventNavUrls(evt);
+  const phoneDigits = evt.host_phone ? String(evt.host_phone).replace(/[^\d]/g, '') : '';
+  const contactHtml = phoneDigits ? `
+      <a href="tel:${phoneDigits}" class="event-page-btn" onclick="recordEventPageContactClicked()">
+        <i class="fa-solid fa-phone" aria-hidden="true"></i> اتصال
+      </a>
+      <a href="https://wa.me/972${phoneDigits.replace(/^0/, '')}" target="_blank" rel="noopener" class="event-page-btn" onclick="recordEventPageContactClicked()">
+        <i class="fa-brands fa-whatsapp" aria-hidden="true"></i> واتساب المعلن
+      </a>` : '';
+
+  const label = congratulationsLabel(evt);
+  const congrats = Array.isArray(evt.congratulations) ? evt.congratulations : null;
+  let congratsListHtml;
+  if (!congrats) {
+    congratsListHtml = '<div class="loading-spinner"><div class="spinner"></div></div>';
+  } else if (!congrats.length) {
+    congratsListHtml = `<p class="event-page-empty">${escapeHtml(isMourning ? `كن أول من يضيف ${label}` : `كن أول من يضيف ${label} 🌹`)}</p>`;
+  } else {
+    congratsListHtml = congrats.map(c => `
+      <div class="chat-bubble">
+        <div class="chat-bubble-header">
+          <span class="sender-name">${escapeHtml(c.sender_name)}</span>
+          ${c.badge_title ? `<span class="sender-badge">${escapeHtml(c.badge_title)}</span>` : ''}
+          ${c.status === 'pending' ? '<span class="status-tag pending">قيد المراجعة</span>' : ''}
+        </div>
+        <div class="chat-msg-text">${escapeHtml(c.message)}</div>
+        ${c.status !== 'pending' ? `
+          <button class="nokoot-del-btn" style="margin-top:6px;" onclick="reportCongratulation(${evt.id}, ${c.id}, this)">
+            <i class="fa-solid fa-flag"></i> إبلاغ
+          </button>` : ''}
+      </div>`).join('');
+  }
+
+  body.innerHTML = `
+    ${posterHtml}
+    <div class="event-page-content">
+      ${evt.occasion_type ? `<div class="event-page-type">${occasionTypeBadgeHtml(evt.occasion_type)}</div>` : ''}
+      <h2 id="eventPageTitle" class="event-page-title">${escapeHtml(eventCardHeadline(evt))}</h2>
+      ${subtitle ? `<div class="event-page-subtitle">${escapeHtml(subtitle)}</div>` : ''}
+      <div class="event-page-info">${infoRows}</div>
+      ${renderEventAudioBlockHtml(evt)}
+      <div class="nav-buttons-row">
+        <a href="${wazeUrl}" target="_blank" rel="noopener" class="waze-btn" onclick="recordEventPageLocationClicked()">
+          <i class="fa-brands fa-waze" aria-hidden="true"></i> اذهب بـ Waze
+        </a>
+        <a href="${mapsUrl}" target="_blank" rel="noopener" class="maps-btn" onclick="recordEventPageLocationClicked()">
+          <i class="fa-solid fa-location-arrow" aria-hidden="true"></i> خرائط Google
+        </a>
+      </div>
+      ${contactHtml ? `<div class="event-page-btn-row">${contactHtml}</div>` : ''}
+      <button type="button" class="event-page-btn event-page-share-btn" onclick="shareEvent(eventPageEvent)">
+        <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> ${escapeHtml(shareButtonLabel(evt))}
+      </button>
+      <div class="event-page-btn-row">
+        ${renderReminderButtonHtml(evt)}
+        <button type="button" class="record-nokoot-btn card-action-btn" onclick="recordNokootFromEventPage()">
+          <i class="fa-solid fa-wallet" aria-hidden="true"></i> <span>تسجيل نقوط</span>
+        </button>
+      </div>
+      ${evt.followers_count != null ? `<div class="event-page-followers">متابعون: ${Number(evt.followers_count) || 0}</div>` : ''}
+      <section id="eventPageArchive" class="event-archive" hidden></section>
+      ${renderReactionBarHtml(evt)}
+      <div class="event-page-congrats-head">
+        <h3>${escapeHtml(label)} <span class="event-page-count">(${congrats ? congrats.length : (evt.congratulations_count || 0)})</span></h3>
+        <button type="button" class="chat-trigger-btn" onclick="openChatModal(${evt.id})">
+          <i class="fa-regular fa-comment-dots" aria-hidden="true"></i> أضف ${escapeHtml(label)}
+        </button>
+      </div>
+      <div class="event-page-congrats">${congratsListHtml}</div>
+    </div>`;
+
+  renderEventArchive(evt, 'eventPageArchive');
+  syncAudioUi();
 }
 
 /** أيقونة ولون نوع المناسبة من الخادم كما هما — لا لون جديد يُصمَّم هنا (#20 step 10). */
@@ -2215,23 +2435,6 @@ function occasionTypeBadgeHtml(occasionType) {
   const color = occasionType.color && occasionType.color.startsWith('#') ? occasionType.color : (occasionType.color ? `#${occasionType.color}` : null);
   const style = color ? `style="background:${color}26; color:${color}; border-color:${color};"` : '';
   return `<span class="town-badge" ${style}>${occasionType.icon ? escapeHtml(occasionType.icon) + ' ' : ''}${escapeHtml(occasionType.name)}</span>`;
-}
-
-/**
- * العدّاد وسطر المعاينة — يفتحان ورقة التبريكات نفسها (الفتح على المودال
- * القائم، لا صفحة تفاصيل). `congratulations_count` قد يغيب كلياً حين يكون
- * `show_congratulations_count` مطفأً على النوع — غيابه يعني لا شيء يُعرَض،
- * لا صفراً (#20 step 10).
- */
-function renderCongratsPreviewHtml(evt) {
-  if (evt.congratulations_count === undefined) return '';
-  const label = (evt.occasion_type && evt.occasion_type.congratulations_label) || 'تبريكات';
-  const latest = evt.latest_congratulation;
-  const preview = latest ? ` — ${escapeHtml(latest.sender_name)}: ${escapeHtml(truncateText(latest.message, 40))}` : '';
-  return `
-    <button class="chat-trigger-btn" style="width:100%; margin-bottom:10px;" onclick="openChatModal(${evt.id})">
-      <i class="fa-regular fa-comment-dots"></i> ${evt.congratulations_count} ${escapeHtml(label)}${preview}
-    </button>`;
 }
 
 /**
@@ -2247,11 +2450,6 @@ function renderReminderButtonHtml(evt) {
     </button>`;
 }
 
-function truncateText(str, len) {
-  if (!str) return '';
-  return str.length > len ? str.slice(0, len) + '…' : str;
-}
-
 /** يبدّل حالة «ذكّرني» — فعل كتابة، خلف حساب مثل النشر والتبريك (#20 step 10). */
 async function toggleReminder(eventId, isReminded, btnElement) {
   if (!requireAuth({ type: 'remind', eventId })) return;
@@ -2263,6 +2461,10 @@ async function toggleReminder(eventId, isReminded, btnElement) {
       const evt = allEvents.find(e => e.id === eventId);
       if (evt) evt.is_reminded = !isReminded;
       renderEvents(allEvents);
+      if (isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
+        eventPageEvent = { ...eventPageEvent, is_reminded: !isReminded };
+        renderEventPage(eventPageEvent);
+      }
       showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
       // طلب إذن الإشعارات الفورية عند إضافة تذكير فقط — لا عند أول فتح للموقع ولا عند إلغائه (قصة 16)
       if (!isReminded) {
@@ -5527,12 +5729,14 @@ async function openChatModal(eventId) {
  * حالة أخرى؛ هنا يكفي: فارغة → القسم مخفي. الشبكة كسولة التحميل، والنقر يفتح
  * عارضاً بملء الشاشة بإغلاق وسابق/تالي.
  */
-function renderEventArchive(evt) {
-  const box = document.getElementById('chatArchive');
+function renderEventArchive(evt, boxId = 'chatArchive') {
+  const box = document.getElementById(boxId);
   if (!box) return;
   const photos = (evt && Array.isArray(evt.archive_photos) ? evt.archive_photos : [])
     .filter(photo => photo && safeHttpUrl(photo.image_url));
   archiveViewerPhotos = photos;
+  // غرفة التبريكات وصفحة المناسبة قد تكونان مفتوحتين معاً — لكلّ صندوق صوره.
+  archivePhotosByBox[boxId] = photos;
   if (!photos.length) {
     box.innerHTML = '';
     box.hidden = true;
@@ -5545,7 +5749,7 @@ function renderEventArchive(evt) {
     </h4>
     <div class="event-archive-grid">
       ${photos.map((photo, index) => `
-        <button type="button" class="event-archive-thumb" onclick="openArchiveViewer(${index})" aria-label="عرض الصورة ${index + 1}">
+        <button type="button" class="event-archive-thumb" onclick="openArchiveViewer(${index}, '${boxId}')" aria-label="عرض الصورة ${index + 1}">
           <img src="${escapeHtml(photo.image_url)}" alt="" loading="lazy" decoding="async">
         </button>
       `).join('')}
@@ -5554,7 +5758,8 @@ function renderEventArchive(evt) {
   box.hidden = false;
 }
 
-function openArchiveViewer(index) {
+function openArchiveViewer(index, boxId) {
+  if (boxId && archivePhotosByBox[boxId]) archiveViewerPhotos = archivePhotosByBox[boxId];
   if (!archiveViewerPhotos.length) return;
   const viewer = document.getElementById('archiveViewer');
   if (!viewer) return;
@@ -5658,6 +5863,8 @@ function closeChatModal() {
   closeArchiveViewer();
   currentChatEventId = null;
   currentChatEvent = null;
+  // غرفة فُتحت من صفحة المناسبة — تبريكة جديدة تظهر في قائمتها بعد الإغلاق.
+  refreshEventPage();
 }
 
 /**
@@ -5679,9 +5886,9 @@ function shareOrigin() {
  * (`GET /e/:id`، share.routes.js) — بلا «حمّل التطبيق»: تلك الصفحة نفسها تحمل
  * زرّ التحميل، وتكراره هنا يحوّل دعوة إلى إعلان (تذكرة #44).
  *
- * navigator.share عند توفّره؛ نسخ إلى الحافظة مع تأكيد مرئي حين لا يتوفر —
- * والزرّ لا يفشل بصمت في أي مسار: إلغاء المستخدم لورقة المشاركة (AbortError)
- * وحده يُعامَل كلا شيء، لا كخطأ.
+ * صحيفة المشاركة على الموبايل، ونافذتنا (واتساب/فيسبوك/نسخ/إلغاء) على الكمبيوتر
+ * أو حين لا مشاركة في المتصفّح — والزرّ لا يفشل بصمت في أي مسار: إلغاء المستخدم
+ * لورقة المشاركة (AbortError) وحده يُعامَل كلا شيء، لا كخطأ (shareLink أدناه).
  */
 async function shareCurrentEvent() {
   await shareEvent(currentChatEvent);
@@ -5703,25 +5910,97 @@ async function shareEvent(evt) {
   await shareLink({ title: evt.title, line, url, copiedMessage: '📋 تم نسخ رابط المناسبة' });
 }
 
-/** المسار المشترك لكل زرّ مشاركة في الموقع (المناسبة والبث) — الوصف أعلى shareCurrentEvent. */
+/**
+ * كمبيوتر بفأرة (لا شاشة لمس) — هناك تُفتح نافذتنا الخاصة بدل نافذة النظام.
+ * السبب ليس ذوقاً: كروم على ويندوز 10 يعلن `navigator.share` ثم لا تظهر نافذة
+ * ويندوز إطلاقاً ولا يرجع خطأ، فيبدو الزرّ ميتاً (جهاز المالك، 2026-10-02).
+ */
+function prefersOwnShareSheet() {
+  try {
+    return !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * المسار المشترك لكل زرّ مشاركة في الموقع (المناسبة والبث) — الوصف أعلى
+ * shareCurrentEvent. على الكمبيوتر نافذتنا (واتساب/فيسبوك/نسخ/إلغاء)، فلا شيء
+ * يُنسخ أو يُرسل من ضغطة خاطئة؛ على الموبايل صحيفة النظام كما هي.
+ */
 async function shareLink({ title, line, url, copiedMessage }) {
-  if (navigator.share) {
+  if (prefersOwnShareSheet() || !navigator.share) {
+    openShareSheet({ title, line, url, copiedMessage });
+    return;
+  }
+  try {
+    await navigator.share({ title, text: line, url });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return; // المستخدم أغلق ورقة المشاركة بنفسه — ليس خطأ
+    // أي فشل آخر (نادر) — نافذتنا بدل ترك الزرّ بلا أثر.
+    openShareSheet({ title, line, url, copiedMessage });
+  }
+}
+
+/** ما تعرضه نافذة المشاركة الآن — يُضبط عند كل فتح. */
+let shareSheetState = null;
+
+function openShareSheet({ title, line, url, copiedMessage }) {
+  const modal = document.getElementById('shareSheetModal');
+  if (!modal) return;
+  shareSheetState = { title, line, url, copiedMessage };
+
+  const message = `${line}\n${url}`;
+  document.getElementById('shareSheetLine').textContent = line;
+  document.getElementById('shareSheetUrl').value = url;
+  document.getElementById('shareSheetWhatsapp').href = `https://wa.me/?text=${encodeURIComponent(message)}`;
+  document.getElementById('shareSheetFacebook').href = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`;
+  resetShareSheetCopyButton();
+  modal.style.display = 'flex';
+}
+
+function closeShareSheet() {
+  const modal = document.getElementById('shareSheetModal');
+  if (modal) modal.style.display = 'none';
+  shareSheetState = null;
+}
+
+function resetShareSheetCopyButton() {
+  const btn = document.getElementById('shareSheetCopyBtn');
+  if (!btn) return;
+  btn.classList.remove('is-copied');
+  btn.innerHTML = '<i class="fa-regular fa-copy" aria-hidden="true"></i> <span>نسخ الرابط</span>';
+}
+
+/** نسخ الرابط لا يحدث إلا بهذا الزرّ — بتأكيد ظاهر على الزرّ نفسه وتنبيه صغير. */
+async function copyShareSheetLink() {
+  if (!shareSheetState) return;
+  const { url, copiedMessage } = shareSheetState;
+  const input = document.getElementById('shareSheetUrl');
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(url);
+    copied = true;
+  } catch (e) {
+    // لا clipboard API (سياق غير آمن مثلاً) — الطريقة القديمة من الحقل نفسه.
     try {
-      await navigator.share({ title, text: line, url });
-      return;
-    } catch (e) {
-      if (e && e.name === 'AbortError') return; // المستخدم أغلق ورقة المشاركة بنفسه — ليس خطأ
-      // أي فشل آخر (نادر) — نكمل إلى نسخ الرابط بدل ترك الزر بلا أثر.
+      input.select();
+      copied = document.execCommand('copy');
+    } catch (err) {
+      copied = false;
     }
   }
 
-  const fullText = `${line}\n${url}`;
-  try {
-    await navigator.clipboard.writeText(fullText);
+  const btn = document.getElementById('shareSheetCopyBtn');
+  if (copied) {
+    btn.classList.add('is-copied');
+    btn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> <span>تم النسخ</span>';
     showToast(copiedMessage);
-  } catch (e) {
-    // لا clipboard API متاح (سياق غير آمن مثلاً) — لا يبقى الزر بلا أثر أبداً.
-    alert(fullText);
+  } else {
+    // لا يبقى الزرّ بلا أثر: الرابط محدَّد في الحقل وجاهز للنسخ باليد.
+    input.focus();
+    input.select();
+    showToast('حدّد الرابط وانسخه بـ Ctrl+C');
   }
 }
 
@@ -6089,6 +6368,8 @@ function updateNotificationsBadge() {
       floatingBadge.style.display = 'none';
     }
   }
+
+  updateNotificationsHeaderButtons();
 }
 
 function renderNotificationsList() {
@@ -6105,19 +6386,29 @@ function renderNotificationsList() {
   // notifications.service.js). `notifications.id` and `broadcasts.id` are two
   // independent, overlapping AUTO_INCREMENT counters, so which endpoint gets
   // called must be decided by entry kind, never by treating both as one `id`.
+  // المقروء يبقى في القائمة باهتاً بلا نقطة حمراء ولا «جديد» — لا يختفي
+  // بالنقر (طلب المالك 2026-10-02)؛ الحذف لـ«مسح الكل» وحده.
   container.innerHTML = notificationsList.map(n => {
     const isBroadcast = isBroadcastEntry(n);
     const clickArgs = isBroadcast ? `true, ${n.broadcast_id}` : `false, ${n.id}`;
     return `
-    <div class="event-card" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${clickArgs})">
+    <div class="event-card notif-item ${n.is_read ? 'is-read' : 'is-unread'}" style="padding:14px; cursor:pointer;" onclick="markNotificationRead(${clickArgs})">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <strong style="color:${n.is_read ? 'var(--ink-soft)' : 'var(--sky)'};">${escapeHtml(n.title)}</strong>
+        <strong class="notif-item-title">${!n.is_read ? '<span class="notif-unread-dot" aria-hidden="true"></span>' : ''}${escapeHtml(n.title)}</strong>
         ${!n.is_read ? '<span class="status-tag pending">جديد</span>' : ''}
       </div>
       <p style="margin-top:6px; color:var(--ink-soft); font-size:0.88rem;">${escapeHtml(n.body)}</p>
     </div>
   `;
   }).join('');
+}
+
+/** زرّ «جعل الكل مقروء» يظهر ما دام في القائمة غير مقروء، و«مسح الكل» ما دامت غير فارغة. */
+function updateNotificationsHeaderButtons() {
+  const markAllBtn = document.getElementById('markAllNotificationsReadBtn');
+  const clearBtn = document.getElementById('clearAllNotificationsBtn');
+  if (markAllBtn) markAllBtn.hidden = !notificationsList.some(n => !n.is_read);
+  if (clearBtn) clearBtn.hidden = !notificationsList.length;
 }
 
 function toggleNotificationsPanel() {
@@ -6189,13 +6480,17 @@ async function markNotificationRead(isBroadcast, id) {
   const eventId = !isBroadcast ? notification.event_id : null;
 
   const endpoint = isBroadcast ? `/api/broadcasts/${id}/dismiss` : `/api/notifications/${id}/read`;
-  try {
-    await apiFetch(endpoint, { method: 'PATCH', auth: true });
-    notificationsList = notificationsList.filter(n => isBroadcast ? n.broadcast_id !== id : n.id !== id);
-    renderNotificationsList();
-    updateNotificationsBadge();
-  } catch (e) {
-    console.error('Dismiss notification error:', e);
+  if (!notification.is_read) {
+    try {
+      const res = await apiFetch(endpoint, { method: 'PATCH', auth: true });
+      if (res.ok) {
+        notificationsList = notificationsList.map(n => (n === notification ? { ...n, is_read: true } : n));
+        renderNotificationsList();
+        updateNotificationsBadge();
+      }
+    } catch (e) {
+      console.error('Mark notification read error:', e);
+    }
   }
 
   // التوجّه إلى المناسبة نفسها عند النقر على إشعار شخصي مرتبط بمناسبة (قصة 14)؛
@@ -6215,6 +6510,20 @@ async function markNotificationRead(isBroadcast, id) {
   }
 }
 
+/** «جعل الكل مقروء» — لا يحذف شيئاً؛ القائمة تبقى كما هي باهتة، والعدّاد الأحمر يختفي. */
+async function markAllNotificationsRead() {
+  try {
+    const res = await apiFetch('/api/notifications/read-all', { method: 'POST', auth: true });
+    if (!res.ok) throw new Error('failed');
+    notificationsList = notificationsList.map(n => ({ ...n, is_read: true }));
+    renderNotificationsList();
+    updateNotificationsBadge();
+  } catch (e) {
+    console.error('Mark all notifications read error:', e);
+    showToast('تعذّر تعليم الإشعارات كمقروءة، حاول مرة أخرى');
+  }
+}
+
 async function clearAllNotifications() {
   try {
     const res = await apiFetch('/api/notifications/clear-all', { method: 'POST', auth: true });
@@ -6229,38 +6538,10 @@ async function clearAllNotifications() {
 }
 
 /**
- * تظليل الكرت والتمرير إليه، مع احترام تفضيل تقليل الحركة ونغمة الوقار (قصة 54، FIX 7).
- */
-function isReducedMotionPreferred() {
-  try {
-    return !!(typeof window !== 'undefined'
-      && window.matchMedia
-      && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  } catch (e) {
-    return false;
-  }
-}
-
-function highlightAndScrollToCard(card, isSolemn = false) {
-  if (!card) return;
-  const reduceMotion = isReducedMotionPreferred();
-  const solemn = isSolemn || card.classList.contains('tone-mourning');
-  if (typeof card.scrollIntoView === 'function') {
-    card.scrollIntoView({
-      behavior: (reduceMotion || solemn) ? 'auto' : 'smooth',
-      block: 'center'
-    });
-  }
-  card.classList.add('event-card-highlight');
-  setTimeout(() => card.classList.remove('event-card-highlight'), 2500);
-}
-
-/**
- * ينتقل إلى مناسبة في التغذية (قصة 14):
- * يغلق المركز، يفتح تبويب الرئيسية، ويفرغ معامل ?event_id= من العنوان عبر replaceState (FIX 5).
- * إن كان الكرت في التغذية المحمّلة ينتقل إليه.
- * إن لم يكن في التغذية (فلتر نشط أو صفحة لاحقة)، يجلبه ويعرضه في #singleEventContainer
- * دون تلويث allEvents أو الإخلال بالفلاتر الحالية (FIX 6).
+ * يفتح مناسبة من إشعار أو رابط عميق أو الأجندة (قصة 14): يغلق المركز، يعيد
+ * التغذية تحتها، ويفرغ معامل ?event_id= من العنوان عبر replaceState (FIX 5)،
+ * ثم صفحة المناسبة نفسها — كالنقر على إشعار في الموبايل. مناسبة خارج التغذية
+ * المحمّلة تُجلب وحدها دون تلويث allEvents أو الإخلال بالفلاتر (FIX 6).
  */
 async function navigateToEvent(eventId) {
   if (!eventId) return;
@@ -6280,25 +6561,7 @@ async function navigateToEvent(eventId) {
     }
   } catch (e) {}
 
-  let card = document.getElementById(`eventCard-${eventId}`);
-  if (card) {
-    clearSingleEventView();
-    highlightAndScrollToCard(card);
-    return;
-  }
-
-  // الكرت غير موجود في القائمة المحمّلة: جلبه وعرضه في خانة مستقلة (FIX 6)
-  try {
-    const res = await apiFetch(`/api/events/${eventId}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && data.event) {
-        renderSingleEventView(data.event);
-      }
-    }
-  } catch (err) {
-    console.error('Failed to fetch event for navigation:', err);
-  }
+  await openEventPage(eventId);
 }
 
 let pendingDeepLinkEventId = null;

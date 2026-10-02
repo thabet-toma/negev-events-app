@@ -1339,6 +1339,80 @@ async function run() {
     assert.strictEqual(shared.title, LIVE_ACTIVE.title);
   });
 
+  /** يجعل `(hover: hover) and (pointer: fine)` صحيحاً — كمبيوتر بفأرة. */
+  function emulateDesktopPointer(win) {
+    win.matchMedia = query => ({
+      matches: /pointer:\s*fine/.test(query),
+      media: query, addListener() {}, addEventListener() {}, removeListener() {}, removeEventListener() {}
+    });
+  }
+
+  await test('on a desktop the share button opens our own dialog — never navigator.share, and nothing is copied by itself', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const win = dom.window;
+    const doc = win.document;
+    emulateDesktopPointer(win);
+    let nativeCalls = 0;
+    const clipboardWrites = [];
+    // كروم/ويندوز 10: المشاركة «موجودة» لكنها لا تُظهر شيئاً ولا ترجع أبداً.
+    Object.defineProperty(win.navigator, 'share', { value: () => { nativeCalls++; return new Promise(() => {}); }, configurable: true });
+    Object.defineProperty(win.navigator, 'clipboard', { value: { writeText: async text => { clipboardWrites.push(text); } }, configurable: true });
+
+    await win.shareEvent({ id: 25, title: 'كسيفة', town: 'رهط' });
+
+    const modal = doc.getElementById('shareSheetModal');
+    assert.strictEqual(modal.style.display, 'flex', 'the dialog opens');
+    assert.strictEqual(nativeCalls, 0, 'the OS share sheet is never asked for on a desktop');
+    assert.deepStrictEqual(clipboardWrites, [], 'opening the dialog copies nothing');
+    const url = doc.getElementById('shareSheetUrl').value;
+    assert.ok(url.endsWith('/e/25'), `expected the event share link, got ${url}`);
+    assert.strictEqual(doc.getElementById('shareSheetLine').textContent, 'كسيفة — رهط');
+
+    const wa = doc.getElementById('shareSheetWhatsapp');
+    assert.ok(wa.href.startsWith('https://wa.me/?text='));
+    assert.strictEqual(decodeURIComponent(wa.href.split('text=')[1]), `كسيفة — رهط\n${url}`);
+    assert.strictEqual(wa.getAttribute('target'), '_blank');
+    const fb = doc.getElementById('shareSheetFacebook');
+    assert.strictEqual(fb.href, `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`);
+
+    const copyBtn = doc.getElementById('shareSheetCopyBtn');
+    copyBtn.click();
+    await waitFor(() => copyBtn.classList.contains('is-copied'));
+    assert.deepStrictEqual(clipboardWrites, [url], '«نسخ الرابط» copies the link, once');
+    assert.ok(copyBtn.textContent.includes('تم النسخ'));
+
+    doc.querySelector('#shareSheetModal .share-sheet-cancel').click();
+    assert.strictEqual(modal.style.display, 'none', '«إلغاء» closes it');
+
+    await win.shareEvent({ id: 26, title: 'عرس ثانٍ', town: 'اللقية' });
+    assert.ok(doc.getElementById('shareSheetCopyBtn').textContent.includes('نسخ الرابط'), 'a reopened dialog starts un-copied');
+  });
+
+  await test('on a phone the native share sheet is still used; with no navigator.share at all our dialog opens instead of a silent copy', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const win = dom.window;
+    let shared = null;
+    Object.defineProperty(win.navigator, 'share', { value: async data => { shared = data; }, configurable: true });
+    await win.shareEvent({ id: 25, title: 'كسيفة', town: 'رهط' });
+    assert.ok(shared && shared.url.endsWith('/e/25'), 'touch device: navigator.share as before');
+    assert.strictEqual(win.document.getElementById('shareSheetModal').style.display, 'none');
+
+    Object.defineProperty(win.navigator, 'share', { value: undefined, configurable: true });
+    const clipboardWrites = [];
+    Object.defineProperty(win.navigator, 'clipboard', { value: { writeText: async text => { clipboardWrites.push(text); } }, configurable: true });
+    await win.shareEvent({ id: 25, title: 'كسيفة', town: 'رهط' });
+    assert.strictEqual(win.document.getElementById('shareSheetModal').style.display, 'flex');
+    assert.deepStrictEqual(clipboardWrites, [], 'no share API is no excuse to copy without asking');
+  });
+
+  await test('the share dialog is the last overlay in the page, so it opens above the congratulations room and the event page', () => {
+    const doc = new JSDOM(INDEX_HTML_RAW).window.document;
+    const overlays = [...doc.querySelectorAll('.modal-overlay')];
+    assert.strictEqual(overlays[overlays.length - 1].id, 'shareSheetModal');
+  });
+
   await test('no TikTok identifier or text is left in web/index.html, app.js or styles.css', () => {
     for (const [name, text] of [['index.html', INDEX_HTML_RAW], ['app.js', APP_JS], ['styles.css', STYLES_CSS_RAW]]) {
       assert.ok(!/tiktok|تيك توك/i.test(text), `expected no TikTok trace in web/${name}`);
@@ -1734,7 +1808,7 @@ async function run() {
     const dom = buildEnv();
     const { document } = dom.window;
 
-    dom.window.renderEvents([
+    const events = [
       {
         id: 901, title: 'عرس أبو فراس', family_clan: 'آل تجربة', town: 'حورة',
         event_date: '2027-01-10', location_name: 'ديوان آل تجربة',
@@ -1767,17 +1841,19 @@ async function run() {
         poster_url: 'https://example.test/uploads/poster911.jpg', audio_url: null,
         occasion_type: FUNERAL_TYPE, reactions: {}
       }
-    ]);
+    ];
+    dom.window.renderEvents(events);
 
-    return { document };
+    return { document, dom, events };
   }
 
-  await test('an event card renders the youth-party line when youth_party_date is present', () => {
-    const { document } = renderCardFixtures();
-    const card = document.getElementById('eventCard-901');
-    assert.ok(card, 'expected card #eventCard-901 to render');
-    assert.ok(card.textContent.includes('سهرة الشباب'), 'expected the youth-party field label in the card');
-    assert.ok(card.textContent.includes('2027-01-09'), 'expected the youth-party date value in the card');
+  await test('the event page renders the youth-party line when youth_party_date is present', () => {
+    const { document, dom, events } = renderCardFixtures();
+    assert.ok(document.getElementById('eventCard-901'), 'expected card #eventCard-901 to render');
+    dom.window.renderEventPage(events.find(e => e.id === 901));
+    const body = document.getElementById('eventPageBody');
+    assert.ok(body.textContent.includes('سهرة الشباب'), 'expected the youth-party field label on the event page');
+    assert.ok(body.textContent.includes('2027-01-09'), 'expected the youth-party date value on the event page');
   });
 
   await test('an event card omits the youth-party line entirely when youth_party_date is empty', () => {
@@ -1786,6 +1862,11 @@ async function run() {
     assert.ok(card, 'expected card #eventCard-902 to render');
     assert.ok(!card.textContent.includes('سهرة الشباب'), 'the youth-party line must not appear when the field is empty');
     assert.strictEqual(card.querySelector('.fa-fire'), null, 'no leftover youth-party detail-item should render either');
+    const { dom, events } = renderCardFixtures();
+    dom.window.renderEventPage(events.find(e => e.id === 902));
+    const body = dom.window.document.getElementById('eventPageBody');
+    assert.ok(!body.textContent.includes('سهرة الشباب'), 'nor on the event page');
+    assert.strictEqual(body.querySelector('.fa-fire'), null);
   });
 
   // WEDDING_TYPE above hides dinner_time, so this pair needs a type that shows
@@ -2000,7 +2081,7 @@ async function run() {
 
     const dateLine = card.querySelector('.card-date-line');
     assert.ok(dateLine, 'expected a visible quiet date line on a mourning card');
-    assert.ok(!card.querySelector('.card-details-collapsible').contains(dateLine), 'the date line must sit outside the collapsed panel — visible immediately');
+    assert.ok(card.querySelector('.card-caption').contains(dateLine), 'the date line sits on the card face — visible immediately, not on the details page only');
     assert.ok(dateLine.textContent.length > 0, 'expected an actual formatted date, not an empty line');
 
     const festiveCard = document.getElementById('eventCard-901');
@@ -2009,21 +2090,67 @@ async function run() {
     assert.ok(festiveDateLine.textContent.length > 0, 'expected formatted date text');
   });
 
-  await test('the details grid, nav buttons and artist line start collapsed behind "التفاصيل"', () => {
-    const { document } = renderCardFixtures();
+  await test('«التفاصيل» opens the event page like the phone — labelled rows, artist, nav buttons — and «رجوع» returns to the feed untouched', async () => {
+    const { document, dom, events } = renderCardFixtures();
     const card = document.getElementById('eventCard-901');
+    assert.strictEqual(card.querySelector('.card-details-collapsible'), null, 'no details sheet inside the card any more');
 
-    const panel = card.querySelector('.card-details-collapsible');
-    assert.ok(panel, 'expected a collapsible details panel');
-    assert.strictEqual(panel.hidden, true, 'details must start collapsed — the text block is two lines only');
-    assert.ok(panel.querySelector('.event-details-grid'), 'expected the details grid inside the collapsible panel');
-    assert.ok(panel.querySelector('.nav-buttons-row'), 'expected the nav buttons inside the collapsible panel');
+    const fetched = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      fetched.push(requestPath);
+      if (requestPath === '/api/events/901') {
+        return jsonResponse({
+          success: true,
+          event: {
+            ...events.find(e => e.id === 901),
+            occasion_type: { ...WEDDING_TYPE, fields: [...WEDDING_TYPE.fields, { field_key: 'artist_name', label: 'الفنان', is_required: false, position: 9 }] },
+            artist_name: 'الفنان التجريبي',
+            honorees: [{ name: 'فراس', role: 'العريس' }],
+            congratulations: [{ id: 1, sender_name: 'أبو علي', message: 'ألف مبروك', status: 'approved' }]
+          }
+        });
+      }
+      return jsonResponse({ success: true });
+    };
 
-    const toggle = card.querySelector('.card-more-details-btn');
-    assert.ok(toggle, 'expected the toggle button');
-    toggle.click();
-    assert.strictEqual(panel.hidden, false, 'clicking the toggle should reveal the details');
-    assert.ok(toggle.textContent.includes('إخفاء التفاصيل'), 'the toggle label should flip once expanded');
+    card.querySelector('.card-more-details-btn').click();
+    const page = document.getElementById('eventPage');
+    await waitFor(() => page.textContent.includes('ألف مبروك'));
+
+    assert.strictEqual(page.hidden, false);
+    assert.ok(fetched.includes('/api/events/901'), 'the page completes itself from GET /api/events/:id');
+    assert.ok(page.querySelector('#eventPageTitle').textContent.includes('عرس'), 'type + honoree headline');
+    const rows = [...page.querySelectorAll('.event-page-info-row')].map(r => r.textContent.replace(/\s+/g, ' '));
+    assert.ok(rows.some(r => r.includes('فراس (العريس)')), 'each honoree on its own labelled row, with the role');
+    assert.ok(rows.some(r => r.includes('الفنان التجريبي')), 'the artist row');
+    assert.ok(rows.some(r => r.includes('ديوان آل تجربة')), 'the place row');
+    assert.ok(page.querySelector('.nav-buttons-row .waze-btn'), 'Waze');
+    assert.ok(page.querySelector('.nav-buttons-row .maps-btn'), 'Google Maps');
+    assert.ok(page.querySelector('.event-page-share-btn'), 'share');
+    assert.ok(page.textContent.includes('تسجيل نقوط'));
+    assert.ok(page.querySelector('.event-page-congrats-head .chat-trigger-btn'), '«أضف تبريكات» opens the room');
+
+    // (المقارنة هنا لا مع `card` أعلاه: جلب التغذية عند الإقلاع قد يعيد رسمها
+    // بعد renderCardFixtures — السباق الموثَّق أعلى تلك الدالة.)
+    const feed = document.getElementById('eventsContainer');
+    const firstCardBefore = feed.firstElementChild;
+    page.querySelector('.event-page-back').click();
+    assert.strictEqual(page.hidden, true, '«رجوع» closes the page');
+    assert.strictEqual(feed.firstElementChild, firstCardBefore, 'closing the page never re-renders the feed — same cards, same position');
+  });
+
+  await test('tapping the card photo opens the same page, and the browser Back button closes it instead of leaving the site', async () => {
+    const { document, dom, events } = renderCardFixtures();
+    dom.window.fetch = async () => jsonResponse({ success: true, event: { ...events.find(e => e.id === 910), congratulations: [] } });
+    document.querySelector('#eventCard-910 .card-media').click();
+    const page = document.getElementById('eventPage');
+    await waitFor(() => !page.hidden);
+    assert.strictEqual(page.hidden, false);
+
+    dom.window.history.back();
+    await waitFor(() => page.hidden);
+    assert.strictEqual(page.hidden, true, 'Back closes the page');
   });
 
   /**
@@ -2200,6 +2327,56 @@ async function run() {
 
     const badge = dom.window.document.getElementById('notificationsBadge');
     assert.strictEqual(badge.style.display, 'none', 'a broadcast entry must be reachable to zero unread, not permanently unread');
+  });
+
+  await test('a clicked notification stays in the list as read — no red dot, no «جديد» — instead of disappearing', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { fetchStub } = buildTrackingFetchStub();
+    dom.window.fetch = fetchStub;
+    const doc = dom.window.document;
+
+    await dom.window.fetchNotifications();
+    assert.strictEqual(doc.querySelectorAll('#notificationsList .notif-unread-dot').length, 2);
+    doc.querySelectorAll('#notificationsList .event-card')[0].click();
+    await waitFor(() => doc.querySelectorAll('#notificationsList .is-read').length === 1);
+
+    const cards = doc.querySelectorAll('#notificationsList .event-card');
+    assert.strictEqual(cards.length, 2, 'reading a notification must not remove it from the centre');
+    assert.ok(cards[0].classList.contains('is-read'));
+    assert.strictEqual(cards[0].querySelectorAll('.notif-unread-dot, .status-tag.pending').length, 0, 'a read entry loses its red dot and «جديد»');
+    assert.ok(cards[1].classList.contains('is-unread'), 'the other entry is still unread');
+    assert.strictEqual(doc.getElementById('notificationsBadge').textContent, '1');
+    assert.strictEqual(MIXED_NOTIFICATIONS_FIXTURE[0].is_read, false, 'the client must not mutate the server payload in place');
+  });
+
+  await test('«جعل الكل مقروء» posts read-all once, keeps every entry, clears every red mark and hides itself', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { fetchStub } = buildTrackingFetchStub();
+    const posts = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/notifications/read-all' && options.method === 'POST') {
+        posts.push(requestPath);
+        return jsonResponse({ success: true });
+      }
+      return fetchStub(url, options);
+    };
+    const doc = dom.window.document;
+
+    await dom.window.fetchNotifications();
+    const markAllBtn = doc.getElementById('markAllNotificationsReadBtn');
+    assert.strictEqual(markAllBtn.hidden, false, 'shown while anything is unread');
+    assert.ok(markAllBtn.textContent.includes('جعل الكل مقروء'));
+
+    markAllBtn.click();
+    await waitFor(() => markAllBtn.hidden === true);
+
+    assert.deepStrictEqual(posts, ['/api/notifications/read-all']);
+    assert.strictEqual(doc.querySelectorAll('#notificationsList .event-card').length, 2, 'nothing is deleted');
+    assert.strictEqual(doc.querySelectorAll('#notificationsList .is-read').length, 2);
+    assert.strictEqual(doc.querySelectorAll('#notificationsList .notif-unread-dot').length, 0);
+    assert.strictEqual(doc.getElementById('notificationsBadge').style.display, 'none', 'the red bell count disappears');
+    assert.strictEqual(doc.getElementById('clearAllNotificationsBtn').hidden, false, '«مسح الكل» stays beside it');
   });
 
   console.log('\nAdmin panel — the emoji icon fields');
@@ -4395,12 +4572,10 @@ async function run() {
     await waitFor(() => getEventCalled, { timeout: 500 });
     assert.strictEqual(getEventCalled, true, 'expected GET /api/events/123 to be called to load missing event');
 
-    const eventCard = dom.window.document.getElementById('eventCard-123');
-    assert.ok(eventCard, 'expected eventCard-123 to be rendered in the DOM');
-    assert.ok(
-      dom.window.document.querySelector('#singleEventContainer #eventCard-123'),
-      'expected eventCard-123 to be rendered in #singleEventContainer (FIX 6)'
-    );
+    const page = dom.window.document.getElementById('eventPage');
+    await waitFor(() => !page.hidden && page.textContent.includes('قاعة الأساطير'));
+    assert.strictEqual(page.hidden, false, 'the event opens on its own page, like tapping a notification on the phone');
+    assert.ok(page.textContent.includes('قاعة الأساطير'), 'the page shows the fetched event');
     assert.strictEqual(
       dom.window.document.querySelector('#eventsContainer #eventCard-123'),
       null,
@@ -4842,13 +5017,11 @@ async function run() {
     await waitFor(() => getFeedCalled);
     await waitFor(() => getSingleEventCalled);
 
-    // Deep-linked event must be present in DOM (rendered in #singleEventContainer)
-    const deepLinkedCard = dom.window.document.getElementById('eventCard-456');
-    assert.ok(deepLinkedCard, 'deep-linked event 456 must be rendered in DOM');
-    assert.ok(
-      dom.window.document.querySelector('#singleEventContainer #eventCard-456'),
-      'deep-linked event 456 must be rendered inside #singleEventContainer'
-    );
+    // Deep-linked event opens on its own page, above the feed
+    const page = dom.window.document.getElementById('eventPage');
+    await waitFor(() => !page.hidden && page.textContent.includes('قاعة السلام'));
+    assert.strictEqual(page.hidden, false, 'deep-linked event 456 must open on the event page');
+    assert.ok(page.textContent.includes('قاعة السلام'), 'with the fetched event in it');
 
     // Feed event must also be present in #eventsContainer
     const feedCard = dom.window.document.getElementById('eventCard-101');
@@ -4869,30 +5042,20 @@ async function run() {
     );
   });
 
-  await test('navigateToEvent uses behavior auto under prefers-reduced-motion or solemn tone (FIX 7, story 54)', async () => {
+  await test('navigateToEvent opens the event page without any animated scroll of the feed (FIX 7, story 54)', async () => {
     const dom = buildEnv({ loggedIn: true });
-
-    let lastScrollBehavior = null;
-    const origGetElementById = dom.window.document.getElementById.bind(dom.window.document);
-    dom.window.document.getElementById = (id) => {
-      if (id === 'eventCard-777') {
-        return {
-          id: 'eventCard-777',
-          classList: {
-            contains: (cls) => cls === 'tone-mourning',
-            add: () => {},
-            remove: () => {}
-          },
-          scrollIntoView: (opts) => {
-            lastScrollBehavior = opts && opts.behavior;
-          }
-        };
-      }
-      return origGetElementById(id);
-    };
+    await flushBoot();
+    dom.window.renderEvents([{ id: 777, title: 'عزاء', town: 'رهط', event_date: '2027-03-10', location_name: 'بيت العزاء', occasion_type: FUNERAL_TYPE }]);
+    const card = dom.window.document.getElementById('eventCard-777');
+    let scrolled = false;
+    card.scrollIntoView = () => { scrolled = true; };
+    dom.window.fetch = async () => jsonResponse({ success: true, event: { id: 777, title: 'عزاء', town: 'رهط', event_date: '2027-03-10', location_name: 'بيت العزاء', occasion_type: FUNERAL_TYPE, congratulations: [] } });
 
     await dom.window.navigateToEvent(777);
-    assert.strictEqual(lastScrollBehavior, 'auto', 'solemn occasion card must scroll with auto behavior, never smooth');
+    const page = dom.window.document.getElementById('eventPage');
+    assert.strictEqual(page.hidden, false, 'the event opens on its page');
+    assert.ok(page.classList.contains('tone-mourning'), 'a solemn event keeps its quiet tone on the page');
+    assert.strictEqual(scrolled, false, 'no smooth scroll through the feed at all — nothing to animate under reduced motion');
   });
 
   await test('clicking an event in the agenda day list closes the agenda and navigates to that event, with no ReferenceError', async () => {
@@ -5268,9 +5431,10 @@ async function run() {
     assert.strictEqual(win.effectiveEventAudio(funeralEvent), null, 'a type that hides audio_url gets NO audio — not its own, not the default');
 
     const festiveCard = win.renderSingleEventCardHtml(festiveEvent);
-    assert.ok(festiveCard.includes('card-audio-player'), 'the default track must render the card\'s audio block');
+    assert.ok(win.renderEventAudioBlockHtml(festiveEvent).includes('card-audio-player'), 'the default track must render the event page\'s audio block');
     assert.ok(festiveCard.includes(`data-audio-url="${DEFAULT_AUDIO}"`), 'the feed card must carry its effective track for autoplay');
-    assert.ok(!win.renderSingleEventCardHtml(funeralEvent).includes('card-audio-player'), 'no audio block at all on a type that hides audio_url');
+    assert.strictEqual(win.renderEventAudioBlockHtml(funeralEvent), '', 'no audio block at all on a type that hides audio_url');
+    assert.ok(!win.renderSingleEventCardHtml(funeralEvent).includes('data-audio-url'), 'nor a track for the feed to autoplay');
   });
 
   await test('feed audio is isolated per card like a story: moving on stops the old track — even a shared default one — and starts the next from zero', async () => {

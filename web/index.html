@@ -74,7 +74,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.4.0">
+  <link rel="stylesheet" href="styles.css?v=2.5.0">
 </head>
 <body>
 
@@ -342,9 +342,6 @@
 
       <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
       <div id="announcementsContainer"></div>
-
-      <!-- عرض مناسبة مفردة من إشعار أو رابط عميق (قصة 14) -->
-      <div id="singleEventContainer"></div>
 
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
       <div id="eventsContainer" class="events-feed">
@@ -1059,6 +1056,7 @@
           <h3><i class="fa-solid fa-bell"></i> الإشعارات</h3>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
+          <button id="markAllNotificationsReadBtn" type="button" class="town-pill" style="font-size:0.75rem; padding:4px 10px; cursor:pointer;" onclick="markAllNotificationsRead()" hidden><i class="fa-solid fa-check-double" aria-hidden="true"></i> جعل الكل مقروء</button>
           <button id="clearAllNotificationsBtn" class="town-pill" style="font-size:0.75rem; padding:4px 10px; cursor:pointer;" onclick="clearAllNotifications()">مسح الكل</button>
           <button class="close-modal-btn" onclick="closeNotificationsModal()"><i class="fa-solid fa-xmark"></i></button>
         </div>
@@ -1427,6 +1425,47 @@
     </div>
   </div>
 
+  <!-- صفحة المناسبة — مثل «تفاصيل المناسبة» في تطبيق الموبايل، فوق التغذية دون أن
+       تمسّها (طلب المالك 2026-10-02). تحت النوافذ (z-index) كي تفتح غرفة التبريكات
+       والمشاركة والدخول فوقها. -->
+  <div id="eventPage" class="event-page" role="dialog" aria-modal="true" aria-labelledby="eventPageTitle" hidden>
+    <div class="event-page-bar">
+      <button type="button" class="event-page-back" onclick="closeEventPage()" aria-label="رجوع">
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> <span>رجوع</span>
+      </button>
+      <span class="event-page-bar-title">تفاصيل المناسبة</span>
+    </div>
+    <div id="eventPageBody" class="event-page-body"></div>
+  </div>
+
+  <!-- نافذة المشاركة الخاصة بالموقع — على الكمبيوتر بدل نافذة النظام (كروم/ويندوز 10
+       يعلن المشاركة ثم لا يُظهر شيئاً). آخر نافذة في الصفحة عمداً: تفتح فوق
+       غرفة التبريكات والبث وصفحة المناسبة، وكلها بنفس z-index. -->
+  <div id="shareSheetModal" class="modal-overlay" style="display:none;" onclick="if (event.target === this) closeShareSheet()">
+    <div class="modal-card share-sheet-card" role="dialog" aria-modal="true" aria-labelledby="shareSheetTitle">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="shareSheetTitle"><i class="fa-solid fa-share-nodes" aria-hidden="true"></i> مشاركة</h3>
+          <span id="shareSheetLine" class="modal-sub"></span>
+        </div>
+        <button type="button" class="close-modal-btn" onclick="closeShareSheet()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <input id="shareSheetUrl" class="share-sheet-url" type="text" readonly dir="ltr" aria-label="رابط المشاركة" onfocus="this.select()">
+      <div class="share-sheet-actions">
+        <a id="shareSheetWhatsapp" class="share-sheet-btn share-sheet-whatsapp" href="#" target="_blank" rel="noopener" onclick="closeShareSheet()">
+          <i class="fa-brands fa-whatsapp" aria-hidden="true"></i> <span>واتساب</span>
+        </a>
+        <a id="shareSheetFacebook" class="share-sheet-btn share-sheet-facebook" href="#" target="_blank" rel="noopener" onclick="closeShareSheet()">
+          <i class="fa-brands fa-facebook-f" aria-hidden="true"></i> <span>فيسبوك</span>
+        </a>
+        <button id="shareSheetCopyBtn" type="button" class="share-sheet-btn share-sheet-copy" onclick="copyShareSheetLink()">
+          <i class="fa-regular fa-copy" aria-hidden="true"></i> <span>نسخ الرابط</span>
+        </button>
+      </div>
+      <button type="button" class="cancel-btn share-sheet-cancel" onclick="closeShareSheet()">إلغاء</button>
+    </div>
+  </div>
+
   <!-- زر الدعم الفني العائم للهاتف وPWA -->
   <button id="supportFab" class="support-fab" onclick="handleSupportClick()" title="الدعم الفني عبر واتساب" aria-label="الدعم الفني عبر واتساب" hidden>
     <i class="fa-brands fa-whatsapp"></i>
@@ -1434,9 +1473,9 @@
 
   <!-- Scripts -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
-  <script src="config.js?v=2.4.0"></script>
-  <script src="api.js?v=2.4.0"></script>
-  <script src="occasionForm.js?v=2.4.0"></script>
-  <script src="app.js?v=2.4.0"></script>
+  <script src="config.js?v=2.5.0"></script>
+  <script src="api.js?v=2.5.0"></script>
+  <script src="occasionForm.js?v=2.5.0"></script>
+  <script src="app.js?v=2.5.0"></script>
 </body>
 </html>

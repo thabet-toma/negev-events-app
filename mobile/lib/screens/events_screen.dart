@@ -1615,7 +1615,6 @@ class _NotificationBellState extends State<_NotificationBell> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
                       'الإشعارات',
@@ -1625,8 +1624,41 @@ class _NotificationBellState extends State<_NotificationBell> {
                         color: sheetContext.c.ink,
                       ),
                     ),
+                    const Spacer(),
+                    // «جعل الكل مقروء» لا يحذف شيئاً — القائمة تبقى باهتة والعدّاد
+                    // الأحمر يختفي؛ «مسح الكل» بجانبه لمن يريد التنظيف فعلاً.
+                    if (_notifications.any((n) => !n.isRead))
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
+                        onPressed: () async {
+                          try {
+                            await api.markAllNotificationsRead();
+                            if (mounted) {
+                              setState(() => _notifications =
+                                  _notifications.map((n) => n.asRead()).toList());
+                            }
+                            setSheetState(() {});
+                          } catch (_) {
+                            if (sheetContext.mounted) {
+                              showMessage(sheetContext, 'تعذّر تعليم الإشعارات كمقروءة', isError: true);
+                            }
+                          }
+                        },
+                        icon: Icon(Icons.done_all, size: 18, color: sheetContext.c.sky),
+                        label: Text(
+                          'جعل الكل مقروء',
+                          style: TextStyle(fontSize: 13, color: sheetContext.c.sky),
+                        ),
+                      ),
                     if (_notifications.isNotEmpty)
                       TextButton.icon(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                        ),
                         onPressed: () async {
                           try {
                             await api.clearAllNotifications();
@@ -1681,16 +1713,38 @@ class _NotificationBellState extends State<_NotificationBell> {
                                 : (n.isRead ? Icons.notifications_none : Icons.notifications_active),
                             color: iconColor,
                           ),
-                          title: Text(
-                            n.title,
-                            style: TextStyle(
-                              fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold,
-                              color: context.c.ink,
-                            ),
+                          // غير المقروء بنقطة حمراء وخطّ عريض؛ المقروء يبقى باهتاً
+                          // بلا نقطة (طلب المالك 2026-10-02).
+                          title: Row(
+                            children: [
+                              if (!n.isRead) ...[
+                                Container(
+                                  key: const ValueKey('notif_unread_dot'),
+                                  width: 9,
+                                  height: 9,
+                                  decoration: BoxDecoration(
+                                    color: context.c.danger,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  n.title,
+                                  style: TextStyle(
+                                    fontWeight: n.isRead ? FontWeight.normal : FontWeight.bold,
+                                    color: n.isRead ? context.c.inkSoft : context.c.ink,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           subtitle: Text(
                             n.body,
-                            style: TextStyle(color: context.c.inkSoft),
+                            style: TextStyle(
+                              color: n.isRead ? context.c.inkFaint : context.c.inkSoft,
+                            ),
                           ),
                           trailing: IconButton(
                             icon: Icon(Icons.close, size: 18, color: sheetContext.c.inkFaint),
@@ -1714,24 +1768,27 @@ class _NotificationBellState extends State<_NotificationBell> {
                               } catch (_) {}
                             },
                           ),
+                          // النقر يعلّم الإشعار مقروءاً ويفتح وجهته — لا يحذفه؛
+                          // الحذف لزرّ ✕ و«مسح الكل» وحدهما.
                           onTap: () async {
                             Navigator.of(sheetContext).pop();
-                            try {
-                              if (n.isBroadcast) {
-                                await api.dismissBroadcast(n.broadcastId!);
-                              } else {
-                                await api.deleteNotification(n.id!);
+                            if (!n.isRead) {
+                              try {
+                                if (n.isBroadcast) {
+                                  await api.dismissBroadcast(n.broadcastId!);
+                                } else {
+                                  await api.markNotificationRead(n.id!);
+                                }
+                                if (mounted) {
+                                  setState(() {
+                                    _notifications = _notifications
+                                        .map((item) => identical(item, n) ? item.asRead() : item)
+                                        .toList();
+                                  });
+                                }
+                              } catch (_) {
+                                // لا يعطّل فتح المناسبة إن فشل تعليم القراءة.
                               }
-                              if (mounted) {
-                                setState(() {
-                                  _notifications = _notifications.where((item) =>
-                                    n.isBroadcast ? item.broadcastId != n.broadcastId : item.id != n.id
-                                  ).toList();
-                                });
-                              }
-                              _load();
-                            } catch (_) {
-                              // لا يعطّل فتح المناسبة إن فشل تعليم القراءة.
                             }
                             _openTarget(n);
                           },

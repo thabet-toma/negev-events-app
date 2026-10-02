@@ -488,6 +488,11 @@ class NegevApi {
     await _client.delete('/api/notifications/$id', auth: true);
   }
 
+  /// «جعل الكل مقروء» — الشخصية والتعاميم معاً، بلا حذف أي سطر.
+  Future<void> markAllNotificationsRead() async {
+    await _client.post('/api/notifications/read-all', auth: true);
+  }
+
   Future<void> clearAllNotifications() async {
     await _client.post('/api/notifications/clear-all', auth: true);
   }

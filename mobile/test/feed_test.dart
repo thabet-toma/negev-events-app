@@ -1036,4 +1036,123 @@ void main() {
       },
     );
   });
+
+  group('جرس الإشعارات — مقروء وغير مقروء', () {
+    /// يفتح ورقة الإشعارات على إشعارَين غير مقروءَين بلا مناسبة (فالنقر لا يفتح
+    /// شاشة أخرى)، ويسجّل كل نداء كتابة يصل الخادم.
+    Future<List<String>> openSheet(WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final writes = <String>[];
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        if (request.method != 'GET') writes.add('${request.method} $path');
+        Object body = {'success': true};
+        if (path.endsWith('/api/auth/login')) {
+          body = {
+            'success': true,
+            'token': 'test-token',
+            'user': {
+              'id': 1,
+              'phone_number': '0500000000',
+              'full_name': 'مستخدم اختبار',
+              'role': 'user',
+            },
+          };
+        } else if (path.endsWith('/api/notifications/preferences')) {
+          body = {
+            'success': true,
+            'preferences': {'notify_new_events': true},
+          };
+        } else if (path.endsWith('/api/notifications')) {
+          body = {
+            'success': true,
+            'notifications': [
+              {'id': 11, 'type': 'event_new_digest', 'title': 'مناسبات جديدة اليوم', 'body': 'نص أول', 'is_read': 0, 'event_id': null},
+              {'id': 12, 'type': 'event_new_digest', 'title': 'ملخص آخر', 'body': 'نص ثانٍ', 'is_read': 0, 'event_id': null},
+            ],
+          };
+        } else if (path.endsWith('/api/events')) {
+          body = {
+            'success': true,
+            'events': <Map<String, dynamic>>[],
+            'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+            'announcements': <Map<String, dynamic>>[],
+          };
+        } else if (path.endsWith('/api/stories')) {
+          body = {'success': true, 'stories': <Map<String, dynamic>>[]};
+        } else if (path.endsWith('/api/occasion-types')) {
+          body = {'success': true, 'types': <Map<String, dynamic>>[]};
+        }
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      await tester.runAsync(() => auth.signIn('0500000000', '1234'));
+      writes.clear();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: RealtimeService(),
+              child: const EventsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.byTooltip('الإشعارات'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      return writes;
+    }
+
+    testWidgets(
+      '«جعل الكل مقروء» يرسل read-all وحده، فتبقى الإشعارات وتختفي النقاط الحمراء',
+      (tester) async {
+        final writes = await openSheet(tester);
+        expect(find.byKey(const ValueKey('notif_unread_dot')), findsNWidgets(2));
+
+        await tester.tap(find.text('جعل الكل مقروء'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        expect(writes, ['POST /api/notifications/read-all']);
+        expect(find.byKey(const ValueKey('notif_unread_dot')), findsNothing);
+        expect(find.text('مناسبات جديدة اليوم'), findsOneWidget, reason: 'لا شيء يُحذف');
+        expect(find.text('ملخص آخر'), findsOneWidget);
+        expect(find.text('جعل الكل مقروء'), findsNothing, reason: 'لا غير مقروء بعد الآن');
+        expect(find.text('مسح الكل'), findsOneWidget, reason: '«مسح الكل» يبقى بجانبه');
+      },
+    );
+
+    testWidgets(
+      'النقر على إشعار يعلّمه مقروءاً بـ PATCH ولا يحذفه',
+      (tester) async {
+        final writes = await openSheet(tester);
+
+        await tester.tap(find.text('مناسبات جديدة اليوم'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(writes, ['PATCH /api/notifications/11/read']);
+
+        await tester.tap(find.byTooltip('الإشعارات'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.text('مناسبات جديدة اليوم'), findsOneWidget, reason: 'المقروء يبقى في القائمة');
+        expect(find.byKey(const ValueKey('notif_unread_dot')), findsOneWidget, reason: 'نقطة الآخر وحده');
+      },
+    );
+  });
 }

@@ -4690,6 +4690,41 @@ async function run() {
     assert.strictEqual(status, 404);
   });
 
+  await test('POST /api/notifications/read-all marks every personal notification and broadcast read, deletes nothing, and touches no one else', async () => {
+    const { insertId: ownId } = await db.execute(
+      "INSERT INTO notifications (user_id, type, title, body) VALUES (?, 'event_new', 'إشعار للاختبار', 'نص')",
+      [broadcastTownUser.id]
+    );
+    const { insertId: strangerId } = await db.execute(
+      "INSERT INTO notifications (user_id, type, title, body) VALUES (?, 'event_new', 'إشعار لغيره', 'نص')",
+      [broadcastOtherTownUser.id]
+    );
+
+    const before = await api('GET', '/api/notifications', { token: broadcastTownUser.token });
+    const beforeCount = before.body.notifications.length;
+    assert.ok(before.body.notifications.some(n => !n.is_read), 'expected at least one unread entry before read-all');
+
+    const anonymous = await api('POST', '/api/notifications/read-all');
+    assert.strictEqual(anonymous.status, 401);
+
+    const res = await api('POST', '/api/notifications/read-all', { token: broadcastTownUser.token });
+    assert.strictEqual(res.status, 200);
+
+    const after = await api('GET', '/api/notifications', { token: broadcastTownUser.token });
+    assert.strictEqual(after.body.notifications.length, beforeCount, 'read-all must not delete anything');
+    assert.ok(after.body.notifications.every(n => n.is_read), 'every entry must read as read after read-all');
+    assert.ok(after.body.notifications.some(n => n.id === ownId));
+    assert.ok(after.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === townBroadcastId));
+
+    const stranger = await db.queryOne('SELECT is_read FROM notifications WHERE id = ?', [strangerId]);
+    assert.strictEqual(Number(stranger.is_read), 0, 'read-all must never touch another user\'s rows');
+
+    const again = await api('POST', '/api/notifications/read-all', { token: broadcastTownUser.token });
+    assert.strictEqual(again.status, 200, 'read-all twice must be idempotent');
+
+    await db.execute('DELETE FROM notifications WHERE id IN (?, ?)', [ownId, strangerId]);
+  });
+
   await test('A user created AFTER the broadcast still sees it — proves no fan-out', async () => {
     const lateUser = await createUserInTown('مستخدم مسجَّل بعد التعميم', scopedTown);
     broadcastCleanupUserIds.push(lateUser.id);

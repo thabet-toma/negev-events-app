@@ -59,6 +59,21 @@ async function markRead(notificationId, userId) {
   if (!affectedRows) throw ApiError.notFound('الإشعار غير موجود');
 }
 
+/**
+ * «جعل الكل مقروء» — يعلّم كل إشعارات المستخدم الشخصية مقروءة ويغلق كل تعميم
+ * لم يقرأه، بلا حذف أي صفّ (بخلاف clearAll أدناه). التعميم «مقروء» هو
+ * `broadcast_views.dismissed` نفسه (انظر listForUser أعلاه)، فلا عمود ثانٍ.
+ */
+async function markAllRead(userId) {
+  await db.execute('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0', [userId]);
+  const rows = await broadcasts.listForCenter(userId);
+  for (const b of rows) {
+    if (!b.dismissed) {
+      await broadcasts.dismiss(userId, b.id);
+    }
+  }
+}
+
 /** Deletes one notification — `WHERE id = ? AND user_id = ?` */
 async function deleteNotification(notificationId, userId) {
   await db.execute(
@@ -525,6 +540,7 @@ async function setPreferences(userId, { notifyNewEvents }) {
 module.exports = {
   listForUser,
   markRead,
+  markAllRead,
   deleteNotification,
   clearAll,
   TYPES,
