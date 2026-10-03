@@ -4,6 +4,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
+const events = require('../services/events.service');
 const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { serviceMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
@@ -222,7 +223,7 @@ router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (r
   // Confirms the provider exists AND is in scope before writing anything —
   // out-of-scope is a 404, never a 403 (a 403 would confirm the row exists
   // to an admin who cannot see it).
-  await services.getProviderForAdmin(req.user, id);
+  const existing = await services.getProviderForAdmin(req.user, id);
 
   const body = req.body || {};
   const payload = {};
@@ -265,6 +266,7 @@ router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (r
 
   if (imageFile) payload.image_url = await cloudinary.storeUploadedImage(imageFile, 'services');
   await services.updateProvider(id, payload);
+  if (payload.image_url !== undefined) await events.releaseReplacedImage(existing.image_url, payload.image_url);
   res.json({ success: true, provider: await services.getProviderForAdmin(req.user, id), message: 'تم تحديث مزوّد الخدمة بنجاح' });
 }));
 

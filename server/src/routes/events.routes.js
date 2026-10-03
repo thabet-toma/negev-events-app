@@ -507,6 +507,10 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });
+  if (changes.poster_url !== undefined) await events.releaseReplacedImage(existing.poster_url, changes.poster_url);
+  if (changes.artist_image_url !== undefined) {
+    await events.releaseReplacedImage(existing.artist_image_url, changes.artist_image_url);
+  }
 
   const changedFields = [...result.changedColumns];
   if (honorees !== null && honorees[0].name !== existing.groom_name) changedFields.push('honorees');

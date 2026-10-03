@@ -5,6 +5,8 @@ const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
 const archivePhotos = require('./archivePhotos.service');
+const cloudinary = require('./cloudinary.service');
+const logger = require('../utils/logger');
 const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
@@ -707,6 +709,29 @@ function classifyAmendment(changedColumns) {
   return changedColumns.some(column => CRITICAL_AMENDMENT_FIELDS.includes(column)) ? 'critical' : 'cosmetic';
 }
 
+/**
+ * Deletes from Cloudinary an image a row just stopped using (a replaced
+ * poster, artist image or service image). Only one storeUploadedImage made,
+ * and only when no row anywhere still holds that URL — the edit forms accept
+ * a typed URL, so an admin may have pasted it onto another event. Best-effort,
+ * like every other destroy: called after the row write has succeeded.
+ */
+async function releaseReplacedImage(oldUrl, newUrl) {
+  if (!oldUrl || oldUrl === newUrl) return;
+  const publicId = cloudinary.forwardedPublicId(oldUrl);
+  if (!publicId) return;
+  const inUse = await db.queryOne(
+    `SELECT 1 AS used FROM events WHERE poster_url = ? OR artist_image_url = ?
+     UNION ALL SELECT 1 FROM service_providers WHERE image_url = ?
+     UNION ALL SELECT 1 FROM occasion_types WHERE default_poster_url = ?
+     LIMIT 1`,
+    [oldUrl, oldUrl, oldUrl, oldUrl]
+  );
+  if (inUse) return;
+  logger.info('cloudinary.release', { publicId });
+  await cloudinary.destroy(publicId);
+}
+
 /** Fetches an event row for an ownership check / edit diff, or throws 404. */
 async function getEventForEdit(eventId) {
   const event = await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
@@ -1085,6 +1110,7 @@ module.exports = {
   checkTownMismatch,
   createEvent,
   getEventForEdit,
+  releaseReplacedImage,
   updateEvent,
   classifyAmendment,
   CRITICAL_AMENDMENT_FIELDS,

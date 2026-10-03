@@ -8005,6 +8005,64 @@ async function run() {
       await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
     });
 
+    const destroyedIds = () => cloudinaryCalls
+      .filter(c => c.url.endsWith('/image/destroy'))
+      .map(c => new URLSearchParams(c.body).get('public_id'));
+    const publicIdOf = url => url.split(/\/v\d+\//)[1];
+
+    await test('replacing a poster deletes the old one from Cloudinary — unless another row still uses it', async () => {
+      const first = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس الاستبدال' }),
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+      });
+      const firstPoster = (await api('GET', `/api/events/${first.body.eventId}`)).body.event.poster_url;
+
+      // A second event whose poster URL was pasted from the first one.
+      const second = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس الرابط الملصوق', custom_poster_url: firstPoster })
+      });
+      assert.strictEqual((await api('GET', `/api/events/${second.body.eventId}`)).body.event.poster_url, firstPoster);
+
+      cloudinaryCalls.length = 0;
+      const replaced = await apiUpload(`/api/events/${first.body.eventId}`, {
+        method: 'PATCH',
+        token: adminToken,
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'new.png' }]
+      });
+      assert.strictEqual(replaced.status, 200, replaced.body.message);
+      assert.deepStrictEqual(destroyedIds(), [], 'still the second event\'s poster — never deleted under it');
+
+      const newPoster = (await api('GET', `/api/events/${first.body.eventId}`)).body.event.poster_url;
+      await api('DELETE', `/api/admin/events/${second.body.eventId}`, { token: adminToken });
+      cloudinaryCalls.length = 0;
+      const again = await apiUpload(`/api/events/${first.body.eventId}`, {
+        method: 'PATCH',
+        token: adminToken,
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'newer.png' }]
+      });
+      assert.strictEqual(again.status, 200, again.body.message);
+      assert.deepStrictEqual(destroyedIds(), [publicIdOf(newPoster)], 'the replaced poster is deleted from Cloudinary');
+      await api('DELETE', `/api/admin/events/${first.body.eventId}`, { token: adminToken });
+    });
+
+    await test('a JSON edit that leaves the poster alone deletes nothing; a typed external URL is never deleted', async () => {
+      const created = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس بلا استبدال', custom_poster_url: 'https://example.com/p.png' })
+      });
+      cloudinaryCalls.length = 0;
+      await api('PATCH', `/api/events/${created.body.eventId}`, { token: adminToken, body: { title: 'عنوان آخر' } });
+      await apiUpload(`/api/events/${created.body.eventId}`, {
+        method: 'PATCH',
+        token: adminToken,
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+      });
+      assert.deepStrictEqual(destroyedIds(), [], 'only images this server forwarded are ever deleted');
+      await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+    });
+
     await test('when Cloudinary fails, the publish still succeeds and the poster stays on this server', async () => {
       cloudinaryUploadFails = true;
       try {
@@ -8068,6 +8126,15 @@ async function run() {
       assert.strictEqual(status, 201, body.message);
       const provider = await api('GET', `/api/admin/service-providers/${body.providerId}`, { token: superAdminToken });
       assert.ok(provider.body.provider.image_url.includes('/negev-events/services/'), provider.body.provider.image_url);
+
+      cloudinaryCalls.length = 0;
+      const replaced = await apiUpload(`/api/admin/service-providers/${body.providerId}`, {
+        method: 'PATCH',
+        token: superAdminToken,
+        files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'j.png' }]
+      });
+      assert.strictEqual(replaced.status, 200, replaced.body.message);
+      assert.deepStrictEqual(destroyedIds(), [publicIdOf(provider.body.provider.image_url)], 'the replaced image is deleted from Cloudinary');
       await api('DELETE', `/api/admin/service-providers/${body.providerId}`, { token: superAdminToken });
       await api('DELETE', `/api/admin/service-categories/${category.body.category.id}`, { token: superAdminToken });
     });

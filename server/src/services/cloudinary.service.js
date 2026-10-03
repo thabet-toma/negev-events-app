@@ -207,6 +207,24 @@ async function storeUploadedImage(file, ...segments) {
   }
 }
 
+// Only the folders storeUploadedImage writes to. Archive photos and episode
+// share images keep their own public_id column and are deleted with their row.
+const FORWARDED_FOLDERS = ['posters', 'artists', 'services'].map(name => `${ROOT_FOLDER}/${name}/`);
+
+/**
+ * The public_id inside a URL storeUploadedImage returned, or null for
+ * anything else — a local `/uploads/` path, an external link someone typed,
+ * another Cloudinary account, or one of our other folders.
+ */
+function forwardedPublicId(url) {
+  if (typeof url !== 'string' || !isConfigured()) return null;
+  const prefix = `https://res.cloudinary.com/${config.cloudinary.cloudName}/image/upload/`;
+  if (!url.startsWith(prefix)) return null;
+  const match = url.slice(prefix.length).match(/(?:^|\/)v\d+\/(.+)$/);
+  const id = match ? match[1] : '';
+  return PUBLIC_ID_PATTERN.test(id) && FORWARDED_FOLDERS.some(folder => id.startsWith(folder)) ? id : null;
+}
+
 module.exports = {
   isConfigured,
   folderFor,
@@ -215,5 +233,6 @@ module.exports = {
   deliveryUrl,
   jpegVariant,
   destroy,
-  storeUploadedImage
+  storeUploadedImage,
+  forwardedPublicId
 };
