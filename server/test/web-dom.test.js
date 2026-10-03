@@ -2522,6 +2522,48 @@ async function run() {
     assert.strictEqual(form.get('title'), 'عنوان جديد');
     assert.strictEqual(form.get('village_id'), '', 'a cleared village must travel as empty, which the server reads as null');
     assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'عريس' }]), 'honorees must be JSON, as the publish form sends them');
+    assert.strictEqual(form.get('audio'), null, 'no audio chosen must send no audio part — not the string "null"');
+  });
+
+  /**
+   * The audio used to be a URL box too — the owner's report: an admin has a
+   * recording on their phone, not a hosted link. The edit form now takes a file
+   * under the field name eventMedia registers, and the URL is only a hidden
+   * value the remove button empties.
+   */
+  await test('the event edit form takes the audio as a file, not a typed URL', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('evtAudioFile').type, 'file', 'expected an audio file input in the edit form');
+    assert.strictEqual(document.getElementById('evtAudioUrl').type, 'hidden', 'the audio URL must no longer be a box someone types into');
+  });
+
+  await test('a chosen audio file is sent as multipart under "audio", alone or with a poster', () => {
+    const dom = buildAdminEnv();
+    const audio = new dom.window.File(['x'], 'song.mp3', { type: 'audio/mpeg' });
+
+    const form = dom.window.buildEventEditFormData({ audio_title: 'زفّة' }, null, audio);
+
+    assert.ok(form.get('audio'), 'the file must ride under "audio" — the name upload.js registers');
+    assert.strictEqual(form.get('poster'), null, 'no poster chosen must send no poster part');
+    assert.strictEqual(form.get('audio_title'), 'زفّة');
+  });
+
+  await test('removing the current audio empties the value the diff compares, and hides the player', () => {
+    const dom = buildAdminEnv();
+    dom.window.ensureEventEditFormMounted();
+    const { document } = dom.window;
+
+    document.getElementById('evtAudioUrl').value = 'http://x/uploads/a.mp3';
+    dom.window.showEventAudioPreview('http://x/uploads/a.mp3');
+    assert.strictEqual(document.getElementById('evtAudioRemoveBtn').style.display, 'inline-flex');
+
+    dom.window.removeEventEditAudio();
+    assert.strictEqual(document.getElementById('evtAudioUrl').value, '', 'an emptied audio_url is what the server reads as "clear it"');
+    assert.strictEqual(document.getElementById('evtAudioPreview').style.display, 'none');
+    assert.strictEqual(document.getElementById('evtAudioRemoveBtn').style.display, 'none');
   });
 
   console.log('\nAdmin panel — village map (typed-by-hand coordinates → click-to-pick)');

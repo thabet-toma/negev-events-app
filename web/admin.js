@@ -2283,8 +2283,8 @@ function setAdminEventsTownFilter(town) {
 // #tabEvents تحت قائمة البطاقات، بنفس نمط pane-box في بقية اللوحة.
 //
 // PATCH /api/events/:id (لا /api/admin/events/:id) — نفس مسار المالك/الأدمن
-// المحلي، بلا رفع ملفات (poster_url/audio_url/artist_image_url نصوص عناوين
-// لا غير)، ويرسل الفرق فقط: كل حقل غير مُغيَّر يبقى `undefined` ولا يدخل
+// المحلي؛ الملصق والمقطع الصوتي يُرفعان ملفاً (artist_image_url وحده رابط
+// نصّي)، ويرسل الفرق فقط: كل حقل غير مُغيَّر يبقى `undefined` ولا يدخل
 // الحمولة، لأن الخادم يرفض 400 «لم يتم إرسال أي تعديل» ويترك كل undefined
 // كما هو (قيد ٤).
 // ======================================================================
@@ -2387,6 +2387,7 @@ function applyEventEditDraft() {
         if (vilEl) vilEl.value = draft.values.evtVillage;
       }
       syncRequestedVillageInput('evt');
+      showEventAudioPreview(document.getElementById('evtAudioUrl').value);
     }
 
     if (Array.isArray(draft.honorees) && draft.honorees.length > 0) {
@@ -2541,10 +2542,6 @@ function ensureEventEditFormMounted() {
         </div>
       </div>
 
-      <p style="font-size:0.82rem; color:var(--text-dim);">
-        <i class="fa-solid fa-circle-info"></i> لا رفع ملفات في هذا النموذج — الحقول أدناه عناوين URL نصّية فقط (رابط صورة أو ملف صوتي مستضاف مسبقاً)، لا منتقي ملفات.
-      </p>
-
       <div class="form-row">
         <div class="form-group half">
           <label>صورة الملصق</label>
@@ -2561,8 +2558,12 @@ function ensureEventEditFormMounted() {
 
       <div class="form-row">
         <div class="form-group half">
-          <label>رابط الملف الصوتي (URL)</label>
-          <input type="text" id="evtAudioUrl" maxlength="2000" placeholder="https://...">
+          <label>المقطع الصوتي</label>
+          <audio id="evtAudioPreview" class="default-audio-player" controls preload="none" style="display:none;"></audio>
+          <input type="file" id="evtAudioFile" accept="audio/*">
+          <span class="hint-text">اختر ملفاً صوتياً من جهازك ليحلّ محلّ المقطع الحالي.</span>
+          <input type="hidden" id="evtAudioUrl">
+          <button type="button" class="btn-reject" id="evtAudioRemoveBtn" onclick="removeEventEditAudio()" style="display:none; margin-top:8px;"><i class="fa-solid fa-trash"></i> إزالة المقطع</button>
         </div>
         <div class="form-group half">
           <label>عنوان المقطع الصوتي</label>
@@ -2861,6 +2862,9 @@ async function openEventEditForm(id) {
   const posterFileInput = document.getElementById('evtPosterFile');
   if (posterFileInput) posterFileInput.value = '';
   showEventPosterPreview(editingEventOriginal.poster_url);
+  const audioFileInput = document.getElementById('evtAudioFile');
+  if (audioFileInput) audioFileInput.value = '';
+  showEventAudioPreview(editingEventOriginal.audio_url);
 
   wrapper.style.display = 'block';
   // بعد إظهار الحاوية لا قبلها — Leaflet يقيس حاوية بعرض صفر وهي مخفية.
@@ -3098,11 +3102,37 @@ function showEventPosterPreview(url) {
 }
 
 /**
+ * يعرض المقطع الصوتي الحالي للمناسبة مع زرّ إزالته (أو يخفيهما إن لم يكن
+ * هناك مقطع). الرابط في `evtAudioUrl` المخفي هو ما تقارنه حمولة الفرق.
+ */
+function showEventAudioPreview(url) {
+  const preview = document.getElementById('evtAudioPreview');
+  const removeBtn = document.getElementById('evtAudioRemoveBtn');
+  if (!preview) return;
+  if (url) {
+    preview.src = url;
+    preview.style.display = 'block';
+  } else {
+    preview.removeAttribute('src');
+    preview.style.display = 'none';
+  }
+  if (removeBtn) removeBtn.style.display = url ? 'inline-flex' : 'none';
+}
+
+/** يُفرغ رابط المقطع الحالي — يُرسَل `audio_url` فارغاً فيمسحه الخادم. */
+function removeEventEditAudio() {
+  document.getElementById('evtAudioUrl').value = '';
+  document.getElementById('evtAudioFile').value = '';
+  showEventAudioPreview('');
+  saveEventEditDraft();
+}
+
+/**
  * يحوّل حمولة الفرق إلى `FormData` حين يرافقها ملف. `honorees` مصفوفة فتُرسَل
  * نصاً JSON — نفس ما يفعله نموذج النشر، و`parseHonorees` على الخادم يقبل
  * الاثنين. و`null` (القرية المُفرَّغة) يصير `''`، وهو ما يقرأه الخادم null.
  */
-function buildEventEditFormData(payload, posterFile) {
+function buildEventEditFormData(payload, posterFile, audioFile) {
   const form = new FormData();
   Object.keys(payload).forEach(key => {
     const value = payload[key];
@@ -3112,7 +3142,8 @@ function buildEventEditFormData(payload, posterFile) {
       form.append(key, value == null ? '' : String(value));
     }
   });
-  form.append('poster', posterFile);
+  if (posterFile) form.append('poster', posterFile);
+  if (audioFile) form.append('audio', audioFile);
   return form;
 }
 
@@ -3172,10 +3203,11 @@ async function handleEventEditSubmit(e) {
   }
 
   // ملف مرفوع تعديلٌ بذاته وإن لم يتغيّر أي حقل نصّي: الخادم يشتق منه
-  // `poster_url` (events.routes.js، PATCH)، فلا يُحسب النموذج فارغاً.
+  // `poster_url`/`audio_url` (events.routes.js، PATCH)، فلا يُحسب النموذج فارغاً.
   const posterFile = (document.getElementById('evtPosterFile').files || [])[0] || null;
+  const audioFile = (document.getElementById('evtAudioFile').files || [])[0] || null;
 
-  if (!Object.keys(payload).length && !posterFile) {
+  if (!Object.keys(payload).length && !posterFile && !audioFile) {
     // لا تعديل فعلي — لا نداء يُرسَل إطلاقاً (قيد ٤).
     alert('لم تُجرِ أي تعديل — لا شيء لحفظه');
     return;
@@ -3200,8 +3232,8 @@ async function handleEventEditSubmit(e) {
     // مع ملف: multipart، والفرق نفسه يُرسَل حقلاً حقلاً. بلا ملف: JSON كما كان
     // تماماً. لا Content-Type يدوي في حالة FormData — المتصفّح يضبط الحدّ الفاصل،
     // وضبطُه بخط اليد يكسر التحليل على الخادم.
-    const request = posterFile
-      ? { method: 'PATCH', body: buildEventEditFormData(payload, posterFile) }
+    const request = (posterFile || audioFile)
+      ? { method: 'PATCH', body: buildEventEditFormData(payload, posterFile, audioFile) }
       : { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
 
     const res = await adminFetch(`/api/events/${editingEventId}`, request);
