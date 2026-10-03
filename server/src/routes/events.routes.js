@@ -15,6 +15,7 @@ const { announceNotification, announceNewEvent } = require('../realtime/announce
 const { isAdminForTown } = require('../services/adminScope.service');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
+const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, MAX_HONOREES
@@ -282,6 +283,13 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     payload[key] = value;
   }
 
+  // Images go on to Cloudinary only once every check above has passed, so a
+  // refused publish leaves nothing there. Audio stays on disk (owner's call).
+  if (posterFile && payload.poster_url) payload.poster_url = await cloudinary.storeUploadedImage(posterFile, 'posters');
+  if (artistImageFile && payload.artist_image_url) {
+    payload.artist_image_url = await cloudinary.storeUploadedImage(artistImageFile, 'artists');
+  }
+
   // Ownership is built from the publish itself (authenticate above already
   // rejected an anonymous request). An admin publishing in one of their own
   // towns still publishes straight away; outside their towns — or with no
@@ -489,6 +497,13 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     const finalLatitude = changes.latitude !== undefined ? changes.latitude : existing.latitude;
     const finalLongitude = changes.longitude !== undefined ? changes.longitude : existing.longitude;
     locationWarning = await events.checkTownMismatch(finalTown, finalLatitude, finalLongitude);
+  }
+
+  // Same as on publish: images go on to Cloudinary only after every check
+  // above, so a refused edit leaves nothing there.
+  if (uploadedMedia.poster_url) changes.poster_url = await cloudinary.storeUploadedImage(uploadedMedia.poster_url, 'posters');
+  if (uploadedMedia.artist_image_url) {
+    changes.artist_image_url = await cloudinary.storeUploadedImage(uploadedMedia.artist_image_url, 'artists');
   }
 
   const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });

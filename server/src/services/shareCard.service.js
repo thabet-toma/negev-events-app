@@ -610,7 +610,7 @@ async function renderCard(event) {
   // as if it were the family's invitation. The wash below is the honest
   // version of "there is no poster".
   const isOwnFallback = Boolean(posterUrl) && posterUrl.startsWith(SHARE_ASSETS_PREFIX);
-  const posterBuffer = isOwnFallback ? null : await loadPosterBuffer(posterUrl);
+  const posterBuffer = isOwnFallback ? null : await loadPosterBuffer(jpegVariant(posterUrl));
   let poster = null;
   if (posterBuffer) {
     try {

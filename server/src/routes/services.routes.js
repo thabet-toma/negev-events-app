@@ -6,6 +6,7 @@ const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
 const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { serviceMedia } = require('../middleware/upload');
+const cloudinary = require('../services/cloudinary.service');
 const { cleanString, requireFields, parseId, parseAmount, isValidPhone } = require('../middleware/validate');
 const townsService = require('../services/towns.service');
 
@@ -108,13 +109,14 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
   const priceType = parsePriceType(body.price_type);
   const priceEstimateDesc = cleanString(body.price_estimate_desc, 255);
   const attributes = parseProviderAttributes(body.attributes);
+  const categoryId = parseId(body.category_id, 'الفئة');
 
   const providerId = await services.createProvider({
-    category_id: parseId(body.category_id, 'الفئة'),
+    category_id: categoryId,
     name: cleanString(body.name, 150),
     phone,
     description: cleanString(body.description, 2000),
-    image_url: imageUrl,
+    image_url: imageFile ? await cloudinary.storeUploadedImage(imageFile, 'services') : imageUrl,
     price,
     price_type: priceType,
     price_estimate_desc: priceEstimateDesc,
@@ -191,13 +193,14 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
   const priceType = parsePriceType(body.price_type);
   const priceEstimateDesc = cleanString(body.price_estimate_desc, 255);
   const attributes = parseProviderAttributes(body.attributes);
+  const categoryId = parseId(body.category_id, 'الفئة');
 
   const providerId = await services.createProvider({
-    category_id: parseId(body.category_id, 'الفئة'),
+    category_id: categoryId,
     name: cleanString(body.name, 150),
     phone,
     description: cleanString(body.description, 2000),
-    image_url: imageUrl,
+    image_url: imageFile ? await cloudinary.storeUploadedImage(imageFile, 'services') : imageUrl,
     price,
     price_type: priceType,
     price_estimate_desc: priceEstimateDesc,
@@ -260,6 +263,7 @@ router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (r
     payload.towns = towns;
   }
 
+  if (imageFile) payload.image_url = await cloudinary.storeUploadedImage(imageFile, 'services');
   await services.updateProvider(id, payload);
   res.json({ success: true, provider: await services.getProviderForAdmin(req.user, id), message: 'تم تحديث مزوّد الخدمة بنجاح' });
 }));

@@ -1,14 +1,17 @@
 'use strict';
 
 /**
- * Cloudinary, by its plain REST API — no SDK (ADR-0008). Three jobs only:
+ * Cloudinary, by its plain REST API — no SDK (ADR-0008). Four jobs only:
  *
  *   1. sign an upload the admin's browser then sends to Cloudinary directly,
  *      so the image never passes through this server's disk or bandwidth;
  *   2. verify the signature Cloudinary returned for that upload before a row
  *      is written, so no caller can register an image this server never
  *      signed for (the API secret is the only thing that can produce it);
- *   3. delete an image whose row was deleted (best-effort).
+ *   3. delete an image whose row was deleted (best-effort);
+ *   4. forward an image a client already sent HERE (poster, artist image,
+ *      service image) — the path every client, published APKs included,
+ *      already takes — so none of them has to change.
  *
  * The public_id is chosen HERE, inside a folder derived from what is being
  * uploaded (an episode, an archived event) — never by the client — and is
@@ -17,6 +20,7 @@
  */
 
 const crypto = require('crypto');
+const fsp = require('fs/promises');
 const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
@@ -27,6 +31,8 @@ const ALLOWED_FORMATS = 'jpg,jpeg,png,webp,heic';
 // way back in, since the value then comes from the client.
 const PUBLIC_ID_PATTERN = /^[a-z0-9-]+(\/[a-z0-9-]+)+$/;
 const REQUEST_TIMEOUT_MS = 8000;
+// A whole poster goes up in one request, so it gets longer than a destroy.
+const UPLOAD_TIMEOUT_MS = 30000;
 
 function isConfigured() {
   const { cloudName, apiKey, apiSecret } = config.cloudinary;
@@ -157,6 +163,50 @@ async function destroy(publicId) {
   }
 }
 
+/**
+ * Sends an image multer already wrote to disk (and verifyMedia already
+ * sniffed) on to Cloudinary under `negev-events/<...segments>/`, and returns
+ * the URL to store — the local copy is then removed. Without keys, or on any
+ * failure, returns the `/uploads/<file>` path exactly as before and keeps the
+ * file: the owner's call is that a publish never fails because Cloudinary did.
+ */
+async function storeUploadedImage(file, ...segments) {
+  const localPath = `/uploads/${file.filename}`;
+  if (!isConfigured()) return localPath;
+
+  const publicId = `${folderFor(...segments)}/${crypto.randomBytes(9).toString('hex')}`;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([await fsp.readFile(file.path)], { type: file.mimetype }), file.filename);
+    form.append('api_key', config.cloudinary.apiKey);
+    form.append('public_id', publicId);
+    form.append('timestamp', String(timestamp));
+    form.append('signature', sign({ public_id: publicId, timestamp }));
+
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudinary.cloudName}/image/upload`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.public_id !== publicId || !data.version) {
+      logger.warn(`[cloudinary] upload to ${publicId} answered ${res.status} — kept on local disk`);
+      return localPath;
+    }
+    await fsp.unlink(file.path).catch(() => {});
+    logger.info('cloudinary.upload', { publicId });
+    return deliveryUrl({ public_id: publicId, version: data.version });
+  } catch (err) {
+    logger.warn(`[cloudinary] upload to ${publicId} failed: ${err.message} — kept on local disk`);
+    return localPath;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = {
   isConfigured,
   folderFor,
@@ -164,5 +214,6 @@ module.exports = {
   verifyUpload,
   deliveryUrl,
   jpegVariant,
-  destroy
+  destroy,
+  storeUploadedImage
 };

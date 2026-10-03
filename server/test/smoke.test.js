@@ -1686,6 +1686,12 @@ async function run() {
 
   console.log('\nFile upload: the multipart path both clients actually use');
 
+  // No Cloudinary keys in this section, whatever the local .env holds: these
+  // run the on-disk path (also the fallback when Cloudinary fails), and must
+  // never reach the real account. The Cloudinary path is covered under ADR-0008 below.
+  const uploadSectionCloudinary = { ...config.cloudinary };
+  Object.assign(config.cloudinary, { cloudName: null, apiKey: null, apiSecret: null });
+
   function uploadFields(overrides = {}) {
     return {
       occasion_type_id: String(weddingType.id),
@@ -1707,6 +1713,7 @@ async function run() {
 
     const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
     assert.ok(/^https?:\/\//.test(fetched.event.poster_url), `poster_url must be absolute, got: ${fetched.event.poster_url}`);
+    assert.ok(fetched.event.poster_url.includes('/uploads/poster-'), 'without Cloudinary keys the poster stays on this server, as before');
     await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
   });
 
@@ -1792,6 +1799,8 @@ async function run() {
     });
     assert.strictEqual(status, 400);
   });
+
+  Object.assign(config.cloudinary, uploadSectionCloudinary);
 
   console.log('\nMap picker: server-side town mismatch warning + coordinate validation (#20 step 6)');
 
@@ -7558,10 +7567,19 @@ async function run() {
   // (this suite's own API calls) goes through untouched.
   const realFetch = globalThis.fetch;
   const cloudinaryCalls = [];
+  let cloudinaryUploadFails = false;
   globalThis.fetch = async (url, options) => {
     const target = String(url);
     if (target.startsWith('https://api.cloudinary.com/') || target.startsWith('https://res.cloudinary.com/')) {
-      cloudinaryCalls.push({ url: target, body: options && options.body ? String(options.body) : '' });
+      const form = options && options.body instanceof FormData ? options.body : null;
+      cloudinaryCalls.push({ url: target, body: options && options.body ? String(options.body) : '', form });
+      if (target.endsWith('/image/upload') && form) {
+        // A server-side upload (cloudinary.storeUploadedImage) — answered the
+        // way Cloudinary does: the same public_id, plus a version.
+        return cloudinaryUploadFails
+          ? new Response('{"error":{"message":"down"}}', { status: 500 })
+          : new Response(JSON.stringify({ public_id: form.get('public_id'), version: 1700000009 }), { status: 200 });
+      }
       return target.startsWith('https://res.cloudinary.com/')
         ? new Response(TINY_PNG, { status: 200, headers: { 'Content-Type': 'image/png' } })
         : new Response('{"result":"ok"}', { status: 200 });
@@ -7924,6 +7942,135 @@ async function run() {
     } finally {
       await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral]);
     }
+
+    // Every image a client sends HERE (poster, artist image, service image)
+    // goes on to Cloudinary from the server — the published APKs included,
+    // since nothing about their request changes.
+    const { uploadsDir } = require('../src/middleware/upload');
+    const localPosterCount = async () => (await fsp.readdir(uploadsDir)).filter(n => n.startsWith('poster-')).length;
+
+    await test('an uploaded poster is forwarded to Cloudinary and stored as its URL, with no copy left on disk', async () => {
+      cloudinaryCalls.length = 0;
+      const before = await localPosterCount();
+      const { status, body } = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس كلاودنري' }),
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+      });
+      assert.strictEqual(status, 201, body.message);
+
+      const upload = cloudinaryCalls.find(c => c.url === 'https://api.cloudinary.com/v1_1/test-cloud/image/upload' && c.form);
+      assert.ok(upload, 'the server itself posted the file to Cloudinary');
+      const publicId = upload.form.get('public_id');
+      assert.ok(publicId.startsWith('negev-events/posters/'), `the folder is chosen by the server, got ${publicId}`);
+      const timestamp = upload.form.get('timestamp');
+      const expected = require('crypto').createHash('sha256')
+        .update(`public_id=${publicId}&timestamp=${timestamp}test-cloudinary-secret`).digest('hex');
+      assert.strictEqual(upload.form.get('signature'), expected, 'signed with the secret, which never leaves the server');
+      assert.ok(!upload.form.get('api_secret'), 'the secret itself is never sent');
+
+      const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
+      assert.strictEqual(
+        fetched.event.poster_url,
+        `https://res.cloudinary.com/test-cloud/image/upload/f_auto,q_auto,c_limit,w_1600/v1700000009/${publicId}`
+      );
+      assert.strictEqual(await localPosterCount(), before, 'the local copy is removed once Cloudinary has it');
+
+      cloudinaryCalls.length = 0;
+      const card = await rawGetBinary(`/e/${body.eventId}/card.jpg`);
+      assert.strictEqual(card.status, 200);
+      assert.ok(cloudinaryCalls.some(c => c.url.includes('/image/upload/f_jpg,')), 'the share card draws the JPEG variant of the poster');
+      await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+    });
+
+    await test('a poster replaced by PATCH, and an artist image, go to their own Cloudinary folders', async () => {
+      const created = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس تبديل كلاودنري', artist_name: 'فنان' }),
+        files: [{ field: 'artist_image', buffer: TINY_PNG, type: 'image/png', name: 'a.png' }]
+      });
+      assert.strictEqual(created.status, 201, created.body.message);
+      const withArtist = await api('GET', `/api/events/${created.body.eventId}`);
+      assert.ok(withArtist.body.event.artist_image_url.includes('/negev-events/artists/'), withArtist.body.event.artist_image_url);
+
+      const patched = await apiUpload(`/api/events/${created.body.eventId}`, {
+        method: 'PATCH',
+        token: adminToken,
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'second.png' }]
+      });
+      assert.strictEqual(patched.status, 200, patched.body.message);
+      const after = await api('GET', `/api/events/${created.body.eventId}`);
+      assert.ok(after.body.event.poster_url.startsWith('https://res.cloudinary.com/test-cloud/'), after.body.event.poster_url);
+      assert.ok(after.body.event.poster_url.includes('/negev-events/posters/'));
+      await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+    });
+
+    await test('when Cloudinary fails, the publish still succeeds and the poster stays on this server', async () => {
+      cloudinaryUploadFails = true;
+      try {
+        const { status, body } = await apiUpload('/api/events', {
+          token: adminToken,
+          fields: uploadFields({ 'honorees[0][name]': 'عريس بلا كلاودنري' }),
+          files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+        });
+        assert.strictEqual(status, 201, 'a Cloudinary outage must never fail a publish');
+        const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
+        assert.ok(fetched.event.poster_url.includes('/uploads/poster-'), `fell back to local disk, got ${fetched.event.poster_url}`);
+        await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+      } finally {
+        cloudinaryUploadFails = false;
+      }
+    });
+
+    await test('a refused publish uploads nothing to Cloudinary', async () => {
+      cloudinaryCalls.length = 0;
+      const { status } = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ town: 'بلدة لا وجود لها' }),
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'p.png' }]
+      });
+      assert.strictEqual(status, 400);
+      assert.ok(!cloudinaryCalls.some(c => c.url.endsWith('/image/upload')), 'validation runs before the upload, so no orphan is left there');
+    });
+
+    await test('the audio track stays on this server — only images go to Cloudinary', async () => {
+      cloudinaryCalls.length = 0;
+      const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(32)]);
+      const { status, body } = await apiUpload('/api/events', {
+        token: adminToken,
+        fields: uploadFields({ 'honorees[0][name]': 'عريس الصوت' }),
+        files: [{ field: 'audio', buffer: MP3, type: 'audio/mpeg', name: 's.mp3' }]
+      });
+      assert.strictEqual(status, 201, body.message);
+      const { body: fetched } = await api('GET', `/api/events/${body.eventId}`);
+      assert.ok(fetched.event.audio_url.includes('/uploads/audio-'), fetched.event.audio_url);
+      assert.ok(!cloudinaryCalls.some(c => c.url.endsWith('/image/upload')));
+      await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+    });
+
+    await test("a service provider's image goes to Cloudinary too", async () => {
+      const category = await api('POST', '/api/admin/service-categories', {
+        token: superAdminToken,
+        body: { name: `فئة كلاودنري ${Date.now()}`, icon: '📷', color: '#00ff00' }
+      });
+      const { status, body } = await apiUpload('/api/admin/service-providers', {
+        token: superAdminToken,
+        fields: {
+          category_id: String(category.body.category.id),
+          name: 'مصوّر الاختبار',
+          phone: `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+          consent_at: new Date().toISOString(),
+          consent_channel: 'واتساب',
+          towns: JSON.stringify(['رهط'])
+        },
+        files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'i.png' }]
+      });
+      assert.strictEqual(status, 201, body.message);
+      const provider = await api('GET', `/api/admin/service-providers/${body.providerId}`, { token: superAdminToken });
+      assert.ok(provider.body.provider.image_url.includes('/negev-events/services/'), provider.body.provider.image_url);
+      await api('DELETE', `/api/admin/service-providers/${body.providerId}`, { token: superAdminToken });
+      await api('DELETE', `/api/admin/service-categories/${category.body.category.id}`, { token: superAdminToken });
+    });
   } finally {
     globalThis.fetch = realFetch;
     Object.assign(config.cloudinary, savedCloudinary);
