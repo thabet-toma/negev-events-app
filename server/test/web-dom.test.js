@@ -6304,6 +6304,120 @@ async function run() {
     assert.strictEqual(box.hidden, true, 'the previous event\'s photos do not linger');
   });
 
+  /**
+   * نصّ حرّ (بلدة، رقم، معرّف جهاز) داخل onclick كان يُكتب `'${escapeHtml(x)}'` —
+   * و`&#039;` يُفكّ إلى ' قبل أن يُقرأ الكود، فاسم فيه فاصلة عليا يكسر الزرّ،
+   * ونصّ مصنوع يُنفَّذ كوداً. القيمة الآن خاصية data-* تُقرأ بـ this.dataset.
+   */
+  const QUOTED_TOWN = "بير الحمّام' (قديم)";
+
+  /** يلتقط كل POST إلى /api/analytics/events بجسمه، ويمرّر الباقي لـ base. */
+  function captureAnalyticsPosts(win, base) {
+    const posts = [];
+    win.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/analytics/events' && options.method === 'POST') {
+        posts.push(JSON.parse(options.body));
+        return jsonResponse({ success: true });
+      }
+      return base(url, options);
+    };
+    return posts;
+  }
+
+  await test('the map popup Waze button still records its town when the town name has an apostrophe', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const win = dom.window;
+    const doc = win.document;
+    const popups = [];
+    const marker = { addTo() { return marker; }, bindPopup(html) { popups.push(html); return marker; } };
+    win.L.marker = () => marker;
+    const base = async (url, options) => {
+      if (String(url).split('?')[0] === '/api/map/events') {
+        return jsonResponse({ success: true, points: [{ latitude: 31.2, longitude: 34.8, title: 'عرس', town: QUOTED_TOWN, groom_name: 'راني', event_date: '2027-01-10', waze_url: 'https://waze.com/ul?ll=31.2,34.8' }] });
+      }
+      return jsonResponse({ success: true });
+    };
+    const posts = captureAnalyticsPosts(win, base);
+    await win.initLeafletMap();
+    assert.strictEqual(popups.length, 1, 'one popup for the one point');
+
+    const holder = doc.createElement('div');
+    holder.innerHTML = popups[0];
+    doc.body.appendChild(holder);
+    const link = holder.querySelector('.map-popup-waze-btn');
+    link.addEventListener('click', e => e.preventDefault());
+    link.click();
+    await waitFor(() => posts.length === 1);
+    assert.strictEqual(posts[0].event_name, 'location_clicked');
+    assert.strictEqual(posts[0].content_town, QUOTED_TOWN, 'the exact town, apostrophe included');
+  });
+
+  await test('the host call/WhatsApp buttons work for a town with an apostrophe, and a hostile host_phone stays text', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const win = dom.window;
+    const doc = win.document;
+    const hostilePhone = '050<img src=x onerror="window.__pwned=1">';
+    const base = async (url, options) => {
+      if (/^\/api\/events\/77$/.test(String(url).split('?')[0])) {
+        return jsonResponse({ success: true, event: { id: 77, title: 'عرس', groom_name: 'راني', town: QUOTED_TOWN, event_date: '2027-01-10', host_phone: hostilePhone, congratulations: [] } });
+      }
+      return buildFetchStub()(url, options);
+    };
+    const posts = captureAnalyticsPosts(win, base);
+    await win.openChatModal(77);
+
+    const bar = doc.getElementById('chatHostBar');
+    assert.strictEqual(bar.querySelector('img'), null, 'host_phone is text, never markup');
+    assert.ok(bar.querySelector('.host-call-btn').textContent.includes(hostilePhone));
+    await new Promise(r => setTimeout(r, 20));
+    assert.strictEqual(win.__pwned, undefined);
+
+    for (const sel of ['.host-call-btn', '.host-wa-btn']) {
+      const a = bar.querySelector(sel);
+      a.addEventListener('click', e => e.preventDefault());
+      a.click();
+    }
+    await waitFor(() => posts.filter(p => p.event_name === 'contact_clicked').length === 2);
+    assert.ok(posts.filter(p => p.event_name === 'contact_clicked').every(p => p.content_town === QUOTED_TOWN));
+  });
+
+  await test('admin: «عرض السجل» opens the log of the exact device id — a crafted id is data, never code', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    const win = dom.window;
+    const doc = win.document;
+    const craftedId = "x');window.__pwned=1;//";
+    const requested = [];
+    const base = win.fetch;
+    win.fetch = async (url, options = {}) => {
+      if (String(url).includes('/api/admin/analytics/devices/')) {
+        requested.push(String(url));
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 } });
+      }
+      return base(url, options);
+    };
+    let container = doc.getElementById('analyticsDevicesList');
+    if (!container) {
+      container = doc.createElement('div');
+      container.id = 'analyticsDevicesList';
+      doc.body.appendChild(container);
+    }
+    win.renderAnalyticsDevices([{ device_id: craftedId, is_anonymous: true, platform: 'web', views_count: 1, clicks_count: 0, shares_count: 0, last_seen: null }], { page: 1, totalPages: 1 });
+
+    container.querySelector('tbody .admin-btn-ghost').click();
+    await waitFor(() => requested.length >= 1);
+    assert.strictEqual(win.__pwned, undefined, 'the crafted id must not run as code');
+    assert.ok(requested[0].includes(`/api/admin/analytics/devices/${encodeURIComponent(craftedId)}/log`), `expected the exact id, encoded, got ${requested[0]}`);
+  });
+
+  await test('no inline handler in web/app.js or web/admin.js embeds escapeHtml() inside a quoted JS string', () => {
+    for (const [name, text] of [['app.js', APP_JS], ['admin.js', ADMIN_JS]]) {
+      const offenders = text.match(/\bon[a-z]+="[^"]*'\$\{escapeHtml\(/g) || [];
+      assert.deepStrictEqual(offenders, [], `web/${name}: pass the value as an escaped data-* attribute and read this.dataset instead`);
+    }
+  });
+
   await test('uploadToCloudinary POSTs exactly the signed fields plus the file to upload_url, with no token, and throws an Arabic message on refusal', async () => {
     const dom = buildAdminEnv();
     let captured = null;

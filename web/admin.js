@@ -4927,7 +4927,7 @@ function renderAnalyticsDevices(devices, pagination) {
               <td><strong>${d.shares_count}</strong></td>
               <td style="font-size:0.82rem; color:var(--text-dim);">${dateStr}</td>
               <td>
-                <button type="button" class="admin-btn-ghost" style="padding:4px 10px; font-size:0.8rem;" onclick="viewDeviceAnalytics('${escapeHtml(d.device_id)}')">
+                <button type="button" class="admin-btn-ghost" style="padding:4px 10px; font-size:0.8rem;" data-device-id="${escapeHtml(d.device_id)}" onclick="viewDeviceAnalytics(this.dataset.deviceId)">
                   <i class="fa-solid fa-clock-rotate-left"></i> عرض السجل
                 </button>
               </td>
@@ -4999,7 +4999,7 @@ async function fetchAnalyticsDeviceLog(page = analyticsUserLogPage) {
   if (!analyticsEventCatalog.length) await fetchAnalyticsEventCatalog();
 
   try {
-    const res = await adminFetch(`/api/admin/analytics/devices/${analyticsSelectedDeviceId}/log?page=${page}`);
+    const res = await adminFetch(`/api/admin/analytics/devices/${encodeURIComponent(analyticsSelectedDeviceId)}/log?page=${page}`);
     const data = await res.json();
 
     if (res.status === 403) {

@@ -2776,7 +2776,7 @@ async function initLeafletMap() {
               <h4>${escapeHtml(pt.title)}</h4>
               <p><strong>البلدة:</strong> ${escapeHtml(pt.town)}</p>
               <p><strong>التاريخ:</strong> ${pt.event_date}</p>
-              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn" onclick="recordLocationClicked('${escapeHtml(pt.town || '')}')">الملاحة عبر Waze</a>
+              <a href="${pt.waze_url}" target="_blank" class="map-popup-waze-btn" data-town="${escapeHtml(pt.town || '')}" onclick="recordLocationClicked(this.dataset.town)">الملاحة عبر Waze</a>
             </div>
           `);
       });
@@ -5707,9 +5707,13 @@ async function openChatModal(eventId) {
 
       if (evt.host_phone) {
         hostBar.style.display = 'flex';
+        // البلدة تُمرَّر خاصيةَ data-town مهرَّبة لا نصّاً داخل كود onclick —
+        // `&#039;` يُفكّ إلى ' قبل أن يقرأ المتصفّح الكود فيكسره. والرقم نصّ حرّ
+        // من النشر، فيُهرَّب أينما ظهر.
+        const townAttr = escapeHtml(evt.town || '');
         hostBar.innerHTML = `
-          <a href="tel:${evt.host_phone}" class="host-call-btn" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: '${escapeHtml(evt.town || '')}' })"><i class="fa-solid fa-phone"></i> اتصال بالمعلن (${evt.host_phone})</a>
-          <a href="https://wa.me/972${evt.host_phone.replace(/^0/, '')}" target="_blank" class="host-wa-btn" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: '${escapeHtml(evt.town || '')}' })"><i class="fa-brands fa-whatsapp"></i> واتساب المعلن</a>
+          <a href="tel:${escapeHtml(evt.host_phone)}" class="host-call-btn" data-town="${townAttr}" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: this.dataset.town })"><i class="fa-solid fa-phone"></i> اتصال بالمعلن (${escapeHtml(evt.host_phone)})</a>
+          <a href="https://wa.me/972${escapeHtml(evt.host_phone.replace(/^0/, ''))}" target="_blank" class="host-wa-btn" data-town="${townAttr}" onclick="recordAnalyticsEvent('contact_clicked', { contentTown: this.dataset.town })"><i class="fa-brands fa-whatsapp"></i> واتساب المعلن</a>
         `;
       } else {
         hostBar.style.display = 'none';
