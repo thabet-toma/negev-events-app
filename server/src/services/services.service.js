@@ -457,7 +457,7 @@ async function getProviderForAdmin(user, id) {
 /**
  * Creates a provider plus its town rows in one transaction.
  * `data.towns` is assumed already validated by the route layer (rule 7:
- * consent_at/consent_channel presence) and by `assertTownsWithinScope`
+ * the route records consent_at/consent_channel itself) and by `assertTownsWithinScope`
  * (containment). Optional columns are coerced to `null` explicitly — the raw
  * connection's `execute` inside `db.transaction` does not normalise
  * `undefined` to `null` the way `pool.js`'s own helpers do.

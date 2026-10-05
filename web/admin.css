@@ -602,22 +602,6 @@ body {
   margin-bottom: 2px;
 }
 
-/* الإذن هو الحارس الوحيد قبل نشر رقم مزوّد — يُبرَز بصرياً لا يُدفَن (#25) */
-.provider-consent-box {
-  background: var(--warn-wash);
-  border: 1px solid var(--warn-yellow);
-  border-radius: var(--radius-sm);
-  padding: 14px 16px;
-}
-.consent-box-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 800;
-  color: var(--text-main);
-  margin-bottom: 4px;
-}
-
 /* Admin ↔ town assignment (قصص 31، 36) */
 .admin-town-assign-row { margin-bottom: 16px; }
 .admin-town-assign-head {

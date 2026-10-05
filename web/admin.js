@@ -3360,15 +3360,6 @@ function renderProvidersList() {
   `;
 }
 
-/** يحوّل قيمة تاريخ من الخادم إلى صيغة <input type="datetime-local"> — يستخدم للعرض فقط عند التعديل، الحقل مقفل حينها. */
-function toDatetimeLocalValue(value) {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 /**
  * منتقي البلدات مقصور على ما يملكه المستخدم فعلاً: كل بلدات المنصة لسوبر
  * أدمن، أو الاتحاد المشتق في deriveScopedTowns() لأدمن محلي — لا اختيار خارج
@@ -3423,23 +3414,6 @@ function openProviderForm(id) {
   }
   document.getElementById('provDescription').value = provider ? (provider.description || '') : '';
   document.getElementById('provIsActive').checked = provider ? Boolean(provider.is_active) : true;
-
-  // consent_at/consent_channel هما سجل الإذن الأصلي — الخادم لا يقبل تعديلهما
-  // إطلاقاً بعد الإنشاء (services.service.js updateProvider)، فيُعرَضان هنا
-  // للسياق فقط عند التعديل ويُقفَلان، ويبقيان إلزاميين وقابلين للتحرير عند الإنشاء.
-  const consentAtInput = document.getElementById('provConsentAt');
-  const consentChannelInput = document.getElementById('provConsentChannel');
-  if (provider) {
-    consentAtInput.value = toDatetimeLocalValue(provider.consent_at);
-    consentChannelInput.value = provider.consent_channel || '';
-    consentAtInput.disabled = true;
-    consentChannelInput.disabled = true;
-  } else {
-    consentAtInput.value = '';
-    consentChannelInput.value = '';
-    consentAtInput.disabled = false;
-    consentChannelInput.disabled = false;
-  }
 
   renderProviderTownsPicker(scopedTowns, provider ? provider.towns : []);
 
@@ -3574,19 +3548,6 @@ async function handleProviderSubmit(e) {
     towns
   };
 
-  // consent_at/consent_channel إلزاميان عند الإنشاء فقط — الخادم يرفض 400 بلا
-  // كليهما (services.routes.js requireConsentAt)، ولا يقبلهما إطلاقاً عند التعديل.
-  if (!id) {
-    const consentAt = document.getElementById('provConsentAt').value;
-    const consentChannel = document.getElementById('provConsentChannel').value;
-    if (!consentAt || !consentChannel) {
-      alert('تسجيل إذن المزوّد (التاريخ والوسيلة) إلزامي — لا يُنشر مزوّد بلا هذا السجل');
-      return;
-    }
-    payload.consent_at = new Date(consentAt).toISOString();
-    payload.consent_channel = consentChannel;
-  }
-
   const imageFileInput = document.getElementById('provImageFile');
   const imageFile = imageFileInput && imageFileInput.files ? imageFileInput.files[0] : null;
 
@@ -3608,8 +3569,6 @@ async function handleProviderSubmit(e) {
       fd.append('description', payload.description);
       fd.append('is_active', String(payload.is_active));
       fd.append('towns', JSON.stringify(payload.towns));
-      if (payload.consent_at) fd.append('consent_at', payload.consent_at);
-      if (payload.consent_channel) fd.append('consent_channel', payload.consent_channel);
       fd.append('image', imageFile);
 
       fetchOptions = {

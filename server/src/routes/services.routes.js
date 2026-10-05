@@ -33,18 +33,6 @@ function parseTowns(raw) {
   return towns;
 }
 
-/** Parses a `consent_at` timestamp. Required on create — enforcement rule 7. */
-function requireConsentAt(value) {
-  if (value === undefined || value === null || value === '') {
-    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) مطلوب');
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    throw ApiError.badRequest('تاريخ تسجيل إذن المزوّد (consent_at) غير صالح');
-  }
-  return parsed;
-}
-
 function parsePriceType(value) {
   if (!value) return 'estimated';
   const clean = String(value).trim();
@@ -171,12 +159,6 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
   const phone = cleanString(body.phone, 30);
   if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
 
-  // Enforcement rule 7: a provider cannot be created without consent_at and
-  // consent_channel — validated here, in the route layer, not the service.
-  const consentAt = requireConsentAt(body.consent_at);
-  const consentChannel = cleanString(body.consent_channel, 20);
-  if (!consentChannel) throw ApiError.badRequest('طريقة تسجيل الإذن (consent_channel) مطلوبة');
-
   const towns = parseTowns(body.towns);
   // Containment test: an admin may only assign towns within its own scope;
   // super_admin may assign any known town (a disabled one included, so re-saving an old provider never fails). Rejects the whole request —
@@ -208,9 +190,12 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
     attributes,
     status: 'approved',
     is_active: body.is_active !== false && body.is_active !== 'false',
-    consent_at: consentAt,
+    // Rule 7 still holds — no provider without a consent record — but the
+    // record is the admin's own act of adding it (owner decision: no date or
+    // channel form fields), the same way an app submission records itself.
+    consent_at: new Date(),
     consent_by: req.user.id,
-    consent_channel: consentChannel,
+    consent_channel: 'admin_entry',
     created_by: req.user.id,
     towns
   });

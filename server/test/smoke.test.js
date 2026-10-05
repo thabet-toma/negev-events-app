@@ -5006,19 +5006,26 @@ async function run() {
     serviceCategoryId = body.category.id;
   });
 
-  await test('Case 17: creating a provider without consent_at is rejected', async () => {
+  await test('Case 17: an admin-created provider needs no consent fields — the server records the consent itself', async () => {
     const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
-    const { status } = await api('POST', '/api/admin/service-providers', {
+    const before = Date.now();
+    const { status, body } = await api('POST', '/api/admin/service-providers', {
       token: superAdminToken,
       body: {
         category_id: serviceCategoryId,
-        name: 'مزوّد بلا إذن',
+        name: 'مزوّد بلا حقول إذن',
         phone,
-        consent_channel: 'واتساب',
         towns: [scopedTown]
       }
     });
-    assert.strictEqual(status, 400);
+    assert.strictEqual(status, 201);
+    const row = await db.queryOne(
+      'SELECT consent_at, consent_by, consent_channel FROM service_providers WHERE id = ?',
+      [body.providerId]
+    );
+    assert.strictEqual(row.consent_channel, 'admin_entry');
+    assert.ok(row.consent_by, 'consent_by is the admin who added the provider');
+    assert.ok(new Date(row.consent_at).getTime() >= before - 2000, 'consent_at is the moment of creation');
   });
 
   await test('Case 18: an admin holding only رهط cannot create a provider for {رهط, حورة} — containment', async () => {
