@@ -796,6 +796,7 @@
               <option value="event_deleted">حذف</option>
               <option value="event_owner_changed">نقل ملكية</option>
               <option value="village_promoted">اعتماد قرية</option>
+              <option value="event_duplicate_override">تجاوز تنبيه التكرار</option>
             </select>
           </div>
           <div id="activityLogList" class="activity-log-list">
@@ -1150,6 +1151,26 @@
           <i class="fa-solid fa-ban"></i> تأكيد الرفض
         </button>
         <button type="button" class="admin-btn-ghost" onclick="closeRejectEventModal()">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DUPLICATE MODAL — حارس التكرار المحتمل (DUP-M3): مقارنة قبل الاعتماد/النشر -->
+  <div id="duplicateModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card duplicate-card" role="dialog" aria-modal="true" aria-labelledby="duplicateModalTitle">
+      <div class="modal-header">
+        <h3 id="duplicateModalTitle"><i class="fa-solid fa-triangle-exclamation"></i> تنبيه: مناسبة مشابهة موجودة</h3>
+        <button type="button" class="close-modal-btn" onclick="closeDuplicateModal()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p id="duplicateModalMessage" class="modal-sub"></p>
+      <div id="duplicateModalCurrent" class="duplicate-current"></div>
+      <div id="duplicateModalList" class="duplicate-list"></div>
+      <div class="duplicate-actions">
+        <button type="button" class="duplicate-override-btn" id="duplicateOverrideBtn" onclick="confirmDuplicateOverride()"></button>
+        <button type="button" class="btn-reject" id="duplicateRejectBtn" onclick="rejectAsDuplicate()">
+          <i class="fa-solid fa-ban"></i> رفض كمكررة
+        </button>
+        <button type="button" class="admin-btn-ghost" onclick="closeDuplicateModal()">إلغاء</button>
       </div>
     </div>
   </div>

@@ -744,6 +744,59 @@ int _toInt(dynamic value) {
   return int.tryParse('${value ?? ''}') ?? 0;
 }
 
+/// مناسبة قائمة يشبهها ما يُنشر الآن — عنصر `details.duplicates` في ردّ 409
+/// (`POSSIBLE_DUPLICATE`) من POST /api/events. التقييم (`confidence`) والأسباب
+/// من الخادم وحده؛ العميل يعرضها ولا يعيد اشتقاقها.
+class PossibleDuplicate {
+  final int id;
+  final String title;
+  final List<String> honorees;
+  final String town;
+  final String eventDate;
+  final String? eventEndDate;
+  final String status;
+  final String? occasionTypeName;
+  final String? posterUrl;
+  final String confidence;
+  final List<String> reasons;
+
+  const PossibleDuplicate({
+    required this.id,
+    required this.title,
+    required this.honorees,
+    required this.town,
+    required this.eventDate,
+    this.eventEndDate,
+    required this.status,
+    this.occasionTypeName,
+    this.posterUrl,
+    required this.confidence,
+    required this.reasons,
+  });
+
+  bool get isCertain => confidence == 'certain';
+
+  factory PossibleDuplicate.fromJson(Map<String, dynamic> json) {
+    List<String> strings(dynamic value) => value is List
+        ? value.map((e) => '$e'.trim()).where((e) => e.isNotEmpty).toList()
+        : <String>[];
+    final endDate = _nullableString(json['event_end_date']);
+    return PossibleDuplicate(
+      id: _toInt(json['id']),
+      title: '${json['title'] ?? ''}',
+      honorees: strings(json['honorees']),
+      town: '${json['town'] ?? ''}',
+      eventDate: _toDate(json['event_date']),
+      eventEndDate: endDate == null ? null : _toDate(endDate),
+      status: '${json['status'] ?? ''}',
+      occasionTypeName: _nullableString(json['occasion_type_name']),
+      posterUrl: _nullableString(json['poster_url']),
+      confidence: '${json['confidence'] ?? ''}',
+      reasons: strings(json['reasons']),
+    );
+  }
+}
+
 double? _toDouble(dynamic value) {
   if (value == null) return null;
   if (value is num) return value.toDouble();

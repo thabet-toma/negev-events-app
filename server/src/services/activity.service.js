@@ -18,7 +18,8 @@ const ACTIONS = [
   'event_rejected',
   'event_deleted',
   'event_owner_changed',
-  'village_promoted'
+  'village_promoted',
+  'event_duplicate_override'
 ];
 
 const DEFAULT_PAGE_SIZE = 30;

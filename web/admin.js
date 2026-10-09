@@ -776,7 +776,10 @@ function renderAdminEvents() {
     return `
       <div class="admin-event-card status-${evt.status || 'pending'}">
         <div class="admin-card-top">
-          <span class="status-tag ${statusClass}">${statusLabel}</span>
+          <span class="admin-card-tags">
+            <span class="status-tag ${statusClass}">${statusLabel}</span>
+            ${renderDuplicateBadgeHtml(evt)}
+          </span>
           <span style="font-size: 0.78rem; color: var(--gold-main);">${escapeHtml(evt.town)}</span>
         </div>
 
@@ -1136,7 +1139,164 @@ async function confirmRejectEvent() {
   await updateEventStatus(id, 'rejected', reason);
 }
 
-async function updateEventStatus(id, newStatus, reason) {
+/*
+ * حارس التكرار المحتمل (DUP-M3). الخادم يرفض الاعتماد/النشر الفوري بـ409 ورمز
+ * POSSIBLE_DUPLICATE حين تشبه المناسبة واحدة منشورة أو في الطابور، ولا يمضي إلا
+ * بإعادة الإرسال مع confirm_duplicate (ويسجّل التجاوز). كل زرّ هنا ينتهي في حالة
+ * يمكن الرجوع منها: «إلغاء» لا يلمس النموذج ولا المسودّة، و«فتح المناسبة» يفتح
+ * نموذج تعديل المناسبة الموجودة.
+ *
+ * duplicateModalState: { context: 'approve' | 'direct-add', eventId, duplicates,
+ *                        current, formData, type }
+ */
+let duplicateModalState = null;
+
+/** شارة «مكررة» على بطاقة قيد المراجعة — زرّ يفتح المقارنة بسياق الاعتماد. */
+function renderDuplicateBadgeHtml(evt) {
+  const dups = Array.isArray(evt.possible_duplicates) ? evt.possible_duplicates : [];
+  if (!dups.length) return '';
+  const certain = dups.some(d => d.confidence === 'certain');
+  return `
+    <button type="button" class="duplicate-badge ${certain ? 'certain' : 'likely'}" onclick="openDuplicateModalForCard(${Number(evt.id)})">
+      ${certain ? '⚠️ مكررة على الأغلب' : '⚠️ مكررة محتملة'} (${dups.length})
+    </button>`;
+}
+
+/** ملخّص المناسبة الحالية في النافذة، من صفّ قائمة الإدارة (لا يحمل إلا اسم العريس لا كل الأصحاب). */
+function duplicateSummaryOf(evt) {
+  if (!evt) return {};
+  return {
+    title: evt.title,
+    names: evt.groom_name ? [evt.groom_name] : [],
+    town: evt.town,
+    date: evt.event_date
+  };
+}
+
+function openDuplicateModalForCard(eventId) {
+  const evt = allAdminEvents.find(e => e.id === eventId);
+  if (!evt) return;
+  openDuplicateModal({
+    context: 'approve',
+    eventId,
+    duplicates: evt.possible_duplicates || [],
+    message: 'هذه المناسبة تشبه مناسبات موجودة. راجع المقارنة أدناه قبل اعتمادها.',
+    current: duplicateSummaryOf(evt)
+  });
+}
+
+function renderDuplicateItemHtml(dup) {
+  const names = Array.isArray(dup.honorees) && dup.honorees.length
+    ? dup.honorees.join(' و ')
+    : (dup.title || `مناسبة رقم ${Number(dup.id)}`);
+  const start = toDateInputValue(dup.event_date);
+  const end = toDateInputValue(dup.event_end_date);
+  const when = end && end !== start ? `${start} — حتى ${end}` : start;
+  const isLive = dup.status === 'approved';
+  const certain = dup.confidence === 'certain';
+  const reasons = (Array.isArray(dup.reasons) ? dup.reasons : [])
+    .map(r => `<span class="duplicate-chip reason">${escapeHtml(String(r))}</span>`).join('');
+  return `
+    <article class="duplicate-item">
+      ${dup.poster_url ? `<img class="duplicate-thumb" src="${escapeHtml(String(dup.poster_url))}" alt="" loading="lazy">` : ''}
+      <div class="duplicate-body">
+        <div class="duplicate-item-head">
+          ${dup.occasion_type_name ? `<strong>${escapeHtml(String(dup.occasion_type_name))}</strong>` : ''}
+          <span class="duplicate-chip ${isLive ? 'live' : 'queued'}">${isLive ? 'منشورة' : 'قيد المراجعة'}</span>
+          <span class="duplicate-chip ${certain ? 'certain' : 'likely'}">${certain ? 'شبه مؤكدة' : 'محتملة'}</span>
+        </div>
+        <div class="duplicate-names">${escapeHtml(String(names))}</div>
+        <div class="duplicate-meta">${escapeHtml(String(dup.town || ''))}${when ? ` · ${escapeHtml(when)}` : ''}</div>
+        ${reasons ? `<div class="duplicate-reasons">${reasons}</div>` : ''}
+      </div>
+      <button type="button" class="admin-btn-ghost duplicate-open-btn" onclick="openDuplicateEvent(${Number(dup.id)})">
+        <i class="fa-solid fa-arrow-up-right-from-square"></i> فتح المناسبة
+      </button>
+    </article>`;
+}
+
+function openDuplicateModal(state) {
+  duplicateModalState = state;
+  const direct = state.context === 'direct-add';
+  const current = state.current || {};
+  const currentNames = (current.names || []).filter(Boolean).join(' و ');
+  const currentLine = [currentNames, current.town, toDateInputValue(current.date)].filter(Boolean).join(' · ');
+
+  const messageEl = document.getElementById('duplicateModalMessage');
+  if (messageEl) messageEl.textContent = state.message || 'توجد مناسبة مشابهة. راجع المقارنة قبل المتابعة.';
+
+  const currentEl = document.getElementById('duplicateModalCurrent');
+  if (currentEl) {
+    currentEl.innerHTML = `
+      <span class="duplicate-current-label">${direct ? 'المناسبة التي تنشرها الآن' : 'المناسبة قيد المراجعة'}</span>
+      ${current.title ? `<strong>${escapeHtml(String(current.title))}</strong>` : ''}
+      <span>${escapeHtml(currentLine)}</span>`;
+  }
+
+  const listEl = document.getElementById('duplicateModalList');
+  if (listEl) listEl.innerHTML = (state.duplicates || []).map(renderDuplicateItemHtml).join('');
+
+  const overrideBtn = document.getElementById('duplicateOverrideBtn');
+  if (overrideBtn) overrideBtn.innerHTML = direct
+    ? '<i class="fa-solid fa-check-double"></i> نشر رغم ذلك'
+    : '<i class="fa-solid fa-check"></i> اعتماد رغم ذلك';
+  const rejectBtn = document.getElementById('duplicateRejectBtn');
+  if (rejectBtn) rejectBtn.style.display = direct ? 'none' : '';
+
+  const modal = document.getElementById('duplicateModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeDuplicateModal() {
+  duplicateModalState = null;
+  const modal = document.getElementById('duplicateModal');
+  if (modal) modal.style.display = 'none';
+}
+
+/** «اعتماد/نشر رغم ذلك» — يعيد الإرسال نفسه مع confirm_duplicate. */
+async function confirmDuplicateOverride() {
+  const state = duplicateModalState;
+  if (!state) return;
+  closeDuplicateModal();
+  if (state.context === 'direct-add') {
+    await postDirectAdd(state.formData, state.type, { confirmDuplicate: true, summary: state.current });
+  } else {
+    await updateEventStatus(state.eventId, 'approved', undefined, { confirmDuplicate: true });
+  }
+}
+
+/** «رفض كمكررة» — يفتح نافذة الرفض القائمة وسببها معبّأ. */
+function rejectAsDuplicate() {
+  const state = duplicateModalState;
+  if (!state || state.context !== 'approve' || !state.eventId) return;
+  closeDuplicateModal();
+  openRejectEventModal(state.eventId);
+  const input = document.getElementById('rejectReasonInput');
+  if (input) input.value = 'المناسبة منشورة مسبقاً';
+}
+
+/** «فتح المناسبة» — نموذج التعديل إن كانت ضمن ما تراه اللوحة، وإلا إشعار يسمّيها. */
+async function openDuplicateEvent(dupId) {
+  const state = duplicateModalState;
+  const dup = state && (state.duplicates || []).find(d => Number(d.id) === dupId);
+  closeDuplicateModal();
+  try {
+    if (!allAdminEvents.some(e => e.id === dupId)) await fetchAdminEvents();
+    if (allAdminEvents.some(e => e.id === dupId)) {
+      await openAdminEvent(dupId);
+      return;
+    }
+  } catch (e) {
+    console.error('Open duplicate event error:', e);
+  }
+  const label = dup && (dup.title || (dup.honorees || []).join(' و '));
+  showAdminNotice(
+    `المناسبة رقم ${dupId}${label ? ` («${label}»)` : ''} غير ظاهرة في لوحتك — قد تكون خارج البلدات التي تديرها.`,
+    'تعذّر الفتح'
+  );
+}
+
+async function updateEventStatus(id, newStatus, reason, options = {}) {
   if (newStatus === 'rejected' && reason === undefined) {
     openRejectEventModal(id);
     return;
@@ -1145,6 +1305,9 @@ async function updateEventStatus(id, newStatus, reason) {
     const payload = { status: newStatus };
     if (newStatus === 'rejected' && reason) {
       payload.reason = reason;
+    }
+    if (newStatus === 'approved' && options.confirmDuplicate) {
+      payload.confirm_duplicate = true;
     }
     const res = await adminFetch(`/api/admin/events/${id}/status`, {
       method: 'PATCH',
@@ -1156,6 +1319,14 @@ async function updateEventStatus(id, newStatus, reason) {
     if (data.success) {
       fetchKPIStats();
       fetchAdminEvents();
+    } else if (data.details?.code === 'POSSIBLE_DUPLICATE') {
+      openDuplicateModal({
+        context: 'approve',
+        eventId: id,
+        duplicates: data.details.duplicates || [],
+        message: data.message,
+        current: duplicateSummaryOf(allAdminEvents.find(e => e.id === id))
+      });
     } else {
       showAdminNotice(data.message || 'حدث خطأ أثناء التحديث', 'خطأ');
     }
@@ -1369,10 +1540,6 @@ async function handleDirectAdd(e) {
     return;
   }
 
-  const btn = document.getElementById('dirSubmitBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري النشر...';
-
   const formData = new FormData();
   formData.append('occasion_type_id', type.id);
   appendHonoreesToFormData(formData, honorees);
@@ -1405,6 +1572,27 @@ async function handleDirectAdd(e) {
     if (artistImageFile) formData.append('artist_image', artistImageFile);
   }
 
+  await postDirectAdd(formData, type, {
+    summary: {
+      title: fieldsByKey.title ? document.getElementById('dirTitle').value.trim() : '',
+      names: honorees.map(h => h.name),
+      town,
+      date: eventDate
+    }
+  });
+}
+
+/**
+ * يرسل نموذج النشر المباشر. الخادم قد يرفضه بـ409 POSSIBLE_DUPLICATE (لا يُنشأ
+ * صفّ)؛ عندها تُفتح نافذة المقارنة ويحتفظ النموذج والمسودّة بكل ما كُتب، و«نشر
+ * رغم ذلك» يعيد إرسال FormData نفسها مع confirm_duplicate=1.
+ */
+async function postDirectAdd(formData, type, { confirmDuplicate = false, summary = {} } = {}) {
+  const btn = document.getElementById('dirSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري النشر...';
+  if (confirmDuplicate) formData.set('confirm_duplicate', '1');
+
   try {
     // رمز الإدارة (adminFetch) هو ما يفتح باب النشر الفوري؛ الاعتماد الفعلي
     // يبقى على بلدة الأدمن (isAdminForTown) لا على الدور وحده — events.routes.js.
@@ -1415,12 +1603,24 @@ async function handleDirectAdd(e) {
     const data = await res.json();
 
     if (data.success) {
-      alert('🎉 تم نشر المناسبة بنجاح كمعتمدة مباشرة!');
+      // خارج بلدات الأدمن تدخل المناسبة الطابور ولا تُنشر — الرسالة من الخادم لا نصّ احتفالي ثابت.
+      alert(data.status === 'pending'
+        ? (data.message || 'تم استلام المناسبة وهي بانتظار المراجعة')
+        : '🎉 تم نشر المناسبة بنجاح كمعتمدة مباشرة!');
       discardDirectAddDraft();
       renderDirectAddFields(type);
       switchAdminTab('tabEvents');
       fetchKPIStats();
       fetchAdminEvents();
+    } else if (data.details?.code === 'POSSIBLE_DUPLICATE') {
+      openDuplicateModal({
+        context: 'direct-add',
+        duplicates: data.details.duplicates || [],
+        message: data.message,
+        current: summary,
+        formData,
+        type
+      });
     } else {
       alert(data.message || 'حدث خطأ');
     }
@@ -2125,7 +2325,8 @@ const ACTIVITY_VERBS = {
   event_rejected: { icon: 'fa-ban', verb: 'رفض أو أوقف' },
   event_deleted: { icon: 'fa-trash', verb: 'حذف' },
   event_owner_changed: { icon: 'fa-right-left', verb: 'نقل ملكية' },
-  village_promoted: { icon: 'fa-map-pin', verb: 'اعتمد قرية من' }
+  village_promoted: { icon: 'fa-map-pin', verb: 'اعتمد قرية من' },
+  event_duplicate_override: { icon: 'fa-clone', verb: 'اعتمد رغم تنبيه التكرار' }
 };
 
 async function fetchActivityLog(page = 1) {
@@ -2168,7 +2369,9 @@ function renderActivityRowHtml(row) {
         ? `إلى: ${row.details}`
         : row.action === 'village_promoted' && row.details
           ? `القرية: ${row.details}`
-          : '';
+          : row.action === 'event_duplicate_override' && row.details
+            ? `مشابهة لـ: ${row.details}`
+            : '';
   const sub = [row.event_town, new Date(row.created_at).toLocaleString('ar-EG'), detail].filter(Boolean).map(escapeHtml).join(' · ');
   const openBtn = row.event_exists
     ? `<button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.8rem;" onclick="openAdminEvent(${Number(row.event_id)})"><i class="fa-solid fa-arrow-up-right-from-square"></i> افتح</button>`

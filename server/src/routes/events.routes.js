@@ -12,13 +12,14 @@ const notifications = require('../services/notifications.service');
 const activity = require('../services/activity.service');
 const facebook = require('../services/facebook.service');
 const { announceNotification, announceNewEvent } = require('../realtime/announce');
-const { isAdminForTown } = require('../services/adminScope.service');
+const { isAdminForTown, townScopeClause } = require('../services/adminScope.service');
+const logger = require('../utils/logger');
 const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
-  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, MAX_HONOREES
+  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, parseFlag, MAX_HONOREES
 } = require('../middleware/validate');
 const { VILLAGES_TOWN, REACTION_TYPES } = require('../constants');
 
@@ -283,6 +284,28 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     payload[key] = value;
   }
 
+  // Possible-duplicate guard — only where this publish goes live at once.
+  // Anything that lands in the queue is checked by the admin who approves it
+  // (PATCH /admin/events/:id/status); an ordinary user is never told and
+  // never stopped. An admin goes ahead only by resending with
+  // `confirm_duplicate`, and that choice is logged.
+  const autoApprove = await isAdminForTown(req.user, town);
+  let duplicates = [];
+  if (autoApprove) {
+    [duplicates] = await events.findPossibleDuplicates([{
+      names: honorees.map(honoree => honoree.name),
+      town,
+      village_id: villageId,
+      requested_village_name: requestedVillageName,
+      event_date: eventDate,
+      event_end_date: payload.event_end_date ?? null
+    }], { scope: await townScopeClause(req.user, 'e') });
+    if (duplicates.length && !parseFlag(req.body.confirm_duplicate)) {
+      logger.info('events.duplicate_blocked', { duplicateIds: duplicates.map(d => d.id) });
+      throw events.possibleDuplicateError(duplicates);
+    }
+  }
+
   // Images go on to Cloudinary only once every check above has passed, so a
   // refused publish leaves nothing there. Audio stays on disk (owner's call).
   if (posterFile && payload.poster_url) payload.poster_url = await cloudinary.storeUploadedImage(posterFile, 'posters');
@@ -296,12 +319,20 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   // towns assigned at all — the publish lands in the moderation queue like
   // anyone else's, never rejected (services-directory spec, story 25).
   const created = await events.createEvent(payload, {
-    autoApprove: await isAdminForTown(req.user, town),
+    autoApprove,
     createdBy: req.user.id
   });
 
   realtime.emit('admin_new_pending_event', created);
   await activity.record({ actorId: req.user.id, action: 'event_created', eventId: created.id });
+  if (duplicates.length) {
+    await activity.record({
+      actorId: req.user.id,
+      action: 'event_duplicate_override',
+      eventId: created.id,
+      details: duplicates.map(d => `#${d.id}`).join('، ')
+    });
+  }
   if (created.status === 'approved') {
     realtime.emit('new_event_created', created);
     announceNewEvent(await notifications.notifyNewEvent({ ...created, created_by: req.user.id }));

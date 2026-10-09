@@ -16,7 +16,8 @@ const scheduler = require('../jobs/scheduler');
 const realtime = require('../realtime');
 const { announceNotification, announceNewEvent } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, requireFields, parseId, optionalDateTime } = require('../middleware/validate');
+const { cleanString, requireFields, parseId, parseFlag, optionalDateTime } = require('../middleware/validate');
+const logger = require('../utils/logger');
 const { EVENT_STATUSES } = require('../constants');
 
 const router = express.Router();
@@ -80,11 +81,38 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   // and cleanString on a field the body doesn't carry is already null.
   const reason = status === 'rejected' ? cleanString(req.body.reason, 500) : null;
 
+  // Possible-duplicate guard: nothing goes live while it looks like an event
+  // already published or queued, unless the admin resends with
+  // `confirm_duplicate` — and that choice is logged (same guard as an
+  // admin's own publish in POST /events). Re-approving an approved event
+  // publishes nothing new, so it is not checked.
+  let duplicates = [];
+  if (status === 'approved') {
+    const existing = await events.getEventForEdit(eventId);
+    if (existing.status !== 'approved') {
+      [duplicates] = await events.findPossibleDuplicates([existing], {
+        scope: await adminScope.townScopeClause(req.user, 'e')
+      });
+      if (duplicates.length && !parseFlag(req.body.confirm_duplicate)) {
+        logger.info('admin.duplicate_blocked', { eventId, duplicateIds: duplicates.map(d => d.id) });
+        throw events.possibleDuplicateError(duplicates);
+      }
+    }
+  }
+
   const { event, notifications, isFirstApproval } = await admin.updateEventStatus(eventId, status, {
     reason, actingUserId: req.user.id
   });
   if (status === 'approved' || status === 'rejected') {
     await activity.record({ actorId: req.user.id, action: `event_${status}`, eventId, details: reason });
+  }
+  if (duplicates.length) {
+    await activity.record({
+      actorId: req.user.id,
+      action: 'event_duplicate_override',
+      eventId,
+      details: duplicates.map(d => `#${d.id}`).join('، ')
+    });
   }
   if (status === 'approved' && isFirstApproval) {
     realtime.emit('new_event_created', {

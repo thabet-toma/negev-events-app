@@ -103,6 +103,13 @@ const CORE_OCCASION_FIELDS = OCCASION_FIELDS.filter(field => field.core).map(fie
 const CONGRATULATION_REPORT_THRESHOLD = 3;
 
 /**
+ * How many days apart two events may sit and still be checked as a possible
+ * duplicate of each other — one, so a publisher who typed the wrong day is
+ * still caught, without every same-name wedding of the season showing up.
+ */
+const DUPLICATE_DATE_WINDOW_DAYS = 1;
+
+/**
  * Closed list of analytics event names (issue #44). The governing rule is:
  * we record what a person DID in the app, never what they READ in it — a row
  * saying "this named person opened this particular عزاء" reads as
@@ -185,6 +192,7 @@ module.exports = {
   OCCASION_FIELD_KEYS,
   CORE_OCCASION_FIELDS,
   CONGRATULATION_REPORT_THRESHOLD,
+  DUPLICATE_DATE_WINDOW_DAYS,
   OCCASION_TONES,
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,

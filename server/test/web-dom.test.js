@@ -2847,6 +2847,293 @@ async function run() {
     assert.strictEqual(captured.body.get('groom_name'), null, 'the old hardcoded field must never be sent again');
   });
 
+  console.log('\nAdmin panel — possible-duplicate guard (DUP-M3)');
+
+  const DUP_CERTAIN = {
+    id: 12, title: 'عرس سالم', honorees: ['سالم', 'نورة'], town: 'رهط',
+    event_date: '2027-06-15', event_end_date: '2027-06-16', status: 'approved',
+    occasion_type_name: 'عرس', poster_url: 'https://example.test/uploads/p.jpg',
+    confidence: 'certain', reasons: ['الاسم مطابق', 'نفس التاريخ', 'نفس البلدة']
+  };
+  const DUP_LIKELY = {
+    id: 15, title: '', honorees: ['سالم'], town: 'رهط', event_date: '2027-06-15',
+    event_end_date: null, status: 'pending', occasion_type_name: 'عرس', poster_url: null,
+    confidence: 'likely', reasons: ['نفس التاريخ']
+  };
+  const DUP_SERVER_MESSAGE = 'تبدو هذه المناسبة مكررة لمناسبة موجودة';
+  const duplicateConflict = (duplicates) => jsonResponse({
+    success: false, message: DUP_SERVER_MESSAGE, details: { code: 'POSSIBLE_DUPLICATE', duplicates }
+  }, { status: 409 });
+
+  /** Admin env whose list holds one pending row; PATCH answers via `onPatch(body)`. */
+  async function buildDuplicateAdminEnv({ pendingRow, onPatch }) {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const patches = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (method === 'GET' && requestPath === '/api/admin/events') {
+        return jsonResponse({ success: true, events: [pendingRow] });
+      }
+      if (method === 'PATCH' && requestPath === `/api/admin/events/${pendingRow.id}/status`) {
+        const body = JSON.parse(options.body);
+        patches.push(body);
+        return onPatch(body, patches.length);
+      }
+      return jsonResponse({ success: true });
+    };
+    await dom.window.fetchAdminEvents();
+    return { dom, patches };
+  }
+  const PENDING_ROW = { ...ADMIN_EVENT_FIXTURE, id: 99, status: 'pending', title: 'عرس سالم الجديد' };
+  const modalOf = dom => dom.window.document.getElementById('duplicateModal');
+
+  await test('a pending card with possible_duplicates shows a danger badge when one is certain, an amber one when all are likely, and none otherwise', async () => {
+    const certainEnv = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [DUP_CERTAIN, DUP_LIKELY] },
+      onPatch: () => jsonResponse({ success: true })
+    });
+    const certainBadge = certainEnv.dom.window.document.querySelector('#adminEventsList .duplicate-badge');
+    assert.ok(certainBadge, 'expected a duplicate badge on the pending card');
+    assert.ok(certainBadge.classList.contains('certain'));
+    assert.ok(certainBadge.textContent.includes('مكررة على الأغلب') && certainBadge.textContent.includes('(2)'), `got "${certainBadge.textContent.trim()}"`);
+
+    const likelyEnv = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [DUP_LIKELY] },
+      onPatch: () => jsonResponse({ success: true })
+    });
+    const likelyBadge = likelyEnv.dom.window.document.querySelector('#adminEventsList .duplicate-badge');
+    assert.ok(likelyBadge.classList.contains('likely') && !likelyBadge.classList.contains('certain'));
+    assert.ok(likelyBadge.textContent.includes('مكررة محتملة') && likelyBadge.textContent.includes('(1)'));
+
+    const cleanEnv = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [] },
+      onPatch: () => jsonResponse({ success: true })
+    });
+    assert.strictEqual(cleanEnv.dom.window.document.querySelector('#adminEventsList .duplicate-badge'), null, 'an empty possible_duplicates array must show no badge');
+  });
+
+  await test('clicking the badge opens the comparison with one card per duplicate and the approve-context buttons', async () => {
+    const { dom } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [DUP_CERTAIN, DUP_LIKELY] },
+      onPatch: () => jsonResponse({ success: true })
+    });
+    const { document } = dom.window;
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    document.querySelector('#adminEventsList .duplicate-badge').click();
+
+    assert.strictEqual(modalOf(dom).style.display, 'flex');
+    const items = document.querySelectorAll('#duplicateModalList .duplicate-item');
+    assert.strictEqual(items.length, 2);
+    const first = items[0].textContent;
+    assert.ok(first.includes('سالم و نورة') && first.includes('رهط') && first.includes('حتى 2027-06-16'), `got "${first}"`);
+    assert.ok(first.includes('منشورة') && first.includes('شبه مؤكدة') && first.includes('الاسم مطابق'));
+    assert.ok(items[0].querySelector('img.duplicate-thumb'), 'a duplicate with a poster shows its thumbnail');
+    assert.ok(items[1].textContent.includes('قيد المراجعة') && items[1].textContent.includes('محتملة'));
+    assert.strictEqual(items[1].querySelector('img'), null, 'no poster, no thumbnail');
+    assert.ok(document.getElementById('duplicateOverrideBtn').textContent.includes('اعتماد رغم ذلك'));
+    assert.notStrictEqual(document.getElementById('duplicateRejectBtn').style.display, 'none');
+    assert.ok(document.getElementById('duplicateModalCurrent').textContent.includes('عرس سالم الجديد'));
+  });
+
+  await test('server text in a duplicate is escaped, never injected as markup', async () => {
+    const evil = { ...DUP_CERTAIN, honorees: ['<img src=x onerror=alert(1)>'], reasons: ['<b>x</b>'], occasion_type_name: '<i>t</i>' };
+    const { dom } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [evil] },
+      onPatch: () => jsonResponse({ success: true })
+    });
+    dom.window.document.querySelector('#adminEventsList .duplicate-badge').click();
+    const list = dom.window.document.getElementById('duplicateModalList');
+    assert.strictEqual(list.querySelector('img[src="x"]'), null);
+    assert.strictEqual(list.querySelector('.duplicate-body b, .duplicate-body i'), null, 'tags inside server text must be inert');
+    assert.ok(list.textContent.includes('<img src=x onerror=alert(1)>'));
+  });
+
+  await test('a 409 POSSIBLE_DUPLICATE on approve opens #duplicateModal with the server message instead of the generic error notice', async () => {
+    const { dom, patches } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW },
+      onPatch: () => duplicateConflict([DUP_CERTAIN])
+    });
+    const { document } = dom.window;
+    await dom.window.updateEventStatus(99, 'approved');
+    assertNoUnhandledRejections('approve 409');
+
+    assert.strictEqual(modalOf(dom).style.display, 'flex');
+    assert.strictEqual(document.getElementById('adminNoticeModal').style.display, 'none', 'the generic error notice must not open');
+    assert.ok(document.getElementById('duplicateModalMessage').textContent.includes(DUP_SERVER_MESSAGE));
+    assert.strictEqual(document.querySelectorAll('#duplicateModalList .duplicate-item').length, 1);
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].confirm_duplicate, undefined, 'the first approval must not pre-confirm');
+  });
+
+  await test('«اعتماد رغم ذلك» re-sends the approval with confirm_duplicate: true and closes the modal', async () => {
+    const { dom, patches } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW },
+      onPatch: (body) => body.confirm_duplicate ? jsonResponse({ success: true }) : duplicateConflict([DUP_CERTAIN])
+    });
+    await dom.window.updateEventStatus(99, 'approved');
+    dom.window.document.getElementById('duplicateOverrideBtn').click();
+    await waitFor(() => patches.length === 2);
+
+    assert.strictEqual(patches[1].status, 'approved');
+    assert.strictEqual(patches[1].confirm_duplicate, true);
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+  });
+
+  await test('«إلغاء» on the approve modal sends nothing and leaves the card there to decide on later', async () => {
+    const { dom, patches } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW, possible_duplicates: [DUP_CERTAIN] },
+      onPatch: () => duplicateConflict([DUP_CERTAIN])
+    });
+    const { document } = dom.window;
+    await dom.window.updateEventStatus(99, 'approved');
+    Array.from(document.querySelectorAll('#duplicateModal .duplicate-actions button'))
+      .find(b => b.textContent.trim() === 'إلغاء').click();
+    await delay(50);
+
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    assert.strictEqual(patches.length, 1, 'cancel must not call the server again');
+    assert.ok(document.querySelector('#adminEventsList .admin-event-card'), 'the card stays in the list');
+  });
+
+  await test('«رفض كمكررة» closes the comparison and opens the reject modal with the reason prefilled', async () => {
+    const { dom, patches } = await buildDuplicateAdminEnv({
+      pendingRow: { ...PENDING_ROW },
+      onPatch: () => duplicateConflict([DUP_CERTAIN])
+    });
+    const { document } = dom.window;
+    await dom.window.updateEventStatus(99, 'approved');
+    document.getElementById('duplicateRejectBtn').click();
+
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    assert.strictEqual(document.getElementById('rejectEventModal').style.display, 'flex');
+    assert.strictEqual(document.getElementById('rejectReasonInput').value, 'المناسبة منشورة مسبقاً');
+
+    document.getElementById('confirmRejectBtn').click();
+    await waitFor(() => patches.length === 2);
+    assert.strictEqual(patches[1].status, 'rejected');
+    assert.strictEqual(patches[1].reason, 'المناسبة منشورة مسبقاً');
+  });
+
+  await test('«فتح المناسبة» opens the existing event\'s edit form when the panel has it, and a notice (not an error) when it does not', async () => {
+    const other = { ...ADMIN_EVENT_FIXTURE, id: 12, status: 'approved', title: 'عرس سالم' };
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const baseFetch = dom.window.fetch; // keeps the env's shaped answers (occasion types, towns, …) for everything else
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/admin/events') {
+        return jsonResponse({ success: true, events: [{ ...PENDING_ROW, possible_duplicates: [DUP_CERTAIN, DUP_LIKELY] }, other] });
+      }
+      if (requestPath === '/api/events/12') {
+        return jsonResponse({ success: true, event: { ...other, honorees: [{ name: 'سالم', role: '' }] } });
+      }
+      return baseFetch(url, options);
+    };
+    await dom.window.fetchAdminEvents();
+    const { document } = dom.window;
+
+    dom.window.document.querySelector('#adminEventsList .duplicate-badge').click();
+    document.querySelector('#duplicateModalList .duplicate-item .duplicate-open-btn').click();
+    await waitFor(() => document.getElementById('eventEditFormWrapper')?.style.display === 'block');
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    assert.ok(document.getElementById('eventEditFormTitle').textContent.includes('عرس سالم'));
+
+    // id 15 is not in the list (and a refresh does not bring it): degrade to a notice naming it.
+    document.querySelector('#adminEventsList .duplicate-badge').click();
+    document.querySelectorAll('#duplicateModalList .duplicate-open-btn')[1].click();
+    await waitFor(() => document.getElementById('adminNoticeModal').style.display === 'flex');
+    assert.ok(document.getElementById('adminNoticeMessage').textContent.includes('15'));
+    assertNoUnhandledRejections('open duplicate event');
+  });
+
+  /** Fill the direct-add form far enough to pass client-side validation. */
+  async function buildDirectAddEnv({ onPost }) {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+    document.querySelector('#dirHonoreesList .honoree-name').value = 'سالم ونورة';
+    document.getElementById('dirEventDate').value = '2027-06-15';
+    document.getElementById('dirLocationName').value = 'ديوان آل تجربة';
+    const posts = [];
+    const alerts = [];
+    dom.window.alert = msg => { alerts.push(msg); };
+    dom.window.fetch = async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events' && opts.method === 'POST') {
+        // FormData is re-sent and mutated in place, so snapshot it at call time.
+        const snapshot = {
+          confirm: opts.body.get('confirm_duplicate'),
+          honoree: opts.body.get('honorees[0][name]'),
+          date: opts.body.get('event_date')
+        };
+        posts.push(snapshot);
+        return onPost(snapshot, posts.length);
+      }
+      return jsonResponse({ success: true });
+    };
+    return { dom, posts, alerts };
+  }
+
+  await test('a 409 POSSIBLE_DUPLICATE on direct add opens the modal in direct-add context and keeps the form intact on cancel', async () => {
+    const { dom, posts } = await buildDirectAddEnv({ onPost: () => duplicateConflict([DUP_CERTAIN]) });
+    const { document } = dom.window;
+    await dom.window.handleDirectAdd({ preventDefault() {} });
+    assertNoUnhandledRejections('direct add 409');
+
+    assert.strictEqual(modalOf(dom).style.display, 'flex');
+    assert.ok(document.getElementById('duplicateOverrideBtn').textContent.includes('نشر رغم ذلك'));
+    assert.strictEqual(document.getElementById('duplicateRejectBtn').style.display, 'none', 'there is no event to reject yet');
+    assert.ok(document.getElementById('duplicateModalCurrent').textContent.includes('سالم ونورة'));
+    assert.strictEqual(posts[0].confirm, null, 'the first publish must not pre-confirm');
+    assert.strictEqual(document.getElementById('dirSubmitBtn').disabled, false, 'the submit button must be usable again behind the modal');
+
+    Array.from(document.querySelectorAll('#duplicateModal .duplicate-actions button'))
+      .find(b => b.textContent.trim() === 'إلغاء').click();
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    assert.strictEqual(posts.length, 1, 'cancel must not publish');
+    assert.strictEqual(document.querySelector('#dirHonoreesList .honoree-name').value, 'سالم ونورة', 'what the admin typed must survive');
+    assert.strictEqual(document.getElementById('dirLocationName').value, 'ديوان آل تجربة');
+  });
+
+  await test('«نشر رغم ذلك» re-sends the same direct-add FormData with confirm_duplicate=1', async () => {
+    const { dom, posts, alerts } = await buildDirectAddEnv({
+      onPost: (snap) => snap.confirm === '1' ? jsonResponse({ success: true, status: 'approved' }) : duplicateConflict([DUP_CERTAIN])
+    });
+    await dom.window.handleDirectAdd({ preventDefault() {} });
+    dom.window.document.getElementById('duplicateOverrideBtn').click();
+    await waitFor(() => posts.length === 2);
+    await waitFor(() => alerts.length === 1);
+
+    assert.strictEqual(posts[1].confirm, '1');
+    assert.strictEqual(posts[1].honoree, posts[0].honoree, 'the very same form content is re-sent');
+    assert.strictEqual(posts[1].date, posts[0].date);
+    assert.strictEqual(modalOf(dom).style.display, 'none');
+    assert.ok(alerts[0].includes('تم نشر المناسبة بنجاح'));
+  });
+
+  await test('a direct add the server queues as pending shows the server\'s message, not the «published directly» celebration', async () => {
+    const queuedMessage = 'تم استلام طلب المناسبة بنجاح! سيتم مراجعته واعتماده من قبل الإدارة خلال دقائق.';
+    const { dom, alerts } = await buildDirectAddEnv({
+      onPost: () => jsonResponse({ success: true, status: 'pending', message: queuedMessage }, { status: 201 })
+    });
+    await dom.window.handleDirectAdd({ preventDefault() {} });
+
+    assert.strictEqual(alerts.length, 1);
+    assert.strictEqual(alerts[0], queuedMessage);
+    assert.ok(!alerts[0].includes('معتمدة مباشرة'));
+  });
+
+  await test('the activity log labels event_duplicate_override with its own verb, shows the ids, and offers a filter for it', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const html = dom.window.renderActivityRowHtml({
+      action: 'event_duplicate_override', actor_name: 'مدير', event_id: 99, event_title: 'عرس سالم',
+      event_exists: true, event_status: 'approved', details: '#12، #15', created_at: '2027-01-01T10:00:00Z'
+    });
+    assert.ok(html.includes('fa-clone') && html.includes('اعتمد رغم تنبيه التكرار'));
+    assert.ok(html.includes('#12، #15'));
+    const option = dom.window.document.querySelector('#activityActionFilter option[value="event_duplicate_override"]');
+    assert.ok(option && option.textContent.includes('تجاوز تنبيه التكرار'));
+  });
+
   console.log('\nAdmin panel — the poster is no longer cropped through the head');
 
   /**

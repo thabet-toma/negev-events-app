@@ -136,6 +136,15 @@ function parseCsvList(value, label = 'القيمة') {
   return [...new Set(values)];
 }
 
+/**
+ * An explicit yes from either body shape — JSON `true`, or the text a
+ * multipart form carries ('true' / '1'). Anything else, absent included, is
+ * no: a confirmation is never assumed.
+ */
+function parseFlag(value) {
+  return value === true || value === 1 || value === 'true' || value === '1';
+}
+
 function parseAmount(value) {
   const amount = Number.parseFloat(value);
   if (Number.isNaN(amount) || amount < 0 || amount > 9999999999) {
@@ -189,6 +198,7 @@ module.exports = {
   requireCoordinate,
   parseId,
   parseAmount,
+  parseFlag,
   parseHonorees,
   parseCsvList,
   MAX_HONOREES,

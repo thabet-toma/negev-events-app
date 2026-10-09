@@ -25,8 +25,8 @@ class ApiError extends Error {
     return new ApiError(404, message);
   }
 
-  static conflict(message = 'العنصر موجود مسبقاً') {
-    return new ApiError(409, message);
+  static conflict(message = 'العنصر موجود مسبقاً', details) {
+    return new ApiError(409, message, details);
   }
 }
 

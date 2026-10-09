@@ -61,7 +61,12 @@ async function stats(user) {
   };
 }
 
-/** The events queue, scoped to `user`'s towns the same way `stats` is. */
+/**
+ * The events queue, scoped to `user`'s towns the same way `stats` is. Every
+ * pending row also carries `possible_duplicates` (events.findPossibleDuplicates,
+ * same scope), so the admin sees a likely duplicate before pressing approve —
+ * one lookup for the whole queue, not one per row.
+ */
 async function listEvents(status, user) {
   const { clause, params } = await adminScope.townScopeClause(user, 'e');
   const statusClause = status ? ' AND e.status = ?' : '';
@@ -74,7 +79,15 @@ async function listEvents(status, user) {
       WHERE 1 = 1 ${clause}${statusClause} ORDER BY e.created_at DESC`,
     queryParams
   );
-  return rows.map(withAbsoluteMedia);
+
+  const pending = rows.filter(row => row.status === 'pending');
+  const duplicates = await events.findPossibleDuplicates(pending, { scope: { clause, params } });
+  const duplicatesById = new Map(pending.map((row, index) => [row.id, duplicates[index]]));
+
+  return rows.map(row => ({
+    ...withAbsoluteMedia(row),
+    ...(row.status === 'pending' ? { possible_duplicates: duplicatesById.get(row.id) } : {})
+  }));
 }
 
 // The two amendment-field groups a critical, approved edit can fall into

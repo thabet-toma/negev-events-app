@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
+import '../models/event.dart';
 
 /// خطأ قادم من الخادم — يحمل الرسالة العربية كما أرسلها.
 class ApiException implements Exception {
@@ -17,6 +18,40 @@ class ApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// 409 `POSSIBLE_DUPLICATE` من POST /api/events: المناسبة تشبه مناسبة قائمة ولم
+/// يُنشأ أي صف. إعادة الإرسال بـ`confirm_duplicate` تنشرها. نوع فرعي من
+/// [ApiException] فأي معالج عام يبقى يعرض رسالته كما كان.
+class PossibleDuplicateException extends ApiException {
+  final List<PossibleDuplicate> duplicates;
+
+  const PossibleDuplicateException(
+    String message,
+    this.duplicates, [
+    int? statusCode = 409,
+  ]) : super(message, statusCode);
+
+  /// يُرجع الاستثناء إن كان [decoded] جسم 409 بكود `POSSIBLE_DUPLICATE`، وإلا null.
+  static PossibleDuplicateException? tryParse(
+    int statusCode,
+    Map<String, dynamic> decoded,
+  ) {
+    if (statusCode != 409) return null;
+    final details = decoded['details'];
+    if (details is! Map || details['code'] != 'POSSIBLE_DUPLICATE') return null;
+    final list = details['duplicates'];
+    final message = decoded['message'];
+    return PossibleDuplicateException(
+      message is String && message.isNotEmpty
+          ? message
+          : 'توجد مناسبة مشابهة لهذه المناسبة',
+      list is List
+          ? list.whereType<Map<String, dynamic>>().map(PossibleDuplicate.fromJson).toList()
+          : const [],
+      statusCode,
+    );
+  }
 }
 
 /// عميل HTTP وحيد لكل نداءات التطبيق.
@@ -159,6 +194,8 @@ class ApiClient {
     }
 
     if (response.statusCode >= 400 || decoded['success'] == false) {
+      final duplicate = PossibleDuplicateException.tryParse(response.statusCode, decoded);
+      if (duplicate != null) throw duplicate;
       final message = decoded['message'];
       throw ApiException(
         message is String && message.isNotEmpty

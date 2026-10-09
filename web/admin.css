@@ -690,6 +690,90 @@ body {
   background: var(--line);
 }
 
+/* حارس التكرار المحتمل (DUP-M3): شارة على بطاقة قيد المراجعة + نافذة المقارنة. */
+.admin-card-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.duplicate-badge {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-family: var(--font-tajawal);
+  font-size: 0.75rem;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid;
+}
+.duplicate-badge.certain { background: var(--danger-wash); color: var(--danger-red); border-color: var(--danger-red); }
+.duplicate-badge.likely { background: var(--warn-wash); color: var(--warn-yellow); border-color: var(--warn-yellow); }
+
+.duplicate-card { max-width: 640px; overflow: hidden; }
+.duplicate-card > * { flex-shrink: 0; }
+.duplicate-card .modal-header h3 { color: var(--warn-yellow); }
+.duplicate-card .modal-sub { margin-bottom: 12px; }
+
+.duplicate-current {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+  color: var(--text-main);
+  font-size: 0.88rem;
+}
+.duplicate-current-label { font-size: 0.74rem; font-weight: 800; color: var(--text-dim); }
+
+.duplicate-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.duplicate-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.duplicate-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; background: var(--surface-sunk); }
+.duplicate-body { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.duplicate-item > .duplicate-body:first-child { grid-column: 1 / -1; }
+.duplicate-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--text-main); }
+.duplicate-names { font-weight: 800; font-size: 0.95rem; color: var(--text-main); overflow-wrap: anywhere; }
+.duplicate-meta { font-size: 0.82rem; color: var(--text-dim); }
+.duplicate-reasons { display: flex; flex-wrap: wrap; gap: 5px; }
+.duplicate-open-btn { grid-column: 1 / -1; justify-content: center; }
+
+.duplicate-chip { padding: 2px 9px; border-radius: 10px; font-size: 0.72rem; font-weight: 800; border: 1px solid transparent; }
+.duplicate-chip.live { background: var(--success-wash); color: var(--success-green); }
+.duplicate-chip.queued { background: var(--warn-wash); color: var(--warn-yellow); }
+.duplicate-chip.certain { background: var(--danger-wash); color: var(--danger-red); }
+.duplicate-chip.likely { background: var(--warn-wash); color: var(--warn-yellow); }
+.duplicate-chip.reason { background: var(--surface-sunk); color: var(--text-dim); border-color: var(--line-soft); font-weight: 700; }
+
+.duplicate-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.duplicate-actions > button { flex: 1 1 140px; justify-content: center; display: inline-flex; align-items: center; gap: 6px; }
+.duplicate-override-btn {
+  background: var(--warn-wash);
+  color: var(--warn-yellow);
+  border: 1px solid var(--warn-yellow);
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-tajawal);
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 /* Broadcast Composer Ready Buttons (stories 22-27) */
 .broadcast-tone-group,
 .broadcast-duration-group {

@@ -3,6 +3,8 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
+// Spelling-insensitive key (never stored), so «عرعره» cannot be added next to «عرعرة».
+const { nameKey } = require('../utils/arabicName');
 const { VILLAGES_TOWN } = require('../constants');
 
 /**
@@ -161,22 +163,6 @@ async function defaultRegionName() {
 
 /** Reserved: 'الكل' is the "no filter" sentinel on every `?town=` list. */
 const RESERVED_PLACE_NAMES = ['الكل'];
-
-/**
- * A spelling-insensitive key for duplicate detection only (never stored):
- * drops tashkeel and tatweel, and folds the variants people type
- * interchangeably — أ/إ/آ/ٱ→ا, ة→ه, ى→ي — so «عرعره» cannot be added
- * next to «عرعرة».
- */
-function nameKey(name) {
-  return String(name)
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
-    .replace(/[أإآٱ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function shapeAdminTown(row) {
   return {

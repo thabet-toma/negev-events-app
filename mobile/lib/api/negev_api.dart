@@ -550,7 +550,9 @@ class NegevApi {
 
   /// تقديم مناسبة. تدخل قائمة المراجعة ما لم يكن المُرسِل مديراً. تتطلب حساباً
   /// (`events.created_by`) — `honorees` تُرسَل بصيغة الأقواس (`honorees[i][name]`)
-  /// التي يفهمها الخادم حصراً.
+  /// التي يفهمها الخادم حصراً. مدير يوشك أن ينشر فوراً مناسبة تشبه قائمة يتلقّى
+  /// [PossibleDuplicateException] (409، بلا صف)؛ [confirmDuplicate] يعيد الإرسال
+  /// ليُنشر رغم ذلك.
   Future<EventSubmissionResult> submitEvent({
     required int occasionTypeId,
     required List<Map<String, String>> honorees,
@@ -558,10 +560,12 @@ class NegevApi {
     http.MultipartFile? poster,
     http.MultipartFile? audio,
     http.MultipartFile? artistImage,
+    bool confirmDuplicate = false,
   }) async {
     final allFields = <String, String>{
       'occasion_type_id': '$occasionTypeId',
       ...fields,
+      if (confirmDuplicate) 'confirm_duplicate': '1',
     };
 
     var index = 0;

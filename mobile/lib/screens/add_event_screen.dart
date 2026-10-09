@@ -342,7 +342,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
     return null;
   }
 
-  Future<void> _submit(OccasionType type) async {
+  /// [confirmDuplicate] إعادة الإرسال نفسها بعد أن أكّد المدير في نافذة
+  /// «مناسبة مشابهة موجودة» — لا يُسجَّل بدء نشر ثانٍ لها.
+  Future<void> _submit(OccasionType type, {bool confirmDuplicate = false}) async {
     final auth = AppServices.of(context).auth;
     if (!auth.isSignedIn) {
       showMessage(context, 'سجّل الدخول لنشر مناسبة', isError: true);
@@ -363,7 +365,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
     final api = AppServices.of(context).api;
     // بلدة *المناسبة* المنشورة، لا بلدة المستخدم — نفس تمييز _share في
     // event_details_screen.dart، وبلدة القيد الفعلية للمنشور دائماً (issue #44).
-    recordAnalyticsEvent(api, 'publish_started', contentTown: _town);
+    if (!confirmDuplicate) {
+      recordAnalyticsEvent(api, 'publish_started', contentTown: _town);
+    }
+    var publishAnyway = false;
 
     try {
       final fields = <String, String>{
@@ -431,6 +436,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         poster: posterFile,
         audio: audioFile,
         artistImage: artistImageFile,
+        confirmDuplicate: confirmDuplicate,
       );
 
       if (!mounted) return;
@@ -438,6 +444,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
       // المستخدم، ونصّه يصل كما أرسله الخادم دون إعادة صياغة.
       showMessage(context, composeEventSubmitMessage(result));
       _reset();
+    } on PossibleDuplicateException catch (duplicate) {
+      // لم يُنشأ أي صف: ليس فشل نشر، فلا يُسجَّل `publish_failed`. النموذج يبقى
+      // ممتلئاً في الحالتين، و`finally` يفكّ حالة الإرسال قبل إعادة المحاولة.
+      if (!mounted) return;
+      publishAnyway = await _confirmPossibleDuplicate(duplicate);
     } catch (error) {
       // فشل بسبب الصورة/الملف تحديداً يُسجَّل باسمه الخاص لا كفشل نشر عام —
       // الاثنان مفتاحان منفصلان في القائمة المغلقة (ANALYTICS_EVENTS).
@@ -460,6 +471,45 @@ class _AddEventScreenState extends State<AddEventScreen> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+    if (publishAnyway && mounted) {
+      await _submit(type, confirmDuplicate: true);
+    }
+  }
+
+  Future<bool> _confirmPossibleDuplicate(PossibleDuplicateException duplicate) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('تنبيه: مناسبة مشابهة موجودة'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(duplicate.message, style: const TextStyle(height: 1.6)),
+                for (final item in duplicate.duplicates) ...[
+                  const SizedBox(height: 12),
+                  _PossibleDuplicateTile(item),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('نشر رغم ذلك'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return confirmed ?? false;
   }
 
   void _reset() {
@@ -980,6 +1030,46 @@ class _FilePickTile extends StatelessWidget {
                 tooltip: 'إزالة',
               ),
         onTap: value == null ? onPick : null,
+      ),
+    );
+  }
+}
+
+/// سطر واحد مضغوط لمناسبة مشابهة في نافذة التأكيد.
+class _PossibleDuplicateTile extends StatelessWidget {
+  const _PossibleDuplicateTile(this.item);
+
+  final PossibleDuplicate item;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = item.honorees.join(' و ');
+    final heading = [
+      if (item.occasionTypeName != null) item.occasionTypeName!,
+      if (names.isNotEmpty) names else if (item.title.isNotEmpty) item.title,
+    ].join(' — ');
+    final date = item.eventEndDate == null || item.eventEndDate == item.eventDate
+        ? item.eventDate
+        : '${item.eventDate} ← ${item.eventEndDate}';
+    final status = item.status == 'approved' ? 'منشورة' : 'قيد المراجعة';
+    final confidence = item.isCertain ? 'شبه مؤكدة' : 'محتملة';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(heading, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 2),
+          Text('${item.town} · $date', style: const TextStyle(height: 1.5)),
+          Text('$status · مطابقة $confidence', style: const TextStyle(height: 1.5)),
+          for (final reason in item.reasons)
+            Text('• $reason', style: const TextStyle(height: 1.5)),
+        ],
       ),
     );
   }

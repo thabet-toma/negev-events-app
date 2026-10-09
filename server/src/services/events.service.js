@@ -7,9 +7,10 @@ const townsService = require('./towns.service');
 const archivePhotos = require('./archivePhotos.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
-const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD } = require('../constants');
+const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
+const { nameKey, comparePersonNames } = require('../utils/arabicName');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
@@ -905,6 +906,155 @@ async function findCollisions({ date, endDate = null, town = null, occasionTypeI
   );
 }
 
+/** A 'YYYY-MM-DD' date moved by `days` — calendar arithmetic in UTC, so no timezone can shift the day. */
+function shiftDate(date, days) {
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/**
+ * Where an event takes place, as one comparable key. Under the villages
+ * catch-all the town name alone says nothing — two weddings there sit in two
+ * different villages — so the village (picked, or typed and still waiting
+ * for promotion) is the place.
+ */
+function placeKey(row) {
+  if (row.town !== VILLAGES_TOWN) return row.town;
+  if (row.village_id) return `village:${row.village_id}`;
+  return `village:${nameKey(row.requested_village_name || '')}`;
+}
+
+/**
+ * Whether `candidate` looks like the same occasion as `subject`, and how
+ * sure that is — or `null`. Same person by name (see comparePersonNames),
+ * dates overlapping or at most DUPLICATE_DATE_WINDOW_DAYS apart. 'certain'
+ * needs the identical name on an overlapping date in the same place (or one
+ * of the two places only a region, i.e. "town unknown"); anything weaker is
+ * 'likely'. A one-word name is too common to stand on its own, so it only
+ * counts at all in the same place. The occasion type is deliberately not
+ * compared: a wedding republished as «خطوبة» by mistake is still the same one.
+ */
+function matchDuplicate(subject, candidate, regionNames) {
+  // Dates first: the cheap test, and the one that rules out almost every
+  // candidate when one query serves a whole queue spanning months.
+  const subjectEnd = subject.event_end_date || subject.event_date;
+  const candidateEnd = candidate.event_end_date || candidate.event_date;
+  const withinWindow = candidate.event_date <= shiftDate(subjectEnd, DUPLICATE_DATE_WINDOW_DAYS)
+    && candidateEnd >= shiftDate(subject.event_date, -DUPLICATE_DATE_WINDOW_DAYS);
+  if (!withinWindow) return null;
+  const overlaps = candidate.event_date <= subjectEnd && candidateEnd >= subject.event_date;
+
+  const samePlace = placeKey(subject) === placeKey(candidate);
+  let best = null;
+  for (const subjectName of subject.names) {
+    for (const candidateName of candidate.names) {
+      const match = comparePersonNames(subjectName, candidateName);
+      if (!match || (match.singleToken && !samePlace)) continue;
+      if (!best || (match.exact && !best.exact)) best = match;
+    }
+  }
+  if (!best) return null;
+
+  const placeUnknown = !samePlace && (regionNames.has(subject.town) || regionNames.has(candidate.town));
+  return {
+    confidence: best.exact && overlaps && (samePlace || placeUnknown) ? 'certain' : 'likely',
+    reasons: [
+      best.exact ? 'الاسم مطابق' : 'الاسم مشابه',
+      overlaps ? 'نفس التاريخ' : 'تاريخ قريب',
+      samePlace ? 'نفس البلدة' : placeUnknown ? 'البلدة غير محدَّدة في إحداهما' : 'بلدة مختلفة'
+    ]
+  };
+}
+
+/**
+ * The possible-duplicate guard's lookup. For each subject (`{ id?, names?,
+ * town, village_id, requested_village_name, event_date, event_end_date }`)
+ * returns, at the same index, the events that look like the same occasion —
+ * 'certain' ones first. A subject with an `id` but no `names` has its
+ * honorees read here, and is never reported as its own duplicate.
+ *
+ * One query covers every subject: the date window narrows candidates in SQL;
+ * the name comparison runs here because it is fuzzy and MySQL has no edit
+ * distance. Candidates are every approved event (public anyway) plus the
+ * pending ones inside `scope` — the caller's `adminScope.townScopeClause`, so
+ * a town admin is never shown another town's unpublished request. Rejected
+ * events are never candidates: rejecting one is how a duplicate is cleared.
+ */
+async function findPossibleDuplicates(subjects, { scope = { clause: '', params: [] } } = {}) {
+  if (!subjects.length) return [];
+
+  const windowStart = shiftDate(
+    subjects.map(s => s.event_date).sort()[0], -DUPLICATE_DATE_WINDOW_DAYS
+  );
+  const windowEnd = shiftDate(
+    subjects.map(s => s.event_end_date || s.event_date).sort().slice(-1)[0], DUPLICATE_DATE_WINDOW_DAYS
+  );
+
+  const candidates = await db.query(
+    `SELECT e.id, e.title, e.groom_name, e.town, e.village_id, e.requested_village_name,
+            e.event_date, e.event_end_date, e.status, e.poster_url, ot.name AS occasion_type_name
+       FROM events e
+       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+      WHERE e.event_date <= ? AND COALESCE(e.event_end_date, e.event_date) >= ?
+        AND (e.status = 'approved' OR (e.status = 'pending'${scope.clause}))
+      ORDER BY e.event_date ASC, e.id ASC`,
+    [windowEnd, windowStart, ...scope.params]
+  );
+
+  const unnamedSubjectIds = subjects.filter(s => s.id && !s.names).map(s => s.id);
+  const [honoreeMap, regionNames] = await Promise.all([
+    honoreesForEvents([...new Set([...candidates.map(c => c.id), ...unnamedSubjectIds])]),
+    townsService.activeRegionNames()
+  ]);
+  const regionSet = new Set(regionNames);
+  // event_honorees is the source; groom_name only for a row that has none.
+  const namesOf = row => {
+    const honorees = honoreeMap[row.id] || [];
+    return honorees.length ? honorees.map(h => h.name) : [row.groom_name].filter(Boolean);
+  };
+  for (const candidate of candidates) candidate.names = namesOf(candidate);
+
+  return subjects.map(subject => {
+    const resolved = subject.names ? subject : { ...subject, names: namesOf(subject) };
+    const matches = [];
+    for (const candidate of candidates) {
+      if (resolved.id && candidate.id === resolved.id) continue;
+      const match = matchDuplicate(resolved, candidate, regionSet);
+      if (!match) continue;
+      matches.push({
+        id: candidate.id,
+        title: candidate.title,
+        honorees: candidate.names,
+        town: candidate.town,
+        event_date: candidate.event_date,
+        event_end_date: candidate.event_end_date,
+        status: candidate.status,
+        occasion_type_name: candidate.occasion_type_name,
+        poster_url: absoluteMediaUrl(candidate.poster_url),
+        ...match
+      });
+    }
+    return matches.sort((a, b) => (a.confidence === b.confidence ? 0 : a.confidence === 'certain' ? -1 : 1));
+  });
+}
+
+/**
+ * The guard's refusal: 409 with `details.code = 'POSSIBLE_DUPLICATE'` and the
+ * matches, so a client can show them side by side and resend with
+ * `confirm_duplicate`. The message stands on its own for a client that
+ * cannot — every APK published before the guard existed.
+ */
+function possibleDuplicateError(duplicates) {
+  const [first] = duplicates;
+  const more = duplicates.length > 1 ? ` (و${duplicates.length - 1} غيرها)` : '';
+  return ApiError.conflict(
+    `تشبه مناسبة موجودة: "${first.title}" بتاريخ ${first.event_date}${first.town ? ` في ${first.town}` : ''}${more}. `
+      + 'إن كانت مناسبة مختلفة فأكّد النشر رغم ذلك من لوحة الإدارة أو من آخر نسخة من التطبيق',
+    { code: 'POSSIBLE_DUPLICATE', duplicates }
+  );
+}
+
 async function addReaction(eventId, reactionType, userIdentifier) {
   const event = await db.queryOne('SELECT id FROM events WHERE id = ?', [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
@@ -1117,6 +1267,8 @@ module.exports = {
   listAmendments,
   listMyEvents,
   findCollisions,
+  findPossibleDuplicates,
+  possibleDuplicateError,
   setReminder,
   removeReminder,
   listMyReminders,

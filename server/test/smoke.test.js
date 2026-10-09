@@ -71,7 +71,7 @@ async function test(name, fn) {
  */
 async function apiUpload(path, { fields = {}, files = [], token, method = 'POST' } = {}) {
   const form = new FormData();
-  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  for (const [key, value] of Object.entries(withDuplicateConfirmed(method, path, fields, '1'))) form.append(key, value);
   for (const file of files) {
     form.append(file.field, new Blob([file.buffer], file.type ? { type: file.type } : {}), file.name);
   }
@@ -89,15 +89,32 @@ const TINY_PNG = Buffer.from(
   'base64'
 );
 
+/**
+ * This suite runs against a persistent development database, and a run that
+ * stops halfway leaves its fixed-name events behind — which the possible-
+ * duplicate guard then (rightly) sees as duplicates of the next run's
+ * identical publishes. So every publish and approval here confirms past the
+ * guard, exactly as an admin pressing «اعتماد رغم ذلك» would; the guard's own
+ * section exercises it by sending `confirm_duplicate: false` explicitly. The
+ * server ignores the flag on a publish that only queues (a regular user's).
+ */
+function withDuplicateConfirmed(method, path, body, yes = true) {
+  const guarded = (method === 'POST' && path === '/api/events')
+    || (method === 'PATCH' && /^\/api\/admin\/events\/\d+\/status$/.test(path));
+  if (!guarded || !body || 'confirm_duplicate' in body) return body;
+  return { ...body, confirm_duplicate: yes };
+}
+
 async function api(method, path, { body, token, legacy = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (!legacy) headers['X-App-Version'] = '2.0.0';
 
+  const sent = withDuplicateConfirmed(method, path, body);
   const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined
+    body: sent ? JSON.stringify(sent) : undefined
   });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
@@ -8150,6 +8167,208 @@ async function run() {
     Object.assign(config.cloudinary, savedCloudinary);
     await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?)', [episodeDay, oldEpisodeDay]);
     await db.execute("DELETE FROM app_settings WHERE setting_key IN ('live_channel_url', 'live_title', 'live_until', 'live_stream_url')");
+  }
+
+  console.log('\nPossible-duplicate guard');
+  const { comparePersonNames, nameKey } = require('../src/utils/arabicName');
+
+  await test('Name matching: hamza, a joined «أبو», a one-letter typo, a dropped middle name and ة/ه all match', async () => {
+    assert.deepStrictEqual(comparePersonNames('محمد سليمان أبو صهيبان', 'محمد سليمان ابو صهيبان'), { exact: true, singleToken: false });
+    assert.deepStrictEqual(comparePersonNames('محمد سليمان أبو صهيبان', 'محمد سليمان ابوصهيبان'), { exact: true, singleToken: false });
+    assert.deepStrictEqual(comparePersonNames('العريس عبد الله الطوري', 'عبدالله الطوري'), { exact: true, singleToken: false });
+    assert.deepStrictEqual(comparePersonNames('محمد سليمان أبو صهيبان', 'محمد سليمان أبو صهبان'), { exact: false, singleToken: false });
+    assert.deepStrictEqual(comparePersonNames('محمد الهواشلة', 'محمد سالم الهواشله'), { exact: false, singleToken: false });
+    assert.strictEqual(nameKey('عرعرة'), nameKey('عرعره'), 'the towns key is the same shared function');
+  });
+
+  await test('Name matching: a different father (a cousin), a different first name, or a different word never match', async () => {
+    assert.strictEqual(comparePersonNames('محمد سالم الهواشلة', 'محمد علي الهواشلة'), null);
+    assert.strictEqual(comparePersonNames('أحمد خالد العطاونة', 'محمود خالد العطاونة'), null);
+    assert.strictEqual(comparePersonNames('محمد سليم القريناوي', 'محمد سالم القريناوي'), null, 'سليم/سالم are two names, not a typo');
+    assert.deepStrictEqual(comparePersonNames('محمد', 'محمد'), { exact: true, singleToken: true }, 'a one-word name is flagged as too weak alone');
+  });
+
+  // A random day in the 2030s, so rows left by an earlier run never collide.
+  const dupYear = 2031 + Math.floor(Math.random() * 5);
+  const dupMonth = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
+  const dupDay = String(1 + Math.floor(Math.random() * 27)).padStart(2, '0');
+  const dupDate = `${dupYear}-${dupMonth}-${dupDay}`;
+  const dupNextDate = `${dupYear}-${dupMonth}-${String(Number(dupDay) + 1).padStart(2, '0')}`;
+  const dupEventIds = [];
+  const dupUserPhones = [];
+  let dupOriginalId = 0;
+  let dupPendingId = 0;
+
+  // confirm_duplicate: false — this section is the one place the guard is
+  // exercised instead of confirmed past (see withDuplicateConfirmed).
+  function dupBody(name, overrides = {}) {
+    return weddingEventBody({
+      honorees: [{ name, role: 'العريس' }], town: 'رهط', event_date: dupDate, confirm_duplicate: false, ...overrides
+    });
+  }
+
+  await test('Set up: an admin publishes a wedding — nothing like it exists yet, so it goes straight out', async () => {
+    const { status, body } = await api('POST', '/api/events', { token: superAdminToken, body: dupBody('محمد سليمان أبو صهيبان') });
+    assert.strictEqual(status, 201, body.message);
+    assert.strictEqual(body.status, 'approved');
+    dupOriginalId = body.eventId;
+    dupEventIds.push(dupOriginalId);
+  });
+
+  await test('A regular user publishing the same wedding is neither warned nor stopped — it queues as before', async () => {
+    const { status, body } = await api('POST', '/api/events', { token: userToken, body: dupBody('محمد سليمان ابوصهيبان') });
+    assert.strictEqual(status, 201, body.message);
+    assert.strictEqual(body.status, 'pending');
+    assert.strictEqual(body.details, undefined, 'the user is never shown the guard');
+    dupPendingId = body.eventId;
+    dupEventIds.push(dupPendingId);
+  });
+
+  await test('GET /api/admin/events flags the pending request as a certain duplicate before anyone presses approve', async () => {
+    const { body } = await api('GET', '/api/admin/events', { token: superAdminToken });
+    const pending = body.events.find(e => e.id === dupPendingId);
+    assert.ok(pending, 'the pending request is listed');
+    assert.strictEqual(pending.possible_duplicates.length, 1);
+    const [match] = pending.possible_duplicates;
+    assert.strictEqual(match.id, dupOriginalId);
+    assert.strictEqual(match.confidence, 'certain');
+    assert.deepStrictEqual(match.reasons, ['الاسم مطابق', 'نفس التاريخ', 'نفس البلدة']);
+    assert.deepStrictEqual(match.honorees, ['محمد سليمان أبو صهيبان']);
+    const original = body.events.find(e => e.id === dupOriginalId);
+    assert.strictEqual(original.possible_duplicates, undefined, 'only pending rows carry the check');
+  });
+
+  await test('Approving it without confirming is refused with 409 POSSIBLE_DUPLICATE, and the event stays pending', async () => {
+    const { status, body } = await api('PATCH', `/api/admin/events/${dupPendingId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(status, 409);
+    assert.strictEqual(body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.strictEqual(body.details.duplicates[0].id, dupOriginalId);
+    assert.ok(/تشبه مناسبة موجودة/.test(body.message), body.message);
+    const row = await db.queryOne('SELECT status FROM events WHERE id = ?', [dupPendingId]);
+    assert.strictEqual(row.status, 'pending');
+  });
+
+  await test('Approving it with confirm_duplicate goes through, and the override is logged against both events', async () => {
+    const { status, body } = await api('PATCH', `/api/admin/events/${dupPendingId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: true }
+    });
+    assert.strictEqual(status, 200, body.message);
+    const log = await db.queryOne(
+      "SELECT details FROM activity_log WHERE action = 'event_duplicate_override' AND event_id = ?", [dupPendingId]
+    );
+    assert.ok(log, 'an override row was written');
+    assert.strictEqual(log.details, `#${dupOriginalId}`);
+  });
+
+  await test("An admin's own publish with a one-letter typo the next day is refused (409, likely) and writes no row at all", async () => {
+    const typo = 'محمد سليمان أبو صهبان';
+    const before = await db.queryOne('SELECT COUNT(*) AS n FROM events WHERE groom_name = ?', [typo]);
+    const { status, body } = await api('POST', '/api/events', {
+      token: superAdminToken, body: dupBody(typo, { event_date: dupNextDate })
+    });
+    assert.strictEqual(status, 409);
+    assert.ok(body.details.duplicates.every(d => d.confidence === 'likely'), 'a typo on a neighbouring day is never "certain"');
+    assert.ok(body.details.duplicates.some(d => d.reasons.includes('الاسم مشابه') && d.reasons.includes('تاريخ قريب')));
+    const after = await db.queryOne('SELECT COUNT(*) AS n FROM events WHERE groom_name = ?', [typo]);
+    assert.strictEqual(Number(after.n), Number(before.n), 'a refused publish creates nothing');
+  });
+
+  await test('The same publish confirmed through multipart (confirm_duplicate=1, as the panel and the app send it) goes live', async () => {
+    const { status, body } = await apiUpload('/api/events', {
+      token: superAdminToken,
+      fields: {
+        occasion_type_id: String(weddingType.id),
+        'honorees[0][name]': 'محمد سليمان أبو صهبان',
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: dupNextDate,
+        confirm_duplicate: '1'
+      }
+    });
+    assert.strictEqual(status, 201, body.message);
+    assert.strictEqual(body.status, 'approved');
+    dupEventIds.push(body.eventId);
+    const log = await db.queryOne(
+      "SELECT details FROM activity_log WHERE action = 'event_duplicate_override' AND event_id = ?", [body.eventId]
+    );
+    assert.ok(log && log.details.includes(`#${dupOriginalId}`), 'the override names what it was warned about');
+  });
+
+  await test('A different groom from the same family, same day and town, is published without any warning', async () => {
+    const { status, body } = await api('POST', '/api/events', { token: superAdminToken, body: dupBody('خالد سليمان أبو صهيبان') });
+    assert.strictEqual(status, 201, body.message);
+    dupEventIds.push(body.eventId);
+  });
+
+  await test('The same name in another town is still flagged, but only as likely — two towns, possibly two people', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: superAdminToken, body: dupBody('محمد سليمان أبو صهيبان', { town: 'حورة' })
+    });
+    assert.strictEqual(status, 409);
+    const match = body.details.duplicates.find(d => d.id === dupOriginalId);
+    assert.strictEqual(match.confidence, 'likely');
+    assert.ok(match.reasons.includes('بلدة مختلفة'));
+  });
+
+  await test("A town admin is never shown another town's unpublished request as a duplicate; the super_admin is", async () => {
+    // Straight into the table, like the scoped-admin set-ups above: this late
+    // in the run the registration rate limit has long been spent.
+    const dupUser = async (fullName, role = 'user', town = null) => {
+      const userPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+      dupUserPhones.push(userPhone);
+      const { insertId } = await db.execute(
+        'INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, ?)',
+        [userPhone, fullName, bcrypt.hashSync('1234', config.bcryptRounds), town, role]
+      );
+      return { id: insertId, token: signToken({ id: insertId, phone_number: userPhone, full_name: fullName, role }, '1h') };
+    };
+    const userA = await dupUser('مستخدم تكرار أ');
+    const userB = await dupUser('مستخدم تكرار ب');
+    const inRahat = await api('POST', '/api/events', { token: userA.token, body: dupBody('سالم عودة الطوري') });
+    const inHura = await api('POST', '/api/events', { token: userB.token, body: dupBody('سالم عودة الطوري', { town: 'حورة' }) });
+    assert.strictEqual(inRahat.status, 201, inRahat.body.message);
+    assert.strictEqual(inHura.status, 201, inHura.body.message);
+    dupEventIds.push(inRahat.body.eventId, inHura.body.eventId);
+
+    const huraAdmin = await dupUser('أدمن حورة التكرار', 'admin', 'حورة');
+    const huraAdminToken = huraAdmin.token;
+    const assign = await api('PUT', `/api/admin/admins/${huraAdmin.id}/towns`, { token: superAdminToken, body: { towns: ['حورة'] } });
+    assert.strictEqual(assign.status, 200, assign.body.message);
+
+    const scoped = await api('GET', '/api/admin/events', { token: huraAdminToken });
+    const scopedRow = scoped.body.events.find(e => e.id === inHura.body.eventId);
+    assert.ok(scopedRow, 'the حورة admin sees the حورة request');
+    assert.deepStrictEqual(scopedRow.possible_duplicates, [], 'the رهط request is pending and outside this admin\'s towns');
+
+    const full = await api('GET', '/api/admin/events', { token: superAdminToken });
+    const fullRow = full.body.events.find(e => e.id === inHura.body.eventId);
+    assert.ok(fullRow.possible_duplicates.some(d => d.id === inRahat.body.eventId), 'the super_admin sees both');
+  });
+
+  await test('A rejected event is never a candidate — rejecting it is how a duplicate is cleared', async () => {
+    const queued = await api('POST', '/api/events', { token: userToken, body: dupBody('يوسف حسن العمور') });
+    assert.strictEqual(queued.status, 201, queued.body.message);
+    dupEventIds.push(queued.body.eventId);
+
+    const whileQueued = await api('POST', '/api/events', { token: superAdminToken, body: dupBody('يوسف حسن العمور') });
+    assert.strictEqual(whileQueued.status, 409, 'a queued request counts as a candidate');
+
+    const rejected = await api('PATCH', `/api/admin/events/${queued.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'rejected', reason: 'مكررة' }
+    });
+    assert.strictEqual(rejected.status, 200, rejected.body.message);
+
+    const afterReject = await api('POST', '/api/events', { token: superAdminToken, body: dupBody('يوسف حسن العمور') });
+    assert.strictEqual(afterReject.status, 201, afterReject.body.message);
+    dupEventIds.push(afterReject.body.eventId);
+  });
+
+  await db.execute(`DELETE FROM activity_log WHERE event_id IN (${dupEventIds.map(() => '?').join(', ')})`, dupEventIds);
+  await db.execute(`DELETE FROM events WHERE id IN (${dupEventIds.map(() => '?').join(', ')})`, dupEventIds);
+  for (const dupPhone of dupUserPhones) {
+    await db.execute('DELETE FROM users WHERE phone_number = ?', [dupPhone]);
   }
 
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);

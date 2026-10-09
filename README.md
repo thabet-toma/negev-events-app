@@ -227,7 +227,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 |---|---|---|
 | `GET` | `/api/events` | المناسبات المعتمدة **القادمة** فقط، مرقّمة (`?town=` `?date=` `?date_from=` `?date_to=` `?search=` `?occasion_type_id=` `?village_id=` `?archive=1` `?page=` `?limit=`) — `?town=` و `?occasion_type_id=` و `?village_id=` تقبل كل منها قيمة واحدة أو قائمة مفصولة بفواصل (سقف ٢٠ قيمة لكل معامل، #85 دفعة 5) |
 | `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات + `archive_photos` (صور «أرشيف الأعراس» `[{ id, image_url, width, height, created_at }]` — فارغة إلا لمناسبة معتمدة منتهية ونوعها يحمل `archive_gallery`؛ ADR-0008) |
-| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة |
+| `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة. **حارس التكرار:** حين يكون النشر فورياً (حساب إدارة لهذه البلدة) ويشبه مناسبةً معتمدة أو في الطابور (الاسم بعد توحيد الإملاء وخطأ حرف أو حرفين، وفارق يوم على الأكثر) يُرفض بـ409 و`details: { code: 'POSSIBLE_DUPLICATE', duplicates }` دون إنشاء أي صفّ؛ إعادة الإرسال مع `confirm_duplicate` تنشر ويُسجَّل التجاوز (`event_duplicate_override`). المستخدم العادي لا يرى الحارس |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze — نفس فلاتر `?town=` `?occasion_type_id=` `?village_id=` وقوائمها المفصولة بفواصل |
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات النشِطة بترتيبها وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة، و`regions` (إضافة): كل محافظة نشِطة `{ id, name, latitude, longitude, map_zoom, position, towns[] }`. اسم المحافظة نفسه (اليوم «النقب») مكان صالح للنشر حين لا تُعرف البلدة — بلا دبّوس احتياطي — ولا يظهر ضمن `towns[]` التي تقرؤها التطبيقات القديمة |
@@ -569,8 +569,8 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 |---|---|---|
 | `POST` | `/api/admin/login` | دخول الإدارة |
 | `GET` | `/api/admin/stats` | مؤشرات اللوحة |
-| `GET` | `/api/admin/events` | كل المناسبات (`?status=`) |
-| `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض (`reason` نصّياً اختياري عند الرفض، يظهر في إشعار الناشر) — يحسم أيضاً صفوف سجلّ التعديل المعلّقة لهذه المناسبة |
+| `GET` | `/api/admin/events` | كل المناسبات (`?status=`) — كل صفّ `pending` يحمل `possible_duplicates`: `{ id, title, honorees, town, event_date, event_end_date, status, occasion_type_name, poster_url, confidence: 'certain'\|'likely', reasons }`، والمرشّحات المعلّقة داخل نطاق الأدمن فقط |
+| `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض (`reason` نصّياً اختياري عند الرفض، يظهر في إشعار الناشر) — يحسم أيضاً صفوف سجلّ التعديل المعلّقة لهذه المناسبة. الاعتماد يمرّ بحارس التكرار: 409 `POSSIBLE_DUPLICATE` حتى يُعاد مع `confirm_duplicate: true` |
 | `GET` | `/api/admin/events/:id/amendments` | سجلّ تعديلات مناسبة كاملاً، الأحدث أولاً |
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |
 | `PATCH` | `/api/admin/events/:id/owner` | نقل ملكية مناسبة إلى مستخدم آخر (فعل إداري بشري، بلا استدلال قرابة آلي) |
@@ -603,7 +603,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/events/:id/photos/signature` | توقيع رفع صورة أرشيف إلى Cloudinary — 400 لمناسبة لم تنتهِ أو نوعها بلا `archive_gallery` أو بلا مفاتيح Cloudinary، و400 عند بلوغ الحدّ 🛡️ |
 | `POST` | `/api/admin/events/:id/photos` | تسجيل صورة مرفوعة `{ public_id, version, signature, width, height }` بعد التحقّق من التوقيع ومن مجلّد المناسبة نفسها (409 للمكرَّرة) 🛡️ |
 | `DELETE` | `/api/admin/events/:id/photos/:photoId` | حذف صورة من الأرشيف ومن Cloudinary 🛡️ |
-| `GET` | `/api/admin/analytics/activity` | سجل النشاط: مَن أضاف/عدّل/اعتمد/رفض/حذف/نقل ملكية/اعتمد قرية لأي مناسبة، الأحدث أولاً، مع اسم الفاعل ورقمه ولقطة عنوان المناسبة ونوعها وبلدتها (تبقى بعد حذفها، `event_exists`)، و`summary` مقروء للتعديل (`?action=` `?page=` `?limit=`) 🛡️ |
+| `GET` | `/api/admin/analytics/activity` | سجل النشاط: مَن أضاف/عدّل/اعتمد/رفض/حذف/نقل ملكية/اعتمد قرية/تجاوز تنبيه التكرار لأي مناسبة، الأحدث أولاً، مع اسم الفاعل ورقمه ولقطة عنوان المناسبة ونوعها وبلدتها (تبقى بعد حذفها، `event_exists`)، و`summary` مقروء للتعديل (`?action=` `?page=` `?limit=`) 🛡️ |
 | `GET` | `/api/admin/analytics/overview` | مؤشرات النشاط العام (المشاهدات، المشاركات، النقرات، جمهور الأجهزة النشطة والزوار غير المسجلين) مع تصفية المدة (`?period=24h\|7d\|30d\|all`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices` | قائمة الأجهزة والتوكنات النشطة (زوار غير مسجلين ومستخدمين) مع البحث والفلترة (`?type=anonymous\|registered` `?search=`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices/:deviceId/log` | سجل نشاط جهاز/توكن محدد مع الترقيم 🛡️ |
