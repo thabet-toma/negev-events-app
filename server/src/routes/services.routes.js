@@ -33,6 +33,17 @@ function parseTowns(raw) {
   return towns;
 }
 
+/**
+ * A provider's phone is optional: absent or blank → `null` (stored as NULL),
+ * otherwise it must be a valid number exactly as before.
+ */
+function parseOptionalPhone(raw) {
+  const phone = cleanString(raw, 30);
+  if (phone === null) return null;
+  if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
+  return phone;
+}
+
 function parsePriceType(value) {
   if (!value) return 'estimated';
   const clean = String(value).trim();
@@ -75,10 +86,9 @@ router.get('/services/providers/:id', asyncHandler(async (req, res) => {
 
 router.post('/services/providers', authenticate, serviceMedia, asyncHandler(async (req, res) => {
   const body = req.body || {};
-  requireFields(body, ['name', 'phone', 'category_id']);
+  requireFields(body, ['name', 'category_id']);
 
-  const phone = cleanString(body.phone, 30);
-  if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
+  const phone = parseOptionalPhone(body.phone);
 
   const towns = parseTowns(body.towns);
 
@@ -154,10 +164,9 @@ router.get('/admin/service-providers/:id', asyncHandler(async (req, res) => {
 
 router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, res) => {
   const body = req.body || {};
-  requireFields(body, ['name', 'phone']);
+  requireFields(body, ['name']);
 
-  const phone = cleanString(body.phone, 30);
-  if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
+  const phone = parseOptionalPhone(body.phone);
 
   const towns = parseTowns(body.towns);
   // Containment test: an admin may only assign towns within its own scope;
@@ -219,11 +228,8 @@ router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (r
     if (!name) throw ApiError.badRequest('اسم مزوّد الخدمة مطلوب');
     payload.name = name;
   }
-  if (body.phone !== undefined) {
-    const phone = cleanString(body.phone, 30);
-    if (!isValidPhone(phone)) throw ApiError.badRequest('رقم الهاتف غير صالح');
-    payload.phone = phone;
-  }
+  // An empty string clears the number; an absent key leaves it untouched.
+  if (body.phone !== undefined) payload.phone = parseOptionalPhone(body.phone);
   if (body.description !== undefined) payload.description = cleanString(body.description, 2000);
 
   const imageFile = req.files?.image?.[0] || req.file;

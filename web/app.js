@@ -4668,6 +4668,11 @@ function renderServiceProviders(providers) {
   container.innerHTML = providers.map(p => renderSingleServiceCardHtml(p)).join('');
 }
 
+/** رقم التواصل اختياري — السطر الهادئ الذي يحلّ محل أزرار الاتصال عند غيابه */
+function noProviderPhoneHtml() {
+  return '<div style="font-size:0.8rem; color:var(--ink-faint);"><i class="fa-solid fa-phone-slash"></i> لا يوجد رقم تواصل مسجّل</div>';
+}
+
 function renderSingleServiceCardHtml(p) {
   const toneColor = p.category_color
     ? (p.category_color.startsWith('#') ? p.category_color : `#${p.category_color}`)
@@ -4675,6 +4680,9 @@ function renderSingleServiceCardHtml(p) {
   const toneStyle = ` style="--tone:${toneColor}"`;
   const bezelSvg = getBezelOrnamentSvg(toneColor);
   const bezelStyle = ` style="background-image:url(&quot;${bezelSvg}&quot;)"`;
+
+  // القائمة تحمل has_phone فقط (لا الرقم نفسه)؛ غيابه (خادم أقدم) يعني «نعم»
+  const hasPhone = p.has_phone !== false;
 
   // Price Badge text
   let priceBadgeText = 'سعر تقديري';
@@ -4754,9 +4762,9 @@ function renderSingleServiceCardHtml(p) {
 
             <!-- شريط الأزرار التفاعلية -->
             <div class="service-card-actions">
-              <button type="button" class="service-action-btn service-contact-btn" onclick="revealServiceContact(${p.id})">
+              ${hasPhone ? `<button type="button" class="service-action-btn service-contact-btn" onclick="revealServiceContact(${p.id})">
                 <i class="fa-solid fa-phone"></i> <span>تواصل فوري</span>
-              </button>
+              </button>` : ''}
               <button type="button" class="service-action-btn service-more-btn" id="serviceMoreBtn-${p.id}" aria-expanded="false" onclick="toggleServiceDetails(${p.id}, this)">
                 <i class="fa-solid fa-chevron-down"></i> <span>مزيد من التفاصيل</span>
               </button>
@@ -4812,9 +4820,9 @@ function renderSingleServiceCardHtml(p) {
 
             <!-- أزرار التواصل المباشرة المفتوحة بعد النقر -->
             <div id="serviceContactRow-${p.id}">
-              <button type="button" class="submit-btn" style="width:100%;" onclick="revealServiceContact(${p.id})">
+              ${hasPhone ? `<button type="button" class="submit-btn" style="width:100%;" onclick="revealServiceContact(${p.id})">
                 <i class="fa-solid fa-phone"></i> إظهار خيارات الاتصال والواتساب
-              </button>
+              </button>` : noProviderPhoneHtml()}
             </div>
           </div>
 
@@ -4852,7 +4860,8 @@ async function revealServiceContact(providerId, preferredAction = null) {
 
     const phone = p.phone || '';
     if (!phone) {
-      alert('رقم التواصل غير متوفر حالياً');
+      const emptyRow = document.getElementById(`serviceContactRow-${providerId}`);
+      if (emptyRow) emptyRow.innerHTML = noProviderPhoneHtml();
       return;
     }
 
@@ -4963,10 +4972,10 @@ async function openProviderModal(providerId) {
     document.getElementById('providerModalTowns').textContent = (p.towns && p.towns.length)
       ? `يخدم: ${p.towns.join('، ')}` : '';
 
-    document.getElementById('providerContactArea').innerHTML = `
+    document.getElementById('providerContactArea').innerHTML = currentProviderPhone ? `
       <button type="button" class="submit-btn" onclick="revealProviderPhone()">
         <i class="fa-solid fa-phone"></i> إظهار رقم التواصل
-      </button>`;
+      </button>` : noProviderPhoneHtml();
 
     document.getElementById('providerModal').style.display = 'flex';
   } catch (e) {

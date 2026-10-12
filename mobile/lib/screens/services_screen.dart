@@ -895,6 +895,7 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                 const SizedBox(height: 12),
                 Row(
                   children: [
+                    if (p.hasPhone) ...[
                     Expanded(
                       child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
@@ -919,6 +920,7 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    ],
                     Expanded(
                       child: OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
@@ -1045,21 +1047,27 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                   ],
 
                   const SizedBox(height: 14),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: cardGold,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 11),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      elevation: 0,
+                  if (p.hasPhone)
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: cardGold,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        elevation: 0,
+                      ),
+                      icon: const Icon(Icons.phone_in_talk, size: 16),
+                      label: const Text(
+                        'إظهار خيارات الاتصال والواتساب',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: _revealContactSheet,
+                    )
+                  else
+                    Text(
+                      'لا يوجد رقم تواصل مسجّل',
+                      style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
                     ),
-                    icon: const Icon(Icons.phone_in_talk, size: 16),
-                    label: const Text(
-                      'إظهار خيارات الاتصال والواتساب',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                    onPressed: _revealContactSheet,
-                  ),
                 ],
               ),
             ),
@@ -1393,12 +1401,12 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(
-                  labelText: 'رقم الهاتف للتواصل *',
+                  labelText: 'رقم الهاتف للتواصل (اختياري)',
                   hintText: '05XXXXXXXX',
                   border: OutlineInputBorder(),
                 ),
                 validator: (val) {
-                  if (val == null || val.trim().isEmpty) return 'يرجى كتابة رقم الهاتف';
+                  if (val == null || val.trim().isEmpty) return null;
                   final clean = val.trim().replaceAll(RegExp(r'[\s-]'), '');
                   if (!RegExp(r'^0\d{8,9}$').hasMatch(clean)) {
                     return 'رقم الهاتف غير صالح';

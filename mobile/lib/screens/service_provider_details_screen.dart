@@ -403,6 +403,13 @@ class _ProviderBody extends StatelessWidget {
               ],
 
               const SizedBox(height: 24),
+              if (!provider.hasPhone)
+                Text(
+                  'لا يوجد رقم تواصل مسجّل',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: context.c.inkFaint),
+                )
+              else
               Row(
                 children: [
                   Expanded(

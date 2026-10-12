@@ -549,17 +549,17 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/services/categories` | فئات الخدمات النشِطة مع خصائصها ومواصفاتها النموذجية |
-| `GET` | `/api/services/providers` | قائمة مزوّدي الخدمات النشِطين (`?category_id=` `?town=` `?search=` `?page=` `?limit=`) مع المواصفات ونوع وسعر الحزمة التقديرية — **رقم الهاتف محجوب كلياً عن استجابة القائمة** |
-| `GET` | `/api/services/providers/:id` | تفاصيل المزوّد الكاملة تشمل رقم الهاتف والمواصفات الكاملة |
-| `POST` | `/api/services/providers` | طلب انضمام مزوّد خدمة جديد 🔒 |
+| `GET` | `/api/services/providers` | قائمة مزوّدي الخدمات النشِطين (`?category_id=` `?town=` `?search=` `?page=` `?limit=`) مع المواصفات ونوع وسعر الحزمة التقديرية — **رقم الهاتف محجوب كلياً عن استجابة القائمة**؛ الرقم اختياري فيحمل كل صف علَماً `has_phone` (منطقي، دون الرقم نفسه) كي تعرف الواجهة أتعرض زر التواصل |
+| `GET` | `/api/services/providers/:id` | تفاصيل المزوّد الكاملة تشمل رقم الهاتف (`null` إن لم يُسجَّل) والمواصفات الكاملة |
+| `POST` | `/api/services/providers` | طلب انضمام مزوّد خدمة جديد 🔒 — رقم الهاتف اختياري، وإن أُرسل يُتحقَّق منه |
 | `GET` | `/api/services/my-services` | الخدمات التي نشرها المستخدم الحالي 🔒 |
 | `GET` | `/api/admin/service-categories` | كل فئات الخدمات مع خصائصها وإحصاءاتها 🛡️ |
 | `POST` | `/api/admin/service-categories` | إنشاء فئة خدمة جديدة مع خصائصها ومواصفاتها 🛡️ |
 | `PATCH` | `/api/admin/service-categories/:id` | تعديل فئة خدمة وخصائصها 🛡️ |
 | `DELETE` | `/api/admin/service-categories/:id` | حذف أو تعطيل فئة خدمة 🛡️ |
 | `GET` | `/api/admin/service-providers` | قائمة المزوّدين للإدارة حسب نطاق البلدات 👑 |
-| `POST` | `/api/admin/service-providers` | إضافة مزوّد خدمة مع إذن النشر الإلزامي والمواصفات والحزمة التقديرية 👑 |
-| `PATCH` | `/api/admin/service-providers/:id` | تعديل بيانات المزوّد 👑 |
+| `POST` | `/api/admin/service-providers` | إضافة مزوّد خدمة مع إذن النشر الإلزامي والمواصفات والحزمة التقديرية؛ رقم الهاتف اختياري (غيابه أو فراغه يُخزَّن `NULL`) 👑 |
+| `PATCH` | `/api/admin/service-providers/:id` | تعديل بيانات المزوّد — `phone: ''` يمسح الرقم، وغياب المفتاح لا يلمسه 👑 |
 | `DELETE` | `/api/admin/service-providers/:id` | حذف مزوّد خدمة 👑 |
 
 

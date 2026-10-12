@@ -223,7 +223,9 @@ async function townsForProviders(providerIds) {
  * A page of active providers. Deliberately does NOT select `phone` — this is
  * enforcement rule 6: the number must never reach a list response, not even
  * as a hidden field, so it cannot leak by a client rendering it by mistake.
- * It only ever comes back from `getPublicProviderById`.
+ * It only ever comes back from `getPublicProviderById`. The phone is optional,
+ * so each row carries `has_phone` (computed in SQL, never the number itself)
+ * for clients deciding whether to offer a contact button.
  */
 async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
   const limitVal = safeLimit(limit);
@@ -261,7 +263,8 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
     `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
-            sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes
+            sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
+            (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE ${whereClause}
@@ -278,6 +281,7 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
     category_name: row.category_name,
     category_icon: row.category_icon,
     category_color: row.category_color,
+    has_phone: Boolean(row.has_phone),
     image_url: absoluteMediaUrl(row.image_url),
     price: row.price ?? null,
     price_type: row.price_type || 'estimated',
@@ -317,7 +321,7 @@ async function getPublicProviderById(id) {
     category_name: row.category_name,
     category_icon: row.category_icon,
     category_color: row.category_color,
-    phone: row.phone,
+    phone: row.phone ?? null,
     description: row.description,
     image_url: absoluteMediaUrl(row.image_url),
     price: row.price ?? null,
@@ -478,7 +482,7 @@ async function createProvider(data) {
           status, rejection_reason, is_active, consent_at, consent_by, consent_channel, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        data.category_id, data.name, data.phone,
+        data.category_id, data.name, data.phone ?? null,
         data.description ?? null, data.image_url ?? null,
         data.price !== undefined ? data.price : null,
         priceType,

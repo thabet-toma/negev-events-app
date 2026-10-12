@@ -1342,6 +1342,31 @@ void main() {
 
       expect(detail.phone, '0501234567');
       expect(detail.description, 'ولائم أعراس ومناسبات في كل أنحاء النقب');
+      expect(detail.hasPhone, isTrue);
+    });
+
+    test('الرقم اختياري: phone: null يعطي hasPhone=false، و has_phone في الصف', () {
+      final detail = ServiceProviderDetail.fromJson({
+        'id': 6,
+        'name': 'الرجل الأنيق',
+        'category_id': 3,
+        'category_name': 'بدلات زفاف للرجال',
+        'phone': null,
+      });
+      expect(detail.phone, '');
+      expect(detail.hasPhone, isFalse);
+
+      ServiceProvider row(Object? hasPhone) => ServiceProvider.fromJson({
+            'id': 6,
+            'name': 'الرجل الأنيق',
+            'category_id': 3,
+            'category_name': 'بدلات زفاف للرجال',
+            'has_phone': ?hasPhone,
+          });
+      expect(row(false).hasPhone, isFalse);
+      expect(row(true).hasPhone, isTrue);
+      // خادم أقدم لا يرسل العلَم: السلوك السابق (زرّ التواصل ظاهر) يبقى.
+      expect(row(null).hasPhone, isTrue);
     });
 
     test('عميل API يقرأ صفحة المزوّدين وفئات الدليل', () async {

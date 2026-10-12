@@ -5094,6 +5094,74 @@ async function run() {
     assert.strictEqual(body.provider.phone, publicProviderPhone);
   });
 
+  let noPhoneProviderId = 0;
+  await test('Optional phone: an admin creates a provider with no phone — 201, stored as NULL', async () => {
+    const { status, body } = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: { category_id: serviceCategoryId, name: 'مزوّد بلا رقم', towns: [scopedTown] }
+    });
+    assert.strictEqual(status, 201);
+    noPhoneProviderId = body.providerId;
+    const row = await db.queryOne('SELECT phone FROM service_providers WHERE id = ?', [noPhoneProviderId]);
+    assert.strictEqual(row.phone, null);
+  });
+
+  await test('Optional phone: a present but invalid phone is still rejected (400), and nothing is written', async () => {
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM service_providers');
+    const { status, body } = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: { category_id: serviceCategoryId, name: 'مزوّد رقمه خطأ', phone: '123', towns: [scopedTown] }
+    });
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.message, 'رقم الهاتف غير صالح');
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM service_providers');
+    assert.strictEqual(Number(after.total), Number(before.total));
+  });
+
+  await test('Optional phone: the detail returns phone: null; the list has no phone key and has_phone tells the two apart', async () => {
+    const { body: detail } = await api('GET', `/api/services/providers/${noPhoneProviderId}`);
+    assert.ok('phone' in detail.provider);
+    assert.strictEqual(detail.provider.phone, null);
+
+    const { body: list } = await api('GET', `/api/services/providers?category_id=${serviceCategoryId}`);
+    const without = list.providers.find(row => row.id === noPhoneProviderId);
+    const withPhone = list.providers.find(row => row.id === publicProviderId);
+    assert.ok(without && withPhone, 'expected both providers on the list');
+    for (const row of list.providers) assert.ok(!('phone' in row), 'the list must never carry the number');
+    assert.strictEqual(without.has_phone, false);
+    assert.strictEqual(withPhone.has_phone, true);
+  });
+
+  await test('Optional phone: PATCH sets the number, leaves it alone when the key is absent, and clears it with an empty string', async () => {
+    const newPhone = '0501234567';
+    const set = await api('PATCH', `/api/admin/service-providers/${noPhoneProviderId}`, {
+      token: superAdminToken, body: { phone: newPhone }
+    });
+    assert.strictEqual(set.status, 200);
+    assert.strictEqual(set.body.provider.phone, newPhone);
+
+    const untouched = await api('PATCH', `/api/admin/service-providers/${noPhoneProviderId}`, {
+      token: superAdminToken, body: { name: 'مزوّد بلا رقم — معدَّل' }
+    });
+    assert.strictEqual(untouched.status, 200);
+    assert.strictEqual(untouched.body.provider.phone, newPhone, 'a PATCH without the phone key must not touch it');
+
+    const cleared = await api('PATCH', `/api/admin/service-providers/${noPhoneProviderId}`, {
+      token: superAdminToken, body: { phone: '' }
+    });
+    assert.strictEqual(cleared.status, 200);
+    assert.strictEqual(cleared.body.provider.phone, null);
+    const row = await db.queryOne('SELECT phone FROM service_providers WHERE id = ?', [noPhoneProviderId]);
+    assert.strictEqual(row.phone, null);
+
+    const bad = await api('PATCH', `/api/admin/service-providers/${noPhoneProviderId}`, {
+      token: superAdminToken, body: { phone: '123' }
+    });
+    assert.strictEqual(bad.status, 400);
+  });
+
+  await api('DELETE', `/api/admin/service-providers/${noPhoneProviderId}`, { token: superAdminToken });
+
   let categoryWithAttrsId = 0;
   await test('Category attributes: creating a category with custom attributes saves and returns them', async () => {
     const { status, body } = await api('POST', '/api/admin/service-categories', {

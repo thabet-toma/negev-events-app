@@ -3537,7 +3537,7 @@ function renderProvidersList() {
             <td><strong>${escapeHtml(p.name)}</strong></td>
             <td>${escapeHtml(p.category_name || '')}</td>
             <td>${p.price != null ? escapeHtml(p.price) + ' ₪' : '—'}</td>
-            <td><a href="tel:${p.phone}" style="color:var(--gold-main);">${escapeHtml(p.phone)}</a></td>
+            <td>${p.phone ? `<a href="tel:${escapeHtml(p.phone)}" style="color:var(--gold-main);">${escapeHtml(p.phone)}</a>` : '—'}</td>
             <td>${(p.towns || []).map(t => `<span class="town-chip">${escapeHtml(t)}</span>`).join('')}</td>
             <td>
               ${p.status === 'pending'
@@ -3603,7 +3603,7 @@ function openProviderForm(id) {
   renderProviderDynamicAttributes(categoryId, provider ? provider.attributes : null);
 
   document.getElementById('provName').value = provider ? provider.name : '';
-  document.getElementById('provPhone').value = provider ? provider.phone : '';
+  document.getElementById('provPhone').value = provider ? (provider.phone || '') : '';
   document.getElementById('provPrice').value = provider && provider.price != null ? provider.price : '';
   document.getElementById('provImage').value = provider ? (provider.image_url || '') : '';
   clearAdminProviderImage();

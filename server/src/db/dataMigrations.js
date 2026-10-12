@@ -1552,6 +1552,24 @@ const steps = [
       `);
       logger.info('[migrations] add-episode-media-and-archive-photos-2026-09: episode media columns, archive_gallery and event_photos ensured.');
     }
+  },
+  {
+    // A provider's phone becomes optional: some shops have no number, and
+    // the column was NOT NULL since create-service-directory-2026-09 (a
+    // historical step, left untouched). Only relaxes the constraint — no row
+    // is read or rewritten. Safe to repeat: once nullable, nothing matches.
+    name: 'make-service-provider-phone-optional-2026-10',
+    async run(connection) {
+      if (!(await tableExists(connection, 'service_providers'))) return;
+      const [rows] = await connection.execute(
+        `SELECT IS_NULLABLE FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'service_providers' AND COLUMN_NAME = 'phone'`
+      );
+      if (rows.length && rows[0].IS_NULLABLE === 'NO') {
+        await connection.query('ALTER TABLE service_providers MODIFY phone VARCHAR(30) NULL');
+        logger.info('[migrations] make-service-provider-phone-optional-2026-10: service_providers.phone is now nullable.');
+      }
+    }
   }
 ];
 

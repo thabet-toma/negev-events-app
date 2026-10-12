@@ -588,7 +588,7 @@ CREATE TABLE IF NOT EXISTS service_providers (
   id                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
   category_id         INT UNSIGNED NOT NULL,
   name                VARCHAR(150) NOT NULL,
-  phone               VARCHAR(30)  NOT NULL,
+  phone               VARCHAR(30)  DEFAULT NULL,
   description         TEXT         DEFAULT NULL,
   image_url           TEXT         DEFAULT NULL,
   price               VARCHAR(100) DEFAULT NULL,

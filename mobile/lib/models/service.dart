@@ -97,6 +97,8 @@ List<ServiceAttributeItem> _parseAttributes(dynamic raw) {
 
 /// سطر مزوّد في القائمة العامة — من GET /api/services/providers. لا يحمل
 /// `phone` مفتاحاً أصلاً في استجابة الخادم؛ التحليل يجب ألّا يفترض وجوده.
+/// الرقم اختياري، فيحمل الصف `has_phone` ليعرف العميل إن كان يعرض زر التواصل
+/// دون كشف الرقم؛ غيابه (خادم أقدم) يعني «نعم» كما كان السلوك قبله.
 class ServiceProvider {
   final int id;
   final String name;
@@ -111,6 +113,7 @@ class ServiceProvider {
   final List<ServiceAttributeItem> attributes;
   final String status;
   final List<String> towns;
+  final bool hasPhone;
 
   const ServiceProvider({
     required this.id,
@@ -126,6 +129,7 @@ class ServiceProvider {
     this.attributes = const [],
     this.status = 'approved',
     this.towns = const [],
+    this.hasPhone = true,
   });
 
   String? get displayPriceBadge {
@@ -163,6 +167,7 @@ class ServiceProvider {
       attributes: _parseAttributes(json['attributes']),
       status: '${json['status'] ?? 'approved'}',
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
+      hasPhone: json['has_phone'] != false,
     );
   }
 }
@@ -240,6 +245,9 @@ class ServiceProviderDetail {
     this.rejectionReason,
     this.towns = const [],
   });
+
+  /// الرقم اختياري: مزوّد بلا رقم يعيد الخادم `phone: null` فيصير هنا ''.
+  bool get hasPhone => phone.isNotEmpty;
 
   factory ServiceProviderDetail.fromJson(Map<String, dynamic> json) {
     final rawTowns = json['towns'];
