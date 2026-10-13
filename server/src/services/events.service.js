@@ -33,6 +33,37 @@ const LIST_COLUMNS = [
   'events.artist_name', 'events.artist_image_url', 'events.host_phone', 'events.views_count'
 ].join(', ');
 
+/**
+ * The date span of an event, as a SQL fragment — every day the occasion
+ * actually covers, not just the column pair it was published with.
+ * `event_date` is its first day and `event_end_date` (when set) its last
+ * fixed one, but `youth_party_date` (the «سهرة الشباب», usually held before
+ * the wedding) and every `event_days` row (the named days — حنّة، غداء) are
+ * real days of the same occasion. A span that ignored them would drop a
+ * wedding from the upcoming list the day after its main date while its حنّة
+ * day is still ahead, and file it in the archive while it is still going on.
+ *
+ * `LEAST`/`GREATEST` yield NULL if any argument is NULL, so every nullable
+ * term — `event_end_date`, `youth_party_date`, and the empty-set MIN/MAX of
+ * the correlated subquery — is COALESCEd back to `event_date`. One literal
+ * per table-reference style the queries actually use (`e` for a joined
+ * `events e`, `events` for the bare/qualified table); each is a fixed string
+ * with no interpolated value or name, so it stays parameter-free like every
+ * other fragment here (CLAUDE.md: no SQL text concatenation).
+ */
+const EVENT_SPAN_START_SQL_EVENTS =
+  'LEAST(events.event_date,'
+  + ' COALESCE(events.youth_party_date, events.event_date),'
+  + ' COALESCE((SELECT MIN(d.day_date) FROM event_days d WHERE d.event_id = events.id), events.event_date))';
+const EVENT_SPAN_END_SQL_EVENTS =
+  'GREATEST(COALESCE(events.event_end_date, events.event_date),'
+  + ' COALESCE(events.youth_party_date, events.event_date),'
+  + ' COALESCE((SELECT MAX(d.day_date) FROM event_days d WHERE d.event_id = events.id), events.event_date))';
+const EVENT_SPAN_END_SQL_E =
+  'GREATEST(COALESCE(e.event_end_date, e.event_date),'
+  + ' COALESCE(e.youth_party_date, e.event_date),'
+  + ' COALESCE((SELECT MAX(d.day_date) FROM event_days d WHERE d.event_id = e.id), e.event_date))';
+
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
   return term.replace(/[\\%_]/g, char => `\\${char}`);
@@ -186,7 +217,7 @@ async function listMyReminders(userId) {
 async function listLiveAnnouncements({ legacyOnly = false } = {}) {
   const conditions = [
     'a.is_current = 1', "e.status = 'approved'",
-    'COALESCE(e.event_end_date, e.event_date) >= CURDATE()'
+    `${EVENT_SPAN_END_SQL_E} >= CURDATE()`
   ];
   const params = [];
 
@@ -343,17 +374,21 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  * `archive` is set), with per-card congratulation stats attached.
  *
  * `archive`: false (default) shows only what has not finished yet —
- * `COALESCE(event_end_date, event_date) >= CURDATE()`, so a multi-day عزا
- * that started yesterday still shows today. `archive: true` flips to what
- * already ended, newest-ended first, reached only on explicit request so it
- * never crowds out what's upcoming (#20 step 4, decision أ).
+ * `span_end >= CURDATE()` (see the EVENT_SPAN_* constants), so a multi-day عزا
+ * that started yesterday still shows today — and so does a wedding whose
+ * fixed date has passed but whose حنّة day or youth party is still ahead.
+ * `archive: true` flips to what already ended (`span_end < CURDATE()`),
+ * newest-ended first, reached only on explicit request so it never crowds out
+ * what's upcoming (#20 step 4, decision أ).
  *
  * `dateFrom`/`dateTo` (either may be alone) are the clients' date filter. An
- * event is in the range when any of its days is — overlap, not start date, so
- * a multi-day عزا covering the range is in it. The range REPLACES the
- * upcoming/archive cut instead of intersecting it: the reader asked for these
- * days, and a day picked in the past must not come back empty just because
- * the archive switch is off. `archive` then only sets the order.
+ * event is in the range when any of its days is (`span_start <= dateTo` and
+ * `span_end >= dateFrom`) — overlap, not start date, so a multi-day عزا
+ * covering the range is in it, and so is a day filed only as an extra day or
+ * a youth party. The range REPLACES the upcoming/archive cut instead of
+ * intersecting it: the reader asked for these days, and a day picked in the
+ * past must not come back empty just because the archive switch is off.
+ * `archive` then only sets the order.
  *
  * `towns`, `occasionTypeIds` and `villageIds` are each either `null` (no
  * filter) or a non-empty array — a single value is simply a one-element
@@ -376,17 +411,17 @@ async function listPublicEvents({
 
   if (dateFrom || dateTo) {
     if (dateFrom) {
-      conditions.push('COALESCE(event_end_date, event_date) >= ?');
+      conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} >= ?`);
       params.push(dateFrom);
     }
     if (dateTo) {
-      conditions.push('event_date <= ?');
+      conditions.push(`${EVENT_SPAN_START_SQL_EVENTS} <= ?`);
       params.push(dateTo);
     }
   } else {
     conditions.push(archive
-      ? 'COALESCE(event_end_date, event_date) < CURDATE()'
-      : 'COALESCE(event_end_date, event_date) >= CURDATE()');
+      ? `${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()`
+      : `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`);
   }
 
   const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
@@ -543,7 +578,7 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
 async function listMapPoints({ towns = null, occasionTypeIds = null, villageIds = null, legacyOnly = false } = {}) {
   const conditions = [
     "status = 'approved'", 'latitude IS NOT NULL', 'longitude IS NOT NULL',
-    'COALESCE(event_end_date, event_date) >= CURDATE()'
+    `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
   const params = [];
 
@@ -781,6 +816,34 @@ async function getEventForEdit(eventId) {
 }
 
 /**
+ * The extra-days list in a comparable shape: ordered by day, then by the
+ * row's own position, and reduced to the four fields that describe the day.
+ * Both sides of an edit's comparison go through here, so a client that sends
+ * the same days in a different date order is still seen as unchanged — only
+ * the content counts, not the order the form happened to build.
+ */
+function normaliseEventDays(days) {
+  return [...days]
+    .sort((a, b) => (a.day_date === b.day_date
+      ? (a.position ?? 0) - (b.position ?? 0)
+      : (a.day_date < b.day_date ? -1 : 1)))
+    .map(day => ({ name: day.name, day_date: day.day_date, place: day.place, day_time: day.day_time }));
+}
+
+/**
+ * Whether an extra-days edit moves the schedule or only describes it:
+ * 'critical' when the multiset of (day_date, place) pairs differs — a day
+ * added, removed, re-dated or moved to another place — and 'cosmetic' when
+ * only a name and/or a time changed on a day that stayed where it was. The
+ * pairs are sorted before comparison so the test is order-blind and two days
+ * on the same date cannot hide a move behind each other.
+ */
+function classifyEventDaysAmendment(oldDays, newDays) {
+  const pairs = days => days.map(day => `${day.day_date}\u0000${day.place ?? ''}`).sort();
+  return JSON.stringify(pairs(oldDays)) === JSON.stringify(pairs(newDays)) ? 'cosmetic' : 'critical';
+}
+
+/**
  * Applies a partial edit. `changes` holds only the columns the route already
  * cleaned and confirmed differ from `existing`; `honorees`, when present,
  * fully replaces event_honorees and re-derives groom_name, and `extraDays`,
@@ -788,6 +851,14 @@ async function getEventForEdit(eventId) {
  * transaction as the event row update, same invariant as createEvent. A
  * critical column change drops an approved event back to pending; honoree
  * spelling edits are always cosmetic, per the domain's own classification.
+ *
+ * Extra days are classified on their own content, not on the column rule: a
+ * day added, removed, re-dated or moved is critical and re-enters moderation,
+ * while a name/time tweak on a day that stayed put is cosmetic and leaves the
+ * event published. A list identical to what is stored is not an edit at all —
+ * no rows are rewritten and no amendment is logged. The overall amendment is
+ * the columns' rule (classifyAmendment) OR the extra-days one, so one
+ * critical change in either place is enough to bounce the event back.
  *
  * Every column that actually changed also gets an event_amendments row, in
  * the same transaction as the event write — either both exist or neither
@@ -804,10 +875,37 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
   const changedColumns = Object.keys(changes).filter(
     column => String(existing[column] ?? '') !== String(changes[column] ?? '')
   );
-  const amendment = classifyAmendment(changedColumns);
-  const nextStatus = amendment === 'critical' && existing.status === 'approved' ? 'pending' : existing.status;
 
-  await db.transaction(async connection => {
+  const { amendment, status: nextStatus, extraDaysChanged } = await db.transaction(async connection => {
+    // The stored days are read here, before any replacement: they are the
+    // only source of truth for whether this edit changes the schedule at all.
+    let extraDaysEdit = null;
+    if (extraDays !== null) {
+      const [currentRows] = await connection.execute(
+        `SELECT name, day_date, place, day_time, position FROM event_days
+          WHERE event_id = ? ORDER BY day_date ASC, position ASC`,
+        [eventId]
+      );
+      const oldDays = normaliseEventDays(currentRows);
+      const newDays = normaliseEventDays(extraDays.map((day, position) => ({ ...day, position })));
+      if (JSON.stringify(oldDays) !== JSON.stringify(newDays)) {
+        extraDaysEdit = {
+          classification: classifyEventDaysAmendment(oldDays, newDays),
+          oldValue: JSON.stringify(oldDays),
+          newValue: JSON.stringify(newDays)
+        };
+      }
+    }
+
+    // One decision, two sources: the columns' own classifyAmendment plus the
+    // extra-days comparison above. A critical change in either re-enters
+    // moderation; otherwise the event keeps the status it had.
+    const amendment = classifyAmendment(changedColumns) === 'critical'
+      || extraDaysEdit?.classification === 'critical'
+      ? 'critical'
+      : 'cosmetic';
+    const nextStatus = amendment === 'critical' && existing.status === 'approved' ? 'pending' : existing.status;
+
     const assignments = [];
     const params = [];
     for (const [column, value] of Object.entries(changes)) {
@@ -835,8 +933,10 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
 
     // A provided extra-days list replaces the whole set, the same
     // delete-then-insert `honorees` above uses; `null` means the caller never
-    // sent the key (every published APK today), so the existing days stay.
-    if (extraDays !== null) {
+    // sent the key (every published APK today), so the existing days stay. A
+    // list identical to the stored one is skipped entirely — nothing to
+    // rewrite and nothing to log.
+    if (extraDaysEdit) {
       await connection.execute('DELETE FROM event_days WHERE event_id = ?', [eventId]);
       let dayPosition = 0;
       for (const day of extraDays) {
@@ -872,6 +972,28 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
         ]
       );
     }
+
+    // The extra-days list is one field, so it is one amendment row carrying
+    // both lists as JSON — the same shape the per-column rows above use, just
+    // with a value that is itself a list. Its status matches a column row's:
+    // pending for a critical change, approved for a cosmetic one.
+    if (extraDaysEdit) {
+      await connection.execute(
+        `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          eventId,
+          'extra_days',
+          extraDaysEdit.oldValue,
+          extraDaysEdit.newValue,
+          changedBy,
+          extraDaysEdit.classification,
+          extraDaysEdit.classification === 'critical' ? 'pending' : 'approved'
+        ]
+      );
+    }
+
+    return { amendment, status: nextStatus, extraDaysChanged: extraDaysEdit !== null };
   });
 
   // A critical edit that moves the date or the town has to be re-checked on
@@ -892,7 +1014,7 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     collision = { hasCollision: conflicts.length > 0, count: conflicts.length, conflicts };
   }
 
-  return { amendment, status: nextStatus, collision, changedColumns };
+  return { amendment, status: nextStatus, collision, changedColumns, extraDaysChanged };
 }
 
 /** Every logged change to this event, newest first, with the name of who made it. */
@@ -1255,8 +1377,8 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * download button (server/src/routes/share.routes.js). Returns `null` for a
  * non-`approved` status or a non-existent id alike: the route must not be
  * able to tell those two apart from this function's result, any more than
- * from its own response. `is_expired` reuses the exact
- * `COALESCE(event_end_date, event_date) < CURDATE()` idiom every other
+ * from its own response. `is_expired` reuses the exact span rule
+ * (`span_end < CURDATE()`, the EVENT_SPAN_* constants) every other
  * upcoming/archive query in this file uses, computed in SQL rather than by a
  * second, JS-side copy of the same rule.
  *
@@ -1274,7 +1396,7 @@ async function getShareEvent(eventId) {
             occasion_types.icon AS occasion_type_icon,
             occasion_types.color AS occasion_type_colour,
             occasion_types.default_poster_url AS occasion_type_poster_url,
-            (COALESCE(events.event_end_date, events.event_date) < CURDATE()) AS is_expired
+            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_expired
        FROM events
        LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
       WHERE events.id = ? AND events.status = 'approved'`,
@@ -1320,6 +1442,9 @@ module.exports = {
   updateEvent,
   classifyAmendment,
   CRITICAL_AMENDMENT_FIELDS,
+  EVENT_SPAN_START_SQL_EVENTS,
+  EVENT_SPAN_END_SQL_EVENTS,
+  EVENT_SPAN_END_SQL_E,
   listAmendments,
   listMyEvents,
   findCollisions,

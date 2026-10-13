@@ -7,15 +7,29 @@
  * `event_photos` row is what the product shows. Every query for the feature
  * is here; archivePhotos.routes.js only validates.
  *
- * "Ended" is the same rule GET /api/events?archive=1 already uses —
- * `COALESCE(event_end_date, event_date) < CURDATE()` — so an event is in the
- * archive list exactly when it can carry photos, never one day apart.
+ * "Ended" is the same span rule `GET /api/events?archive=1` already uses —
+ * `span_end < CURDATE()` (events.service.js's EVENT_SPAN_END_SQL_E: the
+ * GREATEST of event_end_date, youth_party_date and the last extra day) — so
+ * an event is in the archive list exactly when it can carry photos, never one
+ * day apart.
  */
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const cloudinary = require('./cloudinary.service');
+
+/**
+ * The span rule's SQL fragment lives once, in events.service.js. Required
+ * lazily, at the query that uses it: events.service.js requires THIS module
+ * while it is still loading, so a top-level require would capture its
+ * half-initialised exports before the constant exists — the cycle Node
+ * resolves in events.service.js's favour, silently leaving the fragment
+ * undefined here. A call-time require reads the finished exports instead.
+ */
+function eventSpanEndSql() {
+  return require('./events.service').EVENT_SPAN_END_SQL_E;
+}
 
 // Enough for a wedding's highlights; a hard ceiling so one event can never
 // turn into an unbounded page for every visitor who opens it.
@@ -34,7 +48,7 @@ function folderForEvent(eventId) {
  */
 async function assertArchivable(eventId) {
   const row = await db.queryOne(
-    `SELECT e.id, COALESCE(e.event_end_date, e.event_date) < CURDATE() AS ended, ot.archive_gallery
+    `SELECT e.id, ${eventSpanEndSql()} < CURDATE() AS ended, ot.archive_gallery
        FROM events e
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE e.id = ?`,
@@ -88,7 +102,7 @@ async function listPublic(eventId) {
        JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.event_id = ?
         AND e.status = 'approved'
-        AND COALESCE(e.event_end_date, e.event_date) < CURDATE()
+        AND ${eventSpanEndSql()} < CURDATE()
         AND ot.archive_gallery = 1
       ORDER BY p.id ASC`,
     [eventId]

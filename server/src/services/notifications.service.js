@@ -398,6 +398,7 @@ const CHANGE_PHRASES = {
   event_date: 'التاريخ',
   event_end_date: 'تاريخ الانتهاء',
   youth_party_date: 'موعد سهرة الشباب',
+  extra_days: 'أيام المناسبة',
   dinner_time: 'وقت العشاء',
   poster_url: 'الصورة',
   audio_url: 'المقطع الصوتي',

@@ -574,6 +574,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
 
   const changedFields = [...result.changedColumns];
   if (honorees !== null && honorees[0].name !== existing.groom_name) changedFields.push('honorees');
+  if (result.extraDaysChanged) changedFields.push('extra_days');
   if (changedFields.length) {
     await activity.record({ actorId: req.user.id, action: 'event_edited', eventId, details: changedFields.join(',') });
   }

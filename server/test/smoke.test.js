@@ -899,6 +899,193 @@ async function run() {
     await api('DELETE', `/api/admin/events/${extraDaysEventId}`, { token: adminToken });
   });
 
+  console.log('\nAn event\'s date span covers its extra days and its youth party');
+
+  let spanExtraDayId = 0;
+  await test('An approved event whose main date has passed is still upcoming — and mapped — while an extra day is ahead', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس الأيام الممتدة' }],
+        event_date: yesterday,
+        extra_days: [{ name: 'يوم الغد', date: tomorrow }]
+      })
+    });
+    assert.strictEqual(created.status, 'approved');
+    spanExtraDayId = created.eventId;
+
+    const { body: list } = await api('GET', '/api/events?limit=100');
+    assert.ok(
+      list.events.some(e => e.id === spanExtraDayId),
+      'an event with a future extra day must stay in the upcoming list'
+    );
+
+    const { body: archiveList } = await api('GET', '/api/events?archive=1&limit=100');
+    assert.ok(
+      !archiveList.events.some(e => e.id === spanExtraDayId),
+      'an event with a future extra day must not be archived yet'
+    );
+
+    const { body: map } = await api('GET', '/api/map/events');
+    assert.ok(
+      map.points.some(p => p.id === spanExtraDayId),
+      'an event with a future extra day must stay on the map'
+    );
+  });
+
+  await test('?date_from/?date_to find an event by an extra day or a youth party earlier than its event_date', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const { body: withDay } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس يوم إضافي سابق' }],
+        event_date: tomorrow,
+        extra_days: [{ name: 'قبل العرس', date: today }]
+      })
+    });
+    const { body: withYouth } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس سهرة الشباب السابقة' }],
+        event_date: tomorrow,
+        youth_party_date: today
+      })
+    });
+
+    const { body: range } = await api('GET', `/api/events?date_from=${today}&date_to=${today}&limit=100`);
+    assert.ok(
+      range.events.some(e => e.id === withDay.eventId),
+      'an extra day before event_date must be found by its own date'
+    );
+    assert.ok(
+      range.events.some(e => e.id === withYouth.eventId),
+      'a youth party before event_date must be found by its own date'
+    );
+
+    await api('DELETE', `/api/admin/events/${withDay.eventId}`, { token: adminToken });
+    await api('DELETE', `/api/admin/events/${withYouth.eventId}`, { token: adminToken });
+    await api('DELETE', `/api/admin/events/${spanExtraDayId}`, { token: adminToken });
+  });
+
+  // (f) An event with neither extra days nor a youth date is unchanged by this
+  // rule: the span collapses to COALESCE(event_end_date, event_date), exactly
+  // the old behaviour — covered by the existing tests «An event whose date has
+  // passed is absent from the list and present in the archive» and «A عزا that
+  // started yesterday and spans today is still shown», in the section below.
+
+  console.log('\nEditing extra days');
+
+  let daysEditEventId = 0;
+  await test('Set up: an approved wedding with two extra days for the extra-days edit tests', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'صاحب تعديل أيام المناسبة' }],
+        event_date: '2027-09-01',
+        extra_days: [
+          { name: 'الحنّة', date: '2027-09-01' },
+          { name: 'العرس', date: '2027-09-03' }
+        ]
+      })
+    });
+    assert.strictEqual(created.status, 'approved');
+    daysEditEventId = created.eventId;
+  });
+
+  await test('Re-dating one extra day is critical: the event returns to pending and one extra_days amendment row is logged', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${daysEditEventId}`, {
+      token: adminToken,
+      body: {
+        extra_days: [
+          { name: 'الحنّة', date: '2027-09-02' },
+          { name: 'العرس', date: '2027-09-03' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+
+    const rows = await db.query(
+      "SELECT * FROM event_amendments WHERE event_id = ? AND field = 'extra_days'", [daysEditEventId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].classification, 'critical');
+    assert.strictEqual(rows[0].status, 'pending');
+
+    // Approving must settle the row without crashing and without publishing a
+    // public date announcement — extra_days belongs to neither amendment group.
+    const approve = await api('PATCH', `/api/admin/events/${daysEditEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200);
+    const announcements = await db.queryOne(
+      'SELECT COUNT(*) AS total FROM event_announcements WHERE event_id = ?', [daysEditEventId]
+    );
+    assert.strictEqual(Number(announcements.total), 0, 'an extra_days amendment must not publish a date announcement');
+  });
+
+  await test('Renaming one extra day is cosmetic: the event stays approved and the amendment row is cosmetic', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${daysEditEventId}`, {
+      token: adminToken,
+      body: {
+        extra_days: [
+          { name: 'الحنّة المحدَّثة', date: '2027-09-02' },
+          { name: 'العرس', date: '2027-09-03' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'cosmetic');
+    assert.strictEqual(body.status, 'approved');
+
+    const rows = await db.query(
+      "SELECT * FROM event_amendments WHERE event_id = ? AND field = 'extra_days' ORDER BY id ASC", [daysEditEventId]
+    );
+    assert.strictEqual(rows.length, 2);
+    assert.strictEqual(rows[1].classification, 'cosmetic');
+    assert.strictEqual(rows[1].status, 'approved');
+  });
+
+  await test('Resubmitting the identical extra-days list rewrites no rows and logs no new amendment row', async () => {
+    const beforeDays = await db.query(
+      'SELECT id FROM event_days WHERE event_id = ? ORDER BY id ASC', [daysEditEventId]
+    );
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'extra_days'", [daysEditEventId]
+    );
+    const { status, body } = await api('PATCH', `/api/events/${daysEditEventId}`, {
+      token: adminToken,
+      body: {
+        extra_days: [
+          { name: 'الحنّة المحدَّثة', date: '2027-09-02' },
+          { name: 'العرس', date: '2027-09-03' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.status, 'approved');
+    const afterDays = await db.query(
+      'SELECT id FROM event_days WHERE event_id = ? ORDER BY id ASC', [daysEditEventId]
+    );
+    assert.deepStrictEqual(
+      afterDays.map(row => row.id), beforeDays.map(row => row.id),
+      'an identical list must leave the same event_days rows in place, not delete and re-insert them'
+    );
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'extra_days'", [daysEditEventId]
+    );
+    assert.strictEqual(Number(after.total), Number(before.total), 'an identical list must not be logged as an edit');
+  });
+
+  await api('DELETE', `/api/admin/events/${daysEditEventId}`, { token: adminToken });
+
   console.log('\nUpcoming list, pagination, congratulations, legacy filtering (#20 step 4)');
 
   let pastEventId = 0;
