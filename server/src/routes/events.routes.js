@@ -576,9 +576,13 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   // Same as on publish: images go on to Cloudinary only after every check
-  // above, so a refused edit leaves nothing there.
-  if (uploadedMedia.poster_url) changes.poster_url = await cloudinary.storeUploadedImage(uploadedMedia.poster_url, 'posters');
-  if (uploadedMedia.artist_image_url) {
+  // above — the type's field visibility included, so an upload for a field
+  // this type hides is never stored anywhere — and a refused edit leaves
+  // nothing there.
+  if (uploadedMedia.poster_url && isFieldVisible('poster_url')) {
+    changes.poster_url = await cloudinary.storeUploadedImage(uploadedMedia.poster_url, 'posters');
+  }
+  if (uploadedMedia.artist_image_url && isFieldVisible('artist_image_url')) {
     changes.artist_image_url = await cloudinary.storeUploadedImage(uploadedMedia.artist_image_url, 'artists');
   }
 

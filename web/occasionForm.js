@@ -201,9 +201,8 @@ const OCCASION_UPLOAD_FIELD_KEYS = ['poster_url', 'audio_url', 'artist_image_url
  *     شيوعاً بين الشاشتين في شكل المعرّفات،
  *   renderHonoreeAddButton(containerId): string — زرّ «إضافة اسم» بأسلوب كل
  *     صفحة (صنف CSS مختلف تماماً بين styles.css وadmin.css)، إلزامي،
- *   renderExtraDayAddButton(containerId): string اختياري — زرّ «أضف يوماً»
- *     بأسلوب كل صفحة؛ غيابه (اللوحة اليوم) يُسقط إلى زرّ افتراضي بلا صنف،
- *     فلا يسقط نموذج لم يعرّفه،
+ *   renderExtraDayAddButton(containerId): string — زرّ «أضف يوماً» بأسلوب كل
+ *     صفحة، لنفس السبب، إلزامي،
  *   onTownChange / onVillageChange / onDateChange: اسم دالة onchange (نصّاً)
  *     أو null/undefined لإسقاط السمة كلياً — تُقرَأ فقط حين لا override لحقل
  *     'town' (اللوحة تستبدله كاملاً، الموقع العام لا)،
@@ -303,9 +302,7 @@ function renderDefaultOccasionFieldHtml(field, ctx, { label, req }) {
         <div class="form-group">
           <label>${label}${req}</label>
           <div id="${p}ExtraDaysList"></div>
-          ${ctx.renderExtraDayAddButton
-            ? ctx.renderExtraDayAddButton(`${p}ExtraDaysList`)
-            : `<button type="button" onclick="addEventDayRow('${p}ExtraDaysList')"><i class="fa-solid fa-plus"></i> أضف يوماً</button>`}
+          ${ctx.renderExtraDayAddButton(`${p}ExtraDaysList`)}
         </div>`;
     case 'dinner_time':
       return `

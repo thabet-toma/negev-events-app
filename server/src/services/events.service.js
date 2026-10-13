@@ -867,16 +867,32 @@ function formatEventDaysList(days) {
 }
 
 /**
- * Whether an extra-days edit moves the schedule or only describes it:
+ * Whether an extra-days edit moves the schedule or only describes it.
+ *
  * 'critical' when the multiset of (day_date, place) pairs differs — a day
- * added, removed, re-dated or moved to another place — and 'cosmetic' when
- * only a name and/or a time changed on a day that stayed where it was. The
- * pairs are sorted before comparison so the test is order-blind and two days
- * on the same date cannot hide a move behind each other.
+ * added, removed, re-dated or moved to another place — or when the same set
+ * of day names stays put as names but is re-assigned to other dates/places:
+ * [{الحنّة, 10-08}, {العرس, 10-09}] → [{الحنّة, 10-09}, {العرس, 10-08}] keeps
+ * both (day_date, place) pairs yet moves each named day, so the henna moved a
+ * day and the event must re-enter moderation. 'cosmetic' otherwise: a rename
+ * (and/or a time tweak) on a day that kept its date and place changes only the
+ * description. A rename that coincides with a swap changes at least one name,
+ * so the two name sets no longer match and the edit stays 'cosmetic' — an
+ * acknowledged ambiguity, deliberately resolved the same way on both server
+ * and admin panel. The lists are sorted before comparison so the test is
+ * order-blind and two days on the same date cannot hide a move behind each
+ * other.
  */
 function classifyEventDaysAmendment(oldDays, newDays) {
   const pairs = days => days.map(day => `${day.day_date}\u0000${day.place ?? ''}`).sort();
-  return JSON.stringify(pairs(oldDays)) === JSON.stringify(pairs(newDays)) ? 'cosmetic' : 'critical';
+  if (JSON.stringify(pairs(oldDays)) !== JSON.stringify(pairs(newDays))) return 'critical';
+  // Same (day_date, place) pairs: only a re-assignment of the same day names
+  // to other dates/places — a swap, not a rename — is still a schedule move.
+  const names = days => days.map(day => day.name ?? '').sort();
+  const triples = days => days.map(day => `${day.name ?? ''}\u0000${day.day_date}\u0000${day.place ?? ''}`).sort();
+  const sameNames = JSON.stringify(names(oldDays)) === JSON.stringify(names(newDays));
+  if (sameNames && JSON.stringify(triples(oldDays)) !== JSON.stringify(triples(newDays))) return 'critical';
+  return 'cosmetic';
 }
 
 /**

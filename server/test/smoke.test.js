@@ -1091,6 +1091,32 @@ async function run() {
     assert.strictEqual(Number(after.total), Number(before.total), 'an identical list must not be logged as an edit');
   });
 
+  await test('Swapping which named day sits on which date is critical: the event returns to pending and the amendment row is critical', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${daysEditEventId}`, {
+      token: adminToken,
+      body: {
+        // Same two dates as stored, and the same two names — but each named
+        // day moves to the other's date, so the henna moved a day. A
+        // (day_date, place)-only comparison sees an unchanged list; the
+        // schedule has moved and the event must re-enter moderation.
+        extra_days: [
+          { name: 'الحنّة المحدَّثة', date: '2027-09-03' },
+          { name: 'العرس', date: '2027-09-02' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.amendment, 'critical');
+    assert.strictEqual(body.status, 'pending');
+
+    const rows = await db.query(
+      "SELECT * FROM event_amendments WHERE event_id = ? AND field = 'extra_days' ORDER BY id DESC LIMIT 1", [daysEditEventId]
+    );
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].classification, 'critical');
+    assert.strictEqual(rows[0].status, 'pending');
+  });
+
   await api('DELETE', `/api/admin/events/${daysEditEventId}`, { token: adminToken });
 
   console.log('\nUpcoming list, pagination, congratulations, legacy filtering (#20 step 4)');
@@ -2340,6 +2366,57 @@ async function run() {
     assert.ok(/^https?:\/\//.test(after.body.event.poster_url), 'and it must still come back absolute');
 
     await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
+  await test('A multipart PATCH uploading a poster the type hides is ignored, while a visible change in the same request still applies', async () => {
+    // The setup event must already carry a poster, so "unchanged" means
+    // something — otherwise a hidden-but-still-stored upload would look fine.
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس الملصق المخفي' }),
+      files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'original.png' }]
+    });
+    assert.strictEqual(created.status, 201);
+    const before = await api('GET', `/api/events/${created.body.eventId}`);
+    const originalPoster = before.body.event.poster_url;
+    assert.ok(originalPoster, 'the setup event must carry a poster for the "unchanged" assertion to mean anything');
+
+    // Hide poster_url on عرس, exactly as the type editor does.
+    const { body: adminList } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    const wedding = adminList.types.find(t => t.id === weddingType.id);
+    const posterField = wedding.fields.find(f => f.field_key === 'poster_url');
+    assert.ok(posterField && posterField.is_visible, 'poster_url must be visible on عرس before this test hides it');
+    const hiddenFields = wedding.fields.map(f =>
+      f.field_key === 'poster_url' ? { ...f, is_visible: false, is_required: false } : f
+    );
+    await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+      token: superAdminToken,
+      body: { fields: hiddenFields }
+    });
+
+    try {
+      const patched = await apiUpload(`/api/events/${created.body.eventId}`, {
+        method: 'PATCH',
+        token: adminToken,
+        fields: { title: 'عنوان الملصق المخفي' },
+        files: [{ field: 'poster', buffer: TINY_PNG, type: 'image/png', name: 'hidden.png' }]
+      });
+      assert.strictEqual(patched.status, 200, `expected the multipart PATCH to succeed, got ${patched.status}: ${patched.body.message}`);
+
+      const after = await api('GET', `/api/events/${created.body.eventId}`);
+      assert.strictEqual(
+        after.body.event.poster_url, originalPoster,
+        'an upload for a field this type hides must not overwrite the stored poster'
+      );
+      assert.strictEqual(after.body.event.title, 'عنوان الملصق المخفي', 'a visible change in the same request must still apply');
+    } finally {
+      // Restore visibility so later cases see the seeded type untouched.
+      await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+        token: superAdminToken,
+        body: { fields: wedding.fields }
+      });
+      await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+    }
   });
 
   await test('A JSON PATCH still works now that the route carries multer — the old path must not regress', async () => {

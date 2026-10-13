@@ -2546,7 +2546,7 @@ function collectEventEditFormDraft() {
   });
 
   const honorees = collectEventHonorees();
-  const extraDays = collectEventExtraDays();
+  const extraDays = collectEventDays('evtExtraDaysEditor');
 
   return {
     event_id: editingEventId,
@@ -2779,7 +2779,7 @@ function ensureEventEditFormMounted() {
       <div class="form-group" id="evtExtraDaysGroup">
         <label>أيام إضافية ${extraDaysCriticalHint}</label>
         <div id="evtExtraDaysEditor"></div>
-        <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventExtraDayRow()">
+        <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventDayRow('evtExtraDaysEditor')">
           <i class="fa-solid fa-plus"></i> أضف يوماً
         </button>
       </div>
@@ -2976,44 +2976,17 @@ function honoreesEqual(a, b) {
 }
 
 /**
- * صفوف الأيام الإضافية في نموذج تعديل المناسبة — نسخة موازية لصفوف أصحاب
- * المناسبة أعلاه (`.ot-field-row` نفسها: اسم | تاريخ | مكان | وقت + حذف)،
- * لأن نموذج اللوحة يبني صفوفه بيده ولا يستعمل addEventDayRow المشتركة.
+ * صفوف الأيام الإضافية في نموذج تعديل المناسبة — تعتمد addEventDayRow
+ * المشتركة نفسها (occasionForm.js) التي يبني بها الموقع العام النشر ونموذج
+ * النشر المباشر، فتتشارك الشاشات الثلاث صنف `.event-day-row` وتخطيطه بدل
+ * نسخة موازية. الحاوية `#evtExtraDaysEditor` هي ما يخصّ هذا النموذج وحده.
  */
 function renderEventExtraDaysEditor(days) {
   const container = document.getElementById('evtExtraDaysEditor');
   if (!container) return;
   container.innerHTML = '';
   const rows = (days && days.length) ? days : [{ name: '', date: '', place: '', time: '' }];
-  rows.forEach(day => addEventExtraDayRow(day));
-}
-
-function addEventExtraDayRow(day = {}) {
-  const container = document.getElementById('evtExtraDaysEditor');
-  if (!container) return;
-  const row = document.createElement('div');
-  row.className = 'ot-field-row';
-  row.setAttribute('data-extra-day-row', '');
-  row.innerHTML = `
-    <input type="text" class="evt-day-name" placeholder="اسم اليوم — مثال: الحنّة" maxlength="100" value="${escapeHtml(day.name || '')}">
-    <input type="date" class="evt-day-date" value="${escapeHtml(day.date || '')}">
-    <input type="text" class="evt-day-place" placeholder="المكان (اختياري)" maxlength="1000" value="${escapeHtml(day.place || '')}">
-    <input type="text" class="evt-day-time" placeholder="الوقت (اختياري)" maxlength="100" value="${escapeHtml(day.time || '')}">
-    <button type="button" class="btn-delete" onclick="this.closest('[data-extra-day-row]').remove()" title="حذف">
-      <i class="fa-solid fa-xmark"></i>
-    </button>
-  `;
-  container.appendChild(row);
-}
-
-/** يقرأ صفوف الأيام الحالية ويُسقط أي صف خالٍ من الحقول الأربعة — التحقق الدقيق على الخادم. */
-function collectEventExtraDays() {
-  return Array.from(document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]')).map(row => ({
-    name: row.querySelector('.evt-day-name').value.trim(),
-    date: row.querySelector('.evt-day-date').value.trim(),
-    place: row.querySelector('.evt-day-place').value.trim(),
-    time: row.querySelector('.evt-day-time').value.trim()
-  })).filter(day => day.name || day.date || day.place || day.time);
+  rows.forEach(day => addEventDayRow('evtExtraDaysEditor', day));
 }
 
 function extraDaysEqual(a, b) {
@@ -3028,16 +3001,30 @@ function extraDaysEqual(a, b) {
 }
 
 /**
- * أزواج (التاريخ، المكان) مرتّبة — تغيّرها وحده حرِج (نفس تصنيف الخادم:
- * التاريخ والمكان حرِجان، والاسم والوقت تجميليان)، وإضافة يوم أو حذفه تغيّر
- * عدد الأزواج فتعدّ حرجة أيضاً.
+ * هل يحرّك تعديل الأيام الجدولَ أم يكتفي بوصفه — نفس قاعدة الخادم
+ * (classifyEventDaysAmendment) حرفياً: حرِج حين تختلف مجموعة أزواج
+ * (التاريخ، المكان) — يوم أُضيف أو حُذف أو غيّر تاريخه أو مكانه — أو حين تبقى
+ * أسماء الأيام هي هي لكن تُسنَد إلى تواريخ/أماكن أخرى (تبديل)؛ تجميلي فيما
+ * عدا ذلك (إعادة تسمية و/أو تغيير وقت على يوم بقي في تاريخه ومكانه). وإعادة
+ * تسمية تصادف تبديلاً تغيّر اسم أحد الطرفين فلا تتطابق المجموعتان، فتبقى
+ * تجميلية عمداً — التباس معترَف به، مطابق لقرار الخادم.
  */
 function extraDaysPlacementChanged(a, b) {
   const pairs = list => (list || []).map(day => `${day.date || ''}\u0000${day.place || ''}`).sort();
   const listA = pairs(a);
   const listB = pairs(b);
   if (listA.length !== listB.length) return true;
-  return listA.some((pair, i) => pair !== listB[i]);
+  if (listA.some((pair, i) => pair !== listB[i])) return true;
+  // نفس أزواج (التاريخ، المكان): إسناد أسماء الأيام نفسها إلى تواريخ/أماكن
+  // أخرى تبديلٌ حرِج أيضاً، لا مجرّد إعادة تسمية.
+  const names = list => (list || []).map(day => day.name || '').sort();
+  const namesA = names(a);
+  const namesB = names(b);
+  if (namesA.length !== namesB.length || namesA.some((name, i) => name !== namesB[i])) return false;
+  const triples = list => (list || []).map(day => `${day.name || ''}\u0000${day.date || ''}\u0000${day.place || ''}`).sort();
+  const triplesA = triples(a);
+  const triplesB = triples(b);
+  return triplesA.length !== triplesB.length || triplesA.some((triple, i) => triple !== triplesB[i]);
 }
 
 /** سجلّ اختياري (المرجّح المذكور في المهمة) — GET /api/events/:id/amendments، نفس حارس الملكية القائم أصلاً. */
@@ -3550,7 +3537,7 @@ async function handleEventEditSubmit(e) {
   // الأيام: غياب المفتاح يعني «اتركها كما هي»، و[] يعني «امسحها» — فلا
   // يُرسَل إلا حين تكون المجموعة ظاهرة لهذا النوع (وإلا مسح تعديلُ نوعٍ آخر
   // أيامه)، وحين يختلف ما في الصفوف فعلاً عن الأصل.
-  const currentExtraDays = collectEventExtraDays();
+  const currentExtraDays = collectEventDays('evtExtraDaysEditor');
   const extraDaysGroup = document.getElementById('evtExtraDaysGroup');
   const extraDaysVisible = extraDaysGroup && extraDaysGroup.style.display !== 'none';
   if (extraDaysVisible && !extraDaysEqual(editingEventOriginal.extra_days, currentExtraDays)) {

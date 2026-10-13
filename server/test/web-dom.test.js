@@ -7721,12 +7721,12 @@ async function run() {
     await win.openEventEditForm(ADMIN_EXTRA_DAYS_EVENT.id);
     const { document } = win;
 
-    const rows = document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]');
+    const rows = document.querySelectorAll('#evtExtraDaysEditor .event-day-row');
     assert.strictEqual(rows.length, 1, 'one stored day must render as one row');
-    assert.strictEqual(rows[0].querySelector('.evt-day-name').value, 'الحنّة');
-    assert.strictEqual(rows[0].querySelector('.evt-day-date').value, '2026-10-08', 'day_date must fill the date input');
-    assert.strictEqual(rows[0].querySelector('.evt-day-place').value, 'ديوان آل فلان');
-    assert.strictEqual(rows[0].querySelector('.evt-day-time').value, 'بعد العصر', 'day_time must fill the time input');
+    assert.strictEqual(rows[0].querySelector('.event-day-name').value, 'الحنّة');
+    assert.strictEqual(rows[0].querySelector('.event-day-date').value, '2026-10-08', 'day_date must fill the date input');
+    assert.strictEqual(rows[0].querySelector('.event-day-place').value, 'ديوان آل فلان');
+    assert.strictEqual(rows[0].querySelector('.event-day-time').value, 'بعد العصر', 'day_time must fill the time input');
   });
 
   await test('renaming an extra day sends extra_days but never raises the critical-amendment warning', async () => {
@@ -7737,7 +7737,7 @@ async function run() {
     let confirmed = false;
     win.confirm = () => { confirmed = true; return true; };
 
-    document.querySelector('#evtExtraDaysEditor .evt-day-name').value = 'الحنّة الكبرى';
+    document.querySelector('#evtExtraDaysEditor .event-day-name').value = 'الحنّة الكبرى';
     await win.handleEventEditSubmit({ preventDefault() {} });
 
     assert.strictEqual(patches.length, 1, 'expected exactly one PATCH');
@@ -7755,12 +7755,40 @@ async function run() {
     let confirmed = false;
     win.confirm = () => { confirmed = true; return true; };
 
-    document.querySelector('#evtExtraDaysEditor .evt-day-date').value = '2026-10-07';
+    document.querySelector('#evtExtraDaysEditor .event-day-date').value = '2026-10-07';
     await win.handleEventEditSubmit({ preventDefault() {} });
 
     assert.strictEqual(patches.length, 1, 'expected exactly one PATCH');
     assert.strictEqual(patches[0].body.extra_days[0].date, '2026-10-07');
     assert.strictEqual(confirmed, true, 'moving a day to another date is critical — the warning must appear');
+  });
+
+  await test('swapping two extra days\' dates raises the critical-amendment warning even though the date list is unchanged', async () => {
+    const twoDayEvent = {
+      ...ADMIN_EXTRA_DAYS_EVENT,
+      id: 93,
+      extra_days: [
+        { name: 'الحنّة', day_date: '2026-10-08', place: null, day_time: null, position: 1 },
+        { name: 'العرس', day_date: '2026-10-09', place: null, day_time: null, position: 2 }
+      ]
+    };
+    const { win, patches } = await buildAdminExtraDaysEnv(twoDayEvent);
+    await win.openEventEditForm(twoDayEvent.id);
+    const { document } = win;
+
+    let confirmed = false;
+    win.confirm = () => { confirmed = true; return true; };
+
+    // Same two dates, same two names — but each named day moves to the other's
+    // date, so the henna moved a day. The old pairs-only comparison called that
+    // cosmetic; it must be critical.
+    const dates = document.querySelectorAll('#evtExtraDaysEditor .event-day-date');
+    dates[0].value = '2026-10-09';
+    dates[1].value = '2026-10-08';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    assert.strictEqual(patches.length, 1, 'expected exactly one PATCH');
+    assert.strictEqual(confirmed, true, 'a day swap is a schedule move — the warning must appear');
   });
 
   await test('leaving the extra days untouched sends no extra_days key at all', async () => {
@@ -7770,7 +7798,7 @@ async function run() {
     // The stored day must actually be on screen — otherwise "untouched" is
     // vacuous and the negative assertion below proves nothing.
     assert.strictEqual(
-      win.document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]').length, 1,
+      win.document.querySelectorAll('#evtExtraDaysEditor .event-day-row').length, 1,
       'the form must show the stored day for "untouched" to mean anything'
     );
 
