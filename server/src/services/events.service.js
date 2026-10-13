@@ -831,6 +831,42 @@ function normaliseEventDays(days) {
 }
 
 /**
+ * The honorees list in a comparable shape: name and role, kept in the order
+ * given (their stored position). Both sides of an edit's comparison go
+ * through here, so a client that resends the same people and roles in the
+ * same order is seen as unchanged — only the content counts.
+ */
+function normaliseHonorees(honorees) {
+  return honorees.map(honoree => ({ name: honoree.name, role: honoree.role ?? null }));
+}
+
+/**
+ * An amendment row's `old_value`/`new_value` are display text a client prints
+ * verbatim, so a list field is spelled out rather than dumped as JSON: names
+ * joined by «، », each carrying « (role) » when a role is set. An empty list
+ * is null — every client already renders null as «—».
+ */
+function formatHonoreesList(honorees) {
+  if (!honorees.length) return null;
+  return honorees.map(honoree => (honoree.role ? `${honoree.name} (${honoree.role})` : honoree.name)).join('، ');
+}
+
+/**
+ * The same readable treatment for the (normalised, sorted) extra-days list:
+ * each day is «الاسم: التاريخ», with « الوقت » appended when set and
+ * « — المكان » when set, days joined by «؛ ». An empty list is null.
+ */
+function formatEventDaysList(days) {
+  if (!days.length) return null;
+  return days.map(day => {
+    let text = `${day.name}: ${day.day_date}`;
+    if (day.day_time) text += ` ${day.day_time}`;
+    if (day.place) text += ` — ${day.place}`;
+    return text;
+  }).join('؛ ');
+}
+
+/**
  * Whether an extra-days edit moves the schedule or only describes it:
  * 'critical' when the multiset of (day_date, place) pairs differs — a day
  * added, removed, re-dated or moved to another place — and 'cosmetic' when
@@ -844,6 +880,26 @@ function classifyEventDaysAmendment(oldDays, newDays) {
 }
 
 /**
+ * A column is changed when the submitted value differs from what is stored.
+ *
+ * `latitude`/`longitude` are the one exception: they are DECIMAL(10,7), so
+ * MySQL hands them back as strings ('31.3933640') while the route parses the
+ * request to a number (31.393364) — a plain string compare would read an
+ * unchanged, re-sent pin as a change and bounce an approved event back to
+ * 'pending'. Both sides are compared as numbers rounded to the column's own
+ * seven decimal places, with absence on either side meaning "no pin".
+ */
+function columnValueChanged(column, storedValue, submittedValue) {
+  if (column === 'latitude' || column === 'longitude') {
+    const storedEmpty = storedValue === null || storedValue === undefined || storedValue === '';
+    const submittedEmpty = submittedValue === null || submittedValue === undefined || submittedValue === '';
+    if (storedEmpty || submittedEmpty) return storedEmpty !== submittedEmpty;
+    return Math.round(Number(storedValue) * 1e7) !== Math.round(Number(submittedValue) * 1e7);
+  }
+  return String(storedValue ?? '') !== String(submittedValue ?? '');
+}
+
+/**
  * Applies a partial edit. `changes` holds only the columns the route already
  * cleaned and confirmed differ from `existing`; `honorees`, when present,
  * fully replaces event_honorees and re-derives groom_name, and `extraDays`,
@@ -851,6 +907,13 @@ function classifyEventDaysAmendment(oldDays, newDays) {
  * transaction as the event row update, same invariant as createEvent. A
  * critical column change drops an approved event back to pending; honoree
  * spelling edits are always cosmetic, per the domain's own classification.
+ *
+ * Honorees are compared on their own content, like extra days: a list whose
+ * names and roles match the stored rows in order is not an edit at all — the
+ * rows are not rewritten and no amendment is logged. A real change is one
+ * amendment row (`field = 'honorees'`, the two lists as readable text)
+ * classified 'cosmetic' and written `approved`: a name or a role is not a date
+ * or a place, so an approved event stays published.
  *
  * Extra days are classified on their own content, not on the column rule: a
  * day added, removed, re-dated or moved is critical and re-enters moderation,
@@ -873,10 +936,16 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
   const changedColumns = Object.keys(changes).filter(
-    column => String(existing[column] ?? '') !== String(changes[column] ?? '')
+    column => columnValueChanged(column, existing[column], changes[column])
   );
 
-  const { amendment, status: nextStatus, extraDaysChanged } = await db.transaction(async connection => {
+  const { amendment, status: nextStatus, extraDaysChanged, honoreesChanged } = await db.transaction(async connection => {
+    // The stored honorees are read here, before any replacement: the same
+    // source-of-truth role the extra-days rows below play.
+    let honoreesChanged = false;
+    let oldHonorees = null;
+    let newHonorees = null;
+
     // The stored days are read here, before any replacement: they are the
     // only source of truth for whether this edit changes the schedule at all.
     let extraDaysEdit = null;
@@ -891,8 +960,8 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
       if (JSON.stringify(oldDays) !== JSON.stringify(newDays)) {
         extraDaysEdit = {
           classification: classifyEventDaysAmendment(oldDays, newDays),
-          oldValue: JSON.stringify(oldDays),
-          newValue: JSON.stringify(newDays)
+          oldValue: formatEventDaysList(oldDays),
+          newValue: formatEventDaysList(newDays)
         };
       }
     }
@@ -918,17 +987,32 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     }
 
     if (honorees !== null) {
-      await connection.execute('DELETE FROM event_honorees WHERE event_id = ?', [eventId]);
-      let position = 0;
-      for (const honoree of honorees) {
-        await connection.execute(
-          'INSERT INTO event_honorees (event_id, name, role, position) VALUES (?, ?, ?, ?)',
-          [eventId, honoree.name, honoree.role, position]
-        );
-        position += 1;
+      // Same compare-then-write as extra days above: the stored rows are read
+      // before any replacement, and a list identical to them (names and
+      // roles, in position order) is skipped entirely — nothing rewritten,
+      // no amendment. Only a real change deletes and re-inserts, and it also
+      // carries the amendment row written below.
+      const [currentRows] = await connection.execute(
+        'SELECT name, role FROM event_honorees WHERE event_id = ? ORDER BY position ASC',
+        [eventId]
+      );
+      oldHonorees = normaliseHonorees(currentRows);
+      newHonorees = normaliseHonorees(honorees);
+      honoreesChanged = JSON.stringify(oldHonorees) !== JSON.stringify(newHonorees);
+
+      if (honoreesChanged) {
+        await connection.execute('DELETE FROM event_honorees WHERE event_id = ?', [eventId]);
+        let position = 0;
+        for (const honoree of honorees) {
+          await connection.execute(
+            'INSERT INTO event_honorees (event_id, name, role, position) VALUES (?, ?, ?, ?)',
+            [eventId, honoree.name, honoree.role, position]
+          );
+          position += 1;
+        }
+        assignments.push('groom_name = ?');
+        params.push(honorees[0].name);
       }
-      assignments.push('groom_name = ?');
-      params.push(honorees[0].name);
     }
 
     // A provided extra-days list replaces the whole set, the same
@@ -974,9 +1058,10 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     }
 
     // The extra-days list is one field, so it is one amendment row carrying
-    // both lists as JSON — the same shape the per-column rows above use, just
-    // with a value that is itself a list. Its status matches a column row's:
-    // pending for a critical change, approved for a cosmetic one.
+    // both lists as the readable text formatEventDaysList builds — the same
+    // shape the per-column rows above use, just with a value that is itself a
+    // list. Its status matches a column row's: pending for a critical change,
+    // approved for a cosmetic one.
     if (extraDaysEdit) {
       await connection.execute(
         `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
@@ -993,7 +1078,26 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
       );
     }
 
-    return { amendment, status: nextStatus, extraDaysChanged: extraDaysEdit !== null };
+    // Same one-field/one-row shape for the honorees list. Its classification
+    // is always 'cosmetic': honorees are never critical, so the row is
+    // written approved exactly as a cosmetic column row is.
+    if (honoreesChanged) {
+      await connection.execute(
+        `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          eventId,
+          'honorees',
+          formatHonoreesList(oldHonorees),
+          formatHonoreesList(newHonorees),
+          changedBy,
+          'cosmetic',
+          'approved'
+        ]
+      );
+    }
+
+    return { amendment, status: nextStatus, extraDaysChanged: extraDaysEdit !== null, honoreesChanged };
   });
 
   // A critical edit that moves the date or the town has to be re-checked on
@@ -1014,7 +1118,7 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     collision = { hasCollision: conflicts.length > 0, count: conflicts.length, conflicts };
   }
 
-  return { amendment, status: nextStatus, collision, changedColumns, extraDaysChanged };
+  return { amendment, status: nextStatus, collision, changedColumns, extraDaysChanged, honoreesChanged };
 }
 
 /** Every logged change to this event, newest first, with the name of who made it. */

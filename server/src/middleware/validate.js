@@ -170,9 +170,22 @@ const MAX_HONOREES = 50;
  * needing a dedicated branch). Whether the resulting list must be non-empty
  * is a caller decision — it depends on the occasion type's field label, which
  * this module knows nothing about.
+ *
+ * A JSON string is accepted too, and parsed first: FormData.append cannot
+ * carry a nested array, so a multipart edit (a name change alongside a poster
+ * upload) sends the list as `JSON.stringify`. A string that is not valid JSON,
+ * or that decodes to anything but an array, is the same invalid-shape error
+ * as before.
  */
 function parseHonorees(raw, { max = MAX_HONOREES } = {}) {
   if (raw === undefined || raw === null) return [];
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      throw ApiError.badRequest('صيغة أصحاب المناسبة غير صالحة');
+    }
+  }
   if (!Array.isArray(raw)) {
     throw ApiError.badRequest('صيغة أصحاب المناسبة غير صالحة');
   }
@@ -199,9 +212,21 @@ function parseHonorees(raw, { max = MAX_HONOREES } = {}) {
  * Whether the resulting list must be non-empty is a caller decision — it
  * depends on the occasion type's is_required flag, which this module knows
  * nothing about — so an empty list is returned as-is.
+ *
+ * A JSON string is accepted too, and parsed first: FormData.append cannot
+ * carry a nested array, so a multipart edit sends the list as
+ * `JSON.stringify`. A string that is not valid JSON, or that decodes to
+ * anything but an array, is the same invalid-shape error as before.
  */
 function parseEventDays(raw, { max = MAX_EVENT_DAYS } = {}) {
   if (raw === undefined || raw === null) return [];
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      throw ApiError.badRequest('صيغة أيام المناسبة غير صالحة');
+    }
+  }
   if (!Array.isArray(raw)) {
     throw ApiError.badRequest('صيغة أيام المناسبة غير صالحة');
   }

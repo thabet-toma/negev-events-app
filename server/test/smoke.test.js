@@ -1017,6 +1017,13 @@ async function run() {
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].classification, 'critical');
     assert.strictEqual(rows[0].status, 'pending');
+    // The stored value is display text a client prints verbatim, so a list
+    // field must read as Arabic, never as a JSON array.
+    assert.ok(
+      rows[0].new_value.includes('الحنّة') && rows[0].new_value.includes('2027-09-02'),
+      `expected the day's name and date in readable text, got: ${rows[0].new_value}`
+    );
+    assert.ok(!rows[0].new_value.startsWith('['), 'an extra_days amendment must be readable text, not raw JSON');
 
     // Approving must settle the row without crashing and without publishing a
     // public date announcement — extra_days belongs to neither amendment group.
@@ -1603,6 +1610,224 @@ async function run() {
   });
 
   await db.execute('DELETE FROM events WHERE id = ?', [logEventId]);
+
+  console.log('\nEvent edit fixes: coordinate re-send, type-hidden fields, honoree edits, list fields as JSON text');
+
+  // An approved wedding with a pin and two honorees — the shared fixture for
+  // the coordinate, hidden-field and honoree-edit cases below.
+  let editFixEventId = 0;
+  await test('Set up: an approved wedding with a pin and two honorees', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [
+          { name: 'صاحب التعديل الأول', role: 'العريس' },
+          { name: 'صاحب التعديل الثاني', role: 'العروس' }
+        ],
+        event_date: '2027-09-20',
+        latitude: 31.393364,
+        longitude: 34.7554
+      })
+    });
+    assert.strictEqual(status, 201);
+    editFixEventId = body.eventId;
+    const row = await db.queryOne('SELECT status FROM events WHERE id = ?', [editFixEventId]);
+    assert.strictEqual(row.status, 'approved');
+  });
+
+  await test('Re-sending an unchanged pin as a number with fewer decimals is not an edit — approved stays approved, no amendment', async () => {
+    const { body: fetched } = await api('GET', `/api/events/${editFixEventId}`);
+    const sentLatitude = Number(fetched.event.latitude);
+    const sentLongitude = Number(fetched.event.longitude);
+
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field IN ('latitude', 'longitude')",
+      [editFixEventId]
+    );
+    const { status, body } = await api('PATCH', `/api/events/${editFixEventId}`, {
+      token: adminToken,
+      body: { latitude: sentLatitude, longitude: sentLongitude }
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.amendment, 'cosmetic');
+    assert.strictEqual(body.status, 'approved');
+
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field IN ('latitude', 'longitude')",
+      [editFixEventId]
+    );
+    assert.strictEqual(Number(after.total), Number(before.total), 'an unchanged coordinate must not be logged as an amendment');
+  });
+
+  await test("Changing only the second honoree's name stays approved and logs one cosmetic 'honorees' amendment", async () => {
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'honorees'",
+      [editFixEventId]
+    );
+    const { status, body } = await api('PATCH', `/api/events/${editFixEventId}`, {
+      token: adminToken,
+      body: {
+        honorees: [
+          { name: 'صاحب التعديل الأول', role: 'العريس' },
+          { name: 'اسم ثانٍ معدّل', role: 'العروس' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.amendment, 'cosmetic');
+    assert.strictEqual(body.status, 'approved');
+
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'honorees'",
+      [editFixEventId]
+    );
+    assert.strictEqual(Number(after.total) - Number(before.total), 1);
+
+    const row = await db.queryOne(
+      "SELECT classification, status, old_value, new_value FROM event_amendments WHERE event_id = ? AND field = 'honorees' ORDER BY id DESC LIMIT 1",
+      [editFixEventId]
+    );
+    assert.strictEqual(row.classification, 'cosmetic');
+    assert.strictEqual(row.status, 'approved');
+    assert.strictEqual(row.old_value, 'صاحب التعديل الأول (العريس)، صاحب التعديل الثاني (العروس)');
+    assert.strictEqual(row.new_value, 'صاحب التعديل الأول (العريس)، اسم ثانٍ معدّل (العروس)');
+    assert.ok(!row.new_value.startsWith('['), 'a honorees amendment must be readable text, not raw JSON');
+
+    const stored = await db.query('SELECT name FROM event_honorees WHERE event_id = ? ORDER BY position ASC', [editFixEventId]);
+    assert.deepStrictEqual(stored.map(h => h.name), ['صاحب التعديل الأول', 'اسم ثانٍ معدّل']);
+  });
+
+  await test('Re-sending the identical honorees is not an edit — no new amendment and no row rewrite', async () => {
+    const beforeRows = await db.query('SELECT id, name FROM event_honorees WHERE event_id = ? ORDER BY position ASC', [editFixEventId]);
+    const before = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'honorees'",
+      [editFixEventId]
+    );
+
+    const { status, body } = await api('PATCH', `/api/events/${editFixEventId}`, {
+      token: adminToken,
+      body: {
+        honorees: [
+          { name: 'صاحب التعديل الأول', role: 'العريس' },
+          { name: 'اسم ثانٍ معدّل', role: 'العروس' }
+        ]
+      }
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.status, 'approved');
+
+    const after = await db.queryOne(
+      "SELECT COUNT(*) AS total FROM event_amendments WHERE event_id = ? AND field = 'honorees'",
+      [editFixEventId]
+    );
+    assert.strictEqual(Number(after.total), Number(before.total));
+
+    const afterRows = await db.query('SELECT id, name FROM event_honorees WHERE event_id = ? ORDER BY position ASC', [editFixEventId]);
+    assert.deepStrictEqual(afterRows.map(r => r.id), beforeRows.map(r => r.id), 'an unchanged honorees list must not be rewritten');
+  });
+
+  let hiddenFieldEventId = 0;
+  await test('Set up: an approved عزا, whose type hides youth_party_date', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى تعديل الحقل المخفي' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-11-20',
+        event_end_date: '2027-11-22'
+      }
+    });
+    assert.strictEqual(status, 201);
+    hiddenFieldEventId = body.eventId;
+  });
+
+  await test('PATCHing a field the type hides is silently ignored, while a visible field in the same request still applies', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${hiddenFieldEventId}`, {
+      token: adminToken,
+      body: { title: 'عنوان عزاء معدَّل', youth_party_date: '2027-11-18' }
+    });
+    assert.strictEqual(status, 200, body.message);
+
+    const row = await db.queryOne('SELECT title, youth_party_date FROM events WHERE id = ?', [hiddenFieldEventId]);
+    assert.strictEqual(row.youth_party_date, null, 'a field hidden for this type must not be written through an edit');
+    assert.strictEqual(row.title, 'عنوان عزاء معدَّل');
+
+    const amendments = await db.query(
+      "SELECT id FROM event_amendments WHERE event_id = ? AND field = 'youth_party_date'",
+      [hiddenFieldEventId]
+    );
+    assert.strictEqual(amendments.length, 0);
+  });
+
+  // The admin panel sends a list field as JSON text inside multipart form data
+  // (FormData.append cannot carry a nested array); validate.js must accept it.
+  let multipartListEventId = 0;
+  await test('Set up: an approved wedding for the multipart list-field edits', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'قبل التعديل المتعدد', role: 'العريس' }],
+        event_date: '2027-10-05'
+      })
+    });
+    assert.strictEqual(status, 201);
+    multipartListEventId = body.eventId;
+  });
+
+  await test('A multipart PATCH sending honorees as a JSON string replaces the names', async () => {
+    const { status, body } = await apiUpload(`/api/events/${multipartListEventId}`, {
+      method: 'PATCH',
+      token: adminToken,
+      fields: {
+        honorees: JSON.stringify([
+          { name: 'بعد التعديل الأول', role: 'العريس' },
+          { name: 'بعد التعديل الثاني', role: 'العروس' }
+        ])
+      }
+    });
+    assert.strictEqual(status, 200, body.message);
+
+    const stored = await db.query('SELECT name FROM event_honorees WHERE event_id = ? ORDER BY position ASC', [multipartListEventId]);
+    assert.deepStrictEqual(stored.map(h => h.name), ['بعد التعديل الأول', 'بعد التعديل الثاني']);
+  });
+
+  await test('A multipart PATCH sending extra_days as a JSON string stores the day', async () => {
+    const { status, body } = await apiUpload(`/api/events/${multipartListEventId}`, {
+      method: 'PATCH',
+      token: adminToken,
+      fields: {
+        extra_days: JSON.stringify([{ name: 'الحنّة المرفوعة', date: '2027-10-03', place: 'ديوان الاختبار', time: 'قبل المغرب' }])
+      }
+    });
+    assert.strictEqual(status, 200, body.message);
+
+    const { body: detail } = await api('GET', `/api/events/${multipartListEventId}`);
+    assert.strictEqual(detail.event.extra_days.length, 1);
+    assert.strictEqual(detail.event.extra_days[0].name, 'الحنّة المرفوعة');
+    assert.strictEqual(detail.event.extra_days[0].day_date, '2027-10-03');
+  });
+
+  await test('A multipart PATCH with a malformed JSON list string is rejected with the existing Arabic message', async () => {
+    const badHonorees = await apiUpload(`/api/events/${multipartListEventId}`, {
+      method: 'PATCH',
+      token: adminToken,
+      fields: { honorees: 'not-json' }
+    });
+    assert.strictEqual(badHonorees.status, 400);
+    assert.ok(/صيغة أصحاب المناسبة/.test(badHonorees.body.message || ''), `got: ${badHonorees.body.message}`);
+
+    const badDays = await apiUpload(`/api/events/${multipartListEventId}`, {
+      method: 'PATCH',
+      token: adminToken,
+      fields: { extra_days: 'not-json' }
+    });
+    assert.strictEqual(badDays.status, 400);
+    assert.ok(/صيغة أيام المناسبة/.test(badDays.body.message || ''), `got: ${badDays.body.message}`);
+  });
+
+  await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [editFixEventId, hiddenFieldEventId, multipartListEventId]);
 
   console.log('\nCollision detection (range + directional flags)');
 

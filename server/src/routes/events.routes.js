@@ -22,7 +22,7 @@ const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseEventDays,
   parseCsvList, parseFlag, MAX_HONOREES
 } = require('../middleware/validate');
-const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS } = require('../constants');
+const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
 
 const router = express.Router();
 
@@ -397,8 +397,26 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   const existing = await events.getEventForEdit(eventId);
   await assertCanManageEvent(req, existing);
 
-  const body = req.body || {};
+  const body = { ...(req.body || {}) };
   const changes = {};
+
+  // An edit honours the type's field visibility exactly as a publish does
+  // (buildOptionalFieldFormatters above): a field this occasion type does not
+  // show is ignored silently, never written through a PATCH. The hidden keys
+  // are dropped from the body copy up front — one lookup, and the same filter
+  // applies to every field branch below, extra_days included, instead of a
+  // per-field check. An event with no occasion type (a pre-#20 row) has
+  // nothing to consult, so nothing is filtered.
+  const occasionType = existing.occasion_type_id
+    ? await occasionTypes.getTypeById(existing.occasion_type_id)
+    : null;
+  const visibleFieldKeys = occasionType ? new Set(occasionType.fields.map(field => field.field_key)) : null;
+  const isFieldVisible = key => !visibleFieldKeys || visibleFieldKeys.has(key);
+  if (visibleFieldKeys) {
+    for (const key of OCCASION_FIELD_KEYS) {
+      if (!visibleFieldKeys.has(key)) delete body[key];
+    }
+  }
 
   if (body.title !== undefined) changes.title = cleanString(body.title, 255) || existing.title;
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
@@ -456,7 +474,9 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   };
   Object.keys(uploadedMedia).forEach(field => {
     const file = uploadedMedia[field];
-    if (file) changes[field] = `/uploads/${file.filename}`;
+    // An uploaded file for a field this type hides is ignored too, the same
+    // silent drop the URL branch above gets.
+    if (file && isFieldVisible(field)) changes[field] = `/uploads/${file.filename}`;
   });
 
   const requestedVillageName = body.requested_village_name === undefined
@@ -516,17 +536,13 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
 
   // The key's absence means the caller never sent it — every published APK
   // today — so the existing days stay untouched; an empty array is a
-  // deliberate "clear all days". Same visibility rule as on publish: a type
-  // without extra_days never receives the list. An event with no occasion
-  // type (a pre-#20 row) has nothing to consult, so it is applied.
+  // deliberate "clear all days". Same visibility rule as on publish, applied
+  // by the body filter above: a type without extra_days never receives the
+  // list. An event with no occasion type (a pre-#20 row) has nothing to
+  // consult, so it is applied.
   let extraDays = null;
   if (body.extra_days !== undefined) {
-    const type = existing.occasion_type_id
-      ? await occasionTypes.getTypeById(existing.occasion_type_id)
-      : null;
-    if (!type || type.fields.some(field => field.field_key === 'extra_days')) {
-      extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
-    }
+    extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
   }
 
   if (!Object.keys(changes).length && honorees === null && extraDays === null) {
@@ -573,7 +589,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   const changedFields = [...result.changedColumns];
-  if (honorees !== null && honorees[0].name !== existing.groom_name) changedFields.push('honorees');
+  if (result.honoreesChanged) changedFields.push('honorees');
   if (result.extraDaysChanged) changedFields.push('extra_days');
   if (changedFields.length) {
     await activity.record({ actorId: req.user.id, action: 'event_edited', eventId, details: changedFields.join(',') });
