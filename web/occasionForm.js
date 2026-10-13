@@ -1,7 +1,7 @@
 /*
  * ما تتشاركه شاشتا النشر فعلياً — نموذج الموقع العام (app.js) ونموذج النشر
  * المباشر في لوحة الإدارة (admin.js) — بما فيه الآن مفكّ شفرة الحقول
- * (switch field_key) نفسه: الحقول الأربعة عشر تُبنى مرّة واحدة هنا، لا
+ * (switch field_key) نفسه: الحقول السبعة عشر تُبنى مرّة واحدة هنا، لا
  * مرّتين. ما يختلف فعلاً بين الشاشتين — بادئة معرّفات DOM، أسماء معالجات
  * onchange (أو غيابها في اللوحة: لا فحص تعارض حيّ ولا خريطة تُعاد توسيطها
  * هناك)، تخطيط زوج البلدة/القرية في اللوحة (عمودان جنباً إلى جنب، بخلاف
@@ -73,6 +73,53 @@ function appendHonoreesToFormData(formData, honorees) {
   });
 }
 
+// أيام المناسبة الإضافية ٠..N (مثال: عرس من ثلاثة أيام: «الحنّة» ثم «الغداء») —
+// مُدخل ديناميكي مشترك بين نموذج النشر العام ونافذة تعديل مناسبتي؛ الاسم
+// والتاريخ إلزاميان على الخادم، والمكان والوقت اختياريان.
+/** يضيف صفّاً جديداً (اسم + تاريخ + مكان/وقت اختياريان) إلى قائمة أيام المناسبة. */
+function addEventDayRow(containerId, day = {}) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'event-day-row';
+  row.innerHTML = `
+    <input type="text" class="event-day-name" placeholder="اسم اليوم — مثال: الحنّة" maxlength="100" value="${escapeHtml(day.name)}">
+    <input type="date" class="event-day-date" value="${escapeHtml(day.date)}">
+    <input type="text" class="event-day-place" placeholder="المكان (اختياري)" maxlength="1000" value="${escapeHtml(day.place)}">
+    <input type="text" class="event-day-time" placeholder="الوقت (اختياري)" maxlength="100" value="${escapeHtml(day.time)}">
+    <button type="button" class="nokoot-del-btn" onclick="this.parentElement.remove()"><i class="fa-solid fa-trash"></i></button>
+  `;
+  container.appendChild(row);
+}
+
+/** يقرأ صفوف الأيام الحالية، ويُسقط أي صفّ خالٍ من الحقول الأربعة كلها — التحقق الدقيق على الخادم. */
+function collectEventDays(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.event-day-row'))
+    .map(row => ({
+      name: row.querySelector('.event-day-name').value.trim(),
+      date: row.querySelector('.event-day-date').value.trim(),
+      place: row.querySelector('.event-day-place').value.trim(),
+      time: row.querySelector('.event-day-time').value.trim()
+    }))
+    .filter(day => day.name || day.date || day.place || day.time);
+}
+
+/**
+ * يُرفق أيام المناسبة داخل FormData بصيغة `extra_days[i][name]` — نفس صيغة
+ * honorees أعلاه بالضبط، وهي وحدها ما يصل مصفوفة كائنات عبر multipart. الاسم
+ * والتاريخ يُرسَلان دائماً (إلزاميان على الخادم)، والمكان والوقت فقط عند وجودهما.
+ */
+function appendEventDaysToFormData(formData, days) {
+  days.forEach((d, i) => {
+    formData.append(`extra_days[${i}][name]`, d.name);
+    formData.append(`extra_days[${i}][date]`, d.date);
+    if (d.place) formData.append(`extra_days[${i}][place]`, d.place);
+    if (d.time) formData.append(`extra_days[${i}][time]`, d.time);
+  });
+}
+
 /**
  * يطابق تحقّق الخادم نفسه (events.routes.js: buildOptionalFieldFormatters):
  * كل حقل ظاهر وإجباري على هذا النوع تحديداً — عدا الثلاثة البنيوية
@@ -137,13 +184,16 @@ const OCCASION_UPLOAD_FIELD_KEYS = ['poster_url', 'audio_url', 'artist_image_url
 /**
  * يبني HTML كل حقول نوع مناسبة مُختار، بترتيب position، ويستدعيها كل من
  * app.js (نموذج النشر العام) وadmin.js (نموذج النشر المباشر) بدل تكرار نفس
- * الحقول الأربعة عشر في كل ملف.
+ * الحقول السبعة عشر في كل ملف.
  *
  * ctx: {
  *   idPrefix: 'add' | 'dir' — يُلحَق بكل معرّف DOM يُولَّد؛ الفارق الأكثر
  *     شيوعاً بين الشاشتين في شكل المعرّفات،
  *   renderHonoreeAddButton(containerId): string — زرّ «إضافة اسم» بأسلوب كل
  *     صفحة (صنف CSS مختلف تماماً بين styles.css وadmin.css)، إلزامي،
+ *   renderExtraDayAddButton(containerId): string اختياري — زرّ «أضف يوماً»
+ *     بأسلوب كل صفحة؛ غيابه (اللوحة اليوم) يُسقط إلى زرّ افتراضي بلا صنف،
+ *     فلا يسقط نموذج لم يعرّفه،
  *   onTownChange / onVillageChange / onDateChange: اسم دالة onchange (نصّاً)
  *     أو null/undefined لإسقاط السمة كلياً — تُقرَأ فقط حين لا override لحقل
  *     'town' (اللوحة تستبدله كاملاً، الموقع العام لا)،
@@ -237,6 +287,15 @@ function renderDefaultOccasionFieldHtml(field, ctx, { label, req }) {
         <div class="form-group">
           <label>${label}${req}</label>
           <input type="date" id="${p}YouthDate">
+        </div>`;
+    case 'extra_days':
+      return `
+        <div class="form-group">
+          <label>${label}${req}</label>
+          <div id="${p}ExtraDaysList"></div>
+          ${ctx.renderExtraDayAddButton
+            ? ctx.renderExtraDayAddButton(`${p}ExtraDaysList`)
+            : `<button type="button" onclick="addEventDayRow('${p}ExtraDaysList')"><i class="fa-solid fa-plus"></i> أضف يوماً</button>`}
         </div>`;
     case 'dinner_time':
       return `

@@ -2007,6 +2007,24 @@ body {
 .honoree-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .honoree-row input { flex: 1; }
 
+/* صفّ يوم إضافي — شبكة عمودين: (اسم | تاريخ) على السطر الأول و(مكان | وقت)
+   على الثاني، وزرّ الحذف في نهاية الصفّ ممتدّاً على السطرين معاً. */
+.event-day-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  grid-template-areas:
+    "name date del"
+    "place time del";
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.event-day-row .event-day-name { grid-area: name; }
+.event-day-row .event-day-date { grid-area: date; }
+.event-day-row .event-day-place { grid-area: place; }
+.event-day-row .event-day-time { grid-area: time; }
+.event-day-row .nokoot-del-btn { grid-area: del; }
+
 /* حالة تعارض التاريخ — تعريف مفقود سابقاً، الصندوق كان يظهر كنص عادي (#20 خطوة 11) */
 .collision-box {
   display: flex;
@@ -2382,6 +2400,12 @@ body {
 @media (max-width: 650px) {
   .support-fab:not([hidden]) {
     display: flex;
+  }
+
+  /* ضيّق: صفّ اليوم عمود واحد — الحقول والزرّ مكدَّسة لا مقصوصة. */
+  .event-day-row {
+    grid-template-columns: 1fr;
+    grid-template-areas: "name" "date" "place" "time" "del";
   }
 }
 

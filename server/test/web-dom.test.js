@@ -179,7 +179,8 @@ const WEDDING_TYPE = {
     { field_key: 'event_date', label: 'تاريخ المناسبة', is_required: true, position: 3 },
     { field_key: 'youth_party_date', label: 'سهرة الشباب والدحة', is_required: false, position: 4 },
     { field_key: 'location_name', label: 'موقع القاعة', is_required: true, position: 5 },
-    { field_key: 'poster_url', label: 'صورة الملصق', is_required: false, position: 6 }
+    { field_key: 'poster_url', label: 'صورة الملصق', is_required: false, position: 6 },
+    { field_key: 'extra_days', label: 'أيام إضافية', is_required: false, position: 7 }
   ]
 };
 
@@ -7342,6 +7343,165 @@ async function run() {
     assert.ok(userLat.startsWith('31.111'), 'the tap must have set the pin');
     choose('القرى والتجمعات');
     assert.strictEqual(document.getElementById('addLat').value, userLat, "the user's own pin stays");
+  });
+
+  console.log('\nExtra event days — أيام إضافية (public site + shared form)');
+
+  await test('the publish form renders an extra-days list and «أضف يوماً» button for a type that defines one, and nothing for a type without it', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addExtraDaysList') !== null);
+    assertNoUnhandledRejections('publish form / extra days');
+
+    const list = document.getElementById('addExtraDaysList');
+    assert.ok(list, 'expected #addExtraDaysList for the (default-selected) عرس type, which defines extra_days');
+    const addButton = document.querySelector('#addExtraDaysList + button');
+    assert.ok(addButton, 'expected an «أضف يوماً» button right after the list');
+    assert.ok(addButton.textContent.includes('أضف يوماً'), `expected the Arabic add label, got "${addButton.textContent}"`);
+    assert.strictEqual(list.querySelectorAll('.event-day-row').length, 0, 'the optional field must start with zero rows');
+
+    win.selectOccasionType(FUNERAL_TYPE.id);
+    assert.strictEqual(document.getElementById('addExtraDaysList'), null, 'a type that does not define extra_days must render no list at all');
+  });
+
+  await test('submitting the publish form sends extra_days[i][…] bracket keys, and a fully blank row is dropped', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addExtraDaysList') !== null);
+    fillRequiredPublishFields(document);
+
+    const addButton = document.querySelector('#addExtraDaysList + button');
+    addButton.click();
+    const row = document.querySelector('#addExtraDaysList .event-day-row');
+    row.querySelector('.event-day-name').value = 'الحنّة';
+    row.querySelector('.event-day-date').value = '2026-10-08';
+    row.querySelector('.event-day-place').value = 'ديوان آل تجربة';
+    row.querySelector('.event-day-time').value = 'بعد العصر';
+    addButton.click(); // صفّ فارغ تماماً — يجب أن يُسقَط
+
+    let captured = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events' && opts.method === 'POST') {
+        captured = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return buildFetchStub()(url, opts);
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('publish with extra days');
+
+    assert.ok(captured, 'expected the publish POST to fire');
+    assert.strictEqual(captured.body.get('extra_days[0][name]'), 'الحنّة');
+    assert.strictEqual(captured.body.get('extra_days[0][date]'), '2026-10-08');
+    assert.strictEqual(captured.body.get('extra_days[0][place]'), 'ديوان آل تجربة');
+    assert.strictEqual(captured.body.get('extra_days[0][time]'), 'بعد العصر');
+    assert.strictEqual(captured.body.get('extra_days[1][name]'), null, 'a fully blank row must never be sent');
+    assert.strictEqual(captured.body.get('extra_days[1][date]'), null);
+  });
+
+  await test('the edit modal fills its days from evt.extra_days and PATCHes them back as an array', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    const ownEvent = {
+      id: 61, title: 'عرس', town: TOWNS[0], event_date: '2026-10-10', location_name: 'ديوان',
+      groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE,
+      honorees: [{ name: 'عريس', role: '' }],
+      extra_days: [
+        { name: 'الحنّة', day_date: '2026-10-08', place: 'ديوان آل فلان', day_time: 'بعد العصر', position: 1 }
+      ]
+    };
+    const patches = [];
+    win.fetch = async (url, opts = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [ownEvent] });
+      if (opts.method === 'PATCH') {
+        patches.push(JSON.parse(opts.body));
+        return jsonResponse({ success: true, event: {} });
+      }
+      return buildFetchStub()(url, opts);
+    };
+
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(61);
+    const rows = document.querySelectorAll('#editExtraDaysList .event-day-row');
+    assert.strictEqual(rows.length, 1, 'each stored day must become one editable row');
+    assert.strictEqual(rows[0].querySelector('.event-day-name').value, 'الحنّة');
+    assert.strictEqual(rows[0].querySelector('.event-day-date').value, '2026-10-08', 'day_date must fill the date input');
+    assert.strictEqual(rows[0].querySelector('.event-day-place').value, 'ديوان آل فلان');
+    assert.strictEqual(rows[0].querySelector('.event-day-time').value, 'بعد العصر', 'day_time must fill the time input');
+
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.ok(patches.length, 'expected the PATCH to fire');
+    assert.ok(Array.isArray(patches[0].extra_days), 'extra_days must travel as an array, not a string');
+    assert.strictEqual(patches[0].extra_days[0].name, 'الحنّة');
+    assert.strictEqual(patches[0].extra_days[0].date, '2026-10-08');
+    assert.strictEqual(patches[0].extra_days[0].time, 'بعد العصر');
+  });
+
+  await test('the event page renders one row per extra day with its name and long Arabic date, keeping order and escaping markup', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+
+    const base = {
+      id: 71, title: 'عرس', town: TOWNS[0], event_date: '2026-10-10', location_name: 'ديوان',
+      occasion_type: WEDDING_TYPE
+    };
+
+    win.renderEventPage({
+      ...base,
+      extra_days: [
+        { name: 'الحنّة', day_date: '2026-10-08', place: 'ديوان آل فلان', day_time: 'بعد العصر', position: 1 },
+        { name: 'الغداء', day_date: '2026-10-09', place: null, day_time: null, position: 2 }
+      ]
+    });
+
+    const body = document.getElementById('eventPageBody');
+    const dayRows = [...body.querySelectorAll('.event-page-info-row')].filter(r => r.querySelector('.fa-calendar-check'));
+    assert.strictEqual(dayRows.length, 2, 'one row per stored day');
+    const firstText = dayRows[0].textContent.replace(/\s+/g, ' ');
+    assert.ok(firstText.includes('الحنّة'), 'the day name is the row label');
+    assert.ok(firstText.includes(win.formatEventDayLong({ event_date: '2026-10-08' })), 'the long Arabic date is the value');
+    assert.ok(firstText.includes('بعد العصر') && firstText.includes('ديوان آل فلان'), 'time and place are appended when present');
+    assert.ok(dayRows[0].textContent.includes('الحنّة'), "the first row must be the server's first day");
+    assert.ok(dayRows[1].textContent.includes('الغداء'), "the second row must be the server's second day — its own order, untouched");
+
+    win.renderEventPage({
+      ...base,
+      id: 72,
+      extra_days: [{ name: 'الحنّة <b>كبيرة</b>', day_date: '2026-10-08', place: null, day_time: null, position: 1 }]
+    });
+    const hostileRow = [...document.querySelectorAll('#eventPageBody .event-page-info-row')].find(r => r.querySelector('.fa-calendar-check'));
+    assert.ok(hostileRow.textContent.includes('الحنّة <b>كبيرة</b>'), 'the day name must still be shown, as literal text');
+    assert.strictEqual(hostileRow.querySelector('b'), null, 'a day name must never be parsed as markup');
+  });
+
+  await test('the admin direct-add form still renders for a type with extra_days, falling back to a plain add button (no crash)', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const { document } = dom.window;
+
+    const list = document.getElementById('dirExtraDaysList');
+    assert.ok(list, 'expected the panel to render the extra-days list for the عرس type');
+    const addButton = document.querySelector('#dirExtraDaysList + button');
+    assert.ok(addButton, 'a ctx without renderExtraDayAddButton must still get an add button');
+    assert.strictEqual(addButton.getAttribute('type'), 'button');
+
+    addButton.click();
+    assert.ok(document.querySelector('#dirExtraDaysList .event-day-row'), 'clicking the fallback button must append a row');
+    assertNoUnhandledRejections('admin direct-add / extra days');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -74,7 +74,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.5.1">
+  <link rel="stylesheet" href="styles.css?v=2.5.2">
 </head>
 <body>
 
@@ -1022,6 +1022,14 @@
           <input type="date" id="editYouthDate">
         </div>
 
+        <div class="form-group" id="editExtraDaysGroup">
+          <label>أيام إضافية</label>
+          <div id="editExtraDaysList"></div>
+          <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addEventDayRow('editExtraDaysList')">
+            <i class="fa-solid fa-plus"></i> أضف يوماً
+          </button>
+        </div>
+
         <div class="form-group">
           <label>وصف المكان والديوان</label>
           <input type="text" id="editLocationName">
@@ -1473,9 +1481,9 @@
 
   <!-- Scripts -->
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
-  <script src="config.js?v=2.5.1"></script>
-  <script src="api.js?v=2.5.1"></script>
-  <script src="occasionForm.js?v=2.5.1"></script>
-  <script src="app.js?v=2.5.1"></script>
+  <script src="config.js?v=2.5.2"></script>
+  <script src="api.js?v=2.5.2"></script>
+  <script src="occasionForm.js?v=2.5.2"></script>
+  <script src="app.js?v=2.5.2"></script>
 </body>
 </html>

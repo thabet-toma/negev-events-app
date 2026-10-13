@@ -2349,6 +2349,16 @@ function renderEventPage(evt) {
       ? eventPageInfoRowHtml('fa-regular fa-calendar', typeFieldLabel(evt, 'event_end_date', 'حتى'), formatEventDayLong({ event_date: evt.event_end_date })) : '',
     typeShowsField(evt, 'youth_party_date')
       ? eventPageInfoRowHtml('fa-solid fa-fire', typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'), evt.youth_party_date) : '',
+    // الأيام الإضافية بترتيب الخادم نفسه (day_date) — سطر لكل يوم، والتاريخ
+    // الطويل ثم « — الوقت» و« — المكان» عند وجودهما.
+    typeShowsField(evt, 'extra_days') && Array.isArray(evt.extra_days)
+      ? evt.extra_days.map(day => {
+          let value = formatEventDayLong({ event_date: day.day_date });
+          if (day.day_time) value += ` — ${day.day_time}`;
+          if (day.place) value += ` — ${day.place}`;
+          return eventPageInfoRowHtml('fa-regular fa-calendar-check', day.name, value);
+        }).join('')
+      : '',
     typeShowsField(evt, 'dinner_time')
       ? eventPageInfoRowHtml('fa-regular fa-clock', typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'), evt.dinner_time) : ''
   ].join('');
@@ -3984,7 +3994,7 @@ function selectOccasionType(typeId) {
 /**
  * تُصنَع مرّة واحدة فقط، لا في كل استدعاء لـrenderOccasionForm — الدوال التي
  * تحملها (overrides، suffixes، renderHonoreeAddButton) لا حالة لها،
- * وbuildOccasionFieldsHtml (occasionForm.js) هي مالكة الحقول الأربعة عشر
+ * وbuildOccasionFieldsHtml (occasionForm.js) هي مالكة الحقول السبعة عشر
  * المشتركة؛ هنا فقط أسماء معالجات onchange الخاصة بهذه الصفحة، وثلاثة حقول
  * ذات استبدال كامل (صناديق رفع مزخرَفة لا تملك اللوحة CSS لها)، وحقل واحد
  * بإلحاق فقط: location_name يبقى على الشكل الافتراضي نفسه (نص عادي بالتسمية
@@ -4000,6 +4010,10 @@ const PUBLISH_FORM_FIELD_CTX = {
   renderHonoreeAddButton: containerId => `
     <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addHonoreeRow('${containerId}')">
       <i class="fa-solid fa-plus"></i> إضافة اسم
+    </button>`,
+  renderExtraDayAddButton: containerId => `
+    <button type="button" class="add-nokoot-btn" style="margin-top:6px;" onclick="addEventDayRow('${containerId}')">
+      <i class="fa-solid fa-plus"></i> أضف يوماً
     </button>`,
   suffixes: {
     location_name: () => `
@@ -5240,6 +5254,10 @@ async function handleEventSubmit(e) {
   for (const f of type.fields) fieldsByKey[f.field_key] = f;
   const labelOf = key => (fieldsByKey[key] && fieldsByKey[key].label) || key;
 
+  // أيام المناسبة الإضافية تُقرأ مرّة واحدة هنا (لا عند كل حقل)، وتُستعمل في
+  // فحص الإجبارية وفي إرفاق FormData معاً — الحقل اختياري على الأنواع اليوم.
+  const extraDays = fieldsByKey.extra_days ? collectEventDays('addExtraDaysList') : [];
+
   const honorees = collectHonorees('addHonoreesList');
   if (!honorees.length) {
     alert(`${labelOf('honorees')} مطلوب`);
@@ -5278,6 +5296,7 @@ async function handleEventSubmit(e) {
     secondary_location_name: () => document.getElementById('addSecondaryLocationName')?.value.trim(),
     event_end_date: () => document.getElementById('addEventEndDate')?.value,
     youth_party_date: () => document.getElementById('addYouthDate')?.value,
+    extra_days: () => (extraDays.length ? '1' : ''),
     dinner_time: () => document.getElementById('addDinnerTime')?.value.trim(),
     host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
     audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
@@ -5300,6 +5319,7 @@ async function handleEventSubmit(e) {
   const formData = new FormData();
   formData.append('occasion_type_id', type.id);
   appendHonoreesToFormData(formData, honorees);
+  if (fieldsByKey.extra_days) appendEventDaysToFormData(formData, extraDays);
   formData.append('town', town);
   if (villageId) formData.append('village_id', villageId);
   else if (requestedVillageName) formData.append('requested_village_name', requestedVillageName);
@@ -5377,6 +5397,8 @@ async function handleEventSubmit(e) {
         honoreesList.innerHTML = '';
         addHonoreeRow('addHonoreesList');
       }
+      const extraDaysList = document.getElementById('addExtraDaysList');
+      if (extraDaysList) extraDaysList.innerHTML = '';
       fetchMyEvents();
       switchTab('tabHome');
       fetchEvents();
@@ -5574,6 +5596,7 @@ function applyOccasionTypeToEditForm(evt) {
     event_date: 'editEventDate',
     event_end_date: 'editEventEndDate',
     youth_party_date: 'editYouthDate',
+    extra_days: 'editExtraDaysList',
     location_name: 'editLocationName',
     secondary_location_name: 'editSecondaryLocationName',
     dinner_time: 'editDinnerTime',
@@ -5627,6 +5650,12 @@ function openEditEventModal(eventId) {
   const honorees = (evt.honorees && evt.honorees.length) ? evt.honorees : [{ name: evt.groom_name || '', role: '' }];
   honorees.forEach(h => addHonoreeRow('editHonoreesList', h.name, h.role || ''));
 
+  const extraDaysList = document.getElementById('editExtraDaysList');
+  extraDaysList.innerHTML = '';
+  (evt.extra_days || []).forEach(day => addEventDayRow('editExtraDaysList', {
+    name: day.name, date: day.day_date, place: day.place || '', time: day.day_time || ''
+  }));
+
   applyOccasionTypeToEditForm(evt);
   document.getElementById('editEventModal').style.display = 'flex';
 }
@@ -5658,6 +5687,13 @@ async function handleEventEditSubmit(e) {
     host_phone: document.getElementById('editHostPhone').value,
     honorees
   };
+
+  // extra_days غيابه يعني «اترك الأيام كما هي»، و[] يعني «امسحها» — فيُرسَل
+  // فقط حين تكون المجموعة ظاهرة لهذا النوع، وإلا مسح تعديلُ نوعٍ آخر أيامه.
+  const extraDaysGroup = document.getElementById('editExtraDaysGroup');
+  if (extraDaysGroup && extraDaysGroup.style.display !== 'none') {
+    payload.extra_days = collectEventDays('editExtraDaysList');
+  }
 
   try {
     const res = await apiFetch(`/api/events/${eventId}`, {
