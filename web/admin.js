@@ -148,11 +148,16 @@ const OCCASION_FIELDS = [
   { key: 'event_date', label: 'تاريخ المناسبة', core: true },
   { key: 'event_end_date', label: 'تاريخ الانتهاء', core: false },
   { key: 'youth_party_date', label: 'سهرة الشباب', core: false },
+  { key: 'extra_days', label: 'أيام إضافية', core: false },
   { key: 'dinner_time', label: 'وقت العشاء', core: false },
   { key: 'poster_url', label: 'صورة الملصق', core: false },
   { key: 'audio_url', label: 'الملف الصوتي', core: false },
   { key: 'audio_title', label: 'عنوان المقطع الصوتي', core: false },
-  { key: 'host_phone', label: 'رقم التواصل', core: false }
+  { key: 'host_phone', label: 'رقم التواصل', core: false },
+  // غيابهما هنا كان يمحوهما من النوع عند كل حفظ: محرّر الحقول يرسل هذه
+  // القائمة وحدها، والخادم يستبدل حقول النوع كلها بما يصله.
+  { key: 'artist_name', label: 'الفنان', core: false },
+  { key: 'artist_image_url', label: 'صورة الفنان', core: false }
 ];
 
 // مرآة لـ PRIVACY_REQUEST_TYPES و PRIVACY_REQUEST_DEADLINE_DAYS في
@@ -404,6 +409,7 @@ function collectDirectAddFormDraft() {
   inputs.forEach(el => {
     if (!el.id || el.type === 'submit' || el.type === 'button' || el.type === 'password') return;
     if (el.closest && el.closest('#dirHonoreesList')) return;
+    if (el.closest && el.closest('#dirExtraDaysList')) return;
     if (el.type === 'file') {
       if (el.files && el.files.length > 0) hadFiles = true;
       return;
@@ -424,12 +430,18 @@ function collectDirectAddFormDraft() {
     hasAnyText = true;
   }
 
+  const extraDays = collectEventDays('dirExtraDaysList');
+  if (extraDays.length > 0) {
+    hasAnyText = true;
+  }
+
   if (!hasAnyText && !hadFiles) return null;
 
   return {
     occasion_type_id: occasionTypeId,
     values,
     honorees,
+    extra_days: extraDays,
     hadFiles,
     updated_at: Date.now()
   };
@@ -512,6 +524,14 @@ function applyDirectAddDraft() {
       if (container) {
         container.innerHTML = '';
         draft.honorees.forEach(h => addHonoreeRow('dirHonoreesList', h.name, h.role));
+      }
+    }
+
+    if (Array.isArray(draft.extra_days) && draft.extra_days.length > 0) {
+      const container = document.getElementById('dirExtraDaysList');
+      if (container) {
+        container.innerHTML = '';
+        draft.extra_days.forEach(day => addEventDayRow('dirExtraDaysList', day));
       }
     }
 
@@ -1388,7 +1408,7 @@ function handleDirOccasionTypeChange() {
 }
 
 /**
- * أغلب الحقول الأربعة عشر المشتركة تُبنى في buildOccasionFieldsHtml
+ * أغلب الحقول السبعة عشر المشتركة تُبنى في buildOccasionFieldsHtml
  * (occasionForm.js)، لا هنا — هذه فقط أسماء معالجات onchange الخاصة باللوحة
  * (لا فحص تعارض حيّ، فـonDateChange تبقى null)، زرّ «إضافة اسم» بأسلوب اللوحة
  * (صنف btn-approve، لا add-nokoot-btn الذي يستعمله الموقع العام)، واستبدال
@@ -1405,6 +1425,10 @@ const DIRECT_ADD_FIELD_CTX = {
   renderHonoreeAddButton: containerId => `
     <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addHonoreeRow('${containerId}')">
       <i class="fa-solid fa-plus"></i> إضافة اسم
+    </button>`,
+  renderExtraDayAddButton: containerId => `
+    <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventDayRow('${containerId}')">
+      <i class="fa-solid fa-plus"></i> أضف يوماً
     </button>`,
   overrides: {
     town: (field, { label, req }) => `
@@ -1495,6 +1519,8 @@ async function handleDirectAdd(e) {
     return;
   }
 
+  const extraDays = fieldsByKey.extra_days ? collectEventDays('dirExtraDaysList') : [];
+
   const town = document.getElementById('dirTown').value;
 
   // «قريتي غير موجودة» يُرسِل requested_village_name بدل village_id — لا الاثنين معاً.
@@ -1525,6 +1551,7 @@ async function handleDirectAdd(e) {
     secondary_location_name: () => document.getElementById('dirSecondaryLocationName')?.value.trim(),
     event_end_date: () => document.getElementById('dirEventEndDate')?.value,
     youth_party_date: () => document.getElementById('dirYouthDate')?.value,
+    extra_days: () => (extraDays.length ? '1' : ''),
     dinner_time: () => document.getElementById('dirDinnerTime')?.value.trim(),
     host_phone: () => document.getElementById('dirHostPhone')?.value.trim(),
     audio_title: () => document.getElementById('dirAudioTitle')?.value.trim(),
@@ -1554,6 +1581,7 @@ async function handleDirectAdd(e) {
   if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('dirSecondaryLocationName').value);
   if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('dirEventEndDate').value);
   if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('dirYouthDate').value);
+  if (fieldsByKey.extra_days) appendEventDaysToFormData(formData, extraDays);
   if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('dirDinnerTime').value);
   if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('dirHostPhone').value);
   if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('dirAudioTitle').value);
@@ -2136,7 +2164,7 @@ function closeOccasionTypeForm() {
   if (form) form.reset();
 }
 
-/** يعرض الحقول الأربعة عشر كلها دوماً، مملوءة من إعداد النوع القائم إن وُجد. */
+/** يعرض الحقول السبعة عشر كلها دوماً، مملوءة من إعداد النوع القائم إن وُجد. */
 function renderOccasionTypeFieldsEditor(existingFields) {
   const byKey = {};
   (existingFields || []).forEach(f => { byKey[f.field_key] = f; });
@@ -2506,6 +2534,7 @@ function collectEventEditFormDraft() {
   inputs.forEach(el => {
     if (!el.id || el.type === 'submit' || el.type === 'button' || el.type === 'password') return;
     if (el.closest && el.closest('#evtHonoreesEditor')) return;
+    if (el.closest && el.closest('#evtExtraDaysEditor')) return;
     if (el.type === 'file') {
       if (el.files && el.files.length > 0) hadFiles = true;
       return;
@@ -2517,11 +2546,13 @@ function collectEventEditFormDraft() {
   });
 
   const honorees = collectEventHonorees();
+  const extraDays = collectEventExtraDays();
 
   return {
     event_id: editingEventId,
     values,
     honorees,
+    extra_days: extraDays,
     hadFiles,
     updated_at: Date.now()
   };
@@ -2597,6 +2628,14 @@ function applyEventEditDraft() {
       renderEventHonoreesEditor(draft.honorees);
     }
 
+    if (Array.isArray(draft.extra_days) && draft.extra_days.length > 0) {
+      const group = document.getElementById('evtExtraDaysGroup');
+      // نوع لا يُظهر الأيام لا يُسترجَع له صفّ محفوظ حتى لو حملته مسودّة قديمة.
+      if (!group || group.style.display !== 'none') {
+        renderEventExtraDaysEditor(draft.extra_days);
+      }
+    }
+
     if (draft.hadFiles) {
       const fileNotice = document.getElementById('evtDraftFileNotice');
       if (fileNotice) fileNotice.style.display = 'flex';
@@ -2619,6 +2658,9 @@ function ensureEventEditFormMounted() {
   wrapper.style.marginTop = '20px';
 
   const criticalHint = '<span style="color:var(--warn-yellow); font-size:0.78rem; margin-inline-start:6px;"><i class="fa-solid fa-triangle-exclamation"></i> حرج — يعيد مناسبة معتمدة إلى المراجعة</span>';
+  // نفس وسم criticalHint أعلاه حرفياً، بصياغة تخصّ الأيام الإضافية: تصنيف
+  // الخادم لهذا الحقل أخصّ من «حرج» العام (تغيير التاريخ أو المكان فقط حرِج).
+  const extraDaysCriticalHint = '<span style="color:var(--warn-yellow); font-size:0.78rem; margin-inline-start:6px;"><i class="fa-solid fa-triangle-exclamation"></i> تغيير تاريخ يوم أو مكانه حرج — يعيد مناسبة معتمدة إلى المراجعة</span>';
 
   wrapper.innerHTML = `
     <div class="pane-header">
@@ -2732,6 +2774,14 @@ function ensureEventEditFormMounted() {
           <label>وقت العشاء</label>
           <input type="text" id="evtDinnerTime" maxlength="100" placeholder="مثال: 7:30 مساءً — اتركه فارغاً إن لم يُحدَّد">
         </div>
+      </div>
+
+      <div class="form-group" id="evtExtraDaysGroup">
+        <label>أيام إضافية ${extraDaysCriticalHint}</label>
+        <div id="evtExtraDaysEditor"></div>
+        <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventExtraDayRow()">
+          <i class="fa-solid fa-plus"></i> أضف يوماً
+        </button>
       </div>
 
       <div class="form-row">
@@ -2925,6 +2975,71 @@ function honoreesEqual(a, b) {
   return listA.every((h, i) => h.name === listB[i].name && (h.role || '') === (listB[i].role || ''));
 }
 
+/**
+ * صفوف الأيام الإضافية في نموذج تعديل المناسبة — نسخة موازية لصفوف أصحاب
+ * المناسبة أعلاه (`.ot-field-row` نفسها: اسم | تاريخ | مكان | وقت + حذف)،
+ * لأن نموذج اللوحة يبني صفوفه بيده ولا يستعمل addEventDayRow المشتركة.
+ */
+function renderEventExtraDaysEditor(days) {
+  const container = document.getElementById('evtExtraDaysEditor');
+  if (!container) return;
+  container.innerHTML = '';
+  const rows = (days && days.length) ? days : [{ name: '', date: '', place: '', time: '' }];
+  rows.forEach(day => addEventExtraDayRow(day));
+}
+
+function addEventExtraDayRow(day = {}) {
+  const container = document.getElementById('evtExtraDaysEditor');
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'ot-field-row';
+  row.setAttribute('data-extra-day-row', '');
+  row.innerHTML = `
+    <input type="text" class="evt-day-name" placeholder="اسم اليوم — مثال: الحنّة" maxlength="100" value="${escapeHtml(day.name || '')}">
+    <input type="date" class="evt-day-date" value="${escapeHtml(day.date || '')}">
+    <input type="text" class="evt-day-place" placeholder="المكان (اختياري)" maxlength="1000" value="${escapeHtml(day.place || '')}">
+    <input type="text" class="evt-day-time" placeholder="الوقت (اختياري)" maxlength="100" value="${escapeHtml(day.time || '')}">
+    <button type="button" class="btn-delete" onclick="this.closest('[data-extra-day-row]').remove()" title="حذف">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+  `;
+  container.appendChild(row);
+}
+
+/** يقرأ صفوف الأيام الحالية ويُسقط أي صف خالٍ من الحقول الأربعة — التحقق الدقيق على الخادم. */
+function collectEventExtraDays() {
+  return Array.from(document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]')).map(row => ({
+    name: row.querySelector('.evt-day-name').value.trim(),
+    date: row.querySelector('.evt-day-date').value.trim(),
+    place: row.querySelector('.evt-day-place').value.trim(),
+    time: row.querySelector('.evt-day-time').value.trim()
+  })).filter(day => day.name || day.date || day.place || day.time);
+}
+
+function extraDaysEqual(a, b) {
+  const listA = a || [];
+  const listB = b || [];
+  if (listA.length !== listB.length) return false;
+  return listA.every((day, i) =>
+    (day.name || '') === (listB[i].name || '') &&
+    (day.date || '') === (listB[i].date || '') &&
+    (day.place || '') === (listB[i].place || '') &&
+    (day.time || '') === (listB[i].time || ''));
+}
+
+/**
+ * أزواج (التاريخ، المكان) مرتّبة — تغيّرها وحده حرِج (نفس تصنيف الخادم:
+ * التاريخ والمكان حرِجان، والاسم والوقت تجميليان)، وإضافة يوم أو حذفه تغيّر
+ * عدد الأزواج فتعدّ حرجة أيضاً.
+ */
+function extraDaysPlacementChanged(a, b) {
+  const pairs = list => (list || []).map(day => `${day.date || ''}\u0000${day.place || ''}`).sort();
+  const listA = pairs(a);
+  const listB = pairs(b);
+  if (listA.length !== listB.length) return true;
+  return listA.some((pair, i) => pair !== listB[i]);
+}
+
 /** سجلّ اختياري (المرجّح المذكور في المهمة) — GET /api/events/:id/amendments، نفس حارس الملكية القائم أصلاً. */
 function renderEventAmendmentsLog(amendments) {
   const wrapperEl = document.getElementById('evtAmendmentsLogWrapper');
@@ -2973,7 +3088,9 @@ async function openEventEditForm(id) {
   // fetchOccasionTypes)، ويشمل حالتي "خارج بلداتك" و"الجلسة منتهية" معاً بنص
   // الخادم نفسه فيتميّزان تلقائياً بلا تفريق من العميل.
   let honorees = [{ name: evt.groom_name || '', role: '' }];
+  let extraDays = [];
   let amendments = [];
+  let eventTypeFields = null;
   try {
     const [detailRes, amendRes] = await Promise.all([
       adminFetch(`/api/events/${id}`),
@@ -2994,6 +3111,19 @@ async function openEventEditForm(id) {
 
     if (detailData.success && Array.isArray(detailData.event.honorees) && detailData.event.honorees.length) {
       honorees = detailData.event.honorees;
+    }
+    if (detailData.success && detailData.event.occasion_type && Array.isArray(detailData.event.occasion_type.fields)) {
+      eventTypeFields = detailData.event.occasion_type.fields;
+    }
+    // من يوم المناسبة كما يخزّنه الخادم (day_date/day_time) إلى شكل حقول
+    // النموذج (date/time) — نفس تحويل نموذج الموقع العام.
+    if (detailData.success && Array.isArray(detailData.event.extra_days)) {
+      extraDays = detailData.event.extra_days.map(day => ({
+        name: day.name || '',
+        date: toDateInputValue(day.day_date),
+        place: day.place || '',
+        time: day.day_time || ''
+      }));
     }
     if (amendRes.ok) {
       const amendData = await amendRes.json();
@@ -3025,6 +3155,7 @@ async function openEventEditForm(id) {
     artist_name: evt.artist_name || '',
     artist_image_url: evt.artist_image_url || '',
     honorees,
+    extra_days: extraDays,
     status: evt.status
   };
 
@@ -3060,6 +3191,16 @@ async function openEventEditForm(id) {
   handleEventEditTownChange();
 
   renderEventHonoreesEditor(editingEventOriginal.honorees);
+  // النوع يقرّر ظهور قسم الأيام (كما يقرّر ظهور بقية الحقول على الموقع العام)؛
+  // نوع غير معروف للواجهة يُبقي القسم ظاهراً بدل إخفاء أيام قائمة فعلاً.
+  const extraDaysGroup = document.getElementById('evtExtraDaysGroup');
+  const showsExtraDays = !eventTypeFields || eventTypeFields.some(f => f.field_key === 'extra_days');
+  if (extraDaysGroup) extraDaysGroup.style.display = showsExtraDays ? '' : 'none';
+  if (showsExtraDays) {
+    renderEventExtraDaysEditor(editingEventOriginal.extra_days);
+  } else {
+    document.getElementById('evtExtraDaysEditor').innerHTML = '';
+  }
   renderEventAmendmentsLog(amendments);
 
   const posterFileInput = document.getElementById('evtPosterFile');
@@ -3331,15 +3472,16 @@ function removeEventEditAudio() {
 }
 
 /**
- * يحوّل حمولة الفرق إلى `FormData` حين يرافقها ملف. `honorees` مصفوفة فتُرسَل
- * نصاً JSON — نفس ما يفعله نموذج النشر، و`parseHonorees` على الخادم يقبل
- * الاثنين. و`null` (القرية المُفرَّغة) يصير `''`، وهو ما يقرأه الخادم null.
+ * يحوّل حمولة الفرق إلى `FormData` حين يرافقها ملف. `honorees` و`extra_days`
+ * مصفوفتان فتُرسَلان نصاً JSON — نفس ما يفعله نموذج النشر، و`parseHonorees`
+ * و`parseEventDays` على الخادم يقبلان الاثنين. و`null` (القرية المُفرَّغة) يصير
+ * `''`، وهو ما يقرأه الخادم null.
  */
 function buildEventEditFormData(payload, posterFile, audioFile) {
   const form = new FormData();
   Object.keys(payload).forEach(key => {
     const value = payload[key];
-    if (key === 'honorees') {
+    if (key === 'honorees' || key === 'extra_days') {
       form.append(key, JSON.stringify(value));
     } else {
       form.append(key, value == null ? '' : String(value));
@@ -3403,6 +3545,21 @@ async function handleEventEditSubmit(e) {
       return;
     }
     payload.honorees = currentHonorees;
+  }
+
+  // الأيام: غياب المفتاح يعني «اتركها كما هي»، و[] يعني «امسحها» — فلا
+  // يُرسَل إلا حين تكون المجموعة ظاهرة لهذا النوع (وإلا مسح تعديلُ نوعٍ آخر
+  // أيامه)، وحين يختلف ما في الصفوف فعلاً عن الأصل.
+  const currentExtraDays = collectEventExtraDays();
+  const extraDaysGroup = document.getElementById('evtExtraDaysGroup');
+  const extraDaysVisible = extraDaysGroup && extraDaysGroup.style.display !== 'none';
+  if (extraDaysVisible && !extraDaysEqual(editingEventOriginal.extra_days, currentExtraDays)) {
+    payload.extra_days = currentExtraDays;
+    // تغيير التاريخ أو المكان — لا الاسم ولا الوقت — هو ما يعيد المناسبة
+    // المعتمدة إلى المراجعة على الخادم.
+    if (extraDaysPlacementChanged(editingEventOriginal.extra_days, currentExtraDays)) {
+      touchesCritical = true;
+    }
   }
 
   // ملف مرفوع تعديلٌ بذاته وإن لم يتغيّر أي حقل نصّي: الخادم يشتق منه

@@ -2348,7 +2348,8 @@ function renderEventPage(evt) {
     typeShowsField(evt, 'event_end_date') && evt.event_end_date
       ? eventPageInfoRowHtml('fa-regular fa-calendar', typeFieldLabel(evt, 'event_end_date', 'حتى'), formatEventDayLong({ event_date: evt.event_end_date })) : '',
     typeShowsField(evt, 'youth_party_date')
-      ? eventPageInfoRowHtml('fa-solid fa-fire', typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'), evt.youth_party_date) : '',
+      ? eventPageInfoRowHtml('fa-solid fa-fire', typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'),
+        evt.youth_party_date ? formatEventDayLong({ event_date: evt.youth_party_date }) : '') : '',
     // الأيام الإضافية بترتيب الخادم نفسه (day_date) — سطر لكل يوم، والتاريخ
     // الطويل ثم « — الوقت» و« — المكان» عند وجودهما.
     typeShowsField(evt, 'extra_days') && Array.isArray(evt.extra_days)

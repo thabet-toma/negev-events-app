@@ -1928,7 +1928,9 @@ async function run() {
     dom.window.renderEventPage(events.find(e => e.id === 901));
     const body = document.getElementById('eventPageBody');
     assert.ok(body.textContent.includes('سهرة الشباب'), 'expected the youth-party field label on the event page');
-    assert.ok(body.textContent.includes('2027-01-09'), 'expected the youth-party date value on the event page');
+    const longDate = dom.window.formatEventDayLong({ event_date: '2027-01-09' });
+    assert.ok(body.textContent.includes(longDate), 'expected the youth-party date in the same long Arabic form as the rows around it');
+    assert.ok(!body.textContent.includes('2027-01-09'), 'the raw ISO date must not leak next to long-form dates');
   });
 
   await test('an event card omits the youth-party line entirely when youth_party_date is empty', () => {
@@ -7590,7 +7592,7 @@ async function run() {
     assert.strictEqual(hostileRow.querySelector('b'), null, 'a day name must never be parsed as markup');
   });
 
-  await test('the admin direct-add form still renders for a type with extra_days, falling back to a plain add button (no crash)', async () => {
+  await test('the admin direct-add form gets its own styled «أضف يوماً» button for a type with extra_days', async () => {
     const dom = buildAdminEnv();
     await dom.window.initDirectAddForm();
     const { document } = dom.window;
@@ -7598,12 +7600,242 @@ async function run() {
     const list = document.getElementById('dirExtraDaysList');
     assert.ok(list, 'expected the panel to render the extra-days list for the عرس type');
     const addButton = document.querySelector('#dirExtraDaysList + button');
-    assert.ok(addButton, 'a ctx without renderExtraDayAddButton must still get an add button');
+    assert.ok(addButton, 'expected an add button right after the list');
     assert.strictEqual(addButton.getAttribute('type'), 'button');
+    assert.ok(addButton.classList.contains('btn-approve'), 'the panel button must use its own admin.css class, not the shared fallback');
+    assert.ok(addButton.textContent.includes('أضف يوماً'), `expected the Arabic add label, got "${addButton.textContent}"`);
 
     addButton.click();
-    assert.ok(document.querySelector('#dirExtraDaysList .event-day-row'), 'clicking the fallback button must append a row');
+    assert.ok(document.querySelector('#dirExtraDaysList .event-day-row'), 'clicking the button must append a row');
     assertNoUnhandledRejections('admin direct-add / extra days');
+  });
+
+  console.log('\nExtra event days — admin panel (direct add + event edit form)');
+
+  /** Admin env holding one event, whose GET /api/events/:id returns it with honorees and days. */
+  async function buildAdminExtraDaysEnv(evt) {
+    const dom = buildAdminEnv();
+    const win = dom.window;
+    win.localStorage.setItem('negev_admin_token', 'test-admin-token');
+    win.localStorage.setItem('negev_admin_role', 'super_admin');
+    const patches = [];
+    win.fetch = async (url, opts = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (opts && opts.method) || 'GET';
+      if (method === 'PATCH') {
+        patches.push({ path: requestPath, body: opts.body ? JSON.parse(opts.body) : null });
+        return jsonResponse({ success: true, message: 'تم الحفظ' });
+      }
+      if (method === 'GET' && requestPath === '/api/admin/events') return jsonResponse({ success: true, events: [evt] });
+      if (method === 'GET' && requestPath === `/api/events/${evt.id}`) return jsonResponse({ success: true, event: { ...evt } });
+      if (method === 'GET' && requestPath === `/api/events/${evt.id}/amendments`) return jsonResponse({ success: true, amendments: [] });
+      return jsonResponse({ success: true });
+    };
+    await win.fetchAdminEvents();
+    return { win, patches };
+  }
+
+  const ADMIN_EXTRA_DAYS_EVENT = {
+    id: 91, status: 'approved', title: 'عرس سالم', town: 'رهط', groom_name: 'سالم',
+    occasion_type_id: WEDDING_TYPE.id, occasion_type: WEDDING_TYPE,
+    event_date: '2026-10-10', location_name: 'ديوان',
+    honorees: [{ name: 'سالم', role: '' }],
+    extra_days: [
+      { name: 'الحنّة', day_date: '2026-10-08', place: 'ديوان آل فلان', day_time: 'بعد العصر', position: 1 }
+    ]
+  };
+
+  await test('admin direct add sends extra_days[i][…] for a filled day row and drops a blank one', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const win = dom.window;
+    const { document } = win;
+
+    document.querySelector('#dirHonoreesList .honoree-name').value = 'سالم ونورة';
+    document.getElementById('dirEventDate').value = '2027-06-15';
+    document.getElementById('dirLocationName').value = 'ديوان آل تجربة';
+
+    const addButton = document.querySelector('#dirExtraDaysList + button');
+    addButton.click();
+    const row = document.querySelector('#dirExtraDaysList .event-day-row');
+    row.querySelector('.event-day-name').value = 'الحنّة';
+    row.querySelector('.event-day-date').value = '2027-06-14';
+    row.querySelector('.event-day-place').value = 'ديوان آل فلان';
+    row.querySelector('.event-day-time').value = 'بعد العصر';
+    addButton.click(); // صفّ فارغ تماماً — يُسقَط
+
+    let captured = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        captured = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await win.handleDirectAdd({ preventDefault() {} });
+    assertNoUnhandledRejections('admin direct add / extra days');
+
+    assert.ok(captured, 'expected the publish POST to fire');
+    assert.strictEqual(captured.body.get('extra_days[0][name]'), 'الحنّة');
+    assert.strictEqual(captured.body.get('extra_days[0][date]'), '2027-06-14');
+    assert.strictEqual(captured.body.get('extra_days[0][place]'), 'ديوان آل فلان');
+    assert.strictEqual(captured.body.get('extra_days[0][time]'), 'بعد العصر');
+    assert.strictEqual(captured.body.get('extra_days[1][name]'), null, 'a fully blank row must never be sent');
+    assert.strictEqual(document.querySelectorAll('#dirExtraDaysList .event-day-row').length, 0,
+      'a successful publish must leave the days list empty for the next event');
+  });
+
+  await test('a direct-add draft restores its saved extra-day row', async () => {
+    const dom = buildAdminEnv();
+    await dom.window.initDirectAddForm();
+    const win = dom.window;
+    const { document } = win;
+
+    document.querySelector('#dirHonoreesList .honoree-name').value = 'سالم';
+    document.getElementById('dirLocationName').value = 'ديوان';
+    const addButton = document.querySelector('#dirExtraDaysList + button');
+    addButton.click();
+    const row = document.querySelector('#dirExtraDaysList .event-day-row');
+    row.querySelector('.event-day-name').value = 'الحنّة';
+    row.querySelector('.event-day-date').value = '2027-06-14';
+
+    const draft = win.collectDirectAddFormDraft();
+    assert.ok(draft, 'a filled day row must count as draft content on its own');
+    assert.strictEqual(draft.extra_days.length, 1, 'the day must be saved with the draft, separately from the generic capture');
+    assert.strictEqual(draft.extra_days[0].name, 'الحنّة');
+    win.localStorage.setItem('negev_draft_direct_add', JSON.stringify(draft));
+
+    // Reload: the rebuilt form starts with an empty list, then the draft is applied.
+    document.getElementById('dirExtraDaysList').innerHTML = '';
+    win.applyDirectAddDraft();
+
+    const restored = document.querySelectorAll('#dirExtraDaysList .event-day-row');
+    assert.strictEqual(restored.length, 1, 'the saved day must be re-created as a row');
+    assert.strictEqual(restored[0].querySelector('.event-day-name').value, 'الحنّة');
+    assert.strictEqual(restored[0].querySelector('.event-day-date').value, '2027-06-14');
+  });
+
+  await test('the admin edit form shows the event\'s extra days as editable rows', async () => {
+    const { win } = await buildAdminExtraDaysEnv(ADMIN_EXTRA_DAYS_EVENT);
+    await win.openEventEditForm(ADMIN_EXTRA_DAYS_EVENT.id);
+    const { document } = win;
+
+    const rows = document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]');
+    assert.strictEqual(rows.length, 1, 'one stored day must render as one row');
+    assert.strictEqual(rows[0].querySelector('.evt-day-name').value, 'الحنّة');
+    assert.strictEqual(rows[0].querySelector('.evt-day-date').value, '2026-10-08', 'day_date must fill the date input');
+    assert.strictEqual(rows[0].querySelector('.evt-day-place').value, 'ديوان آل فلان');
+    assert.strictEqual(rows[0].querySelector('.evt-day-time').value, 'بعد العصر', 'day_time must fill the time input');
+  });
+
+  await test('renaming an extra day sends extra_days but never raises the critical-amendment warning', async () => {
+    const { win, patches } = await buildAdminExtraDaysEnv(ADMIN_EXTRA_DAYS_EVENT);
+    await win.openEventEditForm(ADMIN_EXTRA_DAYS_EVENT.id);
+    const { document } = win;
+
+    let confirmed = false;
+    win.confirm = () => { confirmed = true; return true; };
+
+    document.querySelector('#evtExtraDaysEditor .evt-day-name').value = 'الحنّة الكبرى';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    assert.strictEqual(patches.length, 1, 'expected exactly one PATCH');
+    assert.deepStrictEqual(patches[0].body.extra_days, [
+      { name: 'الحنّة الكبرى', date: '2026-10-08', place: 'ديوان آل فلان', time: 'بعد العصر' }
+    ]);
+    assert.strictEqual(confirmed, false, 'a name-only change is cosmetic — no critical warning');
+  });
+
+  await test('changing an extra day\'s date sends extra_days and raises the critical-amendment warning', async () => {
+    const { win, patches } = await buildAdminExtraDaysEnv(ADMIN_EXTRA_DAYS_EVENT);
+    await win.openEventEditForm(ADMIN_EXTRA_DAYS_EVENT.id);
+    const { document } = win;
+
+    let confirmed = false;
+    win.confirm = () => { confirmed = true; return true; };
+
+    document.querySelector('#evtExtraDaysEditor .evt-day-date').value = '2026-10-07';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    assert.strictEqual(patches.length, 1, 'expected exactly one PATCH');
+    assert.strictEqual(patches[0].body.extra_days[0].date, '2026-10-07');
+    assert.strictEqual(confirmed, true, 'moving a day to another date is critical — the warning must appear');
+  });
+
+  await test('leaving the extra days untouched sends no extra_days key at all', async () => {
+    const { win, patches } = await buildAdminExtraDaysEnv(ADMIN_EXTRA_DAYS_EVENT);
+    await win.openEventEditForm(ADMIN_EXTRA_DAYS_EVENT.id);
+
+    // The stored day must actually be on screen — otherwise "untouched" is
+    // vacuous and the negative assertion below proves nothing.
+    assert.strictEqual(
+      win.document.querySelectorAll('#evtExtraDaysEditor [data-extra-day-row]').length, 1,
+      'the form must show the stored day for "untouched" to mean anything'
+    );
+
+    win.document.getElementById('evtTitle').value = 'عرس سالم المعدّل';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    assert.strictEqual(patches.length, 1, 'the title change must still PATCH');
+    assert.strictEqual(patches[0].body.title, 'عرس سالم المعدّل');
+    assert.ok(!('extra_days' in patches[0].body), 'an untouched days list must not travel — absence means "leave as is"');
+  });
+
+  await test('the days section is hidden for a type that does not show extra_days, and the key is never sent', async () => {
+    const funeralEvent = {
+      ...ADMIN_EXTRA_DAYS_EVENT,
+      id: 92,
+      occasion_type_id: FUNERAL_TYPE.id,
+      occasion_type: FUNERAL_TYPE,
+      honorees: [{ name: 'المتوفَّى', role: '' }],
+      extra_days: []
+    };
+    const { win, patches } = await buildAdminExtraDaysEnv(funeralEvent);
+    await win.openEventEditForm(funeralEvent.id);
+
+    assert.strictEqual(win.document.getElementById('evtExtraDaysGroup').style.display, 'none',
+      'a type without extra_days must hide the section entirely');
+
+    win.document.getElementById('evtTitle').value = 'عزاء معدّل';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.strictEqual(patches.length, 1);
+    assert.ok(!('extra_days' in patches[0].body), 'a hidden section must never send the key');
+  });
+
+  await test('buildEventEditFormData JSON-stringifies extra_days exactly like honorees', () => {
+    const dom = buildAdminEnv();
+    const days = [{ name: 'الحنّة', date: '2026-10-08', place: '', time: '' }];
+    const form = dom.window.buildEventEditFormData({ extra_days: days, honorees: [{ name: 'سالم' }] }, null, null);
+
+    assert.strictEqual(form.get('extra_days'), JSON.stringify(days), 'extra_days must ride as JSON, never as "[object Object]"');
+    assert.strictEqual(form.get('honorees'), JSON.stringify([{ name: 'سالم' }]));
+  });
+
+  await test('admin.css styles the direct-add honoree and extra-day rows, which had no rule before', () => {
+    assert.ok(/\.honoree-row\s*\{/.test(ADMIN_CSS), 'expected a .honoree-row rule — admin.html loads only admin.css');
+    assert.ok(/\.honoree-row\s+input\s*\{/.test(ADMIN_CSS), 'expected the honoree inputs to be laid out');
+    assert.ok(/\.nokoot-del-btn\s*\{/.test(ADMIN_CSS), 'expected the row delete button to be styled');
+    assert.ok(/\.event-day-row\s*\{/.test(ADMIN_CSS), 'expected an .event-day-row rule for the two-line day grid');
+  });
+
+  /**
+   * The occasion-type editor sends back exactly the rows it renders, and the
+   * server replaces a type's whole field list with what arrives — so a key
+   * missing from the panel's OCCASION_FIELDS mirror is DELETED from the type
+   * on every save (artist_name / artist_image_url were, until this test).
+   */
+  await test('the occasion-type editor round-trips every server field key, so saving a type deletes none', async () => {
+    const { OCCASION_FIELDS: SERVER_FIELDS } = require('../src/constants');
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const win = dom.window;
+    win.renderOccasionTypeFieldsEditor(SERVER_FIELDS.map((field, index) => ({
+      field_key: field.key, label: field.label, is_visible: true, is_required: false, position: index + 1
+    })));
+    // Array.from: the jsdom window's arrays carry its own Array prototype, which deepStrictEqual rejects.
+    const sentKeys = Array.from(win.collectOccasionTypeFields(), field => field.field_key).sort();
+    assert.deepStrictEqual(sentKeys, SERVER_FIELDS.map(field => field.key).sort(),
+      'web/admin.js OCCASION_FIELDS must mirror server/src/constants.js exactly, or saving a type drops the missing fields');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
