@@ -1432,7 +1432,7 @@ function renderDirectAddFields(type) {
 
   if (fieldsByKey.event_date) {
     const dateInput = document.getElementById('dirEventDate');
-    if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+    if (dateInput) dateInput.value = isoLocalDay(new Date());
   }
   if (fieldsByKey.town) {
     populateDirTownSelect();

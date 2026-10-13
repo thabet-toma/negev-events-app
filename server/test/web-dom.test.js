@@ -683,6 +683,40 @@ function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url
   return dom;
 }
 
+/**
+ * Pins a jsdom window's clock to one fixed instant for the duration of a test
+ * by substituting `window.Date` — jsdom exposes no timezone option, and Node's
+ * own Date reads the process-wide TZ, so a substitution is the only way to
+ * exercise "just after local midnight, still the previous UTC day" without
+ * rewriting `process.env.TZ` for the whole suite. `isoLocalDay`'s callers read
+ * the LOCAL getters, so the stub returns the caller's local calendar numbers
+ * from `getFullYear/getMonth/getDate` while leaving the real instant (and thus
+ * `toISOString`, which is UTC) intact — the two deliberately disagree.
+ *
+ * `utcIso` `2026-10-13T21:30:00.000Z` with local 2026-10-14 is a user at UTC+3
+ * thirty minutes after local midnight: the buggy `toISOString().split('T')[0]`
+ * yields 2026-10-13, the local day is 2026-10-14. Returns a restore function.
+ */
+function installFixedLocalClock(win, { utcIso, year, monthIndex, day }) {
+  const RealDate = win.Date;
+  const fixedMs = RealDate.parse(utcIso);
+
+  function FakeDate(...args) {
+    const instance = args.length === 0 ? new RealDate(fixedMs) : new RealDate(...args);
+    Object.defineProperty(instance, 'getFullYear', { value: () => year, configurable: true });
+    Object.defineProperty(instance, 'getMonth', { value: () => monthIndex, configurable: true });
+    Object.defineProperty(instance, 'getDate', { value: () => day, configurable: true });
+    return instance;
+  }
+  FakeDate.prototype = RealDate.prototype;
+  FakeDate.now = () => fixedMs;
+  FakeDate.parse = RealDate.parse;
+  FakeDate.UTC = RealDate.UTC;
+  win.Date = FakeDate;
+
+  return () => { win.Date = RealDate; };
+}
+
 async function run() {
   console.log('\nDOM smoke seam (web/, no database)\n');
 
@@ -811,6 +845,46 @@ async function run() {
     assert.ok(dateInput, 'expected the shared default #addEventDate input');
     assert.strictEqual(dateInput.getAttribute('type'), 'date');
     assert.strictEqual(dateInput.getAttribute('onchange'), 'checkDateCollisionLive()', 'expected the public form\'s own onDateChange handler wired by the shared renderer');
+  });
+
+  /**
+   * The publish form's date default must be the LOCAL day. Setting it from
+   * `new Date().toISOString().split('T')[0]` ships YESTERDAY for every user on
+   * UTC+2/+3 between local midnight and 02:00/03:00 — exactly the users this
+   * platform serves. The fake clock (installFixedLocalClock) is installed
+   * after the home feed has cached the occasion types but BEFORE switchTab
+   * builds the form, which is the moment the clock is read.
+   */
+  await test('#addEventDate defaults to the LOCAL day, not the UTC day (public publish form)', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    // Same boot sequence the historical-bug test reproduces — the home feed
+    // populates occasionTypesCache — but WITHOUT switching tabs yet, because
+    // switchTab('tabAdd') is itself what reads the clock.
+    await waitFor(() => {
+      const chip = document.getElementById('kindFilterChip');
+      return !!chip && !chip.disabled;
+    });
+
+    // Local 2026-10-14 00:30 at UTC+3; UTC is still 2026-10-13 21:30.
+    const restore = installFixedLocalClock(win, {
+      utcIso: '2026-10-13T21:30:00.000Z', year: 2026, monthIndex: 9, day: 14
+    });
+    try {
+      win.switchTab('tabAdd');
+      const built = await waitFor(() => document.getElementById('addEventDate') !== null);
+      assertNoUnhandledRejections('publish form / #addEventDate local default');
+      assert.ok(built, 'expected the publish form to build #addEventDate');
+      assert.strictEqual(
+        document.getElementById('addEventDate').value,
+        '2026-10-14',
+        'the publish form must pre-fill the LOCAL day — a UTC-based default shows 2026-10-13 between local midnight and 02:00/03:00'
+      );
+    } finally {
+      restore();
+    }
   });
 
   /**
@@ -2733,6 +2807,34 @@ async function run() {
 
     assert.strictEqual(document.getElementById('dirFamily'), null, 'family_clan is not on the عرس fixture — it must not render');
     assert.strictEqual(document.getElementById('dirGroom'), null, 'the old hardcoded groom_name field must be gone entirely');
+  });
+
+  /**
+   * The admin direct-add form carries the same local-day default as the public
+   * form (both now call the shared `isoLocalDay`). Same fake-clock seam: local
+   * 2026-10-14 00:30 at UTC+3 while UTC is still 2026-10-13 21:30, so an idiom
+   * that leans on `toISOString` would pre-fill the previous day.
+   */
+  await test('#dirEventDate defaults to the LOCAL day too (admin direct-add form)', async () => {
+    const dom = buildAdminEnv();
+    const win = dom.window;
+
+    const restore = installFixedLocalClock(win, {
+      utcIso: '2026-10-13T21:30:00.000Z', year: 2026, monthIndex: 9, day: 14
+    });
+    try {
+      await win.initDirectAddForm();
+      const { document } = win;
+      assertNoUnhandledRejections('admin direct-add / #dirEventDate local default');
+      assert.ok(document.getElementById('dirEventDate'), 'expected the admin direct-add event-date input');
+      assert.strictEqual(
+        document.getElementById('dirEventDate').value,
+        '2026-10-14',
+        'the admin direct-add form must pre-fill the LOCAL day — a UTC-based default shows 2026-10-13 between local midnight and 02:00/03:00'
+      );
+    } finally {
+      restore();
+    }
   });
 
   await test('switching to a mourning type relabels the honorees field and drops fields it does not define', async () => {

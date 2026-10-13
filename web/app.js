@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderStickerCanvas();
   recordAnalyticsEvent('app_opened');
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = isoLocalDay(new Date());
 
   const nokootDateInput = document.getElementById('nokootDate');
   if (nokootDateInput) nokootDateInput.value = today;
@@ -3581,11 +3581,6 @@ function clearAllFilters() {
 
 const FEED_DATE_PRESETS = { today: 'اليوم', tomorrow: 'غداً', week: 'هذا الأسبوع', weekend: 'الخميس – السبت' };
 
-/** `YYYY-MM-DD` بالتوقيت المحلي — `toISOString` يقلب اليوم قرب منتصف الليل. */
-function isoLocalDay(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
 /*
  * نطاق فلتر التاريخ — نفس `FeedDateFilter.preset` في
  * `mobile/lib/screens/events_screen.dart`. الأسبوع من الأحد إلى السبت،
@@ -3871,8 +3866,8 @@ function renderAgendaCalendar() {
     }
   });
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const selectedDateStr = agendaSelectedDate.toISOString().slice(0, 10);
+  const todayStr = isoLocalDay(new Date());
+  const selectedDateStr = isoLocalDay(agendaSelectedDate);
 
   let html = '';
 
@@ -4099,7 +4094,7 @@ function renderOccasionForm(type) {
   }
 
   const dateInput = document.getElementById('addEventDate');
-  if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+  if (dateInput) dateInput.value = isoLocalDay(new Date());
 
   if (fieldsByKey.honorees) addHonoreeRow('addHonoreesList');
 

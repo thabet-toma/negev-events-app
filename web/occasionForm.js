@@ -19,6 +19,16 @@
  * أول استدعاء لأي دالة هنا تبني HTML.
  */
 
+/**
+ * `YYYY-MM-DD` بالتوقيت المحلي — `toISOString` يعيد يوم UTC، فيعرض نموذج
+ * النشر تاريخ الأمس لمن يفتحه بين منتصف الليل والساعة الثانية/الثالثة
+ * (المستخدمون على UTC+2/+3)، ومنتصفُ ليلٍ محلي يصير اليوم السابق دائماً. تعيش
+ * هنا لأن `app.js` و`admin.js` كلاهما يُحمِّلها بعد هذا الملف، فيتشاركانها بدل نسختين.
+ */
+function isoLocalDay(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 /** أنواع المناسبات النشِطة بحقولها الظاهرة — GET /api/occasion-types عام، لا يحتاج رمز دخول. */
 async function fetchActiveOccasionTypes() {
   try {
