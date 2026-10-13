@@ -142,6 +142,141 @@ class EventDayRow {
   }
 }
 
+/// صفوف الأيام غير الفارغة — صفّ فرغت حقوله الأربعة ليس يوماً فتُسقطه الشاشة
+/// (كما يفعل `parseEventDays` خادمياً)، والغائب عن الخادم لا يُرسَل. عام كي
+/// تشترك فيه شاشتا النشر والتعديل بدل نسخة ثانية.
+List<Map<String, String>> collectEventDays(List<EventDayRow> rows) {
+  return rows
+      .map((row) => {
+            'name': row.nameController.text.trim(),
+            'date': row.date == null ? '' : formatEventDate(row.date!),
+            'place': row.placeController.text.trim(),
+            'time': row.timeController.text.trim(),
+          })
+      .where((day) =>
+          day['name']!.isNotEmpty ||
+          day['date']!.isNotEmpty ||
+          day['place']!.isNotEmpty ||
+          day['time']!.isNotEmpty)
+      .toList();
+}
+
+/// منتقي تاريخ اليوم — يستقبل الحالة الأولى ويعيد التاريخ المختار، كي لا يملك
+/// محرّر الأيام منطق منتقي التاريخ بنفسه.
+typedef EventDayDatePicker = Future<void> Function({
+  required DateTime? initial,
+  required ValueChanged<DateTime> onPicked,
+});
+
+/// محرّر الأيام الإضافية المشترك بين شاشتَي النشر والتعديل: قائمة تبدأ فارغة
+/// تماماً (الخاصية اختيارية)، وكلّ صفّ اسمٌ وتاريخٌ ومكانٌ ووقت. زرّ الحذف
+/// ظاهر دائماً لأنّ القائمة نفسها اختيارية. [onChanged] يعيد بناء الشاشة الأمّ
+/// عند الإضافة أو الحذف أو اختيار تاريخ، و[rebuildOnEdit] يوسّعه لكل تعديل
+/// نصّي — شاشة التعديل تحتاجه ليتفعّل زرّ الحفظ فوراً.
+class EventDaysEditor extends StatelessWidget {
+  const EventDaysEditor({
+    super.key,
+    required this.label,
+    required this.rows,
+    required this.onChanged,
+    required this.pickDate,
+    this.rebuildOnEdit = false,
+  });
+
+  final String label;
+  final List<EventDayRow> rows;
+  final VoidCallback onChanged;
+  final EventDayDatePicker pickDate;
+  final bool rebuildOnEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(color: context.c.inkSoft, fontSize: 13)),
+        const SizedBox(height: 8),
+        ...rows.asMap().entries.map((entry) {
+          final index = entry.key;
+          final row = entry.value;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.nameController,
+                        onChanged: rebuildOnEdit ? (_) => onChanged() : null,
+                        decoration: const InputDecoration(
+                          labelText: 'اسم اليوم — مثال: الحنّة',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.remove_circle_outline,
+                        color: context.c.inkFaint,
+                      ),
+                      tooltip: 'حذف',
+                      onPressed: () {
+                        rows.removeAt(index).dispose();
+                        onChanged();
+                      },
+                    ),
+                  ],
+                ),
+                DateField(
+                  label: 'تاريخ اليوم',
+                  value: row.date == null ? null : formatEventDate(row.date!),
+                  onTap: () async {
+                    await pickDate(
+                      initial: row.date,
+                      onPicked: (date) => row.date = date,
+                    );
+                    onChanged();
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.placeController,
+                        onChanged: rebuildOnEdit ? (_) => onChanged() : null,
+                        decoration: const InputDecoration(labelText: 'المكان (اختياري)'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.timeController,
+                        onChanged: rebuildOnEdit ? (_) => onChanged() : null,
+                        decoration: const InputDecoration(labelText: 'الوقت (اختياري)'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }),
+        TextButton.icon(
+          onPressed: () {
+            rows.add(EventDayRow());
+            onChanged();
+          },
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('أضف يوماً'),
+        ),
+      ],
+    );
+  }
+}
+
 /// تقديم مناسبة جديدة. تدخل قائمة المراجعة — الاعتماد من لوحة الإدارة.
 ///
 /// النموذج كله يُبنى من `GET /api/occasion-types`: لا نوع ثابت، ولا تسمية
@@ -232,24 +367,6 @@ class _AddEventScreenState extends State<AddEventScreen> {
     // فيُنشَر كما هو على مناسبة لم يحدّد صاحبها وقتاً. التلميح في
     // `_textFieldWidget` يرشد بلا أن يفرض قيمة.
     return _controllers.putIfAbsent(key, () => TextEditingController());
-  }
-
-  /// صفوف الأيام غير الفارغة — صفّ فرغت حقوله الأربعة ليس يوماً فتُسقطه الشاشة
-  /// (كما يفعل `parseEventDays` خادمياً)، والغائب عن الخادم لا يُرسَل.
-  List<Map<String, String>> _currentDays() {
-    return _days
-        .map((row) => {
-              'name': row.nameController.text.trim(),
-              'date': row.date == null ? '' : formatEventDate(row.date!),
-              'place': row.placeController.text.trim(),
-              'time': row.timeController.text.trim(),
-            })
-        .where((day) =>
-            day['name']!.isNotEmpty ||
-            day['date']!.isNotEmpty ||
-            day['place']!.isNotEmpty ||
-            day['time']!.isNotEmpty)
-        .toList();
   }
 
   Future<void> _pickDate({
@@ -377,7 +494,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
     if (type.isRequiredField('youth_party_date') && _youthDate == null) {
       return '${type.labelFor('youth_party_date') ?? 'سهرة الشباب'} مطلوب';
     }
-    if (type.isRequiredField('extra_days') && _currentDays().isEmpty) {
+    if (type.isRequiredField('extra_days') && collectEventDays(_days).isEmpty) {
       return '${type.labelFor('extra_days') ?? 'أيام إضافية'} مطلوب';
     }
 
@@ -475,7 +592,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         occasionTypeId: type.id,
         honorees: honorees,
         fields: fields,
-        extraDays: _currentDays(),
+        extraDays: collectEventDays(_days),
         poster: posterFile,
         audio: audioFile,
         artistImage: artistImageFile,
@@ -787,7 +904,12 @@ class _AddEventScreenState extends State<AddEventScreen> {
         ],
         if (type.showsField('extra_days')) ...[
           const SizedBox(height: 12),
-          _daysEditor(type),
+          EventDaysEditor(
+            label: type.labelFor('extra_days') ?? 'أيام إضافية',
+            rows: _days,
+            onChanged: () => setState(() {}),
+            pickDate: _pickDate,
+          ),
         ],
         const SizedBox(height: 12),
         ..._textFieldWidget(type, 'dinner_time'),
@@ -886,85 +1008,6 @@ class _AddEventScreenState extends State<AddEventScreen> {
           onPressed: () => setState(() => _honorees.add(HonoreeRow())),
           icon: const Icon(Icons.add, size: 18),
           label: Text('إضافة $label'),
-        ),
-      ],
-    );
-  }
-
-  /// محرّر الأيام الإضافية — قائمة تبدأ فارغة تماماً (الخاصية اختيارية)،
-  /// وكلّ صفّ اسمٌ إلزاميّ وتاريخٌ إلزاميّ ومكانٌ ووقت حرّان. زرّ الحذف ظاهر
-  /// دائماً لأنّ القائمة نفسها اختيارية.
-  Widget _daysEditor(OccasionType type) {
-    final label = type.labelFor('extra_days') ?? 'أيام إضافية';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: context.c.inkSoft, fontSize: 13)),
-        const SizedBox(height: 8),
-        ..._days.asMap().entries.map((entry) {
-          final index = entry.key;
-          final row = entry.value;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.nameController,
-                        decoration: const InputDecoration(
-                          labelText: 'اسم اليوم — مثال: الحنّة',
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.remove_circle_outline,
-                        color: context.c.inkFaint,
-                      ),
-                      tooltip: 'حذف',
-                      onPressed: () => setState(() => _days.removeAt(index).dispose()),
-                    ),
-                  ],
-                ),
-                DateField(
-                  label: 'تاريخ اليوم',
-                  value: row.date == null ? null : formatEventDate(row.date!),
-                  onTap: () => _pickDate(
-                    initial: row.date,
-                    onPicked: (date) => row.date = date,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.placeController,
-                        decoration: const InputDecoration(labelText: 'المكان (اختياري)'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.timeController,
-                        decoration: const InputDecoration(labelText: 'الوقت (اختياري)'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }),
-        TextButton.icon(
-          onPressed: () => setState(() => _days.add(EventDayRow())),
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('أضف يوماً'),
         ),
       ],
     );

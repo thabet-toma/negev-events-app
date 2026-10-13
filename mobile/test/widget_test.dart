@@ -2566,6 +2566,104 @@ void main() {
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
 
+    Map<String, String> day(
+      String name, {
+      String date = '',
+      String place = '',
+      String time = '',
+    }) => {'name': name, 'date': date, 'place': place, 'time': time};
+
+    test('eventDaysPlacementChanged: تغيير تاريخ يوم ⇒ حرِج', () {
+      expect(
+        eventDaysPlacementChanged(
+          [day('الحنّة', date: '2026-09-20')],
+          [day('الحنّة', date: '2026-09-21')],
+        ),
+        isTrue,
+      );
+    });
+
+    test('eventDaysPlacementChanged: تغيير مكان يوم ⇒ حرِج', () {
+      expect(
+        eventDaysPlacementChanged(
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان')],
+          [day('الحنّة', date: '2026-09-20', place: 'قاعة الأفراح')],
+        ),
+        isTrue,
+      );
+    });
+
+    test('eventDaysPlacementChanged: إضافة يوم أو حذفه ⇒ حرِج', () {
+      expect(
+        eventDaysPlacementChanged([], [day('الحنّة', date: '2026-09-20')]),
+        isTrue,
+      );
+      expect(
+        eventDaysPlacementChanged([day('الحنّة', date: '2026-09-20')], []),
+        isTrue,
+      );
+    });
+
+    test('eventDaysPlacementChanged: تغيير الاسم وحده أو الوقت وحده ⇒ ليس حرِجاً', () {
+      expect(
+        eventDaysPlacementChanged(
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان')],
+          [day('الحنّة الكبرى', date: '2026-09-20', place: 'الديوان')],
+        ),
+        isFalse,
+      );
+      expect(
+        eventDaysPlacementChanged(
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان', time: 'بعد العصر')],
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان', time: 'بعد المغرب')],
+        ),
+        isFalse,
+      );
+    });
+
+    test('eventDaysPlacementChanged: تبادل يومَين مسمّيين تاريخَيهما/مكانَيهما ⇒ حرِج', () {
+      expect(
+        eventDaysPlacementChanged(
+          [
+            day('الحنّة', date: '2026-09-20', place: 'الديوان'),
+            day('الغداء', date: '2026-09-21', place: 'دار العائلة'),
+          ],
+          [
+            day('الحنّة', date: '2026-09-21', place: 'دار العائلة'),
+            day('الغداء', date: '2026-09-20', place: 'الديوان'),
+          ],
+        ),
+        isTrue,
+      );
+    });
+
+    test('eventDaysPlacementChanged: قائمتان متطابقتان ⇒ ليس حرِجاً', () {
+      expect(
+        eventDaysPlacementChanged(
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان')],
+          [day('الحنّة', date: '2026-09-20', place: 'الديوان')],
+        ),
+        isFalse,
+      );
+    });
+
+    test('collectEventDays يُسقط صفّاً فرغت حقوله الأربعة ويُبقي غير الفارغ', () {
+      final blank = EventDayRow();
+      final named = EventDayRow()
+        ..nameController.text = 'الحنّة'
+        ..date = DateTime(2026, 9, 20);
+      addTearDown(() {
+        blank.dispose();
+        named.dispose();
+      });
+
+      final collected = collectEventDays([blank, named]);
+
+      expect(collected, hasLength(1));
+      expect(collected.single['name'], 'الحنّة');
+      expect(collected.single['date'], '2026-09-20');
+    });
+
     test(
       'Event.fromJson يقرأ extra_days ويطبّع التاريخ، والمكان/الوقت الغائبان null، وغياب المفتاح يعني []',
       () {
@@ -2820,13 +2918,17 @@ void main() {
 
         await tester.tap(find.byKey(const Key('save_event_button')));
         await tester.pump();
+
+        // إضافة يوم بتاريخه تغيّر جدول الأيام ⇒ الخادم يصنّفها حرِجة، فتُعرض
+        // نافذة التأكيد قبل الحفظ.
+        expect(find.text('حفظ والمتابعة'), findsOneWidget);
+        await tester.tap(find.text('حفظ والمتابعة'));
+        await tester.pump();
         await tester.pump(const Duration(milliseconds: 100));
 
         expect(patchBodies, hasLength(1));
         expect(patchBodies.single, contains('"extra_days"'));
         expect(patchBodies.single, contains('الحنّة'));
-        // الأيام ليست حقلاً حرِجاً ⇒ لا نافذة تأكيد.
-        expect(find.text('حفظ والمتابعة'), findsNothing);
       },
     );
 

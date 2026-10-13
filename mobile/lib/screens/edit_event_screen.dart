@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
@@ -15,7 +16,9 @@ import 'add_event_screen.dart'
     show
         HonoreeRow,
         EventDayRow,
+        EventDaysEditor,
         DateField,
+        collectEventDays,
         kEventTextFieldKeys,
         kEventFieldHints,
         formatEventDate,
@@ -28,6 +31,10 @@ import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 /// CRITICAL_AMENDMENT_FIELDS) — تُستعمل هنا فقط لقرار عرض تحذير **قبل**
 /// الحفظ. التصنيف الفعلي في الردّ (`amendment`) يبقى مصدر الحقيقة الوحيد؛
 /// هذه القائمة لا تُعرض للمستخدم كحقيقة، هي فقط سبب لسؤاله قبل الإرسال.
+///
+/// `extra_days` ليست فيها: الخادم يصنّفها على محتواها لا على اسم العمود —
+/// حرِجة حين يتحرّك جدول الأيام وحدها، تجميلية حين يتغيّر اسمٌ أو وقت. قرارها
+/// يُبنى بـ`eventDaysPlacementChanged` بجانب هذه القائمة.
 const _fieldsThatMayTriggerReview = {
   'event_date',
   'event_end_date',
@@ -38,6 +45,32 @@ const _fieldsThatMayTriggerReview = {
   'latitude',
   'longitude',
 };
+
+/// هل يغيّر تعديل الأيام الإضافية جدولها (فتعود المناسبة للمراجعة) أم يكتفي
+/// بوصفه؟ حرِج إذا اختلفت مجموعة أزواج (التاريخ، المكان) — يوم أُضيف أو حُذف
+/// أو أُعيد تأريخه أو نُقل — أو إذا بقيت الأسماء نفسها واختلفت ثلاثيات
+/// (الاسم، التاريخ، المكان): يومان مسمّيان تبادلا تاريخَيهما أو مكانَيهما.
+/// تعديل الاسم و/أو الوقت وحده ليس حرِجاً. دالة صِرفة عامة لتبقى قابلة
+/// للاختبار دون تركيب الشاشة كاملة.
+bool eventDaysPlacementChanged(
+  List<Map<String, String>> before,
+  List<Map<String, String>> after,
+) {
+  List<String> pairs(List<Map<String, String>> days) =>
+      days.map((day) => '${day['date'] ?? ''}\u0000${day['place'] ?? ''}').toList()
+        ..sort();
+  List<String> names(List<Map<String, String>> days) =>
+      days.map((day) => day['name'] ?? '').toList()..sort();
+  List<String> triples(List<Map<String, String>> days) => days
+      .map((day) =>
+          '${day['name'] ?? ''}\u0000${day['date'] ?? ''}\u0000${day['place'] ?? ''}')
+      .toList()
+    ..sort();
+
+  if (!listEquals(pairs(before), pairs(after))) return true;
+  return listEquals(names(before), names(after)) &&
+      !listEquals(triples(before), triples(after));
+}
 
 /// تسميات احتياطية لحقول ليست جزءاً من إعداد نوع المناسبة (`latitude`/
 /// `longitude` بنائيان دائماً، لا حقل قابل للإخفاء) — تُستعمل فقط في عرض
@@ -218,7 +251,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
           return row;
         })
         .toList();
-    _originalDays = _currentDays();
+    _originalDays = collectEventDays(_days);
   }
 
   TextEditingController _controllerFor(String key) {
@@ -247,25 +280,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
     return false;
   }
 
-  /// صفوف الأيام غير الفارغة بصيغة الإرسال — نفس منطق شاشة النشر تماماً.
-  List<Map<String, String>> _currentDays() {
-    return _days
-        .map((row) => {
-              'name': row.nameController.text.trim(),
-              'date': row.date == null ? '' : formatEventDate(row.date!),
-              'place': row.placeController.text.trim(),
-              'time': row.timeController.text.trim(),
-            })
-        .where((day) =>
-            day['name']!.isNotEmpty ||
-            day['date']!.isNotEmpty ||
-            day['place']!.isNotEmpty ||
-            day['time']!.isNotEmpty)
-        .toList();
-  }
-
   bool _daysChanged() {
-    final current = _currentDays();
+    final current = collectEventDays(_days);
     if (current.length != _originalDays.length) return true;
     for (var i = 0; i < current.length; i++) {
       if (current[i]['name'] != _originalDays[i]['name'] ||
@@ -326,7 +342,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
     // الأيام تُرسَل كاملها عند أي تغيير؛ غياب المفتاح يعني «بلا تعديل» عند
     // الخادم، والقائمة الفارغة تمسح كل الأيام. لا يُرسَل إلا لنوع يُظهرها.
     if ((_type?.showsField('extra_days') ?? false) && _daysChanged()) {
-      changes['extra_days'] = _currentDays();
+      changes['extra_days'] = collectEventDays(_days);
     }
 
     return changes;
@@ -388,7 +404,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
     // نفس نمط شاشة النشر.
     final api = AppServices.of(context).api;
 
-    final touchesReview = changes.keys.any(_fieldsThatMayTriggerReview.contains);
+    final extraDaysAfter = changes['extra_days'] as List<Map<String, String>>?;
+    final touchesReview =
+        changes.keys.any(_fieldsThatMayTriggerReview.contains) ||
+            (extraDaysAfter != null &&
+                eventDaysPlacementChanged(_originalDays, extraDaysAfter));
     if (touchesReview) {
       final confirmed = await _confirmCriticalChange();
       if (!confirmed) return;
@@ -422,7 +442,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
         _originalLatitude = _latitude;
         _originalLongitude = _longitude;
         _originalHonorees = _currentHonorees();
-        _originalDays = _currentDays();
+        _originalDays = collectEventDays(_days);
         _amendmentsFuture = api.eventAmendments(widget.event.id);
       });
 
@@ -561,7 +581,13 @@ class _EditEventScreenState extends State<EditEventScreen> {
           ],
           if (type?.showsField('extra_days') ?? false) ...[
             const SizedBox(height: 12),
-            _daysEditor(type),
+            EventDaysEditor(
+              label: type?.labelFor('extra_days') ?? 'أيام إضافية',
+              rows: _days,
+              onChanged: () => setState(() {}),
+              pickDate: _pickDate,
+              rebuildOnEdit: true,
+            ),
           ],
           const SizedBox(height: 12),
           ..._textFieldWidget(type, 'dinner_time'),
@@ -698,84 +724,6 @@ class _EditEventScreenState extends State<EditEventScreen> {
           onPressed: () => setState(() => _honorees.add(HonoreeRow())),
           icon: const Icon(Icons.add, size: 18),
           label: Text('إضافة $label'),
-        ),
-      ],
-    );
-  }
-
-  /// محرّر الأيام الإضافية — نفس محرّر شاشة النشر، مع إعادة البناء عند أي
-  /// تعديل (كما يفعل محرّر أصحاب المناسبة هنا) ليتفعّل زرّ الحفظ فوراً.
-  Widget _daysEditor(OccasionType? type) {
-    final label = type?.labelFor('extra_days') ?? 'أيام إضافية';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: TextStyle(color: context.c.inkSoft, fontSize: 13)),
-        const SizedBox(height: 8),
-        ..._days.asMap().entries.map((entry) {
-          final index = entry.key;
-          final row = entry.value;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.nameController,
-                        onChanged: (_) => setState(() {}),
-                        decoration: const InputDecoration(
-                          labelText: 'اسم اليوم — مثال: الحنّة',
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.remove_circle_outline, color: context.c.inkFaint),
-                      tooltip: 'حذف',
-                      onPressed: () => setState(() => _days.removeAt(index).dispose()),
-                    ),
-                  ],
-                ),
-                DateField(
-                  label: 'تاريخ اليوم',
-                  value: row.date == null ? null : formatEventDate(row.date!),
-                  onTap: () => _pickDate(
-                    initial: row.date,
-                    onPicked: (date) => row.date = date,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.placeController,
-                        onChanged: (_) => setState(() {}),
-                        decoration: const InputDecoration(labelText: 'المكان (اختياري)'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextFormField(
-                        controller: row.timeController,
-                        onChanged: (_) => setState(() {}),
-                        decoration: const InputDecoration(labelText: 'الوقت (اختياري)'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }),
-        TextButton.icon(
-          onPressed: () => setState(() => _days.add(EventDayRow())),
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('أضف يوماً'),
         ),
       ],
     );
