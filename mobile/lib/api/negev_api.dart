@@ -550,13 +550,16 @@ class NegevApi {
 
   /// تقديم مناسبة. تدخل قائمة المراجعة ما لم يكن المُرسِل مديراً. تتطلب حساباً
   /// (`events.created_by`) — `honorees` تُرسَل بصيغة الأقواس (`honorees[i][name]`)
-  /// التي يفهمها الخادم حصراً. مدير يوشك أن ينشر فوراً مناسبة تشبه قائمة يتلقّى
-  /// [PossibleDuplicateException] (409، بلا صف)؛ [confirmDuplicate] يعيد الإرسال
-  /// ليُنشر رغم ذلك.
+  /// التي يفهمها الخادم حصراً، وكذلك `extraDays` (`extra_days[i][name]`)؛ صفّ
+  /// أيامٍ فرغت حقوله الأربعة يُتخطّى كما يُتخطّى صاحب مناسبة بلا اسم، والقيم
+  /// الاختيارية (المكان/الوقت) لا تُرسَل فراغها. مدير يوشك أن ينشر فوراً مناسبة
+  /// تشبه قائمة يتلقّى [PossibleDuplicateException] (409، بلا صف)؛
+  /// [confirmDuplicate] يعيد الإرسال ليُنشر رغم ذلك.
   Future<EventSubmissionResult> submitEvent({
     required int occasionTypeId,
     required List<Map<String, String>> honorees,
     required Map<String, String> fields,
+    List<Map<String, String>> extraDays = const [],
     http.MultipartFile? poster,
     http.MultipartFile? audio,
     http.MultipartFile? artistImage,
@@ -578,6 +581,21 @@ class NegevApi {
         allFields['honorees[$index][role]'] = role;
       }
       index++;
+    }
+
+    var dayIndex = 0;
+    for (final day in extraDays) {
+      final name = day['name']?.trim() ?? '';
+      final date = day['date']?.trim() ?? '';
+      final place = day['place']?.trim() ?? '';
+      final time = day['time']?.trim() ?? '';
+      // صفّ فارغ تماماً «خانة اختيارية لم تُملأ» — لا يُرسَل إطلاقاً.
+      if (name.isEmpty && date.isEmpty && place.isEmpty && time.isEmpty) continue;
+      allFields['extra_days[$dayIndex][name]'] = name;
+      allFields['extra_days[$dayIndex][date]'] = date;
+      if (place.isNotEmpty) allFields['extra_days[$dayIndex][place]'] = place;
+      if (time.isNotEmpty) allFields['extra_days[$dayIndex][time]'] = time;
+      dayIndex++;
     }
 
     final data = await _client.postMultipart(

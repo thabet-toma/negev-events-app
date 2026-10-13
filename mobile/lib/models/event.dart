@@ -40,6 +40,10 @@ class Event {
   final OccasionType? occasionType;
   final List<Honoree> honorees;
 
+  /// الأيام الإضافية (حنّة، غداء، …) — من `extra_days`، مرتّبة بالتاريخ من
+  /// الخادم. خادم أقدم لا يرسل المفتاح أصلاً ← قائمة فارغة (النوع قد يُخفيها).
+  final List<EventDay> extraDays;
+
   /// `null` يعني أنّ المفتاح غاب من استجابة الخادم (النوع مطفئ عرضه) — لا صفر.
   final int? congratulationsCount;
   final LatestCongratulation? latestCongratulation;
@@ -85,6 +89,7 @@ class Event {
     this.congratulations = const [],
     this.occasionType,
     this.honorees = const [],
+    this.extraDays = const [],
     this.congratulationsCount,
     this.latestCongratulation,
     this.followersCount,
@@ -145,6 +150,7 @@ class Event {
         congratulations: congratulations,
         occasionType: occasionType,
         honorees: honorees,
+        extraDays: extraDays,
         congratulationsCount: congratulationsCount,
         latestCongratulation: latestCongratulation,
         followersCount: followersCount,
@@ -229,6 +235,14 @@ class Event {
         ? rawHonorees.whereType<Map<String, dynamic>>().map(Honoree.fromJson).toList()
         : <Honoree>[];
 
+    final rawExtraDays = json['extra_days'];
+    final extraDays = rawExtraDays is List
+        ? rawExtraDays
+            .whereType<Map<String, dynamic>>()
+            .map(EventDay.fromJson)
+            .toList()
+        : <EventDay>[];
+
     final rawLatest = json['latest_congratulation'];
 
     final rawArchive = json['archive_photos'];
@@ -272,6 +286,7 @@ class Event {
       congratulations: congratulations,
       occasionType: occasionType,
       honorees: honorees,
+      extraDays: extraDays,
       congratulationsCount: json.containsKey('congratulations_count')
           ? _toInt(json['congratulations_count'])
           : null,
@@ -377,6 +392,34 @@ class Honoree {
   factory Honoree.fromJson(Map<String, dynamic> json) => Honoree(
         name: '${json['name'] ?? ''}',
         role: _nullableString(json['role']),
+        position: _toInt(json['position']),
+      );
+}
+
+/// يوم واحد من أيام مناسبة متعددة الأيام («الحنّة»، «الغداء»، …) — من
+/// `extra_days` في استجابة الخادم. الاسم والتاريخ إلزاميان خادمياً؛ المكان
+/// والوقت حرّان (`null` حين غابا). التاريخ يُطبَّع إلى `YYYY-MM-DD` كبقيّة
+/// تواريخ المناسبة عبر [_toDate].
+class EventDay {
+  final String name;
+  final String dayDate;
+  final String? place;
+  final String? dayTime;
+  final int position;
+
+  const EventDay({
+    required this.name,
+    required this.dayDate,
+    this.place,
+    this.dayTime,
+    this.position = 0,
+  });
+
+  factory EventDay.fromJson(Map<String, dynamic> json) => EventDay(
+        name: '${json['name'] ?? ''}',
+        dayDate: _toDate(json['day_date']),
+        place: _nullableString(json['place']),
+        dayTime: _nullableString(json['day_time']),
         position: _toInt(json['position']),
       );
 }

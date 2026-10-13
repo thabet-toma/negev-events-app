@@ -126,6 +126,22 @@ class HonoreeRow {
   }
 }
 
+/// صف يوم واحد من الأيام الإضافية («الحنّة»، «الغداء»، …) — الاسم والمكان
+/// والوقت حقول نصّية، والتاريخ يملؤه منتقي التاريخ. عام كي تعيد شاشة تعديل
+/// المناسبة استعماله بدل نسخة ثانية.
+class EventDayRow {
+  final nameController = TextEditingController();
+  final placeController = TextEditingController();
+  final timeController = TextEditingController();
+  DateTime? date;
+
+  void dispose() {
+    nameController.dispose();
+    placeController.dispose();
+    timeController.dispose();
+  }
+}
+
 /// تقديم مناسبة جديدة. تدخل قائمة المراجعة — الاعتماد من لوحة الإدارة.
 ///
 /// النموذج كله يُبنى من `GET /api/occasion-types`: لا نوع ثابت، ولا تسمية
@@ -146,6 +162,8 @@ class _AddEventScreenState extends State<AddEventScreen> {
 
   final Map<String, TextEditingController> _controllers = {};
   final List<HonoreeRow> _honorees = [HonoreeRow()];
+  // الأيام الإضافية اختيارية تماماً — تبدأ القائمة فارغة، والصفوف تُضاف بزرّ.
+  final List<EventDayRow> _days = [];
 
   String _town = AppConfig.towns.first;
   // إلزامي فقط تحت بند القرى والتجمعات — `_validate` يرفض النشر بدونه هناك،
@@ -202,6 +220,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
     for (final row in _honorees) {
       row.dispose();
     }
+    for (final row in _days) {
+      row.dispose();
+    }
     _requestedVillageController.dispose();
     super.dispose();
   }
@@ -211,6 +232,24 @@ class _AddEventScreenState extends State<AddEventScreen> {
     // فيُنشَر كما هو على مناسبة لم يحدّد صاحبها وقتاً. التلميح في
     // `_textFieldWidget` يرشد بلا أن يفرض قيمة.
     return _controllers.putIfAbsent(key, () => TextEditingController());
+  }
+
+  /// صفوف الأيام غير الفارغة — صفّ فرغت حقوله الأربعة ليس يوماً فتُسقطه الشاشة
+  /// (كما يفعل `parseEventDays` خادمياً)، والغائب عن الخادم لا يُرسَل.
+  List<Map<String, String>> _currentDays() {
+    return _days
+        .map((row) => {
+              'name': row.nameController.text.trim(),
+              'date': row.date == null ? '' : formatEventDate(row.date!),
+              'place': row.placeController.text.trim(),
+              'time': row.timeController.text.trim(),
+            })
+        .where((day) =>
+            day['name']!.isNotEmpty ||
+            day['date']!.isNotEmpty ||
+            day['place']!.isNotEmpty ||
+            day['time']!.isNotEmpty)
+        .toList();
   }
 
   Future<void> _pickDate({
@@ -338,6 +377,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
     if (type.isRequiredField('youth_party_date') && _youthDate == null) {
       return '${type.labelFor('youth_party_date') ?? 'سهرة الشباب'} مطلوب';
     }
+    if (type.isRequiredField('extra_days') && _currentDays().isEmpty) {
+      return '${type.labelFor('extra_days') ?? 'أيام إضافية'} مطلوب';
+    }
 
     return null;
   }
@@ -433,6 +475,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         occasionTypeId: type.id,
         honorees: honorees,
         fields: fields,
+        extraDays: _currentDays(),
         poster: posterFile,
         audio: audioFile,
         artistImage: artistImageFile,
@@ -519,11 +562,15 @@ class _AddEventScreenState extends State<AddEventScreen> {
     for (final row in _honorees) {
       row.dispose();
     }
+    for (final row in _days) {
+      row.dispose();
+    }
     _requestedVillageController.clear();
     setState(() {
       _honorees
         ..clear()
         ..add(HonoreeRow());
+      _days.clear();
       _eventDate = null;
       _eventEndDate = null;
       _youthDate = null;
@@ -738,6 +785,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
             ),
           ),
         ],
+        if (type.showsField('extra_days')) ...[
+          const SizedBox(height: 12),
+          _daysEditor(type),
+        ],
         const SizedBox(height: 12),
         ..._textFieldWidget(type, 'dinner_time'),
         ..._textFieldWidget(
@@ -835,6 +886,85 @@ class _AddEventScreenState extends State<AddEventScreen> {
           onPressed: () => setState(() => _honorees.add(HonoreeRow())),
           icon: const Icon(Icons.add, size: 18),
           label: Text('إضافة $label'),
+        ),
+      ],
+    );
+  }
+
+  /// محرّر الأيام الإضافية — قائمة تبدأ فارغة تماماً (الخاصية اختيارية)،
+  /// وكلّ صفّ اسمٌ إلزاميّ وتاريخٌ إلزاميّ ومكانٌ ووقت حرّان. زرّ الحذف ظاهر
+  /// دائماً لأنّ القائمة نفسها اختيارية.
+  Widget _daysEditor(OccasionType type) {
+    final label = type.labelFor('extra_days') ?? 'أيام إضافية';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(color: context.c.inkSoft, fontSize: 13)),
+        const SizedBox(height: 8),
+        ..._days.asMap().entries.map((entry) {
+          final index = entry.key;
+          final row = entry.value;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'اسم اليوم — مثال: الحنّة',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.remove_circle_outline,
+                        color: context.c.inkFaint,
+                      ),
+                      tooltip: 'حذف',
+                      onPressed: () => setState(() => _days.removeAt(index).dispose()),
+                    ),
+                  ],
+                ),
+                DateField(
+                  label: 'تاريخ اليوم',
+                  value: row.date == null ? null : formatEventDate(row.date!),
+                  onTap: () => _pickDate(
+                    initial: row.date,
+                    onPicked: (date) => row.date = date,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.placeController,
+                        decoration: const InputDecoration(labelText: 'المكان (اختياري)'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: row.timeController,
+                        decoration: const InputDecoration(labelText: 'الوقت (اختياري)'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }),
+        TextButton.icon(
+          onPressed: () => setState(() => _days.add(EventDayRow())),
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('أضف يوماً'),
         ),
       ],
     );

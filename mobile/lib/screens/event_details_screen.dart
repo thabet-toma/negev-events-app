@@ -322,6 +322,8 @@ class _EventDetailsBody extends StatelessWidget {
     final showDinnerTime = type?.showsField('dinner_time') ?? true;
     final showEndDate = type?.showsField('event_end_date') ?? false;
     final showSecondaryLocation = type?.showsField('secondary_location_name') ?? false;
+    // بلا نوع لا مرجع يُخفيها — والأيام لا تُخزَّن أصلاً إلا لنوع يُظهرها.
+    final showExtraDays = type?.showsField('extra_days') ?? true;
     final reactionKeys = type?.reactions ?? const <String>[];
     final congratulationsLabel = type?.congratulationsLabel ?? 'تبريكات';
 
@@ -446,6 +448,21 @@ class _EventDetailsBody extends StatelessWidget {
                   icon: Icons.nightlife_outlined,
                   label: type?.labelFor('youth_party_date') ?? 'سهرة الشباب',
                   value: event.youthPartyDate!,
+                ),
+              // الأيام الإضافية بترتيب وصولها (مرتّبة بالتاريخ خادمياً) — كل
+              // يومٍ سطرٌ باسمه، وتاريخه بصيغة صفّ التاريخ نفسه، ثم الوقت
+              // والمكان كلٌّ منهما حين يوجد.
+              if (showExtraDays && event.extraDays.isNotEmpty)
+                ...event.extraDays.map(
+                  (day) => _InfoRow(
+                    icon: Icons.event_available,
+                    label: day.name,
+                    value: [
+                      day.dayDate,
+                      if (day.dayTime != null && day.dayTime!.isNotEmpty) day.dayTime!,
+                      if (day.place != null && day.place!.isNotEmpty) day.place!,
+                    ].join(' — '),
+                  ),
                 ),
               if (showDinnerTime && event.dinnerTime.isNotEmpty)
                 _InfoRow(

@@ -2510,4 +2510,392 @@ void main() {
       },
     );
   });
+
+  group('أيام المناسبة الإضافية (extra_days)', () {
+    Map<String, dynamic> daysTypeJson({
+      required bool withExtraDays,
+      bool required = false,
+      bool youth = false,
+    }) => {
+      'id': 1,
+      'name': 'عرس',
+      'icon': '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'tone': 'festive',
+      'congratulations_label': 'تبريكات',
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'أصحاب المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        {
+          'field_key': 'event_date',
+          'label': 'تاريخ المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 2,
+        },
+        if (youth)
+          {
+            'field_key': 'youth_party_date',
+            'label': 'سهرة الشباب',
+            'is_visible': true,
+            'is_required': false,
+            'position': 3,
+          },
+        if (withExtraDays)
+          {
+            'field_key': 'extra_days',
+            'label': 'أيام إضافية',
+            'is_visible': true,
+            'is_required': required,
+            'position': 4,
+          },
+      ],
+      'reactions': <String>[],
+    };
+
+    http.Response jsonResponse(Object body, [int status = 200]) => http.Response(
+          jsonEncode(body),
+          status,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+
+    test(
+      'Event.fromJson يقرأ extra_days ويطبّع التاريخ، والمكان/الوقت الغائبان null، وغياب المفتاح يعني []',
+      () {
+        final event = Event.fromJson({
+          'id': 1,
+          'groom_name': 'محمد',
+          'extra_days': [
+            {
+              'name': 'الحنّة',
+              'day_date': '2026-09-20T00:00:00.000Z',
+              'place': 'الديوان',
+              'day_time': 'بعد العصر',
+              'position': 1,
+            },
+            {'name': 'الغداء', 'day_date': '2026-09-22', 'place': null, 'day_time': null, 'position': 2},
+          ],
+        });
+
+        expect(event.extraDays, hasLength(2));
+        expect(event.extraDays.first.name, 'الحنّة');
+        // نفس تطبيع event_date: الجزء اليومي فقط.
+        expect(event.extraDays.first.dayDate, '2026-09-20');
+        expect(event.extraDays.first.place, 'الديوان');
+        expect(event.extraDays.first.dayTime, 'بعد العصر');
+        expect(event.extraDays[1].dayDate, '2026-09-22');
+        expect(event.extraDays[1].place, isNull);
+        expect(event.extraDays[1].dayTime, isNull);
+
+        // حمولة قديمة/مخبّأة بلا المفتاح ⇒ قائمة فارغة لا رمية.
+        final old = Event.fromJson({'id': 2, 'groom_name': 'سالم'});
+        expect(old.extraDays, isEmpty);
+      },
+    );
+
+    test('copyWithReminder يحافظ على extra_days بعد تبديل التذكير', () {
+      final event = Event.fromJson({
+        'id': 1,
+        'groom_name': 'محمد',
+        'extra_days': [
+          {
+            'name': 'الحنّة',
+            'day_date': '2026-09-20',
+            'place': 'الديوان',
+            'day_time': 'بعد العصر',
+            'position': 1,
+          },
+        ],
+      });
+
+      final updated = event.copyWithReminder(isReminded: true);
+
+      expect(updated.isReminded, isTrue);
+      expect(updated.extraDays, hasLength(1));
+      expect(updated.extraDays.single.name, 'الحنّة');
+      expect(updated.extraDays.single.dayDate, '2026-09-20');
+    });
+
+    test(
+      'submitEvent يرمّز extra_days[i][name|date|place|time] ويتخطّى الوقت الفارغ والصفّ الفارغ',
+      () async {
+        String? capturedBody;
+        final client = MockClient((request) async {
+          capturedBody = utf8.decode(request.bodyBytes);
+          return http.Response(
+            jsonEncode({'success': true, 'message': 'تم استلام المناسبة'}),
+            201,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        });
+
+        await NegevApi(ApiClient(client: client)).submitEvent(
+          occasionTypeId: 1,
+          honorees: [
+            {'name': 'محمد'},
+          ],
+          fields: {'town': 'رهط', 'event_date': '2026-09-01'},
+          extraDays: [
+            {'name': 'الحنّة', 'date': '2026-09-20', 'place': 'الديوان', 'time': ''},
+            {'name': '', 'date': '', 'place': '', 'time': ''},
+            {'name': 'الغداء', 'date': '2026-09-22', 'place': '', 'time': 'بعد العصر'},
+          ],
+        );
+
+        expect(capturedBody, contains('name="extra_days[0][name]"'));
+        expect(capturedBody, contains('الحنّة'));
+        expect(capturedBody, contains('name="extra_days[0][date]"'));
+        expect(capturedBody, contains('2026-09-20'));
+        expect(capturedBody, contains('name="extra_days[0][place]"'));
+        expect(capturedBody, contains('الديوان'));
+        // الوقت الفارغ لا يُرسَل إطلاقاً (كما يُتخطّى دور فارغ).
+        expect(capturedBody, isNot(contains('name="extra_days[0][time]"')));
+        // الصفّ الفارغ تماماً لا يُحسب يوماً، فيأخذ التالي الفهرس ١ لا ٢.
+        expect(capturedBody, contains('name="extra_days[1][name]"'));
+        expect(capturedBody, contains('الغداء'));
+        expect(capturedBody, contains('name="extra_days[1][time]"'));
+        expect(capturedBody, contains('بعد العصر'));
+        // المكان الفارغ في اليوم الثاني لا يُرسَل أيضاً.
+        expect(capturedBody, isNot(contains('name="extra_days[1][place]"')));
+        expect(capturedBody, isNot(contains('name="extra_days[2]')));
+      },
+    );
+
+    NegevApi addApi({required bool withExtraDays}) {
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/api/towns')) {
+          return jsonResponse({
+            'success': true,
+            'towns': ['الكل', 'رهط'],
+            'town_coordinates': <String, dynamic>{},
+            'regions': [negevRegionJson],
+            'villages': <Map<String, dynamic>>[],
+            'stats': <Map<String, dynamic>>[],
+          });
+        }
+        if (path.endsWith('/api/occasion-types')) {
+          return jsonResponse({
+            'success': true,
+            'types': [daysTypeJson(withExtraDays: withExtraDays)],
+          });
+        }
+        return jsonResponse({'success': true});
+      });
+      return NegevApi(ApiClient(client: client));
+    }
+
+    Future<void> pumpAdd(WidgetTester tester, NegevApi api) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: AuthStore(api),
+          realtime: RealtimeService(),
+          child: const MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: AddEventScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets('شاشة النشر: «أضف يوماً» يظهر لنوع يشمل extra_days', (tester) async {
+      await pumpAdd(tester, addApi(withExtraDays: true));
+      expect(find.text('أضف يوماً'), findsOneWidget);
+    });
+
+    testWidgets('شاشة النشر: «أضف يوماً» يغيب تماماً لنوع لا يشمل extra_days', (tester) async {
+      await pumpAdd(tester, addApi(withExtraDays: false));
+      expect(find.text('أضف يوماً'), findsNothing);
+    });
+
+    testWidgets(
+      'شاشة التعديل: extra_days لا يُرسَل بلا تغيير، ويُرسَل بعد إضافة يوم',
+      (tester) async {
+        final patchBodies = <String>[];
+        final client = MockClient((request) async {
+          final path = request.url.path;
+          if (request.method == 'PATCH') {
+            patchBodies.add(utf8.decode(request.bodyBytes));
+            return jsonResponse({
+              'success': true,
+              'message': 'تم حفظ التعديل',
+              'amendment': 'cosmetic',
+              'status': 'approved',
+            });
+          }
+          if (path.endsWith('/api/towns')) {
+            return jsonResponse({
+              'success': true,
+              'towns': ['الكل', 'رهط'],
+              'town_coordinates': <String, dynamic>{},
+              'regions': [negevRegionJson],
+              'villages': <Map<String, dynamic>>[],
+              'stats': <Map<String, dynamic>>[],
+            });
+          }
+          if (path.contains('/amendments')) {
+            return jsonResponse({'success': true, 'amendments': <Map<String, dynamic>>[]});
+          }
+          return jsonResponse({'success': true});
+        });
+        final api = NegevApi(ApiClient(client: client));
+
+        final event = Event.fromJson({
+          'id': 1,
+          'title': 'زفاف محمد',
+          'groom_name': 'محمد',
+          'town': 'رهط',
+          'event_date': '2026-10-01',
+          'status': 'approved',
+          'occasion_type': daysTypeJson(withExtraDays: true),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: AppServices(
+                api: api,
+                auth: AuthStore(api),
+                realtime: RealtimeService(),
+                child: EditEventScreen(event: event),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // بلا لمس الأيام: زرّ الحفظ معطَّل — لا تغيير يعني لا PATCH إطلاقاً.
+        expect(
+          tester
+              .widget<ElevatedButton>(find.byKey(const Key('save_event_button')))
+              .onPressed,
+          isNull,
+        );
+
+        // نضيف يوماً: اسمه وتاريخه.
+        await tester.tap(find.text('أضف يوماً'));
+        await tester.pump();
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'اسم اليوم — مثال: الحنّة'),
+          'الحنّة',
+        );
+        await tester.pump();
+        await tester.tap(find.text('اختر التاريخ'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        await tester.tap(find.byKey(const Key('save_event_button')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(patchBodies, hasLength(1));
+        expect(patchBodies.single, contains('"extra_days"'));
+        expect(patchBodies.single, contains('الحنّة'));
+        // الأيام ليست حقلاً حرِجاً ⇒ لا نافذة تأكيد.
+        expect(find.text('حفظ والمتابعة'), findsNothing);
+      },
+    );
+
+    Future<void> pumpDetails(WidgetTester tester, Map<String, dynamic> eventBody) async {
+      final client = MockClient((request) async {
+        return jsonResponse({'success': true, 'event': eventBody});
+      });
+      final api = NegevApi(ApiClient(client: client));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: AuthStore(api),
+              realtime: RealtimeService(),
+              child: EventDetailsScreen(eventId: eventBody['id'] as int),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets(
+      'تفاصيل المناسبة: صفوف الأيام تظهر بعد سهرة الشباب بترتيبها، بالتاريخ ثم الوقت ثم المكان',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        await pumpDetails(tester, {
+          'id': 60,
+          'groom_name': 'محمد',
+          'town': 'رهط',
+          'location_name': 'قاعة الأفراح',
+          'event_date': '2026-10-01',
+          'youth_party_date': '2026-09-18',
+          'extra_days': [
+            {
+              'name': 'الحنّة',
+              'day_date': '2026-09-20',
+              'place': 'الديوان',
+              'day_time': 'بعد العصر',
+              'position': 1,
+            },
+            {'name': 'الغداء', 'day_date': '2026-09-22', 'place': null, 'day_time': null, 'position': 2},
+          ],
+          'occasion_type': daysTypeJson(withExtraDays: true, youth: true),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        final youthY = tester.getTopLeft(find.text('2026-09-18')).dy;
+        final hennaY = tester.getTopLeft(find.textContaining('الحنّة')).dy;
+        final lunchY = tester.getTopLeft(find.textContaining('الغداء')).dy;
+        expect(youthY, lessThan(hennaY));
+        expect(hennaY, lessThan(lunchY));
+
+        // التاريخ بصيغة صفّ التاريخ نفسه، ثم الوقت ثم المكان كلٌّ حين يوجد.
+        expect(find.text('2026-09-20 — بعد العصر — الديوان'), findsOneWidget);
+        expect(find.text('2026-09-22'), findsOneWidget);
+      },
+    );
+  });
 }
