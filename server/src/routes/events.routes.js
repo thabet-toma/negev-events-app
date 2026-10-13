@@ -19,9 +19,10 @@ const { eventMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
-  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseCsvList, parseFlag, MAX_HONOREES
+  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseEventDays,
+  parseCsvList, parseFlag, MAX_HONOREES
 } = require('../middleware/validate');
-const { VILLAGES_TOWN, REACTION_TYPES } = require('../constants');
+const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS } = require('../constants');
 
 const router = express.Router();
 
@@ -203,6 +204,18 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     throw ApiError.badRequest(`${labelOf('honorees', 'أصحاب المناسبة')} مطلوب`);
   }
 
+  // Extra days are a child list like honorees, but follow the ordinary
+  // optional-field rule: hidden for this type means the input is dropped
+  // silently (never rejected), and only a type that marks the field required
+  // demands a non-empty list — with its own label, like every other field.
+  let extraDays = [];
+  if (fieldsByKey.extra_days) {
+    extraDays = parseEventDays(req.body.extra_days, { max: MAX_EVENT_DAYS });
+    if (fieldsByKey.extra_days.is_required && !extraDays.length) {
+      throw ApiError.badRequest(`${labelOf('extra_days', 'أيام إضافية')} مطلوب`);
+    }
+  }
+
   // An active town, or a region's own name when the exact town is not known
   // (no fallback pin for the latter — see createEvent).
   const town = cleanString(req.body.town, 100);
@@ -263,6 +276,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     occasionTypeName: type.name,
     default_poster_url: type.default_poster_url,
     honorees,
+    extra_days: extraDays,
     town,
     village_id: villageId,
     requested_village_name: requestedVillageName,
@@ -500,7 +514,22 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     if (!honorees.length) throw ApiError.badRequest('يجب إدخال اسم واحد على الأقل لأصحاب المناسبة');
   }
 
-  if (!Object.keys(changes).length && honorees === null) {
+  // The key's absence means the caller never sent it — every published APK
+  // today — so the existing days stay untouched; an empty array is a
+  // deliberate "clear all days". Same visibility rule as on publish: a type
+  // without extra_days never receives the list. An event with no occasion
+  // type (a pre-#20 row) has nothing to consult, so it is applied.
+  let extraDays = null;
+  if (body.extra_days !== undefined) {
+    const type = existing.occasion_type_id
+      ? await occasionTypes.getTypeById(existing.occasion_type_id)
+      : null;
+    if (!type || type.fields.some(field => field.field_key === 'extra_days')) {
+      extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
+    }
+  }
+
+  if (!Object.keys(changes).length && honorees === null && extraDays === null) {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 
@@ -537,7 +566,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     changes.artist_image_url = await cloudinary.storeUploadedImage(uploadedMedia.artist_image_url, 'artists');
   }
 
-  const result = await events.updateEvent(eventId, existing, { changes, honorees, changedBy: req.user.id });
+  const result = await events.updateEvent(eventId, existing, { changes, honorees, extraDays, changedBy: req.user.id });
   if (changes.poster_url !== undefined) await events.releaseReplacedImage(existing.poster_url, changes.poster_url);
   if (changes.artist_image_url !== undefined) {
     await events.releaseReplacedImage(existing.artist_image_url, changes.artist_image_url);

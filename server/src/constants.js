@@ -80,6 +80,7 @@ const OCCASION_FIELDS = [
   { key: 'event_date', label: 'تاريخ المناسبة', core: true },
   { key: 'event_end_date', label: 'تاريخ الانتهاء', core: false },
   { key: 'youth_party_date', label: 'سهرة الشباب', core: false },
+  { key: 'extra_days', label: 'أيام إضافية', core: false },
   { key: 'dinner_time', label: 'وقت العشاء', core: false },
   { key: 'poster_url', label: 'صورة الملصق', core: false },
   { key: 'audio_url', label: 'الملف الصوتي', core: false },
@@ -91,6 +92,14 @@ const OCCASION_FIELDS = [
 
 const OCCASION_FIELD_KEYS = OCCASION_FIELDS.map(field => field.key);
 const CORE_OCCASION_FIELDS = OCCASION_FIELDS.filter(field => field.core).map(field => field.key);
+
+/**
+ * Ceiling on how many extra days one event may carry. The three-day wedding is
+ * the shape this exists for; ten still leaves room for a long عزا or a
+ * week-long celebration without accepting an unbounded list in a single
+ * INSERT loop — the same reasoning as MAX_HONOREES in middleware/validate.js.
+ */
+const MAX_EVENT_DAYS = 10;
 
 /**
  * Reports a single congratulation/تعزية needs before it auto-hides itself
@@ -191,6 +200,7 @@ module.exports = {
   OCCASION_FIELDS,
   OCCASION_FIELD_KEYS,
   CORE_OCCASION_FIELDS,
+  MAX_EVENT_DAYS,
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
   OCCASION_TONES,

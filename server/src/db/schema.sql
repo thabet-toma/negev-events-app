@@ -225,6 +225,25 @@ CREATE TABLE IF NOT EXISTS event_honorees (
   CONSTRAINT fk_event_honorees_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- The named days of a multi-day occasion — «الحنّة» Thursday, «الغداء» Friday,
+-- «العرس» Saturday — each with its own optional place and time. An addition,
+-- not a replacement: event_date, event_end_date and youth_party_date keep the
+-- meaning they always had. A child table like event_honorees, so one event may
+-- carry any number of days, read back ordered by date then position.
+CREATE TABLE IF NOT EXISTS event_days (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id   INT UNSIGNED NOT NULL,
+  name       VARCHAR(100) NOT NULL,
+  day_date   DATE         NOT NULL,
+  place      TEXT         DEFAULT NULL,
+  day_time   VARCHAR(100) DEFAULT NULL,
+  position   INT          NOT NULL DEFAULT 0,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_event_days_event_date (event_id, day_date),
+  CONSTRAINT fk_event_days_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- One row per changed field, not per edit: an admin reads "التاريخ تغيّر من
 -- X إلى Y", not a compressed diff blob. Values are stored as text so the log
 -- stays readable after the row underneath changes again. Also the substrate

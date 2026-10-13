@@ -249,18 +249,45 @@ async function honoreesForEvents(eventIds) {
   return map;
 }
 
-/** Attaches honorees and occasion-type info to a list of raw event rows (media already made absolute). */
+/** Groups extra days by event id, ordered by date then position: { [eventId]: [{ name, day_date, place, day_time, position }] }. */
+async function eventDaysForEvents(eventIds) {
+  if (!eventIds.length) return {};
+
+  const placeholders = eventIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT event_id, name, day_date, place, day_time, position FROM event_days
+      WHERE event_id IN (${placeholders})
+      ORDER BY event_id ASC, day_date ASC, position ASC`,
+    eventIds
+  );
+
+  const map = {};
+  for (const row of rows) {
+    (map[row.event_id] || (map[row.event_id] = [])).push({
+      name: row.name,
+      day_date: row.day_date,
+      place: row.place,
+      day_time: row.day_time,
+      position: row.position
+    });
+  }
+  return map;
+}
+
+/** Attaches honorees, extra days and occasion-type info to a list of raw event rows (media already made absolute). */
 async function attachHonoreesAndTypes(rows) {
   if (!rows.length) return [];
 
-  const [honoreeMap, typeMap] = await Promise.all([
+  const [honoreeMap, extraDayMap, typeMap] = await Promise.all([
     honoreesForEvents(rows.map(row => row.id)),
+    eventDaysForEvents(rows.map(row => row.id)),
     occasionTypes.getTypesByIds(rows.map(row => row.occasion_type_id))
   ]);
 
   return rows.map(row => ({
     ...row,
     honorees: honoreeMap[row.id] || [],
+    extra_days: extraDayMap[row.id] || [],
     occasion_type: row.occasion_type_id ? (typeMap[row.occasion_type_id] || null) : null
   }));
 }
@@ -597,12 +624,12 @@ async function checkTownMismatch(town, latitude, longitude) {
 }
 
 /**
- * Creates an event plus its honorees in one transaction — either both rows
- * exist or neither does, so a published card is never missing the names it
- * exists to display. `groom_name` (kept for every old client that still
- * reads it) is derived from the first honoree by `position`, written in the
- * same transaction rather than a follow-up job. Admins publish immediately;
- * everyone else lands in the moderation queue.
+ * Creates an event plus its honorees and extra days in one transaction —
+ * either all rows exist or none does, so a published card is never missing
+ * the names it exists to display. `groom_name` (kept for every old client
+ * that still reads it) is derived from the first honoree by `position`,
+ * written in the same transaction rather than a follow-up job. Admins publish
+ * immediately; everyone else lands in the moderation queue.
  */
 async function createEvent(data, { autoApprove = false, createdBy = null } = {}) {
   // The villages catch-all has no centre of its own — `data.villageCoords`
@@ -691,6 +718,19 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
       position += 1;
     }
 
+    // Extra days are a child list like the honorees above, in the same
+    // transaction: a day that failed to land must not leave a card
+    // advertising it. Hidden for this occasion type ⇒ `data.extra_days` is an
+    // empty array, so this loop simply does nothing.
+    let dayPosition = 0;
+    for (const day of data.extra_days || []) {
+      await connection.execute(
+        'INSERT INTO event_days (event_id, name, day_date, place, day_time, position) VALUES (?, ?, ?, ?, ?, ?)',
+        [eventId, day.name, day.day_date, day.place, day.day_time, dayPosition]
+      );
+      dayPosition += 1;
+    }
+
     return { id: eventId, title, status, groom_name: groomName, town: data.town, event_date: data.event_date };
   });
 }
@@ -743,7 +783,8 @@ async function getEventForEdit(eventId) {
 /**
  * Applies a partial edit. `changes` holds only the columns the route already
  * cleaned and confirmed differ from `existing`; `honorees`, when present,
- * fully replaces event_honorees and re-derives groom_name — in the same
+ * fully replaces event_honorees and re-derives groom_name, and `extraDays`,
+ * when present, fully replaces event_days the same way — all in the same
  * transaction as the event row update, same invariant as createEvent. A
  * critical column change drops an approved event back to pending; honoree
  * spelling edits are always cosmetic, per the domain's own classification.
@@ -756,7 +797,7 @@ async function getEventForEdit(eventId) {
  * travelling alongside a critical one in one request is still logged
  * `approved` immediately — it never went through review either.
  */
-async function updateEvent(eventId, existing, { changes = {}, honorees = null, changedBy = null } = {}) {
+async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null } = {}) {
   // Only columns whose value actually differs count towards the
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
@@ -790,6 +831,21 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, c
       }
       assignments.push('groom_name = ?');
       params.push(honorees[0].name);
+    }
+
+    // A provided extra-days list replaces the whole set, the same
+    // delete-then-insert `honorees` above uses; `null` means the caller never
+    // sent the key (every published APK today), so the existing days stay.
+    if (extraDays !== null) {
+      await connection.execute('DELETE FROM event_days WHERE event_id = ?', [eventId]);
+      let dayPosition = 0;
+      for (const day of extraDays) {
+        await connection.execute(
+          'INSERT INTO event_days (event_id, name, day_date, place, day_time, position) VALUES (?, ?, ?, ?, ?, ?)',
+          [eventId, day.name, day.day_date, day.place, day.day_time, dayPosition]
+        );
+        dayPosition += 1;
+      }
     }
 
     if (assignments.length) {

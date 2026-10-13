@@ -731,6 +731,174 @@ async function run() {
     );
   });
 
+  console.log('\nExtra days for a multi-day occasion');
+
+  let extraDaysEventId = 0;
+  await test('Publishing with two extra days out of date order stores them and returns them sorted by day_date', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'صاحب الأيام الإضافية' }],
+        event_date: '2027-03-06',
+        extra_days: [
+          { name: 'العرس', date: '2027-03-06', place: 'قاعة الاختبار', time: 'بعد العصر' },
+          { name: 'الحنّة', date: '2027-03-04' }
+        ]
+      })
+    });
+    assert.strictEqual(status, 201);
+    extraDaysEventId = body.eventId;
+
+    const { body: detail } = await api('GET', `/api/events/${extraDaysEventId}`);
+    const days = detail.event.extra_days;
+    assert.strictEqual(days.length, 2);
+    assert.deepStrictEqual(days.map(day => day.day_date), ['2027-03-04', '2027-03-06']);
+    assert.strictEqual(days[0].name, 'الحنّة');
+    assert.strictEqual(days[0].place, null);
+    assert.strictEqual(days[0].day_time, null);
+    assert.strictEqual(days[1].name, 'العرس');
+    assert.strictEqual(days[1].place, 'قاعة الاختبار');
+    assert.strictEqual(days[1].day_time, 'بعد العصر');
+  });
+
+  await test('A multipart publish with extra_days[0][name] bracket keys stores the day', async () => {
+    const { status, body } = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: {
+        occasion_type_id: String(weddingType.id),
+        'honorees[0][name]': 'عريس الأيام المرفوعة',
+        'extra_days[0][name]': 'الحنّة',
+        'extra_days[0][date]': '2027-04-01',
+        'extra_days[0][place]': 'ديوان الاختبار',
+        'extra_days[0][time]': 'قبل المغرب',
+        town: 'حورة',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-04-03'
+      }
+    });
+    assert.strictEqual(status, 201);
+
+    const { body: detail } = await api('GET', `/api/events/${body.eventId}`);
+    assert.strictEqual(detail.event.extra_days.length, 1);
+    assert.strictEqual(detail.event.extra_days[0].name, 'الحنّة');
+    assert.strictEqual(detail.event.extra_days[0].day_date, '2027-04-01');
+    assert.strictEqual(detail.event.extra_days[0].place, 'ديوان الاختبار');
+    assert.strictEqual(detail.event.extra_days[0].day_time, 'قبل المغرب');
+    await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+  });
+
+  await test('An extra day with a name but no date is rejected with اليوم 1 in the message', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ extra_days: [{ name: 'بلا تاريخ' }] })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('اليوم 1'), `expected a اليوم 1 message, got: ${body.message}`);
+  });
+
+  await test('More than ten non-blank extra days is rejected', async () => {
+    const elevenDays = Array.from({ length: 11 }, (unused, index) => ({
+      name: `يوم ${index + 1}`,
+      date: '2027-05-01'
+    }));
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ extra_days: elevenDays })
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(body.message.includes('10'), `expected the ceiling in the message, got: ${body.message}`);
+  });
+
+  await test('PATCH extra_days replaces the list, an empty list clears it, and an absent key leaves it untouched', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'صاحب تعديل الأيام' }],
+        extra_days: [
+          { name: 'الحنّة', date: '2027-06-01' },
+          { name: 'العرس', date: '2027-06-03' }
+        ]
+      })
+    });
+    const id = created.eventId;
+
+    const replaced = await api('PATCH', `/api/events/${id}`, {
+      token: adminToken,
+      body: { extra_days: [{ name: 'الغداء', date: '2027-06-02' }] }
+    });
+    assert.strictEqual(replaced.status, 200);
+    let days = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
+    assert.deepStrictEqual(days.map(day => day.name), ['الغداء']);
+
+    const untouched = await api('PATCH', `/api/events/${id}`, {
+      token: adminToken,
+      body: { title: 'عنوان جديد للأيام' }
+    });
+    assert.strictEqual(untouched.status, 200);
+    days = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
+    assert.deepStrictEqual(days.map(day => day.name), ['الغداء'], 'a PATCH without extra_days must leave the days as they are');
+
+    const cleared = await api('PATCH', `/api/events/${id}`, {
+      token: adminToken,
+      body: { extra_days: [] }
+    });
+    assert.strictEqual(cleared.status, 200);
+    days = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
+    assert.strictEqual(days.length, 0, 'an empty array must clear every day');
+
+    await api('DELETE', `/api/admin/events/${id}`, { token: adminToken });
+  });
+
+  await test('A type where extra_days is hidden ignores posted days instead of rejecting them', async () => {
+    const { body: adminList } = await api('GET', '/api/admin/occasion-types', { token: superAdminToken });
+    const wedding = adminList.types.find(t => t.name === 'عرس');
+    const extraDaysField = wedding.fields.find(f => f.field_key === 'extra_days');
+    assert.ok(extraDaysField, 'extra_days must be a field of عرس for this test to hide it');
+    assert.strictEqual(extraDaysField.is_visible, true);
+
+    const hiddenFields = wedding.fields.map(f =>
+      f.field_key === 'extra_days' ? { ...f, is_visible: false, is_required: false } : f
+    );
+    await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+      token: superAdminToken,
+      body: { fields: hiddenFields }
+    });
+
+    try {
+      const { body: publicList } = await api('GET', '/api/occasion-types');
+      const weddingAfter = publicList.types.find(t => t.name === 'عرس');
+      assert.ok(!weddingAfter.fields.some(f => f.field_key === 'extra_days'), 'extra_days must be hidden now');
+
+      const { status, body } = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({
+          honorees: [{ name: 'عريس الأيام المخفية' }],
+          extra_days: [{ name: 'يوم مخفي', date: '2027-08-01' }]
+        })
+      });
+      assert.strictEqual(status, 201);
+
+      const { body: detail } = await api('GET', `/api/events/${body.eventId}`);
+      assert.strictEqual(detail.event.extra_days.length, 0, 'a hidden extra_days field must be dropped, not stored');
+      await api('DELETE', `/api/admin/events/${body.eventId}`, { token: adminToken });
+    } finally {
+      // Restore visibility so later runs/tests don't inherit a mutated seed type.
+      await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+        token: superAdminToken,
+        body: { fields: wedding.fields }
+      });
+    }
+  });
+
+  await test('GET /api/events list rows carry extra_days', async () => {
+    const { body } = await api('GET', `/api/events?search=${encodeURIComponent('صاحب الأيام الإضافية')}`);
+    const row = body.events.find(event => event.id === extraDaysEventId);
+    assert.ok(row, 'the published event must appear in the list');
+    assert.ok(Array.isArray(row.extra_days), 'every list row must carry an extra_days array');
+    assert.strictEqual(row.extra_days.length, 2);
+    await api('DELETE', `/api/admin/events/${extraDaysEventId}`, { token: adminToken });
+  });
+
   console.log('\nUpcoming list, pagination, congratulations, legacy filtering (#20 step 4)');
 
   let pastEventId = 0;

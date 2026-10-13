@@ -1570,6 +1570,61 @@ const steps = [
         logger.info('[migrations] make-service-provider-phone-optional-2026-10: service_providers.phone is now nullable.');
       }
     }
+  },
+  {
+    // The extra days of a multi-day occasion (schema.sql: event_days). A brand
+    // new table, so `CREATE TABLE IF NOT EXISTS` is idempotent by itself; the
+    // field rows follow the artist-fields step's shape exactly — an explicit
+    // per-type/per-key existence check plus INSERT IGNORE against the table's
+    // own unique key, so a re-run inserts nothing. Visible on every existing
+    // type: a fresh install gets the row from the seed step (buildSeedFields
+    // reads OCCASION_FIELDS), and this step covers every type that predates
+    // the field.
+    name: 'add-event-days-2026-10',
+    async run(connection) {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS event_days (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          event_id   INT UNSIGNED NOT NULL,
+          name       VARCHAR(100) NOT NULL,
+          day_date   DATE         NOT NULL,
+          place      TEXT         DEFAULT NULL,
+          day_time   VARCHAR(100) DEFAULT NULL,
+          position   INT          NOT NULL DEFAULT 0,
+          created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_event_days_event_date (event_id, day_date),
+          CONSTRAINT fk_event_days_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      const [typeRows] = await connection.execute('SELECT id FROM occasion_types');
+
+      let inserted = 0;
+      for (const type of typeRows) {
+        const [existingRows] = await connection.execute(
+          'SELECT field_key FROM occasion_type_fields WHERE occasion_type_id = ? AND field_key = ?',
+          [type.id, 'extra_days']
+        );
+        if (existingRows.length) continue;
+
+        const [maxPosRows] = await connection.execute(
+          'SELECT COALESCE(MAX(position), 0) AS maxPos FROM occasion_type_fields WHERE occasion_type_id = ?',
+          [type.id]
+        );
+
+        await connection.execute(
+          `INSERT IGNORE INTO occasion_type_fields (occasion_type_id, field_key, label, is_visible, is_required, position)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [type.id, 'extra_days', 'أيام إضافية', 1, 0, maxPosRows[0].maxPos + 1]
+        );
+        inserted += 1;
+      }
+
+      if (inserted) {
+        logger.info(`[migrations] add-event-days-2026-10: extra_days field added to ${inserted} occasion type(s).`);
+      }
+    }
   }
 ];
 

@@ -1,6 +1,7 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
+const { MAX_EVENT_DAYS } = require('../constants');
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PHONE_PATTERN = /^0\d{8,9}$/;
@@ -186,6 +187,46 @@ function parseHonorees(raw, { max = MAX_HONOREES } = {}) {
     .filter(honoree => honoree.name);
 }
 
+/**
+ * Cleans a submitted extra-days array — the named days of a multi-day event —
+ * into `{ name, day_date, place, day_time }` rows in input order. A row whose
+ * four fields are all blank is dropped silently (an empty optional slot on a
+ * form, exactly as parseHonorees drops a nameless honoree), so the 1-based `n`
+ * in every message counts only the rows that actually carry something.
+ *
+ * Unlike parseHonorees a kept row is then validated: a day without a name or a
+ * valid `YYYY-MM-DD` date is a mistake worth naming, not a row to swallow.
+ * Whether the resulting list must be non-empty is a caller decision — it
+ * depends on the occasion type's is_required flag, which this module knows
+ * nothing about — so an empty list is returned as-is.
+ */
+function parseEventDays(raw, { max = MAX_EVENT_DAYS } = {}) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw ApiError.badRequest('صيغة أيام المناسبة غير صالحة');
+  }
+
+  const rows = raw
+    .map(item => ({
+      name: cleanString(item && item.name, 100),
+      date: cleanString(item && item.date, 10),
+      place: cleanString(item && item.place, 1000),
+      time: cleanString(item && item.time, 100)
+    }))
+    .filter(row => row.name || row.date || row.place || row.time);
+
+  if (rows.length > max) {
+    throw ApiError.badRequest(`لا يمكن إضافة أكثر من ${max} أيام`);
+  }
+
+  return rows.map((row, index) => {
+    const n = index + 1;
+    if (!row.name) throw ApiError.badRequest(`اليوم ${n}: اسم اليوم مطلوب`);
+    if (!isValidDate(row.date)) throw ApiError.badRequest(`اليوم ${n}: تاريخ اليوم غير صالح`);
+    return { name: row.name, day_date: row.date, place: row.place, day_time: row.time };
+  });
+}
+
 module.exports = {
   cleanString,
   requireFields,
@@ -200,6 +241,7 @@ module.exports = {
   parseAmount,
   parseFlag,
   parseHonorees,
+  parseEventDays,
   parseCsvList,
   MAX_HONOREES,
   MAX_FILTER_VALUES
