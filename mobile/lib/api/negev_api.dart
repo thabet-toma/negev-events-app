@@ -416,7 +416,7 @@ class NegevApi {
   }
 
   /// «ذكّرني» بصيغته الظاهرة في التطبيق: «قائمتي». متابعة، لا حضور ولا
-  /// "لن أحضر" — ONE button, لا زرّان. يتطلب حساباً.
+  /// «لن أحضر» — زرّ واحد، لا زرّان. يتطلب حساباً.
   Future<void> remind(int eventId) async {
     await _client.post('/api/events/$eventId/remind', auth: true);
   }

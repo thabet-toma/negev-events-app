@@ -695,28 +695,33 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         await services.api.remind(event.id);
         willAlarm = await services.reminders.onReminderAdded();
       }
-      // «قائمتي» تُعلَم بوجود تغيير — تجلب نفسها عند ظهورها.
+      // التغيير وقع على الخادم فعلاً — «قائمتي» تجلب نفسها عند ظهورها،
+      // والإشارة تُكتب من كل شاشة تبدّل الحفظ كي لا يفوت تغييرٌ متكرّر
+      // القيمة (سجلّ واحد لآخر تغيير، لا سجلّ لكل شاشة).
       services.myListRevision.value++;
+      services.savedChange.value = (eventId: event.id, saved: !event.isReminded);
       if (!mounted) return;
-      if (!willAlarm) {
-        showMessage(
-          context,
-          'تم حفظ التذكير، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — '
-          'فعّله من إعدادات النظام كي يصلك المنبّه',
-          isError: true,
-        );
-      } else if (event.isReminded) {
+      if (event.isReminded) {
         showMessage(context, 'أُزيلت من قائمتي');
       } else {
-        showMessage(
-          context,
-          'أُضيفت إلى قائمتي',
-          action: SnackBarAction(
-            label: 'عرض',
-            textColor: context.c.sky,
-            onPressed: services.openMyList,
-          ),
+        final viewMyList = SnackBarAction(
+          label: 'عرض',
+          textColor: context.c.sky,
+          onPressed: services.openMyList,
         );
+        if (!willAlarm) {
+          // الحفظ وقع؛ رفض الإذن يمنع المنبّه لا الحفظ — رسالة واحدة تقول
+          // الاثنين، ومعها «عرض» كالرسالة العادية.
+          showMessage(
+            context,
+            'أُضيفت إلى قائمتي، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن '
+            'الإشعارات — فعّله من إعدادات النظام كي يصلك المنبّه',
+            isError: true,
+            action: viewMyList,
+          );
+        } else {
+          showMessage(context, 'أُضيفت إلى قائمتي', action: viewMyList);
+        }
       }
       setState(() {
         _events = _events

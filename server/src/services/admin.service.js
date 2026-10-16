@@ -106,10 +106,11 @@ const VENUE_AMENDMENT_FIELDS = events.CRITICAL_AMENDMENT_FIELDS.filter(
 );
 
 /**
- * Every "ذكّرني" follower plus the event's owner, minus whoever is in
+ * Every un-muted "ذكّرني" follower plus the event's owner, minus whoever is in
  * `excludedUserIds` — the shared recipient set for both a critical-date
- * notification and a critical-venue one (issue #85, stories 5/6). Nobody is
- * ever notified of their own edit (story 15) — `excludedUserIds` may be a
+ * notification and a critical-venue one (issue #85, stories 5/6). A muted row
+ * (`notify = 0`) is excluded: it stays on «قائمتي» but receives nothing. Nobody
+ * is ever notified of their own edit (story 15) — `excludedUserIds` may be a
  * single id (the date path, one amendment at a time) or a `Set` of ids (the
  * venue path, which can batch several amendments from different editors into
  * one notification and must exclude each of them, not just the first).

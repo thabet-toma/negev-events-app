@@ -81,8 +81,8 @@ let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة ال�
 let notificationsList = [];
 let congratsQueueEventId = null;
 
-// «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» في تبويبها السادس. التجميع
-// والترتيب وكل التواريخ تأتي من الخادم (bucket وspan_start/span_end و
+// «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» في تبويبها الثاني (الشريط السفلي).
+// التجميع والترتيب وكل التواريخ تأتي من الخادم (bucket وspan_start/span_end و
 // days_until_start) — لا يعيد العميل اشتقاق تاريخ ولا ترتيباً. myListChip
 // تفضيل هذه الجلسة وحدها (بلا تخزين)، و«انتهت سابقاً» مطويّة افتراضياً.
 let myListData = null; // { events, counts: {all, upcoming, ended}, under_review_count } أو null قبل أول جلب
@@ -2430,7 +2430,7 @@ function renderEventPage(evt) {
         <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> ${escapeHtml(shareButtonLabel(evt))}
       </button>
       <div class="event-page-btn-row">
-        ${renderReminderButtonHtml(evt)}
+        ${!evt.status || evt.status === 'approved' ? renderReminderButtonHtml(evt) : ''}
         <button type="button" class="record-nokoot-btn card-action-btn" onclick="recordNokootFromEventPage()">
           <i class="fa-solid fa-wallet" aria-hidden="true"></i> <span>تسجيل نقوط</span>
         </button>
@@ -2679,13 +2679,29 @@ function myListStatusPillHtml(evt) {
   return `<span class="my-list-status-pill">بعد ${Number(evt.days_until_start) || 0} أيام</span>`;
 }
 
+/** نصّ تاريخ الإعلان بصيغة الصفّ نفسها («١ ديسمبر ٢٠٢٧») — والقيمة الخام كما هي إن لم تكن تاريخاً صالحاً. */
+function formatMyListDateValue(value) {
+  const raw = String(value == null ? '' : value).trim();
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!parts) return raw;
+  // التاريخ الذي يعيد تركيبه المتصفّح هو نفسه فقط إن كان يوماً حقيقياً؛
+  // «2027-02-30» يمرّ من الشكل ويسقط هنا فيبقى خاماً بدل أن ينزاح إلى آذار.
+  const date = eventDayDate({ event_date: raw });
+  const sameDay = date.getFullYear() === Number(parts[1])
+    && date.getMonth() === Number(parts[2]) - 1
+    && date.getDate() === Number(parts[3]);
+  return sameDay ? formatEventDayLong({ event_date: raw }) : raw;
+}
+
 /**
  * «تغيّر الموعد» — إعلان تعديل تاريخ نُشر بعد حفظ المستخدم للمناسبة (الخادم
  * يقصّ كل إعلان أقدم من الحفظ). التفصيل في title لا في نصّ الشارة.
  */
 function myListChangePillHtml(evt) {
   if (!evt.date_change) return '';
-  const detail = `من ${evt.date_change.old_value} إلى ${evt.date_change.new_value}`;
+  const from = formatMyListDateValue(evt.date_change.old_value);
+  const to = formatMyListDateValue(evt.date_change.new_value);
+  const detail = `من ${from} إلى ${to}`;
   return `<span class="my-list-change-pill" title="${escapeHtml(detail)}"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> تغيّر الموعد</span>`;
 }
 
@@ -2844,10 +2860,17 @@ async function removeFromMyList(eventId, btnElement) {
     showToast('أُزيلت من قائمتي', {
       label: 'تراجع',
       onClick: async () => {
-        const undoRes = await apiFetch(`/api/events/${eventId}/remind`, { method: 'POST', auth: true });
-        const undoData = await undoRes.json();
-        if (undoData && undoData.success) applySavedState(eventId, true);
-        loadMyList();
+        try {
+          const undoRes = await apiFetch(`/api/events/${eventId}/remind`, { method: 'POST', auth: true });
+          const undoData = await undoRes.json();
+          if (!undoRes.ok || !undoData.success) throw new Error('undo failed');
+          applySavedState(eventId, true);
+        } catch (e) {
+          alert('تعذّر إرجاع المناسبة إلى قائمتك');
+        } finally {
+          // مهما كانت النتيجة، القائمة المخزَّنة هي الحكم — لا شارة ولا صفّ يسبقها.
+          loadMyList();
+        }
       }
     });
     await loadMyList();
@@ -2864,8 +2887,17 @@ async function clearEndedMyList() {
   try {
     const res = await apiFetch('/api/my-reminders?scope=ended', { method: 'DELETE', auth: true });
     const data = await res.json();
-    showToast(data.message || 'تم حذف المناسبات المنتهية من قائمتك');
+    if (!res.ok || !data.success) {
+      alert(data.message || 'تعذّر حذف المناسبات المنتهية');
+      return;
+    }
+    // ما حُذف على الخادم يخرج أيضاً من كرت التغذية ومن صفحة المناسبة المفتوحة:
+    // لا كرت يقول «في قائمتي» لمناسبة لم تعد في القائمة.
+    ((myListData && myListData.events) || []).forEach(evt => {
+      if (MY_LIST_ENDED_BUCKETS.indexOf(evt.bucket) !== -1) applySavedState(evt.id, false);
+    });
     myListEndedExpanded = false;
+    showToast(data.message || 'تم حذف المناسبات المنتهية من قائمتك');
     await loadMyList();
   } catch (e) {
     alert('تعذّر حذف المناسبات المنتهية — تحقّق من الاتصال');

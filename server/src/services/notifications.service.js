@@ -267,9 +267,11 @@ function subtractDays(dateStr, days) {
  * countdown on, the fire INSTANTS still ahead of today — computed here, once,
  * so no client (today's web centre, tomorrow's mobile alarms) re-derives the
  * offsets, or the 09:00 Asia/Jerusalem hour itself, and drifts from the
- * scheduler's own idea of either (`GET /api/reminders/schedule`). `fires_on`
- * is a full ISO instant (`runInstantForDate`, the same zone-aware conversion
- * the scheduled job itself uses), not a bare `YYYY-MM-DD` — a mobile alarm
+ * scheduler's own idea of either (`GET /api/reminders/schedule`). A muted row
+ * (`notify = 0`) schedules nothing: the event stays on «قائمتي» but has no
+ * alarm. `fires_on` is a full ISO instant (`runInstantForDate`, the same
+ * zone-aware conversion the scheduled job itself uses), not a bare
+ * `YYYY-MM-DD` — a mobile alarm
  * reading a date alone would have to invent the hour, which is exactly the
  * drift «تحسبها الخادم» exists to prevent. An event whose type has
  * `notify_countdown = 0` is absent from the result entirely — there is
@@ -416,8 +418,9 @@ function describeChanges(changedFields) {
 }
 
 /**
- * «ذكّرني» يعني «أبلِغني بما يتغيّر»: كل متابع لمناسبة معتمدة يُبلَّغ بتعديل
- * لم يُرجعها إلى المراجعة — عدا من عدّلها. تعديل التاريخ أو المكان يصل عند
+ * «ذكّرني» يعني «أبلِغني بما يتغيّر»: كل متابع **غير مكتوم** لمناسبة معتمدة
+ * يُبلَّغ بتعديل لم يُرجعها إلى المراجعة — عدا من عدّلها. صفّ مكتوم (`notify = 0`)
+ * لا يصل إليه شيء: يبقى في «قائمتي» فقط. تعديل التاريخ أو المكان يصل عند
  * اعتماده (admin.service.js) لا قبله، كي لا يُبلَّغ الناس بما لم يؤكَّد بعد.
  * إشعار واحد لكل متابع في اليوم (`event_updated_<id>_<اليوم>`): عشرة
  * تصحيحات متتالية لا تصير عشرة إشعارات — لكن التعديل اللاحق لا يضيع: يُحدِّث

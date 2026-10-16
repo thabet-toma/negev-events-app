@@ -9,6 +9,7 @@ import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/my_list.dart';
+import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/my_list_screen.dart';
@@ -21,11 +22,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// خادم وهمي لـ«قائمتي»: يسجّل كل طلب، ويجيب تسجيل الدخول وخطّة المنبّهات
 /// أيضاً — الرمز يُرفق عند `auth: true` فقط، فلا بدّ أن يكون الدخول ونداءات
 /// القائمة على **نفس** العميل كي يُفحَص فعل الإرفاق.
+///
+/// و`eventsBody` اختياري: اختبار يجمع «قائمتي» والتغذية في شجرة واحدة يحتاج
+/// أن يجيب `/api/events` أيضاً. و`body` غير ثابت كي يبدّل اختبارٌ ما يعيده
+/// الخادم بين جلبين (الشارة تُقرأ من جلب تالٍ).
 class MyListBackend {
-  MyListBackend(this.body);
+  MyListBackend(this.body, {this.eventsBody});
 
   /// جسم GET /api/my-reminders — ما عدا DELETE الذي يردّ بحذف ناجح.
-  final Map<String, dynamic> body;
+  Map<String, dynamic> body;
+
+  /// جسم GET /api/events — التغذية الفارغة افتراضاً.
+  final Map<String, dynamic>? eventsBody;
+
   final List<http.Request> requests = [];
 
   NegevApi build() {
@@ -44,6 +53,14 @@ class MyListBackend {
             'role': 'user',
           },
         };
+      } else if (path.endsWith('/api/events')) {
+        response = eventsBody ??
+            {
+              'success': true,
+              'events': <Map<String, dynamic>>[],
+              'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+              'announcements': <Map<String, dynamic>>[],
+            };
       } else if (path.endsWith('/api/my-reminders')) {
         response = request.method == 'DELETE'
             ? {
@@ -826,6 +843,265 @@ void main() {
         );
         expect(find.text('احفظ'), findsOneWidget);
         expect(find.text('محفوظة'), findsNothing);
+      },
+    );
+  });
+
+  group('(ي) إصلاحات المراجعة', () {
+    /// مناسبة واحدة كما تعيدها التغذية و«قائمتي» معاً.
+    Map<String, dynamic> sharedEvent({bool reminded = true, int followers = 3}) =>
+        {
+          'id': 5,
+          'title': 'عرس تجريبي',
+          'groom_name': 'سالم',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'قاعة السلام',
+          'event_date': '2026-11-01',
+          'is_reminded': reminded,
+          'followers_count': followers,
+          'occasion_type': {
+            'id': 1,
+            'name': 'عرس',
+            'icon': '💍',
+            'color': '#0369a1',
+            'tone': 'festive',
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+        };
+
+    testWidgets(
+      'M1: إزالة ← إعادة حفظ من التغذية ← إزالة — الكرت يبقى صادقاً في كل خطوة',
+      (tester) async {
+        final backend = MyListBackend(
+          listBody([entryJson(id: 5, bucket: 'now', daysUntilStart: 0)]),
+          eventsBody: {
+            'success': true,
+            'events': [sharedEvent()],
+            'pagination': {'page': 1, 'limit': 30, 'total': 1, 'totalPages': 1},
+            'announcements': <Map<String, dynamic>>[],
+          },
+        );
+        final api = backend.build();
+        final auth = await tester.runAsync(() => signedIn(api));
+
+        // «قائمتي» والتغذية حيّتان معاً كما في `HomeShell` (`IndexedStack`)،
+        // بمبدّل تبويب يقوده الاختبار.
+        final tab = ValueNotifier<int>(1);
+        final services = AppServices(
+          api: api,
+          auth: auth!,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: ValueListenableBuilder<int>(
+                valueListenable: tab,
+                builder: (context, index, _) => IndexedStack(
+                  index: index,
+                  children: [
+                    EventsScreen(isActive: index == 0),
+                    MyListScreen(isActive: index == 1),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpWidget(services);
+        await tester.pumpAndSettle();
+
+        EventCard card() => tester.widget<EventCard>(find.byType(EventCard));
+        Future<void> showFeed() async {
+          tab.value = 0;
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> showList() async {
+          tab.value = 1;
+          await tester.pumpAndSettle();
+        }
+
+        // (١) إزالة من «قائمتي».
+        await tester.drag(
+          find.byKey(const Key('my_list_row_5')),
+          const Offset(400, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(services.savedChange.value, (eventId: 5, saved: false));
+
+        await showFeed();
+        expect(find.text('احفظ'), findsOneWidget);
+        expect(card().event.isReminded, isFalse);
+
+        // رسالة الإزالة العائمة («أُزيلت من قائمتي» + «تراجع») تجلس فوق أسفل
+        // الشاشة وتحجب زرّ الكرت تحتها زمن عرضها — تُغلق صراحةً بدل انتظار
+        // انقضاء مؤقّتها، فالكبس التالي يصل إلى الزرّ.
+        tester
+            .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+            .removeCurrentSnackBar();
+        await tester.pumpAndSettle();
+
+        // (٢) إعادة الحفظ من كرت التغذية — تُكتب الإشارة هنا أيضاً، وإلا صارت
+        // الإزالة التالية تكراراً مساوياً لا يُخطر أحداً.
+        await tester.tap(find.text('احفظ'));
+        await tester.pumpAndSettle();
+        expect(services.savedChange.value, (eventId: 5, saved: true));
+        expect(find.text('محفوظة'), findsOneWidget);
+        expect(card().event.isReminded, isTrue);
+
+        // (٣) الإزالة الثانية: نفس قيمة البداية، لكن السابقة صارت (٥، محفوظة)
+        // فالتغيير يُخطر والكرت لا يبقى على «محفوظة».
+        await showList();
+        expect(find.byKey(const Key('my_list_row_5')), findsOneWidget);
+        await tester.drag(
+          find.byKey(const Key('my_list_row_5')),
+          const Offset(400, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(services.savedChange.value, (eventId: 5, saved: false));
+
+        await showFeed();
+        expect(
+          find.text('احفظ'),
+          findsOneWidget,
+          reason: 'كرت التغذية لا يجوز أن يبقى «محفوظة» بعد إزالة ثانية',
+        );
+        expect(card().event.isReminded, isFalse);
+      },
+    );
+
+    testWidgets(
+      'M2: الإزالة تُنزل شارة «قائمتي»، وجلب صامت خلف تبويب آخر يرفعها من الخادم',
+      (tester) async {
+        final backend = MyListBackend(
+          listBody([entryJson(id: 8, bucket: 'now', daysUntilStart: 0)]),
+        );
+        final api = backend.build();
+        final auth = await tester.runAsync(() => signedIn(api));
+
+        final active = ValueNotifier<bool>(true);
+        final services = AppServices(
+          api: api,
+          auth: auth!,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: ValueListenableBuilder<bool>(
+                valueListenable: active,
+                builder: (context, isActive, _) =>
+                    MyListScreen(isActive: isActive),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpWidget(services);
+        await tester.pumpAndSettle();
+        expect(services.myListNowCount.value, 1);
+
+        // (١) إزالة متفائلة: الشارة تتبع ما رُسم للتوّ، بلا انتظار جلب.
+        await tester.drag(
+          find.byKey(const Key('my_list_row_8')),
+          const Offset(400, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(services.myListNowCount.value, 0);
+
+        // (٢) صار التبويب خلف آخر، والخادم تغيّر في الأثناء: مجرّد الاختفاء
+        // لا يجلب شيئاً…
+        backend.body = listBody([
+          entryJson(id: 9, bucket: 'now', daysUntilStart: 0),
+          entryJson(id: 10, bucket: 'now', daysUntilStart: 0),
+        ]);
+        active.value = false;
+        await tester.pump();
+        expect(services.myListNowCount.value, 0);
+
+        // …ثم تبديل تذكير من الخارج يجلب صامتاً فتتقدّم البيانات والشارة.
+        services.myListRevision.value++;
+        await tester.pumpAndSettle();
+        expect(services.myListNowCount.value, 2);
+        expect(
+          find.byType(CircularProgressIndicator),
+          findsNothing,
+          reason: 'تحديث خلفيّ صامت — بلا مؤشّر تحميل',
+        );
+      },
+    );
+
+    testWidgets(
+      'M5: زرّ «أضف لقائمتي» في صفحة المناسبة يغيب على غير المعتمدة',
+      (tester) async {
+        Future<void> pumpDetails(String? status) async {
+          final event = <String, dynamic>{
+            'id': 1,
+            'title': 'عرس',
+            'groom_name': 'سالم',
+            'family_clan': 'آل فلان',
+            'town': 'رهط',
+            'location_name': 'قاعة السلام',
+            'event_date': '2026-11-01',
+            'is_reminded': false,
+            'occasion_type': {
+              'id': 1,
+              'name': 'عرس',
+              'icon': '💍',
+              'color': '#0369a1',
+              'tone': 'festive',
+              'fields': <Map<String, dynamic>>[],
+              'reactions': <String>[],
+            },
+            'status': ?status,
+          };
+          final client = MockClient(
+            (request) async => http.Response(
+              jsonEncode({'success': true, 'event': event}),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            ),
+          );
+          final api = NegevApi(ApiClient(client: client));
+          await tester.pumpWidget(
+            AppServices(
+              api: api,
+              auth: AuthStore(api),
+              realtime: RealtimeService(),
+              child: MaterialApp(
+                theme: AppTheme.light(),
+                home: Directionality(
+                  textDirection: TextDirection.rtl,
+                  // مفتاح لكل حالة: الشاشة تقرأ المناسبة مرّة واحدة، فحالة
+                  // أخرى تحتاج `State` جديدة لا نفسها.
+                  child: EventDetailsScreen(
+                    key: ValueKey('details_$status'),
+                    eventId: 1,
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+
+        await pumpDetails('pending');
+        expect(
+          find.text('تفاصيل المناسبة'),
+          findsOneWidget,
+          reason: 'مرساة: الصفحة رُسمت فعلاً',
+        );
+        expect(find.text('أضف لقائمتي'), findsNothing);
+
+        await pumpDetails('approved');
+        expect(find.text('أضف لقائمتي'), findsOneWidget);
+
+        // مناسبة عامة بلا حقل حالة تبقى قابلة للحفظ.
+        await pumpDetails(null);
+        expect(find.text('أضف لقائمتي'), findsOneWidget);
       },
     );
   });

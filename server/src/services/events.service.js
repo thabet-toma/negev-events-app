@@ -279,14 +279,22 @@ const UPCOMING_MY_LIST_BUCKETS = new Set(['now', 'tomorrow', 'this_week', 'later
 async function listMyReminders(userId, { legacyOnly = false } = {}) {
   const conditions = ["e.status = 'approved'", 'r.user_id = ?'];
   const params = [userId];
+  // The under-review count answers the same client's question as the list
+  // itself, so it carries the same legacy door: a pre-#20 client must never be
+  // told that a pending event of a type it cannot render is «قيد المراجعة».
+  const underReviewConditions = ["e.status = 'pending'", 'r.user_id = ?'];
+  const underReviewParams = [userId];
 
   if (legacyOnly) {
     const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
     if (!legacyTypeIds.length) {
       return { events: [], counts: { all: 0, upcoming: 0, ended: 0 }, under_review_count: 0 };
     }
-    conditions.push(`e.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    const legacyClause = `e.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`;
+    conditions.push(legacyClause);
     params.push(...legacyTypeIds);
+    underReviewConditions.push(legacyClause);
+    underReviewParams.push(...legacyTypeIds);
   }
 
   // The span and bucket helpers are computed inside a derived table and the
@@ -363,8 +371,8 @@ async function listMyReminders(userId, { legacyOnly = false } = {}) {
   const { total } = await db.queryOne(
     `SELECT COUNT(*) AS total FROM event_reminders r
        JOIN events e ON e.id = r.event_id
-      WHERE r.user_id = ? AND e.status = 'pending'`,
-    [userId]
+      WHERE ${underReviewConditions.join(' AND ')}`,
+    underReviewParams
   );
 
   return { events, counts, under_review_count: Number(total) };

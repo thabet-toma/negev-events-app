@@ -3585,6 +3585,43 @@ async function run() {
     await db.execute("UPDATE events SET status = 'approved' WHERE id = ?", [myListEventId]);
   });
 
+  await test('under_review_count carries the same legacy filter as the list itself', async () => {
+    // A followed-but-pending event of a type a pre-#20 client can never render:
+    // such a client must not even be told it is «قيد المراجعة», exactly as the
+    // list itself applies the legacy type door.
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى قائمتي المعلّق' }],
+        town: 'رهط',
+        location_name: 'ديوان قائمتي',
+        event_date: '2027-12-20',
+        event_end_date: '2027-12-21'
+      }
+    });
+    assert.strictEqual(created.body.status, 'approved');
+    const pendingNonLegacyId = created.body.eventId;
+
+    // Follow while it is still approved (a pending event is not followable),
+    // then put it back under review directly — the shape a follow has when its
+    // owner amends a critical field.
+    const follow = await api('POST', `/api/events/${pendingNonLegacyId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(follow.status, 200);
+    await db.execute("UPDATE events SET status = 'pending' WHERE id = ?", [pendingNonLegacyId]);
+
+    const modern = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    const legacy = await api('GET', '/api/my-reminders', { token: reminderFollower.token, legacy: true });
+    assert.ok(modern.body.under_review_count >= 1, 'a followed pending event is counted for a modern client');
+    assert.strictEqual(
+      legacy.body.under_review_count, modern.body.under_review_count - 1,
+      'a legacy client must not be told about a pending event of a type it never sees'
+    );
+
+    await db.execute("UPDATE events SET status = 'approved' WHERE id = ?", [pendingNonLegacyId]);
+    await api('DELETE', `/api/admin/events/${pendingNonLegacyId}`, { token: adminToken });
+  });
+
   await test('myListBucket places every day in exactly one bucket, boundaries included', async () => {
     const bucketOf = eventsService.myListBucket;
     // dow 1 = Sunday … 7 = Saturday; the week is Sunday–Saturday.

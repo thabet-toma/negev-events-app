@@ -8009,9 +8009,11 @@ async function run() {
     const { dom } = await buildMyListEnv({
       events: [
         buildMyListEvent({ id: 21, date_change: { old_value: '2026-10-16', new_value: '2026-10-23', published_at: '2026-10-05T10:00:00.000Z' } }),
-        buildMyListEvent({ id: 22, bucket: 'tomorrow', days_until_start: 1, span_start: '2026-10-17', span_end: '2026-10-17', event_date: '2026-10-17' })
+        buildMyListEvent({ id: 22, bucket: 'tomorrow', days_until_start: 1, span_start: '2026-10-17', span_end: '2026-10-17', event_date: '2026-10-17' }),
+        // Neither value is a real calendar day — both must reach the title raw.
+        buildMyListEvent({ id: 23, date_change: { old_value: '2027-02-30', new_value: 'غير محدد', published_at: '2026-10-05T10:00:00.000Z' } })
       ],
-      counts: { all: 2, upcoming: 2, ended: 0 },
+      counts: { all: 3, upcoming: 3, ended: 0 },
       under_review_count: 0
     });
     const { document } = dom.window;
@@ -8019,8 +8021,19 @@ async function run() {
     const changed = document.querySelector('#myListBody .my-list-row[data-event-id="21"] .my-list-change-pill');
     assert.ok(changed, 'a row carrying date_change must show the warning pill');
     assert.ok(changed.textContent.includes('تغيّر الموعد'));
-    assert.strictEqual(changed.getAttribute('title'), 'من 2026-10-16 إلى 2026-10-23',
-      'the old and new values live in the pill title');
+    // نفس مُنسّق سطر تاريخ الصفّ — لا 'YYYY-MM-DD' خاماً في واجهة عربية.
+    const longDate = iso => new Intl.DateTimeFormat('ar-EG', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    }).format(new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))));
+    assert.strictEqual(
+      changed.getAttribute('title'), `من ${longDate('2026-10-16')} إلى ${longDate('2026-10-23')}`,
+      'the old and new values are formatted like the row date line, not raw ISO'
+    );
+    assert.ok(!changed.getAttribute('title').includes('2026-10-16'), 'the raw ISO date never reaches the user');
+
+    const fallback = document.querySelector('#myListBody .my-list-row[data-event-id="23"] .my-list-change-pill');
+    assert.strictEqual(fallback.getAttribute('title'), 'من 2027-02-30 إلى غير محدد',
+      'a value that is not a real date stays exactly as the server sent it');
     assert.strictEqual(document.querySelector('#myListBody .my-list-row[data-event-id="22"] .my-list-change-pill'), null,
       'a null date_change must render no pill');
   });
@@ -8210,6 +8223,166 @@ async function run() {
     const pageReminderBtn = dom.window.document.querySelector('#eventPageBody .reminder-btn');
     assert.ok(pageReminderBtn, 'the open event page renders its reminder button');
     assert.ok(pageReminderBtn.textContent.includes('أضف لقائمتي'), 'the open page agrees with the feed entry');
+  });
+
+  await test('clearEndedMyList: a refused clear toasts nothing and moves nothing; a successful one un-saves the cleared feed event', async () => {
+    const endedEvent = {
+      id: 88,
+      title: 'فرح منتهٍ',
+      town: 'رهط',
+      event_date: '2020-02-02',
+      is_reminded: true,
+      occasion_type: WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }]
+    };
+
+    let clearCalls = 0;
+    let cleared = false;
+    const toasts = [];
+    const alerts = [];
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          if (requestPath === '/api/events' && method === 'GET') {
+            return jsonResponse({ success: true, events: [endedEvent], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          if (requestPath === '/api/my-reminders' && method === 'DELETE') {
+            clearCalls += 1;
+            if (clearCalls === 1) {
+              return jsonResponse({ success: false, message: 'تعذّر الحذف الآن' }, { status: 400 });
+            }
+            cleared = true;
+            return jsonResponse({ success: true, removed: 1, message: 'تم حذف المناسبات المنتهية من قائمتك' });
+          }
+          if (requestPath === '/api/my-reminders' && method === 'GET') {
+            const events = cleared ? [] : [buildMyListEvent({
+              id: 88, bucket: 'ended_recent', days_until_start: -600,
+              span_start: '2020-02-02', span_end: '2020-02-02', event_date: '2020-02-02'
+            })];
+            return jsonResponse({
+              success: true, events,
+              counts: { all: events.length, upcoming: 0, ended: events.length },
+              under_review_count: 0
+            });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+    await waitFor(() => dom.window.document.querySelector('#eventsContainer .reminder-btn'));
+
+    const origAppendChild = dom.window.document.body.appendChild;
+    dom.window.document.body.appendChild = function (node) {
+      if (node && node.className === 'app-toast') toasts.push(node.textContent);
+      return origAppendChild.call(this, node);
+    };
+    dom.window.alert = (message) => { alerts.push(message); };
+    dom.window.confirm = () => true;
+
+    const feedReminderBtn = () => dom.window.document.querySelector('#eventsContainer .reminder-btn');
+    assert.strictEqual(feedReminderBtn().getAttribute('aria-label'), 'في قائمتي', 'the ended event starts out saved');
+
+    // 1) The server refuses: the server's own message is alerted, and neither a
+    // success toast nor a saved-state change may follow.
+    await dom.window.clearEndedMyList();
+    assert.strictEqual(clearCalls, 1);
+    assert.deepStrictEqual(alerts, ['تعذّر الحذف الآن'], 'a refused clear reports the server message');
+    assert.strictEqual(toasts.length, 0, 'a refused clear must toast nothing — not the failure message, not success');
+    assert.strictEqual(feedReminderBtn().getAttribute('aria-label'), 'في قائمتي', 'and must leave the saved state alone');
+
+    // 2) The server clears: every ended row it removed stops being saved on the
+    // feed too — no card may keep saying «في قائمتي» for a cleared event.
+    await dom.window.clearEndedMyList();
+    assert.strictEqual(clearCalls, 2);
+    assert.ok(toasts.some(t => t.includes('تم حذف المناسبات المنتهية')), 'the success message is toasted');
+    assert.strictEqual(
+      feedReminderBtn().getAttribute('aria-label'), 'أضف لقائمتي',
+      'an event cleared from «قائمتي» must stop reading «في قائمتي» on its feed card'
+    );
+    assert.ok(!feedReminderBtn().classList.contains('is-saved'));
+  });
+
+  await test('the «تراجع» undo of a failed re-add alerts and still reloads the list', async () => {
+    const feedEvent = {
+      id: 99,
+      title: 'فرح التراجع',
+      town: 'رهط',
+      event_date: '2026-10-20',
+      is_reminded: true,
+      occasion_type: WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }]
+    };
+
+    let undoAttempts = 0;
+    let listLoads = 0;
+    const alerts = [];
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          if (requestPath === '/api/events' && method === 'GET') {
+            return jsonResponse({ success: true, events: [feedEvent], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          if (requestPath === '/api/events/99/remind' && method === 'DELETE') {
+            return jsonResponse({ success: true, message: 'تم إلغاء التذكير' });
+          }
+          if (requestPath === '/api/events/99/remind' && method === 'POST') {
+            undoAttempts += 1;
+            throw new Error('offline'); // الشبكة تسقط لحظة التراجع
+          }
+          if (requestPath === '/api/my-reminders' && method === 'GET') {
+            listLoads += 1;
+            return jsonResponse({ success: true, events: [], counts: { all: 0, upcoming: 0, ended: 0 }, under_review_count: 0 });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+    await waitFor(() => dom.window.document.querySelector('#eventsContainer .reminder-btn'));
+    dom.window.alert = (message) => { alerts.push(message); };
+
+    await dom.window.removeFromMyList(99, null);
+    const undoBtn = Array.from(dom.window.document.querySelectorAll('.app-toast-action'))
+      .find(btn => btn.textContent === 'تراجع');
+    assert.ok(undoBtn, 'the removal toast offers «تراجع»');
+    assert.strictEqual(undoAttempts, 0, 'nothing is re-POSTed until the action is pressed');
+    const loadsAfterRemove = listLoads;
+
+    undoBtn.click();
+    await waitFor(() => alerts.length > 0);
+    assert.deepStrictEqual(alerts, ['تعذّر إرجاع المناسبة إلى قائمتك'], 'a failed undo says so in Arabic');
+    assert.strictEqual(undoAttempts, 1);
+    await waitFor(() => listLoads > loadsAfterRemove);
+    assert.ok(listLoads > loadsAfterRemove, 'the list is reloaded even when the undo failed');
+  });
+
+  await test('the event page offers no save button for an event that is not approved', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const base = {
+      title: 'عرس', town: TOWNS[0], event_date: '2026-10-10', location_name: 'ديوان',
+      occasion_type: WEDDING_TYPE
+    };
+    const pageReminderBtn = () => document.querySelector('#eventPageBody .reminder-btn');
+
+    win.renderEventPage({ ...base, id: 81, status: 'pending' });
+    assert.strictEqual(pageReminderBtn(), null, 'a pending submission cannot be followed — POST /remind 404s for it');
+
+    win.renderEventPage({ ...base, id: 82, status: 'approved' });
+    assert.ok(pageReminderBtn(), 'an approved event keeps its save button');
+
+    win.renderEventPage({ ...base, id: 83 });
+    assert.ok(pageReminderBtn(), 'an event with no status field at all is treated as followable');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

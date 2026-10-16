@@ -185,6 +185,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
       return;
     }
 
+    bool willAlarm = true;
     try {
       if (event.isReminded) {
         await services.api.unremind(event.id);
@@ -197,41 +198,41 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
         );
         await services.api.remind(event.id);
       }
-      // التغيير وقع على الخادم فعلاً — «قائمتي» تُعلَم هنا، قبل أيّ خروج
-      // مبكّر بسبب إذن الإشعارات: رفض الإذن يمنع المنبّه لا الحفظ، والمتابعة
-      // محفوظة على الخادم أصلاً.
+      // التغيير وقع على الخادم فعلاً — «قائمتي» والتغذية تُعلَمان هنا، قبل أيّ
+      // مسار رسالة: رفض الإذن يمنع المنبّه لا الحفظ، والإشارة تُكتب من كل
+      // شاشة تبدّل الحفظ كي لا يفوت تغييرٌ متكرّر القيمة.
       services.myListRevision.value++;
+      services.savedChange.value = (eventId: event.id, saved: !event.isReminded);
       if (!event.isReminded) {
-        final willAlarm = await services.reminders.onReminderAdded();
-        if (!willAlarm && mounted) {
-          showMessage(
-            context,
-            'تم حفظ التذكير، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — '
-            'فعّله من إعدادات النظام كي يصلك المنبّه',
-            isError: true,
-          );
-          _reloadQuietly();
-          return;
-        }
+        willAlarm = await services.reminders.onReminderAdded();
       }
       if (!mounted) return;
       if (event.isReminded) {
         showMessage(context, 'أُزيلت من قائمتي');
       } else {
-        showMessage(
-          context,
-          'أُضيفت إلى قائمتي',
-          action: SnackBarAction(
-            label: 'عرض',
-            textColor: context.c.sky,
-            onPressed: () {
-              // «عرض» من صفحة مناسبة مدفوعة فوق الهيكل: الرجوع إليه أوّلاً،
-              // وإلا تبدّل التبويب خلف الصفحة ولم يرَ المستخدم شيئاً.
-              Navigator.of(context).popUntil((route) => route.isFirst);
-              services.openMyList();
-            },
-          ),
+        final viewMyList = SnackBarAction(
+          label: 'عرض',
+          textColor: context.c.sky,
+          onPressed: () {
+            // «عرض» من صفحة مناسبة مدفوعة فوق الهيكل: الرجوع إليه أوّلاً،
+            // وإلا تبدّل التبويب خلف الصفحة ولم يرَ المستخدم شيئاً.
+            Navigator.of(context).popUntil((route) => route.isFirst);
+            services.openMyList();
+          },
         );
+        if (!willAlarm) {
+          // الحفظ وقع؛ رفض الإذن يمنع المنبّه لا الحفظ — رسالة واحدة تقول
+          // الاثنين، ومعها «عرض» كالرسالة العادية.
+          showMessage(
+            context,
+            'أُضيفت إلى قائمتي، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن '
+            'الإشعارات — فعّله من إعدادات النظام كي يصلك المنبّه',
+            isError: true,
+            action: viewMyList,
+          );
+        } else {
+          showMessage(context, 'أُضيفت إلى قائمتي', action: viewMyList);
+        }
       }
       _reloadQuietly();
     } catch (error) {
@@ -355,6 +356,11 @@ class _EventDetailsBody extends StatelessWidget {
     final congratulationsLabel = type?.congratulationsLabel ?? 'تبريكات';
 
     final isSolemn = type?.isSolemn ?? false;
+
+    // زرّ المتابعة لا يُعرض على مناسبة غير معتمدة: مالكها يراها في «مناسباتي»
+    // بكل حالاتها، والخادم يرفض متابعتها بـ404. `null` يعني مناسبة عامة وصلت
+    // بلا حقل الحالة — تُعرض لها كما كانت.
+    final canFollow = event.status == null || event.status == 'approved';
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
@@ -540,22 +546,26 @@ class _EventDetailsBody extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: onRemindTap,
-                    icon: Icon(
-                      event.isReminded
-                          ? Icons.bookmark
-                          : Icons.bookmark_border,
-                    ),
-                    label: Text(event.isReminded ? 'في قائمتي' : 'أضف لقائمتي'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor:
-                          event.isReminded ? context.c.sky : context.c.inkSoft,
-                      side: BorderSide(
-                        color: event.isReminded ? context.c.sky : context.c.line,
+                  if (canFollow)
+                    OutlinedButton.icon(
+                      onPressed: onRemindTap,
+                      icon: Icon(
+                        event.isReminded
+                            ? Icons.bookmark
+                            : Icons.bookmark_border,
+                      ),
+                      label:
+                          Text(event.isReminded ? 'في قائمتي' : 'أضف لقائمتي'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: event.isReminded
+                            ? context.c.sky
+                            : context.c.inkSoft,
+                        side: BorderSide(
+                          color:
+                              event.isReminded ? context.c.sky : context.c.line,
+                        ),
                       ),
                     ),
-                  ),
                   if (event.followersCount != null) ...[
                     const SizedBox(width: 10),
                     Text(

@@ -239,9 +239,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/events/:id/react` | إضافة تفاعل |
 | `POST` | `/api/events/:id/congratulate` | إضافة تبريكة/تعزية — تُنشر فوراً أو تدخل المراجعة حسب نوع المناسبة 🔒 |
 | `GET` | `/api/occasion-types` | أنواع المناسبات النشِطة، مرتّبة، مع حقولها الظاهرة وتفاعلاتها |
-| `POST` | `/api/events/:id/remind` | تفعيل «ذكّرني» على مناسبة — متابعة، وليست تعهّد حضور 🔒 |
-| `DELETE` | `/api/events/:id/remind` | إلغاء «ذكّرني» 🔒 |
-| `GET` | `/api/my-reminders` | كل المناسبات التي يتابعها المستخدم الحالي 🔒 |
+| `POST` | `/api/events/:id/remind` | إضافة المناسبة إلى «قائمتي» (الاسم القديم «ذكّرني») — متابعة بتذكير مفعَّل، وليست تعهّد حضور. مناسبة غير معتمدة (`pending`/`rejected`) ← 404 لا 403؛ تكرار الإضافة لا يغيّر الصفّ القائم 🔒 |
+| `DELETE` | `/api/events/:id/remind` | إزالتها من «قائمتي» 🔒 |
+| `PATCH` | `/api/events/:id/remind` | `{ notify: true\|false }` (قيمة منطقية حصراً، وإلا 400) — كتم جرس المناسبة أو تفعيله وهي باقية في القائمة؛ 404 «المناسبة ليست في قائمتك» 🔒 |
+| `GET` | `/api/my-reminders` | «قائمتي»: `{ events, counts: { all, upcoming, ended }, under_review_count }` — المعتمدة فقط (ومرشَّحة بـ`X-App-Version` كالتغذية)، القادمة أولاً بأوّل يوم صعوداً ثم المنتهية بآخر يوم نزولاً. كل صفّ هو صفّ المناسبة المعتاد + `notify` و`saved_at` و`span_start`/`span_end` (`YYYY-MM-DD`، امتداد أيام المناسبة كاملاً) و`days_until_start` و`bucket` (`now`·`tomorrow`·`this_week`·`later`·`ended_recent`·`ended` — يحسبه الخادم لا العميل؛ الأسبوع أحد–سبت، و`ended_recent` آخر سبعة أيام متدحرجة لا «منذ الأحد» كي لا يختفي عرس الخميس صباح الأحد) و`date_change` (آخر إعلان تعديل تاريخ حيّ نُشر **بعد** الحفظ، أو `null`). `under_review_count` = متابَعات مناسباتها عادت `pending` بعد تعديل 🔒 |
+| `DELETE` | `/api/my-reminders?scope=ended` | «نظّف المنتهية» — يحذف من قائمة المستخدم نفسه كل مناسبة انتهى آخر أيامها، ويعيد `removed`؛ أي `scope` آخر ← 400 🔒 |
 
 ⚠️ **تغيّر سلوك:** `POST /api/events` كان عاماً (بلا رمز) ويدخل قائمة المراجعة؛ صار يتطلب
 رمز دخول صالح 🔒 — طلب بلا رمز يُرفض بـ401. القراءة العامة (`GET`) بلا حساب لم تتغيّر.
@@ -322,6 +324,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
   `Authorization`، و`false` للزائر. `followers_count` (عدد صحيح) يظهر **فقط** حين يكون علَم
   `show_followers_count` مرفوعاً على نوع المناسبة — يغيب الحقل كلياً حين يكون مطفأً (لا صفر)،
   كما يفعل `congratulations_count` تماماً. عزاء اليوم يُطفئه، عرس اليوم يرفعه.
+  **صار اسمه في الواجهات «قائمتي»** (زرّ واحد «أضف لقائمتي»/«في قائمتي» وتبويب ثانٍ في
+  الشريط السفلي للويب والموبايل) والحقل والمسارات لم تتغيّر. الصفّ المكتوم (`event_reminders.notify = 0`)
+  يبقى متابِعاً — `is_reminded` صحيح ويُحتسب في `followers_count` — لكنه لا يدخل
+  `/api/reminders/schedule` ولا العدّاد التنازلي ولا «تحديث على…» ولا إشعار تغيّر التاريخ/المكان — يبقى له في القائمة نفسها
+  شارة «تغيّر الموعد» (`date_change`).
 - **`announcements`** إلى جانب `events`: إعلانات تعديل التاريخ **الحيّة فقط** لكل مناسبة
   (`is_current = 1` ولم ينتهِ تاريخها الجديد بعد) — راجع قسم «إعلانات تعديل التاريخ» أدناه.
   يخضع لنفس ترشيح `X-App-Version`.

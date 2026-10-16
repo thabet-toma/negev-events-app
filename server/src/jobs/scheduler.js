@@ -51,10 +51,12 @@ function countdownBody(offsetDays, eventTitle) {
  * Every approved event whose occasion type still has its countdown on
  * (`notify_countdown = 1` — never true for a `solemn` type, story 4) and
  * whose date is exactly one of `COUNTDOWN_OFFSETS` (8, 6, 4, 2, 0) days out today, notifies every
- * "ذكّرني" follower — the event's own creator included, if they follow it
- * too, but exempt from the daily cap (story 11 — exempt means never counted
- * either, see notifications.service.js#countScheduledToday). `event_soon`'s
- * own dedupe key (`event_soon_<event_id>_<offsetDays>`) is what makes
+ * un-muted "ذكّرني" follower — the event's own creator included, if they
+ * follow it too, but exempt from the daily cap (story 11 — exempt means never
+ * counted either, see notifications.service.js#countScheduledToday). Muted
+ * rows (`notify = 0`) are excluded: such a follow stays on «قائمتي» but is
+ * never notified. `event_soon`'s own dedupe key
+ * (`event_soon_<event_id>_<offsetDays>`) is what makes
  * running this pass twice on the same day write the exact same rows, not
  * new ones.
  */

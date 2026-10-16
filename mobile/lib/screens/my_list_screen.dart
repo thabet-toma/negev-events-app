@@ -117,30 +117,50 @@ class _MyListScreenState extends State<MyListScreen> {
   }
 
   /// تبديل تذكير وقع في شاشة أخرى («المناسبات» أو صفحة المناسبة).
+  ///
+  /// القائمة خلف تبويب آخر تُجلب بياناتها **صامتة**: العدّاد والصفوف يتقدّمان
+  /// فوراً بلا مؤشّر تحميل ولا مساس بالفلتر أو بموضع التمرير.
   void _handleRevision() {
-    if (mounted && widget.isActive) _load();
+    if (!mounted) return;
+    _load(quiet: !widget.isActive);
   }
 
-  Future<void> _load() async {
+  /// يُبقي شارة «قائمتي» في الشريط مطابقةً لما تعرضه الشاشة الآن — تُستدعى بعد
+  /// كل تغيير في `_data`، فالشارة لا تنتظر جلباً كاملاً لتصحّ.
+  void _syncNowCount(AppServices services) {
+    final data = _data;
+    if (data != null) services.myListNowCount.value = data.nowCount;
+  }
+
+  /// [quiet] تحديث في الخلفية (تبويب آخر غيّر شيئاً): لا مؤشّر تحميل، ولا
+  /// شاشة خطأ، ولا مساس بما يراه المستخدم إن فشل — لكن البيانات والشارة
+  /// يتقدّمان إن نجح.
+  Future<void> _load({bool quiet = false}) async {
     if (!mounted) return;
     final services = AppServices.of(context);
     if (!services.auth.isSignedIn) return;
 
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (!quiet) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final data = await services.api.myList();
       if (!mounted) return;
-      services.myListNowCount.value = data.nowCount;
       setState(() {
         _data = data;
         _loading = false;
+        _error = null;
       });
+      _syncNowCount(services);
     } catch (error) {
       if (!mounted) return;
+      // تحديث صامت فشل: ما يراه المستخدم يبقى كما هو، ويُصحَّح عند أول جلب
+      // ناجح — لا خطأ يُعرض عن تحديث خلفيّ لم يطلبه أحد.
+      if (quiet) return;
       setState(() {
         _error = error;
         _loading = false;
@@ -179,6 +199,8 @@ class _MyListScreenState extends State<MyListScreen> {
 
     // إزالة متفائلة فوراً: `Dismissible` لا يجوز أن يبقى في الشجرة بعد طيّه.
     setState(() => _data = _data?.withoutEvent(eventId));
+    // الشارة تتبع ما رُسم للتوّ — لا تنتظر جلباً، فلا تبقى تكذب بعد الإزالة.
+    _syncNowCount(services);
 
     try {
       await services.api.unremind(eventId);
@@ -208,27 +230,37 @@ class _MyListScreenState extends State<MyListScreen> {
       action: SnackBarAction(
         label: 'تراجع',
         textColor: context.c.sky,
-        onPressed: () => _undoRemove(eventId),
+        onPressed: () => _undoRemove(services, eventId),
       ),
     );
   }
 
   /// «تراجع» في رسالة الإزالة — إعادة الصفّ كما كان على الخادم.
-  Future<void> _undoRemove(int eventId) async {
-    final services = AppServices.of(context);
+  ///
+  /// [services] يصل من [_remove] ولا يُقرأ من `context` هنا: الرسالة قد تعيش
+  /// أطول من الشاشة، وضغط زرّها بعد `dispose` لا يجوز أن يلمس الشجرة.
+  Future<void> _undoRemove(AppServices services, int eventId) async {
     try {
       await services.api.remind(eventId);
-      try {
-        // المنبّه المعلَّق أُلغي بالسحب — يعود فوراً بلا طلب إذن جديد
-        // (syncAll لا يسأل، بخلاف onReminderAdded). وفشله صامت: التذكير
-        // قائم على الخادم ويُصحَّح عند أول فتح تالٍ.
-        await services.reminders.syncAll();
-      } catch (_) {}
-      services.savedChange.value = (eventId: eventId, saved: true);
     } catch (error) {
       if (mounted) showMessage(context, '$error', isError: true);
+      return;
     }
-    if (mounted) await _load();
+
+    try {
+      // المنبّه المعلَّق أُلغي بالسحب — يعود فوراً بلا طلب إذن جديد
+      // (syncAll لا يسأل، بخلاف onReminderAdded). وفشله صامت: التذكير
+      // قائم على الخادم ويُصحَّح عند أول فتح تالٍ.
+      await services.reminders.syncAll();
+    } catch (_) {}
+
+    services.savedChange.value = (eventId: eventId, saved: true);
+
+    if (!mounted) return;
+    // الجلب يعيد الصفّ والشارة معاً من الخادم؛ وإن فشل تبقى القائمة والشارة
+    // على ما هما عليه (لا نصفّرها: التذكير قائم على الخادم فعلاً).
+    await _load();
+    _syncNowCount(services);
   }
 
   Future<void> _addNokoot(MyListEntry entry) async {
