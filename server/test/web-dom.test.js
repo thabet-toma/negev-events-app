@@ -257,7 +257,7 @@ function jsonResponse(body, { status = 200 } = {}) {
 
 /** A minimal fetch stub for every endpoint app.js's startup path touches. */
 function buildFetchStub() {
-  return async function fetchStub(url) {
+  return async function fetchStub(url, options = {}) {
     const requestPath = String(url).split('?')[0];
     if (requestPath === '/api/occasion-types') {
       return jsonResponse({ success: true, types: OCCASION_TYPES_FIXTURE });
@@ -270,6 +270,10 @@ function buildFetchStub() {
     }
     if (requestPath === '/api/stories') return jsonResponse({ success: true, stories: [] });
     if (requestPath === '/api/notifications') return jsonResponse({ success: true, notifications: [] });
+    // «قائمتي» تُجلب عند الإقلاع لجلسة محفوظة (initMyList) — فارغة بلا جلسة.
+    if (requestPath === '/api/my-reminders' && (options.method || 'GET') === 'GET') {
+      return jsonResponse({ success: true, events: [], counts: { all: 0, upcoming: 0, ended: 0 }, under_review_count: 0 });
+    }
     if (requestPath === '/api/map/events') return jsonResponse({ success: true, points: [] });
     if (requestPath === '/api/app/version') return jsonResponse({ success: false });
     if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [] });
@@ -7864,6 +7868,348 @@ async function run() {
     const sentKeys = Array.from(win.collectOccasionTypeFields(), field => field.field_key).sort();
     assert.deepStrictEqual(sentKeys, SERVER_FIELDS.map(field => field.key).sort(),
       'web/admin.js OCCASION_FIELDS must mirror server/src/constants.js exactly, or saving a type drops the missing fields');
+  });
+
+  console.log('\n«قائمتي» — the follow list tab (web/, no database)');
+
+  /** One «قائمتي» row, shaped exactly like events.service.js#listMyReminders returns it. */
+  function buildMyListEvent(overrides = {}) {
+    return {
+      id: 1,
+      title: 'فرح تجريبي',
+      poster_url: null,
+      town: 'رهط',
+      event_date: '2026-10-16',
+      is_reminded: true,
+      notify: true,
+      saved_at: '2026-10-01T10:00:00.000Z',
+      span_start: '2026-10-16',
+      span_end: '2026-10-16',
+      days_until_start: 0,
+      bucket: 'now',
+      date_change: null,
+      occasion_type: WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }],
+      groom_name: 'سالم',
+      ...overrides
+    };
+  }
+
+  /**
+   * The «قائمتي» fetch seam: GET /api/my-reminders answers `payload` and every
+   * call is recorded. It is installed in onBeforeEval so the startup load
+   * (initMyList, from DOMContentLoaded) answers this same payload — otherwise
+   * a boot fetch could land after the test's own and overwrite myListData.
+   */
+  function buildMyListFetchStub(payload) {
+    const base = buildFetchStub();
+    const calls = [];
+    const fetchFn = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      calls.push({ path: requestPath, url: String(url), method, headers: options.headers || {}, body: options.body });
+      if (requestPath === '/api/my-reminders' && method === 'GET') {
+        return jsonResponse({ success: true, ...payload });
+      }
+      return base(url, options);
+    };
+    return { fetchFn, calls };
+  }
+
+  /** A signed-in env whose «قائمتي» answers `payload`, waited for until it has rendered. */
+  async function buildMyListEnv(payload) {
+    const stub = buildMyListFetchStub(payload);
+    const dom = buildEnv({ loggedIn: true, onBeforeEval: (w) => { w.fetch = stub.fetchFn; } });
+    await flushBoot();
+    await waitFor(() => dom.window.document.querySelectorAll('#myListChips .my-list-chip').length === 3);
+    return { dom, stub };
+  }
+
+  await test('the reminder button reads «أضف لقائمتي» when unsaved, and «في قائمتي» + is-saved when saved', () => {
+    const dom = buildEnv();
+
+    const unsaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: false });
+    assert.ok(unsaved.includes('أضف لقائمتي'), 'an unsaved event must offer «أضف لقائمتي»');
+    assert.ok(unsaved.includes('fa-regular fa-bookmark'), 'the unfilled bookmark marks "not saved yet"');
+    assert.ok(!/class="[^"]*\bis-saved\b/.test(unsaved), 'is-saved must be absent while unsaved');
+
+    const saved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: true });
+    assert.ok(saved.includes('في قائمتي'), 'a saved event must read «في قائمتي»');
+    assert.ok(saved.includes('fa-solid fa-bookmark'), 'the filled bookmark marks "saved"');
+    assert.ok(/class="[^"]*\bis-saved\b/.test(saved), 'is-saved must mark the active state so it reads as active');
+
+    // الكرت (compact) — كلمتان قصيرتان تفيان بعرض الصفّ، والاسم الكامل لقارئ
+    // الشاشة في aria-label. الافتراضي يبقى النصّ الكامل (صفحة المناسبة).
+    const compactUnsaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: false }, { compact: true });
+    assert.ok(compactUnsaved.includes('<span>احفظ</span>'), 'the compact unsaved label is «احفظ»');
+    assert.ok(compactUnsaved.includes('fa-regular fa-bookmark'));
+    assert.ok(compactUnsaved.includes('aria-label="أضف لقائمتي"'), 'the full wording survives in aria-label');
+    assert.ok(!compactUnsaved.includes('<span>أضف لقائمتي</span>'), 'the compact button must not carry the long label');
+
+    const compactSaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: true }, { compact: true });
+    assert.ok(compactSaved.includes('<span>محفوظة</span>'), 'the compact saved label is «محفوظة»');
+    assert.ok(compactSaved.includes('fa-solid fa-bookmark'));
+    assert.ok(compactSaved.includes('aria-label="في قائمتي"'));
+    assert.ok(/class="[^"]*\bis-saved\b/.test(compactSaved), 'the compact saved button is active too');
+  });
+
+  await test('renderMyList draws the six server buckets in order, collapses «انتهت سابقاً», and picks row actions by bucket', async () => {
+    const { dom } = await buildMyListEnv({
+      events: [
+        buildMyListEvent({ id: 11 }),
+        buildMyListEvent({ id: 12, bucket: 'tomorrow', days_until_start: 1, span_start: '2026-10-17', span_end: '2026-10-17', event_date: '2026-10-17' }),
+        buildMyListEvent({ id: 13, bucket: 'this_week', days_until_start: 3, span_start: '2026-10-19', span_end: '2026-10-19', event_date: '2026-10-19' }),
+        // Solemn type (عزا) — the no-countdown assertion below needs it inside a list that renders pills elsewhere.
+        buildMyListEvent({ id: 14, bucket: 'later', days_until_start: 40, span_start: '2026-11-25', span_end: '2026-11-25', event_date: '2026-11-25', occasion_type: FUNERAL_TYPE, honorees: [{ name: 'المرحوم' }] }),
+        buildMyListEvent({ id: 15, bucket: 'ended_recent', days_until_start: -2, span_start: '2026-10-14', span_end: '2026-10-14', event_date: '2026-10-14' }),
+        buildMyListEvent({ id: 16, bucket: 'ended', days_until_start: -30, span_start: '2026-09-16', span_end: '2026-09-16', event_date: '2026-09-16' })
+      ],
+      counts: { all: 6, upcoming: 4, ended: 2 },
+      under_review_count: 0
+    });
+    const { document } = dom.window;
+
+    const heads = Array.from(document.querySelectorAll('#myListBody .my-list-bucket-head'))
+      .map(el => el.textContent.replace(/\s+/g, ' ').trim());
+    assert.strictEqual(heads.length, 6, `expected a heading per bucket, got: ${JSON.stringify(heads)}`);
+    ['اليوم', 'غداً', 'هذا الأسبوع', 'لاحقاً', 'انتهت خلال الأسبوع الأخير', 'انتهت سابقاً'].forEach((title, index) => {
+      assert.ok(heads[index].includes(title), `bucket #${index} must be «${title}», got «${heads[index]}»`);
+    });
+
+    const endedSection = document.querySelector('#myListBody .my-list-section[data-bucket="ended"]');
+    assert.strictEqual(endedSection.querySelectorAll('.my-list-row').length, 0, '«انتهت سابقاً» must start collapsed');
+    assert.ok(
+      endedSection.querySelector('.my-list-bucket-toggle').textContent.includes('(1)'),
+      'the collapsed heading is a toggle showing its own count'
+    );
+
+    const bucketsOf = selector => Array.from(document.querySelectorAll(`#myListBody ${selector}`))
+      .map(el => el.closest('.my-list-section').dataset.bucket);
+
+    assert.deepStrictEqual(bucketsOf('.my-list-nokoot-btn'), ['ended_recent'],
+      '«سجّل نقوطك» belongs to ended rows only, and the collapsed ended row is not drawn yet');
+    dom.window.toggleMyListEnded();
+    assert.deepStrictEqual(bucketsOf('.my-list-nokoot-btn'), ['ended_recent', 'ended'],
+      'expanding «انتهت سابقاً» reveals exactly the second ended row');
+
+    assert.deepStrictEqual(bucketsOf('.my-list-bell-btn'), ['now', 'tomorrow', 'this_week', 'later'],
+      'the bell belongs to upcoming rows only');
+
+    const solemnRow = document.querySelector('#myListBody .my-list-row[data-event-id="14"]');
+    assert.ok(solemnRow, 'the solemn row must have rendered, or the assertion below passes vacuously');
+    assert.strictEqual(solemnRow.querySelector('.my-list-status-pill'), null,
+      'a solemn type must carry no countdown or celebratory pill');
+    assert.ok(
+      document.querySelector('#myListBody .my-list-row[data-event-id="11"] .my-list-status-pill').textContent.includes('جارية اليوم'),
+      'an ordinary upcoming row still shows its status pill'
+    );
+  });
+
+  await test('a date change shows «تغيّر الموعد» with old→new in its title, and null renders nothing', async () => {
+    const { dom } = await buildMyListEnv({
+      events: [
+        buildMyListEvent({ id: 21, date_change: { old_value: '2026-10-16', new_value: '2026-10-23', published_at: '2026-10-05T10:00:00.000Z' } }),
+        buildMyListEvent({ id: 22, bucket: 'tomorrow', days_until_start: 1, span_start: '2026-10-17', span_end: '2026-10-17', event_date: '2026-10-17' })
+      ],
+      counts: { all: 2, upcoming: 2, ended: 0 },
+      under_review_count: 0
+    });
+    const { document } = dom.window;
+
+    const changed = document.querySelector('#myListBody .my-list-row[data-event-id="21"] .my-list-change-pill');
+    assert.ok(changed, 'a row carrying date_change must show the warning pill');
+    assert.ok(changed.textContent.includes('تغيّر الموعد'));
+    assert.strictEqual(changed.getAttribute('title'), 'من 2026-10-16 إلى 2026-10-23',
+      'the old and new values live in the pill title');
+    assert.strictEqual(document.querySelector('#myListBody .my-list-row[data-event-id="22"] .my-list-change-pill'), null,
+      'a null date_change must render no pill');
+  });
+
+  await test('the «انتهت» chip filters client-side, and each chip has its own empty state', async () => {
+    const { dom } = await buildMyListEnv({
+      events: [
+        buildMyListEvent({ id: 31 }),
+        buildMyListEvent({ id: 32, bucket: 'ended_recent', days_until_start: -2, span_start: '2026-10-14', span_end: '2026-10-14', event_date: '2026-10-14' }),
+        buildMyListEvent({ id: 33, bucket: 'ended', days_until_start: -30, span_start: '2026-09-16', span_end: '2026-09-16', event_date: '2026-09-16' })
+      ],
+      counts: { all: 3, upcoming: 1, ended: 2 },
+      under_review_count: 0
+    });
+    const { document } = dom.window;
+
+    assert.ok(document.querySelector('#myListBody .my-list-row[data-event-id="31"]'), 'the default chip shows the upcoming row');
+    dom.window.setMyListChip('ended');
+    assert.strictEqual(document.querySelector('#myListBody .my-list-row[data-event-id="31"]'), null,
+      'an upcoming row must vanish under «انتهت»');
+    assert.ok(document.querySelector('#myListBody .my-list-row[data-event-id="32"]'), 'the recently-ended row stays');
+    assert.strictEqual(document.querySelector('#myListBody .my-list-section[data-bucket="now"]'), null,
+      'no upcoming section survives under «انتهت»');
+    assert.ok(document.querySelector('#myListChips .my-list-chip.active').textContent.includes('انتهت'),
+      'the chosen chip must read as active');
+
+    const empty = await buildMyListEnv({ events: [], counts: { all: 0, upcoming: 0, ended: 0 }, under_review_count: 0 });
+    const emptyBody = empty.dom.window.document.getElementById('myListBody');
+    assert.ok(emptyBody.textContent.includes('قائمتك فارغة'), 'the «الكل» empty state tells the visitor how to fill the list');
+    assert.ok(emptyBody.textContent.includes('تصفّح المناسبات'), 'and offers the way back to the feed');
+    empty.dom.window.setMyListChip('upcoming');
+    assert.ok(empty.dom.window.document.getElementById('myListBody').textContent.includes('لا مناسبات قادمة في قائمتك'));
+    empty.dom.window.setMyListChip('ended');
+    assert.ok(empty.dom.window.document.getElementById('myListBody').textContent.includes('لا مناسبات منتهية في قائمتك'));
+  });
+
+  await test('the bottom nav holds six destinations with «قائمتي» second, and switchTab activates that button', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
+    assert.strictEqual(navBtns.length, 6, 'the bar must hold exactly six destinations');
+    assert.strictEqual(navBtns[1].id, 'navBtnMyList', '«قائمتي» must sit immediately after «المناسبات»');
+    assert.ok(navBtns[1].textContent.includes('قائمتي'));
+    const badge = document.getElementById('myListNavBadge');
+    assert.ok(badge, 'the destination carries its badge span');
+    assert.strictEqual(badge.hidden, true, 'the badge starts hidden — no signed-in list, nothing today');
+
+    // The FAB's slot: the empty span must sit exactly between «الخريطة» and
+    // «النقوط», and must not be a .nav-btn (switchTab counts those).
+    const gap = document.querySelector('.bottom-navbar .nav-fab-gap');
+    assert.ok(gap, 'the bar must reserve a slot for the centre «+» button');
+    assert.strictEqual(gap.nextElementSibling.id, 'navBtnNokoot', 'the gap closes the slot the FAB occupies');
+    assert.strictEqual(gap.previousElementSibling.id, 'navBtnMap', 'and opens right after «الخريطة»');
+    assert.ok(!gap.classList.contains('nav-btn'), 'the gap is not a destination');
+
+    dom.window.switchTab('tabMyList');
+    assert.ok(navBtns[1].classList.contains('active'), 'switchTab must activate the button at the matching nav index');
+    assert.ok(document.getElementById('tabMyList').classList.contains('active-tab'));
+    assert.strictEqual(document.getElementById('myListLockedView').style.display, 'block',
+      'a visitor with no session sees the sign-in card, never a blank tab');
+  });
+
+  await test('resumePendingIntent with { type: \'remind\' } POSTs /api/events/:id/remind after sign-in', async () => {
+    const dom = buildEnv(); // anonymous — the tap below must survive the sign-in
+    await flushBoot();
+
+    let remindPost = null;
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      if (requestPath === '/api/events/55/remind' && method === 'POST') {
+        remindPost = { path: requestPath, headers: options.headers || {} };
+        return jsonResponse({ success: true, message: 'تم تفعيل التذكير' });
+      }
+      if (requestPath === '/api/auth/login' && method === 'POST') {
+        return jsonResponse({ success: true, token: 'test-token-after-login', user: { id: 777, full_name: 'مستخدم بعد الدخول', role: 'user' } });
+      }
+      return base(url, options);
+    };
+
+    // The guest taps «أضف لقائمتي»: intent kept, nothing sent, the auth modal opens.
+    assert.strictEqual(dom.window.requireAuth({ type: 'remind', eventId: 55 }), false);
+    assert.strictEqual(remindPost, null, 'a guest tap must not POST on its own');
+
+    dom.window.document.getElementById('loginPhone').value = '0500000000';
+    dom.window.document.getElementById('loginPin').value = '1234';
+    await dom.window.handleLogin({ preventDefault() {} });
+    await waitFor(() => remindPost !== null);
+
+    assert.ok(remindPost, 'signing in must resume the reminder intent — otherwise the guest loses the tap');
+    assert.strictEqual(remindPost.path, '/api/events/55/remind');
+    assert.strictEqual(remindPost.headers.Authorization, 'Bearer test-token-after-login', 'the resumed call carries the fresh token');
+  });
+
+  await test('«نظّف المنتهية» confirms first, then DELETEs /api/my-reminders?scope=ended with the token', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+
+    const confirmMessages = [];
+    dom.window.confirm = (message) => { confirmMessages.push(message); return true; };
+
+    let clearCall = null;
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url) === '/api/my-reminders?scope=ended') {
+        clearCall = { url: String(url), method: options.method, headers: options.headers || {} };
+        return jsonResponse({ success: true, removed: 2, message: 'تم حذف المناسبات المنتهية من قائمتك' });
+      }
+      return base(url, options);
+    };
+
+    await dom.window.clearEndedMyList();
+
+    assert.deepStrictEqual(confirmMessages, ['حذف كل المناسبات المنتهية من قائمتك؟'],
+      'the deletion is irreversible — it must be confirmed first');
+    assert.ok(clearCall, 'confirming must issue the DELETE');
+    assert.strictEqual(clearCall.method, 'DELETE');
+    assert.strictEqual(clearCall.headers.Authorization, 'Bearer test-token-web-dom', 'the clear must carry the site token');
+
+    // Declining the confirmation must mean nothing is deleted at all.
+    clearCall = null;
+    dom.window.confirm = (message) => { confirmMessages.push(message); return false; };
+    await dom.window.clearEndedMyList();
+    assert.strictEqual(confirmMessages.length, 2, 'the button always asks before deleting');
+    assert.strictEqual(clearCall, null, 'declining the confirmation must send no DELETE');
+  });
+
+  await test('removing an event from «قائمتي» clears is_reminded on the feed entry, so its card offers adding it again', async () => {
+    const feedEvent = {
+      id: 77,
+      title: 'فرح الإزالة',
+      town: 'رهط',
+      event_date: '2026-10-20',
+      is_reminded: true,
+      occasion_type: WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }]
+    };
+
+    let deleteCalled = false;
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          if (requestPath === '/api/events' && method === 'GET') {
+            return jsonResponse({ success: true, events: [feedEvent], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          if (requestPath === '/api/events/77/remind' && method === 'DELETE') {
+            deleteCalled = true;
+            return jsonResponse({ success: true, message: 'تم إلغاء التذكير' });
+          }
+          // The page is read from the client's own state here: an empty answer
+          // keeps openEventPage from re-rendering over it, so the assertion
+          // below witnesses allEvents rather than a fresh server payload.
+          if (requestPath === '/api/events/77' && method === 'GET') {
+            return jsonResponse({ success: false });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+
+    await dom.window.fetchEvents();
+    await waitFor(() => dom.window.document.querySelector('#eventsContainer .reminder-btn'));
+    const feedReminderBtn = () => dom.window.document.querySelector('#eventsContainer .reminder-btn');
+    // The feed card is the compact variant — the full wording rides in aria-label.
+    assert.strictEqual(feedReminderBtn().getAttribute('aria-label'), 'في قائمتي', 'the card starts out saved');
+    assert.ok(feedReminderBtn().classList.contains('is-saved'));
+
+    await dom.window.removeFromMyList(77, null);
+
+    assert.strictEqual(deleteCalled, true, 'the removal must reach DELETE /api/events/77/remind');
+    assert.strictEqual(
+      feedReminderBtn().getAttribute('aria-label'), 'أضف لقائمتي',
+      'after removal the feed entry is no longer reminded — its card offers adding again, not removing'
+    );
+    assert.ok(!feedReminderBtn().classList.contains('is-saved'), 'and the active class goes with it');
+
+    // The same state sync covers the event page branch of applySavedState.
+    await dom.window.openEventPage(77);
+    await delay(30);
+    const pageReminderBtn = dom.window.document.querySelector('#eventPageBody .reminder-btn');
+    assert.ok(pageReminderBtn, 'the open event page renders its reminder button');
+    assert.ok(pageReminderBtn.textContent.includes('أضف لقائمتي'), 'the open page agrees with the feed entry');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

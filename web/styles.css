@@ -2056,8 +2056,12 @@ body {
 .app-toast {
   position: fixed;
   top: 70px;
-  inset-inline-start: 50%;
+  left: 50%;
   transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
   background: var(--sky);
   color: var(--on-sky);
   font-weight: 800;
@@ -3943,3 +3947,134 @@ body.event-page-open { overflow: hidden; }
 .event-page-congrats .sender-name { font-weight: 800; color: var(--ink); font-size: 0.9rem; }
 .event-page-congrats .sender-badge { font-size: 0.72rem; color: var(--tone, var(--sky)); }
 .event-page-congrats .chat-msg-text { color: var(--ink-soft); font-size: 0.92rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»: شارة وجهة الشريط السفلي، وحالة
+   زرّ الحفظ النشِطة، وفعل داخل التوست، وصفوف التبويب. لا رمز لون جديد هنا —
+   رموز الملف وحدها (وأبيض واحد فوق الأخضر المصمت كما في .record-nokoot-btn)،
+   فتعمل في الوضعين الفاتح والداكن بلا استثناء. */
+#navBtnMyList { position: relative; }
+
+/* الوجهات الستّ تتقاسم ما بقي بعد خانة زرّ النشر العائم، وتسمية كل وجهة في
+   سطر واحد. `.nav-fab-gap` يحفظ للزرّ وسطه الفارغ دون أن يكون زرّاً —
+   `switchTab` تعُدّ `.nav-btn` وحدها فلا تراه. */
+.bottom-navbar .nav-btn { flex: 1 1 0; min-width: 0; }
+.bottom-navbar .nav-btn > span { white-space: nowrap; }
+.nav-fab-gap { flex: 0 0 58px; }
+
+/* 375px وما دونها: ستّ تسميات وزرّ نشر في الوسط لا تتّسع بحشوة 12px وخطّ
+   0.72rem، فتُضيّق الحشوة ويصغر الخطّ بدل أن تفيض التسميات على بعضها. */
+@media (max-width: 380px) {
+  .bottom-navbar { padding: 10px 6px; }
+  .nav-btn { font-size: 0.66rem; }
+}
+
+.nav-badge {
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 50%;
+  margin-inline-start: 6px;
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.62rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+/* «في قائمتي» حالة نشِطة: تسبق قواعد .record-nokoot-btn وقواعد الكرت في
+   الترتيب (الملف يُقرأ من أعلاه إلى أسفله) بنفس التخصيص أو أعلى. */
+.reminder-btn.is-saved,
+.card-caption-actions .reminder-btn.is-saved {
+  background: var(--sky-wash);
+  border-color: var(--sky);
+  color: var(--sky-deep);
+}
+
+.reminder-btn.is-saved:hover,
+.card-caption-actions .reminder-btn.is-saved:hover {
+  background: var(--sky);
+  color: var(--on-sky);
+}
+
+/* فعل داخل التوست — «عرض» و«تراجع» — بجانب نصّه (الفراغ من gap التوست). */
+.app-toast-action {
+  padding: 2px 12px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-main);
+  font-size: 0.8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.my-list-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.my-list-head-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.my-list-head-title h2 { font-size: 1.35rem; color: var(--ink); font-weight: 800; }
+.my-list-count { font-size: 0.85rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.my-list-clear-btn { background: none; border: none; padding: 4px 2px; color: var(--ink-faint); font-family: var(--font-main); font-size: 0.82rem; font-weight: 700; cursor: pointer; text-decoration: underline; white-space: nowrap; }
+.my-list-clear-btn:hover { color: var(--danger); }
+
+.my-list-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.my-list-chip.active { background: var(--sky); color: var(--on-sky); border-color: var(--sky); }
+/* الرقاقة النشِطة تحمل لونها فوق hover القاعدة نفسها (.filter-chip:hover) */
+.my-list-chip.active:hover { color: var(--on-sky); border-color: var(--sky); }
+
+.my-list-notice {
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-size: 0.83rem;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.my-list-section { display: flex; flex-direction: column; }
+.my-list-bucket-head { display: flex; align-items: center; gap: 6px; margin: 18px 0 10px; font-size: 0.95rem; font-weight: 800; color: var(--ink); }
+.my-list-section:first-child .my-list-bucket-head { margin-top: 0; }
+.my-list-bucket-toggle { background: none; border: none; padding: 0; font-family: var(--font-main); color: var(--sky-deep); cursor: pointer; }
+
+.my-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+.my-list-row.is-ended { background: var(--surface-sunk); }
+
+/* جسم الصفّ وحده يفتح صفحة المناسبة — الأزرار في العمود المقابل خارج هذا العنصر. */
+.my-list-row-body { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
+.my-list-row-img { width: 54px; height: 54px; border-radius: var(--radius-sm); object-fit: cover; flex: none; background: var(--surface-sunk); }
+.my-list-row-img-empty { display: grid; place-items: center; color: var(--sky); font-size: 1.25rem; }
+.my-list-row-main { min-width: 0; flex: 1; }
+.my-list-row-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.my-list-row-title { font-size: 0.95rem; font-weight: 800; color: var(--ink); line-height: 1.35; overflow-wrap: anywhere; }
+.my-list-row-meta { font-size: 0.78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.my-list-status-pill { padding: 2px 10px; border-radius: var(--radius-pill); background: var(--sky-wash); color: var(--sky-deep); border: 1px solid var(--sky); font-size: 0.72rem; font-weight: 800; white-space: nowrap; }
+.my-list-status-pill.is-now { background: var(--success-wash); color: var(--success); border-color: var(--success); }
+.my-list-status-pill.is-ended { background: var(--surface-sunk); color: var(--ink-soft); border-color: var(--line); }
+.my-list-change-pill { padding: 2px 10px; border-radius: var(--radius-pill); background: var(--warn-wash); color: var(--warn); border: 1px solid var(--warn); font-size: 0.72rem; font-weight: 800; white-space: nowrap; }
+
+.my-list-row-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.my-list-icon-btn { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-sunk); color: var(--ink-soft); font-size: 0.9rem; display: grid; place-items: center; cursor: pointer; }
+.my-list-icon-btn:hover { border-color: var(--sky); color: var(--sky-deep); }
+.my-list-bell-btn.is-muted { color: var(--ink-faint); }
+.my-list-nokoot-btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid var(--success); border-radius: var(--radius-pill); background: var(--success-wash); color: var(--success); font-family: var(--font-main); font-size: 0.74rem; font-weight: 800; white-space: nowrap; cursor: pointer; }
+.my-list-nokoot-btn:hover { background: var(--success); color: #ffffff; }
+
+.my-list-empty p { margin-bottom: 0; }
+.my-list-empty .gold-action-btn { margin-top: 14px; }

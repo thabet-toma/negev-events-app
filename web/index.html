@@ -74,7 +74,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.5.2">
+  <link rel="stylesheet" href="styles.css?v=2.6.1">
 </head>
 <body>
 
@@ -526,6 +526,39 @@
 
     </section>
 
+    <!-- TAB: «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» (زرّ واحد لا زرّان).
+         التجميع والترتيب (bucket وتواريخ الامتداد) يأتيان من الخادم — لا يُعيد
+         العميل اشتقاق تاريخ ولا ترتيباً. الرأس وحده ثابت هنا؛ الرقاقات والصفوف
+         والأقسام يرسمها app.js#renderMyList في #myListChips و#myListBody. -->
+    <section id="tabMyList" class="tab-content">
+
+      <!-- حالة الزائر غير المسجّل — بنفس بطاقة دفتر النقوط المقفلة -->
+      <div id="myListLockedView" class="vault-locked-card">
+        <div class="vault-icon"><i class="fa-solid fa-bookmark"></i></div>
+        <h2>قائمتي</h2>
+        <p>احفظ المناسبات التي تهمّك أثناء التصفّح، وتابع القادم منها وما انتهى في مكان واحد.</p>
+        <button class="gold-action-btn" onclick="requireAuth({ type: 'my_list' })"><i class="fa-solid fa-right-to-bracket"></i> تسجيل الدخول</button>
+      </div>
+
+      <!-- القائمة نفسها — للمسجَّل دخوله وحده -->
+      <div id="myListUnlockedView" style="display: none;">
+        <div class="my-list-head">
+          <div class="my-list-head-title">
+            <h2>قائمتي</h2>
+            <span id="myListCount" class="my-list-count">0</span>
+          </div>
+          <button type="button" id="myListClearEndedBtn" class="my-list-clear-btn" onclick="clearEndedMyList()" hidden>نظّف المنتهية</button>
+        </div>
+
+        <div class="my-list-chips" id="myListChips"></div>
+
+        <p id="myListUnderReview" class="my-list-notice" hidden></p>
+
+        <div id="myListBody"></div>
+      </div>
+
+    </section>
+
     <!-- TAB 5: PRO STICKER & CARD STUDIO (استوديو الستيكرات والبطاقات المتقدم) -->
     <section id="tabStickers" class="tab-content">
       <div class="page-title-box">
@@ -742,7 +775,9 @@
   </main>
 
   <!--
-    الشريط السفلي — خمس وجهات مطابقة لتطبيق الموبايل تماماً (المناسبات، الخريطة، النقوط، حسابي، الخدمات) + زر نشر عائم (FAB).
+    الشريط السفلي — ستّ وجهات (المناسبات، قائمتي، الخريطة، النقوط، حسابي، الخدمات) + زر نشر عائم (FAB).
+    «قائمتي» ثانيةً بعد «المناسبات»: هي وجهة المتابعة نفسها («ذكّرني»)، وشارتها عدد
+    مناسبات اليوم الجارية وحدها، وتُخفى حين لا شيء اليوم أو حين لا جلسة.
   -->
   <div class="bottom-nav-wrap">
     <button class="fab-publish" onclick="openAddEventModal()" aria-label="إعلان مناسبة جديدة" title="إعلان مناسبة جديدة">
@@ -753,10 +788,19 @@
         <i class="fa-solid fa-champagne-glasses"></i>
         <span>المناسبات</span>
       </button>
+      <button class="nav-btn" id="navBtnMyList" onclick="switchTab('tabMyList')">
+        <i class="fa-solid fa-bookmark"></i>
+        <span>قائمتي</span>
+        <span class="nav-badge" id="myListNavBadge" hidden></span>
+      </button>
       <button class="nav-btn" id="navBtnMap" onclick="switchTab('tabMap')">
         <i class="fa-solid fa-map-location-dot"></i>
         <span>الخريطة</span>
       </button>
+      <!-- خانة فارغة بعرض زرّ النشر العائم: الوسط لم يعد محايداً بعد الوجهة
+           السادسة، والزرّ (left:50%) كان يغطّي أيقونة «الخريطة» المقاسة
+           عند 375px. الـspan لا يحمل .nav-btn فلا يراه عدّاد switchTab. -->
+      <span class="nav-fab-gap" aria-hidden="true"></span>
       <button class="nav-btn" id="navBtnNokoot" onclick="switchTab('tabNokoot')">
         <i class="fa-solid fa-wallet"></i>
         <span>النقوط</span>
@@ -1484,6 +1528,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.5.2"></script>
+  <script src="app.js?v=2.6.1"></script>
 </body>
 </html>

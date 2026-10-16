@@ -81,6 +81,14 @@ let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة ال�
 let notificationsList = [];
 let congratsQueueEventId = null;
 
+// «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» في تبويبها السادس. التجميع
+// والترتيب وكل التواريخ تأتي من الخادم (bucket وspan_start/span_end و
+// days_until_start) — لا يعيد العميل اشتقاق تاريخ ولا ترتيباً. myListChip
+// تفضيل هذه الجلسة وحدها (بلا تخزين)، و«انتهت سابقاً» مطويّة افتراضياً.
+let myListData = null; // { events, counts: {all, upcoming, ended}, under_review_count } أو null قبل أول جلب
+let myListChip = 'all'; // 'all' | 'upcoming' | 'ended'
+let myListEndedExpanded = false;
+
 // News ticker (#85 خطوة 28-33) — الحيّ من GET /api/broadcasts/live، مرتّباً
 // بالأحدث أولاً كما يعيده الخادم. tickerExpanded توسيع قائمة البقيّة في مكانها
 // لزائر مجهول فقط (المسجَّل دخوله يفتح مركز الإشعارات بدلاً منه).
@@ -163,6 +171,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initSocket();
   loadFilterSelectionFromStorage();
   updateAuthUI();
+  // جلسة محفوظة: «قائمتي» تُجلب مرة واحدة عند الإقلاع كي تكون شارتها صحيحة
+  // بلا فتح التبويب (والفشل يُترك للتبويب نفسه وقت فتحه).
+  initMyList();
   initPlaceFilter();
   initKindFilter();
   updateFloatingFilterLabel();
@@ -2050,7 +2061,7 @@ function renderSingleEventCardHtml(evt) {
         <button type="button" class="chat-trigger-btn card-action-btn" onclick="openChatModal(${evt.id})">
           <i class="fa-regular fa-comments"></i> <span>${escapeHtml(congratulationsLabel(evt))}</span>
         </button>
-        ${renderReminderButtonHtml(evt)}
+        ${renderReminderButtonHtml(evt, { compact: true })}
         <button type="button" class="share-event-btn card-action-btn" onclick="shareEventById(${evt.id})">
           <i class="fa-solid fa-share-nodes"></i> <span>${escapeHtml(shareButtonLabel(evt))}</span>
         </button>
@@ -2449,16 +2460,41 @@ function occasionTypeBadgeHtml(occasionType) {
 }
 
 /**
- * «ذكّرني» — متابعة لا تعهّد حضور، ونفس التسمية في كل الأنواع (#20 step 10).
+ * «أضف لقائمتي» / «في قائمتي» — زرّ واحد لمتابعة «ذكّرني» (قرار المالك: قائمة
+ * واحدة، لا زرّ حفظ وزرّ تنبيه). is-saved يجعل الحالة النشِطة تُقرأ بالعين،
+ * والنوعان (الملء/الفراغ) يفرّقانها بلا نصّ إضافي.
+ *
+ * `compact` لكرت التغذية وحده: صفّه أربعة أزرار متساوية، و«أضف لقائمتي» تفيض
+ * منه على زرّ المشاركة عند 375px. الكلمتان القصيرتان هناك، والاسم الكامل في
+ * aria-label لقارئ الشاشة — وصفحة المناسبة (رحبة) تبقى على النصّ الكامل.
  */
-function renderReminderButtonHtml(evt) {
-  const isReminded = !!evt.is_reminded;
-  const icon = isReminded ? 'fa-bell-slash' : 'fa-bell';
-  const label = isReminded ? 'إلغاء التذكير' : 'ذكّرني';
+function renderReminderButtonHtml(evt, { compact = false } = {}) {
+  const isSaved = !!evt.is_reminded;
+  const fullLabel = isSaved ? 'في قائمتي' : 'أضف لقائمتي';
+  const label = compact ? (isSaved ? 'محفوظة' : 'احفظ') : fullLabel;
+  const aria = compact ? ` aria-label="${fullLabel}"` : '';
   return `
-    <button class="record-nokoot-btn card-action-btn" onclick="toggleReminder(${evt.id}, ${isReminded}, this)">
-      <i class="fa-solid ${icon}"></i> <span>${label}</span>
+    <button class="record-nokoot-btn card-action-btn reminder-btn${isSaved ? ' is-saved' : ''}"${aria} onclick="toggleReminder(${evt.id}, ${isSaved}, this)">
+      <i class="fa-${isSaved ? 'solid' : 'regular'} fa-bookmark"></i> <span>${label}</span>
     </button>`;
+}
+
+/**
+ * يوائم حالة «محفوظ» الظاهرة بعد نجاح أي فعل يغيّرها على الخادم: صفّ التغذية
+ * المخزَّن (allEvents) وصفحة المناسبة المفتوحة إن كانت هي نفسها. `followers_count`
+ * لا يُلمَس — عدّاد المتابعين ليس من شأن هذا الفعل، ولا يُعاد اشتقاقه هنا.
+ * كل مسارات التغيير (toggleReminder، الإزالة، و«تراجع») تمرّ من هنا؛ بلا ذلك
+ * بقي كرت التغذية يقول «في قائمتي» بعد الإزالة حتى إعادة تحميل الصفحة، وضغطه
+ * حينها يرسل الطريقة الخطأ.
+ */
+function applySavedState(eventId, isSaved) {
+  const evt = allEvents.find(e => e.id === eventId);
+  if (evt) evt.is_reminded = isSaved;
+  renderEvents(allEvents);
+  if (isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
+    eventPageEvent = { ...eventPageEvent, is_reminded: isSaved };
+    renderEventPage(eventPageEvent);
+  }
 }
 
 /** يبدّل حالة «ذكّرني» — فعل كتابة، خلف حساب مثل النشر والتبريك (#20 step 10). */
@@ -2470,18 +2506,21 @@ async function toggleReminder(eventId, isReminded, btnElement) {
     const data = await res.json();
     if (data.success) {
       const evt = allEvents.find(e => e.id === eventId);
-      if (evt) evt.is_reminded = !isReminded;
-      renderEvents(allEvents);
-      if (isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
-        eventPageEvent = { ...eventPageEvent, is_reminded: !isReminded };
-        renderEventPage(eventPageEvent);
-      }
-      showToast(isReminded ? 'تم إلغاء التذكير' : '🔔 تم تفعيل التذكير');
+      applySavedState(eventId, !isReminded);
+      // الإضافة تحمل فعل «عرض» يوصل التبويب الجديد مباشرةً — بدونه يبقى
+      // المستخدم لا يعرف أين ذهبت المناسبة (التوست يمرّ في ٣.٥ ثانية).
+      showToast(
+        isReminded ? 'أُزيلت من قائمتي' : 'أُضيفت إلى قائمتي',
+        isReminded ? null : { label: 'عرض', onClick: () => switchTab('tabMyList') }
+      );
       // طلب إذن الإشعارات الفورية عند إضافة تذكير فقط — لا عند أول فتح للموقع ولا عند إلغائه (قصة 16)
       if (!isReminded) {
         recordAnalyticsEvent('reminder_clicked', { contentTown: evt ? evt.town : undefined });
         requestPushNotificationSubscription();
       }
+      // القائمة المخزَّنة تُحدَّث بعد النجاح فقط إن كانت محمَّلة أصلاً — لا نداء
+      // لم يطلبه أحد؛ والشارة تُحدَّث من داخلها.
+      if (myListData) loadMyList();
     } else {
       alert(data.message || 'تعذر تنفيذ الطلب');
     }
@@ -2489,6 +2528,347 @@ async function toggleReminder(eventId, isReminded, btnElement) {
     alert('تعذر تنفيذ الطلب — تحقق من الاتصال بالخادم');
   } finally {
     if (btnElement) btnElement.disabled = false;
+  }
+}
+
+// «قائمتي» — ترتيب الأقسام هو ترتيب الخادم نفسه (myListBucket: الأقرب أولاً،
+// ثم ما انتهى حديثاً)، والعميل يرسم ولا يعيد الاشتقاق. الدلوان الأخيران
+// «منتهيان» في عدّ counts ورقاقتها.
+const MY_LIST_UPCOMING_BUCKETS = ['now', 'tomorrow', 'this_week', 'later'];
+const MY_LIST_ENDED_BUCKETS = ['ended_recent', 'ended'];
+const MY_LIST_BUCKET_ORDER = ['now', 'tomorrow', 'this_week', 'later', 'ended_recent', 'ended'];
+const MY_LIST_BUCKET_TITLES = {
+  now: 'اليوم',
+  tomorrow: 'غداً',
+  this_week: 'هذا الأسبوع',
+  later: 'لاحقاً',
+  ended_recent: 'انتهت خلال الأسبوع الأخير',
+  ended: 'انتهت سابقاً'
+};
+
+/** عند الإقلاع: جلسة محفوظة تُحمَّل لها القائمة فوراً كي تكون الشارة صحيحة بلا فتح التبويب. */
+function initMyList() {
+  if (currentUser && authToken) loadMyList();
+}
+
+/** خروج أو انتهاء جلسة: القائمة المخزَّنة لم تعد لهذا الحساب، فتُمحى وشارتها معها. */
+function clearMyList() {
+  myListData = null;
+  myListEndedExpanded = false;
+  updateMyListNavBadge();
+}
+
+/**
+ * شارة التبويب: عدد مناسبات اليوم الجارية (bucket 'now') وحده — هي وحدها ما
+ * يستحقّ لفتة عين. تُخفى حين صفر أو حين لا جلسة، لا تظهر «0» أبداً.
+ */
+function updateMyListNavBadge() {
+  const badge = document.getElementById('myListNavBadge');
+  if (!badge) return;
+
+  const todayCount = (currentUser && authToken && myListData && Array.isArray(myListData.events))
+    ? myListData.events.filter(evt => evt.bucket === 'now').length
+    : 0;
+
+  if (todayCount > 0) {
+    badge.textContent = todayCount > 99 ? '99+' : String(todayCount);
+    badge.hidden = false;
+  } else {
+    badge.textContent = '';
+    badge.hidden = true;
+  }
+}
+
+/** يقرّر ما يراه زائر التبويب: بطاقة الدخول لغير المسجَّل، والقائمة للمسجَّل. */
+function loadMyListView() {
+  const lockedView = document.getElementById('myListLockedView');
+  const unlockedView = document.getElementById('myListUnlockedView');
+  if (!lockedView || !unlockedView) return;
+
+  if (!currentUser || !authToken) {
+    lockedView.style.display = 'block';
+    unlockedView.style.display = 'none';
+    return;
+  }
+
+  lockedView.style.display = 'none';
+  unlockedView.style.display = 'block';
+  loadMyList();
+}
+
+/**
+ * جلب «قائمتي» وتخزينها في myListData ثم رسمها. لا شاشة فارغة في أي حال:
+ * قبل أول استجابة دوّارة، وعند الفشل رسالة عربية وزرّ إعادة محاولة.
+ */
+async function loadMyList() {
+  if (!currentUser || !authToken) return;
+  const bodyEl = document.getElementById('myListBody');
+  if (!myListData && bodyEl) {
+    bodyEl.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+  }
+
+  try {
+    const res = await apiFetch('/api/my-reminders', { auth: true });
+    const data = await res.json();
+    if (!data || !data.success || !Array.isArray(data.events)) throw new Error('bad my-reminders response');
+
+    myListData = {
+      events: data.events,
+      counts: data.counts || { all: data.events.length, upcoming: 0, ended: 0 },
+      under_review_count: Number(data.under_review_count) || 0
+    };
+    renderMyList();
+    updateMyListNavBadge();
+  } catch (e) {
+    if (bodyEl) {
+      bodyEl.innerHTML = `
+        <div class="empty-state my-list-empty">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <p>تعذّر تحميل قائمتك — تحقّق من الاتصال</p>
+          <button type="button" class="gold-action-btn" onclick="loadMyList()"><i class="fa-solid fa-rotate-right"></i> إعادة المحاولة</button>
+        </div>`;
+    }
+    updateMyListNavBadge();
+  }
+}
+
+/** الصفوف الظاهرة تحت الرقاقة المختارة — فلترة عميل بحتة على bucket القادم من الخادم. */
+function myListVisibleEvents() {
+  const events = (myListData && myListData.events) || [];
+  if (myListChip === 'upcoming') return events.filter(evt => MY_LIST_UPCOMING_BUCKETS.indexOf(evt.bucket) !== -1);
+  if (myListChip === 'ended') return events.filter(evt => MY_LIST_ENDED_BUCKETS.indexOf(evt.bucket) !== -1);
+  return events;
+}
+
+/** حالة فارغة لكل رقاقة بنصّها — «قائمتك فارغة» ليست رسالة «لا مناسبات منتهية». */
+function myListEmptyStateHtml() {
+  if (myListChip === 'upcoming') {
+    return `
+      <div class="empty-state my-list-empty">
+        <i class="fa-solid fa-calendar-check"></i>
+        <p>لا مناسبات قادمة في قائمتك</p>
+      </div>`;
+  }
+  if (myListChip === 'ended') {
+    return `
+      <div class="empty-state my-list-empty">
+        <i class="fa-solid fa-box-archive"></i>
+        <p>لا مناسبات منتهية في قائمتك</p>
+      </div>`;
+  }
+  return `
+    <div class="empty-state my-list-empty">
+      <i class="fa-solid fa-bookmark"></i>
+      <p>قائمتك فارغة. اضغط «أضف لقائمتي» على أي مناسبة لتجدها هنا.</p>
+      <button type="button" class="gold-action-btn" onclick="switchTab('tabHome')"><i class="fa-solid fa-champagne-glasses"></i> تصفّح المناسبات</button>
+    </div>`;
+}
+
+/**
+ * شارة حالة الصف: «جارية اليوم»/«غداً»/«بعد N أيام» للقادم، و«انتهت» للمنتهي.
+ * نوع وقور (عزاء) لا يحمل أي عدّ ولا احتفال — نعيٌ وعدّاد يومه إساءة،
+ * فلا شارة له إطلاقاً، والسطر بتاريخه يكفي.
+ */
+function myListStatusPillHtml(evt) {
+  if (isMourningTone(evt)) return '';
+  if (MY_LIST_ENDED_BUCKETS.indexOf(evt.bucket) !== -1) {
+    return '<span class="my-list-status-pill is-ended">انتهت</span>';
+  }
+  if (evt.bucket === 'now') return '<span class="my-list-status-pill is-now">جارية اليوم</span>';
+  if (evt.bucket === 'tomorrow') return '<span class="my-list-status-pill">غداً</span>';
+  return `<span class="my-list-status-pill">بعد ${Number(evt.days_until_start) || 0} أيام</span>`;
+}
+
+/**
+ * «تغيّر الموعد» — إعلان تعديل تاريخ نُشر بعد حفظ المستخدم للمناسبة (الخادم
+ * يقصّ كل إعلان أقدم من الحفظ). التفصيل في title لا في نصّ الشارة.
+ */
+function myListChangePillHtml(evt) {
+  if (!evt.date_change) return '';
+  const detail = `من ${evt.date_change.old_value} إلى ${evt.date_change.new_value}`;
+  return `<span class="my-list-change-pill" title="${escapeHtml(detail)}"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> تغيّر الموعد</span>`;
+}
+
+/** «سجّل نقوطك» من صفّ منتهٍ — نفس quickRecordNokoot القائمة، باسم أول صاحب مناسبة. */
+function quickRecordNokootFromMyList(eventId) {
+  const evt = ((myListData && myListData.events) || []).find(e => e.id === eventId);
+  if (!evt) return;
+  quickRecordNokoot(eventHonoreeNames(evt)[0] || evt.groom_name || '', evt.span_end, evt.town || '');
+}
+
+/** صفّ مضغوط: مصغّرة، وشارة النوع، والعنوان، وسطر تاريخ وبلدة، والحالة، وأفعاله. */
+function renderMyListRowHtml(evt) {
+  const ended = MY_LIST_ENDED_BUCKETS.indexOf(evt.bucket) !== -1;
+  const media = evt.poster_url
+    ? `<img src="${escapeHtml(evt.poster_url)}" alt="" class="my-list-row-img" loading="lazy">`
+    : `<div class="my-list-row-img my-list-row-img-empty"><i class="fa-solid ${isMourningTone(evt) ? 'fa-dove' : 'fa-champagne-glasses'}" aria-hidden="true"></i></div>`;
+  const metaLine = [formatEventDayLong(evt), evt.town].filter(Boolean).map(escapeHtml).join(' · ');
+
+  // المنتهي لا جرس له (لا تذكير لما مضى) بل زرّ تسجيل نقوط — وهو الفعل
+  // الوحيد المعقول بعد انتهاء المناسبة.
+  const actionHtml = ended
+    ? `<button type="button" class="my-list-nokoot-btn" onclick="quickRecordNokootFromMyList(${evt.id})">
+         <i class="fa-solid fa-wallet" aria-hidden="true"></i> <span>سجّل نقوطك</span>
+       </button>`
+    : `<button type="button" class="my-list-icon-btn my-list-bell-btn${evt.notify ? '' : ' is-muted'}" onclick="setMyListNotify(${evt.id}, ${evt.notify ? 'false' : 'true'}, this)" aria-label="${evt.notify ? 'كتم التنبيه' : 'تفعيل التنبيه'}" title="${evt.notify ? 'كتم التنبيه' : 'تفعيل التنبيه'}">
+         <i class="fa-solid ${evt.notify ? 'fa-bell' : 'fa-bell-slash'}" aria-hidden="true"></i>
+       </button>`;
+
+  return `
+    <div class="my-list-row${ended ? ' is-ended' : ''}" data-event-id="${evt.id}">
+      <div class="my-list-row-body" onclick="openEventPage(${evt.id})">
+        ${media}
+        <div class="my-list-row-main">
+          <div class="my-list-row-top">
+            ${occasionTypeBadgeHtml(evt.occasion_type)}
+            ${myListStatusPillHtml(evt)}
+            ${myListChangePillHtml(evt)}
+          </div>
+          <h4 class="my-list-row-title">${escapeHtml(eventCardHeadline(evt))}</h4>
+          <div class="my-list-row-meta">${metaLine}</div>
+        </div>
+      </div>
+      <div class="my-list-row-actions">
+        ${actionHtml}
+        <button type="button" class="my-list-icon-btn my-list-remove-btn" onclick="removeFromMyList(${evt.id}, this)" aria-label="إزالة من قائمتي" title="إزالة من قائمتي">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>`;
+}
+
+/**
+ * يرسم الرقاقات والأقسام والصفوف من myListData المخزَّنة. ترويسة لكل دلو فيه
+ * صفوف ظاهرة، بترتيب الخادم؛ و«انتهت سابقاً» آخرها ومطويّة افتراضياً خلف زرّ
+ * يحمل عدّها.
+ */
+function renderMyList() {
+  if (!myListData) return;
+  const chipsEl = document.getElementById('myListChips');
+  const bodyEl = document.getElementById('myListBody');
+  if (!bodyEl) return;
+
+  const counts = myListData.counts || { all: 0, upcoming: 0, ended: 0 };
+
+  if (chipsEl) {
+    chipsEl.innerHTML = [
+      { key: 'all', label: `الكل (${counts.all})` },
+      { key: 'upcoming', label: `القادمة (${counts.upcoming})` },
+      { key: 'ended', label: `انتهت (${counts.ended})` }
+    ].map(chip => `
+      <button type="button" class="filter-chip my-list-chip${myListChip === chip.key ? ' active' : ''}" onclick="setMyListChip('${chip.key}')">${chip.label}</button>`).join('');
+  }
+
+  const countEl = document.getElementById('myListCount');
+  if (countEl) countEl.textContent = String(counts.all);
+
+  // «نظّف المنتهية» لا معنى لها بلا منتهٍ واحد.
+  const clearBtn = document.getElementById('myListClearEndedBtn');
+  if (clearBtn) clearBtn.hidden = !(Number(counts.ended) > 0);
+
+  const notice = document.getElementById('myListUnderReview');
+  if (notice) {
+    const pending = Number(myListData.under_review_count) || 0;
+    notice.hidden = pending <= 0;
+    notice.textContent = pending === 1
+      ? 'مناسبة واحدة من قائمتك قيد المراجعة بعد تعديل، وستعود عند اعتمادها'
+      : `${pending} مناسبات من قائمتك قيد المراجعة بعد تعديل، وستعود عند اعتمادها`;
+  }
+
+  const visible = myListVisibleEvents();
+  if (!visible.length) {
+    bodyEl.innerHTML = myListEmptyStateHtml();
+    return;
+  }
+
+  bodyEl.innerHTML = MY_LIST_BUCKET_ORDER.map(bucket => {
+    const rows = visible.filter(evt => evt.bucket === bucket);
+    if (!rows.length) return '';
+    const collapsed = bucket === 'ended' && !myListEndedExpanded;
+    const head = bucket === 'ended'
+      ? `<button type="button" class="my-list-bucket-head my-list-bucket-toggle" onclick="toggleMyListEnded()" aria-expanded="${myListEndedExpanded ? 'true' : 'false'}">
+           <i class="fa-solid fa-chevron-${myListEndedExpanded ? 'up' : 'down'}" aria-hidden="true"></i> ${MY_LIST_BUCKET_TITLES[bucket]} (${rows.length})
+         </button>`
+      : `<h3 class="my-list-bucket-head">${MY_LIST_BUCKET_TITLES[bucket]}</h3>`;
+    return `<section class="my-list-section" data-bucket="${bucket}">${head}${collapsed ? '' : rows.map(renderMyListRowHtml).join('')}</section>`;
+  }).join('');
+}
+
+function setMyListChip(chip) {
+  myListChip = chip;
+  renderMyList();
+}
+
+function toggleMyListEnded() {
+  myListEndedExpanded = !myListEndedExpanded;
+  renderMyList();
+}
+
+/** كتم/تفعيل جرس مناسبة في قائمتي عبر PATCH — تبقى في القائمة، فقط لا تُنبّه. */
+async function setMyListNotify(eventId, notify, btnElement) {
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/remind`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notify })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message || (notify ? 'تم تفعيل التنبيه' : 'تم كتم التنبيه'));
+      await loadMyList();
+    } else {
+      alert(data.message || 'تعذّر تغيير التنبيه');
+    }
+  } catch (e) {
+    alert('تعذّر تغيير التنبيه — تحقّق من الاتصال');
+  } finally {
+    if (btnElement) btnElement.disabled = false;
+  }
+}
+
+/** إزالة صفّ من قائمتي، مع «تراجع» يعيد الإضافة نفسها ثم يعيد الجلب. */
+async function removeFromMyList(eventId, btnElement) {
+  if (btnElement) btnElement.disabled = true;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/remind`, { method: 'DELETE', auth: true });
+    const data = await res.json();
+    if (!data.success) {
+      alert(data.message || 'تعذّر حذف المناسبة من قائمتك');
+      return;
+    }
+    // التغذية وصفحة المناسبة تُوائم قبل إعادة الجلب: الإزالة من «قائمتي» تغيير
+    // حالة حفظ كأي زرّ «في قائمتي» في التغذية، لا حذفاً للمناسبة نفسها.
+    applySavedState(eventId, false);
+    showToast('أُزيلت من قائمتي', {
+      label: 'تراجع',
+      onClick: async () => {
+        const undoRes = await apiFetch(`/api/events/${eventId}/remind`, { method: 'POST', auth: true });
+        const undoData = await undoRes.json();
+        if (undoData && undoData.success) applySavedState(eventId, true);
+        loadMyList();
+      }
+    });
+    await loadMyList();
+  } catch (e) {
+    alert('تعذّر حذف المناسبة — تحقّق من الاتصال');
+  } finally {
+    if (btnElement) btnElement.disabled = false;
+  }
+}
+
+/** «نظّف المنتهية» — حذف كل ما انتهى من قائمتي، مؤكَّد قبل الإرسال لأنه بلا رجعة. */
+async function clearEndedMyList() {
+  if (!confirm('حذف كل المناسبات المنتهية من قائمتك؟')) return;
+  try {
+    const res = await apiFetch('/api/my-reminders?scope=ended', { method: 'DELETE', auth: true });
+    const data = await res.json();
+    showToast(data.message || 'تم حذف المناسبات المنتهية من قائمتك');
+    myListEndedExpanded = false;
+    await loadMyList();
+  } catch (e) {
+    alert('تعذّر حذف المناسبات المنتهية — تحقّق من الاتصال');
   }
 }
 
@@ -3106,7 +3486,7 @@ function switchTab(tabId) {
   const targetTab = document.getElementById(tabId);
   if (targetTab) targetTab.classList.add('active-tab');
 
-  const navIndex = ['tabHome', 'tabMap', 'tabNokoot', 'tabAccount', 'tabServices'].indexOf(tabId);
+  const navIndex = ['tabHome', 'tabMyList', 'tabMap', 'tabNokoot', 'tabAccount', 'tabServices'].indexOf(tabId);
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
   if (navBtns[navIndex]) navBtns[navIndex].classList.add('active');
 
@@ -3124,6 +3504,7 @@ function switchTab(tabId) {
     feedScrollMemory = null;
   }
   else if (tabId === 'tabNokoot') loadNokootView();
+  else if (tabId === 'tabMyList') loadMyListView();
   else if (tabId === 'tabAccount') loadAccountView();
   else if (tabId === 'tabStickers') renderStickerCanvas();
   else if (tabId === 'tabMap') initLeafletMap();
@@ -3201,6 +3582,7 @@ function handleLogout() {
   localStorage.removeItem('negev_user');
   localStorage.removeItem('negev_token');
   updateAuthUI();
+  clearMyList();
   loadAccountView();
   showToast('تم تسجيل الخروج بنجاح');
   switchTab('tabHome');
@@ -3231,6 +3613,7 @@ function handleSessionExpired() {
     localStorage.removeItem('negev_token');
   } catch (e) { /* التخزين المحلي معطَّل — الجلسة ممسوحة من الذاكرة على الأقل */ }
   updateAuthUI();
+  clearMyList();
   loadAccountView();
   showToast('انتهت جلستك، يرجى تسجيل الدخول من جديد');
   openAuthModal();
@@ -3295,6 +3678,15 @@ function resumePendingIntent() {
     // الإرسال نفسه تلقائياً بالرمز الجديد بدل أن يعيد المستخدم الكتابة.
     switchTab('tabAdd');
     handleEventSubmit({ preventDefault() {} });
+  } else if (intent.type === 'remind') {
+    // الزرّ ضُغط قبل الدخول — تُنفَّذ المتابعة نفسها الآن، إلا أن تكون المناسبة
+    // في «قائمتي» فعلاً (جلسة أو جهاز آخر) فلا معنى لإعادة الإضافة.
+    const known = allEvents.find(e => e.id === intent.eventId)
+      || (eventPageEvent && eventPageEvent.id === intent.eventId ? eventPageEvent : null);
+    if (!(known && known.is_reminded)) toggleReminder(intent.eventId, false, null);
+  } else if (intent.type === 'my_list') {
+    // بطاقة الدخول في تبويب «قائمتي» — يعود إليه بعد الدخول لا إلى التغذية.
+    switchTab('tabMyList');
   } else if (intent.type === 'congratulate') {
     // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
     const senderInput = document.getElementById('chatSenderName');
@@ -6314,6 +6706,7 @@ async function handleLogin(e) {
       closeAuthModal();
       showToast(`مرحباً بك يا ${currentUser.full_name}`);
       loadNokootView();
+      loadMyList(); // الحساب صار له قائمة الآن — الشارة تُبنى بلا فتح التبويب
       subscribeToNotificationSocket();
       fetchNotifications();
       // بلا هذا يبقى الشريط بنتيجة الزائر المجهول (تعاميم عامة فقط) حتى
@@ -6353,6 +6746,7 @@ async function handleRegister(e) {
       closeAuthModal();
       showToast(`تم إنشاء حسابك وتفعيل السجل بنجاح!`);
       loadNokootView();
+      loadMyList(); // الحساب صار له قائمة الآن — الشارة تُبنى بلا فتح التبويب
       subscribeToNotificationSocket();
       fetchNotifications();
       // بلا هذا يبقى الشريط بنتيجة الزائر المجهول (تعاميم عامة فقط) حتى
@@ -7168,10 +7562,25 @@ function shareStickerToWhatsApp() {
   window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
 }
 
-function showToast(msg) {
+/**
+ * توست عابر. الوسيط الثاني اختياري: فعل واحد داخل التوست ({ label, onClick })
+ * — يُستعمل في «عرض» بعد الإضافة إلى قائمتي و«تراجع» بعد الإزالة. النداءات
+ * القديمة بلا وسيط ثانٍ تعمل كما هي.
+ */
+function showToast(msg, action) {
   const toast = document.createElement('div');
   toast.className = 'app-toast';
-  toast.textContent = msg;
+  const text = document.createElement('span');
+  text.textContent = msg;
+  toast.appendChild(text);
+  if (action && action.label && typeof action.onClick === 'function') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'app-toast-action';
+    btn.textContent = action.label;
+    btn.onclick = () => { toast.remove(); action.onClick(); };
+    toast.appendChild(btn);
+  }
   document.body.appendChild(toast);
   setTimeout(() => { toast.remove(); }, 3500);
 }
