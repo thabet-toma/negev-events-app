@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../models/event.dart';
 import '../models/live.dart';
+import '../models/my_list.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
 import '../models/reminder_schedule.dart';
@@ -414,13 +415,48 @@ class NegevApi {
     return Congratulation.fromJson(comment);
   }
 
-  /// «ذكّرني» — متابعة، لا حضور ولا "لن أحضر". يتطلب حساباً.
+  /// «ذكّرني» بصيغته الظاهرة في التطبيق: «قائمتي». متابعة، لا حضور ولا
+  /// "لن أحضر" — ONE button, لا زرّان. يتطلب حساباً.
   Future<void> remind(int eventId) async {
     await _client.post('/api/events/$eventId/remind', auth: true);
   }
 
   Future<void> unremind(int eventId) async {
     await _client.delete('/api/events/$eventId/remind', auth: true);
+  }
+
+  /// «قائمتي» — كل مناسبة معتمدة يتابعها المستخدم: القادم أولاً ثم المنتهي
+  /// حديثاً، بترتيب الخادم النهائي. `bucket` و`span_*` و`days_until_start`
+  /// تُقرأ كما وصلت — لا إعادة ترتيب ولا إعادة اشتقاق على الجهاز.
+  Future<MyList> myList() async {
+    final data = await _client.get('/api/my-reminders', auth: true);
+    return MyList.fromJson(data);
+  }
+
+  /// كتم/تفعيل جرس مناسبة في «قائمتي» — الصفّ يبقى في القائمة. الكتم يغيّر
+  /// مخرجات `/api/reminders/schedule` على الخادم، فالمستدعي يعيد مزامنة
+  /// المنبّهات المحلية بعده: `services.reminders.syncAll()`.
+  Future<void> setReminderNotify(int eventId, bool notify) async {
+    await _client.patch(
+      '/api/events/$eventId/remind',
+      auth: true,
+      body: {'notify': notify},
+    );
+  }
+
+  /// «نظّف المنتهية» — يحذف المناسبات المنتهية وحدها من قائمة المستخدم؛
+  /// `scope=ended` إلزامي على الخادم. يعيد عدد الصفوف المحذوفة ورسالة الخادم
+  /// كما وصلت (تُعرض بلا إعادة صياغة في العميل).
+  Future<({int removed, String message})> clearEndedReminders() async {
+    final data = await _client.delete(
+      '/api/my-reminders',
+      query: {'scope': 'ended'},
+      auth: true,
+    );
+    return (
+      removed: int.tryParse('${data['removed'] ?? ''}') ?? 0,
+      message: '${data['message'] ?? 'تم حذف المناسبات المنتهية من قائمتك'}',
+    );
   }
 
   /// طابور مراجعة رسائل مناسبة — للمالك أو الإدارة فقط (403 لغيرهم).

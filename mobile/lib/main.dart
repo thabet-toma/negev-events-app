@@ -115,6 +115,10 @@ void main() {
 /// الاختبار الحالية التي تُنشئ `AppServices` مباشرة أن تعرف عنه — و`audio`
 /// كذلك (منسّق بلا مشغّل حتى أول تشغيل فعلي)، و`places` (يبدأ بالبلدات
 /// الاحتياطية ويحمّل الخادم عند أول طلب من شاشة).
+///
+/// وإشارات «قائمتي» الأربع اختيارية بالسبب نفسه: كرت التغذية وشاشة التفاصيل
+/// يبدّلان التذكير من خارج الشاشة، و`HomeShell` وحده يعرف فهارس تبويباته —
+/// فالإشارات تعيش هنا حيث يلقاها الطرفان، لا في هيكل الشريط ولا في الكرت.
 class AppServices extends InheritedWidget {
   AppServices({
     super.key,
@@ -125,11 +129,29 @@ class AppServices extends InheritedWidget {
     ReminderScheduler? reminders,
     AudioCoordinator? audio,
     PlacesStore? places,
+    ValueNotifier<int>? tabRequest,
+    ValueNotifier<int>? myListRevision,
+    ValueNotifier<int>? myListNowCount,
+    ValueNotifier<({int eventId, bool saved})?>? savedChange,
     required super.child,
   })  : themeStore = themeStore ?? ThemeStore(),
         reminders = reminders ?? ReminderScheduler(api: api, auth: auth),
         audio = audio ?? AudioCoordinator(),
-        places = places ?? PlacesStore(api);
+        places = places ?? PlacesStore(api),
+        tabRequest = tabRequest ?? ValueNotifier<int>(_noTabRequest),
+        myListRevision = myListRevision ?? ValueNotifier<int>(0),
+        myListNowCount = myListNowCount ?? ValueNotifier<int>(0),
+        savedChange = savedChange ??
+            ValueNotifier<({int eventId, bool saved})?>(null);
+
+  /// فهرس وجهة «المناسبات» في الشريط السفلي.
+  static const int feedTabIndex = 0;
+
+  /// فهرس وجهة «قائمتي» — ثانيةً مباشرةً بعد المناسبات.
+  static const int myListTabIndex = 1;
+
+  /// «لا طلب تبديل» — القيمة الابتدائية الوحيدة التي لا تُقرأ كطلب.
+  static const int _noTabRequest = -1;
 
   final NegevApi api;
   final AuthStore auth;
@@ -138,6 +160,42 @@ class AppServices extends InheritedWidget {
   final ReminderScheduler reminders;
   final AudioCoordinator audio;
   final PlacesStore places;
+
+  /// طلب تبديل تبويب من خارج الشريط السفلي — يستهلكه `HomeShell` ويعيده إلى
+  /// [_noTabRequest]. قيمة لا استدعاء: الكرت لا يستورد هيكل الشريط لأجل رقم.
+  final ValueNotifier<int> tabRequest;
+
+  /// عدّاد يُزاد بعد كل تبديل تذكير ناجح من أيّ شاشة — «قائمتي» تسمعه فتعيد
+  /// الجلب عند ظهورها. عدّاد لا قيمة منطقية: التغيير نفسه هو الخبر.
+  final ValueNotifier<int> myListRevision;
+
+  /// عدد مناسبات «قائمتي» الجارية اليوم — شارة تبويبها في الشريط السفلي.
+  /// تكتبه شاشة «قائمتي» وحدها بعد كل جلب ناجح، وتحصفره عند الخروج.
+  final ValueNotifier<int> myListNowCount;
+
+  /// آخر تغيير في حالة الحفظ وقع خارج التغذية — إزالة من «قائمتي» أو تراجعٌ
+  /// عنها. التغذية تبقى حيّة خلف التبويبات (`IndexedStack`)، فلا ترى جلباً
+  /// جديداً بعد الإزالة، فتُخبَر بهذه الإشارة وتصحّح كرتها في مكانه بدل أن
+  /// تُرسل نداءً معاكساً لمن كبسه لاحقاً.
+  final ValueNotifier<({int eventId, bool saved})?> savedChange;
+
+  /// يفتح «قائمتي» — زرّ «عرض» في رسالة الإضافة، ومعها إشارة إعادة الجلب كي
+  /// لا يرى المستخدم قائمة بلحظة ما قبل الإضافة.
+  void openMyList() {
+    myListRevision.value++;
+    tabRequest.value = myListTabIndex;
+  }
+
+  /// يفتح تبويب المناسبات — زرّ «تصفّح المناسبات» في القائمة الفارغة.
+  void openFeed() {
+    tabRequest.value = feedTabIndex;
+  }
+
+  /// يستهلك الطلب بعد أن ينفّذه `HomeShell` — يعيده إلى [_noTabRequest] كي
+  /// لا يُعاد تنفيذه مع كل بناء، ولا يعود إليه المستخدم بعد كل تنقّل يدوي.
+  void consumeTabRequest() {
+    tabRequest.value = _noTabRequest;
+  }
 
   static AppServices of(BuildContext context) {
     final services =
@@ -154,7 +212,11 @@ class AppServices extends InheritedWidget {
       themeStore != oldWidget.themeStore ||
       reminders != oldWidget.reminders ||
       audio != oldWidget.audio ||
-      places != oldWidget.places;
+      places != oldWidget.places ||
+      tabRequest != oldWidget.tabRequest ||
+      myListRevision != oldWidget.myListRevision ||
+      myListNowCount != oldWidget.myListNowCount ||
+      savedChange != oldWidget.savedChange;
 }
 
 class NegevApp extends StatelessWidget {

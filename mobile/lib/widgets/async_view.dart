@@ -113,7 +113,15 @@ class EmptyView extends StatelessWidget {
 ///
 /// خلفية الخطأ ثابتة لا تتبع الوضع — نفس منطق راية النظام في `home_shell.dart`
 /// (تحذير مستقل عن هوية المناسبات)، ونصّها أبيض ثابت بنفس السبب.
-void showMessage(BuildContext context, String message, {bool isError = false}) {
+/// [action] زرّ اختياري داخل الرسالة («عرض» بعد الإضافة إلى «قائمتي») — يُبنى
+/// عند المستدعي لأنّ وجهته تخصّه. الرسالة الحاملة زرّاً تبقى مدة أطول: ثلاث
+/// ثوانٍ لا تكفي لقراءة النصّ والوصول إلى الزرّ.
+void showMessage(
+  BuildContext context,
+  String message, {
+  bool isError = false,
+  SnackBarAction? action,
+}) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(
@@ -123,7 +131,8 @@ void showMessage(BuildContext context, String message, {bool isError = false}) {
           style: isError ? const TextStyle(color: Colors.white) : null,
         ),
         backgroundColor: isError ? const Color(0xFF7F1D1D) : context.c.surface,
-        duration: const Duration(seconds: 3),
+        duration: Duration(seconds: action == null ? 3 : 5),
+        action: action,
       ),
     );
 }

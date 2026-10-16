@@ -159,6 +159,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   bool _covered = false;
   bool _routeSubscribed = false;
 
+  /// إشارة «قائمتي» بتغيير حالة حفظ وقع خارج التغذية (إزالة أو تراجع) —
+  /// تُلتقط هنا كي تُفكّ عند `dispose`، كما يفعل `HomeShell` بـ`tabRequest`.
+  ValueNotifier<({int eventId, bool saved})?>? _savedChange;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -204,6 +208,39 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     // إعدادات البث تغيّرت من اللوحة — الشارة تتبعها بلا سحب للتحديث.
     _liveStatusSub ??=
         AppServices.of(context).realtime.onLiveStatus.listen((_) => _loadLiveChannel());
+    // إزالة من «قائمتي» (أو تراجع عنها) — التغذية حيّة فلا ترى جلباً جديداً،
+    // فتُصحَّح كرتها في مكانها بدل أن يُكبَس زرّها بحالة قديمة.
+    if (_savedChange == null) {
+      _savedChange = AppServices.of(context).savedChange;
+      _savedChange!.addListener(_handleSavedChange);
+    }
+  }
+
+  /// يطبّق تغيير حالة الحفظ على الكرت المقابل إن كان في القائمة المحمّلة —
+  /// نفس `copyWithReminder` وعدّاد المتابعين المستعملين في `_toggleRemind`.
+  void _handleSavedChange() {
+    final change = _savedChange!.value;
+    if (change == null || !mounted) return;
+
+    final index = _events.indexWhere((event) => event.id == change.eventId);
+    if (index == -1) return;
+    final event = _events[index];
+    if (event.isReminded == change.saved) return;
+
+    setState(() {
+      _events = _events
+          .map(
+            (e) => e.id == change.eventId
+                ? e.copyWithReminder(
+                    isReminded: change.saved,
+                    followersCount: e.followersCount == null
+                        ? null
+                        : e.followersCount! + (change.saved ? 1 : -1),
+                  )
+                : e,
+          )
+          .toList();
+    });
   }
 
   /// GET /api/live للكبسة الرابعة. الفشل صامت: الكبسة تبقى بلا شارة.
@@ -244,6 +281,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _debounce?.cancel();
     _newEventSub?.cancel();
     _liveStatusSub?.cancel();
+    _savedChange?.removeListener(_handleSavedChange);
     _searchController.dispose();
     _pageController.dispose();
     super.dispose();
@@ -644,7 +682,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   Future<void> _toggleRemind(Event event) async {
     final services = AppServices.of(context);
     if (!services.auth.isSignedIn) {
-      await openSignInGate(context, 'سجّل الدخول لتفعيل التذكير');
+      await openSignInGate(context, 'سجّل الدخول لحفظ المناسبة في قائمتك');
       return;
     }
 
@@ -657,6 +695,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         await services.api.remind(event.id);
         willAlarm = await services.reminders.onReminderAdded();
       }
+      // «قائمتي» تُعلَم بوجود تغيير — تجلب نفسها عند ظهورها.
+      services.myListRevision.value++;
       if (!mounted) return;
       if (!willAlarm) {
         showMessage(
@@ -664,6 +704,18 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           'تم حفظ التذكير، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — '
           'فعّله من إعدادات النظام كي يصلك المنبّه',
           isError: true,
+        );
+      } else if (event.isReminded) {
+        showMessage(context, 'أُزيلت من قائمتي');
+      } else {
+        showMessage(
+          context,
+          'أُضيفت إلى قائمتي',
+          action: SnackBarAction(
+            label: 'عرض',
+            textColor: context.c.sky,
+            onPressed: services.openMyList,
+          ),
         );
       }
       setState(() {

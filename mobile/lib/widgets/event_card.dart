@@ -112,7 +112,7 @@ class EventCard extends StatelessWidget {
   /// `null` يعطل النقر على التبريكات في الشريط.
   final VoidCallback? onCongratulationsTap;
 
-  /// `null` يعطل زرّ «ذكّرني» في لوح المعلومات.
+  /// `null` يعطل زرّ «احفظ» في لوح المعلومات (لقبه الكامل «أضف لقائمتي»).
   final VoidCallback? onRemindTap;
 
   String get _countdownText {
@@ -499,7 +499,7 @@ class CardCaption extends StatelessWidget {
             ),
           const SizedBox(height: 8),
 
-          // 4. صفّ الأزرار: التفاصيل (مصمت بلون النوع)، تبريكات، تذكير، مشاركة
+          // 4. صفّ الأزرار: التفاصيل (مصمت بلون النوع)، تبريكات، قائمتي، مشاركة
           Row(
             children: [
               Expanded(
@@ -524,9 +524,13 @@ class CardCaption extends StatelessWidget {
               Expanded(
                 child: _CaptionActionButton(
                   icon: event.isReminded
-                      ? Icons.notifications_active
-                      : Icons.notifications_none,
-                  label: event.isReminded ? 'إلغاء التذكير' : 'ذكّرني',
+                      ? Icons.bookmark
+                      : Icons.bookmark_border,
+                  // على الكرت كلمة واحدة قصيرة: «أضف لقائمتي» لا تنضغط بجانب
+                  // «شارك المناسبة» على هاتف ٣٦٠dp (الويب فعلت هذا أولاً).
+                  // النصّ الكامل يعيش في التلميح، وصفحة المناسبة تحمله بنفسها.
+                  label: event.isReminded ? 'محفوظة' : 'احفظ',
+                  tooltip: event.isReminded ? 'في قائمتي' : 'أضف لقائمتي',
                   highlight: event.isReminded,
                   onTap: onRemindTap,
                 ),
@@ -549,11 +553,14 @@ class CardCaption extends StatelessWidget {
 
 /// زرّ في صفّ لوح المعلومات: محدّد على السطح، أو مصمت بلون [fill] («التفاصيل»)
 /// ونصّه أبيض أو داكن حسب سطوع اللون — لون نوع فاتح (ذهبي) لا يحمل نصاً أبيض.
+/// [tooltip] لزرّ اختصر نصّه لضيق المساحة («احفظ»)، فيحمل التلميح المعنى كاملاً
+/// ويقرأه قارئ الشاشة أيضاً (`Tooltip` يضيفه لوصف العقدة).
 class _CaptionActionButton extends StatelessWidget {
   const _CaptionActionButton({
     required this.icon,
     required this.label,
     required this.onTap,
+    this.tooltip,
     this.highlight = false,
     this.fill,
   });
@@ -561,6 +568,7 @@ class _CaptionActionButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
+  final String? tooltip;
   final bool highlight;
   final Color? fill;
 
@@ -573,7 +581,7 @@ class _CaptionActionButton extends StatelessWidget {
             : Colors.black87)
         : (highlight ? context.c.sky : context.c.ink);
 
-    return Material(
+    final button = Material(
       color: fill ?? (highlight ? context.c.skyWash : Colors.transparent),
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
@@ -609,6 +617,10 @@ class _CaptionActionButton extends StatelessWidget {
         ),
       ),
     );
+
+    final message = tooltip;
+    if (message == null) return button;
+    return Tooltip(message: message, child: button);
   }
 }
 

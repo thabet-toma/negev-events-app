@@ -1391,7 +1391,8 @@ void main() {
   });
 
   group('الشريط السفلي — «الخدمات» بدل «إضافة»، وزرّ عائم للنشر (wayfinder #21)', () {
-    testWidgets('خمس وجهات فقط بلا "إضافة"، و"الخدمات" ضمنها، وزرّ عائم', (tester) async {
+    testWidgets('ستّ وجهات بلا "إضافة" و«قائمتي» ثانيةً، و"الخدمات" ضمنها، وزرّ عائم',
+        (tester) async {
       final api = apiReturning({'success': true});
       final auth = AuthStore(api);
       final realtime = RealtimeService();
@@ -1417,7 +1418,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-      expect(navBar.destinations, hasLength(5));
+      expect(navBar.destinations, hasLength(6));
+      expect(
+        (navBar.destinations[1] as NavigationDestination).label,
+        'قائمتي',
+      );
 
       // «إضافة» لم تعد وجهة في الشريط — الزرّ العائم هو النشر الآن.
       expect(

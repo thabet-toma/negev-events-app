@@ -127,9 +127,13 @@ class ApiClient {
     );
   }
 
-  Future<Map<String, dynamic>> delete(String path, {bool auth = false}) async {
+  Future<Map<String, dynamic>> delete(
+    String path, {
+    Map<String, String>? query,
+    bool auth = false,
+  }) async {
     return _send(
-      () => _client.delete(_uri(path), headers: _headers(auth: auth)),
+      () => _client.delete(_uri(path, query), headers: _headers(auth: auth)),
       auth: auth,
     );
   }

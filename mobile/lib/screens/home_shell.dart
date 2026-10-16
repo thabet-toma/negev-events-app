@@ -9,16 +9,23 @@ import 'account_screen.dart';
 import 'add_event_screen.dart';
 import 'events_screen.dart';
 import 'map_screen.dart';
+import 'my_list_screen.dart';
 import 'nokoot_screen.dart';
 import 'services_screen.dart';
 
-/// الهيكل الرئيسي — خمس وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر في الوسط.
+/// فهرس وجهة «النقوط» — تُخفي زرّ النشر العائم (شاشتها لها زرّها الخاصّ).
+const int _nokootTabIndex = 3;
+
+/// الهيكل الرئيسي — ستّ وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر.
 ///
 /// «إضافة» ليست وجهة بل فعل (wayfinder #21 خطوة ١): خرجت من الشريط إلى زرّ
 /// عائم، فأفرغت خانة أخذتها «الخدمات» — الخمسة الأصليون (المناسبات، الخريطة،
 /// النقوط، حسابي) بقوا كما هم، ولم يتنحَّ أحد.
 ///
-/// الخانة الخامسة هنا «حسابي»، بينما نظيرتها في الويب «الستيكرات» — قرار
+/// و«قائمتي» (الوجه الظاهر لـ«ذكّرني») جاءت سادسةً وتُعرض **ثانيةً** مباشرةً
+/// بعد «المناسبات»: هي نتيجة التصفّح، فمكانها بجانبه لا في آخره.
+///
+/// الخانة الأخيرة هنا «حسابي»، بينما نظيرتها في الويب «الستيكرات» — قرار
 /// موثَّق لا انحراف بين العميلين (spec #21 خطوة ١، القرار ٢).
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -30,22 +37,40 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   StreamSubscription<Map<String, dynamic>>? _broadcastSub;
+  ValueNotifier<int>? _tabRequest;
   String? _banner;
   bool _updateChecked = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final services = AppServices.of(context);
     _broadcastSub ??=
-        AppServices.of(context).realtime.onBroadcast.listen((data) {
+        services.realtime.onBroadcast.listen((data) {
       if (!mounted) return;
       setState(() => _banner = '${data['message'] ?? data['title'] ?? ''}');
     });
+
+    // طلب تبديل تبويب من خارج الشريط (زرّ «عرض» في رسالة الإضافة): قيمة على
+    // `AppServices` لا استدعاء مباشر، كي لا يستورد كرت التغذية هذا الملف.
+    if (_tabRequest == null) {
+      _tabRequest = services.tabRequest;
+      _tabRequest!.addListener(_handleTabRequest);
+    }
 
     if (!_updateChecked) {
       _updateChecked = true;
       _checkForUpdate();
     }
+  }
+
+  /// يستهلك الطلب ثم يعيده إلى «لا طلب» — قيمة سنتين على نفس الرقم ليست
+  /// طلباً جديداً (`ValueNotifier` لا يُخطر على قيمة مساوية).
+  void _handleTabRequest() {
+    final request = _tabRequest!.value;
+    if (request < 0 || !mounted) return;
+    setState(() => _index = request);
+    AppServices.of(context).consumeTabRequest();
   }
 
   /// فحص التحديث عند الإقلاع. صامت تماماً عند الفشل — التطبيق يعمل بدونه.
@@ -63,6 +88,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     _broadcastSub?.cancel();
+    _tabRequest?.removeListener(_handleTabRequest);
     super.dispose();
   }
 
@@ -80,7 +106,8 @@ class _HomeShellState extends State<HomeShell> {
     // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر صراحةً
     // متى لم تعد المختارة كي تُسكت صوتها.
     final screens = [
-      EventsScreen(isActive: _index == 0),
+      EventsScreen(isActive: _index == AppServices.feedTabIndex),
+      MyListScreen(isActive: _index == AppServices.myListTabIndex),
       const MapScreen(),
       const NokootScreen(),
       const AccountScreen(),
@@ -99,7 +126,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      floatingActionButton: _index == 2
+      floatingActionButton: _index == _nokootTabIndex
           ? null
           : FloatingActionButton.small(
               onPressed: _openAddEvent,
@@ -116,6 +143,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.celebration_outlined),
             selectedIcon: Icon(Icons.celebration),
             label: 'المناسبات',
+          ),
+          NavigationDestination(
+            icon: _MyListNavIcon(),
+            selectedIcon: _MyListNavIcon(selected: true),
+            label: 'قائمتي',
           ),
           NavigationDestination(
             icon: Icon(Icons.map_outlined),
@@ -139,6 +171,32 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// أيقونة «قائمتي» في الشريط مع شارة عدد مناسبات اليوم الجارية — تُخفى حين لا
+/// شيء جارٍ أو حين لا حساب، فلا رقم بلا معنى. العدّاد تكتبه شاشة «قائمتي»
+/// وحدها (`myListNowCount`) بعد كل جلب ناجح.
+class _MyListNavIcon extends StatelessWidget {
+  const _MyListNavIcon({this.selected = false});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppServices.of(context);
+    return AnimatedBuilder(
+      animation: Listenable.merge([services.auth, services.myListNowCount]),
+      builder: (context, _) {
+        final count =
+            services.auth.isSignedIn ? services.myListNowCount.value : 0;
+        return Badge(
+          isLabelVisible: count > 0,
+          label: Text('$count'),
+          child: Icon(selected ? Icons.bookmark : Icons.bookmark_border),
+        );
+      },
     );
   }
 }

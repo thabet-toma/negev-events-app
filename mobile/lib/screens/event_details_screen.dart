@@ -181,7 +181,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   Future<void> _toggleRemind(Event event) async {
     final services = AppServices.of(context);
     if (!services.auth.isSignedIn) {
-      await openSignInGate(context, 'سجّل الدخول لتفعيل التذكير');
+      await openSignInGate(context, 'سجّل الدخول لحفظ المناسبة في قائمتك');
       return;
     }
 
@@ -196,6 +196,12 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
           contentTown: event.town,
         );
         await services.api.remind(event.id);
+      }
+      // التغيير وقع على الخادم فعلاً — «قائمتي» تُعلَم هنا، قبل أيّ خروج
+      // مبكّر بسبب إذن الإشعارات: رفض الإذن يمنع المنبّه لا الحفظ، والمتابعة
+      // محفوظة على الخادم أصلاً.
+      services.myListRevision.value++;
+      if (!event.isReminded) {
         final willAlarm = await services.reminders.onReminderAdded();
         if (!willAlarm && mounted) {
           showMessage(
@@ -204,7 +210,28 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
             'فعّله من إعدادات النظام كي يصلك المنبّه',
             isError: true,
           );
+          _reloadQuietly();
+          return;
         }
+      }
+      if (!mounted) return;
+      if (event.isReminded) {
+        showMessage(context, 'أُزيلت من قائمتي');
+      } else {
+        showMessage(
+          context,
+          'أُضيفت إلى قائمتي',
+          action: SnackBarAction(
+            label: 'عرض',
+            textColor: context.c.sky,
+            onPressed: () {
+              // «عرض» من صفحة مناسبة مدفوعة فوق الهيكل: الرجوع إليه أوّلاً،
+              // وإلا تبدّل التبويب خلف الصفحة ولم يرَ المستخدم شيئاً.
+              Navigator.of(context).popUntil((route) => route.isFirst);
+              services.openMyList();
+            },
+          ),
+        );
       }
       _reloadQuietly();
     } catch (error) {
@@ -517,10 +544,10 @@ class _EventDetailsBody extends StatelessWidget {
                     onPressed: onRemindTap,
                     icon: Icon(
                       event.isReminded
-                          ? Icons.notifications_active
-                          : Icons.notifications_none,
+                          ? Icons.bookmark
+                          : Icons.bookmark_border,
                     ),
-                    label: const Text('ذكّرني'),
+                    label: Text(event.isReminded ? 'في قائمتي' : 'أضف لقائمتي'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor:
                           event.isReminded ? context.c.sky : context.c.inkSoft,

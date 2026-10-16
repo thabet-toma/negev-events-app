@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../api/negev_api.dart' show NegevApi;
 import '../main.dart';
 import '../models/nokoot.dart';
 import '../theme.dart';
@@ -23,157 +24,8 @@ class _NokootScreenState extends State<NokootScreen> {
   }
 
   Future<void> _openAddSheet() async {
-    final recipientController = TextEditingController();
-    final amountController = TextEditingController();
-    final notesController = TextEditingController();
-    final towns = AppServices.of(context).places.catalog.towns;
-    String town = towns.first;
-    DateTime? date;
-    var saving = false;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: context.c.surfaceSunk,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (sheetContext, setSheetState) => Padding(
-          padding: EdgeInsets.only(
-            left: 18,
-            right: 18,
-            top: 20,
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 22,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'إضافة قيد نقوط',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: sheetContext.c.ink,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: recipientController,
-                  decoration: const InputDecoration(labelText: 'اسم المستلم *'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: amountController,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'المبلغ (₪) *'),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: town,
-                  decoration: const InputDecoration(labelText: 'البلدة'),
-                  items: towns
-                      .map((item) =>
-                          DropdownMenuItem(value: item, child: Text(item)))
-                      .toList(),
-                  onChanged: (value) {
-                    if (value != null) setSheetState(() => town = value);
-                  },
-                ),
-                const SizedBox(height: 12),
-                InkWell(
-                  onTap: () async {
-                    final now = DateTime.now();
-                    final picked = await showDatePicker(
-                      context: sheetContext,
-                      initialDate: date ?? now,
-                      firstDate: DateTime(now.year - 10),
-                      lastDate: DateTime(now.year + 3),
-                    );
-                    if (picked != null) setSheetState(() => date = picked);
-                  },
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'تاريخ المناسبة *',
-                      suffixIcon: Icon(Icons.calendar_today, size: 18),
-                    ),
-                    child: Text(
-                      date == null
-                          ? 'اختر التاريخ'
-                          : '${date!.year}-${date!.month.toString().padLeft(2, '0')}-${date!.day.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        color: date == null
-                            ? sheetContext.c.inkFaint
-                            : sheetContext.c.ink,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: notesController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(labelText: 'ملاحظات'),
-                ),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: saving
-                      ? null
-                      : () async {
-                          final recipient = recipientController.text.trim();
-                          final amount =
-                              double.tryParse(amountController.text.trim());
-
-                          if (recipient.isEmpty ||
-                              amount == null ||
-                              date == null) {
-                            showMessage(
-                              sheetContext,
-                              'الاسم والمبلغ والتاريخ مطلوبة',
-                              isError: true,
-                            );
-                            return;
-                          }
-
-                          setSheetState(() => saving = true);
-                          try {
-                            final day =
-                                '${date!.year}-${date!.month.toString().padLeft(2, '0')}-${date!.day.toString().padLeft(2, '0')}';
-                            await AppServices.of(context).api.addNokoot(
-                                  recipientName: recipient,
-                                  amount: amount,
-                                  eventDate: day,
-                                  clanTown: town,
-                                  notes: notesController.text.trim(),
-                                );
-                            if (sheetContext.mounted) {
-                              Navigator.of(sheetContext).pop();
-                            }
-                            _refresh();
-                          } catch (error) {
-                            if (sheetContext.mounted) {
-                              showMessage(sheetContext, '$error', isError: true);
-                            }
-                          } finally {
-                            setSheetState(() => saving = false);
-                          }
-                        },
-                  child: Text(saving ? 'جارٍ الحفظ…' : 'حفظ القيد'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    recipientController.dispose();
-    amountController.dispose();
-    notesController.dispose();
+    final saved = await showAddNokootSheet(context);
+    if (saved) _refresh();
   }
 
   Future<void> _delete(NokootRecord record) async {
@@ -281,6 +133,209 @@ class _NokootScreenState extends State<NokootScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+/// ورقة إضافة قيد نقوط — مستخرَجة من [NokootScreen] كي تفتحها «قائمتي» على
+/// مناسبة بعينها («سجّل نقوطك») بنفس الورقة ونفس التحقّق، بلا نسخة ثانية.
+///
+/// تعيد `true` فقط حين حُفظ صفّ فعلاً؛ التحديث مسؤولية المستدعي، فلا تعرف هذه
+/// الدالة أيّ شاشة استدعتها.
+///
+/// [recipient] و[date] و[town] تعبئة أوّلية فقط: البلدة تُتجاهَل إن لم تكن
+/// ضمن قائمة المنتقي (فيبقى الافتراضي)، والتاريخ يبقى فارغاً إن لم يُمرَّر.
+Future<bool> showAddNokootSheet(
+  BuildContext context, {
+  String? recipient,
+  DateTime? date,
+  String? town,
+}) async {
+  // نلتقط الخدمة قبل الورقة حتى لا نلمس context بعد فجوة غير متزامنة.
+  final api = AppServices.of(context).api;
+  final towns = AppServices.of(context).places.catalog.towns;
+
+  final saved = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: context.c.surfaceSunk,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (sheetContext) => _AddNokootSheet(
+      api: api,
+      towns: towns,
+      recipient: recipient,
+      date: date,
+      town: town,
+    ),
+  );
+  return saved == true;
+}
+
+/// جسم ورقة إضافة القيد — مكوّن يملك محرّراته بنفسه.
+///
+/// الملكية هنا ليست تنغيماً: `showModalBottomSheet` يعيد نتيجته لحظة طلب
+/// الإغلاق لا لحظة اكتمال انسحاب الورقة، فمحرّر يُفصَل في المستدعي فور وصول
+/// النتيجة يُقرَأ مُفصَلاً طوال انتقال الخروج (رمي في وضع التنقيح). `dispose`
+/// هنا يقع مع تفكيك شجرة الورقة، أي بعد انتهاء الانتقال.
+class _AddNokootSheet extends StatefulWidget {
+  const _AddNokootSheet({
+    required this.api,
+    required this.towns,
+    this.recipient,
+    this.date,
+    this.town,
+  });
+
+  final NegevApi api;
+  final List<String> towns;
+  final String? recipient;
+  final DateTime? date;
+  final String? town;
+
+  @override
+  State<_AddNokootSheet> createState() => _AddNokootSheetState();
+}
+
+class _AddNokootSheetState extends State<_AddNokootSheet> {
+  late final TextEditingController _recipient =
+      TextEditingController(text: widget.recipient ?? '');
+  final TextEditingController _amount = TextEditingController();
+  final TextEditingController _notes = TextEditingController();
+
+  /// بلدة المناسبة حين تكون ضمن قائمة المنتقي، وإلا الافتراضية (أوّل القائمة).
+  late String _town = widget.town != null && widget.towns.contains(widget.town)
+      ? widget.town!
+      : widget.towns.first;
+  late DateTime? _date = widget.date;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _recipient.dispose();
+    _amount.dispose();
+    _notes.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _recipient.text.trim();
+    final amount = double.tryParse(_amount.text.trim());
+
+    if (name.isEmpty || amount == null || _date == null) {
+      showMessage(context, 'الاسم والمبلغ والتاريخ مطلوبة', isError: true);
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final day =
+          '${_date!.year}-${_date!.month.toString().padLeft(2, '0')}-${_date!.day.toString().padLeft(2, '0')}';
+      await widget.api.addNokoot(
+        recipientName: name,
+        amount: amount,
+        eventDate: day,
+        clanTown: _town,
+        notes: _notes.text.trim(),
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 22,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'إضافة قيد نقوط',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _recipient,
+              decoration: const InputDecoration(labelText: 'اسم المستلم *'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'المبلغ (₪) *'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _town,
+              decoration: const InputDecoration(labelText: 'البلدة'),
+              items: widget.towns
+                  .map(
+                    (item) => DropdownMenuItem(value: item, child: Text(item)),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) setState(() => _town = value);
+              },
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () async {
+                final now = DateTime.now();
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _date ?? now,
+                  firstDate: DateTime(now.year - 10),
+                  lastDate: DateTime(now.year + 3),
+                );
+                if (picked != null) setState(() => _date = picked);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'تاريخ المناسبة *',
+                  suffixIcon: Icon(Icons.calendar_today, size: 18),
+                ),
+                child: Text(
+                  _date == null
+                      ? 'اختر التاريخ'
+                      : '${_date!.year}-${_date!.month.toString().padLeft(2, '0')}-${_date!.day.toString().padLeft(2, '0')}',
+                  style: TextStyle(
+                    color: _date == null ? context.c.inkFaint : context.c.ink,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _notes,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'ملاحظات'),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _saving ? null : _save,
+              child: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ القيد'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
