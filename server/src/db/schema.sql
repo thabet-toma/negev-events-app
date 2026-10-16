@@ -273,6 +273,8 @@ CREATE TABLE IF NOT EXISTS event_reminders (
   id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id    INT UNSIGNED NOT NULL,
   event_id   INT UNSIGNED NOT NULL,
+  -- muted = still in «قائمتي», no reminder notifications
+  notify     TINYINT(1)   NOT NULL DEFAULT 1,
   created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_event_reminders (user_id, event_id),

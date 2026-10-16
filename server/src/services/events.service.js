@@ -63,6 +63,10 @@ const EVENT_SPAN_END_SQL_E =
   'GREATEST(COALESCE(e.event_end_date, e.event_date),'
   + ' COALESCE(e.youth_party_date, e.event_date),'
   + ' COALESCE((SELECT MAX(d.day_date) FROM event_days d WHERE d.event_id = e.id), e.event_date))';
+const EVENT_SPAN_START_SQL_E =
+  'LEAST(e.event_date,'
+  + ' COALESCE(e.youth_party_date, e.event_date),'
+  + ' COALESCE((SELECT MIN(d.day_date) FROM event_days d WHERE d.event_id = e.id), e.event_date))';
 
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
@@ -178,9 +182,15 @@ async function attachReminderState(events, userId) {
   });
 }
 
-/** Toggles a "ذكّرني" on — a follow, not an RSVP. Re-pressing an active reminder is a silent no-op (UNIQUE key). */
+/**
+ * Toggles a "ذكّرني" on — a follow, not an RSVP. Only an `approved` event can
+ * be followed: a pending/rejected one answers 404, exactly like a
+ * non-existent id, so the endpoint never confirms that an unreviewed
+ * submission exists. Re-pressing an active reminder is a silent no-op (UNIQUE
+ * key) and leaves the row — `notify` included — untouched.
+ */
 async function setReminder(eventId, userId) {
-  const event = await db.queryOne('SELECT id FROM events WHERE id = ?', [eventId]);
+  const event = await db.queryOne("SELECT id FROM events WHERE id = ? AND status = 'approved'", [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
 
   try {
@@ -194,17 +204,170 @@ async function removeReminder(eventId, userId) {
   await db.execute('DELETE FROM event_reminders WHERE user_id = ? AND event_id = ?', [userId, eventId]);
 }
 
-/** Every event this user is following, newest reminder first. */
-async function listMyReminders(userId) {
-  const rows = await db.query(
-    `SELECT e.* FROM event_reminders r
+/**
+ * Mutes or un-mutes the reminder bell of an event already in «قائمتي» without
+ * removing it — `WHERE event_id = ? AND user_id = ?` so a user can only ever
+ * touch their own row. 0 affected rows means the event is not in this user's
+ * list (or does not exist) — the same 404 for both.
+ */
+async function setReminderNotify(eventId, userId, notify) {
+  const { affectedRows } = await db.execute(
+    'UPDATE event_reminders SET notify = ? WHERE event_id = ? AND user_id = ?',
+    [notify ? 1 : 0, eventId, userId]
+  );
+  if (!affectedRows) throw ApiError.notFound('المناسبة ليست في قائمتك');
+}
+
+/**
+ * «نظّف المنتهية»: deletes this user's followed events whose span already
+ * ended — `r.user_id = ?` sits in the DELETE itself, so one user can never
+ * clear another's list. Returns how many rows were removed.
+ */
+async function clearEndedReminders(userId) {
+  const { affectedRows } = await db.execute(
+    `DELETE r FROM event_reminders r
        JOIN events e ON e.id = r.event_id
-      WHERE r.user_id = ?
-      ORDER BY r.created_at DESC`,
+      WHERE r.user_id = ? AND ${EVENT_SPAN_END_SQL_E} < CURDATE()`,
     [userId]
   );
+  return affectedRows;
+}
+
+/**
+ * The «قائمتي» bucket one followed event falls into, given how far its span
+ * sits from today and today's day-of-week (1 = Sunday … 7 = Saturday, so the
+ * week runs Sunday–Saturday like the feed's «هذا الأسبوع»). Pure and exported
+ * for its own test — `listMyReminders` reads every verdict from here, never a
+ * second copy of the rule. First match wins:
+ *   now          the event is running today (its span covers CURDATE())
+ *   tomorrow     starts tomorrow
+ *   this_week    starts later this week — `7 - todayDow` days remain of it
+ *   later        starts further ahead than this week
+ *   ended_recent ended within the last 7 days (rolling, deliberately NOT
+ *                "since Sunday": a Thursday–Saturday wedding must not vanish
+ *                from the list on Sunday)
+ *   ended        anything older
+ */
+function myListBucket(daysUntilStart, daysUntilEnd, todayDow) {
+  if (daysUntilStart <= 0 && daysUntilEnd >= 0) return 'now';
+  if (daysUntilStart === 1) return 'tomorrow';
+  if (daysUntilStart >= 2 && daysUntilStart <= (7 - todayDow)) return 'this_week';
+  if (daysUntilStart > 0) return 'later';
+  if (daysUntilEnd >= -7) return 'ended_recent';
+  return 'ended';
+}
+
+/** The «قائمتي» buckets that count as "upcoming" — everything still ahead of the reader. */
+const UPCOMING_MY_LIST_BUCKETS = new Set(['now', 'tomorrow', 'this_week', 'later']);
+
+/**
+ * «قائمتي» — the visible face of this user's «ذكّرني» follows. Only approved
+ * events appear (a followed submission elsewhere is a review matter, not a
+ * list entry), upcoming first then the recently ended. Every row carries its
+ * span's own dates, a `bucket` (myListBucket) so a client can group without
+ * re-deriving dates, the mute flag (`notify`), when it was saved (`saved_at`),
+ * and `date_change` when a still-current announcement about the date was
+ * published AFTER the user saved the event — an announcement that predates
+ * the follow is old news the user never asked to track.
+ *
+ * `legacyOnly` applies the same occasion-type filter as the list/map/detail
+ * endpoints (listLiveAnnouncements' pattern), so a pre-#20 client never sees a
+ * type it cannot render. Returns a plain object — the route spreads it. The
+ * span comes from the shared EVENT_SPAN_* constants, never a hand-written
+ * COALESCE, and the announcement columns are stripped before the shape leaves.
+ */
+async function listMyReminders(userId, { legacyOnly = false } = {}) {
+  const conditions = ["e.status = 'approved'", 'r.user_id = ?'];
+  const params = [userId];
+
+  if (legacyOnly) {
+    const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
+    if (!legacyTypeIds.length) {
+      return { events: [], counts: { all: 0, upcoming: 0, ended: 0 }, under_review_count: 0 };
+    }
+    conditions.push(`e.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    params.push(...legacyTypeIds);
+  }
+
+  // The span and bucket helpers are computed inside a derived table and the
+  // ORDER BY runs over its columns — so the upcoming/ended split and its two
+  // sort directions read each helper once, as a real column, instead of
+  // re-expanding the whole span fragment five times in the ordering.
+  // The announcement's three columns come from one correlated, parameter-free
+  // subquery each (LIMIT 1, newest first) rather than a JOIN: only one row per
+  // event can ever be current, but a JOIN would silently double the event in
+  // the list if that invariant ever broke.
+  const rows = await db.query(
+    `SELECT * FROM (
+       SELECT e.*, r.notify, r.created_at AS saved_at,
+              DATE_FORMAT(${EVENT_SPAN_START_SQL_E}, '%Y-%m-%d') AS span_start,
+              DATE_FORMAT(${EVENT_SPAN_END_SQL_E}, '%Y-%m-%d') AS span_end,
+              DATEDIFF(${EVENT_SPAN_START_SQL_E}, CURDATE()) AS days_until_start,
+              DATEDIFF(${EVENT_SPAN_END_SQL_E}, CURDATE()) AS days_until_end,
+              DAYOFWEEK(CURDATE()) AS today_dow,
+              (SELECT a.old_value FROM event_announcements a
+                WHERE a.event_id = e.id AND a.is_current = 1 AND a.published_at > r.created_at
+                ORDER BY a.published_at DESC, a.id DESC LIMIT 1) AS announcement_old_value,
+              (SELECT a.new_value FROM event_announcements a
+                WHERE a.event_id = e.id AND a.is_current = 1 AND a.published_at > r.created_at
+                ORDER BY a.published_at DESC, a.id DESC LIMIT 1) AS announcement_new_value,
+              (SELECT a.published_at FROM event_announcements a
+                WHERE a.event_id = e.id AND a.is_current = 1 AND a.published_at > r.created_at
+                ORDER BY a.published_at DESC, a.id DESC LIMIT 1) AS announcement_published_at
+         FROM event_reminders r
+         JOIN events e ON e.id = r.event_id
+        WHERE ${conditions.join(' AND ')}
+     ) listed
+      ORDER BY (days_until_end >= 0) DESC,
+               CASE WHEN days_until_end >= 0 THEN span_start END ASC,
+               CASE WHEN days_until_end >= 0 THEN id END ASC,
+               CASE WHEN days_until_end < 0 THEN span_end END DESC,
+               CASE WHEN days_until_end < 0 THEN id END DESC`,
+    params
+  );
+
   const withRelations = await attachHonoreesAndTypes(rows.map(withAbsoluteMedia));
-  return attachReminderState(withRelations, userId);
+  const withReminderState = await attachReminderState(withRelations, userId);
+
+  const counts = { all: 0, upcoming: 0, ended: 0 };
+  const events = withReminderState.map(row => {
+    const {
+      days_until_end, today_dow,
+      announcement_old_value, announcement_new_value, announcement_published_at,
+      ...event
+    } = row;
+
+    const bucket = myListBucket(Number(row.days_until_start), Number(row.days_until_end), Number(row.today_dow));
+    counts.all += 1;
+    if (UPCOMING_MY_LIST_BUCKETS.has(bucket)) counts.upcoming += 1;
+    else counts.ended += 1;
+
+    return {
+      ...event,
+      notify: Boolean(event.notify),
+      saved_at: event.saved_at,
+      span_start: event.span_start,
+      span_end: event.span_end,
+      days_until_start: Number(event.days_until_start),
+      bucket,
+      date_change: announcement_published_at
+        ? {
+          old_value: announcement_old_value,
+          new_value: announcement_new_value,
+          published_at: announcement_published_at
+        }
+        : null
+    };
+  });
+
+  const { total } = await db.queryOne(
+    `SELECT COUNT(*) AS total FROM event_reminders r
+       JOIN events e ON e.id = r.event_id
+      WHERE r.user_id = ? AND e.status = 'pending'`,
+    [userId]
+  );
+
+  return { events, counts, under_review_count: Number(total) };
 }
 
 /**
@@ -1565,6 +1728,7 @@ module.exports = {
   EVENT_SPAN_START_SQL_EVENTS,
   EVENT_SPAN_END_SQL_EVENTS,
   EVENT_SPAN_END_SQL_E,
+  EVENT_SPAN_START_SQL_E,
   listAmendments,
   listMyEvents,
   findCollisions,
@@ -1572,6 +1736,9 @@ module.exports = {
   possibleDuplicateError,
   setReminder,
   removeReminder,
+  setReminderNotify,
+  clearEndedReminders,
+  myListBucket,
   listMyReminders,
   listLiveAnnouncements,
   addReaction,

@@ -283,7 +283,7 @@ async function scheduleForUser(userId) {
        FROM event_reminders r
        JOIN events e ON e.id = r.event_id
        JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE r.user_id = ? AND ot.notify_countdown = 1
+      WHERE r.user_id = ? AND r.notify = 1 AND ot.notify_countdown = 1
       ORDER BY e.event_date ASC, e.id ASC`,
     [userId]
   );
@@ -425,7 +425,7 @@ function describeChanges(changedFields) {
  */
 async function notifyEventFollowersOnUpdate(eventId, { title, changedFields = [], updatedBy = null }) {
   const followers = await db.query(
-    'SELECT DISTINCT user_id FROM event_reminders WHERE event_id = ? AND user_id <> ?',
+    'SELECT DISTINCT user_id FROM event_reminders WHERE event_id = ? AND notify = 1 AND user_id <> ?',
     [eventId, updatedBy ?? 0]
   );
   if (!followers.length) return [];

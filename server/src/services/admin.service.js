@@ -120,7 +120,7 @@ async function notifiableUserIds(connection, eventId, excludedUserIds) {
 
   const [rows] = await connection.execute(
     `SELECT DISTINCT user_id FROM (
-        SELECT user_id FROM event_reminders WHERE event_id = ?
+        SELECT user_id FROM event_reminders WHERE event_id = ? AND notify = 1
         UNION
         SELECT created_by AS user_id FROM events WHERE id = ? AND created_by IS NOT NULL
      ) recipients`,

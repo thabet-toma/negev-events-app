@@ -641,14 +641,49 @@ router.post('/events/:id/remind', authenticate, asyncHandler(async (req, res) =>
   res.json({ success: true, message: 'تم تفعيل التذكير' });
 }));
 
+/**
+ * Mutes/un-mutes the reminder bell of an event already in «قائمتي», without
+ * removing it: `notify` must be a real boolean — a string like "no" is a
+ * client bug, not a mute. 404 when the event is not in this user's list, so
+ * the endpoint never confirms what a user does not follow.
+ */
+router.patch('/events/:id/remind', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const notify = req.body.notify;
+  if (typeof notify !== 'boolean') throw ApiError.badRequest('قيمة التنبيه غير صالحة');
+
+  await events.setReminderNotify(eventId, req.user.id, notify);
+  res.json({ success: true, notify, message: notify ? 'تم تفعيل التنبيه' : 'تم كتم التنبيه' });
+}));
+
 router.delete('/events/:id/remind', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   await events.removeReminder(eventId, req.user.id);
   res.json({ success: true, message: 'تم إلغاء التذكير' });
 }));
 
+// «قائمتي» — the follow list itself: every approved event this user follows,
+// with its span, bucket, mute flag and any date change announced since they
+// saved it. `legacyOnly` keeps a pre-#20 client from seeing a type it cannot
+// render, the same door the feed and map apply.
 router.get('/my-reminders', authenticate, asyncHandler(async (req, res) => {
-  res.json({ success: true, events: await events.listMyReminders(req.user.id) });
+  const result = await events.listMyReminders(req.user.id, { legacyOnly: isLegacyClient(req) });
+  res.json({ success: true, ...result });
+}));
+
+/**
+ * «نظّف المنتهية» — clears this user's already-ended follows. `scope` must be
+ * `ended` today; anything else is a malformed request rather than a silent
+ * no-op, so a client cannot one day widen this into "delete everything" by
+ * typo. Only the removed count is logged — never who asked.
+ */
+router.delete('/my-reminders', authenticate, asyncHandler(async (req, res) => {
+  const scope = cleanString(req.query.scope, 20);
+  if (scope !== 'ended') throw ApiError.badRequest('نطاق الحذف غير صالح');
+
+  const removed = await events.clearEndedReminders(req.user.id);
+  logger.info('my-reminders.clear-ended', { removed });
+  res.json({ success: true, removed, message: 'تم حذف المناسبات المنتهية من قائمتك' });
 }));
 
 // --- Amendment log (owner or admin) ---------------------------------

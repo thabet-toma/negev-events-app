@@ -74,7 +74,8 @@ async function runCountdownPass() {
   const eventIds = candidateEvents.map(event => event.id);
   const placeholders = eventIds.map(() => '?').join(', ');
   const followerRows = await db.query(
-    `SELECT event_id, user_id FROM event_reminders WHERE event_id IN (${placeholders}) ORDER BY id ASC`,
+    `SELECT event_id, user_id FROM event_reminders
+      WHERE event_id IN (${placeholders}) AND notify = 1 ORDER BY id ASC`,
     eventIds
   );
 

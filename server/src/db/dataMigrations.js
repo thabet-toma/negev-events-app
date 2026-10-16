@@ -1625,6 +1625,24 @@ const steps = [
         logger.info(`[migrations] add-event-days-2026-10: extra_days field added to ${inserted} occasion type(s).`);
       }
     }
+  },
+  {
+    // «قائمتي»'s mute switch: a followed event the user silenced stays in the
+    // list (`event_reminders` still has the row) but stops producing reminder
+    // notifications. Guarded on columnExists like every other ALTER here, so
+    // a fresh install — where schema.sql already carries the column — no-ops.
+    name: 'add-reminder-notify-2026-10',
+    async run(connection) {
+      if (await columnExists(connection, 'event_reminders', 'notify')) {
+        logger.info('[migrations] add-reminder-notify-2026-10: already present.');
+        return;
+      }
+
+      await connection.execute(
+        'ALTER TABLE event_reminders ADD COLUMN notify TINYINT(1) NOT NULL DEFAULT 1 AFTER event_id'
+      );
+      logger.info('[migrations] add-reminder-notify-2026-10: column added.');
+    }
   }
 ];
 

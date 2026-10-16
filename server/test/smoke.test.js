@@ -30,6 +30,7 @@ const SEED_TOWN_NAMES = SEED_TOWNS.map(town => town.name);
 const { absoluteMediaUrl } = require('../src/utils/mediaUrl');
 const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
+const eventsService = require('../src/services/events.service');
 const scheduler = require('../src/jobs/scheduler');
 const notificationsService = require('../src/services/notifications.service');
 const pushService = require('../src/services/push.service');
@@ -3430,6 +3431,225 @@ async function run() {
     assert.strictEqual(status, 200);
     assert.ok(body.events.some(e => e.id === reminderEventId));
   });
+
+  // «قائمتي» — the mute switch on a follow, the feed's own shape, and
+  // «نظّف المنتهية». Uses its own events so the «ذكّرني»/announcement cases
+  // above and below keep the exact state they were written against.
+
+  let myListEventId = 0;
+  let myListEndedEventId = 0;
+  let myListPendingEventId = 0;
+
+  await test('Set up: an admin publishes an upcoming and an already-ended wedding, and the follower follows both', async () => {
+    const upcoming = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس قائمتي' }], town: 'رهط', event_date: '2027-12-01' })
+    });
+    myListEventId = upcoming.body.eventId;
+    assert.strictEqual(upcoming.body.status, 'approved');
+
+    const ended = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس قائمتي المنتهية' }], town: 'رهط', event_date: '2020-02-02' })
+    });
+    myListEndedEventId = ended.body.eventId;
+    assert.strictEqual(ended.body.status, 'approved');
+
+    await api('POST', `/api/events/${myListEventId}/remind`, { token: reminderFollower.token });
+    await api('POST', `/api/events/${myListEndedEventId}/remind`, { token: reminderFollower.token });
+  });
+
+  await test('PATCH /api/events/:id/remind mutes without unfollowing; a non-boolean is 400 and an event not in the list is 404', async () => {
+    const mute = await api('PATCH', `/api/events/${myListEventId}/remind`, {
+      token: reminderFollower.token, body: { notify: false }
+    });
+    assert.strictEqual(mute.status, 200);
+    assert.strictEqual(mute.body.notify, false);
+
+    const row = await db.queryOne(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [myListEventId, reminderFollower.id]
+    );
+    assert.strictEqual(Number(row.notify), 0, 'a mute must write notify = 0');
+
+    // Re-pressing the follow is still a silent no-op — and must not un-mute.
+    const repeat = await api('POST', `/api/events/${myListEventId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(repeat.status, 200);
+    const stillMuted = await db.queryOne(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [myListEventId, reminderFollower.id]
+    );
+    assert.strictEqual(Number(stillMuted.notify), 0, 'a repeat follow must not reset notify');
+
+    const { body } = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    const listed = body.events.find(e => e.id === myListEventId);
+    assert.ok(listed, 'a muted event must stay in «قائمتي»');
+    assert.strictEqual(listed.notify, false);
+    assert.strictEqual(listed.is_reminded, true);
+
+    const bad = await api('PATCH', `/api/events/${myListEventId}/remind`, {
+      token: reminderFollower.token, body: { notify: 'no' }
+    });
+    assert.strictEqual(bad.status, 400);
+    assert.strictEqual(bad.body.message, 'قيمة التنبيه غير صالحة');
+
+    const missing = await api('PATCH', `/api/events/${myListEventId}/remind`, {
+      token: reminderOther.token, body: { notify: false }
+    });
+    assert.strictEqual(missing.status, 404, 'an event this user does not follow has no row to update');
+
+    // Leave it unmuted for the tests below.
+    const unmute = await api('PATCH', `/api/events/${myListEventId}/remind`, {
+      token: reminderFollower.token, body: { notify: true }
+    });
+    assert.strictEqual(unmute.body.notify, true);
+  });
+
+  await test("A muted follower is excluded from the reminder schedule and from an owner's cosmetic edit, while an unmuted follower still hears both", async () => {
+    await api('POST', `/api/events/${myListEventId}/remind`, { token: reminderOther.token });
+    await api('PATCH', `/api/events/${myListEventId}/remind`, { token: reminderFollower.token, body: { notify: false } });
+
+    const mutedSchedule = await api('GET', '/api/reminders/schedule', { token: reminderFollower.token });
+    const unmutedSchedule = await api('GET', '/api/reminders/schedule', { token: reminderOther.token });
+    assert.ok(!mutedSchedule.body.schedule.some(e => e.event_id === myListEventId), 'a muted follow is not scheduled');
+    assert.ok(unmutedSchedule.body.schedule.some(e => e.event_id === myListEventId), 'an unmuted follow is scheduled');
+
+    const edit = await api('PATCH', `/api/events/${myListEventId}`, {
+      token: adminToken, body: { title: 'عنوان قائمتي التجميلي' }
+    });
+    assert.strictEqual(edit.status, 200);
+    assert.strictEqual(edit.body.amendment, 'cosmetic');
+
+    const updatedRows = userId => db.query(
+      "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_updated'",
+      [userId, myListEventId]
+    );
+    assert.strictEqual((await updatedRows(reminderFollower.id)).length, 0, 'a muted follower must not be told about an edit');
+    assert.strictEqual((await updatedRows(reminderOther.id)).length, 1, 'an unmuted follower is still told');
+
+    await api('PATCH', `/api/events/${myListEventId}/remind`, { token: reminderFollower.token, body: { notify: true } });
+  });
+
+  await test('POST /api/events/:id/remind on a pending event is a 404 and writes no row', async () => {
+    const created = await api('POST', '/api/events', {
+      token: reminderOwner.token,
+      body: weddingEventBody({ honorees: [{ name: 'عريس قائمتي المعلّق' }], town: 'رهط', event_date: '2027-12-05' })
+    });
+    myListPendingEventId = created.body.eventId;
+    assert.strictEqual(created.body.status, 'pending');
+
+    const res = await api('POST', `/api/events/${myListPendingEventId}/remind`, { token: reminderFollower.token });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.body.message, 'المناسبة غير موجودة');
+
+    const rows = await db.query(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [myListPendingEventId, reminderFollower.id]
+    );
+    assert.strictEqual(rows.length, 0, 'a pending event must not be followable');
+  });
+
+  await test('GET /api/my-reminders shapes «قائمتي»: counts, under_review_count, span strings, a bucket, upcoming before ended', async () => {
+    const { status, body } = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    assert.strictEqual(status, 200);
+
+    const { events: rows, counts } = body;
+    assert.strictEqual(counts.all, rows.length);
+    assert.strictEqual(counts.all, counts.upcoming + counts.ended);
+    assert.ok(counts.upcoming >= 2, 'the two upcoming follows are counted');
+    assert.ok(counts.ended >= 1, 'the ended follow is counted');
+
+    const entry = rows.find(e => e.id === myListEventId);
+    assert.ok(entry, 'the followed event is listed');
+    assert.strictEqual(typeof entry.span_start, 'string');
+    assert.strictEqual(typeof entry.span_end, 'string');
+    assert.ok(entry.bucket, 'every row carries a bucket');
+    assert.ok(!('days_until_end' in entry), 'the helper column is stripped');
+    assert.ok(!('today_dow' in entry), 'the helper column is stripped');
+
+    const upcomingBuckets = new Set(['now', 'tomorrow', 'this_week', 'later']);
+    const firstEndedIndex = rows.findIndex(e => !upcomingBuckets.has(e.bucket));
+    assert.ok(firstEndedIndex > 0, 'the ended follow comes after the upcoming ones');
+    assert.ok(rows.slice(firstEndedIndex).every(e => !upcomingBuckets.has(e.bucket)), 'no upcoming event may follow an ended one');
+
+    // Make a followed event non-approved directly, and confirm it leaves the
+    // feed but is counted as under review — then restore it.
+    await db.execute("UPDATE events SET status = 'pending' WHERE id = ?", [myListEventId]);
+    const underReview = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    assert.strictEqual(underReview.body.under_review_count, 1, 'the followed-but-unapproved event is counted');
+    assert.ok(!underReview.body.events.some(e => e.id === myListEventId), 'a non-approved event is not in the feed');
+    await db.execute("UPDATE events SET status = 'approved' WHERE id = ?", [myListEventId]);
+
+    // A rejected follow is not «قيد المراجعة» — it must not be counted either.
+    await db.execute("UPDATE events SET status = 'rejected' WHERE id = ?", [myListEventId]);
+    const rejected = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    assert.strictEqual(rejected.body.under_review_count, 0, 'a rejected event is not under review');
+    assert.ok(!rejected.body.events.some(e => e.id === myListEventId), 'a rejected event is not in the feed');
+    await db.execute("UPDATE events SET status = 'approved' WHERE id = ?", [myListEventId]);
+  });
+
+  await test('myListBucket places every day in exactly one bucket, boundaries included', async () => {
+    const bucketOf = eventsService.myListBucket;
+    // dow 1 = Sunday … 7 = Saturday; the week is Sunday–Saturday.
+    assert.strictEqual(bucketOf(0, 0, 1), 'now');
+    assert.strictEqual(bucketOf(-1, 1, 3), 'now', 'a multi-day event started yesterday and ends tomorrow');
+    assert.strictEqual(bucketOf(1, 1, 5), 'tomorrow');
+    assert.strictEqual(bucketOf(2, 4, 1), 'this_week');
+    assert.strictEqual(bucketOf(6, 6, 1), 'this_week', 'Sunday + 6 days is still this week (Saturday)');
+    assert.strictEqual(bucketOf(7, 7, 1), 'later', 'the day after the week ends is later');
+    assert.strictEqual(bucketOf(2, 2, 7), 'later', 'on Saturday this_week is impossible — no days remain');
+    assert.strictEqual(bucketOf(8, 10, 3), 'later');
+    assert.strictEqual(bucketOf(-3, -1, 3), 'ended_recent');
+    assert.strictEqual(bucketOf(-10, -7, 3), 'ended_recent', 'exactly seven days ago is still recent');
+    assert.strictEqual(bucketOf(-11, -8, 3), 'ended', 'eight days ago is not');
+  });
+
+  await test('date_change appears only for an announcement published after the row was saved', async () => {
+    const oldInsert = await db.execute(
+      `INSERT INTO event_announcements (event_id, old_value, new_value, published_at, is_current)
+       VALUES (?, ?, ?, DATE_SUB(NOW(), INTERVAL 1 DAY), 1)`,
+      [myListEventId, '2027-12-01', '2027-12-02']
+    );
+
+    const before = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    assert.strictEqual(
+      before.body.events.find(e => e.id === myListEventId).date_change, null,
+      'an announcement older than the follow must not surface'
+    );
+
+    await db.execute(
+      'UPDATE event_announcements SET old_value = ?, new_value = ?, published_at = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = ?',
+      ['2027-12-01', '2027-12-09', oldInsert.insertId]
+    );
+    const after = await api('GET', '/api/my-reminders', { token: reminderFollower.token });
+    const change = after.body.events.find(e => e.id === myListEventId).date_change;
+    assert.ok(change, 'an announcement newer than the follow surfaces as date_change');
+    assert.strictEqual(change.old_value, '2027-12-01');
+    assert.strictEqual(change.new_value, '2027-12-09');
+    assert.ok(change.published_at, 'the change carries when it was published');
+  });
+
+  await test("DELETE /api/my-reminders?scope=ended clears only this user's ended rows; another scope is 400", async () => {
+    await api('POST', `/api/events/${myListEndedEventId}/remind`, { token: reminderOther.token });
+
+    const bad = await api('DELETE', '/api/my-reminders?scope=all', { token: reminderFollower.token });
+    assert.strictEqual(bad.status, 400);
+    assert.strictEqual(bad.body.message, 'نطاق الحذف غير صالح');
+
+    const cleared = await api('DELETE', '/api/my-reminders?scope=ended', { token: reminderFollower.token });
+    assert.strictEqual(cleared.status, 200);
+    assert.ok(cleared.body.removed >= 1, "this user's ended follow is removed");
+
+    const mine = await db.query(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [myListEndedEventId, reminderFollower.id]
+    );
+    assert.strictEqual(mine.length, 0, "the caller's ended row is gone");
+    const theirs = await db.query(
+      'SELECT * FROM event_reminders WHERE event_id = ? AND user_id = ?', [myListEndedEventId, reminderOther.id]
+    );
+    assert.strictEqual(theirs.length, 1, "another user's ended row must survive");
+  });
+
+  // Deleting the events cascades their reminders, notifications and
+  // announcements (every child FK is ON DELETE CASCADE), so no row survives.
+  await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [myListEventId, myListEndedEventId, myListPendingEventId]);
 
   await test('Set up: the owner also reminds their own event — tests self-exclusion even when editor is both owner and follower', async () => {
     const res = await api('POST', `/api/events/${reminderEventId}/remind`, { token: reminderOwner.token });
