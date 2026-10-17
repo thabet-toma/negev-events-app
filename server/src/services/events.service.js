@@ -572,7 +572,7 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  */
 async function listPublicEvents({
   towns = null, date, dateFrom = null, dateTo = null, search, occasionTypeIds = null, villageIds = null,
-  legacyOnly = false, archive = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
+  legacyOnly = false, archive = false, upcoming = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -589,10 +589,10 @@ async function listPublicEvents({
       conditions.push(`${EVENT_SPAN_START_SQL_EVENTS} <= ?`);
       params.push(dateTo);
     }
-  } else {
-    conditions.push(archive
-      ? `${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()`
-      : `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`);
+  } else if (archive) {
+    conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()`);
+  } else if (upcoming) {
+    conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`);
   }
 
   const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
@@ -637,14 +637,27 @@ async function listPublicEvents({
   const { total } = await db.queryOne(`SELECT COUNT(*) AS total FROM events WHERE ${whereClause}`, params);
 
   const offset = (safePage - 1) * safeLimit;
-  const orderClause = archive ? 'event_date DESC, id DESC' : 'event_date ASC, id ASC';
+  let orderClause;
+  if (archive) {
+    orderClause = 'event_date DESC, id DESC';
+  } else if (upcoming || dateFrom || dateTo) {
+    orderClause = 'event_date ASC, id ASC';
+  } else {
+    // Default (all events): upcoming/active first (chronological), then ended (reverse-chronological)
+    orderClause = `(span_end_order >= CURDATE()) DESC,
+      CASE WHEN span_end_order >= CURDATE() THEN event_date END ASC,
+      CASE WHEN span_end_order >= CURDATE() THEN id END ASC,
+      CASE WHEN span_end_order < CURDATE() THEN event_date END DESC,
+      CASE WHEN span_end_order < CURDATE() THEN id END DESC`;
+  }
 
   // LIMIT/OFFSET as bound parameters, not string-concatenated — same
   // parameterization rule as every other value in this query. `village_name`
   // is joined in, never stored on `events` itself — a village is a place
   // `village_id` merely points at.
   const rows = await db.query(
-    `SELECT ${LIST_COLUMNS}, villages.name AS village_name
+    `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
+            (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order
        FROM events
        LEFT JOIN villages ON villages.id = events.village_id
       WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
@@ -1681,6 +1694,7 @@ async function reportCongratulation(eventId, congratulationId, userId) {
 async function getShareEvent(eventId) {
   const row = await db.queryOne(
     `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
+            events.event_date, events.event_end_date, events.location_name,
             events.updated_at,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
@@ -1709,6 +1723,17 @@ async function getShareEvent(eventId) {
     is_expired: Boolean(row.is_expired),
     honorees: honoreeMap[eventId] || []
   };
+}
+
+/** All approved events for sitemap generation — only id and lastmod. */
+async function listSitemapEvents() {
+  const rows = await db.query(
+    "SELECT id, updated_at FROM events WHERE status = 'approved' ORDER BY updated_at DESC"
+  );
+  return rows.map(r => ({
+    id: r.id,
+    lastmod: r.updated_at ? new Date(r.updated_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+  }));
 }
 
 /** Per-town counts of approved events, for the filter chips. */
@@ -1757,5 +1782,6 @@ module.exports = {
   deleteCongratulation,
   reportCongratulation,
   townStats,
-  getShareEvent
+  getShareEvent,
+  listSitemapEvents
 };

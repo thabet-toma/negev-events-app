@@ -1160,6 +1160,8 @@ body {
 .card-body { padding: 16px 18px 18px; }
 
 .event-main-title { font-weight: 900; font-size: 1.35rem; color: var(--ink); margin-bottom: 4px; line-height: 1.35; }
+.card-title-link { color: inherit; text-decoration: none; }
+.card-title-link:hover { text-decoration: underline; }
 
 .detail-item { display: flex; align-items: flex-start; gap: 10px; font-size: 0.9rem; color: var(--ink-soft); line-height: 1.45; }
 .detail-item i { color: var(--sky); margin-top: 3px; width: 18px; font-size: 0.95rem; }

@@ -64,6 +64,7 @@ let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل 
 let currentPage = 1;
 const EVENTS_PAGE_SIZE = 30;
 let currentPagination = null;
+let upcomingOnly = false; // الافتراضي: عرض الكل (القادمة والمنتهية)، وعند التفعيل: القادمة فقط
 let showArchive = false;
 
 // Place & kind filter — رقاقة واحدة لكل منها تفتح ورقة بحث متعددة الاختيار،
@@ -1695,7 +1696,8 @@ async function fetchEvents(options = {}) {
     if (selectedVillageIds.length) params.set('village_id', selectedVillageIds.join(','));
     if (selectedOccasionTypeIds.length) params.set('occasion_type_id', selectedOccasionTypeIds.join(','));
     if (searchQuery) params.set('search', searchQuery);
-    if (showArchive) params.set('archive', '1');
+    if (upcomingOnly) params.set('upcoming', '1');
+    else if (showArchive) params.set('archive', '1');
     if (selectedDateFilter) {
       params.set('date_from', selectedDateFilter.from);
       params.set('date_to', selectedDateFilter.to);
@@ -1753,12 +1755,28 @@ function renderFeedLoadingPill() {
   if (loadingPill) loadingPill.style.display = isLoading ? 'inline-flex' : 'none';
 }
 
-/** المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط عبر ?archive=1 (#20 step 10). */
+/** تبديل عرض القادمة فقط vs الكل (الافتراضي: الكل) */
 function toggleArchive() {
-  showArchive = !showArchive;
-  const btn = document.getElementById('archiveToggleBtn');
-  if (btn) btn.classList.toggle('active', showArchive);
+  toggleUpcomingOnly();
+}
+
+function toggleUpcomingOnly() {
+  upcomingOnly = !upcomingOnly;
+  syncUpcomingUi();
+  updateFloatingFilterLabel();
   fetchEvents();
+}
+
+function syncUpcomingUi() {
+  const mainBtn = document.getElementById('archiveToggleBtn');
+  if (mainBtn) {
+    mainBtn.classList.toggle('active', upcomingOnly);
+    mainBtn.title = upcomingOnly ? 'عرض كل المناسبات' : 'إظهار المناسبات القادمة فقط';
+    const textSpan = mainBtn.querySelector('span');
+    if (textSpan) textSpan.textContent = upcomingOnly ? 'القادمة فقط ✓' : 'القادمة فقط';
+  }
+  const drawerSwitch = document.getElementById('drawerArchiveSwitch');
+  if (drawerSwitch) drawerSwitch.checked = upcomingOnly;
 }
 
 /**
@@ -2051,7 +2069,7 @@ function renderSingleEventCardHtml(evt) {
         <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
         ${countdownChipHtml}
       </div>
-      <h2 class="event-main-title card-clamp-2-line">${escapeHtml(eventCardHeadline(evt))}</h2>
+      <h2 class="event-main-title card-clamp-2-line"><a href="/e/${evt.id}" class="card-title-link" onclick="handleCardTitleClick(event, ${evt.id})">${escapeHtml(eventCardHeadline(evt))}</a></h2>
       ${subtitleHtml}
       <div class="card-info-lines">${infoLinesHtml}</div>
       <div class="card-caption-actions">
@@ -2081,6 +2099,12 @@ function renderSingleEventCardHtml(evt) {
       </div>
     </div>
   `;
+}
+
+function handleCardTitleClick(event, id) {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) return;
+  event.preventDefault();
+  openEventPage(id);
 }
 
 function renderEvents(events) {
@@ -3997,6 +4021,8 @@ function clearAllFilters() {
   selectedVillageIds = [];
   selectedOccasionTypeIds = [];
   selectedDateFilter = null;
+  upcomingOnly = false;
+  syncUpcomingUi();
   persistFilterSelection();
   updateFilterChipLabel('place');
   updateFilterChipLabel('kind');
@@ -4135,8 +4161,9 @@ function updateFloatingFilterLabel() {
   const hasPlaces = (selectedTowns && selectedTowns.length > 0) || (selectedVillageIds && selectedVillageIds.length > 0);
   const hasKinds = selectedOccasionTypeIds && selectedOccasionTypeIds.length > 0;
   const hasDate = Boolean(selectedDateFilter);
+  const hasUpcoming = Boolean(upcomingOnly);
   const hasArchive = Boolean(showArchive);
-  const hasActiveFilters = hasSearch || hasPlaces || hasKinds || hasDate || hasArchive;
+  const hasActiveFilters = hasSearch || hasPlaces || hasKinds || hasDate || hasUpcoming || hasArchive;
 
   if (floatingDot) {
     floatingDot.style.display = hasActiveFilters ? 'inline-block' : 'none';
@@ -4225,12 +4252,12 @@ function clearDrawerSearch() {
 }
 
 function toggleArchiveSwitch(checked) {
-  showArchive = checked;
-  const mainBtn = document.getElementById('archiveToggleBtn');
-  if (mainBtn) mainBtn.classList.toggle('active', showArchive);
-  const drawerSwitch = document.getElementById('drawerArchiveSwitch');
-  if (drawerSwitch) drawerSwitch.checked = showArchive;
+  toggleUpcomingSwitch(checked);
+}
 
+function toggleUpcomingSwitch(checked) {
+  upcomingOnly = Boolean(checked);
+  syncUpcomingUi();
   updateFloatingFilterLabel();
   fetchEvents();
 }

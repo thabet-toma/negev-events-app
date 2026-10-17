@@ -14,6 +14,8 @@ const routes = require('./routes');
 const shareRoutes = require('./routes/share.routes');
 const shareCard = require('./services/shareCard.service');
 const db = require('./db/pool');
+const events = require('./services/events.service');
+const asyncHandler = require('./utils/asyncHandler');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
 
@@ -108,6 +110,26 @@ function createApp() {
   // كلاهما يحتاج سطر nginx على الإنتاج — `/e/` مضاف، و`/live` لم يُضَف بعد.
   app.use('/e', shareRoutes.eventRouter);
   app.use('/live', shareRoutes.liveRouter);
+
+  // خريطة الموقع لمحركات البحث (SEO Sitemap) — تُولّد ديناميكياً بكل المناسبات المعتمدة
+  app.get('/sitemap.xml', asyncHandler(async (req, res) => {
+    const sitemapEvents = await events.listSitemapEvents();
+    const siteUrl = config.publicUrl.replace(/\/+$/, '');
+    const urls = [
+      `  <url>\n    <loc>${siteUrl}/</loc>\n    <changefreq>daily</changefreq>\n    <priority>1.0</priority>\n  </url>`,
+      `  <url>\n    <loc>${siteUrl}/live</loc>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`,
+      `  <url>\n    <loc>${siteUrl}/privacy.html</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`
+    ];
+
+    for (const evt of sitemapEvents) {
+      urls.push(`  <url>\n    <loc>${siteUrl}/e/${evt.id}</loc>\n    <lastmod>${evt.lastmod}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.8</priority>\n  </url>`);
+    }
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`;
+    res.set('Content-Type', 'application/xml; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(xml);
+  }));
 
   app.use(notFound);
   app.use(errorHandler);

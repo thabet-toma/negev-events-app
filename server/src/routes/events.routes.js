@@ -88,11 +88,12 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
   const villageIds = parseIdListParam(req.query.village_id, 'القرية');
   const archive = req.query.archive === '1' || req.query.archive === 'true';
+  const upcoming = req.query.upcoming === '1' || req.query.upcoming === 'true';
   const legacyOnly = isLegacyClient(req);
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
-      towns, search, date, dateFrom, dateTo, occasionTypeIds, villageIds, archive, legacyOnly,
+      towns, search, date, dateFrom, dateTo, occasionTypeIds, villageIds, archive, upcoming, legacyOnly,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null

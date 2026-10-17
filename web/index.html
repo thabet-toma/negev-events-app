@@ -247,14 +247,14 @@
       </button>
     </div>
 
-    <!-- Archive switch row inside Drawer -->
+    <!-- Upcoming-only switch row inside Drawer (الافتراضي: الكل، والمفتاح للقادمة فقط) -->
     <div class="drawer-archive-row">
       <div class="drawer-archive-label">
-        <i class="fa-solid fa-box-archive"></i>
-        <span>عرض المناسبات المنتهية</span>
+        <i class="fa-regular fa-calendar-check"></i>
+        <span>إظهار المناسبات القادمة فقط</span>
       </div>
       <label class="drawer-switch">
-        <input type="checkbox" id="drawerArchiveSwitch" onchange="toggleArchiveSwitch(this.checked)">
+        <input type="checkbox" id="drawerArchiveSwitch" onchange="toggleUpcomingSwitch(this.checked)">
         <span class="drawer-switch-slider"></span>
       </label>
     </div>
@@ -334,9 +334,9 @@
           <input type="text" id="eventSearchInput" placeholder="ابحث باسم العريس، العشيرة، أو البلدة..." oninput="handleSearch()">
           <button id="clearSearchBtn" class="clear-btn" style="display:none;" onclick="clearSearch()"><i class="fa-solid fa-xmark"></i></button>
         </div>
-        <!-- المنتهي لا يزاحم القادم — يُطلَب صراحةً فقط (#20 خطوة 10) -->
-        <button id="archiveToggleBtn" class="town-pill" onclick="toggleArchive()" title="عرض المناسبات المنتهية">
-          <i class="fa-solid fa-box-archive"></i> الأرشيف
+        <!-- فلتر إظهار المناسبات القادمة فقط (الافتراضي: إظهار الكل) -->
+        <button id="archiveToggleBtn" class="town-pill" onclick="toggleUpcomingOnly()" title="إظهار المناسبات القادمة فقط">
+          <i class="fa-regular fa-calendar-check"></i> <span>القادمة فقط</span>
         </button>
       </div>
 

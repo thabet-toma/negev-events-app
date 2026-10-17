@@ -200,6 +200,17 @@ async function run() {
     assert.ok(body.events[0].reactions, 'expected a reactions object');
   });
 
+  await test('GET /api/events returns all events by default, while ?upcoming=1 filters to upcoming only', async () => {
+    const allRes = await api('GET', '/api/events');
+    assert.strictEqual(allRes.status, 200);
+    assert.ok(Array.isArray(allRes.body.events));
+
+    const upcomingRes = await api('GET', '/api/events?upcoming=1');
+    assert.strictEqual(upcomingRes.status, 200);
+    assert.ok(Array.isArray(upcomingRes.body.events));
+    assert.ok(upcomingRes.body.pagination.total <= allRes.body.pagination.total);
+  });
+
   await test('GET /api/events?town= filters by town', async () => {
     const { body } = await api('GET', `/api/events?town=${encodeURIComponent('رهط')}`);
     assert.ok(body.events.every(e => e.town === 'رهط'));

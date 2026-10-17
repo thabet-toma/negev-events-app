@@ -329,11 +329,56 @@ function pageStyle(palette) {
 function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
-  const description = buildDescription(event);
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
   const typeName = event.occasion_type_name;
   const typeColour = safeHexColour(event.occasion_type_colour, palette.accent);
   const icon = event.occasion_type_icon;
+
+  // إثراء العنوان والوصف لمحركات البحث وجوجل (SEO)
+  const titleParts = [headline];
+  if (event.family_clan) titleParts.push(`عائلة ${event.family_clan}`);
+  if (event.town) titleParts.push(event.town);
+  const pageTitle = `${titleParts.join(' — ')} | ${palette.wordmark}`;
+
+  const metaDescription = `تفاصيل وبطاقة دعوة ${headline}${event.family_clan ? ` من عائلة ${event.family_clan}` : ''} في ${event.town || 'النقب'}. موعد المناسبة والتفاصيل عبر منصة ${palette.wordmark}.`;
+
+  // Schema.org Event Structured Data
+  const schemaData = {
+    '@context': 'https://schema.org',
+    '@type': 'Event',
+    name: headline,
+    description: metaDescription,
+    url: pageUrl,
+    eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
+    eventStatus: 'https://schema.org/EventScheduled',
+    image: [imageUrl],
+    organizer: {
+      '@type': 'Organization',
+      name: palette.wordmark,
+      url: siteRootUrl
+    }
+  };
+
+  if (event.event_date) {
+    schemaData.startDate = event.event_date;
+  }
+  if (event.event_end_date || event.event_date) {
+    schemaData.endDate = event.event_end_date || event.event_date;
+  }
+  if (event.location_name || event.town) {
+    schemaData.location = {
+      '@type': 'Place',
+      name: event.location_name || event.town || 'النقب',
+      address: {
+        '@type': 'PostalAddress',
+        addressLocality: event.town || 'النقب',
+        addressRegion: 'منطقة النقب',
+        addressCountry: 'IL'
+      }
+    };
+  }
+
+  const jsonLdString = JSON.stringify(schemaData, null, 2).replace(/</g, '\\u003c');
 
   // The type chip and the veil dress a *bare poster*, and the generated card
   // already carries its own type chip and name band — overlaying a second one
@@ -351,9 +396,12 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(headline)}</title>
-<meta property="og:title" content="${escapeHtml(headline)}">
-<meta property="og:description" content="${escapeHtml(description)}">
+<title>${escapeHtml(pageTitle)}</title>
+<meta name="description" content="${escapeHtml(metaDescription)}">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="${escapeHtml(pageUrl)}">
+<meta property="og:title" content="${escapeHtml(pageTitle)}">
+<meta property="og:description" content="${escapeHtml(metaDescription)}">
 <meta property="og:image" content="${escapeHtml(imageUrl)}">
 ${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.width}">
 <meta property="og:image:height" content="${imageDimensions.height}">` : ''}
@@ -362,6 +410,9 @@ ${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.
 <meta property="og:site_name" content="${palette.wordmark}">
 <meta property="og:locale" content="ar_AR">
 <meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+${jsonLdString}
+</script>
 <style>${pageStyle(palette)}</style>
 </head>
 <body>
