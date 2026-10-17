@@ -639,16 +639,16 @@ async function listPublicEvents({
   const offset = (safePage - 1) * safeLimit;
   let orderClause;
   if (archive) {
-    orderClause = 'event_date DESC, id DESC';
+    orderClause = 'events.event_date DESC, events.id DESC';
   } else if (upcoming || dateFrom || dateTo) {
-    orderClause = 'event_date ASC, id ASC';
+    orderClause = 'events.event_date ASC, events.id ASC';
   } else {
     // Default (all events): upcoming/active first (chronological), then ended (reverse-chronological)
     orderClause = `(span_end_order >= CURDATE()) DESC,
-      CASE WHEN span_end_order >= CURDATE() THEN event_date END ASC,
-      CASE WHEN span_end_order >= CURDATE() THEN id END ASC,
-      CASE WHEN span_end_order < CURDATE() THEN event_date END DESC,
-      CASE WHEN span_end_order < CURDATE() THEN id END DESC`;
+      CASE WHEN span_end_order >= CURDATE() THEN events.event_date END ASC,
+      CASE WHEN span_end_order >= CURDATE() THEN events.id END ASC,
+      CASE WHEN span_end_order < CURDATE() THEN events.event_date END DESC,
+      CASE WHEN span_end_order < CURDATE() THEN events.id END DESC`;
   }
 
   // LIMIT/OFFSET as bound parameters, not string-concatenated — same
