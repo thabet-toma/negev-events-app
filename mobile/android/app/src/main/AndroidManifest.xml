@@ -42,7 +42,11 @@
             <!-- App Links (issue #44): رابط مناسبة مشترَك يفتح على تفاصيلها
                  مباشرة بلا مربّع اختيار تطبيق — لا مخطط خاص (أي تطبيق يعلن
                  مخططاً)، بل تحقّق `https` حقيقي عبر autoVerify + الملف على
-                 web/.well-known/assetlinks.json. -->
+                 web/.well-known/assetlinks.json.
+                 وأُضيفت مسارات الألبوم والصورة والشخص (تذاكر #104 و#106): بلا
+                 سطر لكل مسار هنا لا يصل الرابط إلى التطبيق إطلاقاً فيفتح في
+                 المتصفّح، بينما المعالج يعرف كيف يفتحه — عطلٌ لا يراه أي اختبار
+                 لأن الاختبارات لا تقرأ المانيفست. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
@@ -51,6 +55,18 @@
                     android:scheme="https"
                     android:host="munasbat.ktra-pro.tech"
                     android:pathPrefix="/e/"/>
+                <data
+                    android:scheme="https"
+                    android:host="munasbat.ktra-pro.tech"
+                    android:pathPrefix="/a/"/>
+                <data
+                    android:scheme="https"
+                    android:host="munasbat.ktra-pro.tech"
+                    android:pathPrefix="/p/"/>
+                <data
+                    android:scheme="https"
+                    android:host="munasbat.ktra-pro.tech"
+                    android:pathPrefix="/person/"/>
             </intent-filter>
         </activity>
         <!-- شاشة قصّ البوستر (image_cropper، مكتبة uCrop) — بلا هذا التسجيل
