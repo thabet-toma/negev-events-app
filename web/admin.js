@@ -2492,6 +2492,7 @@ function renderAdminAlbumPhotos() {
   box.innerHTML = adminAlbumPhotoCache.map(photo => {
     const cover = photo.is_cover ? '<span class="admin-photo-cover-badge">الغلاف</span>' : '';
     const status = photo.status === 'hidden' ? 'مخفية' : 'ظاهرة';
+    const tags = Array.isArray(photo.tags) ? photo.tags : [];
     const albumOptions = adminAlbumListCache.map(album => `<option value="${Number(album.id)}" ${Number(album.id) === Number(photo.album_id) ? 'selected' : ''}>${escapeHtml(album.title || 'ألبوم')}</option>`).join('');
     return `
       <article class="admin-album-photo-card" data-photo-id="${Number(photo.id)}">
@@ -2501,17 +2502,43 @@ function renderAdminAlbumPhotos() {
           <span class="admin-photo-status ${photo.status === 'hidden' ? 'hidden' : ''}">${status}</span>
         </div>
         <input type="text" class="admin-photo-caption" value="${escapeHtml(photo.caption || '')}" maxlength="200" placeholder="عنوان الصورة (بحث)" onchange="saveAdminPhotoCaption(${Number(photo.id)}, this.value)">
+        ${tags.length ? `<div class="admin-photo-tags">${tags.map(tag => `<span class="admin-photo-tag ${tag.status === 'pending' ? 'pending' : ''}">${escapeHtml(tag.name)}${tag.status === 'pending' ? ' · معلّق' : ''}</span>`).join('')}</div>` : ''}
         <div class="admin-photo-row">
           <select class="admin-photo-move" onchange="moveAdminPhoto(${Number(photo.id)}, this.value)" aria-label="نقل إلى ألبوم">${albumOptions}</select>
           <button type="button" class="admin-btn-ghost" onclick="setAdminPhotoCover(${Number(photo.id)})" ${photo.is_cover ? 'disabled' : ''}><i class="fa-solid fa-star"></i> غلاف</button>
         </div>
         <div class="admin-photo-actions">
+          <button type="button" class="admin-btn-ghost" onclick="addAdminPhotoName(${Number(photo.id)})"><i class="fa-solid fa-user-plus"></i> إضافة اسم</button>
           <button type="button" class="admin-btn-ghost" onclick="toggleAdminPhotoStatus(${Number(photo.id)}, '${photo.status === 'hidden' ? 'approved' : 'hidden'}')">${photo.status === 'hidden' ? 'إظهار' : 'إخفاء'}</button>
           <button type="button" class="btn-reject" onclick="deleteAdminPhoto(${Number(photo.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>
         </div>
       </article>
     `;
   }).join('');
+}
+
+/**
+ * Adds a name directly to a photo — the admin path for someone without an
+ * account, and the quickest path for the owner testing his own wedding.
+ * The name is approved immediately (the admin is the moderator), while the
+ * user-facing self-tag stays pending until approved in the queue.
+ */
+async function addAdminPhotoName(photoId) {
+  const name = prompt('اسم الشخص الظاهر في الصورة:');
+  if (!name || !name.trim()) return;
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر إضافة الاسم');
+    await openAdminAlbum(adminAlbumCurrent.id);
+    showAdminNotice('تمت إضافة الاسم إلى الصورة.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر إضافة الاسم'), 'خطأ');
+  }
 }
 
 async function saveAdminPhotoCaption(photoId, caption) {

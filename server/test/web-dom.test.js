@@ -7401,6 +7401,10 @@ async function run() {
     await dom.window.saveAdminPhotoCaption(3, captionInput.value);
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.caption === 'صورة القاعة بعد التعديل'));
 
+    dom.window.prompt = () => 'راني';
+    await dom.window.addAdminPhotoName(3);
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3/tags' && call.method === 'POST' && call.body.name === 'راني'));
+
     await dom.window.moderateAdminTag(21, 'approved');
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.status === 'approved'));
     await dom.window.hideAdminReportedPhoto(3);

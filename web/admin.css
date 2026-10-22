@@ -1269,6 +1269,16 @@ body {
   font-family: var(--font-tajawal);
   font-size: 0.82rem;
 }
+.admin-photo-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.admin-photo-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--success-wash);
+  color: var(--success);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.admin-photo-tag.pending { background: var(--warn-wash); color: var(--warn); }
 .admin-photo-row { display: flex; gap: 6px; align-items: center; }
 .admin-photo-move { flex: 1; min-width: 0; }
 .admin-photo-row .admin-btn-ghost { font-size: 0.72rem; padding: 5px 8px; }
