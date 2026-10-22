@@ -1648,6 +1648,10 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
+/* ورقة المشاركة تُفتح من داخل عارض الصور أيضاً (تذكرة #102)، والعارض عند 1100 —
+   فورقةٌ عند 1000 تُرسم خلفه على الحاسوب ويبدو الزرّ ميتاً. رفعُها وحدها كافٍ،
+   فلا تُمسّ بقية النوافذ ولا ترتيب شاشة الدخول (‏:479). */
+#shareSheetModal { z-index: 1200; }
 
 @media (min-width: 600px) { .modal-overlay { align-items: center; padding: 20px; } }
 

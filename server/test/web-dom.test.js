@@ -1229,12 +1229,12 @@ async function run() {
     // `#` لا يصل إلى زاحف واتساب. والزرّ فعلٌ صريح في رأس الصفحة.
     const albumShareBtn = document.querySelector('#albumDetailHeader .album-share-btn');
     assert.ok(albumShareBtn, 'the album page carries a share button');
-    let sharedAlbum = null;
-    dom.window.shareLink = async payload => { sharedAlbum = payload; };
+    let sharedPayload = null;
+    dom.window.shareLink = async payload => { sharedPayload = payload; };
     dom.window.shareAlbum(11);
-    await waitFor(() => sharedAlbum !== null);
-    assert.strictEqual(sharedAlbum.url, 'https://munasbat.test/a/11');
-    assert.ok(sharedAlbum.line.includes('رهط'), 'the message names the town, like an event share');
+    await waitFor(() => sharedPayload !== null);
+    assert.strictEqual(sharedPayload.url, 'https://munasbat.test/a/11');
+    assert.ok(sharedPayload.line.includes('رهط'), 'the message names the town, like an event share');
 
     // بلا `share_url` (خادم لم يُحدَّث بعد) لا يرمي الزرّ: يسقط إلى صفحة الموقع
     // نفسها — لا إلى أصل الـAPI الذي لا يخدم `#album/…` في النشر المفصول.
@@ -1242,11 +1242,11 @@ async function run() {
     dom.window.closeAlbumDetail();
     await dom.window.openAlbumDetail(11);
     await waitFor(() => document.querySelectorAll('#albumDetailGrid .albums-photo-card').length === 1);
-    sharedAlbum = null;
+    sharedPayload = null;
     dom.window.shareAlbum(11);
-    await waitFor(() => sharedAlbum !== null);
-    assert.ok(sharedAlbum.url.endsWith('#album/11'), `the fallback is the in-app link, got ${sharedAlbum.url}`);
-    assert.ok(!sharedAlbum.url.includes('/a/11'), 'the fallback never points at a server page that does not exist');
+    await waitFor(() => sharedPayload !== null);
+    assert.ok(sharedPayload.url.endsWith('#album/11'), `the fallback is the in-app link, got ${sharedPayload.url}`);
+    assert.ok(!sharedPayload.url.includes('/a/11'), 'the fallback never points at a server page that does not exist');
 
     dom.window.closeAlbumDetail();
     assert.strictEqual(document.getElementById('albumDetailView').hidden, true);
@@ -1276,10 +1276,13 @@ async function run() {
     );
     const photoShareBtn = document.getElementById('archiveViewerShareBtn');
     assert.ok(photoShareBtn && photoShareBtn.tagName === 'BUTTON', 'the photo share is a button');
-    sharedAlbum = null;
-    dom.window.shareCurrentPhoto();
-    await waitFor(() => sharedAlbum !== null);
-    assert.ok(sharedAlbum.url.endsWith('/p/7'), `shares the photo page itself, got ${sharedAlbum.url}`);
+    assert.ok(photoShareBtn.textContent.includes('مشاركة'), 'labelled «مشاركة», not «صفحة الصورة»');
+    sharedPayload = null;
+    photoShareBtn.click();
+    await waitFor(() => sharedPayload !== null);
+    assert.strictEqual(new URL(sharedPayload.url).pathname, '/p/7', `shares the photo page itself, got ${sharedPayload.url}`);
+    assert.ok(sharedPayload.url.startsWith('http'), 'an absolute URL, not a relative path');
+    assert.ok(!sharedPayload.url.includes('//p/7'), 'no doubled slash from a trailing slash in the base');
 
     dom.window.requestPhotoTag();
     await waitFor(() => paths.some(path => path === 'POST /api/photos/7/tags'));

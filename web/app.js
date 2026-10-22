@@ -6652,7 +6652,7 @@ function currentArchivePhoto() {
 
 /**
  * مشاركة الصورة (تذكرة #102) — رابطها صفحة `/p/:id` على الخادم، لا `#photo/:id`:
- * صفحة الصورة هي ما يحمل الصورة نفسها في معاينة واتساب (ADR-0006). وكانت هنا
+ * صفحة الصورة (ADR-0009) هي ما يحمل الصورة نفسها في معاينة واتساب. وكانت هنا
  * وصلة `<a>` اسمها «صفحة الصورة» — فعلُ معاينة لا فعلُ مشاركة؛ صارت زرّاً يمرّ
  * بنفس `shareLink` الذي تمرّ به المناسبة والحلقة، فتُفتح ورقة النظام على الهاتف
  * وورقتنا على الحاسوب.
@@ -6660,12 +6660,15 @@ function currentArchivePhoto() {
 async function shareCurrentPhoto() {
   const photo = currentArchivePhoto();
   if (!photo || !photo.id) return;
-  const event = photo.event || {};
-  recordAnalyticsEvent('share_clicked', { contentTown: event.town });
+  // `archive_photos` (the event page's own strip) carries no `event` object,
+  // so the town comes from the open event when the photo itself has none —
+  // otherwise those shares would be counted with no town at all.
+  const town = (photo.event && photo.event.town) || (currentChatEvent && currentChatEvent.town);
+  recordAnalyticsEvent('share_clicked', { contentTown: town });
   await shareLink({
     title: photo.caption || 'صورة من ألبوم العرس',
     line: photo.caption || '',
-    url: `${shareOrigin().replace(/\/$/, '')}/p/${Number(photo.id)}`,
+    url: `${shareOrigin()}/p/${photo.id}`,
     copiedMessage: '📋 تم نسخ رابط الصورة'
   });
 }
@@ -6980,7 +6983,9 @@ function shareButtonLabel(evt) {
 
 /** الأصل من config.js دائماً (نفس API_BASE الذي يبنيه api.js) — لا نص ثابت ثانٍ هنا. */
 function shareOrigin() {
-  return API_BASE || window.location.origin;
+  // Trailing slashes are stripped here, once: every caller concatenates
+  // `${shareOrigin()}/…`, and a base ending in `/` would produce `//e/1`.
+  return (API_BASE || window.location.origin).replace(/\/+$/, '');
 }
 
 /**
