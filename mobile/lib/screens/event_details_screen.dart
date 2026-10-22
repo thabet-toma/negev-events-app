@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
+import '../models/album.dart';
 import '../models/event.dart';
 import '../state/analytics.dart';
 import '../state/audio_coordinator.dart';
@@ -14,6 +15,7 @@ import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
+import 'albums_screen.dart';
 
 /// ارتفاع بوستر التفاصيل — عادي مقابل نبرة `solemn`، بنفس نسبة كرت القائمة
 /// (#20 خطوة ١٥).
@@ -576,7 +578,12 @@ class _EventDetailsBody extends StatelessWidget {
                 ],
               ),
               // الخادم وحده يقرّر متى تصل الصور (عرس معتمد انتهى) — لا شرط نوع هنا.
-              if (event.archivePhotos.isNotEmpty) ...[
+              // ألبومات ADR-0009 أولاً: الصورة تُفتح من الألبوم حيث زرّ
+              // «أنا في الصورة» موجود؛ الأرشيف القديم يبقى لخادم لا يرسل albums.
+              if (event.albums.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _AlbumsSection(albums: event.albums),
+              ] else if (event.archivePhotos.isNotEmpty) ...[
                 const SizedBox(height: 20),
                 _ArchiveSection(photos: event.archivePhotos),
               ],
@@ -870,6 +877,105 @@ void _openFullScreenImage(BuildContext context, String url, int eventId) {
       },
     ),
   );
+}
+
+/// «ألبومات العرس» — المدخل الواضح من صفحة المناسبة إلى الصور ووسم
+/// «أنا في الصورة». بطاقة أفقية لكل ألبوم، والنقر يفتح AlbumDetailScreen.
+class _AlbumsSection extends StatelessWidget {
+  const _AlbumsSection({required this.albums});
+
+  final List<EventAlbum> albums;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Column(
+      key: const Key('event_albums_section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.photo_library_outlined, size: 20, color: c.sky),
+            const SizedBox(width: 6),
+            Text(
+              'ألبومات العرس',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: c.ink),
+            ),
+            const SizedBox(width: 8),
+            Text('(${albums.length})', style: TextStyle(color: c.inkFaint)),
+            const Spacer(),
+            TextButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AlbumsScreen()),
+              ),
+              child: const Text('كل الألبومات'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 176,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: albums.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final album = albums[index];
+              final cover = album.coverThumbUrl ?? album.coverUrl;
+              return InkWell(
+                key: Key('event_album_${album.id}'),
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
+                ),
+                child: SizedBox(
+                  width: 124,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: SizedBox(
+                          width: 124,
+                          height: 124,
+                          child: cover == null
+                              ? ColoredBox(
+                                  color: c.surfaceSunk,
+                                  child: Icon(Icons.photo_library, color: c.sky, size: 34),
+                                )
+                              : CachedNetworkImage(
+                                  imageUrl: cover,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 280,
+                                  placeholder: (_, _) => ColoredBox(color: c.surfaceSunk),
+                                  errorWidget: (_, _, _) => ColoredBox(
+                                    color: c.surfaceSunk,
+                                    child: Icon(Icons.broken_image_outlined, color: c.inkFaint),
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        album.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5),
+                      ),
+                      Text(
+                        '${album.photoCount} صورة',
+                        style: TextStyle(color: c.inkFaint, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// «أرشيف العرس» — شبكة مصغّرات، والنقر يفتح عارضاً بملء الشاشة يُسحب فيه

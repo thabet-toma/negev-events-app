@@ -1,3 +1,5 @@
+import 'album.dart';
+
 /// مناسبة — الحقول مطابقة لجدول `events` في الخادم.
 ///
 /// روابط الوسائط تصل **مطلقة** من الخادم (withAbsoluteMedia)، فلا يبني التطبيق
@@ -61,6 +63,10 @@ class Event {
   /// لعرس معتمد انتهى. خادم أقدم لا يرسل المفتاح أصلاً ← قائمة فارغة.
   final List<ArchivePhoto> archivePhotos;
 
+  /// ألبومات المناسبة المنشورة — من `GET /api/events/:id` وحده (ADR-0009).
+  /// خادم أقدم لا يرسل المفتاح ← قائمة فارغة، فيبقى الأرشيف القديم ظاهراً.
+  final List<EventAlbum> albums;
+
   const Event({
     required this.id,
     required this.title,
@@ -96,6 +102,7 @@ class Event {
     this.isReminded = false,
     this.status,
     this.archivePhotos = const [],
+    this.albums = const [],
   });
 
   int get totalReactions =>
@@ -254,6 +261,14 @@ class Event {
             .toList()
         : <ArchivePhoto>[];
 
+    final rawAlbums = json['albums'];
+    final albums = rawAlbums is List
+        ? rawAlbums
+            .whereType<Map>()
+            .map((m) => EventAlbum.fromJson(Map<String, dynamic>.from(m)))
+            .toList()
+        : <EventAlbum>[];
+
     return Event(
       id: _toInt(json['id']),
       title: '${json['title'] ?? ''}',
@@ -299,6 +314,7 @@ class Event {
       isReminded: json['is_reminded'] == true,
       status: _nullableString(json['status']),
       archivePhotos: archivePhotos,
+      albums: albums,
     );
   }
 }

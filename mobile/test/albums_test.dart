@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:negev_events/models/album.dart';
+import 'package:negev_events/models/event.dart';
 
 void main() {
   group('نماذج ألبومات الأعراس (ADR-0009)', () {
@@ -54,6 +55,30 @@ void main() {
       expect(photo.tags.map((tag) => tag.name), ['فاطمة', 'محمد']);
       expect(photo.albumTitle, 'عرس أحمد');
       expect(photo.isCover, isTrue);
+    });
+
+    test('Event.fromJson يقرأ albums من تفاصيل المناسبة', () {
+      final event = Event.fromJson({
+        'id': 127,
+        'title': 'عرس راني',
+        'groom_name': 'راني',
+        'family_clan': 'الجرابعة',
+        'town': 'شقيب السلام',
+        'event_date': '2026-09-26',
+        'albums': [
+          {
+            'id': 2,
+            'event_id': 127,
+            'title': 'عرس راني — شقيب السلام',
+            'photo_count': 1,
+            'cover_thumb_url': 'https://cdn.test/cover.jpg',
+            'event': {'id': 127, 'title': 'عرس راني', 'town': 'شقيب السلام'}
+          }
+        ]
+      });
+      expect(event.albums, hasLength(1));
+      expect(event.albums.single.id, 2);
+      expect(event.albums.single.photoCount, 1);
     });
 
     test('AlbumSearchResults.fromJson يفصل المجموعات الثلاث', () {
