@@ -153,6 +153,9 @@ function publicPhotoShape(row, tags = []) {
     caption: row.caption,
     position: row.position,
     is_cover: Boolean(row.is_cover),
+    // صفحة الصورة على الخادم — تُبنى هنا مع بقية شكلها، فلا يركّبها عميل
+    // بنفسه ويختلف عن الخادم حين يتغيّر النطاق (تذكرة #103).
+    share_url: `${config.publicUrl}/p/${row.id}`,
     created_at: row.created_at,
     tags: tags.map(tag => ({ name: tag.name })),
     album: { id: row.album_id, title: row.album_title || null },

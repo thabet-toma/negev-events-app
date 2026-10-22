@@ -11,7 +11,8 @@ class EventAlbum {
   final String? coverUrl;
   final String? coverThumbUrl;
   /// صفحة المشاركة على الخادم (`/a/:id`) — يأتي جاهزاً من الحمولة، فلا يركّبه
-  /// أي عميل بنفسه ويخطئ حين يتغيّر النطاق (تذكرة #100).
+  /// أي عميل بنفسه ويخطئ حين يتغيّر النطاق (تذكرة #100). والسقوط إلى بناءٍ من
+  /// المعرّف يبقى للخادم الذي يسبق الحقل، لا للعميل الذي يجهل النطاق.
   final String? shareUrl;
   final String? eventTitle;
   final String? town;
@@ -76,6 +77,8 @@ class EventPhoto {
   final String? eventTitle;
   final String? town;
   final String? eventDate;
+  /// صفحة الصورة على الخادم (`/p/:id`) — تُقرأ جاهزة كي لا يركّبها العميل.
+  final String? shareUrl;
 
   const EventPhoto({
     required this.id,
@@ -92,6 +95,7 @@ class EventPhoto {
     this.eventTitle,
     this.town,
     this.eventDate,
+    this.shareUrl,
   });
 
   String get displayImage => thumbUrl?.isNotEmpty == true ? thumbUrl! : imageUrl;
@@ -121,6 +125,7 @@ class EventPhoto {
       eventTitle: _nullableString(event['title'] ?? json['event_title']),
       town: _nullableString(event['town'] ?? json['town']),
       eventDate: _nullableString(event['event_date'] ?? json['event_date']),
+      shareUrl: _nullableString(json['share_url']),
     );
   }
 }

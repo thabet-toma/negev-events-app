@@ -135,11 +135,28 @@ void main() {
           reason: 'ما بعد # لا يفتح التطبيق ولا ينتج معاينة');
     });
 
-    test('albumShareMessage يحمل العنوان والبلدة والرابط', () {
-      final message = albumShareMessage(album(shareUrl: 'https://munasbat.test/a/11'));
-      expect(message, contains('عرس أحمد — رهط'));
-      expect(message, contains('رهط'));
-      expect(message, contains('https://munasbat.test/a/11'));
+    test('albumShareMessage: العنوان — المناسبة · البلدة، ثم الرابط', () {
+      // عنوانٌ لا يحتوي بلدةً ولا مناسبة: وإلّا لمرّ التأكيد من العنوان وحده
+      // ولم يكشف حذف سطر المناسبة (Q10/D8).
+      final message = albumShareMessage(const EventAlbum(
+        id: 11,
+        eventId: 5,
+        title: 'ألبوم الحنّة',
+        town: 'رهط',
+        eventTitle: 'عرس أحمد',
+        shareUrl: 'https://munasbat.test/a/11',
+      ));
+      expect(message, startsWith('ألبوم الحنّة — عرس أحمد · رهط'));
+      expect(message, contains('\nhttps://munasbat.test/a/11'));
+
+      final noPlace = albumShareMessage(const EventAlbum(
+        id: 11,
+        eventId: 5,
+        title: 'ألبوم الحنّة',
+        shareUrl: 'https://munasbat.test/a/11',
+      ));
+      expect(noPlace, startsWith('ألبوم الحنّة\n'),
+          reason: 'بلا مناسبة ولا بلدة لا فاصل معلّق');
     });
 
     test('photoShareUrl صفحة الصورة، ورسالتها عنوانها التعليق أو بديله', () {
@@ -149,11 +166,29 @@ void main() {
         imageUrl: 'https://cdn.test/full.jpg',
         caption: 'صورة القاعة',
       );
-      expect(photoShareUrl(photo), endsWith('/p/7'));
+      final url = photoShareUrl(photo);
+      expect(Uri.parse(url).path, '/p/7');
+      expect(url.contains('#'), isFalse, reason: 'ما بعد # لا ينتج معاينة');
       expect(photoShareMessage(photo), contains('صورة القاعة'));
 
-      final untitled = EventPhoto(id: 8, albumId: 11, imageUrl: 'https://cdn.test/x.jpg');
-      expect(photoShareMessage(untitled), contains('صورة من ألبوم العرس'));
+      // رابط الخادم يُفضّل حين يصل، كالألبوم تماماً.
+      const withShare = EventPhoto(
+        id: 8,
+        albumId: 11,
+        imageUrl: 'https://cdn.test/x.jpg',
+        shareUrl: 'https://munasbat.test/p/8',
+      );
+      expect(photoShareUrl(withShare), 'https://munasbat.test/p/8');
+
+      final untitled = EventPhoto(
+        id: 9,
+        albumId: 11,
+        imageUrl: 'https://cdn.test/y.jpg',
+        albumTitle: 'ألبوم الحنّة',
+        eventTitle: 'عرس أحمد',
+      );
+      expect(photoShareMessage(untitled), startsWith('ألبوم الحنّة — عرس أحمد'),
+          reason: 'بلا تعليق: عنوان الألبوم والمناسبة، لا «ألبوم عرس»');
     });
   });
 }

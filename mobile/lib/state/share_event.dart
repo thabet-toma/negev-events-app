@@ -15,6 +15,19 @@ import 'analytics.dart';
 /// صفحة الهبوط لا صحيفة المشاركة.
 ///
 /// بلدة **المناسبة** المشارَكة لا بلدة المستخدم — نفس تمييز الويب. ويُسجَّل حدث
+/// ورقة مشاركة النظام مع رسالة فشل عربية — **التعريف الوحيد** لكل سطح يشارك:
+/// المناسبة والألبوم والصورة. فشل الورقة يُقال للمستخدم، لأن الصمت هنا يترك
+/// النقرة بلا أثر مرئي فتُقرأ عطلاً. (الصمت نمط متّبع لحدث التحليل وحده.)
+Future<void> shareViaSystem(BuildContext context, String text) async {
+  try {
+    await SharePlus.instance.share(ShareParams(text: text));
+  } catch (error) {
+    if (context.mounted) {
+      showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
+    }
+  }
+}
+
 /// التحليل عند النقرة نفسها، بصرف النظر عن نجاح صحيفة المشاركة بعدها أو فشلها.
 Future<void> shareEvent(BuildContext context, Event event) async {
   recordAnalyticsEvent(
@@ -25,13 +38,5 @@ Future<void> shareEvent(BuildContext context, Event event) async {
 
   final url = '${AppConfig.apiBase}/e/${event.id}';
   final text = '${event.displayTitle} — ${event.townDisplay}\n$url';
-  try {
-    await SharePlus.instance.share(ShareParams(text: text));
-  } catch (error) {
-    // فشل صحيفة المشاركة يُقال للمستخدم — الصمت هنا يترك النقرة بلا أثر مرئي
-    // فتُقرأ عطلاً. (الصمت نمط متّبع لحدث التحليل وحده، لا للمشاركة نفسها.)
-    if (context.mounted) {
-      showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
-    }
-  }
+  await shareViaSystem(context, text);
 }

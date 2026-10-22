@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../config.dart';
 import '../main.dart';
 import '../models/album.dart';
-import '../widgets/async_view.dart';
 import 'analytics.dart';
+import 'share_event.dart' show shareViaSystem;
 
 /// مشاركة الألبوم والصورة (تذكرة #103) — تعريفٌ واحد يستدعيه سطحان.
 ///
@@ -22,32 +21,32 @@ String albumShareUrl(EventAlbum album) {
 }
 
 String albumShareMessage(EventAlbum album) {
-  final line = [album.title, album.town]
+  // الصيغة المتفَق عليها (Q10/D8): «عنوان الألبوم — المناسبة · البلدة».
+  // سطرُ المناسبة ليس زينة: ألبومان في بلدة واحدة لا يتميّزان بدونه.
+  final place = [album.eventTitle, album.town]
       .where((part) => part != null && part.isNotEmpty)
-      .join(' — ');
+      .join(' · ');
+  final line = place.isEmpty ? album.title : '${album.title} — $place';
   return '$line\n${albumShareUrl(album)}';
 }
 
-String photoShareUrl(EventPhoto photo) => '${AppConfig.apiBase}/p/${photo.id}';
+String photoShareUrl(EventPhoto photo) {
+  final shared = photo.shareUrl;
+  if (shared != null && shared.isNotEmpty) return shared;
+  return '${AppConfig.apiBase}/p/${photo.id}';
+}
 
 String photoShareMessage(EventPhoto photo) {
   final caption = photo.caption;
+  // بلا تعليق: عنوان الألبوم ثم المناسبة، لا «ألبوم عرس» — فالألبوم قد يكون
+  // حنّة أو عزاء أو نجاحاً، والنصّ لا يجوز أن يفترض عرساً.
+  final fallback = [photo.albumTitle, photo.eventTitle]
+      .where((part) => part != null && part.isNotEmpty)
+      .join(' — ');
   final title = (caption != null && caption.isNotEmpty)
       ? caption
-      : 'صورة من ألبوم العرس';
+      : (fallback.isEmpty ? 'صورة' : fallback);
   return '$title\n${photoShareUrl(photo)}';
-}
-
-/// فشل ورقة المشاركة يُقال للمستخدم — الصمت هنا يترك النقرة بلا أثر مرئي
-/// فتُقرأ عطلاً. (الصمت نمط متّبع لحدث التحليل وحده، لا للمشاركة نفسها.)
-Future<void> _share(BuildContext context, String text) async {
-  try {
-    await SharePlus.instance.share(ShareParams(text: text));
-  } catch (_) {
-    if (context.mounted) {
-      showMessage(context, 'تعذّر فتح قائمة المشاركة', isError: true);
-    }
-  }
 }
 
 Future<void> shareAlbum(BuildContext context, EventAlbum album) async {
@@ -56,7 +55,7 @@ Future<void> shareAlbum(BuildContext context, EventAlbum album) async {
     'share_clicked',
     contentTown: album.town,
   );
-  await _share(context, albumShareMessage(album));
+  await shareViaSystem(context, albumShareMessage(album));
 }
 
 Future<void> sharePhoto(BuildContext context, EventPhoto photo) async {
@@ -65,5 +64,5 @@ Future<void> sharePhoto(BuildContext context, EventPhoto photo) async {
     'share_clicked',
     contentTown: photo.town,
   );
-  await _share(context, photoShareMessage(photo));
+  await shareViaSystem(context, photoShareMessage(photo));
 }

@@ -72,6 +72,11 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('album_share_btn')), findsOneWidget);
+    // الوجود وحده لا يكفي: زرٌّ معطّل يمرّ منه. النداء نفسه لا يُختبر لأن
+    // `SharePlus.instance` ساكن بلا مِفصل، والمنطق المختبَر في الدالّتين النقيّتين.
+    final button = tester.widget<IconButton>(find.byKey(const Key('album_share_btn')));
+    expect(button.onPressed, isNotNull);
+    expect(button.tooltip, 'مشاركة');
   });
 
   testWidgets('العارض يعرض زرّ مشاركة', (tester) async {
@@ -86,5 +91,7 @@ void main() {
 
     expect(find.byKey(const Key('photo_share_btn')), findsOneWidget);
     expect(find.text('مشاركة'), findsOneWidget);
+    final button = tester.widget<OutlinedButton>(find.byKey(const Key('photo_share_btn')));
+    expect(button.onPressed, isNotNull, reason: 'زرٌّ معطّل يمرّ من فحص الوجود');
   });
 }
