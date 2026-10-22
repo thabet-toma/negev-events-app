@@ -6650,6 +6650,26 @@ function currentArchivePhoto() {
   return archiveViewerPhotos[archiveViewerIndex] || null;
 }
 
+/**
+ * مشاركة الصورة (تذكرة #102) — رابطها صفحة `/p/:id` على الخادم، لا `#photo/:id`:
+ * صفحة الصورة هي ما يحمل الصورة نفسها في معاينة واتساب (ADR-0006). وكانت هنا
+ * وصلة `<a>` اسمها «صفحة الصورة» — فعلُ معاينة لا فعلُ مشاركة؛ صارت زرّاً يمرّ
+ * بنفس `shareLink` الذي تمرّ به المناسبة والحلقة، فتُفتح ورقة النظام على الهاتف
+ * وورقتنا على الحاسوب.
+ */
+async function shareCurrentPhoto() {
+  const photo = currentArchivePhoto();
+  if (!photo || !photo.id) return;
+  const event = photo.event || {};
+  recordAnalyticsEvent('share_clicked', { contentTown: event.town });
+  await shareLink({
+    title: photo.caption || 'صورة من ألبوم العرس',
+    line: photo.caption || '',
+    url: `${shareOrigin().replace(/\/$/, '')}/p/${Number(photo.id)}`,
+    copiedMessage: '📋 تم نسخ رابط الصورة'
+  });
+}
+
 function updateArchiveViewerFooter(photo) {
   const footer = document.getElementById('archiveViewerFooter');
   if (!footer) return;
@@ -6676,8 +6696,6 @@ function updateArchiveViewerFooter(photo) {
   }
   const withdraw = document.getElementById('archiveViewerWithdrawBtn');
   if (withdraw) withdraw.hidden = !authToken;
-  const share = document.getElementById('archiveViewerShareBtn');
-  if (share) share.href = `${shareOrigin().replace(/\/$/, '')}/p/${Number(photo.id)}`;
 }
 
 async function requestPhotoTag() {

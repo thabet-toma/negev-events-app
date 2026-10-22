@@ -1267,6 +1267,20 @@ async function run() {
     assert.ok(document.getElementById('archiveViewerCaption').textContent.includes('صورة القاعة'));
     assert.ok(document.getElementById('archiveViewerTags').textContent.includes('فاطمة الوسم'));
 
+    // مشاركة الصورة (تذكرة #102): زرّ فعل، لا وصلة «صفحة الصورة» — ورابطه
+    // صفحة `/p/:id` على الخادم، وهي ما يحمل الصورة في المعاينة.
+    assert.strictEqual(
+      document.querySelector('#archiveViewerFooter a.archive-viewer-action'),
+      null,
+      'no leftover «صفحة الصورة» link in the viewer'
+    );
+    const photoShareBtn = document.getElementById('archiveViewerShareBtn');
+    assert.ok(photoShareBtn && photoShareBtn.tagName === 'BUTTON', 'the photo share is a button');
+    sharedAlbum = null;
+    dom.window.shareCurrentPhoto();
+    await waitFor(() => sharedAlbum !== null);
+    assert.ok(sharedAlbum.url.endsWith('/p/7'), `shares the photo page itself, got ${sharedAlbum.url}`);
+
     dom.window.requestPhotoTag();
     await waitFor(() => paths.some(path => path === 'POST /api/photos/7/tags'));
     assert.ok(document.getElementById('archiveViewerTagBtn').textContent.includes('معلّق') || paths.some(path => path === 'POST /api/photos/7/tags'));
