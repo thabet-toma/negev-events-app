@@ -3,6 +3,20 @@
 -- Charset: utf8mb4 (full Arabic + emoji support)
 -- ==========================================================
 
+-- الشخص كائنٌ هويّته الاسم (ADR-0011، تذكرة #105). `name_key` فريد: اسمان
+-- يتطابقان بعد توحيد الإملاء شخصٌ واحد. تُغذّيه ثلاث خزائن — الحسابات، الوسوم،
+-- أصحاب المناسبات — ولا يكتبه أي مسار بنفسه: الكل يمرّ بـpeople.resolveByName.
+-- ويُعرَّف **قبل** الجداول الثلاثة التي تشير إليه، كي تُبنى مفاتيحها الأجنبية.
+CREATE TABLE IF NOT EXISTS people (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name       VARCHAR(150) NOT NULL,
+  name_key   VARCHAR(150) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_people_name_key (name_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS users (
   id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
   phone_number      VARCHAR(20)  NOT NULL,
@@ -18,11 +32,16 @@ CREATE TABLE IF NOT EXISTS users (
   -- «مناسبة جديدة» للجميع قابلة للإطفاء من صاحب الحساب وحده؛ التذكيرات وما
   -- يخصّ مناسباته هو تبقى تصله دائماً (notifications.service.js).
   notify_new_events TINYINT(1)   NOT NULL DEFAULT 1,
+  -- الشخص الذي هو هذا الحساب (ADR-0011). NULLable عن قصد: الحساب سجلّ هوية،
+  -- والشخص صفٌّ يُنشأ عند التسجيل عبر people.resolveByName، لا هنا.
+  person_id         INT UNSIGNED DEFAULT NULL,
   created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_phone (phone_number),
-  KEY idx_users_role (role)
+  KEY idx_users_role (role),
+  KEY idx_users_person (person_id),
+  CONSTRAINT fk_users_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Local admin scope. Deliberately separate from users.clan_town: that column
@@ -218,10 +237,15 @@ CREATE TABLE IF NOT EXISTS event_honorees (
   name       VARCHAR(150) NOT NULL,
   role       VARCHAR(60)  DEFAULT NULL,
   position   INT          NOT NULL DEFAULT 0,
+  -- صاحب المناسبة شخصٌ أيضاً، والعروس ليست حالة خاصة: الدور نصّ حرّ، والتحليل
+  -- إلى شخص لا يفرّق بينه وبين غيره (ADR-0011).
+  person_id  INT UNSIGNED DEFAULT NULL,
   created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_event_honorees_event (event_id),
   KEY idx_event_honorees_name (name),
+  KEY idx_event_honorees_person (person_id),
+  CONSTRAINT fk_event_honorees_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL,
   CONSTRAINT fk_event_honorees_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -850,6 +874,9 @@ CREATE TABLE IF NOT EXISTS photo_tags (
   user_id      INT UNSIGNED DEFAULT NULL,
   name         VARCHAR(150) NOT NULL,
   name_key     VARCHAR(150) NOT NULL,
+  -- الشخص الذي يسمّيه الوسم (ADR-0011). `name_key` يبقى للبحث والمقارنة،
+  -- و`person_id` هو الهوية التي تُجمع تحتها الصور.
+  person_id    INT UNSIGNED DEFAULT NULL,
   status       ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   requested_by INT UNSIGNED DEFAULT NULL,
   moderated_by INT UNSIGNED DEFAULT NULL,
@@ -859,6 +886,8 @@ CREATE TABLE IF NOT EXISTS photo_tags (
   UNIQUE KEY uq_photo_tags_user (photo_id, user_id),
   KEY idx_photo_tags_photo (photo_id, status),
   KEY idx_photo_tags_name (name_key, status),
+  KEY idx_photo_tags_person (person_id, status),
+  CONSTRAINT fk_photo_tags_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL,
   CONSTRAINT fk_photo_tags_photo FOREIGN KEY (photo_id) REFERENCES event_photos(id) ON DELETE CASCADE,
   CONSTRAINT fk_photo_tags_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_photo_tags_requester FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE SET NULL,

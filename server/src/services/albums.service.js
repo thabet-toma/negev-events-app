@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const cloudinary = require('./cloudinary.service');
 const adminScope = require('./adminScope.service');
 const facebook = require('./facebook.service');
+const people = require('./people.service');
 const { nameKey, searchVariants } = require('../utils/arabicName');
 const { fetchImageBuffer } = require('../utils/remoteImage');
 const {
@@ -287,13 +288,19 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   return { album: publicAlbumShape(albumRow), photos: photos.photos, pagination: photos.pagination };
 }
 
-async function listPublicPhotos({ search = null, albumId = null, person = null, mineUserId = null, page = 1, limit = 24 } = {}) {
+async function listPublicPhotos({ search = null, albumId = null, person = null, personId = null, mineUserId = null, page = 1, limit = 24 } = {}) {
   const conditions = [...publicAlbumConditions(), "p.status = 'approved'"];
   const params = [];
 
   if (albumId !== null) {
     conditions.push('p.album_id = ?');
     params.push(albumId);
+  }
+  if (personId !== null) {
+    // بالمعرّف لا بالاسم: صفحة الشخص تجمع صوره من هويّته (ADR-0011)، فلا
+    // تفرّقها صيغة إملائية ولا تخلطها بأسماء تشبهها.
+    conditions.push(`EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id AND pt.status = 'approved' AND pt.person_id = ?)`);
+    params.push(personId);
   }
   if (person) {
     conditions.push(`EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id AND pt.status = 'approved' AND pt.name_key = ?)`);
@@ -367,49 +374,107 @@ async function getPublicPhoto(photoId) {
 async function searchPeople(search, limit = 12) {
   if (!nameKey(search)) return [];
   const key = `%${escapeLike(nameKey(search))}%`;
+  const gates = publicAlbumConditions().join(' AND ');
 
+  // من `people` لا من تجميع نصوص الوسوم (ADR-0011): فحسابٌ سجّل يظهر باسمه،
+  // وصاحب المناسبة يظهر ولو لم يُوسم، والاسم الواحد لا يتفرّق على صيغ إملائية.
+  // وشرط الظهور (D15): لا يُعاد إلّا من له صورة ظاهرة أو مناسبة ظاهرة هو
+  // صاحبها — الحساب سجلّ هوية، لا دفتر أعضاء. والاستعلامات الفرعية تستعير
+  // أسماء الجداول نفسها (`al`, `e`, `ot`) في نطاقها الخاص، فلا تتضارب.
   const rows = await db.query(
-    `SELECT t.name_key, MIN(t.name) AS name, COUNT(DISTINCT t.photo_id) AS photos_count
-       FROM photo_tags t
-       JOIN event_photos p ON p.id = t.photo_id AND p.status = 'approved'
-       JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
-       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE t.status = 'approved' AND ${publicAlbumConditions().join(' AND ')}
-        AND t.name_key LIKE ?
-      GROUP BY t.name_key
-      ORDER BY photos_count DESC, name ASC
+    `SELECT p.id, p.name, p.name_key,
+            (SELECT COUNT(DISTINCT t.photo_id)
+               FROM photo_tags t
+               JOIN event_photos ph ON ph.id = t.photo_id AND ph.status = 'approved'
+               JOIN event_albums al ON al.id = ph.album_id
+               JOIN events e ON e.id = al.event_id
+               LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+              WHERE t.person_id = p.id AND t.status = 'approved' AND ${gates}) AS photos_count,
+            (SELECT COUNT(DISTINCT al.id)
+               FROM event_honorees h
+               JOIN events e ON e.id = h.event_id
+               JOIN event_albums al ON al.event_id = e.id
+               LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+              WHERE h.person_id = p.id AND ${gates}) AS albums_count
+       FROM people p
+      WHERE p.name_key LIKE ?
+      HAVING photos_count > 0 OR albums_count > 0
+      ORDER BY (photos_count + albums_count) DESC, p.name ASC
       LIMIT ?`,
     [key, limit]
   );
   if (!rows.length) return [];
 
-  const keys = rows.map(row => row.name_key);
-  const placeholders = keys.map(() => '?').join(', ');
+  const ids = rows.map(row => row.id);
+  const placeholders = ids.map(() => '?').join(', ');
   const samples = await db.query(
-    `SELECT t.name_key, p.image_url
+    `SELECT t.person_id, ph.image_url
        FROM photo_tags t
-       JOIN event_photos p ON p.id = t.photo_id AND p.status = 'approved'
-       JOIN event_albums al ON al.id = p.album_id
+       JOIN event_photos ph ON ph.id = t.photo_id AND ph.status = 'approved'
+       JOIN event_albums al ON al.id = ph.album_id
        JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE t.status = 'approved' AND t.name_key IN (${placeholders})
-        AND ${publicAlbumConditions().join(' AND ')}
-      ORDER BY p.id ASC`,
-    keys
+      WHERE t.status = 'approved' AND t.person_id IN (${placeholders}) AND ${gates}
+      ORDER BY ph.id ASC`,
+    ids
   );
   const firstPhoto = new Map();
   for (const sample of samples) {
-    if (!firstPhoto.has(sample.name_key)) firstPhoto.set(sample.name_key, sample.image_url);
+    if (!firstPhoto.has(sample.person_id)) firstPhoto.set(sample.person_id, sample.image_url);
   }
 
   return rows.map(row => ({
+    id: row.id,
     name: row.name,
     name_key: row.name_key,
     photos_count: Number(row.photos_count),
-    sample_url: firstPhoto.get(row.name_key) || null,
-    sample_thumb_url: thumbFromImageUrl(firstPhoto.get(row.name_key))
+    albums_count: Number(row.albums_count),
+    sample_url: firstPhoto.get(row.id) || null,
+    sample_thumb_url: thumbFromImageUrl(firstPhoto.get(row.id))
   }));
+}
+
+/**
+ * صفحة الشخص (ADR-0011، تذكرة #105): صوره الموسومة بها، ومناسباته التي هو
+ * صاحبها وألبوماتها. البوابات الخمس هي نفسها، والاختبار على `person_id` لا
+ * على الاسم — فالإملاء لا يفرّق بين شخصين ولا يجمع شخصين.
+ */
+async function getPublicPerson(personId) {
+  const person = await db.queryOne('SELECT id, name, name_key FROM people WHERE id = ?', [personId]);
+  if (!person) throw ApiError.notFound('الشخص غير موجود');
+
+  const photos = await listPublicPhotos({ personId, page: 1, limit: 48 });
+  const albums = await db.query(
+    `SELECT al.id, al.event_id, al.title, al.description, al.is_published, al.created_at,
+            e.title AS event_title, e.town, e.event_date,
+            ot.name AS occasion_type_name,
+            (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved') AS photo_count,
+            (SELECT p.image_url FROM event_photos p
+              WHERE p.album_id = al.id AND p.status = 'approved'
+              ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
+       FROM event_honorees h
+       JOIN events e ON e.id = h.event_id
+       JOIN event_albums al ON al.event_id = e.id
+       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+      WHERE h.person_id = ? AND ${publicAlbumConditions().join(' AND ')}
+      ORDER BY e.event_date DESC`,
+    [personId]
+  );
+
+  // لا شيء ظاهر ⇒ الشخص غير موجود، بنفس الردّ الذي يردّه لمن يعدّ المعرّفات.
+  if (!photos.pagination.total && !albums.length) throw ApiError.notFound('الشخص غير موجود');
+
+  return {
+    person: {
+      id: person.id,
+      name: person.name,
+      name_key: person.name_key,
+      photos_count: photos.pagination.total,
+      albums_count: albums.length,
+      photos: photos.photos,
+      albums: albums.map(publicAlbumShape)
+    }
+  };
 }
 
 /**
@@ -886,10 +951,11 @@ async function requestTag(user, photoId) {
   if (!name) throw ApiError.badRequest('اسم حسابك فارغ — أكمل ملفك أولاً');
 
   try {
+    const personId = await people.resolveByName(name);
     await db.execute(
-      `INSERT INTO photo_tags (photo_id, user_id, name, name_key, status, requested_by)
-       VALUES (?, ?, ?, ?, 'pending', ?)`,
-      [photoId, user.id, name, nameKey(name), user.id]
+      `INSERT INTO photo_tags (photo_id, user_id, name, name_key, person_id, status, requested_by)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+      [photoId, user.id, name, nameKey(name), personId, user.id]
     );
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
@@ -926,9 +992,9 @@ async function addAdminTag(user, photoId, name) {
   await adminScope.assertPhotoInScope(user, photoId);
   if (!name) throw ApiError.badRequest('اسم الشخص مطلوب');
   const result = await db.execute(
-    `INSERT INTO photo_tags (photo_id, user_id, name, name_key, status, requested_by, moderated_by, moderated_at)
-     VALUES (?, NULL, ?, ?, 'approved', ?, ?, NOW())`,
-    [photoId, name, nameKey(name), user.id, user.id]
+    `INSERT INTO photo_tags (photo_id, user_id, name, name_key, person_id, status, requested_by, moderated_by, moderated_at)
+     VALUES (?, NULL, ?, ?, ?, 'approved', ?, ?, NOW())`,
+    [photoId, name, nameKey(name), await people.resolveByName(name), user.id, user.id]
   );
   logger.info('photo.tag.add', { photoId, tagId: result.insertId, by: user.id });
   return { id: result.insertId, name, status: 'approved' };
@@ -1101,12 +1167,12 @@ async function resolveReport(user, reportId, status) {
   return { id: reportId, status };
 }
 
-module.exports = {
-  // public
+module.exports = {  // public
   listPublicAlbums,
   getPublicAlbum,
   listPublicPhotos,
   getPublicPhoto,
+  getPublicPerson,
   searchPublic,
   searchPeople,
   listDefaultAlbumPhotosForEvent,

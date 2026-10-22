@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
 const albums = require('./albums.service');
+const people = require('./people.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
 const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN } = require('../constants');
@@ -935,9 +936,11 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 
     let position = 0;
     for (const honoree of data.honorees) {
+      // صاحب المناسبة شخصٌ (ADR-0011) — والعروس ليست حالة خاصة: الدور نصّ
+      // حرّ، والتحليل إلى شخص لا يفرّق بينه وبين غيره.
       await connection.execute(
-        'INSERT INTO event_honorees (event_id, name, role, position) VALUES (?, ?, ?, ?)',
-        [eventId, honoree.name, honoree.role, position]
+        'INSERT INTO event_honorees (event_id, name, role, position, person_id) VALUES (?, ?, ?, ?, ?)',
+        [eventId, honoree.name, honoree.role, position, await people.resolveByName(honoree.name, connection)]
       );
       position += 1;
     }
@@ -1210,8 +1213,8 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
         let position = 0;
         for (const honoree of honorees) {
           await connection.execute(
-            'INSERT INTO event_honorees (event_id, name, role, position) VALUES (?, ?, ?, ?)',
-            [eventId, honoree.name, honoree.role, position]
+            'INSERT INTO event_honorees (event_id, name, role, position, person_id) VALUES (?, ?, ?, ?, ?)',
+            [eventId, honoree.name, honoree.role, position, await people.resolveByName(honoree.name, connection)]
           );
           position += 1;
         }

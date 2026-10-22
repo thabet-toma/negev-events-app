@@ -5,6 +5,7 @@ const db = require('../db/pool');
 const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const { signToken, ADMIN_ROLES } = require('../middleware/auth');
+const people = require('./people.service');
 
 function publicUser(user) {
   return {
@@ -33,10 +34,13 @@ async function register({ phone_number, full_name, pin_code, clan_town }) {
   if (existing) throw ApiError.conflict('رقم الهاتف مسجل مسبقاً');
 
   const hashedPin = bcrypt.hashSync(pin_code, config.bcryptRounds);
+  // الحساب شخصٌ أيضاً (ADR-0011): اسمه يُحلّ إلى صفّ `people` عند التسجيل، لا
+  // عند أوّل بحث، فمن سجّل باسمه يظهر باسمه لا باسمٍ لم يُكتب بعد.
+  const personId = await people.resolveByName(full_name);
   const { insertId } = await db.execute(
-    `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role)
-     VALUES (?, ?, ?, ?, 'user')`,
-    [phone_number, full_name, hashedPin, clan_town || 'النقب']
+    `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role, person_id)
+     VALUES (?, ?, ?, ?, 'user', ?)`,
+    [phone_number, full_name, hashedPin, clan_town || 'النقب', personId]
   );
 
   const user = { id: insertId, phone_number, full_name, clan_town: clan_town || 'النقب', role: 'user' };

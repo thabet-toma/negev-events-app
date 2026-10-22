@@ -111,6 +111,7 @@ function createApp() {
   app.use('/e', shareRoutes.eventRouter);
   app.use('/p', shareRoutes.photoRouter);
   app.use('/a', shareRoutes.albumRouter);
+  app.use('/person', shareRoutes.personRouter);
   app.use('/live', shareRoutes.liveRouter);
 
   // خريطة الموقع لمحركات البحث (SEO Sitemap) — تُولّد ديناميكياً بكل المناسبات المعتمدة

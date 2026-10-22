@@ -9285,6 +9285,66 @@ async function run() {
         await db.execute('UPDATE event_albums SET is_published = 1 WHERE id = ?', [albumRow.id]);
       });
 
+      await test('a person is a row: a honoree is findable by name, his album counted, and his page renders (ADR-0011)', async () => {
+        const peopleService = require('../src/services/people.service');
+        const honoreeName = 'شخص العرس التجريبي';
+        const personId = await peopleService.resolveByName(honoreeName);
+        assert.ok(personId, 'the resolver returns a person id');
+        await db.execute(
+          'INSERT INTO event_honorees (event_id, name, role, position, person_id) VALUES (?, ?, ?, 0, ?)',
+          [endedWedding, honoreeName, 'العريس', personId]
+        );
+
+        const found = await api('GET', `/api/search?q=${encodeURIComponent(honoreeName)}`);
+        assert.strictEqual(found.status, 200);
+        const person = found.body.people.find(row => row.id === personId);
+        assert.ok(person, 'the honoree is returned as a person, not only as an album');
+        assert.ok(person.albums_count >= 1, 'his album is counted');
+        assert.ok(person.name_key, 'and the card carries a name key');
+
+        const detail = await api('GET', `/api/people/${personId}`);
+        assert.strictEqual(detail.status, 200, JSON.stringify(detail.body));
+        assert.ok(Array.isArray(detail.body.person.albums));
+        assert.strictEqual(detail.body.person.albums_count, detail.body.person.albums.length);
+
+        const page = await rawGet(`/person/${personId}`);
+        assert.strictEqual(page.status, 200);
+        assert.ok(page.text.includes('noindex'), 'a person page is not for search engines');
+        assert.ok(!page.text.includes('<script'), 'and carries no script');
+        assert.strictEqual((await rawGet('/person/999999999')).status, 404);
+        assert.strictEqual((await rawGet('/person/not-a-number')).status, 404);
+      });
+
+      await test('two spellings of one name are one person, and a name with nothing public never appears', async () => {
+        const peopleService = require('../src/services/people.service');
+        const first = await api('POST', `/api/admin/photos/${archivePhotoId}/tags`, {
+          token: superAdminToken,
+          body: { name: 'راني أبو سالم' }
+        });
+        assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+        const second = await api('POST', `/api/admin/photos/${archivePhotoId}/tags`, {
+          token: superAdminToken,
+          body: { name: 'راني ابو سالم' }
+        });
+        assert.strictEqual(second.status, 201, JSON.stringify(second.body));
+
+        const tagA = await db.queryOne('SELECT person_id FROM photo_tags WHERE id = ?', [first.body.tag.id]);
+        const tagB = await db.queryOne('SELECT person_id FROM photo_tags WHERE id = ?', [second.body.tag.id]);
+        assert.ok(tagA.person_id, 'the tag carries a person');
+        assert.strictEqual(tagA.person_id, tagB.person_id, 'hamza spellings collapse to one person row');
+
+        const visible = await api('GET', '/api/search?q=' + encodeURIComponent('راني'));
+        assert.ok(visible.body.people.some(row => row.id === tagA.person_id), 'the tagged person is findable');
+
+        // اسمٌ له صفّ شخص (هوية) ولا صورة ولا مناسبة: لا يظهر في البحث — D15.
+        const lonelyName = 'اسم بلا صور اختبار';
+        const lonelyId = await peopleService.resolveByName(lonelyName);
+        assert.ok(lonelyId, 'the identity row is created even for a name with nothing public');
+        const hidden = await api('GET', '/api/search?q=' + encodeURIComponent(lonelyName));
+        assert.strictEqual(hidden.status, 200);
+        assert.strictEqual(hidden.body.people.length, 0, 'a name with nothing public stays out of the search');
+      });
+
       await test('the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off', async () => {
         await db.execute("UPDATE events SET status = 'rejected' WHERE id = ?", [endedWedding]);
         const rejected = await api('GET', `/api/events/${endedWedding}`);

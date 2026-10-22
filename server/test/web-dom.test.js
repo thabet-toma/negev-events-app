@@ -1194,7 +1194,7 @@ async function run() {
           success: true,
           albums,
           photos,
-          people: [{ name: 'فاطمة الوسم', name_key: 'فاطمه الوسم', photos_count: 1, sample_thumb_url: 'https://cdn.test/person.jpg' }]
+          people: [{ id: 21, name: 'فاطمة الوسم', name_key: 'فاطمه الوسم', photos_count: 1, albums_count: 1, sample_thumb_url: 'https://cdn.test/person.jpg' }]
         });
       }
       if (parsed.pathname === '/api/albums/11' && method === 'GET') {
@@ -1205,8 +1205,19 @@ async function run() {
           pagination: { page: 1, limit: 24, total: 1, totalPages: 1 }
         });
       }
-      if (parsed.pathname === '/api/photos' && parsed.searchParams.get('person')) {
-        return jsonResponse({ success: true, photos, pagination: { page: 1, limit: 48, total: 1, totalPages: 1 } });
+      if (parsed.pathname === '/api/people/21' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          person: {
+            id: 21,
+            name: 'فاطمة الوسم',
+            name_key: 'فاطمه الوسم',
+            photos_count: 1,
+            albums_count: 1,
+            photos,
+            albums
+          }
+        });
       }
       if (parsed.pathname === '/api/photos/7/tags' && method === 'POST') {
         return jsonResponse({ success: true, status: 'pending', message: 'تم إرسال طلبك' }, { status: 201 });
@@ -1261,6 +1272,17 @@ async function run() {
     await waitFor(() => document.querySelectorAll('#albumsResults .album-person-card').length === 1);
     document.querySelector('#albumsResults .album-person-card').click();
     await waitFor(() => document.querySelectorAll('#albumsResults .albums-photo-card').length === 1);
+    // صفحة الشخص (تذكرة #105): تُقرأ من `/api/people/:id` لا من شبكة صور بالاسم.
+    assert.ok(paths.some(path => path.startsWith('GET /api/people/21')), 'the person page is fetched by id');
+    assert.ok(
+      document.querySelector('#albumsResults .album-person-head strong').textContent.includes('فاطمة'),
+      'and it names the person'
+    );
+    assert.strictEqual(
+      document.querySelectorAll('#albumsResults .album-card').length,
+      1,
+      'his albums are listed next to his photos'
+    );
     document.querySelector('#albumsResults .albums-photo-card').click();
     await waitFor(() => document.getElementById('archiveViewer').hidden === false);
     assert.ok(document.getElementById('archiveViewerFooter').hidden === false);

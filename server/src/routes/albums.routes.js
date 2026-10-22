@@ -83,6 +83,15 @@ router.get('/photos/:id', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * شخصٌ واحد بصوره ومناسباته (ADR-0011، تذكرة #105). معرّف لا موجود، أو شخصٌ
+ * لا شيء ظاهر له ⇒ 404 واحدة، فلا يُستدلّ على وجود اسمٍ لم يُنشر.
+ */
+router.get('/people/:id', asyncHandler(async (req, res) => {
+  const personId = parseId(req.params.id, 'معرّف الشخص');
+  res.json({ success: true, ...await albums.getPublicPerson(personId) });
+}));
+
+/**
  * One box, three groups: albums, photos, people. An empty q is not a 400 —
  * it is "nothing typed yet", which the UI renders as an empty result rather
  * than an error it has to special-case.

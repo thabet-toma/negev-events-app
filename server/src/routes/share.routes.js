@@ -53,6 +53,7 @@ const eventRouter = express.Router();
 const liveRouter = express.Router();
 const photoRouter = express.Router();
 const albumRouter = express.Router();
+const personRouter = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
@@ -537,6 +538,59 @@ function renderAlbumPage(album, photos) {
     ${thumbs.length > 1 ? `<div class="grid">${thumbs.map(photo => `<img src="${escapeHtml(photo.thumb_url || photo.image_url)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy">`).join('')}</div>` : ''}
     <a class="cta" href="${escapeHtml(`${config.publicUrl}/#album/${album.id}`)}">افتح الألبوم في الموقع</a>
     <p class="note">صفحة ألبوم خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
+  </main>
+</body>
+</html>`;
+}
+
+/**
+ * `GET /person/:id` — صفحة شخص (ADR-0011، تذكرة #105). نفس غلاف `/a/:id`:
+ * مصيَّرة على الخادم كي توجد معاينة في واتساب، بلا `<script>`، و`noindex`.
+ * تحمل الاسم وصوره ومناسباته فقط — لا هاتف ولا حساب ولا شيء عن صاحب الحساب.
+ */
+function renderPersonPage(person) {
+  const heading = person.name;
+  const counts = [
+    person.photos_count ? `${person.photos_count} صورة` : '',
+    person.albums_count ? `${person.albums_count} مناسبة` : ''
+  ].filter(Boolean).join(' · ');
+  const pageUrl = `${config.publicUrl}/person/${person.id}`;
+  const cover = (person.photos[0] && person.photos[0].image_url)
+    || (person.albums[0] && person.albums[0].cover_url)
+    || '';
+  const thumbs = person.photos.slice(0, 12);
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>${escapeHtml(heading)} | اعراسنا</title>
+  <meta name="description" content="${escapeHtml(counts)}">
+  <meta property="og:type" content="profile">
+  <meta property="og:title" content="${escapeHtml(heading)}">
+  <meta property="og:description" content="${escapeHtml(counts)}">
+  ${cover ? `<meta property="og:image" content="${escapeHtml(cover)}">` : ''}
+  <meta property="og:url" content="${escapeHtml(pageUrl)}">
+  <meta property="og:site_name" content="اعراسنا">
+  ${cover ? '<meta name="twitter:card" content="summary_large_image">' : ''}
+  ${cover ? `<meta name="twitter:image" content="${escapeHtml(cover)}">` : ''}
+  <style>${SHARE_PAGE_CSS}
+    .shot { width: 100%; max-height: 52vh; object-fit: cover; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 20px; }
+    .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: #0d1b27; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span>اعراسنا · مناسبات النقب</span><a href="${escapeHtml(config.publicUrl)}">الموقع</a></div>
+    ${cover ? `<img class="shot" src="${escapeHtml(cover)}" alt="${escapeHtml(heading)}">` : ''}
+    <h1>${escapeHtml(heading)}</h1>
+    ${counts ? `<p>${escapeHtml(counts)}</p>` : ''}
+    ${thumbs.length > 1 ? `<div class="grid">${thumbs.map(photo => `<img src="${escapeHtml(photo.thumb_url || photo.image_url)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy">`).join('')}</div>` : ''}
+    <a class="cta" href="${escapeHtml(`${config.publicUrl}/#person/${person.id}`)}">افتح صفحة ${escapeHtml(heading)} في الموقع</a>
+    <p class="note">صفحة شخص خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
   </main>
 </body>
 </html>`;
@@ -1319,4 +1373,32 @@ albumRouter.get('/:id', asyncHandler(async (req, res) => {
     .send(renderAlbumPage(data.album, data.photos));
 }));
 
-module.exports = { eventRouter, liveRouter, photoRouter, albumRouter };
+personRouter.get('/:id', asyncHandler(async (req, res) => {
+  const personId = shareIdOrNull(req.params.id);
+  let data = null;
+  if (personId) {
+    try {
+      data = await albums.getPublicPerson(personId);
+    } catch (err) {
+      // شخص لا شيء ظاهر له يُعامَل كغير الموجود، بنفس صفحة 404.
+      if (err.status !== 404) throw err;
+    }
+  }
+
+  if (!data) {
+    sendNotFound(res);
+    return;
+  }
+
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': SHARE_CSP,
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Cache-Control': 'public, max-age=300'
+    })
+    .send(renderPersonPage(data.person));
+}));
+
+module.exports = { eventRouter, liveRouter, photoRouter, albumRouter, personRouter };

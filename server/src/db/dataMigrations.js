@@ -1838,6 +1838,94 @@ const steps = [
       );
       logger.info(`[migrations] fix-artist-field-visibility-2026-10: corrected ${result.affectedRows} field row(s).`);
     }
+  },
+  {
+    // «الشخص كائن» (ADR-0011، تذكرة #105). schema.sql يحمل التعريف الكامل
+    // للتنصيبات الجديدة؛ هذه الخطوة تضيفه إلى قاعدة حيّة وتملأ `person_id` من
+    // الخزائن الثلاث. **إضافات فقط**: كل عمود NULLable، والكود القديم يقرأ
+    // `name_key` كما كان، فسقوط الترحيل لا يُسقط شيئاً قائماً.
+    // والملء يمرّ بـ`people.resolveByName` نفسها التي تمرّ بها الكتابات الحيّة،
+    // فلا يختلف الاسم في الترحيل عن الاسم في التسجيل.
+    name: 'add-people-2026-10',
+    async run(connection) {
+      const people = require('../services/people.service');
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS people (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          name       VARCHAR(150) NOT NULL,
+          name_key   VARCHAR(150) NOT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_people_name_key (name_key)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      if (!(await columnExists(connection, 'users', 'person_id'))) {
+        await connection.execute('ALTER TABLE users ADD COLUMN person_id INT UNSIGNED DEFAULT NULL');
+      }
+      if (!(await indexExists(connection, 'users', 'idx_users_person'))) {
+        await connection.execute('ALTER TABLE users ADD KEY idx_users_person (person_id)');
+      }
+      if (!(await constraintExists(connection, 'users', 'fk_users_person'))) {
+        await connection.execute(
+          'ALTER TABLE users ADD CONSTRAINT fk_users_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL'
+        );
+      }
+
+      if (!(await columnExists(connection, 'photo_tags', 'person_id'))) {
+        await connection.execute('ALTER TABLE photo_tags ADD COLUMN person_id INT UNSIGNED DEFAULT NULL');
+      }
+      if (!(await indexExists(connection, 'photo_tags', 'idx_photo_tags_person'))) {
+        await connection.execute('ALTER TABLE photo_tags ADD KEY idx_photo_tags_person (person_id, status)');
+      }
+      if (!(await constraintExists(connection, 'photo_tags', 'fk_photo_tags_person'))) {
+        await connection.execute(
+          'ALTER TABLE photo_tags ADD CONSTRAINT fk_photo_tags_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL'
+        );
+      }
+
+      if (!(await columnExists(connection, 'event_honorees', 'person_id'))) {
+        await connection.execute('ALTER TABLE event_honorees ADD COLUMN person_id INT UNSIGNED DEFAULT NULL');
+      }
+      if (!(await indexExists(connection, 'event_honorees', 'idx_event_honorees_person'))) {
+        await connection.execute('ALTER TABLE event_honorees ADD KEY idx_event_honorees_person (person_id)');
+      }
+      if (!(await constraintExists(connection, 'event_honorees', 'fk_event_honorees_person'))) {
+        await connection.execute(
+          'ALTER TABLE event_honorees ADD CONSTRAINT fk_event_honorees_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL'
+        );
+      }
+
+      const link = async (rows, updateSql) => {
+        let linked = 0;
+        for (const row of rows) {
+          const personId = await people.resolveByName(row.name, connection);
+          if (!personId) continue;
+          await connection.execute(updateSql, [personId, row.id]);
+          linked += 1;
+        }
+        return linked;
+      };
+
+      const [userRows] = await connection.execute(
+        "SELECT id, full_name AS name FROM users WHERE person_id IS NULL AND full_name <> ''"
+      );
+      const [tagRows] = await connection.execute(
+        "SELECT id, name FROM photo_tags WHERE person_id IS NULL AND name <> ''"
+      );
+      const [honoreeRows] = await connection.execute(
+        "SELECT id, name FROM event_honorees WHERE person_id IS NULL AND name <> ''"
+      );
+
+      const linked =
+        (await link(userRows, 'UPDATE users SET person_id = ? WHERE id = ?')) +
+        (await link(tagRows, 'UPDATE photo_tags SET person_id = ? WHERE id = ?')) +
+        (await link(honoreeRows, 'UPDATE event_honorees SET person_id = ? WHERE id = ?'));
+
+      logger.info(`[migrations] add-people-2026-10: ${linked} row(s) linked to a person.`);
+    }
   }
 ];
 

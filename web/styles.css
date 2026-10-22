@@ -4265,6 +4265,18 @@ body.albums-page-open { overflow: hidden; }
 .album-person-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .album-person-card strong { font-size: 0.86rem; text-align: center; overflow-wrap: anywhere; }
 .album-person-card small { color: var(--ink-faint); font-size: 0.74rem; }
+/* رأس صفحة الشخص (تذكرة #105) — اسمٌ وعددان، ثم مناسباته وصوره تحته. */
+.album-person-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 2px 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.album-person-head strong { font-size: 1.05rem; color: var(--ink); overflow-wrap: anywhere; }
+.album-person-head small { color: var(--ink-faint); font-size: 0.78rem; white-space: nowrap; }
 .albums-load-more {
   display: block;
   margin: 16px auto 0;
