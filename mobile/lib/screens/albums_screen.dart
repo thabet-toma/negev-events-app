@@ -420,6 +420,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   }
 
   Future<void> _load() async {
+    if (!_loading) {
+      // إعادة المحاولة: امسح الخطأ وأظهر التحميل، وإلّا بقي نصّ الفشل القديم
+      // ظاهراً أثناء محاولة جديدة تنجح.
+      setState(() { _loading = true; _error = null; });
+    }
     try {
       final data = await AppServices.of(context).api.albumDetails(widget.id);
       if (!mounted) return;
@@ -430,9 +435,16 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _loading = false;
         _error = null;
       });
-      await _openFocusPhoto();
     } catch (error) {
       if (mounted) setState(() { _loading = false; _error = '$error'; });
+      return;
+    }
+    // خارج `catch` الألبوم: فشلُ جلب صفحة إضافية للبحث عن الصورة المطلوبة
+    // يجب ألّا يستبدل ألبوماً حُمّل بنجاح برسالة فشل.
+    try {
+      await _openFocusPhoto();
+    } catch (_) {
+      // الرابط قاد إلى صورة لم نجدها — الألبوم يبقى معروضاً من أعلاه.
     }
   }
 
@@ -442,6 +454,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   Future<void> _openFocusPhoto() async {
     final focus = widget.focusPhotoId;
     if (focus == null || _focused) return;
+    // يُقفل قبل أي `await`: ضغطتان على «إعادة المحاولة» كانتا تدفعان العارض
+    // مرّتين.
+    _focused = true;
     var index = _photos.indexWhere((photo) => photo.id == focus);
     for (var attempt = 0; index < 0 && attempt < 10; attempt += 1) {
       final pagination = _pagination;
@@ -455,7 +470,6 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       index = _photos.indexWhere((photo) => photo.id == focus);
     }
     if (index < 0) return;
-    _focused = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.of(context).push(
@@ -658,6 +672,7 @@ class _PersonScreenState extends State<PersonScreen> {
   Person? _person;
   List<EventPhoto> _photos = const [];
   List<EventAlbum> _albums = const [];
+  List<PersonOccasion> _occasions = const [];
   Pagination? _pagination;
   bool _loading = true;
   String? _error;
@@ -680,6 +695,7 @@ class _PersonScreenState extends State<PersonScreen> {
         _person = person;
         _photos = person.photos;
         _albums = person.albums;
+        _occasions = person.events;
         _pagination = person.pagination;
         _loading = false;
         _error = null;
@@ -763,6 +779,19 @@ class _PersonScreenState extends State<PersonScreen> {
                                 ),
                               );
                             },
+                          ),
+                        ),
+                      ],
+                      if (_albums.isEmpty && _occasions.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        // مناسبة ظاهرة بلا ألبوم منشور بعد: تُذكر هنا بدل صفحة
+                        // فيها اسمٌ ورقمان ولا شيء تحتهما.
+                        ..._occasions.map(
+                          (occasion) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Icon(Icons.celebration_outlined, color: c.sky),
+                            title: Text(occasion.title ?? occasion.occasionTypeName ?? 'مناسبة'),
+                            subtitle: Text(occasion.line),
                           ),
                         ),
                       ],

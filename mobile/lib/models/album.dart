@@ -177,7 +177,38 @@ class PersonSearchResult {
       );
 }
 
-/// شخصٌ واحد بصفحته (ADR-0011): اسمه، صوره، ومواسمه — من `/api/people/:id`.
+/// مناسبة ظاهر هو صاحبها — تُعرض في صفحة الشخص ولو لم يُنشأ ألبومها بعد، كي لا
+/// تكون الصفحة اسماً ورقمين ولا شيء تحتهما.
+class PersonOccasion {
+  final int id;
+  final String? title;
+  final String? town;
+  final String? eventDate;
+  final String? occasionTypeName;
+
+  const PersonOccasion({
+    required this.id,
+    this.title,
+    this.town,
+    this.eventDate,
+    this.occasionTypeName,
+  });
+
+  String get line => [title, town, eventDate]
+      .whereType<String>()
+      .where((part) => part.isNotEmpty)
+      .join(' · ');
+
+  factory PersonOccasion.fromJson(Map<String, dynamic> json) => PersonOccasion(
+        id: _toInt(json['id']),
+        title: _nullableString(json['title']),
+        town: _nullableString(json['town']),
+        eventDate: _nullableString(json['event_date']),
+        occasionTypeName: _nullableString(json['occasion_type_name']),
+      );
+}
+
+/// شخصٌ واحد بصفحته (ADR-0011): اسمه، صوره، ومناسباته — من `/api/people/:id`.
 class Person {
   final int id;
   final String name;
@@ -186,6 +217,7 @@ class Person {
   final int albumsCount;
   final List<EventPhoto> photos;
   final List<EventAlbum> albums;
+  final List<PersonOccasion> events;
   final Pagination pagination;
 
   const Person({
@@ -196,6 +228,7 @@ class Person {
     required this.albumsCount,
     this.photos = const [],
     this.albums = const [],
+    this.events = const [],
     this.pagination = const Pagination(page: 1, limit: 48, total: 0, totalPages: 0),
   });
 
@@ -204,6 +237,7 @@ class Person {
   factory Person.fromJson(Map<String, dynamic> json) {
     final rawPhotos = json['photos'];
     final rawAlbums = json['albums'];
+    final rawEvents = json['events'];
     return Person(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
@@ -220,6 +254,12 @@ class Person {
           ? rawAlbums
               .whereType<Map>()
               .map((item) => EventAlbum.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const [],
+      events: rawEvents is List
+          ? rawEvents
+              .whereType<Map>()
+              .map((item) => PersonOccasion.fromJson(Map<String, dynamic>.from(item)))
               .toList()
           : const [],
       pagination: Pagination.fromJson(

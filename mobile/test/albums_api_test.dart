@@ -76,7 +76,10 @@ void main() {
               'albums': [
                 {'id': 11, 'event_id': 5, 'title': 'ألبوم'}
               ],
-              'pagination': {'page': 1, 'limit': 48, 'total': 1, 'totalPages': 1}
+              'events': [
+                {'id': 5, 'title': 'عرس أحمد', 'town': 'رهط', 'event_date': '2025-05-01'}
+              ],
+              'pagination': {'page': 1, 'limit': 48, 'total': 49, 'totalPages': 2}
             }
           }),
           200,
@@ -98,7 +101,12 @@ void main() {
       expect(person.name, 'فاطمة');
       expect(person.photos.single.id, 7);
       expect(person.albums.single.title, 'ألبوم');
-      expect(person.hasMore, isFalse);
+      expect(person.events.single.title, 'عرس أحمد');
+      expect(person.photosCount, 1);
+      expect(person.albumsCount, 1);
+      // صفحتان في الحمولة: القيمة تسقط لو لم يُقرأ `pagination` أصلاً (فالبديل
+      // `totalPages: 0`)، بخلاف `isFalse` التي كانت تمرّ في الحالتين.
+      expect(person.hasMore, isTrue);
       expect(requests.last.url.path, '/api/people/21');
       expect(requests.last.headers['Authorization'], isNull);
     });

@@ -478,17 +478,18 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
     [personId]
   );
 
-  const occasions = await db.queryOne(
-    `SELECT COUNT(DISTINCT e.id) AS total
+  const occasions = await db.query(
+    `SELECT DISTINCT e.id, e.title, e.town, e.event_date, ot.name AS occasion_type_name
        FROM event_honorees h
        JOIN events e ON e.id = h.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE h.person_id = ? AND ${publicEventConditions().join(' AND ')}`,
+      WHERE h.person_id = ? AND ${publicEventConditions().join(' AND ')}
+      ORDER BY e.event_date DESC`,
     [personId]
   );
 
   // لا شيء ظاهر ⇒ الشخص غير موجود، بنفس الردّ الذي يردّه لمن يعدّ المعرّفات.
-  if (!photos.pagination.total && !Number(occasions.total)) throw ApiError.notFound('الشخص غير موجود');
+  if (!photos.pagination.total && !occasions.length) throw ApiError.notFound('الشخص غير موجود');
 
   return {
     person: {
@@ -496,9 +497,18 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
       name: person.name,
       name_key: person.name_key,
       photos_count: photos.pagination.total,
-      albums_count: Number(occasions.total),
+      albums_count: occasions.length,
       photos: photos.photos,
       albums: albums.map(publicAlbumShape),
+      // مناسباته الظاهرة حتى لو لم يُنشأ ألبومها بعد — كي لا تُعرض صفحة فيها
+      // اسمٌ ورقمان ولا شيء تحتهما.
+      events: occasions.map(row => ({
+        id: row.id,
+        title: row.title || null,
+        town: row.town || null,
+        event_date: row.event_date || null,
+        occasion_type_name: row.occasion_type_name || null
+      })),
       pagination: photos.pagination
     }
   };

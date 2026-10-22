@@ -20,6 +20,7 @@ void main() {
       expect(target('https://munasbat.test/'), isNull);
       expect(target('https://munasbat.test/a/'), isNull);
       expect(target('https://munasbat.test/a/abc'), isNull);
+      expect(target('https://munasbat.test/person/abc'), isNull);
       expect(target('https://munasbat.test/a/0'), isNull);
       expect(target('https://munasbat.test/a/-4'), isNull);
     });
