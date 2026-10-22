@@ -118,6 +118,33 @@ docker compose up -d app
 
 ---
 
+### Step 6b: صفحات يولّدها الخادم — مواضع nginx على المضيف (تُنسى فتكسر النشر)
+
+كل مسار HTML يولّده Express (`/e/`، `/p/`، `/a/`، `/person/`، `/live/…`) يحتاج
+`location` في **nginx المضيف** يمرّره إلى `127.0.0.1:3100`. بلا هذا الموضع يخدم
+حاويةُ الملفات الثابتة الطلبَ فتردّ **404 من nginx لا من التطبيق** — وهي 404 صامتة
+تماماً: لا اختبار محلي يراها لأن الاختبارات تخاطب Express مباشرة. حدثت هذه في نشر
+2026-10-22: `/a/` و`/person/` أُضيفتا في الكود ولم يعرفهما المضيف.
+
+**الملف الحقيقي هو `/etc/nginx/sites-enabled/munasbat.ktra-pro.tech`، وهو ملفٌ
+عادي لا symlink**، و`sites-available/` يحمل نسخة قديمة — تحريرها لا يغيّر شيئاً.
+تحقّق دائماً بـ`nginx -T` قبل وبعد، لا بقراءة أي ملف.
+
+النمط (موضع `=` للمسار المجرّد و`^~` للبادئة، مثل `/p` و`/live` القائمين):
+
+```nginx
+location ^~ /a/ {
+    proxy_pass http://127.0.0.1:3100;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+الإجراء الآمن: نسخة احتياطية إلى `/root/backups/`، ثم التعديل، ثم `nginx -t`،
+ثم `systemctl reload nginx`، ثم **تحقّق من خارج الخادم** بمسار حقيقي (الخطوة 7).
+
+---
+
 ### Step 7: Live Verification
 Verify that both the version endpoint and the static APK download respond correctly:
 
@@ -140,3 +167,13 @@ Verify that both the version endpoint and the static APK download respond correc
    curl -I https://munasbat.ktra-pro.tech/downloads/negev-events.apk
    ```
    *Expected Response*: `HTTP/1.1 200 OK`, `Content-Length` matches the size of the uploaded APK.
+
+3. **التحقق من صفحات الخادم (لا يكفي 200 — تأكّد أن الردّ من التطبيق):**
+   ```bash
+   for p in /e/17 /p/1 /person/5 /live; do
+     curl -s -o /dev/null -w "$p -> %{http_code}\n" "https://munasbat.ktra-pro.tech$p"
+   done
+   ```
+   المتوقّع `200` لكلٍّ منها، **وجسم الصفحة عربي**. إن جاءت `404` بجسم
+   `<title>404 Not Found</title>` قصير فذلك nginx لا التطبيق ⇒ موضع ناقص في
+   الخطوة 6b. و`/a/<id>` قد يردّ 404 عربياً وهذا صحيح: لا ألبومات ظاهرة بعد.
