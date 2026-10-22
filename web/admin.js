@@ -618,8 +618,8 @@ function showDashboard() {
 }
 
 /*
- * كل مسار خلف requireSuperAdmin (المستخدمون، البث، الستوريات/أنواع المناسبات،
- * القرى، فئات الخدمات، الأدمن والبلدات) يُخفى تبويبه كلياً عن أدمن عادي — لا
+ * كل مسار خلف requireSuperAdmin (المستخدمون، الأشخاص، البث، الستوريات/أنواع
+ * المناسبات، القرى، فئات الخدمات، الأدمن والبلدات) يُخفى تبويبه كلياً عن أدمن عادي — لا
  * يُعطَّل بل يغيب، لأن الزرّ المعطَّل تسريبٌ لـ403 إلى الواجهة (قاعدة اللوحة في
  * المواصفة). الدور المخزَّن ادّعاء محلي قد يكون قديماً؛ التحقق الحقيقي يبقى من
  * الخادم نفسه (403) في كل جلب — هذه الدالة تتحكم بالعرض الأولي فقط.
@@ -7288,6 +7288,14 @@ async function loadAdminPeople() {
     }
     box.innerHTML = people.map(person => {
       const isSource = adminPeopleFrom === person.id;
+      // اقتراحات قراءة فقط من الخادم (تذكرة #107): زرّ لكل اسم مشابه يختاره
+      // مصدراً للدمج. لا شيء هنا يدمج تلقائياً — الاختيار يبقى بيد السوبر أدمن.
+      const similar = Array.isArray(person.similar) ? person.similar : [];
+      const similarLine = similar.length
+        ? `<div class="admin-person-similar">تشبه: ${similar.map(candidate =>
+            `<button type="button" class="admin-person-similar-btn" onclick="selectPeopleMergeSource(${Number(candidate.id)})">${escapeHtml(candidate.name)} (${Number(candidate.photos_count) || 0} صورة)</button>`
+          ).join('، ')}</div>`
+        : '';
       return `
         <div class="admin-person-row${isSource ? ' is-source' : ''}">
           <span class="admin-person-name">${escapeHtml(person.name)}</span>
@@ -7300,6 +7308,7 @@ async function loadAdminPeople() {
               ? `<button type="button" class="admin-person-btn primary" onclick="mergePeopleInto(${Number(person.id)})">دمج هنا</button>`
               : ''}
           </span>
+          ${similarLine}
         </div>
       `;
     }).join('');
@@ -7321,6 +7330,7 @@ async function mergePeopleInto(targetId) {
   try {
     const res = await adminFetch(`/api/admin/people/${Number(targetId)}/merge`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from_id: adminPeopleFrom })
     });
     const data = await res.json().catch(() => ({}));

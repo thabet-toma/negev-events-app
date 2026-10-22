@@ -1329,7 +1329,7 @@ body {
   margin-bottom: 8px;
   background: var(--surface);
 }
-.admin-person-row.is-source { border-color: #b45309; background: #fffbeb; }
+.admin-person-row.is-source { border-color: var(--warn); background: var(--warn-wash); }
 .admin-person-name { font-weight: 800; color: var(--ink); flex: 1 1 180px; }
 .admin-person-counts { color: var(--ink-faint); font-size: 0.8rem; }
 .admin-person-actions { display: flex; align-items: center; gap: 8px; }
@@ -1346,3 +1346,20 @@ body {
 }
 .admin-person-btn.primary { background: #b45309; border-color: #b45309; color: #fff; }
 .admin-person-btn:hover { border-color: #b45309; }
+/* سطر الاقتراحات تحت الصفّ — نصٌّ لاصق وزرٌّ بلا إطار، فلا يزاحم أزرار الصفّ. */
+.admin-person-similar {
+  flex: 1 1 100%;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+}
+.admin-person-similar-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--warn);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}

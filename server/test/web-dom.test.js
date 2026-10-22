@@ -7373,6 +7373,113 @@ async function run() {
     assert.strictEqual(btn.style.display, 'none');
   });
 
+  await test('تبويب «الأشخاص» is hidden from a town admin and shown to a super admin — merging is super-only (#107)', () => {
+    const townDom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط'] });
+    const townBtn = townDom.window.document.getElementById('tabPeopleBtn');
+    townBtn.style.display = 'flex';
+    townDom.window.applyRoleVisibility();
+    assert.strictEqual(townBtn.style.display, 'none', 'a town admin must not see the people tab');
+
+    // العكس صريح: الزرّ يبدأ مخفياً فلا يمكن أن يمرّ الاختبار بلا هذه الدالة.
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const superBtn = superDom.window.document.getElementById('tabPeopleBtn');
+    superBtn.style.display = 'none';
+    superDom.window.applyRoleVisibility();
+    assert.strictEqual(superBtn.style.display, 'flex', 'a super admin must see the people tab');
+  });
+
+  await test('اقتراحات الدمج in the people tab are rendered, escaped, and only preselect — they never merge (#107)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const people = [
+      {
+        id: 7, name: 'راني', photos_count: 2, honorees_count: 0, users_count: 0,
+        similar: [
+          { id: 9, name: 'راني أبو سالم', photos_count: 3 },
+          { id: 11, name: '<b>راني</b>', photos_count: 1 }
+        ]
+      },
+      { id: 9, name: 'راني أبو سالم', photos_count: 3, honorees_count: 1, users_count: 1, similar: [] },
+      { id: 11, name: '<b>راني</b>', photos_count: 1, honorees_count: 0, users_count: 0, similar: [] }
+    ];
+    const written = [];
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (method !== 'GET') written.push({ requestPath, method, options });
+      if (requestPath === '/api/admin/people' && method === 'GET') return jsonResponse({ success: true, people });
+      return jsonResponse({ success: true });
+    });
+
+    await dom.window.loadAdminPeople();
+
+    const line = document.querySelector('.admin-person-row .admin-person-similar');
+    assert.ok(line, 'the similar-name line is rendered under its row');
+    assert.ok(line.textContent.startsWith('تشبه:'), `expected «تشبه:», got: ${line.textContent}`);
+    assert.ok(line.textContent.includes('راني أبو سالم (3 صورة)'), `expected the suggestion with its photo count, got: ${line.textContent}`);
+    assert.ok(line.textContent.includes('<b>راني</b> (1 صورة)'), 'the suggested name is escaped, not injected as markup');
+    assert.strictEqual(line.querySelector('b'), null, 'no HTML from a person name reaches the DOM');
+    assert.strictEqual(
+      document.querySelectorAll('.admin-person-similar').length, 1,
+      'a person with no suggestions renders no extra line'
+    );
+
+    const suggestion = line.querySelector('.admin-person-similar-btn');
+    suggestion.click();
+    await waitFor(() => {
+      const selected = document.querySelector('.admin-person-row.is-source .admin-person-name');
+      return selected && selected.textContent === 'راني أبو سالم';
+    });
+    assert.strictEqual(
+      document.querySelector('.admin-person-row.is-source .admin-person-name').textContent,
+      'راني أبو سالم',
+      'clicking a suggestion only preselects that person as the merge source'
+    );
+    assert.strictEqual(written.length, 0, 'nothing is merged by rendering or clicking a suggestion');
+  });
+
+  await test('دمج الأشخاص: the merge POST carries JSON and the selected source, and success clears the selection (#107)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const people = [
+      { id: 7, name: 'راني', photos_count: 2, honorees_count: 0, users_count: 0, similar: [] },
+      { id: 9, name: 'راني أبو سالم', photos_count: 3, honorees_count: 1, users_count: 1, similar: [] }
+    ];
+    const requests = [];
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      requests.push({ requestPath, method, options });
+      if (requestPath === '/api/admin/people' && method === 'GET') return jsonResponse({ success: true, people });
+      if (requestPath === '/api/admin/people/9/merge' && method === 'POST') {
+        return jsonResponse({ success: true, message: 'تم الدمج — صار الاسم واحداً، وكل صوره ومناسبه تحته' });
+      }
+      return jsonResponse({ success: true });
+    });
+    dom.window.confirm = () => true;
+
+    dom.window.selectPeopleMergeSource(7);
+    await waitFor(() => document.querySelector('.admin-person-row.is-source'));
+    await dom.window.mergePeopleInto(9);
+
+    const merge = requests.find(r => r.method === 'POST' && r.requestPath === '/api/admin/people/9/merge');
+    assert.ok(merge, 'the panel posted to the merge route for the target person');
+    assert.strictEqual(merge.options.headers['Content-Type'], 'application/json',
+      'without this header express.json() sees no body and the route always answers 400');
+    assert.strictEqual(merge.options.headers.Authorization, 'Bearer test-admin-token');
+    assert.strictEqual(merge.options.headers['X-App-Version'], 'web');
+    const sent = JSON.parse(merge.options.body);
+    assert.deepStrictEqual(sent, { from_id: 7 }, 'the body names the selected source and nothing else');
+
+    await waitFor(() => document.querySelectorAll('.admin-person-row').length === people.length
+      && !document.querySelector('.admin-person-row.is-source'));
+    assert.strictEqual(document.querySelectorAll('.admin-person-row').length, people.length,
+      'the list is re-rendered after the merge');
+    assert.strictEqual(document.querySelector('.admin-person-row.is-source'), null, 'the selection is cleared after merging');
+    assert.strictEqual(
+      document.getElementById('adminNoticeMessage').textContent,
+      'تم الدمج — صار الاسم واحداً، وكل صوره ومناسبه تحته',
+      'the server message is shown to the admin'
+    );
+    assert.strictEqual(document.getElementById('adminNoticeModal').style.display, 'flex', 'the notice is shown');
+  });
+
   await test('ألبومات الإدارة: pick an archive-gallery event, open its album, edit a caption, and moderate a tag/report', async () => {
     const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
     const { document } = dom.window;
