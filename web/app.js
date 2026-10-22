@@ -6525,6 +6525,9 @@ function renderAlbumDetail() {
         <h2>${escapeHtml(album.title || 'ألبوم عرس')}</h2>
         <p>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}${event.event_date ? ` · ${escapeHtml(event.event_date)}` : ''}</p>
         <span class="album-detail-count">${Number(album.photo_count) || albumsAlbumPhotos.length} صورة</span>
+        <button type="button" class="album-share-btn" onclick="shareAlbum(${Number(album.id)})">
+          <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> مشاركة
+        </button>
       </div>
     </div>
   `;
@@ -6555,6 +6558,32 @@ async function loadMoreAlbumPhotos() {
   } catch (e) {
     // الصفحة التالية فشلت — تبقى المعروضة، ولا نمسحها.
   }
+}
+
+/**
+ * مشاركة الألبوم (تذكرة #100) — الرابط من الخادم (`share_url`)، وهو صفحة
+ * `/a/:id` المصيَّرة، لا `#album/:id`: ما بعد `#` لا يصل إلى زاحف واتساب، فيصل
+ * الرابط بلا صورة. وإن غاب `share_url` (خادم لم يُحدَّث بعد) نسقط إلى الرابط
+ * الداخلي بدل أن يرمي الزرّ — لا تنكسر الصفحة بين نشرَين.
+ */
+async function shareAlbum(albumId) {
+  const album = albumsCurrentAlbum;
+  if (!album || Number(album.id) !== Number(albumId)) return;
+  const event = album.event || {};
+  // `shareOrigin()` is the API origin (`API_BASE || location.origin`), and a
+  // `#album/…` link is a page of the static web app, not of the JSON server —
+  // in the split deploy `web/config.js` supports, pointing it at the API origin
+  // would land on a server that has no such page. The fallback therefore uses
+  // the web page's own origin, exactly like `closeAlbumsPage` builds its path.
+  const url = safeHttpUrl(album.share_url)
+    || `${window.location.origin}${window.location.pathname}${window.location.search}#album/${album.id}`;
+  recordAnalyticsEvent('share_clicked', { contentTown: event.town });
+  await shareLink({
+    title: album.title || 'ألبوم عرس',
+    line: [album.title, event.town].filter(Boolean).join(' — '),
+    url,
+    copiedMessage: '📋 تم نسخ رابط الألبوم'
+  });
 }
 
 function closeAlbumDetail() {

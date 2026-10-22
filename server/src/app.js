@@ -107,9 +107,10 @@ function createApp() {
   // docs/adr/0006-server-renders-the-share-page.md. و`/live/...` توسيعٌ
   // مُوثَّق لنفس الاستثناء (‏ADR-0006، «توسيع 2026-09-20») لا استثناء ثانٍ
   // يُخترع هنا: صفحة البث المباشر (أيّاً كانت منصّته) وغلاف مشغّل يوتيوب `/live/embed`، في نفس الملف.
-  // كلاهما يحتاج سطر nginx على الإنتاج — `/e/` مضاف، و`/live` لم يُضَف بعد.
+  // كلٌّ يحتاج سطر nginx على الإنتاج: `/e/` و`/p/` مضافان، و`/a/` و`/live` لم يُضافا بعد.
   app.use('/e', shareRoutes.eventRouter);
   app.use('/p', shareRoutes.photoRouter);
+  app.use('/a', shareRoutes.albumRouter);
   app.use('/live', shareRoutes.liveRouter);
 
   // خريطة الموقع لمحركات البحث (SEO Sitemap) — تُولّد ديناميكياً بكل المناسبات المعتمدة

@@ -1166,6 +1166,7 @@ async function run() {
         event_id: 5,
         cover_url: 'https://cdn.test/cover.jpg',
         cover_thumb_url: 'https://cdn.test/cover-thumb.jpg',
+        share_url: 'https://munasbat.test/a/11',
         photo_count: 2,
         event: { title: 'عرس أحمد', town: 'رهط', event_date: '2025-05-01', occasion_type_name: 'عرس' }
       }
@@ -1223,6 +1224,29 @@ async function run() {
     await waitFor(() => document.querySelectorAll('#albumDetailGrid .albums-photo-card').length === 1);
     assert.ok(document.getElementById('albumDetailHeader').textContent.includes('عرس أحمد'));
     assert.ok(paths.some(path => path.startsWith('GET /api/albums/11')));
+
+    // مشاركة الألبوم (تذكرة #100): الرابط من الخادم، لا `#album/11` — ما بعد
+    // `#` لا يصل إلى زاحف واتساب. والزرّ فعلٌ صريح في رأس الصفحة.
+    const albumShareBtn = document.querySelector('#albumDetailHeader .album-share-btn');
+    assert.ok(albumShareBtn, 'the album page carries a share button');
+    let sharedAlbum = null;
+    dom.window.shareLink = async payload => { sharedAlbum = payload; };
+    dom.window.shareAlbum(11);
+    await waitFor(() => sharedAlbum !== null);
+    assert.strictEqual(sharedAlbum.url, 'https://munasbat.test/a/11');
+    assert.ok(sharedAlbum.line.includes('رهط'), 'the message names the town, like an event share');
+
+    // بلا `share_url` (خادم لم يُحدَّث بعد) لا يرمي الزرّ: يسقط إلى صفحة الموقع
+    // نفسها — لا إلى أصل الـAPI الذي لا يخدم `#album/…` في النشر المفصول.
+    delete albums[0].share_url;
+    dom.window.closeAlbumDetail();
+    await dom.window.openAlbumDetail(11);
+    await waitFor(() => document.querySelectorAll('#albumDetailGrid .albums-photo-card').length === 1);
+    sharedAlbum = null;
+    dom.window.shareAlbum(11);
+    await waitFor(() => sharedAlbum !== null);
+    assert.ok(sharedAlbum.url.endsWith('#album/11'), `the fallback is the in-app link, got ${sharedAlbum.url}`);
+    assert.ok(!sharedAlbum.url.includes('/a/11'), 'the fallback never points at a server page that does not exist');
 
     dom.window.closeAlbumDetail();
     assert.strictEqual(document.getElementById('albumDetailView').hidden, true);

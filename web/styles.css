@@ -4304,6 +4304,24 @@ body.albums-page-open { overflow: hidden; }
 .album-detail-card h2 { margin: 0 0 4px; font-size: 1.1rem; color: var(--ink); }
 .album-detail-card p { margin: 0 0 5px; color: var(--ink-soft); font-size: 0.84rem; line-height: 1.5; }
 .album-detail-count { color: var(--ink-faint); font-size: 0.76rem; }
+/* مشاركة الألبوم (تذكرة #100) — فعل صريح، بنفس حجم سطر العدد لا زرّ رئيسي. */
+.album-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.album-share-btn:hover { border-color: var(--sky); color: var(--sky); }
+.album-share-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
 /* عارض الصورة — شريط الوسم/الإبلاغ فوق الصورة. */
 .archive-viewer-footer {

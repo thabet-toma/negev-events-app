@@ -9083,6 +9083,14 @@ async function run() {
         const details = await api('GET', `/api/events/${endedWedding}`);
         assert.strictEqual(details.status, 200);
         assert.deepStrictEqual(details.body.event.archive_photos.map(p => p.id), [archivePhotoId]);
+        assert.ok(
+          details.body.event.albums.length > 0,
+          'the ended wedding lists its album on the event page'
+        );
+        assert.ok(
+          details.body.event.albums.every(album => album.share_url === `${config.publicUrl}/a/${album.id}`),
+          'the event page carries each album share_url too — the strip and the album page share one link'
+        );
         assert.ok(details.body.event.archive_photos[0].image_url.startsWith('https://res.cloudinary.com/test-cloud/'));
 
         const admin = await api('GET', `/api/admin/events/${endedWedding}/photos`, { token: superAdminToken });
@@ -9234,6 +9242,47 @@ async function run() {
           token: superAdminToken,
           body: { status: 'approved' }
         });
+      });
+
+      await test('GET /a/:id serves the album with its cover as og:image, noindex, and no script — and 404s when hidden or malformed', async () => {
+        const albumRow = await db.queryOne(
+          'SELECT id FROM event_albums WHERE event_id = ? ORDER BY id ASC LIMIT 1',
+          [endedWedding]
+        );
+        assert.ok(albumRow, 'the ended wedding has an album');
+
+        const payload = await api('GET', `/api/albums/${albumRow.id}`);
+        assert.strictEqual(payload.status, 200);
+        assert.strictEqual(payload.body.album.share_url, `${config.publicUrl}/a/${albumRow.id}`);
+
+        const page = await rawGet(`/a/${albumRow.id}`);
+        assert.strictEqual(page.status, 200);
+        assert.ok(
+          page.text.includes(`property="og:image" content="${payload.body.album.cover_url}"`),
+          'the preview is the album cover itself, not an empty or substitute image'
+        );
+        assert.ok(page.text.includes(`/a/${albumRow.id}`), 'og:url points at this album');
+        assert.ok(page.text.includes('noindex'), 'a wedding album is not for search engines');
+        assert.ok(!page.text.includes('<script'), 'the album page carries no script at all');
+
+        const missing = await rawGet('/a/999999999');
+        assert.strictEqual(missing.status, 404);
+        const malformed = await rawGet('/a/not-a-number');
+        assert.strictEqual(malformed.status, 404, 'a malformed id is the not-found page, not a JSON error');
+        assert.strictEqual(malformed.text, missing.text, 'both 404 bodies are byte-identical');
+        const trailing = await rawGet('/a/12abc');
+        assert.strictEqual(trailing.status, 404, 'a partly-numeric id never serves album 12');
+        assert.strictEqual(trailing.text, missing.text, 'and it is the same body, not a different error');
+
+        const listed = await api('GET', '/api/albums');
+        assert.ok(listed.body.albums.length > 0, 'the public album list is not empty in this fixture');
+        assert.ok(listed.body.albums.every(album => album.share_url === `${config.publicUrl}/a/${album.id}`));
+
+        await db.execute('UPDATE event_albums SET is_published = 0 WHERE id = ?', [albumRow.id]);
+        const hidden = await rawGet(`/a/${albumRow.id}`);
+        assert.strictEqual(hidden.status, 404, 'an unpublished album has no public page');
+        assert.strictEqual(hidden.text, malformed.text, 'unpublished and malformed answer with the same bytes');
+        await db.execute('UPDATE event_albums SET is_published = 1 WHERE id = ?', [albumRow.id]);
       });
 
       await test('the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off', async () => {

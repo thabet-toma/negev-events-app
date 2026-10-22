@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('../db/pool');
+const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const cloudinary = require('./cloudinary.service');
@@ -179,6 +180,10 @@ function publicAlbumShape(row) {
     photo_count: Number(row.photo_count || 0),
     cover_url: row.cover_image_url || null,
     cover_thumb_url: thumbFromImageUrl(row.cover_image_url),
+    // The shareable page the server renders at GET /a/:id. Built here, next to
+    // the rest of the album's public shape, so no client assembles the URL and
+    // drifts the day PUBLIC_URL changes (ADR-0006, issue #100).
+    share_url: `${config.publicUrl}/a/${row.id}`,
     created_at: row.created_at,
     event: {
       id: row.event_id,

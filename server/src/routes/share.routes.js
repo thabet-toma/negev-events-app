@@ -52,6 +52,7 @@ const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
 const eventRouter = express.Router();
 const liveRouter = express.Router();
 const photoRouter = express.Router();
+const albumRouter = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
@@ -408,6 +409,25 @@ ${reasonsStrip()}
 }
 
 /**
+ * The frame `/p/:id` and `/a/:id` wear: same palette, same brand bar, same CTA
+ * and note. Only `.shot` and the page-specific block differ, so those stay in
+ * each template — one definition of the frame, two of the content. Kept as a
+ * constant rather than a template function so the shared part cannot drift
+ * between the two pages without a visible diff here.
+ */
+const SHARE_PAGE_CSS = `
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #08131f; color: #eef6fb; font-family: "Cairo", "Segoe UI", system-ui, sans-serif; }
+    main { max-width: 720px; margin: 0 auto; padding: 18px 16px 40px; }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: #d4af37; font-weight: 800; }
+    .brand a { color: #9fc7de; text-decoration: none; font-size: .88rem; }
+    h1 { font-size: 1.25rem; margin: 16px 0 6px; line-height: 1.5; }
+    p { color: #9fb6c9; line-height: 1.7; margin: 0 0 10px; }
+    .cta { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 13px 18px; border-radius: 999px; background: #d4af37; color: #08131f; font-weight: 900; text-decoration: none; }
+    .note { margin-top: 14px; font-size: .78rem; color: #6f8a9e; text-align: center; }`;
+
+/**
  * Byte-identical for "does not exist", "not approved yet", and "not a valid
  * id" — the response must not let anyone distinguish those (issue #44). No
  * per-request data goes into this template (there is no event to draw one
@@ -446,20 +466,10 @@ function renderPhotoPage(photo) {
   <meta property="og:site_name" content="اعراسنا">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="${escapeHtml(photo.image_url)}">
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #08131f; color: #eef6fb; font-family: "Cairo", "Segoe UI", system-ui, sans-serif; }
-    main { max-width: 720px; margin: 0 auto; padding: 18px 16px 40px; }
-    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: #d4af37; font-weight: 800; }
-    .brand a { color: #9fc7de; text-decoration: none; font-size: .88rem; }
+  <style>${SHARE_PAGE_CSS}
     .shot { width: 100%; max-height: 78vh; object-fit: contain; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
-    h1 { font-size: 1.25rem; margin: 16px 0 6px; line-height: 1.5; }
-    p { color: #9fb6c9; line-height: 1.7; margin: 0 0 10px; }
     .tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 20px; }
     .tag { background: #12354d; color: #d8edf9; border: 1px solid #24506b; border-radius: 999px; padding: 5px 12px; font-size: .82rem; }
-    .cta { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 13px 18px; border-radius: 999px; background: #d4af37; color: #08131f; font-weight: 900; text-decoration: none; }
-    .note { margin-top: 14px; font-size: .78rem; color: #6f8a9e; text-align: center; }
   </style>
 </head>
 <body>
@@ -471,6 +481,62 @@ function renderPhotoPage(photo) {
     ${tags.length ? `<div class="tags">${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
     <a class="cta" href="${escapeHtml(`${config.publicUrl}/#photo/${photo.id}`)}">افتح الصورة في الموقع</a>
     <p class="note">صفحة صورة خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
+  </main>
+</body>
+</html>`;
+}
+
+/**
+ * `GET /a/:id` — one album's own share page (ADR-0006 pattern, issue #100).
+ * The cover is the preview, because an album's cover is what a family
+ * recognises in a WhatsApp bubble. Deliberately `noindex` like `/p/:id`: an
+ * album is shared with a circle, not with an image search. No script, no
+ * phone, and every user-written value escaped before interpolation.
+ */
+function renderAlbumPage(album, photos) {
+  const event = album.event || {};
+  const heading = album.title || 'ألبوم عرس';
+  const description = [event.title, event.town, event.event_date, `${album.photo_count} صورة`]
+    .filter(Boolean)
+    .join(' — ');
+  const pageUrl = album.share_url;
+  // `getPublicAlbum` gates on PUBLIC_PHOTO_EXISTS, so a published album always
+  // has at least one approved photo — the fallback is `photos[0]`, not a
+  // static placeholder nobody can reach.
+  const cover = album.cover_url || photos[0].image_url;
+  const thumbs = photos.slice(0, 12);
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>${escapeHtml(heading)} | اعراسنا</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="${escapeHtml(heading)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:image" content="${escapeHtml(cover)}">
+  <meta property="og:url" content="${escapeHtml(pageUrl)}">
+  <meta property="og:site_name" content="اعراسنا">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="${escapeHtml(cover)}">
+  <style>${SHARE_PAGE_CSS}
+    .shot { width: 100%; max-height: 62vh; object-fit: cover; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 20px; }
+    .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: #0d1b27; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span>اعراسنا · مناسبات النقب</span><a href="${escapeHtml(config.publicUrl)}">الموقع</a></div>
+    <img class="shot" src="${escapeHtml(cover)}" alt="${escapeHtml(heading)}">
+    <h1>${escapeHtml(heading)}</h1>
+    ${description ? `<p>${escapeHtml(description)}</p>` : ''}
+    ${thumbs.length > 1 ? `<div class="grid">${thumbs.map(photo => `<img src="${escapeHtml(photo.thumb_url || photo.image_url)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy">`).join('')}</div>` : ''}
+    <a class="cta" href="${escapeHtml(`${config.publicUrl}/#album/${album.id}`)}">افتح الألبوم في الموقع</a>
+    <p class="note">صفحة ألبوم خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
   </main>
 </body>
 </html>`;
@@ -530,18 +596,22 @@ eventRouter.get('/assets/:file', (req, res) => {
  * A non-numeric id must 404 with the exact same body as "not approved" or
  * "does not exist", so a parse failure is folded into the same not-found path
  * instead of reaching the JSON error handler — which would both look different
- * and leak "this id is malformed". Both routes below share it.
+ * and leak "this id is malformed". The three share pages below share it.
  */
-function shareEventIdOrNull(raw) {
+function shareIdOrNull(raw) {
+  // Digits only. `parseId` runs `parseInt`, so `12abc` would quietly serve
+  // album/event 12 — a malformed id must 404 like a missing one, as the
+  // comment above promises.
+  if (!/^\d+$/.test(String(raw))) return null;
   try {
-    return parseId(raw, 'معرّف المناسبة');
+    return parseId(raw, 'معرّف');
   } catch (err) {
     return null;
   }
 }
 
 eventRouter.get('/:id', asyncHandler(async (req, res) => {
-  const eventId = shareEventIdOrNull(req.params.id);
+  const eventId = shareIdOrNull(req.params.id);
 
   const event = eventId ? await events.getShareEvent(eventId) : null;
   if (!event) {
@@ -597,7 +667,7 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
  * URL instead of 500ing, same fallback as the page uses.
  */
 eventRouter.get('/:id/card.jpg', asyncHandler(async (req, res) => {
-  const eventId = shareEventIdOrNull(req.params.id);
+  const eventId = shareIdOrNull(req.params.id);
   const event = eventId ? await events.getShareEvent(eventId) : null;
   if (!event) {
     res.status(404).end();
@@ -625,7 +695,7 @@ eventRouter.get('/:id/card.jpg', asyncHandler(async (req, res) => {
  * adds one hop, not a different destination.
  */
 eventRouter.get('/:id/download', asyncHandler(async (req, res) => {
-  const eventId = shareEventIdOrNull(req.params.id);
+  const eventId = shareIdOrNull(req.params.id);
 
   // The redirect must never depend on the lookup succeeding — a stale or
   // malformed link still has to hand the visitor the app. content_town is
@@ -1064,7 +1134,7 @@ function sendEmbedPage(res, embedUrl) {
 /**
  * The episode for `raw`, or null for a malformed id, a missing episode, or
  * one with no broadcast — all three answered with the same not-found body,
- * for the same reason as shareEventIdOrNull above.
+ * for the same reason as shareIdOrNull above.
  */
 async function publicEpisodeOrNull(raw) {
   let id;
@@ -1218,4 +1288,35 @@ photoRouter.get('/:id', asyncHandler(async (req, res) => {
     .send(renderPhotoPage(data.photo));
 }));
 
-module.exports = { eventRouter, liveRouter, photoRouter };
+albumRouter.get('/:id', asyncHandler(async (req, res) => {
+  const albumId = shareIdOrNull(req.params.id);
+
+  let data = null;
+  if (albumId) {
+    try {
+      data = await albums.getPublicAlbum(albumId, { page: 1, limit: 24 });
+    } catch (err) {
+      // "not published", "not ended", "hidden by its type" and "no such id"
+      // all collapse into the one not-found page — the album's existence must
+      // not be confirmable by probing ids.
+      if (err.status !== 404) throw err;
+    }
+  }
+
+  if (!data) {
+    sendNotFound(res);
+    return;
+  }
+
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': SHARE_CSP,
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Cache-Control': 'public, max-age=300'
+    })
+    .send(renderAlbumPage(data.album, data.photos));
+}));
+
+module.exports = { eventRouter, liveRouter, photoRouter, albumRouter };
