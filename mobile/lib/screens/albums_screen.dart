@@ -27,10 +27,16 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
   String? _error;
   List<EventAlbum> _albums = const [];
   AlbumSearchResults? _results;
+  bool _started = false;
 
+  /// `AppServices.of` قراءةٌ من جهة موروثة، و`initState` يسبق توافرها — فالنداء
+  /// هناك يرمي في وضع التطوير ويترك الشاشة على حالة الخطأ دائماً. أوّل تحميل
+  /// مكانه هنا، مرّة واحدة.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
     _load();
   }
 
@@ -197,7 +203,17 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
         return _Message(
           icon: Icons.photo_library_outlined,
           title: query.isEmpty ? 'لا ألبومات ظاهرة بعد' : 'لا ألبومات تطابق بحثك',
-          body: 'تظهر الألبومات بعد انتهاء المناسبة وموافقة الإدارة.',
+          // أربعة شروط، مسمّاة: «لا ألبومات» وحدها تُقرأ عطلاً، لا شرطاً —
+          // فيظنّ المستخدم أنّ الميزة غائبة (تذكرة #101، القرار D1).
+          body: query.isEmpty
+              ? 'الألبوم يظهر بعد أربعة شروط: أن يكون منشوراً، وأن تكون المناسبة معتمدة، وأن يسمح نوعها بألبوم صور، وأن تكون المناسبة قد انتهت.'
+              : 'جرّب كلمة واحدة من اسم العريس أو العشيرة أو البلدة.',
+          action: query.isEmpty
+              ? TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('تصفّح المناسبات'),
+                )
+              : null,
         );
       }
       return GridView.builder(

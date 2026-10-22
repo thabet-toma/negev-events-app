@@ -743,6 +743,45 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     }
   }
 
+  /// مدخل «ألبومات الأعراس» — كبسة واحدة في الشريط العائم فوق التغذية، تُرى في
+  /// أول إطار بلا فتح الكروم (تذكرة #101، القرار D11). نقرة واحدة تفتح البحث،
+  /// لا نقرة على كبسة الفلاتر ثم أيقونة داخل كروم منسدل.
+  Widget _albumsEntryChip() {
+    return Material(
+      key: const Key('albums_entry_chip'),
+      color: Colors.black.withValues(alpha: 0.60),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AlbumsScreen()),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.photo_library_outlined, color: Colors.white, size: 18),
+              SizedBox(width: 6),
+              Text(
+                'ألبومات الأعراس',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = AppServices.of(context).auth;
@@ -991,6 +1030,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                             );
                           },
                         ),
+                      ),
+                      // «ألبومات الأعراس» (تذكرة #101، القرار D11): صفّه الخاص
+                      // تحت صفّ البث، لأن صفَّي الشريط ممتلئان على هاتف ٣٦٠ —
+                      // إقحامُ كبسة ثالثة فيهما يُفيض ٦٨ بكسل (اختبار live_test).
+                      // والشريط عائم فوق التغذية لا يحتلّ ارتفاعاً منها.
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: _albumsEntryChip(),
                       ),
                     ],
                   ),

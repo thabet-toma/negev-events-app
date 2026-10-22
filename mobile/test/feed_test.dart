@@ -78,6 +78,19 @@ NegevApi feedScreenApi({Object? eventsBody, List<Uri>? requests}) {
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
+    if (request.url.path.endsWith('/api/albums')) {
+      // الخادم يرسل دائماً `pagination` مع القائمة؛ عميلٌ لا يحصل عليها يفشل
+      // في التحليل، فلا يكفي `{success: true}` لاختبار شاشة الألبومات.
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'albums': <Map<String, dynamic>>[],
+          'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
     return http.Response(
       jsonEncode({'success': true}),
       200,
@@ -90,14 +103,17 @@ NegevApi feedScreenApi({Object? eventsBody, List<Uri>? requests}) {
 Future<void> pumpFeedScreen(WidgetTester tester, NegevApi api) async {
   final auth = AuthStore(api);
   final realtime = RealtimeService();
+  // `AppServices` فوق `MaterialApp` كما في `main.dart` بالحرف. وضعُه داخل
+  // `home` يجعل الشاشات المدفوعة (‏AlbumsScreen مثلاً) لا تجده: المسار المدفوع
+  // شقيقٌ لـ`home` في شجرة الملاحة لا ابنٌ له.
   await tester.pumpWidget(
-    MaterialApp(
-      home: Directionality(
-        textDirection: TextDirection.rtl,
-        child: AppServices(
-          api: api,
-          auth: auth,
-          realtime: realtime,
+    AppServices(
+      api: api,
+      auth: auth,
+      realtime: realtime,
+      child: MaterialApp(
+        home: Directionality(
+          textDirection: TextDirection.rtl,
           child: const EventsScreen(),
         ),
       ),
@@ -1152,6 +1168,35 @@ void main() {
 
         expect(find.text('مناسبات جديدة اليوم'), findsOneWidget, reason: 'المقروء يبقى في القائمة');
         expect(find.byKey(const ValueKey('notif_unread_dot')), findsOneWidget, reason: 'نقطة الآخر وحده');
+      },
+    );
+
+    testWidgets(
+      'مدخل «ألبومات» ظاهر في أول إطار ويفتح البحث، وصفّ الكروم القديم لم يبقَ',
+      (tester) async {
+        await pumpFeedScreen(tester, feedScreenApi());
+
+        expect(
+          find.byKey(const Key('albums_entry_chip')),
+          findsOneWidget,
+          reason: 'المدخل يُرى بلا فتح الكروم (تذكرة #101، القرار D11)',
+        );
+        expect(
+          find.byKey(const Key('albums_entry_row')),
+          findsNothing,
+          reason: 'الصفّ الذي كان داخل الكروم محذوف — الكبسة تحلّ محلّه',
+        );
+
+        await tester.tap(find.byKey(const Key('albums_entry_chip')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('ألبومات الأعراس'), findsOneWidget, reason: 'نقرة واحدة تفتح الشاشة');
+        expect(
+          find.textContaining('أربعة شروط'),
+          findsOneWidget,
+          reason: 'الحالة الفارغة تسمّي الشروط، لا «لا ألبومات» وحدها',
+        );
+        expect(find.text('تصفّح المناسبات'), findsOneWidget, reason: 'ولها مخرج');
       },
     );
   });
