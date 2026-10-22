@@ -203,14 +203,20 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
         return _Message(
           icon: Icons.photo_library_outlined,
           title: query.isEmpty ? 'لا ألبومات ظاهرة بعد' : 'لا ألبومات تطابق بحثك',
-          // أربعة شروط، مسمّاة: «لا ألبومات» وحدها تُقرأ عطلاً، لا شرطاً —
-          // فيظنّ المستخدم أنّ الميزة غائبة (تذكرة #101، القرار D1).
+          // الشروط مسمّاة كما هي في الخادم: الأربعة في publicAlbumConditions()
+          // **وصورةٌ معتمدة واحدة** (PUBLIC_PHOTO_EXISTS) — ألبومٌ يمرّ بالأربعة
+          // بلا صورة لا يظهر، فقولُ «أربعة» وحده يكذب. (تذكرة #101، القرار D1)
           body: query.isEmpty
-              ? 'الألبوم يظهر بعد أربعة شروط: أن يكون منشوراً، وأن تكون المناسبة معتمدة، وأن يسمح نوعها بألبوم صور، وأن تكون المناسبة قد انتهت.'
+              ? 'الألبوم يظهر بعد خمسة شروط: أن يكون منشوراً، وأن تكون المناسبة معتمدة، وأن يسمح نوعها بألبوم صور، وأن تكون المناسبة قد انتهت، وأن تحمل صورةً معتمدة واحدة على الأقل.'
               : 'جرّب كلمة واحدة من اسم العريس أو العشيرة أو البلدة.',
           action: query.isEmpty
               ? TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  // `openFeed` تبديلُ تبويب لا رجوعٌ من المكدّس: تعمل حتى لو
+                  // فُتحت الشاشة جذراً من رابط، حيث `pop` لا تفعل شيئاً.
+                  onPressed: () {
+                    AppServices.of(context).openFeed();
+                    Navigator.of(context).maybePop();
+                  },
                   child: const Text('تصفّح المناسبات'),
                 )
               : null,
@@ -381,9 +387,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   String? _error;
   bool _loadingMore = false;
 
+  bool _started = false;
+
+  // كبقية الشاشات هنا: `AppServices.of` قراءةٌ من جهة موروثة، و`initState`
+  // يسبق توافرها — فالنداء هناك يترك الشاشة على حالة الخطأ في وضع التطوير.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
     _load();
   }
 
@@ -568,9 +580,13 @@ class PersonPhotosScreen extends StatefulWidget {
 class _PersonPhotosScreenState extends State<PersonPhotosScreen> {
   late Future<List<EventPhoto>> _future;
 
+  bool _started = false;
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
     _future = _load();
   }
 
@@ -616,9 +632,13 @@ class MyPhotosScreen extends StatefulWidget {
 class _MyPhotosScreenState extends State<MyPhotosScreen> {
   late Future<List<EventPhoto>> _future;
 
+  bool _started = false;
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
     _future = _load();
   }
 
