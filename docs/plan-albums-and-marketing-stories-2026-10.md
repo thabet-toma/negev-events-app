@@ -1,8 +1,8 @@
 # خطة ألبومات الأعراس وستوريات التسويق — سجل التقدّم وحالة التسليم
 
-**آخر تحديث:** 2026-10-22 (بعد الاختبار الشامل الأخير) · **الفرع:** الحالي
-**الحالة العامة:** كل تذاكر الميزة بُنيت واختُبرت. لا يوجد عمل كود إلزامي متبقٍ — بقي
-الالتزام (commit) ثم النشر/الترحيل/المفاتيح بموافقة المالك.
+**آخر تحديث:** 2026-10-22 (بعد النشر) · **الفرع:** `main`
+**الحالة العامة:** نُشرت **v1.20.0+31** على الإنتاج (commit `accb236`). الخادم والويب
+وAPK محدَّثون، والترحيل طُبِّق، و`/p` موصول في nginx. بقي اختبار يدوي حقيقي ببيانات عرس.
 
 > اقرأ هذا الملف أولاً بعد أي ضغط سياق (compact)، ثم `CLAUDE.md`, `README.md`,
 > `docs/adr/0009-event-albums-and-self-tagging.md`, `docs/adr/0010-marketing-stories.md`.
@@ -143,16 +143,29 @@
 
 ---
 
-## 4) النشر — لا يُنفَّذ بلا موافقة صريحة
+## 4) النشر — تم ✅
 
-1. `npm run db:migrate` على الإنتاج (ينشئ الجداول/الأعمدة ويملأ ألبومات الأرشيف القديم).
-2. توجيه nginx لـ`/p` و`/p/` إلى الخادم، مثل `/e` و`/live`.
-3. التأكد من مفاتيح Cloudinary (`CLOUDINARY_*`) على الخادم؛ بدونها الرفع المباشر يعطي رسالة عربية ولا يحفظ الصورة.
-4. إن أردت استيراد صفحة فيسبوك: توكن صفحة بصلاحية `pages_read_engagement` (وتحقق فعلي من Graph).
-5. بناء APK جديد ونشره (الموبايل تغيّر: شاشة ألبومات + CTA ستوري).
-6. اختبار حقيقي بعد النشر: مناسبة منتهية، ألبوم بصور، بحث باسم، وسم/موافقة/سحب، `/p/:id`، ستوري CTA.
+**الخادم:** `root@187.124.164.58` · **المسار:** `/root/munasbat/app` · **commit:** `accb236`
+**الإصدار:** `1.20.0+31` (versionCode 31) · **APK:** 65,059,577 بايت
+**الرابط العام:** https://munasbat.ktra-pro.tech
 
-**لم يُنفَّذ أي ترحيل إنتاج ولا نشر ولا commit.**
+1. ✅ الترحيل طُبِّق تلقائياً عند إقلاع الحاوية: `event_albums`, `photo_tags`, `photo_reports`, `event_photos.album_id`, `stories.link_platform/cta_label`.
+2. ✅ nginx: أُضيف `location = /p` و`^~ /p/` → `127.0.0.1:3100`. النسخة الاحتياطية: `/root/munasbat-nginx-backup-20261022-143624.conf`. `nginx -t` نجح.
+3. ✅ Cloudinary: `CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET` مضبوطة على الخادم.
+4. ✅ فيسبوك: `FACEBOOK_PAGE_ID/ACCESS_TOKEN` مضبوطان (استيراد Page يحتاج تحقق Graph فعلي).
+5. ✅ APK الجديد رُفع إلى `server/downloads/negev-events.apk`، و`APP_LATEST_VERSION=1.20.0` و`APP_RELEASE_NOTES` محدَّثان.
+6. ✅ `docker compose build app && docker compose up -d app` — الحاوية صحّية.
+
+**تحقق حي:**
+- `GET /api/app/version` → `latest_version=1.20.0`, `apk_url=https://munasbat.ktra-pro.tech/downloads/negev-events.apk`, release notes عربية.
+- `HEAD /downloads/negev-events.apk` → 200 و`Content-Length=65059577`؛ SHA-256 المحلي = البعيد `9d6399ce…b11a1`.
+- `apksigner verify` → v2 true، DN `CN=thabet toma, …`.
+- `/p/1` → 404 من **الخادم** (لا من nginx) لأن لا صور منشورة بعد؛ التوجيه يعمل.
+- `/api/albums` و`/api/search` → 200.
+- `/health` → `{"status":"ok","database":"up"}`.
+- الجداول والأعمدة موجودة في قاعدة الإنتاج.
+
+**باقٍ (اختبار يدوي فقط):** مناسبة منتهية، رفع صور من اللوحة، عنوان/غطاء، بحث باسم، وسم/موافقة/سحب، إبلاغ، `/p/:id`، وستوري CTA على جهاز حقيقي.
 
 ---
 
