@@ -456,6 +456,19 @@ class NegevApi {
     return EventPhoto.fromJson(Map<String, dynamic>.from(raw));
   }
 
+  /// شخصٌ واحد بصفحته (ADR-0011، تذكرة #106) — صوره ومناسباته معاً.
+  Future<Person> person(int id, {int page = 1, int limit = 48}) async {
+    final data = await _client.get(
+      '/api/people/$id',
+      query: {'page': '$page', 'limit': '$limit'},
+    );
+    final raw = data['person'];
+    if (raw is! Map) {
+      throw Exception('الشخص غير موجود');
+    }
+    return Person.fromJson(Map<String, dynamic>.from(raw));
+  }
+
   Future<({List<EventPhoto> photos, Pagination pagination})> photos({
     String? search,
     int? albumId,

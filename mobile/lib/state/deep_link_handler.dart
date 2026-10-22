@@ -13,7 +13,7 @@ typedef DeepLinkTarget = ({String kind, int id});
 
 /// يفتح رابطاً من نطاقنا على شاشته مباشرة — بلا مربّع اختيار تطبيق، وبلا صفحة
 /// فارغة إن كان الهدف قد حُذف: `/e/<id>` مناسبة، `/a/<id>` ألبوم، `/p/<id>`
-/// صورة (تذكرة #104).
+/// صورة، `/person/<id>` شخص (تذاكر #104 و#106).
 ///
 /// يغطي الحالتين معاً: الإقلاع البارد (`getInitialLink`، رابط فتح التطبيق
 /// أصلاً) والاستئناف الدافئ (`uriLinkStream`، رابط وصل والتطبيق يعمل أصلاً في
@@ -94,24 +94,34 @@ class DeepLinkHandler {
             ),
           ),
         );
+        return;
+      }
+      if (target.kind == 'person') {
+        await _api.person(target.id);
+        navigator.push(
+          MaterialPageRoute(builder: (_) => PersonScreen(personId: target.id)),
+        );
       }
     } catch (_) {
       final context = _navigatorKey.currentContext;
       if (context == null || !context.mounted) return;
+      // `/e` يحتفظ بنصّه القديم حرفياً (تذكرة #44)؛ والبقية برسالة واحدة.
       showMessage(
         context,
-        'تعذّر فتح هذا الرابط، قد يكون غير موجود أو لم يُنشر بعد',
+        target.kind == 'event'
+            ? 'تعذّر فتح هذه المناسبة، قد تكون غير موجودة بعد الآن'
+            : 'تعذّر فتح هذا الرابط، قد يكون غير موجود أو لم يُنشر بعد',
         isError: true,
       );
     }
   }
 
-  /// `/e/<id>` مناسبة، `/a/<id>` ألبوم، `/p/<id>` صورة (تذكرة #104) — وأي
-  /// مسار آخر يُتجاهل بصمت كما كان.
+  /// `/e/<id>` مناسبة، `/a/<id>` ألبوم، `/p/<id>` صورة، `/person/<id>` شخص
+  /// (تذاكر #104 و#106) — وأي مسار آخر يُتجاهل بصمت كما كان.
   static DeepLinkTarget? extractTarget(Uri uri) {
     final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
     if (segments.length < 2) return null;
-    const kinds = {'e': 'event', 'a': 'album', 'p': 'photo'};
+    const kinds = {'e': 'event', 'a': 'album', 'p': 'photo', 'person': 'person'};
     final kind = kinds[segments[0]];
     if (kind == null) return null;
     final id = int.tryParse(segments[1]);

@@ -297,7 +297,7 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
           trailing: const Icon(Icons.chevron_left),
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => PersonPhotosScreen(name: person.name, nameKey: person.nameKey),
+              builder: (_) => PersonScreen(personId: person.id),
             ),
           ),
         );
@@ -430,18 +430,30 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _loading = false;
         _error = null;
       });
-      _openFocusPhoto();
+      await _openFocusPhoto();
     } catch (error) {
       if (mounted) setState(() { _loading = false; _error = '$error'; });
     }
   }
 
-  /// يفتح العارض على الصورة التي جاء الرابط من أجلها، مرّة واحدة، بعد أوّل
-  /// إطار — فلا يُدفع مسار فوق شاشة لم تُبنَ بعد.
-  void _openFocusPhoto() {
+  /// يفتح العارض على الصورة التي جاء الرابط من أجلها. أوّل تحميل يجلب ٢٤ صورة
+  /// فقط، فرابطٌ لصورة في صفحة أبعد كان يفتح الألبوم من أعلاه؛ فنجلب الصفحات
+  /// التالية حتى نجدها — بسقفٍ كي لا يصير رابط خاطئ حلقةً لا تنتهي.
+  Future<void> _openFocusPhoto() async {
     final focus = widget.focusPhotoId;
     if (focus == null || _focused) return;
-    final index = _photos.indexWhere((photo) => photo.id == focus);
+    var index = _photos.indexWhere((photo) => photo.id == focus);
+    for (var attempt = 0; index < 0 && attempt < 10; attempt += 1) {
+      final pagination = _pagination;
+      if (pagination == null || !pagination.hasMore) break;
+      final data = await AppServices.of(context).api.albumDetails(widget.id, page: pagination.page + 1);
+      if (!mounted) return;
+      setState(() {
+        _photos = [..._photos, ...data.photos];
+        _pagination = data.pagination;
+      });
+      index = _photos.indexWhere((photo) => photo.id == focus);
+    }
     if (index < 0) return;
     _focused = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -490,7 +502,12 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
-                ? _Message(icon: Icons.cloud_off, title: 'تعذّر تحميل الألبوم', body: _error!)
+                ? _Message(
+                    icon: Icons.cloud_off,
+                    title: 'تعذّر تحميل الألبوم',
+                    body: _error!,
+                    action: TextButton(onPressed: _load, child: const Text('إعادة المحاولة')),
+                  )
                 : Column(
                     children: [
                       Padding(
@@ -545,15 +562,24 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 }
 
 class _PhotoGrid extends StatelessWidget {
-  const _PhotoGrid({required this.photos, this.onTap});
+  const _PhotoGrid({
+    required this.photos,
+    this.onTap,
+    this.shrinkWrap = false,
+    this.physics,
+  });
 
   final List<EventPhoto> photos;
   final void Function(int index)? onTap;
+  final bool shrinkWrap;
+  final ScrollPhysics? physics;
 
   @override
   Widget build(BuildContext context) {
     final c = context.c;
     return GridView.builder(
+      shrinkWrap: shrinkWrap,
+      physics: physics,
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 28),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
@@ -616,19 +642,26 @@ class _PhotoGrid extends StatelessWidget {
   }
 }
 
-class PersonPhotosScreen extends StatefulWidget {
-  const PersonPhotosScreen({super.key, required this.name, required this.nameKey});
+/// صفحة الشخص (ADR-0011، تذكرة #106): اسمه وعدداه، مناسباته، ثم صوره.
+/// تُفتح من بطاقة في تبويب «أشخاص» ومن رابط `/person/<id>` — وتقرأ من
+/// `/api/people/:id` وحده، فلا تعرف العميلُ من ظاهر ولا تجمّع صوراً بالاسم.
+class PersonScreen extends StatefulWidget {
+  const PersonScreen({super.key, required this.personId});
 
-  final String name;
-  final String nameKey;
+  final int personId;
 
   @override
-  State<PersonPhotosScreen> createState() => _PersonPhotosScreenState();
+  State<PersonScreen> createState() => _PersonScreenState();
 }
 
-class _PersonPhotosScreenState extends State<PersonPhotosScreen> {
-  late Future<List<EventPhoto>> _future;
-
+class _PersonScreenState extends State<PersonScreen> {
+  Person? _person;
+  List<EventPhoto> _photos = const [];
+  List<EventAlbum> _albums = const [];
+  Pagination? _pagination;
+  bool _loading = true;
+  String? _error;
+  bool _loadingMore = false;
   bool _started = false;
 
   @override
@@ -636,36 +669,128 @@ class _PersonPhotosScreenState extends State<PersonPhotosScreen> {
     super.didChangeDependencies();
     if (_started) return;
     _started = true;
-    _future = _load();
+    _load();
   }
 
-  Future<List<EventPhoto>> _load() async {
-    final data = await AppServices.of(context).api.photos(person: widget.nameKey, limit: 48);
-    return data.photos;
+  Future<void> _load() async {
+    try {
+      final person = await AppServices.of(context).api.person(widget.personId);
+      if (!mounted) return;
+      setState(() {
+        _person = person;
+        _photos = person.photos;
+        _albums = person.albums;
+        _pagination = person.pagination;
+        _loading = false;
+        _error = null;
+      });
+    } catch (error) {
+      if (mounted) setState(() { _loading = false; _error = '$error'; });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final pagination = _pagination;
+    if (pagination == null || !pagination.hasMore || _loadingMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final person = await AppServices.of(context).api.person(
+        widget.personId,
+        page: pagination.page + 1,
+      );
+      if (!mounted) return;
+      setState(() {
+        _photos = [..._photos, ...person.photos];
+        _pagination = person.pagination;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final person = _person;
+    final c = context.c;
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        appBar: AppBar(title: Text('صور ${widget.name}')),
-        body: FutureBuilder<List<EventPhoto>>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return _Message(icon: Icons.cloud_off, title: 'تعذّر تحميل الصور', body: '${snapshot.error}');
-            }
-            final photos = snapshot.data ?? const <EventPhoto>[];
-            if (photos.isEmpty) {
-              return const _Message(icon: Icons.image_not_supported, title: 'لا صور', body: 'لم تُعتمد صورة لهذا الاسم بعد.');
-            }
-            return _PhotoGrid(photos: photos);
-          },
-        ),
+        appBar: AppBar(title: Text(person?.name ?? 'شخص')),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? _Message(
+                    icon: Icons.cloud_off,
+                    title: 'تعذّر تحميل الشخص',
+                    body: _error!,
+                    action: TextButton(onPressed: _load, child: const Text('إعادة المحاولة')),
+                  )
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 28),
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              person?.name ?? '',
+                              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                            ),
+                          ),
+                          Text(
+                            '${person?.photosCount ?? _photos.length} صورة · ${person?.albumsCount ?? _albums.length} مناسبة',
+                            style: TextStyle(color: c.inkFaint, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                      if (_albums.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 200,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _albums.length,
+                            separatorBuilder: (_, _) => const SizedBox(width: 10),
+                            itemBuilder: (context, index) {
+                              final album = _albums[index];
+                              return SizedBox(
+                                width: 150,
+                                child: _AlbumCard(
+                                  album: album,
+                                  onTap: () => Navigator.of(context).push(
+                                    MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      if (_photos.isEmpty)
+                        const _Message(
+                          icon: Icons.image_not_supported,
+                          title: 'لا صور ظاهرة',
+                          body: 'لم يُوسم هذا الاسم في صورة ظاهرة بعد.',
+                        )
+                      else
+                        _PhotoGrid(
+                          photos: _photos,
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                        ),
+                      if (_pagination?.hasMore == true)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: TextButton(
+                            onPressed: _loadingMore ? null : _loadMore,
+                            child: _loadingMore
+                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Text('عرض المزيد من الصور'),
+                          ),
+                        ),
+                    ],
+                  ),
       ),
     );
   }

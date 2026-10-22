@@ -8,10 +8,11 @@ void main() {
     DeepLinkTarget? target(String url) =>
         DeepLinkHandler.extractTarget(Uri.parse(url));
 
-    test('المناسبة والألبوم والصورة تُستخرج بأنواعها', () {
+    test('المناسبة والألبوم والصورة والشخص تُستخرج بأنواعها', () {
       expect(target('https://munasbat.test/e/1'), (kind: 'event', id: 1));
       expect(target('https://munasbat.test/a/2'), (kind: 'album', id: 2));
       expect(target('https://munasbat.test/p/3'), (kind: 'photo', id: 3));
+      expect(target('https://munasbat.test/person/4'), (kind: 'person', id: 4));
     });
 
     test('مسارٌ لا نعرفه أو رقمٌ خاطئ يُتجاهل بصمت', () {

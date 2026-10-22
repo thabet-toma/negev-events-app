@@ -42,6 +42,67 @@ void main() {
       expect(requests.last.url.path, '/api/albums/11');
     });
 
+    test('photo وperson يقرآن حمولتهما بلا رمز (مساران عامّان)', () async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.path == '/api/photos/7') {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'photo': {
+                'id': 7,
+                'album_id': 11,
+                'image_url': 'https://cdn.test/p.jpg',
+                'share_url': 'https://munasbat.test/p/7'
+              }
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'person': {
+              'id': 21,
+              'name': 'فاطمة',
+              'name_key': 'فاطمه',
+              'photos_count': 1,
+              'albums_count': 1,
+              'photos': [
+                {'id': 7, 'album_id': 11, 'image_url': 'https://cdn.test/p.jpg'}
+              ],
+              'albums': [
+                {'id': 11, 'event_id': 5, 'title': 'ألبوم'}
+              ],
+              'pagination': {'page': 1, 'limit': 48, 'total': 1, 'totalPages': 1}
+            }
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final raw = ApiClient(client: client)..token = 'site-token';
+      final api = NegevApi(raw);
+
+      final photo = await api.photo(7);
+      expect(photo.id, 7);
+      expect(photo.shareUrl, 'https://munasbat.test/p/7');
+      expect(requests.last.url.path, '/api/photos/7');
+      expect(requests.last.headers['Authorization'], isNull,
+          reason: 'مسار عام: لا رمز يُرسل');
+
+      final person = await api.person(21);
+      expect(person.name, 'فاطمة');
+      expect(person.photos.single.id, 7);
+      expect(person.albums.single.title, 'ألبوم');
+      expect(person.hasMore, isFalse);
+      expect(requests.last.url.path, '/api/people/21');
+      expect(requests.last.headers['Authorization'], isNull);
+    });
+
     test('myPhotos وtagPhoto وreportPhoto ترسل رمز الدخول الصحيح', () async {
       final requests = <http.Request>[];
       final client = MockClient((request) async {
