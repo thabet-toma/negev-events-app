@@ -92,6 +92,19 @@ function signUpload(folder) {
 }
 
 /**
+ * N upload slots in one call — the album studio's batch. A wedding album can
+ * be hundreds of photos (there is no product cap), so signing them one HTTP
+ * request at a time turns a 30-photo upload into 60 round trips; this signs a
+ * bounded batch (the route caps it at ALBUM_UPLOAD_BATCH_MAX) and the client
+ * still uploads each file separately and directly to Cloudinary.
+ */
+function signBatch(folder, count) {
+  assertConfigured();
+  const n = Math.max(1, Math.min(Number.parseInt(count, 10) || 1, 50));
+  return Array.from({ length: n }, () => signUpload(folder));
+}
+
+/**
  * Checks what the browser relays back from Cloudinary's upload response:
  * the public_id must sit inside `folder` and be a shape we generate, and the
  * response signature — Cloudinary's hash of public_id + version with our
@@ -116,11 +129,19 @@ function verifyUpload(folder, { public_id: publicId, version, signature } = {}) 
 
 /**
  * The stored, public URL of a verified image: Cloudinary picks the format
- * and quality per device, and nothing wider than 1600px is ever sent — a
- * phone photo straight off the camera is several times that.
+ * and quality per device, and nothing wider than `width` (1600 by default)
+ * is ever sent — a phone photo straight off the camera is several times
+ * that. The gallery asks for a 600px variant per grid cell instead of
+ * downloading a wedding's whole 1600px set.
  */
-function deliveryUrl({ public_id: publicId, version }) {
-  return `https://res.cloudinary.com/${config.cloudinary.cloudName}/image/upload/f_auto,q_auto,c_limit,w_1600/v${version}/${publicId}`;
+function deliveryUrl({ public_id: publicId, version }, { width = 1600 } = {}) {
+  const safeWidth = Number.isInteger(width) && width > 0 && width <= 4000 ? width : 1600;
+  return `https://res.cloudinary.com/${config.cloudinary.cloudName}/image/upload/f_auto,q_auto,c_limit,w_${safeWidth}/v${version}/${publicId}`;
+}
+
+/** The same image for a grid cell or admin thumbnail. */
+function thumbUrl(asset) {
+  return deliveryUrl(asset, { width: 600 });
 }
 
 /**
@@ -207,6 +228,61 @@ async function storeUploadedImage(file, ...segments) {
   }
 }
 
+/**
+ * Uploads bytes the server itself produced (a generated story card) or
+ * fetched from an allowlisted remote host (a Facebook image). Unlike
+ * storeUploadedImage this never falls back to local disk: these bytes have no
+ * second home, and a story that silently points at `/uploads/` would work on
+ * one deployment and break on the next. Throws an Arabic error instead.
+ */
+async function uploadBuffer(buffer, folder, { format = 'jpg' } = {}) {
+  assertConfigured();
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    throw ApiError.badRequest('لا توجد صورة لرفعها');
+  }
+
+  const publicId = `${folder}/${crypto.randomBytes(9).toString('hex')}`;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const mime = format === 'png' ? 'image/png' : 'image/jpeg';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: mime }), `upload.${format}`);
+    form.append('api_key', config.cloudinary.apiKey);
+    form.append('public_id', publicId);
+    form.append('timestamp', String(timestamp));
+    form.append('signature', sign({ public_id: publicId, timestamp }));
+
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudinary.cloudName}/image/upload`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.public_id !== publicId || !data.version) {
+      logger.warn(`[cloudinary] uploadBuffer to ${publicId} answered ${res.status}`);
+      throw ApiError.badRequest('تعذّر رفع الصورة إلى خدمة الصور — حاول مرة أخرى');
+    }
+
+    logger.info('cloudinary.buffer.upload', { publicId });
+    return {
+      public_id: publicId,
+      version: data.version,
+      url: deliveryUrl({ public_id: publicId, version: data.version })
+    };
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err.name === 'AbortError') {
+      throw ApiError.badRequest('انتهت مهلة رفع الصورة — حاول مرة أخرى');
+    }
+    throw ApiError.badRequest('تعذّر رفع الصورة إلى خدمة الصور — تحقّق من الاتصال وحاول مرة أخرى');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Only the folders storeUploadedImage writes to. Archive photos and episode
 // share images keep their own public_id column and are deleted with their row.
 const FORWARDED_FOLDERS = ['posters', 'artists', 'services'].map(name => `${ROOT_FOLDER}/${name}/`);
@@ -229,10 +305,13 @@ module.exports = {
   isConfigured,
   folderFor,
   signUpload,
+  signBatch,
   verifyUpload,
   deliveryUrl,
+  thumbUrl,
   jpegVariant,
   destroy,
   storeUploadedImage,
+  uploadBuffer,
   forwardedPublicId
 };

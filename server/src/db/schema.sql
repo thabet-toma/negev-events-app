@@ -440,6 +440,13 @@ CREATE TABLE IF NOT EXISTS stories (
   advertiser_name        VARCHAR(150) DEFAULT NULL,
   is_ad                  TINYINT(1)   NOT NULL DEFAULT 0,
   target_url             TEXT         DEFAULT NULL,
+  -- ستوريو التسويق (ADR-0010): منصة الرابط المعروفة، تسمية زرّ CTA، ومصدر
+  -- الصورة (رفع/توليد/جلب من oEmbed) مع public_id لحذف المولَّدة من
+  -- Cloudinary عند استبدالها. كلها NULL للصفوف القديمة، فلا يتغيّر شكلها.
+  link_platform          VARCHAR(20)  DEFAULT NULL,
+  cta_label              VARCHAR(40)  DEFAULT NULL,
+  poster_public_id       VARCHAR(255) DEFAULT NULL,
+  poster_source          VARCHAR(20)  DEFAULT NULL,
   slide_duration_seconds INT UNSIGNED NOT NULL DEFAULT 5,
   created_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -778,22 +785,104 @@ CREATE TABLE IF NOT EXISTS live_poll_votes (
   CONSTRAINT fk_live_poll_votes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- «أرشيف الأعراس» (ADR-0008): photos a super_admin adds to an ENDED event
--- whose type has archive_gallery on. The file lives on Cloudinary; this row
--- is what the product shows. public_id is unique because it was generated
--- and signed by the server for exactly one upload.
+-- «ألبومات الأعراس» (ADR-0009، توسعةً لـADR-0008): الألبوم صفّ مستقل لكل
+-- مناسبة — ألبوم افتراضي واحد يُنشأ عند أول رفع، والجدول يسمح بأكثر من
+-- ألبوم (الحنّة، العرس…) بلا ترحيل جديد. لا سقف لعدد الصور (قرار المالك
+-- 2026-10)؛ الحماية الوحيدة تقنية: دفعة توقيع ٢٠ صورة في الطلب الواحد.
+CREATE TABLE IF NOT EXISTS event_albums (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id     INT UNSIGNED NOT NULL,
+  title        VARCHAR(200) NOT NULL,
+  description  TEXT         DEFAULT NULL,
+  is_published TINYINT(1)   NOT NULL DEFAULT 1,
+  created_by   INT UNSIGNED DEFAULT NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_event_albums_event (event_id),
+  KEY idx_event_albums_published (is_published),
+  CONSTRAINT fk_event_albums_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_albums_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The file lives on Cloudinary; this row is what the product shows.
+-- public_id is unique because it was generated and signed by the server for
+-- exactly one upload. album_id is the grouping; caption is the photo's own
+-- searchable name; caption_key is nameKey(caption) so «فاطمه» meets
+-- «فاطمة». status hides a photo without deleting it (reports, takedown),
+-- position orders the album, and is_cover marks the album's single cover.
 CREATE TABLE IF NOT EXISTS event_photos (
   id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
   event_id     INT UNSIGNED NOT NULL,
+  album_id     INT UNSIGNED DEFAULT NULL,
   public_id    VARCHAR(255) NOT NULL,
   image_url    VARCHAR(500) NOT NULL,
   width        INT UNSIGNED DEFAULT NULL,
   height       INT UNSIGNED DEFAULT NULL,
+  caption      VARCHAR(200) DEFAULT NULL,
+  caption_key  VARCHAR(200) DEFAULT NULL,
+  position     INT          NOT NULL DEFAULT 0,
+  status       ENUM('approved','hidden') NOT NULL DEFAULT 'approved',
+  is_cover     TINYINT(1)   NOT NULL DEFAULT 0,
+  source       ENUM('upload','facebook_page','facebook_url') NOT NULL DEFAULT 'upload',
+  source_url   VARCHAR(500) DEFAULT NULL,
   uploaded_by  INT UNSIGNED DEFAULT NULL,
   created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_event_photos_public_id (public_id),
   KEY idx_event_photos_event (event_id),
+  KEY idx_event_photos_album (album_id, status, position),
+  KEY idx_event_photos_caption (caption_key),
   CONSTRAINT fk_event_photos_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_photos_album FOREIGN KEY (album_id) REFERENCES event_albums(id) ON DELETE CASCADE,
   CONSTRAINT fk_event_photos_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The user tags HIMSELF (user_id = requested_by, name comes from the
+-- account, never from the request body) and an admin approves it. An admin
+-- may also add a name for someone without an account (user_id NULL). The
+-- UNIQUE key allows many NULL-user rows, while one account gets exactly one
+-- tag per photo. Rejection keeps the row as an audit trail; withdrawal
+-- deletes it, which is what makes consent revocable.
+CREATE TABLE IF NOT EXISTS photo_tags (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  photo_id     INT UNSIGNED NOT NULL,
+  user_id      INT UNSIGNED DEFAULT NULL,
+  name         VARCHAR(150) NOT NULL,
+  name_key     VARCHAR(150) NOT NULL,
+  status       ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  requested_by INT UNSIGNED DEFAULT NULL,
+  moderated_by INT UNSIGNED DEFAULT NULL,
+  moderated_at DATETIME     DEFAULT NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_photo_tags_user (photo_id, user_id),
+  KEY idx_photo_tags_photo (photo_id, status),
+  KEY idx_photo_tags_name (name_key, status),
+  CONSTRAINT fk_photo_tags_photo FOREIGN KEY (photo_id) REFERENCES event_photos(id) ON DELETE CASCADE,
+  CONSTRAINT fk_photo_tags_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_photo_tags_requester FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_photo_tags_moderator FOREIGN KEY (moderated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One report per (photo, user), same UNIQUE-key pattern as
+-- congratulation_reports. Photos are not deleted by reports: the row is
+-- hidden at PHOTO_REPORT_HIDE_THRESHOLD and a human re-shows or removes it.
+-- 'privacy' is the path for «أنا في الصورة وأطلب إزالتها».
+CREATE TABLE IF NOT EXISTS photo_reports (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  photo_id    INT UNSIGNED NOT NULL,
+  user_id     INT UNSIGNED NOT NULL,
+  reason      ENUM('privacy','inappropriate','wrong_event','other') NOT NULL,
+  note        VARCHAR(300) DEFAULT NULL,
+  status      ENUM('open','resolved','dismissed') NOT NULL DEFAULT 'open',
+  resolved_by INT UNSIGNED DEFAULT NULL,
+  resolved_at DATETIME     DEFAULT NULL,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_photo_reports_user (photo_id, user_id),
+  KEY idx_photo_reports_status (status, created_at),
+  CONSTRAINT fk_photo_reports_photo FOREIGN KEY (photo_id) REFERENCES event_photos(id) ON DELETE CASCADE,
+  CONSTRAINT fk_photo_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_photo_reports_resolver FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

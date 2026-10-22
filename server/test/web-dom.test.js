@@ -1116,6 +1116,159 @@ async function run() {
     assert.strictEqual(doc.querySelectorAll('#drawerStoriesContainer .story-item').length, 1, 'the drawer strip mirrors the main one');
   });
 
+  await test('every story with an http(s) target gets a CTA — not only ads — and a javascript: link gets none', () => {
+    const dom = buildEnv();
+    const doc = dom.window.document;
+    const footer = () => doc.getElementById('storyViewerFooter');
+
+    dom.window.renderStoryFooter({
+      id: 1,
+      target_url: 'https://youtu.be/abcdefghijk',
+      cta_label: 'شاهد الفيديو',
+      link_platform: 'youtube',
+      is_ad: false
+    });
+    const promoButton = footer().querySelector('.story-viewer-visit-btn');
+    assert.ok(promoButton, 'a promotional story must carry the same CTA an ad does');
+    assert.ok(promoButton.textContent.includes('شاهد الفيديو'));
+    assert.ok(footer().textContent.includes('يوتيوب'), 'the platform is named in the footer');
+
+    dom.window.renderStoryFooter({
+      id: 2,
+      target_url: 'https://example.com/shop',
+      cta_label: '',
+      advertiser_name: 'مطعم الاختبار',
+      is_ad: true
+    });
+    const adButton = footer().querySelector('.story-viewer-visit-btn');
+    assert.ok(adButton && adButton.textContent.includes('زيارة'), 'an ad with no CTA label keeps «زيارة»');
+    assert.ok(footer().textContent.includes('مطعم الاختبار'));
+
+    dom.window.renderStoryFooter({
+      id: 3,
+      target_url: 'javascript:alert(1)',
+      cta_label: 'افتح',
+      is_ad: false
+    });
+    assert.strictEqual(footer().querySelector('.story-viewer-visit-btn'), null, 'javascript: must never become a CTA');
+  });
+
+  await test('ألبومات الأعراس: one box searches albums/photos/people, an album opens its photos, and a photo can be tagged', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const { document } = dom.window;
+
+    const albums = [
+      {
+        id: 11,
+        title: 'عرس أحمد — رهط',
+        description: null,
+        event_id: 5,
+        cover_url: 'https://cdn.test/cover.jpg',
+        cover_thumb_url: 'https://cdn.test/cover-thumb.jpg',
+        photo_count: 2,
+        event: { title: 'عرس أحمد', town: 'رهط', event_date: '2025-05-01', occasion_type_name: 'عرس' }
+      }
+    ];
+    const photos = [{
+      id: 7,
+      album_id: 11,
+      image_url: 'https://cdn.test/photo.jpg',
+      thumb_url: 'https://cdn.test/photo-thumb.jpg',
+      caption: 'صورة القاعة',
+      tags: [{ name: 'فاطمة الوسم' }],
+      album: { id: 11, title: 'عرس أحمد — رهط' },
+      event: { id: 5, title: 'عرس أحمد', town: 'رهط', event_date: '2025-05-01', occasion_type_name: 'عرس' }
+    }];
+    const paths = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      const method = options.method || 'GET';
+      paths.push(`${method} ${parsed.pathname}${parsed.search}`);
+      if (parsed.pathname === '/api/albums' && method === 'GET') {
+        return jsonResponse({ success: true, albums, pagination: { page: 1, limit: 12, total: 1, totalPages: 1 } });
+      }
+      if (parsed.pathname === '/api/search' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          albums,
+          photos,
+          people: [{ name: 'فاطمة الوسم', name_key: 'فاطمه الوسم', photos_count: 1, sample_thumb_url: 'https://cdn.test/person.jpg' }]
+        });
+      }
+      if (parsed.pathname === '/api/albums/11' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          album: { ...albums[0], photo_count: 2 },
+          photos,
+          pagination: { page: 1, limit: 24, total: 1, totalPages: 1 }
+        });
+      }
+      if (parsed.pathname === '/api/photos' && parsed.searchParams.get('person')) {
+        return jsonResponse({ success: true, photos, pagination: { page: 1, limit: 48, total: 1, totalPages: 1 } });
+      }
+      if (parsed.pathname === '/api/photos/7/tags' && method === 'POST') {
+        return jsonResponse({ success: true, status: 'pending', message: 'تم إرسال طلبك' }, { status: 201 });
+      }
+      return jsonResponse({ success: true, photos: [], albums: [], people: [] });
+    };
+
+    dom.window.openAlbumsPage();
+    await waitFor(() => document.querySelectorAll('#albumsResults .album-card').length === 1);
+    assert.ok(document.getElementById('albumsPage').hidden === false);
+    assert.ok(document.getElementById('albumsPage').classList.contains('albums-page'));
+    assert.ok(document.getElementById('albumsSearchInput'), 'one search box, not three pages');
+
+    document.querySelector('#albumsResults .album-card').click();
+    await waitFor(() => document.querySelectorAll('#albumDetailGrid .albums-photo-card').length === 1);
+    assert.ok(document.getElementById('albumDetailHeader').textContent.includes('عرس أحمد'));
+    assert.ok(paths.some(path => path.startsWith('GET /api/albums/11')));
+
+    dom.window.closeAlbumDetail();
+    assert.strictEqual(document.getElementById('albumDetailView').hidden, true);
+
+    document.getElementById('albumsSearchInput').value = 'فاطمه';
+    dom.window.handleAlbumsSearch();
+    await new Promise(resolve => setTimeout(resolve, 380));
+    await waitFor(() => document.querySelectorAll('#albumsResults .album-person-card').length === 1 || document.querySelectorAll('#albumsResults .album-card').length === 1);
+    assert.ok(paths.some(path => path.includes('/api/search?q=')), 'typing reaches the unified search endpoint');
+
+    dom.window.setAlbumsTab('people');
+    await waitFor(() => document.querySelectorAll('#albumsResults .album-person-card').length === 1);
+    document.querySelector('#albumsResults .album-person-card').click();
+    await waitFor(() => document.querySelectorAll('#albumsResults .albums-photo-card').length === 1);
+    document.querySelector('#albumsResults .albums-photo-card').click();
+    await waitFor(() => document.getElementById('archiveViewer').hidden === false);
+    assert.ok(document.getElementById('archiveViewerFooter').hidden === false);
+    assert.ok(document.getElementById('archiveViewerCaption').textContent.includes('صورة القاعة'));
+    assert.ok(document.getElementById('archiveViewerTags').textContent.includes('فاطمة الوسم'));
+
+    dom.window.requestPhotoTag();
+    await waitFor(() => paths.some(path => path === 'POST /api/photos/7/tags'));
+    assert.ok(document.getElementById('archiveViewerTagBtn').textContent.includes('معلّق') || paths.some(path => path === 'POST /api/photos/7/tags'));
+  });
+
+  await test('the event page gets an additive album strip — escaped titles, cover and count — and nothing when empty', () => {
+    const dom = buildEnv();
+    const doc = dom.window.document;
+    assert.strictEqual(dom.window.renderEventAlbumsHtml({ albums: [] }), '');
+    const html = dom.window.renderEventAlbumsHtml({
+      albums: [{
+        id: 11,
+        title: 'ألبوم <b>العرس</b>',
+        photo_count: 3,
+        cover_thumb_url: 'https://cdn.test/cover.jpg'
+      }]
+    });
+    const box = doc.createElement('div');
+    box.innerHTML = html;
+    assert.strictEqual(box.querySelectorAll('.event-album-card').length, 1);
+    assert.strictEqual(box.querySelector('.event-album-card strong').textContent, 'ألبوم <b>العرس</b>');
+    assert.strictEqual(box.querySelector('.event-album-card small').textContent, '3 صورة');
+    assert.ok(box.querySelector('.event-album-card img').src.includes('cover.jpg'));
+    assert.ok(box.querySelector('.event-albums-all').getAttribute('onclick').includes('openAlbumsForEvent'));
+  });
+
   await test('the «مباشر» badge shows on both buttons only while live.active, and turns itself off at until', async () => {
     const dom = buildEnv();
     await flushBoot();
@@ -1492,9 +1645,13 @@ async function run() {
     assert.strictEqual(overlays[overlays.length - 1].id, 'shareSheetModal');
   });
 
-  await test('no TikTok identifier or text is left in web/index.html, app.js or styles.css', () => {
+  await test('no TikTok LIVE identifier is left in web/index.html, app.js or styles.css — the story platform key is the one allowed mention', () => {
     for (const [name, text] of [['index.html', INDEX_HTML_RAW], ['app.js', APP_JS], ['styles.css', STYLES_CSS_RAW]]) {
-      assert.ok(!/tiktok|تيك توك/i.test(text), `expected no TikTok trace in web/${name}`);
+      // The story studio names its platform key `tiktok`; that one object
+      // entry is not the removed live feature. Everything else must be gone.
+      const withoutStoryKey = name === 'app.js' ? text.replace(/tiktok:\s*'[^']*'/g, '') : text;
+      assert.ok(!/tiktok/i.test(withoutStoryKey), `expected no TikTok identifier in web/${name}`);
+      if (name !== 'app.js') assert.ok(!/تيك توك/i.test(text), `expected no TikTok text in web/${name}`);
     }
   });
 
@@ -7019,7 +7176,7 @@ async function run() {
     const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
       if (requestPath === '/api/admin/occasion-types') return jsonResponse({ success: true, types });
       if (requestPath === '/api/admin/events') return jsonResponse({ success: true, events });
-      if (requestPath === '/api/admin/events/7/photos' && method === 'GET') return jsonResponse({ success: true, photos, max_photos: 60 });
+      if (requestPath === '/api/admin/events/7/photos' && method === 'GET') return jsonResponse({ success: true, photos, max_photos: null });
       if (requestPath === '/api/admin/events/7/photos/2' && method === 'DELETE') {
         deletes += 1;
         photos = photos.filter(p => p.id !== 2);
@@ -7048,7 +7205,7 @@ async function run() {
     cardFor('عرس منتهٍ').querySelector('.archive-photos-btn').click();
     await waitFor(() => document.querySelectorAll('#archivePhotosGrid .archive-photo').length === 2);
     assert.strictEqual(document.getElementById('archivePhotosModal').style.display, 'flex');
-    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 / 60 صورة');
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 صورة');
     assert.ok(cardFor('عرس منتهٍ').querySelector('.archive-photos-btn').textContent.includes('صور الأرشيف (2)'), 'the button learns its count');
     assert.ok(calls.adminPaths.includes('/api/admin/events/7/photos'), 'through adminFetch');
 
@@ -7059,7 +7216,7 @@ async function run() {
     document.querySelector('#archivePhotosGrid .archive-photo[data-photo-id="2"] .archive-photo-delete').click();
     await waitFor(() => document.querySelectorAll('#archivePhotosGrid .archive-photo').length === 1);
     assert.strictEqual(deletes, 1);
-    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '1 / 60 صورة');
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '1 صورة');
 
     const files = [new dom.window.File(['a'], 'one.jpg', { type: 'image/jpeg' }), new dom.window.File(['b'], 'two.jpg', { type: 'image/jpeg' })];
     await dom.window.handleArchivePhotosPick({ files, value: '' });
@@ -7070,7 +7227,184 @@ async function run() {
     assert.ok(rows[1].textContent.includes('رفع الصور غير مفعَّل بعد'), 'the server\'s Arabic refusal is shown on that file');
     assert.deepStrictEqual(registered, { public_id: CLOUDINARY_UPLOAD.public_id, version: 9, signature: 'cafe', width: 1200, height: 900 });
     assert.strictEqual(document.querySelectorAll('#archivePhotosGrid .archive-photo').length, 2);
-    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 / 60 صورة');
+    assert.strictEqual(document.getElementById('archivePhotosCount').textContent, '2 صورة');
+  });
+
+  await test('ستوريو التسويق: super_admin sees the tab, previews a link, publishes, and deletes with its asset', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    dom.window.applyRoleVisibility();
+    assert.strictEqual(document.getElementById('tabStoriesBtn').style.display, 'flex', 'the studio tab is visible to super_admin');
+
+    const stories = [{
+      id: 5,
+      title: 'قصة قديمة',
+      image: 'https://res.cloudinary.com/demo/image/upload/v1/story.jpg',
+      download_url: 'https://res.cloudinary.com/demo/image/upload/fl_attachment/v1/story.jpg',
+      target_url: 'https://youtu.be/abcdefghijk',
+      link_platform: 'youtube',
+      cta_label: 'شاهد الفيديو',
+      expires_at: null,
+      is_ad: false
+    }];
+    let previewBody = null;
+    let publishBody = null;
+    let deleted = 0;
+    let loads = 0;
+
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/stories' && method === 'GET') {
+        loads += 1;
+        return jsonResponse({ success: true, stories });
+      }
+      if (requestPath === '/api/admin/stories/studio/preview') {
+        previewBody = JSON.parse(options.body);
+        return jsonResponse({
+          success: true,
+          preview: 'data:image/jpeg;base64,AAAA',
+          info: { platform: 'youtube', title: 'فيديو تجريبي', canonical_url: 'https://www.youtube.com/watch?v=abcdefghijk' }
+        });
+      }
+      if (requestPath === '/api/admin/stories/studio') {
+        publishBody = JSON.parse(options.body);
+        stories.push({ ...stories[0], id: 6, title: 'قصة جديدة' });
+        return jsonResponse({ success: true, story: { id: 6 } });
+      }
+      if (requestPath === '/api/admin/stories/5' && method === 'DELETE') {
+        deleted += 1;
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    dom.window.switchAdminTab('tabStories');
+    await waitFor(() => document.querySelectorAll('.admin-story-card').length === 1);
+    assert.strictEqual(loads, 1, 'opening the tab fetches the list');
+
+    document.getElementById('storyStudioUrl').value = 'https://youtu.be/abcdefghijk';
+    document.getElementById('storyStudioTitle').value = 'عرس النقب';
+    await dom.window.previewStoryStudio({ preventDefault() {} });
+
+    assert.strictEqual(previewBody.url, 'https://youtu.be/abcdefghijk');
+    assert.strictEqual(previewBody.title, 'عرس النقب');
+    assert.strictEqual(document.getElementById('storyStudioPreviewWrap').hidden, false);
+    assert.strictEqual(document.getElementById('storyStudioPreviewImage').src, 'data:image/jpeg;base64,AAAA');
+    assert.strictEqual(document.getElementById('storyStudioPublishBtn').style.display, 'flex');
+
+    await dom.window.publishStoryStudio();
+    assert.strictEqual(publishBody.url, 'https://youtu.be/abcdefghijk');
+    assert.strictEqual(publishBody.expiry_preset, 'week');
+    await waitFor(() => document.querySelectorAll('.admin-story-card').length === 2);
+
+    await dom.window.deleteAdminStory(5);
+    assert.strictEqual(deleted, 1, 'delete goes through the admin endpoint');
+  });
+
+  await test('ستوريو التسويق is hidden from a town admin — the tab is absent, not disabled', () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط'] });
+    const btn = dom.window.document.getElementById('tabStoriesBtn');
+    btn.style.display = 'flex';
+    dom.window.applyRoleVisibility();
+    assert.strictEqual(btn.style.display, 'none');
+  });
+
+  await test('ألبومات الإدارة: pick an archive-gallery event, open its album, edit a caption, and moderate a tag/report', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const calls = [];
+    const album = {
+      id: 11,
+      event_id: 7,
+      title: 'ألبوم العرس',
+      is_published: 1,
+      photo_count: 1,
+      cover_url: null,
+      cover_thumb_url: null
+    };
+    const photo = {
+      id: 3,
+      album_id: 11,
+      image_url: 'https://cdn.test/p.jpg',
+      thumb_url: 'https://cdn.test/p-thumb.jpg',
+      caption: 'صورة القاعة',
+      status: 'approved',
+      is_cover: true,
+      album_title: 'ألبوم العرس',
+      event_title: 'عرس أحمد',
+      town: 'رهط'
+    };
+
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      calls.push({ requestPath, method, body: options.body ? JSON.parse(options.body) : null });
+      if (requestPath === '/api/admin/events' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          events: [{
+            id: 7,
+            title: 'عرس أحمد',
+            groom_name: 'أحمد',
+            town: 'رهط',
+            status: 'approved',
+            occasion_type_id: 1
+          }]
+        });
+      }
+      if (requestPath === '/api/admin/occasion-types' && method === 'GET') {
+        return jsonResponse({ success: true, types: [{ id: 1, name: 'عرس', archive_gallery: 1, fields: [], reactions: [] }] });
+      }
+      if (requestPath === '/api/admin/events/7/albums' && method === 'GET') {
+        return jsonResponse({ success: true, album, albums: [album] });
+      }
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'GET') {
+        return jsonResponse({ success: true, album, photos: [photo] });
+      }
+      if (requestPath === '/api/admin/photo-tags' && method === 'GET') {
+        return jsonResponse({ success: true, tags: [{
+          id: 21,
+          photo_id: 3,
+          name: 'فاطمة',
+          status: 'pending',
+          requester_name: 'فاطمة',
+          photo: { thumb_url: 'https://cdn.test/p-thumb.jpg', album_title: 'ألبوم العرس', event_title: 'عرس أحمد', town: 'رهط' }
+        }] });
+      }
+      if (requestPath === '/api/admin/photo-reports' && method === 'GET') {
+        return jsonResponse({ success: true, reports: [{
+          id: 31,
+          photo_id: 3,
+          reason: 'privacy',
+          note: 'أنا في الصورة',
+          status: 'open',
+          reporter_name: 'فاطمة',
+          photo: { thumb_url: 'https://cdn.test/p-thumb.jpg', album_title: 'ألبوم العرس', event_title: 'عرس أحمد', town: 'رهط', status: 'approved' }
+        }] });
+      }
+      if (requestPath === '/api/admin/photos/3' && method === 'PATCH') {
+        return jsonResponse({ success: true, photo: { ...photo, ...JSON.parse(options.body) } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await dom.window.fetchAdminEvents();
+    dom.window.switchAdminTab('tabAdminAlbums');
+    await waitFor(() => document.querySelectorAll('#adminAlbumsEventSelect option').length === 1);
+    assert.strictEqual(document.getElementById('adminAlbumsEventSelect').value, '7');
+
+    await dom.window.openAdminEventAlbums();
+    await waitFor(() => document.querySelectorAll('#adminAlbumsList .admin-album-card').length === 1);
+    await dom.window.openAdminAlbum(11);
+    await waitFor(() => document.querySelectorAll('#adminAlbumPhotos .admin-album-photo-card').length === 1);
+
+    const captionInput = document.querySelector('#adminAlbumPhotos .admin-photo-caption');
+    assert.strictEqual(captionInput.value, 'صورة القاعة');
+    captionInput.value = 'صورة القاعة بعد التعديل';
+    await dom.window.saveAdminPhotoCaption(3, captionInput.value);
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.caption === 'صورة القاعة بعد التعديل'));
+
+    await dom.window.moderateAdminTag(21, 'approved');
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.status === 'approved'));
+    await dom.window.hideAdminReportedPhoto(3);
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.status === 'hidden'));
   });
 
   console.log('\nAdmin towns & regions tab (TWN-4)');

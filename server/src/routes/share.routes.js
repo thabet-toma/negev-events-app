@@ -41,6 +41,7 @@ const events = require('../services/events.service');
 const settings = require('../services/settings.service');
 const liveHub = require('../services/liveHub.service');
 const analytics = require('../services/analytics.service');
+const albums = require('../services/albums.service');
 const shareCard = require('../services/shareCard.service');
 const logger = require('../utils/logger');
 const { parseId } = require('../middleware/validate');
@@ -50,6 +51,7 @@ const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
 
 const eventRouter = express.Router();
 const liveRouter = express.Router();
+const photoRouter = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
@@ -342,44 +344,14 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
 
   const metaDescription = `تفاصيل وبطاقة دعوة ${headline}${event.family_clan ? ` من عائلة ${event.family_clan}` : ''} في ${event.town || 'النقب'}. موعد المناسبة والتفاصيل عبر منصة ${palette.wordmark}.`;
 
-  // Schema.org Event Structured Data
-  const schemaData = {
-    '@context': 'https://schema.org',
-    '@type': 'Event',
-    name: headline,
-    description: metaDescription,
-    url: pageUrl,
-    eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
-    eventStatus: 'https://schema.org/EventScheduled',
-    image: [imageUrl],
-    organizer: {
-      '@type': 'Organization',
-      name: palette.wordmark,
-      url: siteRootUrl
-    }
-  };
-
-  if (event.event_date) {
-    schemaData.startDate = event.event_date;
-  }
-  if (event.event_end_date || event.event_date) {
-    schemaData.endDate = event.event_end_date || event.event_date;
-  }
-  if (event.location_name || event.town) {
-    schemaData.location = {
-      '@type': 'Place',
-      name: event.location_name || event.town || 'النقب',
-      address: {
-        '@type': 'PostalAddress',
-        addressLocality: event.town || 'النقب',
-        addressRegion: 'منطقة النقب',
-        addressCountry: 'IL'
-      }
-    };
-  }
-
-  const jsonLdString = JSON.stringify(schemaData, null, 2).replace(/</g, '\\u003c');
-
+  // No structured-data block on this page, deliberately. JSON-LD is a
+  // <script> tag, and a Schema.org Event carries the date and the venue — the
+  // two values this page exists to keep off the public web while the family's
+  // private invitation is still circulating. The page is a poster and two
+  // buttons, not a search-engine event record; the smoke test that asserts
+  // "no <script> tag" and "the venue never appears" is the rule, and it was
+  // being broken here rather than in the renderer.
+  //
   // The type chip and the veil dress a *bare poster*, and the generated card
   // already carries its own type chip and name band — overlaying a second one
   // on top of it just prints the type twice. `imageDimensions` is null in
@@ -410,9 +382,6 @@ ${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.
 <meta property="og:site_name" content="${palette.wordmark}">
 <meta property="og:locale" content="ar_AR">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">
-${jsonLdString}
-</script>
 <style>${pageStyle(palette)}</style>
 </head>
 <body>
@@ -445,6 +414,68 @@ ${reasonsStrip()}
  * from), so that stays true by construction even with the redesigned shell
  * below: same mark, same two buttons, same reasons, every time.
  */
+/**
+ * `GET /p/:id` — one photo's own share page (ADR-0009, WEB-03). Same
+ * crawler-first reasoning as `/e/:id`: WhatsApp must see the actual photo,
+ * not a JavaScript shell. It is deliberately `noindex`: a wedding album is
+ * shared with the family's circle, not with Google's image search. No script,
+ * no date/venue/phone — the photo and its own caption only.
+ */
+function renderPhotoPage(photo) {
+  const heading = photo.caption
+    || `صورة من ${photo.album.title || 'ألبوم العرس'}`;
+  const description = [photo.album.title, photo.event.occasion_type_name, photo.event.town]
+    .filter(Boolean)
+    .join(' — ');
+  const pageUrl = `${config.publicUrl}/p/${photo.id}`;
+  const tags = Array.isArray(photo.tags) ? photo.tags.map(tag => tag.name).filter(Boolean) : [];
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>${escapeHtml(heading)} | اعراسنا</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="${escapeHtml(heading)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:image" content="${escapeHtml(photo.image_url)}">
+  <meta property="og:url" content="${escapeHtml(pageUrl)}">
+  <meta property="og:site_name" content="اعراسنا">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="${escapeHtml(photo.image_url)}">
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #08131f; color: #eef6fb; font-family: "Cairo", "Segoe UI", system-ui, sans-serif; }
+    main { max-width: 720px; margin: 0 auto; padding: 18px 16px 40px; }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: #d4af37; font-weight: 800; }
+    .brand a { color: #9fc7de; text-decoration: none; font-size: .88rem; }
+    .shot { width: 100%; max-height: 78vh; object-fit: contain; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
+    h1 { font-size: 1.25rem; margin: 16px 0 6px; line-height: 1.5; }
+    p { color: #9fb6c9; line-height: 1.7; margin: 0 0 10px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 20px; }
+    .tag { background: #12354d; color: #d8edf9; border: 1px solid #24506b; border-radius: 999px; padding: 5px 12px; font-size: .82rem; }
+    .cta { display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 13px 18px; border-radius: 999px; background: #d4af37; color: #08131f; font-weight: 900; text-decoration: none; }
+    .note { margin-top: 14px; font-size: .78rem; color: #6f8a9e; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span>اعراسنا · مناسبات النقب</span><a href="${escapeHtml(config.publicUrl)}">الموقع</a></div>
+    <img class="shot" src="${escapeHtml(photo.image_url)}" alt="${escapeHtml(heading)}">
+    <h1>${escapeHtml(heading)}</h1>
+    ${description ? `<p>${escapeHtml(description)}</p>` : ''}
+    ${tags.length ? `<div class="tags">${tags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+    <a class="cta" href="${escapeHtml(`${config.publicUrl}/#photo/${photo.id}`)}">افتح الصورة في الموقع</a>
+    <p class="note">صفحة صورة خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
+  </main>
+</body>
+</html>`;
+}
+
 function renderNotFoundPage() {
   const palette = PALETTES.festive;
   const downloadUrl = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
@@ -1163,4 +1194,28 @@ liveRouter.get('/e/:id/embed', asyncHandler(async (req, res) => {
   sendEmbedPage(res, episode ? episode.embed_url : null);
 }));
 
-module.exports = { eventRouter, liveRouter };
+photoRouter.get('/:id', asyncHandler(async (req, res) => {
+  const photoId = parseId(req.params.id, 'معرّف الصورة');
+  let data;
+  try {
+    data = await albums.getPublicPhoto(photoId);
+  } catch (err) {
+    if (err.status === 404) {
+      sendNotFound(res);
+      return;
+    }
+    throw err;
+  }
+
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': SHARE_CSP,
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Cache-Control': 'public, max-age=300'
+    })
+    .send(renderPhotoPage(data.photo));
+}));
+
+module.exports = { eventRouter, liveRouter, photoRouter };

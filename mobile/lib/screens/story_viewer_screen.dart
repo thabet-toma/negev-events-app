@@ -133,6 +133,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     final url = story.targetUrl;
     if (url == null || url.isEmpty) return;
 
+    // الخادم يرفض غير http(s) منذ ADR-0010، لكن APK منشوراً قد يحمل صفّاً
+    // قديماً؛ لا نسلّم `launchUrl` أي مخطّط آخر (javascript:/file:/intent:).
+    final uri = Uri.tryParse(url);
+    final isHttp = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (!isHttp) {
+      if (mounted) showMessage(context, 'رابط الوجهة غير صالح', isError: true);
+      return;
+    }
+
     try {
       final deviceId = await DeviceIdStore.get();
       if (!mounted) return;
@@ -141,13 +150,31 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه.
     }
 
-    final uri = Uri.tryParse(url);
-    final launched = uri == null
-        ? false
-        : await launchUrl(uri, mode: LaunchMode.externalApplication);
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!launched && mounted) {
       showMessage(context, 'تعذّر فتح الرابط', isError: true);
     }
+  }
+
+  String _platformLabel(String? platform) {
+    switch (platform) {
+      case 'youtube':
+        return 'يوتيوب';
+      case 'tiktok':
+        return 'تيك توك';
+      case 'facebook':
+        return 'فيسبوك';
+      case 'instagram':
+        return 'إنستغرام';
+      default:
+        return 'فيديو';
+    }
+  }
+
+  String _ctaLabel(Story story) {
+    final label = story.ctaLabel?.trim() ?? '';
+    if (label.isNotEmpty) return label;
+    return story.isAd ? 'زيارة' : 'شاهد الفيديو';
   }
 
   Future<void> _report(Story story) async {
@@ -217,9 +244,15 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                       bottom: 20,
                       right: 16,
                       left: 16,
-                      child: story.isAd
-                          ? _AdActionBar(
+                      child: (story.isAd ||
+                              (story.targetUrl != null &&
+                                  story.targetUrl!.isNotEmpty))
+                          ? _StoryActionBar(
                               story: story,
+                              ctaLabel: _ctaLabel(story),
+                              sourceLabel: story.isAd
+                                  ? (story.advertiserName ?? '')
+                                  : _platformLabel(story.linkPlatform),
                               onOpenTarget: () => _openTarget(story),
                               onReport: () => _report(story),
                             )
@@ -391,16 +424,20 @@ class _StoryHeader extends StatelessWidget {
   }
 }
 
-/// شريط إجراء الإعلان — الطبقتان الثانية والثالثة من فصل الإعلان: اسم المعلن
-/// حرفياً كما أرسله الخادم، وزرّ الإبلاغ.
-class _AdActionBar extends StatelessWidget {
-  const _AdActionBar({
+/// شريط إجراء أي قصة لها وجهة — ليس الإعلان وحده (ADR-0010). الإعلان يعرض
+/// اسم المعلن، والترويج يعرض المنصة؛ والزرّ يحمل تسمية الستوديو أو الافتراضي.
+class _StoryActionBar extends StatelessWidget {
+  const _StoryActionBar({
     required this.story,
+    required this.ctaLabel,
+    required this.sourceLabel,
     required this.onOpenTarget,
     required this.onReport,
   });
 
   final Story story;
+  final String ctaLabel;
+  final String sourceLabel;
   final VoidCallback onOpenTarget;
   final VoidCallback onReport;
 
@@ -417,14 +454,14 @@ class _AdActionBar extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              story.advertiserName ?? '',
+              sourceLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ),
           if (hasTarget)
-            ElevatedButton(onPressed: onOpenTarget, child: const Text('زيارة')),
+            ElevatedButton(onPressed: onOpenTarget, child: Text(ctaLabel)),
           _ReportButton(onReport: onReport),
         ],
       ),

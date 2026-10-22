@@ -108,10 +108,43 @@ async function assertEventInScope(user, eventId) {
   return event;
 }
 
+/**
+ * One album, only if its event is inside `user`'s towns — the same 404 for
+ * "missing" and "outside your scope", so existence is never confirmed to an
+ * admin who cannot see it. Every album route calls this before a write; the
+ * album's own queries never trust a client-supplied event id.
+ */
+async function assertAlbumInScope(user, albumId) {
+  const { clause, params } = await townScopeClause(user, 'e');
+  const album = await db.queryOne(
+    `SELECT a.* FROM event_albums a JOIN events e ON e.id = a.event_id WHERE a.id = ?${clause}`,
+    [albumId, ...params]
+  );
+  if (!album) throw ApiError.notFound('الألبوم غير موجود');
+  return album;
+}
+
+/** One photo, scoped through its album's event exactly as assertAlbumInScope. */
+async function assertPhotoInScope(user, photoId) {
+  const { clause, params } = await townScopeClause(user, 'e');
+  const photo = await db.queryOne(
+    `SELECT p.*, a.event_id
+       FROM event_photos p
+       JOIN event_albums a ON a.id = p.album_id
+       JOIN events e ON e.id = a.event_id
+      WHERE p.id = ?${clause}`,
+    [photoId, ...params]
+  );
+  if (!photo) throw ApiError.notFound('الصورة غير موجودة');
+  return photo;
+}
+
 module.exports = {
   listTownsFor,
   isAdminForTown,
   townScopeClause,
   resolveBroadcastTowns,
-  assertEventInScope
+  assertEventInScope,
+  assertAlbumInScope,
+  assertPhotoInScope
 };

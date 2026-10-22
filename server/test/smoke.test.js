@@ -1141,7 +1141,9 @@ async function run() {
     });
     pastEventId = created.eventId;
 
-    const { body: list } = await api('GET', '/api/events?limit=100');
+    // The default feed is upcoming-first *then* ended (events.service.js's
+    // orderClause); `?upcoming=1` is the query that means "upcoming only".
+    const { body: list } = await api('GET', '/api/events?upcoming=1&limit=100');
     assert.ok(!list.events.some(e => e.id === pastEventId), 'a past event must not appear in the upcoming list');
 
     const { body: archiveList } = await api('GET', '/api/events?archive=1&limit=100');
@@ -5163,6 +5165,136 @@ async function run() {
     assert.strictEqual(body.story.slide_duration_seconds, 5);
   });
 
+  await test('A story link must be http(s); a video platform and CTA are stored and returned', async () => {
+    const hostile = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'رابط خطر', target_url: 'javascript:alert(1)' }
+    });
+    assert.strictEqual(hostile.status, 400);
+    assert.ok(/http/.test(hostile.body.message), hostile.body.message);
+
+    const created = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: {
+        title: 'ترويج فيديو',
+        target_url: 'https://youtu.be/abcdefghijk',
+        link_platform: 'youtube',
+        cta_label: 'شاهد الفيديو'
+      }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.story.link_platform, 'youtube');
+    assert.strictEqual(created.body.story.cta_label, 'شاهد الفيديو');
+    assert.strictEqual(created.body.story.target_url, 'https://youtu.be/abcdefghijk');
+
+    const badPlatform = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'منصة مجهولة', target_url: 'https://example.com', link_platform: 'myspace' }
+    });
+    assert.strictEqual(badPlatform.status, 400);
+
+    await api('DELETE', `/api/admin/stories/${created.body.story.id}`, { token: adminToken });
+  });
+
+  await test('The studio previews a YouTube link as a real 1080×1920 card without uploading it', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      const target = String(url);
+      if (target.startsWith('https://www.youtube.com/oembed')) {
+        return new Response(JSON.stringify({
+          title: 'فيديو تجريبي',
+          author_name: 'قناة الاختبار',
+          thumbnail_url: 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg'
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (target.startsWith('https://i.ytimg.com/')) {
+        return new Response(TINY_PNG, { status: 200, headers: { 'Content-Type': 'image/png' } });
+      }
+      return realFetch(url, options);
+    };
+
+    try {
+      const preview = await api('POST', '/api/admin/stories/studio/preview', {
+        token: adminToken,
+        body: { url: 'https://youtu.be/abcdefghijk', title: 'عرس النقب', cta_label: 'شاهد الفيديو' }
+      });
+      assert.strictEqual(preview.status, 200, JSON.stringify(preview.body));
+      assert.strictEqual(preview.body.info.platform, 'youtube');
+      assert.strictEqual(preview.body.info.canonical_url, 'https://www.youtube.com/watch?v=abcdefghijk');
+      assert.ok(preview.body.preview.startsWith('data:image/jpeg;base64,'), 'preview is an inline JPEG');
+      assert.ok(preview.body.preview.length > 5000, 'the preview has real bytes, not an empty canvas');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  await test('Publishing a studio story uploads the generated poster, stores the link/CTA, and deletes the asset with the story', async () => {
+    const realFetch = globalThis.fetch;
+    const originalCloudinary = config.cloudinary;
+    const destroyed = [];
+    config.cloudinary = {
+      ...originalCloudinary,
+      cloudName: 'test-cloud',
+      apiKey: 'test-key',
+      apiSecret: 'test-secret'
+    };
+
+    globalThis.fetch = async (url, options) => {
+      const target = String(url);
+      if (target.startsWith('https://www.youtube.com/oembed')) {
+        return new Response(JSON.stringify({
+          title: 'فيديو تجريبي',
+          author_name: 'قناة الاختبار',
+          thumbnail_url: 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg'
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (target.startsWith('https://i.ytimg.com/')) {
+        return new Response(TINY_PNG, { status: 200, headers: { 'Content-Type': 'image/png' } });
+      }
+      if (target.endsWith('/image/upload')) {
+        const publicId = options.body.get('public_id');
+        return new Response(JSON.stringify({ public_id: publicId, version: 1700000000 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (target.endsWith('/image/destroy')) {
+        destroyed.push(new URLSearchParams(options.body).get('public_id'));
+        return new Response(JSON.stringify({ result: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return realFetch(url, options);
+    };
+
+    try {
+      const published = await api('POST', '/api/admin/stories/studio', {
+        token: adminToken,
+        body: {
+          url: 'https://youtu.be/abcdefghijk',
+          title: 'عرس النقب',
+          cta_label: 'شاهد الفيديو',
+          expiry_preset: 'week'
+        }
+      });
+      assert.strictEqual(published.status, 201, JSON.stringify(published.body));
+      const story = published.body.story;
+      assert.strictEqual(story.link_platform, 'youtube');
+      assert.strictEqual(story.cta_label, 'شاهد الفيديو');
+      assert.strictEqual(story.target_url, 'https://www.youtube.com/watch?v=abcdefghijk');
+      assert.ok(story.poster_public_id.startsWith('negev-events/stories/posters/'), story.poster_public_id);
+      assert.ok(story.download_url.includes('fl_attachment'), story.download_url);
+
+      const removed = await api('DELETE', `/api/admin/stories/${story.id}`, { token: adminToken });
+      assert.strictEqual(removed.status, 200);
+      assert.ok(destroyed.includes(story.poster_public_id), 'deleting the story must destroy its generated poster');
+    } finally {
+      config.cloudinary = originalCloudinary;
+      globalThis.fetch = realFetch;
+    }
+  });
+
   await test('Turning an existing story into an ad without an advertiser_name is rejected the same way on PATCH', async () => {
     const { status, body } = await api('PATCH', `/api/admin/stories/${activeStoryId}`, {
       token: adminToken,
@@ -8859,34 +8991,65 @@ async function run() {
     const endedWedding = await insertArchiveEvent(weddingType.id, '2025-05-05');
     const upcomingWedding = await insertArchiveEvent(weddingType.id, '2031-05-05');
     const endedFuneral = await insertArchiveEvent(funeralType.id, '2025-05-06');
+    const bulkEvent = await insertArchiveEvent(weddingType.id, '2025-05-07');
+    const makeArchiveUser = async fullName => {
+      const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+      const { insertId } = await db.execute(
+        `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, 'رهط', 'user')`,
+        [phone, fullName, bcrypt.hashSync('1234', config.bcryptRounds)]
+      );
+      return {
+        id: insertId,
+        token: signToken({ id: insertId, phone_number: phone, full_name: fullName, role: 'user' }, '1h')
+      };
+    };
+    const makeArchiveAdmin = async (fullName, towns) => {
+      const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+      const { insertId } = await db.execute(
+        `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, 'رهط', 'admin')`,
+        [phone, fullName, bcrypt.hashSync('1234', config.bcryptRounds)]
+      );
+      for (const town of towns) {
+        await db.execute('INSERT INTO admin_towns (user_id, town) VALUES (?, ?)', [insertId, town]);
+      }
+      return {
+        id: insertId,
+        token: signToken({ id: insertId, phone_number: phone, full_name: fullName, role: 'admin' }, '1h')
+      };
+    };
+    const tagger = await makeArchiveUser('فاطمة الوسم');
+    const reporterB = await makeArchiveUser('محمد الوسم');
+    const reporterC = await makeArchiveUser('سالم الوسم');
+    const archiveScopedAdmin = await makeArchiveAdmin('أدمن ألبومات رهط', ['رهط']);
+    const archiveNoScopeAdmin = await makeArchiveAdmin('أدمن ألبومات بلا بلدات', []);
+    const tagUserIds = [tagger.id, reporterB.id, reporterC.id, archiveScopedAdmin.id, archiveNoScopeAdmin.id];
     const signFor = eventId => api('POST', `/api/admin/events/${eventId}/photos/signature`, { token: superAdminToken });
     let archiveUpload = null;
     let archivePhotoId = 0;
 
     try {
-      await test('archive photos: only an ENDED event whose type carries the archive can take them', async () => {
+      await test('album photos: the type gate is the only gate — an upcoming wedding can be prepared, an ended funeral cannot', async () => {
         const upcoming = await signFor(upcomingWedding);
-        assert.strictEqual(upcoming.status, 400);
-        assert.ok(/بعد انتهاء المناسبة/.test(upcoming.body.message));
+        assert.strictEqual(upcoming.status, 200, 'uploading before the wedding ends is allowed; the public view waits for the span to end');
         const funeral = await signFor(endedFuneral);
         assert.strictEqual(funeral.status, 400);
-        assert.ok(/لا يحمل أرشيف صور/.test(funeral.body.message));
+        assert.ok(/لا يحمل ألبوم صور/.test(funeral.body.message));
         const missing = await signFor(999999999);
         assert.strictEqual(missing.status, 404);
         const ok = await signFor(endedWedding);
         assert.strictEqual(ok.status, 200);
         archiveUpload = ok.body.upload;
-        assert.ok(archiveUpload.public_id.startsWith(`negev-events/archive/event-${endedWedding}/`));
+        assert.ok(archiveUpload.public_id.startsWith('negev-events/albums/album-'), archiveUpload.public_id);
       });
 
-      await test('archive routes are super_admin only (a town admin gets 403)', async () => {
+      await test('album routes: a town admin manages a wedding in their town; one with no towns gets 404, never 403', async () => {
+        const allowed = await api('GET', `/api/admin/events/${endedWedding}/photos`, { token: archiveScopedAdmin.token });
+        assert.strictEqual(allowed.status, 200, JSON.stringify(allowed.body));
         for (const [method, path] of [
           ['GET', `/api/admin/events/${endedWedding}/photos`],
-          ['POST', `/api/admin/events/${endedWedding}/photos/signature`],
-          ['POST', `/api/admin/events/${endedWedding}/photos`],
-          ['DELETE', `/api/admin/events/${endedWedding}/photos/1`]
+          ['POST', `/api/admin/events/${endedWedding}/photos/signature`]
         ]) {
-          assert.strictEqual((await api(method, path, { token: scopedAdminToken })).status, 403, `${method} ${path}`);
+          assert.strictEqual((await api(method, path, { token: archiveNoScopeAdmin.token })).status, 404, `${method} ${path}`);
           assert.strictEqual((await api(method, path)).status, 401, `${method} ${path} anonymous`);
         }
       });
@@ -8914,7 +9077,8 @@ async function run() {
           token: superAdminToken,
           body: { public_id: archiveUpload.public_id, version: '1700000001', signature: cloudinarySign(archiveUpload.public_id, '1700000001') }
         });
-        assert.strictEqual(dup.status, 409);
+        assert.strictEqual(dup.status, 201, 'registering the same public_id twice is the retry path, not a 409');
+        assert.strictEqual(dup.body.photo.id, archivePhotoId);
 
         const details = await api('GET', `/api/events/${endedWedding}`);
         assert.strictEqual(details.status, 200);
@@ -8923,7 +9087,153 @@ async function run() {
 
         const admin = await api('GET', `/api/admin/events/${endedWedding}/photos`, { token: superAdminToken });
         assert.strictEqual(admin.body.photos.length, 1);
-        assert.strictEqual(admin.body.max_photos, 60);
+        assert.strictEqual(admin.body.max_photos, null, 'the owner removed the album cap');
+
+        const albumView = await api('GET', `/api/albums/${admin.body.album.id}`);
+        assert.strictEqual(albumView.status, 200, JSON.stringify(albumView.body));
+        assert.deepStrictEqual(albumView.body.photos.map(photo => photo.id), [archivePhotoId]);
+
+        const found = await api('GET', `/api/albums?search=${encodeURIComponent('عريس الأرشيف')}`);
+        assert.ok(found.body.albums.some(album => album.event_id === endedWedding), 'an album is searchable by the wedding name');
+
+        const withAlbums = await api('GET', `/api/events/${endedWedding}`);
+        assert.strictEqual(withAlbums.status, 200, JSON.stringify(withAlbums.body));
+        assert.ok(
+          Array.isArray(withAlbums.body.event.albums)
+            && withAlbums.body.event.albums.some(album => Number(album.id) === Number(admin.body.album.id)),
+          'the event page carries its published albums as an additive summary'
+        );
+      });
+
+      await test('a user tags himself: pending and invisible, then searchable by a spelling variant after approval', async () => {
+        const request = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        assert.strictEqual(request.status, 201, JSON.stringify(request.body));
+        assert.strictEqual(request.body.status, 'pending');
+
+        const before = await api('GET', `/api/photos/${archivePhotoId}`);
+        assert.strictEqual(before.status, 200);
+        assert.deepStrictEqual(before.body.photo.tags, [], 'a pending tag is not public');
+
+        const queue = await api('GET', '/api/admin/photo-tags?status=pending', { token: superAdminToken });
+        const pending = queue.body.tags.find(tag => tag.photo_id === archivePhotoId && tag.name === 'فاطمة الوسم');
+        assert.ok(pending, 'the request reaches the admin queue');
+
+        const approved = await api('PATCH', `/api/admin/photo-tags/${pending.id}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
+        assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+
+        const after = await api('GET', `/api/photos/${archivePhotoId}`);
+        assert.deepStrictEqual(after.body.photo.tags.map(tag => tag.name), ['فاطمة الوسم']);
+
+        const search = await api('GET', `/api/search?q=${encodeURIComponent('فاطمه')}`);
+        assert.strictEqual(search.status, 200);
+        assert.ok(
+          search.body.people.some(person => person.name === 'فاطمة الوسم'),
+          'nameKey folds فاطمه to فاطمة'
+        );
+
+        const mine = await api('GET', '/api/my-photos', { token: tagger.token });
+        assert.ok(mine.body.photos.some(photo => photo.id === archivePhotoId));
+      });
+
+      await test('a user withdraws the tag, re-requests, is rejected, and cannot re-request the same photo', async () => {
+        await api('DELETE', `/api/photos/${archivePhotoId}/tags/me`, { token: tagger.token });
+        const withdrawn = await api('GET', `/api/photos/${archivePhotoId}`);
+        assert.deepStrictEqual(withdrawn.body.photo.tags, []);
+
+        const again = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        assert.strictEqual(again.status, 201);
+        const queue = await api('GET', '/api/admin/photo-tags?status=pending', { token: superAdminToken });
+        const pending = queue.body.tags.find(tag => tag.photo_id === archivePhotoId && tag.name === 'فاطمة الوسم');
+        assert.ok(pending);
+        await api('PATCH', `/api/admin/photo-tags/${pending.id}`, {
+          token: superAdminToken,
+          body: { status: 'rejected' }
+        });
+
+        const refused = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        assert.strictEqual(refused.status, 409);
+        assert.ok(/رُفض|رفض/.test(refused.body.message), refused.body.message);
+      });
+
+      await test('three distinct privacy reports hide the photo; the admin restores it and it is public again', async () => {
+        const first = await api('POST', `/api/photos/${archivePhotoId}/reports`, {
+          token: tagger.token,
+          body: { reason: 'privacy' }
+        });
+        const second = await api('POST', `/api/photos/${archivePhotoId}/reports`, {
+          token: reporterB.token,
+          body: { reason: 'privacy' }
+        });
+        assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+        assert.strictEqual(second.status, 201, JSON.stringify(second.body));
+        assert.strictEqual((await api('GET', `/api/photos/${archivePhotoId}`)).status, 200, 'two reports do not hide it');
+
+        const third = await api('POST', `/api/photos/${archivePhotoId}/reports`, {
+          token: reporterC.token,
+          body: { reason: 'privacy' }
+        });
+        assert.strictEqual(third.status, 201, JSON.stringify(third.body));
+        assert.strictEqual((await api('GET', `/api/photos/${archivePhotoId}`)).status, 404, 'the threshold hides it');
+
+        const restore = await api('PATCH', `/api/admin/photos/${archivePhotoId}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
+        assert.strictEqual(restore.status, 200, JSON.stringify(restore.body));
+        assert.strictEqual((await api('GET', `/api/photos/${archivePhotoId}`)).status, 200);
+      });
+
+      await test('there is no album photo cap: 61 rows are accepted and every one is listed', async () => {
+        const signed = await api('POST', `/api/admin/events/${bulkEvent}/photos/signature`, { token: superAdminToken });
+        assert.strictEqual(signed.status, 200, JSON.stringify(signed.body));
+        const album = await db.queryOne('SELECT id FROM event_albums WHERE event_id = ?', [bulkEvent]);
+        assert.ok(album, 'the default album was created');
+
+        for (let index = 0; index < 61; index += 1) {
+          await db.execute(
+            `INSERT INTO event_photos (event_id, album_id, public_id, image_url, position)
+             VALUES (?, ?, ?, ?, ?)`,
+            [
+              bulkEvent,
+              album.id,
+              `negev-events/albums/album-${album.id}/bulk-${index}`,
+              'https://res.cloudinary.com/test-cloud/image/upload/f_auto,q_auto,c_limit,w_1600/v1/bulk.jpg',
+              index
+            ]
+          );
+        }
+
+        const list = await api('GET', `/api/admin/events/${bulkEvent}/photos`, { token: superAdminToken });
+        assert.strictEqual(list.status, 200);
+        assert.strictEqual(list.body.photos.length, 61);
+        assert.strictEqual(list.body.max_photos, null);
+      });
+
+      await test('GET /p/:id serves one photo with og:image, noindex, and no script — and 404s when hidden', async () => {
+        const page = await rawGet(`/p/${archivePhotoId}`);
+        assert.strictEqual(page.status, 200);
+        assert.ok(/property="og:image"/.test(page.text), 'the photo itself is the preview');
+        assert.ok(page.text.includes('noindex'), 'a wedding photo is not for search engines');
+        assert.ok(!page.text.includes('<script'), 'the photo page carries no script at all');
+        assert.ok(!page.text.includes('الديوان'), 'the venue is not on the photo page');
+        assert.ok(page.text.includes(`/p/${archivePhotoId}`), 'og:url points at this photo');
+
+        const missing = await rawGet('/p/999999999');
+        assert.strictEqual(missing.status, 404);
+
+        await api('PATCH', `/api/admin/photos/${archivePhotoId}`, {
+          token: superAdminToken,
+          body: { status: 'hidden' }
+        });
+        const hidden = await rawGet(`/p/${archivePhotoId}`);
+        assert.strictEqual(hidden.status, 404, 'a hidden photo has no public page');
+        await api('PATCH', `/api/admin/photos/${archivePhotoId}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
       });
 
       await test('the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off', async () => {
@@ -8957,7 +9267,8 @@ async function run() {
         assert.deepStrictEqual(details.body.event.archive_photos, []);
       });
     } finally {
-      await db.execute('DELETE FROM events WHERE id IN (?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral]);
+      await db.execute('DELETE FROM events WHERE id IN (?, ?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral, bulkEvent]);
+      await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', tagUserIds);
     }
 
     // Every image a client sends HERE (poster, artist image, service image)

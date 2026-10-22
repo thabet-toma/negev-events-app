@@ -156,6 +156,23 @@ let archiveViewerPhotos = [];
 const archivePhotosByBox = {};
 let archiveViewerIndex = 0;
 
+// «ألبومات الأعراس» (ADR-0009) — صفحة واحدة، ثلاث مجموعات في البحث، وثلاثة
+// مستويات: الألبوم ثم الصورة. لا تبويب سابع في الشريط السفلي.
+let albumsTab = 'albums';
+let albumsSearchQuery = '';
+let albumsSearchResults = { albums: [], photos: [], people: [] };
+let albumsSearchTimer = null;
+let albumsList = [];
+let albumsPagination = null;
+let albumsCurrentAlbum = null;
+let albumsAlbumPhotos = [];
+let albumsAlbumPagination = null;
+let albumsCurrentPerson = null;
+let albumsPersonPhotos = [];
+let albumsMyPhotosMode = false;
+let albumsMyPhotosPhotos = [];
+let albumsMyPhotosPagination = null;
+
 // Write actions (publish, congratulate) require login; browsing never does.
 // Set right before openAuthModal() so a successful login/register can pick
 // back up exactly what the visitor was trying to do (#20 step 9).
@@ -188,6 +205,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initServiceWorker();
   initUrlNavigation();
   window.addEventListener('popstate', handleEventPagePopstate);
+  window.addEventListener('hashchange', handleAlbumsHashChange);
+  handleAlbumsHashChange();
   initFeedScroller();
   initFeedAudio();
   refreshSessionFromServer();
@@ -1382,26 +1401,30 @@ function startStorySlide() {
   storyViewerRafId = requestAnimationFrame(tickStorySlide);
 }
 
-/** فصل الإعلان ثلاث طبقات (README): شارة «إعلان» (في الرأس)، اسم المعلن حرفياً هنا، وزرّ الإبلاغ. */
+/**
+ * فصل الإعلان ثلاث طبقات (README): شارة «إعلان» في الرأس، اسم المعلن هنا،
+ * وزرّ الإبلاغ. ومنذ ADR-0010، **أي** ستوري له رابط http(s) يعرض زرّ CTA —
+ * الإعلان ليس النوع الوحيد الذي يملك وجهة. التسمية تأتي من `cta_label` الذي
+ * كتبه الستوديو، وزرّ الإعلان القديم يبقى «زيارة» إن لم تصل تسمية.
+ */
 function renderStoryFooter(story) {
   const footer = document.getElementById('storyViewerFooter');
   const hasTarget = isSafeHttpUrl(story.target_url);
+  const platformLabels = {
+    youtube: 'يوتيوب', tiktok: 'تيك توك', facebook: 'فيسبوك', instagram: 'إنستغرام', website: 'فيديو'
+  };
+  const label = (story.cta_label || '').trim() || (story.is_ad ? 'زيارة' : 'شاهد الفيديو');
+  const source = story.is_ad
+    ? (story.advertiser_name || '')
+    : (platformLabels[story.link_platform] || '');
 
-  if (story.is_ad) {
-    footer.innerHTML = `
-      <span class="story-viewer-advertiser">${escapeHtml(story.advertiser_name || '')}</span>
-      <div class="story-viewer-actions">
-        ${hasTarget ? '<button class="story-viewer-visit-btn" onclick="handleStoryTargetClick()">زيارة</button>' : ''}
-        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
-      </div>
-    `;
-  } else {
-    footer.innerHTML = `
-      <div class="story-viewer-actions">
-        <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
-      </div>
-    `;
-  }
+  footer.innerHTML = `
+    <span class="story-viewer-advertiser">${escapeHtml(source)}</span>
+    <div class="story-viewer-actions">
+      ${hasTarget ? `<button class="story-viewer-visit-btn" onclick="handleStoryTargetClick()"><i class="fa-solid fa-circle-play"></i> ${escapeHtml(label)}</button>` : ''}
+      <button class="story-viewer-report-btn" onclick="handleStoryReport()"><i class="fa-solid fa-flag"></i> إبلاغ</button>
+    </div>
+  `;
 }
 
 /** target_url قادم من قاعدة بيانات يديرها أدمن، ويُوضع في href/window.open — يُرفض أي مخطَّط غير http/https (مثل javascript:). */
@@ -2460,6 +2483,7 @@ function renderEventPage(evt) {
         </button>
       </div>
       ${evt.followers_count != null ? `<div class="event-page-followers">متابعون: ${Number(evt.followers_count) || 0}</div>` : ''}
+      ${renderEventAlbumsHtml(evt)}
       <section id="eventPageArchive" class="event-archive" hidden></section>
       ${renderReactionBarHtml(evt)}
       <div class="event-page-congrats-head">
@@ -6225,6 +6249,534 @@ async function openChatModal(eventId) {
  * حالة أخرى؛ هنا يكفي: فارغة → القسم مخفي. الشبكة كسولة التحميل، والنقر يفتح
  * عارضاً بملء الشاشة بإغلاق وسابق/تالي.
  */
+// ======================================================================
+// ألبومات الأعراس — البحث والألبوم والصورة (ADR-0009)
+// ======================================================================
+
+function albumsPhotoBoxId(kind) {
+  return `albums-${kind}`;
+}
+
+function albumsSafeImage(photo, thumb) {
+  const value = thumb ? (photo.thumb_url || photo.image_url) : photo.image_url;
+  return safeHttpUrl(value) ? value : '';
+}
+
+function albumCardHtml(album) {
+  const cover = safeHttpUrl(album.cover_thumb_url || album.cover_url) ? (album.cover_thumb_url || album.cover_url) : '';
+  const event = album.event || {};
+  return `
+    <button type="button" class="album-card" onclick="openAlbumDetail(${Number(album.id)})">
+      <span class="album-card-cover">${cover ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async">` : '<i class="fa-solid fa-images" aria-hidden="true"></i>'}</span>
+      <span class="album-card-body">
+        <strong>${escapeHtml(album.title || 'ألبوم عرس')}</strong>
+        <span>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}</span>
+        <small>${Number(album.photo_count) || 0} صورة</small>
+      </span>
+    </button>
+  `;
+}
+
+function albumPhotoCardHtml(photo, boxId, index) {
+  const image = albumsSafeImage(photo, true);
+  const tags = Array.isArray(photo.tags) ? photo.tags.map(tag => tag.name).filter(Boolean) : [];
+  return `
+    <button type="button" class="albums-photo-card" onclick="openArchiveViewer(${index}, '${boxId}')" aria-label="${escapeHtml(photo.caption || `صورة ${index + 1}`)}">
+      ${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy" decoding="async">` : '<span class="albums-photo-placeholder"><i class="fa-solid fa-image"></i></span>'}
+      ${photo.caption ? `<span class="albums-photo-caption">${escapeHtml(photo.caption)}</span>` : ''}
+      ${tags.length ? `<span class="albums-photo-tags">${tags.slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</span>` : ''}
+    </button>
+  `;
+}
+
+function peopleCardHtml(person) {
+  const image = safeHttpUrl(person.sample_thumb_url || person.sample_url) ? (person.sample_thumb_url || person.sample_url) : '';
+  return `
+    <button type="button" class="album-person-card" data-name-key="${escapeHtml(person.name_key || '')}" data-name="${escapeHtml(person.name || '')}" onclick="openPersonPhotos(this.dataset.nameKey, this.dataset.name)">
+      <span class="album-person-avatar">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : '<i class="fa-solid fa-user"></i>'}</span>
+      <strong>${escapeHtml(person.name || '')}</strong>
+      <small>${Number(person.photos_count) || 0} صورة</small>
+    </button>
+  `;
+}
+
+function albumsEmptyHtml(icon, text) {
+  return `<div class="albums-empty"><i class="fa-solid ${icon}" aria-hidden="true"></i><p>${escapeHtml(text)}</p></div>`;
+}
+
+function isAlbumsPageOpen() {
+  const page = document.getElementById('albumsPage');
+  return Boolean(page && !page.hidden);
+}
+
+function openAlbumsPage({ skipHash = false } = {}) {
+  const page = document.getElementById('albumsPage');
+  if (!page) return;
+  if (!skipHash && window.location.hash !== '#albums') {
+    window.history.pushState({ albums: true }, '', '#albums');
+  }
+  page.hidden = false;
+  document.body.classList.add('albums-page-open');
+  document.getElementById('albumsBrowserView').hidden = false;
+  document.getElementById('albumDetailView').hidden = true;
+  albumsTab = 'albums';
+  document.querySelectorAll('.albums-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.albumsTab === 'albums');
+  });
+  albumsCurrentAlbum = null;
+  albumsMyPhotosMode = false;
+  albumsCurrentPerson = null;
+  albumsPersonPhotos = [];
+  if (!albumsList.length && !albumsSearchQuery) loadAlbumsList(1);
+  else renderAlbumsResults();
+}
+
+function closeAlbumsPage({ skipHash = false } = {}) {
+  const page = document.getElementById('albumsPage');
+  if (!page) return;
+  page.hidden = true;
+  document.body.classList.remove('albums-page-open');
+  closeArchiveViewer();
+  if (!skipHash && /^#(albums|album|photo)/.test(window.location.hash)) {
+    window.history.replaceState({}, '', window.location.pathname + window.location.search);
+  }
+}
+
+async function loadAlbumsList(page = 1) {
+  const results = document.getElementById('albumsResults');
+  if (!results) return;
+  if (page === 1) {
+    results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الألبومات...</div>';
+  }
+  try {
+    const res = await apiFetch(`/api/albums?page=${page}&limit=12`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الألبومات');
+    if (page === 1) albumsList = [];
+    albumsList = albumsList.concat(Array.isArray(data.albums) ? data.albums : []);
+    albumsPagination = data.pagination || null;
+    renderAlbumsResults();
+  } catch (error) {
+    results.innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر تحميل الألبومات');
+  }
+}
+
+function handleAlbumsSearch() {
+  const input = document.getElementById('albumsSearchInput');
+  const clear = document.getElementById('albumsClearSearchBtn');
+  if (clear) clear.style.display = input && input.value.trim() ? 'inline-flex' : 'none';
+  clearTimeout(albumsSearchTimer);
+  albumsSearchTimer = setTimeout(() => {
+    albumsSearchQuery = (input && input.value.trim()) || '';
+    albumsCurrentPerson = null;
+    albumsPersonPhotos = [];
+    albumsMyPhotosMode = false;
+    if (albumsSearchQuery) runAlbumsSearch();
+    else {
+      albumsSearchResults = { albums: [], photos: [], people: [] };
+      loadAlbumsList(1);
+    }
+  }, 320);
+}
+
+async function runAlbumsSearch() {
+  const results = document.getElementById('albumsResults');
+  if (!results) return;
+  results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري البحث...</div>';
+  try {
+    const res = await apiFetch(`/api/search?q=${encodeURIComponent(albumsSearchQuery)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر البحث');
+    albumsSearchResults = {
+      albums: Array.isArray(data.albums) ? data.albums : [],
+      photos: Array.isArray(data.photos) ? data.photos : [],
+      people: Array.isArray(data.people) ? data.people : []
+    };
+    renderAlbumsResults();
+  } catch (error) {
+    results.innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر البحث');
+  }
+}
+
+function clearAlbumsSearch() {
+  albumsSearchQuery = '';
+  albumsSearchResults = { albums: [], photos: [], people: [] };
+  albumsCurrentPerson = null;
+  albumsPersonPhotos = [];
+  albumsMyPhotosMode = false;
+  const input = document.getElementById('albumsSearchInput');
+  if (input) input.value = '';
+  const clear = document.getElementById('albumsClearSearchBtn');
+  if (clear) clear.style.display = 'none';
+  loadAlbumsList(1);
+}
+
+function setAlbumsTab(tab) {
+  if (!['albums', 'photos', 'people'].includes(tab)) return;
+  albumsTab = tab;
+  document.querySelectorAll('.albums-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.albumsTab === tab);
+  });
+  renderAlbumsResults();
+}
+
+function albumsSummaryText() {
+  if (albumsMyPhotosMode) return 'صور وُسمت فيها بموافقة الإدارة';
+  if (albumsCurrentPerson) return `صور ${albumsCurrentPerson.name || ''}`;
+  if (!albumsSearchQuery) return '';
+  const counts = [
+    `${albumsSearchResults.albums.length} ألبوم`,
+    `${albumsSearchResults.photos.length} صورة`,
+    `${albumsSearchResults.people.length} شخص`
+  ];
+  return `نتائج «${albumsSearchQuery}» — ${counts.join(' · ')}`;
+}
+
+function renderAlbumsResults() {
+  const results = document.getElementById('albumsResults');
+  if (!results) return;
+  const summary = document.getElementById('albumsSearchSummary');
+  const summaryText = albumsSummaryText();
+  if (summary) {
+    summary.textContent = summaryText;
+    summary.hidden = !summaryText;
+  }
+
+  const loadMore = document.getElementById('albumsLoadMoreBtn');
+  if (loadMore) {
+    const canMore = albumsTab === 'albums'
+      && !albumsSearchQuery
+      && albumsPagination
+      && albumsPagination.page < albumsPagination.totalPages;
+    loadMore.hidden = !canMore;
+  }
+
+  if (albumsTab === 'albums') {
+    const albums = albumsSearchQuery ? albumsSearchResults.albums : albumsList;
+    results.innerHTML = albums.length
+      ? `<div class="albums-grid">${albums.map(albumCardHtml).join('')}</div>`
+      : albumsEmptyHtml('fa-images', albumsSearchQuery ? 'لا ألبومات تطابق بحثك' : 'لا توجد ألبومات ظاهرة بعد');
+    return;
+  }
+
+  if (albumsTab === 'photos') {
+    let photos = [];
+    let boxId = albumsPhotoBoxId('search');
+    if (albumsMyPhotosMode) {
+      photos = albumsMyPhotosPhotos;
+      boxId = albumsPhotoBoxId('mine');
+    } else if (albumsCurrentPerson) {
+      photos = albumsPersonPhotos;
+      boxId = albumsPhotoBoxId('person');
+    } else if (albumsSearchQuery) {
+      photos = albumsSearchResults.photos;
+      boxId = albumsPhotoBoxId('search');
+    } else {
+      results.innerHTML = albumsEmptyHtml('fa-magnifying-glass', 'ابحث باسم العريس أو العشيرة أو اسم شخص لتظهر الصور');
+      return;
+    }
+    archivePhotosByBox[boxId] = photos;
+    results.innerHTML = photos.length
+      ? `<div class="albums-photo-grid">${photos.map((photo, index) => albumPhotoCardHtml(photo, boxId, index)).join('')}</div>`
+      : albumsEmptyHtml('fa-image', 'لا صور تطابق بحثك');
+    return;
+  }
+
+  const people = albumsSearchQuery ? albumsSearchResults.people : [];
+  results.innerHTML = people.length
+    ? `<div class="albums-people-grid">${people.map(peopleCardHtml).join('')}</div>`
+    : albumsEmptyHtml('fa-users', albumsSearchQuery ? 'لا أشخاص يطابقون بحثك' : 'ابحث باسم شخص لترى صوره');
+}
+
+async function loadMoreAlbums() {
+  if (!albumsPagination || albumsPagination.page >= albumsPagination.totalPages) return;
+  await loadAlbumsList(albumsPagination.page + 1);
+}
+
+async function openAlbumDetail(albumId, { skipHash = false } = {}) {
+  const id = Number(albumId);
+  if (!id) return;
+  if (!skipHash) window.history.pushState({ album: id }, '', `#album/${id}`);
+  document.getElementById('albumsBrowserView').hidden = true;
+  document.getElementById('albumDetailView').hidden = false;
+  document.getElementById('albumDetailHeader').innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الألبوم...</div>';
+  document.getElementById('albumDetailGrid').innerHTML = '';
+  try {
+    const res = await apiFetch(`/api/albums/${id}?page=1&limit=24`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الألبوم');
+    albumsCurrentAlbum = data.album;
+    albumsAlbumPhotos = Array.isArray(data.photos) ? data.photos : [];
+    albumsAlbumPagination = data.pagination || null;
+    renderAlbumDetail();
+  } catch (error) {
+    document.getElementById('albumDetailHeader').innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر تحميل الألبوم');
+  }
+}
+
+function renderAlbumDetail() {
+  const album = albumsCurrentAlbum;
+  if (!album) return;
+  const event = album.event || {};
+  document.getElementById('albumDetailHeader').innerHTML = `
+    <div class="album-detail-card">
+      <span class="album-detail-cover">${album.cover_url ? `<img src="${escapeHtml(album.cover_url)}" alt="">` : '<i class="fa-solid fa-images"></i>'}</span>
+      <div>
+        <h2>${escapeHtml(album.title || 'ألبوم عرس')}</h2>
+        <p>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}${event.event_date ? ` · ${escapeHtml(event.event_date)}` : ''}</p>
+        <span class="album-detail-count">${Number(album.photo_count) || albumsAlbumPhotos.length} صورة</span>
+      </div>
+    </div>
+  `;
+  const grid = document.getElementById('albumDetailGrid');
+  if (!albumsAlbumPhotos.length) {
+    grid.innerHTML = albumsEmptyHtml('fa-image', 'هذا الألبوم بلا صور ظاهرة');
+  } else {
+    archivePhotosByBox.albumDetail = albumsAlbumPhotos;
+    grid.innerHTML = albumsAlbumPhotos.map((photo, index) => albumPhotoCardHtml(photo, 'albumDetail', index)).join('');
+  }
+  const more = document.getElementById('albumDetailMoreBtn');
+  if (more) {
+    more.hidden = !(albumsAlbumPagination && albumsAlbumPagination.page < albumsAlbumPagination.totalPages);
+  }
+}
+
+async function loadMoreAlbumPhotos() {
+  if (!albumsCurrentAlbum || !albumsAlbumPagination) return;
+  if (albumsAlbumPagination.page >= albumsAlbumPagination.totalPages) return;
+  const next = albumsAlbumPagination.page + 1;
+  try {
+    const res = await apiFetch(`/api/albums/${albumsCurrentAlbum.id}?page=${next}&limit=24`);
+    const data = await res.json();
+    if (!data.success) return;
+    albumsAlbumPhotos = albumsAlbumPhotos.concat(Array.isArray(data.photos) ? data.photos : []);
+    albumsAlbumPagination = data.pagination || albumsAlbumPagination;
+    renderAlbumDetail();
+  } catch (e) {
+    // الصفحة التالية فشلت — تبقى المعروضة، ولا نمسحها.
+  }
+}
+
+function closeAlbumDetail() {
+  document.getElementById('albumDetailView').hidden = true;
+  document.getElementById('albumsBrowserView').hidden = false;
+  if (window.location.hash.startsWith('#album/')) {
+    window.history.replaceState({}, '', '#albums');
+  }
+  renderAlbumsResults();
+}
+
+async function openPersonPhotos(nameKey, displayName) {
+  if (!nameKey) return;
+  albumsCurrentPerson = { name_key: nameKey, name: displayName || '' };
+  albumsMyPhotosMode = false;
+  albumsSearchQuery = '';
+  const input = document.getElementById('albumsSearchInput');
+  if (input) input.value = '';
+  const clear = document.getElementById('albumsClearSearchBtn');
+  if (clear) clear.style.display = 'none';
+  albumsTab = 'photos';
+  document.querySelectorAll('.albums-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.albumsTab === 'photos');
+  });
+  const results = document.getElementById('albumsResults');
+  results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل صور الشخص...</div>';
+  try {
+    const res = await apiFetch(`/api/photos?person=${encodeURIComponent(nameKey)}&limit=48`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الصور');
+    albumsPersonPhotos = Array.isArray(data.photos) ? data.photos : [];
+    renderAlbumsResults();
+  } catch (error) {
+    results.innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر تحميل الصور');
+  }
+}
+
+async function openMyPhotos() {
+  if (!requireAuth({ type: 'photos' })) return;
+  albumsMyPhotosMode = true;
+  albumsCurrentPerson = null;
+  albumsSearchQuery = '';
+  const input = document.getElementById('albumsSearchInput');
+  if (input) input.value = '';
+  albumsTab = 'photos';
+  document.querySelectorAll('.albums-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.albumsTab === 'photos');
+  });
+  const results = document.getElementById('albumsResults');
+  results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل صورك...</div>';
+  try {
+    const res = await apiFetch('/api/my-photos?limit=48', { auth: true });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل صورك');
+    albumsMyPhotosPhotos = Array.isArray(data.photos) ? data.photos : [];
+    albumsMyPhotosPagination = data.pagination || null;
+    renderAlbumsResults();
+  } catch (error) {
+    results.innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر تحميل صورك');
+  }
+}
+
+function currentArchivePhoto() {
+  return archiveViewerPhotos[archiveViewerIndex] || null;
+}
+
+function updateArchiveViewerFooter(photo) {
+  const footer = document.getElementById('archiveViewerFooter');
+  if (!footer) return;
+  if (!photo || !photo.id) {
+    footer.hidden = true;
+    return;
+  }
+  footer.hidden = false;
+  const caption = document.getElementById('archiveViewerCaption');
+  if (caption) {
+    caption.textContent = photo.caption || '';
+    caption.hidden = !photo.caption;
+  }
+  const tagsBox = document.getElementById('archiveViewerTags');
+  if (tagsBox) {
+    const names = Array.isArray(photo.tags) ? photo.tags.map(tag => tag.name).filter(Boolean) : [];
+    tagsBox.innerHTML = names.map(name => `<span>${escapeHtml(name)}</span>`).join('');
+    tagsBox.hidden = !names.length;
+  }
+  const tagBtn = document.getElementById('archiveViewerTagBtn');
+  if (tagBtn) {
+    tagBtn.disabled = false;
+    tagBtn.innerHTML = '<i class="fa-solid fa-user-check"></i> أنا في الصورة';
+  }
+  const withdraw = document.getElementById('archiveViewerWithdrawBtn');
+  if (withdraw) withdraw.hidden = !authToken;
+  const share = document.getElementById('archiveViewerShareBtn');
+  if (share) share.href = `${shareOrigin().replace(/\/$/, '')}/p/${Number(photo.id)}`;
+}
+
+async function requestPhotoTag() {
+  const photo = currentArchivePhoto();
+  if (!photo || !photo.id) return;
+  if (!requireAuth({ type: 'photos' })) return;
+  try {
+    const res = await apiFetch(`/api/photos/${photo.id}/tags`, { method: 'POST', auth: true });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'تعذّر إرسال طلب الوسم');
+    showToast(data.message || 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
+    const btn = document.getElementById('archiveViewerTagBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-clock"></i> طلبك معلّق';
+    }
+  } catch (error) {
+    showToast(error.message || 'تعذّر إرسال طلب الوسم');
+  }
+}
+
+async function withdrawPhotoTag() {
+  const photo = currentArchivePhoto();
+  if (!photo || !photo.id) return;
+  if (!requireAuth({ type: 'photos' })) return;
+  try {
+    const res = await apiFetch(`/api/photos/${photo.id}/tags/me`, { method: 'DELETE', auth: true });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'لا يوجد وسم لك على هذه الصورة');
+    showToast(data.message || 'تم سحب وسمك');
+    updateArchiveViewerFooter(photo);
+  } catch (error) {
+    showToast(error.message || 'لا يوجد وسم لك على هذه الصورة');
+  }
+}
+
+async function reportCurrentPhoto() {
+  const photo = currentArchivePhoto();
+  if (!photo || !photo.id) return;
+  if (!requireAuth({ type: 'report' })) return;
+  if (!confirm('إبلاغ عن هذه الصورة لمراجعة الإزالة؟')) return;
+  try {
+    const res = await apiFetch(`/api/photos/${photo.id}/reports`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'privacy' })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'تعذّر إرسال البلاغ');
+    showToast(data.message || 'تم استلام بلاغك — ستراجعه الإدارة');
+  } catch (error) {
+    showToast(error.message || 'تعذّر إرسال البلاغ');
+  }
+}
+
+function handleAlbumsHashChange() {
+  const hash = window.location.hash;
+  if (hash === '#albums') {
+    openAlbumsPage({ skipHash: true });
+    return;
+  }
+  if (hash.startsWith('#album/')) {
+    const id = Number(hash.slice('#album/'.length));
+    if (id) {
+      openAlbumsPage({ skipHash: true });
+      openAlbumDetail(id, { skipHash: true });
+    }
+    return;
+  }
+  if (hash.startsWith('#photo/')) {
+    const id = Number(hash.slice('#photo/'.length));
+    if (!id) return;
+    openAlbumsPage({ skipHash: true });
+    apiFetch(`/api/photos/${id}`).then(res => res.json()).then(data => {
+      if (!data.success || !data.photo) return;
+      archivePhotosByBox.photoDeepLink = [data.photo];
+      openArchiveViewer(0, 'photoDeepLink');
+    }).catch(() => {});
+    return;
+  }
+  if (!hash && isAlbumsPageOpen()) closeAlbumsPage({ skipHash: true });
+}
+
+function renderEventAlbumsHtml(evt) {
+  const albums = Array.isArray(evt && evt.albums) ? evt.albums : [];
+  if (!albums.length) return '';
+  return `
+    <section class="event-albums-strip">
+      <div class="event-albums-head">
+        <h4><i class="fa-solid fa-images" aria-hidden="true"></i> ألبومات العرس <span>${albums.length}</span></h4>
+        <button type="button" class="event-albums-all" onclick="openAlbumsForEvent(eventPageEvent)">كل الألبومات</button>
+      </div>
+      <div class="event-albums-row">
+        ${albums.map(album => {
+          const cover = safeHttpUrl(album.cover_thumb_url || album.cover_url)
+            ? (album.cover_thumb_url || album.cover_url)
+            : '';
+          return `
+            <button type="button" class="event-album-card" onclick="openAlbumFromEvent(${Number(album.id)})">
+              <span class="event-album-cover">${cover ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy">` : '<i class="fa-solid fa-images" aria-hidden="true"></i>'}</span>
+              <strong>${escapeHtml(album.title || 'ألبوم')}</strong>
+              <small>${Number(album.photo_count) || 0} صورة</small>
+            </button>`;
+        }).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function openAlbumsForEvent(evt) {
+  openAlbumsPage();
+  const term = (evt && (evt.title || evt.groom_name)) || '';
+  const input = document.getElementById('albumsSearchInput');
+  if (input) input.value = term;
+  if (term) handleAlbumsSearch();
+}
+
+function openAlbumFromEvent(albumId) {
+  openAlbumsPage();
+  openAlbumDetail(albumId);
+}
+
+function openMyPhotosFromAccount() {
+  openAlbumsPage();
+  openMyPhotos();
+}
+
 function renderEventArchive(evt, boxId = 'chatArchive') {
   const box = document.getElementById(boxId);
   if (!box) return;
@@ -6244,11 +6796,13 @@ function renderEventArchive(evt, boxId = 'chatArchive') {
       <span class="event-archive-count">${photos.length}</span>
     </h4>
     <div class="event-archive-grid">
-      ${photos.map((photo, index) => `
-        <button type="button" class="event-archive-thumb" onclick="openArchiveViewer(${index}, '${boxId}')" aria-label="عرض الصورة ${index + 1}">
-          <img src="${escapeHtml(photo.image_url)}" alt="" loading="lazy" decoding="async">
-        </button>
-      `).join('')}
+      ${photos.map((photo, index) => {
+        const image = safeHttpUrl(photo.thumb_url) ? photo.thumb_url : photo.image_url;
+        return `
+        <button type="button" class="event-archive-thumb" onclick="openArchiveViewer(${index}, '${boxId}')" aria-label="${escapeHtml(photo.caption || `عرض الصورة ${index + 1}`)}">
+          <img src="${escapeHtml(image)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy" decoding="async">
+        </button>`;
+      }).join('')}
     </div>
   `;
   box.hidden = false;
@@ -6279,6 +6833,9 @@ function closeArchiveViewer() {
   document.removeEventListener('keydown', handleArchiveViewerKeydown);
   const img = document.getElementById('archiveViewerImage');
   if (img) img.removeAttribute('src');
+  if (window.location.hash.startsWith('#photo/') && isAlbumsPageOpen()) {
+    window.history.replaceState({}, '', '#albums');
+  }
 }
 
 /** ‏+1 التالية، ‎-1 السابقة — تدور من الأخيرة إلى الأولى وبالعكس. */
@@ -6295,9 +6852,11 @@ function showArchiveViewerPhoto() {
   const counter = document.getElementById('archiveViewerCounter');
   if (!photo || !img) return;
   img.src = photo.image_url;
+  img.alt = photo.caption || 'صورة من ألبوم العرس';
   if (counter) counter.textContent = `${archiveViewerIndex + 1} / ${archiveViewerPhotos.length}`;
   const single = archiveViewerPhotos.length < 2;
   document.querySelectorAll('#archiveViewer .archive-viewer-nav').forEach(btn => { btn.hidden = single; });
+  updateArchiveViewerFooter(photo);
 }
 
 /**

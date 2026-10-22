@@ -109,6 +109,7 @@ function createApp() {
   // يُخترع هنا: صفحة البث المباشر (أيّاً كانت منصّته) وغلاف مشغّل يوتيوب `/live/embed`، في نفس الملف.
   // كلاهما يحتاج سطر nginx على الإنتاج — `/e/` مضاف، و`/live` لم يُضَف بعد.
   app.use('/e', shareRoutes.eventRouter);
+  app.use('/p', shareRoutes.photoRouter);
   app.use('/live', shareRoutes.liveRouter);
 
   // خريطة الموقع لمحركات البحث (SEO Sitemap) — تُولّد ديناميكياً بكل المناسبات المعتمدة

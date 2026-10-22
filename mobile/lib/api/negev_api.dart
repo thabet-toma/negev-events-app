@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
+import '../models/album.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/my_list.dart';
@@ -392,6 +393,130 @@ class NegevApi {
   /// إبلاغ عن قصة — مرّة واحدة لكل مستخدم، يتطلّب حساباً.
   Future<void> reportStory(int storyId) async {
     await _client.post('/api/stories/$storyId/report', auth: true);
+  }
+
+  // --- ألبومات الأعراس (ADR-0009) ------------------------------------
+
+  Future<({List<EventAlbum> albums, Pagination pagination})> albums({
+    String? search,
+    int page = 1,
+    int limit = 12,
+  }) async {
+    final query = <String, String>{'page': '$page', 'limit': '$limit'};
+    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
+    final data = await _client.get('/api/albums', query: query);
+    final list = data['albums'];
+    return (
+      albums: list is List
+          ? list
+              .whereType<Map>()
+              .map((item) => EventAlbum.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const <EventAlbum>[],
+      pagination: Pagination.fromJson(
+        data['pagination'] is Map
+            ? Map<String, dynamic>.from(data['pagination'] as Map)
+            : const {},
+      ),
+    );
+  }
+
+  Future<({EventAlbum album, List<EventPhoto> photos, Pagination pagination})>
+      albumDetails(int id, {int page = 1, int limit = 24, String? search}) async {
+    final query = <String, String>{'page': '$page', 'limit': '$limit'};
+    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
+    final data = await _client.get('/api/albums/$id', query: query);
+    final photos = data['photos'];
+    return (
+      album: EventAlbum.fromJson(
+        data['album'] is Map ? Map<String, dynamic>.from(data['album'] as Map) : const {},
+      ),
+      photos: photos is List
+          ? photos
+              .whereType<Map>()
+              .map((item) => EventPhoto.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const <EventPhoto>[],
+      pagination: Pagination.fromJson(
+        data['pagination'] is Map
+            ? Map<String, dynamic>.from(data['pagination'] as Map)
+            : const {},
+      ),
+    );
+  }
+
+  Future<({List<EventPhoto> photos, Pagination pagination})> photos({
+    String? search,
+    int? albumId,
+    String? person,
+    int page = 1,
+    int limit = 24,
+  }) async {
+    final query = <String, String>{'page': '$page', 'limit': '$limit'};
+    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
+    if (albumId != null) query['album_id'] = '$albumId';
+    if (person != null && person.trim().isNotEmpty) query['person'] = person.trim();
+    final data = await _client.get('/api/photos', query: query);
+    final list = data['photos'];
+    return (
+      photos: list is List
+          ? list
+              .whereType<Map>()
+              .map((item) => EventPhoto.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const <EventPhoto>[],
+      pagination: Pagination.fromJson(
+        data['pagination'] is Map
+            ? Map<String, dynamic>.from(data['pagination'] as Map)
+            : const {},
+      ),
+    );
+  }
+
+  Future<AlbumSearchResults> searchAlbums(String query) async {
+    final data = await _client.get('/api/search', query: {'q': query.trim()});
+    return AlbumSearchResults.fromJson(data);
+  }
+
+  Future<({List<EventPhoto> photos, Pagination pagination})> myPhotos({
+    int page = 1,
+    int limit = 24,
+  }) async {
+    final data = await _client.get(
+      '/api/my-photos',
+      query: {'page': '$page', 'limit': '$limit'},
+      auth: true,
+    );
+    final list = data['photos'];
+    return (
+      photos: list is List
+          ? list
+              .whereType<Map>()
+              .map((item) => EventPhoto.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const <EventPhoto>[],
+      pagination: Pagination.fromJson(
+        data['pagination'] is Map
+            ? Map<String, dynamic>.from(data['pagination'] as Map)
+            : const {},
+      ),
+    );
+  }
+
+  Future<void> tagPhoto(int photoId) async {
+    await _client.post('/api/photos/$photoId/tags', auth: true);
+  }
+
+  Future<void> withdrawPhotoTag(int photoId) async {
+    await _client.delete('/api/photos/$photoId/tags/me', auth: true);
+  }
+
+  Future<void> reportPhoto(int photoId, {String reason = 'privacy', String? note}) async {
+    await _client.post(
+      '/api/photos/$photoId/reports',
+      auth: true,
+      body: {'reason': reason, if (note != null && note.trim().isNotEmpty) 'note': note.trim()},
+    );
   }
 
   Future<void> react(int eventId, String type, String identifier) async {

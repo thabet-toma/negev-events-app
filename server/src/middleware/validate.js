@@ -252,6 +252,40 @@ function parseEventDays(raw, { max = MAX_EVENT_DAYS } = {}) {
   });
 }
 
+/**
+ * A URL a client will later put in `href`, `window.open` or a mobile
+ * `launchUrl`. The scheme is checked HERE, on the server, not only in each
+ * client: `javascript:` and `file:` parse as URLs but must never be stored
+ * as a story's target. Returns the normalised absolute URL.
+ */
+function parseHttpUrl(value, label = 'الرابط') {
+  const cleaned = cleanString(value, 2000);
+  if (!cleaned) throw ApiError.badRequest(`${label} مطلوب`);
+  let parsed;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    throw ApiError.badRequest(`${label} غير صالح`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw ApiError.badRequest(`${label} يجب أن يبدأ بـ http:// أو https://`);
+  }
+  return parsed.toString();
+}
+
+/** A 1-based page number; anything absent or invalid falls back to the default. */
+function parsePage(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** A page size with a hard ceiling, so `?limit=100000` cannot become a query. */
+function parseLimit(value, fallback = 24, max = 100) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
 module.exports = {
   cleanString,
   requireFields,
@@ -268,6 +302,9 @@ module.exports = {
   parseHonorees,
   parseEventDays,
   parseCsvList,
+  parseHttpUrl,
+  parsePage,
+  parseLimit,
   MAX_HONOREES,
   MAX_FILTER_VALUES
 };

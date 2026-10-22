@@ -4,7 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
-const archivePhotos = require('./archivePhotos.service');
+const albums = require('./albums.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
 const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN } = require('../constants');
@@ -723,7 +723,7 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
 
   await db.execute('UPDATE events SET views_count = views_count + 1 WHERE id = ?', [eventId]);
 
-  const [congratulations, reactionRows, [withRelations], archivePhotoRows] = await Promise.all([
+  const [congratulations, reactionRows, [withRelations], archivePhotoRows, publicAlbums] = await Promise.all([
     db.query(
       `SELECT * FROM congratulations
         WHERE event_id = ? AND (status = 'approved' OR (user_id = ? AND status = 'pending'))
@@ -735,9 +735,13 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
       [eventId]
     ),
     attachHonoreesAndTypes([withAbsoluteMedia(event)]),
-    // «أرشيف الأعراس» (ADR-0008): empty unless the event is approved, has
-    // ended and its type carries the archive — the rule is in the query.
-    archivePhotos.listPublic(eventId)
+    // «أرشيف الأعراس» (ADR-0008/0009): empty unless the event is approved,
+    // has ended and its type carries the gallery — the rule is in the query.
+    // This is the event's default album, in the old shape plus additives.
+    albums.listDefaultAlbumPhotosForEvent(eventId),
+    // Every published album of this event, for the page's albums strip. The
+    // same visibility rule lives in the query; this is an additive summary.
+    albums.listPublicAlbums({ eventId, page: 1, limit: 100 })
   ]);
 
   const reactions = EMPTY_REACTIONS();
@@ -750,7 +754,8 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
     views_count: event.views_count + 1,
     reactions,
     congratulations: congratulations.map(withAbsoluteMedia),
-    archive_photos: archivePhotoRows
+    archive_photos: archivePhotoRows,
+    albums: publicAlbums.albums
   };
 }
 
@@ -1762,6 +1767,7 @@ module.exports = {
   EVENT_SPAN_END_SQL_EVENTS,
   EVENT_SPAN_END_SQL_E,
   EVENT_SPAN_START_SQL_E,
+  escapeLike,
   listAmendments,
   listMyEvents,
   findCollisions,

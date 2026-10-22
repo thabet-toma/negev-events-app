@@ -3,6 +3,7 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
+const cloudinary = require('./cloudinary.service');
 
 /**
  * The four ready-made expiry lengths the admin panel offers (#20 step 8,
@@ -30,7 +31,15 @@ function todayDateString() {
 }
 
 function shapeStory(row) {
-  return { ...withAbsoluteMedia(row), isLive: Boolean(row.is_live), is_ad: Boolean(row.is_ad) };
+  const shaped = { ...withAbsoluteMedia(row), isLive: Boolean(row.is_live), is_ad: Boolean(row.is_ad) };
+  // One additive field for the studio's "download the poster" button. It is
+  // derived, never stored: the same image URL with Cloudinary's attachment
+  // flag downloads instead of rendering, and a non-Cloudinary URL passes
+  // through unchanged so the button still means something.
+  shaped.download_url = typeof shaped.image === 'string' && shaped.image.includes('res.cloudinary.com/')
+    ? shaped.image.replace('/image/upload/', '/image/upload/fl_attachment/')
+    : (shaped.image || null);
+  return shaped;
 }
 
 /**
@@ -140,12 +149,13 @@ async function createStory(data) {
 
   const { insertId } = await db.execute(
     `INSERT INTO stories
-       (title, clan, town, image, is_live, event_id, expires_at, advertiser_name, is_ad, target_url, slide_duration_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (title, clan, town, image, is_live, event_id, expires_at, advertiser_name, is_ad, target_url,
+        link_platform, cta_label, slide_duration_seconds)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.title, data.clan, data.town, data.image, data.is_live ? 1 : 0, data.event_id,
       data.expires_at, data.advertiser_name, data.is_ad ? 1 : 0, data.target_url,
-      data.slide_duration_seconds || 5
+      data.link_platform, data.cta_label, data.slide_duration_seconds || 5
     ]
   );
   return getAdminStoryById(insertId);
@@ -153,7 +163,8 @@ async function createStory(data) {
 
 const UPDATABLE_COLUMNS = [
   'title', 'clan', 'town', 'image', 'is_live', 'event_id',
-  'expires_at', 'advertiser_name', 'is_ad', 'target_url', 'slide_duration_seconds'
+  'expires_at', 'advertiser_name', 'is_ad', 'target_url',
+  'link_platform', 'cta_label', 'slide_duration_seconds'
 ];
 const BOOLEAN_COLUMNS = ['is_live', 'is_ad'];
 
@@ -184,8 +195,23 @@ async function updateStory(id, data) {
 }
 
 async function deleteStory(id) {
+  const story = await db.queryOne('SELECT poster_public_id FROM stories WHERE id = ?', [id]);
   const { affectedRows } = await db.execute('DELETE FROM stories WHERE id = ?', [id]);
   if (!affectedRows) throw ApiError.notFound('القصة غير موجودة');
+  if (story && story.poster_public_id) await cloudinary.destroy(story.poster_public_id);
+}
+
+/**
+ * Records which Cloudinary asset a studio-generated story owns, after the
+ * story row exists. Kept separate from createStory so the general create
+ * endpoint can never be used to claim (and later delete) another story's
+ * asset: only the studio calls this, with a public_id it just uploaded.
+ */
+async function attachPoster(id, publicId, source) {
+  await db.execute(
+    'UPDATE stories SET poster_public_id = ?, poster_source = ? WHERE id = ?',
+    [publicId, source, id]
+  );
 }
 
 /**
@@ -232,5 +258,6 @@ module.exports = {
   createStory,
   updateStory,
   deleteStory,
+  attachPoster,
   getStoryMetrics
 };

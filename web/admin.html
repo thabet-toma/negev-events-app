@@ -144,6 +144,9 @@
         <button class="admin-tab-btn active" data-tab="tabEvents" onclick="switchAdminTab('tabEvents')">
           <i class="fa-solid fa-list-check"></i> إدارة ومراجعة المناسبات
         </button>
+        <button class="admin-tab-btn" id="tabAdminAlbumsBtn" data-tab="tabAdminAlbums" onclick="switchAdminTab('tabAdminAlbums')">
+          <i class="fa-solid fa-images"></i> ألبومات الأعراس
+        </button>
         <button class="admin-tab-btn" data-tab="tabDirectAdd" onclick="switchAdminTab('tabDirectAdd')">
           <i class="fa-solid fa-plus-circle"></i> نشر مناسبة معتمدة فوراً
         </button>
@@ -155,6 +158,9 @@
         </button>
         <button class="admin-tab-btn" id="tabBroadcastBtn" data-tab="tabBroadcast" onclick="switchAdminTab('tabBroadcast')">
           <i class="fa-solid fa-bullhorn"></i> البث والإشعارات العامة
+        </button>
+        <button class="admin-tab-btn" id="tabStoriesBtn" data-tab="tabStories" onclick="switchAdminTab('tabStories')" style="display:none;">
+          <i class="fa-solid fa-clapperboard"></i> ستوريات التسويق
         </button>
         <button class="admin-tab-btn" id="tabUsersBtn" data-tab="tabUsers" onclick="switchAdminTab('tabUsers')" style="display:none;">
           <i class="fa-solid fa-user-gear"></i> إدارة المستخدمين
@@ -205,6 +211,83 @@
         </div>
 
         <div id="adminEventsList" class="admin-events-grid"></div>
+      </section>
+
+      <!-- TAB: ALBUMS & PHOTO MODERATION (ADR-0009) — لكل أدمن داخل بلداته -->
+      <section id="tabAdminAlbums" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-images"></i> ألبومات الأعراس</h2>
+            <p>اختر المناسبة، ثم أدر ألبوماتها وصورها. لا سقف لعدد الصور — الرفع دفعات، وكل صورة مستقلة بعنوانها ووسومها.</p>
+          </div>
+          <div class="admin-albums-picker">
+            <select id="adminAlbumsEventSelect" aria-label="اختر المناسبة"></select>
+            <button type="button" class="admin-btn-primary" onclick="openAdminEventAlbums()">
+              <i class="fa-solid fa-folder-open"></i> فتح الألبومات
+            </button>
+          </div>
+          <div id="adminAlbumsNotice" class="occasion-types-notice" style="display:none;"></div>
+          <div id="adminAlbumsList" class="admin-albums-grid">
+            <div class="empty-state" style="padding:26px; text-align:center; color:var(--text-dim);">
+              <i class="fa-solid fa-images" style="font-size:2rem; color:var(--gold-main);"></i>
+              <p>اختر مناسبة لعرض ألبوماتها.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane-box" id="adminAlbumDetail" style="margin-top:20px; display:none;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+            <div>
+              <h2 id="adminAlbumDetailTitle"><i class="fa-solid fa-images"></i> الألبوم</h2>
+              <p id="adminAlbumDetailMeta"></p>
+            </div>
+            <button type="button" class="admin-btn-ghost" onclick="closeAdminAlbumDetail()">
+              <i class="fa-solid fa-arrow-right"></i> رجوع للألبومات
+            </button>
+          </div>
+
+          <div class="admin-album-toolbar">
+            <label class="admin-btn-primary admin-album-upload-label">
+              <i class="fa-solid fa-cloud-arrow-up"></i> رفع صور
+              <input type="file" id="adminAlbumUploadInput" accept="image/jpeg,image/png,image/webp,image/heic" multiple hidden onchange="handleAdminAlbumUpload(this)">
+            </label>
+            <button type="button" class="admin-btn-ghost" onclick="createAdminAlbum()"><i class="fa-solid fa-folder-plus"></i> ألبوم جديد</button>
+            <button type="button" class="btn-reject" id="adminAlbumDeleteBtn" onclick="deleteAdminAlbum()" style="display:none;"><i class="fa-solid fa-trash-can"></i> حذف الألبوم</button>
+          </div>
+
+          <ul id="adminAlbumUploadQueue" class="archive-upload-queue"></ul>
+          <div id="adminAlbumPhotos" class="admin-album-photos"></div>
+
+          <div class="admin-album-import">
+            <input type="text" id="adminAlbumImportUrl" placeholder="https://scontent...fbcdn.net/... (Copy image address)" aria-label="رابط صورة مباشر">
+            <button type="button" class="admin-btn-ghost" onclick="importAdminAlbumPhotoUrl()"><i class="fa-solid fa-link"></i> استيراد رابط صورة</button>
+          </div>
+          <p class="hint-text">رابط منشور فيسبوك لا يُستورد — انسخ رابط الصورة نفسه من المتصفّح (Copy image address)، أو ارفع الملف مباشرة.</p>
+        </div>
+
+        <div class="pane-box" style="margin-top:20px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div><h2><i class="fa-solid fa-user-tag"></i> طابور الوسوم</h2><p>طلبات «أنا في الصورة» بانتظار الاعتماد أو الرفض، داخل بلداتك فقط.</p></div>
+            <select id="adminPhotoTagsStatus" class="activity-filter-select" onchange="loadAdminPhotoTags(this.value)">
+              <option value="pending">بانتظار المراجعة</option>
+              <option value="approved">المعتمدة</option>
+              <option value="rejected">المرفوضة</option>
+            </select>
+          </div>
+          <div id="adminPhotoTagsQueue" class="admin-photo-queue"></div>
+        </div>
+
+        <div class="pane-box" style="margin-top:20px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div><h2><i class="fa-solid fa-flag"></i> بلاغات الصور</h2><p>بلاغات الخصوصية والمحتوى — الإخفاء قرار بشري، لا حذف تلقائي.</p></div>
+            <select id="adminPhotoReportsStatus" class="activity-filter-select" onchange="loadAdminPhotoReports(this.value)">
+              <option value="open">مفتوحة</option>
+              <option value="resolved">محلولة</option>
+              <option value="dismissed">متجاهَلة</option>
+            </select>
+          </div>
+          <div id="adminPhotoReportsQueue" class="admin-photo-queue"></div>
+        </div>
       </section>
 
       <!-- TAB 2: DIRECT ADMIN ADD -->
@@ -933,6 +1016,95 @@
           </div>
           <div id="analyticsRetentionNotice" class="occasion-types-notice"></div>
           <div id="analyticsCountsList" class="admin-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB: MARKETING STORY STUDIO — سوبر أدمن حصراً (ADR-0010) -->
+      <section id="tabStories" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-clapperboard"></i> ستوريو التسويق</h2>
+            <p>الصق رابط فيديو يوتيوب أو تيك توك — نولّد بطاقة ١٠٨٠×١٩٢٠ بهوية أعراسنا، والضغط عليها داخل التطبيق يفتح الفيديو. الصورة نفسها قابلة للتنزيل للنشر على السوشيال.</p>
+          </div>
+
+          <div id="storyStudioNotice" class="occasion-types-notice" style="display:none;"></div>
+
+          <form id="storyStudioForm" class="admin-form" onsubmit="previewStoryStudio(event)">
+            <div class="form-group">
+              <label>رابط الفيديو (يوتيوب / تيك توك) *</label>
+              <input type="url" id="storyStudioUrl" placeholder="https://youtu.be/..." required>
+              <span class="hint-text">فيسبوك وإنستغرام: الرابط يُقبل، لكن الصورة تُولَّد بالهوية بلا مصغّرة (Meta لا تعطي oEmbed بلا توكن).</span>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label>العنوان على الصورة</label>
+                <input type="text" id="storyStudioTitle" maxlength="200" placeholder="يُجلب من الفيديو إن تُرك فارغاً">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label>سطر تحت العنوان</label>
+                <input type="text" id="storyStudioSubtitle" maxlength="150" placeholder="اسم القناة أو سطر ترويجي">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1;">
+                <label>نص الزر</label>
+                <input type="text" id="storyStudioCta" maxlength="40" placeholder="شاهد الفيديو">
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label>مدة الظهور</label>
+                <select id="storyStudioExpiry">
+                  <option value="day">يوم</option>
+                  <option value="3_days">٣ أيام</option>
+                  <option value="week" selected>أسبوع</option>
+                  <option value="month">شهر</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row" style="align-items:center; gap:16px;">
+              <label class="ot-check" style="flex:none;">
+                <input type="checkbox" id="storyStudioIsAd" onchange="toggleStoryAdvertiserField()"> قصة إعلانية
+              </label>
+              <div class="form-group" id="storyStudioAdvertiserWrap" style="flex:1; display:none; margin-bottom:0;">
+                <label>اسم المعلن *</label>
+                <input type="text" id="storyStudioAdvertiser" maxlength="150" placeholder="اسم التاجر أو الجهة">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <button type="submit" class="admin-btn-primary" id="storyStudioPreviewBtn" style="flex:1;">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> معاينة البطاقة
+              </button>
+              <button type="button" class="admin-btn-ghost" id="storyStudioPublishBtn" style="flex:1; display:none;" onclick="publishStoryStudio()">
+                <i class="fa-solid fa-paper-plane"></i> نشر القصة
+              </button>
+            </div>
+          </form>
+
+          <div id="storyStudioPreviewWrap" class="story-studio-preview" hidden>
+            <img id="storyStudioPreviewImage" alt="معاينة بطاقة الستوري">
+            <div id="storyStudioPreviewMeta" class="story-studio-meta"></div>
+          </div>
+        </div>
+
+        <div class="pane-box" style="margin-top:24px;">
+          <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+            <div>
+              <h2><i class="fa-solid fa-rectangle-list"></i> الستوريات المنشورة</h2>
+              <p>نشِطة ومنتهية، مع مشاهدات ونقرات حقيقية — زرّ «قياس» يفتح التفاصيل.</p>
+            </div>
+            <button type="button" class="admin-btn-ghost" onclick="loadAdminStories()">
+              <i class="fa-solid fa-rotate"></i> تحديث
+            </button>
+          </div>
+          <div id="adminStoriesList" class="admin-stories-list">
+            <div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);">
+              <i class="fa-solid fa-spinner fa-spin" style="font-size:1.8rem; color:var(--gold-main); margin-bottom:10px;"></i>
+              <p>جاري تحميل الستوريات...</p>
+            </div>
+          </div>
         </div>
       </section>
 

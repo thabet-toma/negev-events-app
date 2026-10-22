@@ -17,6 +17,7 @@ import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
 import 'agenda_screen.dart';
+import 'albums_screen.dart';
 import 'edit_event_screen.dart';
 import 'event_details_screen.dart';
 import 'live_screen.dart';
@@ -1041,6 +1042,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                               onPressed: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(builder: (_) => const AgendaScreen()),
+                                );
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.photo_library_outlined),
+                              tooltip: 'ألبومات الأعراس',
+                              onPressed: () {
+                                setState(() => _showTopChrome = false);
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => const AlbumsScreen()),
                                 );
                               },
                             ),

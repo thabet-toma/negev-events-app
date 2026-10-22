@@ -2,8 +2,91 @@
 
 const db = require('../db/pool');
 const config = require('../config');
+const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
+
+const GRAPH_VERSION = 'v20.0';
+const GRAPH_TIMEOUT_MS = 8000;
+
+/**
+ * One Graph API GET. The page token is required for reading a Page's own
+ * albums (`pages_read_engagement` + `pages_show_list`); the existing token is
+ * already used for publishing, so whether it can read is a fact to verify,
+ * not an assumption. Errors are logged in English and surfaced in Arabic —
+ * never echo Facebook's message to the admin, and never log the token or the
+ * full URL.
+ */
+async function graphGet(pathname) {
+  const { pageId, accessToken } = config.facebook || {};
+  if (!pageId || !accessToken) {
+    throw ApiError.badRequest('صفحة فيسبوك غير مفعّلة — أضف FACEBOOK_PAGE_ID وFACEBOOK_PAGE_ACCESS_TOKEN إلى إعدادات الخادم');
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPH_TIMEOUT_MS);
+  const separator = pathname.includes('?') ? '&' : '?';
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/${GRAPH_VERSION}/${pathname}${separator}access_token=${encodeURIComponent(accessToken)}`,
+      { signal: controller.signal }
+    );
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.error) {
+      logger.warn(`[facebook] graph ${pathname.split('?')[0]} answered ${res.status}${data && data.error && data.error.code ? ` (code ${data.error.code})` : ''}`);
+      throw ApiError.badRequest('تعذّر قراءة صفحة فيسبوك — تحقّق من صلاحية التوكن (pages_read_engagement) وحاول مرة أخرى');
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err.name === 'AbortError') {
+      throw ApiError.badRequest('انتهت مهلة الاتصال بفيسبوك — حاول مرة أخرى');
+    }
+    throw ApiError.badRequest('تعذّر الاتصال بفيسبوك — تحقّق من الشبكة وحاول مرة أخرى');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The page's own albums, newest first — only albums a human can import. */
+async function listPageAlbums() {
+  const { pageId } = config.facebook || {};
+  const data = await graphGet(
+    `${encodeURIComponent(pageId)}/albums?fields=id,name,count,cover_photo{images}&limit=50`
+  );
+  return (data.data || []).map(album => ({
+    id: String(album.id),
+    name: album.name || 'ألبوم فيسبوك',
+    count: Number(album.count) || 0,
+    cover_url: album.cover_photo && Array.isArray(album.cover_photo.images) && album.cover_photo.images.length
+      ? album.cover_photo.images[0].source
+      : null
+  }));
+}
+
+/**
+ * Up to 100 photos of one Page album, each with its largest downloadable
+ * rendition. `images[0]` is the largest in Graph's ordering; the importer
+ * re-checks the host and size before fetching it.
+ */
+async function listAlbumPhotos(albumId) {
+  const data = await graphGet(
+    `${encodeURIComponent(albumId)}/photos?fields=id,images,alt_text,created_time&limit=100`
+  );
+  return (data.data || [])
+    .map(photo => {
+      const image = Array.isArray(photo.images) && photo.images.length ? photo.images[0] : null;
+      return {
+        id: String(photo.id),
+        source_url: image ? image.source : null,
+        width: image ? Number(image.width) || null : null,
+        height: image ? Number(image.height) || null : null,
+        caption: photo.alt_text || null,
+        created_time: photo.created_time || null
+      };
+    })
+    .filter(photo => photo.source_url);
+}
 
 /**
  * Builds marketing copy for the Facebook post.
@@ -170,5 +253,7 @@ module.exports = {
   publishEvent,
   publishEventSafely,
   publishCustomPost,
-  formatEventCaption
+  formatEventCaption,
+  listPageAlbums,
+  listAlbumPhotos
 };

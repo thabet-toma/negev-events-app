@@ -1,0 +1,842 @@
+import 'dart:async';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/material.dart';
+
+import '../main.dart';
+import '../models/album.dart';
+import '../models/event.dart' show Pagination;
+import '../theme.dart';
+import '../widgets/async_view.dart' show showMessage;
+import '../widgets/congratulations.dart' show openSignInGate;
+
+/// «ألبومات الأعراس» — بحث واحد بثلاث مجموعات (ألبومات/صور/أشخاص)، ثم ألبوم،
+/// ثم صورة مستقلة بوسومها. لا سقف للصور؛ الترقيم على الخادم.
+class AlbumsScreen extends StatefulWidget {
+  const AlbumsScreen({super.key});
+
+  @override
+  State<AlbumsScreen> createState() => _AlbumsScreenState();
+}
+
+class _AlbumsScreenState extends State<AlbumsScreen> {
+  final TextEditingController _search = TextEditingController();
+  Timer? _debounce;
+  int _tab = 0;
+  bool _loading = false;
+  String? _error;
+  List<EventAlbum> _albums = const [];
+  AlbumSearchResults? _results;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final query = _search.text.trim();
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      if (query.isEmpty) {
+        if (_tab == 0) {
+          final data = await AppServices.of(context).api.albums(page: 1, limit: 30);
+          if (!mounted) return;
+          setState(() => _albums = data.albums);
+        } else {
+          if (mounted) setState(() => _albums = const []);
+        }
+      } else {
+        final data = await AppServices.of(context).api.searchAlbums(query);
+        if (!mounted) return;
+        setState(() => _results = data);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _onSearchChanged(String _) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _load();
+    });
+    setState(() {});
+  }
+
+  void _setTab(int tab) {
+    setState(() => _tab = tab);
+    _load();
+  }
+
+  Future<void> _openMyPhotos() async {
+    if (!AppServices.of(context).auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لترى الصور التي وسمت نفسك فيها');
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MyPhotosScreen()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final query = _search.text.trim();
+    final albums = query.isEmpty ? _albums : (_results?.albums ?? const <EventAlbum>[]);
+    final photos = _results?.photos ?? const <EventPhoto>[];
+    final people = _results?.people ?? const <PersonSearchResult>[];
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('ألبومات الأعراس'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.person_search),
+              tooltip: 'صوري',
+              onPressed: _openMyPhotos,
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+                child: TextField(
+                  controller: _search,
+                  onChanged: _onSearchChanged,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'ابحث باسم العرس، العشيرة، الشخص، أو وصف الصورة...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _search.clear();
+                              _results = null;
+                              _load();
+                            },
+                          ),
+                    filled: true,
+                    fillColor: c.surfaceSunk,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(
+                  children: [
+                    _tabChip('ألبومات', 0, albums.length),
+                    const SizedBox(width: 8),
+                    _tabChip('صور', 1, photos.length),
+                    const SizedBox(width: 8),
+                    _tabChip('أشخاص', 2, people.length),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Expanded(child: _buildBody(c, query, albums, photos, people)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tabChip(String label, int index, int count) {
+    final selected = _tab == index;
+    return ChoiceChip(
+      label: Text(count > 0 ? '$label ($count)' : label),
+      selected: selected,
+      onSelected: (_) => _setTab(index),
+    );
+  }
+
+  Widget _buildBody(
+    NegevPalette c,
+    String query,
+    List<EventAlbum> albums,
+    List<EventPhoto> photos,
+    List<PersonSearchResult> people,
+  ) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return _Message(
+        icon: Icons.cloud_off,
+        title: 'تعذّر تحميل الألبومات',
+        body: _error!,
+        action: TextButton(onPressed: _load, child: const Text('إعادة المحاولة')),
+      );
+    }
+    if (_tab == 0) {
+      if (albums.isEmpty) {
+        return _Message(
+          icon: Icons.photo_library_outlined,
+          title: query.isEmpty ? 'لا ألبومات ظاهرة بعد' : 'لا ألبومات تطابق بحثك',
+          body: 'تظهر الألبومات بعد انتهاء المناسبة وموافقة الإدارة.',
+        );
+      }
+      return GridView.builder(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 28),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 0.78,
+        ),
+        itemCount: albums.length,
+        itemBuilder: (context, index) {
+          final album = albums[index];
+          return _AlbumCard(
+            album: album,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: album)),
+            ),
+          );
+        },
+      );
+    }
+    if (_tab == 1) {
+      if (query.isEmpty) {
+        return const _Message(
+          icon: Icons.search,
+          title: 'ابحث لتظهر الصور',
+          body: 'اكتب اسم العريس أو العشيرة أو وصف الصورة — أو اسم شخص لترى صوره.',
+        );
+      }
+      if (photos.isEmpty) {
+        return const _Message(
+          icon: Icons.image_not_supported,
+          title: 'لا صور تطابق بحثك',
+          body: 'جرّب كلمة واحدة من الاسم أو الوصف.',
+        );
+      }
+      return _PhotoGrid(photos: photos);
+    }
+    if (query.isEmpty) {
+      return const _Message(
+        icon: Icons.people_outline,
+        title: 'ابحث باسم شخص',
+        body: 'الأسماء تأتي من الوسوم التي وافق عليها صاحبها أو أضافها الأدمن.',
+      );
+    }
+    if (people.isEmpty) {
+      return const _Message(
+        icon: Icons.person_off_outlined,
+        title: 'لا أشخاص يطابقون بحثك',
+        body: 'جرّب الاسم الأول أو لقب العائلة.',
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 28),
+      itemCount: people.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final person = people[index];
+        return ListTile(
+          tileColor: c.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          leading: CircleAvatar(
+            backgroundColor: c.skyWash,
+            backgroundImage: person.sampleThumbUrl == null
+                ? null
+                : CachedNetworkImageProvider(person.sampleThumbUrl!),
+            child: person.sampleThumbUrl == null
+                ? Icon(Icons.person, color: c.sky)
+                : null,
+          ),
+          title: Text(person.name),
+          subtitle: Text('${person.photosCount} صورة'),
+          trailing: const Icon(Icons.chevron_left),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => PersonPhotosScreen(name: person.name, nameKey: person.nameKey),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AlbumCard extends StatelessWidget {
+  const _AlbumCard({required this.album, required this.onTap});
+
+  final EventAlbum album;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final cover = album.coverThumbUrl ?? album.coverUrl;
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: onTap,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: c.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: c.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: cover == null
+                  ? ColoredBox(
+                      color: c.surfaceSunk,
+                      child: Icon(Icons.photo_library, color: c.sky, size: 36),
+                    )
+                  : CachedNetworkImage(
+                      imageUrl: cover,
+                      fit: BoxFit.cover,
+                      placeholder: (_, _) => ColoredBox(color: c.surfaceSunk),
+                      errorWidget: (_, _, _) => ColoredBox(
+                        color: c.surfaceSunk,
+                        child: Icon(Icons.broken_image, color: c.inkFaint),
+                      ),
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(album.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 2),
+                  Text(
+                    [album.eventTitle, album.town].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.inkFaint, fontSize: 11),
+                  ),
+                  const SizedBox(height: 2),
+                  Text('${album.photoCount} صورة', style: TextStyle(color: c.inkFaint, fontSize: 11)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AlbumDetailScreen extends StatefulWidget {
+  const AlbumDetailScreen({super.key, required this.album});
+
+  final EventAlbum album;
+
+  @override
+  State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
+}
+
+class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
+  late EventAlbum _album = widget.album;
+  List<EventPhoto> _photos = const [];
+  Pagination? _pagination;
+  bool _loading = true;
+  String? _error;
+  bool _loadingMore = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await AppServices.of(context).api.albumDetails(widget.album.id);
+      if (!mounted) return;
+      setState(() {
+        _album = data.album;
+        _photos = data.photos;
+        _pagination = data.pagination;
+        _loading = false;
+        _error = null;
+      });
+    } catch (error) {
+      if (mounted) setState(() { _loading = false; _error = '$error'; });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final pagination = _pagination;
+    if (pagination == null || !pagination.hasMore || _loadingMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final data = await AppServices.of(context).api.albumDetails(_album.id, page: pagination.page + 1);
+      if (!mounted) return;
+      setState(() {
+        _photos = [..._photos, ...data.photos];
+        _pagination = data.pagination;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(title: Text(_album.title)),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? _Message(icon: Icons.cloud_off, title: 'تعذّر تحميل الألبوم', body: _error!)
+                : Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                [_album.eventTitle, _album.town, _album.eventDate]
+                                    .whereType<String>()
+                                    .where((s) => s.isNotEmpty)
+                                    .join(' · '),
+                                style: TextStyle(color: context.c.inkFaint, fontSize: 12),
+                              ),
+                            ),
+                            Text('${_album.photoCount} صورة',
+                                style: TextStyle(color: context.c.inkFaint, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: _photos.isEmpty
+                            ? const _Message(
+                                icon: Icons.image_not_supported,
+                                title: 'لا صور ظاهرة',
+                                body: 'الألبوم موجود لكن لا صور معتمدة فيه بعد.',
+                              )
+                            : _PhotoGrid(
+                                photos: _photos,
+                                onTap: (index) => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => PhotoViewerScreen(photos: _photos, initialIndex: index),
+                                  ),
+                                ),
+                              ),
+                      ),
+                      if (_pagination?.hasMore == true)
+                        Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: TextButton(
+                            onPressed: _loadingMore ? null : _loadMore,
+                            child: _loadingMore
+                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Text('عرض المزيد من الصور'),
+                          ),
+                        ),
+                    ],
+                  ),
+      ),
+    );
+  }
+}
+
+class _PhotoGrid extends StatelessWidget {
+  const _PhotoGrid({required this.photos, this.onTap});
+
+  final List<EventPhoto> photos;
+  final void Function(int index)? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 28),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+      ),
+      itemCount: photos.length,
+      itemBuilder: (context, index) {
+        final photo = photos[index];
+        return InkWell(
+          onTap: onTap == null
+              ? () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => PhotoViewerScreen(photos: photos, initialIndex: index),
+                    ),
+                  )
+              : () => onTap!(index),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: CachedNetworkImage(
+                  imageUrl: photo.displayImage,
+                  fit: BoxFit.cover,
+                  placeholder: (_, _) => ColoredBox(color: c.surfaceSunk),
+                  errorWidget: (_, _, _) => ColoredBox(
+                    color: c.surfaceSunk,
+                    child: Icon(Icons.broken_image, color: c.inkFaint),
+                  ),
+                ),
+              ),
+              if (photo.caption != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(6, 12, 6, 5),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black87],
+                      ),
+                    ),
+                    child: Text(
+                      photo.caption!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class PersonPhotosScreen extends StatefulWidget {
+  const PersonPhotosScreen({super.key, required this.name, required this.nameKey});
+
+  final String name;
+  final String nameKey;
+
+  @override
+  State<PersonPhotosScreen> createState() => _PersonPhotosScreenState();
+}
+
+class _PersonPhotosScreenState extends State<PersonPhotosScreen> {
+  late Future<List<EventPhoto>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<EventPhoto>> _load() async {
+    final data = await AppServices.of(context).api.photos(person: widget.nameKey, limit: 48);
+    return data.photos;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(title: Text('صور ${widget.name}')),
+        body: FutureBuilder<List<EventPhoto>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return _Message(icon: Icons.cloud_off, title: 'تعذّر تحميل الصور', body: '${snapshot.error}');
+            }
+            final photos = snapshot.data ?? const <EventPhoto>[];
+            if (photos.isEmpty) {
+              return const _Message(icon: Icons.image_not_supported, title: 'لا صور', body: 'لم تُعتمد صورة لهذا الاسم بعد.');
+            }
+            return _PhotoGrid(photos: photos);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class MyPhotosScreen extends StatefulWidget {
+  const MyPhotosScreen({super.key});
+
+  @override
+  State<MyPhotosScreen> createState() => _MyPhotosScreenState();
+}
+
+class _MyPhotosScreenState extends State<MyPhotosScreen> {
+  late Future<List<EventPhoto>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<EventPhoto>> _load() async {
+    final data = await AppServices.of(context).api.myPhotos(limit: 48);
+    return data.photos;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('صوري')),
+        body: FutureBuilder<List<EventPhoto>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return _Message(icon: Icons.cloud_off, title: 'تعذّر تحميل صورك', body: '${snapshot.error}');
+            }
+            final photos = snapshot.data ?? const <EventPhoto>[];
+            if (photos.isEmpty) {
+              return const _Message(
+                icon: Icons.photo_library_outlined,
+                title: 'لا صور بعد',
+                body: 'افتح صورة من الألبوم واضغط «أنا في الصورة»؛ تظهر هنا بعد موافقة الإدارة.',
+              );
+            }
+            return _PhotoGrid(photos: photos);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class PhotoViewerScreen extends StatefulWidget {
+  const PhotoViewerScreen({super.key, required this.photos, required this.initialIndex});
+
+  final List<EventPhoto> photos;
+  final int initialIndex;
+
+  @override
+  State<PhotoViewerScreen> createState() => _PhotoViewerScreenState();
+}
+
+class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
+  late final PageController _controller = PageController(initialPage: widget.initialIndex);
+  late int _index = widget.initialIndex;
+  bool _busy = false;
+
+  EventPhoto get _photo => widget.photos[_index];
+
+  Future<void> _tag() async {
+    if (!AppServices.of(context).auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لتضع اسمك في الصورة');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await AppServices.of(context).api.tagPhoto(_photo.id);
+      if (mounted) showMessage(context, 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _withdraw() async {
+    setState(() => _busy = true);
+    try {
+      await AppServices.of(context).api.withdrawPhotoTag(_photo.id);
+      if (mounted) showMessage(context, 'تم سحب وسمك من الصورة');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _report() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول للإبلاغ عن الصورة');
+      return;
+    }
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('سبب الإبلاغ'),
+        children: [
+          SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext, 'privacy'), child: const Text('أنا في الصورة وأطلب مراجعتها')),
+          SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext, 'inappropriate'), child: const Text('محتوى غير لائق')),
+          SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext, 'wrong_event'), child: const Text('الصورة لمناسبة أخرى')),
+          SimpleDialogOption(onPressed: () => Navigator.pop(dialogContext, 'other'), child: const Text('سبب آخر')),
+        ],
+      ),
+    );
+    if (reason == null) return;
+    setState(() => _busy = true);
+    try {
+      await services.api.reportPhoto(_photo.id, reason: reason);
+      if (mounted) showMessage(context, 'تم استلام بلاغك — ستراجعه الإدارة');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photo = _photo;
+    final signedIn = AppServices.of(context).auth.isSignedIn;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: Text('${_index + 1} / ${widget.photos.length}'),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: PageView.builder(
+                controller: _controller,
+                itemCount: widget.photos.length,
+                onPageChanged: (value) => setState(() => _index = value),
+                itemBuilder: (context, index) {
+                  final item = widget.photos[index];
+                  return InteractiveViewer(
+                    child: Center(
+                      child: CachedNetworkImage(
+                        imageUrl: item.imageUrl,
+                        fit: BoxFit.contain,
+                        placeholder: (_, _) => const CircularProgressIndicator(color: Colors.white54),
+                        errorWidget: (_, _, _) => const Icon(Icons.broken_image, color: Colors.white54, size: 48),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            Container(
+              width: double.infinity,
+              color: Colors.black,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (photo.caption != null) ...[
+                    Text(photo.caption!, textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 6),
+                  ],
+                  if (photo.tags.isNotEmpty)
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: photo.tags
+                          .map((tag) => Chip(
+                                label: Text(tag.name),
+                                backgroundColor: Colors.white24,
+                                labelStyle: const TextStyle(color: Colors.white, fontSize: 11),
+                              ))
+                          .toList(),
+                    ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _busy ? null : _tag,
+                        icon: const Icon(Icons.person_add_alt_1, size: 18),
+                        label: const Text('أنا في الصورة'),
+                      ),
+                      if (signedIn)
+                        OutlinedButton(
+                          onPressed: _busy ? null : _withdraw,
+                          child: const Text('سحب وسطي'),
+                        ),
+                      OutlinedButton.icon(
+                        onPressed: _busy ? null : _report,
+                        icon: const Icon(Icons.flag_outlined, size: 18),
+                        label: const Text('إبلاغ'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Message extends StatelessWidget {
+  const _Message({required this.icon, required this.title, required this.body, this.action});
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 54, color: c.sky),
+            const SizedBox(height: 10),
+            Text(title, textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 6),
+            Text(body, textAlign: TextAlign.center, style: TextStyle(color: c.inkFaint, height: 1.6)),
+            if (action != null) ...[const SizedBox(height: 10), action!],
+          ],
+        ),
+      ),
+    );
+  }
+}

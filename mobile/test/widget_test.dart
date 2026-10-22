@@ -933,6 +933,57 @@ void main() {
     );
   });
 
+  group('ستوريو التسويق — CTA لأي قصة لها رابط (ADR-0010)', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('Story.fromJson يحمل link_platform وcta_label', () {
+      final story = Story.fromJson({
+        'id': 9,
+        'title': 'ترويج',
+        'target_url': 'https://youtu.be/abcdefghijk',
+        'link_platform': 'youtube',
+        'cta_label': 'شاهد الفيديو',
+      });
+      expect(story.linkPlatform, 'youtube');
+      expect(story.ctaLabel, 'شاهد الفيديو');
+      expect(story.targetUrl, 'https://youtu.be/abcdefghijk');
+    });
+
+    testWidgets('قصة ترويجية بلا is_ad تعرض زر CTA وتسمية المنصة', (tester) async {
+      const stories = [
+        Story(
+          id: 1,
+          title: 'ترويج',
+          targetUrl: 'https://youtu.be/abcdefghijk',
+          linkPlatform: 'youtube',
+          ctaLabel: 'شاهد الفيديو',
+          slideDurationSeconds: 30,
+        ),
+      ];
+      final api = apiReturning({'success': true});
+      final auth = AuthStore(api);
+      final realtime = RealtimeService();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppServices(
+            api: api,
+            auth: auth,
+            realtime: realtime,
+            child: const StoryViewerScreen(stories: stories, initialIndex: 0),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('شاهد الفيديو'), findsOneWidget);
+      expect(find.text('يوتيوب'), findsOneWidget);
+      expect(find.text('إعلان'), findsNothing, reason: 'the story is not an ad');
+    });
+  });
+
   group('عارض الستوري — عتبة الثانيتين للمشاهدة (issue #20 خطوة ١٧)', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});

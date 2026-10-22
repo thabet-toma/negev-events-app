@@ -73,6 +73,10 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | صلاحيات ومصادقة | `server/src/middleware/auth.js` |
 | رفع صورة أو صوت | `server/src/middleware/upload.js` |
 | بث لحظي | `server/src/realtime/index.js` + `realtime.emit` من طبقة المسارات |
+| البث المباشر ونقاش اليوم | `server/src/routes/live.routes.js` + `server/src/services/liveHub.service.js` (الحلقات والتصويت)؛ إعدادات البث و`toEmbedUrl` في `settings.service.js`؛ صفحتا `/live` و`/live/embed` في `share.routes.js` (ADR-0006) |
+| الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
+| «قائمتي» (المحفوظات) | ليست جدولاً جديداً: هي وجه «ذكّرني» (`event_reminders`، وعمود `notify` للكتم) — `listMyReminders` و`myListBucket` في `events.service.js` (الأقسام يحسبها الخادم، لا العميل)، ومسارات `/remind` و`/my-reminders` في `events.routes.js`؛ الويب `loadMyList`/`renderMyList` في `web/app.js`، والموبايل `mobile/lib/screens/my_list_screen.dart` + `models/my_list.dart`. تبويبها الثاني في الشريط السفلي، فأي فهرس تبويب بعده انزاح بواحد |
+| ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009 |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
@@ -103,18 +107,41 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 حرِجاً على التاريخ/المكان (يعود `pending`) — التصنيف بالكود لا بالقاعدة. البحث العام
 يمسك أيضاً أي اسم داخل `event_honorees`، لا `groom_name` وحده.
 
+**حارس التكرار** (`events.findPossibleDuplicates` + `server/src/utils/arabicName.js`) يقف عند
+لحظتَي الخروج للعلن فقط: نشر أدمن فوري في `POST /api/events`، والاعتماد في
+`PATCH /api/admin/events/:id/status` — 409 `POSSIBLE_DUPLICATE` حتى يُعاد الطلب مع
+`confirm_duplicate`، ويُسجَّل التجاوز `event_duplicate_override`. **المستخدم العادي لا يراه ولا
+يُوقَف** (قرار المالك): طلبه يدخل الطابور، و`GET /api/admin/events` يُلحق `possible_duplicates`
+بكل صفّ معلّق. المطابقة على الأسماء بعد توحيد الإملاء (همزات، ة/ه، ى/ي، «أبو» ملتصقة، الألقاب)
+مع خطأ حرف أو حرفين وإسقاط اسم أوسط، وفارق `DUPLICATE_DATE_WINDOW_DAYS` على الأكثر؛ «شبه مؤكدة»
+تشترط نفس البلدة لأن تكرار الاسم في بلدتين حقيقي في النقب. تنبيه لا منع — لا تحوّله منعاً صامتاً.
+
+**الأيام الإضافية (`event_days`).** مناسبة متعددة الأيام تحمل ٠..١٠ أيام مسمّاة (حنّة، غداء…)
+باسم وتاريخ ومكان ووقت اختياريين — جدول ابن مثل `event_honorees`، والحقل `extra_days` ظاهر
+واختياري في كل الأنواع؛ `youth_party_date` باقٍ عموداً مستقلاً. «أيام المناسبة» امتداد واحد من
+أقدم إلى أحدث `event_date`/`event_end_date`/`youth_party_date`/`event_days` — ثوابت `EVENT_SPAN_*`
+في `events.service.js` وحدها تبنيه، فلا تكتب `COALESCE(event_end_date, event_date)` جديداً
+لشرط قادم/منتهٍ. التصادم ونافذة التكرار والتذكير بالعدّ التنازلي لا تزال على `event_date` وحده عمداً.
+تغيير تاريخ يوم أو مكانه حرِج، واسمه أو وقته تجميلي.
+
 **البحث لا يزال عاماً وليس ما تبقّى من الخطوة.** `GET /api/events` صار قادماً-أولاً
-(`COALESCE(event_end_date, event_date) >= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي
+(آخر أيام المناسبة `>= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي
 ٣٠ وسقف ١٠٠)، مفلتراً حسب النوع صراحةً (`?occasion_type_id=`) ومرشَّحاً حسب ترويسة
 `X-App-Version` — طلب بلا الترويسة (كل APK منشور اليوم) لا يرى إلا نوع المناسبة الأول
 بالترتيب (`position`)، و`GET /api/events/:id` لنوع آخر يعيد 404. كل صف يحمل أيضاً
 `congratulations_count` و`latest_congratulation`، محسوبَين باستعلام نافذة واحد ومُخفيَين معاً
 حين يكون `show_congratulations_count` مطفأً على النوع. `GET /api/map/events` يخضع لنفس حدّ
 القادم ونفس ترشيح النسخة. **فلتر تغذية `web/` والكرت نفسه أُعيد بناؤهما (#85 دفعة 6أ)** —
-رقاقتا مكان/نوع تفتحان ورقة بحث متعددة الاختيار بدل شريطين ثابتين، والكرت صندوق ٤:٥ بالصورة
-كاملة. **ولوحة الإدارة وتطبيق الموبايل لُحِقا بها (#85 دفعات 6د-6هـ و7-8)** — مؤلّف التعميم
+رقاقتا مكان/نوع تفتحان ورقة بحث متعددة الاختيار بدل شريطين ثابتين، ثم رقاقة تاريخ
+(اليوم/غداً/هذا الأسبوع/الخميس–السبت/يوم مختار ← `?date_from=` `?date_to=`). والكرت صورة
+كاملة فوق لوحة صلبة: العنوان «النوع + أصحاب المناسبة» (العنوان الحرّ سطر صغير تحته فقط حين
+يضيف شيئاً)، وأسطر التاريخ والوقت والمكان والعائلة، وزرّ «التفاصيل» بلون النوع — هو والنقر على
+الصورة يفتحان صفحة المناسبة (`#eventPage`، بترتيب صفحة الموبايل) فوق التغذية دون إعادة رسمها، فالرجوع
+بزرّها أو بزرّ رجوع المتصفّح يبقى على نفس الكرت؛ والإشعار والرابط العميق والأجندة تفتحها هي أيضاً. **ولوحة الإدارة وتطبيق الموبايل لُحِقا بها (#85 دفعات 6د-6هـ
+و7-8)** — مؤلّف التعميم
 بنغمة ومدّة، وسبب الرفض، وإعدادات المنصّة، وحماية الجلسة والمسودّات في اللوحة؛ والمنبّه المحلي،
-ومركز الإشعارات، والكرت ٤:٥، ورقاقتا الفلتر في الموبايل. **ما لا يزال غير محدَّث: الستوريات،
+ومركز الإشعارات، والكرت نفسه («التفاصيل» فيه يفتح صفحة المناسبة، والرجوع منها يبقى على
+نفس الكرت لا الأول)، ورقاقات الفلتر مع التاريخ في الموبايل. **ما لا يزال غير محدَّث: الستوريات،
 والتفاعلات** — لا تزال `coffee` `horse` `fireworks` `rose` `hand` بلا فحص نوع في طبقات العملاء.
 إن كانت مهمتك تلمس هاتين فتحقّق أولاً من حالتهما في issue #20 قبل الافتراض أنهما منتهيتان.
 
@@ -189,17 +216,21 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 ### الوسائط
 - الوسائط تُخزَّن نسبية (`/uploads/<ملف>`) وتخرج **مطلقة دائماً** عبر `withAbsoluteMedia` في `server/src/utils/mediaUrl.js`. أي استعلام جديد يرجّع `poster_url` أو `audio_url` أو `image` يمرّ من هناك — الرابط النسبي يعمل بالصدفة في الويب ويكسر كل عميل آخر
 - `PUBLIC_URL` مطلوب في الإنتاج، وإلا خرجت الروابط على `localhost`
+- **الاستثناء الوحيد: Cloudinary** (ADR-0008) — كل صورة على Cloudinary تُخزَّن رابطاً مطلقاً (`https://res.cloudinary.com/…`) لأن الملف ليس على خادمنا أصلاً، و`absoluteMediaUrl` يتركه كما هو. طريقان للوصول إليه:
+  - **صور الألبومات وصور مشاركة الحلقات:** الرفع من المتصفّح مباشرةً بتوقيع من `cloudinary.service.js`، والصفّ لا يُكتب إلا بعد التحقّق من توقيع ردّ Cloudinary وأن `public_id` داخل مجلّد الهدف نفسه.
+  - **الملصق وصورة الفنان وصورة مزوّد الخدمة:** تصل الخادمَ عبر `upload.js` كما كانت (فلا يتغيّر أي عميل ولا أي APK منشور)، ثم يحوّلها `cloudinary.storeUploadedImage` بعد نجاح كل تحقّق في المسار. بلا مفاتيح أو عند فشل Cloudinary يُخزَّن `/uploads/<ملف>` كما كان ولا يفشل الطلب. الصوت يبقى على القرص دائماً. الصورة المستبدَلة تُحذف من Cloudinary عبر `events.releaseReplacedImage`، إلا إن كان صفّ آخر لا يزال يحملها.
+  - السرّ `CLOUDINARY_API_SECRET` لا يغادر الخادم، ولا يُضاف SDK
 
 ### الأمان
 - `pin_code` مخزّن بـ bcrypt و**لا يخرج في أي استجابة** — مرّر المستخدم دائماً عبر `auth.service.publicUser`
 - **دفتر النقوط خاص على مستوى الاستعلام نفسه**: كل استعلام في `nokoot.service.js` يحمل `WHERE user_id = ?` (والحذف `WHERE id = ? AND user_id = ?`). فلترة بعد الجلب في الـJS = تسريب بيانات
-- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/events/:id/photos/*` و `/admin/admins/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
+- كل مسارات `/admin` خلف `requireAdmin` أو أشدّ، ولا مفاتيح تجاوز. **والدوران لم يعودا متساويين:** `/admin/occasion-types/*` و `/admin/villages/*` و `/admin/towns/*` و `/admin/regions/*` و `/admin/events/:id/promote-village` و `/admin/service-categories/*` و `/admin/stories/*` و `/admin/live/*` و `/admin/events/:id/photos/*` و `/admin/admins/*` و `/admin/analytics/*` و `GET /admin/users` خلف `requireSuperAdmin` حصراً، و`PATCH /admin/users/:id/role` (ترقية/إلغاء صلاحية) يفرض نفس القيد لكن داخل معالِجه مباشرة لا عبر `requireSuperAdmin` — فيردّ 404 لا 403 على أدمن غير سوبر، على نمط `adminScope.service.js` (كل راوتر يحمل حارسه الخاص؛ حارس `admin.routes.js` لا يحمي راوترات أخرى تشارك بادئة `/admin`). **`POST /admin/broadcast` خلف `requireAdmin` فقط منذ #85 (خطوة 22-24)** — أدمن بلدة يبثّ لبلداته هو، والنطاق يُبنى بكامله داخل `adminScope.resolveBroadcastTowns` لا في الراوتر؛ أدمن بلا بلدات مُسنَدة يُرفض صراحة بلا كتابة أي صفّ
 - **نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر** — `adminScope.service.js` وحده يبنيه (`townScopeClause` و `assertEventInScope`)، على نمط `nokoot.service.js`. أدمن بلا صفوف في `admin_towns` **لا يرى ولا يعتمد شيئاً** (‏`AND 1 = 0`)، والرفض **404 لا 403** كي لا يؤكَّد وجود مناسبة لمن لا يملكها. والنشر الفوري صار `isAdminForTown(user, town)` لا مجرّد الدور
-- **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel` — يكتبهما الخادم بنفسه لحظة الإضافة (`admin_entry` من اللوحة، `app_submission` من التطبيق)، لا حقول في أي نموذج
+- **رقم مزوّد الخدمة لا يخرج في استجابة القائمة إطلاقاً** — `phone` غير مُنتقى في استعلام `listPublicProviders` أصلاً، لا مخفيّ في العميل. والرقم **اختياري** (`service_providers.phone` يقبل `NULL`): القائمة تحمل علَماً `has_phone` محسوباً في SQL كي تعرف الواجهات أتعرض زر التواصل دون كشف الرقم. ولا يُنشر مزوّد بلا `consent_at` و `consent_channel` — يكتبهما الخادم بنفسه لحظة الإضافة (`admin_entry` من اللوحة، `app_submission` من التطبيق)، لا حقول في أي نموذج
 - المدخلات كلها عبر `server/src/middleware/validate.js` (`cleanString` يقصّ الطول، `parseId`، `parseAmount`، `requireDate`) — لا تحقق يدوي جديد
 - البلدة عند النشر/التعديل بلدة نشِطة من جدول `towns` **أو اسم محافظة نشِطة** (`towns.service.isActivePlace`) — والأخيرة معناها «البلدة غير معروفة»: بلا دبّوس احتياطي وبلا تنبيه عدم تطابق. الإحداثيات الاحتياطية مركز البلدة (`coordinatesByName`) — لا تخمين، ولا تحقّق ضد `SEED_TOWNS`. لا يُكتب `'غير محدد'` في `events.town` أبداً — المستورِد يكتب اسم المحافظة
 - **البلدات بيانات وقت تشغيل في جدولَي `regions`/`towns`**، والاسم لا المعرّف هو ما يُخزَّن في كل جدول آخر (`events.town`، `admin_towns`، …) لأن كل APK منشور يحمل الأسماء مكتوبة داخله. `mobile/lib/config.dart` لا يزال ينسخ البذرة حرفياً (قاعدة الموبايل أدناه). `web/app.js` و`web/admin.js` يجلبانها ديناميكياً من `GET /api/towns` (مع استبعاد 'الكل') منذ #85 دفعة 6أ و6د، مع احتفاظ `web/admin.js` بمصفوفة احتياطية للإقلاع عند انقطاع الاتصال (story 46). **القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو أي عميل جديد يعيد المشكلة التي وُجدت القرى لحلّها
-- `events.village_id` غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`) — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**
+- `events.village_id` و`events.requested_village_name` («قريتي غير موجودة») غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`)، **ولا يجتمعان** — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**. نشر جديد تحت هذا البند يحمل أحدهما إلزامياً؛ اسم مكتوب يطابق قرية نشِطة يُربط بها فوراً، وغيره ينتظر `POST /admin/events/:id/promote-village` (سوبر أدمن) الذي ينشئ القرية أو يعيد تنشيطها ويربط كل مناسبة طلبت الاسم نفسه
 - الرفع عبر `middleware/upload.js` فقط: قائمة MIME بيضاء، وأسماء ملفات تُولَّد على الخادم ولا تُؤخذ من العميل
 
 ### البث اللحظي

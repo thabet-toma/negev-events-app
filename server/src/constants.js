@@ -190,6 +190,59 @@ const PRIVACY_REQUEST_TYPES = ['access', 'erasure'];
  */
 const PRIVACY_REQUEST_DEADLINE_DAYS = 30;
 
+/**
+ * Photos only — deliberately NOT an album cap. The owner's decision (2026-10)
+ * is that an album may hold as many photos as the family uploads; the only
+ * ceiling is Cloudinary's storage plan. These two numbers protect a single
+ * request, not the album: one signatures call signs at most this many
+ * uploads, and one imported remote image may not exceed this size.
+ */
+const ALBUM_UPLOAD_BATCH_MAX = 20;
+const PHOTO_IMPORT_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Hosts a Facebook image URL may come from. A Facebook POST link cannot be
+ * turned into its photos by any API (oEmbed returns embed HTML only, and its
+ * thumbnail fields were removed in 2025-11); the admin copies the image's own
+ * address from the browser, and those addresses live on Facebook's CDN. The
+ * allowlist is what keeps a pasted URL from making the server fetch an
+ * internal address (SSRF).
+ */
+const PHOTO_IMPORT_HOSTS = ['fbcdn.net', 'fbsbx.com'];
+
+/** The report reasons the UI offers; the SQL ENUM repeats them by hand, so keep both in sync. */
+const PHOTO_REPORT_REASONS = ['privacy', 'inappropriate', 'wrong_event', 'other'];
+
+/**
+ * Distinct reporters a photo needs before it hides itself pending human
+ * review — same shape and same reasoning as CONGRATULATION_REPORT_THRESHOLD:
+ * low enough for a small town's genuine reaction to a private photo, high
+ * enough that one annoyed person cannot silence a wedding album alone.
+ */
+const PHOTO_REPORT_HIDE_THRESHOLD = 3;
+
+/**
+ * The link platforms the story studio recognises. `website` is the fallback
+ * for any other valid http(s) link; a value outside this list is rejected by
+ * stories.routes.js, never stored.
+ */
+const STORY_LINK_PLATFORMS = ['youtube', 'tiktok', 'facebook', 'instagram', 'website'];
+
+/**
+ * Where a video's own thumbnail may be fetched from when the studio draws a
+ * story card. These are the CDNs YouTube/TikTok/Meta actually return from
+ * oEmbed; an allowlist is what keeps a hostile oEmbed response from making
+ * the server fetch an internal address.
+ */
+const STORY_THUMB_HOSTS = [
+  'ytimg.com',
+  'tiktokcdn.com',
+  'tiktokcdn-us.com',
+  'ibytedtos.com',
+  'fbcdn.net',
+  'fbsbx.com'
+];
+
 module.exports = {
   SEED_REGION,
   SEED_TOWNS,
@@ -209,5 +262,12 @@ module.exports = {
   ANALYTICS_EVENT_KEYS,
   COUNT_ONLY_ANALYTICS_EVENTS,
   PRIVACY_REQUEST_TYPES,
-  PRIVACY_REQUEST_DEADLINE_DAYS
+  PRIVACY_REQUEST_DEADLINE_DAYS,
+  ALBUM_UPLOAD_BATCH_MAX,
+  PHOTO_IMPORT_MAX_BYTES,
+  PHOTO_IMPORT_HOSTS,
+  PHOTO_REPORT_REASONS,
+  PHOTO_REPORT_HIDE_THRESHOLD,
+  STORY_LINK_PLATFORMS,
+  STORY_THUMB_HOSTS
 };

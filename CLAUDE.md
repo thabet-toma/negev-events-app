@@ -76,7 +76,7 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | البث المباشر ونقاش اليوم | `server/src/routes/live.routes.js` + `server/src/services/liveHub.service.js` (الحلقات والتصويت)؛ إعدادات البث و`toEmbedUrl` في `settings.service.js`؛ صفحتا `/live` و`/live/embed` في `share.routes.js` (ADR-0006) |
 | الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
 | «قائمتي» (المحفوظات) | ليست جدولاً جديداً: هي وجه «ذكّرني» (`event_reminders`، وعمود `notify` للكتم) — `listMyReminders` و`myListBucket` في `events.service.js` (الأقسام يحسبها الخادم، لا العميل)، ومسارات `/remind` و`/my-reminders` في `events.routes.js`؛ الويب `loadMyList`/`renderMyList` في `web/app.js`، والموبايل `mobile/lib/screens/my_list_screen.dart` + `models/my_list.dart`. تبويبها الثاني في الشريط السفلي، فأي فهرس تبويب بعده انزاح بواحد |
-| أرشيف الأعراس (صور بعد انتهاء المناسبة) | `server/src/routes/archivePhotos.routes.js` + `server/src/services/archivePhotos.service.js`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `server/src/services/cloudinary.service.js` (توقيع وتحقّق بلا مكتبة) — ADR-0008 |
+| ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009 |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
@@ -123,6 +123,24 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 في `events.service.js` وحدها تبنيه، فلا تكتب `COALESCE(event_end_date, event_date)` جديداً
 لشرط قادم/منتهٍ. التصادم ونافذة التكرار والتذكير بالعدّ التنازلي لا تزال على `event_date` وحده عمداً.
 تغيير تاريخ يوم أو مكانه حرِج، واسمه أو وقته تجميلي.
+
+**ألبومات الأعراس والوسم (`event_albums` + `event_photos` + `photo_tags` + `photo_reports`، ADR-0009).**
+كل عرس له ألبوم افتراضي يُنشأ عند أول فتح للوحة أو أول رفع، والجدول يسمح بأكثر من ألبوم
+(الحنّة، العرس…) بلا ترحيل. **لا سقف لعدد الصور** — قرار المالك 2026-10؛ الحماية الوحيدة
+تقنية: `ALBUM_UPLOAD_BATCH_MAX` توقيعاً في الطلب الواحد. الرفع متاح للأدمن **قبل** انتهاء
+المناسبة، لكن الظهور العام يبقى بعد انتهائها (نفس `EVENT_SPAN_END_SQL_E`) و`archive_gallery`
+و`is_published` و`status = 'approved'` — القاعدة كلها في استعلامات `albums.service.js` وحدها.
+الصورة كائن مستقل: `GET /api/photos/:id` وصفحة `/p/:id` المستقلة، `caption`/`caption_key`
+قابلان للبحث، و`thumb_url` مشتقّ من رابط التسليم (`w_600`) لا مخزَّن.
+**الوسم بشري بلا تعرّف وجوه:** المستخدم يطلب وسم نفسه (الاسم من `users.full_name` لا من
+الجسم) بحالة `pending`، والأدمن يعتمد أو يرفض، والمستخدم يسحب وسمه متى شاء. البحث في
+`GET /api/search` ثلاث مجموعات: ألبومات/صور/أشخاص، ويستخدم `nameKey` و`searchVariants`
+لتوحيد الهمزات وة/ه وى/ي. **لا `FULLTEXT`**: ngram في MySQL 8 للصينية/اليابانية/الكورية،
+و`LIKE` بمفاتيح مفهرسة هو الصحيح على هذا الحجم.
+**استيراد فيسبوك:** رابط **منشور** لا يمكن سحبه برمجياً (oEmbed يعيد HTML فقط وحقول الصورة
+أُزيلت). المسموح: رفع مباشر، أو لصق رابط صورة من `fbcdn.net`/`fbsbx.com`، أو ألبومات
+**صفحتنا** عبر Graph API إذا سمح التوكن بـ`pages_read_engagement`. القائمة البيضاء في
+`utils/remoteImage.js` هي ما يمنع SSRF.
 
 **البحث لا يزال عاماً وليس ما تبقّى من الخطوة.** `GET /api/events` صار قادماً-أولاً
 (آخر أيام المناسبة `>= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي
@@ -217,7 +235,7 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 - الوسائط تُخزَّن نسبية (`/uploads/<ملف>`) وتخرج **مطلقة دائماً** عبر `withAbsoluteMedia` في `server/src/utils/mediaUrl.js`. أي استعلام جديد يرجّع `poster_url` أو `audio_url` أو `image` يمرّ من هناك — الرابط النسبي يعمل بالصدفة في الويب ويكسر كل عميل آخر
 - `PUBLIC_URL` مطلوب في الإنتاج، وإلا خرجت الروابط على `localhost`
 - **الاستثناء الوحيد: Cloudinary** (ADR-0008) — كل صورة على Cloudinary تُخزَّن رابطاً مطلقاً (`https://res.cloudinary.com/…`) لأن الملف ليس على خادمنا أصلاً، و`absoluteMediaUrl` يتركه كما هو. طريقان للوصول إليه:
-  - **صور «أرشيف الأعراس» وصور مشاركة الحلقات:** الرفع من المتصفّح مباشرةً بتوقيع من `cloudinary.service.js`، والصفّ لا يُكتب إلا بعد التحقّق من توقيع ردّ Cloudinary وأن `public_id` داخل مجلّد الهدف نفسه.
+  - **صور الألبومات وصور مشاركة الحلقات:** الرفع من المتصفّح مباشرةً بتوقيع من `cloudinary.service.js`، والصفّ لا يُكتب إلا بعد التحقّق من توقيع ردّ Cloudinary وأن `public_id` داخل مجلّد الهدف نفسه.
   - **الملصق وصورة الفنان وصورة مزوّد الخدمة:** تصل الخادمَ عبر `upload.js` كما كانت (فلا يتغيّر أي عميل ولا أي APK منشور)، ثم يحوّلها `cloudinary.storeUploadedImage` بعد نجاح كل تحقّق في المسار. بلا مفاتيح أو عند فشل Cloudinary يُخزَّن `/uploads/<ملف>` كما كان ولا يفشل الطلب. الصوت يبقى على القرص دائماً. الصورة المستبدَلة تُحذف من Cloudinary عبر `events.releaseReplacedImage`، إلا إن كان صفّ آخر لا يزال يحملها.
   - السرّ `CLOUDINARY_API_SECRET` لا يغادر الخادم، ولا يُضاف SDK
 

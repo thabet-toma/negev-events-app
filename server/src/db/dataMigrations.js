@@ -137,7 +137,9 @@ const OCCASION_TYPE_SEEDS = [
       dinner_time: { is_visible: 0 },
       audio_url: { is_visible: 0 },
       audio_title: { is_visible: 0 },
-      poster_url: { is_visible: 1, is_required: 0 }
+      poster_url: { is_visible: 1, is_required: 0 },
+      artist_name: { is_visible: 0 },
+      artist_image_url: { is_visible: 0 }
     })
   },
   {
@@ -185,7 +187,9 @@ const OCCASION_TYPE_SEEDS = [
       honorees: { label: 'الناجح' },
       secondary_location_name: { is_visible: 0 },
       event_end_date: { is_visible: 0 },
-      youth_party_date: { is_visible: 0 }
+      youth_party_date: { is_visible: 0 },
+      artist_name: { is_visible: 0 },
+      artist_image_url: { is_visible: 0 }
     })
   },
   {
@@ -210,7 +214,9 @@ const OCCASION_TYPE_SEEDS = [
       event_date: { label: 'تاريخ الاستقبال' },
       secondary_location_name: { is_visible: 0 },
       event_end_date: { is_visible: 0 },
-      youth_party_date: { is_visible: 0 }
+      youth_party_date: { is_visible: 0 },
+      artist_name: { is_visible: 0 },
+      artist_image_url: { is_visible: 0 }
     })
   }
 ];
@@ -1642,6 +1648,195 @@ const steps = [
         'ALTER TABLE event_reminders ADD COLUMN notify TINYINT(1) NOT NULL DEFAULT 1 AFTER event_id'
       );
       logger.info('[migrations] add-reminder-notify-2026-10: column added.');
+    }
+  },
+  {
+    // «ألبومات الأعراس» (ADR-0009): ألبوم صفّ مستقل، والصور تُنسب إليه،
+    // والوسوم والبلاغات جدولان جديدان. schema.sql يحمل التعريف الكامل
+    // للتنصيبات الجديدة؛ هذه الخطوة تضيف الأعمدة إلى قاعدة حيّة وتملأ
+    // album_id لكل صورة قديمة. البوّابة `album_id IS NULL` هي ما يجعل
+    // إعادة التشغيل no-op: بعد المرة الأولى لا يبقى صفّ بلا ألبوم.
+    // لا سقف لعدد الصور (قرار المالك 2026-10) — لا ثابت حدود هنا.
+    name: 'add-event-albums-and-photo-tags-2026-10',
+    async run(connection) {
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS event_albums (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          event_id     INT UNSIGNED NOT NULL,
+          title        VARCHAR(200) NOT NULL,
+          description  TEXT         DEFAULT NULL,
+          is_published TINYINT(1)   NOT NULL DEFAULT 1,
+          created_by   INT UNSIGNED DEFAULT NULL,
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_event_albums_event (event_id),
+          KEY idx_event_albums_published (is_published),
+          CONSTRAINT fk_event_albums_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_albums_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS photo_tags (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          photo_id     INT UNSIGNED NOT NULL,
+          user_id      INT UNSIGNED DEFAULT NULL,
+          name         VARCHAR(150) NOT NULL,
+          name_key     VARCHAR(150) NOT NULL,
+          status       ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+          requested_by INT UNSIGNED DEFAULT NULL,
+          moderated_by INT UNSIGNED DEFAULT NULL,
+          moderated_at DATETIME     DEFAULT NULL,
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_photo_tags_user (photo_id, user_id),
+          KEY idx_photo_tags_photo (photo_id, status),
+          KEY idx_photo_tags_name (name_key, status),
+          CONSTRAINT fk_photo_tags_photo FOREIGN KEY (photo_id) REFERENCES event_photos(id) ON DELETE CASCADE,
+          CONSTRAINT fk_photo_tags_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_photo_tags_requester FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE SET NULL,
+          CONSTRAINT fk_photo_tags_moderator FOREIGN KEY (moderated_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS photo_reports (
+          id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          photo_id    INT UNSIGNED NOT NULL,
+          user_id     INT UNSIGNED NOT NULL,
+          reason      ENUM('privacy','inappropriate','wrong_event','other') NOT NULL,
+          note        VARCHAR(300) DEFAULT NULL,
+          status      ENUM('open','resolved','dismissed') NOT NULL DEFAULT 'open',
+          resolved_by INT UNSIGNED DEFAULT NULL,
+          resolved_at DATETIME     DEFAULT NULL,
+          created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_photo_reports_user (photo_id, user_id),
+          KEY idx_photo_reports_status (status, created_at),
+          CONSTRAINT fk_photo_reports_photo FOREIGN KEY (photo_id) REFERENCES event_photos(id) ON DELETE CASCADE,
+          CONSTRAINT fk_photo_reports_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          CONSTRAINT fk_photo_reports_resolver FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+
+      if (!(await columnExists(connection, 'event_photos', 'album_id'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN album_id INT UNSIGNED DEFAULT NULL AFTER event_id');
+      }
+      if (!(await columnExists(connection, 'event_photos', 'caption'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN caption VARCHAR(200) DEFAULT NULL AFTER height');
+      }
+      if (!(await columnExists(connection, 'event_photos', 'caption_key'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN caption_key VARCHAR(200) DEFAULT NULL AFTER caption');
+      }
+      if (!(await columnExists(connection, 'event_photos', 'position'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN position INT NOT NULL DEFAULT 0 AFTER caption_key');
+      }
+      if (!(await columnExists(connection, 'event_photos', 'status'))) {
+        await connection.query("ALTER TABLE event_photos ADD COLUMN status ENUM('approved','hidden') NOT NULL DEFAULT 'approved' AFTER position");
+      }
+      if (!(await columnExists(connection, 'event_photos', 'is_cover'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN is_cover TINYINT(1) NOT NULL DEFAULT 0 AFTER status');
+      }
+      if (!(await columnExists(connection, 'event_photos', 'source'))) {
+        await connection.query("ALTER TABLE event_photos ADD COLUMN source ENUM('upload','facebook_page','facebook_url') NOT NULL DEFAULT 'upload' AFTER is_cover");
+      }
+      if (!(await columnExists(connection, 'event_photos', 'source_url'))) {
+        await connection.query('ALTER TABLE event_photos ADD COLUMN source_url VARCHAR(500) DEFAULT NULL AFTER source');
+      }
+      if (!(await indexExists(connection, 'event_photos', 'idx_event_photos_album'))) {
+        await connection.query('ALTER TABLE event_photos ADD KEY idx_event_photos_album (album_id, status, position)');
+      }
+      if (!(await indexExists(connection, 'event_photos', 'idx_event_photos_caption'))) {
+        await connection.query('ALTER TABLE event_photos ADD KEY idx_event_photos_caption (caption_key)');
+      }
+      if (!(await constraintExists(connection, 'event_photos', 'fk_event_photos_album'))) {
+        await connection.query(
+          'ALTER TABLE event_photos ADD CONSTRAINT fk_event_photos_album FOREIGN KEY (album_id) REFERENCES event_albums(id) ON DELETE CASCADE'
+        );
+      }
+
+      if (!(await columnExists(connection, 'stories', 'link_platform'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN link_platform VARCHAR(20) DEFAULT NULL AFTER target_url');
+      }
+      if (!(await columnExists(connection, 'stories', 'cta_label'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN cta_label VARCHAR(40) DEFAULT NULL AFTER link_platform');
+      }
+      if (!(await columnExists(connection, 'stories', 'poster_public_id'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN poster_public_id VARCHAR(255) DEFAULT NULL AFTER cta_label');
+      }
+      if (!(await columnExists(connection, 'stories', 'poster_source'))) {
+        await connection.query('ALTER TABLE stories ADD COLUMN poster_source VARCHAR(20) DEFAULT NULL AFTER poster_public_id');
+      }
+
+      const [albumInsert] = await connection.execute(`
+        INSERT INTO event_albums (event_id, title)
+        SELECT e.id,
+               CONCAT(
+                 COALESCE(ot.name, 'عرس'), ' ',
+                 COALESCE(
+                   (SELECT h.name FROM event_honorees h WHERE h.event_id = e.id ORDER BY h.position ASC, h.id ASC LIMIT 1),
+                   e.groom_name
+                 ),
+                 ' — ', e.town
+               )
+          FROM events e
+          LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+         WHERE EXISTS (SELECT 1 FROM event_photos p WHERE p.event_id = e.id)
+           AND NOT EXISTS (SELECT 1 FROM event_albums a WHERE a.event_id = e.id)
+      `);
+
+      // Old rows are numbered by their own id: upload order is the only order
+      // they ever had, and `album_id IS NULL` keeps a re-run from renumbering
+      // photos uploaded after this step. is_cover is left at 0 on purpose —
+      // the album read treats the first photo as the cover when no row is
+      // flagged, so a backfill cannot mark one album's photo as another's.
+      const [positionResult] = await connection.execute(
+        'UPDATE event_photos SET position = id WHERE album_id IS NULL'
+      );
+
+      const [albumLinkResult] = await connection.execute(`
+        UPDATE event_photos p
+          JOIN (SELECT event_id, MIN(id) AS album_id FROM event_albums GROUP BY event_id) a
+            ON a.event_id = p.event_id
+           SET p.album_id = a.album_id
+         WHERE p.album_id IS NULL
+      `);
+
+      logger.info(
+        `[migrations] add-event-albums-and-photo-tags-2026-10: `
+        + `created ${albumInsert.affectedRows} default album(s), `
+        + `positioned ${positionResult.affectedRows}, linked ${albumLinkResult.affectedRows} photo(s).`
+      );
+    }
+  },
+  {
+    // One-time correction for databases seeded before the artist field's
+    // per-type visibility was applied. `add-events-artist-fields-2026-09`
+    // only inserted missing rows, so a database where the seed already
+    // created all fields kept artist_name visible on عزا/نجاح/حج — the
+    // opposite of what that step's own comment says. The marker row makes
+    // this run once, so a super_admin who later turns an artist field on for
+    // a non-wedding type is not reverted by every deploy.
+    name: 'fix-artist-field-visibility-2026-10',
+    async run(connection) {
+      const [marker] = await connection.execute(
+        "SELECT setting_value FROM app_settings WHERE setting_key = 'fix_artist_field_visibility_2026_10'"
+      );
+      if (marker.length) return;
+
+      const [result] = await connection.execute(`
+        UPDATE occasion_type_fields otf
+          JOIN occasion_types ot ON ot.id = otf.occasion_type_id
+           SET otf.is_visible = IF(ot.name IN ('عرس', 'خطوبة'), 1, 0)
+         WHERE otf.field_key IN ('artist_name', 'artist_image_url')
+      `);
+      await connection.execute(
+        `INSERT INTO app_settings (setting_key, setting_value)
+         VALUES ('fix_artist_field_visibility_2026_10', 'done')
+         ON DUPLICATE KEY UPDATE setting_key = setting_key`
+      );
+      logger.info(`[migrations] fix-artist-field-visibility-2026-10: corrected ${result.affectedRows} field row(s).`);
     }
   }
 ];

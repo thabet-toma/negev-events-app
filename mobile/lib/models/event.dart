@@ -601,6 +601,8 @@ class Story {
   final bool isAd;
   final String? advertiserName;
   final String? targetUrl;
+  final String? linkPlatform;
+  final String? ctaLabel;
   final int slideDurationSeconds;
 
   const Story({
@@ -613,6 +615,8 @@ class Story {
     this.isAd = false,
     this.advertiserName,
     this.targetUrl,
+    this.linkPlatform,
+    this.ctaLabel,
     this.slideDurationSeconds = _defaultSlideDurationSeconds,
   });
 
@@ -631,6 +635,8 @@ class Story {
         isAd: json['is_ad'] == true,
         advertiserName: _nullableString(json['advertiser_name']),
         targetUrl: _nullableString(json['target_url']),
+        linkPlatform: _nullableString(json['link_platform']),
+        ctaLabel: _nullableString(json['cta_label']),
         slideDurationSeconds: _slideDuration(json['slide_duration_seconds']),
       );
 

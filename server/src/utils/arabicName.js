@@ -126,4 +126,34 @@ function comparePersonNames(nameA, nameB) {
   return { exact: false, singleToken: false };
 }
 
-module.exports = { nameKey, nameTokens, tokensMatch, comparePersonNames };
+/**
+ * Spelling variants of a search term, for a `LIKE` against names stored as
+ * their owners wrote them. `nameKey` folds أ/إ/آ/ٱ→ا, ة→ه and ى→ي; this
+ * expands the folded key back into the spellings a person might type or a
+ * row might hold («فاطمه» → «فاطمه» و«فاطمة»), so a photo search does not
+ * require the searcher to guess the writer's hamza. Capped: a long name has
+ * more theoretical combinations than a `LIKE` list should ever carry, and
+ * the first sixteen cover every realistic one (`ال` and common names).
+ */
+function searchVariants(term) {
+  const key = nameKey(term);
+  if (!key) return [];
+  const alternatives = { 'ا': ['ا', 'أ', 'إ', 'آ'], 'ه': ['ه', 'ة'], 'ي': ['ي', 'ى'] };
+
+  let out = [''];
+  for (const character of key) {
+    const choices = alternatives[character] || [character];
+    const next = [];
+    for (const prefix of out) {
+      for (const choice of choices) next.push(prefix + choice);
+      if (next.length >= 64) break;
+    }
+    out = next.slice(0, 64);
+  }
+
+  // The raw term is kept even when nameKey changed it, so a value the DB
+  // stored verbatim (a Latin word, a digit) is still searchable as typed.
+  return [...new Set([String(term).trim(), ...out])].filter(Boolean).slice(0, 16);
+}
+
+module.exports = { nameKey, nameTokens, tokensMatch, comparePersonNames, searchVariants };

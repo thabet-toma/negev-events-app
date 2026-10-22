@@ -5,8 +5,10 @@ const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const stories = require('../services/stories.service');
+const storyStudio = require('../services/storyStudio.service');
 const { authenticate, optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, parseId, optionalDateTime } = require('../middleware/validate');
+const { cleanString, parseId, optionalDateTime, parseHttpUrl } = require('../middleware/validate');
+const { STORY_LINK_PLATFORMS } = require('../constants');
 
 const router = express.Router();
 
@@ -82,6 +84,69 @@ function parseOptionalEventId(value) {
   return parseId(value, 'معرّف المناسبة');
 }
 
+/**
+ * `target_url` reaches `href`, `window.open` and Flutter's `launchUrl`.
+ * Every client already refuses non-http schemes except the mobile launcher
+ * (which accepts any URI), so the scheme is enforced here — the one place
+ * all three clients pass through. Empty clears the link; absent leaves it.
+ */
+function optionalTargetUrl(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  return parseHttpUrl(value, 'رابط الوجهة');
+}
+
+/** A closed list, same as occasion tones and broadcast tones — never free text. */
+function optionalLinkPlatform(value) {
+  if (value === undefined) return undefined;
+  const platform = cleanString(value, 20);
+  if (!platform) return null;
+  if (!STORY_LINK_PLATFORMS.includes(platform)) {
+    throw ApiError.badRequest('منصة الرابط غير معروفة');
+  }
+  return platform;
+}
+
+/**
+ * The studio's two-step handshake: preview draws the exact card the publish
+ * call will upload, so the admin approves the picture they will see rather
+ * than a text description of it. Both steps are super_admin only through the
+ * router guard above, and both accept the same free-text fields.
+ */
+function studioPayload(body) {
+  const url = cleanString(body.url, 2000);
+  if (!url) throw ApiError.badRequest('رابط الفيديو مطلوب');
+  return {
+    url,
+    title: cleanString(body.title, 200),
+    subtitle: cleanString(body.subtitle, 150),
+    cta_label: cleanString(body.cta_label, 40),
+    clan: cleanString(body.clan, 150),
+    town: cleanString(body.town, 100),
+    is_ad: Boolean(body.is_ad),
+    advertiser_name: cleanString(body.advertiser_name, 150),
+    event_id: parseOptionalEventId(body.event_id),
+    slide_duration_seconds: body.slide_duration_seconds === undefined
+      ? undefined
+      : parseId(body.slide_duration_seconds, 'مدة الشريحة')
+  };
+}
+
+router.post('/admin/stories/studio/preview', asyncHandler(async (req, res) => {
+  res.json({ success: true, ...await storyStudio.previewCampaign(studioPayload(req.body || {})) });
+}));
+
+router.post('/admin/stories/studio', asyncHandler(async (req, res) => {
+  const input = studioPayload(req.body || {});
+  if (input.is_ad && !input.advertiser_name) {
+    throw ApiError.badRequest('اسم المعلن مطلوب لأي قصة إعلانية');
+  }
+  const { story, info } = await storyStudio.publishCampaign(req.user, input, {
+    expiresAt: resolveExpiry(req.body || {})
+  });
+  res.status(201).json({ success: true, story, info, message: 'تم إنشاء قصة التسويق' });
+}));
+
 router.get('/admin/stories', asyncHandler(async (req, res) => {
   res.json({
     success: true,
@@ -110,7 +175,9 @@ router.post('/admin/stories', asyncHandler(async (req, res) => {
     expires_at: resolveExpiry(req.body),
     advertiser_name: advertiserName,
     is_ad: isAd,
-    target_url: cleanString(req.body.target_url, 2000),
+    target_url: optionalTargetUrl(req.body.target_url),
+    link_platform: optionalLinkPlatform(req.body.link_platform),
+    cta_label: cleanString(req.body.cta_label, 40),
     slide_duration_seconds: req.body.slide_duration_seconds === undefined
       ? undefined
       : parseId(req.body.slide_duration_seconds, 'مدة الشريحة')
@@ -136,7 +203,9 @@ router.patch('/admin/stories/:id', asyncHandler(async (req, res) => {
   if (body.event_id !== undefined) payload.event_id = parseOptionalEventId(body.event_id);
   if (body.is_ad !== undefined) payload.is_ad = Boolean(body.is_ad);
   if (body.advertiser_name !== undefined) payload.advertiser_name = cleanString(body.advertiser_name, 150);
-  if (body.target_url !== undefined) payload.target_url = cleanString(body.target_url, 2000);
+  if (body.target_url !== undefined) payload.target_url = optionalTargetUrl(body.target_url);
+  if (body.link_platform !== undefined) payload.link_platform = optionalLinkPlatform(body.link_platform);
+  if (body.cta_label !== undefined) payload.cta_label = cleanString(body.cta_label, 40);
   if (body.slide_duration_seconds !== undefined) {
     payload.slide_duration_seconds = parseId(body.slide_duration_seconds, 'مدة الشريحة');
   }

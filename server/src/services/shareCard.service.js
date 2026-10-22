@@ -1016,5 +1016,8 @@ module.exports = {
   renderLiveCover,
   getOrRenderLiveCover,
   renderEpisodeCard,
-  getOrRenderEpisodeCard
+  getOrRenderEpisodeCard,
+  // The story studio draws the same brand mark on a 1080×1920 card; exporting
+  // the one drawing function is cheaper than a second copy of the geometry.
+  drawBrandMark
 };

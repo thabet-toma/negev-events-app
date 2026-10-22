@@ -177,10 +177,11 @@ npm run db:import-legacy
 7. لصور Cloudinary (ADR-0008): ضع `CLOUDINARY_CLOUD_NAME` و
    `CLOUDINARY_API_KEY` و `CLOUDINARY_API_SECRET` (من لوحة Cloudinary ← API Keys) في `.env`.
    بها تذهب كل صورة جديدة إلى Cloudinary: الملصق وصورة الفنان وصورة مزوّد الخدمة (يحوّلها الخادم
-   بعد استلامها)، وصور «أرشيف الأعراس» وصور مشاركة الحلقات (رفع مباشر من المتصفّح). الصوت
+   بعد استلامها)، وصور الألبومات وصور مشاركة الحلقات (رفع مباشر من المتصفّح). الصوت
    يبقى على القرص. بلاها، أو إن فشل Cloudinary لحظة الرفع، تُحفظ الصورة على القرص كما كانت ولا
    يفشل النشر، وزرّا الرفع المباشر يردّان برسالة عربية. ولصفحات الحلقات (`/live/e/:id`)
-   يجب أن يوجِّه nginx الإنتاج `/live` و `/live/` إلى الخادم (السطران في ADR-0006).
+   وصفحات الصور المستقلة (`/p/:id`) يجب أن يوجِّه nginx الإنتاج `/live` و `/live/`
+   و`/p` و`/p/` إلى الخادم (السطران في ADR-0006، وصفحة الصورة في ADR-0009).
 
 مثال Nginx:
 
@@ -226,9 +227,14 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/events` | المناسبات المعتمدة **القادمة** فقط، مرقّمة (`?town=` `?date=` `?date_from=` `?date_to=` `?search=` `?occasion_type_id=` `?village_id=` `?archive=1` `?page=` `?limit=`) — `?town=` و `?occasion_type_id=` و `?village_id=` تقبل كل منها قيمة واحدة أو قائمة مفصولة بفواصل (سقف ٢٠ قيمة لكل معامل، #85 دفعة 5) |
-| `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات + `archive_photos` (صور «أرشيف الأعراس» `[{ id, image_url, width, height, created_at }]` — فارغة إلا لمناسبة معتمدة منتهية ونوعها يحمل `archive_gallery`؛ ADR-0008) |
+| `GET` | `/api/events/:id` | تفاصيل مناسبة + أصحابها ونوعها + التفاعلات والتبريكات + `archive_photos` (صور **الألبوم الافتراضي** `[{ id, image_url, thumb_url, width, height, caption, tags, created_at }]` — فارغة إلا لمناسبة معتمدة منتهية ونوعها يحمل `archive_gallery`؛ ADR-0008/0009) + `albums` (ملخص كل ألبوم منشور: `cover_thumb_url`, `photo_count`, … — الواجهة الجديدة تقرأ `/api/albums/:id`) |
 | `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة. **حارس التكرار:** حين يكون النشر فورياً (حساب إدارة لهذه البلدة) ويشبه مناسبةً معتمدة أو في الطابور (الاسم بعد توحيد الإملاء وخطأ حرف أو حرفين، وفارق يوم على الأكثر) يُرفض بـ409 و`details: { code: 'POSSIBLE_DUPLICATE', duplicates }` دون إنشاء أي صفّ؛ إعادة الإرسال مع `confirm_duplicate` تنشر ويُسجَّل التجاوز (`event_duplicate_override`). المستخدم العادي لا يرى الحارس |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze — نفس فلاتر `?town=` `?occasion_type_id=` `?village_id=` وقوائمها المفصولة بفواصل |
+| `GET` | `/api/albums` | ألبومات الأعراس الظاهرة (`?search=` `?event_id=` `?page=` `?limit=`) — ألبوم منشور، مناسبة معتمدة منتهية، نوعها يحمل `archive_gallery`، وفيه صورة معتمدة واحدة على الأقل. كل صف: `cover_url`, `cover_thumb_url`, `photo_count`, وملخص المناسبة (ADR-0009) |
+| `GET` | `/api/albums/:id` | ألبوم + صوره المعتمدة مرقّمة (`?page=` `?limit=` `?search=` للبحث داخل الألبوم) — 404 لغير الظاهر |
+| `GET` | `/api/photos` | بحث الصور وحدها (`?search=` `?album_id=` `?person=` `?page=` `?limit=`) — `person` هو `name_key` القادم من نتيجة «أشخاص»؛ كل صورة تحمل `caption`, `thumb_url`, وسومها المعتمدة، وسياق ألبومها/مناسبتها |
+| `GET` | `/api/photos/:id` | صورة واحدة بسياقها (ألبومها/مناسبتها) ووسومها المعتمدة — 404 لغير الظاهرة |
+| `GET` | `/api/search` | بحث واحد بثلاث مجموعات: `albums` / `photos` / `people` (اسم الشخص، `name_key`، عدد صوره، وعيّنة) — يوحّد همزات وة/ه وى/ي عبر `nameKey` و`searchVariants` |
 | `GET` | `/api/stories` | القصص المباشرة |
 | `GET` | `/api/towns` | البلدات النشِطة بترتيبها وإحصاءاتها، ومركز كل بلدة (`town_coordinates`) لتوسيط منتقي الخريطة، و`regions` (إضافة): كل محافظة نشِطة `{ id, name, latitude, longitude, map_zoom, position, towns[] }`. اسم المحافظة نفسه (اليوم «النقب») مكان صالح للنشر حين لا تُعرف البلدة — بلا دبّوس احتياطي — ولا يظهر ضمن `towns[]` التي تقرؤها التطبيقات القديمة |
 | `GET` | `/api/settings/public` | رقم واتساب الدعم الفني (`support_whatsapp_number`) والمقطع الصوتي الافتراضي للمناسبات التي لا صوت لها (`default_event_audio_url`، رابط مطلق) فقط — كلاهما `null` إن لم يُحفَظ بعد، ولا يخرج أي إعداد آخر مهما كبرت القائمة لاحقاً |
@@ -488,7 +494,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/stories` | الستوريات النشِطة فقط — `expires_at IS NULL OR expires_at > UTC_TIMESTAMP()`؛ كل ستوري يحمل `is_ad`, `advertiser_name`, `target_url`, `slide_duration_seconds` إضافة إلى `is_live`/`isLive` وبقية الحقول القديمة، والصورة مطلقة دائماً (ADR-0002) |
+| `GET` | `/api/stories` | الستوريات النشِطة فقط — `expires_at IS NULL OR expires_at > UTC_TIMESTAMP()`؛ كل ستوري يحمل `is_ad`, `advertiser_name`, `target_url`, `link_platform`, `cta_label`, `slide_duration_seconds` إضافة إلى `is_live`/`isLive` وبقية الحقول القديمة، والصورة مطلقة دائماً (ADR-0002/0010) |
 | `POST` | `/api/stories/:id/view` | تسجيل مشاهدة — عام، يقبل `device_id` لغير المسجَّل؛ مرّة واحدة لكل شخص لكل ستوري يومياً (قيد فريد، ليس فحصاً مسبقاً) |
 | `POST` | `/api/stories/:id/click` | تسجيل نقرة — عام، بلا حدّ تكرار (كل نقرة حقيقية) |
 | `POST` | `/api/stories/:id/report` | إبلاغ عن ستوري — مرّة واحدة لكل مستخدم 🔒 |
@@ -497,13 +503,22 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 (`express-rate-limit`، بالعنوان لا بالمستخدم، ١٢٠ طلباً كل ٥ دقائق). طلب `view` بلا رمز
 دخول وبلا `device_id` يُرفض بـ400.
 
+### ألبومات الأعراس — المستخدم 🔒
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| `GET` | `/api/my-photos` | صور وُسم فيها المستخدم بوسم **معتمد** في ألبومات ظاهرة، مرقّمة |
+| `POST` | `/api/photos/:id/tags` | طلب وسم ذاتي — الاسم من `users.full_name` لا من الجسم، الحالة `pending`، وطلب واحد لكل مستخدم/صورة (409 للمكرَّر) |
+| `DELETE` | `/api/photos/:id/tags/me` | سحب الوسم (pending أو approved) — الموافقة قابلة للسحب |
+| `POST` | `/api/photos/:id/reports` | إبلاغ `{ reason: privacy\|inappropriate\|wrong_event\|other, note? }` — مرّة واحدة لكل مستخدم؛ عند `PHOTO_REPORT_HIDE_THRESHOLD` بلاغات مفتوحة تُخفى الصورة مؤقتاً ويراجعها الأدمن |
+
 ### إدارة الستوريات 👑
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/admin/stories` | كل الستوريات (نشِطة ومنتهية)، و `expiry_presets` (المدد الجاهزة) |
-| `POST` | `/api/admin/stories` | إنشاء ستوري — `title` إلزامي؛ `expires_at` (تاريخ ووقت حرّ) أو `expiry_preset` (`day` `3_days` `week` `month`)؛ `is_ad: true` بلا `advertiser_name` يُرفض |
-| `PATCH` | `/api/admin/stories/:id` | تعديل جزئي، بنفس قواعد الإنشاء — تحويل ستوري قائم إلى إعلان بلا اسم معلن يُرفض أيضاً |
+| `POST` | `/api/admin/stories` | إنشاء ستوري — `title` إلزامي؛ `expires_at` (تاريخ ووقت حرّ) أو `expiry_preset` (`day` `3_days` `week` `month`)؛ `is_ad: true` بلا `advertiser_name` يُرفض؛ `target_url` يجب أن يبدأ بـhttp(s)، و`link_platform` من `youtube`/`tiktok`/`facebook`/`instagram`/`website`، و`cta_label` حتى ٤٠ حرفاً (ADR-0010) |
+| `PATCH` | `/api/admin/stories/:id` | تعديل جزئي، بنفس قواعد الإنشاء — تحويل ستوري قائم إلى إعلان بلا اسم معلن يُرفض أيضاً، وأي `target_url` غير http(s) يُرفض |
 | `DELETE` | `/api/admin/stories/:id` | حذف ستوري |
 | `GET` | `/api/admin/stories/:id/metrics` | `views`, `distinct_viewers`, `clicks`, `town_breakdown` — **بلا CPM ولا eCPM ولا تكرار** (لا مزاد هنا) |
 
@@ -618,10 +633,28 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `PUT` | `/api/admin/live/episodes/:id/share-image` | تسجيل الصورة المرفوعة `{ public_id, version, signature }` بعد التحقّق من توقيع ردّ Cloudinary ومن المجلّد؛ الصورة المستبدَلة تُحذف من Cloudinary 🛡️ |
 | `DELETE` | `/api/admin/live/episodes/:id/share-image` | إزالة صورة المشاركة (تعود البطاقة المولَّدة) وحذفها من Cloudinary 🛡️ |
 | `DELETE` | `/api/admin/live/episodes/:id` | حذف حلقة وأصواتها معها (وصورة مشاركتها من Cloudinary) 🛡️ |
-| `GET` | `/api/admin/events/:id/photos` | صور «أرشيف الأعراس» لمناسبة + `max_photos` (٦٠) 🛡️ |
-| `POST` | `/api/admin/events/:id/photos/signature` | توقيع رفع صورة أرشيف إلى Cloudinary — 400 لمناسبة لم تنتهِ أو نوعها بلا `archive_gallery` أو بلا مفاتيح Cloudinary، و400 عند بلوغ الحدّ 🛡️ |
-| `POST` | `/api/admin/events/:id/photos` | تسجيل صورة مرفوعة `{ public_id, version, signature, width, height }` بعد التحقّق من التوقيع ومن مجلّد المناسبة نفسها (409 للمكرَّرة) 🛡️ |
-| `DELETE` | `/api/admin/events/:id/photos/:photoId` | حذف صورة من الأرشيف ومن Cloudinary 🛡️ |
+| `GET` | `/api/admin/events/:id/albums` | ألبومات المناسبة (وينشئ الافتراضي عند أول فتح) — أدمن البلدة داخل بلداته، وسوبر أدمن للجميع 🛡️ |
+| `POST` | `/api/admin/events/:id/albums` | إنشاء ألبوم مسمّى (`title` إلزامي، `description?`) 🛡️ |
+| `PATCH` | `/api/admin/albums/:id` | عنوان/وصف/`is_published` — إطفاء النشر يخفي الألبوم ولا يحذفه 🛡️ |
+| `DELETE` | `/api/admin/albums/:id` | حذف الألبوم وصوره وملفاتها من Cloudinary — **سوبر أدمن فقط** 🔴 |
+| `GET` | `/api/admin/albums/:id/photos` | صور الألبوم كلها (بما فيها المخفية) + وسومها وحالاتها، مرقّمة 🛡️ |
+| `POST` | `/api/admin/albums/:id/photos/signatures` | توقيع دفعة رفع (`count` حتى `ALBUM_UPLOAD_BATCH_MAX` = ٢٠) — 400 لنوع بلا `archive_gallery` أو بلا مفاتيح Cloudinary. **لا سقف لعدد صور الألبوم** 🛡️ |
+| `POST` | `/api/admin/albums/:id/photos` | تسجيل صورة مرفوعة `{ public_id, version, signature, width, height, caption? }` — التسجيل المكرَّر لنفس `public_id` يعيد الصفّ نفسه (retry idempotent) 🛡️ |
+| `PATCH` | `/api/admin/photos/:id` | عنوان، `status` (`approved`/`hidden`)، `position`، `is_cover`، أو `album_id` لنقل الصورة داخل المناسبة نفسها 🛡️ |
+| `DELETE` | `/api/admin/photos/:id` | حذف الصفّ والملف من Cloudinary، وترقية التالية غلافاً 🛡️ |
+| `POST` | `/api/admin/albums/:id/photos/import-url` | استيراد صورة من رابط صورة مباشر على `fbcdn.net`/`fbsbx.com` — لا يقبل رابط منشور فيسبوك (400 برسالة تشرح البديل) 🛡️ |
+| `GET` | `/api/admin/facebook/page-albums` | ألبومات **صفحتنا** عبر Graph API — 400 عربية إن غاب التوكن أو صلاحية `pages_read_engagement` 🔴 |
+| `POST` | `/api/admin/albums/:id/import-facebook` | استيراد حتى ١٠ صور من ألبوم صفحتنا `{ facebook_album_id, photo_ids }`، ونتيجة لكل صورة 🔴 |
+| `GET` | `/api/admin/photo-tags` | طابور الوسوم (`?status=pending\|approved\|rejected`) ضمن بلدات الأدمن 🛡️ |
+| `PATCH` | `/api/admin/photo-tags/:id` | اعتماد/رفض وسم، مع `moderated_by/at` 🛡️ |
+| `POST` | `/api/admin/photos/:id/tags` | إضافة اسم مباشرة (لشخص بلا حساب) بحالة معتمدة 🛡️ |
+| `DELETE` | `/api/admin/photo-tags/:id` | حذف وسم 🛡️ |
+| `GET` | `/api/admin/photo-reports` | طابور البلاغات (`?status=open\|resolved\|dismissed`) ضمن بلدات الأدمن 🛡️ |
+| `PATCH` | `/api/admin/photo-reports/:id` | حل/تجاهل البلاغ (`status`) — إظهار الصورة أو إخفاؤها يبقى عبر `PATCH /api/admin/photos/:id` 🛡️ |
+| `GET` | `/api/admin/events/:id/photos` | **توافق قديم:** صور الألبوم الافتراضي؛ `max_photos: null` (لا سقف) — أدمن البلدة داخل بلداته 🛡️ |
+| `POST` | `/api/admin/events/:id/photos/signature` | **توافق قديم:** توقيع رفع واحد للألبوم الافتراضي — 400 لنوع بلا `archive_gallery` أو بلا مفاتيح Cloudinary (لم يعد يشترط انتهاء المناسبة) 🛡️ |
+| `POST` | `/api/admin/events/:id/photos` | **توافق قديم:** تسجيل صورة `{ public_id, version, signature, width, height, caption? }` — التسجيل المكرَّر يعيد الصفّ نفسه 🛡️ |
+| `DELETE` | `/api/admin/events/:id/photos/:photoId` | **توافق قديم:** حذف صورة من الألبوم الافتراضي ومن Cloudinary 🛡️ |
 | `GET` | `/api/admin/analytics/activity` | سجل النشاط: مَن أضاف/عدّل/اعتمد/رفض/حذف/نقل ملكية/اعتمد قرية/تجاوز تنبيه التكرار لأي مناسبة، الأحدث أولاً، مع اسم الفاعل ورقمه ولقطة عنوان المناسبة ونوعها وبلدتها (تبقى بعد حذفها، `event_exists`)، و`summary` مقروء للتعديل (`?action=` `?page=` `?limit=`) 🛡️ |
 | `GET` | `/api/admin/analytics/overview` | مؤشرات النشاط العام (المشاهدات، المشاركات، النقرات، جمهور الأجهزة النشطة والزوار غير المسجلين) مع تصفية المدة (`?period=24h\|7d\|30d\|all`) 🛡️ |
 | `GET` | `/api/admin/analytics/devices` | قائمة الأجهزة والتوكنات النشطة (زوار غير مسجلين ومستخدمين) مع البحث والفلترة (`?type=anonymous\|registered` `?search=`) 🛡️ |

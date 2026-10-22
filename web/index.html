@@ -242,6 +242,9 @@
         <i class="fa-regular fa-calendar"></i>
         <span id="drawerDateChipLabel">كل التواريخ</span>
       </button>
+      <button id="drawerAlbumsEntryChip" class="filter-chip filter-chip-albums" onclick="toggleTopChrome(false); openAlbumsPage();">
+        <i class="fa-solid fa-images"></i> ألبومات الأعراس
+      </button>
       <button id="drawerClearChip" class="filter-chip filter-chip-clear" onclick="clearAllFilters()">
         <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
       </button>
@@ -321,6 +324,9 @@
         <button id="dateFilterChip" class="filter-chip" onclick="openDateFilterSheet()">
           <i class="fa-regular fa-calendar"></i>
           <span id="dateFilterChipLabel">كل التواريخ</span>
+        </button>
+        <button id="albumsEntryBtn" class="filter-chip filter-chip-albums" onclick="openAlbumsPage()">
+          <i class="fa-solid fa-images"></i> ألبومات الأعراس
         </button>
         <button id="clearFiltersBtn" class="filter-chip filter-chip-clear" onclick="clearAllFilters()">
           <i class="fa-solid fa-filter-circle-xmark"></i> مسح الفلاتر
@@ -647,6 +653,17 @@
             <span>لوحة تحكم الإدارة</span>
             <i class="fa-solid fa-chevron-left" style="margin-inline-start: auto;"></i>
           </a>
+        </div>
+
+        <!-- صوري — صور وُسم فيها المستخدم بموافقة الإدارة -->
+        <div class="chart-card-box">
+          <div class="chart-header">
+            <h4><i class="fa-solid fa-images"></i> صوري</h4>
+            <button type="button" class="map-refresh-btn" onclick="openMyPhotosFromAccount()">
+              <i class="fa-solid fa-arrow-up-right-from-square"></i> فتح
+            </button>
+          </div>
+          <p class="account-photos-hint">الصور التي وسمت نفسك فيها بعد موافقة الإدارة — تظهر هنا، ويمكنك سحب وسمك من أي صورة.</p>
         </div>
 
         <!-- مناسباتي -->
@@ -1266,6 +1283,24 @@
     <img id="archiveViewerImage" class="archive-viewer-img" alt="">
     <button type="button" class="archive-viewer-nav archive-viewer-prev" onclick="archiveViewerStep(-1)" aria-label="الصورة السابقة"><i class="fa-solid fa-chevron-right"></i></button>
     <button type="button" class="archive-viewer-nav archive-viewer-next" onclick="archiveViewerStep(1)" aria-label="الصورة التالية"><i class="fa-solid fa-chevron-left"></i></button>
+    <div id="archiveViewerFooter" class="archive-viewer-footer" hidden>
+      <div id="archiveViewerCaption" class="archive-viewer-caption"></div>
+      <div id="archiveViewerTags" class="archive-viewer-tags"></div>
+      <div class="archive-viewer-actions">
+        <button type="button" id="archiveViewerTagBtn" class="archive-viewer-action primary" onclick="requestPhotoTag()">
+          <i class="fa-solid fa-user-check"></i> أنا في الصورة
+        </button>
+        <button type="button" id="archiveViewerWithdrawBtn" class="archive-viewer-action" onclick="withdrawPhotoTag()" hidden>
+          سحب وسطي
+        </button>
+        <button type="button" id="archiveViewerReportBtn" class="archive-viewer-action danger" onclick="reportCurrentPhoto()">
+          <i class="fa-solid fa-flag"></i> إبلاغ
+        </button>
+        <a id="archiveViewerShareBtn" class="archive-viewer-action" href="#" target="_blank" rel="noopener">
+          <i class="fa-solid fa-arrow-up-right-from-square"></i> صفحة الصورة
+        </a>
+      </div>
+    </div>
   </div>
 
   <!-- MODAL 9: SERVICE PROVIDER DETAILS (دليل الخدمات — الرقم يُكشف بفعل صريح فقط) -->
@@ -1474,6 +1509,47 @@
           <button type="button" class="cancel-btn" onclick="closeSubmitServiceModal()">إلغاء</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- صفحة ألبومات الأعراس (ADR-0009) — بحث واحد بثلاث مجموعات، ألبوم، وصورة.
+       لا تبويب سابع في الشريط السفلي: الشريط ستة أهداف بقياس مقصود، والمدخل
+       رقاقة «ألبومات الأعراس» في الفلاتر والدرج. -->
+  <div id="albumsPage" class="albums-page" role="dialog" aria-modal="true" aria-labelledby="albumsPageTitle" hidden>
+    <div class="albums-page-bar">
+      <button type="button" class="event-page-back" onclick="closeAlbumsPage()" aria-label="رجوع">
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> <span>رجوع</span>
+      </button>
+      <strong id="albumsPageTitle" class="event-page-bar-title">ألبومات الأعراس</strong>
+      <button type="button" id="albumsMyPhotosBtn" class="albums-my-btn" onclick="openMyPhotos()">
+        <i class="fa-solid fa-user-check"></i> صوري
+      </button>
+    </div>
+    <div class="albums-page-body">
+      <div id="albumsBrowserView">
+        <div class="search-input-box albums-search-box">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+          <input type="text" id="albumsSearchInput" placeholder="ابحث باسم العرس، العشيرة، الشخص، أو وصف الصورة..." oninput="handleAlbumsSearch()">
+          <button id="albumsClearSearchBtn" class="clear-btn" style="display:none;" onclick="clearAlbumsSearch()" aria-label="مسح البحث"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="albums-tabs" role="tablist" aria-label="نتائج البحث">
+          <button type="button" class="albums-tab active" data-albums-tab="albums" onclick="setAlbumsTab('albums')">ألبومات</button>
+          <button type="button" class="albums-tab" data-albums-tab="photos" onclick="setAlbumsTab('photos')">صور</button>
+          <button type="button" class="albums-tab" data-albums-tab="people" onclick="setAlbumsTab('people')">أشخاص</button>
+        </div>
+        <div id="albumsSearchSummary" class="albums-search-summary" hidden></div>
+        <div id="albumsResults" class="albums-results"></div>
+        <button type="button" id="albumsLoadMoreBtn" class="albums-load-more" hidden onclick="loadMoreAlbums()">عرض المزيد</button>
+      </div>
+
+      <div id="albumDetailView" hidden>
+        <button type="button" class="albums-detail-back" onclick="closeAlbumDetail()">
+          <i class="fa-solid fa-arrow-right"></i> كل الألبومات
+        </button>
+        <div id="albumDetailHeader" class="album-detail-header"></div>
+        <div id="albumDetailGrid" class="albums-photo-grid"></div>
+        <button type="button" id="albumDetailMoreBtn" class="albums-load-more" hidden onclick="loadMoreAlbumPhotos()">عرض المزيد من الصور</button>
+      </div>
     </div>
   </div>
 

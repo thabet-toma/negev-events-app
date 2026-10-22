@@ -1084,3 +1084,219 @@ body {
     grid-template-areas: "name" "date" "place" "time" "del";
   }
 }
+
+/* ===== ستوريو التسويق (ADR-0010) ===== */
+.story-studio-preview {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunk);
+}
+.story-studio-preview[hidden] { display: none; }
+.story-studio-preview img {
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  flex: none;
+}
+.story-studio-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.story-studio-meta strong { color: var(--ink); font-size: 1.05rem; }
+.story-studio-meta a { color: var(--sky); font-weight: 700; }
+.story-platform-badge {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+.admin-stories-list { display: flex; flex-direction: column; gap: 14px; }
+.admin-story-card {
+  display: flex;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.admin-story-card.is-expired { opacity: 0.72; }
+.admin-story-card > img {
+  width: 108px;
+  height: 192px;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunk);
+  flex: none;
+}
+.admin-story-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.admin-story-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.admin-story-head h3 { margin: 0; font-size: 1rem; color: var(--ink); }
+.story-status-badge { padding: 3px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 800; }
+.story-status-badge.active { background: var(--success-wash); color: var(--success); }
+.story-status-badge.expired { background: var(--danger-wash); color: var(--danger); }
+.admin-story-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; color: var(--ink-faint); font-size: 0.8rem; }
+.story-ad-chip { color: var(--warn); font-weight: 800; }
+.admin-story-link { color: var(--sky); font-size: 0.82rem; overflow-wrap: anywhere; }
+.admin-story-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.admin-story-actions .admin-btn-ghost,
+.admin-story-actions .btn-reject { font-size: 0.8rem; padding: 6px 12px; text-decoration: none; }
+.story-metrics { margin-top: 8px; padding: 12px; border-radius: var(--radius-md); background: var(--surface-sunk); border: 1px solid var(--line-soft); }
+.story-metrics-loading { color: var(--ink-faint); font-size: 0.82rem; }
+.story-metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; text-align: center; }
+.story-metric-grid div { display: flex; flex-direction: column; gap: 2px; }
+.story-metric-grid strong { font-size: 1.2rem; color: var(--ink); }
+.story-metric-grid span { font-size: 0.74rem; color: var(--ink-faint); }
+.story-metric-towns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; color: var(--ink-soft); font-size: 0.78rem; }
+.story-metric-towns span { background: var(--surface); border: 1px solid var(--line-soft); padding: 3px 8px; border-radius: 999px; }
+
+@media (max-width: 720px) {
+  .story-studio-preview { flex-direction: column; }
+  .story-studio-preview img { width: 100%; max-width: 260px; }
+  .admin-story-card { flex-direction: column; }
+  .admin-story-card > img { width: 100%; height: 220px; }
+}
+
+/* ===== ألبومات الأعراس وطوابير الصور (ADR-0009) ===== */
+.admin-albums-picker {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.admin-albums-picker select { flex: 1; min-width: 240px; }
+.admin-albums-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.admin-album-card {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.admin-album-cover {
+  width: 84px;
+  height: 108px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-sunk);
+  display: grid;
+  place-items: center;
+  color: var(--sky);
+  flex: none;
+}
+.admin-album-cover img { width: 100%; height: 100%; object-fit: cover; }
+.admin-album-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.admin-album-body h3 { margin: 0; font-size: 0.95rem; color: var(--ink); overflow-wrap: anywhere; }
+.admin-album-body p { margin: 0; color: var(--ink-faint); font-size: 0.78rem; }
+.admin-album-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.admin-album-actions .admin-btn-ghost,
+.admin-album-actions .btn-reject { font-size: 0.78rem; padding: 5px 10px; }
+.admin-album-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.admin-album-upload-label { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.admin-album-photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.admin-album-photo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.admin-album-photo-media { position: relative; width: 100%; aspect-ratio: 4 / 3; border-radius: var(--radius-md); overflow: hidden; background: var(--surface-sunk); }
+.admin-album-photo-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.admin-photo-cover-badge {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gold-shimmer);
+  color: var(--on-sky);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+.admin-photo-status {
+  position: absolute;
+  bottom: 6px;
+  inset-inline-start: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--success-wash);
+  color: var(--success);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+.admin-photo-status.hidden { background: var(--danger-wash); color: var(--danger); }
+.admin-photo-caption {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-tajawal);
+  font-size: 0.82rem;
+}
+.admin-photo-row { display: flex; gap: 6px; align-items: center; }
+.admin-photo-move { flex: 1; min-width: 0; }
+.admin-photo-row .admin-btn-ghost { font-size: 0.72rem; padding: 5px 8px; }
+.admin-photo-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.admin-photo-actions .admin-btn-ghost,
+.admin-photo-actions .btn-reject { font-size: 0.74rem; padding: 5px 9px; }
+.admin-album-import { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
+.admin-album-import input { flex: 1; min-width: 240px; }
+.admin-photo-queue { display: flex; flex-direction: column; gap: 10px; }
+.admin-moderation-card {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.admin-moderation-card > img { width: 76px; height: 96px; object-fit: cover; border-radius: var(--radius-md); border: 1px solid var(--line); flex: none; }
+.admin-moderation-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.admin-moderation-body strong { color: var(--ink); font-size: 0.9rem; }
+.admin-moderation-body span, .admin-moderation-body small { color: var(--ink-soft); font-size: 0.78rem; overflow-wrap: anywhere; }
+.admin-moderation-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.admin-moderation-actions .admin-btn-primary,
+.admin-moderation-actions .admin-btn-ghost,
+.admin-moderation-actions .btn-reject { font-size: 0.76rem; padding: 5px 10px; }
+@media (max-width: 720px) {
+  .admin-albums-grid { grid-template-columns: 1fr; }
+  .admin-album-photos { grid-template-columns: 1fr 1fr; }
+  .admin-moderation-card { flex-direction: column; }
+  .admin-moderation-card > img { width: 100%; height: 180px; }
+}

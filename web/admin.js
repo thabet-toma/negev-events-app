@@ -4,6 +4,14 @@ let currentFilterStatus = 'all';
 let searchKeyword = '';
 let allOccasionTypes = [];
 let editingOccasionTypeId = null;
+let adminStoriesCache = [];
+let storyStudioPreviewReady = false;
+let adminAlbumsEventId = null;
+let adminAlbumListCache = [];
+let adminAlbumCurrent = null;
+let adminAlbumPhotoCache = [];
+let adminPhotoTagsStatus = 'pending';
+let adminPhotoReportsStatus = 'open';
 let allServiceProviders = [];
 let allPublicCategories = [];
 let editingProviderId = null;
@@ -621,7 +629,7 @@ function applyRoleVisibility() {
   const superAdminOnlyBtnIds = [
     'tabUsersBtn', 'tabOccasionTypesBtn',
     'tabVillagesBtn', 'tabTownsBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
-    'tabPrivacyRequestsBtn', 'tabAnalyticsBtn', 'tabSettingsBtn'
+    'tabPrivacyRequestsBtn', 'tabAnalyticsBtn', 'tabStoriesBtn', 'tabSettingsBtn'
   ];
   superAdminOnlyBtnIds.forEach(id => {
     const btn = document.getElementById(id);
@@ -889,7 +897,9 @@ function renderRequestedVillageNoticeHtml(evt) {
 const archivePhotoCounts = {};
 let archiveModalEventId = null;
 let archiveModalPhotos = [];
-let archiveModalMax = 60;
+// لا سقف لعدد صور الألبوم (قرار المالك 2026-10). null هنا يعني «بلا حدّ»؛
+// الخادم يعيد max_photos: null، والواجهة القديمة كانت تقارن بعدد 60.
+let archiveModalMax = null;
 
 function isArchivableAdminEvent(evt) {
   if (!evt) return false;
@@ -978,9 +988,9 @@ async function fetchArchivePhotos(eventId) {
 
 function renderArchivePhotosModal() {
   const count = archiveModalPhotos.length;
-  const full = count >= archiveModalMax;
+  const full = archiveModalMax !== null && count >= archiveModalMax;
   const countEl = document.getElementById('archivePhotosCount');
-  if (countEl) countEl.textContent = `${count} / ${archiveModalMax} صورة`;
+  if (countEl) countEl.textContent = archiveModalMax === null ? `${count} صورة` : `${count} / ${archiveModalMax} صورة`;
   const input = document.getElementById('archivePhotosInput');
   if (input) input.disabled = full;
   const label = document.getElementById('archivePhotosUploadLabel');
@@ -1034,7 +1044,7 @@ async function handleArchivePhotosPick(input) {
   setArchivePhotosError(null);
 
   const queue = document.getElementById('archiveUploadQueue');
-  const room = Math.max(0, archiveModalMax - archiveModalPhotos.length);
+  const room = archiveModalMax === null ? files.length : Math.max(0, archiveModalMax - archiveModalPhotos.length);
   const rows = files.map((file, index) => {
     const li = document.createElement('li');
     li.className = 'archive-upload-row';
@@ -2330,6 +2340,10 @@ function switchAdminTab(tabId) {
 
   if (tabId === 'tabBroadcast') {
     renderBroadcastComposer();
+  } else if (tabId === 'tabAdminAlbums') {
+    initAdminAlbumsTab();
+  } else if (tabId === 'tabStories') {
+    loadAdminStories();
   } else if (tabId === 'tabSettings') {
     fetchAdminSettings();
     fetchLiveEpisodes();
@@ -2338,6 +2352,786 @@ function switchAdminTab(tabId) {
     fetchAdminAnalyticsCounts();
     fetchAdminAnalyticsOverview();
     fetchAdminAnalyticsDevices(1);
+  }
+}
+
+// ======================================================================
+// ألبومات الأعراس وطوابير الوسوم/البلاغات (ADR-0009)
+// ======================================================================
+
+const PHOTO_REPORT_REASON_LABELS = {
+  privacy: 'خصوصية — أنا في الصورة',
+  inappropriate: 'محتوى غير لائق',
+  wrong_event: 'مناسبة خاطئة',
+  other: 'سبب آخر'
+};
+
+function adminAlbumsNotice(message, ok = true) {
+  const el = document.getElementById('adminAlbumsNotice');
+  if (!el) return;
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+  el.style.color = ok ? 'var(--success)' : 'var(--danger)';
+}
+
+async function initAdminAlbumsTab() {
+  if (!allAdminEvents.length) {
+    try { await fetchAdminEvents(); } catch (e) { /* the notice below explains */ }
+  }
+  if (!allOccasionTypes.length) {
+    try { await fetchOccasionTypes(); } catch (e) { /* best effort */ }
+  }
+
+  const select = document.getElementById('adminAlbumsEventSelect');
+  if (!select) return;
+  const options = allAdminEvents
+    .filter(evt => {
+      const type = allOccasionTypes.find(item => Number(item.id) === Number(evt.occasion_type_id));
+      return type && type.archive_gallery;
+    })
+    .map(evt => {
+      const title = evt.title || evt.groom_name || `مناسبة ${evt.id}`;
+      const status = evt.status === 'approved' ? 'معتمدة' : evt.status === 'pending' ? 'معلّقة' : 'مرفوضة';
+      return `<option value="${Number(evt.id)}">${escapeHtml(title)} — ${escapeHtml(evt.town || '')} (${status})</option>`;
+    });
+
+  select.innerHTML = options.length
+    ? options.join('')
+    : '<option value="">لا مناسبات من نوع يحمل ألبوماً في نطاقك</option>';
+  if (adminAlbumsEventId && [...select.options].some(option => Number(option.value) === Number(adminAlbumsEventId))) {
+    select.value = String(adminAlbumsEventId);
+  }
+
+  adminAlbumsNotice(options.length ? '' : 'لا تظهر مناسبة الآن — تأكد أن نوعها يحمل «أرشيف صور» وأنها داخل بلداتك.', options.length > 0);
+  loadAdminPhotoTags(document.getElementById('adminPhotoTagsStatus')?.value || adminPhotoTagsStatus);
+  loadAdminPhotoReports(document.getElementById('adminPhotoReportsStatus')?.value || adminPhotoReportsStatus);
+}
+
+async function openAdminEventAlbums() {
+  const select = document.getElementById('adminAlbumsEventSelect');
+  const eventId = Number(select?.value);
+  if (!eventId) {
+    adminAlbumsNotice('اختر مناسبة أولاً', false);
+    return;
+  }
+  adminAlbumsEventId = eventId;
+  adminAlbumsNotice('جاري تحميل الألبومات...', true);
+  try {
+    const res = await adminFetch(`/api/admin/events/${eventId}/albums`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الألبومات');
+    adminAlbumListCache = Array.isArray(data.albums) ? data.albums : [];
+    renderAdminAlbums();
+    adminAlbumsNotice('', true);
+  } catch (err) {
+    adminAlbumsNotice(arabicErrorMessage(err, 'تعذّر تحميل الألبومات'), false);
+  }
+}
+
+function renderAdminAlbums() {
+  const box = document.getElementById('adminAlbumsList');
+  if (!box) return;
+  if (!adminAlbumListCache.length) {
+    box.innerHTML = '<div class="empty-state" style="padding:26px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-folder-open" style="font-size:2rem; color:var(--gold-main);"></i><p>لا ألبومات بعد — سيُنشأ الألبوم الافتراضي عند أول فتح، أو أضف ألبوماً جديداً.</p></div>';
+    return;
+  }
+  box.innerHTML = adminAlbumListCache.map(album => `
+    <article class="admin-album-card">
+      <span class="admin-album-cover">${album.cover_thumb_url || album.cover_url ? `<img src="${escapeHtml(album.cover_thumb_url || album.cover_url)}" alt="" loading="lazy">` : '<i class="fa-solid fa-images"></i>'}</span>
+      <div class="admin-album-body">
+        <h3>${escapeHtml(album.title || 'ألبوم عرس')}</h3>
+        <p>${Number(album.photo_count) || 0} صورة${album.is_published === false ? ' · غير منشور' : ''}</p>
+        <div class="admin-album-actions">
+          <button type="button" class="admin-btn-ghost" onclick="openAdminAlbum(${Number(album.id)})"><i class="fa-solid fa-folder-open"></i> فتح</button>
+          ${isSuperAdminRole() ? `<button type="button" class="btn-reject" onclick="deleteAdminAlbum(${Number(album.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>` : ''}
+        </div>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function openAdminAlbum(albumId) {
+  const detail = document.getElementById('adminAlbumDetail');
+  if (!detail) return;
+  detail.style.display = 'block';
+  document.getElementById('adminAlbumDetailTitle').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الألبوم...';
+  document.getElementById('adminAlbumDetailMeta').textContent = '';
+  document.getElementById('adminAlbumPhotos').innerHTML = '';
+  adminAlbumsNotice('', true);
+  try {
+    const res = await adminFetch(`/api/admin/albums/${Number(albumId)}/photos?limit=100`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الصور');
+    adminAlbumCurrent = data.album;
+    adminAlbumPhotoCache = Array.isArray(data.photos) ? data.photos : [];
+    renderAdminAlbumDetail();
+  } catch (err) {
+    document.getElementById('adminAlbumDetailTitle').innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> تعذّر تحميل الألبوم';
+    document.getElementById('adminAlbumDetailMeta').textContent = arabicErrorMessage(err, 'تعذّر تحميل الألبوم');
+  }
+}
+
+function renderAdminAlbumDetail() {
+  if (!adminAlbumCurrent) return;
+  const title = document.getElementById('adminAlbumDetailTitle');
+  const meta = document.getElementById('adminAlbumDetailMeta');
+  if (title) title.innerHTML = `<i class="fa-solid fa-images"></i> ${escapeHtml(adminAlbumCurrent.title || 'ألبوم عرس')}`;
+  if (meta) meta.textContent = `${adminAlbumPhotoCache.length} صورة · ${Number(adminAlbumCurrent.is_published) === 0 ? 'غير منشور' : 'منشور'}`;
+  const deleteBtn = document.getElementById('adminAlbumDeleteBtn');
+  if (deleteBtn) deleteBtn.style.display = isSuperAdminRole() ? 'inline-flex' : 'none';
+  renderAdminAlbumPhotos();
+}
+
+function renderAdminAlbumPhotos() {
+  const box = document.getElementById('adminAlbumPhotos');
+  if (!box) return;
+  if (!adminAlbumPhotoCache.length) {
+    box.innerHTML = '<div class="empty-state" style="padding:28px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-cloud-arrow-up" style="font-size:2rem; color:var(--gold-main);"></i><p>لا صور في هذا الألبوم — ارفع أول صورة.</p></div>';
+    return;
+  }
+  box.innerHTML = adminAlbumPhotoCache.map(photo => {
+    const cover = photo.is_cover ? '<span class="admin-photo-cover-badge">الغلاف</span>' : '';
+    const status = photo.status === 'hidden' ? 'مخفية' : 'ظاهرة';
+    const albumOptions = adminAlbumListCache.map(album => `<option value="${Number(album.id)}" ${Number(album.id) === Number(photo.album_id) ? 'selected' : ''}>${escapeHtml(album.title || 'ألبوم')}</option>`).join('');
+    return `
+      <article class="admin-album-photo-card" data-photo-id="${Number(photo.id)}">
+        <div class="admin-album-photo-media">
+          <img src="${escapeHtml(photo.thumb_url || photo.image_url || '')}" alt="" loading="lazy">
+          ${cover}
+          <span class="admin-photo-status ${photo.status === 'hidden' ? 'hidden' : ''}">${status}</span>
+        </div>
+        <input type="text" class="admin-photo-caption" value="${escapeHtml(photo.caption || '')}" maxlength="200" placeholder="عنوان الصورة (بحث)" onchange="saveAdminPhotoCaption(${Number(photo.id)}, this.value)">
+        <div class="admin-photo-row">
+          <select class="admin-photo-move" onchange="moveAdminPhoto(${Number(photo.id)}, this.value)" aria-label="نقل إلى ألبوم">${albumOptions}</select>
+          <button type="button" class="admin-btn-ghost" onclick="setAdminPhotoCover(${Number(photo.id)})" ${photo.is_cover ? 'disabled' : ''}><i class="fa-solid fa-star"></i> غلاف</button>
+        </div>
+        <div class="admin-photo-actions">
+          <button type="button" class="admin-btn-ghost" onclick="toggleAdminPhotoStatus(${Number(photo.id)}, '${photo.status === 'hidden' ? 'approved' : 'hidden'}')">${photo.status === 'hidden' ? 'إظهار' : 'إخفاء'}</button>
+          <button type="button" class="btn-reject" onclick="deleteAdminPhoto(${Number(photo.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function saveAdminPhotoCaption(photoId, caption) {
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حفظ العنوان');
+    const photo = adminAlbumPhotoCache.find(item => Number(item.id) === Number(photoId));
+    if (photo) photo.caption = caption.trim();
+    showAdminNotice('تم حفظ عنوان الصورة.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر حفظ العنوان'), 'خطأ');
+  }
+}
+
+async function setAdminPhotoCover(photoId) {
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_cover: true })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تعيين الغلاف');
+    await openAdminAlbum(adminAlbumCurrent.id);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر تعيين الغلاف'), 'خطأ');
+  }
+}
+
+async function toggleAdminPhotoStatus(photoId, status) {
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تغيير حالة الصورة');
+    await openAdminAlbum(adminAlbumCurrent.id);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر تغيير حالة الصورة'), 'خطأ');
+  }
+}
+
+async function deleteAdminPhoto(photoId) {
+  if (!confirm('حذف هذه الصورة من الألبوم ومن Cloudinary؟')) return;
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حذف الصورة');
+    await openAdminAlbum(adminAlbumCurrent.id);
+    await openAdminEventAlbums();
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر حذف الصورة'), 'خطأ');
+  }
+}
+
+async function moveAdminPhoto(photoId, albumId) {
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ album_id: Number(albumId) })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر نقل الصورة');
+    await openAdminAlbum(adminAlbumCurrent.id);
+    await openAdminEventAlbums();
+    showAdminNotice('تم نقل الصورة إلى الألبوم المختار.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر نقل الصورة'), 'خطأ');
+  }
+}
+
+async function createAdminAlbum() {
+  if (!adminAlbumsEventId) {
+    adminAlbumsNotice('افتح مناسبة أولاً', false);
+    return;
+  }
+  const title = prompt('اسم الألبوم الجديد (مثال: حنّة، عرس، غداء):');
+  if (!title || !title.trim()) return;
+  try {
+    const res = await adminFetch(`/api/admin/events/${adminAlbumsEventId}/albums`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title.trim() })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر إنشاء الألبوم');
+    await openAdminEventAlbums();
+    showAdminNotice('تم إنشاء الألبوم.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر إنشاء الألبوم'), 'خطأ');
+  }
+}
+
+async function deleteAdminAlbum(albumId) {
+  if (!isSuperAdminRole()) return;
+  if (!confirm('حذف الألبوم وكل صوره من Cloudinary؟ لا يمكن التراجع.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/albums/${Number(albumId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حذف الألبوم');
+    closeAdminAlbumDetail();
+    await openAdminEventAlbums();
+    showAdminNotice('تم حذف الألبوم وصوره.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر حذف الألبوم'), 'خطأ');
+  }
+}
+
+function closeAdminAlbumDetail() {
+  const detail = document.getElementById('adminAlbumDetail');
+  if (detail) detail.style.display = 'none';
+  adminAlbumCurrent = null;
+  adminAlbumPhotoCache = [];
+}
+
+async function importAdminAlbumPhotoUrl() {
+  if (!adminAlbumCurrent) return;
+  const input = document.getElementById('adminAlbumImportUrl');
+  const url = (input?.value || '').trim();
+  if (!url) {
+    showAdminNotice('الصق رابط صورة مباشراً أولاً.', 'تنبيه');
+    return;
+  }
+  try {
+    const res = await adminFetch(`/api/admin/albums/${adminAlbumCurrent.id}/photos/import-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر استيراد الصورة');
+    if (input) input.value = '';
+    await openAdminAlbum(adminAlbumCurrent.id);
+    await openAdminEventAlbums();
+    showAdminNotice(data.message || 'تم استيراد الصورة.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر استيراد الصورة'), 'خطأ');
+  }
+}
+
+async function handleAdminAlbumUpload(input) {
+  const files = input && input.files ? Array.from(input.files) : [];
+  if (input) input.value = '';
+  if (!adminAlbumCurrent || !files.length) return;
+
+  const albumId = adminAlbumCurrent.id;
+  const queue = document.getElementById('adminAlbumUploadQueue');
+  const rows = files.map((file, index) => {
+    const li = document.createElement('li');
+    li.className = 'archive-upload-row';
+    const name = document.createElement('span');
+    name.className = 'archive-upload-name';
+    name.textContent = file.name || `صورة ${index + 1}`;
+    const status = document.createElement('span');
+    status.className = 'archive-upload-status';
+    status.textContent = 'في الانتظار';
+    li.append(name, status);
+    if (queue) queue.appendChild(li);
+    return { file, li, status };
+  });
+  const setRow = (row, text, state) => {
+    row.status.textContent = text;
+    row.li.dataset.state = state;
+  };
+
+  for (const row of rows) {
+    if (!adminAlbumCurrent || Number(adminAlbumCurrent.id) !== Number(albumId)) {
+      setRow(row, 'أُلغي — تغيّر الألبوم', 'error');
+      continue;
+    }
+    try {
+      setRow(row, 'جارٍ التجهيز…', 'busy');
+      const sigRes = await adminFetch(`/api/admin/albums/${albumId}/photos/signatures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: 1 })
+      });
+      const sig = await sigRes.json();
+      if (!sig.success) throw new Error(sig.message || 'تعذّر تجهيز الرفع');
+      const upload = Array.isArray(sig.uploads) ? sig.uploads[0] : null;
+      if (!upload) throw new Error('تعذّر تجهيز الرفع');
+
+      setRow(row, 'جارٍ الرفع…', 'busy');
+      const uploaded = await uploadToCloudinary(upload, row.file);
+
+      setRow(row, 'جارٍ الحفظ…', 'busy');
+      const res = await adminFetch(`/api/admin/albums/${albumId}/photos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          public_id: uploaded.public_id,
+          version: uploaded.version,
+          signature: uploaded.signature,
+          width: uploaded.width,
+          height: uploaded.height
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'تعذّر حفظ الصورة');
+      setRow(row, 'تمت الإضافة', 'done');
+    } catch (err) {
+      setRow(row, arabicErrorMessage(err, 'تعذّر رفع الصورة'), 'error');
+    }
+  }
+
+  if (adminAlbumCurrent && Number(adminAlbumCurrent.id) === Number(albumId)) {
+    await openAdminAlbum(albumId);
+    await openAdminEventAlbums();
+  }
+}
+
+// --- طابور الوسوم ------------------------------------------------------
+
+async function loadAdminPhotoTags(status = 'pending') {
+  adminPhotoTagsStatus = status || 'pending';
+  const box = document.getElementById('adminPhotoTagsQueue');
+  if (!box) return;
+  box.innerHTML = '<div class="empty-state" style="padding:24px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin"></i><p>جاري تحميل الوسوم...</p></div>';
+  try {
+    const res = await adminFetch(`/api/admin/photo-tags?status=${encodeURIComponent(adminPhotoTagsStatus)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الوسوم');
+    renderAdminPhotoTags(Array.isArray(data.tags) ? data.tags : []);
+  } catch (err) {
+    box.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; color:var(--danger);"><p>${escapeHtml(arabicErrorMessage(err, 'تعذّر تحميل الوسوم'))}</p></div>`;
+  }
+}
+
+function renderAdminPhotoTags(tags) {
+  const box = document.getElementById('adminPhotoTagsQueue');
+  if (!box) return;
+  if (!tags.length) {
+    box.innerHTML = '<div class="empty-state" style="padding:24px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-user-check" style="font-size:1.8rem; color:var(--gold-main);"></i><p>لا وسوم في هذه الحالة.</p></div>';
+    return;
+  }
+  box.innerHTML = tags.map(tag => `
+    <article class="admin-moderation-card">
+      <img src="${escapeHtml(tag.photo?.thumb_url || tag.photo?.image_url || '')}" alt="" loading="lazy">
+      <div class="admin-moderation-body">
+        <strong>${escapeHtml(tag.name || '')}</strong>
+        <span>${escapeHtml(tag.photo?.album_title || '')} · ${escapeHtml(tag.photo?.event_title || '')} · ${escapeHtml(tag.photo?.town || '')}</span>
+        <small>${tag.requester_name ? `بطلب من ${escapeHtml(tag.requester_name)}` : 'أُضيف بواسطة الإدارة'} · ${escapeHtml(tag.status)}</small>
+        <div class="admin-moderation-actions">
+          ${tag.status === 'pending' ? `
+            <button type="button" class="admin-btn-primary" onclick="moderateAdminTag(${Number(tag.id)}, 'approved')">اعتماد</button>
+            <button type="button" class="btn-reject" onclick="moderateAdminTag(${Number(tag.id)}, 'rejected')">رفض</button>` : ''}
+          <button type="button" class="admin-btn-ghost" onclick="deleteAdminTag(${Number(tag.id)})">حذف</button>
+        </div>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function moderateAdminTag(tagId, status) {
+  try {
+    const res = await adminFetch(`/api/admin/photo-tags/${Number(tagId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحديث الوسم');
+    await loadAdminPhotoTags(adminPhotoTagsStatus);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر تحديث الوسم'), 'خطأ');
+  }
+}
+
+async function deleteAdminTag(tagId) {
+  if (!confirm('حذف هذا الوسم نهائياً؟')) return;
+  try {
+    const res = await adminFetch(`/api/admin/photo-tags/${Number(tagId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حذف الوسم');
+    await loadAdminPhotoTags(adminPhotoTagsStatus);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر حذف الوسم'), 'خطأ');
+  }
+}
+
+// --- طابور البلاغات ----------------------------------------------------
+
+async function loadAdminPhotoReports(status = 'open') {
+  adminPhotoReportsStatus = status || 'open';
+  const box = document.getElementById('adminPhotoReportsQueue');
+  if (!box) return;
+  box.innerHTML = '<div class="empty-state" style="padding:24px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin"></i><p>جاري تحميل البلاغات...</p></div>';
+  try {
+    const res = await adminFetch(`/api/admin/photo-reports?status=${encodeURIComponent(adminPhotoReportsStatus)}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل البلاغات');
+    renderAdminPhotoReports(Array.isArray(data.reports) ? data.reports : []);
+  } catch (err) {
+    box.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; color:var(--danger);"><p>${escapeHtml(arabicErrorMessage(err, 'تعذّر تحميل البلاغات'))}</p></div>`;
+  }
+}
+
+function renderAdminPhotoReports(reports) {
+  const box = document.getElementById('adminPhotoReportsQueue');
+  if (!box) return;
+  if (!reports.length) {
+    box.innerHTML = '<div class="empty-state" style="padding:24px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-flag" style="font-size:1.8rem; color:var(--gold-main);"></i><p>لا بلاغات في هذه الحالة.</p></div>';
+    return;
+  }
+  box.innerHTML = reports.map(report => `
+    <article class="admin-moderation-card">
+      <img src="${escapeHtml(report.photo?.thumb_url || report.photo?.image_url || '')}" alt="" loading="lazy">
+      <div class="admin-moderation-body">
+        <strong>${escapeHtml(PHOTO_REPORT_REASON_LABELS[report.reason] || report.reason || 'بلاغ')}</strong>
+        <span>${escapeHtml(report.photo?.album_title || '')} · ${escapeHtml(report.photo?.event_title || '')} · ${escapeHtml(report.photo?.town || '')}</span>
+        ${report.note ? `<small>ملاحظة: ${escapeHtml(report.note)}</small>` : ''}
+        <small>${report.reporter_name ? `المُبلِّغ: ${escapeHtml(report.reporter_name)}` : ''} · الصورة: ${report.photo?.status === 'hidden' ? 'مخفية' : 'ظاهرة'}</small>
+        <div class="admin-moderation-actions">
+          ${report.status === 'open' ? `
+            <button type="button" class="admin-btn-primary" onclick="resolveAdminReport(${Number(report.id)}, 'resolved')">حل</button>
+            <button type="button" class="admin-btn-ghost" onclick="resolveAdminReport(${Number(report.id)}, 'dismissed')">تجاهل</button>
+            <button type="button" class="btn-reject" onclick="hideAdminReportedPhoto(${Number(report.photo_id)})">إخفاء الصورة</button>` : ''}
+        </div>
+      </div>
+    </article>
+  `).join('');
+}
+
+async function resolveAdminReport(reportId, status) {
+  try {
+    const res = await adminFetch(`/api/admin/photo-reports/${Number(reportId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحديث البلاغ');
+    await loadAdminPhotoReports(adminPhotoReportsStatus);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر تحديث البلاغ'), 'خطأ');
+  }
+}
+
+async function hideAdminReportedPhoto(photoId) {
+  try {
+    const res = await adminFetch(`/api/admin/photos/${Number(photoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'hidden' })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر إخفاء الصورة');
+    await loadAdminPhotoReports(adminPhotoReportsStatus);
+    showAdminNotice('تم إخفاء الصورة من العرض العام — الصفّ لم يُحذف.', 'تم');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر إخفاء الصورة'), 'خطأ');
+  }
+}
+
+// ======================================================================
+// ستوريو التسويق (ADR-0010) — رابط فيديو ← بطاقة ١٠٨٠×١٩٢٠ ← قصة
+// ======================================================================
+
+const STORY_PLATFORM_LABELS = {
+  youtube: 'يوتيوب',
+  tiktok: 'تيك توك',
+  facebook: 'فيسبوك',
+  instagram: 'إنستغرام',
+  website: 'فيديو'
+};
+
+function toggleStoryAdvertiserField() {
+  const enabled = Boolean(document.getElementById('storyStudioIsAd')?.checked);
+  const wrap = document.getElementById('storyStudioAdvertiserWrap');
+  const input = document.getElementById('storyStudioAdvertiser');
+  if (wrap) wrap.style.display = enabled ? 'block' : 'none';
+  if (input) input.required = enabled;
+}
+
+function setStoryStudioNotice(message, ok = true) {
+  const el = document.getElementById('storyStudioNotice');
+  if (!el) return;
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+  el.style.color = ok ? 'var(--success)' : 'var(--danger)';
+}
+
+function storyStudioPayload() {
+  return {
+    url: (document.getElementById('storyStudioUrl')?.value || '').trim(),
+    title: (document.getElementById('storyStudioTitle')?.value || '').trim(),
+    subtitle: (document.getElementById('storyStudioSubtitle')?.value || '').trim(),
+    cta_label: (document.getElementById('storyStudioCta')?.value || '').trim(),
+    expiry_preset: document.getElementById('storyStudioExpiry')?.value || 'week',
+    is_ad: Boolean(document.getElementById('storyStudioIsAd')?.checked),
+    advertiser_name: (document.getElementById('storyStudioAdvertiser')?.value || '').trim()
+  };
+}
+
+async function previewStoryStudio(event) {
+  if (event) event.preventDefault();
+  const payload = storyStudioPayload();
+  if (!payload.url) {
+    setStoryStudioNotice('رابط الفيديو مطلوب', false);
+    return;
+  }
+  if (payload.is_ad && !payload.advertiser_name) {
+    setStoryStudioNotice('اسم المعلن مطلوب لأي قصة إعلانية', false);
+    return;
+  }
+
+  const button = document.getElementById('storyStudioPreviewBtn');
+  if (button) button.disabled = true;
+  setStoryStudioNotice('جاري الرسم وجلب صورة الفيديو...', true);
+
+  try {
+    const res = await adminFetch('/api/admin/stories/studio/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّرت معاينة البطاقة');
+
+    const image = document.getElementById('storyStudioPreviewImage');
+    if (image) image.src = data.preview;
+    const meta = document.getElementById('storyStudioPreviewMeta');
+    if (meta) {
+      const info = data.info || {};
+      meta.innerHTML = `
+        <span class="story-platform-badge">${escapeHtml(STORY_PLATFORM_LABELS[info.platform] || 'فيديو')}</span>
+        <strong>${escapeHtml(info.title || payload.title || 'بطاقة ترويجية')}</strong>
+        <span>${escapeHtml(info.author_name || payload.subtitle || '')}</span>
+        <a href="${escapeHtml(info.canonical_url || payload.url)}" target="_blank" rel="noopener">فتح الفيديو للتحقق</a>
+      `;
+    }
+    const wrap = document.getElementById('storyStudioPreviewWrap');
+    if (wrap) wrap.hidden = false;
+    const publish = document.getElementById('storyStudioPublishBtn');
+    if (publish) publish.style.display = 'flex';
+    storyStudioPreviewReady = true;
+    setStoryStudioNotice('المعاينة جاهزة — راجع الصورة ثم انشر القصة.', true);
+  } catch (err) {
+    storyStudioPreviewReady = false;
+    setStoryStudioNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function publishStoryStudio() {
+  const payload = storyStudioPayload();
+  if (!storyStudioPreviewReady) {
+    setStoryStudioNotice('اعمل «معاينة البطاقة» أولاً ثم انشر.', false);
+    return;
+  }
+  if (!payload.url) {
+    setStoryStudioNotice('رابط الفيديو مطلوب', false);
+    return;
+  }
+  if (payload.is_ad && !payload.advertiser_name) {
+    setStoryStudioNotice('اسم المعلن مطلوب لأي قصة إعلانية', false);
+    return;
+  }
+
+  const button = document.getElementById('storyStudioPublishBtn');
+  if (button) button.disabled = true;
+  setStoryStudioNotice('جاري نشر القصة ورفع الصورة...', true);
+
+  try {
+    const res = await adminFetch('/api/admin/stories/studio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر نشر القصة');
+
+    storyStudioPreviewReady = false;
+    const wrap = document.getElementById('storyStudioPreviewWrap');
+    if (wrap) wrap.hidden = true;
+    if (button) button.style.display = 'none';
+    document.getElementById('storyStudioUrl').value = '';
+    document.getElementById('storyStudioTitle').value = '';
+    document.getElementById('storyStudioSubtitle').value = '';
+    document.getElementById('storyStudioCta').value = '';
+    document.getElementById('storyStudioIsAd').checked = false;
+    document.getElementById('storyStudioAdvertiser').value = '';
+    toggleStoryAdvertiserField();
+    setStoryStudioNotice('نُشرت القصة — تظهر الآن في شريط الستوريات.', true);
+    await loadAdminStories();
+  } catch (err) {
+    setStoryStudioNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function loadAdminStories() {
+  const list = document.getElementById('adminStoriesList');
+  if (!list) return;
+  list.innerHTML = '<div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin"></i><p>جاري تحميل الستوريات...</p></div>';
+  try {
+    const res = await adminFetch('/api/admin/stories');
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الستوريات');
+    adminStoriesCache = Array.isArray(data.stories) ? data.stories : [];
+    renderAdminStories();
+  } catch (err) {
+    list.innerHTML = `<div class="empty-state" style="padding:30px; text-align:center; color:var(--danger);"><i class="fa-solid fa-triangle-exclamation"></i><p>${escapeHtml(arabicErrorMessage(err, 'تعذّر تحميل الستوريات'))}</p></div>`;
+  }
+}
+
+function renderAdminStories() {
+  const list = document.getElementById('adminStoriesList');
+  if (!list) return;
+  if (!adminStoriesCache.length) {
+    list.innerHTML = `
+      <div class="empty-state" style="padding:36px; text-align:center; color:var(--text-dim);">
+        <i class="fa-solid fa-clapperboard" style="font-size:2.2rem; color:var(--gold-main); margin-bottom:10px;"></i>
+        <p>لا توجد ستوريات بعد — الصق رابط فيديو في الأعلى واعمل معاينة.</p>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = adminStoriesCache.map(story => {
+    const expires = story.expires_at ? new Date(story.expires_at).getTime() : null;
+    const active = expires === null || expires > Date.now();
+    const platform = STORY_PLATFORM_LABELS[story.link_platform] || 'فيديو';
+    const image = story.image || '';
+    const download = story.download_url || image;
+    return `
+      <article class="admin-story-card ${active ? 'is-active' : 'is-expired'}">
+        <img src="${escapeHtml(image)}" alt="" loading="lazy">
+        <div class="admin-story-body">
+          <div class="admin-story-head">
+            <h3>${escapeHtml(story.title || 'قصة')}</h3>
+            <span class="story-status-badge ${active ? 'active' : 'expired'}">${active ? 'نشِطة' : 'منتهية'}</span>
+          </div>
+          <p class="admin-story-meta">
+            <span>${escapeHtml(platform)}</span>
+            ${story.cta_label ? `<span>${escapeHtml(story.cta_label)}</span>` : ''}
+            ${story.is_ad ? `<span class="story-ad-chip">إعلان${story.advertiser_name ? `: ${escapeHtml(story.advertiser_name)}` : ''}</span>` : ''}
+            <span>${expires === null ? 'بلا انتهاء' : `تنتهي ${new Date(story.expires_at).toLocaleDateString('ar-EG')}`}</span>
+          </p>
+          ${story.target_url ? `<a class="admin-story-link" href="${escapeHtml(story.target_url)}" target="_blank" rel="noopener">${escapeHtml(story.target_url)}</a>` : ''}
+          <div class="admin-story-actions">
+            <button type="button" class="admin-btn-ghost" onclick="showStoryMetrics(${Number(story.id)})"><i class="fa-solid fa-chart-simple"></i> قياس</button>
+            <a class="admin-btn-ghost" href="${escapeHtml(download)}" target="_blank" rel="noopener" download><i class="fa-solid fa-download"></i> تنزيل الصورة</a>
+            <button type="button" class="admin-btn-ghost" onclick="copyStoryText(${Number(story.id)})"><i class="fa-solid fa-copy"></i> نسخ النص</button>
+            <button type="button" class="btn-reject" onclick="deleteAdminStory(${Number(story.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>
+          </div>
+          <div id="storyMetrics-${Number(story.id)}" class="story-metrics" hidden></div>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function showStoryMetrics(id) {
+  const box = document.getElementById(`storyMetrics-${Number(id)}`);
+  if (!box) return;
+  if (!box.hidden) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = '<span class="story-metrics-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري جلب الأرقام...</span>';
+  try {
+    const res = await adminFetch(`/api/admin/stories/${Number(id)}/metrics`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر جلب القياس');
+    const metrics = data.metrics || {};
+    const towns = Array.isArray(metrics.town_breakdown) && metrics.town_breakdown.length
+      ? metrics.town_breakdown.map(row => `<span>${escapeHtml(row.town)}: ${Number(row.views)}</span>`).join('')
+      : '<span>لا مدن مسجَّلة بعد</span>';
+    box.innerHTML = `
+      <div class="story-metric-grid">
+        <div><strong>${Number(metrics.views) || 0}</strong><span>مشاهدة</span></div>
+        <div><strong>${Number(metrics.distinct_viewers) || 0}</strong><span>مشاهد فريد</span></div>
+        <div><strong>${Number(metrics.clicks) || 0}</strong><span>نقرة</span></div>
+      </div>
+      <div class="story-metric-towns">${towns}</div>
+    `;
+  } catch (err) {
+    box.innerHTML = `<span style="color:var(--danger);">${escapeHtml(arabicErrorMessage(err, 'تعذّر جلب القياس'))}</span>`;
+  }
+}
+
+async function copyStoryText(id) {
+  const story = adminStoriesCache.find(item => Number(item.id) === Number(id));
+  if (!story) return;
+  const text = [story.title, story.cta_label || '', story.target_url || ''].filter(Boolean).join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showAdminNotice('تم نسخ نص القصة والرابط — جاهز للنشر على السوشيال.', 'تم النسخ');
+      return;
+    } catch (e) {
+      // fall through to the manual box
+    }
+  }
+  showAdminNotice(`انسخ النص يدوياً:\n${text}`, 'انسخ يدوياً');
+}
+
+async function deleteAdminStory(id) {
+  const story = adminStoriesCache.find(item => Number(item.id) === Number(id));
+  if (!story) return;
+  if (!confirm(`حذف قصة «${story.title || ''}» وصورتها من Cloudinary؟`)) return;
+  try {
+    const res = await adminFetch(`/api/admin/stories/${Number(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حذف القصة');
+    showAdminNotice('تم حذف القصة وصورتها.', 'تم');
+    await loadAdminStories();
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), 'خطأ');
   }
 }
 
