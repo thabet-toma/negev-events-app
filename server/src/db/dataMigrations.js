@@ -1926,6 +1926,36 @@ const steps = [
 
       logger.info(`[migrations] add-people-2026-10: ${linked} row(s) linked to a person.`);
     }
+  },
+  {
+    // سجلّ تدقيق الدمج (تذكرة #107): schema.sql يحمل التعريف للتنصيبات الجديدة،
+    // وهذه الخطوة تضمنه لقاعدة حيّة. `from_id`/`into_id` بلا مفتاح أجنبي إلى
+    // `people` عمداً — `from` يُحذف بالدمج و`into` قد يُحذف لاحقاً، والمفتاح
+    // إمّا يمنع الدمج أو يمحو الأثر؛ والاسمان لقطة تبقى بعد الحذف.
+    name: 'add-people-merges-2026-10',
+    async run(connection) {
+      if (await tableExists(connection, 'people_merges')) {
+        logger.info('[migrations] add-people-merges-2026-10: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS people_merges (
+          id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          actor_id   INT UNSIGNED DEFAULT NULL,
+          from_id    INT UNSIGNED NOT NULL,
+          from_name  VARCHAR(150) NOT NULL,
+          into_id    INT UNSIGNED NOT NULL,
+          into_name  VARCHAR(150) NOT NULL,
+          moved      VARCHAR(120) DEFAULT NULL,
+          created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          KEY idx_people_merges_created (created_at),
+          CONSTRAINT fk_people_merges_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] add-people-merges-2026-10: table created.');
+    }
   }
 ];
 

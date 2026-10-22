@@ -44,6 +44,24 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT fk_users_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- سجلّ تدقيق دمج شخصين (تذكرة #107). `from_id`/`into_id` أعداد صحيحة بلا مفتاح
+-- أجنبي إلى `people` عمداً: `from` يُحذف بالدمج و`into` قد يُحذف بدمجٍ لاحق،
+-- فالمفتاح إمّا يمنع الدمج أو يمحو الأثر. والاسمان لقطة وقت الدمج، والفاعل قد
+-- يُحذف فيبقى الصفّ بـ`actor_id = NULL`.
+CREATE TABLE IF NOT EXISTS people_merges (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  actor_id   INT UNSIGNED DEFAULT NULL,
+  from_id    INT UNSIGNED NOT NULL,
+  from_name  VARCHAR(150) NOT NULL,
+  into_id    INT UNSIGNED NOT NULL,
+  into_name  VARCHAR(150) NOT NULL,
+  moved      VARCHAR(120) DEFAULT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_people_merges_created (created_at),
+  CONSTRAINT fk_people_merges_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Local admin scope. Deliberately separate from users.clan_town: that column
 -- is a self-reported profile fact, so making it a permission would turn
 -- editing one's own profile into a privilege escalation (services-directory

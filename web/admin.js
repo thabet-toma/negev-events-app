@@ -7291,7 +7291,7 @@ async function loadAdminPeople() {
       return `
         <div class="admin-person-row${isSource ? ' is-source' : ''}">
           <span class="admin-person-name">${escapeHtml(person.name)}</span>
-          <span class="admin-person-counts">${Number(person.tags_count) || 0} وسم · ${Number(person.honorees_count) || 0} مناسبة · ${Number(person.users_count) || 0} حساب</span>
+          <span class="admin-person-counts">${Number(person.photos_count) || 0} صورة · ${Number(person.honorees_count) || 0} مناسبة · ${Number(person.users_count) || 0} حساب</span>
           <span class="admin-person-actions">
             ${isSource
               ? '<em>مختار للدمج</em>'

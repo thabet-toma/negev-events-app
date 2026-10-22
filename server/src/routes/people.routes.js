@@ -5,8 +5,8 @@
  *
  * حارسُ هذا الراوتر `requireSuperAdmin` حصراً — لا `requireAdmin` — لأن الدمج
  * يعبر البلاد ويغيّر هوية اسم، و`adminScope` لا يملك مفهوماً لـ«شخص» بل لبلدة.
- * وهو حارسٌ على الراوتر نفسه لا على `admin.routes.js`: حارسُ راوتر لا يحمي
- * آخر يشارك بادئة `/api`.
+ * وهو حارسٌ على هذا الراوتر وحده: كل راوتر يحمل حارسه، وحارسُ `admin.routes.js`
+ * لا يحمي راوتراً آخر يشارك بادئة `/admin` — البادئة نفسها ليست حارساً.
  */
 
 const express = require('express');
@@ -38,7 +38,7 @@ router.post('/admin/people/:id/merge', asyncHandler(async (req, res) => {
     return;
   }
   const fromId = parseId(body.from_id, 'معرّف الشخص المدموج');
-  const result = await people.mergeTwo(fromId, intoId);
+  const result = await people.mergeTwo(fromId, intoId, req.user.id);
   res.json({
     success: true,
     ...result,

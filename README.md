@@ -623,6 +623,8 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
+| `GET` | `/api/admin/people` | قائمة الأشخاص للسوبر أدمن (`?q=` بحث بالاسم، حتى ٥٠ صفّاً) مع `photos_count` (صور معتمدة فريدة، لا صفوف وسوم) و`honorees_count` و`users_count`، ولكل شخص `similar[]`: `{ id, name, photos_count }` — اقتراحات `comparePersonNames` للقراءة فقط ولا تدمج تلقائياً 🛡️ |
+| `POST` | `/api/admin/people/:id/merge` | دمج شخص في آخر — `:id` هو الباقي، والجسم `{ from_id, into_id? }` (`into_id` إن أُرسل يجب أن يطابق المسار). في معاملة واحدة تنتقل الحسابات والوسوم وأصحاب المناسبات، ويُوحَّد إملاء الوسوم والمناسبات على اسم الباقي، ثم يُحذف `from` ويُكتب صفّ `people_merges` بالفاعل والاسمين وأعداد ما نُقل. يعيد `{ merged_into, removed, moved }` 🛡️ |
 | `POST` | `/api/admin/broadcast` | بث تعميم — `message` مطلوب، و`title`/`tone` (`info`\|`urgent`\|`solemn`)/`duration` (`hour`\|`day`\|`3_days`\|`week`\|`none`) أو `expires_at` اختيارية. `super_admin` يصل الجميع (صفّ واحد `scope_town = NULL`)؛ أدمن بلدة يبثّ لبلداته هو فقط (`towns[]`، صفّ لكل بلدة)، ويُرفض إن لم يملك بلدة مُسنَدة أصلاً |
 | `GET` | `/api/admin/occasion-types` | كل أنواع المناسبات (نشِطة ومعطَّلة) مع عدد المناسبات لكل نوع 🛡️ |
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
