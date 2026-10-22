@@ -26,7 +26,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- Admin Styles -->
-  <link rel="stylesheet" href="admin.css?v=2.5.2">
+  <link rel="stylesheet" href="admin.css?v=2.6.0">
 </head>
 <body>
 
@@ -149,6 +149,9 @@
         </button>
         <button class="admin-tab-btn" data-tab="tabDirectAdd" onclick="switchAdminTab('tabDirectAdd')">
           <i class="fa-solid fa-plus-circle"></i> نشر مناسبة معتمدة فوراً
+        </button>
+        <button class="admin-tab-btn" id="tabPeopleBtn" data-tab="tabPeople" onclick="switchAdminTab('tabPeople')" style="display:none;">
+          <i class="fa-solid fa-user-pen"></i> الأشخاص
         </button>
         <button class="admin-tab-btn" data-tab="tabServiceProviders" onclick="switchAdminTab('tabServiceProviders')">
           <i class="fa-solid fa-handshake"></i> دليل مزوّدي الخدمات
@@ -418,6 +421,20 @@
             <input type="text" id="adminUserSearch" placeholder="بحث برقم الهاتف أو الاسم..." oninput="handleAdminUserSearch()">
           </div>
           <div id="adminUsersList" class="admin-users-table-wrapper"></div>
+        </div>
+      </section>
+
+      <!-- TAB: PEOPLE — a name is an identity, and two rows for one person are merged here (ADR-0011, #107) -->
+      <section id="tabPeople" class="admin-tab-pane">
+        <div class="pane-box">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-user-pen"></i> الأشخاص — الاسم الواحد في صفّين</h2>
+            <p>ابحث عن الاسم، اختر الصفّ الذي تريد التخلّص منه، ثم اضغط «دمج هنا» على الصفّ الباقي. تنتقل الوسوم والمناسبات والحسابات إليه، ويُحذف الصفّ الآخر.</p>
+          </div>
+          <div class="admin-search-box">
+            <input type="text" id="adminPeopleSearch" placeholder="بحث بالاسم..." oninput="handleAdminPeopleSearch()">
+          </div>
+          <div id="adminPeopleList" class="admin-users-table-wrapper"></div>
         </div>
       </section>
 
@@ -1410,6 +1427,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="admin.js?v=2.5.2"></script>
+  <script src="admin.js?v=2.6.0"></script>
 </body>
 </html>

@@ -23,6 +23,7 @@ const settingsRoutes = require('./settings.routes');
 const liveRoutes = require('./live.routes');
 const albumsRoutes = require('./albums.routes');
 const archivePhotosRoutes = require('./archivePhotos.routes');
+const peopleRoutes = require('./people.routes');
 
 const router = express.Router();
 
@@ -69,5 +70,6 @@ router.use(settingsRoutes);
 router.use(liveRoutes);
 router.use(albumsRoutes);
 router.use(archivePhotosRoutes);
+router.use(peopleRoutes);
 
 module.exports = router;

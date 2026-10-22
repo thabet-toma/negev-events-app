@@ -627,7 +627,7 @@ function showDashboard() {
 function applyRoleVisibility() {
   const isSuperAdmin = isSuperAdminRole();
   const superAdminOnlyBtnIds = [
-    'tabUsersBtn', 'tabOccasionTypesBtn',
+    'tabUsersBtn', 'tabOccasionTypesBtn', 'tabPeopleBtn',
     'tabVillagesBtn', 'tabTownsBtn', 'tabServiceCategoriesBtn', 'tabAdminsBtn',
     'tabPrivacyRequestsBtn', 'tabAnalyticsBtn', 'tabStoriesBtn', 'tabSettingsBtn'
   ];
@@ -2340,6 +2340,8 @@ function switchAdminTab(tabId) {
 
   if (tabId === 'tabBroadcast') {
     renderBroadcastComposer();
+  } else if (tabId === 'tabPeople') {
+    loadAdminPeople();
   } else if (tabId === 'tabAdminAlbums') {
     initAdminAlbumsTab();
   } else if (tabId === 'tabStories') {
@@ -7254,5 +7256,79 @@ async function handleDeleteLiveEpisode(id) {
     }
   } catch (e) {
     showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  }
+}
+
+// ======================================================================
+// «الأشخاص» — دمج الاسم الواحد في صفّين (ADR-0011، تذكرة #107)
+// ======================================================================
+
+/** الصفّ المختار للتخلّص منه؛ يُملأ بنقرة، ويُصفَّر بعد كل دمج. */
+let adminPeopleFrom = null;
+let adminPeopleSearchTimer = null;
+
+function handleAdminPeopleSearch() {
+  clearTimeout(adminPeopleSearchTimer);
+  adminPeopleSearchTimer = setTimeout(loadAdminPeople, 320);
+}
+
+async function loadAdminPeople() {
+  const box = document.getElementById('adminPeopleList');
+  if (!box) return;
+  box.innerHTML = '<p class="admin-empty">جاري التحميل...</p>';
+  try {
+    const query = (document.getElementById('adminPeopleSearch') || {}).value || '';
+    const res = await adminFetch(`/api/admin/people?q=${encodeURIComponent(query.trim())}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'تعذّر تحميل الأشخاص');
+    const people = Array.isArray(data.people) ? data.people : [];
+    if (!people.length) {
+      box.innerHTML = '<p class="admin-empty">لا أشخاص بهذا الاسم</p>';
+      return;
+    }
+    box.innerHTML = people.map(person => {
+      const isSource = adminPeopleFrom === person.id;
+      return `
+        <div class="admin-person-row${isSource ? ' is-source' : ''}">
+          <span class="admin-person-name">${escapeHtml(person.name)}</span>
+          <span class="admin-person-counts">${Number(person.tags_count) || 0} وسم · ${Number(person.honorees_count) || 0} مناسبة · ${Number(person.users_count) || 0} حساب</span>
+          <span class="admin-person-actions">
+            ${isSource
+              ? '<em>مختار للدمج</em>'
+              : `<button type="button" class="admin-person-btn" onclick="selectPeopleMergeSource(${Number(person.id)})">اختر للدمج</button>`}
+            ${adminPeopleFrom !== null && !isSource
+              ? `<button type="button" class="admin-person-btn primary" onclick="mergePeopleInto(${Number(person.id)})">دمج هنا</button>`
+              : ''}
+          </span>
+        </div>
+      `;
+    }).join('');
+  } catch (error) {
+    box.innerHTML = `<p class="admin-empty">${escapeHtml(error.message || 'تعذّر تحميل الأشخاص')}</p>`;
+  }
+}
+
+function selectPeopleMergeSource(id) {
+  adminPeopleFrom = Number(id) || null;
+  loadAdminPeople();
+}
+
+/** يدمج الصفّ المختار في `targetId` — الباقي هو الصفّ الذي يُضغط عليه. */
+async function mergePeopleInto(targetId) {
+  if (adminPeopleFrom === null || adminPeopleFrom === Number(targetId)) return;
+  const ok = confirm('دمج الشخص المختار في هذا؟ تنتقل وسومه ومناسباته وحساباته إليه، ويُحذف الصفّ الآخر نهائياً.');
+  if (!ok) return;
+  try {
+    const res = await adminFetch(`/api/admin/people/${Number(targetId)}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ from_id: adminPeopleFrom })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) throw new Error(data.message || 'تعذّر الدمج');
+    adminPeopleFrom = null;
+    showAdminNotice(data.message || 'تم الدمج', 'نجاح');
+    loadAdminPeople();
+  } catch (error) {
+    showAdminNotice(error.message || 'تعذّر الدمج', 'خطأ');
   }
 }

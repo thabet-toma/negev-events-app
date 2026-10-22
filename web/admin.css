@@ -1310,3 +1310,39 @@ body {
   .admin-moderation-card { flex-direction: column; }
   .admin-moderation-card > img { width: 100%; height: 180px; }
 }
+
+/* «الأشخاص» — صفٌّ لكل اسم، والمختار للدمج يُعلَّم (تذكرة #107). */
+.admin-empty {
+  padding: 18px 6px;
+  color: var(--ink-faint);
+  font-size: 0.88rem;
+  text-align: center;
+}
+.admin-person-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+}
+.admin-person-row.is-source { border-color: #b45309; background: #fffbeb; }
+.admin-person-name { font-weight: 800; color: var(--ink); flex: 1 1 180px; }
+.admin-person-counts { color: var(--ink-faint); font-size: 0.8rem; }
+.admin-person-actions { display: flex; align-items: center; gap: 8px; }
+.admin-person-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.admin-person-btn.primary { background: #b45309; border-color: #b45309; color: #fff; }
+.admin-person-btn:hover { border-color: #b45309; }

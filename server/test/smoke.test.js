@@ -9354,6 +9354,56 @@ async function run() {
         assert.strictEqual(hidden.body.people.length, 0, 'a name with nothing public stays out of the search');
       });
 
+      await test('merging two people moves their tags and occasions, and only a super admin can (#107)', async () => {
+        const peopleService = require('../src/services/people.service');
+        // اسمان مختلفان بعد توحيد الإملاء — وإلّا لكانا شخصاً واحداً أصلاً.
+        const fromId = await peopleService.resolveByName('راني سالم المندمج');
+        const intoId = await peopleService.resolveByName('راني ابو سالم المندمج');
+        assert.ok(fromId && intoId && fromId !== intoId, 'two separate person rows');
+
+        await db.execute(
+          'INSERT INTO photo_tags (photo_id, name, name_key, person_id, status) VALUES (?, ?, ?, ?, ?)',
+          [archivePhotoId, 'راني سالم المندمج', 'راني سالم المندمج', fromId, 'approved']
+        );
+        await db.execute(
+          'INSERT INTO event_honorees (event_id, name, role, position, person_id) VALUES (?, ?, ?, 0, ?)',
+          [endedWedding, 'راني سالم المندمج', 'العريس', fromId]
+        );
+
+        // أدمن بلدة لا يصل إلى اللوحة: 403 من `requireSuperAdmin` — وهو ما
+        // ترميه البوابة فعلاً. (404 نمط `adminScope` لمسارات النطاق لا للدور.)
+        assert.strictEqual(
+          (await api('GET', '/api/admin/people', { token: archiveScopedAdmin.token })).status,
+          403
+        );
+
+        const listed = await api('GET', '/api/admin/people?q=' + encodeURIComponent('راني'), { token: superAdminToken });
+        assert.strictEqual(listed.status, 200, JSON.stringify(listed.body));
+        assert.ok(listed.body.people.some(row => row.id === fromId), 'the doomed person is listed first');
+
+        const merged = await api('POST', `/api/admin/people/${intoId}/merge`, {
+          token: superAdminToken,
+          body: { from_id: fromId }
+        });
+        assert.strictEqual(merged.status, 200, JSON.stringify(merged.body));
+        assert.ok(merged.body.moved.tags >= 1, 'the tag moved');
+        assert.ok(merged.body.moved.honorees >= 1, 'the occasion moved');
+
+        assert.strictEqual(await db.queryOne('SELECT id FROM people WHERE id = ?', [fromId]), null,
+          'the merged row is gone');
+        const movedTag = await db.queryOne(
+          'SELECT person_id FROM photo_tags WHERE photo_id = ? AND person_id = ?',
+          [archivePhotoId, intoId]
+        );
+        assert.ok(movedTag, 'the tag now points at the surviving person');
+
+        const selfMerge = await api('POST', `/api/admin/people/${intoId}/merge`, {
+          token: superAdminToken,
+          body: { from_id: intoId }
+        });
+        assert.strictEqual(selfMerge.status, 400, 'merging a person into themselves is refused');
+      });
+
       await test('the archive is hidden (not deleted) when the event is unpublished or its type turns the archive off', async () => {
         await db.execute("UPDATE events SET status = 'rejected' WHERE id = ?", [endedWedding]);
         const rejected = await api('GET', `/api/events/${endedWedding}`);
