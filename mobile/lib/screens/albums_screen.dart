@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/album.dart';
 import '../models/event.dart' show Pagination;
+import '../state/share_album.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show showMessage;
 import '../widgets/congratulations.dart' show openSignInGate;
@@ -437,7 +438,17 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        appBar: AppBar(title: Text(_album.title)),
+        appBar: AppBar(
+          title: Text(_album.title),
+          actions: [
+            IconButton(
+              key: const Key('album_share_btn'),
+              icon: const Icon(Icons.share_outlined),
+              tooltip: 'مشاركة',
+              onPressed: () => shareAlbum(context, _album),
+            ),
+          ],
+        ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error != null
@@ -823,6 +834,12 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
                         onPressed: _busy ? null : _tag,
                         icon: const Icon(Icons.person_add_alt_1, size: 18),
                         label: const Text('أنا في الصورة'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const Key('photo_share_btn'),
+                        onPressed: _busy ? null : () => sharePhoto(context, _photo),
+                        icon: const Icon(Icons.share_outlined, size: 18),
+                        label: const Text('مشاركة'),
                       ),
                       if (signedIn)
                         OutlinedButton(

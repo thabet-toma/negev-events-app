@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:negev_events/models/album.dart';
 import 'package:negev_events/models/event.dart';
+import 'package:negev_events/state/share_album.dart';
 
 void main() {
   group('نماذج ألبومات الأعراس (ADR-0009)', () {
@@ -98,6 +99,61 @@ void main() {
       expect(results.photos, hasLength(1));
       expect(results.people.single.name, 'فاطمة');
       expect(results.people.single.nameKey, 'فاطمه');
+    });
+  });
+
+  group('مشاركة الألبوم والصورة (تذكرة #103)', () {
+    EventAlbum album({String? shareUrl}) => EventAlbum(
+          id: 11,
+          eventId: 5,
+          title: 'عرس أحمد — رهط',
+          town: 'رهط',
+          shareUrl: shareUrl,
+        );
+
+    test('EventAlbum.fromJson يقرأ share_url، ويبقى null مع خادم قديم', () {
+      final withShare = EventAlbum.fromJson({
+        'id': 11,
+        'event_id': 5,
+        'title': 'عرس',
+        'share_url': 'https://munasbat.test/a/11',
+      });
+      expect(withShare.shareUrl, 'https://munasbat.test/a/11');
+
+      final without = EventAlbum.fromJson({'id': 11, 'event_id': 5, 'title': 'عرس'});
+      expect(without.shareUrl, isNull);
+    });
+
+    test('albumShareUrl يفضّل رابط الخادم، ويسقط إلى /a/<id> حين يغيب', () {
+      expect(albumShareUrl(album(shareUrl: 'https://munasbat.test/a/11')),
+          'https://munasbat.test/a/11');
+
+      final fallback = albumShareUrl(album());
+      expect(fallback, endsWith('/a/11'));
+      expect(fallback, startsWith('http'), reason: 'رابط مطلق لا نسبيّ');
+      expect(fallback.contains('#'), isFalse,
+          reason: 'ما بعد # لا يفتح التطبيق ولا ينتج معاينة');
+    });
+
+    test('albumShareMessage يحمل العنوان والبلدة والرابط', () {
+      final message = albumShareMessage(album(shareUrl: 'https://munasbat.test/a/11'));
+      expect(message, contains('عرس أحمد — رهط'));
+      expect(message, contains('رهط'));
+      expect(message, contains('https://munasbat.test/a/11'));
+    });
+
+    test('photoShareUrl صفحة الصورة، ورسالتها عنوانها التعليق أو بديله', () {
+      final photo = EventPhoto(
+        id: 7,
+        albumId: 11,
+        imageUrl: 'https://cdn.test/full.jpg',
+        caption: 'صورة القاعة',
+      );
+      expect(photoShareUrl(photo), endsWith('/p/7'));
+      expect(photoShareMessage(photo), contains('صورة القاعة'));
+
+      final untitled = EventPhoto(id: 8, albumId: 11, imageUrl: 'https://cdn.test/x.jpg');
+      expect(photoShareMessage(untitled), contains('صورة من ألبوم العرس'));
     });
   });
 }

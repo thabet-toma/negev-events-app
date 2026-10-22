@@ -10,6 +10,9 @@ class EventAlbum {
   final int photoCount;
   final String? coverUrl;
   final String? coverThumbUrl;
+  /// صفحة المشاركة على الخادم (`/a/:id`) — يأتي جاهزاً من الحمولة، فلا يركّبه
+  /// أي عميل بنفسه ويخطئ حين يتغيّر النطاق (تذكرة #100).
+  final String? shareUrl;
   final String? eventTitle;
   final String? town;
   final String? eventDate;
@@ -23,6 +26,7 @@ class EventAlbum {
     this.photoCount = 0,
     this.coverUrl,
     this.coverThumbUrl,
+    this.shareUrl,
     this.eventTitle,
     this.town,
     this.eventDate,
@@ -39,6 +43,7 @@ class EventAlbum {
       photoCount: _toInt(json['photo_count']),
       coverUrl: _nullableString(json['cover_url']),
       coverThumbUrl: _nullableString(json['cover_thumb_url']),
+      shareUrl: _nullableString(json['share_url']),
       eventTitle: _nullableString(event['title'] ?? json['event_title']),
       town: _nullableString(event['town'] ?? json['town']),
       eventDate: _nullableString(event['event_date'] ?? json['event_date']),
