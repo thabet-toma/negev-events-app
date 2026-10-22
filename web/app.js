@@ -170,6 +170,7 @@ let albumsAlbumPagination = null;
 let albumsCurrentPerson = null;
 let albumsPersonPhotos = [];
 let albumsPersonAlbums = [];
+let albumsPersonPagination = null;
 let albumsMyPhotosMode = false;
 let albumsMyPhotosPhotos = [];
 let albumsMyPhotosPagination = null;
@@ -6317,10 +6318,13 @@ function personPageHtml() {
   return `
     <div class="album-person-head">
       <strong>${escapeHtml(person.name || '')}</strong>
-      <small>${count} صورة${albums.length ? ` · ${albums.length} مناسبة` : ''}</small>
+      <small>${count} صورة${Number(person.albums_count) ? ` · ${Number(person.albums_count)} مناسبة` : ''}</small>
     </div>
     ${albums.length ? `<div class="albums-grid">${albums.map(albumCardHtml).join('')}</div>` : ''}
     ${photos.length ? `<div class="albums-photo-grid">${photos.map((photo, index) => albumPhotoCardHtml(photo, 'albumPerson', index)).join('')}</div>` : ''}
+    ${albumsPersonPagination && albumsPersonPagination.hasMore
+      ? '<button type="button" class="albums-load-more" onclick="loadMorePersonPhotos()">عرض المزيد من الصور</button>'
+      : ''}
   `;
 }
 
@@ -6394,6 +6398,8 @@ function handleAlbumsSearch() {
     albumsSearchQuery = (input && input.value.trim()) || '';
     albumsCurrentPerson = null;
     albumsPersonPhotos = [];
+    albumsPersonAlbums = [];
+    albumsPersonPagination = null;
     albumsMyPhotosMode = false;
     if (albumsSearchQuery) runAlbumsSearch();
     else {
@@ -6427,6 +6433,8 @@ function clearAlbumsSearch() {
   albumsSearchResults = { albums: [], photos: [], people: [] };
   albumsCurrentPerson = null;
   albumsPersonPhotos = [];
+  albumsPersonAlbums = [];
+  albumsPersonPagination = null;
   albumsMyPhotosMode = false;
   const input = document.getElementById('albumsSearchInput');
   if (input) input.value = '';
@@ -6626,41 +6634,59 @@ function closeAlbumDetail() {
 
 /**
  * صفحة الشخص (ADR-0011، تذكرة #105) — تُقرأ من `/api/people/:id` لا من شبكة
- * صور باسم: الخادم وحده يعرف من ظاهر، ويعيد صوره ومناسباته معاً.
+ * صور باسم: الخادم وحده يعرف من ظاهر، ويعيد صوره ومناسباته معاً. ولكل صفحة
+ * عنوانها `#person/<id>` كي يعمل زرّ الرجوع ويصلح الرابط للمشاركة.
  */
-async function openPerson(personId) {
+async function openPerson(personId, { page = 1, append = false, skipHash = false } = {}) {
   const id = Number(personId);
   if (!id) return;
-  albumsCurrentPerson = { id, name: '' };
-  albumsPersonPhotos = [];
-  albumsPersonAlbums = [];
-  albumsMyPhotosMode = false;
-  albumsSearchQuery = '';
-  const input = document.getElementById('albumsSearchInput');
-  if (input) input.value = '';
-  const clear = document.getElementById('albumsClearSearchBtn');
-  if (clear) clear.style.display = 'none';
+  if (!append) {
+    albumsCurrentPerson = { id, name: '' };
+    albumsPersonPhotos = [];
+    albumsPersonAlbums = [];
+    albumsPersonPagination = null;
+    albumsMyPhotosMode = false;
+    albumsSearchQuery = '';
+    const input = document.getElementById('albumsSearchInput');
+    if (input) input.value = '';
+    const clear = document.getElementById('albumsClearSearchBtn');
+    if (clear) clear.style.display = 'none';
+  }
+  if (!skipHash) window.history.pushState({ person: id }, '', `#person/${id}`);
   albumsTab = 'people';
   document.querySelectorAll('.albums-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.albumsTab === 'people');
   });
   const results = document.getElementById('albumsResults');
-  results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الشخص...</div>';
+  if (!append) {
+    results.innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الشخص...</div>';
+  }
   try {
-    const res = await apiFetch(`/api/people/${id}`);
+    const res = await apiFetch(`/api/people/${id}?page=${page}&limit=48`);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'تعذّر تحميل الشخص');
     albumsCurrentPerson = {
       id,
       name: data.person.name,
-      photos_count: Number(data.person.photos_count) || 0
+      photos_count: Number(data.person.photos_count) || 0,
+      albums_count: Number(data.person.albums_count) || 0
     };
-    albumsPersonPhotos = Array.isArray(data.person.photos) ? data.person.photos : [];
+    const incoming = Array.isArray(data.person.photos) ? data.person.photos : [];
+    albumsPersonPhotos = append ? albumsPersonPhotos.concat(incoming) : incoming;
     albumsPersonAlbums = Array.isArray(data.person.albums) ? data.person.albums : [];
+    albumsPersonPagination = data.person.pagination || null;
     renderAlbumsResults();
   } catch (error) {
     results.innerHTML = albumsEmptyHtml('fa-triangle-exclamation', error.message || 'تعذّر تحميل الشخص');
   }
+}
+
+/** «عرض المزيد» في صفحة الشخص — الصفحة التالية تُلحق ولا تستبدل. */
+async function loadMorePersonPhotos() {
+  const person = albumsCurrentPerson;
+  const pagination = albumsPersonPagination;
+  if (!person || !person.id || !pagination || !pagination.hasMore) return;
+  await openPerson(person.id, { page: pagination.page + 1, append: true, skipHash: true });
 }
 
 async function openMyPhotos() {
@@ -6820,6 +6846,14 @@ function handleAlbumsHashChange() {
       archivePhotosByBox.photoDeepLink = [data.photo];
       openArchiveViewer(0, 'photoDeepLink');
     }).catch(() => {});
+    return;
+  }
+  if (hash.startsWith('#person/')) {
+    const id = Number(hash.slice('#person/'.length));
+    if (!id) return;
+    openAlbumsPage({ skipHash: true });
+    setAlbumsTab('people');
+    openPerson(id, { skipHash: true });
     return;
   }
   if (!hash && isAlbumsPageOpen()) closeAlbumsPage({ skipHash: true });

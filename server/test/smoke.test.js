@@ -598,14 +598,23 @@ async function run() {
     await db.execute('DELETE FROM events WHERE id = ?', [insertId]);
   });
 
-  await test('Running the migration twice does not duplicate occasion types or honorees', async () => {
+  await test('Running the migration twice does not duplicate occasion types, honorees or people', async () => {
     const beforeHonorees = await db.queryOne('SELECT COUNT(*) AS total FROM event_honorees');
     const beforeTypes = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_types');
+    const beforePeople = await db.queryOne('SELECT COUNT(*) AS total FROM people');
     await migrate();
     const afterHonorees = await db.queryOne('SELECT COUNT(*) AS total FROM event_honorees');
     const afterTypes = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_types');
+    const afterPeople = await db.queryOne('SELECT COUNT(*) AS total FROM people');
     assert.strictEqual(Number(beforeHonorees.total), Number(afterHonorees.total));
     assert.strictEqual(Number(beforeTypes.total), Number(afterTypes.total));
+    // `add-people-2026-10` يملأ ما بلا شخص فقط، و`name_key` فريد — فإعادة
+    // التشغيل لا تُنشئ صفّ شخص ثانياً (تذكرة #105).
+    assert.strictEqual(Number(beforePeople.total), Number(afterPeople.total));
+    const unlinked = await db.queryOne(
+      'SELECT (SELECT COUNT(*) FROM users WHERE person_id IS NULL) + (SELECT COUNT(*) FROM photo_tags WHERE person_id IS NULL) + (SELECT COUNT(*) FROM event_honorees WHERE person_id IS NULL) AS total'
+    );
+    assert.strictEqual(Number(unlinked.total), 0, 'every named row is linked to a person');
   });
 
   console.log('\nOccasion-aware publishing');

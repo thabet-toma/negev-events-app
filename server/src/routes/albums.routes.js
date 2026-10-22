@@ -88,7 +88,13 @@ router.get('/photos/:id', asyncHandler(async (req, res) => {
  */
 router.get('/people/:id', asyncHandler(async (req, res) => {
   const personId = parseId(req.params.id, 'معرّف الشخص');
-  res.json({ success: true, ...await albums.getPublicPerson(personId) });
+  res.json({
+    success: true,
+    ...await albums.getPublicPerson(personId, {
+      page: parsePage(req.query.page),
+      limit: parseLimit(req.query.limit, 48, 60)
+    })
+  });
 }));
 
 /**

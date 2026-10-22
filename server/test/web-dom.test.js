@@ -1272,8 +1272,10 @@ async function run() {
     await waitFor(() => document.querySelectorAll('#albumsResults .album-person-card').length === 1);
     document.querySelector('#albumsResults .album-person-card').click();
     await waitFor(() => document.querySelectorAll('#albumsResults .albums-photo-card').length === 1);
-    // صفحة الشخص (تذكرة #105): تُقرأ من `/api/people/:id` لا من شبكة صور بالاسم.
+    // صفحة الشخص (تذكرة #105): تُقرأ من `/api/people/:id` لا من شبكة صور بالاسم،
+    // ولها عنوانها `#person/<id>` كي يعمل زرّ الرجوع ويصلح الرابط للمشاركة.
     assert.ok(paths.some(path => path.startsWith('GET /api/people/21')), 'the person page is fetched by id');
+    assert.strictEqual(dom.window.location.hash, '#person/21', 'the person view has its own address');
     assert.ok(
       document.querySelector('#albumsResults .album-person-head strong').textContent.includes('فاطمة'),
       'and it names the person'

@@ -25,14 +25,16 @@ async function selectId(connection, key) {
 }
 
 async function insertPerson(connection, name, key) {
+  // `ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)` يجعل الإدراج ذرّياً: إن
+  // كان الصفّ موجوداً يعيد `insertId` معرّفَه هو، فلا سباق يُفشل الكتابة ولا
+  // اعتماد على رؤية صفٍّ أنشأه طلبٌ آخر داخل لقطة معاملة (REPEATABLE READ).
+  const sql =
+    'INSERT INTO people (name, name_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)';
   if (connection) {
-    const [result] = await connection.execute(
-      'INSERT INTO people (name, name_key) VALUES (?, ?)',
-      [name, key]
-    );
+    const [result] = await connection.execute(sql, [name, key]);
     return result.insertId;
   }
-  const result = await db.execute('INSERT INTO people (name, name_key) VALUES (?, ?)', [name, key]);
+  const result = await db.execute(sql, [name, key]);
   return result.insertId;
 }
 
@@ -49,16 +51,7 @@ async function resolveByName(name, connection = null) {
   const existing = await selectId(connection, key);
   if (existing) return existing;
 
-  try {
-    return await insertPerson(connection, clean, key);
-  } catch (err) {
-    // سباق بين طلبين لنفس الاسم: الصفّ صار موجوداً، فخذه بدل أن تفشل الكتابة.
-    if (err.code === 'ER_DUP_ENTRY') {
-      const raced = await selectId(connection, key);
-      if (raced) return raced;
-    }
-    throw err;
-  }
+  return insertPerson(connection, clean, key);
 }
 
 module.exports = { resolveByName };

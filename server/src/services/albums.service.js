@@ -63,12 +63,23 @@ function pagination(page, limit, total) {
   return { page, limit, total, totalPages: Math.ceil(total / limit) };
 }
 
-function publicAlbumConditions() {
+/**
+ * بوابات **المناسبة** وحدها: معتمدة، نوعها يسمح بالأرشيف، وامتدادها انتهى.
+ * تُستعمل حيث لا ألبوم بعد — صفحة الشخص وعدّ مناسباته — لأن الألبوم يُنشأ
+ * كسولاً عند أول فتح للوحة، وصاحبُ عرسٍ لم يُفتح ألبومه بعد يجب أن يُوجَد.
+ */
+function publicEventConditions() {
   return [
-    'al.is_published = 1',
     "e.status = 'approved'",
     'ot.archive_gallery = 1',
     `${eventSpanEndSql()} < CURDATE()`
+  ];
+}
+
+function publicAlbumConditions() {
+  return [
+    ...publicEventConditions(),
+    'al.is_published = 1'
   ];
 }
 
@@ -390,12 +401,11 @@ async function searchPeople(search, limit = 12) {
                JOIN events e ON e.id = al.event_id
                LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
               WHERE t.person_id = p.id AND t.status = 'approved' AND ${gates}) AS photos_count,
-            (SELECT COUNT(DISTINCT al.id)
+            (SELECT COUNT(DISTINCT e.id)
                FROM event_honorees h
                JOIN events e ON e.id = h.event_id
-               JOIN event_albums al ON al.event_id = e.id
                LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-              WHERE h.person_id = p.id AND ${gates}) AS albums_count
+              WHERE h.person_id = p.id AND ${publicEventConditions().join(' AND ')}) AS albums_count
        FROM people p
       WHERE p.name_key LIKE ?
       HAVING photos_count > 0 OR albums_count > 0
@@ -438,12 +448,16 @@ async function searchPeople(search, limit = 12) {
  * صفحة الشخص (ADR-0011، تذكرة #105): صوره الموسومة بها، ومناسباته التي هو
  * صاحبها وألبوماتها. البوابات الخمس هي نفسها، والاختبار على `person_id` لا
  * على الاسم — فالإملاء لا يفرّق بين شخصين ولا يجمع شخصين.
+ *
+ * `albums_count` عدُّ **مناسباته الظاهرة** لا ألبوماته: صاحبُ عرسٍ لم يُنشأ
+ * ألبومه بعد (الألبوم يُنشأ عند أول فتح للوحة) يجب أن يظهر ويُوجَد، وإلّا صار
+ * الظهور معلَّقاً على خطوة إدارية لاحقة.
  */
-async function getPublicPerson(personId) {
+async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
   const person = await db.queryOne('SELECT id, name, name_key FROM people WHERE id = ?', [personId]);
   if (!person) throw ApiError.notFound('الشخص غير موجود');
 
-  const photos = await listPublicPhotos({ personId, page: 1, limit: 48 });
+  const photos = await listPublicPhotos({ personId, page, limit });
   const albums = await db.query(
     `SELECT al.id, al.event_id, al.title, al.description, al.is_published, al.created_at,
             e.title AS event_title, e.town, e.event_date,
@@ -456,13 +470,22 @@ async function getPublicPerson(personId) {
        JOIN events e ON e.id = h.event_id
        JOIN event_albums al ON al.event_id = e.id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE h.person_id = ? AND ${publicAlbumConditions().join(' AND ')}
+      WHERE h.person_id = ? AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_PHOTO_EXISTS}
       ORDER BY e.event_date DESC`,
     [personId]
   );
 
+  const occasions = await db.queryOne(
+    `SELECT COUNT(DISTINCT e.id) AS total
+       FROM event_honorees h
+       JOIN events e ON e.id = h.event_id
+       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+      WHERE h.person_id = ? AND ${publicEventConditions().join(' AND ')}`,
+    [personId]
+  );
+
   // لا شيء ظاهر ⇒ الشخص غير موجود، بنفس الردّ الذي يردّه لمن يعدّ المعرّفات.
-  if (!photos.pagination.total && !albums.length) throw ApiError.notFound('الشخص غير موجود');
+  if (!photos.pagination.total && !Number(occasions.total)) throw ApiError.notFound('الشخص غير موجود');
 
   return {
     person: {
@@ -470,9 +493,10 @@ async function getPublicPerson(personId) {
       name: person.name,
       name_key: person.name_key,
       photos_count: photos.pagination.total,
-      albums_count: albums.length,
+      albums_count: Number(occasions.total),
       photos: photos.photos,
-      albums: albums.map(publicAlbumShape)
+      albums: albums.map(publicAlbumShape),
+      pagination: photos.pagination
     }
   };
 }
