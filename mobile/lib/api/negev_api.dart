@@ -445,6 +445,17 @@ class NegevApi {
     );
   }
 
+  /// صورة واحدة بمعرّفها — للرابط العميق `/p/<id>` (تذكرة #104). مسار عام،
+  /// فلا رمز يُرسل. يرمي إن لم تكن الصورة ظاهرة، فيُقال للمستخدم بالعربية.
+  Future<EventPhoto> photo(int id) async {
+    final data = await _client.get('/api/photos/$id');
+    final raw = data['photo'];
+    if (raw is! Map) {
+      throw Exception('الصورة غير موجودة');
+    }
+    return EventPhoto.fromJson(Map<String, dynamic>.from(raw));
+  }
+
   Future<({List<EventPhoto> photos, Pagination pagination})> photos({
     String? search,
     int? albumId,

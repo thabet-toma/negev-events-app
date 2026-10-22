@@ -4,18 +4,23 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
 import '../api/negev_api.dart';
+import '../screens/albums_screen.dart';
 import '../screens/event_details_screen.dart';
 import '../widgets/async_view.dart';
 
-/// يفتح رابط مناسبة (`https://<الدومين>/e/<id>`) على شاشة تفاصيلها مباشرة —
-/// بلا مربّع اختيار تطبيق، وبلا صفحة فارغة إن كانت المناسبة قد حُذفت.
+/// هدف الرابط: نوعٌ ومعرّف. `null` لمسار لا نعرفه أو رقم غير صالح.
+typedef DeepLinkTarget = ({String kind, int id});
+
+/// يفتح رابطاً من نطاقنا على شاشته مباشرة — بلا مربّع اختيار تطبيق، وبلا صفحة
+/// فارغة إن كان الهدف قد حُذف: `/e/<id>` مناسبة، `/a/<id>` ألبوم، `/p/<id>`
+/// صورة (تذكرة #104).
 ///
 /// يغطي الحالتين معاً: الإقلاع البارد (`getInitialLink`، رابط فتح التطبيق
 /// أصلاً) والاستئناف الدافئ (`uriLinkStream`، رابط وصل والتطبيق يعمل أصلاً في
 /// الخلفية) — `android:launchMode="singleTop"` القائم في AndroidManifest.xml
 /// هو ما يضمن وصول الرابط الثاني كـ`onNewIntent` لا كإقلاع مستقل.
 ///
-/// رابط لا يطابق `/e/<رقم>` يُتجاهل بصمت — لا مسار آخر يُستهلك اليوم.
+/// رابط لا يطابق هذه المسارات يُتجاهل بصمت — لا رسالة خطأ عن رابط لا يخصّنا.
 class DeepLinkHandler {
   DeepLinkHandler({
     required GlobalKey<NavigatorState> navigatorKey,
@@ -55,37 +60,62 @@ class DeepLinkHandler {
   }
 
   Future<void> _handle(Uri uri) async {
-    final eventId = _extractEventId(uri);
-    if (eventId == null) return;
+    final target = extractTarget(uri);
+    if (target == null) return;
 
     final navigator = _navigatorKey.currentState;
     if (navigator == null) return;
 
-    // تحقّق من وجود المناسبة قبل الدفع — رابط قديم لمناسبة حُذفت يهبط على
-    // الشاشة القائمة (الرئيسية عادةً) برسالة عربية، لا على شاشة تفاصيل فارغة
-    // أو عطل غير مفهوم.
+    // تحقّق من الوجود قبل الدفع — رابط قديم لشيء حُذف أو لم يُنشر يهبط على
+    // الشاشة القائمة برسالة عربية، لا على شاشة فارغة أو عطل غير مفهوم.
     try {
-      await _api.eventDetails(eventId);
+      if (target.kind == 'event') {
+        await _api.eventDetails(target.id);
+        navigator.push(
+          MaterialPageRoute(builder: (_) => EventDetailsScreen(eventId: target.id)),
+        );
+        return;
+      }
+      if (target.kind == 'album') {
+        await _api.albumDetails(target.id);
+        navigator.push(
+          MaterialPageRoute(builder: (_) => AlbumDetailScreen.byId(albumId: target.id)),
+        );
+        return;
+      }
+      if (target.kind == 'photo') {
+        // الصورة تُفتح داخل ألبومها وعلى موضعها — لا عارضاً فيه `1 / 1`.
+        final photo = await _api.photo(target.id);
+        navigator.push(
+          MaterialPageRoute(
+            builder: (_) => AlbumDetailScreen.byId(
+              albumId: photo.albumId,
+              focusPhotoId: photo.id,
+            ),
+          ),
+        );
+      }
     } catch (_) {
       final context = _navigatorKey.currentContext;
       if (context == null || !context.mounted) return;
       showMessage(
         context,
-        'تعذّر فتح هذه المناسبة، قد تكون غير موجودة بعد الآن',
+        'تعذّر فتح هذا الرابط، قد يكون غير موجود أو لم يُنشر بعد',
         isError: true,
       );
-      return;
     }
-
-    navigator.push(
-      MaterialPageRoute(builder: (_) => EventDetailsScreen(eventId: eventId)),
-    );
   }
 
-  /// `/e/<id>` فقط — أي مسار آخر (أو رقم غير صالح) يُتجاهل.
-  static int? _extractEventId(Uri uri) {
+  /// `/e/<id>` مناسبة، `/a/<id>` ألبوم، `/p/<id>` صورة (تذكرة #104) — وأي
+  /// مسار آخر يُتجاهل بصمت كما كان.
+  static DeepLinkTarget? extractTarget(Uri uri) {
     final segments = uri.pathSegments.where((s) => s.isNotEmpty).toList();
-    if (segments.length < 2 || segments[0] != 'e') return null;
-    return int.tryParse(segments[1]);
+    if (segments.length < 2) return null;
+    const kinds = {'e': 'event', 'a': 'album', 'p': 'photo'};
+    final kind = kinds[segments[0]];
+    if (kind == null) return null;
+    final id = int.tryParse(segments[1]);
+    if (id == null || id <= 0) return null;
+    return (kind: kind, id: id);
   }
 }

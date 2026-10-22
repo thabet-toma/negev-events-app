@@ -372,21 +372,40 @@ class _AlbumCard extends StatelessWidget {
 }
 
 class AlbumDetailScreen extends StatefulWidget {
-  const AlbumDetailScreen({super.key, required this.album});
+  /// من كائن ألبوم جاهز (قائمة أو شريط في صفحة المناسبة).
+  const AlbumDetailScreen({super.key, required this.album})
+      : albumId = null,
+        focusPhotoId = null;
 
-  final EventAlbum album;
+  /// من معرّف وحده — رابط عميق `/a/<id>` أو `/p/<id>` (تذكرة #104)، حيث لا
+  /// كائن ألبوم في اليد بل رقمٌ في الرابط.
+  const AlbumDetailScreen.byId({
+    super.key,
+    required this.albumId,
+    this.focusPhotoId,
+  }) : album = null;
+
+  final EventAlbum? album;
+  final int? albumId;
+
+  /// حين يقود الرابط إلى صورة بعينها: يُفتح عارضها على موضعها بعد التحميل،
+  /// لا عارضٌ فيه `1 / 1` — صورةٌ يتيمة بلا سياق ليست تجربة.
+  final int? focusPhotoId;
+
+  int get id => album?.id ?? albumId!;
 
   @override
   State<AlbumDetailScreen> createState() => _AlbumDetailScreenState();
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
-  late EventAlbum _album = widget.album;
+  EventAlbum? _album;
   List<EventPhoto> _photos = const [];
   Pagination? _pagination;
   bool _loading = true;
   String? _error;
   bool _loadingMore = false;
+  bool _focused = false;
 
   bool _started = false;
 
@@ -402,7 +421,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _load() async {
     try {
-      final data = await AppServices.of(context).api.albumDetails(widget.album.id);
+      final data = await AppServices.of(context).api.albumDetails(widget.id);
       if (!mounted) return;
       setState(() {
         _album = data.album;
@@ -411,9 +430,28 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
         _loading = false;
         _error = null;
       });
+      _openFocusPhoto();
     } catch (error) {
       if (mounted) setState(() { _loading = false; _error = '$error'; });
     }
+  }
+
+  /// يفتح العارض على الصورة التي جاء الرابط من أجلها، مرّة واحدة، بعد أوّل
+  /// إطار — فلا يُدفع مسار فوق شاشة لم تُبنَ بعد.
+  void _openFocusPhoto() {
+    final focus = widget.focusPhotoId;
+    if (focus == null || _focused) return;
+    final index = _photos.indexWhere((photo) => photo.id == focus);
+    if (index < 0) return;
+    _focused = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PhotoViewerScreen(photos: _photos, initialIndex: index),
+        ),
+      );
+    });
   }
 
   Future<void> _loadMore() async {
@@ -421,7 +459,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     if (pagination == null || !pagination.hasMore || _loadingMore) return;
     setState(() => _loadingMore = true);
     try {
-      final data = await AppServices.of(context).api.albumDetails(_album.id, page: pagination.page + 1);
+      final data = await AppServices.of(context).api.albumDetails(widget.id, page: pagination.page + 1);
       if (!mounted) return;
       setState(() {
         _photos = [..._photos, ...data.photos];
@@ -439,13 +477,13 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       textDirection: TextDirection.rtl,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_album.title),
+          title: Text(_album?.title ?? 'ألبوم عرس'),
           actions: [
             IconButton(
               key: const Key('album_share_btn'),
               icon: const Icon(Icons.share_outlined),
               tooltip: 'مشاركة',
-              onPressed: () => shareAlbum(context, _album),
+              onPressed: _album == null ? null : () => shareAlbum(context, _album!),
             ),
           ],
         ),
@@ -461,14 +499,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                [_album.eventTitle, _album.town, _album.eventDate]
+                                [_album?.eventTitle, _album?.town, _album?.eventDate]
                                     .whereType<String>()
                                     .where((s) => s.isNotEmpty)
                                     .join(' · '),
                                 style: TextStyle(color: context.c.inkFaint, fontSize: 12),
                               ),
                             ),
-                            Text('${_album.photoCount} صورة',
+                            Text('${_album?.photoCount ?? _photos.length} صورة',
                                 style: TextStyle(color: context.c.inkFaint, fontSize: 12)),
                           ],
                         ),
