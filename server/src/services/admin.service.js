@@ -63,9 +63,10 @@ async function stats(user) {
 
 /**
  * The events queue, scoped to `user`'s towns the same way `stats` is. Every
- * pending row also carries `possible_duplicates` (events.findPossibleDuplicates,
- * same scope), so the admin sees a likely duplicate before pressing approve —
- * one lookup for the whole queue, not one per row.
+ * row carries `honorees` (events.honoreesForEvents — one lookup for the whole
+ * queue, not one per row), and every pending row also carries
+ * `possible_duplicates` (events.findPossibleDuplicates, same scope), so the
+ * admin sees a likely duplicate before pressing approve.
  */
 async function listEvents(status, user) {
   const { clause, params } = await adminScope.townScopeClause(user, 'e');
@@ -83,9 +84,13 @@ async function listEvents(status, user) {
   const pending = rows.filter(row => row.status === 'pending');
   const duplicates = await events.findPossibleDuplicates(pending, { scope: { clause, params } });
   const duplicatesById = new Map(pending.map((row, index) => [row.id, duplicates[index]]));
+  // One lookup for the whole queue (same shape listPublicEvents uses), so the
+  // panel can name an event by its honorees instead of `groom_name` alone.
+  const honoreeMap = await events.honoreesForEvents(rows.map(row => row.id));
 
   return rows.map(row => ({
     ...withAbsoluteMedia(row),
+    honorees: honoreeMap[row.id] || [],
     ...(row.status === 'pending' ? { possible_duplicates: duplicatesById.get(row.id) } : {})
   }));
 }

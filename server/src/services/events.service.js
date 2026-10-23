@@ -1771,6 +1771,7 @@ module.exports = {
   EVENT_SPAN_END_SQL_E,
   EVENT_SPAN_START_SQL_E,
   escapeLike,
+  honoreesForEvents,
   listAmendments,
   listMyEvents,
   findCollisions,

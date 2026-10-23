@@ -608,7 +608,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 |---|---|---|
 | `POST` | `/api/admin/login` | دخول الإدارة |
 | `GET` | `/api/admin/stats` | مؤشرات اللوحة |
-| `GET` | `/api/admin/events` | كل المناسبات (`?status=`) — كل صفّ `pending` يحمل `possible_duplicates`: `{ id, title, honorees, town, event_date, event_end_date, status, occasion_type_name, poster_url, confidence: 'certain'\|'likely', reasons }`، والمرشّحات المعلّقة داخل نطاق الأدمن فقط |
+| `GET` | `/api/admin/events` | كل المناسبات (`?status=`) — كل صفّ يحمل `honorees` (أسماء أصحاب المناسبة)، وكل صفّ `pending` يحمل `possible_duplicates`: `{ id, title, honorees, town, event_date, event_end_date, status, occasion_type_name, poster_url, confidence: 'certain'\|'likely', reasons }`، والمرشّحات المعلّقة داخل نطاق الأدمن فقط |
 | `PATCH` | `/api/admin/events/:id/status` | اعتماد أو رفض (`reason` نصّياً اختياري عند الرفض، يظهر في إشعار الناشر) — يحسم أيضاً صفوف سجلّ التعديل المعلّقة لهذه المناسبة. الاعتماد يمرّ بحارس التكرار: 409 `POSSIBLE_DUPLICATE` حتى يُعاد مع `confirm_duplicate: true` |
 | `GET` | `/api/admin/events/:id/amendments` | سجلّ تعديلات مناسبة كاملاً، الأحدث أولاً |
 | `DELETE` | `/api/admin/events/:id` | حذف مناسبة |

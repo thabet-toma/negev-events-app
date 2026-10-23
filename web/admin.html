@@ -26,7 +26,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- Admin Styles -->
-  <link rel="stylesheet" href="admin.css?v=2.6.0">
+  <link rel="stylesheet" href="admin.css?v=2.7.0">
 </head>
 <body>
 
@@ -224,6 +224,7 @@
             <p>اختر المناسبة، ثم أدر ألبوماتها وصورها. لا سقف لعدد الصور — الرفع دفعات، وكل صورة مستقلة بعنوانها ووسومها.</p>
           </div>
           <div class="admin-albums-picker">
+            <input type="search" id="adminAlbumsEventSearch" placeholder="ابحث باسم العريس أو البلدة أو التاريخ" aria-label="ابحث عن المناسبة" oninput="filterAdminAlbumsEvents()">
             <select id="adminAlbumsEventSelect" aria-label="اختر المناسبة"></select>
             <button type="button" class="admin-btn-primary" onclick="openAdminEventAlbums()">
               <i class="fa-solid fa-folder-open"></i> فتح الألبومات
@@ -1427,6 +1428,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="admin.js?v=2.6.0"></script>
+  <script src="admin.js?v=2.7.0"></script>
 </body>
 </html>

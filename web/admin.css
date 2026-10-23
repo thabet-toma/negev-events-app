@@ -1184,6 +1184,8 @@ body {
   margin-bottom: 16px;
 }
 .admin-albums-picker select { flex: 1; min-width: 240px; }
+/* حقل البحث في الصفّ نفسه: ينمو مع القائمة ويبقى مقروءاً حين يلتفّ على شاشة ضيقة */
+.admin-albums-picker input[type="search"] { flex: 1 1 240px; min-width: 200px; }
 .admin-albums-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

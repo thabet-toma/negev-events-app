@@ -8,6 +8,7 @@ let adminStoriesCache = [];
 let storyStudioPreviewReady = false;
 let adminAlbumsEventId = null;
 let adminAlbumListCache = [];
+let adminAlbumsEventChoices = []; // خيارات منتقي «ألبومات الأعراس» بعد فلتر النوع — يبنيها initAdminAlbumsTab
 let adminAlbumCurrent = null;
 let adminAlbumPhotoCache = [];
 let adminPhotoTagsStatus = 'pending';
@@ -2376,6 +2377,118 @@ function adminAlbumsNotice(message, ok = true) {
   el.style.color = ok ? 'var(--success)' : 'var(--danger)';
 }
 
+/**
+ * One line for the albums picker: النوع — أصحاب المناسبة — البلدة — التاريخ (الحالة).
+ *
+ * `title` is a free-text field that usually carries nothing but the town name
+ * («رهط»), while the honorees are the actual names of the event. So the honorees
+ * win, `groom_name` is the legacy one-name fallback, and `title` is printed only
+ * when neither names anybody — and not even then if it merely repeats the town
+ * printed right after it. That duplicate («رهط — رهط») is the bug this fixes.
+ */
+function adminAlbumsEventLabel(evt) {
+  const type = allOccasionTypes.find(item => Number(item.id) === Number(evt.occasion_type_id));
+  const town = String(evt.town || '').trim();
+  const honoreeNames = (Array.isArray(evt.honorees) ? evt.honorees : [])
+    .map(person => (person && person.name ? String(person.name).trim() : ''))
+    .filter(Boolean);
+
+  let people = honoreeNames.join(' و ') || String(evt.groom_name || '').trim();
+  if (!people) {
+    const freeTitle = String(evt.title || '').trim();
+    people = freeTitle && freeTitle !== town ? freeTitle : '';
+  }
+  if (!people) people = `مناسبة ${Number(evt.id)}`;
+
+  const status = evt.status === 'approved' ? 'معتمدة' : evt.status === 'pending' ? 'معلّقة' : 'مرفوضة';
+  const date = evt.event_date ? new Date(evt.event_date).toLocaleDateString('ar-EG') : '';
+
+  const parts = [];
+  if (type && type.name) parts.push(type.name);
+  parts.push(people);
+  if (town) parts.push(town);
+  if (date) parts.push(date);
+  return `${parts.join(' — ')} (${status})`;
+}
+
+/**
+ * A small Arabic search key for this picker, local because the panel has no
+ * shared one: the admin types «حوره» for «حورة» when the ta-marbuta is hard to
+ * reach, and «احمد» should still find «أحمد». Arabic spelling is forgiving and
+ * the picker should be too. Folds hamza carriers to a bare alef, ta-marbuta to
+ * ha, alef-maqsura to ya, strips harakat and tatweel, drops the bidi marks
+ * (U+200E/U+200F/…) that `toLocaleDateString('ar-EG')` puts inside a date so a
+ * typed date never has to reproduce them, folds Arabic-Indic (٠-٩) and Extended
+ * Arabic-Indic (۰-۹) digits to ASCII so «2026» finds the rendered «٢٠٢٦» from a
+ * keyboard that types what it means, collapses whitespace and lowercases.
+ * Applied to both the labels and the typed query.
+ */
+function adminAlbumsSearchKey(text) {
+  return String(text == null ? '' : text)
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[\u0623\u0625\u0622]/g, '\u0627')
+    .replace(/\u0629/g, '\u0647')
+    .replace(/\u0649/g, '\u064A')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/[\u0660-\u0669]/g, digit => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[\u06F0-\u06F9]/g, digit => String(digit.charCodeAt(0) - 0x06F0))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/** Rebuilds the picker's options from `choices` (already filtered) — every label is escaped here. */
+function renderAdminAlbumsEventOptions(choices) {
+  const select = document.getElementById('adminAlbumsEventSelect');
+  if (!select) return;
+  select.innerHTML = choices.length
+    ? choices.map(choice => `<option value="${Number(choice.id)}">${escapeHtml(choice.label)}</option>`).join('')
+    : '<option value="">لا مناسبات من نوع يحمل ألبوماً في نطاقك</option>';
+}
+
+/**
+ * The picker's real search: every typed word must appear in the label (AND),
+ * compared through adminAlbumsSearchKey so «حوره» finds «حورة». The event the
+ * admin already had selected is pinned first and re-selected after filtering,
+ * so typing never quietly swaps their choice for a different event.
+ */
+function filterAdminAlbumsEvents() {
+  const select = document.getElementById('adminAlbumsEventSelect');
+  if (!select) return;
+  const search = document.getElementById('adminAlbumsEventSearch');
+  const typed = search ? search.value.trim() : '';
+  const selectedValue = select.value;
+
+  if (!adminAlbumsEventChoices.length) {
+    renderAdminAlbumsEventOptions([]);
+    adminAlbumsNotice('لا تظهر مناسبة الآن — تأكد أن نوعها يحمل «أرشيف صور» وأنها داخل بلداتك.', false);
+    return;
+  }
+
+  const words = adminAlbumsSearchKey(typed).split(' ').filter(Boolean);
+  const matches = words.length
+    ? adminAlbumsEventChoices.filter(choice => words.every(word => choice.haystack.includes(word)))
+    : adminAlbumsEventChoices;
+
+  const kept = selectedValue
+    ? adminAlbumsEventChoices.find(choice => String(choice.id) === String(selectedValue))
+    : null;
+
+  // Nothing matches: a single empty-valued option, so «فتح» falls through to its
+  // own «اختر مناسبة أولاً» instead of opening whatever was selected before.
+  if (!matches.length) {
+    select.innerHTML = `<option value="">لا مناسبة تطابق «${escapeHtml(typed)}»</option>`;
+    select.value = '';
+    adminAlbumsNotice('لا مناسبة تطابق بحثك — امسح البحث لعرض كل المناسبات.', false);
+    return;
+  }
+
+  const options = kept ? [kept, ...matches.filter(choice => choice !== kept)] : matches;
+  renderAdminAlbumsEventOptions(options);
+  if (kept) select.value = String(kept.id);
+  adminAlbumsNotice('', true);
+}
+
 async function initAdminAlbumsTab() {
   if (!allAdminEvents.length) {
     try { await fetchAdminEvents(); } catch (e) { /* the notice below explains */ }
@@ -2386,25 +2499,30 @@ async function initAdminAlbumsTab() {
 
   const select = document.getElementById('adminAlbumsEventSelect');
   if (!select) return;
-  const options = allAdminEvents
+
+  // ما يُعرض الآن هو القائمة كاملة، فلا يبقى في الحقل بحث قديم لا يطابقها.
+  const search = document.getElementById('adminAlbumsEventSearch');
+  if (search) search.value = '';
+
+  adminAlbumsEventChoices = allAdminEvents
     .filter(evt => {
       const type = allOccasionTypes.find(item => Number(item.id) === Number(evt.occasion_type_id));
       return type && type.archive_gallery;
     })
     .map(evt => {
-      const title = evt.title || evt.groom_name || `مناسبة ${evt.id}`;
-      const status = evt.status === 'approved' ? 'معتمدة' : evt.status === 'pending' ? 'معلّقة' : 'مرفوضة';
-      return `<option value="${Number(evt.id)}">${escapeHtml(title)} — ${escapeHtml(evt.town || '')} (${status})</option>`;
+      const label = adminAlbumsEventLabel(evt);
+      return { id: Number(evt.id), label, haystack: adminAlbumsSearchKey(label) };
     });
 
-  select.innerHTML = options.length
-    ? options.join('')
-    : '<option value="">لا مناسبات من نوع يحمل ألبوماً في نطاقك</option>';
+  renderAdminAlbumsEventOptions(adminAlbumsEventChoices);
   if (adminAlbumsEventId && [...select.options].some(option => Number(option.value) === Number(adminAlbumsEventId))) {
     select.value = String(adminAlbumsEventId);
   }
 
-  adminAlbumsNotice(options.length ? '' : 'لا تظهر مناسبة الآن — تأكد أن نوعها يحمل «أرشيف صور» وأنها داخل بلداتك.', options.length > 0);
+  adminAlbumsNotice(
+    adminAlbumsEventChoices.length ? '' : 'لا تظهر مناسبة الآن — تأكد أن نوعها يحمل «أرشيف صور» وأنها داخل بلداتك.',
+    adminAlbumsEventChoices.length > 0
+  );
   loadAdminPhotoTags(document.getElementById('adminPhotoTagsStatus')?.value || adminPhotoTagsStatus);
   loadAdminPhotoReports(document.getElementById('adminPhotoReportsStatus')?.value || adminPhotoReportsStatus);
 }

@@ -7583,6 +7583,130 @@ async function run() {
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.status === 'hidden'));
   });
 
+  console.log('\nAdmin albums picker: honoree label + typed search (2026-11)');
+
+  /**
+   * The picker used to label every option from `title` alone, and `title` on
+   * these events is just the town — so the list read «رهط — رهط» and never named
+   * the groom. It now names the honorees (from GET /api/admin/events'
+   * `honorees`), prints the town once, and is searchable as the admin types.
+   */
+  await test('ألبومات الإدارة: الوسم يسمّي أصحاب المناسبة والبلدة مرة واحدة، والبحث يرشّح بالكتابة', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const events = [
+      {
+        id: 7,
+        title: 'رهط',
+        town: 'رهط',
+        groom_name: 'عاطف',
+        honorees: [{ name: 'عاطف' }, { name: 'سمير' }],
+        event_date: '2026-11-03',
+        status: 'approved',
+        occasion_type_id: 1
+      },
+      {
+        id: 8,
+        title: 'مناسبة',
+        town: 'حورة',
+        groom_name: 'محمود',
+        honorees: [{ name: 'محمود' }],
+        event_date: '2026-12-01',
+        status: 'pending',
+        occasion_type_id: 1
+      }
+    ];
+
+    instrumentAdminLive(dom, (requestPath, method) => {
+      if (requestPath === '/api/admin/events' && method === 'GET') return jsonResponse({ success: true, events });
+      if (requestPath === '/api/admin/occasion-types' && method === 'GET') {
+        return jsonResponse({ success: true, types: [{ id: 1, name: 'عرس', archive_gallery: 1, fields: [], reactions: [] }] });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await dom.window.initAdminAlbumsTab();
+
+    const select = document.getElementById('adminAlbumsEventSelect');
+    const search = document.getElementById('adminAlbumsEventSearch');
+    assert.ok(search, 'expected an #adminAlbumsEventSearch field inside the picker');
+    assert.strictEqual(search.getAttribute('type'), 'search', 'the search field must be type=search');
+    assert.strictEqual(search.getAttribute('aria-label'), 'ابحث عن المناسبة');
+    const optionOf = id => [...select.options].find(option => option.value === String(id));
+    const optionValues = () => [...select.options].map(option => option.value);
+    const typeQuery = value => {
+      search.value = value;
+      dom.window.filterAdminAlbumsEvents();
+    };
+
+    // The label: type, honorees, town once, date, status — no «رهط — رهط».
+    const label7 = optionOf(7).textContent;
+    ['عاطف', 'سمير', 'عرس', 'رهط'].forEach(part => {
+      assert.ok(label7.includes(part), `option 7 must carry «${part}» — got «${label7}»`);
+    });
+    assert.strictEqual((label7.match(/رهط/g) || []).length, 1, `the town must be printed once — got «${label7}»`);
+    assert.ok(!label7.includes('رهط — رهط'), `the duplicated-town label is the bug under test — got «${label7}»`);
+    assert.ok(label7.includes('(معتمدة)'), 'the status still closes the label');
+
+    const arDate8 = new Date('2026-12-01').toLocaleDateString('ar-EG');
+    assert.ok(optionOf(8).textContent.includes('محمود'), 'option 8 names its honoree');
+    assert.ok(optionOf(8).textContent.includes('(معلّقة)'), 'option 8 carries its pending status');
+    assert.ok(optionOf(8).textContent.includes(arDate8), `option 8 carries the ar-EG date «${arDate8}»`);
+
+    // «عاطف» finds the first event only.
+    typeQuery('عاطف');
+    assert.deepStrictEqual(optionValues(), ['7'], 'a honoree name alone must narrow the list to that event');
+
+    // Every word must be present (AND), in any order.
+    typeQuery('رهط عاطف');
+    assert.deepStrictEqual(optionValues(), ['7'], 'both words are in option 7, whichever order they are typed in');
+
+    // «حوره» with a ha must still find «حورة» — the normaliser, not a substring.
+    typeQuery('حوره');
+    assert.ok(optionOf(8), '«حوره» must match «حورة» — the ta-marbuta is folded, not compared literally');
+
+    // The date is part of the label, so it is searchable. ar-EG renders
+    // ١‏/١٢‏/٢٠٢٦ in THIS Node (Arabic-Indic digits, bidi marks), so the probe
+    // takes the year exactly as it renders — and the digit fold below makes an
+    // ASCII «2026» the same key.
+    const renderedYear = (arDate8.match(/[\u0660-\u0669]{4}/) || [])[0];
+    assert.ok(renderedYear, `expected an Arabic-Indic year inside «${arDate8}»`);
+    typeQuery(renderedYear);
+    assert.ok(optionOf(7) && optionOf(8), 'the date is part of the searchable label');
+
+    // Digits fold both ways: what a keyboard writes and what the label renders
+    // are one key, so the field's promise to search by date actually holds.
+    typeQuery('2026');
+    assert.deepStrictEqual(optionValues(), ['7', '8'], 'an ASCII year finds the rendered Arabic-Indic one — both events are 2026');
+    typeQuery('3/11');
+    assert.deepStrictEqual(optionValues(), ['7'], "«3/11» matches event 7's ٣/١١ date, and not event 8's ١/١٢");
+
+    // Typing never drops the admin's current choice: it stays first and selected.
+    select.value = '7';
+    typeQuery('محمود');
+    assert.deepStrictEqual(optionValues(), ['7', '8'], 'the selected option stays first, the matches follow');
+    assert.strictEqual(select.value, '7', 'the selected event is still selected after filtering');
+
+    // Nothing matches: one empty option, a notice, and «فتح» keeps its own guard.
+    typeQuery('zzz');
+    assert.strictEqual(select.options.length, 1, 'an unmatched query leaves exactly one option');
+    assert.strictEqual(select.options[0].value, '', 'that option has an empty value');
+    assert.ok(
+      select.options[0].textContent.startsWith('لا مناسبة تطابق'),
+      `expected a «لا مناسبة تطابق» option — got «${select.options[0].textContent}»`
+    );
+    assert.strictEqual(document.getElementById('adminAlbumsNotice').style.display, 'block', 'the notice explains the empty result');
+    assert.ok(document.getElementById('adminAlbumsNotice').textContent.includes('امسح البحث'), 'and says how to get back');
+    await dom.window.openAdminEventAlbums();
+    assert.strictEqual(document.getElementById('adminAlbumsNotice').textContent, 'اختر مناسبة أولاً',
+      'the open button still refuses to open anything without a selection');
+
+    // Clearing the field brings the whole list back.
+    typeQuery('');
+    assert.strictEqual(select.options.length, 2, 'clearing the search restores every option');
+    assert.ok(optionOf(7) && optionOf(8), 'both events are back');
+  });
+
   console.log('\nAdmin towns & regions tab (TWN-4)');
 
   // Shaped exactly like GET /api/admin/towns (super_admin): one region, two
