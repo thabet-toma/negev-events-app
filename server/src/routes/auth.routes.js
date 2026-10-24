@@ -106,4 +106,19 @@ router.patch('/auth/me', authenticate, asyncHandler(async (req, res) => {
   });
 }));
 
+/**
+ * Self-service account deletion (Google Play's account-deletion policy).
+ * DELETE rather than POST so the destructive intent survives any intermediary,
+ * and the body carries the one thing a stolen token cannot supply: the PIN.
+ * No response shape beyond a fixed Arabic message — there is nothing left to
+ * show, and the client signs out locally.
+ */
+router.delete('/account', authenticate, asyncHandler(async (req, res) => {
+  const pin_code = cleanString(req.body && req.body.pin_code, 10);
+  if (!pin_code) throw ApiError.badRequest('رمز الدخول مطلوب');
+
+  await auth.deleteAccount(req.user.id, pin_code);
+  res.json({ success: true, message: 'تم حذف حسابك وبياناتك الشخصية' });
+}));
+
 module.exports = router;

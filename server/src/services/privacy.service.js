@@ -75,4 +75,71 @@ async function closeRequest(id, handledBy) {
   return db.queryOne('SELECT * FROM privacy_requests WHERE id = ?', [id]);
 }
 
-module.exports = { eraseAnalyticsForUser, createRequest, listRequests, closeRequest };
+/**
+ * Arabic-Indic (٠-٩) and Persian (۰-۹) digits are what an Arabic keyboard can
+ * produce instead of ASCII digits — same number, different code points, so a
+ * lookup that compares them literally finds nothing.
+ */
+function toAsciiDigits(value) {
+  return String(value || '')
+    .replace(/[\u0660-\u0669]/g, ch => String(ch.charCodeAt(0) - 0x0660))
+    .replace(/[\u06F0-\u06F9]/g, ch => String(ch.charCodeAt(0) - 0x06F0));
+}
+
+/**
+ * Reduces the number a person typed into the public form to the compact ASCII
+ * form `users.phone_number` is stored in: ASCII digits only, no spaces, dashes
+ * or `+`. Pure and parameter-free on purpose — the route reads `toAsciiDigits`
+ * for its own shape check, and the lookup below normalises the stored column
+ * the same way inside SQL.
+ */
+function normalisePhoneNumber(value) {
+  return toAsciiDigits(value).replace(/[\s-]/g, '').replace(/\+/g, '');
+}
+
+/**
+ * A deletion request filed from the public page — no app, no login, just the
+ * number someone signed up with. Deliberately returns the internal outcome to
+ * its caller; the route throws it away and answers identically every time, so
+ * a stranger cannot enumerate registered numbers by comparing two replies.
+ *
+ * "No user" ends here with no second query, and an account that already has an
+ * open erasure request is never queued twice — a duplicate only slows the
+ * queue down.
+ */
+async function fileDeletionRequest(phoneNumber) {
+  const normalised = normalisePhoneNumber(phoneNumber);
+  if (!normalised) return { matched: false };
+
+  // Compared normalised rather than assumed already clean (older imports may
+  // have stored whatever was typed), and the value still travels as a bound
+  // parameter — REPLACE only normalises the column side, it never builds SQL.
+  const user = await db.queryOne(
+    `SELECT id FROM users
+      WHERE REPLACE(REPLACE(REPLACE(phone_number, ' ', ''), '-', ''), '+', '') = ?
+      LIMIT 1`,
+    [normalised]
+  );
+  if (!user) return { matched: false };
+
+  const open = await db.queryOne(
+    `SELECT id FROM privacy_requests
+      WHERE user_id = ? AND request_type = 'erasure' AND status = 'pending'
+      LIMIT 1`,
+    [user.id]
+  );
+  if (open) return { matched: true, duplicate: true };
+
+  await createRequest(user.id, 'erasure');
+  return { matched: true, duplicate: false };
+}
+
+module.exports = {
+  eraseAnalyticsForUser,
+  createRequest,
+  listRequests,
+  closeRequest,
+  fileDeletionRequest,
+  toAsciiDigits,
+  normalisePhoneNumber
+};

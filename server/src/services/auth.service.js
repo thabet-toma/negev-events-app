@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const db = require('../db/pool');
 const config = require('../config');
 const ApiError = require('../utils/ApiError');
+const logger = require('../utils/logger');
 const { signToken, ADMIN_ROLES } = require('../middleware/auth');
 const people = require('./people.service');
 
@@ -106,4 +107,76 @@ function renewToken(user) {
   return issueToken(user);
 }
 
-module.exports = { register, login, adminLogin, findById, publicUser, setAnalyticsOptOut, renewToken };
+/**
+ * Self-service account deletion — the path Google Play's account-deletion
+ * policy asks for. Re-authentication is the account's own PIN (the same bcrypt
+ * hash login checks), so a stolen token alone cannot erase an account.
+ *
+ * Deleting the `users` row IS the erasure: every personal child row
+ * (reminders, notifications, nokoot, push subscriptions, photo tags and
+ * reports, analytics_events) carries `ON DELETE CASCADE`, while content meant
+ * to be public (events, albums/photos, congratulations) carries
+ * `ON DELETE SET NULL` and stays online with no owner name — see schema.sql.
+ * The delete runs inside an explicit transaction even though it is one
+ * statement, so the intent is written down rather than inferred.
+ *
+ * Known limit: the JWT is never revoked. `authenticate` verifies the signature
+ * only and reads no user row, so a token issued before the deletion stays
+ * cryptographically valid until it expires — every endpoint that looks the
+ * user up now answers 404, but nothing can invalidate the string itself.
+ */
+async function deleteAccount(userId, pinCode) {
+  const user = await db.queryOne('SELECT id, pin_code FROM users WHERE id = ?', [userId]);
+  if (!user) throw ApiError.notFound('الحساب غير موجود');
+
+  if (!bcrypt.compareSync(pinCode, user.pin_code)) {
+    throw ApiError.unauthorized('رمز الدخول غير صحيح');
+  }
+
+  await db.transaction(async connection => {
+    await connection.execute('DELETE FROM users WHERE id = ?', [userId]);
+  });
+
+  // Audit line carrying no personal data — the id alone, no phone, no name.
+  logger.info('account.delete', { userId });
+  return { deleted: true };
+}
+
+/**
+ * The same deletion performed by a super_admin from the panel: no PIN (the
+ * admin is not the account holder) and the actor is recorded instead.
+ *
+ * An open erasure request is closed inside the same transaction, BEFORE the
+ * delete — `fk_privacy_requests_user` is ON DELETE CASCADE, so the request row
+ * goes with the user and closing it afterwards would find nothing at all.
+ */
+async function deleteAccountAsAdmin(userId, adminId) {
+  await db.transaction(async connection => {
+    const [rows] = await connection.execute('SELECT id FROM users WHERE id = ?', [userId]);
+    if (!rows.length) throw ApiError.notFound('المستخدم غير موجود');
+
+    await connection.execute(
+      `UPDATE privacy_requests
+          SET status = 'completed', handled_at = NOW(), handled_by = ?
+        WHERE user_id = ? AND request_type = 'erasure' AND status = 'pending'`,
+      [adminId, userId]
+    );
+
+    await connection.execute('DELETE FROM users WHERE id = ?', [userId]);
+  });
+
+  logger.info('account.delete', { userId, by: adminId });
+  return { deleted: true };
+}
+
+module.exports = {
+  register,
+  login,
+  adminLogin,
+  findById,
+  publicUser,
+  setAnalyticsOptOut,
+  renewToken,
+  deleteAccount,
+  deleteAccountAsAdmin
+};

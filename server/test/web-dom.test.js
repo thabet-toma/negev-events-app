@@ -223,10 +223,11 @@ const ADMIN_EVENT_FIXTURE = {
   poster_url: 'https://example.test/uploads/poster.jpg'
 };
 
-/** Two platform users — enough to exercise the phone/name search filter (issue #83). */
+/** Three platform users — enough to exercise the phone/name search filter (issue #83) and to prove the delete button is withheld from a super_admin row. */
 const ADMIN_USERS_FIXTURE = [
   { id: 501, phone_number: '0501112223', full_name: 'أحمد المستخدم', clan_town: 'رهط', role: 'user', created_at: '2026-01-01' },
-  { id: 502, phone_number: '0509998887', full_name: 'سارة الإدارية', clan_town: 'حورة', role: 'admin', created_at: '2026-01-02' }
+  { id: 502, phone_number: '0509998887', full_name: 'سارة الإدارية', clan_town: 'حورة', role: 'admin', created_at: '2026-01-02' },
+  { id: 503, phone_number: '0500001112', full_name: 'مدير المنصة العام', clan_town: 'النقب', role: 'super_admin', created_at: '2026-01-03' }
 ];
 
 /** Four of the eight ANALYTICS_EVENTS, two of them the failure ones — enough to exercise Arabic-label mapping and the failure highlight. */
@@ -3586,6 +3587,100 @@ async function run() {
     document.getElementById('adminUserSearch').value = '';
     dom.window.handleAdminUserSearch();
     assert.strictEqual(rowCount(), ADMIN_USERS_FIXTURE.length, 'clearing the search must restore the full list');
+  });
+
+  console.log('\nAdmin panel — deleting an account from the users tab (Google Play account-deletion policy)');
+
+  await test('the users tab offers «حذف الحساب» to a super_admin on every row except a super_admin row, and never to a plain admin', async () => {
+    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    await superDom.window.fetchAdminUsers();
+
+    const superDocument = superDom.window.document;
+    const rows = superDocument.querySelectorAll('#adminUsersList tbody tr');
+    const deleteButtons = superDocument.querySelectorAll('#adminUsersList .btn-reject');
+    const deletable = ADMIN_USERS_FIXTURE.filter(u => u.role !== 'super_admin').length;
+
+    assert.strictEqual(rows.length, ADMIN_USERS_FIXTURE.length, 'every fetched user still renders');
+    assert.strictEqual(deleteButtons.length, deletable, 'one delete button per deletable row — never on the super_admin row');
+    assert.ok(superDocument.getElementById('adminUsersList').textContent.includes('حذف الحساب'));
+
+    const plainDom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط'] });
+    await plainDom.window.fetchAdminUsers();
+    assert.strictEqual(
+      plainDom.window.document.querySelectorAll('#adminUsersList .btn-reject').length,
+      0,
+      'a town admin must never be offered account deletion'
+    );
+  });
+
+  await test('deleting a user asks for two explicit confirmations, sends DELETE /api/admin/users/:id through adminFetch, then reloads the list and reports success', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    await dom.window.fetchAdminUsers();
+
+    const { window } = dom;
+    const requests = [];
+    let users = ADMIN_USERS_FIXTURE;
+    const originalFetch = window.fetch;
+
+    window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/admin/users' && (options.method || 'GET') === 'GET') {
+        requests.push({ path: requestPath, method: 'GET', options });
+        return jsonResponse({ success: true, users });
+      }
+      if (/^\/api\/admin\/users\/\d+$/.test(requestPath) && options.method === 'DELETE') {
+        requests.push({ path: requestPath, method: 'DELETE', options });
+        users = users.filter(u => u.id !== 502);
+        return jsonResponse({ success: true, message: 'تم حذف الحساب وبياناته الشخصية' });
+      }
+      return originalFetch(url, options);
+    };
+
+    const confirmMessages = [];
+    window.confirm = message => { confirmMessages.push(message); return true; };
+    const alerts = [];
+    window.alert = message => alerts.push(message);
+
+    await window.handleDeleteAdminUser(502);
+
+    const deletes = requests.filter(r => r.method === 'DELETE');
+    assert.strictEqual(deletes.length, 1, 'exactly one DELETE per confirmed deletion');
+    assert.strictEqual(deletes[0].path, '/api/admin/users/502');
+    assert.strictEqual(
+      deletes[0].options.headers.Authorization, 'Bearer test-admin-token',
+      'the call must go through adminFetch, which attaches the panel token'
+    );
+
+    assert.strictEqual(confirmMessages.length, 2, 'the deletion must be confirmed twice');
+    assert.ok(confirmMessages[0].includes('سارة الإدارية'), 'the first prompt must name the account being deleted');
+    assert.ok(confirmMessages[1].includes('لا يمكن التراجع'), 'the second prompt must state the action is final');
+    assert.ok(confirmMessages[1].includes('بلا اسم ناشر'), 'and that published events stay without a publisher name');
+
+    assert.strictEqual(requests.filter(r => r.method === 'GET').length, 1, 'the list must reload through its existing loader after the delete');
+    assert.strictEqual(alerts.length, 1);
+    assert.ok(alerts[0].includes('تم حذف الحساب'), 'expected an Arabic success message');
+  });
+
+  await test('backing out of either confirmation sends no request at all', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    await dom.window.fetchAdminUsers();
+
+    const { window } = dom;
+    const requestedPaths = [];
+    const originalFetch = window.fetch;
+    window.fetch = async (url, options = {}) => {
+      requestedPaths.push(String(url));
+      return originalFetch(url, options);
+    };
+    window.confirm = () => false;
+    window.alert = () => {};
+
+    await window.handleDeleteAdminUser(502);
+    assert.strictEqual(
+      requestedPaths.filter(p => p.includes('/api/admin/users/502')).length,
+      0,
+      'no DELETE may be sent when the user backs out'
+    );
   });
 
   console.log('\nAdmin panel — analytics/tracking tab (the reading UI that shipped with no UI)');

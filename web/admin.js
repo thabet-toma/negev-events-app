@@ -1968,6 +1968,9 @@ function renderAdminUsersList() {
                 ? `<button type="button" class="admin-btn-primary" style="padding:6px 12px; font-size:0.8rem;" onclick="handleChangeUserRole(${u.id}, 'admin', 'ترقية هذا المستخدم إلى أدمن؟')"><i class="fa-solid fa-user-shield"></i> ترقية إلى أدمن</button>`
                 : ''}
               <button type="button" class="admin-btn-ghost" style="padding:6px 12px; font-size:0.8rem;" onclick="viewUserAnalytics(${u.id})"><i class="fa-solid fa-chart-line"></i> سجل التتبّع</button>
+              ${isSuperAdminRole() && u.role !== 'super_admin'
+                ? `<button type="button" class="btn-reject" style="padding:6px 12px; font-size:0.8rem;" onclick="handleDeleteAdminUser(${u.id})"><i class="fa-solid fa-trash-can"></i> حذف الحساب</button>`
+                : ''}
             </td>
           </tr>
         `).join('')}
@@ -1997,6 +2000,33 @@ async function handleChangeUserRole(userId, role, confirmText) {
       await fetchAdminAdmins();
     } else {
       alert(data.message || (role === 'admin' ? 'تعذّرت الترقية' : 'تعذّر إلغاء الصلاحيات'));
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+
+/**
+ * حذف حساب نهائياً من تبويب المستخدمين — تنفيذ طلب حذف وصل من التطبيق أو من
+ * صفحة الويب العامة. سوبر أدمن وحده، وصفّ السوبر أدمن نفسه لا يعرض الزرّ
+ * أصلاً (احتياط إضافي فوق رفض الخادم حذف النفس). تأكيدان صريحان لأن الحذف
+ * لا رجعة فيه: الثاني وحده يذكر أن المناسبات تبقى بلا اسم ناشر.
+ */
+async function handleDeleteAdminUser(userId) {
+  const user = allAdminUsers.find(u => u.id === userId);
+  const label = user ? `${user.full_name} (${user.phone_number})` : `#${userId}`;
+
+  if (!confirm(`حذف حساب «${label}» نهائياً؟`)) return;
+  if (!confirm('هذا الإجراء لا يمكن التراجع عنه. سيُحذف الحساب وبياناته الشخصية، وستبقى مناسباته المنشورة على المنصة بلا اسم ناشر.\n\nتأكيد الحذف النهائي؟')) return;
+
+  try {
+    const res = await adminFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تم حذف الحساب');
+      await fetchAdminUsers();
+    } else {
+      alert(data.message || 'تعذّر حذف الحساب');
     }
   } catch (e) {
     alert('تعذر الاتصال بالخادم');

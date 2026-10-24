@@ -7213,6 +7213,106 @@ async function run() {
     assert.ok(close.body.request.handled_at, 'expected handled_at to be set on close');
   });
 
+  console.log('\nAccount deletion (Google Play policy): self-service, the public no-app request, and admin fulfilment');
+
+  /**
+   * `insertTestUser` above, not POST /api/auth/register: the suite's shared
+   * authLimiter budget (20 requests per window across register/login/admin-
+   * login) is fully spent by this point — the same constraint and the same
+   * workaround the sections above document. The row's PIN is a real bcrypt
+   * hash of '1234', so the service's own PIN check is genuinely exercised.
+   */
+  await test('DELETE /api/account — no PIN is 400, a wrong PIN is 401, the right PIN is 200; an already-issued token stops answering with data afterwards', async () => {
+    const deletingUser = await insertTestUser('مستخدم حذف حسابه بنفسه');
+
+    const noPin = await api('DELETE', '/api/account', { token: deletingUser.token });
+    assert.strictEqual(noPin.status, 400, 'the PIN is the one thing a stolen token cannot supply, so it is mandatory');
+
+    const wrongPin = await api('DELETE', '/api/account', {
+      token: deletingUser.token, body: { pin_code: '0000' }
+    });
+    assert.strictEqual(wrongPin.status, 401);
+    const stillThere = await db.queryOne('SELECT id FROM users WHERE id = ?', [deletingUser.id]);
+    assert.ok(stillThere, 'a refused deletion must leave the account untouched');
+
+    const deleted = await api('DELETE', '/api/account', {
+      token: deletingUser.token, body: { pin_code: '1234' }
+    });
+    assert.strictEqual(deleted.status, 200, deleted.body.message);
+    assert.strictEqual(deleted.body.success, true);
+    assert.strictEqual(await db.queryOne('SELECT id FROM users WHERE id = ?', [deletingUser.id]), null);
+
+    // The JWT is NOT revoked — middleware/auth.js verifies the signature only
+    // and reads no user row. So `authenticate` still passes, and the route
+    // that looks the user up answers 404. Both codes are acceptable to a
+    // client ("sign in again" or "no such account"); this codebase yields 404.
+    const oldToken = await api('GET', '/api/auth/me', { token: deletingUser.token });
+    assert.ok([401, 404].includes(oldToken.status), `the deleted account must stop answering with data (got ${oldToken.status})`);
+    assert.strictEqual(oldToken.status, 404, 'signature still valid → findById() returns null → 404, never 401');
+  });
+
+  await test('POST /api/privacy/deletion-request is public, folds Arabic-Indic digits and spaces, answers identically for a registered number, an unknown one and a duplicate, and queues exactly one erasure request', async () => {
+    const requestUser = await insertTestUser('مستخدم طلب حذفاً من الويب');
+    const arabicDigits = requestUser.phone.replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[Number(d)]);
+    const formatted = `${arabicDigits.slice(0, 3)} ${arabicDigits.slice(3, 6)}-${arabicDigits.slice(6)}`;
+
+    const registered = await api('POST', '/api/privacy/deletion-request', { body: { phone_number: formatted } });
+    assert.strictEqual(registered.status, 200);
+    assert.strictEqual(registered.body.success, true, 'no token is required on this path');
+    const message = registered.body.message;
+    assert.ok(/خلال 30 يوماً/.test(message), 'the reply must state the deadline');
+
+    const unknownPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const unknown = await api('POST', '/api/privacy/deletion-request', { body: { phone_number: unknownPhone } });
+    assert.strictEqual(unknown.status, 200);
+    assert.strictEqual(unknown.body.message, message, 'a stranger and a registered number must be indistinguishable');
+
+    const duplicate = await api('POST', '/api/privacy/deletion-request', { body: { phone_number: requestUser.phone } });
+    assert.strictEqual(duplicate.status, 200);
+    assert.strictEqual(duplicate.body.message, message);
+
+    const queued = await db.query(
+      `SELECT id FROM privacy_requests WHERE user_id = ? AND request_type = 'erasure' AND status = 'pending'`,
+      [requestUser.id]
+    );
+    assert.strictEqual(queued.length, 1, 'a second submission must never queue a duplicate open request');
+
+    const malformed = await api('POST', '/api/privacy/deletion-request', { body: { phone_number: 'not-a-phone' } });
+    assert.strictEqual(malformed.status, 400);
+
+    // Leave no pending request behind in a reused development database.
+    await db.execute('DELETE FROM users WHERE id = ?', [requestUser.id]);
+  });
+
+  await test('DELETE /api/admin/users/:id — a super_admin deletes another account, its queue row goes with it (CASCADE), deleting itself is refused, and an unknown id is 404', async () => {
+    const victim = await insertTestUser('مستخدم يحذفه السوبر أدمن');
+    // An open erasure request on the victim, filed through the real route. The
+    // service closes it inside the same transaction, but `fk_privacy_requests_user`
+    // is ON DELETE CASCADE, so the row is removed with the account — assert
+    // that no dangling queue entry survives.
+    const filed = await api('POST', '/api/privacy/requests', {
+      token: victim.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(filed.status, 201, filed.body.message);
+
+    const deleted = await api('DELETE', `/api/admin/users/${victim.id}`, { token: superAdminToken });
+    assert.strictEqual(deleted.status, 200, deleted.body.message);
+    assert.strictEqual(await db.queryOne('SELECT id FROM users WHERE id = ?', [victim.id]), null);
+    assert.strictEqual(
+      (await db.query('SELECT id FROM privacy_requests WHERE user_id = ?', [victim.id])).length,
+      0,
+      'no privacy request may outlive its user'
+    );
+
+    const superAdminRow = await db.queryOne('SELECT id FROM users WHERE phone_number = ?', [config.admin.phone]);
+    const self = await api('DELETE', `/api/admin/users/${superAdminRow.id}`, { token: superAdminToken });
+    assert.strictEqual(self.status, 400, 'the panel must never delete its own super_admin account');
+    assert.ok(self.body.message.includes('حذف حسابي'), 'the refusal must point at the app path it asks for');
+
+    const missing = await api('DELETE', '/api/admin/users/999999999', { token: superAdminToken });
+    assert.strictEqual(missing.status, 404);
+  });
+
   await test('GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user\'s own rows, isolated from another user\'s, with no event id of any kind, and pagination that behaves', async () => {
     const rowsUser = await insertTestUser('مستخدم لاختبار قراءة السجل الفردي');
     const otherUser = await insertTestUser('مستخدم آخر يجب ألا تظهر بياناته هنا');

@@ -192,6 +192,10 @@ class AccountScreen extends StatelessWidget {
                       icon: const Icon(Icons.logout),
                       label: const Text('تسجيل الخروج'),
                     ),
+                    // آخر صفوف الشاشة عمداً: إجراء نهائي بلون الخطر لا يجاور
+                    // ما يُقصد كل يوم.
+                    const SizedBox(height: 14),
+                    const _DeleteAccountRow(),
                     const SizedBox(height: 26),
                     Center(
                       child: Text(
@@ -281,6 +285,264 @@ class _ThemeModeTile extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// نصّ التأكيد الأول قبل الحذف.
+///
+/// يسمّي ما سيُحذف وما سيبقى بلا مواربة: «لا يمكن التراجع» وحدها لا تخبر
+/// المستخدم أنّ مناسباته وصوره تبقى على المنصّة بلا اسم ناشر.
+const _deleteAccountWarning =
+    'سيُحذف حسابك وبياناتك الشخصية: اسمك ورقمك ورمز دخولك وتذكيراتك '
+    'وإشعاراتك ودفتر نقوطك ووسومك. المناسبات والصور التي نشرتها تبقى في '
+    'المنصة بلا اسم ناشر. لا يمكن التراجع.';
+
+/// «حذف حسابي» — صفّ الخطر الوحيد في الشاشة، وآخر صفوفها.
+///
+/// ثلاث خطوات: تأكيد صريح يتجاوز «هل أنت متأكد؟»، ثم رمز الدخول (تأكيد هوية
+/// على جهاز قد يكون مفتوحاً لغير صاحبه)، ثم النداء ومعه مؤشّر انتظار لا يسمح
+/// بأي نقرة أخرى. الحذف نفسه على الخادم؛ هذه الشاشة لا تمسح شيئاً من البيانات،
+/// بل تُخرج الجلسة المحلية بعد النجاح (`auth.signOut`) كي لا يبقى على الجهاز
+/// حساب محذوف معروضاً.
+class _DeleteAccountRow extends StatefulWidget {
+  const _DeleteAccountRow();
+
+  @override
+  State<_DeleteAccountRow> createState() => _DeleteAccountRowState();
+}
+
+class _DeleteAccountRowState extends State<_DeleteAccountRow> {
+  /// سلسلة الحوارات جارية أو النداء في الطريق — الزرّ معطّل ومعه مؤشّر.
+  bool _busy = false;
+
+  Future<void> _start() async {
+    final services = AppServices.of(context);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: dialogContext.c.surfaceSunk,
+        icon: Icon(
+          Icons.delete_forever_outlined,
+          color: dialogContext.c.danger,
+          size: 34,
+        ),
+        title: const Text('حذف حسابي'),
+        content: const Text(
+          _deleteAccountWarning,
+          style: TextStyle(height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              'متابعة',
+              style: TextStyle(color: dialogContext.c.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final pinCode = await showDialog<String>(
+      context: context,
+      builder: (_) => const _DeleteAccountPinDialog(),
+    );
+    // رمز فارغ لا يُرسَل — ولا استدعاء أصلاً.
+    if (pinCode == null || pinCode.isEmpty || !mounted) return;
+
+    setState(() => _busy = true);
+
+    final outcome = await showDialog<Object>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _DeleteAccountProgressDialog(
+        onDelete: () => services.api.deleteAccount(pinCode: pinCode),
+      ),
+    );
+
+    if (outcome == true) {
+      // الحساب لم يعد على الخادم. الخروج من الجلسة المحلية واجب حتى لو أُغلقت
+      // الشاشة أثناء النداء، فالمستخدم المحفوظ لم يعد له وجود.
+      await services.auth.signOut();
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showMessage(context, 'تم حذف حسابك نهائياً');
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() => _busy = false);
+    showMessage(
+      context,
+      outcome is String && outcome.isNotEmpty
+          ? outcome
+          : 'تعذّر حذف الحساب، حاول مرة أخرى',
+      isError: true,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _busy ? null : _start,
+      style: OutlinedButton.styleFrom(foregroundColor: context.c.danger),
+      icon: _busy
+          ? SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: context.c.danger,
+              ),
+            )
+          : const Icon(Icons.delete_forever_outlined),
+      label: Text(_busy ? 'جارٍ حذف حسابك…' : 'حذف حسابي'),
+    );
+  }
+}
+
+/// خطوة رمز الدخول — تعيد الرمز مكتوباً، أو `null` عند الإلغاء.
+///
+/// زرّ الحذف معطّل ما دام الحقل فارغاً، فرمز فارغ لا يبلغ `NegevApi` أصلاً.
+class _DeleteAccountPinDialog extends StatefulWidget {
+  const _DeleteAccountPinDialog();
+
+  @override
+  State<_DeleteAccountPinDialog> createState() =>
+      _DeleteAccountPinDialogState();
+}
+
+class _DeleteAccountPinDialogState extends State<_DeleteAccountPinDialog> {
+  final _controller = TextEditingController();
+  bool _canSubmit = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _refresh() {
+    final canSubmit = _controller.text.trim().isNotEmpty;
+    if (canSubmit != _canSubmit) setState(() => _canSubmit = canSubmit);
+  }
+
+  void _submit() {
+    final pinCode = _controller.text.trim();
+    if (pinCode.isEmpty) return;
+    Navigator.of(context).pop(pinCode);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.c.surfaceSunk,
+      title: const Text('رمز الدخول'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'اكتب رمز دخولك لتأكيد حذف الحساب.',
+            style: TextStyle(color: context.c.inkSoft, height: 1.6),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            obscureText: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) {
+              if (_canSubmit) _submit();
+            },
+            decoration: const InputDecoration(labelText: 'رمز PIN'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        TextButton(
+          onPressed: _canSubmit ? _submit : null,
+          child: Text(
+            'حذف حسابي',
+            style: TextStyle(color: _canSubmit ? context.c.danger : null),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// نداء الحذف نفسه داخل حوار لا يُغلق بشيء: مؤشّر الانتظار ظاهر وكل الأزرار
+/// خلفه معطّلة حتى يعود الخادم. يعيد `true` عند النجاح، أو رسالة الخطأ العربية
+/// كما وصلت من الخادم — والمستدعي وحده يعرضها ويقرّر البقاء.
+class _DeleteAccountProgressDialog extends StatefulWidget {
+  const _DeleteAccountProgressDialog({required this.onDelete});
+
+  final Future<void> Function() onDelete;
+
+  @override
+  State<_DeleteAccountProgressDialog> createState() =>
+      _DeleteAccountProgressDialogState();
+}
+
+class _DeleteAccountProgressDialogState
+    extends State<_DeleteAccountProgressDialog> {
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    try {
+      await widget.onDelete();
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (mounted) Navigator.of(context).pop('$error');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        backgroundColor: context.c.surfaceSunk,
+        content: Row(
+          children: [
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                'جارٍ حذف حسابك…',
+                style: TextStyle(color: context.c.ink, height: 1.6),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

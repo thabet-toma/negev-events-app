@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>حذف الحساب — أعراسنا</title>
+  <meta name="description" content="كيف تحذف حسابك في منصة وتطبيق أعراسنا (مناسبات النقب): فوراً من التطبيق، أو بطلب من هذه الصفحة بلا تطبيق. ما يُحذف، وما يبقى، ومتى.">
+  <link rel="canonical" href="https://munasbat.ktra-pro.tech/delete-account.html">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ar_AR">
+  <meta property="og:site_name" content="أعراسنا">
+  <meta property="og:title" content="حذف الحساب — أعراسنا">
+  <meta property="og:description" content="كيف تحذف حسابك في منصة وتطبيق أعراسنا (مناسبات النقب): فوراً من التطبيق، أو بطلب من هذه الصفحة بلا تطبيق.">
+  <meta property="og:url" content="https://munasbat.ktra-pro.tech/delete-account.html">
+  <meta property="og:image" content="https://munasbat.ktra-pro.tech/icons/icon-512.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --card: #ffffff;
+      --text: #1f2a37;
+      --muted: #5b6573;
+      --accent: #a8802f;
+      --line: #e6dfd0;
+      --danger: #a83232;
+      --ok: #2f6b3a;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1722;
+        --card: #172233;
+        --text: #e8ecf1;
+        --muted: #a3adbb;
+        --accent: #d4af5f;
+        --line: #26344a;
+        --danger: #f08a8a;
+        --ok: #8fd39c;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Cairo', system-ui, sans-serif;
+      line-height: 1.9;
+      font-size: 16px;
+    }
+    main {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 32px 16px 64px;
+    }
+    header { margin-bottom: 24px; }
+    h1 { font-size: 1.8rem; margin: 0 0 4px; color: var(--accent); }
+    .updated { color: var(--muted); font-size: .9rem; margin: 0; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    h2 { font-size: 1.15rem; margin: 0 0 8px; }
+    p { margin: 0 0 10px; }
+    p:last-child, ul:last-child, ol:last-child { margin-bottom: 0; }
+    ul, ol { margin: 0 0 10px; padding-inline-start: 22px; }
+    li { margin-bottom: 4px; }
+    a { color: var(--accent); }
+    strong { font-weight: 700; }
+    form { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+    label { display: block; font-weight: 600; font-size: .95rem; margin-bottom: 4px; }
+    input[type="tel"] {
+      width: 100%;
+      max-width: 280px;
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    button {
+      padding: 10px 18px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 700;
+      /* Dark ink on the brand gold in both themes: white on this gold is under
+         4.5:1, while this pair clears it in light and dark alike. */
+      color: #0f1722;
+      background: var(--accent);
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: default; }
+    .status { margin-top: 14px; font-size: .95rem; display: none; }
+    .status.is-visible { display: block; }
+    .status.is-ok { color: var(--ok); }
+    .status.is-error { color: var(--danger); }
+    footer { text-align: center; color: var(--muted); font-size: .9rem; margin-top: 24px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>حذف الحساب — أعراسنا</h1>
+    <p class="updated">منصة وتطبيق «أعراسنا» (مناسبات النقب)</p>
+  </header>
+
+  <section>
+    <h2>لماذا هذه الصفحة؟</h2>
+    <p>حسابك عندنا هو اسمك ورقم هاتفك ورمز دخولك وما يترتّب عليهما. إن لم تعد تستخدم «أعراسنا»
+      فمن حقك أن تحذفه متى شئت، بلا سبب وبلا انتظار موافقة. هذه الصفحة تشرح الطريقتين، وما سيُحذف
+      فعلاً، وما سيبقى على المنصة بعد الحذف.</p>
+  </section>
+
+  <section>
+    <h2>الطريقة الأولى — من التطبيق (فورية)</h2>
+    <ol>
+      <li>افتح تطبيق «أعراسنا».</li>
+      <li>اذهب إلى <strong>«حسابي»</strong>.</li>
+      <li>اضغط <strong>«حذف حسابي»</strong>.</li>
+      <li>أدخل رمز الدخول (PIN) للتأكيد.</li>
+    </ol>
+    <p>بمجرد إدخال الرمز يُحذف الحساب فوراً، ولا حاجة لانتظار أو مراجعة.</p>
+  </section>
+
+  <section>
+    <h2>ما الذي يُحذف؟</h2>
+    <ul>
+      <li><strong>الحساب نفسه:</strong> الاسم الكامل، رقم الهاتف، رمز الدخول، والبلدة أو العائلة إن أدخلتها.</li>
+      <li>تذكيراتك («ذكّرني») وإشعاراتك.</li>
+      <li>دفتر النقوط بالكامل.</li>
+      <li>اشتراكات الإشعارات على أجهزتك.</li>
+      <li>وسومك على الصور، وبلاغاتك.</li>
+      <li>بيانات التحليلات المرتبطة بحسابك (بمعرّفك) — لا بما هو مجمَّع ومجهول الهوية.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>ما الذي يبقى؟</h2>
+    <p><strong>المناسبات التي نشرتها والصور المرفوعة تبقى في المنصة بعد حذف حسابك، لكن بلا اسم ناشر.</strong>
+      حذف الحساب يقطع نسبة المحتوى إلى صاحبه، فلا يظهر اسمك ولا رقمك بجانبه.</p>
+    <p>سبب بقائها أنها محتوى عام تفاعل معه آخرون — تهانٍ وتعازٍ وذكريات وبطاقات مناسبة — وربما
+      نُشرت على صفحتنا في فيسبوك. إن أردت حذف مناسبة بعينها أو صورة تظهر فيها، راسلنا عبر
+      <a href="/privacy.html">صفحة الخصوصية</a> وسنحذفها.</p>
+  </section>
+
+  <section id="request">
+    <h2>الطريقة الثانية — بلا تطبيق</h2>
+    <p>إن لم يكن التطبيق على جهازك، أرسل طلب الحذف برقم الهاتف المسجّل في حسابك. نعالج الطلبات
+      خلال 30 يوماً من وصولها، ونتواصل معك على واتساب عند التنفيذ. الطلب لا يحتاج حساباً ولا تسجيل دخول.</p>
+    <form id="deleteRequestForm" novalidate>
+      <div>
+        <label for="phoneNumber">رقم الهاتف المسجّل</label>
+        <input id="phoneNumber" name="phone_number" type="tel" inputmode="tel" autocomplete="tel"
+               maxlength="20" placeholder="05XXXXXXXX" required>
+      </div>
+      <button type="submit" id="deleteRequestBtn">أرسل طلب الحذف</button>
+    </form>
+    <p id="deleteRequestStatus" class="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>للاطّلاع والمتابعة</h2>
+    <p>ما الذي نجمعه ولماذا وكم نحتفظ به: <a href="/privacy.html">سياسة الخصوصية</a>. وللاستفسار
+      عن حالة طلبك أو عن أي بيان يخصّك، تواصل معنا عبر البيانات الموجودة في تلك الصفحة.</p>
+  </section>
+
+  <footer>
+    <a href="/">العودة إلى أعراسنا</a>
+  </footer>
+</main>
+
+<script src="config.js?v=2.5.2"></script>
+<script src="api.js?v=2.5.2"></script>
+<script>
+  (function () {
+    const form = document.getElementById('deleteRequestForm');
+    const input = document.getElementById('phoneNumber');
+    const button = document.getElementById('deleteRequestBtn');
+    const status = document.getElementById('deleteRequestStatus');
+
+    function showStatus(message, kind) {
+      status.textContent = message;
+      status.className = 'status is-visible' + (kind ? ' is-' + kind : '');
+    }
+
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      const phone = input.value.trim();
+      if (!phone) {
+        showStatus('يرجى إدخال رقم الهاتف المسجّل في حسابك', 'error');
+        return;
+      }
+
+      button.disabled = true;
+      showStatus('جارٍ إرسال الطلب…', null);
+
+      try {
+        const res = await apiFetch('/api/privacy/deletion-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone_number: phone })
+        });
+        let data = null;
+        try { data = await res.json(); } catch (e) { data = null; }
+
+        if (res.ok && data && data.success) {
+          showStatus(data.message || 'وصلنا طلبك — سنتواصل معك على واتساب.', 'ok');
+          form.reset();
+        } else {
+          showStatus((data && data.message) || 'تعذّر إرسال الطلب — حاول مرة أخرى.', 'error');
+        }
+      } catch (e) {
+        showStatus('تعذّر الاتصال بالخادم — تحقّق من الإنترنت وحاول مرة أخرى.', 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  })();
+</script>
+</body>
+</html>

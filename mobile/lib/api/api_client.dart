@@ -127,14 +127,29 @@ class ApiClient {
     );
   }
 
+  /// [body] اختياري لأن بعض المسارات تحتاج جسماً مع الحذف (تأكيد الهوية في
+  /// `DELETE /api/account`)، وبعضها لا جسم له أصلاً. `Content-Type` لا يُضاف
+  /// إلا مع جسم فعلي كي لا يتغيّر شكل الطلبات القائمة.
+  ///
+  /// [reportUnauthorized] يخصّ `DELETE /api/account` وحده: رمز دخول خاطئ هناك
+  /// يردّ 401، وهو 401 لا يعني «جلسة منتهية» — إبلاغ `AuthStore` به كان يُخرج
+  /// المستخدم من جلسته ويكسر رسالة «الرمز غير صحيح» التي يجب أن تبقى على
+  /// الشاشة.
   Future<Map<String, dynamic>> delete(
     String path, {
     Map<String, String>? query,
+    Map<String, dynamic>? body,
     bool auth = false,
+    bool reportUnauthorized = true,
   }) async {
     return _send(
-      () => _client.delete(_uri(path, query), headers: _headers(auth: auth)),
+      () => _client.delete(
+        _uri(path, query),
+        headers: _headers(auth: auth, json: body != null),
+        body: body == null ? null : jsonEncode(body),
+      ),
       auth: auth,
+      reportUnauthorized: reportUnauthorized,
     );
   }
 
@@ -173,6 +188,7 @@ class ApiClient {
   Future<Map<String, dynamic>> _send(
     Future<http.Response> Function() run, {
     bool auth = false,
+    bool reportUnauthorized = true,
   }) async {
     // الرمز كما أُرفق بهذا الطلب تحديداً — لا كما يصير بعد انتظار الاستجابة.
     final sentToken = auth && token != null && token!.isNotEmpty ? token : null;
@@ -193,7 +209,9 @@ class ApiClient {
       throw ApiException('استجابة غير مفهومة من الخادم', response.statusCode);
     }
 
-    if (response.statusCode == 401 && sentToken != null) {
+    if (reportUnauthorized &&
+        response.statusCode == 401 &&
+        sentToken != null) {
       onUnauthorized?.call(sentToken);
     }
 

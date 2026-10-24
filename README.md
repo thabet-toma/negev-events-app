@@ -574,6 +574,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/auth/register` | إنشاء حساب |
 | `POST` | `/api/auth/login` | تسجيل الدخول |
 | `GET` | `/api/auth/me` | بيانات الحساب الحالي، و`token` جديد موقَّع لحساب `user` العادي فقط (لا للإدارة) — العميل يستبدل رمزه به عند كل فتح فلا تنتهي جلسة مستخدم نشِط. رمز منتهٍ أو مزوَّر يُرفض بـ**401** في كل المسارات المحمية (لا 403: ‏403 تعني «غير مسموح لك» فقط) 🔒 |
+| `DELETE` | `/api/account` | حذف حسابك نهائياً بعد تأكيد رمز الدخول `{ pin_code }` — صفوفك الشخصية تُحذف بالـCASCADE، ومناسباتك وصورك تبقى بلا اسم ناشر. وبلا تطبيق: `POST /api/privacy/deletion-request` (عام، ٥ لكل ساعة/IP) يسجّل طلب محو بالهاتف ويجيب بالنصّ نفسه دائماً حتى لا يُكشف وجود رقم 🔒 |
 
 ### دفتر النقوط 🔒
 
@@ -623,6 +624,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` / `DELETE` | `/api/admin/comments[/:id]` | إدارة التبريكات |
 | `GET` | `/api/admin/users` | قائمة المستخدمين |
 | `PATCH` | `/api/admin/users/:id/role` | ترقية مستخدم إلى أدمن أو إلغاء صلاحياته إلى مستخدم عادي (`role`: `admin`\|`user`) — لا يمنح `super_admin` أبداً 🛡️ |
+| `DELETE` | `/api/admin/users/:id` | تنفيذ طلب محو: حذف الحساب نهائياً بلا رمز دخول (الفاعل مسجَّل) — يُرفض حذف حسابك أنت بـ400، وما لا وجود له بـ404 🔴 |
 | `GET` | `/api/admin/people` | قائمة الأشخاص للسوبر أدمن (`?q=` بحث بالاسم، حتى ٥٠ صفّاً) مع `photos_count` (صور معتمدة فريدة، لا صفوف وسوم) و`honorees_count` و`users_count`، ولكل شخص `similar[]`: `{ id, name, photos_count }` — اقتراحات `comparePersonNames` للقراءة فقط ولا تدمج تلقائياً 🛡️ |
 | `POST` | `/api/admin/people/:id/merge` | دمج شخص في آخر — `:id` هو الباقي، والجسم `{ from_id, into_id? }` (`into_id` إن أُرسل يجب أن يطابق المسار). في معاملة واحدة تنتقل الحسابات والوسوم وأصحاب المناسبات، ويُوحَّد إملاء الوسوم والمناسبات على اسم الباقي، ثم يُحذف `from` ويُكتب صفّ `people_merges` بالفاعل والاسمين وأعداد ما نُقل. يعيد `{ merged_into, removed, moved }` 🛡️ |
 | `POST` | `/api/admin/broadcast` | بث تعميم — `message` مطلوب، و`title`/`tone` (`info`\|`urgent`\|`solemn`)/`duration` (`hour`\|`day`\|`3_days`\|`week`\|`none`) أو `expires_at` اختيارية. `super_admin` يصل الجميع (صفّ واحد `scope_town = NULL`)؛ أدمن بلدة يبثّ لبلداته هو فقط (`towns[]`، صفّ لكل بلدة)، ويُرفض إن لم يملك بلدة مُسنَدة أصلاً |

@@ -185,6 +185,27 @@ router.get('/admin/users', requireSuperAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * Fulfils an erasure request from the panel — the same deletion the account
+ * holder can perform from the app, with no PIN (the super_admin is not the
+ * account holder). Guarded by `requireSuperAdmin` here, never by the router's
+ * weaker `requireAdmin`: deleting an account is not town-scoped moderation.
+ *
+ * Self-deletion is refused rather than silently allowed: a super_admin pressing
+ * this on their own row would lock the platform out of its own panel, and the
+ * app's own «حذف حسابي» already covers that intention with a PIN check.
+ */
+router.delete('/admin/users/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const userId = parseId(req.params.id, 'معرّف المستخدم');
+
+  if (Number(userId) === Number(req.user.id)) {
+    throw ApiError.badRequest('استخدم «حذف حسابي» من التطبيق لحذف حسابك');
+  }
+
+  await auth.deleteAccountAsAdmin(userId, req.user.id);
+  res.json({ success: true, message: 'تم حذف الحساب وبياناته الشخصية' });
+}));
+
+/**
  * The only path that changes `users.role` — promotes a user to `admin` or
  * demotes an `admin`/`super_admin` back to `user`. `super_admin` is never
  * grantable here (only `seed.js` creates one). Guarded on this router

@@ -892,6 +892,37 @@ class NegevApi {
     );
   }
 
+  /// حذف الحساب نهائياً — `DELETE /api/account` (سياسة Google Play: الحذف من
+  /// داخل التطبيق لا بريد إلى الدعم).
+  ///
+  /// رمز الدخول يُعاد إرساله كتأكيد هوية، فجلسة مفتوحة على جهاز غير صاحبه لا
+  /// تكفي لحذف الحساب؛ رمز خاطئ يردّ 401 برسالة عربية يراها المستخدم كما هي.
+  ///
+  /// `reportUnauthorized: false` لأن 401 هنا معناه «رمز خاطئ» لا «جلسة منتهية»:
+  /// إبلاغ `AuthStore` به كان يُخرج المستخدم ويستبدل رسالة الخادم برسالة
+  /// انتهاء الجلسة، فيخرج من الشاشة بدل أن يقرأ خطأه ويصحّحه.
+  ///
+  /// **لا شيء يُمسح من التخزين المحلي هنا** — الرمز والمستخدم المحفوظان مسؤولية
+  /// الشاشة بعد نجاح النداء (`auth.signOut()`)، فهذه الطبقة لا تعرف مخزن الجلسة.
+  Future<void> deleteAccount({required String pinCode}) async {
+    final data = await _client.delete(
+      '/api/account',
+      auth: true,
+      body: {'pin_code': pinCode},
+      reportUnauthorized: false,
+    );
+    // الرمز والرسالة يأتيان من الخادم؛ البديل هنا لردّ ناقص لا لخطأ معلَن —
+    // `ApiClient` يرمي أصلاً بأي حالة 4xx/5xx أو `success: false`.
+    if (data['success'] != true) {
+      final message = data['message'];
+      throw ApiException(
+        message is String && message.isNotEmpty
+            ? message
+            : 'تعذّر حذف الحساب، حاول مرة أخرى',
+      );
+    }
+  }
+
   ({String token, AppUser user}) _authResult(Map<String, dynamic> data) {
     final token = data['token'];
     final user = data['user'];
