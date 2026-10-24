@@ -23,9 +23,9 @@
  * the preview, and there is no middle setting (measured: at blur(8px) the
  * Arabic on a live poster was still readable) — and the call was to show the
  * picture: "let the image show". So the withholding that remains is in the
- * *text*: `share.routes.js` still prints no date, venue or phone anywhere on
- * the page or in the meta tags. Whatever the family chose to print on their
- * own invitation travels with it.
+ * *text*: no time, venue or phone; the town and the type are shown, and so is
+ * the date — as text, for an expired event only, never on an upcoming one.
+ * Whatever the family chose to print on their own invitation travels with it.
  *
  * No SQL lives here — `events.service.getShareEvent` already has everything
  * this needs (including `updated_at`, the cache key below), and this module

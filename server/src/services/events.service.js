@@ -1733,6 +1733,63 @@ async function getShareEvent(eventId) {
   };
 }
 
+/**
+ * «مناسبات أخرى» أسفل صفحة المشاركة (/e/:id): مناسبات معتمدة أخرى في نفس
+ * البلدة أو لنفس العائلة، القادمة أولاً ثم الأحدث، بلا المناسبة نفسها.
+ * كل الاستعلامات مربوطة `?` — لا دمج نصوص SQL بقيم. `limit` مقصوص 1..6
+ * (ومخرجه لا يزيد على 6 صفوف مهما أُرسل).
+ *
+ * The union is OR, not AND: an event sharing either the town or the family is
+ * a plausible "other occasion" — requiring both would empty the section for
+ * every family whose occasions are spread across towns. Both missing means
+ * there is nothing to relate to (an unconditional query would just return an
+ * arbitrary list), so that case short-circuits before touching the database.
+ * Ordering reuses the EVENT_SPAN_* rule rather than COALESCE(event_end_date,
+ * event_date): a multi-day occasion whose حنّة day is still ahead is upcoming
+ * even if its main date has passed.
+ */
+async function listRelatedEvents({ town = null, familyClan = null, excludeId = null, limit = 6 } = {}) {
+  // بلا بلدة وبلا عائلة لا يوجد «مناسبات أخرى» — استعلام بلا شرط يرجّع قائمة عشوائية.
+  if (!town && !familyClan) return [];
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 6, 1), 6);
+
+  const conditions = ["events.status = 'approved'"];
+  const params = [];
+
+  const placeConditions = [];
+  if (town) {
+    placeConditions.push('events.town = ?');
+    params.push(town);
+  }
+  if (familyClan) {
+    placeConditions.push('events.family_clan = ?');
+    params.push(familyClan);
+  }
+  conditions.push(`(${placeConditions.join(' OR ')})`);
+
+  if (excludeId) {
+    conditions.push('events.id <> ?');
+    params.push(excludeId);
+  }
+
+  // Only the six columns the share page's link list draws, nothing else —
+  // the route has no use for the rest of the row.
+  const rows = await db.query(
+    `SELECT events.id, events.title, events.town, events.family_clan,
+            occasion_types.name AS occasion_type_name, events.event_date
+       FROM events
+       LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY (${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()) DESC,
+               CASE WHEN ${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE() THEN events.event_date END ASC,
+               events.event_date DESC,
+               events.id DESC
+      LIMIT ?`,
+    [...params, safeLimit]
+  );
+  return rows;
+}
+
 /** All approved events for sitemap generation — only id and lastmod. */
 async function listSitemapEvents() {
   const rows = await db.query(
@@ -1793,5 +1850,6 @@ module.exports = {
   reportCongratulation,
   townStats,
   getShareEvent,
+  listRelatedEvents,
   listSitemapEvents
 };

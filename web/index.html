@@ -29,10 +29,21 @@
   <meta property="og:description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
   <meta property="og:url" content="https://munasbat.ktra-pro.tech/">
   <meta property="og:image" content="https://munasbat.ktra-pro.tech/icons/icon-512.png">
+  <!-- الأبعاد الحقيقية للأيقونة (512×512) — بدونها يخمّن بعض الزاحفين مقاساً
+       ويقصّ المعاينة على غير حقيقتها -->
+  <meta property="og:image:width" content="512">
+  <meta property="og:image:height" content="512">
+  <!-- بطاقة تويتر: النصّان نفس نصَّي og أعلاه حرفياً، كي لا تختلف المعاينة
+       بين شبكة وأخرى -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="أعراسنا | المنصة الأولى لأعراس وأفراح النقب">
+  <meta name="twitter:description" content="المنصة الذكية الأولى لمناسبات وأعراس وبطاقات أفراح منطقة النقب، مع دفتر النقوط السري وخريطة الملاحة المباشرة.">
+  <meta name="twitter:image" content="https://munasbat.ktra-pro.tech/icons/icon-512.png">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "Organization",
+    "@id": "https://munasbat.ktra-pro.tech/#organization",
     "name": "أعراسنا — مناسبات النقب / Aarasna",
     "url": "https://munasbat.ktra-pro.tech/",
     "logo": "https://munasbat.ktra-pro.tech/icons/icon-512.png",
@@ -46,6 +57,21 @@
       "https://ktra-pro.tech/",
       "https://home.ktra-pro.tech/products/aarasna.html"
     ]
+  }
+  </script>
+
+  <!-- كتلة مستقلة للـWebSite: المنصة كموقع يحمل الاسم بأشكاله التي يكتبها
+       الناس في البحث (اعراسنا بلا همزة، Aarasna، مناسبات النقب). صاحبها
+       يُشار إليه بـ@id الكتلة أعلاه، فلا يُكرَّر وصف المنظمة هنا. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "أعراسنا",
+    "url": "https://munasbat.ktra-pro.tech/",
+    "inLanguage": "ar",
+    "alternateName": ["اعراسنا", "Aarasna", "مناسبات النقب"],
+    "publisher": { "@id": "https://munasbat.ktra-pro.tech/#organization" }
   }
   </script>
 
@@ -74,7 +100,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.6.3">
+  <link rel="stylesheet" href="styles.css?v=2.7.0">
 </head>
 <body>
 
@@ -787,6 +813,44 @@
       <div id="servicesLoadMoreWrapper" style="display:none; text-align:center; margin-top:20px; margin-bottom:40px;">
         <button id="servicesLoadMoreBtn" class="town-pill" onclick="loadMoreServiceProviders()">عرض المزيد من الخدمات</button>
       </div>
+    </section>
+
+    <!-- «عن المنصة» ظاهرة دائماً أسفل المحتوى، لا في تبويب: من يصل من بحث
+         عن المنصة ولا يعرفها يجب أن يجد شرحها من أول تمرير، لا أن يفتح
+         وجهاً مخفياً ليصادفه. لذلك قسم عادي بلا `tab-content` وبلا أي إخفاء. -->
+    <section id="aboutPlatform" class="about-platform">
+      <h2>عن منصة أعراسنا</h2>
+      <p class="about-lead">«أعراسنا» منصة اجتماعية لأهل النقب. تنشر فيها المناسبة ببطاقتها وموعدها ومكانها، فتصل لكل من يفتح الموقع أو التطبيق، بعد أن يعتمدها مدير البلدة. وخريطة النقب تجمع المناسبات القادمة في مكان واحد، فتعرف ما يجري في بلدتك وفي البلدات المجاورة قبل أن تخرج. ولكل حساب دفتر نقوطه الخاص، يقيّد فيه ما دفعه وما بقي عليه، ولا يراه غيره. والمنصة تخدم بلدات النقب وقُراه وتجمّعاته، وتتوسّع كلما أُضيفت بلدة.</p>
+      <ul class="about-services">
+        <li><strong>نشر مناسبة:</strong> تعبّئ الاسم والنوع والبلدة والتاريخ وتُرسل الطلب، فيراجعه مدير البلدة قبل ظهوره — والخطوات كاملة في <a href="/about.html">صفحة عن المنصة</a>.</li>
+        <li><strong>الخريطة:</strong> كل المناسبات القادمة على خريطة النقب، لتعرف أقربها إليك وأين تقام قبل أن تحرّك سيارتك.</li>
+        <li><strong>دفتر النقوط:</strong> سجل خاص بحسابك وحده، تكتب فيه ما دفعته في الأعراس وما بقي عليك من واجب — و<a href="/privacy.html">سياسة الخصوصية</a> تشرح حدوده.</li>
+      </ul>
+
+      <!-- أسئلة يبحث عنها الزائر الجديد فعلاً — كلام صريح بلا إحصاءات -->
+      <h3 class="about-faq-heading">أسئلة يتكرّر سؤالها</h3>
+      <details class="about-faq">
+        <summary>هل أحتاج حساباً لأرى المناسبات؟</summary>
+        <p>لا. التغذية والخريطة مفتوحتان لكل زائر بلا تسجيل. الحساب يلزمك حين تريد نشر مناسبة أو حفظ دفتر النقوط الخاص بك، لأن الاثنين يُربطان بصاحبهما.</p>
+      </details>
+      <details class="about-faq">
+        <summary>من يراجع المناسبة قبل ظهورها؟</summary>
+        <p>طلبك يدخل مراجعة إدارة البلدة التي اخترتها، وهي تتحقّق من الاسم والموعد والمكان قبل الاعتماد. بعد الموافقة يظهر الطلب في التغذية وعلى الخريطة، وتتابع حالته من «مناسباتي» في حسابك.</p>
+      </details>
+      <details class="about-faq">
+        <summary>هل يطّلع أحد على دفتر النقوط؟</summary>
+        <p>لا. كل قيد في الدفتر مرتبط بحسابك وحده، ولا يظهر في أي شاشة يراها مستخدم آخر، ولا في الملف العام للمنصة.</p>
+      </details>
+      <details class="about-faq">
+        <summary>أي البلدات تخدمها المنصة؟</summary>
+        <p>بلدات النقب المعروفة وقُراه وتجمّعاته: رهط وحورة وتل السبع وكسيفة وشقيب السلام واللقية وعرعرة النقب من بينها، والقائمة تتوسّع. وإن كانت بلدتك غير موجودة فاكتب اسم قريتك عند النشر.</p>
+      </details>
+      <details class="about-faq">
+        <summary>أرسلت مناسبة وأريد تعديلها، ماذا يحدث؟</summary>
+        <p>تعدّلها من «مناسباتي» في حسابك. تغيير الاسم أو الوصف يبقى ظاهراً، أما تغيير التاريخ أو المكان فيعيد الطلب إلى المراجعة، لأن الناس رتّبوا مواعيدهم على ما نشروه أولاً.</p>
+      </details>
+
+      <p class="about-foot">لمن يريد التفصيل: <a href="/about.html">عن المنصة</a> · <a href="/privacy.html">سياسة الخصوصية</a>.</p>
     </section>
 
   </main>

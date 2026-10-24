@@ -10,6 +10,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
 const config = require('./config');
+const { ABOUT_LASTMOD } = require('./constants');
 const routes = require('./routes');
 const shareRoutes = require('./routes/share.routes');
 const shareCard = require('./services/shareCard.service');
@@ -119,7 +120,8 @@ function createApp() {
     const sitemapEvents = await events.listSitemapEvents();
     const siteUrl = config.publicUrl.replace(/\/+$/, '');
     const urls = [
-      `  <url>\n    <loc>${siteUrl}/</loc>\n    <changefreq>daily</changefreq>\n    <priority>1.0</priority>\n  </url>`,
+      `  <url>\n    <loc>${siteUrl}/</loc>\n    <lastmod>${ABOUT_LASTMOD}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>1.0</priority>\n  </url>`,
+      `  <url>\n    <loc>${siteUrl}/about.html</loc>\n    <lastmod>${ABOUT_LASTMOD}</lastmod>\n    <changefreq>monthly</changefreq>\n    <priority>0.6</priority>\n  </url>`,
       `  <url>\n    <loc>${siteUrl}/live</loc>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`,
       `  <url>\n    <loc>${siteUrl}/privacy.html</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`
     ];

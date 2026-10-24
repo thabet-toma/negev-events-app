@@ -4436,3 +4436,48 @@ body.albums-page-open { overflow: hidden; }
 .event-album-card strong { font-size: 0.78rem; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-album-card small { font-size: 0.7rem; color: var(--ink-faint); }
 .account-photos-hint { margin: 0; color: var(--ink-faint); font-size: 0.84rem; line-height: 1.6; }
+
+/* ── قسم «عن المنصة» في الصفحة الرئيسية ───────────────────────────────
+   قسم ظاهر دائماً أسفل التغذية (ليس تبويباً، فلا `tab-content`): بطاقة
+   واحدة تجمع التعريف والخدمات وأسئلة تُفتح وتُطوى. كل ألوانه من متغيّرات
+   المظهرين، فلا يحتاج قاعدة ليلية خاصة. */
+.about-platform {
+  margin: 18px 0 28px;
+  padding: 20px 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-family: var(--font-main);
+  color: var(--ink);
+  text-align: start;
+}
+.about-platform h2 { margin: 0 0 10px; font-size: 1.1rem; color: var(--ink); }
+.about-lead { margin: 0 0 14px; color: var(--ink-soft); font-size: 0.9rem; line-height: 1.9; }
+.about-services {
+  margin: 0 0 16px;
+  padding-inline-start: 20px;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.8;
+}
+.about-services li { margin-bottom: 8px; }
+.about-services li:last-child { margin-bottom: 0; }
+.about-services strong { color: var(--ink); }
+.about-services a { color: var(--sky); font-weight: 700; text-decoration: none; }
+.about-services a:hover { text-decoration: underline; }
+.about-faq-heading { margin: 0 0 8px; font-size: 0.98rem; color: var(--ink); }
+.about-faq {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunk);
+}
+.about-faq summary { cursor: pointer; font-weight: 700; font-size: 0.88rem; color: var(--ink); }
+.about-faq summary::marker { color: var(--sky); }
+.about-faq[open] summary { margin-bottom: 6px; color: var(--sky-deep); }
+.about-faq p { margin: 0; color: var(--ink-soft); font-size: 0.86rem; line-height: 1.85; }
+.about-foot { margin: 12px 0 0; font-size: 0.86rem; color: var(--ink-soft); }
+.about-foot a { color: var(--sky); font-weight: 700; text-decoration: none; }
+.about-foot a:hover { text-decoration: underline; }

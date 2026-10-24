@@ -243,6 +243,13 @@ const STORY_THUMB_HOSTS = [
   'fbsbx.com'
 ];
 
+/**
+ * تاريخ آخر تعديل جوهري على الصفحة الرئيسية (web/index.html) وعلى web/about.html.
+ * يُستخدم `lastmod` لهذين المدخلين في خريطة الموقع وحدها. **حدّثه عند تغيير المحتوى** —
+ * لا يُشتقّ من تاريخ اليوم: lastmod يتغيّر كل يوم معناه أنه لا يعني شيئاً لمحرك البحث.
+ */
+const ABOUT_LASTMOD = '2026-10-24';
+
 module.exports = {
   SEED_REGION,
   SEED_TOWNS,
@@ -269,5 +276,6 @@ module.exports = {
   PHOTO_REPORT_REASONS,
   PHOTO_REPORT_HIDE_THRESHOLD,
   STORY_LINK_PLATFORMS,
-  STORY_THUMB_HOSTS
+  STORY_THUMB_HOSTS,
+  ABOUT_LASTMOD
 };

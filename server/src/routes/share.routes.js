@@ -104,6 +104,39 @@ function escapeHtml(value) {
 }
 
 /**
+ * Gregorian month names in Arabic, in calendar order. A fixed list rather than
+ * `Intl.DateTimeFormat`: the page may run on a Node image with a small ICU,
+ * and a locale table that silently falls back to «March» on an Arabic page is
+ * not a failure this page would notice. `ar` month names also differ by
+ * region (يناير vs كانون الثاني), and the wording here is the one the rest of
+ * the platform uses.
+ */
+const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+/**
+ * `YYYY-MM-DD` → «15 مارس 2024», assembled by hand from the three parts.
+ * NEVER `new Date(value)`: parsing that string yields UTC midnight, and
+ * formatting it back in a local timezone west of Greenwich moves the day back
+ * by one — a date shown on the wrong day is exactly the error this page
+ * cannot afford. `pool.js` already returns DATE columns as strings
+ * (`dateStrings: ['DATE']`); a `Date` instance can only arrive if that
+ * connection setting changes, and it is converted through UTC
+ * (`toISOString`), never local time, before the same string handling runs.
+ * Anything that is not exactly a date string returns '' so the caller omits
+ * the line instead of printing a broken date.
+ */
+function formatArabicDate(value) {
+  if (!value) return '';
+  const iso = value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) return '';
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  if (monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) return '';
+  return `${day} ${ARABIC_MONTHS[monthIndex]} ${match[1]}`;
+}
+
+/**
  * `#rrggbb` (or `#rgb`) + an 0–1 alpha → a CSS `rgba(...)` string — the same
  * conversion shareCard.service.js's own `withAlpha` performs for canvas
  * fills, needed again here for style-attribute strings since that module
@@ -156,7 +189,7 @@ const REASON_ICONS = {
 
 /**
  * What the platform gives someone who installs — never anything about the
- * one event this link is for, so the no-date/no-venue/no-phone rule above is
+ * one event this link is for, so the no-time/no-venue/no-phone rule is
  * untouched by this strip (product-owner decision: three reasons under the
  * call to action, since the page's real problem was never saying what the
  * app IS).
@@ -170,6 +203,48 @@ const REASONS = [
 function reasonsStrip() {
   return `<ul class="reasons">
 ${REASONS.map(r => `<li class="reason"><span class="glyph">${r.icon}</span><span>${escapeHtml(r.text)}</span></li>`).join('\n')}
+</ul>`;
+}
+
+/**
+ * «مناسبات أخرى» — internal links to other `/e/` pages in the same town or
+ * family, below the reasons strip. Nothing is printed when the list is empty:
+ * an empty section on a share page is a promise the page cannot keep.
+ *
+ * Each link reads «النوع في البلدة» — the type alone when the town is empty
+ * (a row that matched on family only), and the free title for a legacy row
+ * with no type. The trailing date follows the SAME rule as the page's own
+ * date: it appears only when THIS page's event has expired. An upcoming
+ * event's page therefore carries no date anywhere — its own or its
+ * neighbours' — which is what the whole-page date rule promises.
+ *
+ * The page's own row is skipped defensively even though the service's SQL
+ * already excludes it. Ids come from an integer column and are escaped like
+ * every other byte that lands inside `href="…"`.
+ */
+function relatedEventsSection(event, relatedEvents, siteUrl) {
+  const rows = (Array.isArray(relatedEvents) ? relatedEvents : [])
+    .filter(row => row && row.id !== event.id);
+  if (!rows.length) return '';
+
+  const items = rows.map(row => {
+    const type = row.occasion_type_name;
+    const town = row.town;
+    const label = type
+      ? (town ? `${type} في ${town}` : type)
+      : (row.title || '');
+    if (!label) return '';
+    const date = event.is_expired ? formatArabicDate(row.event_date) : '';
+    const text = date
+      ? `${escapeHtml(label)} — ${escapeHtml(date)}`
+      : escapeHtml(label);
+    return `<li><a class="related-link" href="${escapeHtml(`${siteUrl}/e/${row.id}`)}">${text}</a></li>`;
+  }).filter(Boolean);
+
+  if (!items.length) return '';
+  return `<h2 class="related-title">مناسبات أخرى</h2>
+<ul class="related">
+${items.join('\n')}
 </ul>`;
 }
 
@@ -193,12 +268,18 @@ function actionButtons({ downloadUrl, siteRootUrl }) {
  * occasion type leads instead: it is the one word that tells someone what they
  * were sent. Falls back to the title only for a legacy row with no type.
  *
- * Still no date, no venue, no phone in any text this file emits — the preview
- * copy, the meta tags, the page body. Those live in the app, and that friction
- * is the point of this page. What the generated card shows is a separate
- * question and a separate decision: the poster is drawn sharp there, so
- * anything a family printed on their own invitation is visible in it (see
- * shareCard.service.js). This file's own restraint is unchanged either way.
+ * The rule this file holds to is narrower than "no date at all": no time
+ * (`dinner_time`), no venue (`location_name`) and no phone number appear in
+ * any text this file emits — the preview copy, the meta tags, the page body.
+ * The town and the occasion type ARE shown on every page (that is what makes
+ * the page an archive entry rather than a bare poster), and the event's own
+ * DATE is shown as text on an expired event only, never on an upcoming one —
+ * the owner's explicit exception to ADR-0006, because sending a visitor to
+ * the app has no point once the occasion is over. What the generated card
+ * shows is a separate question and a separate decision: the poster is drawn
+ * sharp there, so anything a family printed on their own invitation is
+ * visible in it (see shareCard.service.js). This file's own restraint is
+ * unchanged either way.
  */
 function buildHeadline(event) {
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ');
@@ -268,6 +349,12 @@ function pageStyle(palette) {
   .body { padding: 20px 22px 26px; }
   .names { font-size: 25px; font-weight: 700; margin: 0; line-height: 1.5; }
   .clan { font-size: 15px; color: ${palette.faint}; margin: 7px 0 0; }
+  /* Place · occasion type — visible on every page, including an upcoming one:
+     it is what tells a crawler (and a visitor) that this URL is the town's
+     عرس, not a bare poster with two buttons. */
+  .where { font-size: 15px; color: ${palette.faint}; margin: 7px 0 0; }
+  /* Expired events only — an upcoming page prints no date anywhere. */
+  .expired-date { font-size: 14px; font-weight: 700; color: ${palette.accent}; margin: 10px 0 0; }
   .rule {
     width: 46px; height: 2px; margin: 18px auto 16px; border: 0; border-radius: 2px;
     background: ${palette.accent}; opacity: 0.75;
@@ -300,6 +387,20 @@ function pageStyle(palette) {
     display: flex; align-items: center; justify-content: center;
     background: ${withAlphaCss(palette.accent, 0.14)}; color: ${palette.accent};
   }
+  /* Other occasions — the archive's internal links. Same restrained surface
+     the reasons strip uses, one step larger: these are navigation, not a
+     bullet list of promises. */
+  .related-title { font-size: 15px; font-weight: 700; color: ${palette.ink}; margin: 22px 0 10px; }
+  .related {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 8px; text-align: start;
+  }
+  .related-link {
+    display: block; padding: 11px 14px; border-radius: 12px;
+    font-size: 14px; color: ${palette.ink}; text-decoration: none;
+    background: ${withAlphaCss(palette.accent, 0.08)};
+    border: 1px solid ${withAlphaCss(palette.accent, 0.22)};
+  }
   .mark {
     font-size: 12px; color: ${palette.faint}; opacity: 0.75;
     margin: 14px 0 0; letter-spacing: 0.3px;
@@ -330,13 +431,25 @@ function pageStyle(palette) {
  * below) — that is the one case where the size is unknown again, and the
  * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl }) {
+function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [] }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
   const typeName = event.occasion_type_name;
   const typeColour = safeHexColour(event.occasion_type_colour, palette.accent);
   const icon = event.occasion_type_icon;
+
+  // المكان والنوع مرئيان في كل صفحة — البلدة وحدها أو النوع وحده حين يغيب
+  // الآخر، ولا سطر فارغ حين يغيبان معاً.
+  const whereParts = [event.town, event.occasion_type_name].filter(Boolean);
+  const whereLine = whereParts.length
+    ? `<p class="where">${whereParts.map(escapeHtml).join(' · ')}</p>`
+    : '';
+  // تاريخ المناسبة نصاً للمنتهية وحدها. صفحة القادمة تبقى بلا أي تاريخ.
+  const expiredDate = event.is_expired ? formatArabicDate(event.event_date) : '';
+  const lead = event.is_expired
+    ? 'أُقيمت هذه المناسبة — التفاصيل الكاملة في التطبيق'
+    : 'التفاصيل الكاملة في التطبيق';
 
   // إثراء العنوان والوصف لمحركات البحث وجوجل (SEO)
   const titleParts = [headline];
@@ -348,11 +461,15 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
 
   // No structured-data block on this page, deliberately. JSON-LD is a
   // <script> tag, and a Schema.org Event carries the date and the venue — the
-  // two values this page exists to keep off the public web while the family's
-  // private invitation is still circulating. The page is a poster and two
-  // buttons, not a search-engine event record; the smoke test that asserts
-  // "no <script> tag" and "the venue never appears" is the rule, and it was
-  // being broken here rather than in the renderer.
+  // venue is one of the values this page still exists to keep off the public
+  // web while the family's private invitation is circulating. The event's own
+  // date is now printed as TEXT on an expired event only (the `.expired-date`
+  // line below) — an owner-approved exception to ADR-0006 that changes
+  // nothing about this decision: the page still emits no <script> tag at all
+  // (the CSP below is default-src 'none', and the smoke test asserts its
+  // absence), and the venue must never appear in any tag a crawler reads. The
+  // page is a poster, two buttons and a short list of related pages, not a
+  // search-engine event record.
   //
   // The type chip and the veil dress a *bare poster*, and the generated card
   // already carries its own type chip and name band — overlaying a second one
@@ -398,10 +515,13 @@ ${chip}
 <div class="body">
 <h1 class="names">${escapeHtml(names)}</h1>
 ${event.family_clan ? `<p class="clan">${escapeHtml(event.family_clan)}</p>` : ''}
+${whereLine}
+${expiredDate ? `<p class="expired-date">${escapeHtml(expiredDate)}</p>` : ''}
 <hr class="rule">
-<p class="lead">التفاصيل الكاملة في التطبيق</p>
+<p class="lead">${lead}</p>
 ${actionButtons({ downloadUrl, siteRootUrl })}
 ${reasonsStrip()}
+${relatedEventsSection(event, relatedEvents, siteRootUrl)}
 <p class="mark">${palette.wordmark}</p>
 </div>
 </main>
@@ -673,6 +793,21 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
     return;
   }
 
+  // «مناسبات أخرى» is an enhancement, never a requirement: a failing lookup
+  // must leave the page standing (with no section) rather than turn a shared
+  // link into a 500.
+  let relatedEvents = [];
+  try {
+    relatedEvents = await events.listRelatedEvents({
+      town: event.town,
+      familyClan: event.family_clan,
+      excludeId: event.id,
+      limit: 6
+    });
+  } catch (err) {
+    logger.error(`[share] related events lookup failed for event ${event.id}: ${err.message}`);
+  }
+
   // Count-only, on purpose (issue #44 — the governing rule: record what a
   // person DID, never what they READ): this page has zero <script> tags
   // (CSP below is default-src 'none'), so a client-side beacon is impossible
@@ -708,7 +843,7 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
     .status(200)
     .set('Content-Security-Policy', SHARE_CSP)
     .set('Content-Type', 'text/html; charset=utf-8')
-    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl }));
+    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents }));
 }));
 
 /**
