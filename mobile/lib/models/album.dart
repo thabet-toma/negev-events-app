@@ -17,6 +17,12 @@ class EventAlbum {
   final String? eventTitle;
   final String? town;
   final String? eventDate;
+  /// اسم صاحب الألبوم حين يكون الألبوم بلا مناسبة (`honoree_name`): الحقل يأتي
+  /// من الخادم لألبوم `event_id = NULL` وحده، ويبقى null في ألبوم المناسبة.
+  final String? honoreeName;
+  /// الشخص المربوط بالألبوم (`person.name`) — يحمل الاسم نفسه في الغالب، ويُقرأ
+  /// احتياطاً حين يغيب `honoree_name` كي لا يبقى سطر البطاقة بلا اسم.
+  final String? personName;
 
   const EventAlbum({
     required this.id,
@@ -31,10 +37,33 @@ class EventAlbum {
     this.eventTitle,
     this.town,
     this.eventDate,
+    this.honoreeName,
+    this.personName,
   });
+
+  /// ألبومٌ له مناسبة (`event_id` موجب — يُقرأ من `event.id` حين يغيب الحقل
+  /// صراحةً) أم ألبومٌ بلا مناسبة (`event_id: null` + `event: null`).
+  /// `eventId` يبقى `int` كما هو — صفراً حين لا مناسبة، فلا يصير `int?` ويكسر
+  /// كل قارئ له.
+  bool get hasEvent => eventId > 0;
+
+  /// السطر الثاني في بطاقة الألبوم: عنوان المناسبة وبلدتها، واسم العريس وبلدته
+  /// حين لا مناسبة — لا سطرٌ فارغ ولا «null» ولا صفر. فارغُ المحتوى يبقى فارغاً
+  /// هنا، وعلى الشاشة أن تخفيه بدل أن ترسم سطراً أبيض.
+  String get contextLine => _joinLine(
+        hasEvent ? [eventTitle, town] : [honoreeName ?? personName, town],
+      );
+
+  /// سطر رأس تفاصيل الألبوم: أعلاه، وتاريخ المناسبة يُضاف في ألبومها وحده.
+  String get detailLine => _joinLine(
+        hasEvent
+            ? [eventTitle, town, eventDate]
+            : [honoreeName ?? personName, town],
+      );
 
   factory EventAlbum.fromJson(Map<String, dynamic> json) {
     final event = json['event'] is Map ? json['event'] as Map : const {};
+    final person = json['person'] is Map ? json['person'] as Map : const {};
     return EventAlbum(
       id: _toInt(json['id']),
       eventId: _toInt(json['event_id'] ?? event['id']),
@@ -46,11 +75,20 @@ class EventAlbum {
       coverThumbUrl: _nullableString(json['cover_thumb_url']),
       shareUrl: _nullableString(json['share_url']),
       eventTitle: _nullableString(event['title'] ?? json['event_title']),
-      town: _nullableString(event['town'] ?? json['town']),
+      // بلدة الألبوم أولاً: ألبومٌ بلا مناسبة لا `event` له، وبلدة المناسبة
+      // سقوطٌ للخادم الذي يسبق الحقل (وقيمته هي نفسها في ألبوم المناسبة).
+      town: _nullableString(json['town'] ?? event['town']),
       eventDate: _nullableString(event['event_date'] ?? json['event_date']),
+      honoreeName: _nullableString(json['honoree_name']),
+      personName: _nullableString(person['name']),
     );
   }
 }
+
+String _joinLine(Iterable<String?> parts) => parts
+    .whereType<String>()
+    .where((part) => part.isNotEmpty)
+    .join(' · ');
 
 class PhotoTag {
   final String name;

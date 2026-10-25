@@ -831,9 +831,16 @@ CREATE TABLE IF NOT EXISTS live_poll_votes (
 -- مناسبة — ألبوم افتراضي واحد يُنشأ عند أول رفع، والجدول يسمح بأكثر من
 -- ألبوم (الحنّة، العرس…) بلا ترحيل جديد. لا سقف لعدد الصور (قرار المالك
 -- 2026-10)؛ الحماية الوحيدة تقنية: دفعة توقيع ٢٠ صورة في الطلب الواحد.
+--
+-- والألبوم صار له وجهان (2026-10): ألبوم مناسبة (`event_id`)، وألبوم باسم
+-- العريس بلا مناسبة (`event_id` = NULL): `person_id` صاحبه من `people`،
+-- و`town` بلدته. «مناسبة أو شخص» قاعدة يفرضها الكود لا القاعدة — كل ألبوم
+-- بلا مناسبة يحمل `person_id`، و`town` إلزامية لأدمن بلدة.
 CREATE TABLE IF NOT EXISTS event_albums (
   id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  event_id     INT UNSIGNED NOT NULL,
+  event_id     INT UNSIGNED DEFAULT NULL,
+  person_id    INT UNSIGNED DEFAULT NULL,
+  town         VARCHAR(100) DEFAULT NULL,
   title        VARCHAR(200) NOT NULL,
   description  TEXT         DEFAULT NULL,
   is_published TINYINT(1)   NOT NULL DEFAULT 1,
@@ -842,8 +849,10 @@ CREATE TABLE IF NOT EXISTS event_albums (
   updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_event_albums_event (event_id),
+  KEY idx_event_albums_person (person_id),
   KEY idx_event_albums_published (is_published),
   CONSTRAINT fk_event_albums_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_albums_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL,
   CONSTRAINT fk_event_albums_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -853,9 +862,11 @@ CREATE TABLE IF NOT EXISTS event_albums (
 -- searchable name; caption_key is nameKey(caption) so «فاطمه» meets
 -- «فاطمة». status hides a photo without deleting it (reports, takedown),
 -- position orders the album, and is_cover marks the album's single cover.
+-- event_id is nullable because the album itself may have no event (an
+-- honoree album); the photo's own event_id mirrors its album's.
 CREATE TABLE IF NOT EXISTS event_photos (
   id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  event_id     INT UNSIGNED NOT NULL,
+  event_id     INT UNSIGNED DEFAULT NULL,
   album_id     INT UNSIGNED DEFAULT NULL,
   public_id    VARCHAR(255) NOT NULL,
   image_url    VARCHAR(500) NOT NULL,

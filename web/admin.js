@@ -2408,6 +2408,25 @@ function adminAlbumsNotice(message, ok = true) {
 }
 
 /**
+ * ألبوم بلا مناسبة (2026-10): لا عنوان مناسبة له ولا «مناسبة #…» — صاحبه
+ * `honoree_name` (اسم العريس من `people` لا من `title` الحرّ) وبلدته `town`.
+ * يُرجع `{ name, town }` لهما كي يعرضهما رأس التفاصيل وبطاقة الألبوم مكان
+ * عنوان المناسبة، و`null` لألبوم المناسبة فيبقى عرضه كما كان حرفياً.
+ */
+function adminAlbumHonoree(album) {
+  if (!album || album.event_id !== null) return null;
+  const name = String(album.honoree_name || (album.person && album.person.name) || '').trim();
+  const town = String(album.town || '').trim();
+  return name || town ? { name, town } : null;
+}
+
+/** سطر «أحمد · رهط» لصاحب الألبوم بلا مناسبة — وفارغ لألبوم المناسبة. */
+function adminAlbumHonoreeLine(album) {
+  const honoree = adminAlbumHonoree(album);
+  return honoree ? [honoree.name, honoree.town].filter(Boolean).join(' · ') : '';
+}
+
+/**
  * One line for the albums picker: النوع — أصحاب المناسبة — البلدة — التاريخ (الحالة).
  *
  * `title` is a free-text field that usually carries nothing but the town name
@@ -2578,28 +2597,57 @@ async function openAdminEventAlbums() {
   }
 }
 
-function renderAdminAlbums() {
+/**
+ * ألبومات العريس (بلا مناسبة) — المدخل الثاني للشبكة (2026-10): شبكة التبويب
+ * تُبنى من ألبومات مناسبة واحدة، و`event_id = NULL` لا مناسبة له، فلا يبقى
+ * لألبوم العريس مدخل بعد مغادرة صفحته. البطاقات نفسها (`renderAdminAlbums`)
+ * كي يبقى زرّ «فتح» على `openAdminAlbum(id)` نفسه.
+ */
+async function openAdminHonoreeAlbums() {
+  const emptyMessage = 'لا ألبومات بلا مناسبة بعد — أنشئ ألبوماً باسم العريس من الزرّ المجاور.';
+  adminAlbumsNotice('جاري تحميل ألبومات العريس...', true);
+  try {
+    const res = await adminFetch('/api/admin/albums?without_event=1');
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل ألبومات العريس');
+    adminAlbumListCache = Array.isArray(data.albums) ? data.albums : [];
+    renderAdminAlbums(emptyMessage);
+    adminAlbumsNotice(adminAlbumListCache.length ? '' : emptyMessage, adminAlbumListCache.length > 0);
+  } catch (err) {
+    adminAlbumsNotice(arabicErrorMessage(err, 'تعذّر تحميل ألبومات العريس'), false);
+  }
+}
+
+function renderAdminAlbums(emptyMessage = 'لا ألبومات بعد — سيُنشأ الألبوم الافتراضي عند أول فتح، أو أضف ألبوماً جديداً.') {
   const box = document.getElementById('adminAlbumsList');
   if (!box) return;
   if (!adminAlbumListCache.length) {
-    box.innerHTML = '<div class="empty-state" style="padding:26px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-folder-open" style="font-size:2rem; color:var(--gold-main);"></i><p>لا ألبومات بعد — سيُنشأ الألبوم الافتراضي عند أول فتح، أو أضف ألبوماً جديداً.</p></div>';
+    box.innerHTML = `<div class="empty-state" style="padding:26px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-folder-open" style="font-size:2rem; color:var(--gold-main);"></i><p>${escapeHtml(emptyMessage)}</p></div>`;
     return;
   }
-  box.innerHTML = adminAlbumListCache.map(album => `
+  box.innerHTML = adminAlbumListCache.map(album => {
+    // ألبوم بلا مناسبة (2026-10): اسم العريس وبلدته مكان عنوان المناسبة.
+    const honoree = adminAlbumHonoreeLine(album);
+    return `
     <article class="admin-album-card">
       <span class="admin-album-cover">${album.cover_thumb_url || album.cover_url ? `<img src="${escapeHtml(album.cover_thumb_url || album.cover_url)}" alt="" loading="lazy">` : '<i class="fa-solid fa-images"></i>'}</span>
       <div class="admin-album-body">
         <h3>${escapeHtml(album.title || 'ألبوم عرس')}</h3>
-        <p>${Number(album.photo_count) || 0} صورة${album.is_published === false ? ' · غير منشور' : ''}</p>
+        <p>${honoree ? `${escapeHtml(honoree)} · ` : ''}${Number(album.photo_count) || 0} صورة${album.is_published === false ? ' · غير منشور' : ''}</p>
         <div class="admin-album-actions">
           <button type="button" class="admin-btn-ghost" onclick="openAdminAlbum(${Number(album.id)})"><i class="fa-solid fa-folder-open"></i> فتح</button>
           ${isSuperAdminRole() ? `<button type="button" class="btn-reject" onclick="deleteAdminAlbum(${Number(album.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>` : ''}
         </div>
       </div>
     </article>
-  `).join('');
+  `;
+  }).join('');
 }
 
+/**
+ * قارئ التفاصيل يعيد الألبوم بشكله العام نفسه — اسم صاحبه وبلدته معه بعد إعادة
+ * فتحه أو إعادة تحميل الصفحة، لا من ردّ الإنشاء وحده (2026-10).
+ */
 async function openAdminAlbum(albumId) {
   const detail = document.getElementById('adminAlbumDetail');
   if (!detail) return;
@@ -2626,9 +2674,21 @@ function renderAdminAlbumDetail() {
   const title = document.getElementById('adminAlbumDetailTitle');
   const meta = document.getElementById('adminAlbumDetailMeta');
   if (title) title.innerHTML = `<i class="fa-solid fa-images"></i> ${escapeHtml(adminAlbumCurrent.title || 'ألبوم عرس')}`;
-  if (meta) meta.textContent = `${adminAlbumPhotoCache.length} صورة · ${Number(adminAlbumCurrent.is_published) === 0 ? 'غير منشور' : 'منشور'}`;
+  // ألبوم بلا مناسبة (2026-10): الرأس يقول اسم العريس وبلدته بدل عنوان مناسبة غير موجود.
+  const honoree = adminAlbumHonoreeLine(adminAlbumCurrent);
+  const published = Number(adminAlbumCurrent.is_published) === 0 ? 'غير منشور' : 'منشور';
+  if (meta) meta.textContent = [honoree ? `بلا مناسبة · العريس: ${honoree}` : '', `${adminAlbumPhotoCache.length} صورة`, published].filter(Boolean).join(' · ');
+  // معرّف الألبوم على زرّ الحذف نفسه (2026-10): الزرّ في رأس اللوحة لا يعرف
+  // ألبوماً غير المفتوح، ونداؤه بلا معرّف كان يبني `DELETE …/NaN` فيردّ 400.
   const deleteBtn = document.getElementById('adminAlbumDeleteBtn');
-  if (deleteBtn) deleteBtn.style.display = isSuperAdminRole() ? 'inline-flex' : 'none';
+  if (deleteBtn) {
+    deleteBtn.dataset.albumId = adminAlbumCurrent.id;
+    deleteBtn.style.display = isSuperAdminRole() ? 'inline-flex' : 'none';
+  }
+  // «ألبوم جديد» ينشئ على المناسبة المفتوحة في المنتقي، وألبوم بلا مناسبة لا مناسبة
+  // له — فيُخفى بدل أن ينشئ على مناسبة قديمة بلا أن يدري الأدمن.
+  const newAlbumBtn = document.getElementById('adminAlbumNewBtn');
+  if (newAlbumBtn) newAlbumBtn.style.display = adminAlbumCurrent.event_id === null ? 'none' : 'inline-flex';
   renderAdminAlbumPhotos();
 }
 
@@ -2639,11 +2699,14 @@ function renderAdminAlbumPhotos() {
     box.innerHTML = '<div class="empty-state" style="padding:28px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-cloud-arrow-up" style="font-size:2rem; color:var(--gold-main);"></i><p>لا صور في هذا الألبوم — ارفع أول صورة.</p></div>';
     return;
   }
+  // ألبومات النقل في هذا الصفّ هي ألبومات المناسبة المفتوحة؛ ألبوم بلا مناسبة
+  // (2026-10) لا قائمة مناسبة له، فيُخفى المنتقي بدل قائمة فارغة أو من مناسبة أخرى.
+  const hideMove = Boolean(adminAlbumCurrent && adminAlbumCurrent.event_id === null);
   box.innerHTML = adminAlbumPhotoCache.map(photo => {
     const cover = photo.is_cover ? '<span class="admin-photo-cover-badge">الغلاف</span>' : '';
     const status = photo.status === 'hidden' ? 'مخفية' : 'ظاهرة';
     const tags = Array.isArray(photo.tags) ? photo.tags : [];
-    const albumOptions = adminAlbumListCache.map(album => `<option value="${Number(album.id)}" ${Number(album.id) === Number(photo.album_id) ? 'selected' : ''}>${escapeHtml(album.title || 'ألبوم')}</option>`).join('');
+    const albumOptions = hideMove ? '' : adminAlbumListCache.map(album => `<option value="${Number(album.id)}" ${Number(album.id) === Number(photo.album_id) ? 'selected' : ''}>${escapeHtml(album.title || 'ألبوم')}</option>`).join('');
     return `
       <article class="admin-album-photo-card" data-photo-id="${Number(photo.id)}">
         <div class="admin-album-photo-media">
@@ -2654,7 +2717,7 @@ function renderAdminAlbumPhotos() {
         <input type="text" class="admin-photo-caption" value="${escapeHtml(photo.caption || '')}" maxlength="200" placeholder="عنوان الصورة (بحث)" onchange="saveAdminPhotoCaption(${Number(photo.id)}, this.value)">
         ${tags.length ? `<div class="admin-photo-tags">${tags.map(tag => `<span class="admin-photo-tag ${tag.status === 'pending' ? 'pending' : ''}">${escapeHtml(tag.name)}${tag.status === 'pending' ? ' · معلّق' : ''}</span>`).join('')}</div>` : ''}
         <div class="admin-photo-row">
-          <select class="admin-photo-move" onchange="moveAdminPhoto(${Number(photo.id)}, this.value)" aria-label="نقل إلى ألبوم">${albumOptions}</select>
+          ${hideMove ? '' : `<select class="admin-photo-move" onchange="moveAdminPhoto(${Number(photo.id)}, this.value)" aria-label="نقل إلى ألبوم">${albumOptions}</select>`}
           <button type="button" class="admin-btn-ghost" onclick="setAdminPhotoCover(${Number(photo.id)})" ${photo.is_cover ? 'disabled' : ''}><i class="fa-solid fa-star"></i> غلاف</button>
         </div>
         <div class="admin-photo-actions">
@@ -2787,6 +2850,129 @@ async function createAdminAlbum() {
     showAdminNotice('تم إنشاء الألبوم.', 'تم');
   } catch (err) {
     showAdminNotice(arabicErrorMessage(err, 'تعذّر إنشاء الألبوم'), 'خطأ');
+  }
+}
+
+// --- ألبوم باسم العريس بلا مناسبة (2026-10) ---------------------------
+
+// نصّ زرّ الإنشاء كما في النافذة — يُستعاد بعد كل محاولة، نفس نمط أزرار اللوحة.
+const HONOREE_ALBUM_SUBMIT_TEXT = '<i class="fa-solid fa-check"></i> إنشاء الألبوم وفتحه';
+
+/**
+ * منتقي بلدة ألبوم العريس: بلدات هذا الأدمن وحده (`GET /api/admin/me`)،
+ * وللسوبر أدمن كل البلدات مع بند «بلا بلدة». النطاق نفسه يفرضه الخادم، ولا
+ * يُعاد بناؤه هنا — الأدمن المحلي بلا بلدات يقرأ ذلك في السطر تحت الحقل.
+ */
+function renderHonoreeAlbumTownOptions() {
+  const select = document.getElementById('honoreeAlbumTown');
+  const hint = document.getElementById('honoreeAlbumTownHint');
+  if (!select) return;
+
+  if (isSuperAdminRole()) {
+    select.innerHTML = '<option value="">بلا بلدة</option>'
+      + TOWNS.map(town => `<option value="${escapeHtml(town)}">${escapeHtml(town)}</option>`).join('');
+    select.value = '';
+    if (hint) hint.textContent = 'اختياري للسوبر أدمن — «بلا بلدة» ألبوم لا يتبع أي بلدة.';
+    return;
+  }
+
+  const towns = deriveScopedTowns();
+  select.innerHTML = towns.length
+    ? towns.map(town => `<option value="${escapeHtml(town)}">${escapeHtml(town)}</option>`).join('')
+    : '<option value="">لا بلدات مسنَدة لحسابك</option>';
+  if (towns.length) select.value = towns[0];
+  if (hint) {
+    hint.textContent = towns.length
+      ? 'بلداتك فقط — أي بلدة خارجها يرفضها الخادم.'
+      : 'لا بلدات مسنَدة لحسابك بعد — يلزم أن يُسنِد السوبر أدمن بلدة قبل إنشاء الألبوم.';
+  }
+}
+
+function setHonoreeAlbumError(message) {
+  const el = document.getElementById('honoreeAlbumError');
+  if (!el) return;
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+}
+
+/** يفتح نافذة «ألبوم باسم العريس» بحقول فارغة وقائمة بلدات طازجة (لا `prompt()`). */
+function openHonoreeAlbumModal() {
+  const modal = document.getElementById('honoreeAlbumModal');
+  if (!modal) return;
+  const nameInput = document.getElementById('honoreeAlbumName');
+  const titleInput = document.getElementById('honoreeAlbumTitleInput');
+  if (nameInput) nameInput.value = '';
+  if (titleInput) titleInput.value = '';
+  renderHonoreeAlbumTownOptions();
+  setHonoreeAlbumError('');
+  const btn = document.getElementById('honoreeAlbumSubmitBtn');
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = HONOREE_ALBUM_SUBMIT_TEXT;
+  }
+  modal.style.display = 'flex';
+  if (nameInput) nameInput.focus();
+}
+
+function closeHonoreeAlbumModal() {
+  const modal = document.getElementById('honoreeAlbumModal');
+  if (modal) modal.style.display = 'none';
+  setHonoreeAlbumError('');
+}
+
+/**
+ * POST /api/admin/albums — الخادم وحده يقرّر البلدة المسموحة والعنوان الافتراضي
+ * («عرس الاسم»)، وهنا يُرسَل ما كتبه الأدمن فقط. النجاح يغلق النافذة ويفتح
+ * الألبوم الجديد في شاشة التفاصيل القائمة ليرفع فيه الصور بمسار الرفع نفسه.
+ */
+async function handleCreateHonoreeAlbum(event) {
+  if (event) event.preventDefault();
+  const nameInput = document.getElementById('honoreeAlbumName');
+  const name = (nameInput && nameInput.value || '').trim();
+  if (!name) {
+    setHonoreeAlbumError('اسم العريس مطلوب.');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  const townSelect = document.getElementById('honoreeAlbumTown');
+  const titleInput = document.getElementById('honoreeAlbumTitleInput');
+  const payload = {
+    honoree_name: name,
+    town: (townSelect && townSelect.value || '').trim()
+  };
+  const title = (titleInput && titleInput.value || '').trim();
+  if (title) payload.title = title;
+
+  const btn = document.getElementById('honoreeAlbumSubmitBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإنشاء...';
+  }
+  setHonoreeAlbumError('');
+  try {
+    const res = await adminFetch('/api/admin/albums', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر إنشاء الألبوم');
+    const albumId = data.album && data.album.id ? Number(data.album.id) : null;
+    closeHonoreeAlbumModal();
+    showAdminNotice('تم إنشاء الألبوم.', 'تم');
+    if (albumId) {
+      await openAdminAlbum(albumId);
+      const detail = document.getElementById('adminAlbumDetail');
+      if (detail && typeof detail.scrollIntoView === 'function') detail.scrollIntoView({ block: 'start' });
+    }
+  } catch (err) {
+    setHonoreeAlbumError(arabicErrorMessage(err, 'تعذّر إنشاء الألبوم'));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = HONOREE_ALBUM_SUBMIT_TEXT;
+    }
   }
 }
 

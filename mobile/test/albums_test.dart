@@ -102,6 +102,109 @@ void main() {
     });
   });
 
+  group('ألبوم بلا مناسبة (event_id: null، ADR-0009)', () {
+    // الشكل الجديد من الخادم: ألبوم باسم العريس، `event` صار null بدل كائن،
+    // والبلدة واسم العريس أعلى الكائن. لا يجب أن يسقط أيٌّ منهما على الأرض.
+    Map<String, dynamic> payload({String? town = 'رهط'}) => {
+          'id': 21,
+          'event_id': null,
+          'title': 'عرس أحمد أبو سليمان',
+          'description': 'صور الحنّة',
+          'is_published': true,
+          'photo_count': 3,
+          'cover_url': 'https://cdn.test/cover.jpg',
+          'cover_thumb_url': 'https://cdn.test/cover-thumb.jpg',
+          'share_url': 'https://munasbat.test/a/21',
+          'created_at': '2026-10-01T10:00:00.000Z',
+          'town': town,
+          'honoree_name': 'أحمد أبو سليمان',
+          'person': {'id': 9, 'name': 'أحمد أبو سليمان'},
+          'event': null,
+        };
+
+    test('fromJson يقرأ البلدة واسم العريس، وeventId يبقى int صفراً', () {
+      final album = EventAlbum.fromJson(payload());
+
+      expect(album.hasEvent, isFalse);
+      expect(album.eventId, 0, reason: 'int لا null — صفراً حين لا مناسبة');
+      expect(album.town, 'رهط', reason: 'البلدة أعلى الكائن، لا في event الغائب');
+      expect(album.honoreeName, 'أحمد أبو سليمان');
+      expect(album.personName, 'أحمد أبو سليمان');
+      expect(album.eventTitle, isNull);
+      expect(album.eventDate, isNull);
+      expect(album.contextLine, 'أحمد أبو سليمان · رهط');
+      expect(album.detailLine, 'أحمد أبو سليمان · رهط');
+    });
+
+    test('رسالة المشاركة: العنوان — البلدة، بلا فاصل معلّق ولا سطر فارغ', () {
+      final message = albumShareMessage(EventAlbum.fromJson(payload()));
+      final lines = message.split('\n');
+
+      expect(lines, hasLength(2));
+      expect(lines.first, 'عرس أحمد أبو سليمان — رهط',
+          reason: 'المناسبة غابت فبقي العنوان والبلدة — لا « · » معلّقة');
+      expect(lines.last, 'https://munasbat.test/a/21');
+      expect(lines.first.contains(' · '), isFalse);
+      expect(message.contains('— \n'), isFalse);
+      expect(message.contains('null'), isFalse);
+    });
+
+    test('بلا بلدة أيضاً: البلدة تسقط ولا يبقى فاصل', () {
+      final album = EventAlbum.fromJson(payload(town: null));
+
+      expect(album.town, isNull);
+      expect(album.contextLine, 'أحمد أبو سليمان',
+          reason: 'السطر الثاني يبقى اسماً لا فراغاً');
+      expect(albumShareMessage(album).split('\n').first, 'عرس أحمد أبو سليمان',
+          reason: 'عنوان لا بلدة — بلا «—» في آخره');
+    });
+
+    test('سقوط person.name حين يغيب honoree_name', () {
+      final album = EventAlbum.fromJson({
+        'id': 22,
+        'event_id': null,
+        'title': 'عرس سالم',
+        'town': 'تل السبع',
+        'honoree_name': null,
+        'person': {'id': 10, 'name': 'سالم أبو كف'},
+        'event': null,
+      });
+
+      expect(album.hasEvent, isFalse);
+      expect(album.honoreeName, isNull);
+      expect(album.personName, 'سالم أبو كف');
+      expect(album.contextLine, 'سالم أبو كف · تل السبع');
+    });
+
+    test('ألبوم المناسبة كما هو: event كامل، وشكل السطر لا يتغيّر', () {
+      final album = EventAlbum.fromJson({
+        'id': 11,
+        'event_id': 5,
+        'title': 'ألبوم الحنّة',
+        'town': 'رهط',
+        'honoree_name': null,
+        'person': null,
+        'event': {
+          'id': 5,
+          'title': 'عرس أحمد',
+          'town': 'رهط',
+          'event_date': '2025-05-01',
+        },
+      });
+
+      expect(album.hasEvent, isTrue);
+      expect(album.eventId, 5);
+      expect(album.eventTitle, 'عرس أحمد');
+      expect(album.eventDate, '2025-05-01');
+      expect(album.honoreeName, isNull);
+      expect(album.personName, isNull);
+      expect(album.contextLine, 'عرس أحمد · رهط',
+          reason: 'بلدة المناسبة نفسها من أعلى الكائن — لا تكرار');
+      expect(album.detailLine, 'عرس أحمد · رهط · 2025-05-01',
+          reason: 'التاريخ في رأس التفاصيل وحده');
+    });
+  });
+
   group('مشاركة الألبوم والصورة (تذكرة #103)', () {
     EventAlbum album({String? shareUrl}) => EventAlbum(
           id: 11,

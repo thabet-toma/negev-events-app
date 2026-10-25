@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../api/negev_api.dart' show NegevApi, Village;
@@ -108,11 +109,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   List<int> _selectedVillageIds = const [];
   List<int> _selectedOccasionTypeIds = const [];
   String _search = '';
+  /// النصّ الذي طُلبت به آخر صفحة أولى فعلاً. الكتابة ثم العودة إلى النصّ نفسه
+  /// (مسافة زائدة أُضيفت أو حُذفت) ليست بحثاً جديداً، فلا تُعيد الجلب ولا تقفز
+  /// بالكرت المعروض إلى أوّل القائمة.
+  String _appliedSearch = '';
   bool _archive = false;
 
   /// `null` = كل التواريخ.
   FeedDateFilter? _dateFilter;
-  /// إظهار/إخفاء الكروم العلوي (الفلاتر وشريط القصص والبحث) — مخفي افتراضياً
+  /// إظهار/إخفاء لوح الفلاتر والبحث — مخفي افتراضياً
   /// لعرض الكروت ملء الشاشة بتمرير عمودي، ويظهر بكبسة زر طافٍ.
   bool _showTopChrome = false;
   Timer? _debounce;
@@ -122,8 +127,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   Future<List<Story>>? _stories;
 
-  /// حالة البث لزر التغذية وشارتها — `null` قبل أول ردّ أو عند فشله،
-  /// والزر ظاهر وقابل للكبس في الحالتين.
+  /// حالة البث لكبسة الشريط وشارتها — `null` قبل أول ردّ أو عند فشله،
+  /// والكبسة ظاهرة وقابلة للكبس في الحالتين.
   LiveChannel? _liveChannel;
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
@@ -150,6 +155,18 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// يتجاهل نتيجته إن وصلت بعد أن بدأ طلب أحدث (فلتر آخر تغيّر أثناء
   /// انتظاره)، بدل أن يُلحِق صفحة من فلتر قديم بقائمة الفلتر الجديد.
   int _requestGeneration = 0;
+
+  /// لقطة ما كان معروضاً قبل آخر تغيير فلتر فعلي (مكان/نوع/تاريخ/أرشفة/مسح):
+  /// زرّ الرجوع في الرسالة يعيدها كاملة بـ`setState` و`jumpToPage` بلا طلب
+  /// شبكة. `null` = لا شيء يُعاد إليه، فلا تُعرض الرسالة.
+  _ResultsSnapshot? _snapshot;
+
+  /// هل تنتظر اللقطة وصول نتائج التغيير كي تُعرض رسالة الرجوع؟ تُطفأ بعد العرض.
+  bool _snapshotPending = false;
+
+  /// `onPageChanged` الناتج عن `jumpToPage` في `_restoreSnapshot` لا يجوز أن
+  /// يُطلق جلب «المزيد» — الرجوع للقطة بلا أي طلب شبكة.
+  bool _restoringSnapshot = false;
 
   /// المشغّل المشترك — يُلتقط هنا لأنّ `dispose` لا يجوز له قراءة الشجرة.
   AudioCoordinator? _audio;
@@ -244,7 +261,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     });
   }
 
-  /// GET /api/live للكبسة الرابعة. الفشل صامت: الكبسة تبقى بلا شارة.
+  /// GET /api/live لكبسة البث في شريط الستوريات. الفشل صامت: الكبسة تبقى بلا
+  /// شارة.
   Future<void> _loadLiveChannel() async {
     try {
       final channel = await AppServices.of(context).api.liveChannel();
@@ -352,6 +370,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       }
       _currentPage = 0;
       _autoplayCurrent();
+      // بعد وصول نتائج التغيير لا قبله — رسالة على شاشة قد تُلغى بخطأ الطلب
+      // لا معنى لها.
+      _showSnapshotReturn();
     } catch (error) {
       if (!mounted || generation != _requestGeneration) return;
       setState(() {
@@ -359,6 +380,74 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         _initialLoading = false;
       });
     }
+  }
+
+  /// يلتقط ما هو معروض الآن قبل أي تغيير فلتر فعلي — القائمة وموضعها والفلتر
+  /// كاملاً — كي يُعاد المستخدم إلى نتائجه بضغطة واحدة.
+  void _captureSnapshot() {
+    _snapshot = _ResultsSnapshot(
+      events: _events,
+      pagination: _pagination,
+      index: _currentPage < _events.length ? _currentPage : 0,
+      search: _search,
+      towns: _selectedTowns,
+      villages: _selectedVillageIds,
+      kinds: _selectedOccasionTypeIds,
+      archive: _archive,
+      dateFilter: _dateFilter,
+    );
+    _snapshotPending = true;
+  }
+
+  /// رسالة «رجوع لنتائجك السابقة» تُعرض **بعد** وصول نتائج التغيير. تُستبدل
+  /// اللقطة بأحدثها في كل تغيير، ولا رسالة حين لا لقطة ذات نتائج (تغيير فلتر
+  /// على تغذية فارغة لا شيء يُعاد إليه).
+  void _showSnapshotReturn() {
+    if (!_snapshotPending) return;
+    _snapshotPending = false;
+    final snapshot = _snapshot;
+    if (snapshot == null || snapshot.events.isEmpty || !mounted) return;
+    showMessage(
+      context,
+      'حُدِّثت نتائج الفلتر',
+      action: SnackBarAction(
+        label: '↩ رجوع لنتائجك السابقة',
+        textColor: context.c.sky,
+        onPressed: _restoreSnapshot,
+      ),
+    );
+  }
+
+  /// إعادة اللقطة كاملةً — القائمة والموضع والفلتر ونصّ البحث — بلا أي طلب
+  /// شبكة. تُلغى مهلة البحث المعلّقة كي لا يصل طلب بعد الرجوع فيغيّر ما عاد.
+  void _restoreSnapshot() {
+    final snapshot = _snapshot;
+    if (snapshot == null || !mounted) return;
+    _debounce?.cancel();
+    setState(() {
+      _events = snapshot.events;
+      _pagination = snapshot.pagination;
+      _search = snapshot.search;
+      _appliedSearch = snapshot.search;
+      _searchController.text = snapshot.search;
+      _selectedTowns = snapshot.towns;
+      _selectedVillageIds = snapshot.villages;
+      _selectedOccasionTypeIds = snapshot.kinds;
+      _archive = snapshot.archive;
+      _dateFilter = snapshot.dateFilter;
+      _currentPage = snapshot.index;
+      _snapshot = null;
+      _snapshotPending = false;
+    });
+    // القفزة بعد إعادة البناء: `PageView` ما زال على عدد كروت الفلتر الجديد
+    // داخل هذه اللحظة، فالقفز قبله يُقصّ إلى آخر كرت متاح.
+    _restoringSnapshot = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_pageController.hasClients) _pageController.jumpToPage(snapshot.index);
+      _restoringSnapshot = false;
+      _autoplayCurrent();
+    });
   }
 
   /// تحديث الصفحة الأولى بلا مؤشّر تحميل ولا قفز إلى أوّل القائمة: الكرت
@@ -431,7 +520,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
-      _search = value;
+      // النصّ نفسه بعد trim ليس بحثاً جديداً: النتائج المعروضة هي نتائجه أصلاً،
+      // فلا جلب ولا قفز إلى أول القائمة.
+      final next = value.trim();
+      if (next == _appliedSearch) return;
+      _search = next;
+      _appliedSearch = next;
       _loadFirstPage();
     });
   }
@@ -536,10 +630,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       selected: selected,
     );
     if (result == null || !mounted) return;
+    final towns = result.where((t) => t.kind == 'town').map((t) => t.id as String).toList();
+    final villages = result.where((t) => t.kind == 'village').map((t) => t.id as int).toList();
+    // «تطبيق» بلا تغيير فعلي ليس تغيير فلتر — لا لقطة ولا جلب ولا قفز.
+    if (listEquals(towns, _selectedTowns) && listEquals(villages, _selectedVillageIds)) {
+      return;
+    }
+    _captureSnapshot();
     setState(() {
-      _selectedTowns = result.where((t) => t.kind == 'town').map((t) => t.id as String).toList();
-      _selectedVillageIds =
-          result.where((t) => t.kind == 'village').map((t) => t.id as int).toList();
+      _selectedTowns = towns;
+      _selectedVillageIds = villages;
     });
     _loadFirstPage();
   }
@@ -557,8 +657,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       selected: selected,
     );
     if (result == null || !mounted) return;
+    final kinds = result.map((t) => t.id as int).toList();
+    if (listEquals(kinds, _selectedOccasionTypeIds)) return;
+    _captureSnapshot();
     setState(() {
-      _selectedOccasionTypeIds = result.map((t) => t.id as int).toList();
+      _selectedOccasionTypeIds = kinds;
     });
     _loadFirstPage();
   }
@@ -644,11 +747,23 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     } else if (choice != 'all') {
       next = FeedDateFilter.preset(choice, DateTime.now());
     }
+    // إعادة اختيار التاريخ نفسه (أو «كل التواريخ» وهي كذلك) ليست تغييراً.
+    if (next?.key == _dateFilter?.key && next?.fromParam == _dateFilter?.fromParam) {
+      return;
+    }
+    _captureSnapshot();
     setState(() => _dateFilter = next);
     _loadFirstPage();
   }
 
   void _clearFilters() {
+    // «مسح» بلا فلتر نشِط لا يغيّر ما هو معروض: لا لقطة ولا جلب.
+    final hadFilters = _selectedTowns.isNotEmpty ||
+        _selectedVillageIds.isNotEmpty ||
+        _selectedOccasionTypeIds.isNotEmpty ||
+        _dateFilter != null;
+    if (!hadFilters) return;
+    _captureSnapshot();
     setState(() {
       _selectedTowns = const [];
       _selectedVillageIds = const [];
@@ -659,6 +774,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   }
 
   void _onArchiveToggled(bool value) {
+    if (value == _archive) return;
+    _captureSnapshot();
     _archive = value;
     _loadFirstPage();
   }
@@ -946,7 +1063,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                       _stories = services.api.stories();
                                     });
                                     _loadLiveChannel();
-                                    await _loadFirstPage();
+                                    // تحديث في المكان: الصفحة الأولى تُستبدل
+                                    // والكرت المعروض يبقى أمام المستخدم بدل
+                                    // أن يقفز إلى أوّله.
+                                    await _refreshInPlace();
                                   },
                                 ),
                                 IconButton(
@@ -978,11 +1098,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             final narrow = constraints.maxWidth < 390;
-                            final liveButton = LiveButton(
-                              channel: _liveChannel,
-                              onPressed: () => openLiveScreen(context),
-                              compact: narrow,
-                            );
                             final audioAuth = Container(
                               key: const Key('feed_audio_auth_container'),
                               decoration: BoxDecoration(
@@ -1023,23 +1138,33 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                                 ],
                               ),
                             );
-                            return Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [liveButton, audioAuth],
+                            // كبسة البث انتقلت إلى شريط الستوريات أدناه (مدخل
+                            // واحد لها)، والتحكّم بالصوت يبقى في طرفه كما كان.
+                            return Align(
+                              alignment: AlignmentDirectional.centerEnd,
+                              child: audioAuth,
                             );
                           },
                         ),
                       ),
                       // «ألبومات الأعراس» (تذكرة #101، القرار D11): صفّه الخاص
-                      // تحت صفّ البث، لأن صفَّي الشريط ممتلئان على هاتف ٣٦٠ —
-                      // إقحامُ كبسة ثالثة فيهما أسقط live_test بفيض ٦٨ بكسل.
-                      // والشريط عائم فلا يدفع التغذية، لكنه يغطّي شريطاً من أعلى
-                      // الكرت الأول — ثمنٌ مقبول مقابل مدخل يُرى بلا نقرة.
+                      // تحت صفّ الصوت والدخول، لأن صفَّي الشريط ممتلئان على
+                      // هاتف ٣٦٠ — إقحامُ كبسة ثالثة فيهما أسقط live_test بفيض
+                      // ٦٨ بكسل. والشريط عائم فلا يدفع التغذية، لكنه يغطّي
+                      // شريطاً من أعلى الكرت الأول — ثمنٌ مقبول مقابل مدخل
+                      // يُرى بلا نقرة.
                       const SizedBox(height: 6),
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: _albumsEntryChip(),
+                      ),
+                      // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر:
+                      // كبسة البث أوله ثم ستوريات التسويق. ارتفاعه محدود
+                      // (`_storiesStripHeight`) لأنه عائم لا يدفع التغذية.
+                      _StoriesStrip(
+                        future: _stories,
+                        channel: _liveChannel,
+                        onLiveTap: () => openLiveScreen(context),
                       ),
                     ],
                   ),
@@ -1047,7 +1172,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               ),
             ),
 
-          // 3. لوحة الفلاتر والقصص المنسدلة (تظهر عند الضغط على الكبسة)
+          // 3. لوحة الفلاتر والبحث المنسدلة (تظهر عند الضغط على الكبسة)
           if (_showTopChrome) ...[
             Positioned.fill(
               child: GestureDetector(
@@ -1119,17 +1244,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                           ],
                         ),
                       ),
-                      Padding(
-                        padding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 4),
-                        child: Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: LiveButton(
-                            channel: _liveChannel,
-                            onPressed: () => openLiveScreen(context),
-                          ),
-                        ),
-                      ),
-                      _StoriesStrip(future: _stories),
+                      // كبسة البث والستوريات في الشريط الظاهر على التغذية
+                      // وحدها؛ لا نسخة ثانية لهما داخل اللوح.
                       _SearchBar(
                         controller: _searchController,
                         onChanged: _onSearchChanged,
@@ -1278,6 +1394,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           onPageChanged: (index) {
             _currentPage = index;
             _autoplayCurrent();
+            // قفزة الرجوع للقطة ليست تمريراً من المستخدم، فلا تجلب «المزيد».
+            if (_restoringSnapshot) return;
             if (index >= _events.length - 2 && hasMore && !_loadingMore) {
               _loadMore();
             }
@@ -1343,6 +1461,32 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       ],
     );
   }
+}
+
+/// لقطة ما قبل تغيير الفلتر — القائمة وموضع الكرت والفلتر كاملاً. تُعاد
+/// بـ`setState` و`jumpToPage` بلا طلب شبكة، فلا يضيع تقدّم القائمة.
+class _ResultsSnapshot {
+  const _ResultsSnapshot({
+    required this.events,
+    required this.pagination,
+    required this.index,
+    required this.search,
+    required this.towns,
+    required this.villages,
+    required this.kinds,
+    required this.archive,
+    required this.dateFilter,
+  });
+
+  final List<Event> events;
+  final Pagination? pagination;
+  final int index;
+  final String search;
+  final List<String> towns;
+  final List<int> villages;
+  final List<int> kinds;
+  final bool archive;
+  final FeedDateFilter? dateFilter;
 }
 
 class _SearchBar extends StatelessWidget {
@@ -1549,10 +1693,23 @@ class _AnnouncementCard extends StatelessWidget {
   }
 }
 
+/// سقف ارتفاع شريط الستوريات: الكروم عائم لا يدفع التغذية، فكل زيادة تغطّي
+/// طرفاً من أعلى الكرت الأول. (إقحام كبسة ثالثة في صفّ الأيقونات أسقط
+/// `live_test` بفيض ٦٨ بكسل سابقاً — فالسقف هنا ٨٤ والتصميم تحته بهامش.)
+const double _storiesStripHeight = 82;
+
+/// شريط الستوريات الظاهر دائماً في الكروم: كبسة البث أولاً — فعل مستقل يبقى
+/// وحده إن لم تصل ستوريات — ثم ستوريات التسويق أفقياً.
 class _StoriesStrip extends StatelessWidget {
-  const _StoriesStrip({required this.future});
+  const _StoriesStrip({
+    required this.future,
+    required this.channel,
+    required this.onLiveTap,
+  });
 
   final Future<List<Story>>? future;
+  final LiveChannel? channel;
+  final VoidCallback onLiveTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1560,41 +1717,136 @@ class _StoriesStrip extends StatelessWidget {
       future: future,
       builder: (context, snapshot) {
         final stories = snapshot.data ?? const <Story>[];
-        if (stories.isEmpty) return const SizedBox.shrink();
 
         return SizedBox(
-          height: 96,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            itemCount: stories.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 12),
-            itemBuilder: (context, index) {
-              final story = stories[index];
-              return _StripItem(
-                highlighted: story.isLive,
-                label: story.title,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => StoryViewerScreen(
-                      stories: stories,
-                      initialIndex: index,
-                    ),
+          key: const Key('stories_strip'),
+          height: _storiesStripHeight,
+          child: Row(
+            children: [
+              // أول عنصر في الجهة اليمنى (RTL) — كبسة البث على محاذاة صفّ
+              // «ألبومات الأعراس» فوقها (الحشو في عمود الكروم).
+              _LiveStoryTile(channel: channel, onTap: onLiveTap),
+              // بلا ستوريات: الكبسة وحدها بلا فاصل ولا شريط فارغ.
+              if (stories.isNotEmpty) ...[
+                Container(
+                  width: 1,
+                  height: 54,
+                  margin: const EdgeInsets.symmetric(horizontal: 6),
+                  color: context.c.line,
+                ),
+                Expanded(
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    itemCount: stories.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final story = stories[index];
+                      return _StripItem(
+                        highlighted: story.isLive,
+                        label: story.title,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => StoryViewerScreen(
+                              stories: stories,
+                              initialIndex: index,
+                            ),
+                          ),
+                        ),
+                        avatar: story.image == null
+                            ? _storyFallbackAvatar(context)
+                            : Image.network(
+                                story.image!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) =>
+                                    _storyFallbackAvatar(context),
+                              ),
+                      );
+                    },
                   ),
                 ),
-                avatar: story.image == null
-                    ? _storyFallbackAvatar(context)
-                    : Image.network(
-                        story.image!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) =>
-                            _storyFallbackAvatar(context),
-                      ),
-              );
-            },
+              ],
+            ],
           ),
         );
       },
+    );
+  }
+}
+
+/// كبسة البث في أول الشريط: مربّع متدرّج بزوايا ١٨، ظاهر دائماً حتى بلا بثّ،
+/// وشارة «مباشر» وحدها تتبع `channel.isLive` — داخل المربّع كي لا يُقصّ رسمها.
+class _LiveStoryTile extends StatelessWidget {
+  const _LiveStoryTile({required this.channel, required this.onTap});
+
+  final LiveChannel? channel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = channel?.isLive ?? false;
+    return GestureDetector(
+      key: const Key('stories_live_tile'),
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 72,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                // الأحمران الجديدان الوحيدان في هذه المهمة.
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFEF4444), Color(0xFFF59E0B)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.live_tv_rounded, color: Colors.white, size: 22),
+                  if (live) ...[
+                    const SizedBox(height: 3),
+                    Container(
+                      key: const Key('stories_live_badge'),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: context.c.danger,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white, width: 0.8),
+                      ),
+                      child: const Text(
+                        'مباشر',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          height: 1.1,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 5),
+            // تصغير لا قصّ: التسمية تُقرأ كاملة حتى على شاشة ضيّقة.
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                'البث المباشر',
+                maxLines: 1,
+                style: TextStyle(fontSize: 11, color: context.c.inkSoft),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

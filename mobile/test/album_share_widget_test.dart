@@ -53,6 +53,52 @@ NegevApi _api({bool personWithoutAlbums = false}) {
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
+    if (request.url.path.endsWith('/api/albums/21')) {
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'album': {
+            'id': 21,
+            'event_id': null,
+            'title': 'عرس أحمد أبو سليمان',
+            'photo_count': 1,
+            'share_url': 'https://munasbat.test/a/21',
+            'town': 'رهط',
+            'honoree_name': 'أحمد أبو سليمان',
+            'person': {'id': 9, 'name': 'أحمد أبو سليمان'},
+            'event': null
+          },
+          'photos': [
+            {'id': 7, 'album_id': 21, 'image_url': 'https://cdn.test/p.jpg', 'tags': []}
+          ],
+          'pagination': {'page': 1, 'limit': 24, 'total': 1, 'totalPages': 1}
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (request.url.path.endsWith('/api/albums')) {
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'albums': [
+            {
+              'id': 21,
+              'event_id': null,
+              'title': 'عرس أحمد أبو سليمان',
+              'photo_count': 3,
+              'town': 'رهط',
+              'honoree_name': 'أحمد أبو سليمان',
+              'person': {'id': 9, 'name': 'أحمد أبو سليمان'},
+              'event': null
+            }
+          ],
+          'pagination': {'page': 1, 'limit': 30, 'total': 1, 'totalPages': 1}
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
     if (request.url.path.endsWith('/api/albums/11')) {
       return http.Response(
         jsonEncode({
@@ -89,6 +135,13 @@ Widget _wrap(Widget child, NegevApi api) => AppServices(
       child: MaterialApp(
         home: Directionality(textDirection: TextDirection.rtl, child: child),
       ),
+    );
+
+/// «لا نصّ فارغ»: `find.text('')` يمسك أيضاً محتوى `EditableText` الداخلي لحقل
+/// البحث، وهو ليس سطراً معروضاً — فالمقصود `Text` بمحتوى فارغ حرفياً.
+Finder _blankText() => find.byWidgetPredicate(
+      (widget) => widget is Text && widget.data == '',
+      description: 'Text بمحتوى فارغ',
     );
 
 void main() {
@@ -149,5 +202,42 @@ void main() {
 
     expect(find.text('عرس أحمد'), findsWidgets,
         reason: 'اسم ورقمان بلا شيء تحتهما ممنوعان — المناسبة تُذكر');
+  });
+
+  testWidgets('بطاقة ألبوم بلا مناسبة تعرض اسم العريس والبلدة', (tester) async {
+    final api = _api();
+    await tester.pumpWidget(_wrap(const AlbumsScreen(), api));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('عرس أحمد أبو سليمان'), findsWidgets, reason: 'عنوان الألبوم');
+    expect(find.text('أحمد أبو سليمان · رهط'), findsOneWidget,
+        reason: 'اسم العريس والبلدة مكان عنوان المناسبة وبلدتها');
+    // «لا سطر فارغ ولا null ولا صفر»: السطر الثاني يُرسم بمحتواه وحده.
+    expect(_blankText(), findsNothing, reason: 'سطرٌ فارغ يترك فراغاً في البطاقة');
+    expect(find.text('null'), findsNothing);
+    expect(find.text('0 صورة'), findsNothing);
+  });
+
+  testWidgets('رأس تفاصيل ألبوم بلا مناسبة: اسم العريس والبلدة لا نصّ فارغ',
+      (tester) async {
+    final api = _api();
+    await tester.pumpWidget(
+      _wrap(
+        const AlbumDetailScreen(
+          album: EventAlbum(id: 21, eventId: 0, title: 'عرس أحمد أبو سليمان'),
+        ),
+        api,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('أحمد أبو سليمان · رهط'), findsOneWidget);
+    expect(_blankText(), findsNothing,
+        reason: 'السطر الغائب يُخفى بدل أن يُرسم فارغاً');
+    expect(find.text('null'), findsNothing);
+    expect(find.text('1 صورة'), findsOneWidget,
+        reason: 'العدد يبقى عدد الصور لا قيمة فاسدة من event_id الغائب');
   });
 }

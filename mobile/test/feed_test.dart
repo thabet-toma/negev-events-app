@@ -19,8 +19,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// عميل وهمي يوجّه حسب المسار — القصص وأنواع المناسبات فارغة، `/api/towns`
 /// يحمل بلدة وقرية ومحافظة من الخادم (لا من أي قائمة في العميل)، و`/api/events`
-/// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً. [requests] يلتقط كل طلب.
-NegevApi feedScreenApi({Object? eventsBody, List<Uri>? requests}) {
+/// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً: [eventsBody] لردّ ثابت أو
+/// [eventsBodyFor] لردّ يتبع استعلام الطلب. [requests] يلتقط كل طلب.
+NegevApi feedScreenApi({
+  Object? eventsBody,
+  List<Uri>? requests,
+  Object? Function(Uri url)? eventsBodyFor,
+}) {
   final client = MockClient((request) async {
     requests?.add(request.url);
     if (request.url.path.endsWith('/api/stories')) {
@@ -66,7 +71,8 @@ NegevApi feedScreenApi({Object? eventsBody, List<Uri>? requests}) {
     if (request.url.path.endsWith('/api/events')) {
       return http.Response(
         jsonEncode(
-          eventsBody ??
+          eventsBodyFor?.call(request.url) ??
+              eventsBody ??
               {
                 'success': true,
                 'events': <Map<String, dynamic>>[],
@@ -1188,5 +1194,107 @@ void main() {
         expect(find.text('تصفّح المناسبات'), findsOneWidget, reason: 'ولها مخرج');
       },
     );
+  });
+
+  group('تقدّم القائمة عند البحث والفلترة', () {
+    Map<String, dynamic> feedBody(List<Map<String, dynamic>> events) => {
+          'success': true,
+          'events': events,
+          'pagination': {'page': 1, 'limit': 30, 'total': events.length, 'totalPages': 1},
+          'announcements': <Map<String, dynamic>>[],
+        };
+
+    Map<String, dynamic> row(int id, String day) => {
+          'id': id,
+          'title': 'مناسبة $id',
+          'groom_name': 'اسم $id',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'event_date': day,
+        };
+
+    testWidgets('البحث بالنص نفسه بعد trim لا يعيد جلب الصفحة الأولى', (tester) async {
+      final requests = <Uri>[];
+      final api = feedScreenApi(requests: requests);
+      await pumpFeedScreen(tester, api);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('الفلاتر والبحث'));
+      await tester.pumpAndSettle();
+
+      int eventRequests() =>
+          requests.where((u) => u.path.endsWith('/api/events')).length;
+      final before = eventRequests();
+
+      await tester.enterText(find.byType(TextField), 'رهط');
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pump();
+      expect(eventRequests(), before + 1, reason: 'نصّ جديد يُجلب مرّة واحدة');
+      final applied = eventRequests();
+
+      // مسافة زائدة تُطبَّع بـtrim، فلا يُغيّر النصَّ المطبَّق ولا يجلب.
+      await tester.enterText(find.byType(TextField), ' رهط ');
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pump();
+      expect(eventRequests(), applied, reason: 'نفس النصّ لا يستدعي طلباً');
+      expect(
+        requests.lastWhere((u) => u.path.endsWith('/api/events')).queryParameters['search'],
+        'رهط',
+        reason: 'المُطبَّق هو النصّ المقصوص',
+      );
+    });
+
+    testWidgets('تغيير فلتر يعرض «رجوع لنتائجك السابقة» ويعيد الكروت والموضع بلا طلب', (tester) async {
+      final requests = <Uri>[];
+      final all = [row(401, '2026-09-20'), row(402, '2026-09-21'), row(403, '2026-09-22')];
+      final onlyTown = [row(402, '2026-09-21')];
+      final api = feedScreenApi(
+        requests: requests,
+        eventsBodyFor: (url) =>
+            url.queryParameters['town'] == 'رهط' ? feedBody(onlyTown) : feedBody(all),
+      );
+      await pumpFeedScreen(tester, api);
+      await tester.pumpAndSettle();
+
+      final pageView = tester.widget<PageView>(find.byType(PageView));
+      pageView.controller!.jumpToPage(2);
+      await tester.pumpAndSettle();
+      expect(pageView.controller!.page, 2);
+
+      final before = requests.where((u) => u.path.endsWith('/api/events')).length;
+
+      // فلتر المكان: «كل الأماكن» ← «رهط». الخيار في ورقة الفلتر وحده (بلدة
+      // الكرت في التغذية تحمل النصّ نفسه).
+      await tester.tap(find.text('الفلاتر والبحث'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('كل الأماكن'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(CheckboxListTile, 'رهط'));
+      await tester.tap(find.text('تطبيق'));
+      await tester.pumpAndSettle();
+
+      // نتائج الفلتر الجديد (كرت واحد) ورسالة الرجوع بعد وصولها.
+      expect(find.text('↩ رجوع لنتائجك السابقة'), findsOneWidget);
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).childrenDelegate.estimatedChildCount,
+        1,
+      );
+
+      await tester.tap(find.text('↩ رجوع لنتائجك السابقة'));
+      await tester.pumpAndSettle();
+
+      final after = requests.where((u) => u.path.endsWith('/api/events')).length;
+      expect(after, before + 1, reason: 'طلب الفلتر وحده، والرجوع بلا أي شبكة');
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).childrenDelegate.estimatedChildCount,
+        3,
+        reason: 'كروت ما قبل التغيير عادت',
+      );
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).controller!.page,
+        2,
+        reason: 'الموضع الذي كان عليه القارئ يعود معها',
+      );
+    });
   });
 }

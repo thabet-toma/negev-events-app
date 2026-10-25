@@ -23,7 +23,9 @@ String albumShareUrl(EventAlbum album) {
 String albumShareMessage(EventAlbum album) {
   // الصيغة المتفَق عليها (Q10/D8): «عنوان الألبوم — المناسبة · البلدة».
   // سطرُ المناسبة ليس زينة: ألبومان في بلدة واحدة لا يتميّزان بدونه.
-  final place = [album.eventTitle, album.town]
+  // وبلا مناسبة يصير «العنوان — البلدة»: العنوان نفسه «عرس <الاسم>» فيحمل اسم
+  // صاحبه، فلا نكرّره بإضافة `honoreeName` — والبلدة وحدها تُبقي الرسالة ذات معنى.
+  final place = [if (album.hasEvent) album.eventTitle, album.town]
       .where((part) => part != null && part.isNotEmpty)
       .join(' · ');
   final line = place.isEmpty ? album.title : '${album.title} — $place';

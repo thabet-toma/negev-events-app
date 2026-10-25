@@ -1289,6 +1289,21 @@ body {
 .admin-photo-actions .btn-reject { font-size: 0.74rem; padding: 5px 9px; }
 .admin-album-import { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
 .admin-album-import input { flex: 1; min-width: 240px; }
+/* المدخل الثاني في صفّ المنتقي «ألبوم باسم العريس (بلا مناسبة)» (2026-10):
+   يبقى سطراً واحداً ويلتفّ صفّاً كاملاً على الشاشة الضيقة. */
+.admin-albums-honoree-btn { flex: 0 0 auto; white-space: nowrap; }
+/* رقاقة «بلا مناسبة»: مدخل ألبومات العريس في صفّ المنتقي نفسه (2026-10) */
+.admin-albums-honoree-chip { flex: 0 0 auto; white-space: nowrap; }
+/* خطأ نافذة ألبوم العريس — عربي داخل النافذة، لا تنبيه متصفّح يقطع العمل. */
+.honoree-album-error {
+  background: var(--danger-wash);
+  color: var(--danger-red);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  font-weight: 700;
+  margin-top: 4px;
+}
 .admin-photo-queue { display: flex; flex-direction: column; gap: 10px; }
 .admin-moderation-card {
   display: flex;

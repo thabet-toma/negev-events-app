@@ -9135,6 +9135,17 @@ async function run() {
     const signFor = eventId => api('POST', `/api/admin/events/${eventId}/photos/signature`, { token: superAdminToken });
     let archiveUpload = null;
     let archivePhotoId = 0;
+    // ألبوم باسم العريس بلا مناسبة (2026-10): الأسماء فريدة في كل تشغيل كي لا
+    // يلتقط `people.resolveByName` صفّاً تركه تشغيل سابق، وما يُنشأ هنا
+    // يُنظَّف في `finally` كبقية صفوف القسم.
+    const standaloneSuffix = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const standaloneGroom = `عريس بلا مناسبة ${standaloneSuffix}`;
+    const standaloneTownGroom = `عريس رهط بلا مناسبة ${standaloneSuffix}`;
+    const standaloneOutOfScopeGroom = `عريس حورة بلا مناسبة ${standaloneSuffix}`;
+    const standaloneAlbumIds = [];
+    const standalonePersonIds = [];
+    let standaloneAlbum = null;
+    let standalonePhotoId = 0;
 
     try {
       await test('album photos: the type gate is the only gate — an upcoming wedding can be prepared, an ended funeral cannot', async () => {
@@ -9604,7 +9615,327 @@ async function run() {
         const details = await api('GET', `/api/events/${endedWedding}`);
         assert.deepStrictEqual(details.body.event.archive_photos, []);
       });
+
+      await test('POST /api/admin/albums builds a published album from the groom name alone, and a blank name is an Arabic 400', async () => {
+        const blank = await api('POST', '/api/admin/albums', {
+          token: superAdminToken,
+          body: { honoree_name: '   ', town: 'رهط' }
+        });
+        assert.strictEqual(blank.status, 400, JSON.stringify(blank.body));
+        assert.ok(
+          /[\u0600-\u06FF]/.test(blank.body.message || ''),
+          `the message is Arabic, got: ${blank.body.message}`
+        );
+        const missing = await api('POST', '/api/admin/albums', { token: superAdminToken, body: {} });
+        assert.strictEqual(missing.status, 400, 'no body is the same 400, never a 500');
+
+        // البادئة `/admin/albums` محروسة بالحارس نفسه كجاراتها، لا بمفتاح تجاوز.
+        assert.strictEqual(
+          (await api('POST', '/api/admin/albums', { body: { honoree_name: standaloneGroom, town: 'رهط' } })).status,
+          401
+        );
+
+        const { status, body } = await api('POST', '/api/admin/albums', {
+          token: superAdminToken,
+          body: { honoree_name: ` ${standaloneGroom} `, town: 'رهط' }
+        });
+        assert.strictEqual(status, 201, JSON.stringify(body));
+        standaloneAlbum = body.album;
+        standaloneAlbumIds.push(standaloneAlbum.id);
+        standalonePersonIds.push(standaloneAlbum.person.id);
+
+        assert.strictEqual(standaloneAlbum.event_id, null, 'no event, and the column accepts NULL');
+        assert.strictEqual(standaloneAlbum.event, null, 'event stays a key — null, not a half-built object');
+        assert.strictEqual(standaloneAlbum.title, `عرس ${standaloneGroom}`, 'the default title is Arabic, names the groom, and trims it');
+        assert.strictEqual(standaloneAlbum.town, 'رهط');
+        assert.strictEqual(standaloneAlbum.honoree_name, standaloneGroom);
+        assert.strictEqual(standaloneAlbum.person.name, standaloneGroom);
+        assert.strictEqual(standaloneAlbum.is_published, true, 'it is created published, not waiting for approval');
+        assert.strictEqual(standaloneAlbum.share_url, `${config.publicUrl}/a/${standaloneAlbum.id}`);
+        const personRow = await db.queryOne('SELECT name FROM people WHERE id = ?', [standaloneAlbum.person.id]);
+        assert.strictEqual(personRow.name, standaloneGroom, 'the honoree is a person row (ADR-0011), not free text on the album');
+
+        // السوبر أدمن بلا بلدة يُقبل: البلدة في هذا الوجه اختيارية له وحده.
+        const noTown = await api('POST', '/api/admin/albums', {
+          token: superAdminToken,
+          body: { honoree_name: `${standaloneGroom} الثاني` }
+        });
+        assert.strictEqual(noTown.status, 201, JSON.stringify(noTown.body));
+        assert.strictEqual(noTown.body.album.town, null);
+        standaloneAlbumIds.push(noTown.body.album.id);
+        standalonePersonIds.push(noTown.body.album.person.id);
+      });
+
+      /**
+       * `GET /api/admin/albums/:id/photos` used to answer with the raw
+       * `event_albums` row, which carries no `honoree_name`/`person` and no
+       * event title — so the panel could only name a no-event album from the
+       * create response it still held in memory. The album now comes back in
+       * the one public shape, and an event album keeps its event object.
+       */
+      await test('admin album photos: the album comes back in the public shape — the honoree album names itself after reopening, the event album keeps its event', async () => {
+        const honoree = await api('GET', `/api/admin/albums/${standaloneAlbum.id}/photos`, { token: superAdminToken });
+        assert.strictEqual(honoree.status, 200, JSON.stringify(honoree.body));
+        assert.strictEqual(honoree.body.album.id, standaloneAlbum.id);
+        assert.strictEqual(honoree.body.album.event_id, null, 'the no-event album still carries a NULL event_id');
+        assert.strictEqual(honoree.body.album.event, null, 'event stays a key — null, never a half-built object');
+        assert.strictEqual(honoree.body.album.honoree_name, standaloneGroom, 'the groom name travels with the reader, not only with the create response');
+        assert.strictEqual(honoree.body.album.person.name, standaloneGroom);
+        assert.strictEqual(honoree.body.album.town, 'رهط');
+        assert.strictEqual(honoree.body.album.is_published, true);
+        assert.strictEqual(honoree.body.album.share_url, `${config.publicUrl}/a/${standaloneAlbum.id}`);
+        assert.deepStrictEqual(honoree.body.photos, [], 'a fresh album has no photos — the reader is empty for that reason alone');
+        assert.strictEqual(honoree.body.pagination.page, 1);
+        assert.strictEqual(honoree.body.pagination.limit, 60);
+        assert.strictEqual(honoree.body.pagination.total, 0);
+        assert.strictEqual(honoree.body.pagination.totalPages, 0);
+
+        const listed = await api('GET', `/api/admin/events/${endedWedding}/albums`, { token: superAdminToken });
+        const eventAlbumId = listed.body.albums.find(album => Number(album.event_id) === Number(endedWedding)).id;
+        const eventAlbum = await api('GET', `/api/admin/albums/${eventAlbumId}/photos`, { token: superAdminToken });
+        assert.strictEqual(eventAlbum.status, 200, JSON.stringify(eventAlbum.body));
+        assert.strictEqual(eventAlbum.body.album.event_id, endedWedding);
+        assert.strictEqual(eventAlbum.body.album.event.id, endedWedding, 'the event link is not broken by the shared shape');
+        assert.strictEqual(eventAlbum.body.album.event.town, 'رهط');
+        assert.strictEqual(eventAlbum.body.album.event.occasion_type_name, 'عرس');
+        assert.strictEqual(eventAlbum.body.album.town, 'رهط', 'town is additive and equals the event town');
+        assert.strictEqual(eventAlbum.body.album.person, null, 'an event album has no honoree person');
+        // الصورة الوحيدة حُذفت في اختبار الحذف أعلاه، فالقائمة الفارغة هي الحالة
+        // الصحيحة هنا — والمهمّ أن `photos`/`pagination` لم يتغيّرا بالشكل الجديد.
+        assert.deepStrictEqual(eventAlbum.body.photos, [], 'the photos list is untouched by the album shape');
+        assert.strictEqual(eventAlbum.body.pagination.page, 1);
+        assert.strictEqual(eventAlbum.body.pagination.total, 0);
+      });
+
+      await test('a no-event album is public only once it holds one approved photo — the list and the search both wait', async () => {
+        const listBefore = await api('GET', '/api/albums?limit=60');
+        assert.ok(
+          !listBefore.body.albums.some(album => album.id === standaloneAlbum.id),
+          'an album with no approved photo is not a public album'
+        );
+        const searchBefore = await api('GET', `/api/search?q=${encodeURIComponent(standaloneGroom)}`);
+        assert.strictEqual(searchBefore.status, 200);
+        assert.ok(!searchBefore.body.albums.some(album => album.id === standaloneAlbum.id), 'nor does search find it');
+        assert.strictEqual((await api('GET', `/api/albums/${standaloneAlbum.id}`)).status, 404);
+
+        // الرفع إلى ألبوم بلا مناسبة كالمعتاد: توقيع من الخدمة ثم صفّ صورة.
+        const signed = await api('POST', `/api/admin/albums/${standaloneAlbum.id}/photos/signatures`, {
+          token: superAdminToken,
+          body: { count: 1 }
+        });
+        assert.strictEqual(signed.status, 200, JSON.stringify(signed.body));
+        const upload = signed.body.uploads[0];
+        assert.ok(upload.public_id.startsWith(`negev-events/albums/album-${standaloneAlbum.id}/`), upload.public_id);
+        const registered = await api('POST', `/api/admin/albums/${standaloneAlbum.id}/photos`, {
+          token: superAdminToken,
+          body: {
+            public_id: upload.public_id,
+            version: '1700000470',
+            signature: cloudinarySign(upload.public_id, '1700000470'),
+            width: 900,
+            height: 600
+          }
+        });
+        assert.strictEqual(registered.status, 201, JSON.stringify(registered.body));
+        standalonePhotoId = registered.body.photo.id;
+        assert.strictEqual(registered.body.photo.status, 'approved');
+
+        const listAfter = await api('GET', '/api/albums?limit=60');
+        const listed = listAfter.body.albums.find(album => album.id === standaloneAlbum.id);
+        assert.ok(listed, 'one approved photo is what puts it on the public album list');
+        assert.strictEqual(listed.event, null);
+        assert.strictEqual(listed.photo_count, 1);
+        assert.strictEqual(listed.cover_url, registered.body.photo.image_url);
+        assert.strictEqual(listed.person.id, standaloneAlbum.person.id);
+        assert.strictEqual(listed.town, 'رهط');
+
+        const searchAfter = await api('GET', `/api/search?q=${encodeURIComponent(standaloneGroom)}`);
+        assert.ok(searchAfter.body.albums.some(album => album.id === standaloneAlbum.id), 'search finds it by the groom name');
+        const searchTown = await api('GET', `/api/search?q=${encodeURIComponent('رهط')}`);
+        assert.ok(searchTown.body.albums.some(album => album.id === standaloneAlbum.id), 'and by the town the admin typed');
+
+        const detail = await api('GET', `/api/albums/${standaloneAlbum.id}`);
+        assert.strictEqual(detail.status, 200, JSON.stringify(detail.body));
+        assert.strictEqual(detail.body.album.event, null);
+        assert.deepStrictEqual(detail.body.photos.map(photo => photo.id), [standalonePhotoId]);
+        assert.strictEqual(detail.body.photos[0].album.id, standaloneAlbum.id);
+        assert.strictEqual((await api('GET', `/api/photos/${standalonePhotoId}`)).status, 200);
+      });
+
+      await test('a town admin creates an album in their own town and gets 404 outside it — never 403, and nothing is written', async () => {
+        const outside = await api('POST', '/api/admin/albums', {
+          token: archiveScopedAdmin.token,
+          body: { honoree_name: standaloneOutOfScopeGroom, town: 'حورة' }
+        });
+        assert.strictEqual(outside.status, 404, JSON.stringify(outside.body));
+        assert.ok(/[\u0600-\u06FF]/.test(outside.body.message || ''));
+        const leakedAlbum = await db.queryOne(
+          'SELECT id FROM event_albums WHERE title = ?',
+          [`عرس ${standaloneOutOfScopeGroom}`]
+        );
+        assert.strictEqual(leakedAlbum, null, 'a refused request writes no album');
+        const leakedPerson = await db.queryOne('SELECT id FROM people WHERE name = ?', [standaloneOutOfScopeGroom]);
+        assert.strictEqual(leakedPerson, null, 'and no person row is created for it');
+
+        const inside = await api('POST', '/api/admin/albums', {
+          token: archiveScopedAdmin.token,
+          body: { honoree_name: standaloneTownGroom, town: 'رهط' }
+        });
+        assert.strictEqual(inside.status, 201, JSON.stringify(inside.body));
+        standaloneAlbumIds.push(inside.body.album.id);
+        standalonePersonIds.push(inside.body.album.person.id);
+        assert.strictEqual(inside.body.album.town, 'رهط');
+        assert.strictEqual(inside.body.album.person.name, standaloneTownGroom);
+
+        const signed = await api('POST', `/api/admin/albums/${inside.body.album.id}/photos/signatures`, {
+          token: archiveScopedAdmin.token,
+          body: { count: 1 }
+        });
+        assert.strictEqual(signed.status, 200, 'the same admin uploads into the album they just created');
+
+        const townless = await api('POST', '/api/admin/albums', {
+          token: archiveScopedAdmin.token,
+          body: { honoree_name: `${standaloneTownGroom} ب` }
+        });
+        assert.strictEqual(townless.status, 400, 'a town admin must name a town');
+
+        const unscoped = await api('POST', '/api/admin/albums', {
+          token: archiveNoScopeAdmin.token,
+          body: { honoree_name: `${standaloneTownGroom} ج`, town: 'رهط' }
+        });
+        assert.strictEqual(unscoped.status, 404, 'an admin with no towns is refused like every other scope check');
+        assert.strictEqual(
+          (await db.queryOne('SELECT id FROM event_albums WHERE title = ?', [`عرس ${standaloneTownGroom} ج`])),
+          null
+        );
+      });
+
+      /**
+       * ألبومات العريس لا مناسبة لها، فمنتج المناسبات لا يصل إليها بعد مغادرة
+       * صفحتها؛ `GET /api/admin/albums?without_event=1` هو مدخلها (2026-10):
+       * السوبر أدمن يرى ما أنشأه هو وأدمن البلدة، وكل صفّ بالشكل العام نفسه.
+       */
+      await test('GET /api/admin/albums?without_event=1 lists honoree albums for a super admin, newest first, in the public shape', async () => {
+        assert.strictEqual((await api('GET', '/api/admin/albums')).status, 401, 'the route is behind the admin guard');
+        const noFlag = await api('GET', '/api/admin/albums', { token: superAdminToken });
+        assert.strictEqual(noFlag.status, 400, 'the only mode is explicit: ?without_event=1');
+
+        const { status, body } = await api('GET', '/api/admin/albums?without_event=1', { token: superAdminToken });
+        assert.strictEqual(status, 200, JSON.stringify(body));
+        const ids = body.albums.map(album => album.id);
+        assert.ok(ids.includes(standaloneAlbum.id), 'the album created through POST /api/admin/albums is listed');
+        assert.ok(
+          body.albums.some(album => album.title === `عرس ${standaloneTownGroom}`),
+          "the town admin's رهط album is listed for the super admin"
+        );
+        assert.deepStrictEqual(ids, [...ids].sort((a, b) => b - a), 'newest first');
+        assert.ok(body.albums.length <= 50, 'the list is capped at 50 rows');
+
+        const row = body.albums.find(album => album.id === standaloneAlbum.id);
+        assert.strictEqual(row.event_id, null, 'every row here has no event');
+        assert.strictEqual(row.event, null, 'event stays a key — null, never a half-built object');
+        assert.strictEqual(row.honoree_name, standaloneGroom, 'the groom name travels with the list row');
+        assert.strictEqual(row.town, 'رهط');
+        assert.strictEqual(typeof row.photo_count, 'number', 'the album count is the full count, approved or not');
+        assert.strictEqual(row.share_url, `${config.publicUrl}/a/${row.id}`);
+      });
+
+      await test('GET /api/admin/albums?without_event=1 hides another town’s honoree album — and the album route is 404, never 403', async () => {
+        const otherTownAdmin = await makeArchiveAdmin('أدمن ألبومات حورة', ['حورة']);
+        tagUserIds.push(otherTownAdmin.id);
+
+        const { status, body } = await api('GET', '/api/admin/albums?without_event=1', { token: otherTownAdmin.token });
+        assert.strictEqual(status, 200, JSON.stringify(body));
+        assert.ok(
+          !body.albums.some(album => album.id === standaloneAlbum.id),
+          'a رهط album is not in a حورة admin list'
+        );
+        assert.ok(
+          body.albums.every(album => album.town === 'حورة'),
+          'every row a town admin sees is inside their own towns'
+        );
+
+        const direct = await api('GET', `/api/admin/albums/${standaloneAlbum.id}/photos`, { token: otherTownAdmin.token });
+        assert.strictEqual(direct.status, 404, 'out of scope answers 404, never 403');
+        assert.ok(/[\u0600-\u06FF]/.test(direct.body.message || ''), `the message is Arabic, got: ${direct.body.message}`);
+      });
+
+      await test('GET /api/admin/albums?without_event=1 never lists an album that has an event', async () => {
+        const eventAlbums = await api('GET', `/api/admin/events/${endedWedding}/albums`, { token: superAdminToken });
+        assert.strictEqual(eventAlbums.status, 200, JSON.stringify(eventAlbums.body));
+        const eventAlbumId = eventAlbums.body.albums[0].id;
+        assert.ok(eventAlbumId, 'the ended wedding has an album to look for');
+
+        const { status, body } = await api('GET', '/api/admin/albums?without_event=1', { token: superAdminToken });
+        assert.strictEqual(status, 200, JSON.stringify(body));
+        assert.ok(!body.albums.some(album => album.id === eventAlbumId), 'an album with an event_id never appears in this list');
+        assert.ok(body.albums.every(album => album.event_id === null), 'every listed album has no event');
+      });
+
+      await test('GET /a/:id and GET /p/:id serve a no-event album and its photo instead of falling over', async () => {
+        const payload = await api('GET', `/api/albums/${standaloneAlbum.id}`);
+        const albumPage = await rawGet(`/a/${standaloneAlbum.id}`);
+        assert.strictEqual(albumPage.status, 200, 'an album with no event still has a share page');
+        assert.ok(albumPage.text.includes(standaloneGroom), 'the page shows the groom name');
+        assert.ok(
+          albumPage.text.includes(`property="og:image" content="${payload.body.album.cover_url}"`),
+          'the preview is the cover photo itself'
+        );
+        assert.ok(albumPage.text.includes(`/a/${standaloneAlbum.id}`), 'og:url points at this album');
+        assert.ok(!albumPage.text.includes('<script'), 'no script, same as every share page');
+
+        const photoPage = await rawGet(`/p/${standalonePhotoId}`);
+        assert.strictEqual(photoPage.status, 200, 'the photo card works for a no-event album too');
+        assert.ok(photoPage.text.includes(`/p/${standalonePhotoId}`));
+        assert.ok(photoPage.text.includes(standaloneGroom), 'the photo page names the groom through its album title');
+        assert.ok(!photoPage.text.includes('<script'));
+
+        const hidden = await api('PATCH', `/api/admin/albums/${standaloneAlbum.id}`, {
+          token: superAdminToken,
+          body: { is_published: false }
+        });
+        assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+        assert.strictEqual(hidden.body.album.is_published, false, 'the updated album comes back, never null');
+        assert.strictEqual((await rawGet(`/a/${standaloneAlbum.id}`)).status, 404, 'an unpublished album has no share page');
+        const shown = await api('PATCH', `/api/admin/albums/${standaloneAlbum.id}`, {
+          token: superAdminToken,
+          body: { is_published: true }
+        });
+        assert.strictEqual(shown.status, 200);
+        assert.strictEqual((await rawGet(`/a/${standaloneAlbum.id}`)).status, 200);
+      });
+
+      await test('an album attached to an event is untouched: the same event object, the same fields, the same route', async () => {
+        const listed = await api('GET', `/api/admin/events/${endedWedding}/albums`, { token: superAdminToken });
+        assert.strictEqual(listed.status, 200, JSON.stringify(listed.body));
+        const eventAlbum = listed.body.albums[0];
+        assert.strictEqual(eventAlbum.event_id, endedWedding);
+        assert.strictEqual(eventAlbum.event.id, endedWedding, 'event is the object an old client already reads');
+        assert.strictEqual(eventAlbum.event.town, 'رهط');
+        assert.strictEqual(eventAlbum.event.occasion_type_name, 'عرس');
+        assert.ok(eventAlbum.event.title, 'the event title is still carried');
+        assert.strictEqual(eventAlbum.person, null, 'an event album has no honoree person');
+        assert.strictEqual(eventAlbum.honoree_name, null);
+        assert.strictEqual(eventAlbum.town, 'رهط', 'town is additive and equals the event town');
+
+        const created = await api('POST', `/api/admin/events/${upcomingWedding}/albums`, {
+          token: superAdminToken,
+          body: { title: 'ألبوم الحنّة', description: 'ليلة الحنّة' }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        assert.strictEqual(created.body.album.event_id, upcomingWedding);
+        assert.strictEqual(created.body.album.event.id, upcomingWedding);
+        assert.strictEqual(created.body.album.event.town, 'رهط');
+        const listedAfter = await api('GET', `/api/admin/events/${upcomingWedding}/albums`, { token: superAdminToken });
+        assert.ok(listedAfter.body.albums.some(album => album.id === created.body.album.id));
+      });
     } finally {
+      for (const albumId of standaloneAlbumIds) {
+        await db.execute('DELETE FROM event_albums WHERE id = ?', [albumId]);
+      }
+      for (const personId of standalonePersonIds) {
+        await db.execute('DELETE FROM people WHERE id = ?', [personId]);
+      }
       await db.execute('DELETE FROM events WHERE id IN (?, ?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral, bulkEvent]);
       await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', tagUserIds);
     }

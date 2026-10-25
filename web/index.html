@@ -100,7 +100,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.7.0">
+  <link rel="stylesheet" href="styles.css?v=2.8.0">
 </head>
 <body>
 
@@ -386,6 +386,13 @@
           <i class="fa-solid fa-spinner fa-spin"></i> <span>جاري تحميل المزيد...</span>
         </div>
       </div>
+
+      <!-- زرّ «رجوع لنتائجك السابقة» — لقطة واحدة في الذاكرة قبل تغيير فلتر
+           فعلي، تعيد القائمة والموضع نفسيهما بلا طلب شبكة (app.js). يبقى
+           مخفياً حتى توجد لقطة، ويُخفيه أي تغيير فلتر جديد أو «مسح الفلاتر». -->
+      <button type="button" id="feedBackPill" class="feed-back-pill" onclick="restoreFeedBackSnapshot()" hidden>
+        <span>↩ رجوع لنتائجك السابقة</span>
+      </button>
 
     </section>
 
@@ -1668,6 +1675,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.6.3"></script>
+  <script src="app.js?v=2.8.1"></script>
 </body>
 </html>

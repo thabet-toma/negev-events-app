@@ -352,13 +352,17 @@ class _AlbumCard extends StatelessWidget {
                 children: [
                   Text(album.title, maxLines: 2, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text(
-                    [album.eventTitle, album.town].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: c.inkFaint, fontSize: 11),
-                  ),
+                  // بلا مناسبة: اسم العريس وبلدته مكان عنوان المناسبة وبلدتها —
+                  // والسطر يغيب كلّياً حين لا معلومة بدل سطرٍ فارغ.
+                  if (album.contextLine.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      album.contextLine,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.inkFaint, fontSize: 11),
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text('${album.photoCount} صورة', style: TextStyle(color: c.inkFaint, fontSize: 11)),
                 ],
@@ -499,6 +503,9 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // بلا مناسبة: اسم العريس وبلدته مكان عنوان المناسبة وبلدتها وتاريخها —
+    // والسطر لا يُرسم فارغاً حين لا معلومة (التخطيط نفسه في الحالتين).
+    final info = _album?.detailLine ?? '';
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
@@ -528,15 +535,15 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
                         child: Row(
                           children: [
-                            Expanded(
-                              child: Text(
-                                [_album?.eventTitle, _album?.town, _album?.eventDate]
-                                    .whereType<String>()
-                                    .where((s) => s.isNotEmpty)
-                                    .join(' · '),
-                                style: TextStyle(color: context.c.inkFaint, fontSize: 12),
+                            if (info.isEmpty)
+                              const Spacer()
+                            else
+                              Expanded(
+                                child: Text(
+                                  info,
+                                  style: TextStyle(color: context.c.inkFaint, fontSize: 12),
+                                ),
                               ),
-                            ),
                             Text('${_album?.photoCount ?? _photos.length} صورة',
                                 style: TextStyle(color: context.c.inkFaint, fontSize: 12)),
                           ],

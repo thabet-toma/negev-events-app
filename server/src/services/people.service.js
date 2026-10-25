@@ -170,6 +170,13 @@ async function mergeTwo(fromId, intoId, actorId = null) {
       'UPDATE event_honorees SET person_id = ? WHERE person_id = ?',
       [intoId, fromId]
     );
+    // ألبوم العريس (2026-10) صفٌّ يشير إلى الشخص بلا مناسبة؛ بلا هذا النقل
+    // يصير `person_id` NULL بمفتاح `ON DELETE SET NULL` فيختفي الألبوم من
+    // العام حين يُدمج صاحبه — وهو بالضبط ما وُجد الدمج ليمنعه.
+    const [albums] = await connection.execute(
+      'UPDATE event_albums SET person_id = ? WHERE person_id = ?',
+      [intoId, fromId]
+    );
 
     // توحيد الإملاء بعد نقل `person_id`: بحث `GET /api/photos?person=` يفلتر
     // بـ`photo_tags.name_key`، فبقاء «راني» على وسمٍ صار تحت «راني أبو سالم»
@@ -187,7 +194,7 @@ async function mergeTwo(fromId, intoId, actorId = null) {
     await connection.execute('DELETE FROM people WHERE id = ?', [fromId]);
 
     const movedSummary =
-      `${users.affectedRows} حساب · ${tags.affectedRows} وسم · ${honorees.affectedRows} مناسبة`;
+      `${users.affectedRows} حساب · ${tags.affectedRows} وسم · ${honorees.affectedRows} مناسبة · ${albums.affectedRows} ألبوم`;
     await connection.execute(
       `INSERT INTO people_merges (actor_id, from_id, from_name, into_id, into_name, moved)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -199,7 +206,8 @@ async function mergeTwo(fromId, intoId, actorId = null) {
       into: intoId,
       users: users.affectedRows,
       tags: tags.affectedRows,
-      honorees: honorees.affectedRows
+      honorees: honorees.affectedRows,
+      albums: albums.affectedRows
     });
 
     return {
@@ -208,7 +216,8 @@ async function mergeTwo(fromId, intoId, actorId = null) {
       moved: {
         users: users.affectedRows,
         tags: tags.affectedRows,
-        honorees: honorees.affectedRows
+        honorees: honorees.affectedRows,
+        albums: albums.affectedRows
       }
     };
   });

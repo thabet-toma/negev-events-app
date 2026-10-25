@@ -354,53 +354,89 @@ void main() {
       );
     });
 
-    testWidgets('في التغذية بلا بث: الزر مستقل تحت صف الأيقونات', (tester) async {
+    testWidgets('في التغذية بلا بث: كبسة البث ظاهرة أول الشريط بلا شارة', (tester) async {
       final quiet = _api();
       await _pump(tester, quiet, await _auth(quiet), const EventsScreen());
-      expect(find.byKey(const Key('live_button')), findsOneWidget);
-      expect(find.text('بث مباشر'), findsOneWidget);
-      expect(find.byIcon(Icons.live_tv_rounded), findsNothing);
+      final tile = find.byKey(const Key('stories_live_tile'));
+      expect(tile, findsOneWidget);
+      expect(find.text('البث المباشر'), findsOneWidget);
+      expect(find.byIcon(Icons.live_tv_rounded), findsOneWidget);
       expect(find.text('مباشر'), findsNothing);
+
+      // فعل مستقل في الشريط، لا داخل صفّ الصوت/الدخول.
       final container = find.byKey(const Key('feed_audio_auth_container'));
-      expect(find.descendant(of: container, matching: find.byKey(const Key('live_button'))), findsNothing);
+      expect(find.descendant(of: container, matching: tile), findsNothing);
       expect(
-        tester.getRect(find.byKey(const Key('live_button'))).top,
+        find.descendant(of: find.byKey(const Key('stories_strip')), matching: tile),
+        findsOneWidget,
+      );
+      // وتحت صفّ الأيقونات لا بجانبه.
+      expect(
+        tester.getRect(tile).top,
         greaterThan(tester.getRect(find.byIcon(Icons.calendar_month_rounded)).bottom),
       );
+      // السقف ٨٤ بكسل: الكروم عائم لا يدفع التغذية.
       expect(
-        tester.getRect(find.byKey(const Key('live_button'))).top,
-        closeTo(tester.getRect(container).top, 8),
+        tester.getSize(find.byKey(const Key('stories_strip'))).height,
+        lessThanOrEqualTo(84),
       );
     });
 
-    testWidgets('في التغذية مع بث: الزر النصي يحمل شارة «مباشر»', (tester) async {
+    testWidgets('في التغذية مع بث: كبسة الشريط تحمل شارة «مباشر»', (tester) async {
       final live = _api(liveBody: _activeLive());
       await _pump(tester, live, await _auth(live), const EventsScreen());
       await tester.pump(const Duration(milliseconds: 50));
-      expect(find.byKey(const Key('live_button')), findsOneWidget);
-      expect(find.text('بث مباشر'), findsOneWidget);
+      expect(find.byKey(const Key('stories_live_tile')), findsOneWidget);
+      expect(find.text('البث المباشر'), findsOneWidget);
       expect(find.text('مباشر'), findsOneWidget);
-      expect(find.byIcon(Icons.live_tv_rounded), findsNothing);
+      expect(find.byKey(const Key('stories_live_badge')), findsOneWidget);
     });
 
-    testWidgets('عند فتح الكروم يظهر الزر تحت رأس اللوحة بخلفية داكنة', (tester) async {
+    testWidgets('نقر كبسة الشريط يفتح شاشة البث', (tester) async {
+      final api = _api(hubBody: _hub());
+      // `AppServices` فوق `MaterialApp` كي تصل الشاشة المدفوعة إليه.
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: await _auth(api),
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: EventsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.byKey(const Key('stories_live_tile')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LiveScreen), findsOneWidget);
+      expect(find.text('لا يوجد بث الآن'), findsOneWidget);
+    });
+
+    testWidgets('عند فتح اللوح لا يتكرّر مدخل البث داخله', (tester) async {
       final quiet = _api();
       await _pump(tester, quiet, await _auth(quiet), const EventsScreen());
       await tester.tap(find.byIcon(Icons.tune_rounded));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('live_button')), findsOneWidget);
-      final button = tester.widget<FilledButton>(find.byKey(const Key('live_button')));
-      expect(button.style!.backgroundColor!.resolve(const {}), const Color(0xFF263238));
-      expect(button.style!.foregroundColor!.resolve(const {}), Colors.white);
-      expect(
-        tester.getRect(find.byKey(const Key('live_button'))).top,
-        greaterThan(tester.getRect(find.text('مناسبات النقب')).bottom),
-      );
+      // مدخل واحد للبث: كبسة الشريط، ولا LiveButton داخل اللوح.
+      expect(find.byKey(const Key('live_button')), findsNothing);
+      expect(find.byKey(const Key('stories_live_tile')), findsNothing);
+      expect(find.text('البث المباشر'), findsNothing);
+      expect(find.text('بث مباشر'), findsNothing);
+      // الحارس على الغياب لا يمرّ على لوح لم يُفتح أصلاً.
+      expect(find.text('مناسبات النقب'), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
     });
   });
 
-  testWidgets('هاتف ضيّق (٣٦٠) ومسجَّل مع بث: الزران مستقلان وفي صف واحد بلا فيضان', (tester) async {
+  testWidgets('هاتف ضيّق (٣٦٠) ومسجَّل مع بث: كبسة الشريط وشارتها بلا فيضان', (tester) async {
     tester.view.physicalSize = const Size(360, 780);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -410,22 +446,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.byTooltip('الإشعارات'), findsOneWidget);
-    expect(find.text('بث مباشر'), findsOneWidget);
+    expect(find.text('البث المباشر'), findsOneWidget);
     expect(find.text('مباشر'), findsOneWidget);
     expect(find.text('تسجيل الخروج'), findsOneWidget);
-    final container = find.byKey(const Key('feed_audio_auth_container'));
-    final button = find.byKey(const Key('live_button'));
-    expect(find.descendant(of: container, matching: button), findsNothing);
-    final liveRect = tester.getRect(button);
-    final authRect = tester.getRect(container);
-    expect(liveRect.right, greaterThan(authRect.right));
-    expect(liveRect.left, greaterThan(authRect.left));
-    expect(liveRect.top, lessThan(authRect.bottom));
-    expect(liveRect.bottom, greaterThan(authRect.top));
-    expect(authRect.left, greaterThanOrEqualTo(0));
-    expect(liveRect.left, greaterThanOrEqualTo(0));
-    expect(authRect.right, lessThanOrEqualTo(360));
-    expect(tester.getRect(button).right, lessThanOrEqualTo(360));
+    final rail = find.byKey(const Key('stories_strip'));
+    final tile = find.byKey(const Key('stories_live_tile'));
+    expect(find.descendant(of: rail, matching: tile), findsOneWidget);
+    expect(tester.getSize(rail).height, lessThanOrEqualTo(84));
+    expect(tester.getRect(tile).right, lessThanOrEqualTo(360));
+    expect(tester.getRect(tile).left, greaterThanOrEqualTo(0));
     expect(tester.takeException(), isNull);
   });
 

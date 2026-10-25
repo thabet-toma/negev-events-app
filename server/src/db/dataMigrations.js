@@ -34,6 +34,16 @@ async function columnExists(connection, table, column) {
   return rows[0].cnt > 0;
 }
 
+/** Whether a column accepts NULL — the guard for a past-safe `MODIFY ... NULL`. */
+async function columnIsNullable(connection, table, column) {
+  const [rows] = await connection.execute(
+    `SELECT IS_NULLABLE FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  return rows.length > 0 && rows[0].IS_NULLABLE === 'YES';
+}
+
 async function indexExists(connection, table, indexName) {
   const [rows] = await connection.execute(
     `SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS
@@ -1955,6 +1965,54 @@ const steps = [
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
       logger.info('[migrations] add-people-merges-2026-10: table created.');
+    }
+  },
+  {
+    // «ألبوم باسم العريس بلا مناسبة» (2026-10): ألبومٌ ثالث لا يملك مناسبة،
+    // صاحبه صفّ في `people` وبلدته في `town`. schema.sql يحمل التعريف
+    // للتنصيبات الجديدة؛ هذه الخطوة تعدّل الجدولين القائمين فقط:
+    // event_albums.event_id يصير NULL (مفتاحه الأجنبي يبقى)، ويُضاف
+    // person_id (FK إلى people بـ ON DELETE SET NULL) وtown، ويصير
+    // event_photos.event_id NULL كذلك. كل جزء محروس بفحصه (وجود العمود، أو
+    // قبوله NULL)، فإعادة تشغيلها على قاعدة طُبِّقت عليها no-op.
+    // «ألبوم بلا مناسبة يحمل person_id» قاعدة يفرضها الكود لا القاعدة، تماماً
+    // كقاعدة `event_albums` الأخرى — فلا قيد CHECK هنا.
+    name: 'allow-albums-without-event-2026-10',
+    async run(connection) {
+      let changed = 0;
+
+      if (!(await columnIsNullable(connection, 'event_albums', 'event_id'))) {
+        await connection.query('ALTER TABLE event_albums MODIFY COLUMN event_id INT UNSIGNED DEFAULT NULL');
+        changed += 1;
+      }
+      if (!(await columnExists(connection, 'event_albums', 'person_id'))) {
+        await connection.query('ALTER TABLE event_albums ADD COLUMN person_id INT UNSIGNED DEFAULT NULL AFTER event_id');
+        changed += 1;
+      }
+      if (!(await columnExists(connection, 'event_albums', 'town'))) {
+        await connection.query('ALTER TABLE event_albums ADD COLUMN town VARCHAR(100) DEFAULT NULL AFTER person_id');
+        changed += 1;
+      }
+      if (!(await indexExists(connection, 'event_albums', 'idx_event_albums_person'))) {
+        await connection.query('ALTER TABLE event_albums ADD KEY idx_event_albums_person (person_id)');
+        changed += 1;
+      }
+      if (!(await constraintExists(connection, 'event_albums', 'fk_event_albums_person'))) {
+        await connection.query(
+          'ALTER TABLE event_albums ADD CONSTRAINT fk_event_albums_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL'
+        );
+        changed += 1;
+      }
+      if (!(await columnIsNullable(connection, 'event_photos', 'event_id'))) {
+        await connection.query('ALTER TABLE event_photos MODIFY COLUMN event_id INT UNSIGNED DEFAULT NULL');
+        changed += 1;
+      }
+
+      logger.info(
+        changed
+          ? `[migrations] allow-albums-without-event-2026-10: ${changed} change(s) applied.`
+          : '[migrations] allow-albums-without-event-2026-10: already present.'
+      );
     }
   }
 ];

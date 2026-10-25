@@ -23,12 +23,19 @@ const {
  * and archivePhotos.routes.js is a compatibility face onto the default album.
  *
  * Two visibility rules live in SQL and nowhere else:
- *  - an album is public only when the event is approved, has ENDED, its type
- *    still carries `archive_gallery`, and the album is published. The ended
- *    span is events.service.js's EVENT_SPAN_END_SQL_E, required lazily
- *    because events.service.js requires this module at load time.
+ *  - an album is public only when it is published AND either its event is
+ *    approved, has ENDED, and its type still carries `archive_gallery`, or
+ *    (an honoree album, 2026-10) it has no event but does carry a person.
+ *    The ended span is events.service.js's EVENT_SPAN_END_SQL_E, required
+ *    lazily because events.service.js requires this module at load time.
  *  - a photo is public only when its own status is approved. Hiding a type's
  *    gallery or an album hides the photos without deleting one.
+ *
+ * The five-event gates keep their meaning for every album that has an event;
+ * a no-event album is never given them for free — `event_id` is NULL there, so
+ * the event branch is false by construction and the album's own gate applies.
+ * An album with no event and no person is an orphan the code never writes, and
+ * the public gate refuses it too.
  *
  * There is deliberately NO album photo cap (owner decision, 2026-10). The
  * only guard is on one request: ALBUM_UPLOAD_BATCH_MAX signatures per call,
@@ -76,20 +83,55 @@ function publicEventConditions() {
   ];
 }
 
+/**
+ * بوابات الألبوم المنشور — بوابتُه هو حصراً، ووجهاه:
+ *  - ألبوم له مناسبة: البوابات الخمس كما هي (معتمدة + نوعها يسمح بالأرشيف +
+ *    انتهى امتدادها + منشور).
+ *  - ألبوم بلا مناسبة (ألبوم العريس، 2026-10): منشور وله شخص. لا بوابات
+ *    مناسبة له — ليس له `e` ولا `ot` أصلاً، والفرع الأول يخرج NULL.
+ * وجود صورة معتمدة واحدة ليس هنا: إنه `PUBLIC_PHOTO_EXISTS` في كل قراءة
+ * تُعرض فيها صور، فلا يظهر ألبوم فارغ في قائمة ولا في بحث.
+ */
 function publicAlbumConditions() {
   return [
-    ...publicEventConditions(),
-    'al.is_published = 1'
+    'al.is_published = 1',
+    `((${publicEventConditions().join(' AND ')}) OR (al.event_id IS NULL AND al.person_id IS NOT NULL))`
   ];
 }
 
 const PUBLIC_PHOTO_EXISTS = "EXISTS (SELECT 1 FROM event_photos pub WHERE pub.album_id = al.id AND pub.status = 'approved')";
 
 /**
+ * صفّ ألبوم واحد مشترك بين القراءات العامة واللوحة. `events` و`occasion_types`
+ * و`people` كلها `LEFT JOIN` لأن ألبوم العريس (2026-10) قد لا يكون لمناسبة:
+ * فحينها `event_*` كلها NULL و`person_*`/`album_town` هي ما يُعرض.
+ * `photoCount` اختلاف مقصود واحد: العام يعدّ المعتمد وحده، واللوحة تعدّ كلها.
+ */
+function albumRowSelect({ photoCount = 'approved' } = {}) {
+  const count = photoCount === 'all'
+    ? '(SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id)'
+    : "(SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved')";
+  return `SELECT al.id, al.event_id, al.person_id, al.town AS album_town,
+                 al.title, al.description, al.is_published, al.created_at,
+                 e.title AS event_title, e.town AS event_town, e.event_date,
+                 ot.name AS occasion_type_name, pp.name AS person_name,
+                 ${count} AS photo_count,
+                 (SELECT p.image_url FROM event_photos p
+                   WHERE p.album_id = al.id AND p.status = 'approved'
+                   ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
+            FROM event_albums al
+            LEFT JOIN events e ON e.id = al.event_id
+            LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+            LEFT JOIN people pp ON pp.id = al.person_id`;
+}
+
+/**
  * Variants of the typed term, not a SQL fold: the stored name keeps whatever
  * spelling its owner wrote, and a LIKE list of real spellings is both
  * index-friendly enough at this scale and free of concatenated SQL. Captions
  * and tags already carry `*_key` (nameKey), so those two match on one term.
+ * `al.town` and the honoree's own name are here because a no-event album has no
+ * `e.town` and no `e.title` — searching the town or the groom must still find it.
  */
 function albumSearch(search) {
   const variants = searchVariants(search);
@@ -101,10 +143,12 @@ function albumSearch(search) {
     OR e.groom_name LIKE ? ESCAPE '\\\\'
     OR e.family_clan LIKE ? ESCAPE '\\\\'
     OR e.town LIKE ? ESCAPE '\\\\'
+    OR al.town LIKE ? ESCAPE '\\\\'
+    OR pp.name LIKE ? ESCAPE '\\\\'
     OR al.description LIKE ? ESCAPE '\\\\'
     OR EXISTS (SELECT 1 FROM event_honorees eh WHERE eh.event_id = e.id AND eh.name LIKE ? ESCAPE '\\\\')
   )`);
-  const params = variants.flatMap(variant => Array(7).fill(`%${escapeLike(variant)}%`));
+  const params = variants.flatMap(variant => Array(9).fill(`%${escapeLike(variant)}%`));
   const key = `%${escapeLike(nameKey(search))}%`;
 
   return {
@@ -127,10 +171,12 @@ function photoSearch(search) {
     OR e.groom_name LIKE ? ESCAPE '\\\\'
     OR e.family_clan LIKE ? ESCAPE '\\\\'
     OR e.town LIKE ? ESCAPE '\\\\'
+    OR al.town LIKE ? ESCAPE '\\\\'
+    OR pp.name LIKE ? ESCAPE '\\\\'
     OR al.title LIKE ? ESCAPE '\\\\'
     OR EXISTS (SELECT 1 FROM event_honorees eh WHERE eh.event_id = e.id AND eh.name LIKE ? ESCAPE '\\\\')
   )`);
-  const params = variants.flatMap(variant => Array(6).fill(`%${escapeLike(variant)}%`));
+  const params = variants.flatMap(variant => Array(8).fill(`%${escapeLike(variant)}%`));
   const key = `%${escapeLike(nameKey(search))}%`;
 
   return {
@@ -185,10 +231,20 @@ function adminPhotoShape(row, tags = []) {
   };
 }
 
+/**
+ * الشكل العام للألبوم. `event` يبقى مفتاحاً دائماً — كائناً كاملاً لألبوم
+ * المناسبة كما كان حرفياً، و`null` لألبوم بلا مناسبة (2026-10) — فلا يجد
+ * عميل قديم أباً ناقصاً في ألبوم مناسبة، ولا معنى جديداً لحقل قديم.
+ * و`person`/`honoree_name`/`town` إضافات لألبوم العريس: `honoree_name` اسم
+ * صاحبه من `people` (لا نصّاً مخزَّناً هنا)، و`town` بلدة الألبوم نفسها وإلا
+ * بلدة مناسبتها.
+ */
 function publicAlbumShape(row) {
+  const eventTown = row.event_town || null;
+  const albumTown = row.album_town || null;
   return {
     id: row.id,
-    event_id: row.event_id,
+    event_id: row.event_id || null,
     title: row.title,
     description: row.description,
     is_published: Boolean(row.is_published),
@@ -200,13 +256,16 @@ function publicAlbumShape(row) {
     // drifts the day PUBLIC_URL changes (ADR-0006, issue #100).
     share_url: `${config.publicUrl}/a/${row.id}`,
     created_at: row.created_at,
-    event: {
+    town: albumTown || eventTown || null,
+    honoree_name: row.person_name || null,
+    person: row.person_id ? { id: row.person_id, name: row.person_name || null } : null,
+    event: row.event_id ? {
       id: row.event_id,
       title: row.event_title || null,
-      town: row.town || null,
+      town: eventTown,
       event_date: row.event_date || null,
       occasion_type_name: row.occasion_type_name || null
-    }
+    } : null
   };
 }
 
@@ -249,26 +308,18 @@ async function listPublicAlbums({ search = null, eventId = null, page = 1, limit
   const countRow = await db.queryOne(
     `SELECT COUNT(*) AS total
        FROM event_albums al
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+       LEFT JOIN people pp ON pp.id = al.person_id
       WHERE ${where}`,
     params
   );
 
   const offset = (page - 1) * limit;
   const rows = await db.query(
-    `SELECT al.id, al.event_id, al.title, al.description, al.is_published, al.created_at,
-            e.title AS event_title, e.town, e.event_date,
-            ot.name AS occasion_type_name,
-            (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved') AS photo_count,
-            (SELECT p.image_url FROM event_photos p
-              WHERE p.album_id = al.id AND p.status = 'approved'
-              ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
-       FROM event_albums al
-       JOIN events e ON e.id = al.event_id
-       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+    `${albumRowSelect()}
       WHERE ${where}
-      ORDER BY e.event_date DESC, al.id DESC
+      ORDER BY COALESCE(e.event_date, DATE(al.created_at)) DESC, al.id DESC
       LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
@@ -283,16 +334,7 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   const conditions = publicAlbumConditions();
   conditions.push(PUBLIC_PHOTO_EXISTS);
   const albumRow = await db.queryOne(
-    `SELECT al.id, al.event_id, al.title, al.description, al.is_published, al.created_at,
-            e.title AS event_title, e.town, e.event_date,
-            ot.name AS occasion_type_name,
-            (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved') AS photo_count,
-            (SELECT p.image_url FROM event_photos p
-              WHERE p.album_id = al.id AND p.status = 'approved'
-              ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
-       FROM event_albums al
-       JOIN events e ON e.id = al.event_id
-       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+    `${albumRowSelect()}
       WHERE al.id = ? AND ${conditions.join(' AND ')}`,
     [albumId]
   );
@@ -337,8 +379,9 @@ async function listPublicPhotos({ search = null, albumId = null, person = null, 
     `SELECT COUNT(*) AS total
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+       LEFT JOIN people pp ON pp.id = al.person_id
       WHERE ${where}`,
     params
   );
@@ -346,14 +389,16 @@ async function listPublicPhotos({ search = null, albumId = null, person = null, 
   const offset = (page - 1) * limit;
   const rows = await db.query(
     `SELECT p.*, al.title AS album_title, al.event_id AS event_id,
-            e.title AS event_title, e.town, e.event_date,
-            ot.name AS occasion_type_name
+            e.title AS event_title,
+            COALESCE(al.town, e.town) AS town,
+            e.event_date, ot.name AS occasion_type_name
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+       LEFT JOIN people pp ON pp.id = al.person_id
       WHERE ${where}
-      ORDER BY e.event_date DESC, p.is_cover DESC, p.position ASC, p.id ASC
+      ORDER BY COALESCE(e.event_date, DATE(al.created_at)) DESC, p.is_cover DESC, p.position ASC, p.id ASC
       LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
@@ -368,11 +413,12 @@ async function listPublicPhotos({ search = null, albumId = null, person = null, 
 async function getPublicPhoto(photoId) {
   const row = await db.queryOne(
     `SELECT p.*, al.title AS album_title, al.event_id AS event_id,
-            e.title AS event_title, e.town, e.event_date,
-            ot.name AS occasion_type_name
+            e.title AS event_title,
+            COALESCE(al.town, e.town) AS town,
+            e.event_date, ot.name AS occasion_type_name
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.id = ? AND p.status = 'approved' AND ${publicAlbumConditions().join(' AND ')}`,
     [photoId]
@@ -401,7 +447,7 @@ async function searchPeople(search, limit = 12) {
                FROM photo_tags t
                JOIN event_photos ph ON ph.id = t.photo_id AND ph.status = 'approved'
                JOIN event_albums al ON al.id = ph.album_id
-               JOIN events e ON e.id = al.event_id
+               LEFT JOIN events e ON e.id = al.event_id
                LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
               WHERE t.person_id = p.id AND t.status = 'approved' AND ${gates}) AS photos_count,
             (SELECT COUNT(DISTINCT e.id)
@@ -425,7 +471,7 @@ async function searchPeople(search, limit = 12) {
        FROM photo_tags t
        JOIN event_photos ph ON ph.id = t.photo_id AND ph.status = 'approved'
        JOIN event_albums al ON al.id = ph.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE t.status = 'approved' AND t.person_id IN (${placeholders}) AND ${gates}
       ORDER BY ph.id ASC`,
@@ -455,6 +501,10 @@ async function searchPeople(search, limit = 12) {
  * `albums_count` عدُّ **مناسباته الظاهرة** لا ألبوماته: صاحبُ عرسٍ لم يُنشأ
  * ألبومه بعد (الألبوم يُنشأ عند أول فتح للوحة) يجب أن يظهر ويُوجَد، وإلّا صار
  * الظهور معلَّقاً على خطوة إدارية لاحقة.
+ *
+ * والألبوم صار له وجهان (2026-10): ألبومات مناسباته كما كانت، وألبومه هو إن
+ * أُنشئ باسمه بلا مناسبة (`al.person_id`). والبوابة العامة هي البوابة نفسها في
+ * الحالتين، فلا يُعاد إلّا ما يراه الزائر في قائمة الألبومات.
  */
 async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
   const person = await db.queryOne('SELECT id, name, name_key FROM people WHERE id = ?', [personId]);
@@ -462,20 +512,13 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
 
   const photos = await listPublicPhotos({ personId, page, limit });
   const albums = await db.query(
-    `SELECT al.id, al.event_id, al.title, al.description, al.is_published, al.created_at,
-            e.title AS event_title, e.town, e.event_date,
-            ot.name AS occasion_type_name,
-            (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved') AS photo_count,
-            (SELECT p.image_url FROM event_photos p
-              WHERE p.album_id = al.id AND p.status = 'approved'
-              ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
-       FROM event_honorees h
-       JOIN events e ON e.id = h.event_id
-       JOIN event_albums al ON al.event_id = e.id
-       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
-      WHERE h.person_id = ? AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_PHOTO_EXISTS}
-      ORDER BY e.event_date DESC`,
-    [personId]
+    `${albumRowSelect()}
+      WHERE (al.person_id = ?
+             OR EXISTS (SELECT 1 FROM event_honorees h
+                         WHERE h.event_id = al.event_id AND h.person_id = ?))
+        AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_PHOTO_EXISTS}
+      ORDER BY COALESCE(e.event_date, DATE(al.created_at)) DESC, al.id DESC`,
+    [personId, personId]
   );
 
   const occasions = await db.query(
@@ -489,7 +532,10 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
   );
 
   // لا شيء ظاهر ⇒ الشخص غير موجود، بنفس الردّ الذي يردّه لمن يعدّ المعرّفات.
-  if (!photos.pagination.total && !occasions.length) throw ApiError.notFound('الشخص غير موجود');
+  // ألبومُه وحده ظهورٌ صالح، وإلّا صار صاحبُ ألبومٍ لا صفحةَ له.
+  if (!photos.pagination.total && !occasions.length && !albums.length) {
+    throw ApiError.notFound('الشخص غير موجود');
+  }
 
   return {
     person: {
@@ -565,6 +611,16 @@ async function assertEventAllowsGallery(eventId) {
   return row;
 }
 
+/**
+ * بوابة رفع الصور للألبوم نفسه: ألبوم المناسبة يمرّ ببوابة نوعها، وألبوم بلا
+ * مناسبة لا نوع له أصلاً فلا بوابة نوع تُطبَّق عليه (2026-10). بقية البوابات —
+ * أن الألبوم داخل نطاق الأدمن، وأن الصورة تصير معتمدة — في مكانها.
+ */
+async function assertAlbumAllowsGallery(album) {
+  if (album.event_id === null || album.event_id === undefined) return null;
+  return assertEventAllowsGallery(album.event_id);
+}
+
 async function defaultAlbumTitle(eventId, connection = null) {
   const sql = `SELECT COALESCE(ot.name, 'عرس') AS type_name,
                       COALESCE(
@@ -609,20 +665,53 @@ async function ensureDefaultAlbum(user, eventId) {
   });
 }
 
+/**
+ * قراءة ألبوم واحد للوحة — بعد التحقّق من نطاقه، وبنفس شكل القراءة العامة
+ * وبنفس العدّ الذي اعتاده أدمن المناسبة (كل الصور، المخفية منها كذلك).
+ * مستقلة عن `listAlbumsForAdmin` لأن تلك مقيَّدة بمناسبة، وألبوم العريس
+ * (2026-10) لا مناسبة له، فلا بدّ من قارئ يقبل `event_id` = NULL.
+ */
+async function albumByIdForAdmin(user, albumId) {
+  await adminScope.assertAlbumInScope(user, albumId);
+  const row = await db.queryOne(
+    `${albumRowSelect({ photoCount: 'all' })}
+      WHERE al.id = ?`,
+    [albumId]
+  );
+  if (!row) throw ApiError.notFound('الألبوم غير موجود');
+  return publicAlbumShape(row);
+}
+
 async function listAlbumsForAdmin(user, eventId) {
   await adminScope.assertEventInScope(user, eventId);
   const rows = await db.query(
-    `SELECT al.*, e.title AS event_title, e.town, e.event_date, ot.name AS occasion_type_name,
-            (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id) AS photo_count,
-            (SELECT p.image_url FROM event_photos p
-              WHERE p.album_id = al.id AND p.status = 'approved'
-              ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
-       FROM event_albums al
-       JOIN events e ON e.id = al.event_id
-       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+    `${albumRowSelect({ photoCount: 'all' })}
       WHERE al.event_id = ?
       ORDER BY al.id ASC`,
     [eventId]
+  );
+  return rows.map(publicAlbumShape);
+}
+
+/**
+ * ألبومات العريس (بلا مناسبة) داخل نطاق الأدمن — أحدث أولاً (2026-10):
+ * تبويب الألبومات يبني شبكته من ألبومات مناسبة مختارة، فلا يبقى لألبوم
+ * `event_id = NULL` مدخل بعد مغادرة صفحته. الشكل العام نفسه والعدّ الكامل
+ * (`photoCount: 'all'`) كما في `listAlbumsForAdmin`، وسقفها ٥٠ صفّاً لأنها قائمة
+ * تنقّل لا شاشة إدارة كاملة — والرقم يمرّ `?` لا في نصّ الاستعلام.
+ */
+async function listHonoreeAlbumsForAdmin(user, limit = 50) {
+  const requested = Number.parseInt(limit, 10);
+  const capped = Number.isInteger(requested) && requested > 0
+    ? Math.min(requested, 50)
+    : 50;
+  const scoped = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
+  const rows = await db.query(
+    `${albumRowSelect({ photoCount: 'all' })}
+      WHERE al.event_id IS NULL${scoped.clause}
+      ORDER BY al.id DESC
+      LIMIT ?`,
+    [...scoped.params, capped]
   );
   return rows.map(publicAlbumShape);
 }
@@ -640,6 +729,50 @@ async function createAlbum(user, eventId, { title, description }) {
   return albums.find(album => Number(album.id) === Number(result.insertId)) || null;
 }
 
+/**
+ * بلدة ألبوم العريس: السوبر أدمن يكتب ما يشاء (أو يتركها فارغة)، وأدمن
+ * البلدة لا يخرج عن بلداته — بلدةٌ ليست له 404 كبقية `adminScope`، ولا بلدة
+ * أصلاً 400 لأن الألبوم بلا بلدة لا يدخل نطاق أحد. والقيمة تُقصّ كما في كل
+ * `cleanString` لا تُترك كما وصلت.
+ */
+async function resolveHonoreeAlbumTown(user, town) {
+  const requested = String(town || '').trim().slice(0, 100) || null;
+  if (user && user.role === 'super_admin') return requested;
+
+  const ownTowns = await adminScope.listTownsFor(user);
+  if (!requested) throw ApiError.badRequest('بلدة الألبوم مطلوبة');
+  if (!ownTowns.includes(requested)) throw ApiError.notFound('بلدة غير موجودة ضمن نطاقك');
+  return requested;
+}
+
+/**
+ * ألبوم باسم العريس بلا مناسبة (2026-10): الشخص يُحلّ بالاسم الموحَّد
+ * (`people.resolveByName`، ADR-0011) فلا يُنشأ صفّان لصاحب واحد، والألبوم
+ * يُنشأ منشوراً بعنوان افتراضي عربي، ويُعاد بشكله العام كاملاً. لا مناسبة في
+ * أي سطر هنا — وهذا مقصود: البوابات الخمس تخصّ ألبوم المناسبة وحده.
+ */
+async function createAlbumForHonoree(user, { honoreeName, town, title, description }) {
+  const name = String(honoreeName || '').trim().slice(0, 150);
+  if (!name) throw ApiError.badRequest('اسم العريس مطلوب');
+
+  const albumTown = await resolveHonoreeAlbumTown(user, town);
+  const personId = await people.resolveByName(name);
+  if (!personId) throw ApiError.badRequest('اسم العريس مطلوب');
+
+  const result = await db.execute(
+    `INSERT INTO event_albums (event_id, person_id, town, title, description, created_by)
+     VALUES (NULL, ?, ?, ?, ?, ?)`,
+    [personId, albumTown, (title || `عرس ${name}`).slice(0, 200), description || null, user.id]
+  );
+  logger.info('album.create.honoree', {
+    albumId: result.insertId,
+    personId,
+    town: albumTown,
+    by: user.id
+  });
+  return albumByIdForAdmin(user, result.insertId);
+}
+
 const ALBUM_UPDATABLE = ['title', 'description', 'is_published'];
 
 async function updateAlbum(user, albumId, data) {
@@ -654,8 +787,7 @@ async function updateAlbum(user, albumId, data) {
   if (!assignments.length) throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   params.push(albumId);
   await db.execute(`UPDATE event_albums SET ${assignments.join(', ')} WHERE id = ?`, params);
-  return listAlbumsForAdmin(user, (await adminScope.assertAlbumInScope(user, albumId)).event_id)
-    .then(albums => albums.find(album => Number(album.id) === Number(albumId)) || null);
+  return albumByIdForAdmin(user, albumId);
 }
 
 async function deleteAlbum(user, albumId) {
@@ -672,16 +804,30 @@ async function deleteAlbum(user, albumId) {
 
 // --- Admin: photos ----------------------------------------------------
 
+/**
+ * صور الألبوم للوحة. الألبوم يعود بالشكل العام نفسه (`publicAlbumShape`) لا
+ * بصفّ `event_albums` الخام: اللوحة تسمّي ألبوم العريس بـ`honoree_name`/`person`
+ * بعد فتحه من جديد، لا من ردّ إنشائه وحده (2026-10). ولا تحقّق مزدوج —
+ * `assertAlbumInScope` مرّة واحدة، ثم قراءة الصفّ بالقراءة المشتركة.
+ */
 async function listPhotosForAdmin(user, albumId, { page = 1, limit = 60 } = {}) {
-  const album = await adminScope.assertAlbumInScope(user, albumId);
+  await adminScope.assertAlbumInScope(user, albumId);
+  const albumRow = await db.queryOne(
+    `${albumRowSelect({ photoCount: 'all' })}
+      WHERE al.id = ?`,
+    [albumId]
+  );
+  if (!albumRow) throw ApiError.notFound('الألبوم غير موجود');
   const countRow = await db.queryOne('SELECT COUNT(*) AS total FROM event_photos WHERE album_id = ?', [albumId]);
   const offset = (page - 1) * limit;
   const rows = await db.query(
     `SELECT p.*, al.title AS album_title, al.event_id AS event_id,
-            e.title AS event_title, e.town, e.event_date, ot.name AS occasion_type_name
+            e.title AS event_title,
+            COALESCE(al.town, e.town) AS town,
+            e.event_date, ot.name AS occasion_type_name
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.album_id = ?
       ORDER BY p.is_cover DESC, p.position ASC, p.id ASC
@@ -690,7 +836,7 @@ async function listPhotosForAdmin(user, albumId, { page = 1, limit = 60 } = {}) 
   );
   const tags = await tagsForPhotos(rows.map(row => row.id), { approvedOnly: false });
   return {
-    album,
+    album: publicAlbumShape(albumRow),
     photos: rows.map(row => adminPhotoShape(row, tags.get(row.id) || [])),
     pagination: pagination(page, limit, Number(countRow.total))
   };
@@ -698,7 +844,7 @@ async function listPhotosForAdmin(user, albumId, { page = 1, limit = 60 } = {}) 
 
 async function signPhotoUploads(user, albumId, count) {
   const album = await adminScope.assertAlbumInScope(user, albumId);
-  await assertEventAllowsGallery(album.event_id);
+  await assertAlbumAllowsGallery(album);
   return cloudinary.signBatch(folderForAlbum(albumId), count);
 }
 
@@ -724,10 +870,12 @@ async function insertPhotoRow(connection, { eventId, albumId, publicId, imageUrl
 async function photoByIdForAdmin(photoId) {
   const row = await db.queryOne(
     `SELECT p.*, al.title AS album_title, al.event_id AS event_id,
-            e.title AS event_title, e.town, e.event_date, ot.name AS occasion_type_name
+            e.title AS event_title,
+            COALESCE(al.town, e.town) AS town,
+            e.event_date, ot.name AS occasion_type_name
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.id = ?`,
     [photoId]
@@ -739,7 +887,7 @@ async function photoByIdForAdmin(photoId) {
 
 async function registerPhoto(user, albumId, upload, { width, height }, caption) {
   const album = await adminScope.assertAlbumInScope(user, albumId);
-  await assertEventAllowsGallery(album.event_id);
+  await assertAlbumAllowsGallery(album);
 
   const verified = cloudinary.verifyUpload(folderForAlbum(albumId), upload);
   const existing = await db.queryOne('SELECT * FROM event_photos WHERE public_id = ?', [verified.public_id]);
@@ -800,8 +948,10 @@ async function updatePhoto(user, photoId, data) {
       params.push(position);
     } else if (column === 'album_id') {
       const albumId = Number.parseInt(data.album_id, 10);
+      // `<=>` لا `=`: ألبوم العريس بلا مناسبة (`event_id` NULL) له صورتُه،
+      // ونقلها إلى ألبوم آخر لا مناسبة له أيضاً يجب أن يُقبل بنفس الشرط.
       const target = await db.queryOne(
-        'SELECT id FROM event_albums WHERE id = ? AND event_id = ?',
+        'SELECT id FROM event_albums WHERE id = ? AND event_id <=> ?',
         [albumId, photo.event_id]
       );
       if (!target) throw ApiError.badRequest('الألبوم الهدف لا ينتمي إلى المناسبة نفسها');
@@ -883,7 +1033,7 @@ function sanitiseSourceUrl(raw) {
 
 async function importRemoteIntoAlbum(user, albumId, { url, caption, source }) {
   const album = await adminScope.assertAlbumInScope(user, albumId);
-  await assertEventAllowsGallery(album.event_id);
+  await assertAlbumAllowsGallery(album);
 
   const sourceUrl = sanitiseSourceUrl(url);
   if (sourceUrl) {
@@ -970,7 +1120,7 @@ async function assertPhotoVisible(photoId) {
     `SELECT p.id
        FROM event_photos p
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.id = ? AND p.status = 'approved' AND ${publicAlbumConditions().join(' AND ')}`,
     [photoId]
@@ -1038,7 +1188,7 @@ async function addAdminTag(user, photoId, name) {
 }
 
 async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
-  const scoped = await adminScope.townScopeClause(user, 'e');
+  const scoped = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
   const conditions = ['1 = 1'];
   const params = [];
   if (status) {
@@ -1049,11 +1199,11 @@ async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
   params.push(...scoped.params);
   const rows = await db.query(
     `SELECT t.*, p.image_url, p.caption, al.title AS album_title,
-            e.title AS event_title, e.town, u.full_name AS requester_name
+            e.title AS event_title, COALESCE(al.town, e.town) AS town, u.full_name AS requester_name
        FROM photo_tags t
        JOIN event_photos p ON p.id = t.photo_id
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN users u ON u.id = t.requested_by
       WHERE ${conditions.join(' AND ')}${scoped.clause}
       ORDER BY t.created_at ASC, t.id ASC
@@ -1083,12 +1233,12 @@ async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
 }
 
 async function scopedTag(user, tagId) {
-  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const { clause, params } = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
   const row = await db.queryOne(
     `SELECT t.* FROM photo_tags t
        JOIN event_photos p ON p.id = t.photo_id
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
       WHERE t.id = ?${clause}`,
     [tagId, ...params]
   );
@@ -1147,15 +1297,16 @@ async function reportPhoto(user, photoId, { reason, note }) {
 
 async function listReportsForAdmin(user, { status = 'open', limit = 50 } = {}) {
   if (!['open', 'resolved', 'dismissed'].includes(status)) throw ApiError.badRequest('حالة البلاغ غير معروفة');
-  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const { clause, params } = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
   const rows = await db.query(
     `SELECT r.*, p.image_url, p.caption, p.status AS photo_status,
-            al.title AS album_title, e.title AS event_title, e.town,
+            al.title AS album_title, e.title AS event_title,
+            COALESCE(al.town, e.town) AS town,
             u.full_name AS reporter_name
        FROM photo_reports r
        JOIN event_photos p ON p.id = r.photo_id
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN users u ON u.id = r.user_id
       WHERE r.status = ?${clause}
       ORDER BY r.created_at ASC, r.id ASC
@@ -1186,12 +1337,12 @@ async function listReportsForAdmin(user, { status = 'open', limit = 50 } = {}) {
 
 async function resolveReport(user, reportId, status) {
   if (!['resolved', 'dismissed'].includes(status)) throw ApiError.badRequest('حالة البلاغ غير معروفة');
-  const { clause, params } = await adminScope.townScopeClause(user, 'e');
+  const { clause, params } = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
   const row = await db.queryOne(
     `SELECT r.id FROM photo_reports r
        JOIN event_photos p ON p.id = r.photo_id
        JOIN event_albums al ON al.id = p.album_id
-       JOIN events e ON e.id = al.event_id
+       LEFT JOIN events e ON e.id = al.event_id
       WHERE r.id = ?${clause}`,
     [reportId, ...params]
   );
@@ -1216,7 +1367,10 @@ module.exports = {  // public
   // admin albums/photos
   ensureDefaultAlbum,
   listAlbumsForAdmin,
+  listHonoreeAlbumsForAdmin,
+  albumByIdForAdmin,
   createAlbum,
+  createAlbumForHonoree,
   updateAlbum,
   deleteAlbum,
   listPhotosForAdmin,

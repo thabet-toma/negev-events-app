@@ -26,7 +26,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- Admin Styles -->
-  <link rel="stylesheet" href="admin.css?v=2.7.0">
+  <link rel="stylesheet" href="admin.css?v=2.8.1">
 </head>
 <body>
 
@@ -229,6 +229,15 @@
             <button type="button" class="admin-btn-primary" onclick="openAdminEventAlbums()">
               <i class="fa-solid fa-folder-open"></i> فتح الألبومات
             </button>
+            <!-- ألبوم بلا مناسبة لا مناسبة له، فلا يصل إليه منتقي المناسبات أعلاه —
+                 هذه رقاقته: تجلب ألبومات العريس كلها وتعرض بطاقاتها نفسها (2026-10). -->
+            <button type="button" class="filter-chip admin-albums-honoree-chip" id="adminAlbumsHonoreeChip" onclick="openAdminHonoreeAlbums()">
+              <i class="fa-solid fa-user-tie"></i> بلا مناسبة
+            </button>
+            <!-- المدخل الثاني: ألبوم باسم العريس بلا مناسبة (2026-10) — لا يمرّ بالمنتقي أعلاه -->
+            <button type="button" class="admin-btn-ghost admin-albums-honoree-btn" onclick="openHonoreeAlbumModal()">
+              <i class="fa-solid fa-plus"></i> ألبوم باسم العريس (بلا مناسبة)
+            </button>
           </div>
           <div id="adminAlbumsNotice" class="occasion-types-notice" style="display:none;"></div>
           <div id="adminAlbumsList" class="admin-albums-grid">
@@ -255,8 +264,8 @@
               <i class="fa-solid fa-cloud-arrow-up"></i> رفع صور
               <input type="file" id="adminAlbumUploadInput" accept="image/jpeg,image/png,image/webp,image/heic" multiple hidden onchange="handleAdminAlbumUpload(this)">
             </label>
-            <button type="button" class="admin-btn-ghost" onclick="createAdminAlbum()"><i class="fa-solid fa-folder-plus"></i> ألبوم جديد</button>
-            <button type="button" class="btn-reject" id="adminAlbumDeleteBtn" onclick="deleteAdminAlbum()" style="display:none;"><i class="fa-solid fa-trash-can"></i> حذف الألبوم</button>
+            <button type="button" class="admin-btn-ghost" id="adminAlbumNewBtn" onclick="createAdminAlbum()"><i class="fa-solid fa-folder-plus"></i> ألبوم جديد</button>
+            <button type="button" class="btn-reject" id="adminAlbumDeleteBtn" onclick="deleteAdminAlbum(this.dataset.albumId)" style="display:none;"><i class="fa-solid fa-trash-can"></i> حذف الألبوم</button>
           </div>
 
           <ul id="adminAlbumUploadQueue" class="archive-upload-queue"></ul>
@@ -1385,6 +1394,41 @@
     </div>
   </div>
 
+  <!-- HONOREE ALBUM MODAL — ألبوم باسم العريس بلا مناسبة (2026-10) -->
+  <div id="honoreeAlbumModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="honoreeAlbumTitle">
+      <div class="modal-header">
+        <h3 id="honoreeAlbumTitle"><i class="fa-solid fa-user-plus"></i> ألبوم باسم العريس</h3>
+        <button type="button" class="close-modal-btn" onclick="closeHonoreeAlbumModal()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="modal-sub" style="margin-bottom:14px; font-size:0.9rem; line-height:1.6;">
+        ألبوم صور بلا مناسبة: يُنشأ باسم العريس مباشرةً، وتُرفع فيه الصور بعد إنشائه. اترك العنوان فارغاً فيصير «عرس الاسم».
+      </p>
+      <form id="honoreeAlbumForm" onsubmit="handleCreateHonoreeAlbum(event)">
+        <div class="form-group">
+          <label for="honoreeAlbumName">اسم العريس <span style="color:var(--danger-red);">*</span></label>
+          <input type="text" id="honoreeAlbumName" maxlength="150" required placeholder="مثال: أحمد أبو سالم">
+        </div>
+        <div class="form-group">
+          <label for="honoreeAlbumTown">البلدة</label>
+          <select id="honoreeAlbumTown"></select>
+          <span class="hint-text" id="honoreeAlbumTownHint"></span>
+        </div>
+        <div class="form-group">
+          <label for="honoreeAlbumTitleInput">عنوان الألبوم (اختياري)</label>
+          <input type="text" id="honoreeAlbumTitleInput" maxlength="200" placeholder="يُترك فارغاً فيصير «عرس اسم العريس»">
+        </div>
+        <div id="honoreeAlbumError" class="honoree-album-error" style="display:none;"></div>
+        <div class="form-row" style="margin-top:16px; gap:10px;">
+          <button type="submit" class="admin-btn-primary" id="honoreeAlbumSubmitBtn" style="flex:1;">
+            <i class="fa-solid fa-check"></i> إنشاء الألبوم وفتحه
+          </button>
+          <button type="button" class="admin-btn-ghost" onclick="closeHonoreeAlbumModal()">إلغاء</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- ADMIN RE-AUTH MODAL (spec stories 56, 57) -->
   <div id="adminReauthModal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -1428,6 +1472,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="admin.js?v=2.7.0"></script>
+  <script src="admin.js?v=2.8.1"></script>
 </body>
 </html>

@@ -1314,6 +1314,88 @@ async function run() {
     assert.ok(document.getElementById('archiveViewerTagBtn').textContent.includes('معلّق') || paths.some(path => path === 'POST /api/photos/7/tags'));
   });
 
+  /**
+   * مشاركة ألبوم بلا مناسبة (2026-10): الخادم يرسل `event: null` عمداً لصاحب
+   * الألبوم، وبلدته على الألبوم نفسه — فقراءة `album.event.town` وحدها كانت
+   * تُسقط البلدة من سطر المشاركة ومن `share_clicked` معاً.
+   *
+   * Opens a real album page through `openAlbumDetail()` (the only writer of
+   * `albumsCurrentAlbum`) and shares it with a captured `shareLink` and a
+   * fetch stub that also records `POST /api/analytics/events`.
+   */
+  async function shareAlbumCase(album) {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const analytics = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === `/api/albums/${album.id}`) {
+        return jsonResponse({
+          success: true,
+          album,
+          photos: [],
+          pagination: { page: 1, limit: 24, total: 0, totalPages: 0 }
+        });
+      }
+      if (parsed.pathname === '/api/analytics/events') {
+        analytics.push(JSON.parse(options.body));
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: true, photos: [], albums: [], people: [] });
+    };
+    let shared = null;
+    dom.window.shareLink = async payload => { shared = payload; };
+    await dom.window.openAlbumDetail(album.id);
+    dom.window.shareAlbum(album.id);
+    await waitFor(() => shared !== null);
+    await waitFor(() => analytics.length > 0);
+    return { shared, analytics };
+  }
+
+  await test('share a no-event honoree album: the line names its town from the album, and so does the analytics event', async () => {
+    const { shared, analytics } = await shareAlbumCase({
+      id: 91,
+      title: 'عرس سالم',
+      event_id: null,
+      town: 'رهط',
+      event: null,
+      share_url: 'https://munasbat.test/a/91',
+      photo_count: 0
+    });
+    assert.strictEqual(shared.line, 'عرس سالم — رهط', `expected «العنوان — رهط», got «${shared.line}»`);
+    assert.strictEqual(analytics[0].event_name, 'share_clicked');
+    assert.strictEqual(analytics[0].content_town, 'رهط', 'the album town reaches share_clicked, not undefined');
+  });
+
+  await test('share an event album: the event town is what the line and the analytics event carry', async () => {
+    const { shared, analytics } = await shareAlbumCase({
+      id: 92,
+      title: 'عرس أحمد',
+      event_id: 5,
+      town: null,
+      event: { id: 5, title: 'عرس أحمد', town: 'حورة' },
+      share_url: 'https://munasbat.test/a/92',
+      photo_count: 2
+    });
+    assert.strictEqual(shared.line, 'عرس أحمد — حورة');
+    assert.strictEqual(analytics[0].content_town, 'حورة');
+  });
+
+  await test('share an album with neither town nor event: the title alone, with no dangling dash', async () => {
+    const { shared, analytics } = await shareAlbumCase({
+      id: 93,
+      title: 'ألبوم بلا بلدة',
+      event_id: null,
+      town: null,
+      event: null,
+      share_url: 'https://munasbat.test/a/93',
+      photo_count: 0
+    });
+    assert.strictEqual(shared.line, 'ألبوم بلا بلدة', 'a missing town appends nothing');
+    assert.ok(!shared.line.includes('—'), 'no floating « — » at the end of the line');
+    assert.strictEqual(analytics[0].content_town, undefined, 'no town is sent rather than an empty one');
+  });
+
   await test('the event page gets an additive album strip — escaped titles, cover and count — and nothing when empty', () => {
     const dom = buildEnv();
     const doc = dom.window.document;
@@ -1721,6 +1803,139 @@ async function run() {
     }
   });
 
+  console.log('\nألبوم بلا مناسبة — ألبوم باسم العريس (event_id NULL, web/)');
+
+  await test('a no-event album card names the honoree and his town, and draws no empty line where the event line sits', () => {
+    const dom = buildEnv();
+    const doc = dom.window.document;
+    const cardOf = album => {
+      const box = doc.createElement('div');
+      box.innerHTML = dom.window.albumCardHtml(album);
+      return box.querySelector('.album-card');
+    };
+
+    // الشكل الذي يرسله GET /api/albums لألبوم بلا مناسبة: event: null مع
+    // honoree_name و town، والعنوان نفسه «عرس <الاسم>».
+    const card = cardOf({
+      id: 12,
+      event_id: null,
+      title: 'عرس سعيد أبو عرار',
+      honoree_name: 'سعيد أبو عرار',
+      town: 'رهط',
+      person: { id: 31, name: 'سعيد أبو عرار' },
+      event: null,
+      photo_count: 4
+    });
+    assert.strictEqual(card.querySelector('.album-card-body strong').textContent, 'عرس سعيد أبو عرار');
+    // العيب الذي يحرسه هذا التأكيد: `album.event || {}` على `event: null` رسم
+    // `<span>` فارغاً — سطراً أبيض على كل بطاقة.
+    assert.strictEqual(
+      card.querySelector('.album-card-body span').textContent,
+      'سعيد أبو عرار · رهط',
+      'the event line reads honoree · town, not a blank span'
+    );
+    assert.strictEqual(card.querySelector('.album-card-body small').textContent, '4 صورة');
+    assert.deepStrictEqual(
+      [...card.querySelectorAll('.album-card-body span')].filter(span => !span.textContent.trim()).map(span => span.outerHTML),
+      [],
+      'no empty line on a no-event album card'
+    );
+
+    // بلا `honoree_name` (استجابة سبقت الحقل) يسقط إلى `person.name`، والبلد وحده يكفي.
+    const legacy = cardOf({ id: 13, event_id: null, title: 'عرس فاطمة', town: 'كسيفة', person: { id: 32, name: 'فاطمة' }, event: null, photo_count: 1 });
+    assert.strictEqual(legacy.querySelector('.album-card-body span').textContent, 'فاطمة · كسيفة');
+    const townOnly = cardOf({ id: 14, event_id: null, title: 'عرس', town: 'تل السبع', event: null, photo_count: 0 });
+    assert.strictEqual(townOnly.querySelector('.album-card-body span').textContent, 'تل السبع');
+
+    // لا اسم ولا بلدة: السطر يختفي كلّياً، لا يُرسم فارغاً.
+    const bare = cardOf({ id: 15, event_id: null, title: 'ألبوم', event: null, photo_count: 0 });
+    assert.strictEqual(bare.querySelectorAll('.album-card-body span').length, 0, 'nothing to name, so no line at all');
+  });
+
+  await test('a no-event album header names the honoree and his town, with no date line and no dangling separator', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+    const album = {
+      id: 12,
+      event_id: null,
+      title: 'عرس سعيد أبو عرار',
+      honoree_name: 'سعيد أبو عرار',
+      town: 'رهط',
+      person: { id: 31, name: 'سعيد أبو عرار' },
+      event: null,
+      photo_count: 0,
+      cover_url: 'https://cdn.test/no-event-cover.jpg'
+    };
+    const fallbackFetch = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/albums/12') {
+        return jsonResponse({ success: true, album, photos: [], pagination: { page: 1, limit: 24, total: 0, totalPages: 1 } });
+      }
+      return fallbackFetch(url, options);
+    };
+
+    await dom.window.openAlbumDetail(12);
+    const header = document.getElementById('albumDetailHeader');
+    const line = header.querySelector('.album-detail-card p');
+    assert.ok(line, 'the identity line is drawn');
+    assert.strictEqual(line.textContent, 'سعيد أبو عرار · رهط');
+    assert.ok(!line.textContent.endsWith('·'), 'no `·` left hanging where the date used to be');
+    assert.ok(!header.textContent.includes('—'), 'no «—» standing in for a missing date');
+    assert.strictEqual(header.querySelectorAll('.album-detail-card p').length, 1, 'one line, not an extra empty one');
+
+    // لا اسم في أي حقل ولا بلدة: لا سطر فارغ ولا «—» — السطر لا يُرسم أصلاً.
+    delete album.honoree_name;
+    delete album.person;
+    delete album.town;
+    await dom.window.openAlbumDetail(12);
+    assert.strictEqual(
+      document.querySelector('#albumDetailHeader .album-detail-card p'),
+      null,
+      'a header with nothing to name draws no <p> at all'
+    );
+  });
+
+  await test('an event album keeps its event title, town and date on the card and in the header (regression)', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const doc = dom.window.document;
+    const album = {
+      id: 11,
+      event_id: 5,
+      title: 'عرس أحمد — رهط',
+      honoree_name: null,
+      person: null,
+      town: 'رهط',
+      photo_count: 2,
+      cover_url: 'https://cdn.test/cover.jpg',
+      event: { id: 5, title: 'عرس أحمد', town: 'رهط', event_date: '2025-05-01', occasion_type_name: 'عرس' }
+    };
+    const box = doc.createElement('div');
+    box.innerHTML = dom.window.albumCardHtml(album);
+    assert.strictEqual(
+      box.querySelector('.album-card-body span').textContent,
+      'عرس أحمد · رهط',
+      'the event album card still reads event title · town'
+    );
+
+    dom.window.fetch = async url => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/albums/11') {
+        return jsonResponse({ success: true, album, photos: [], pagination: { page: 1, limit: 24, total: 0, totalPages: 1 } });
+      }
+      return jsonResponse({ success: true });
+    };
+    await dom.window.openAlbumDetail(11);
+    assert.strictEqual(
+      doc.querySelector('#albumDetailHeader .album-detail-card p').textContent,
+      'عرس أحمد · رهط · 2025-05-01',
+      'the event album header still carries title · town · date'
+    );
+    assert.strictEqual(doc.querySelector('#albumDetailHeader .album-detail-card h2').textContent, 'عرس أحمد — رهط');
+  });
+
   console.log('\nPlace & kind filter — one searchable multi-select each (#85 batch 6a, stories 40-46)');
 
   const TEST_VILLAGE_FIXTURE = { id: 777, name: 'قرية الاختبار', latitude: 31.1, longitude: 34.8, position: 1 };
@@ -2053,6 +2268,210 @@ async function run() {
     assert.strictEqual(dom.window.document.getElementById('placeFilterChipLabel').textContent, 'كل الأماكن');
     assert.strictEqual(dom.window.document.getElementById('kindFilterChipLabel').textContent, 'كل الأنواع');
     assert.strictEqual(dom.window.document.getElementById('placeFilterChip').disabled, false, 'a corrupt stored value must not leave the picker stuck disabled');
+  });
+
+  console.log('\nFeed filter signature — a change that changes nothing must not rebuild the list');
+
+  /** One card's worth of event, ids chosen per answer below so the DOM names which request landed. */
+  function feedSignatureEvent(id) {
+    return {
+      id, title: `عرس رقم ${id}`, family_clan: null, town: 'رهط',
+      event_date: '2027-06-01', location_name: 'قاعة الاختبار', poster_url: null,
+      audio_url: null, occasion_type: WEDDING_TYPE, reactions: {}
+    };
+  }
+
+  /** The ids of the rendered feed cards, in DOM order — what "the same list" means here. */
+  function feedCardIds(win) {
+    return [...win.document.querySelectorAll('#eventsContainer .event-card')].map(card => Number(card.dataset.eventId));
+  }
+
+  /**
+   * A capturing stub whose /api/events answer follows its own query: a search
+   * answers one list, a chosen town another, both together a third, and no
+   * filter the boot list. So a test can tell not only HOW MANY requests went
+   * out but WHICH one landed.
+   */
+  function buildFeedSignatureFetchStub() {
+    const calls = [];
+    const fetchStub = async url => {
+      const fullUrl = String(url);
+      const requestPath = fullUrl.split('?')[0];
+      if (requestPath === '/api/towns') {
+        return jsonResponse({ success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [] });
+      }
+      if (requestPath === '/api/occasion-types') return jsonResponse({ success: true, types: OCCASION_TYPES_FIXTURE });
+      if (requestPath === '/api/events') {
+        calls.push(fullUrl);
+        const params = new URLSearchParams(fullUrl.split('?')[1] || '');
+        let events = [feedSignatureEvent(700), feedSignatureEvent(701)];
+        if (params.get('search') && params.get('town')) events = [feedSignatureEvent(810)];
+        else if (params.get('search')) events = [feedSignatureEvent(710), feedSignatureEvent(711)];
+        else if (params.get('town')) events = [feedSignatureEvent(800)];
+        return jsonResponse({ success: true, events, pagination: { page: 1, totalPages: 1 }, announcements: [] });
+      }
+      return jsonResponse({ success: false });
+    };
+    return { fetchStub, calls };
+  }
+
+  /** Loads the page with the signature stub wired BEFORE app.js runs, waits for its own boot fetch, then zeroes the counter. */
+  async function setupFeedSignatureEnv() {
+    const { fetchStub, calls } = buildFeedSignatureFetchStub();
+    const dom = buildEnv({ onBeforeEval: window => { window.fetch = fetchStub; } });
+    await flushBoot();
+    await waitFor(() => feedCardIds(dom.window).length > 0);
+    await dom.window.initPlaceFilter();
+    assert.deepStrictEqual(feedCardIds(dom.window), [700, 701], 'the unfiltered boot answer must be on screen first');
+    calls.length = 0;
+    return { dom, calls };
+  }
+
+  await test('two identical searches send one request and leave the very same cards in place', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const input = dom.window.document.getElementById('eventSearchInput');
+
+    input.value = 'سالم';
+    dom.window.handleSearch();
+    await waitFor(() => calls.length === 1 && feedCardIds(dom.window).join(',') === '710,711');
+    assert.deepStrictEqual(feedCardIds(dom.window), [710, 711], 'the search answer must be the list on screen');
+
+    dom.window.handleSearch(); // النص نفسه — لا شيء تغيّر
+    await delay(520);
+    assert.strictEqual(calls.length, 1, 'a second identical search must not reach the server again');
+    assert.deepStrictEqual(feedCardIds(dom.window), [710, 711], 'and must not rebuild the list from its first card either');
+  });
+
+  await test('opening and closing the filter drawer without changing anything keeps the cards and sends no request', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const before = feedCardIds(dom.window);
+
+    dom.window.toggleTopChrome(true);
+    const drawerSearch = dom.window.document.getElementById('drawerSearchInput');
+    assert.strictEqual(drawerSearch.value, '', 'the drawer opens holding the applied (empty) search text');
+    // Even the input event a browser fires for a no-op edit must not cost a fetch.
+    drawerSearch.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    dom.window.toggleTopChrome(false);
+
+    await delay(520); // beyond handleDrawerSearch's 400ms debounce
+    assert.strictEqual(calls.length, 0, 'opening and closing the drawer unchanged must not fetch the feed');
+    assert.deepStrictEqual(feedCardIds(dom.window), before, 'the same cards must stay, in the same order');
+  });
+
+  await test('an actual filter change shows the floating «رجوع لنتائجك السابقة» pill', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const pill = dom.window.document.getElementById('feedBackPill');
+    assert.ok(pill, 'expected #feedBackPill in web/index.html');
+    assert.strictEqual(pill.hidden, true, 'it ships hidden — there is no previous result to return to yet');
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+
+    await waitFor(() => feedCardIds(dom.window).join(',') === '800' && pill.hidden === false);
+    assert.strictEqual(calls.length, 1, 'the real change fetched once');
+    assert.strictEqual(pill.hidden, false, 'a real filter change must offer the way back');
+    assert.ok(pill.textContent.includes('رجوع لنتائجك السابقة'), `expected the Arabic pill label, got "${pill.textContent}"`);
+
+    // Floating and mobile/desktop alike: one base rule that floats, no display:none.
+    const pillCss = STYLES_CSS_RAW.match(/\.feed-back-pill\s*\{[^}]*\}/);
+    assert.ok(pillCss, 'web/styles.css must carry a .feed-back-pill rule');
+    assert.ok(/display:\s*inline-flex/.test(pillCss[0]), 'the pill must be displayable (no hidden-by-default rule)');
+    assert.ok(/position:\s*fixed/.test(pillCss[0]), 'the pill floats over the feed');
+    const bottomOffset = pillCss[0].match(/bottom:\s*calc\((\d+)px/);
+    assert.ok(bottomOffset && Number(bottomOffset[1]) >= 68, 'its bottom offset must clear the 68px bottom navbar');
+  });
+
+  await test('pressing the pill restores the previous card ids in their order with no new request, then hides', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const before = feedCardIds(dom.window);
+    assert.deepStrictEqual(before, [700, 701]);
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '800');
+    const requestsAfterChange = calls.length;
+
+    const pill = dom.window.document.getElementById('feedBackPill');
+    assert.strictEqual(pill.hidden, false);
+    pill.click();
+
+    assert.deepStrictEqual(feedCardIds(dom.window), before, 'the previous results must return in their original order');
+    assert.strictEqual(pill.hidden, true, 'one snapshot only — the pill hides once used');
+    await delay(80);
+    assert.strictEqual(calls.length, requestsAfterChange, 'going back must not touch the network');
+  });
+
+  await test('pressing the pill restores the filter UI its list was fetched with, so nothing re-fetches afterwards', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const { document } = dom.window;
+    const searchInput = document.getElementById('eventSearchInput');
+    const drawerSearch = document.getElementById('drawerSearchInput');
+    const pill = document.getElementById('feedBackPill');
+
+    // تغييران فعليان: بحث، ثم مكان فوقه — لقطة المكان هي نتيجة البحث وحدها.
+    searchInput.value = 'سالم';
+    dom.window.handleSearch();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '710,711');
+    assert.strictEqual(calls.length, 1);
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '810' && document.getElementById('placeFilterChipLabel').textContent === 'رهط');
+    assert.strictEqual(pill.hidden, false);
+
+    // رجوع أول: رقاقة المكان تعود «كل الأماكن» مع القائمة التي تصفها.
+    pill.click();
+    assert.strictEqual(document.getElementById('placeFilterChipLabel').textContent, 'كل الأماكن', 'the place chip must describe the list on screen again');
+    assert.strictEqual(document.getElementById('drawerPlaceChipLabel').textContent, 'كل الأماكن');
+    assert.deepStrictEqual(feedCardIds(dom.window), [710, 711], 'and the list is the one that state fetched');
+    assert.strictEqual(searchInput.value, 'سالم', 'the search text of that list stays in its field');
+    assert.strictEqual(drawerSearch.value, 'سالم');
+    assert.strictEqual(dom.window.feedFiltersUnchanged(), true, 'the restored signature must describe the restored filter state');
+
+    // رجوع ثانٍ: هذه المرّة نصّ البحث نفسه هو ما يعود إلى حقله.
+    dom.window.clearSearch();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '700,701' && pill.hidden === false);
+    assert.strictEqual(searchInput.value, '');
+
+    pill.click();
+    assert.strictEqual(searchInput.value, 'سالم', 'the search field must show the text its results were fetched with');
+    assert.strictEqual(drawerSearch.value, 'سالم', 'the drawer search field agrees with it');
+    assert.deepStrictEqual(feedCardIds(dom.window), [710, 711]);
+    assert.strictEqual(dom.window.feedFiltersUnchanged(), true);
+
+    // الحالة عادت مطابقة للبصمة، فأول تفاعل تالٍ لا يجد ما يجلبه بلا سبب.
+    const requestsBeforeBack = calls.length;
+    dom.window.handleSearch();
+    await delay(120);
+    assert.strictEqual(calls.length, requestsBeforeBack, 'a no-op search after going back must not fetch again');
+  });
+
+  await test('a real filter change draws its results from the top, with an explicit scroll reset', async () => {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    const { document } = dom.window;
+    const container = document.getElementById('eventsContainer');
+    const scrollCalls = [];
+    dom.window.scrollTo = (x, y) => { scrollCalls.push([x, y]); };
+    container.scrollTop = 640; // deep in the feed — jsdom stores the value, no layout needed
+
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '800');
+
+    assert.deepStrictEqual(scrollCalls, [[0, 0]], `expected one explicit scrollTo(0, 0) once the new list landed, got ${JSON.stringify(scrollCalls)}`);
+    assert.strictEqual(container.scrollTop, 0, 'the feed container itself is reset to its first result');
+
+    // والفرق مقصود: تحديث بلا تغيير بصمة (زرّ التحديث) يعيد الموضع لا يصفّره.
+    scrollCalls.length = 0;
+    container.scrollTop = 320;
+    dom.window.refreshEventsFeed();
+    await waitFor(() => calls.length === 2 && container.scrollTop === 320);
+    assert.strictEqual(container.scrollTop, 320, 'an unchanged-signature refresh must keep the reader where they were');
+    assert.deepStrictEqual(scrollCalls, [], 'and must not scroll the page to the top either');
   });
 
   console.log('\nLoading state — skeletons before the feed resolves, not a spinner (#85 خطوة 53-54)');
@@ -7676,6 +8095,132 @@ async function run() {
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.status === 'approved'));
     await dom.window.hideAdminReportedPhoto(3);
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.status === 'hidden'));
+  });
+
+  /**
+   * حذف الألبوم من رأس اللوحة (2026-10): الزرّ كان ينادي `deleteAdminAlbum()`
+   * بلا معرّف، فيُبنى `DELETE /api/admin/albums/NaN` ويردّ الخادم 400. المعرّف
+   * صار على الزرّ من `renderAdminAlbumDetail()`، والاختبار يضغطه كما يضغطه
+   * الأدمن — لا يمرّر معرّفاً بنفسه.
+   */
+  await test('ألبومات الإدارة: زرّ الحذف في الرأس يرسل معرّف الألبوم الحقيقي، ويغلق اللوحة ويعيد جلب الألبومات', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const album = {
+      id: 11,
+      event_id: 7,
+      title: 'ألبوم العرس',
+      is_published: 1,
+      photo_count: 0,
+      cover_url: null,
+      cover_thumb_url: null
+    };
+    const calls = [];
+    instrumentAdminLive(dom, (requestPath, method) => {
+      calls.push({ requestPath, method });
+      if (requestPath === '/api/admin/events' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          events: [{
+            id: 7,
+            title: 'عرس أحمد',
+            groom_name: 'أحمد',
+            town: 'رهط',
+            status: 'approved',
+            occasion_type_id: 1
+          }]
+        });
+      }
+      if (requestPath === '/api/admin/occasion-types' && method === 'GET') {
+        return jsonResponse({ success: true, types: [{ id: 1, name: 'عرس', archive_gallery: 1, fields: [], reactions: [] }] });
+      }
+      if (requestPath === '/api/admin/events/7/albums' && method === 'GET') {
+        return jsonResponse({ success: true, album, albums: [album] });
+      }
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'GET') {
+        return jsonResponse({ success: true, album, photos: [] });
+      }
+      if (requestPath === '/api/admin/albums/11' && method === 'DELETE') {
+        return jsonResponse({ success: true, message: 'تم حذف الألبوم وصوره' });
+      }
+      return jsonResponse({ success: true });
+    });
+    dom.window.confirm = () => true;
+
+    dom.window.switchAdminTab('tabAdminAlbums');
+    await waitFor(() => document.querySelectorAll('#adminAlbumsEventSelect option').length === 1);
+    await dom.window.openAdminEventAlbums();
+    await dom.window.openAdminAlbum(11);
+
+    const deleteBtn = document.getElementById('adminAlbumDeleteBtn');
+    assert.strictEqual(deleteBtn.dataset.albumId, '11', 'the open album id sits on the header button');
+    deleteBtn.click();
+    await waitFor(() => document.getElementById('adminAlbumDetail').style.display === 'none');
+
+    const deletes = calls.filter(call => call.method === 'DELETE');
+    assert.strictEqual(deletes.length, 1, 'one click, one DELETE');
+    assert.strictEqual(deletes[0].requestPath, '/api/admin/albums/11', 'the real id — never NaN');
+    assert.strictEqual(document.getElementById('adminAlbumDetail').style.display, 'none', 'the panel closes after deleting');
+    const albumLoads = calls.filter(call => call.requestPath === '/api/admin/events/7/albums' && call.method === 'GET').length;
+    assert.ok(albumLoads >= 2, `the event's album list is refetched after the delete, got ${albumLoads} load(s)`);
+  });
+
+  /**
+   * رقاقة «بلا مناسبة» (2026-10): ألبوم العريس لا مناسبة له، فلا يدخل منتقي
+   * المناسبات ولا يبقى له مدخل بعد مغادرة صفحته. الرقاقة تجلب ألبومات العريس
+   * وتعرض بطاقتها نفسها، و«فتح» فيها يمرّ بمسار تفاصيل الألبوم ذاته.
+   */
+  await test('ألبومات الإدارة: رقاقة «بلا مناسبة» تجلب ألبومات العريس وتعرض بطاقتها، و«فتح» يفتح تفاصيلها', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const groom = 'سالم بلا مناسبة';
+    const album = {
+      id: 42,
+      event_id: null,
+      title: `عرس ${groom}`,
+      town: 'رهط',
+      honoree_name: groom,
+      is_published: true,
+      photo_count: 0,
+      cover_url: null,
+      cover_thumb_url: null,
+      person: { id: 9, name: groom },
+      event: null
+    };
+    const calls = instrumentAdminLive(dom, (requestPath, method) => {
+      if (requestPath === '/api/admin/albums' && method === 'GET') {
+        return jsonResponse({ success: true, albums: [album] });
+      }
+      if (requestPath === '/api/admin/albums/42/photos' && method === 'GET') {
+        return jsonResponse({ success: true, album, photos: [] });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const chip = document.getElementById('adminAlbumsHonoreeChip');
+    assert.ok(chip, 'expected a «بلا مناسبة» chip in the albums tab');
+    assert.ok(chip.textContent.includes('بلا مناسبة'), 'the chip is labelled in Arabic');
+    chip.click();
+    await waitFor(() => document.querySelectorAll('#adminAlbumsList .admin-album-card').length === 1);
+
+    assert.ok(
+      calls.adminPaths.includes('/api/admin/albums?without_event=1'),
+      'the chip asks for the honoree list itself, not an event list'
+    );
+    const card = document.querySelector('#adminAlbumsList .admin-album-card');
+    assert.ok(card.textContent.includes(groom), 'the card names the groom');
+    assert.ok(card.textContent.includes('رهط'), 'and his town');
+    assert.strictEqual(document.getElementById('adminAlbumsNotice').textContent, '', 'no empty notice when albums exist');
+
+    card.querySelector('.admin-album-actions button').click();
+    await waitFor(() => document.getElementById('adminAlbumDetailMeta').textContent.includes(groom));
+    assert.ok(
+      calls.adminPaths.some(path => path.startsWith('/api/admin/albums/42/photos')),
+      '«فتح» calls the album detail endpoint with the card id'
+    );
+    assert.ok(document.getElementById('adminAlbumDetailMeta').textContent.includes('بلا مناسبة'), 'the detail names it as a no-event album');
+    assert.strictEqual(document.getElementById('adminAlbumNewBtn').style.display, 'none', 'a no-event album hides «ألبوم جديد»');
+    assert.strictEqual(document.querySelector('#adminAlbumPhotos .admin-photo-move'), null, 'and no move-select for a no-event album');
   });
 
   console.log('\nAdmin albums picker: honoree label + typed search (2026-11)');

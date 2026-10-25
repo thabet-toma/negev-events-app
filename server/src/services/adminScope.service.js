@@ -109,29 +109,54 @@ async function assertEventInScope(user, eventId) {
 }
 
 /**
- * One album, only if its event is inside `user`'s towns — the same 404 for
- * "missing" and "outside your scope", so existence is never confirmed to an
- * admin who cannot see it. Every album route calls this before a write; the
- * album's own queries never trust a client-supplied event id.
+ * Scope for anything that hangs off an album. An album used to reach a town
+ * only through its event; an honoree album has no event, so its own `town`
+ * is the scope — same town list, same `AND 1 = 0` fail-closed, same 404 rule.
+ * `townScopeClause` stays what it is: it scopes an `events.town`, which a
+ * no-event album does not have, so this parallel form is added instead of
+ * loosening it (2026-10).
+ */
+async function albumScopeClause(user, { eventAlias = 'e', albumAlias = 'al' } = {}) {
+  assertValidAlias(eventAlias);
+  assertValidAlias(albumAlias);
+
+  if (user && user.role === 'super_admin') return { clause: '', params: [] };
+
+  const towns = await listTownsFor(user);
+  if (!towns.length) return { clause: ' AND 1 = 0', params: [] };
+
+  const placeholders = towns.map(() => '?').join(', ');
+  return {
+    clause: ` AND (${eventAlias}.town IN (${placeholders}) OR (${albumAlias}.event_id IS NULL AND ${albumAlias}.town IN (${placeholders})))`,
+    params: [...towns, ...towns]
+  };
+}
+
+/**
+ * One album, only if its event is inside `user`'s towns — or, for an album
+ * with no event, its own town is — the same 404 for "missing" and "outside
+ * your scope", so existence is never confirmed to an admin who cannot see
+ * it. Every album route calls this before a write; the album's own queries
+ * never trust a client-supplied event id.
  */
 async function assertAlbumInScope(user, albumId) {
-  const { clause, params } = await townScopeClause(user, 'e');
+  const { clause, params } = await albumScopeClause(user, { eventAlias: 'e', albumAlias: 'a' });
   const album = await db.queryOne(
-    `SELECT a.* FROM event_albums a JOIN events e ON e.id = a.event_id WHERE a.id = ?${clause}`,
+    `SELECT a.* FROM event_albums a LEFT JOIN events e ON e.id = a.event_id WHERE a.id = ?${clause}`,
     [albumId, ...params]
   );
   if (!album) throw ApiError.notFound('الألبوم غير موجود');
   return album;
 }
 
-/** One photo, scoped through its album's event exactly as assertAlbumInScope. */
+/** One photo, scoped through its album exactly as assertAlbumInScope. */
 async function assertPhotoInScope(user, photoId) {
-  const { clause, params } = await townScopeClause(user, 'e');
+  const { clause, params } = await albumScopeClause(user, { eventAlias: 'e', albumAlias: 'a' });
   const photo = await db.queryOne(
     `SELECT p.*, a.event_id
        FROM event_photos p
        JOIN event_albums a ON a.id = p.album_id
-       JOIN events e ON e.id = a.event_id
+       LEFT JOIN events e ON e.id = a.event_id
       WHERE p.id = ?${clause}`,
     [photoId, ...params]
   );
@@ -143,6 +168,7 @@ module.exports = {
   listTownsFor,
   isAdminForTown,
   townScopeClause,
+  albumScopeClause,
   resolveBroadcastTowns,
   assertEventInScope,
   assertAlbumInScope,

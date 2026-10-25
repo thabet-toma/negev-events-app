@@ -174,6 +174,38 @@ router.get('/admin/events/:id/albums', asyncHandler(async (req, res) => {
   res.json({ success: true, album, albums: await albums.listAlbumsForAdmin(req.user, eventId) });
 }));
 
+/**
+ * كل ألبومات العريس (بلا مناسبة) داخل نطاق الأدمن — مدخلها بعد مغادرة صفحة
+ * الألبوم (2026-10): تبويب الألبومات يعرض ألبومات مناسبة مختارة، فما لا مناسبة
+ * له كان يُفتح مرة ثم لا يوجد له مدخل. `?without_event=1` هو الوضع الوحيد الذي
+ * يعنيه المسار — طلبٌ بغيره يردّ 400 فلا يُفهم على أنه قائمة أخرى.
+ */
+router.get('/admin/albums', asyncHandler(async (req, res) => {
+  if (!parseFlag(req.query.without_event)) {
+    throw ApiError.badRequest('حدّد ?without_event=1 لعرض ألبومات بلا مناسبة');
+  }
+  res.json({ success: true, albums: await albums.listHonoreeAlbumsForAdmin(req.user) });
+}));
+
+/**
+ * ألبوم باسم العريس بلا مناسبة (2026-10): الأدمن يكتب الاسم فيُنشأ ألبوم
+ * منشور، ويرفع فيه الصور بمسارات الألبوم نفسها. الاسم شرط وحيد ورسالته
+ * عربية؛ والبلدة للنطاق (أدمن بلدة لا يخرج عن بلداته، والسوبر أدمن بلا
+ * بلدة يُقبل) — والتحقق منها في الخدمة كما في كل `adminScope`.
+ */
+router.post('/admin/albums', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const honoreeName = cleanString(body.honoree_name, 150);
+  if (!honoreeName) throw ApiError.badRequest('اسم العريس مطلوب');
+  const album = await albums.createAlbumForHonoree(req.user, {
+    honoreeName,
+    town: cleanString(body.town, 100),
+    title: cleanString(body.title, 200),
+    description: cleanString(body.description, 2000)
+  });
+  res.status(201).json({ success: true, album, message: 'تم إنشاء الألبوم' });
+}));
+
 router.post('/admin/events/:id/albums', asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   const album = await albums.createAlbum(req.user, eventId, {

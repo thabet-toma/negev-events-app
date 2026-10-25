@@ -66,6 +66,18 @@ const EVENTS_PAGE_SIZE = 30;
 let currentPagination = null;
 let upcomingOnly = false; // الافتراضي: عرض الكل (القادمة والمنتهية)، وعند التفعيل: القادمة فقط
 let showArchive = false;
+// بصمة الفلتر المطلوب — نصّ واحد يجمع كل ما يغيّر طلب `GET /api/events`.
+// تطابقها مع الحالة الحالية يعني «لا شيء تغيّر»: لا طلب، ولا إعادة رسم، ولا
+// فقد لموضع التمرير (وهو العطل الذي وُجدت هذه المقارنة لمنعه).
+let feedAppliedSignature = null;
+// بصمة وحالة ما هو معروض فعلاً (آخر ردّ ناجح) — منها تُبنى لقطة الرجوع، لأن
+// حالة الفلتر تكون قد تغيّرت قبل أن يصل النداء إلى `fetchEvents`.
+let feedRenderedSignature = null;
+let feedRenderedFilterState = null;
+// لقطة رجوع واحدة، في الذاكرة وحدها (بلا localStorage): آخر نتيجة معروضة قبل
+// تغيير فلتر فعلي، بموضع تمريرها وحالة فلترها — زرّ «رجوع لنتائجك السابقة»
+// يعيدها بلا شبكة.
+let feedBackSnapshot = null;
 
 // Place & kind filter — رقاقة واحدة لكل منها تفتح ورقة بحث متعددة الاختيار،
 // بدل شريطين زاحفين (#85 خطوة 40-46). البلدة والقرية يُختاران من قائمة واحدة
@@ -466,7 +478,8 @@ function initSocket() {
       // وموضعه محفوظ) لا يُنتزع من مكانه، ويرى الجديد بزرّ التحديث.
       const position = feedScrollPosition();
       if (position.feed > 0 || position.page > 0 || feedScrollMemory) return;
-      fetchEvents();
+      // مناسبة جديدة فعلاً: `force` يتجاوز حارس البصمة (البصمة لم تتغيّر — الحدث هو التغيير).
+      fetchEvents({ force: true });
     });
 
     // بثّ عام (كل المستخدمين) — الحمولة تحمل نصاً فعلاً، لكن لا معرّف
@@ -1695,19 +1708,172 @@ function handleFeedScroll() {
   }
 }
 
+/**
+ * بصمة الفلتر: نصّ واحد يصف كل ما يغيّر طلب `GET /api/events` — الأماكن
+ * والقرى والأنواع والتاريخ والقادمة فقط والأرشيف والبحث المطبَّق. ترتيب
+ * الاختيار داخل القائمة الواحدة لا يغيّر النتيجة (الخادم يوحّدها)، فتُرتَّب
+ * قبل المقارنة: إعادة اختيار البلدات نفسها بترتيب آخر ليست تغييراً.
+ */
+function feedFilterSignature() {
+  const numeric = list => [...list].map(Number).sort((a, b) => a - b);
+  return JSON.stringify([
+    [...selectedTowns].sort(),
+    numeric(selectedVillageIds),
+    numeric(selectedOccasionTypeIds),
+    selectedDateFilter ? [selectedDateFilter.key, selectedDateFilter.from, selectedDateFilter.to] : null,
+    Boolean(upcomingOnly),
+    Boolean(showArchive),
+    (searchQuery || '').trim()
+  ]);
+}
+
+/** هل ما تطلبه الحالة الآن هو نفسه ما جُلب له آخر مرة ونجح؟ */
+function feedFiltersUnchanged() {
+  return feedAppliedSignature !== null && feedFilterSignature() === feedAppliedSignature;
+}
+
+/** الحالة الكاملة التي تصفها البصمة — تُلتقط في لقطة الرجوع وتُعاد عند الضغط عليها. */
+function feedFilterState() {
+  return {
+    selectedTowns: [...selectedTowns],
+    selectedVillageIds: [...selectedVillageIds],
+    selectedOccasionTypeIds: [...selectedOccasionTypeIds],
+    selectedDateFilter: selectedDateFilter ? { ...selectedDateFilter } : null,
+    upcomingOnly: Boolean(upcomingOnly),
+    showArchive: Boolean(showArchive),
+    searchQuery: searchQuery || ''
+  };
+}
+
+/**
+ * يعيد حالة فلتر كاملة كما التُقطت، ومعها كل ما يعرضها: رقاقات المكان والنوع
+ * والتاريخ (في الصفحة والدرج)، وحقلَي البحث وزرّي مسحه، ومفتاح «القادمة فقط»
+ * عبر `syncUpcomingUi`. الاختيار يُحفظ محلياً كما لو اختاره المستخدم بنفسه.
+ */
+function applyFeedFilterState(state) {
+  if (!state) return;
+  selectedTowns = [...state.selectedTowns];
+  selectedVillageIds = [...state.selectedVillageIds];
+  selectedOccasionTypeIds = [...state.selectedOccasionTypeIds];
+  selectedDateFilter = state.selectedDateFilter ? { ...state.selectedDateFilter } : null;
+  upcomingOnly = Boolean(state.upcomingOnly);
+  showArchive = Boolean(state.showArchive);
+  searchQuery = state.searchQuery || '';
+
+  persistFilterSelection();
+  syncUpcomingUi();
+  updateFilterChipLabel('place');
+  updateFilterChipLabel('kind');
+  updateDateFilterChipLabel();
+  updateFloatingFilterLabel();
+
+  const searchInput = document.getElementById('eventSearchInput');
+  if (searchInput) searchInput.value = searchQuery;
+  const drawerSearch = document.getElementById('drawerSearchInput');
+  if (drawerSearch) drawerSearch.value = searchQuery;
+  const clearBtn = document.getElementById('clearSearchBtn');
+  if (clearBtn) clearBtn.style.display = searchQuery ? 'block' : 'none';
+  const drawerClear = document.getElementById('drawerClearSearchBtn');
+  if (drawerClear) drawerClear.style.display = searchQuery ? 'block' : 'none';
+}
+
+/**
+ * يعيد موضع التغذية بعد إعادة رسم أفرغت الحاوية لحظةً فأقصّت `scrollTop`
+ * معها. يُستدعى بعد `updateFeedDimensions` كي يُحسب الارتفاع الجديد أولاً —
+ * لا ننتظر المتصفّح ليفعل ذلك من نفسه.
+ */
+function restoreFeedScroll(position) {
+  if (!position) return;
+  const feed = document.getElementById('eventsContainer');
+  if (feed) feed.scrollTop = position.feed || 0;
+  if (position.page) window.scrollTo(0, position.page);
+}
+
+/**
+ * يعيد التغذية إلى أوّل نتائجها بعد رسم قائمة جديدة — القائمة الجديدة ليست
+ * امتداداً للقديمة، فلا معنى لموضع تمريرها القديم. القيمة تُضبَط صراحةً بعد
+ * الرسم لا انتظاراً للمتصفّح.
+ */
+function restoreFeedTop() {
+  const feed = document.getElementById('eventsContainer');
+  if (feed) feed.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
+/** زرّ «رجوع لنتائجك السابقة» — يظهر فقط حين توجد لقطة، ويُخفى في كل تغيير فلتر جديد. */
+function showFeedBackPill() {
+  const pill = document.getElementById('feedBackPill');
+  if (pill) pill.hidden = !feedBackSnapshot;
+}
+
+function hideFeedBackPill() {
+  const pill = document.getElementById('feedBackPill');
+  if (pill) pill.hidden = true;
+}
+
+/**
+ * يعيد اللقطة السابقة — القائمة نفسها بالترتيب نفسه، وحالة الفلتر التي
+ * جُلبت بها (فتصف الرقاقات وحقل البحث ما تراه العين)، وموضع التمرير نفسه —
+ * بلا أي طلب شبكة، ثم يخفي الزرّ ويُفرغ اللقطة (رجوع واحد فقط).
+ */
+function restoreFeedBackSnapshot() {
+  const snapshot = feedBackSnapshot;
+  feedBackSnapshot = null;
+  hideFeedBackPill();
+  if (!snapshot) return;
+
+  allEvents = snapshot.allEvents;
+  currentPage = snapshot.currentPage;
+  currentPagination = snapshot.currentPagination;
+  // الحالة قبل البصمة: البصمة وصفٌ للحالة، فلا تفترقان بعد الرجوع.
+  applyFeedFilterState(snapshot.filters);
+  feedAppliedSignature = snapshot.signature;
+  feedRenderedSignature = snapshot.signature;
+  feedRenderedFilterState = feedFilterState();
+  renderEvents(allEvents);
+  updateFeedDimensions();
+  restoreFeedScroll(snapshot.scroll);
+}
+
 async function fetchEvents(options = {}) {
-  const { append = false } = options;
+  const { append = false, force = false } = options;
   const container = document.getElementById('eventsContainer');
+
+  // لا شيء تغيّر: الخروج قبل أي مسّ بالـDOM. إعادة الرسم نفسها هي ما يمحو
+  // `scrollTop` ويفقد ما حُمِّل، فإعادة رسم مطابقة عطلٌ ولو حملت البيانات نفسها.
+  if (!append && !force && feedFiltersUnchanged()) return;
+
   if (append && isFetchingEvents) return;
   isFetchingEvents = true;
 
   const loadingPill = document.getElementById('feedLoadingSpinner');
   const loadWrapper = document.getElementById('loadMoreWrapper');
+  const signature = feedFilterSignature();
+  // حالة هذا الطلب تُحفظ كي تصف البصمة، عند نجاحه، ما رُسم فعلاً.
+  const requestState = feedFilterState();
+  // البصمة السابقة تُحفظ للأخطاء: الطلب الذي لم ينجح لا يجعل حالته «مطبَّقة»،
+  // فلا تبقى البصمة معلَّقة على نتيجة لم تُرسم.
+  const previousSignature = feedAppliedSignature;
+  let scrollBefore = null;
 
   if (append) {
     if (loadingPill) loadingPill.style.display = 'inline-flex';
     if (loadWrapper) loadWrapper.style.display = 'block';
   } else {
+    scrollBefore = feedScrollPosition();
+    // قبل أي تغيير بصمة فعلي: لقطة واحدة لما هو معروض الآن — ببصمته وحالة
+    // فلتره لا بحالة الطلب الجديد — وموضعه. أول جلب لا لقطة له.
+    if (signature !== previousSignature) {
+      if (feedRenderedSignature !== null) {
+        feedBackSnapshot = {
+          allEvents, currentPage, currentPagination, scroll: scrollBefore,
+          signature: feedRenderedSignature, filters: feedRenderedFilterState
+        };
+      }
+      hideFeedBackPill();
+    }
+    // الحالة المطلوبة الآن، قبل وصول الردّ: طلبان متطابقان لا يخرجان معاً.
+    feedAppliedSignature = signature;
     currentPage = 1;
     renderEventSkeletons(container);
   }
@@ -1740,16 +1906,31 @@ async function fetchEvents(options = {}) {
       renderAnnouncements(data.announcements);
       renderFeedLoadingPill();
       updateFeedDimensions();
+      if (!append) {
+        // بصمة لم تتغيّر (تحديث يدوي/مناسبة جديدة): يبقى المستخدم حيث كان.
+        // وبصمة تغيّرت فعلياً: قائمة جديدة تُعرَض من أوّلها صراحةً، لا من
+        // منتصف نتيجة أخرى.
+        if (signature === previousSignature) {
+          restoreFeedScroll(scrollBefore);
+        } else {
+          restoreFeedTop();
+        }
+        feedRenderedSignature = signature;
+        feedRenderedFilterState = requestState;
+        showFeedBackPill();
+      }
       // فحص أي رابط عميق بعد اكتمال جلب التغذية (FIX 5)
       if (!append) {
         await checkPendingDeepLink();
       }
     } else {
+      if (!append && feedAppliedSignature === signature) feedAppliedSignature = previousSignature;
       container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>تعذر جلب المناسبات حالياً</p></div>`;
       if (!append) await checkPendingDeepLink();
     }
   } catch (err) {
     console.error('Error fetching events:', err);
+    if (!append && feedAppliedSignature === signature) feedAppliedSignature = previousSignature;
     container.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>حدث خطأ في الاتصال بالخادم</p></div>`;
     if (!append) await checkPendingDeepLink();
   } finally {
@@ -4043,6 +4224,12 @@ function updateFilterChipLabel(key) {
 
 /** «مسح الفلاتر» ظاهر دائماً — لا فقط حين يوجد اختيار — لئلّا تصير التغذية الفارغة لغزاً (#85 خطوة 45). */
 function clearAllFilters() {
+  // هل هناك فلتر يمسحه هذا الزرّ فعلاً؟ بلا فلتر نشِط لا شيء يتغيّر، فلا
+  // طلب ولا إعادة رسم — البحث وحده لا يمسحه الزرّ فلا يُحسب هنا.
+  const hadFilters = Boolean(
+    selectedTowns.length || selectedVillageIds.length || selectedOccasionTypeIds.length ||
+    selectedDateFilter || upcomingOnly
+  );
   selectedTowns = [];
   selectedVillageIds = [];
   selectedOccasionTypeIds = [];
@@ -4053,6 +4240,8 @@ function clearAllFilters() {
   updateFilterChipLabel('place');
   updateFilterChipLabel('kind');
   updateDateFilterChipLabel();
+  hideFeedBackPill();
+  if (!hadFilters) return;
   fetchEvents();
 }
 
@@ -4159,6 +4348,8 @@ function handleSearch() {
   if (drawerClear) drawerClear.style.display = val ? 'block' : 'none';
 
   updateFloatingFilterLabel();
+  // النص نفسه المطبَّق: الواجهة تحدَّثت أعلاه، ولا طلب يعيد رسم القائمة من أوّلها.
+  if (feedFiltersUnchanged()) return;
   fetchEvents();
 }
 
@@ -4174,6 +4365,8 @@ function clearSearch() {
   if (drawerClear) drawerClear.style.display = 'none';
 
   updateFloatingFilterLabel();
+  // لا نص مطبَّق أصلاً: لا شيء ليمسحه هذا الزرّ، فلا جلب.
+  if (feedFiltersUnchanged()) return;
   fetchEvents();
 }
 
@@ -4265,6 +4458,8 @@ function handleDrawerSearch(query) {
   clearTimeout(drawerSearchDebounceTimer);
   drawerSearchDebounceTimer = setTimeout(() => {
     updateFloatingFilterLabel();
+    // الكتابة ثم الرجوع إلى النص المطبَّق نفسه: لا شيء تغيّر، فلا جلب.
+    if (feedFiltersUnchanged()) return;
     fetchEvents();
   }, 400);
 }
@@ -4290,7 +4485,9 @@ function toggleUpcomingSwitch(checked) {
 
 function refreshEventsFeed() {
   fetchStories();
-  fetchEvents({ page: 1 });
+  // تحديث صريح: يُجلب دائماً حتى لو لم تتغيّر البصمة، ثم يُعاد موضع التمرير
+  // بعد الرسم داخل `fetchEvents` (المسار غير التابع).
+  fetchEvents({ page: 1, force: true });
   showToast('🔄 تم تحديث المناسبات');
 }
 
@@ -5874,7 +6071,8 @@ async function handleEventSubmit(e) {
       if (extraDaysList) extraDaysList.innerHTML = '';
       fetchMyEvents();
       switchTab('tabHome');
-      fetchEvents();
+      // مناسبة جديدة نُشرت للتوّ: تُجلب حتى لو لم تتغيّر بصمة الفلتر.
+      fetchEvents({ force: true });
     } else {
       alert(data.message || 'حدث خطأ أثناء النشر');
       // فشل بسبب الصورة/الملف تحديداً (متعدّد multer، error.js) يُسجَّل باسمه
@@ -6264,15 +6462,33 @@ function albumsSafeImage(photo, thumb) {
   return safeHttpUrl(value) ? value : '';
 }
 
+/**
+ * هوية ألبوم بلا مناسبة (`event: null`): الخادم يرسله باسم العريس في
+ * `honoree_name` وبلدته في `town`، بلا كائن مناسبة. الاسم من `honoree_name`
+ * بأثر رجعي `person.name` (استجابة سبقت الحقل)، والبلدة من `town`. أيٌّ منهما
+ * قد يغيب — فتعود القائمة فارغة ويُخفى السطر بدل رسمه فارغاً.
+ */
+function albumIdentityText(album) {
+  const name = album.honoree_name || (album.person && album.person.name) || '';
+  return [name, album.town].filter(Boolean).join(' · ');
+}
+
 function albumCardHtml(album) {
   const cover = safeHttpUrl(album.cover_thumb_url || album.cover_url) ? (album.cover_thumb_url || album.cover_url) : '';
   const event = album.event || {};
+  // ألبوم المناسبة يبقى حرفياً كما كان (عنوان المناسبة ثم بلدتها). ألبوم بلا
+  // مناسبة يعرض اسم العريس وبلدته، وإن غابا معاً اختفى السطر كلّياً بدل
+  // `<span>` فارغ يترك بياضاً على البطاقة.
+  const identity = album.event ? '' : albumIdentityText(album);
+  const subtitle = album.event
+    ? `<span>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}</span>`
+    : identity ? `<span>${escapeHtml(identity)}</span>` : '';
   return `
     <button type="button" class="album-card" onclick="openAlbumDetail(${Number(album.id)})">
       <span class="album-card-cover">${cover ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy" decoding="async">` : '<i class="fa-solid fa-images" aria-hidden="true"></i>'}</span>
       <span class="album-card-body">
         <strong>${escapeHtml(album.title || 'ألبوم عرس')}</strong>
-        <span>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}</span>
+        ${subtitle}
         <small>${Number(album.photo_count) || 0} صورة</small>
       </span>
     </button>
@@ -6555,12 +6771,19 @@ function renderAlbumDetail() {
   const album = albumsCurrentAlbum;
   if (!album) return;
   const event = album.event || {};
+  // رأس ألبوم المناسبة كما كان: عنوانها وبلدتها وتاريخها. ألبوم بلا مناسبة
+  // (`event: null`) بلا تاريخ أصلاً، فسطره من الاسم والبلدة وحدهما — ويختفي
+  // السطر كلّياً إن غابا، فلا سطر فارغ ولا «—» معلّقة.
+  const identity = album.event ? '' : albumIdentityText(album);
+  const subtitle = album.event
+    ? `<p>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}${event.event_date ? ` · ${escapeHtml(event.event_date)}` : ''}</p>`
+    : identity ? `<p>${escapeHtml(identity)}</p>` : '';
   document.getElementById('albumDetailHeader').innerHTML = `
     <div class="album-detail-card">
       <span class="album-detail-cover">${album.cover_url ? `<img src="${escapeHtml(album.cover_url)}" alt="">` : '<i class="fa-solid fa-images"></i>'}</span>
       <div>
         <h2>${escapeHtml(album.title || 'ألبوم عرس')}</h2>
-        <p>${escapeHtml(event.title || '')}${event.town ? ` · ${escapeHtml(event.town)}` : ''}${event.event_date ? ` · ${escapeHtml(event.event_date)}` : ''}</p>
+        ${subtitle}
         <span class="album-detail-count">${Number(album.photo_count) || albumsAlbumPhotos.length} صورة</span>
         <button type="button" class="album-share-btn" onclick="shareAlbum(${Number(album.id)})">
           <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> مشاركة
@@ -6606,7 +6829,9 @@ async function loadMoreAlbumPhotos() {
 async function shareAlbum(albumId) {
   const album = albumsCurrentAlbum;
   if (!album || Number(album.id) !== Number(albumId)) return;
-  const event = album.event || {};
+  // ألبوم العريس (2026-10) يصل بـ`event: null` عمداً، وبلدته على الألبوم نفسه —
+  // فقراءة بلدة المناسبة وحدها كانت تُسقط البلدة من نصّ المشاركة وتتبّعها معاً.
+  const town = album.event ? album.event.town : album.town;
   // `shareOrigin()` is the API origin (`API_BASE || location.origin`), and a
   // `#album/…` link is a page of the static web app, not of the JSON server —
   // in the split deploy `web/config.js` supports, pointing it at the API origin
@@ -6614,10 +6839,10 @@ async function shareAlbum(albumId) {
   // the web page's own origin, exactly like `closeAlbumsPage` builds its path.
   const url = safeHttpUrl(album.share_url)
     || `${window.location.origin}${window.location.pathname}${window.location.search}#album/${album.id}`;
-  recordAnalyticsEvent('share_clicked', { contentTown: event.town });
+  recordAnalyticsEvent('share_clicked', { contentTown: town });
   await shareLink({
     title: album.title || 'ألبوم عرس',
-    line: [album.title, event.town].filter(Boolean).join(' — '),
+    line: [album.title, town].filter(Boolean).join(' — '),
     url,
     copiedMessage: '📋 تم نسخ رابط الألبوم'
   });
