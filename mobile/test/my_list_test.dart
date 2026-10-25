@@ -589,8 +589,9 @@ void main() {
           'المناسبات',
         );
 
-        // تبويب المناسبات (٠): الزرّ العائم ظاهر.
-        expect(find.byType(FloatingActionButton), findsOneWidget);
+        // تبويب المناسبات (٠): لا زرّ عائم — نشرُه في رأس التغذية نفسه
+        // (`feed_publish_button`)، فلا شيء يطفو فوق الكرت.
+        expect(find.byType(FloatingActionButton), findsNothing);
 
         await tester.tap(find.text('النقوط'));
         await settleTab();

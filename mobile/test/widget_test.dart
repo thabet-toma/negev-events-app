@@ -1449,7 +1449,8 @@ void main() {
       final realtime = RealtimeService();
 
       // AppServices يجب أن يلفّ MaterialApp نفسه هنا، لا العكس — نفس ترتيب
-      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كزرّ النشر العائم أدناه)
+      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كأيقونة «إعلان مناسبة» في
+      // رأس التغذية أدناه)
       // يُدرَج تحت هذا الـNavigator مباشرة، فيبقى حفيداً لـAppServices فقط
       // إن كان AppServices فوق الـNavigator، لا داخل `home` تحته.
       await tester.pumpWidget(
@@ -1475,7 +1476,8 @@ void main() {
         'قائمتي',
       );
 
-      // «إضافة» لم تعد وجهة في الشريط — الزرّ العائم هو النشر الآن.
+      // «إضافة» لم تعد وجهة في الشريط. وفي تبويب التغذية لا زرّ عائم إطلاقاً:
+      // نشره أيقونةٌ داخل رأس التغذية نفسه (`feed_publish_button`).
       expect(
         find.descendant(of: find.byType(NavigationBar), matching: find.text('إضافة')),
         findsNothing,
@@ -1488,16 +1490,22 @@ void main() {
         find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
         findsOneWidget,
       );
-      expect(find.byType(FloatingActionButton), findsOneWidget);
+      expect(
+        find.byType(FloatingActionButton),
+        findsNothing,
+        reason: 'التغذية تحمل نشرها في رأسها — لا شيء يطفو فوق الكرت',
+      );
+      expect(find.byTooltip('إعلان مناسبة'), findsOneWidget);
     });
 
-    testWidgets('الزرّ العائم يفتح شاشة النشر', (tester) async {
+    testWidgets('أيقونة «إعلان مناسبة» في الرأس تفتح شاشة النشر', (tester) async {
       final api = apiReturning({'success': true});
       final auth = AuthStore(api);
       final realtime = RealtimeService();
 
       // AppServices يجب أن يلفّ MaterialApp نفسه هنا، لا العكس — نفس ترتيب
-      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كزرّ النشر العائم أدناه)
+      // main.dart فعلياً: أيّ مسار يدفعه Navigator (كأيقونة «إعلان مناسبة» في
+      // رأس التغذية أدناه)
       // يُدرَج تحت هذا الـNavigator مباشرة، فيبقى حفيداً لـAppServices فقط
       // إن كان AppServices فوق الـNavigator، لا داخل `home` تحته.
       await tester.pumpWidget(
@@ -1516,7 +1524,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      await tester.tap(find.byType(FloatingActionButton));
+      await tester.tap(find.byTooltip('إعلان مناسبة'));
       await tester.pumpAndSettle();
 
       expect(find.byType(AddEventScreen), findsOneWidget);

@@ -8,11 +8,13 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/live.dart';
+import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/live_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/theme.dart';
+import 'package:negev_events/widgets/event_card.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -41,12 +43,14 @@ Map<String, dynamic> _activeLive({String? embedUrl}) => {
     };
 
 /// عميل وهمي يوجّه حسب المسار — نفس نمط feed_test.dart. `liveBody` ردّ
-/// GET /api/live، و`hubBody` ردّ GET /api/live/hub، و`requests` يلتقط كل طلب.
+/// GET /api/live، و`hubBody` ردّ GET /api/live/hub، و`events` صفوف
+/// GET /api/events (فارغة ما لم تُمرَّر)، و`requests` يلتقط كل طلب.
 NegevApi _api({
   Map<String, dynamic> liveBody = _nothingConfigured,
   Map<String, dynamic>? hubBody,
   Map<String, dynamic>? voteBody,
   List<http.Request>? requests,
+  List<Map<String, dynamic>>? events,
 }) {
   final client = MockClient((request) async {
     requests?.add(request);
@@ -78,8 +82,13 @@ NegevApi _api({
     } else if (path.endsWith('/api/events')) {
       body = {
         'success': true,
-        'events': <Map<String, dynamic>>[],
-        'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+        'events': events ?? <Map<String, dynamic>>[],
+        'pagination': {
+          'page': 1,
+          'limit': 30,
+          'total': events?.length ?? 0,
+          'totalPages': (events == null || events.isEmpty) ? 0 : 1,
+        },
         'announcements': <Map<String, dynamic>>[],
       };
     }
@@ -375,10 +384,11 @@ void main() {
         tester.getRect(tile).top,
         greaterThan(tester.getRect(find.byIcon(Icons.calendar_month_rounded)).bottom),
       );
-      // السقف ٨٤ بكسل: الكروم عائم لا يدفع التغذية.
+      // الشريط ٨٢ بكسل: في رأس التغذية يدفعها تحته، فلا حاجة إلى هامش يسمح
+      // بتغطية طرف من الكرت الأول.
       expect(
         tester.getSize(find.byKey(const Key('stories_strip'))).height,
-        lessThanOrEqualTo(84),
+        lessThanOrEqualTo(82),
       );
     });
 
@@ -448,14 +458,105 @@ void main() {
     expect(find.byTooltip('الإشعارات'), findsOneWidget);
     expect(find.text('البث المباشر'), findsOneWidget);
     expect(find.text('مباشر'), findsOneWidget);
-    expect(find.text('تسجيل الخروج'), findsOneWidget);
+    // الدخول/الخروج رمزٌ بتلميحه لا كلمة: الكلمة لم تعد في الشريط.
+    expect(find.byTooltip('تسجيل الخروج'), findsOneWidget);
+    expect(find.text('تسجيل الخروج'), findsNothing);
     final rail = find.byKey(const Key('stories_strip'));
     final tile = find.byKey(const Key('stories_live_tile'));
     expect(find.descendant(of: rail, matching: tile), findsOneWidget);
-    expect(tester.getSize(rail).height, lessThanOrEqualTo(84));
+    expect(tester.getSize(rail).height, lessThanOrEqualTo(82));
     expect(tester.getRect(tile).right, lessThanOrEqualTo(360));
     expect(tester.getRect(tile).left, greaterThanOrEqualTo(0));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('الستوريات تنتهي عند أعلى الكرت، والكروم صفّ واحد على ٣٦٠', (tester) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final api = _api(
+      liveBody: _activeLive(),
+      events: const [
+        {
+          'id': 901,
+          'title': 'مناسبة',
+          'groom_name': 'سالم',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'event_date': '2026-10-30',
+        },
+      ],
+    );
+    // `AppServices` فوق `MaterialApp` (خلاف `_pump`) كي تجد الشاشة المدفوعة
+    // عند كبس «إعلان مناسبة» — المسار المدفوع شقيقٌ لـ`home` لا ابنٌ له.
+    await tester.pumpWidget(
+      AppServices(
+        api: api,
+        auth: await _auth(api, signedIn: true),
+        realtime: RealtimeService(),
+        child: MaterialApp(
+          theme: AppTheme.light(),
+          home: const Directionality(
+            textDirection: TextDirection.rtl,
+            child: EventsScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+
+    // مرساة موجبة قبل أي قياس: كرتٌ ومحورٌ على الشاشة فعلاً، وإلّا فقياسٌ على
+    // شجرة فارغة ينجح بلا معنى.
+    expect(find.byType(EventCard), findsOneWidget);
+    final pageView = find.byType(PageView);
+    expect(pageView, findsOneWidget);
+
+    // ١. الشريط ينتهي عند أعلى التغذية أو قبلها: لا يعلو الكرت ولا يكتب على
+    // صورته — وهي العلّة التي جاء هذا الترتيب لإزالتها (النموذج، العرض «أ»).
+    final rail = find.byKey(const Key('stories_strip'));
+    final railBottom = tester.getRect(rail).bottom;
+    final feedTop = tester.getRect(pageView).top;
+    expect(railBottom, lessThanOrEqualTo(feedTop));
+    expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(railBottom));
+
+    // ٢. الكروم صفّ واحد: كبسة الفلاتر وأيقونة الدخول/الخروج في حزمة أفقية
+    // واحدة، لا صفّان فوق بعضهما كما كان.
+    final filterChip = find.text('الفلاتر والبحث');
+    final auth = find.byTooltip('تسجيل الخروج');
+    expect(filterChip, findsOneWidget);
+    expect(auth, findsOneWidget);
+    expect(
+      (tester.getRect(filterChip).center.dy - tester.getRect(auth).center.dy).abs(),
+      lessThan(8),
+    );
+
+    // ٣. الشريط ستّة أزرار لمسجَّل: أوّلها «إعلان مناسبة» (زرّ التمييز)،
+    // وآخرها الدخول/الخروج برمز لا بكلمة. ولا دعم واتساب في الشريط: بقي
+    // في لوح الفلاتر وحده.
+    final group = find.byKey(const Key('feed_controls_bar'));
+    final buttons = tester
+        .widgetList<IconButton>(
+          find.descendant(of: group, matching: find.byType(IconButton)),
+        )
+        .toList();
+    expect(buttons, hasLength(6));
+    expect(buttons.first.tooltip, 'إعلان مناسبة');
+    expect(buttons.last.tooltip, 'تسجيل الخروج');
+    expect(find.text('تسجيل الخروج'), findsNothing);
+    expect(find.byTooltip('الدعم الفني عبر واتساب'), findsNothing);
+
+    // والكرت نفسه لا يفيض بعد أن قصرت التغذية: ارتفاعه يوزَّع بين الصورة
+    // (‏`Expanded`) ولوح المعلومات، فالملصق وحده يتراجع.
+    expect(tester.takeException(), isNull);
+
+    // وأيقونة النشر تفتح شاشة النشر — فعل الزرّ العائم الذي كان فوق الكرت،
+    // وقد انتقل إلى داخل الشريط.
+    await tester.tap(find.byTooltip('إعلان مناسبة'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AddEventScreen), findsOneWidget);
   });
 
   group('LiveScreen', () {

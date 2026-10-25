@@ -17,6 +17,7 @@ import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
+import 'add_event_screen.dart';
 import 'agenda_screen.dart';
 import 'albums_screen.dart';
 import 'edit_event_screen.dart';
@@ -117,8 +118,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   /// `null` = كل التواريخ.
   FeedDateFilter? _dateFilter;
-  /// إظهار/إخفاء لوح الفلاتر والبحث — مخفي افتراضياً
-  /// لعرض الكروت ملء الشاشة بتمرير عمودي، ويظهر بكبسة زر طافٍ.
+  /// إظهار/إخفاء لوح الفلاتر والبحث — مخفي افتراضياً لتبقى الكروت أكبر
+  /// مساحة، ويُفتح بكبسة «الفلاتر والبحث» في صفّ الرأس فوق التغذية.
   bool _showTopChrome = false;
   Timer? _debounce;
 
@@ -860,9 +861,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     }
   }
 
-  /// مدخل «ألبومات الأعراس» — كبسة واحدة في الشريط العائم فوق التغذية، تُرى في
-  /// أول إطار بلا فتح الكروم (تذكرة #101، القرار D11). نقرة واحدة تفتح البحث،
-  /// لا نقرة على كبسة الفلاتر ثم أيقونة داخل كروم منسدل.
+  /// مدخل «ألبومات الأعراس» — كبسة واحدة في صفّها تحت شريط الرأس، تُرى في أول
+  /// إطار بلا فتح اللوح (تذكرة #101، القرار D11). نقرة واحدة تفتح البحث، لا
+  /// نقرة على كبسة الفلاتر ثم أيقونة داخل لوح منسدل.
   Widget _albumsEntryChip() {
     return Material(
       key: const Key('albums_entry_chip'),
@@ -901,278 +902,39 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    final auth = AppServices.of(context).auth;
-
     return Scaffold(
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. التغذية الرأسية ملء الشاشة
-          Positioned.fill(
-            child: RefreshIndicator(
-              onRefresh: () async {
-                final services = AppServices.of(context);
-                setState(() {
-                  _stories = services.api.stories();
-                });
-                _loadLiveChannel();
-                // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
-                services.audio.defaultTrack(services.api, refresh: true).then((url) {
-                  if (mounted) _defaultAudioUrl = url;
-                });
-                await _loadFirstPage();
-              },
-              child: _buildList(),
-            ),
-          ),
-
-          // 2. الكروم العلوي العائم (يظهر عندما تكون اللوحة مغلقة)
-          if (!_showTopChrome)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    // الصفّ الثاني تحت مجموعة الأيقونات، لا بجانبها: الصفّ
-                    // الأوّل ممتلئ أصلاً على هاتف ضيّق، وزرّ النشر العائم في وسطه.
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Row(
-                        // لا `Spacer` هنا: مع `Flexible` بجانبه كان سيقاسمه
-                        // المساحة نصفين فيُختصر نصّ الكبسة بلا حاجة.
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // زر الكبسة لفتح الفلاتر وعرض المناسبات — يتقلّص (ونصّه
-                          // يُختصَر) قبل أن تفيض مجموعة الأيقونات على هاتف ضيّق.
-                          Flexible(
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () => setState(() => _showTopChrome = true),
-                                borderRadius: BorderRadius.circular(999),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 8,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.60),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(
-                                      color: _hasActiveFilters
-                                          ? context.c.sky
-                                          : Colors.white.withValues(alpha: 0.25),
-                                    ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x40000000),
-                                        blurRadius: 10,
-                                        offset: Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.tune_rounded,
-                                        size: 16,
-                                        color: _hasActiveFilters
-                                            ? context.c.sky
-                                            : Colors.white,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          _filterButtonLabel,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                            color: _hasActiveFilters
-                                                ? context.c.sky
-                                                : Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                      if (_hasActiveFilters) ...[
-                                        const SizedBox(width: 6),
-                                        Container(
-                                          width: 7,
-                                          height: 7,
-                                          decoration: BoxDecoration(
-                                            color: context.c.sky,
-                                            shape: BoxShape.circle,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // الأجندة · التحديث · الدعم · الجرس للمسجَّل
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.60),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.25),
-                              ),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x40000000),
-                                  blurRadius: 10,
-                                  offset: Offset(0, 3),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.calendar_month_rounded,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                  tooltip: 'أجندة المناسبات',
-                                  onPressed: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(builder: (_) => const AgendaScreen()),
-                                    );
-                                  },
-                                ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.refresh,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                  tooltip: 'تحديث',
-                                  onPressed: () async {
-                                    final services = AppServices.of(context);
-                                    setState(() {
-                                      _stories = services.api.stories();
-                                    });
-                                    _loadLiveChannel();
-                                    // تحديث في المكان: الصفحة الأولى تُستبدل
-                                    // والكرت المعروض يبقى أمام المستخدم بدل
-                                    // أن يقفز إلى أوّله.
-                                    await _refreshInPlace();
-                                  },
-                                ),
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.support_agent_rounded,
-                                    color: Color(0xFF25D366),
-                                    size: 20,
-                                  ),
-                                  tooltip: 'الدعم الفني عبر واتساب',
-                                  onPressed: () => openSupportWhatsApp(context),
-                                ),
-                                AnimatedBuilder(
-                                  animation: auth,
-                                  builder: (context, _) {
-                                    if (!auth.isSignedIn) {
-                                      return const SizedBox.shrink();
-                                    }
-                                    return _NotificationBell(userId: auth.user!.id);
-                                  },
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      SizedBox(
-                        width: double.infinity,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final narrow = constraints.maxWidth < 390;
-                            final audioAuth = Container(
-                              key: const Key('feed_audio_auth_container'),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.60),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.25),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  AnimatedBuilder(
-                                    animation: _audio!,
-                                    builder: (context, _) => IconButton(
-                                      key: const Key('feed_mute_toggle'),
-                                      constraints: BoxConstraints.tightFor(
-                                        width: narrow ? 36 : 48,
-                                        height: narrow ? 36 : 48,
-                                      ),
-                                      padding: EdgeInsets.zero,
-                                      visualDensity: VisualDensity.compact,
-                                      icon: Icon(
-                                        _audio!.isMuted
-                                            ? Icons.volume_off_rounded
-                                            : Icons.volume_up_rounded,
-                                        color: Colors.white,
-                                        size: 20,
-                                      ),
-                                      tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
-                                      onPressed: _toggleMute,
-                                    ),
-                                  ),
-                                  AuthActionButton(
-                                    stacked: narrow,
-                                    color: Colors.white,
-                                  ),
-                                ],
-                              ),
-                            );
-                            // كبسة البث انتقلت إلى شريط الستوريات أدناه (مدخل
-                            // واحد لها)، والتحكّم بالصوت يبقى في طرفه كما كان.
-                            return Align(
-                              alignment: AlignmentDirectional.centerEnd,
-                              child: audioAuth,
-                            );
-                          },
-                        ),
-                      ),
-                      // «ألبومات الأعراس» (تذكرة #101، القرار D11): صفّه الخاص
-                      // تحت صفّ الصوت والدخول، لأن صفَّي الشريط ممتلئان على
-                      // هاتف ٣٦٠ — إقحامُ كبسة ثالثة فيهما أسقط live_test بفيض
-                      // ٦٨ بكسل. والشريط عائم فلا يدفع التغذية، لكنه يغطّي
-                      // شريطاً من أعلى الكرت الأول — ثمنٌ مقبول مقابل مدخل
-                      // يُرى بلا نقرة.
-                      const SizedBox(height: 6),
-                      Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: _albumsEntryChip(),
-                      ),
-                      // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر:
-                      // كبسة البث أوله ثم ستوريات التسويق. ارتفاعه محدود
-                      // (`_storiesStripHeight`) لأنه عائم لا يدفع التغذية.
-                      _StoriesStrip(
-                        future: _stories,
-                        channel: _liveChannel,
-                        onLiveTap: () => openLiveScreen(context),
-                      ),
-                    ],
-                  ),
+          // 1. رأس التغذية ثم التغذية تحته: عمودٌ حقيقي في مساحة الشاشة، فلا
+          // شيء يطفو فوق الكرت الأول ولا يكتب على صورته.
+          Column(
+            children: [
+              // حين يُفتح لوح الفلاتر يحلّ محلّ الرأس بدل أن يجلس فوقه: اللوح
+              // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
+              // الستوريات ولا من كبسة الفلاتر.
+              if (!_showTopChrome) _feedHeader(),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: () async {
+                    final services = AppServices.of(context);
+                    setState(() {
+                      _stories = services.api.stories();
+                    });
+                    _loadLiveChannel();
+                    // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
+                    services.audio.defaultTrack(services.api, refresh: true).then((url) {
+                      if (mounted) _defaultAudioUrl = url;
+                    });
+                    await _loadFirstPage();
+                  },
+                  child: _buildList(),
                 ),
               ),
-            ),
+            ],
+          ),
 
-          // 3. لوحة الفلاتر والبحث المنسدلة (تظهر عند الضغط على الكبسة)
+          // 2. لوحة الفلاتر والبحث المنسدلة (تظهر عند الضغط على الكبسة)
           if (_showTopChrome) ...[
             Positioned.fill(
               child: GestureDetector(
@@ -1308,6 +1070,270 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           ],
         ],
       ),
+    );
+  }
+
+  /// رأس التغذية: صفّ كروم واحد في أعلاه، ثم «ألبومات الأعراس» في صفّه، ثم
+  /// شريط الستوريات — وكلُّه يدفع التغذية تحته. **ليس عائماً**: لا تسمية ستوري
+  /// ولا أيقونة تغطّي صورة الكرت الأول، وهي عِلّة الشكوى (الشكل «أ» في
+  /// `docs/prototype/home-2026-10.html`).
+  Widget _feedHeader() {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            _chromeRow(),
+            const SizedBox(height: 6),
+            // «ألبومات الأعراس» (تذكرة #101، القرار D11): صفّه الخاص تحت
+            // الشريط، وهو العنصر الوحيد خارج الشريط بقرار المالك.
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: _albumsEntryChip(),
+            ),
+            // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
+            // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته.
+            _StoriesStrip(
+              future: _stories,
+              channel: _liveChannel,
+              onLiveTap: () => openLiveScreen(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// صفّ الكروم الوحيد: «الفلاتر والبحث» يميناً، ومجموعة الأيقونات (وفيها زرّ
+  /// النشر) يساراً. لا شيء يطفو في وسطه، ولا يقع فيه زرّ آخر: هو صفٌّ واحد
+  /// متّصل، وزرّ الهيكل العائم لم يعد يمرّ على التغذية أصلاً.
+  Widget _chromeRow() {
+    return Row(
+      // لا `Spacer` هنا: مع `Flexible` بجانبه كان سيقاسمه المساحة نصفين
+      // فيُختصر نصّ الكبسة بلا حاجة.
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        // زر الكبسة لفتح الفلاتر وعرض المناسبات — يتقلّص (ونصّه يُختصَر) قبل
+        // أن تفيض مجموعة الأيقونات على هاتف ضيّق.
+        Flexible(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => setState(() => _showTopChrome = true),
+              borderRadius: BorderRadius.circular(999),
+              child: Container(
+                // حشو `.filter-btn` في النموذج نفسه (7px 9px، وفاصل 4px بين
+                // الأيقونة والنصّ): ١٤/٦ كانت تملأ الصفّ تماماً على ٣٦٠dp
+                // فيُختصر النصّ بلا داع.
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.60),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: _hasActiveFilters
+                        ? context.c.sky
+                        : Colors.white.withValues(alpha: 0.25),
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x40000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.tune_rounded,
+                      size: 16,
+                      color: _hasActiveFilters ? context.c.sky : Colors.white,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        _filterButtonLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: _hasActiveFilters ? context.c.sky : Colors.white,
+                        ),
+                      ),
+                    ),
+                    if (_hasActiveFilters) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: context.c.sky,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        _chromeControlsGroup(),
+      ],
+    );
+  }
+
+  /// مجموعة أيقونات الشريط، بترتيب المالك: النشر (بلون التمييز، أوّلها)،
+  /// الأجندة، التحديث، الجرس (لمسجَّل وحده)، كتم الصوت، والدخول/الخروج
+  /// **آخرها برمز لا بكلمة**. كلٌّ منها ٣٠×٣٠ (مقاييس `.icon-btn` في
+  /// `docs/prototype/home-2026-10.html`)، فتمرّ ستّاً في صفّ واحد على هاتف
+  /// ٣٦٠dp بلا فيض. وأيقونة الدعم عبر واتساب ليست هنا: لها مكانها في لوح
+  /// الفلاتر — «خيار واحد» في الشريط، و«ألبومات الأعراس» وحدها خارجه.
+  Widget _chromeControlsGroup() {
+    final auth = AppServices.of(context).auth;
+
+    return Container(
+      key: const Key('feed_controls_bar'),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.60),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x40000000),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _chromePublishButton(),
+          _chromeIcon(
+            icon: Icons.calendar_month_rounded,
+            tooltip: 'أجندة المناسبات',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AgendaScreen()),
+              );
+            },
+          ),
+          _chromeIcon(
+            icon: Icons.refresh,
+            tooltip: 'تحديث',
+            onPressed: () async {
+              final services = AppServices.of(context);
+              setState(() {
+                _stories = services.api.stories();
+              });
+              _loadLiveChannel();
+              // تحديث في المكان: الصفحة الأولى تُستبدل والكرت المعروض يبقى
+              // أمام المستخدم بدل أن يقفز إلى أوّله.
+              await _refreshInPlace();
+            },
+          ),
+          AnimatedBuilder(
+            animation: auth,
+            builder: (context, _) {
+              if (!auth.isSignedIn) {
+                return const SizedBox.shrink();
+              }
+              return _NotificationBell(userId: auth.user!.id);
+            },
+          ),
+          // زوج الصوت والدخول: مفتاحه باقٍ لأنّ `live_test` يحرس به أنّ كبسة
+          // البث في شريط الستوريات ليست داخله.
+          Row(
+            key: const Key('feed_audio_auth_container'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedBuilder(
+                animation: _audio!,
+                builder: (context, _) => _chromeIcon(
+                  key: const Key('feed_mute_toggle'),
+                  icon: _audio!.isMuted
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_up_rounded,
+                  tooltip: _audio!.isMuted ? 'تشغيل الصوت' : 'كتم الصوت',
+                  onPressed: _toggleMute,
+                ),
+              ),
+              // الدخول/الخروج أيقونةً وحدها بتلميحها: الكلمة «تسجيل الخروج»
+              // لم تعد ظاهرة في الشريط (طلب المالك)، والنقر يفتح حوار التأكيد
+              // نفسه داخل `AuthActionButton`. `IconButtonTheme` هنا يقصّ زرّه
+              // (‏٤٨dp افتراضياً) إلى ٣٠×٣٠ بلا لمس الزرّ نفسه.
+              IconButtonTheme(
+                data: IconButtonThemeData(
+                  style: IconButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(30, 30),
+                    maximumSize: const Size(30, 30),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+                child: const AuthActionButton(compact: true, color: Colors.white),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// زرّ النشر — العنصر الملوّن الوحيد في الشريط، وأوّل المجموعة (أقربها إلى
+  /// وسط الصفّ في RTL). كان زرّاً عائماً فوق الكرت يحجب أول أيقونة؛ انتقل إلى
+  /// الشريط نفسه لأنّ المالك طلب خياراً واحداً، والألبومات وحدها خارجه. النقر
+  /// يفعل ما فعله الزرّ العائم في `HomeShell` حرفياً: يدفع شاشة النشر.
+  Widget _chromePublishButton() {
+    return IconButton(
+      key: const Key('feed_publish_button'),
+      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+      padding: EdgeInsets.zero,
+      style: IconButton.styleFrom(
+        // `onSky` لا أبيض صريح: هو لون النص/الأيقونة فوق `sky` في الوضعين
+        // (أبيض نهاراً، حبر داكن فوق السماوى الساطع ليلاً).
+        backgroundColor: context.c.sky,
+        foregroundColor: context.c.onSky,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(9)),
+        ),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      tooltip: 'إعلان مناسبة',
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AddEventScreen()),
+        );
+      },
+      icon: const Icon(Icons.add, size: 20),
+    );
+  }
+
+  /// أيقونة واحدة في صفّ الكروم: ٣٠×٣٠ بلا حشو داخلي. `shrinkWrap` لازم:
+  /// `IconButton` يحجز ٤٨dp للهدف اللمسي بدونه، فتفيض ستّ أيقونات على هاتف
+  /// ٣٦٠dp.
+  Widget _chromeIcon({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    Color color = Colors.white,
+    Key? key,
+  }) {
+    return IconButton(
+      key: key,
+      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+      padding: EdgeInsets.zero,
+      style: IconButton.styleFrom(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, color: color, size: 20),
     );
   }
 
@@ -1693,12 +1719,12 @@ class _AnnouncementCard extends StatelessWidget {
   }
 }
 
-/// سقف ارتفاع شريط الستوريات: الكروم عائم لا يدفع التغذية، فكل زيادة تغطّي
-/// طرفاً من أعلى الكرت الأول. (إقحام كبسة ثالثة في صفّ الأيقونات أسقط
-/// `live_test` بفيض ٦٨ بكسل سابقاً — فالسقف هنا ٨٤ والتصميم تحته بهامش.)
+/// ارتفاع شريط الستوريات. الشريط في رأس التغذية يدفعها تحته، فكل زيادة فيه
+/// تُقتطع من ارتفاع الكرت لا أن تغطّيه: يبقى ٨٢ كما في النموذج
+/// (`docs/prototype/home-2026-10.html`، العرض «أ») ولا يكبر.
 const double _storiesStripHeight = 82;
 
-/// شريط الستوريات الظاهر دائماً في الكروم: كبسة البث أولاً — فعل مستقل يبقى
+/// شريط الستوريات الظاهر دائماً في رأس التغذية: كبسة البث أولاً — فعل مستقل يبقى
 /// وحده إن لم تصل ستوريات — ثم ستوريات التسويق أفقياً.
 class _StoriesStrip extends StatelessWidget {
   const _StoriesStrip({
@@ -1737,7 +1763,10 @@ class _StoriesStrip extends StatelessWidget {
                 Expanded(
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    // رأسي ٢ لا ٤: كرة ٥٤ + فاصل ٥ + تسمية ١١px تبلغ ٧٥٫٥،
+                    // والـ٤ كانت تترك ٧٤ فيفيض العمود بكسلٌ واحد على الجهاز
+                    // الحقيقي (ظهر شريط الفيضان فوق الأسماء في لقطة 2026-10-25).
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     itemCount: stories.length,
                     separatorBuilder: (_, _) => const SizedBox(width: 12),
                     itemBuilder: (context, index) {
@@ -2214,12 +2243,17 @@ class _NotificationBellState extends State<_NotificationBell> {
   @override
   Widget build(BuildContext context) {
     final unread = _notifications.where((n) => !n.isRead).length;
+    // مقاس شريط الكروم: ٣٠×٣٠ كأخواتها. بدونه يحجز `IconButton` ٤٨dp للهدف
+    // اللمسي فتفيض ستّ أيقونات على هاتف ٣٦٠dp.
     return IconButton(
+      constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+      padding: EdgeInsets.zero,
+      style: IconButton.styleFrom(tapTargetSize: MaterialTapTargetSize.shrinkWrap),
       tooltip: 'الإشعارات',
       icon: Badge(
         label: Text('$unread'),
         isLabelVisible: unread > 0,
-        child: const Icon(Icons.notifications_outlined),
+        child: const Icon(Icons.notifications_outlined, size: 20),
       ),
       onPressed: _open,
     );

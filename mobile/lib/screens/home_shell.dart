@@ -16,7 +16,9 @@ import 'services_screen.dart';
 /// فهرس وجهة «النقوط» — تُخفي زرّ النشر العائم (شاشتها لها زرّها الخاصّ).
 const int _nokootTabIndex = 3;
 
-/// الهيكل الرئيسي — ستّ وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر.
+/// الهيكل الرئيسي — ستّ وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر في تبويباته ما
+/// عدا التغذية (نشرُها في رأسها، `feed_publish_button` في `EventsScreen`) والنقوط
+/// (شاشتها لها زرّها الخاصّ).
 ///
 /// «إضافة» ليست وجهة بل فعل (wayfinder #21 خطوة ١): خرجت من الشريط إلى زرّ
 /// عائم، فأفرغت خانة أخذتها «الخدمات». والوجهات الستّ بترتيبها: المناسبات،
@@ -96,6 +98,8 @@ class _HomeShellState extends State<HomeShell> {
   /// يفتح شاشة النشر — نفس ما كان يفعله تبويب «إضافة» بالضبط، فقط كدفعٍ
   /// جديد بدل تبديل تبويب. حاجز الحساب لم يتغيّر: يبقى داخل `AddEventScreen`
   /// نفسها عند الإرسال، لا هنا (`_submit` في add_event_screen.dart).
+  /// يخدم الزرّ العائم في تبويبات الشريط؛ التغذية تدفع الشاشة نفسها من زرّ
+  /// «إعلان مناسبة» في رأسها (`_chromePublishButton`).
   void _openAddEvent() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const AddEventScreen()),
@@ -127,7 +131,10 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      floatingActionButton: _index == _nokootTabIndex
+      // تبويب التغذية وحده بلا زرّ نشر عائم: نشره في رأس التغذية نفسه
+      // (`feed_publish_button`)، فلا شيء يطفو فوق الكرت ولا فوق أيقونات الشريط.
+      floatingActionButton: _index == AppServices.feedTabIndex ||
+              _index == _nokootTabIndex
           ? null
           : FloatingActionButton.small(
               onPressed: _openAddEvent,
@@ -135,7 +142,7 @@ class _HomeShellState extends State<HomeShell> {
               elevation: 4,
               child: const Icon(Icons.add, size: 20),
             ),
-      floatingActionButtonLocation: _HomeFabLocation(_index),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (value) => setState(() => _index = value),
@@ -247,25 +254,3 @@ class _BroadcastBanner extends StatelessWidget {
     );
   }
 }
-
-/// موقع زر الإضافة العائم: في الشريط العلوي لتبويب المناسبات حتى لا يغطي الكرت،
-/// وفي الزاوية السفلية (endFloat) للشاشات الأخرى.
-class _HomeFabLocation extends FloatingActionButtonLocation {
-  const _HomeFabLocation(this.index);
-
-  final int index;
-
-  @override
-  Offset getOffset(ScaffoldPrelayoutGeometry scaffoldGeometry) {
-    if (index == 0) {
-      final double statusBar = scaffoldGeometry.minViewPadding.top;
-      final double y = statusBar + 8.0;
-      final double x = (scaffoldGeometry.scaffoldSize.width -
-              scaffoldGeometry.floatingActionButtonSize.width) /
-          2;
-      return Offset(x, y);
-    }
-    return FloatingActionButtonLocation.endFloat.getOffset(scaffoldGeometry);
-  }
-}
-
