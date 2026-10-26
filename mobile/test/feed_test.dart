@@ -1196,6 +1196,99 @@ void main() {
     );
   });
 
+  group('مفتاح «المناسبات المنتهية» — رأس التغذية لا لوح الفلاتر', () {
+    testWidgets(
+      'ظاهر بنصّه في أول إطار، ويطلب archive=1 ثم يعود بلا archive',
+      (tester) async {
+        final requests = <Uri>[];
+        final api = feedScreenApi(requests: requests);
+        await pumpFeedScreen(tester, api);
+
+        // أول إطار فعلاً: قبل `pumpAndSettle` وقبل أي فتح للوح.
+        final chip = find.byKey(const Key('archive_toggle_chip'));
+        expect(chip, findsOneWidget, reason: 'خارج اللوح، يُرى بلا فتح الفلاتر');
+        expect(
+          find.descendant(of: chip, matching: find.text('المناسبات المنتهية')),
+          findsOneWidget,
+          reason: 'مكتوبٌ باسمه لا أيقونةً صامتة',
+        );
+        expect(find.text('المناسبات المنتهية'), findsOneWidget, reason: 'الرأس وحده يسمّي الوضع');
+        expect(
+          find.descendant(of: chip, matching: find.byIcon(Icons.archive_outlined)),
+          findsOneWidget,
+          reason: 'يبدأ غير مفعّل',
+        );
+
+        await tester.pumpAndSettle();
+        int eventRequests() => requests.where((u) => u.path.endsWith('/api/events')).length;
+        final before = eventRequests();
+        final idleColor = tester.widget<Material>(chip).color;
+
+        await tester.tap(chip);
+        await tester.pumpAndSettle();
+
+        expect(eventRequests(), before + 1, reason: 'نقرة واحدة = طلب واحد');
+        final withArchive = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(withArchive.queryParameters['archive'], '1', reason: 'الوضع يمرّ في الاستعلام');
+        expect(
+          tester.widget<Material>(chip).color,
+          isNot(idleColor),
+          reason: 'المفعّل يبدّل لونه، لا الأيقونة وحدها',
+        );
+        expect(
+          find.descendant(of: chip, matching: find.byIcon(Icons.check)),
+          findsOneWidget,
+          reason: 'وعلامة صحّ تجعله بيّناً بنظرة',
+        );
+        expect(
+          find.descendant(of: chip, matching: find.byIcon(Icons.archive_outlined)),
+          findsNothing,
+        );
+        expect(
+          find.text('الفلاتر والبحث'),
+          findsOneWidget,
+          reason: 'لم يعد الوضع فلتراً يُسمّى في كبسة الفلاتر',
+        );
+
+        await tester.tap(chip);
+        await tester.pumpAndSettle();
+
+        final cleared = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(cleared.queryParameters.containsKey('archive'), isFalse);
+        expect(tester.widget<Material>(chip).color, idleColor, reason: 'عاد إلى هيئته');
+        expect(
+          find.descendant(of: chip, matching: find.byIcon(Icons.archive_outlined)),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('لوح الفلاتر أُفرغ من مفتاح الأرشيف', (tester) async {
+      await pumpFeedScreen(tester, feedScreenApi());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('الفلاتر والبحث'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('عرض المناسبات المنتهية'), findsNothing, reason: 'السطر أُزيل من اللوح');
+      expect(find.byType(Switch), findsNothing, reason: 'ولا مفتاح ثانٍ يبدّل الوضع');
+      expect(find.text('المناسبات المنتهية'), findsNothing, reason: 'الرأس وحده يسمّيه');
+    });
+
+    testWidgets('على شاشة ٣٢٠dp يُرسم الرأس بلا فيض', (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await pumpFeedScreen(tester, feedScreenApi());
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull, reason: 'Wrap يلفّ الصفّ بدل أن يفيض');
+      expect(find.byKey(const Key('archive_toggle_chip')), findsOneWidget);
+      expect(find.byKey(const Key('albums_entry_chip')), findsOneWidget);
+    });
+  });
+
   group('تقدّم القائمة عند البحث والفلترة', () {
     Map<String, dynamic> feedBody(List<Map<String, dynamic>> events) => {
           'success': true,

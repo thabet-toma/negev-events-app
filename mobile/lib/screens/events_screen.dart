@@ -636,8 +636,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _selectedVillageIds.isNotEmpty ||
       _selectedOccasionTypeIds.isNotEmpty ||
       _dateFilter != null ||
-      _search.isNotEmpty ||
-      _archive;
+      _search.isNotEmpty;
 
   String get _filterButtonLabel {
     if (_search.isNotEmpty) return 'بحث: $_search';
@@ -649,7 +648,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       if (_dateFilter != null) _dateFilter!.label,
     ];
     if (parts.isNotEmpty) return parts.join(' • ');
-    if (_archive) return 'المناسبات المنتهية';
     return 'الفلاتر والبحث';
   }
 
@@ -958,6 +956,51 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
+  /// «المناسبات المنتهية» — وضع عرض لا فلتر، فمكانه في الرأس لا في لوح
+  /// الفلاتر: يراه المستخدم بلا فتح اللوح، وهو في التدفّق الطبيعي فوق الكروت
+  /// فلا يطفو على أول كرت ولا يغطّي صورته.
+  Widget _archiveToggleChip() {
+    return Material(
+      key: const Key('archive_toggle_chip'),
+      color: _archive ? context.c.sky : Colors.black.withValues(alpha: 0.60),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => _onArchiveToggled(!_archive),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: _archive
+                  ? context.c.onSky.withValues(alpha: 0.55)
+                  : Colors.white.withValues(alpha: 0.25),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _archive ? Icons.check : Icons.archive_outlined,
+                color: _archive ? context.c.onSky : Colors.white,
+                size: 18,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'المناسبات المنتهية',
+                style: TextStyle(
+                  color: _archive ? context.c.onSky : Colors.white,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1091,28 +1134,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                         onDateTap: _openDateFilter,
                         onClearTap: _clearFilters,
                       ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.archive_outlined,
-                              size: 17,
-                              color: _archive ? context.c.sky : context.c.inkFaint,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'عرض المناسبات المنتهية',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: context.c.inkSoft,
-                              ),
-                            ),
-                            const Spacer(),
-                            Switch(value: _archive, onChanged: _onArchiveToggled),
-                          ],
-                        ),
-                      ),
                       if (_announcements.isNotEmpty)
                         ConstrainedBox(
                           constraints: const BoxConstraints(
@@ -1143,10 +1164,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
-  /// رأس التغذية: صفّ كروم واحد في أعلاه، ثم «ألبومات الأعراس» في صفّه، ثم
-  /// شريط الستوريات — وكلُّه يدفع التغذية تحته. **ليس عائماً**: لا تسمية ستوري
-  /// ولا أيقونة تغطّي صورة الكرت الأول، وهي عِلّة الشكوى (الشكل «أ» في
-  /// `docs/prototype/home-2026-10.html`).
+  /// رأس التغذية: صفّ كروم واحد في أعلاه، ثم رقاقتا «ألبومات الأعراس» و
+  /// «المناسبات المنتهية» في صفّهما، ثم شريط الستوريات — وكلُّه يدفع التغذية
+  /// تحته. **ليس عائماً**: لا تسمية ستوري ولا أيقونة تغطّي صورة الكرت الأول،
+  /// وهي عِلّة الشكوى (الشكل «أ» في `docs/prototype/home-2026-10.html`).
   Widget _feedHeader() {
     return SafeArea(
       bottom: false,
@@ -1158,11 +1179,20 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
           children: [
             _chromeRow(),
             const SizedBox(height: 6),
-            // «ألبومات الأعراس» (تذكرة #101، القرار D11): صفّه الخاص تحت
-            // الشريط، وهو العنصر الوحيد خارج الشريط بقرار المالك.
+            // «ألبومات الأعراس» (تذكرة #101، القرار D11) و«المناسبات المنتهية»
+            // صفّهما الخاص تحت الشريط، وهما العنصران الوحيدان خارجه بقرار
+            // المالك. `Wrap` لا `Row`: على هاتف ٣٢٠dp ينكسر الصفّ إلى سطرين
+            // بدل أن يفيض النصّ خارج الشاشة.
             Align(
               alignment: AlignmentDirectional.centerStart,
-              child: _albumsEntryChip(),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _albumsEntryChip(),
+                  _archiveToggleChip(),
+                ],
+              ),
             ),
             // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
             // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته.
@@ -1264,7 +1294,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// **آخرها برمز لا بكلمة**. كلٌّ منها ٣٠×٣٠ (مقاييس `.icon-btn` في
   /// `docs/prototype/home-2026-10.html`)، فتمرّ ستّاً في صفّ واحد على هاتف
   /// ٣٦٠dp بلا فيض. وأيقونة الدعم عبر واتساب ليست هنا: لها مكانها في لوح
-  /// الفلاتر — «خيار واحد» في الشريط، و«ألبومات الأعراس» وحدها خارجه.
+  /// الفلاتر — «خيار واحد» في الشريط، والرقاقتان (الألبومات والمناسبات
+  /// المنتهية) وحدهما خارجه.
   Widget _chromeControlsGroup() {
     final auth = AppServices.of(context).auth;
 
@@ -1359,7 +1390,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   /// زرّ النشر — العنصر الملوّن الوحيد في الشريط، وأوّل المجموعة (أقربها إلى
   /// وسط الصفّ في RTL). كان زرّاً عائماً فوق الكرت يحجب أول أيقونة؛ انتقل إلى
-  /// الشريط نفسه لأنّ المالك طلب خياراً واحداً، والألبومات وحدها خارجه. النقر
+  /// الشريط نفسه لأنّ المالك طلب خياراً واحداً فيه، والرقاقتان وحدهما خارجه. النقر
   /// يفعل ما فعله الزرّ العائم في `HomeShell` حرفياً: يدفع شاشة النشر.
   Widget _chromePublishButton() {
     return IconButton(
