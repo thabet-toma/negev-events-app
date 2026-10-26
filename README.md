@@ -186,6 +186,9 @@ npm run db:import-legacy
    ADR-0006، وصفحة الصورة في ADR-0009، وصفحة الألبوم في ADR-0006 «توسيع 2026-10-22»،
    وصفحة الشخص في ADR-0011). **وصفحات الفيديو (`/v/:id`) تحتاج من nginx نفس قسمَي `/p`** —
    `location = /v` و`location ^~ /v/` — وهما مضبوطان على الخادم مع إصدار 2026-10-26.
+8. للنشر التلقائي على فيسبوك: `FACEBOOK_PAGE_ID` و `FACEBOOK_PAGE_ACCESS_TOKEN`. ولإضافة صفحة
+   ثانية ضع `FACEBOOK_PAGE_ID_2` و `FACEBOOK_PAGE_ACCESS_TOKEN_2` — توكن الصفحة يخصّ صفحة واحدة
+   بعينها ولا يصلح لصفحتين.
 
 مثال Nginx:
 

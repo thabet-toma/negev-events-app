@@ -125,11 +125,70 @@ function formatEventCaption(event, honorees = []) {
 }
 
 /**
- * Posts an event to the configured Facebook Page.
+ * Posts one event to one Page: photo first, then a feed link post as fallback,
+ * with exactly the payloads the single-page implementation used. Never throws —
+ * a failure is reported for that Page alone so the caller can carry on to the
+ * next one. The token stays inside the request body and is never logged.
+ */
+async function publishEventToPage(page, { eventId, event, caption, pageUrl, imageUrl }) {
+  const { pageId, accessToken } = page;
+  logger.info(`[facebook] Publishing event ${eventId} ("${event.title}") to page ${pageId}...`);
+
+  try {
+    // Try publishing as a photo with caption first
+    if (imageUrl) {
+      const photoApiUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/photos`;
+      const body = new URLSearchParams({
+        url: imageUrl,
+        caption,
+        access_token: accessToken
+      });
+
+      const res = await fetch(photoApiUrl, { method: 'POST', body });
+      const data = await res.json();
+
+      if (data.id || data.post_id) {
+        logger.info(`[facebook] Event ${eventId} published to page ${pageId} as photo! Post ID: ${data.post_id || data.id}`);
+        return { pageId, success: true, postId: data.post_id || data.id };
+      }
+
+      logger.warn(`[facebook] Photo post to page ${pageId} failed (${JSON.stringify(data)}), falling back to feed post...`);
+    }
+
+    // Fallback: publish as a link post to feed
+    const feedApiUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/feed`;
+    const feedBody = new URLSearchParams({
+      message: caption,
+      link: pageUrl,
+      access_token: accessToken
+    });
+
+    const feedRes = await fetch(feedApiUrl, { method: 'POST', body: feedBody });
+    const feedData = await feedRes.json();
+
+    if (feedData.id) {
+      logger.info(`[facebook] Event ${eventId} published to page ${pageId} feed! Post ID: ${feedData.id}`);
+      return { pageId, success: true, postId: feedData.id };
+    }
+
+    logger.error(`[facebook] Failed to publish event ${eventId} to page ${pageId} feed: ${JSON.stringify(feedData)}`);
+    return { pageId, success: false, error: feedData };
+  } catch (err) {
+    logger.error(`[facebook] Network/API error while publishing event ${eventId} to page ${pageId}: ${err.message}`);
+    return { pageId, success: false, error: err.message };
+  }
+}
+
+/**
+ * Posts an event to every configured Facebook Page, primary first. One Page
+ * failing (Graph error, network error, a response without an id) leaves the
+ * others untouched. Returns null when auto-publishing is off or no Page is
+ * configured — the contract callers already rely on.
  */
 async function publishEvent(eventOrId) {
-  const { pageId, accessToken, autoPublish } = config.facebook || {};
-  if (!autoPublish || !accessToken || !pageId) {
+  const { pages, autoPublish } = config.facebook || {};
+  const targets = Array.isArray(pages) ? pages : [];
+  if (!autoPublish || !targets.length) {
     logger.debug('[facebook] Auto-publish skipped: missing credentials or disabled');
     return null;
   }
@@ -160,51 +219,12 @@ async function publishEvent(eventOrId) {
   const cardUrl = `${config.publicUrl}/e/${event.id}/card.jpg`;
   const imageUrl = event.poster_url || cardUrl;
 
-  logger.info(`[facebook] Publishing event ${eventId} ("${event.title}") to page ${pageId}...`);
-
-  try {
-    // Try publishing as a photo with caption first
-    if (imageUrl) {
-      const photoApiUrl = `https://graph.facebook.com/v20.0/${pageId}/photos`;
-      const body = new URLSearchParams({
-        url: imageUrl,
-        caption,
-        access_token: accessToken
-      });
-
-      const res = await fetch(photoApiUrl, { method: 'POST', body });
-      const data = await res.json();
-
-      if (data.id || data.post_id) {
-        logger.info(`[facebook] Event ${eventId} published successfully as photo! Post ID: ${data.post_id || data.id}`);
-        return { success: true, postId: data.post_id || data.id };
-      }
-
-      logger.warn(`[facebook] Photo post failed (${JSON.stringify(data)}), falling back to feed post...`);
-    }
-
-    // Fallback: publish as a link post to feed
-    const feedApiUrl = `https://graph.facebook.com/v20.0/${pageId}/feed`;
-    const feedBody = new URLSearchParams({
-      message: caption,
-      link: pageUrl,
-      access_token: accessToken
-    });
-
-    const feedRes = await fetch(feedApiUrl, { method: 'POST', body: feedBody });
-    const feedData = await feedRes.json();
-
-    if (feedData.id) {
-      logger.info(`[facebook] Event ${eventId} published successfully to feed! Post ID: ${feedData.id}`);
-      return { success: true, postId: feedData.id };
-    }
-
-    logger.error(`[facebook] Failed to publish event ${eventId} to Facebook feed: ${JSON.stringify(feedData)}`);
-    return { success: false, error: feedData };
-  } catch (err) {
-    logger.error(`[facebook] Network/API error while publishing event ${eventId}: ${err.message}`);
-    throw err;
+  const results = [];
+  for (const page of targets) {
+    results.push(await publishEventToPage(page, { eventId, event, caption, pageUrl, imageUrl }));
   }
+
+  return { success: results.some(result => result.success), results };
 }
 
 /**
@@ -219,34 +239,72 @@ function publishEventSafely(eventOrId) {
 }
 
 /**
- * Publishes a custom post or announcement.
+ * Posts a custom message to one Page: as a photo when an image is given,
+ * otherwise as a feed post. Never throws — the outcome is reported for that
+ * Page alone so a second Page is still attempted.
+ */
+async function publishCustomPostToPage(page, { message, link, imageUrl }) {
+  const { pageId, accessToken } = page;
+
+  try {
+    if (imageUrl) {
+      const url = `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/photos`;
+      const params = new URLSearchParams({
+        url: imageUrl,
+        caption: message,
+        access_token: accessToken
+      });
+      const res = await fetch(url, { method: 'POST', body: params });
+      const data = await res.json();
+
+      if (data && (data.post_id || data.id)) {
+        logger.info(`[facebook] Custom post published to page ${pageId} as photo! Post ID: ${data.post_id || data.id}`);
+        return { pageId, success: true, postId: data.post_id || data.id };
+      }
+
+      logger.error(`[facebook] Failed to publish custom post to page ${pageId} as photo: ${JSON.stringify(data)}`);
+      return { pageId, success: false, error: data };
+    }
+
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/feed`;
+    const params = new URLSearchParams({
+      message,
+      access_token: accessToken
+    });
+    if (link) params.set('link', link);
+
+    const res = await fetch(url, { method: 'POST', body: params });
+    const data = await res.json();
+
+    if (data && data.id) {
+      logger.info(`[facebook] Custom post published to page ${pageId} feed! Post ID: ${data.id}`);
+      return { pageId, success: true, postId: data.id };
+    }
+
+    logger.error(`[facebook] Failed to publish custom post to page ${pageId} feed: ${JSON.stringify(data)}`);
+    return { pageId, success: false, error: data };
+  } catch (err) {
+    logger.error(`[facebook] Network/API error while publishing custom post to page ${pageId}: ${err.message}`);
+    return { pageId, success: false, error: err.message };
+  }
+}
+
+/**
+ * Publishes a custom post or announcement to every configured Page.
  */
 async function publishCustomPost({ message, link, imageUrl }) {
-  const { pageId, accessToken } = config.facebook || {};
-  if (!accessToken || !pageId) {
+  const { pages } = config.facebook || {};
+  const targets = Array.isArray(pages) ? pages : [];
+  if (!targets.length) {
     throw new Error('Facebook credentials not configured');
   }
 
-  if (imageUrl) {
-    const url = `https://graph.facebook.com/v20.0/${pageId}/photos`;
-    const params = new URLSearchParams({
-      url: imageUrl,
-      caption: message,
-      access_token: accessToken
-    });
-    const res = await fetch(url, { method: 'POST', body: params });
-    return res.json();
+  const results = [];
+  for (const page of targets) {
+    results.push(await publishCustomPostToPage(page, { message, link, imageUrl }));
   }
 
-  const url = `https://graph.facebook.com/v20.0/${pageId}/feed`;
-  const params = new URLSearchParams({
-    message,
-    access_token: accessToken
-  });
-  if (link) params.set('link', link);
-
-  const res = await fetch(url, { method: 'POST', body: params });
-  return res.json();
+  return { success: results.some(result => result.success), results };
 }
 
 module.exports = {

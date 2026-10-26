@@ -124,9 +124,24 @@ const config = {
   facebook: {
     pageId: process.env.FACEBOOK_PAGE_ID || null,
     accessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN || null,
-    autoPublish: process.env.FACEBOOK_AUTO_PUBLISH !== 'false' && Boolean(process.env.FACEBOOK_PAGE_ACCESS_TOKEN)
+    // An optional second Page. A Page access token is scoped to exactly one
+    // Page (GET /me/accounts is rejected for it), so the second Page needs its
+    // own id and its own token — they cannot be derived or reused.
+    secondPageId: process.env.FACEBOOK_PAGE_ID_2 || null,
+    secondAccessToken: process.env.FACEBOOK_PAGE_ACCESS_TOKEN_2 || null,
+    // True when at least one token exists, so a single-page install behaves as
+    // it always has; `pages` below is what actually holds the usable pairs.
+    autoPublish: process.env.FACEBOOK_AUTO_PUBLISH !== 'false'
+      && Boolean(process.env.FACEBOOK_PAGE_ACCESS_TOKEN || process.env.FACEBOOK_PAGE_ACCESS_TOKEN_2)
   }
 };
+
+// Every Page a post may go to, primary first. A pair counts only when BOTH
+// halves are set: a token without an id (or an id without a token) is unusable.
+config.facebook.pages = [
+  { pageId: config.facebook.pageId, accessToken: config.facebook.accessToken },
+  { pageId: config.facebook.secondPageId, accessToken: config.facebook.secondAccessToken }
+].filter(page => Boolean(page.pageId && page.accessToken));
 
 if (isProduction && config.admin.pin === '9999') {
   console.warn('[config] ⚠️  ADMIN_PIN is still the default value — change it before going live.');
