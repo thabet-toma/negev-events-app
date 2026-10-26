@@ -120,8 +120,14 @@ async function scopeClauseForUser(userId) {
  * The shared SELECT both `listLive` and `listForCenter` build on — same
  * columns, same `LEFT JOIN broadcast_views`, same scope clause — differing
  * only in the extra predicate the caller appends (liveness, for the ticker).
+ *
+ * `extraParams` binds that extra predicate's own `?`s in the order they appear
+ * in `extraClause`, AFTER the scope clause's params — the bind order below
+ * mirrors the SQL text's own order (`bv.user_id` first, then the scope clause,
+ * then the extra predicate), so a caller with a two-placeholder clause binds
+ * two values and no caller without one changes anything.
  */
-async function queryBroadcastsForUser(userId, extraClause = '') {
+async function queryBroadcastsForUser(userId, extraClause = '', extraParams = []) {
   const { clause, params } = await scopeClauseForUser(userId);
 
   const rows = await db.query(
@@ -131,7 +137,7 @@ async function queryBroadcastsForUser(userId, extraClause = '') {
        LEFT JOIN broadcast_views bv ON bv.broadcast_id = b.id AND bv.user_id = ?
       WHERE ${clause}${extraClause}
       ORDER BY b.created_at DESC`,
-    [userId ?? null, ...params]
+    [userId ?? null, ...params, ...extraParams]
   );
   return rows.map(row => ({ ...row, dismissed: Boolean(row.dismissed) }));
 }
@@ -158,14 +164,42 @@ async function listLive(user) {
 }
 
 /**
- * Every broadcast that applies to `userId` for the notification centre
- * (issue #85, story 30) — expired and quiet ones included, since expiry only
- * ends the ticker, never the record. `notifications.service.js` merges this
- * with the user's own notification rows; it only ever has a `userId`, never
- * a full user object, so that's all this takes.
+ * The broadcasts that belong in `userId`'s notification centre (issue #85,
+ * story 30) — deliberately NOT "every broadcast that applies to them". Two
+ * limits, each answering a different question:
+ *
+ *   1. `b.created_at >= users.created_at` — a broadcast published BEFORE this
+ *      account existed was never news to it. Nothing is fanned out per user
+ *      (see schema.sql's `broadcast_views` comment), so without this a brand
+ *      new account opens the centre to the whole back catalogue at once
+ *      (confirmed in production: four old broadcasts on a fresh signup).
+ *      Existing accounts keep their own registration date, so nothing they
+ *      already saw retroactively vanishes.
+ *   2. `expires_at IS NULL OR expires_at > UTC_TIMESTAMP() - INTERVAL 30 DAY`
+ *      — a broadcast that lapsed more than 30 days ago has finished its run
+ *      even as a record; the centre is a feed of what is still worth reading,
+ *      not an archive. `NULL` (`بلا شريط`, no ticker at all) never expires and
+ *      so is never dropped by this half; it is bounded by rule 1 alone.
+ *
+ * A broadcast inside both limits survives its own expiry here, as before —
+ * expiry ends the ticker, not the record (that is `listLive`'s rule alone, and
+ * it is untouched by this function). Compared against `UTC_TIMESTAMP()`, never
+ * `NOW()`: `db/pool.js` pins `timezone: 'Z'` while `NOW()` follows the MySQL
+ * session timezone (same reasoning as `listLive` above).
+ *
+ * The extra `users` read is what makes the registration date a bound rather
+ * than a guess; a `userId` with no row yields an empty centre instead of
+ * comparing against `NULL` (which would silently match nothing anyway, but
+ * says so explicitly here).
  */
 async function listForCenter(userId) {
-  return queryBroadcastsForUser(userId);
+  const user = await db.queryOne('SELECT created_at FROM users WHERE id = ?', [userId]);
+  if (!user) return [];
+  return queryBroadcastsForUser(
+    userId,
+    ' AND b.created_at >= ? AND (b.expires_at IS NULL OR b.expires_at > UTC_TIMESTAMP() - INTERVAL 30 DAY)',
+    [user.created_at]
+  );
 }
 
 /**

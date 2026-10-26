@@ -6,12 +6,16 @@ class AppUser {
   final String? clanTown;
   final String role;
 
+  /// رابط الصورة الشخصية — مطلق أو null (بلا صورة). الخادم وحده يبنيه.
+  final String? avatarUrl;
+
   const AppUser({
     required this.id,
     required this.phoneNumber,
     required this.fullName,
     required this.role,
     this.clanTown,
+    this.avatarUrl,
   });
 
   bool get isAdmin => role == 'admin' || role == 'super_admin';
@@ -24,6 +28,7 @@ class AppUser {
       fullName: '${json['full_name'] ?? ''}',
       clanTown: json['clan_town'] == null ? null : '${json['clan_town']}',
       role: '${json['role'] ?? 'user'}',
+      avatarUrl: json['avatar_url'] == null ? null : '${json['avatar_url']}',
     );
   }
 
@@ -33,5 +38,6 @@ class AppUser {
         'full_name': fullName,
         'clan_town': clanTown,
         'role': role,
+        'avatar_url': avatarUrl,
       };
 }

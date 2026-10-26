@@ -178,6 +178,7 @@ let albumsList = [];
 let albumsPagination = null;
 let albumsCurrentAlbum = null;
 let albumsAlbumPhotos = [];
+let albumsAlbumVideos = [];
 let albumsAlbumPagination = null;
 let albumsCurrentPerson = null;
 let albumsPersonPhotos = [];
@@ -3803,6 +3804,30 @@ function loadAccountView() {
     const phoneEl = document.getElementById('accountUserPhone');
     if (phoneEl) phoneEl.textContent = currentUser.phone_number || currentUser.phone || '';
 
+    // الصورة الشخصية: رابط مطلق أو null من publicUser — الأيقونة بديل فقط.
+    const avatarImg = document.getElementById('accountAvatarImg');
+    const avatarFallback = document.getElementById('accountAvatarFallback');
+    if (avatarImg && avatarFallback) {
+      if (currentUser.avatar_url) {
+        avatarImg.src = currentUser.avatar_url;
+        avatarImg.hidden = false;
+        avatarFallback.hidden = true;
+      } else {
+        avatarImg.removeAttribute('src');
+        avatarImg.hidden = true;
+        avatarFallback.hidden = false;
+      }
+    }
+
+    const profileNameInput = document.getElementById('accountProfileNameInput');
+    if (profileNameInput) profileNameInput.value = currentUser.full_name || currentUser.name || '';
+
+    const profileTownInput = document.getElementById('accountProfileTownInput');
+    if (profileTownInput) profileTownInput.value = currentUser.clan_town || '';
+
+    const phoneInput = document.getElementById('accountPhoneInput');
+    if (phoneInput) phoneInput.value = currentUser.phone_number || currentUser.phone || '';
+
     const roleBadge = document.getElementById('accountUserRoleBadge');
     if (roleBadge) {
       if (currentUser.role === 'super_admin') {
@@ -3836,6 +3861,146 @@ function loadAccountView() {
   } else {
     guestView.style.display = 'block';
     loggedInView.style.display = 'none';
+  }
+}
+
+/**
+ * «غيّر صورتك» — ترفع الصورة إلى POST /api/auth/me/avatar.
+ * الجسم FormData كما هو، بلا `Content-Type` عمداً: المتصفّح يبني الترويسة
+ * بحدّها الفاصل (boundary) بنفسه، ووضعها يدوياً يفقده فيرفض الخادم الطلب.
+ */
+async function handleAccountAvatarPick(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+
+  if (!/^image\//.test(file.type || '')) {
+    showToast('اختر صورة');
+    input.value = '';
+    return;
+  }
+
+  const form = new FormData();
+  form.append('image', file);
+
+  try {
+    const res = await apiFetch('/api/auth/me/avatar', { method: 'POST', auth: true, body: form });
+    const data = await res.json();
+    if (res.ok && data.success && data.user) {
+      currentUser = data.user;
+      try {
+        localStorage.setItem('negev_user', JSON.stringify(currentUser));
+      } catch (e) { /* التخزين المحلي معطَّل — الصورة تبقى معروضة في هذه الجلسة */ }
+      updateAuthUI();
+      loadAccountView();
+      showToast(data.message || 'تم تحديث صورتك الشخصية');
+    } else {
+      showToast(data.message || 'تعذّر رفع صورتك — حاول مرة أخرى');
+    }
+  } catch (e) {
+    showToast('تعذّر رفع صورتك — تحقّق من الاتصال وحاول مرة أخرى');
+  } finally {
+    // تفريغ الحقل يتيح اختيار الملف نفسه مرة أخرى بعد فشل أو استبدال.
+    input.value = '';
+  }
+}
+
+/** يحفظ الاسم والبلدة عبر PATCH /api/auth/me — والاسم لا يُرسل فارغاً أبداً. */
+async function saveAccountProfile() {
+  const nameInput = document.getElementById('accountProfileNameInput');
+  const townInput = document.getElementById('accountProfileTownInput');
+  if (!nameInput || !townInput) return;
+
+  const full_name = nameInput.value.trim();
+  const clan_town = townInput.value.trim();
+  if (!full_name) {
+    showToast('الاسم لا يكون فارغاً');
+    return;
+  }
+
+  try {
+    const res = await apiFetch('/api/auth/me', {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, clan_town })
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.user) {
+      currentUser = data.user;
+      try {
+        localStorage.setItem('negev_user', JSON.stringify(currentUser));
+      } catch (e) { /* التخزين المحلي معطَّل — الحساب محدَّث في هذه الجلسة */ }
+      updateAuthUI();
+      loadAccountView();
+      showToast(data.message || 'تم تحديث بيانات حسابك');
+    } else {
+      // رسالة الخادم عربية دائماً — تُعرض كما هي بدل نصّ عام يغطّيها.
+      showToast(data.message || 'تعذّر حفظ بياناتك — حاول مرة أخرى');
+    }
+  } catch (e) {
+    showToast('تعذّر الاتصال بالخادم — حاول مرة أخرى');
+  }
+}
+
+/**
+ * يفتح نموذج تعديل رقم الهاتف أو يغلقه. الفتح يعيد الرقم الحالي من الجلسة،
+ * والرمز يُفرَّغ دائماً فلا يبقى رمز مكتوب في الحقل بعد الإغلاق.
+ */
+function toggleAccountPhoneForm(show) {
+  const form = document.getElementById('accountPhoneForm');
+  const editBtn = document.getElementById('accountPhoneEditBtn');
+  const phoneInput = document.getElementById('accountPhoneInput');
+  const pinInput = document.getElementById('accountPhonePinInput');
+  if (!form) return;
+
+  form.hidden = !show;
+  if (editBtn) editBtn.hidden = !!show;
+  if (pinInput) pinInput.value = '';
+  if (show && phoneInput && currentUser) {
+    phoneInput.value = currentUser.phone_number || currentUser.phone || '';
+  }
+}
+
+/**
+ * يغيّر رقم الهاتف (اسم الدخول) بعد تأكيده برمز الدخول الحالي.
+ * الاستجابة تحمل رمزاً جديداً موقَّعاً بالرقم الجديد، فيُحفظ وحده مكان القديم
+ * كي لا يخرج المستخدم من جلسته بتغييره — ورمز الدخول نفسه لا يُخزَّن أبداً.
+ */
+async function saveAccountPhone() {
+  const phoneInput = document.getElementById('accountPhoneInput');
+  const pinInput = document.getElementById('accountPhonePinInput');
+  if (!phoneInput || !pinInput) return;
+
+  const phone_number = phoneInput.value.trim();
+  const pin_code = pinInput.value;
+
+  try {
+    const res = await apiFetch('/api/auth/me/phone', {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone_number, pin_code })
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.token && data.user) {
+      try {
+        localStorage.setItem('negev_token', data.token);
+      } catch (e) { /* التخزين المحلي معطَّل — الجلسة الجديدة تعمل في الذاكرة */ }
+      authToken = data.token;
+      currentUser = data.user;
+      try {
+        localStorage.setItem('negev_user', JSON.stringify(currentUser));
+      } catch (e) { /* التخزين المحلي معطَّل — الحساب محدَّث في هذه الجلسة */ }
+      updateAuthUI();
+      toggleAccountPhoneForm(false);
+      loadAccountView();
+      showToast(data.message || 'تم تحديث رقم هاتفك');
+    } else {
+      // الفشل يُبقي النموذج مفتوحاً لتصحيح الرقم أو رمز الدخول.
+      showToast(data.message || 'تعذّر تحديث رقمك — تحقّق من رقم الهاتف ورمز الدخول');
+    }
+  } catch (e) {
+    showToast('تعذّر الاتصال بالخادم — حاول مرة أخرى');
   }
 }
 
@@ -6507,6 +6672,68 @@ function albumPhotoCardHtml(photo, boxId, index) {
   `;
 }
 
+/**
+ * فيديوهات الألبوم (T-11) — الفيديو يبقى على منصّته: البطاقة تعرض صورته
+ * المصغّرة (`thumb_url` من GET /api/albums/:id، وإن غابت مربّعاً بأيقونة فيلم)،
+ * و«فتح الفيديو» ينقل الزائر إلى المنصّة نفسها في تبويب جديد، و«مشاركة» يبقى
+ * عندنا: صفحة `/v/:id` على الخادم هي ما يغلّفه ببطاقة «أعراسنا».
+ */
+const ALBUM_VIDEO_PROVIDER_LABELS = {
+  youtube: 'يوتيوب',
+  tiktok: 'تيك توك',
+  facebook: 'فيسبوك',
+  instagram: 'إنستغرام',
+  website: 'الموقع'
+};
+
+function albumVideoProviderLabel(provider) {
+  return ALBUM_VIDEO_PROVIDER_LABELS[String(provider || '').toLowerCase()] || 'فيديو';
+}
+
+function albumVideoCardHtml(video) {
+  const thumb = safeHttpUrl(video.thumb_url);
+  const external = safeHttpUrl(video.external_url);
+  return `
+    <article class="album-video-card">
+      <div class="album-video-media">
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="" loading="lazy" decoding="async">` : '<span class="album-video-placeholder"><i class="fa-solid fa-film" aria-hidden="true"></i></span>'}
+        <span class="album-video-play" aria-hidden="true"><i class="fa-solid fa-play"></i></span>
+      </div>
+      <div class="album-video-body">
+        <strong>${escapeHtml(video.title || 'فيديو من الألبوم')}</strong>
+        <span class="album-video-platform">${escapeHtml(albumVideoProviderLabel(video.provider))}</span>
+        <div class="album-video-actions">
+          ${external ? `<a class="album-video-open" href="${escapeHtml(external)}" target="_blank" rel="noopener noreferrer">فتح الفيديو</a>` : ''}
+          <button type="button" class="album-video-share" data-video-id="${Number(video.id)}" onclick="shareVideoFromAlbum(this.dataset.videoId)">مشاركة</button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+/**
+ * مشاركة فيديو من الألبوم — رابط **صفحتنا** `/v/:id` لا رابط يوتيوب/تيك توك:
+ * صفحة المشاركة على الخادم تحمل بطاقة OG بتغليف «أعراسنا»، فرابط المنصّة
+ * نفسها يُسقط التغليف. والزرّ يمرّر معرّف الفيديو (وسم HTML نصّ) فتُقبل هنا
+ * عرضاً كان أو معرّفاً.
+ */
+async function shareVideoFromAlbum(video) {
+  const target = video && typeof video === 'object'
+    ? video
+    : albumsAlbumVideos.find(item => Number(item.id) === Number(video));
+  if (!target || !target.id) return;
+  recordAnalyticsEvent('share_clicked', {
+    contentTown: (albumsCurrentAlbum && (albumsCurrentAlbum.town || (albumsCurrentAlbum.event && albumsCurrentAlbum.event.town))) || null
+  });
+  const title = target.title || 'فيديو من ألبوم العرس';
+  await shareLink({
+    title,
+    line: title,
+    url: `${shareOrigin()}/v/${target.id}`,
+    copiedMessage: '📋 تم نسخ رابط الفيديو'
+  });
+}
+
 function peopleCardHtml(person) {
   const image = safeHttpUrl(person.sample_thumb_url || person.sample_url) ? (person.sample_thumb_url || person.sample_url) : '';
   const counts = [];
@@ -6754,12 +6981,21 @@ async function openAlbumDetail(albumId, { skipHash = false } = {}) {
   document.getElementById('albumDetailView').hidden = false;
   document.getElementById('albumDetailHeader').innerHTML = '<div class="albums-loading"><i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الألبوم...</div>';
   document.getElementById('albumDetailGrid').innerHTML = '';
+  // فيديوهات الألبوم تُفرَّغ مع الرأس: ألبومٌ فشل تحميله كان سيورث فيديوهات
+  // الألبوم السابق تحت عنوانه الجديد (T-11).
+  albumsAlbumVideos = [];
+  const videosBox = document.getElementById('albumDetailVideos');
+  if (videosBox) {
+    videosBox.hidden = true;
+    videosBox.innerHTML = '';
+  }
   try {
     const res = await apiFetch(`/api/albums/${id}?page=1&limit=24`);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'تعذّر تحميل الألبوم');
     albumsCurrentAlbum = data.album;
     albumsAlbumPhotos = Array.isArray(data.photos) ? data.photos : [];
+    albumsAlbumVideos = Array.isArray(data.videos) ? data.videos : [];
     albumsAlbumPagination = data.pagination || null;
     renderAlbumDetail();
   } catch (error) {
@@ -6797,6 +7033,13 @@ function renderAlbumDetail() {
   } else {
     archivePhotosByBox.albumDetail = albumsAlbumPhotos;
     grid.innerHTML = albumsAlbumPhotos.map((photo, index) => albumPhotoCardHtml(photo, 'albumDetail', index)).join('');
+  }
+  // فيديوهات الألبوم (T-11) — قسم مستقلّ تحت الصور: بطاقة لكل فيديو معتمد،
+  // والقسم كلّه مخفي حين لا فيديوهات، فلا فراغ ولا عنوان لقسم فارغ.
+  const videosBox = document.getElementById('albumDetailVideos');
+  if (videosBox) {
+    videosBox.hidden = !albumsAlbumVideos.length;
+    videosBox.innerHTML = albumsAlbumVideos.map(albumVideoCardHtml).join('');
   }
   const more = document.getElementById('albumDetailMoreBtn');
   if (more) {
@@ -6994,22 +7237,127 @@ function updateArchiveViewerFooter(photo) {
   if (withdraw) withdraw.hidden = !authToken;
 }
 
+/**
+ * «أنا في الصورة» لم تعد ترسل شيئاً: تفتح ورقة تشرح ما يفعله الوسم وتذكّر
+ * بشرطَي T-06 (صورة شخصية مرفوعة، ورقم يخصّ صاحبه). الجلسة تُحدَّث أولاً كي
+ * تكون `avatar_url` و`phone_number` في `currentUser` أحدث ما يعرفه الخادم.
+ */
 async function requestPhotoTag() {
   const photo = currentArchivePhoto();
   if (!photo || !photo.id) return;
   if (!requireAuth({ type: 'photos' })) return;
+  await refreshSessionFromServer();
+  // خرج المستخدم أو انتهت جلسته أثناء التحديث — لا ورقة لحساب لم يعد موجوداً.
+  if (!currentUser) { closePhotoTagSheet(); return; }
+  openPhotoTagSheet();
+}
+
+/** يملأ صفّي الشرط في ورقة الوسم من `currentUser` ويضبط زرّ الإرسال. */
+function renderPhotoTagSheetState() {
+  const user = currentUser || {};
+  const hasAvatar = !!user.avatar_url;
+  const avatarState = document.getElementById('photoTagAvatarState');
+  if (avatarState) {
+    avatarState.textContent = hasAvatar
+      ? '✅ صورتك الشخصية مرفوعة'
+      : '⚠️ لازم ترفع صورتك الشخصية أولاً';
+    avatarState.classList.toggle('is-ok', hasAvatar);
+  }
+  const uploadBtn = document.getElementById('photoTagUploadAvatarBtn');
+  if (uploadBtn) uploadBtn.hidden = hasAvatar;
+  const phoneState = document.getElementById('photoTagPhoneState');
+  if (phoneState) phoneState.textContent = `رقمك الشخصي: ${user.phone_number || '—'}`;
+  updatePhotoTagSubmitState();
+}
+
+/** الإرسال لا يُتاح إلا بصورة شخصية مرفوعة ورقم مؤكَّد — نفس شرطَي الخادم. */
+function updatePhotoTagSubmitState() {
+  const submitBtn = document.getElementById('photoTagSubmitBtn');
+  if (!submitBtn) return;
+  const confirm = document.getElementById('photoTagConfirmPhone');
+  const confirmed = !!(confirm && confirm.checked);
+  const hasAvatar = !!(currentUser && currentUser.avatar_url);
+  submitBtn.disabled = !(confirmed && hasAvatar);
+}
+
+function showPhotoTagError(message) {
+  const errorBox = document.getElementById('photoTagError');
+  if (!errorBox) return;
+  errorBox.textContent = message || '';
+  errorBox.hidden = !message;
+}
+
+function openPhotoTagSheet() {
+  const sheet = document.getElementById('photoTagSheet');
+  if (!sheet) return;
+  const selfDescription = document.getElementById('photoTagSelfDescription');
+  const captionSuggestion = document.getElementById('photoTagCaptionSuggestion');
+  if (selfDescription) selfDescription.value = '';
+  if (captionSuggestion) captionSuggestion.value = '';
+  const confirm = document.getElementById('photoTagConfirmPhone');
+  if (confirm) confirm.checked = false;
+  showPhotoTagError('');
+  renderPhotoTagSheetState();
+  sheet.hidden = false;
+}
+
+function closePhotoTagSheet() {
+  const sheet = document.getElementById('photoTagSheet');
+  if (sheet) sheet.hidden = true;
+}
+
+/** «ارفع صورتك الآن» — تخرج من العارض إلى حسابك وتفتح منتقي الصورة نفسه. */
+function goToPhotoTagAvatarUpload() {
+  closePhotoTagSheet();
+  switchTab('tabAccount');
+  const input = document.getElementById('accountAvatarInput');
+  if (input) input.click();
+}
+
+/** «عدّل رقمي» — تخرج إلى الحساب وتفتح نموذج تعديل الرقم القائم (T-04). */
+function goToPhotoTagPhoneEdit() {
+  closePhotoTagSheet();
+  switchTab('tabAccount');
+  toggleAccountPhoneForm(true);
+}
+
+/**
+ * إرسال طلب الوسم من الورقة. الحقول الفارغة تُرسل `''` — والخادم يخزّنها NULL.
+ * 400/409 رسالته عربية وموضعها سطر الخطأ داخل الورقة (تبقى مفتوحة كي يصحّح
+ * المستخدم ما ينقصه)؛ النجاح وحده يغلقها ويحوّل الزرّ إلى «طلبك معلّق».
+ */
+async function submitPhotoTag() {
+  const photo = currentArchivePhoto();
+  if (!photo || !photo.id) return;
+  const submitBtn = document.getElementById('photoTagSubmitBtn');
+  const selfDescription = document.getElementById('photoTagSelfDescription');
+  const captionSuggestion = document.getElementById('photoTagCaptionSuggestion');
+  showPhotoTagError('');
   try {
-    const res = await apiFetch(`/api/photos/${photo.id}/tags`, { method: 'POST', auth: true });
+    if (submitBtn) submitBtn.disabled = true;
+    const res = await apiFetch(`/api/photos/${photo.id}/tags`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        self_description: ((selfDescription && selfDescription.value) || '').trim(),
+        caption_suggestion: ((captionSuggestion && captionSuggestion.value) || '').trim(),
+        confirm_phone: true
+      })
+    });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.success) throw new Error(data.message || 'تعذّر إرسال طلب الوسم');
-    showToast(data.message || 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
-    const btn = document.getElementById('archiveViewerTagBtn');
-    if (btn) {
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-clock"></i> طلبك معلّق';
+    closePhotoTagSheet();
+    const tagBtn = document.getElementById('archiveViewerTagBtn');
+    if (tagBtn) {
+      tagBtn.disabled = true;
+      tagBtn.innerHTML = '<i class="fa-solid fa-clock"></i> طلبك معلّق';
     }
+    showToast(data.message || 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
   } catch (error) {
-    showToast(error.message || 'تعذّر إرسال طلب الوسم');
+    showPhotoTagError(error.message || 'تعذّر إرسال طلب الوسم');
+  } finally {
+    updatePhotoTagSubmitState();
   }
 }
 

@@ -2014,6 +2014,93 @@ const steps = [
           : '[migrations] allow-albums-without-event-2026-10: already present.'
       );
     }
+  },
+  {
+    // صورة الملف الشخصي (T-03). schema.sql يحمل العمود للتنصيبات الجديدة،
+    // وهذه الخطوة تضمنه لقاعدة حيّة — ADD COLUMN محروس كما في كل خطوة قبله.
+    // NULL هو الحالة الصحيحة لكل حساب قائم: لا صورة، ولا استنتاج لها.
+    name: 'add-users-avatar-2026-10',
+    async run(connection) {
+      if (await columnExists(connection, 'users', 'avatar_url')) {
+        logger.info('[migrations] add-users-avatar-2026-10: already present.');
+        return;
+      }
+
+      await connection.execute(
+        'ALTER TABLE users ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL AFTER person_id'
+      );
+      logger.info('[migrations] add-users-avatar-2026-10: column added.');
+    }
+  },
+  {
+    // الوسم المشروط (T-06): وصف الطالب لنفسه في الصورة، ووصفه المقترح للصورة،
+    // ولحظة تأكيده أن الرقم شخصي. schema.sql يحمل الأعمدة للتنصيبات الجديدة،
+    // وهذه الخطوة تضمنها لقاعدة حيّة — كل عمود داخل حارسه كما في كل خطوة قبله.
+    name: 'add-photo-tags-self-description-2026-10',
+    async run(connection) {
+      let changed = 0;
+      if (!(await columnExists(connection, 'photo_tags', 'self_description'))) {
+        await connection.execute(
+          'ALTER TABLE photo_tags ADD COLUMN self_description VARCHAR(200) DEFAULT NULL AFTER person_id'
+        );
+        changed += 1;
+      }
+      if (!(await columnExists(connection, 'photo_tags', 'caption_suggestion'))) {
+        await connection.execute(
+          'ALTER TABLE photo_tags ADD COLUMN caption_suggestion VARCHAR(200) DEFAULT NULL AFTER self_description'
+        );
+        changed += 1;
+      }
+      if (!(await columnExists(connection, 'photo_tags', 'phone_confirmed_at'))) {
+        await connection.execute(
+          'ALTER TABLE photo_tags ADD COLUMN phone_confirmed_at DATETIME DEFAULT NULL AFTER caption_suggestion'
+        );
+        changed += 1;
+      }
+
+      logger.info(
+        changed
+          ? `[migrations] add-photo-tags-self-description-2026-10: ${changed} column(s) added.`
+          : '[migrations] add-photo-tags-self-description-2026-10: already present.'
+      );
+    }
+  },
+  {
+    // فيديوهات الألبوم (T-09): جدول جديد بالتعريف نفسه الذي في schema.sql —
+    // الروابط خارجية فلا أعمدة ملفات، والحالة تُخفي بلا حذف. الخطوة محروسة
+    // بوجود الجدول، فإعادة تشغيلها على قاعدة طُبِّقت عليها no-op.
+    name: 'create-event-videos-2026-10',
+    async run(connection) {
+      if (await tableExists(connection, 'event_videos')) {
+        logger.info('[migrations] create-event-videos-2026-10: already present.');
+        return;
+      }
+
+      await connection.query(`
+        CREATE TABLE IF NOT EXISTS event_videos (
+          id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          album_id     INT UNSIGNED NOT NULL,
+          event_id     INT UNSIGNED DEFAULT NULL,
+          provider     ENUM('youtube','tiktok','facebook','instagram','website') NOT NULL,
+          external_url VARCHAR(500) NOT NULL,
+          video_key    VARCHAR(64)  DEFAULT NULL,
+          title        VARCHAR(200) DEFAULT NULL,
+          thumb_url    VARCHAR(500) DEFAULT NULL,
+          position     INT          NOT NULL DEFAULT 0,
+          status       ENUM('approved','hidden') NOT NULL DEFAULT 'approved',
+          created_by   INT UNSIGNED DEFAULT NULL,
+          created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_event_videos_album_url (album_id, external_url(191)),
+          KEY idx_event_videos_album (album_id, status, position),
+          KEY idx_event_videos_event (event_id),
+          CONSTRAINT fk_event_videos_album FOREIGN KEY (album_id) REFERENCES event_albums(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_videos_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+          CONSTRAINT fk_event_videos_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      logger.info('[migrations] create-event-videos-2026-10: table created.');
+    }
   }
 ];
 

@@ -6,6 +6,7 @@ const ApiError = require('../utils/ApiError');
 const auth = require('../services/auth.service');
 const analytics = require('../services/analytics.service');
 const { authenticate } = require('../middleware/auth');
+const { avatarMedia } = require('../middleware/upload');
 const { cleanString, requireFields, isValidPhone } = require('../middleware/validate');
 
 const router = express.Router();
@@ -87,22 +88,90 @@ router.get('/auth/me', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
- * The one setting this layer adds to "my account" — the analytics opt-out
- * switch (issue #44, privacy layer part 2). Reuses this same route shape
- * rather than inventing a dedicated privacy-settings convention: a client
- * reads the current value from GET /auth/me and flips it here.
+ * "My account" edits: the analytics opt-out switch (issue #44, privacy layer
+ * part 2), and — since T-03 — the two self-reported profile facts, name and
+ * town. A request carrying neither profile field is the original opt-out
+ * branch, unchanged down to its two messages. `phone_number` is read nowhere
+ * here on purpose: it is the sign-in identifier, so changing it needs the
+ * current PIN and has its own route below.
  */
 router.patch('/auth/me', authenticate, asyncHandler(async (req, res) => {
   const body = req.body || {};
-  if (typeof body.analytics_opt_out !== 'boolean') {
-    throw ApiError.badRequest('قيمة analytics_opt_out يجب أن تكون true أو false');
+
+  if (body.full_name === undefined && body.clan_town === undefined) {
+    if (typeof body.analytics_opt_out !== 'boolean') {
+      throw ApiError.badRequest('قيمة analytics_opt_out يجب أن تكون true أو false');
+    }
+
+    const user = await auth.setAnalyticsOptOut(req.user.id, body.analytics_opt_out);
+    res.json({
+      success: true,
+      user,
+      message: body.analytics_opt_out ? 'تم إيقاف التحليلات السلوكية' : 'تم تفعيل التحليلات السلوكية'
+    });
+    return;
   }
 
-  const user = await auth.setAnalyticsOptOut(req.user.id, body.analytics_opt_out);
+  let fullName;
+  if (body.full_name !== undefined) {
+    fullName = cleanString(body.full_name, 120);
+    if (!fullName) throw ApiError.badRequest('الاسم لا يكون فارغاً');
+  }
+
+  let clanTown;
+  if (body.clan_town !== undefined) {
+    clanTown = cleanString(body.clan_town, 100);
+    if (!clanTown) throw ApiError.badRequest('البلدة لا تكون فارغة');
+  }
+
+  let user = await auth.updateProfile(req.user.id, { fullName, clanTown });
+  // The opt-out switch may ride along on the same request; the answer still
+  // reports the profile change the user actually asked for.
+  if (typeof body.analytics_opt_out === 'boolean') {
+    user = await auth.setAnalyticsOptOut(req.user.id, body.analytics_opt_out);
+  }
+
+  res.json({ success: true, user, message: 'تم تحديث بيانات حسابك' });
+}));
+
+/**
+ * The signed-in user's own profile photo (T-03). The multipart field is
+ * `image`, exactly as every other image upload here — and multer plus
+ * verifyMedia have already refused anything that is not a real image by the
+ * time this handler runs.
+ */
+router.post('/auth/me/avatar', authenticate, avatarMedia, asyncHandler(async (req, res) => {
+  if (!req.file) throw ApiError.badRequest('اختر صورة شخصية أولاً');
+
+  const user = await auth.updateAvatar(req.user.id, req.file);
+  res.json({ success: true, user, message: 'تم تحديث صورتك الشخصية' });
+}));
+
+/**
+ * Changing the sign-in number itself (T-03). Unlike the profile fields this
+ * requires the current PIN: the number IS the login identifier, so a stolen
+ * token alone must not decide where the account moves. The answer carries a
+ * token signed with the new number, so the caller is not signed out by its
+ * own change.
+ */
+router.patch('/auth/me/phone', authenticate, asyncHandler(async (req, res) => {
+  requireFields(req.body, ['phone_number', 'pin_code']);
+
+  const phone_number = normalisePhone(req.body.phone_number);
+  if (!isValidPhone(phone_number)) {
+    throw ApiError.badRequest('رقم الهاتف غير صالح');
+  }
+
+  const result = await auth.changePhoneNumber(
+    req.user.id,
+    phone_number,
+    cleanString(req.body.pin_code, 20)
+  );
+
   res.json({
     success: true,
-    user,
-    message: body.analytics_opt_out ? 'تم إيقاف التحليلات السلوكية' : 'تم تفعيل التحليلات السلوكية'
+    ...result,
+    message: 'تم تحديث رقم هاتفك — استخدمه في الدخول القادم'
   });
 }));
 

@@ -128,6 +128,17 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   Future<List<Story>>? _stories;
 
+  /// بطاقة الدخول التسويقية (T-14): قصة واحدة تظهر مرّة عند فتح التغذية،
+  /// تشير إلى الستوري، وتختفي بمؤقّت أو بزرّ إغلاق. [Story] وحدها تُرسَم؛
+  /// [_entryCardVisible] وحدها تحكم الظهور كي يبقى الإخفاء بلا فقدان القصة.
+  Story? _entryStory;
+  bool _entryCardVisible = false;
+
+  /// بطاقة واحدة لكل شاشة/تشغيل: تُرفع قبل النداء نفسه، فلا يُعاد الطلب مع
+  /// كل `didChangeDependencies` ولا بعد سحبٍ للتحديث.
+  bool _entryCardShown = false;
+  Timer? _entryCardTimer;
+
   /// حالة البث لكبسة الشريط وشارتها — `null` قبل أول ردّ أو عند فشله،
   /// والكبسة ظاهرة وقابلة للكبس في الحالتين.
   LiveChannel? _liveChannel;
@@ -219,6 +230,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _didInit = true;
       _loadFirstPage();
       _loadLiveChannel();
+      // بعد أول إطار: بطاقة الدخول نداء ثانٍ لا يشترك في بناء التغذية، فلا
+      // يؤخّر أول كرت ولا يمنع ظهوره إن تأخّر.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowEntryCard());
     }
 
     // مناسبة جديدة نُشرت لحظياً — تحديث صامت يُبقي المستخدم على الكرت الذي أمامه.
@@ -271,6 +285,49 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     } catch (_) {}
   }
 
+  /// بطاقة الدخول التسويقية — تُطلب مرّة واحدة لكل شاشة/تشغيل، بعد أول إطار.
+  ///
+  /// [_entryCardShown] تُرفع **قبل** النداء لا بعده: فشل الشبكة أو ردّ بلا
+  /// قصة لا يجوز أن يُعيد المحاولة مع كل `didChangeDependencies` فيصير نداءً
+  /// متكرّراً على بطاقة تسويقية. و`NegevApi.entryCard` لا يرمي أصلاً، فالبطاقة
+  /// لا تُفشل التغذية بأي حال.
+  Future<void> _maybeShowEntryCard() async {
+    if (_entryCardShown || !mounted) return;
+    _entryCardShown = true;
+
+    final card = await AppServices.of(context).api.entryCard();
+    if (!mounted) return;
+    final story = card.story;
+    if (!card.enabled || story == null) return;
+
+    setState(() {
+      _entryStory = story;
+      _entryCardVisible = true;
+    });
+    _entryCardTimer?.cancel();
+    _entryCardTimer = Timer(const Duration(seconds: 3), _hideEntryCard);
+  }
+
+  /// إخفاء البطاقة — من مؤقّتها أو من زرّ إغلاقها أو بعد فتح الستوري منها.
+  /// القصة تبقى في [_entryStory] كي لا يضيع المرجع أثناء تحريك الإخفاء.
+  void _hideEntryCard() {
+    _entryCardTimer?.cancel();
+    _entryCardTimer = null;
+    if (!mounted) return;
+    setState(() => _entryCardVisible = false);
+  }
+
+  /// يفتح عارض الستوري على قصة البطاقة وحدها من حلقتها الأولى، ثم يخفي البطاقة:
+  /// البطاقة مدخل لا شريط — العارض هو ما يُقرأ بعده.
+  void _openEntryStory(Story story) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StoryViewerScreen(stories: [story], initialIndex: 0),
+      ),
+    );
+    _hideEntryCard();
+  }
+
   @override
   void didUpdateWidget(covariant EventsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -299,6 +356,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     routeObserver.unsubscribe(this);
     _audio?.release(this);
     _debounce?.cancel();
+    _entryCardTimer?.cancel();
     _newEventSub?.cancel();
     _liveStatusSub?.cancel();
     _savedChange?.removeListener(_handleSavedChange);
@@ -914,6 +972,18 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
               // الستوريات ولا من كبسة الفلاتر.
               if (!_showTopChrome) _feedHeader(),
+              // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — **تحت**
+              // شريط الستوريات لا فوقه — فتدفع الكروت قليلاً ثم تختفي ويعود
+              // التخطيط. بطاقةٌ تشير إلى أوّل ستوري لا يجوز أن تحجبه.
+              if (_entryCardVisible && _entryStory != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                  child: _EntryCard(
+                    story: _entryStory!,
+                    onClose: _hideEntryCard,
+                    onTap: () => _openEntryStory(_entryStory!),
+                  ),
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
@@ -1875,6 +1945,149 @@ class _LiveStoryTile extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// بطاقة الدخول التسويقية (T-14): قصة واحدة في عمود التغذية عند فتحها، **تحت**
+/// شريط الستوريات مباشرة، تشير إلى أوّل ستوري فيه.
+///
+/// دفعٌ لا تغطية: عنصر عادي في `Column` التغذية، فيزيح الكروت تحته قليلاً ثم
+/// يعود التخطيط كما كان بعد إخفائها — رأس التغذية وشريط الستوريات ورقاقة
+/// الألبومات تبقى مرئية وقابلة للكبس وهي المقصودة بالبطاقة. الظهور والإخفاء
+/// والمؤقّت في `_EventsScreenState` وحدها — هذا الكلاس يرسم ويرسل حدثَي
+/// فتح/إغلاق.
+class _EntryCard extends StatelessWidget {
+  const _EntryCard({
+    required this.story,
+    required this.onClose,
+    required this.onTap,
+  });
+
+  final Story story;
+
+  /// زرّ X: يخفي البطاقة وحدها، ولا يفتح العارض ولا يغلقه.
+  final VoidCallback onClose;
+
+  /// فتح الستوري من حلقتها الأولى — الشاشة تخفي البطاقة بعدها.
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final image = story.image;
+    final title = story.title.trim();
+
+    return Container(
+      key: const Key('home_entry_card'),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: c.line),
+        // ظلّ خفيف يفصل البطاقة عن الكروت التي تدفعها تحتها.
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 6)),
+        ],
+      ),
+      // بلا `clipBehavior`: الزوايا ١٨ ترسم الحدّ والظلّ، والمحتوى لا يبلغها
+      // أصلاً (الصورة داخل قصّها الخاص ١٢)، فالقصّ هنا كان يقصّ الظلّ وحده.
+      child: Row(
+        children: [
+          // الصورة والنصّ وحدهما منطقة النقر — زرّ الإغلاق شقيقها لا ابنها،
+          // فلا يبتلع النقر الخارجي ضغطته.
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(18),
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(10, 10, 8, 10),
+                  child: Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox(
+                          width: 96,
+                          height: 96,
+                          child: image == null
+                              ? _storyFallbackAvatar(context)
+                              : Image.network(
+                                  image,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) =>
+                                      _storyFallbackAvatar(context),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // سطر داخل `maxLines: 2` — لا عنوان يطرد الصورة
+                            // ولا سطر فارغ حين يغيب العنوان.
+                            if (title.isNotEmpty)
+                              Text(
+                                title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  height: 1.35,
+                                  fontWeight: FontWeight.w800,
+                                  color: c.ink,
+                                ),
+                              ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'من أول ستوري فوق — اضغط لتفتحها',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 11, color: c.inkSoft),
+                            ),
+                            const SizedBox(height: 6),
+                            FilledButton(
+                              key: const Key('home_entry_card_cta'),
+                              onPressed: onTap,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: c.sky,
+                                foregroundColor: c.onSky,
+                                minimumSize: const Size(0, 30),
+                                padding: const EdgeInsets.symmetric(horizontal: 14),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                textStyle: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                shape: const StadiumBorder(),
+                              ),
+                              child: const Text('شاهد الآن'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsetsDirectional.only(end: 2),
+            child: IconButton(
+              key: const Key('home_entry_card_close'),
+              onPressed: onClose,
+              tooltip: 'إغلاق',
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              color: c.inkSoft,
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ),
+        ],
       ),
     );
   }

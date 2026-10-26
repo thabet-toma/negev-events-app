@@ -100,7 +100,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.8.0">
+  <link rel="stylesheet" href="styles.css?v=2.8.3">
 </head>
 <body>
 
@@ -669,12 +669,59 @@
       <div id="accountLoggedInView" style="display: none;">
         <!-- بطاقة الملف الشخصي -->
         <div class="account-profile-card">
-          <div class="account-avatar-circle" id="accountUserAvatar"><i class="fa-solid fa-user"></i></div>
+          <div class="account-avatar-circle" id="accountUserAvatar">
+            <img id="accountAvatarImg" alt="صورتك الشخصية" hidden>
+            <i id="accountAvatarFallback" class="fa-solid fa-user"></i>
+          </div>
           <div class="account-profile-info">
             <h3 id="accountUserName">المستخدم</h3>
             <p id="accountUserPhone">05xxxxxxxx</p>
             <div class="account-role-wrapper">
               <span id="accountUserRoleBadge" class="status-tag approved">مستخدم</span>
+            </div>
+
+            <div class="account-profile-edit">
+              <!-- صورتك: الرفع multipart إلى POST /api/auth/me/avatar -->
+              <input type="file" id="accountAvatarInput" accept="image/*" hidden onchange="handleAccountAvatarPick(this)">
+              <button type="button" class="map-refresh-btn" id="accountAvatarPickBtn" onclick="document.getElementById('accountAvatarInput').click()">
+                <i class="fa-solid fa-camera"></i> غيّر صورتك
+              </button>
+
+              <!-- اسمك وبلدتك — تعديل ذاتي عبر PATCH /api/auth/me -->
+              <div class="form-group">
+                <label for="accountProfileNameInput">الاسم</label>
+                <input id="accountProfileNameInput" type="text" maxlength="120" autocomplete="name" value="المستخدم">
+              </div>
+              <div class="form-group">
+                <label for="accountProfileTownInput">البلدة</label>
+                <input id="accountProfileTownInput" type="text" maxlength="100" autocomplete="address-level2" value="">
+              </div>
+              <button type="button" class="record-nokoot-btn" id="accountProfileSaveBtn" onclick="saveAccountProfile()">
+                <i class="fa-solid fa-floppy-disk"></i> احفظ بياناتي
+              </button>
+
+              <!-- رقمك: هو اسم الدخول، فتغييره يطلب رمز الدخول الحالي -->
+              <button type="button" class="map-refresh-btn" id="accountPhoneEditBtn" onclick="toggleAccountPhoneForm(true)">
+                <i class="fa-solid fa-pen-to-square"></i> عدّل رقمي
+              </button>
+              <form id="accountPhoneForm" hidden onsubmit="saveAccountPhone(); return false;">
+                <div class="form-group">
+                  <label for="accountPhoneInput">رقم الهاتف</label>
+                  <input id="accountPhoneInput" type="tel" inputmode="tel" dir="ltr" autocomplete="tel" value="">
+                  <div class="account-photos-hint" style="margin-top: 4px;">رقمك هو اسم الدخول — ستدخل به من المرّة القادمة</div>
+                </div>
+                <div class="form-group">
+                  <label for="accountPhonePinInput">رمز الدخول الحالي</label>
+                  <input id="accountPhonePinInput" type="password" inputmode="numeric" autocomplete="off">
+                  <div class="account-photos-hint" style="margin-top: 4px;">أدخل رمز الدخول الحالي للتأكيد</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                  <button type="submit" class="record-nokoot-btn" id="accountPhoneSaveBtn" style="flex: 1;">
+                    <i class="fa-solid fa-floppy-disk"></i> احفظ الرقم
+                  </button>
+                  <button type="button" class="back-pill-btn" id="accountPhoneCancelBtn" onclick="toggleAccountPhoneForm(false)">إلغاء</button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
@@ -1374,6 +1421,46 @@
     </div>
   </div>
 
+  <!-- ورقة «أنا في الصورة» (T-07) — تشرح الوسم قبل إرسال الطلب: صورتك الشخصية
+       ورقمك هما الشرطان، وليس فيها تعرّف وجوه آلي. تفتح فوق العارض (1100). -->
+  <div id="photoTagSheet" class="modal-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="photoTagSheetTitle">
+    <div class="modal-card photo-tag-sheet">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="photoTagSheetTitle"><i class="fa-solid fa-user-check"></i> أنا في الصورة</h3>
+        </div>
+        <button type="button" class="close-modal-btn" onclick="closePhotoTagSheet()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="photo-tag-intro">الوسم يربط الصورة بحسابك: اسمك يظهر تحتها، وتلقاها في «صوري». ما في تعرّف وجوه آلي — أنت اللي تقول «هذا أنا»، والإدارة توافق قبل الظهور.</p>
+      <p class="photo-tag-checklist-title">قبل الإرسال تأكّد من:</p>
+      <div class="photo-tag-check-row">
+        <span id="photoTagAvatarState" class="photo-tag-state"></span>
+        <button type="button" id="photoTagUploadAvatarBtn" class="photo-tag-link-btn" onclick="goToPhotoTagAvatarUpload()">ارفع صورتك الآن</button>
+      </div>
+      <div class="photo-tag-check-row">
+        <span id="photoTagPhoneState" class="photo-tag-state"></span>
+        <button type="button" id="photoTagEditPhoneBtn" class="photo-tag-link-btn" onclick="goToPhotoTagPhoneEdit()">عدّل رقمي</button>
+      </div>
+      <label class="photo-tag-confirm">
+        <input type="checkbox" id="photoTagConfirmPhone" onchange="updatePhotoTagSubmitState()">
+        <span>نعم، هذا رقمي الشخصي</span>
+      </label>
+      <div class="form-group">
+        <label for="photoTagSelfDescription">مين أنت في الصورة؟ (اختياري — يفيد الإدارة إن كان في الصورة أكثر من شخص)</label>
+        <textarea id="photoTagSelfDescription" maxlength="200" rows="2"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="photoTagCaptionSuggestion">وصف الصورة (اختياري — يصير وصفها بعد موافقة الإدارة)</label>
+        <textarea id="photoTagCaptionSuggestion" maxlength="200" rows="2"></textarea>
+      </div>
+      <p id="photoTagError" class="photo-tag-error" hidden></p>
+      <div class="photo-tag-actions">
+        <button type="button" id="photoTagSubmitBtn" class="submit-btn" onclick="submitPhotoTag()">أرسل الطلب</button>
+        <button type="button" id="photoTagCancelBtn" class="back-pill-btn" onclick="closePhotoTagSheet()">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL 9: SERVICE PROVIDER DETAILS (دليل الخدمات — الرقم يُكشف بفعل صريح فقط) -->
   <div id="providerModal" class="modal-overlay" style="display:none;">
     <div class="modal-card">
@@ -1618,6 +1705,9 @@
           <i class="fa-solid fa-arrow-right"></i> كل الألبومات
         </button>
         <div id="albumDetailHeader" class="album-detail-header"></div>
+        <!-- فيديوهات الألبوم (T-11) — شريط فوق شبكة الصور، يبقى مخفياً إن لا فيديوهات معتمدة.
+             البطاقات تُبنى في renderAlbumDetail من `videos` في GET /api/albums/:id. -->
+        <div id="albumDetailVideos" class="album-videos" hidden></div>
         <div id="albumDetailGrid" class="albums-photo-grid"></div>
         <button type="button" id="albumDetailMoreBtn" class="albums-load-more" hidden onclick="loadMoreAlbumPhotos()">عرض المزيد من الصور</button>
       </div>
@@ -1675,6 +1765,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.8.1"></script>
+  <script src="app.js?v=2.8.4"></script>
 </body>
 </html>

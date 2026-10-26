@@ -4,6 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 const cloudinary = require('./cloudinary.service');
+const settings = require('./settings.service');
 
 /**
  * The four ready-made expiry lengths the admin panel offers (#20 step 8,
@@ -57,6 +58,27 @@ async function listPublicStories() {
       ORDER BY is_live DESC, id ASC`
   );
   return rows.map(shapeStory);
+}
+
+/**
+ * The one story the entry card shows when the app opens: the pinned
+ * `entry_promo_story_id` when it is still among the active stories, otherwise
+ * the first of the strip. A pin to a story that has since been deleted or has
+ * expired falls back to auto instead of erroring — the card must never be
+ * broken by a stale setting. `enabled: false` (with no story) when nothing is
+ * active, so the client hides the card rather than drawing an empty frame.
+ */
+async function entryCard() {
+  const active = await listPublicStories();
+  if (!active.length) return { enabled: false, source: null, story: null };
+
+  const pinnedId = await settings.getEntryPromoStoryId();
+  if (pinnedId !== null) {
+    const pinned = active.find(s => Number(s.id) === pinnedId);
+    if (pinned) return { enabled: true, source: 'pinned', story: pinned };
+  }
+
+  return { enabled: true, source: 'auto', story: active[0] };
 }
 
 async function getStoryOrThrow(storyId) {
@@ -251,6 +273,7 @@ module.exports = {
   EXPIRY_PRESETS,
   presetToExpiresAt,
   listPublicStories,
+  entryCard,
   recordView,
   recordClick,
   reportStory,

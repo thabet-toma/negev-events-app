@@ -1289,6 +1289,53 @@ body {
 .admin-photo-actions .btn-reject { font-size: 0.74rem; padding: 5px 9px; }
 .admin-album-import { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
 .admin-album-import input { flex: 1; min-width: 240px; }
+/* فيديوهات الألبوم (T-11) — صندوق تحت شبكة الصور: حقلان وزرّ في صفّ، ثم
+   بطاقة لكل فيديو بمصغّرة وعنوان وحالته وأزرارها. */
+.admin-album-videos {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunk);
+}
+.admin-album-videos-title { margin: 0 0 10px; font-size: 0.95rem; color: var(--ink); }
+.admin-album-video-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.admin-album-video-form input[type="url"] { flex: 2 1 280px; min-width: 220px; }
+.admin-album-video-form input[type="text"] { flex: 1 1 180px; min-width: 150px; }
+.admin-album-videos-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.admin-album-video-card {
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.admin-album-video-thumb {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 54px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-sunk);
+  color: var(--sky);
+  flex: none;
+}
+.admin-album-video-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.admin-album-video-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.admin-album-video-body strong { color: var(--ink); font-size: 0.86rem; line-height: 1.4; overflow-wrap: anywhere; }
+.admin-album-video-meta { color: var(--ink-faint); font-size: 0.76rem; }
+.admin-video-status { font-weight: 800; color: var(--success); }
+.admin-video-status.hidden { color: var(--danger); }
+.admin-album-video-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.admin-album-video-actions .admin-btn-ghost,
+.admin-album-video-actions .btn-reject { font-size: 0.74rem; padding: 5px 9px; }
 /* المدخل الثاني في صفّ المنتقي «ألبوم باسم العريس (بلا مناسبة)» (2026-10):
    يبقى سطراً واحداً ويلتفّ صفّاً كاملاً على الشاشة الضيقة. */
 .admin-albums-honoree-btn { flex: 0 0 auto; white-space: nowrap; }
@@ -1305,6 +1352,22 @@ body {
   margin-top: 4px;
 }
 .admin-photo-queue { display: flex; flex-direction: column; gap: 10px; }
+/* تبويبات طابور الوسوم (T-07) — ثلاثة أزرار بعدّادات، والزرّ الحالي معلَّم
+   بـ`aria-pressed` للقارئ الشاشي وبالصنف للعين. */
+.admin-tag-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-tag-tab {
+  padding: 6px 12px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: var(--radius-sm);
+  background: var(--admin-card);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.admin-tag-tab.is-active { background: var(--gold-main); border-color: var(--gold-main); color: var(--on-sky); }
+.admin-tag-tab:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 .admin-moderation-card {
   display: flex;
   gap: 12px;
@@ -1321,6 +1384,17 @@ body {
 .admin-moderation-actions .admin-btn-primary,
 .admin-moderation-actions .admin-btn-ghost,
 .admin-moderation-actions .btn-reject { font-size: 0.76rem; padding: 5px 10px; }
+/* «اجعله وصف الصورة» — اختيار صريح داخل بطاقة الوسم المعلّق وحدها. */
+.admin-tag-apply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.admin-tag-apply input { width: 16px; height: 16px; accent-color: var(--sky); flex-shrink: 0; }
+.admin-tag-apply span { color: var(--ink); }
 @media (max-width: 720px) {
   .admin-albums-grid { grid-template-columns: 1fr; }
   .admin-album-photos { grid-template-columns: 1fr 1fr; }

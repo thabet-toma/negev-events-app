@@ -341,7 +341,13 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   if (!albumRow) throw ApiError.notFound('الألبوم غير موجود');
 
   const photos = await listPublicPhotos({ albumId, page, limit, search });
-  return { album: publicAlbumShape(albumRow), photos: photos.photos, pagination: photos.pagination };
+  const videos = await videosForAlbum(albumId);
+  return {
+    album: { ...publicAlbumShape(albumRow), video_count: videos.length },
+    photos: photos.photos,
+    videos,
+    pagination: photos.pagination
+  };
 }
 
 async function listPublicPhotos({ search = null, albumId = null, person = null, personId = null, mineUserId = null, page = 1, limit = 24 } = {}) {
@@ -1113,6 +1119,172 @@ async function importFacebookPageAlbum(user, albumId, { facebookAlbumId, photoId
   return { imported, failed };
 }
 
+// --- Videos -----------------------------------------------------------
+
+/**
+ * فيديو الألبوم رابط خارجي لا ملف (T-09): لا رفع ولا Cloudinary ولا بايتات
+ * تُحذف — الحذف يحذف الصفّ وحده. والرابط يمرّ بالمحلّل الوحيد في المشروع،
+ * `normaliseVideoLink` في storyStudio.service.js، فلا يُخترع مشغّل ثانٍ ولا
+ * يصل `javascript:` إلى صفحة. `status` يُخفي بلا حذف كما في الصور، و`position`
+ * ترتيب داخل الألبوم وحده.
+ */
+
+/**
+ * The project's single video-link parser, required lazily: that module pulls
+ * @napi-rs/canvas and the whole story studio, and no album read needs either.
+ */
+function normaliseVideoLink(raw) {
+  return require('./storyStudio.service').normaliseVideoLink(raw);
+}
+
+/** A video's own shape — one shape for the album read and for GET /api/videos/:id. */
+function videoShape(row) {
+  return {
+    id: row.id,
+    provider: row.provider,
+    title: row.title || null,
+    external_url: row.external_url,
+    thumb_url: row.thumb_url || null,
+    position: row.position,
+    created_at: row.created_at
+  };
+}
+
+/** The panel's shape: adds what a visitor never sees — moderation state and author. */
+function adminVideoShape(row) {
+  return { ...videoShape(row), status: row.status, created_by: row.created_by };
+}
+
+/** `title` is free text: trimmed to the column's length, and empty is stored NULL, never ''. */
+function videoTitle(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
+}
+
+/**
+ * فيديوهات ألبوم واحد بترتيبها (`position` ثم `id`، فالتعادل لا يقلب الصفحة).
+ * الافتراضي المعتمد وحده. `includeHidden` للوحة، و`shape` لأنها تقرأ
+ * `status`/`created_by` وهما لا يخرجان للزائر.
+ */
+async function videosForAlbum(albumId, { includeHidden = false, shape = videoShape } = {}) {
+  const statusClause = includeHidden ? '' : " AND status = 'approved'";
+  const rows = await db.query(
+    `SELECT * FROM event_videos
+      WHERE album_id = ?${statusClause}
+      ORDER BY position ASC, id ASC`,
+    [albumId]
+  );
+  return rows.map(shape);
+}
+
+/**
+ * فيديو واحد للزائر: صفّه المعتمد + ألبومه بالشكل العام (`albumRowSelect()`
+ * لا صفّاً خاماً). البوابة هي بوابة الألبوم نفسها (`publicAlbumConditions`،
+ * والمنشور منها) **بلا** `PUBLIC_PHOTO_EXISTS`: فيديو واحد يكفي صفحة مشاركة،
+ * وإضافة شرط الصورة هنا كانت ستُغيّر ظهور الألبوم العام نفسه — وهو ما لم يُطلب.
+ * والردّ 404 واحدة لغياب الفيديو أو سقوط ألبومه، فلا يُستدلّ على مخفيّ.
+ */
+async function getPublicVideo(videoId) {
+  const videoRow = await db.queryOne(
+    "SELECT * FROM event_videos WHERE id = ? AND status = 'approved'",
+    [videoId]
+  );
+  if (!videoRow) throw ApiError.notFound('الفيديو غير موجود');
+
+  const albumRow = await db.queryOne(
+    `${albumRowSelect()}
+      WHERE al.id = ? AND ${publicAlbumConditions().join(' AND ')}`,
+    [videoRow.album_id]
+  );
+  if (!albumRow) throw ApiError.notFound('الفيديو غير موجود');
+
+  return { video: videoShape(videoRow), album: publicAlbumShape(albumRow) };
+}
+
+/** فيديوهات الألبوم للوحة — بعد التحقّق من نطاقه، وبنفس الترتيب، والمخفي معها. */
+async function listVideosForAdmin(user, albumId) {
+  await adminScope.assertAlbumInScope(user, albumId);
+  return videosForAlbum(albumId, { includeHidden: true, shape: adminVideoShape });
+}
+
+async function addAlbumVideo(user, albumId, { url, title }) {
+  const album = await adminScope.assertAlbumInScope(user, albumId);
+  await assertAlbumAllowsGallery(album);
+
+  const link = normaliseVideoLink(url);
+  if (link.canonical_url.length > 500) throw ApiError.badRequest('رابط الفيديو طويل جداً');
+
+  let insertId;
+  try {
+    // `MAX(position) + 1` في عبارة الإدراج نفسها: إضافتان متزامنتان لا تكتبان
+    // الرقم نفسه، بلا معاملة ولا قفل صريح. و`event_id` يُنسخ من الألبوم هنا،
+    // فلا يُقبل من الجسم أبداً.
+    const result = await db.execute(
+      `INSERT INTO event_videos
+         (album_id, event_id, provider, external_url, video_key, title, thumb_url,
+          position, status, created_by)
+       SELECT ?, ?, ?, ?, ?, ?, ?, COALESCE(MAX(position), -1) + 1, 'approved', ?
+         FROM event_videos
+        WHERE album_id = ?`,
+      [
+        albumId, album.event_id, link.platform, link.canonical_url, link.video_id,
+        videoTitle(title), link.thumbnail_url, user.id, albumId
+      ]
+    );
+    insertId = result.insertId;
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      throw ApiError.conflict('هذا الفيديو مضاف إلى الألبوم بالفعل');
+    }
+    throw err;
+  }
+
+  logger.info('album.video.add', { albumId, videoId: insertId, provider: link.platform, by: user.id });
+  return adminVideoShape(await db.queryOne('SELECT * FROM event_videos WHERE id = ?', [insertId]));
+}
+
+/** الفيديو مع ألبومه داخل نطاق `user` — 404 واحدة لغيابه ولخروجه عن النطاق. */
+async function scopedVideo(user, videoId) {
+  const video = await db.queryOne('SELECT * FROM event_videos WHERE id = ?', [videoId]);
+  if (!video) throw ApiError.notFound('الفيديو غير موجود');
+  await adminScope.assertAlbumInScope(user, video.album_id);
+  return video;
+}
+
+const VIDEO_UPDATABLE = ['title', 'status'];
+
+async function updateAlbumVideo(user, videoId, data) {
+  await scopedVideo(user, videoId);
+
+  const assignments = [];
+  const params = [];
+  for (const column of VIDEO_UPDATABLE) {
+    if (data[column] === undefined) continue;
+    if (column === 'title') {
+      assignments.push('title = ?');
+      params.push(videoTitle(data.title));
+    } else {
+      if (!['approved', 'hidden'].includes(data.status)) {
+        throw ApiError.badRequest('حالة الفيديو غير معروفة');
+      }
+      assignments.push('status = ?');
+      params.push(data.status);
+    }
+  }
+  if (!assignments.length) throw ApiError.badRequest('لم يتم إرسال أي تعديل');
+
+  params.push(videoId);
+  await db.execute(`UPDATE event_videos SET ${assignments.join(', ')} WHERE id = ?`, params);
+  logger.info('album.video.update', { videoId, by: user.id });
+  return adminVideoShape(await db.queryOne('SELECT * FROM event_videos WHERE id = ?', [videoId]));
+}
+
+/** حذف الصفّ وحده: الرابط خارجي، فلا ملف على Cloudinary ولا على القرص يُحذف. */
+async function deleteAlbumVideo(user, videoId) {
+  const video = await scopedVideo(user, videoId);
+  await db.execute('DELETE FROM event_videos WHERE id = ?', [videoId]);
+  logger.info('album.video.delete', { videoId, albumId: video.album_id, by: user.id });
+}
+
 // --- Tags -------------------------------------------------------------
 
 async function assertPhotoVisible(photoId) {
@@ -1129,10 +1301,26 @@ async function assertPhotoVisible(photoId) {
   return row;
 }
 
-async function requestTag(user, photoId) {
+/** A tag's free text: trimmed to the column's length, and empty is stored NULL, never ''. */
+function tagText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
+}
+
+/**
+ * The self-tag request is conditional since T-06: the account must carry a
+ * profile photo (the tag links a real face to a real account), and the owner
+ * must confirm the number is personal. Both gates sit before any insert.
+ */
+async function requestTag(user, photoId, { selfDescription, captionSuggestion, confirmPhone } = {}) {
   await assertPhotoVisible(photoId);
-  const account = await db.queryOne('SELECT full_name FROM users WHERE id = ?', [user.id]);
+  const account = await db.queryOne('SELECT full_name, avatar_url FROM users WHERE id = ?', [user.id]);
   if (!account) throw ApiError.unauthorized();
+  if (!account.avatar_url) {
+    throw ApiError.badRequest('ارفع صورتك الشخصية من حسابك أولاً — الوسم يربط الصورة بحسابك');
+  }
+  if (confirmPhone !== true) {
+    throw ApiError.badRequest('أكّد أن رقمك الشخصي صحيح قبل إرسال الطلب');
+  }
 
   const name = String(account.full_name || '').trim().slice(0, 150);
   if (!name) throw ApiError.badRequest('اسم حسابك فارغ — أكمل ملفك أولاً');
@@ -1140,9 +1328,14 @@ async function requestTag(user, photoId) {
   try {
     const personId = await people.resolveByName(name);
     await db.execute(
-      `INSERT INTO photo_tags (photo_id, user_id, name, name_key, person_id, status, requested_by)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-      [photoId, user.id, name, nameKey(name), personId, user.id]
+      `INSERT INTO photo_tags
+         (photo_id, user_id, name, name_key, person_id, self_description, caption_suggestion,
+          phone_confirmed_at, status, requested_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'pending', ?)`,
+      [
+        photoId, user.id, name, nameKey(name), personId,
+        tagText(selfDescription), tagText(captionSuggestion), user.id
+      ]
     );
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
@@ -1198,7 +1391,8 @@ async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
   }
   params.push(...scoped.params);
   const rows = await db.query(
-    `SELECT t.*, p.image_url, p.caption, al.title AS album_title,
+    `SELECT t.*, t.self_description, t.caption_suggestion, t.phone_confirmed_at,
+            p.image_url, p.caption, al.title AS album_title,
             e.title AS event_title, COALESCE(al.town, e.town) AS town, u.full_name AS requester_name
        FROM photo_tags t
        JOIN event_photos p ON p.id = t.photo_id
@@ -1215,6 +1409,9 @@ async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
     photo_id: row.photo_id,
     name: row.name,
     status: row.status,
+    self_description: row.self_description,
+    caption_suggestion: row.caption_suggestion,
+    phone_confirmed_at: row.phone_confirmed_at,
     requested_by: row.requested_by,
     requester_name: row.requester_name,
     moderated_by: row.moderated_by,
@@ -1232,6 +1429,31 @@ async function listTagsForAdmin(user, { status = null, limit = 50 } = {}) {
   }));
 }
 
+/**
+ * The queue's tab badges (T-06): the same joins and the same `albumScopeClause`
+ * as the list above, so a count can never describe rows the admin may not see.
+ * A status with no rows is 0, not missing.
+ */
+async function tagCountsForAdmin(user) {
+  const { clause, params } = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
+  const rows = await db.query(
+    `SELECT t.status, COUNT(*) AS cnt
+       FROM photo_tags t
+       JOIN event_photos p ON p.id = t.photo_id
+       JOIN event_albums al ON al.id = p.album_id
+       LEFT JOIN events e ON e.id = al.event_id
+      WHERE 1 = 1${clause}
+      GROUP BY t.status`,
+    params
+  );
+
+  const counts = { pending: 0, approved: 0, rejected: 0 };
+  for (const row of rows) {
+    if (row.status in counts) counts[row.status] = Number(row.cnt);
+  }
+  return counts;
+}
+
 async function scopedTag(user, tagId) {
   const { clause, params } = await adminScope.albumScopeClause(user, { eventAlias: 'e', albumAlias: 'al' });
   const row = await db.queryOne(
@@ -1246,15 +1468,33 @@ async function scopedTag(user, tagId) {
   return row;
 }
 
-async function moderateTag(user, tagId, status) {
+/**
+ * Approving may also adopt the requester's caption suggestion as the photo's
+ * caption — an explicit admin choice (`applyCaption`), never automatic, and
+ * never on rejection. The status and the caption move together or not at all.
+ */
+async function moderateTag(user, tagId, status, { applyCaption = false } = {}) {
   if (!['approved', 'rejected'].includes(status)) throw ApiError.badRequest('حالة الوسم غير معروفة');
-  await scopedTag(user, tagId);
-  await db.execute(
-    'UPDATE photo_tags SET status = ?, moderated_by = ?, moderated_at = NOW() WHERE id = ?',
-    [status, user.id, tagId]
-  );
-  logger.info('photo.tag.moderate', { tagId, status, by: user.id });
-  return { id: tagId, status };
+  const tag = await scopedTag(user, tagId);
+  const suggestion = status === 'approved' && applyCaption ? tagText(tag.caption_suggestion) : null;
+
+  const captionApplied = await db.transaction(async connection => {
+    await connection.execute(
+      'UPDATE photo_tags SET status = ?, moderated_by = ?, moderated_at = NOW() WHERE id = ?',
+      [status, user.id, tagId]
+    );
+    if (!suggestion) return false;
+
+    const named = normaliseCaption(suggestion);
+    await connection.execute(
+      'UPDATE event_photos SET caption = ?, caption_key = ? WHERE id = ?',
+      [named.caption, named.captionKey, tag.photo_id]
+    );
+    return true;
+  });
+
+  logger.info('photo.tag.moderate', { tagId, status, by: user.id, captionApplied });
+  return { id: tagId, status, caption_applied: captionApplied };
 }
 
 async function deleteTag(user, tagId) {
@@ -1382,12 +1622,19 @@ module.exports = {  // public
   importPhotoFromUrl,
   listFacebookPageAlbums,
   importFacebookPageAlbum,
+  // videos
+  getPublicVideo,
+  listVideosForAdmin,
+  addAlbumVideo,
+  updateAlbumVideo,
+  deleteAlbumVideo,
   // tags
   requestTag,
   withdrawTag,
   listMyPhotos,
   addAdminTag,
   listTagsForAdmin,
+  tagCountsForAdmin,
   moderateTag,
   deleteTag,
   // reports

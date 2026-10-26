@@ -3,13 +3,17 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../api/api_client.dart' show ApiException;
+import '../api/negev_api.dart';
 import '../main.dart';
 import '../models/album.dart';
 import '../models/event.dart' show Pagination;
+import '../state/auth_store.dart';
 import '../state/share_album.dart';
 import '../theme.dart';
-import '../widgets/async_view.dart' show showMessage;
+import '../widgets/async_view.dart' show openExternalLink, showMessage;
 import '../widgets/congratulations.dart' show openSignInGate;
+import 'account_screen.dart';
 
 /// «ألبومات الأعراس» — بحث واحد بثلاث مجموعات (ألبومات/صور/أشخاص)، ثم ألبوم،
 /// ثم صورة مستقلة بوسومها. لا سقف للصور؛ الترقيم على الخادم.
@@ -405,6 +409,8 @@ class AlbumDetailScreen extends StatefulWidget {
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
   EventAlbum? _album;
   List<EventPhoto> _photos = const [];
+  /// فيديوهات الألبوم — صفحةٌ كاملة مع أوّل جلب، فـ`_loadMore` لا يمسّها.
+  List<EventVideo> _videos = const [];
   Pagination? _pagination;
   bool _loading = true;
   String? _error;
@@ -435,6 +441,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
       setState(() {
         _album = data.album;
         _photos = data.photos;
+        _videos = data.videos;
         _pagination = data.pagination;
         _loading = false;
         _error = null;
@@ -549,6 +556,27 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                           ],
                         ),
                       ),
+                      // الفيديوهات جزءٌ من الألبوم لا صفحةٌ ثانية: شريط أفقي
+                      // واحد بين الرأس والشبكة، يُخفى كاملاً حين لا فيديو.
+                      if (_videos.isNotEmpty)
+                        SizedBox(
+                          height: 150,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
+                            itemCount: _videos.length,
+                            separatorBuilder: (_, _) => const SizedBox(width: 10),
+                            itemBuilder: (context, index) {
+                              final video = _videos[index];
+                              return _VideoCard(
+                                key: Key('album_video_${video.id}'),
+                                video: video,
+                                albumTitle: _album?.title,
+                                town: _album?.town,
+                              );
+                            },
+                          ),
+                        ),
                       Expanded(
                         child: _photos.isEmpty
                             ? const _Message(
@@ -659,6 +687,141 @@ class _PhotoGrid extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// بطاقة فيديو واحدة في شريط الألبوم: غلافٌ 16:9 وشارة تشغيل، عنوانٌ سطر واحد
+/// ووسم المنصّة، وزرّ مشاركة صغير. النقر يفتح الفيديو في تطبيقه — التطبيق لا
+/// يشغّل الفيديو بنفسه؛ والمشاركة تمرّ بصفحة `/v/:id` التي تغلّفه ببطاقة المنصّة.
+class _VideoCard extends StatelessWidget {
+  const _VideoCard({
+    super.key,
+    required this.video,
+    this.albumTitle,
+    this.town,
+  });
+
+  final EventVideo video;
+  final String? albumTitle;
+  final String? town;
+
+  /// المخطّط يُفحص قبل التسليم إلى `launchUrl`: لا `javascript:`/`intent:` ولا
+  /// رابط ناقص، والفشل — بالطريقتين، false ورمية — يُقال بالعربية.
+  Future<void> _open(BuildContext context) async {
+    final url = video.externalUrl;
+    final uri = url == null ? null : Uri.tryParse(url);
+    final isHttp = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+    if (!isHttp) {
+      showMessage(context, 'تعذّر فتح الفيديو', isError: true);
+      return;
+    }
+    await openExternalLink(context, uri, failureMessage: 'تعذّر فتح الفيديو');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final thumb = video.thumbUrl;
+    return SizedBox(
+      width: 192,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _open(context),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 192 × 9/16 — غلافٌ 16:9 بعرض ~200، كما في شبكة الصور.
+            SizedBox(
+              height: 108,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    // بلا مصغّرة: مربّع بأيقونة فيلم، لا رابط فارغ يُرسَل
+                    // إلى الشبكة ثم يفشل مرّتين (الطلب والفشل).
+                    child: thumb == null
+                        ? ColoredBox(
+                            color: c.surfaceSunk,
+                            child: Icon(Icons.movie_outlined, color: c.inkFaint),
+                          )
+                        : CachedNetworkImage(
+                            imageUrl: thumb,
+                            fit: BoxFit.cover,
+                            placeholder: (_, _) => ColoredBox(color: c.surfaceSunk),
+                            errorWidget: (_, _, _) => ColoredBox(
+                              color: c.surfaceSunk,
+                              child: Icon(Icons.movie_outlined, color: c.inkFaint),
+                            ),
+                          ),
+                  ),
+                  Center(
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: const BoxDecoration(
+                        color: Color(0x99000000),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          video.title ?? 'فيديو',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: c.ink,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          video.providerLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: c.inkFaint, fontSize: 10.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    key: Key('album_video_share_${video.id}'),
+                    icon: Icon(Icons.share_outlined, size: 17, color: c.inkSoft),
+                    tooltip: 'مشاركة',
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+                    onPressed: () => shareVideo(
+                      context,
+                      video,
+                      albumTitle: albumTitle,
+                      town: town,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -905,20 +1068,31 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 
   EventPhoto get _photo => widget.photos[_index];
 
+  /// «أنا في الصورة» لا ترسل شيئاً بنفسها: تفتح ورقة تشرح الوسم وتذكّر
+  /// بشرطَيه (صورة شخصية مرفوعة، ورقم يخصّ صاحب الحساب). الورقة وحدها ترسل،
+  /// وتغلق نفسها بـ`true` عند النجاح — والرسالة هنا كي لا تختفي الورقة بلا خبر.
   Future<void> _tag() async {
-    if (!AppServices.of(context).auth.isSignedIn) {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
       await openSignInGate(context, 'سجّل الدخول لتضع اسمك في الصورة');
       return;
     }
-    setState(() => _busy = true);
-    try {
-      await AppServices.of(context).api.tagPhoto(_photo.id);
-      if (mounted) showMessage(context, 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
-    } catch (error) {
-      if (mounted) showMessage(context, '$error', isError: true);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    final photoId = _photo.id;
+    final sent = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.c.surfaceSunk,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => _TagPhotoSheet(
+        photoId: photoId,
+        api: services.api,
+        auth: services.auth,
+      ),
+    );
+    if (!mounted || sent != true) return;
+    showMessage(context, 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة');
   }
 
   Future<void> _withdraw() async {
@@ -1054,6 +1228,232 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
                   ),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ورقة «أنا في الصورة» — تشرح الوسم قبل إرساله بدل أن ترسل فوراً.
+///
+/// الوسم بشري بلا تعرّف وجوه آلي: المستخدم يقول «هذا أنا»، والإدارة توافق قبل
+/// ظهور الاسم. والخادم يرفض الطلب ما لم يكن على الحساب صورة شخصية مرفوعة
+/// (`avatar_url`) ولم يؤكّد المستخدم أن الرقم رقمه (`confirm_phone`) — فالشرطان
+/// معروضان هنا قبل الإرسال، والزرّ معطّل دونهما.
+///
+/// النصّان اختياريان ويُرسَلان دائماً؛ فارغين يعني NULL على الخادم. وردّ 400
+/// (أو أي خطأ خادم) يبقى في سطر الخطأ داخل الورقة كي يصحّح المستخدم ما ينقصه.
+class _TagPhotoSheet extends StatefulWidget {
+  const _TagPhotoSheet({
+    required this.photoId,
+    required this.api,
+    required this.auth,
+  });
+
+  final int photoId;
+  final NegevApi api;
+  final AuthStore auth;
+
+  @override
+  State<_TagPhotoSheet> createState() => _TagPhotoSheetState();
+}
+
+class _TagPhotoSheetState extends State<_TagPhotoSheet> {
+  final _selfDescription = TextEditingController();
+  final _captionSuggestion = TextEditingController();
+  bool _confirmPhone = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _selfDescription.dispose();
+    _captionSuggestion.dispose();
+    super.dispose();
+  }
+
+  bool get _hasAvatar => widget.auth.user?.avatarUrl != null;
+
+  /// «ارفع صورتك الآن» و«عدّل رقمي»: تُغلق الورقة أولاً ثم تُفتح «حسابي» —
+  /// الرفع في شاشة الحساب وحدها (هنا لا `image_picker`)، والورقة لا تعيش فوق
+  /// شاشة أخرى لتُعاد قراءة `avatar_url` فيها. تُعاد فتحها بالحالة الجديدة.
+  void _openAccount() {
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    navigator.push(
+      MaterialPageRoute<void>(builder: (_) => const AccountScreen()),
+    );
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.tagPhoto(
+        widget.photoId,
+        selfDescription: _selfDescription.text.trim(),
+        captionSuggestion: _captionSuggestion.text.trim(),
+        confirmPhone: true,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = widget.auth.user;
+    final hasAvatar = _hasAvatar;
+    final canSubmit = hasAvatar && _confirmPhone && !_busy;
+    final hintStyle = TextStyle(color: context.c.inkSoft, height: 1.6, fontSize: 13);
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 18,
+          right: 18,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'أنا في الصورة',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'الوسم يربط الصورة بحسابك: اسمك يظهر تحتها، وتلقاها في «صوري». '
+              'ما في تعرّف وجوه آلي — أنت اللي تقول «هذا أنا»، والإدارة توافق قبل الظهور.',
+              style: hintStyle,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 6,
+              children: [
+                Text(
+                  hasAvatar
+                      ? '✅ صورتك الشخصية مرفوعة'
+                      : '⚠️ لازم ترفع صورتك الشخصية أولاً',
+                  key: const Key('tag_avatar_state'),
+                  style: TextStyle(
+                    color: hasAvatar ? context.c.ink : context.c.danger,
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+                if (!hasAvatar)
+                  TextButton(
+                    key: const Key('tag_upload_avatar'),
+                    onPressed: _openAccount,
+                    child: const Text('ارفع صورتك الآن'),
+                  ),
+              ],
+            ),
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 6,
+              children: [
+                Text(
+                  'رقمك الشخصي: ${user?.phoneNumber ?? '—'}',
+                  key: const Key('tag_phone_state'),
+                  style: TextStyle(
+                    color: context.c.ink,
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+                TextButton(
+                  key: const Key('tag_edit_phone'),
+                  onPressed: _openAccount,
+                  child: const Text('عدّل رقمي'),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Checkbox(
+                  key: const Key('tag_confirm_phone'),
+                  value: _confirmPhone,
+                  onChanged: (value) =>
+                      setState(() => _confirmPhone = value ?? false),
+                ),
+                Expanded(
+                  child: InkWell(
+                    onTap: () => setState(() => _confirmPhone = !_confirmPhone),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'نعم، هذا رقمي الشخصي',
+                        style: TextStyle(color: context.c.ink, fontSize: 13.5),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'مين أنت في الصورة؟ (اختياري — يفيد الإدارة إن كان في الصورة أكثر من شخص)',
+              style: hintStyle,
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              key: const Key('tag_self_description'),
+              controller: _selfDescription,
+              maxLength: 200,
+              minLines: 1,
+              maxLines: 2,
+              style: TextStyle(color: context.c.ink, fontSize: 13.5),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'وصف الصورة (اختياري — يصير وصفها بعد موافقة الإدارة)',
+              style: hintStyle,
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              key: const Key('tag_caption_suggestion'),
+              controller: _captionSuggestion,
+              maxLength: 200,
+              minLines: 1,
+              maxLines: 2,
+              style: TextStyle(color: context.c.ink, fontSize: 13.5),
+            ),
+            if (_error != null && _error!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                _error!,
+                key: const Key('tag_error'),
+                style: TextStyle(
+                  color: context.c.danger,
+                  fontSize: 13,
+                  height: 1.5,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            FilledButton(
+              key: const Key('tag_submit'),
+              onPressed: canSubmit ? _submit : null,
+              child: Text(_busy ? 'جارٍ الإرسال…' : 'أرسل الطلب'),
             ),
           ],
         ),

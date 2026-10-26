@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
@@ -327,6 +329,33 @@ class NegevApi {
     return list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList();
   }
 
+  /// بطاقة الدخول التسويقية — `GET /api/stories/entry-card`، مسار عام بلا
+  /// مصادقة: القصة تختارها الإدارة لكل الزوّار، لا لحساب بعينه.
+  ///
+  /// `enabled` وحدها تعني «اعرض البطاقة»: الخادم يرسلها `false` (و`story`
+  /// `null`) حين لا قصة نشِطة، فيصمت العميل بلا إطار فارغ.
+  ///
+  /// **لا ترمي أبداً** — بخلاف كل دالة أخرى هنا. بطاقة تسويقية لا تُفشل
+  /// التغذية: انقطاع الشبكة أو ردّ غير متوقَّع يعيد
+  /// `(enabled: false, source: null, story: null)` كأن الخادم قال «لا بطاقة».
+  Future<({bool enabled, String? source, Story? story})> entryCard() async {
+    try {
+      final data = await _client.get('/api/stories/entry-card');
+      final rawStory = data['story'];
+      final story = rawStory is Map
+          ? Story.fromJson(Map<String, dynamic>.from(rawStory))
+          : null;
+      final rawSource = data['source'];
+      return (
+        enabled: data['enabled'] == true && rawStory is Map,
+        source: rawSource is String && rawSource.isNotEmpty ? rawSource : null,
+        story: story,
+      );
+    } catch (_) {
+      return (enabled: false, source: null, story: null);
+    }
+  }
+
   /// حالة البث المباشر — GET /api/live عام بلا مصادقة، فلا `auth: true`:
   /// زر التغذية وشارة النشاط لا علاقة لهما بالجلسة.
   Future<LiveChannel> liveChannel() async {
@@ -421,12 +450,19 @@ class NegevApi {
     );
   }
 
-  Future<({EventAlbum album, List<EventPhoto> photos, Pagination pagination})>
-      albumDetails(int id, {int page = 1, int limit = 24, String? search}) async {
+  /// تفاصيل الألبوم: صوره المرقَّمة، وفيديوهاته (`videos`) — صفحةٌ كاملة لا
+  /// مرقَّمة، فلا هي تُكرَّر مع `page` التالي ولا تختفي في «عرض المزيد».
+  Future<({
+    EventAlbum album,
+    List<EventPhoto> photos,
+    List<EventVideo> videos,
+    Pagination pagination
+  })> albumDetails(int id, {int page = 1, int limit = 24, String? search}) async {
     final query = <String, String>{'page': '$page', 'limit': '$limit'};
     if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
     final data = await _client.get('/api/albums/$id', query: query);
     final photos = data['photos'];
+    final videos = data['videos'];
     return (
       album: EventAlbum.fromJson(
         data['album'] is Map ? Map<String, dynamic>.from(data['album'] as Map) : const {},
@@ -437,6 +473,13 @@ class NegevApi {
               .map((item) => EventPhoto.fromJson(Map<String, dynamic>.from(item)))
               .toList()
           : const <EventPhoto>[],
+      // خادمٌ لم يُحدَّث بعد: المفتاح غائب ⇒ ألبومٌ بلا فيديوهات، لا انهيار.
+      videos: videos is List
+          ? videos
+              .whereType<Map>()
+              .map((item) => EventVideo.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const <EventVideo>[],
       pagination: Pagination.fromJson(
         data['pagination'] is Map
             ? Map<String, dynamic>.from(data['pagination'] as Map)
@@ -527,8 +570,25 @@ class NegevApi {
     );
   }
 
-  Future<void> tagPhoto(int photoId) async {
-    await _client.post('/api/photos/$photoId/tags', auth: true);
+  /// طلب وسم النفس في صورة. الخادم يفرض شرطين قبل قبوله: صورة شخصية مرفوعة
+  /// على الحساب، و`confirm_phone` صريحاً — ولذلك الافتراضي `false` هنا، فلا
+  /// يُرسَل تأكيد لم يفعله المستخدم.
+  /// النصّان اختياريان ويُرسَلان دائماً (فارغين ⇒ يخزّنهما الخادم NULL).
+  Future<void> tagPhoto(
+    int photoId, {
+    String? selfDescription,
+    String? captionSuggestion,
+    bool confirmPhone = false,
+  }) async {
+    await _client.post(
+      '/api/photos/$photoId/tags',
+      auth: true,
+      body: {
+        'self_description': selfDescription ?? '',
+        'caption_suggestion': captionSuggestion ?? '',
+        'confirm_phone': confirmPhone,
+      },
+    );
   }
 
   Future<void> withdrawPhotoTag(int photoId) async {
@@ -890,6 +950,59 @@ class NegevApi {
       user: AppUser.fromJson(user),
       token: token is String && token.isNotEmpty ? token : null,
     );
+  }
+
+  /// الصورة الشخصية للحساب — multipart بالحقل `image`، كما في كل رفع صورة هنا.
+  /// الخادم هو من يخزّن الملف ويبني `avatar_url` المطلق، فالردّ يحمل المستخدم
+  /// المحدَّث كاملاً لا الرابط وحده.
+  Future<AppUser> uploadAvatar(File image) async {
+    final data = await _client.postMultipart(
+      '/api/auth/me/avatar',
+      fields: const {},
+      files: [await http.MultipartFile.fromPath('image', image.path)],
+      auth: true,
+    );
+    final user = data['user'];
+    if (user is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة بيانات الحساب');
+    }
+    return AppUser.fromJson(user);
+  }
+
+  /// تعديل الاسم والبلدة — `PATCH /api/auth/me`. الحقل الغائب يعني «بلا تعديل
+  /// عليه» عند الخادم، والحقل الفارغ يرفضه صراحةً، فلا يُرسَل إلا ما له قيمة.
+  /// عدد الهاتف ليس هنا عمداً: هو اسم الدخول، وله [changePhone] برمز تأكيد.
+  Future<AppUser> updateProfile({String? fullName, String? clanTown}) async {
+    final body = <String, dynamic>{
+      if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+      if (clanTown != null && clanTown.isNotEmpty) 'clan_town': clanTown,
+    };
+    final data = await _client.patch('/api/auth/me', body: body, auth: true);
+    final user = data['user'];
+    if (user is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة بيانات الحساب');
+    }
+    return AppUser.fromJson(user);
+  }
+
+  /// تغيير رقم الدخول نفسه — يتطلّب رمز الدخول الحالي، ويردّ رمزاً جديداً موقَّعاً
+  /// بالرقم الجديد كي لا يُخرِج المستخدمَ تغييرُه هو. رمز خاطئ يردّ 400 لا 401،
+  /// فالجلسة تبقى قائمة والرسالة تظهر للحوار المفتوح.
+  Future<({AppUser user, String token})> changePhone({
+    required String phoneNumber,
+    required String pinCode,
+  }) async {
+    final data = await _client.patch(
+      '/api/auth/me/phone',
+      body: {'phone_number': phoneNumber, 'pin_code': pinCode},
+      auth: true,
+    );
+    final user = data['user'];
+    final token = data['token'];
+    if (user is! Map<String, dynamic> || token is! String || token.isEmpty) {
+      throw const ApiException('تعذّر تحديث رقمك — حاول مرة أخرى');
+    }
+    return (user: AppUser.fromJson(user), token: token);
   }
 
   /// حذف الحساب نهائياً — `DELETE /api/account` (سياسة Google Play: الحذف من

@@ -54,6 +54,7 @@ const liveRouter = express.Router();
 const photoRouter = express.Router();
 const albumRouter = express.Router();
 const personRouter = express.Router();
+const videoRouter = express.Router();
 
 // helmet's CSP is globally disabled (server/src/app.js — the UI loads posters,
 // audio and map tiles from third-party CDNs), so this one HTML-emitting route
@@ -711,6 +712,63 @@ function renderPersonPage(person) {
     ${thumbs.length > 1 ? `<div class="grid">${thumbs.map(photo => `<img src="${escapeHtml(photo.thumb_url || photo.image_url)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy">`).join('')}</div>` : ''}
     <a class="cta" href="${escapeHtml(`${config.publicUrl}/#person/${person.id}`)}">افتح صفحة ${escapeHtml(heading)} في الموقع</a>
     <p class="note">صفحة شخص خاصة — غير مفهرسة في محركات البحث. لطلب إزالة صورة، استخدم زرّ الإبلاغ في الموقع.</p>
+  </main>
+</body>
+</html>`;
+}
+
+/**
+ * `GET /v/:id` — one album video's own share page (T-10). Same crawler-first
+ * reasoning as `/p/:id` and `/a/:id`: WhatsApp must see a real preview, and
+ * the preview is this server's own card, never a bare third-party thumbnail
+ * that the platform may have removed. Deliberately `noindex` like the two
+ * album pages — a wedding video is shared with the family's circle, not with a
+ * search engine. No script at all, and every user-written value escaped before
+ * interpolation.
+ *
+ * The album is always present: `albums.getPublicVideo` answers 404 rather than
+ * half a video, so `album.title`/`album.event` need no null-guard beyond the
+ * one every album page already keeps.
+ */
+function renderVideoPage({ video, album, providerLabel, imageUrl }) {
+  const heading = video.title || `فيديو من ${album.title || 'ألبوم العرس'}`;
+  const description = [album.title, album.event?.title, album.town]
+    .filter(Boolean)
+    .join(' — ');
+  const pageUrl = `${config.publicUrl}/v/${video.id}`;
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>${escapeHtml(heading)} | اعراسنا</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta property="og:type" content="video.other">
+  <meta property="og:title" content="${escapeHtml(heading)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:image" content="${escapeHtml(imageUrl)}">
+  <meta property="og:image:width" content="${shareCard.WIDTH}">
+  <meta property="og:image:height" content="${shareCard.HEIGHT}">
+  <meta property="og:url" content="${escapeHtml(pageUrl)}">
+  <meta property="og:site_name" content="اعراسنا">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="${escapeHtml(imageUrl)}">
+  <style>${SHARE_PAGE_CSS}
+    .shot { width: 100%; max-height: 62vh; object-fit: cover; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
+    .cta + .cta { margin-top: 10px; background: #12354d; color: #d8edf9; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span>اعراسنا · مناسبات النقب</span><a href="${escapeHtml(config.publicUrl)}">الموقع</a></div>
+    <img class="shot" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(heading)}">
+    <h1>${escapeHtml(heading)}</h1>
+    ${description ? `<p>${escapeHtml(description)}</p>` : ''}
+    <a class="cta" href="${escapeHtml(video.external_url)}" target="_blank" rel="noopener">شاهد الفيديو على ${escapeHtml(providerLabel)}</a>
+    <a class="cta" href="${escapeHtml(`${config.publicUrl}/#album/${album.id}`)}">افتح الألبوم في الموقع</a>
+    <p class="note">صفحة مشاركة فيديو — غير مفهرسة في محركات البحث. الفيديو يُشاهد على منصّته، ولا نُعيد استضافته.</p>
   </main>
 </body>
 </html>`;
@@ -1536,4 +1594,93 @@ personRouter.get('/:id', asyncHandler(async (req, res) => {
     .send(renderPersonPage(data.person));
 }));
 
-module.exports = { eventRouter, liveRouter, photoRouter, albumRouter, personRouter };
+/**
+ * The video for `raw`, or null for a malformed id, a missing video, or one
+ * whose album no longer passes its own public gates — all three answered with
+ * the same not-found body, for the same reason as shareIdOrNull above. The
+ * service already returns one 404 for every one of those cases; only that
+ * status is folded into "not found" here, so a real database failure is still
+ * a 500 rather than a lie about the video.
+ */
+async function publicVideoOrNull(raw) {
+  const videoId = shareIdOrNull(raw);
+  if (!videoId) return null;
+  try {
+    return await albums.getPublicVideo(videoId);
+  } catch (err) {
+    if (err.status !== 404) throw err;
+    return null;
+  }
+}
+
+/**
+ * The platform's Arabic name, from `storyStudio.service.PLATFORM_LABELS` —
+ * that module is the one that resolves a pasted link to a platform, so this
+ * keeps no second copy of the names. Required lazily so a share page's boot
+ * path does not pull the studio's oEmbed machinery in with it. Its `website`
+ * entry is the bare word «فيديو» (what the studio prints where a platform name
+ * would go), which would read «شاهد الفيديو على فيديو» in this page's
+ * sentence — a link that resolved to no platform is «الموقع» here.
+ */
+function platformLabel(provider) {
+  const { PLATFORM_LABELS } = require('../services/storyStudio.service');
+  const label = PLATFORM_LABELS[provider];
+  return !label || provider === 'website' ? 'الموقع' : label;
+}
+
+videoRouter.get('/:id', asyncHandler(async (req, res) => {
+  const data = await publicVideoOrNull(req.params.id);
+  if (!data) {
+    sendNotFound(res);
+    return;
+  }
+
+  // The card is rendered by the route below on demand and is the only
+  // og:image this page offers — exactly what `/e/:id` and `/live/e/:id` do.
+  const imageUrl = `${config.publicUrl}/v/${data.video.id}/card.jpg`;
+
+  res
+    .status(200)
+    .type('html')
+    .set({
+      'Content-Security-Policy': SHARE_CSP,
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Cache-Control': 'public, max-age=300'
+    })
+    .send(renderVideoPage({
+      video: data.video,
+      album: data.album,
+      providerLabel: platformLabel(data.video.provider),
+      imageUrl
+    }));
+}));
+
+videoRouter.get('/:id/card.jpg', asyncHandler(async (req, res) => {
+  const data = await publicVideoOrNull(req.params.id);
+  if (!data) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const buffer = await shareCard.getOrRenderVideoCard({
+      id: data.video.id,
+      title: data.video.title,
+      thumbUrl: data.video.thumb_url,
+      albumTitle: data.album.title,
+      town: data.album.town
+    });
+    res
+      .status(200)
+      .set('Content-Type', 'image/jpeg')
+      // Short, like the episode card: the video can be retitled or re-linked
+      // at any time, with no request of the admin's hitting here.
+      .set('Cache-Control', 'public, max-age=300')
+      .send(buffer);
+  } catch (err) {
+    logger.error(`[share] video card render failed: ${err.message}`);
+    res.status(404).end();
+  }
+}));
+
+module.exports = { eventRouter, liveRouter, photoRouter, albumRouter, personRouter, videoRouter };

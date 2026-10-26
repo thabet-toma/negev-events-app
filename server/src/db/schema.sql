@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS users (
   -- الشخص الذي هو هذا الحساب (ADR-0011). NULLable عن قصد: الحساب سجلّ هوية،
   -- والشخص صفٌّ يُنشأ عند التسجيل عبر people.resolveByName، لا هنا.
   person_id         INT UNSIGNED DEFAULT NULL,
+  -- صورة الملف الشخصي: رابط Cloudinary مطلق، أو `/uploads/…` حين Cloudinary متوقّف.
+  -- ووسم المستخدم نفسه في صورة ألبوم يتطلّب وجودها (photo_tags من الحساب).
+  avatar_url        VARCHAR(500) DEFAULT NULL,
   created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -891,6 +894,35 @@ CREATE TABLE IF NOT EXISTS event_photos (
   CONSTRAINT fk_event_photos_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- فيديوهات الألبوم (T-09): الرابط خارجي — لا رفع ولا تخزين لبايتات، ولا
+-- Cloudinary هنا. `provider`/`video_key`/`thumb_url` مشتقّة من
+-- `normaliseVideoLink` في storyStudio.service.js وقت الإضافة، لا من العميل.
+-- `status` يُخفي الفيديو بلا حذف صفّه (كالوسم والبلاغ)، و`position` ترتيبه
+-- داخل ألبومه وحده. `event_id` ينسخ `event_albums.event_id` وقت الكتابة،
+-- فيسقط الفيديو بسقوط مناسبتها أو ألبومها. والرابط نفسه لا يتكرّر في الألبوم
+-- الواحد — مفتاح فريد على أول ١٩١ حرفاً منه، حدّ فهرس utf8mb4.
+CREATE TABLE IF NOT EXISTS event_videos (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  album_id     INT UNSIGNED NOT NULL,
+  event_id     INT UNSIGNED DEFAULT NULL,
+  provider     ENUM('youtube','tiktok','facebook','instagram','website') NOT NULL,
+  external_url VARCHAR(500) NOT NULL,
+  video_key    VARCHAR(64)  DEFAULT NULL,
+  title        VARCHAR(200) DEFAULT NULL,
+  thumb_url    VARCHAR(500) DEFAULT NULL,
+  position     INT          NOT NULL DEFAULT 0,
+  status       ENUM('approved','hidden') NOT NULL DEFAULT 'approved',
+  created_by   INT UNSIGNED DEFAULT NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_event_videos_album_url (album_id, external_url(191)),
+  KEY idx_event_videos_album (album_id, status, position),
+  KEY idx_event_videos_event (event_id),
+  CONSTRAINT fk_event_videos_album FOREIGN KEY (album_id) REFERENCES event_albums(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_videos_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_videos_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- The user tags HIMSELF (user_id = requested_by, name comes from the
 -- account, never from the request body) and an admin approves it. An admin
 -- may also add a name for someone without an account (user_id NULL). The
@@ -906,6 +938,12 @@ CREATE TABLE IF NOT EXISTS photo_tags (
   -- الشخص الذي يسمّيه الوسم (ADR-0011). `name_key` يبقى للبحث والمقارنة،
   -- و`person_id` هو الهوية التي تُجمع تحتها الصور.
   person_id    INT UNSIGNED DEFAULT NULL,
+  -- ما يكتبه الطالب مع طلبه (T-06): وصفه لنفسه في الصورة، ووصفه المقترح
+  -- للصورة (ينسخه الأدمن على `event_photos.caption` عند الاعتماد إن أراد)،
+  -- ولحظة تأكيده أن الرقم شخصي — إقرار يُسجَّل، لا نصّ يُصدَّق.
+  self_description   VARCHAR(200) DEFAULT NULL,
+  caption_suggestion VARCHAR(200) DEFAULT NULL,
+  phone_confirmed_at DATETIME     DEFAULT NULL,
   status       ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   requested_by INT UNSIGNED DEFAULT NULL,
   moderated_by INT UNSIGNED DEFAULT NULL,

@@ -132,10 +132,91 @@ void main() {
       expect(requests.last.method, 'POST');
       expect(requests.last.url.path, '/api/photos/7/tags');
       expect(requests.last.headers['Authorization'], 'Bearer site-token');
+      // الاستدعاء القديم بلا وسائط يبقى صالحاً: النصّان فارغان (NULL على
+      // الخادم) ولا تأكيد رقم لم يفعله المستخدم.
+      final tagBody = jsonDecode(requests.last.body) as Map<String, dynamic>;
+      expect(tagBody['self_description'], '');
+      expect(tagBody['caption_suggestion'], '');
+      expect(tagBody['confirm_phone'], isFalse);
 
       await api.reportPhoto(7, reason: 'privacy');
       expect(requests.last.url.path, '/api/photos/7/reports');
       expect(jsonDecode(requests.last.body)['reason'], 'privacy');
+    });
+
+    test('albumDetails يقرأ videos بالترتيب، وغيابها قائمة فارغة', () async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.path == '/api/albums/12') {
+          // خادمٌ لا يعرف الفيديوهات بعد: المفتاح غائب لا null.
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'album': {'id': 12, 'event_id': 5, 'title': 'ألبوم قديم', 'photo_count': 0},
+              'photos': [],
+              'pagination': {'page': 1, 'limit': 24, 'total': 0, 'totalPages': 0}
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'success': true,
+            'album': {
+              'id': 11,
+              'event_id': 5,
+              'title': 'ألبوم الحنّة',
+              'photo_count': 1,
+              'video_count': 2
+            },
+            'photos': [
+              {'id': 7, 'album_id': 11, 'image_url': 'https://cdn.test/p.jpg', 'tags': []}
+            ],
+            'videos': [
+              {
+                'id': 7,
+                'provider': 'youtube',
+                'title': 'زفّة أحمد',
+                'external_url': 'https://www.youtube.com/watch?v=abc',
+                'thumb_url': 'https://cdn.test/v7.jpg',
+                'position': 0,
+                'created_at': '2026-10-01T10:00:00.000Z'
+              },
+              {
+                'id': 8,
+                'provider': 'tiktok',
+                'title': 'رقصة العرس',
+                'external_url': 'https://www.tiktok.com/@x/video/2',
+                'thumb_url': null,
+                'position': 1,
+                'created_at': '2026-10-01T11:00:00.000Z'
+              }
+            ],
+            'pagination': {'page': 1, 'limit': 24, 'total': 1, 'totalPages': 1}
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final api = NegevApi(ApiClient(client: client));
+
+      final details = await api.albumDetails(11);
+      expect(requests.last.url.path, '/api/albums/11');
+      // الترتيب من الخادم (`position`) لا من العميل: معرّفا الفيديو بالترتيب.
+      expect(details.videos.map((video) => video.id), [7, 8]);
+      expect(details.videos.first.title, 'زفّة أحمد');
+      expect(details.videos.first.providerLabel, 'يوتيوب');
+      expect(details.videos.first.thumbUrl, 'https://cdn.test/v7.jpg');
+      expect(details.videos.last.thumbUrl, isNull,
+          reason: 'المصغّرة الغائبة null لا سلسلة فارغة');
+      expect(details.photos.single.id, 7, reason: 'الصور لم تُلمس');
+
+      final bare = await api.albumDetails(12);
+      expect(bare.videos, isEmpty,
+          reason: 'غياب المفتاح يعني ألبوماً بلا فيديوهات لا انهياراً');
     });
   });
 }

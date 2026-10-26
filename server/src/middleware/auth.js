@@ -79,5 +79,6 @@ module.exports = {
   requireAdmin,
   requireSuperAdmin,
   signToken,
+  extractToken,
   ADMIN_ROLES
 };

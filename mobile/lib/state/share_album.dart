@@ -68,3 +68,30 @@ Future<void> sharePhoto(BuildContext context, EventPhoto photo) async {
   );
   await shareViaSystem(context, photoShareMessage(photo));
 }
+
+/// فيديو الألبوم — صفحة `/v/:id` على الخادم تغلّفه ببطاقة «اعراسنا»، فالمشاركة
+/// لا ترسل رابط يوتيوب الخام: المنصّة تُعرَّف خارجيّاً باسمها وحدها.
+String videoShareUrl(EventVideo video) => '${AppConfig.apiBase}/v/${video.id}';
+
+/// عنوان الفيديو، أو «فيديو من <الألبوم>» حين لا عنوان له. الرابط سطرٌ ثانٍ
+/// دائماً، كما في الألبوم والصورة.
+String videoShareMessage(EventVideo video, {String? albumTitle}) {
+  final title = video.title;
+  final album = (albumTitle != null && albumTitle.isNotEmpty) ? albumTitle : 'ألبوم العرس';
+  final line = (title != null && title.isNotEmpty) ? title : 'فيديو من $album';
+  return '$line\n${videoShareUrl(video)}';
+}
+
+Future<void> shareVideo(
+  BuildContext context,
+  EventVideo video, {
+  String? albumTitle,
+  String? town,
+}) async {
+  recordAnalyticsEvent(
+    AppServices.of(context).api,
+    'share_clicked',
+    contentTown: town,
+  );
+  await shareViaSystem(context, videoShareMessage(video, albumTitle: albumTitle));
+}

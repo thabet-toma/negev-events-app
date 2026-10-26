@@ -181,9 +181,11 @@ npm run db:import-legacy
    يبقى على القرص. بلاها، أو إن فشل Cloudinary لحظة الرفع، تُحفظ الصورة على القرص كما كانت ولا
    يفشل النشر، وزرّا الرفع المباشر يردّان برسالة عربية. ولصفحات الحلقات (`/live/e/:id`)
    وصفحات الصور المستقلة (`/p/:id`) وصفحات الألبومات (`/a/:id`) وصفحات الأشخاص
-   (`/person/:id`) يجب أن يوجِّه nginx الإنتاج `/live` و `/live/` و`/p` و`/p/` و`/a`
-   و`/a/` و`/person` و`/person/` إلى الخادم (السطران في ADR-0006، وصفحة الصورة في
-   ADR-0009، وصفحة الألبوم في ADR-0006 «توسيع 2026-10-22»، وصفحة الشخص في ADR-0011).
+   (`/person/:id`) وصفحات الفيديو (`/v/:id`) يجب أن يوجِّه nginx الإنتاج `/live` و `/live/`
+   و`/p` و`/p/` و`/a` و`/a/` و`/person` و`/person/` و`/v` و`/v/` إلى الخادم (السطران في
+   ADR-0006، وصفحة الصورة في ADR-0009، وصفحة الألبوم في ADR-0006 «توسيع 2026-10-22»،
+   وصفحة الشخص في ADR-0011). **وصفحات الفيديو (`/v/:id`) تحتاج من nginx نفس قسمَي `/p`** —
+   `location = /v` و`location ^~ /v/` — وهما مضبوطان على الخادم مع إصدار 2026-10-26.
 
 مثال Nginx:
 
@@ -233,9 +235,10 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/events` | تقديم مناسبة (تدخل قائمة المراجعة، أو تُنشر فوراً لحساب إدارة) 🔒 — تحت `'القرى والتجمعات'` يلزم `village_id` **أو** `requested_village_name` («قريتي غير موجودة»، نص حتى ١٠٠ حرف) لا الاثنان معاً، ويُرفض أيٌّ منهما تحت بلدة أخرى بـ400؛ اسم مكتوب يطابق قرية نشِطة حرفياً يُربط بها تلقائياً ويرث إحداثياتها. `requested_village_name` يخرج في القائمة والتفاصيل وقائمة الإدارة. **حارس التكرار:** حين يكون النشر فورياً (حساب إدارة لهذه البلدة) ويشبه مناسبةً معتمدة أو في الطابور (الاسم بعد توحيد الإملاء وخطأ حرف أو حرفين، وفارق يوم على الأكثر) يُرفض بـ409 و`details: { code: 'POSSIBLE_DUPLICATE', duplicates }` دون إنشاء أي صفّ؛ إعادة الإرسال مع `confirm_duplicate` تنشر ويُسجَّل التجاوز (`event_duplicate_override`). المستخدم العادي لا يرى الحارس |
 | `GET` | `/api/map/events` | نقاط الخريطة + روابط Waze — نفس فلاتر `?town=` `?occasion_type_id=` `?village_id=` وقوائمها المفصولة بفواصل |
 | `GET` | `/api/albums` | ألبومات الأعراس الظاهرة (`?search=` `?event_id=` `?page=` `?limit=`) — ألبوم منشور وفيه صورة معتمدة واحدة على الأقل، وله مناسبة معتمدة منتهية نوعها يحمل `archive_gallery`، **أو** بلا مناسبة وله شخص (ADR-0012). وهذه المفاتيح نفسها في `GET /api/albums/:id` و`GET /api/admin/albums/:id/photos` وقائمة `/api/people/:id`: `cover_url`, `cover_thumb_url`, `photo_count`, و`event` (كائن المناسبة كاملاً، أو `null` لألبوم بلا مناسبة) و`person` (`{id,name}` أو `null`) و`honoree_name` و`town` (بلدة الألبوم وإلا بلدة مناسبتها) — والبحث يمسك أيضاً اسم العريس و`al.town` (ADR-0009/0012) |
-| `GET` | `/api/albums/:id` | ألبوم + صوره المعتمدة مرقّمة (`?page=` `?limit=` `?search=` للبحث داخل الألبوم) — 404 لغير الظاهر |
+| `GET` | `/api/albums/:id` | ألبوم + صوره المعتمدة مرقّمة (`?page=` `?limit=` `?search=` للبحث داخل الألبوم) + `videos` (فيديوهاته المعتمدة مرتّبة بـ`position`: `{ id, provider, title, external_url, thumb_url, position, created_at }`) و`video_count` — 404 لغير الظاهر |
 | `GET` | `/api/photos` | بحث الصور وحدها (`?search=` `?album_id=` `?person=` `?page=` `?limit=`) — `person` هو `name_key` القادم من نتيجة «أشخاص»؛ كل صورة تحمل `caption`, `thumb_url`, وسومها المعتمدة، وسياق ألبومها/مناسبتها |
 | `GET` | `/api/photos/:id` | صورة واحدة بسياقها (ألبومها/مناسبتها) ووسومها المعتمدة — 404 لغير الظاهرة |
+| `GET` | `/api/videos/:id` | فيديو واحد (T-09): `video` (`{ id, provider, title, external_url, thumb_url, position, created_at }`) و`album` بالشكل العام نفسه — رابط خارجي لا ملف مرفوع (لا رفع ولا تخزين)، و404 للفيديو المخفي أو لألبومه الساقط عن بواباته. **بلا اشتراط صورة معتمدة**: فيديو واحد يكفي صفحة مشاركة، وظهور ألبوم الصور العام لا يتغيّر |
 | `GET` | `/api/people/:id` | شخص واحد (ADR-0011): اسمه، صوره الموسومة بها، ومناسباته التي هو صاحبها وألبوماتها — وألبومٌ أُنشئ باسمه بلا مناسبة (ADR-0012) — و`photos_count`/`albums_count`. 404 لغير الموجود أو لمن لا شيء ظاهر له |
 | `GET` | `/api/search` | بحث واحد بثلاث مجموعات: `albums` / `photos` / `people` — و«الأشخاص» اليوم من جدول `people` (حسابٌ سجّل، وسمٌ معتمد، أو صاحب مناسبة) لا من تجميع نصوص الوسوم. لا يظهر إلّا من له صورة ظاهرة أو مناسبة ظاهرة، ويوحّد همزات وة/ه وى/ي عبر `nameKey` و`searchVariants` |
 | `GET` | `/api/stories` | القصص المباشرة |
@@ -365,6 +368,8 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/e/:id/download` | يسجّل `app_download_clicked` ثم يوجّه 302 إلى ملف الـAPK |
 | `GET` | `/a/:id` | صفحة ألبوم مستقلة (تذكرة #100، ADR-0006 «توسيع 2026-10-22») — الغلاف هو المعاينة (`og:image`)، والعنوان وسطر «المناسبة · البلدة · التاريخ · عدد الصور» (يبقى منه عدد الصور وحده لألبوم بلا مناسبة — ADR-0012)، وشبكة أول ١٢ صورة، وزرّ «افتح الألبوم في الموقع». `noindex`، بلا `<script>`، و404 بنفس الجسم لمعرّف غير صالح أو ألبوم غير ظاهر. الرابط نفسه يصل جاهزاً في `share_url` مع كل ألبوم، فلا يركّبه أي عميل بنفسه |
 | `GET` | `/person/:id` | صفحة شخص مستقلة (ADR-0011، تذكرة #105) — الاسم وعدد الصور والألبومات، وصوره، ومناسباته. `noindex`، بلا `<script>`، و404 بنفس الجسم لمعرّف غير صالح أو لشخص لا شيء ظاهر له |
+| `GET` | `/v/:id` | صفحة مشاركة فيديو ألبوم (T-10) — بطاقة الخادم هي المعاينة (`og:type` = `video.other`، و`og:image` = `/v/:id/card.jpg` بعرضها وارتفاعها ١٢٠٠)، ثم العنوان وسطر «الألبوم — المناسبة — البلدة»، وزرّ «شاهد الفيديو على يوتيوب» (اسم المنصّة من `PLATFORM_LABELS`) إلى الرابط الخارجي المخزَّن في تبويب جديد، وزرّ «افتح الألبوم في الموقع». `noindex`، بلا `<script>` إطلاقاً، و404 بنفس الجسم لمعرّف غير رقمي أو لفيديو مخفيّ أو لألبومه الساقط عن بواباته |
+| `GET` | `/v/:id/card.jpg` | بطاقة `og:image` للفيديو (1200×1200 JPEG) من `renderVideoCard`: صورة الفيديو المصغَّرة كاملة فوق نسخة مضبَّبة منها، ثم شريحة اسم الألبوم (أو «فيديو من أعراسنا») والعنوان على سطرين والبلدة وسطر التطبيق داخل الإطار؛ بلا مصغَّرة (تيك توك/فيسبوك، أو مصغَّرة تعذّر جلبها): العلامة كبيرة فوق الشريط. `max-age=300` |
 | `GET` | `/live` | صفحة البث المصمَّمة بعلامتنا، بلا اسم منصّة — أي رابط يُلصَق في واتساب يفتح هذه الصفحة أولاً. بث نشِط: شارة «مباشر الآن» وعنوان البث؛ غير ذلك: «بث أعراسنا المباشر». تحتها حلقة اليوم (الموضوع، سؤال الحلقة، سؤال الاستفتاء وخياراته **للقراءة فقط** بلا نسب) ونتيجة نقاش الأمس بأشرطة نسب، وأزرار «ادخل البث» (`/live/go`) و«شارك بالنقاش في التطبيق» (`/live/download`) و«مشاركة واتساب»، ثم قائمة «الحلقات السابقة» روابطَ إلى `/live/e/:id` (ADR-0008). بلا رابط قناة وبلا بث على الإطلاق: 404 بنفس جسم صفحة المناسبة غير الموجودة. يسجّل `tiktok_page_viewed` (اسم الحدث التاريخي، لم يُغيَّر كي لا تنقسم السلسلة) |
 | `GET` | `/live/card.jpg` | بطاقة `og:image` تسويقية (1200×1200 JPEG) من `renderLiveCover` في `shareCard.service.js` — العلامة كاملة، شارة حمراء عند بثّ نشِط فقط، وموضوع البث كعنوان رئيسي بحجم يتقلَّص حسب طول النص. مُخزَّنة **بلا** `immutable` (`max-age=300` فقط) لأن مفتاحها نص الموضوع لا معرّف صف — تغيير الموضوع أو انتهاء البث لا يستدعي أي طلب إلى هذا المسار بذاته |
 | `GET` | `/live/go` | يسجّل `tiktok_click_through` ثم يوجّه 302 إلى رابط البث النشِط أو رابط القناة الدائم (من `settings.service.getLiveChannel` حصراً — لا معامل استعلام يقرَّر منه الوجهة أبداً)، و404 إن لم يوجد أيّ من الرابطين. التسجيل يسبق التحقّق عمداً: المقيس «أحدهم ضغط» لا «ونجح» |
@@ -417,7 +422,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/notifications` | إشعارات المستخدم الحالي مدموجة مع التعاميم التي تخصّه، قائمة واحدة مرتّبة بالأحدث أولاً — هذا هو مركز الإشعارات داخل صفحة الويب |
+| `GET` | `/api/notifications` | إشعارات المستخدم الحالي مدموجة مع التعاميم التي تخصّه، قائمة واحدة مرتّبة بالأحدث أولاً — هذا هو مركز الإشعارات داخل صفحة الويب. **لا يشمل تعميماً نُشر قبل تاريخ تسجيل المستخدم، ولا منتهياً منذ أكثر من ٣٠ يوماً — والشريط الحيّ لا يتغيّر** |
 | `PATCH` | `/api/notifications/:id/read` | تعليم إشعار كمقروء |
 | `POST` | `/api/notifications/read-all` 🔒 | «جعل الكل مقروء» — يعلّم كل الإشعارات الشخصية مقروءة ويغلق كل تعميم لم يُقرأ، بلا حذف أي صفّ (بخلاف «مسح الكل» `POST /api/notifications/clear-all` الذي يحذف الشخصية) |
 | `GET` | `/api/notifications/preferences` 🔒 | تفضيلات إشعارات صاحب الحساب — اليوم مفتاح واحد: `notify_new_events` («مناسبة جديدة» للجميع) |
@@ -466,8 +471,10 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 يوثّق تسليم FCM للموبايل تحديداً (#19)، لا نجاح Web Push، ولا يزال خارج نطاق هذه الدفعة.
 
 عنصر التعميم داخل هذه القائمة يحمل شكلاً مختلفاً عمداً عن الإشعار الشخصي — `type: 'broadcast'`
-و`broadcast_id` (لا `id` إطلاقاً) و`tone` و`expires_at`، ويبقى فيها للأبد حتى بعد انتهاء مدّة
-شريطه (issue #85, قصة 30). الفصل بين `id` و`broadcast_id` مقصود: عدّادا `notifications.id`
+و`broadcast_id` (لا `id` إطلاقاً) و`tone` و`expires_at`، ويبقى فيها بعد انتهاء مدّة شريطه
+(issue #85, قصة 30). **قيدان على هذه القائمة وحدها: لا يشمل تعميماً نُشر قبل تاريخ تسجيل
+المستخدم، ولا منتهياً منذ أكثر من ٣٠ يوماً — والشريط الحيّ لا يتغيّر.** الفصل بين `id` و`broadcast_id`
+مقصود: عدّادا `notifications.id`
 و`broadcasts.id` مستقلّان ويتداخلان، فعنصر يحمل `id` وحده كان يجعل عميلاً يخلط بين الجدولين
 عند تعليم عنصر كمقروء. **حالة القراءة موحَّدة عبر `is_read` على كلا النوعين** — لعنصر التعميم
 هي `broadcast_views.dismissed` نفسها (`PATCH /api/broadcasts/:id/dismiss` أدناه هو فعل
@@ -500,6 +507,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/stories` | الستوريات النشِطة فقط — `expires_at IS NULL OR expires_at > UTC_TIMESTAMP()`؛ كل ستوري يحمل `is_ad`, `advertiser_name`, `target_url`, `link_platform`, `cta_label`, `slide_duration_seconds` إضافة إلى `is_live`/`isLive` وبقية الحقول القديمة، والصورة مطلقة دائماً (ADR-0002/0010) |
+| `GET` | `/api/stories/entry-card` | القصة الواحدة التي تُعرض في «بطاقة الدخول» عند فتح التطبيق: `story` (بالشكل نفسه) و`source` — `pinned` للقصة المثبَّتة في إعداد `entry_promo_story_id`، و`auto` لأول قصة نشِطة إن لم يُثبَّت شيء أو لم تعد المثبَّتة نشِطة — و`enabled: false` مع `story: null` حين لا قصة نشِطة. عام بلا مصادقة |
 | `POST` | `/api/stories/:id/view` | تسجيل مشاهدة — عام، يقبل `device_id` لغير المسجَّل؛ مرّة واحدة لكل شخص لكل ستوري يومياً (قيد فريد، ليس فحصاً مسبقاً) |
 | `POST` | `/api/stories/:id/click` | تسجيل نقرة — عام، بلا حدّ تكرار (كل نقرة حقيقية) |
 | `POST` | `/api/stories/:id/report` | إبلاغ عن ستوري — مرّة واحدة لكل مستخدم 🔒 |
@@ -513,7 +521,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/my-photos` | صور وُسم فيها المستخدم بوسم **معتمد** في ألبومات ظاهرة، مرقّمة |
-| `POST` | `/api/photos/:id/tags` | طلب وسم ذاتي — الاسم من `users.full_name` لا من الجسم، الحالة `pending`، وطلب واحد لكل مستخدم/صورة (409 للمكرَّر) |
+| `POST` | `/api/photos/:id/tags` | طلب وسم ذاتي — الاسم من `users.full_name` لا من الجسم، الحالة `pending`، وطلب واحد لكل مستخدم/صورة (409 للمكرَّر). ويشترط **صورة شخصية مرفوعة** في الحساب (`avatar_url`) و`confirm_phone: true` (كلٌّ **400** برسالته)، ويقبل `self_description` (وصفك لنفسك في الصورة) و`caption_suggestion` (وصف الصورة المقترح) حتى ٢٠٠ حرف لكلٍّ، ويُسجَّل `phone_confirmed_at` |
 | `DELETE` | `/api/photos/:id/tags/me` | سحب الوسم (pending أو approved) — الموافقة قابلة للسحب |
 | `POST` | `/api/photos/:id/reports` | إبلاغ `{ reason: privacy\|inappropriate\|wrong_event\|other, note? }` — مرّة واحدة لكل مستخدم؛ عند `PHOTO_REPORT_HIDE_THRESHOLD` بلاغات مفتوحة تُخفى الصورة مؤقتاً ويراجعها الأدمن |
 
@@ -574,6 +582,9 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/auth/register` | إنشاء حساب |
 | `POST` | `/api/auth/login` | تسجيل الدخول |
 | `GET` | `/api/auth/me` | بيانات الحساب الحالي، و`token` جديد موقَّع لحساب `user` العادي فقط (لا للإدارة) — العميل يستبدل رمزه به عند كل فتح فلا تنتهي جلسة مستخدم نشِط. رمز منتهٍ أو مزوَّر يُرفض بـ**401** في كل المسارات المحمية (لا 403: ‏403 تعني «غير مسموح لك» فقط) 🔒 |
+| `PATCH` | `/api/auth/me` | تعديل بيانات حسابك: الاسم `full_name` (حتى 120 حرفاً) والبلدة `clan_town` (حتى 100) — واسم فارغ أو بلدة فارغة **400**؛ ومفتاح التحليلات السلوكية `analytics_opt_out` كما كان. و`phone_number` في هذا الجسم **لا يُكتب أبداً**: للرقم مسار مستقل يشترط رمز الدخول 🔒 |
+| `PATCH` | `/api/auth/me/phone` | تغيير رقم هاتفك بعد تأكيد رمز الدخول الحالي `{ phone_number, pin_code }` — يرد برمز جديد موقَّع بالرقم الجديد كي لا تُخرَج من جلستك بتغييرك: **400** للرمز الخطأ، و**400** إن كان هو رقمك الحالي، و**409** إن كان مسجَّلاً لحساب آخر، والرقم القديم يتوقف عن الدخول فوراً 🔒 |
+| `POST` | `/api/auth/me/avatar` | رفع صورة شخصية (multipart، الحقل `image`، لأي مستخدم مسجَّل) — تُخزَّن على Cloudinary أو في `‎/uploads/‎`، والصورة السابقة تُحذف عند استبدالها (وحذفها لا يُفشل الطلب إن تعذّر)، ووسم المستخدم نفسه في صور الألبوم يتطلّب وجودها 🔒 |
 | `DELETE` | `/api/account` | حذف حسابك نهائياً بعد تأكيد رمز الدخول `{ pin_code }` — صفوفك الشخصية تُحذف بالـCASCADE، ومناسباتك وصورك تبقى بلا اسم ناشر. وبلا تطبيق: `POST /api/privacy/deletion-request` (عام، ٥ لكل ساعة/IP) يسجّل طلب محو بالهاتف ويجيب بالنصّ نفسه دائماً حتى لا يُكشف وجود رقم 🔒 |
 
 ### دفتر النقوط 🔒
@@ -632,10 +643,11 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `POST` | `/api/admin/occasion-types` | إنشاء نوع مناسبة 🛡️ |
 | `PATCH` | `/api/admin/occasion-types/:id` | تعديل نوع مناسبة (حقوله، تفاعلاته، أعلامه — ومنها `archive_gallery`: أرشيف صور بعد انتهاء المناسبة، مفعّل للعرس وحده افتراضياً) 🛡️ |
 | `DELETE` | `/api/admin/occasion-types/:id` | حذف نوع مناسبة، أو تعطيله إن كانت له مناسبات 🛡️ |
-| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق، و`live_channel_url` و`live_title` و`live_until` و`live_stream_url` للبث المباشر — أعادت خطوة `add-live-episodes-2026-09` تسميتها من مفاتيح `tiktok_*` القديمة) 🛡️ |
+| `GET` | `/api/admin/settings` | كل إعدادات المنصّة المدرجة في القائمة البيضاء بالكود (اليوم: `support_whatsapp_number` و`default_event_audio_url` برابط مطلق، و`live_channel_url` و`live_title` و`live_until` و`live_stream_url` للبث المباشر — أعادت خطوة `add-live-episodes-2026-09` تسميتها من مفاتيح `tiktok_*` القديمة — و`entry_promo_story_id` لقصة بطاقة الدخول) 🛡️ |
 | `PUT` | `/api/admin/settings` | حفظ إعداد واحد أو أكثر — يرفض أي مفتاح خارج القائمة البيضاء، ويرفض رقم واتساب غير صالح برسالة عربية قبل الحفظ، ويرفض `default_event_audio_url` نصّاً حرّاً (يُرفع ملفاً فقط)، ويرفض `live_channel_url`/`live_stream_url` بغير `https` أو بمضيف بلا نقطة أو بحاملٍ لاسم مستخدم/كلمة مرور (المنصّة نفسها حرّة عمداً — تبديلها لا يحتاج نشراً)، ويرفض حفظ عنوان بث بلا موعد انتهاء أو العكس، وحفظهما معاً بلا أي رابط (لا بث ولا حساب دائم). حين يصير البث نشِطاً ورابطه رابط فيديو يوتيوب واحد، يُحفظ حلقةً لليوم وتعود في `live_episode`؛ ورابط قناة يُعيد `live_episode_notice` (لن يُحفظ كحلقة — ADR-0008) 🛡️ |
 | `POST` | `/api/admin/settings/default-audio` | رفع المقطع الصوتي الافتراضي (`multipart/form-data`، حقل `audio`، نفس فحص البايتات كصوت المناسبة) — يُخزَّن نسبياً ويعود مطلقاً، والملف السابق يبقى على القرص 🛡️ |
 | `DELETE` | `/api/admin/settings/default-audio` | حذف المقطع الصوتي الافتراضي (يعود `null`) 🛡️ |
+| إعداد | `entry_promo_story_id` | معرّف قصة «بطاقة الدخول» يُحفظ عبر `PUT /api/admin/settings` — سوبر أدمن وحده، نصّي موجب (`String(id)`)، وقيمة فارغة `''` تمسحه فيعود `GET /api/stories/entry-card` لأول قصة نشِطة تلقائياً 🛡️ |
 | `GET` | `/api/admin/live/episodes` | حلقات البث لآخر ٦٠ يوماً (والمخطَّطة مسبقاً)، الأحدث أولاً، مع `vote_count` 🛡️ |
 | `PUT` | `/api/admin/live/episodes/:date` | إنشاء/استبدال حلقة يوم (`YYYY-MM-DD`): `topic` `episode_question` و`video_url` (رابط فيديو يوتيوب **واحد** يُخزَّن بصيغة `watch?v=`، ورابط قناة 400) و`poll_question` + `poll_options` (٢–٤ خيارات، أو كلاهما فارغ = بلا استفتاء) — استبدال كامل، و409 عند تغيير الخيارات بعد أول صوت (باقي الحقول قابلة للتعديل) 🛡️ |
 | `POST` | `/api/admin/live/episodes/:id/share-image/signature` | توقيع رفع صورة مشاركة الحلقة إلى Cloudinary مباشرةً (`public_id` داخل مجلّد الحلقة يختاره الخادم) — 400 بالعربية إن لم تُضبط مفاتيح Cloudinary 🛡️ |
@@ -651,13 +663,17 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `GET` | `/api/admin/albums/:id/photos` | صور الألبوم كلها (بما فيها المخفية) + وسومها وحالاتها، مرقّمة 🛡️ |
 | `POST` | `/api/admin/albums/:id/photos/signatures` | توقيع دفعة رفع (`count` حتى `ALBUM_UPLOAD_BATCH_MAX` = ٢٠) — 400 لنوع بلا `archive_gallery` أو بلا مفاتيح Cloudinary. **لا سقف لعدد صور الألبوم** 🛡️ |
 | `POST` | `/api/admin/albums/:id/photos` | تسجيل صورة مرفوعة `{ public_id, version, signature, width, height, caption? }` — التسجيل المكرَّر لنفس `public_id` يعيد الصفّ نفسه (retry idempotent) 🛡️ |
+| `GET` | `/api/admin/albums/:id/videos` | فيديوهات الألبوم كلها (بما فيها المخفية) بترتيب `position`، مع `status` و`created_by` 🛡️ |
+| `POST` | `/api/admin/albums/:id/videos` | إضافة فيديو `{ url, title? }` — يُحلَّل بـ`normaliseVideoLink` (يوتيوب/تيك توك/فيسبوك/إنستغرام/أي رابط `http(s)`) ويُخزَّن رابطه و`provider` و`thumb_url` وترتيبه التالي؛ رابط ليس `http(s)` 400 عربية، ومكرَّر في الألبوم نفسه 409 (وفي ألبوم آخر يُقبل) 🛡️ |
+| `PATCH` | `/api/admin/videos/:id` | `title` و/أو `status` (`approved`/`hidden`) — الإخفاء يُخرجه من الألبوم العام ومن `/api/videos/:id` بلا حذف صفّ 🛡️ |
+| `DELETE` | `/api/admin/videos/:id` | حذف صفّ الفيديو وحده — الرابط خارجي فلا ملف على Cloudinary ولا على القرص يُحذف 🛡️ |
 | `PATCH` | `/api/admin/photos/:id` | عنوان، `status` (`approved`/`hidden`)، `position`، `is_cover`، أو `album_id` لنقل الصورة داخل المناسبة نفسها 🛡️ |
 | `DELETE` | `/api/admin/photos/:id` | حذف الصفّ والملف من Cloudinary، وترقية التالية غلافاً 🛡️ |
 | `POST` | `/api/admin/albums/:id/photos/import-url` | استيراد صورة من رابط صورة مباشر على `fbcdn.net`/`fbsbx.com` — لا يقبل رابط منشور فيسبوك (400 برسالة تشرح البديل) 🛡️ |
 | `GET` | `/api/admin/facebook/page-albums` | ألبومات **صفحتنا** عبر Graph API — 400 عربية إن غاب التوكن أو صلاحية `pages_read_engagement` 🔴 |
 | `POST` | `/api/admin/albums/:id/import-facebook` | استيراد حتى ١٠ صور من ألبوم صفحتنا `{ facebook_album_id, photo_ids }`، ونتيجة لكل صورة 🔴 |
-| `GET` | `/api/admin/photo-tags` | طابور الوسوم (`?status=pending\|approved\|rejected`) ضمن بلدات الأدمن 🛡️ |
-| `PATCH` | `/api/admin/photo-tags/:id` | اعتماد/رفض وسم، مع `moderated_by/at` 🛡️ |
+| `GET` | `/api/admin/photo-tags` | طابور الوسوم (`?status=pending\|approved\|rejected`) مع `counts` (`pending`/`approved`/`rejected`) بنفس نطاق البلدات، وكل صفّ يحمل `self_description` و`caption_suggestion` و`phone_confirmed_at` 🛡️ |
+| `PATCH` | `/api/admin/photo-tags/:id` | اعتماد/رفض وسم، مع `moderated_by/at`؛ و`apply_caption: true` مع الاعتماد ينسخ `caption_suggestion` إلى وصف الصورة (`caption`/`caption_key`) ويعيد `caption_applied` — الرفض لا يكتب وصفاً أبداً 🛡️ |
 | `POST` | `/api/admin/photos/:id/tags` | إضافة اسم مباشرة (لشخص بلا حساب) بحالة معتمدة 🛡️ |
 | `DELETE` | `/api/admin/photo-tags/:id` | حذف وسم 🛡️ |
 | `GET` | `/api/admin/photo-reports` | طابور البلاغات (`?status=open\|resolved\|dismissed`) ضمن بلدات الأدمن 🛡️ |

@@ -15,12 +15,16 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 process.env.RATE_LIMIT_MAX = process.env.RATE_LIMIT_MAX || '3000';
+// A distinct authenticated budget makes the two buckets observable: an
+// anonymous caller must keep seeing RATE_LIMIT_MAX (3000), never this one.
+process.env.RATE_LIMIT_USER_MAX = process.env.RATE_LIMIT_USER_MAX || '6000';
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
+const { authenticatedUserId } = require('../src/utils/rateLimitIdentity');
 const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
 
 // The eight towns (and their centres) exactly as they stood as constants
@@ -117,7 +121,7 @@ async function api(method, path, { body, token, legacy = false } = {}) {
     headers,
     body: sent ? JSON.stringify(sent) : undefined
   });
-  return { status: res.status, body: await res.json().catch(() => ({})) };
+  return { status: res.status, body: await res.json().catch(() => ({})), headers: res.headers };
 }
 
 /**
@@ -319,6 +323,34 @@ async function run() {
     assert.strictEqual(registerRow.platform, 'android');
     assert.strictEqual(registerRow.app_version, '2.0.0');
     assert.strictEqual(loginRow.platform, 'android');
+  });
+
+  console.log('\nRate limiting (two buckets)');
+  await test('An anonymous request is counted per IP and reports RATE_LIMIT_MAX as its ceiling', async () => {
+    const { headers } = await api('GET', '/api/events');
+    assert.strictEqual(headers.get('ratelimit-limit'), String(config.rateLimit.max));
+  });
+
+  await test('A signed-in request is counted per user and reports the larger RATE_LIMIT_USER_MAX ceiling', async () => {
+    const { status, headers } = await api('GET', '/api/auth/me', { token: userToken });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(headers.get('ratelimit-limit'), '6000');
+  });
+
+  await test('A garbage bearer token is anonymous again — it keeps the per-IP ceiling', async () => {
+    const { headers } = await api('GET', '/api/events', { token: 'garbage' });
+    assert.strictEqual(headers.get('ratelimit-limit'), String(config.rateLimit.max));
+  });
+
+  await test('authenticatedUserId reads a real token, and answers null for anything unusable', async () => {
+    const withHeader = token => ({ headers: { authorization: `Bearer ${token}` } });
+    assert.strictEqual(
+      authenticatedUserId(withHeader(signToken({ id: 987654, phone_number: '0500000000', full_name: 'اختبار', role: 'user' }, '1h'))),
+      987654
+    );
+    assert.strictEqual(authenticatedUserId({ headers: {} }), null);
+    assert.strictEqual(authenticatedUserId(withHeader('garbage')), null);
+    assert.strictEqual(authenticatedUserId(withHeader(signToken({ id: 'abc' }, '1h'))), null);
   });
 
   console.log('\nNokoot ledger (private)');
@@ -5447,6 +5479,127 @@ async function run() {
     assert.strictEqual(status, 401);
   });
 
+  // --- Entry card (T-13): a pinned story or the first active one ---------
+  // app_settings is persistent between runs, so an id pinned by an earlier
+  // run would make "no pin ⇒ auto" untrue before the first assertion —
+  // start from the known-empty state the tests below reason about.
+  await db.execute("DELETE FROM app_settings WHERE setting_key = 'entry_promo_story_id'");
+
+  await test('With no entry_promo_story_id the entry card is the first active story, source "auto"', async () => {
+    const { status, body } = await api('GET', '/api/stories/entry-card');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.enabled, true);
+    assert.strictEqual(body.source, 'auto');
+
+    const { body: strip } = await api('GET', '/api/stories');
+    assert.ok(strip.stories.length > 0, 'sanity: the strip has an active story to fall back to');
+    assert.strictEqual(body.story.id, strip.stories[0].id);
+  });
+
+  await test('Pinning a story id returns that story from the entry card with source "pinned"', async () => {
+    const { body: strip } = await api('GET', '/api/stories');
+    assert.ok(strip.stories.length >= 2, 'sanity: two active stories are needed to pin one that is not the first');
+    const secondStoryId = strip.stories[1].id;
+    assert.notStrictEqual(secondStoryId, strip.stories[0].id);
+
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { entry_promo_story_id: String(secondStoryId) }
+    });
+    assert.strictEqual(save.status, 200, JSON.stringify(save.body));
+    assert.strictEqual(save.body.settings.entry_promo_story_id, String(secondStoryId));
+
+    const { body } = await api('GET', '/api/stories/entry-card');
+    assert.strictEqual(body.enabled, true);
+    assert.strictEqual(body.source, 'pinned');
+    assert.strictEqual(body.story.id, secondStoryId);
+  });
+
+  await test('Clearing entry_promo_story_id with an empty string returns the entry card to auto', async () => {
+    const cleared = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { entry_promo_story_id: '' }
+    });
+    assert.strictEqual(cleared.status, 200);
+    assert.strictEqual(cleared.body.settings.entry_promo_story_id, null);
+
+    const { body } = await api('GET', '/api/stories/entry-card');
+    assert.strictEqual(body.enabled, true);
+    assert.strictEqual(body.source, 'auto');
+  });
+
+  await test('A pinned story that is then deleted leaves the entry card on auto, without an error', async () => {
+    const created = await api('POST', '/api/admin/stories', {
+      token: adminToken, body: { title: 'قصة بطاقة مؤقتة' }
+    });
+    assert.strictEqual(created.status, 201);
+    const throwawayStoryId = created.body.story.id;
+
+    await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { entry_promo_story_id: String(throwawayStoryId) }
+    });
+    const pinned = await api('GET', '/api/stories/entry-card');
+    assert.strictEqual(pinned.body.source, 'pinned');
+    assert.strictEqual(pinned.body.story.id, throwawayStoryId);
+
+    const removed = await api('DELETE', `/api/admin/stories/${throwawayStoryId}`, { token: adminToken });
+    assert.strictEqual(removed.status, 200);
+
+    const { status, body } = await api('GET', '/api/stories/entry-card');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.enabled, true);
+    assert.strictEqual(body.source, 'auto');
+
+    // Leave the key clear for whatever runs after this block.
+    await api('PUT', '/api/admin/settings', { token: superAdminToken, body: { entry_promo_story_id: '' } });
+  });
+
+  await test('A non-numeric entry_promo_story_id is rejected with an Arabic 400, and a town-scoped admin is refused (403)', async () => {
+    const bad = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { entry_promo_story_id: 'abc' }
+    });
+    assert.strictEqual(bad.status, 400);
+    assert.ok(/[؀-ۿ]/.test(bad.body.message), 'expected an Arabic error message');
+
+    // Inserted directly and signed like scopedAdminToken further down — this
+    // section runs before that fixture exists, and the shared authLimiter
+    // budget is already mostly spent by this point.
+    const townAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: townAdminId } = await db.execute(
+      "INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, 'أدمن بلدة لبطاقة الدخول', 'x', 'admin')",
+      [townAdminPhone]
+    );
+    try {
+      const townAdminToken = signToken(
+        { id: townAdminId, phone_number: townAdminPhone, full_name: 'أدمن بلدة لبطاقة الدخول', role: 'admin' },
+        '1h'
+      );
+      const refused = await api('PUT', '/api/admin/settings', {
+        token: townAdminToken, body: { entry_promo_story_id: String(activeStoryId) }
+      });
+      assert.strictEqual(refused.status, 403);
+    } finally {
+      await db.execute('DELETE FROM users WHERE id = ?', [townAdminId]);
+    }
+  });
+
+  await test('With no active story the entry card is disabled, and every story\'s expiry is restored afterwards', async () => {
+    const saved = await db.query('SELECT id, expires_at FROM stories');
+    assert.ok(saved.length > 0, 'sanity: there is at least one story row to expire');
+
+    try {
+      await db.execute('UPDATE stories SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 DAY');
+
+      const { status, body } = await api('GET', '/api/stories/entry-card');
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(body, { success: true, enabled: false, source: null, story: null });
+    } finally {
+      // Restore row by row (nulls included) so no story created by any other
+      // test in this suite is left expired by this one.
+      for (const row of saved) {
+        await db.execute('UPDATE stories SET expires_at = ? WHERE id = ?', [row.expires_at, row.id]);
+      }
+    }
+  });
+
   await db.execute(
     'DELETE FROM stories WHERE id IN (?, ?, ?, ?)',
     [activeStoryId, adStoryId, expiredStoryId, neverExpiresStoryId]
@@ -5721,7 +5874,10 @@ async function run() {
     });
     expiredBroadcastId = body.broadcasts[0].id;
     broadcastCleanupBroadcastIds.push(expiredBroadcastId);
-    await db.execute('UPDATE broadcasts SET expires_at = ? WHERE id = ?', ['2020-01-01 00:00:00', expiredBroadcastId]);
+    // Expired YESTERDAY, not years ago: the centre drops anything that lapsed
+    // more than 30 days back (T-15, exercised in its own block below), and this
+    // test is about "expiry ends the ticker, not the record" alone.
+    await db.execute('UPDATE broadcasts SET expires_at = UTC_TIMESTAMP() - INTERVAL 1 DAY WHERE id = ?', [expiredBroadcastId]);
 
     const live = await api('GET', '/api/broadcasts/live', { token: broadcastOtherTownUser.token });
     assert.ok(!live.body.broadcasts.some(b => b.id === expiredBroadcastId), 'an expired broadcast must not appear in the live ticker');
@@ -5825,6 +5981,118 @@ async function run() {
     assert.ok(
       live.body.broadcasts.some(b => b.id === townBroadcastId),
       'a broadcast sent before registration must still reach a newly registered user in its town'
+    );
+  });
+
+  // ── The notification centre's own two limits (T-15) ──────────────────────
+  // A broadcast published BEFORE the account registered was never news to it
+  // (a fresh signup used to open the centre to the whole back catalogue), and
+  // one that expired more than 30 days ago has finished its run even as a
+  // record. Both limits live in `broadcasts.service.js#listForCenter` ONLY —
+  // the live ticker keeps its own rule, asserted last here so a regression in
+  // it is caught by the same block that introduced the limits.
+  const centreNewUser = await createUserInTown('مستخدم جديد لمركز الإشعارات', scopedTown);
+  const centreOldUser = await createUserInTown('مستخدم قديم لمركز الإشعارات', scopedTown);
+  broadcastCleanupUserIds.push(centreNewUser.id, centreOldUser.id);
+  // `users.created_at`'s own clock (`CURRENT_TIMESTAMP`), never `UTC_TIMESTAMP()`:
+  // the service compares a broadcast's `created_at` against this column, and the
+  // two must sit on the same wall clock to mean anything.
+  await db.execute('UPDATE users SET created_at = CURRENT_TIMESTAMP - INTERVAL 90 DAY WHERE id = ?', [centreOldUser.id]);
+
+  /**
+   * A global broadcast whose age and expiry this block picks — inserted
+   * directly, because `POST /api/admin/broadcast` only ever writes "now" and a
+   * live-ticker length. Both timestamps are built on the SQL side, and on
+   * purpose from two different clocks, each matching the predicate that reads
+   * it:
+   *   - `created_at` is compared against the account's own `created_at`, which
+   *     a `TIMESTAMP` column defaults with `CURRENT_TIMESTAMP` — so it is
+   *     derived from `CURRENT_TIMESTAMP` too. A JS `Date` here would land on
+   *     UTC's wall clock instead (the pool formats with `timezone: 'Z'` while
+   *     this database's session time zone is SYSTEM) and shift the row by the
+   *     session offset, which is exactly the bug this comment exists to stop.
+   *   - `expires_at` is compared against `UTC_TIMESTAMP()` and written from a
+   *     bound JS `Date` by the admin route — both UTC wall clocks — so it is
+   *     derived from `UTC_TIMESTAMP()`.
+   * A negative `expiresInDays` expires in the past; `null` writes SQL NULL
+   * («بلا شريط», `INTERVAL NULL DAY` being NULL).
+   */
+  async function seedCentreBroadcast({ ageDays, expiresInDays = null }) {
+    const { insertId } = await db.execute(
+      `INSERT INTO broadcasts (title, message, tone, scope_town, created_at, expires_at)
+       VALUES (?, ?, 'info', NULL,
+               CURRENT_TIMESTAMP - INTERVAL ? DAY,
+               UTC_TIMESTAMP() + INTERVAL ? DAY)`,
+      ['تعميم لاختبار حدود مركز الإشعارات', 'نصّ التعميم لاختبار الحدود', ageDays, expiresInDays]
+    );
+    broadcastCleanupBroadcastIds.push(insertId);
+    return insertId;
+  }
+
+  let centreStaleId = 0;
+  let centreFreshId = 0;
+  await test('The centre hides a broadcast published before the account registered, and keeps a newer one', async () => {
+    // The quiet one (`expires_at = NULL`, no ticker at all) is 60 days old and
+    // the account is minutes old: only the registration-date rule can exclude
+    // it, so its absence proves exactly that rule.
+    centreStaleId = await seedCentreBroadcast({ ageDays: 60 });
+    centreFreshId = await seedCentreBroadcast({ ageDays: 0, expiresInDays: 1 });
+
+    const fresh = await api('GET', '/api/notifications', { token: centreNewUser.token });
+    assert.ok(
+      !fresh.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreStaleId),
+      'a broadcast published before this account existed must not appear in its notification centre'
+    );
+    assert.ok(
+      fresh.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreFreshId),
+      'a broadcast published after registration must still reach a brand-new account'
+    );
+
+    // Registered 90 days ago, i.e. before the "stale" broadcast: the bound is
+    // the account's own date, so nothing it could legitimately have seen is
+    // retroactively removed.
+    const old = await api('GET', '/api/notifications', { token: centreOldUser.token });
+    assert.ok(
+      old.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreStaleId),
+      'an account registered before the broadcast keeps it — the rule bounds by registration, not by broadcast age'
+    );
+    assert.ok(old.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreFreshId));
+  });
+
+  let centreLongExpiredId = 0;
+  let centreRecentExpiredId = 0;
+  await test('A broadcast that expired more than 30 days ago drops out of the centre; one expired 10 days ago stays', async () => {
+    // Both published 89 days ago — after `centreOldUser` registered 90 days
+    // ago — so the registration-date rule passes BOTH and only the 30-day
+    // expiry rule can separate them.
+    centreLongExpiredId = await seedCentreBroadcast({ ageDays: 89, expiresInDays: -40 });
+    centreRecentExpiredId = await seedCentreBroadcast({ ageDays: 89, expiresInDays: -10 });
+
+    const centre = await api('GET', '/api/notifications', { token: centreOldUser.token });
+    assert.ok(
+      !centre.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreLongExpiredId),
+      'a broadcast that expired more than 30 days ago must not appear even in the record'
+    );
+    assert.ok(
+      centre.body.notifications.some(n => n.type === 'broadcast' && n.broadcast_id === centreRecentExpiredId),
+      'a broadcast that expired 10 days ago is still inside the 30-day record window'
+    );
+  });
+
+  await test('GET /api/broadcasts/live is unchanged by the centre limits: only live broadcasts, even anonymously', async () => {
+    const { status, body } = await api('GET', '/api/broadcasts/live');
+    assert.strictEqual(status, 200);
+    assert.ok(
+      body.broadcasts.some(b => b.id === centreFreshId),
+      'a live global broadcast must still show in the anonymous ticker'
+    );
+    assert.ok(
+      !body.broadcasts.some(b => b.id === centreRecentExpiredId),
+      'an expired broadcast must never show in the ticker, however recently it expired'
+    );
+    assert.ok(
+      !body.broadcasts.some(b => b.id === centreStaleId),
+      'a «بلا شريط» broadcast (expires_at = NULL) must never show in the ticker'
     );
   });
 
@@ -8076,9 +8344,19 @@ async function run() {
   });
 
   const DAY_MS = 24 * 60 * 60 * 1000;
+  // Calendar arithmetic on the JERUSALEM date, never `Date.now() - DAY_MS`:
+  // during the evening of Israel's DST change (21:00Z until local midnight on
+  // the last Sunday of October) the instant 24h ago is already the SAME
+  // Jerusalem day, so `liveYesterday` collided with `liveToday` and seven
+  // live-hub tests failed for one window a year — not a code regression.
+  const dayBefore = (isoDate, days) => {
+    const d = new Date(`${isoDate}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - days);
+    return d.toISOString().slice(0, 10);
+  };
   const liveToday = jerusalemDateString();
-  const liveYesterday = jerusalemDateString(new Date(Date.now() - DAY_MS));
-  const liveTwoDaysAgo = jerusalemDateString(new Date(Date.now() - 2 * DAY_MS));
+  const liveYesterday = dayBefore(liveToday, 1);
+  const liveTwoDaysAgo = dayBefore(liveToday, 2);
   const liveDates = [liveToday, liveYesterday, liveTwoDaysAgo];
   await db.execute('DELETE FROM live_episodes WHERE episode_date IN (?, ?, ?)', liveDates);
 
@@ -9135,6 +9413,21 @@ async function run() {
     const signFor = eventId => api('POST', `/api/admin/events/${eventId}/photos/signature`, { token: superAdminToken });
     let archiveUpload = null;
     let archivePhotoId = 0;
+    // T-06: الوسم صار مشروطاً بصورة شخصية. تُرفع مرّة واحدة عبر البوّابة
+    // الحقيقية (`POST /api/auth/me/avatar`) في أول اختبار وسم، وبقية المستخدمين
+    // هنا يأخذون الرابط نفسه بتحديث مباشر كي لا يتضاعف الرفع. والحالات الجديدة
+    // تُنظَّف بمعرّفاتها في `finally` أدناه.
+    let archiveAvatarUrl = '';
+    let captionTagId = 0;
+    const conditionalTagUserIds = [];
+    const giveArchiveAvatar = async userId => {
+      assert.ok(archiveAvatarUrl, 'the real avatar upload must run first');
+      await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [archiveAvatarUrl, userId]);
+    };
+    const archiveTagFor = userId => db.queryOne(
+      'SELECT * FROM photo_tags WHERE photo_id = ? AND user_id = ?',
+      [archivePhotoId, userId]
+    );
     // ألبوم باسم العريس بلا مناسبة (2026-10): الأسماء فريدة في كل تشغيل كي لا
     // يلتقط `people.resolveByName` صفّاً تركه تشغيل سابق، وما يُنشأ هنا
     // يُنظَّف في `finally` كبقية صفوف القسم.
@@ -9234,7 +9527,20 @@ async function run() {
       });
 
       await test('a user tags himself: pending and invisible, then searchable by a spelling variant after approval', async () => {
-        const request = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        // شرط الوسم الأول (T-06): صورة شخصية في الحساب، تُرفع هنا فعلياً مرّة واحدة.
+        const avatar = await apiUpload('/api/auth/me/avatar', {
+          token: tagger.token,
+          files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'tagger.png' }]
+        });
+        assert.strictEqual(avatar.status, 200, JSON.stringify(avatar.body));
+        const avatarRow = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [tagger.id]);
+        assert.ok(avatarRow.avatar_url, 'the account carries a profile photo after the real upload route');
+        archiveAvatarUrl = avatarRow.avatar_url;
+
+        const request = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: tagger.token,
+          body: { confirm_phone: true }
+        });
         assert.strictEqual(request.status, 201, JSON.stringify(request.body));
         assert.strictEqual(request.body.status, 'pending');
 
@@ -9271,7 +9577,10 @@ async function run() {
         const withdrawn = await api('GET', `/api/photos/${archivePhotoId}`);
         assert.deepStrictEqual(withdrawn.body.photo.tags, []);
 
-        const again = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        const again = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: tagger.token,
+          body: { confirm_phone: true }
+        });
         assert.strictEqual(again.status, 201);
         const queue = await api('GET', '/api/admin/photo-tags?status=pending', { token: superAdminToken });
         const pending = queue.body.tags.find(tag => tag.photo_id === archivePhotoId && tag.name === 'فاطمة الوسم');
@@ -9281,9 +9590,185 @@ async function run() {
           body: { status: 'rejected' }
         });
 
-        const refused = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: tagger.token });
+        const refused = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: tagger.token,
+          body: { confirm_phone: true }
+        });
         assert.strictEqual(refused.status, 409);
         assert.ok(/رُفض|رفض/.test(refused.body.message), refused.body.message);
+      });
+
+      await test('a self-tag without a profile photo, or without confirm_phone, is refused and writes no row', async () => {
+        const noAvatarUser = await makeArchiveUser('وسيم بلا صورة');
+        conditionalTagUserIds.push(noAvatarUser.id);
+        const missingAvatar = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: noAvatarUser.token,
+          body: { confirm_phone: true }
+        });
+        assert.strictEqual(missingAvatar.status, 400, JSON.stringify(missingAvatar.body));
+        assert.ok(/ارفع صورتك الشخصية/.test(missingAvatar.body.message), missingAvatar.body.message);
+        assert.strictEqual(await archiveTagFor(noAvatarUser.id), null, 'the photo gate runs before any insert');
+
+        const noConfirmUser = await makeArchiveUser('سعيد بلا تأكيد');
+        conditionalTagUserIds.push(noConfirmUser.id);
+        await giveArchiveAvatar(noConfirmUser.id);
+        const missingConfirm = await api('POST', `/api/photos/${archivePhotoId}/tags`, { token: noConfirmUser.token });
+        assert.strictEqual(missingConfirm.status, 400, JSON.stringify(missingConfirm.body));
+        assert.ok(/أكّد أن رقمك الشخصي/.test(missingConfirm.body.message), missingConfirm.body.message);
+        const stringConfirm = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: noConfirmUser.token,
+          body: { confirm_phone: 'true' }
+        });
+        assert.strictEqual(stringConfirm.status, 400, 'only the boolean true is the confirmation the route accepts');
+        assert.strictEqual(await archiveTagFor(noConfirmUser.id), null, 'no row was written either time');
+      });
+
+      await test('a conditional tag keeps both descriptions and the phone-confirmation stamp, and the queue returns them', async () => {
+        const fullTagUser = await makeArchiveUser('خالد الوسم الكامل');
+        conditionalTagUserIds.push(fullTagUser.id);
+        await giveArchiveAvatar(fullTagUser.id);
+
+        const created = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: fullTagUser.token,
+          body: {
+            confirm_phone: true,
+            self_description: 'أنا الثاني من اليمين',
+            caption_suggestion: 'العريس وأخوه'
+          }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        assert.strictEqual(created.body.status, 'pending');
+
+        const row = await archiveTagFor(fullTagUser.id);
+        assert.strictEqual(row.self_description, 'أنا الثاني من اليمين');
+        assert.strictEqual(row.caption_suggestion, 'العريس وأخوه');
+        assert.ok(row.phone_confirmed_at, 'the confirmation is stamped by the server, not the client');
+        captionTagId = row.id;
+
+        const queue = await api('GET', '/api/admin/photo-tags?status=pending', { token: superAdminToken });
+        assert.strictEqual(queue.status, 200, JSON.stringify(queue.body));
+        const queued = queue.body.tags.find(tag => tag.id === row.id);
+        assert.ok(queued, 'the request reaches the admin queue');
+        assert.strictEqual(queued.self_description, 'أنا الثاني من اليمين');
+        assert.strictEqual(queued.caption_suggestion, 'العريس وأخوه');
+        assert.ok(queued.phone_confirmed_at);
+      });
+
+      await test('apply_caption adopts the suggestion on approval; without it — and on any rejection — the caption is untouched', async () => {
+        const { nameKey } = require('../src/utils/arabicName');
+
+        const noApplyUser = await makeArchiveUser('منى وصف بلا تطبيق');
+        conditionalTagUserIds.push(noApplyUser.id);
+        await giveArchiveAvatar(noApplyUser.id);
+        const noApplyCreated = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: noApplyUser.token,
+          body: { confirm_phone: true, caption_suggestion: 'وصف لا يُطبَّق' }
+        });
+        assert.strictEqual(noApplyCreated.status, 201, JSON.stringify(noApplyCreated.body));
+        const noApplyTag = await archiveTagFor(noApplyUser.id);
+        const noApply = await api('PATCH', `/api/admin/photo-tags/${noApplyTag.id}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
+        assert.strictEqual(noApply.status, 200, JSON.stringify(noApply.body));
+        assert.strictEqual(noApply.body.caption_applied, false);
+        assert.strictEqual(noApply.body.tag.caption_applied, false);
+        const untouched = await db.queryOne('SELECT caption, caption_key FROM event_photos WHERE id = ?', [archivePhotoId]);
+        assert.strictEqual(untouched.caption, null, 'approval without apply_caption never writes the suggestion');
+        assert.strictEqual(untouched.caption_key, null);
+
+        const applied = await api('PATCH', `/api/admin/photo-tags/${captionTagId}`, {
+          token: superAdminToken,
+          body: { status: 'approved', apply_caption: true }
+        });
+        assert.strictEqual(applied.status, 200, JSON.stringify(applied.body));
+        assert.strictEqual(applied.body.caption_applied, true);
+        assert.strictEqual(applied.body.tag.status, 'approved');
+        const adopted = await db.queryOne('SELECT caption, caption_key FROM event_photos WHERE id = ?', [archivePhotoId]);
+        assert.strictEqual(adopted.caption, 'العريس وأخوه');
+        assert.strictEqual(adopted.caption_key, nameKey('العريس وأخوه'));
+
+        const rejectUser = await makeArchiveUser('ريم وصف مرفوض');
+        conditionalTagUserIds.push(rejectUser.id);
+        await giveArchiveAvatar(rejectUser.id);
+        const rejectCreated = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: rejectUser.token,
+          body: { confirm_phone: true, caption_suggestion: 'وصف مرفوض تماماً' }
+        });
+        assert.strictEqual(rejectCreated.status, 201, JSON.stringify(rejectCreated.body));
+        const rejectTag = await archiveTagFor(rejectUser.id);
+        const rejected = await api('PATCH', `/api/admin/photo-tags/${rejectTag.id}`, {
+          token: superAdminToken,
+          body: { status: 'rejected', apply_caption: true }
+        });
+        assert.strictEqual(rejected.status, 200, JSON.stringify(rejected.body));
+        assert.strictEqual(rejected.body.caption_applied, false);
+        const kept = await db.queryOne('SELECT caption FROM event_photos WHERE id = ?', [archivePhotoId]);
+        assert.strictEqual(kept.caption, 'العريس وأخوه', 'a rejection never writes a caption');
+      });
+
+      await test('descriptions longer than 200 characters are truncated, and blank ones are stored NULL', async () => {
+        const longUser = await makeArchiveUser('هدى وصف طويل');
+        conditionalTagUserIds.push(longUser.id);
+        await giveArchiveAvatar(longUser.id);
+        const longText = 'ط'.repeat(250);
+        const created = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: longUser.token,
+          body: {
+            confirm_phone: true,
+            self_description: `  ${longText}  `,
+            caption_suggestion: longText
+          }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        const longRow = await archiveTagFor(longUser.id);
+        assert.strictEqual(longRow.self_description.length, 200);
+        assert.strictEqual(longRow.caption_suggestion.length, 200);
+        assert.ok(longText.startsWith(longRow.self_description), 'the stored text is the first 200 characters');
+
+        const blankUser = await makeArchiveUser('سامي وصف فارغ');
+        conditionalTagUserIds.push(blankUser.id);
+        await giveArchiveAvatar(blankUser.id);
+        const blankCreated = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: blankUser.token,
+          body: { confirm_phone: true, self_description: '   ', caption_suggestion: '' }
+        });
+        assert.strictEqual(blankCreated.status, 201, JSON.stringify(blankCreated.body));
+        const blankRow = await archiveTagFor(blankUser.id);
+        assert.strictEqual(blankRow.self_description, null, 'an empty description is NULL, never an empty string');
+        assert.strictEqual(blankRow.caption_suggestion, null);
+      });
+
+      await test('the tag queue counts match the rows of each status, and move as a tag is decided', async () => {
+        const expected = { pending: 0, approved: 0, rejected: 0 };
+        const rows = await db.query('SELECT status, COUNT(*) AS cnt FROM photo_tags GROUP BY status');
+        for (const row of rows) expected[row.status] = Number(row.cnt);
+
+        const queue = await api('GET', '/api/admin/photo-tags', { token: superAdminToken });
+        assert.strictEqual(queue.status, 200, JSON.stringify(queue.body));
+        assert.deepStrictEqual(queue.body.counts, expected, 'counts describe the rows this admin can see');
+
+        const counter = await makeArchiveUser('ليلى عدّاد الوسم');
+        conditionalTagUserIds.push(counter.id);
+        await giveArchiveAvatar(counter.id);
+        const counterCreated = await api('POST', `/api/photos/${archivePhotoId}/tags`, {
+          token: counter.token,
+          body: { confirm_phone: true }
+        });
+        assert.strictEqual(counterCreated.status, 201, JSON.stringify(counterCreated.body));
+
+        const afterRequest = await api('GET', '/api/admin/photo-tags?status=pending', { token: superAdminToken });
+        assert.strictEqual(afterRequest.body.counts.pending, expected.pending + 1);
+        assert.strictEqual(afterRequest.body.counts.approved, expected.approved);
+
+        const counterTag = await archiveTagFor(counter.id);
+        await api('PATCH', `/api/admin/photo-tags/${counterTag.id}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
+        const afterApprove = await api('GET', '/api/admin/photo-tags', { token: superAdminToken });
+        assert.strictEqual(afterApprove.body.counts.pending, expected.pending, 'the approved row left the pending count');
+        assert.strictEqual(afterApprove.body.counts.approved, expected.approved + 1);
       });
 
       await test('three distinct privacy reports hide the photo; the admin restores it and it is public again', async () => {
@@ -9929,6 +10414,286 @@ async function run() {
         const listedAfter = await api('GET', `/api/admin/events/${upcomingWedding}/albums`, { token: superAdminToken });
         assert.ok(listedAfter.body.albums.some(album => album.id === created.body.album.id));
       });
+
+      /**
+       * فيديوهات الألبوم (T-09): الرابط خارجي يُحلَّل ويُخزَّن رابطه لا بايتاته،
+       * فالحذف لا يمسّ Cloudinary. الألبوم هنا هو ألبوم عرس منتهٍ فيه صور
+       * معتمدة (‏bulkEvent)، فـ`GET /api/albums/:id` يمرّ بـ`PUBLIC_PHOTO_EXISTS`
+       * كما يمرّ أي ألبوم صور عاديّ — وظهور الفيديو وحده لا يعتمد عليها.
+       */
+      const videoAlbum = await db.queryOne(
+        'SELECT id FROM event_albums WHERE event_id = ? ORDER BY id ASC LIMIT 1',
+        [bulkEvent]
+      );
+      assert.ok(videoAlbum, 'the bulk wedding has an album to carry the video cases');
+      const youtubeVideoId = 'T09VjTkZq0A';
+      const weddingVideoUrl = `https://www.youtube.com/watch?v=${youtubeVideoId}`;
+      let weddingVideoId = 0;
+      let honoreeVideoId = 0;
+
+      await test('album videos: a YouTube link lands on the wedding album, in GET /api/albums/:id, and on its own public route with the YouTube thumbnail', async () => {
+        const { status, body } = await api('POST', `/api/admin/albums/${videoAlbum.id}/videos`, {
+          token: superAdminToken,
+          body: { url: weddingVideoUrl, title: '  فيديو العرس  ' }
+        });
+        assert.strictEqual(status, 201, JSON.stringify(body));
+        assert.strictEqual(body.message, 'تمت إضافة الفيديو');
+        weddingVideoId = body.video.id;
+        assert.strictEqual(body.video.provider, 'youtube');
+        assert.strictEqual(body.video.title, 'فيديو العرس', 'a pasted title is trimmed to the column');
+        assert.strictEqual(body.video.external_url, weddingVideoUrl, 'the canonical watch?v= link is what is stored');
+        assert.strictEqual(body.video.thumb_url, `https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg`);
+        assert.strictEqual(body.video.position, 0, 'the first video sits at position 0');
+        assert.strictEqual(body.video.status, 'approved', 'a video is approved on add — no moderation queue');
+        const row = await db.queryOne('SELECT created_by, video_key FROM event_videos WHERE id = ?', [weddingVideoId]);
+        assert.ok(row.created_by, 'the author is recorded, as on every album write');
+        assert.strictEqual(row.video_key, youtubeVideoId, 'the platform id is stored, not re-parsed on every read');
+
+        const album = await api('GET', `/api/albums/${videoAlbum.id}`);
+        assert.strictEqual(album.status, 200, JSON.stringify(album.body));
+        assert.strictEqual(album.body.album.video_count, 1);
+        assert.deepStrictEqual(album.body.videos.map(video => video.id), [weddingVideoId]);
+        assert.strictEqual(album.body.videos[0].thumb_url, body.video.thumb_url);
+        assert.strictEqual(album.body.videos[0].external_url, weddingVideoUrl);
+        assert.strictEqual(album.body.videos[0].status, undefined, 'the public shape carries no moderation state');
+        assert.strictEqual(album.body.videos[0].created_by, undefined);
+
+        const single = await api('GET', `/api/videos/${weddingVideoId}`);
+        assert.strictEqual(single.status, 200, JSON.stringify(single.body));
+        assert.strictEqual(single.body.video.id, weddingVideoId);
+        assert.strictEqual(single.body.video.provider, 'youtube');
+        assert.strictEqual(single.body.album.id, videoAlbum.id);
+        assert.strictEqual(single.body.album.event.id, bulkEvent, 'the video carries its album in the public album shape');
+      });
+
+      await test('album videos: a non-http link is an Arabic 400, the same link twice in one album is a 409, and another album accepts it', async () => {
+        for (const url of ['javascript:alert(1)', 'ليس رابطاً']) {
+          const refused = await api('POST', `/api/admin/albums/${videoAlbum.id}/videos`, {
+            token: superAdminToken,
+            body: { url }
+          });
+          assert.strictEqual(refused.status, 400, `${url} ⇒ ${JSON.stringify(refused.body)}`);
+          assert.ok(
+            /[\u0600-\u06FF]/.test(refused.body.message || ''),
+            `the message is Arabic, got: ${refused.body.message}`
+          );
+        }
+        const empty = await api('POST', `/api/admin/albums/${videoAlbum.id}/videos`, { token: superAdminToken, body: {} });
+        assert.strictEqual(empty.status, 400, 'no url at all is the same Arabic 400');
+
+        const duplicate = await api('POST', `/api/admin/albums/${videoAlbum.id}/videos`, {
+          token: superAdminToken,
+          body: { url: weddingVideoUrl }
+        });
+        assert.strictEqual(duplicate.status, 409, JSON.stringify(duplicate.body));
+        assert.ok(/مضاف/.test(duplicate.body.message), duplicate.body.message);
+
+        const elsewhere = await api('POST', `/api/admin/albums/${standaloneAlbum.id}/videos`, {
+          token: superAdminToken,
+          body: { url: weddingVideoUrl }
+        });
+        assert.strictEqual(elsewhere.status, 201, JSON.stringify(elsewhere.body));
+        honoreeVideoId = elsewhere.body.video.id;
+        assert.notStrictEqual(honoreeVideoId, weddingVideoId, 'the same link is a different row in a different album');
+      });
+
+      await test('album videos: hiding removes it from the album and 404s its own public route; an unknown status is an Arabic 400', async () => {
+        const unknown = await api('PATCH', `/api/admin/videos/${weddingVideoId}`, {
+          token: superAdminToken,
+          body: { status: 'deleted' }
+        });
+        assert.strictEqual(unknown.status, 400, JSON.stringify(unknown.body));
+        assert.ok(/حالة الفيديو/.test(unknown.body.message), unknown.body.message);
+
+        const hidden = await api('PATCH', `/api/admin/videos/${weddingVideoId}`, {
+          token: superAdminToken,
+          body: { status: 'hidden' }
+        });
+        assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+        assert.strictEqual(hidden.body.video.status, 'hidden');
+
+        const album = await api('GET', `/api/albums/${videoAlbum.id}`);
+        assert.strictEqual(album.status, 200, JSON.stringify(album.body));
+        assert.deepStrictEqual(album.body.videos, [], 'a hidden video is not part of the public album');
+        assert.strictEqual(album.body.album.video_count, 0);
+        assert.strictEqual((await api('GET', `/api/videos/${weddingVideoId}`)).status, 404, 'and has no public row of its own');
+
+        const adminList = await api('GET', `/api/admin/albums/${videoAlbum.id}/videos`, { token: superAdminToken });
+        assert.strictEqual(adminList.status, 200, JSON.stringify(adminList.body));
+        assert.strictEqual(
+          adminList.body.videos.find(video => video.id === weddingVideoId).status,
+          'hidden',
+          'the panel still sees it — hiding is not deleting'
+        );
+      });
+
+      await test('album videos: deleting removes the row and its public route, and touches no file — the link is external', async () => {
+        cloudinaryCalls.length = 0;
+        const { status, body } = await api('DELETE', `/api/admin/videos/${weddingVideoId}`, { token: superAdminToken });
+        assert.strictEqual(status, 200, JSON.stringify(body));
+        assert.strictEqual(body.message, 'تم حذف الفيديو');
+        assert.strictEqual(await db.queryOne('SELECT id FROM event_videos WHERE id = ?', [weddingVideoId]), null);
+        assert.strictEqual((await api('GET', `/api/videos/${weddingVideoId}`)).status, 404);
+        assert.ok(
+          !cloudinaryCalls.some(call => call.url.endsWith('/image/destroy')),
+          'an external link has no file to destroy'
+        );
+        const album = await api('GET', `/api/albums/${videoAlbum.id}`);
+        assert.deepStrictEqual(album.body.videos.map(video => video.id), []);
+      });
+
+      await test('album videos: a town admin outside the album’s scope gets 404 on all four video routes — never 403 — and nothing is written', async () => {
+        const otherTownVideoAdmin = await makeArchiveAdmin('أدمن فيديو حورة', ['حورة']);
+        conditionalTagUserIds.push(otherTownVideoAdmin.id);
+
+        const attempts = [
+          ['GET', `/api/admin/albums/${videoAlbum.id}/videos`],
+          ['POST', `/api/admin/albums/${videoAlbum.id}/videos`, { url: 'https://www.youtube.com/watch?v=oScopedOut1' }],
+          ['PATCH', `/api/admin/videos/${honoreeVideoId}`, { title: 'اختراق' }],
+          ['DELETE', `/api/admin/videos/${honoreeVideoId}`]
+        ];
+        for (const [method, path, attemptBody] of attempts) {
+          const refused = await api(method, path, { token: otherTownVideoAdmin.token, body: attemptBody });
+          assert.strictEqual(refused.status, 404, `${method} ${path} ⇒ ${refused.status} ${JSON.stringify(refused.body)}`);
+          assert.ok(
+            /[\u0600-\u06FF]/.test(refused.body.message || ''),
+            `${method} ${path}: the message is Arabic, got: ${refused.body.message}`
+          );
+        }
+
+        const kept = await db.queryOne('SELECT title, status FROM event_videos WHERE id = ?', [honoreeVideoId]);
+        assert.ok(kept, 'the refused DELETE removed nothing');
+        assert.strictEqual(kept.title, null, 'the refused PATCH wrote no title');
+        assert.strictEqual(kept.status, 'approved');
+        assert.strictEqual(
+          (await api('PATCH', `/api/admin/videos/${honoreeVideoId}`, { body: { title: 'بلا رمز' } })).status,
+          401,
+          'the /admin/videos prefix is behind the same admin guard'
+        );
+        assert.strictEqual((await api('GET', `/api/admin/albums/${videoAlbum.id}/videos`)).status, 401);
+      });
+
+      await test('album videos: a groom-only album (ADR-0012) takes a video, and its public route waits for the album to be published — event stays null', async () => {
+        const tiktokUrl = 'https://www.tiktok.com/@negev/video/7300000000000000000';
+        const added = await api('POST', `/api/admin/albums/${standaloneAlbum.id}/videos`, {
+          token: superAdminToken,
+          body: { url: tiktokUrl, title: 'فيديو العريس' }
+        });
+        assert.strictEqual(added.status, 201, JSON.stringify(added.body));
+        assert.strictEqual(added.body.video.provider, 'tiktok');
+        assert.strictEqual(added.body.video.thumb_url, null, 'a tokenless platform has no thumbnail, and none is invented');
+        const groomVideoId = added.body.video.id;
+
+        const publicVideo = await api('GET', `/api/videos/${groomVideoId}`);
+        assert.strictEqual(publicVideo.status, 200, JSON.stringify(publicVideo.body));
+        assert.strictEqual(publicVideo.body.album.id, standaloneAlbum.id);
+        assert.strictEqual(publicVideo.body.album.event, null, 'event stays a key — null, never a half-built object');
+        assert.strictEqual(publicVideo.body.album.honoree_name, standaloneGroom);
+
+        const hidden = await api('PATCH', `/api/admin/albums/${standaloneAlbum.id}`, {
+          token: superAdminToken,
+          body: { is_published: false }
+        });
+        assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+        assert.strictEqual(
+          (await api('GET', `/api/videos/${groomVideoId}`)).status,
+          404,
+          'an unpublished album hides its videos too'
+        );
+
+        const shown = await api('PATCH', `/api/admin/albums/${standaloneAlbum.id}`, {
+          token: superAdminToken,
+          body: { is_published: true }
+        });
+        assert.strictEqual(shown.status, 200, JSON.stringify(shown.body));
+        assert.strictEqual((await api('GET', `/api/videos/${groomVideoId}`)).status, 200);
+      });
+
+      /**
+       * صفحة مشاركة الفيديو `/v/:id` وبطاقتها (T-10): الصفحة HTML على الخادم
+       * لعوارض الشبكات الاجتماعية — `og:type` نصّي هو `video.other`، وصورتها
+       * بطاقتنا نحن لا صورة يوتيوب، وبلا `<script>` و`noindex`. والباقي هو ما
+       * يهمّ فعلاً: عنوان فيه محاولة حقن يخرج مهرَّباً، وفيديو مخفيّ يسقط كما
+       * يسقط غير الموجود.
+       */
+      let shareVideoId = 0;
+
+      await test('video share page: og:video.other, our own card as og:image, «شاهد الفيديو على يوتيوب», and the injected title escaped', async () => {
+        const injectionTitle = 'فيلم <img onerror=alert(1)> العرس';
+        const created = await api('POST', `/api/admin/albums/${videoAlbum.id}/videos`, {
+          token: superAdminToken,
+          body: { url: 'https://www.youtube.com/watch?v=T10ShArE001', title: injectionTitle }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        shareVideoId = created.body.video.id;
+
+        const publicVideo = await api('GET', `/api/videos/${shareVideoId}`);
+        assert.strictEqual(publicVideo.status, 200, JSON.stringify(publicVideo.body));
+        const albumTitle = publicVideo.body.album.title;
+
+        const res = await fetch(`${baseUrl}/v/${shareVideoId}`);
+        assert.strictEqual(res.status, 200);
+        const html = await res.text();
+
+        assert.ok(html.includes('<meta property="og:type" content="video.other">'), 'the preview is a video, not an article');
+        assert.ok(
+          html.includes(`<meta property="og:image" content="${config.publicUrl}/v/${shareVideoId}/card.jpg">`),
+          'og:image is this server\'s own card, not the YouTube thumbnail'
+        );
+        assert.ok(html.includes('og:image:width" content="1200"'), 'the declared width is the card\'s real 1200');
+        assert.ok(html.includes('og:image:height" content="1200"'), 'the declared size is the card\'s real 1200×1200');
+        assert.ok(html.includes(`<meta property="og:url" content="${config.publicUrl}/v/${shareVideoId}">`), 'og:url is the page itself');
+        assert.ok(html.includes('content="noindex, nofollow"'), 'a wedding video is not for an image search');
+        assert.ok(html.includes('شاهد الفيديو على يوتيوب'), 'the CTA names the platform in Arabic');
+        assert.ok(html.includes(`href="${config.publicUrl}/#album/${videoAlbum.id}"`), 'and there is a way back to the album');
+        assert.ok(html.includes(`href="${created.body.video.external_url}"`), 'the CTA points at the stored external link only');
+        assert.ok(!/<script/i.test(html), 'no script on a share page, ever');
+
+        const descMeta = html.match(/property="og:description" content="([^"]*)"/);
+        assert.ok(descMeta, 'expected an og:description meta tag');
+        assert.ok(descMeta[1].startsWith(albumTitle), `the album leads the description, got: ${descMeta[1]}`);
+
+        // مهرَّباً في النص وفي `content="…"` معاً: لا وسم حقيقي من عنوان الفيديو.
+        assert.ok(html.includes('&lt;img onerror=alert(1)&gt;'), 'the title is escaped where it is drawn');
+        assert.ok(!html.includes('<img onerror'), 'the title never becomes a tag');
+        const titleMeta = html.match(/property="og:title" content="([^"]*)"/);
+        assert.ok(titleMeta[1].includes('&lt;img'), 'escaped inside content="…" too');
+        assert.ok(!titleMeta[1].includes('<img'), 'and it does not break out of the attribute');
+        assert.ok((res.headers.get('content-security-policy') || '').includes("default-src 'none'"), 'no script is allowed to run either');
+      });
+
+      await test('the video card is a JPEG of its own, served with a short cache', async () => {
+        const card = await fetch(`${baseUrl}/v/${shareVideoId}/card.jpg`);
+        assert.strictEqual(card.status, 200);
+        assert.strictEqual(card.headers.get('content-type'), 'image/jpeg');
+        assert.ok((card.headers.get('cache-control') || '').includes('max-age=300'), 'retitling a video must reach the card within minutes');
+        const buffer = Buffer.from(await card.arrayBuffer());
+        assert.ok(buffer.length > 1000, `expected a real image, got ${buffer.length} bytes`);
+      });
+
+      await test('a hidden video is a 404 on its page and its card, and comes back when it is approved again', async () => {
+        const hidden = await api('PATCH', `/api/admin/videos/${shareVideoId}`, {
+          token: superAdminToken,
+          body: { status: 'hidden' }
+        });
+        assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+        assert.strictEqual((await fetch(`${baseUrl}/v/${shareVideoId}`)).status, 404, 'the page of a hidden video');
+        assert.strictEqual((await fetch(`${baseUrl}/v/${shareVideoId}/card.jpg`)).status, 404, 'and its card');
+
+        const restored = await api('PATCH', `/api/admin/videos/${shareVideoId}`, {
+          token: superAdminToken,
+          body: { status: 'approved' }
+        });
+        assert.strictEqual(restored.status, 200, JSON.stringify(restored.body));
+        assert.strictEqual((await fetch(`${baseUrl}/v/${shareVideoId}`)).status, 200, 'approved again ⇒ the page is back');
+      });
+
+      await test('a malformed and a non-existent video id are the same 404 on both video share routes', async () => {
+        for (const id of ['abc', '999999999']) {
+          assert.strictEqual((await fetch(`${baseUrl}/v/${id}`)).status, 404, `page ${id}`);
+          assert.strictEqual((await fetch(`${baseUrl}/v/${id}/card.jpg`)).status, 404, `card ${id}`);
+        }
+      });
     } finally {
       for (const albumId of standaloneAlbumIds) {
         await db.execute('DELETE FROM event_albums WHERE id = ?', [albumId]);
@@ -9937,6 +10702,11 @@ async function run() {
         await db.execute('DELETE FROM people WHERE id = ?', [personId]);
       }
       await db.execute('DELETE FROM events WHERE id IN (?, ?, ?, ?)', [endedWedding, upcomingWedding, endedFuneral, bulkEvent]);
+      // T-06: accounts made only for the conditional-tag cases, each by its own
+      // id — their photo_tags rows go with them on the CASCADE.
+      for (const userId of conditionalTagUserIds) {
+        await db.execute('DELETE FROM users WHERE id = ?', [userId]);
+      }
       await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', tagUserIds);
     }
 
@@ -10343,6 +11113,217 @@ async function run() {
   for (const dupPhone of dupUserPhones) {
     await db.execute('DELETE FROM users WHERE phone_number = ?', [dupPhone]);
   }
+
+  console.log('\nProfile (T-03): a personal photo, an editable name/البلدة, and a phone change that needs the PIN');
+
+  // No Cloudinary keys in this section, whatever the local .env holds: the
+  // avatar then stays on this server, which is the path that must keep working
+  // with no account at all. ADR-0008's own section above covers the other one.
+  const { uploadsDir } = require('../src/middleware/upload');
+  const profileCloudinary = { ...config.cloudinary };
+  Object.assign(config.cloudinary, { cloudName: null, apiKey: null, apiSecret: null });
+
+  const storedAvatarPath = storedUrl => path.join(uploadsDir, path.basename(storedUrl));
+  const fileExists = async filePath => fsp.access(filePath).then(() => true, () => false);
+
+  let avatarUser = null;
+  let firstStoredAvatar = '';
+
+  await test('POST /api/auth/me/avatar stores the photo — absolute URL out, relative path in the column — and GET /api/auth/me carries it', async () => {
+    avatarUser = await insertTestUser('مستخدم صورة شخصية');
+
+    const { status, body } = await apiUpload('/api/auth/me/avatar', {
+      token: avatarUser.token,
+      files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'avatar.png' }]
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.ok(/^https?:\/\//.test(body.user.avatar_url), `avatar_url must go out absolute, got: ${body.user.avatar_url}`);
+
+    const row = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
+    assert.ok(row.avatar_url.startsWith('/uploads/'), `the column stores the relative path, got: ${row.avatar_url}`);
+    firstStoredAvatar = row.avatar_url;
+    assert.strictEqual(await fileExists(storedAvatarPath(firstStoredAvatar)), true, 'the photo must really be on disk without Cloudinary keys');
+
+    const me = await api('GET', '/api/auth/me', { token: avatarUser.token });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.body.user.avatar_url, body.user.avatar_url, 'GET /api/auth/me must carry the same absolute URL');
+  });
+
+  await test('A second avatar upload replaces the first, and the replaced local file is gone from uploadsDir', async () => {
+    assert.ok(firstStoredAvatar, 'the first upload must have succeeded for "replaced" to mean anything');
+
+    const { status, body } = await apiUpload('/api/auth/me/avatar', {
+      token: avatarUser.token,
+      files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'newer.png' }]
+    });
+    assert.strictEqual(status, 200, body.message);
+
+    const row = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
+    assert.ok(row.avatar_url && row.avatar_url !== firstStoredAvatar, 'the row must point at the new photo only');
+    assert.strictEqual(
+      await fileExists(storedAvatarPath(firstStoredAvatar)), false,
+      'the replaced photo must be deleted from disk, not left behind'
+    );
+  });
+
+  await test('A text file named x.png is refused with a 400 that names the accepted formats', async () => {
+    const { status, body } = await apiUpload('/api/auth/me/avatar', {
+      token: avatarUser.token,
+      files: [{ field: 'image', buffer: Buffer.from('this is not an image at all'), type: 'image/png', name: 'x.png' }]
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/JPG/.test(body.message || ''), `the rejection must name what IS accepted, got: ${body.message}`);
+  });
+
+  await test('POST /api/auth/me/avatar without a file is a 400 in Arabic', async () => {
+    const { status, body } = await apiUpload('/api/auth/me/avatar', { token: avatarUser.token });
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.message, 'اختر صورة شخصية أولاً');
+  });
+
+  let profileUser = null;
+
+  await test('Set up: a brand-new account answers avatar_url: null — the key exists and is not undefined', async () => {
+    profileUser = await insertTestUser('مستخدم بيانات الحساب');
+
+    const { status, body } = await api('GET', '/api/auth/me', { token: profileUser.token });
+    assert.strictEqual(status, 200);
+    assert.ok('avatar_url' in body.user, 'every signed-in read must carry the key');
+    assert.strictEqual(body.user.avatar_url, null);
+  });
+
+  await test('PATCH /api/auth/me updates full_name and clan_town, and GET /api/auth/me reflects both', async () => {
+    const patch = await api('PATCH', '/api/auth/me', {
+      token: profileUser.token,
+      body: { full_name: 'اسم بعد التعديل', clan_town: 'حورة' }
+    });
+    assert.strictEqual(patch.status, 200, patch.body.message);
+    assert.strictEqual(patch.body.message, 'تم تحديث بيانات حسابك');
+    assert.strictEqual(patch.body.user.full_name, 'اسم بعد التعديل');
+    assert.strictEqual(patch.body.user.clan_town, 'حورة');
+
+    const me = await api('GET', '/api/auth/me', { token: profileUser.token });
+    assert.strictEqual(me.body.user.full_name, 'اسم بعد التعديل');
+    assert.strictEqual(me.body.user.clan_town, 'حورة');
+  });
+
+  await test('PATCH /api/auth/me refuses an empty full_name with a 400 in Arabic', async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me', {
+      token: profileUser.token,
+      body: { full_name: '   ' }
+    });
+    assert.strictEqual(status, 400);
+    assert.strictEqual(body.message, 'الاسم لا يكون فارغاً');
+  });
+
+  await test('PATCH /api/auth/me applies analytics_opt_out too when it rides along with a profile field', async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me', {
+      token: profileUser.token,
+      body: { clan_town: 'رهط', analytics_opt_out: true }
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.user.analytics_opt_out, true);
+    assert.strictEqual(body.user.clan_town, 'رهط');
+  });
+
+  let phoneUser = null;
+  let neighbourUser = null;
+  const changedPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+
+  await test('Set up: two fresh accounts with a real PIN hash — one holds the number the other will take', async () => {
+    phoneUser = await insertTestUser('مستخدم تغيير الرقم');
+    neighbourUser = await insertTestUser('جار الرقم');
+    assert.ok(phoneUser.phone !== neighbourUser.phone);
+  });
+
+  await test('PATCH /api/auth/me/phone with a wrong PIN is a 400 and leaves the number unchanged', async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me/phone', {
+      token: phoneUser.token,
+      body: { phone_number: changedPhone, pin_code: '0000' }
+    });
+    assert.strictEqual(status, 400, 'a wrong PIN is a typo on a valid session, not an expired session — 401 would sign the user out');
+    assert.strictEqual(body.message, 'رمز الدخول غير صحيح');
+
+    const row = await db.queryOne('SELECT phone_number FROM users WHERE id = ?', [phoneUser.id]);
+    assert.strictEqual(row.phone_number, phoneUser.phone, 'a refused change must write nothing');
+  });
+
+  await test("PATCH /api/auth/me/phone refuses another account's number with a 409", async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me/phone', {
+      token: phoneUser.token,
+      body: { phone_number: neighbourUser.phone, pin_code: '1234' }
+    });
+    assert.strictEqual(status, 409, body.message);
+
+    const row = await db.queryOne('SELECT phone_number FROM users WHERE id = ?', [phoneUser.id]);
+    assert.strictEqual(row.phone_number, phoneUser.phone, 'the taken number must not be copied over');
+  });
+
+  let changedPhoneToken = '';
+
+  await test('PATCH /api/auth/me/phone changes the number and returns a token signed with the new one', async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me/phone', {
+      token: phoneUser.token,
+      body: { phone_number: changedPhone, pin_code: '1234' }
+    });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.user.phone_number, changedPhone);
+    assert.strictEqual(typeof body.token, 'string', 'the caller must not be signed out by its own change');
+    changedPhoneToken = body.token;
+
+    const me = await api('GET', '/api/auth/me', { token: changedPhoneToken });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.body.user.phone_number, changedPhone, 'that token must identify the account by its new number');
+  });
+
+  // The credential endpoints share ONE 20-requests-per-window budget, and the
+  // whole suite has spent it by this point (see insertTestUser above). These
+  // two logins therefore come from their own client address — the header the
+  // reverse proxy sets in production, and the one `trust proxy` makes this
+  // limiter's key — so the bucket is a fresh one; the limiter itself is
+  // untouched and still counts every attempt.
+  const loginFrom = async (clientIp, body) => {
+    const res = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-App-Version': '2.0.0',
+        'X-Forwarded-For': clientIp
+      },
+      body: JSON.stringify(body)
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+
+  await test('After the change, login with the old number is 401 and with the new one is 200', async () => {
+    const oldLogin = await loginFrom('203.0.113.11', { phone_number: phoneUser.phone, pin_code: '1234' });
+    assert.strictEqual(oldLogin.status, 401, 'the old number must stop signing in the moment the change lands');
+
+    const newLogin = await loginFrom('203.0.113.12', { phone_number: changedPhone, pin_code: '1234' });
+    assert.strictEqual(newLogin.status, 200, newLogin.body.message);
+    assert.strictEqual(newLogin.body.user.phone_number, changedPhone);
+  });
+
+  await test('PATCH /api/auth/me carrying phone_number never writes it', async () => {
+    const attempt = await api('PATCH', '/api/auth/me', {
+      token: changedPhoneToken,
+      body: { phone_number: neighbourUser.phone, full_name: 'اسم بعد محاولة تغيير الرقم' }
+    });
+    assert.strictEqual(attempt.status, 200, attempt.body.message);
+
+    const row = await db.queryOne('SELECT phone_number FROM users WHERE id = ?', [phoneUser.id]);
+    assert.strictEqual(row.phone_number, changedPhone, 'the number is only ever written by /auth/me/phone');
+  });
+
+  const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
+  if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {
+    await fsp.unlink(storedAvatarPath(leftoverAvatar.avatar_url)).catch(() => {});
+  }
+  await db.execute(
+    'DELETE FROM users WHERE id IN (?, ?, ?, ?)',
+    [avatarUser.id, profileUser.id, phoneUser.id, neighbourUser.id]
+  );
+  Object.assign(config.cloudinary, profileCloudinary);
 
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 

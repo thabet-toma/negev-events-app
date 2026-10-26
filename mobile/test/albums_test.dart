@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:negev_events/config.dart';
 import 'package:negev_events/models/album.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/state/share_album.dart';
@@ -292,6 +293,87 @@ void main() {
       );
       expect(photoShareMessage(untitled), startsWith('ألبوم الحنّة — عرس أحمد'),
           reason: 'بلا تعليق: عنوان الألبوم والمناسبة، لا «ألبوم عرس»');
+    });
+  });
+
+  group('فيديوهات الألبوم (T-12)', () {
+    test('videoShareUrl: صفحة /v/<id> على نطاق الخادم لا رابط المنصّة الخام', () {
+      final url = videoShareUrl(const EventVideo(
+        id: 12,
+        provider: 'youtube',
+        title: 'زفّة أحمد',
+        externalUrl: 'https://www.youtube.com/watch?v=abc',
+      ));
+
+      expect(url, endsWith('/v/12'));
+      expect(url, startsWith(AppConfig.apiBase));
+      expect(Uri.parse(url).path, '/v/12');
+      expect(url.contains('youtube'), isFalse,
+          reason: 'رابط يوتيوب الخام لا ينتج معاينة «اعراسنا»');
+    });
+
+    test('videoShareMessage: عنوان الفيديو ثم الرابط، أو «فيديو من الألبوم»', () {
+      const video = EventVideo(id: 12, provider: 'youtube', title: 'زفّة أحمد');
+      final message = videoShareMessage(video, albumTitle: 'ألبوم الحنّة');
+      final lines = message.split('\n');
+
+      expect(lines, hasLength(2));
+      expect(lines.first, 'زفّة أحمد', reason: 'العنوان يبدأ الرسالة');
+      expect(lines.last, endsWith('/v/12'));
+      expect(message.contains('null'), isFalse);
+
+      // بلا عنوان: «فيديو من <عنوان الألبوم>» — لا سطر فارغ ولا «null».
+      const untitled = EventVideo(id: 13, provider: 'tiktok');
+      expect(
+        videoShareMessage(untitled, albumTitle: 'ألبوم الحنّة').split('\n').first,
+        'فيديو من ألبوم الحنّة',
+      );
+      expect(
+        videoShareMessage(untitled).split('\n').first,
+        'فيديو من ألبوم العرس',
+        reason: 'بلا عنوان ألبوم أيضاً: البديل العام لا فراغ',
+      );
+      expect(videoShareMessage(const EventVideo(id: 14, title: '')).split('\n').first,
+          'فيديو من ألبوم العرس', reason: 'عنوان فارغ كالغائب');
+    });
+
+    test('EventVideo.fromJson يقرأ الحقول، والغائب null', () {
+      final video = EventVideo.fromJson({
+        'id': 7,
+        'provider': 'tiktok',
+        'title': 'مقطع العرس',
+        'external_url': 'https://www.tiktok.com/@x/video/1',
+        'thumb_url': 'https://cdn.test/v7.jpg',
+        'position': 0,
+        'created_at': '2026-10-01T10:00:00.000Z',
+      });
+
+      expect(video.id, 7);
+      expect(video.provider, 'tiktok');
+      expect(video.title, 'مقطع العرس');
+      expect(video.externalUrl, 'https://www.tiktok.com/@x/video/1');
+      expect(video.thumbUrl, 'https://cdn.test/v7.jpg');
+
+      final bare = EventVideo.fromJson({'id': 8, 'thumb_url': null});
+      expect(bare.id, 8);
+      expect(bare.provider, isNull);
+      expect(bare.title, isNull);
+      expect(bare.externalUrl, isNull);
+      expect(bare.thumbUrl, isNull);
+      expect(bare.providerLabel, 'فيديو');
+    });
+
+    test('providerLabel: اسم كل منصّة بالعربية، والمجهول «فيديو»', () {
+      String label(String? provider) =>
+          EventVideo(id: 1, provider: provider).providerLabel;
+
+      expect(label('youtube'), 'يوتيوب');
+      expect(label('tiktok'), 'تيك توك');
+      expect(label('facebook'), 'فيسبوك');
+      expect(label('instagram'), 'إنستغرام');
+      expect(label('website'), 'الموقع');
+      expect(label('vimeo'), 'فيديو', reason: 'منصّة لم تُعرَف: وسمٌ عام لا null');
+      expect(label(null), 'فيديو');
     });
   });
 }

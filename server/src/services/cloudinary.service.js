@@ -285,7 +285,7 @@ async function uploadBuffer(buffer, folder, { format = 'jpg' } = {}) {
 
 // Only the folders storeUploadedImage writes to. Archive photos and episode
 // share images keep their own public_id column and are deleted with their row.
-const FORWARDED_FOLDERS = ['posters', 'artists', 'services'].map(name => `${ROOT_FOLDER}/${name}/`);
+const FORWARDED_FOLDERS = ['posters', 'artists', 'services', 'avatars'].map(name => `${ROOT_FOLDER}/${name}/`);
 
 /**
  * The public_id inside a URL storeUploadedImage returned, or null for

@@ -24,7 +24,10 @@ const SETTING_KEYS = {
   LIVE_CHANNEL_URL: 'live_channel_url',
   LIVE_TITLE: 'live_title',
   LIVE_UNTIL: 'live_until',
-  LIVE_STREAM_URL: 'live_stream_url'
+  LIVE_STREAM_URL: 'live_stream_url',
+  // معرّف قصة «بطاقة الدخول» التي يضبطها سوبر أدمن، أو فارغ = «أول قصة نشِطة
+  // تلقائياً» — والاختيار نفسه في stories.service.entryCard.
+  ENTRY_PROMO_STORY_ID: 'entry_promo_story_id'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
@@ -73,6 +76,19 @@ async function getAllForAdmin() {
 /** The PUBLIC_KEYS only, for the public unauthenticated route. */
 async function getPublicSettings() {
   return readKeys(PUBLIC_KEYS);
+}
+
+/**
+ * The story the entry card pins, or `null` meaning "none pinned" — the caller
+ * then falls back to the first active story (stories.service.entryCard). The
+ * route stores a validated id as text, so this is the one place that turns
+ * the stored value back into a positive integer; anything else reads as null
+ * rather than throwing, since a bad stored value must not break the card.
+ */
+async function getEntryPromoStoryId() {
+  const raw = await readKeys([SETTING_KEYS.ENTRY_PROMO_STORY_ID]);
+  const parsed = Number.parseInt(raw[SETTING_KEYS.ENTRY_PROMO_STORY_ID], 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -255,6 +271,7 @@ module.exports = {
   assertWhitelisted,
   getAllForAdmin,
   getPublicSettings,
+  getEntryPromoStoryId,
   getLiveChannel,
   toEmbedUrl,
   toWatchUrl,

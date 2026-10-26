@@ -1648,6 +1648,9 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
+/* `hidden` هو الحالة المغلقة لأي نافذة تُبنى به (ورقة الوسم، T-07) — وبدونه
+   تغلبه قاعدة `display: flex` أعلاه فتبقى على الشاشة رغم إخفائها. */
+.modal-overlay[hidden] { display: none; }
 /* ورقة المشاركة تُفتح من داخل عارض الصور أيضاً (تذكرة #102)، والعارض عند 1100 —
    فورقةٌ عند 1000 تُرسم خلفه على الحاسوب ويبدو الزرّ ميتاً. رفعُها وحدها كافٍ،
    فلا تُمسّ بقية النوافذ ولا ترتيب شاشة الدخول (‏:479). */
@@ -2853,6 +2856,28 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   font-size: 1.6rem;
   flex-shrink: 0;
 }
+
+/* الصورة تحلّ محلّ الأيقونة داخل الحلقة نفسها، والأيقونة تبقى بديلاً عند غيابها. */
+#accountUserAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+/* display:block أعلاه يغلب [hidden] الافتراضي — نفس علّة .ai-magic-btn[hidden] */
+#accountUserAvatar img[hidden] { display: none; }
+
+/* البطاقة صارت تحمل حقول تعديل تحتها، فتبقى الصورة أعلى العمود لا في وسطه. */
+#accountUserAvatar { align-self: flex-start; }
+
+/* منطقة تعديل «حسابي» (الصورة والاسم/البلدة والرقم) بعرض البطاقة لا بعرض الشاشة. */
+.account-profile-edit { max-width: 380px; margin-top: 12px; display: grid; gap: 10px; }
+.account-profile-edit .form-group { margin-bottom: 0; }
+#accountPhoneForm { display: grid; gap: 10px; }
+/* display:grid أعلاه يغلب [hidden] الافتراضي — نفس علّة .ai-magic-btn[hidden] */
+#accountPhoneForm[hidden] { display: none; }
 
 .account-profile-info {
   flex: 1;
@@ -4371,6 +4396,66 @@ body.albums-page-open { overflow: hidden; }
 }
 .album-share-btn:hover { border-color: var(--sky); color: var(--sky); }
 .album-share-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+/* فيديوهات الألبوم (T-11) — قسم مستقلّ فوق شبكة الصور: شبكة تلقائية، صورة
+   16:9، وشارة تشغيل فوقها. `[hidden]` صريحة لأن `display: grid` هنا تتغلّب
+   على قاعدة `hidden` الافتراضية، فيبقى القسم الفارغ ظاهراً بلا هذه القاعدة.
+   والهامش السفلي فاصلُه عن شبكة الصور التي تليه، ويزول معه العنصر المخفي. */
+.album-videos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+.album-videos[hidden] { display: none; }
+.album-video-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.album-video-media { position: relative; width: 100%; aspect-ratio: 16 / 9; background: var(--surface-sunk); }
+.album-video-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.album-video-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: var(--sky); font-size: 1.8rem; }
+.album-video-play {
+  position: absolute;
+  inset-inline-end: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(12, 27, 42, 0.66);
+  color: #fff;
+  font-size: 0.8rem;
+}
+.album-video-body { display: flex; flex-direction: column; gap: 5px; padding: 9px 10px 10px; }
+.album-video-body strong { color: var(--ink); font-size: 0.88rem; line-height: 1.45; overflow-wrap: anywhere; }
+.album-video-platform { color: var(--ink-faint); font-size: 0.74rem; }
+.album-video-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.album-video-open,
+.album-video-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.album-video-open:hover,
+.album-video-share:hover { border-color: var(--sky); color: var(--sky); }
+.album-video-open:focus-visible,
+.album-video-share:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
 /* عارض الصورة — شريط الوسم/الإبلاغ فوق الصورة. */
 .archive-viewer-footer {
@@ -4411,6 +4496,54 @@ body.albums-page-open { overflow: hidden; }
 .archive-viewer-action.danger { color: #fecaca; }
 .archive-viewer-action[hidden] { display: none; }
 .archive-viewer-action:disabled { opacity: 0.7; cursor: default; }
+
+/* ورقة «أنا في الصورة» (T-07) — تُفتح من العارض (1100)، فتعلوه بالضرورة. */
+#photoTagSheet { z-index: 1200; }
+.photo-tag-sheet { gap: 10px; overflow-y: auto; }
+.photo-tag-intro { margin: 0; color: var(--ink-soft); font-size: 0.88rem; line-height: 1.75; }
+.photo-tag-checklist-title { margin: 4px 0 0; color: var(--ink); font-size: 0.88rem; font-weight: 800; }
+.photo-tag-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+}
+.photo-tag-state { flex: 1; min-width: 0; font-size: 0.84rem; font-weight: 700; color: var(--warn); }
+.photo-tag-state.is-ok { color: var(--success); }
+.photo-tag-link-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--sky-deep);
+  font-family: var(--font-main);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.photo-tag-link-btn[hidden] { display: none; }
+.photo-tag-confirm { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; font-weight: 700; color: var(--ink); cursor: pointer; }
+.photo-tag-confirm input { width: 18px; height: 18px; accent-color: var(--sky); flex-shrink: 0; }
+.photo-tag-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-wash);
+  color: var(--danger);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.photo-tag-error[hidden] { display: none; }
+.photo-tag-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.photo-tag-actions .submit-btn { flex: 1; }
+.photo-tag-actions .submit-btn:disabled { opacity: 0.55; cursor: default; }
+.photo-tag-actions .submit-btn:disabled:hover { background: var(--sky); }
+
 @media (max-width: 420px) {
   .albums-grid { grid-template-columns: 1fr; }
   .albums-photo-grid { grid-template-columns: repeat(2, 1fr); }

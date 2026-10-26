@@ -90,6 +90,9 @@ const config = {
   rateLimit: {
     windowMs: toInt(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: toInt(process.env.RATE_LIMIT_MAX, 600),
+    // Separate per-USER budget for authenticated requests, so one admin's bulk
+    // album upload can neither starve nor be starved by others behind one IP.
+    userMax: toInt(process.env.RATE_LIMIT_USER_MAX, 3000),
     authMax: toInt(process.env.RATE_LIMIT_AUTH_MAX, 20),
     // Tighter than the global API budget above: this is a fire-and-forget
     // beacon endpoint (POST /api/analytics/events) with no login required,

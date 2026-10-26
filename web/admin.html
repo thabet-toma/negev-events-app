@@ -26,7 +26,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- Admin Styles -->
-  <link rel="stylesheet" href="admin.css?v=2.8.1">
+  <link rel="stylesheet" href="admin.css?v=2.8.3">
 </head>
 <body>
 
@@ -271,6 +271,21 @@
           <ul id="adminAlbumUploadQueue" class="archive-upload-queue"></ul>
           <div id="adminAlbumPhotos" class="admin-album-photos"></div>
 
+          <!-- فيديوهات الألبوم (T-11): الفيديو يبقى على منصّته، والمشاركة من
+               عندنا تغلّفه ببطاقة «أعراسنا» (صفحة /v/:id على الخادم). -->
+          <div class="admin-album-videos">
+            <h3 class="admin-album-videos-title"><i class="fa-solid fa-video"></i> فيديوهات الألبوم</h3>
+            <div class="admin-album-video-form">
+              <input type="url" id="adminAlbumVideoUrl" dir="ltr" maxlength="500" placeholder="https://www.youtube.com/watch?v=..." aria-label="رابط الفيديو">
+              <input type="text" id="adminAlbumVideoTitle" maxlength="200" placeholder="عنوان الفيديو (اختياري)" aria-label="عنوان الفيديو">
+              <button type="button" class="admin-btn-primary" id="adminAlbumAddVideoBtn" onclick="addAdminAlbumVideo()">
+                <i class="fa-solid fa-plus"></i> أضف فيديو
+              </button>
+            </div>
+            <div id="adminAlbumVideos" class="admin-album-videos-list"></div>
+            <p class="hint-text">الصق رابط يوتيوب/تيك توك/فيسبوك/إنستغرام — الفيديو يبقى على منصّته، والمشاركة من عندنا تغلّفه ببطاقة أعراسنا.</p>
+          </div>
+
           <div class="admin-album-import">
             <input type="text" id="adminAlbumImportUrl" placeholder="https://scontent...fbcdn.net/... (Copy image address)" aria-label="رابط صورة مباشر">
             <button type="button" class="admin-btn-ghost" onclick="importAdminAlbumPhotoUrl()"><i class="fa-solid fa-link"></i> استيراد رابط صورة</button>
@@ -280,12 +295,8 @@
 
         <div class="pane-box" style="margin-top:20px;">
           <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-            <div><h2><i class="fa-solid fa-user-tag"></i> طابور الوسوم</h2><p>طلبات «أنا في الصورة» بانتظار الاعتماد أو الرفض، داخل بلداتك فقط.</p></div>
-            <select id="adminPhotoTagsStatus" class="activity-filter-select" onchange="loadAdminPhotoTags(this.value)">
-              <option value="pending">بانتظار المراجعة</option>
-              <option value="approved">المعتمدة</option>
-              <option value="rejected">المرفوضة</option>
-            </select>
+            <div><h2><i class="fa-solid fa-user-tag"></i> طابور الوسوم</h2><p>كل طلب يُقرأ بجملته: من طلب، وفي أي صورة، وماذا قال عن نفسه. القبول يُظهر الاسم على الصورة وفي «صوري».</p></div>
+            <div id="adminPhotoTagTabs" class="admin-tag-tabs"></div>
           </div>
           <div id="adminPhotoTagsQueue" class="admin-photo-queue"></div>
         </div>
@@ -1117,6 +1128,19 @@
         </div>
 
         <div class="pane-box" style="margin-top:24px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-bullhorn"></i> بطاقة الدخول</h2>
+            <p>أول ما يفتح المستخدم التطبيق تظهر له بطاقة سريعة تشير إلى أول ستوري، ثم تختفي. اختر قصة معيّنة أو اتركها تلقائية.</p>
+          </div>
+          <div class="form-group">
+            <label for="entryPromoStorySelect">القصة التي تشير إليها البطاقة</label>
+            <select id="entryPromoStorySelect"></select>
+            <p id="entryPromoStoryNotice" class="hint-text" style="display:none; color:var(--danger);"></p>
+          </div>
+          <button type="button" class="admin-btn-primary" id="entryPromoStorySaveBtn" onclick="saveEntryPromoStory()">احفظ بطاقة الدخول</button>
+        </div>
+
+        <div class="pane-box" style="margin-top:24px;">
           <div class="pane-header" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
             <div>
               <h2><i class="fa-solid fa-rectangle-list"></i> الستوريات المنشورة</h2>
@@ -1472,6 +1496,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="admin.js?v=2.8.1"></script>
+  <script src="admin.js?v=2.8.5"></script>
 </body>
 </html>

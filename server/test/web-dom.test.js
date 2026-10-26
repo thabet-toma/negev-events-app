@@ -1309,9 +1309,23 @@ async function run() {
     assert.ok(sharedPayload.url.startsWith('http'), 'an absolute URL, not a relative path');
     assert.ok(!sharedPayload.url.includes('//p/7'), 'no doubled slash from a trailing slash in the base');
 
-    dom.window.requestPhotoTag();
-    await waitFor(() => paths.some(path => path === 'POST /api/photos/7/tags'));
-    assert.ok(document.getElementById('archiveViewerTagBtn').textContent.includes('معلّق') || paths.some(path => path === 'POST /api/photos/7/tags'));
+    // «أنا في الصورة» صار ورقة شرح تسبق الطلب (T-07): الضغط لا يُرسل شيئاً،
+    // لأن الوسم يربط الصورة بحساب حقيقي — ويفسّره للمستخدم قبل أن يوافق.
+    await dom.window.requestPhotoTag();
+    const tagSheet = document.getElementById('photoTagSheet');
+    assert.ok(tagSheet, 'expected the «أنا في الصورة» explanation sheet in the page');
+    assert.strictEqual(tagSheet.hidden, false, 'the button opens the sheet');
+    assert.strictEqual(
+      paths.filter(path => path === 'POST /api/photos/7/tags').length,
+      0,
+      'opening the sheet must not send the request'
+    );
+    assert.ok(
+      tagSheet.textContent.includes('ما في تعرّف وجوه آلي'),
+      'the sheet states that no face recognition is involved'
+    );
+    dom.window.closePhotoTagSheet();
+    assert.strictEqual(tagSheet.hidden, true, 'closing it hides the sheet again');
   });
 
   /**
@@ -1394,6 +1408,151 @@ async function run() {
     assert.strictEqual(shared.line, 'ألبوم بلا بلدة', 'a missing town appends nothing');
     assert.ok(!shared.line.includes('—'), 'no floating « — » at the end of the line');
     assert.strictEqual(analytics[0].content_town, undefined, 'no town is sent rather than an empty one');
+  });
+
+  /**
+   * فيديوهات الألبوم في الموقع (T-11): `GET /api/albums/:id` يعيد `videos`، ولكل
+   * فيديو بطاقةٌ تحت الصور — مصغّرته أو مربّع بأيقونة فيلم، وعنوانه أو «فيديو
+   * من الألبوم»، ووسم منصّته بالعربية، و«فتح الفيديو» رابطٌ خارجي في تبويب
+   * جديد (الفيديو يبقى على منصّته)، و«مشاركة» يرسل صفحتنا `/v/:id` لا رابط
+   * المنصّة: صفحة المشاركة وحدها تغلّفه ببطاقة «أعراسنا» في معاينة واتساب.
+   */
+  await test('فيديوهات الألبوم في الموقع: بطاقة لكل فيديو بوسم منصّتها، و«فتح» خارجي، و«مشاركة» ترسل صفحتنا /v/:id', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const { document } = dom.window;
+    const album = {
+      id: 61,
+      title: 'عرس أحمد — رهط',
+      event_id: 5,
+      cover_url: null,
+      share_url: 'https://munasbat.test/a/61',
+      photo_count: 0,
+      event: { id: 5, title: 'عرس أحمد', town: 'رهط', event_date: '2025-05-01' }
+    };
+    const videos = [
+      {
+        id: 501,
+        provider: 'youtube',
+        title: 'فيديو الحنّة',
+        external_url: 'https://www.youtube.com/watch?v=abcdefghijk',
+        thumb_url: 'https://cdn.test/hanna.jpg',
+        position: 0,
+        created_at: '2026-10-01T09:00:00.000Z'
+      },
+      {
+        id: 502,
+        provider: 'website',
+        title: null,
+        external_url: 'https://example.com/clip',
+        thumb_url: null,
+        position: 1,
+        created_at: '2026-10-02T09:00:00.000Z'
+      }
+    ];
+    const analytics = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/albums/61') {
+        return jsonResponse({
+          success: true,
+          album: { ...album, video_count: videos.length },
+          photos: [],
+          videos,
+          pagination: { page: 1, limit: 24, total: 0, totalPages: 1 }
+        });
+      }
+      if (parsed.pathname === '/api/analytics/events') {
+        analytics.push(JSON.parse(options.body));
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: true, photos: [], albums: [], people: [], videos: [] });
+    };
+    let shared = null;
+    dom.window.shareLink = async payload => { shared = payload; };
+
+    await dom.window.openAlbumDetail(61);
+    await waitFor(() => document.querySelectorAll('#albumDetailVideos .album-video-card').length === 2);
+
+    const box = document.getElementById('albumDetailVideos');
+    assert.ok(box, 'expected #albumDetailVideos inside the album page');
+    assert.strictEqual(box.hidden, false, 'the videos section is visible when the album has videos');
+    const cards = [...box.querySelectorAll('.album-video-card')];
+    assert.strictEqual(cards.length, 2, 'one card per video');
+    assert.ok(cards[0].textContent.includes('فيديو الحنّة'), 'the card carries the title the admin typed');
+    assert.strictEqual(cards[0].querySelector('.album-video-platform').textContent, 'يوتيوب', 'the platform is named in Arabic');
+    assert.ok(cards[0].querySelector('.album-video-media img'), 'the thumbnail from the server is used when it exists');
+    assert.strictEqual(cards[1].querySelector('.album-video-platform').textContent, 'الموقع');
+    assert.ok(cards[1].querySelector('.album-video-placeholder'), 'a video with no thumb falls back to the film box, not a broken image');
+    assert.ok(cards[1].textContent.includes('فيديو من الألبوم'), 'and an untitled video gets the album fallback title');
+
+    const openLink = cards[0].querySelector('a.album-video-open');
+    assert.ok(openLink, '«فتح الفيديو» is a link, so the video opens on its own platform');
+    assert.strictEqual(openLink.getAttribute('href'), 'https://www.youtube.com/watch?v=abcdefghijk');
+    assert.strictEqual(openLink.getAttribute('target'), '_blank');
+    assert.ok((openLink.getAttribute('rel') || '').includes('noopener'), 'a new tab must not keep window.opener');
+
+    cards[0].querySelector('.album-video-share').click();
+    await waitFor(() => shared !== null);
+    assert.strictEqual(new URL(shared.url).pathname, '/v/501', `shares our own video page, got ${shared.url}`);
+    assert.ok(!shared.url.includes('youtube'), 'the platform link is never what gets shared');
+    assert.strictEqual(shared.copiedMessage, '📋 تم نسخ رابط الفيديو');
+    await waitFor(() => analytics.some(entry => entry.event_name === 'share_clicked'));
+    const shareEvent = analytics.find(entry => entry.event_name === 'share_clicked');
+    assert.strictEqual(shareEvent.content_town, 'رهط', 'the share is counted against the album town');
+  });
+
+  /**
+   * ألبوم بلا فيديوهات (T-11): القسم يبقى مخفياً — لا شبكة فارغة ولا حاوية
+   * بطاقات بلا محتوى. والانتقال من ألبوم فيه فيديو إلى آخر بلا فيديوهات لا
+   * يُبقي بطاقات الألبوم السابق تحت الألبوم الجديد.
+   */
+  await test('ألبوم بلا فيديوهات: #albumDetailVideos مخفي، والانتقال إليه لا يترك بطاقات الألبوم السابق', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const { document } = dom.window;
+    const albumWithVideo = { id: 62, title: 'عرس فيه فيديو', event_id: null, town: 'رهط', event: null, photo_count: 0, share_url: null };
+    const albumWithout = { id: 63, title: 'عرس بلا فيديو', event_id: null, town: 'رهط', event: null, photo_count: 0, share_url: null };
+    const video = {
+      id: 503,
+      provider: 'tiktok',
+      title: 'فيديو من الألبوم',
+      external_url: 'https://www.tiktok.com/@aarasna/video/1',
+      thumb_url: null,
+      position: 0,
+      created_at: '2026-10-01T09:00:00.000Z'
+    };
+    dom.window.fetch = async url => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/albums/62') {
+        return jsonResponse({
+          success: true,
+          album: { ...albumWithVideo, video_count: 1 },
+          photos: [],
+          videos: [video],
+          pagination: { page: 1, limit: 24, total: 0, totalPages: 1 }
+        });
+      }
+      if (parsed.pathname === '/api/albums/63') {
+        return jsonResponse({
+          success: true,
+          album: { ...albumWithout, video_count: 0 },
+          photos: [],
+          videos: [],
+          pagination: { page: 1, limit: 24, total: 0, totalPages: 1 }
+        });
+      }
+      return jsonResponse({ success: true, photos: [], albums: [], people: [], videos: [] });
+    };
+
+    await dom.window.openAlbumDetail(62);
+    await waitFor(() => document.querySelectorAll('#albumDetailVideos .album-video-card').length === 1);
+
+    await dom.window.openAlbumDetail(63);
+    await waitFor(() => document.getElementById('albumDetailHeader').textContent.includes('بلا فيديو'));
+    const box = document.getElementById('albumDetailVideos');
+    assert.strictEqual(box.hidden, true, 'no videos: the section stays hidden');
+    assert.strictEqual(box.children.length, 0, 'and it carries no stale cards from the previous album');
   });
 
   await test('the event page gets an additive album strip — escaped titles, cover and count — and nothing when empty', () => {
@@ -7879,6 +8038,60 @@ async function run() {
     assert.strictEqual(deleted, 1, 'delete goes through the admin endpoint');
   });
 
+  await test('بطاقة الدخول: the pinned story is preselected, and saving sends its id or an explicit empty string', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const stories = [
+      { id: 5, title: 'دحة الليلة', image: 'https://res.cloudinary.com/demo/image/upload/v1/story-5.jpg' },
+      { id: 6, title: 'سهرة الشباب', image: 'https://res.cloudinary.com/demo/image/upload/v1/story-6.jpg' }
+    ];
+    const puts = [];
+    const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/settings' && method === 'GET') {
+        return jsonResponse({ success: true, settings: { support_whatsapp_number: '', entry_promo_story_id: '5' } });
+      }
+      if (requestPath === '/api/stories' && method === 'GET') {
+        return jsonResponse({ success: true, stories });
+      }
+      if (requestPath === '/api/admin/stories' && method === 'GET') {
+        return jsonResponse({ success: true, stories: [] });
+      }
+      if (requestPath === '/api/admin/settings' && method === 'PUT') {
+        const body = JSON.parse(options.body);
+        puts.push(body);
+        return jsonResponse({ success: true, settings: { entry_promo_story_id: body.entry_promo_story_id } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    dom.window.switchAdminTab('tabStories');
+    await waitFor(() => document.querySelectorAll('#entryPromoStorySelect option').length === 3);
+
+    const select = document.getElementById('entryPromoStorySelect');
+    const options = [...select.querySelectorAll('option')];
+    assert.deepStrictEqual(
+      options.map(option => option.value), ['', '5', '6'],
+      'the first option is auto, then one option per active story'
+    );
+    assert.strictEqual(options[0].textContent, 'تلقائي — أول ستوري نشِط', 'the auto option says what it falls back to');
+    assert.ok(options[1].textContent.includes('دحة الليلة'), `expected the story title in the option, got: ${options[1].textContent}`);
+    assert.ok(options[2].textContent.includes('سهرة الشباب'), 'every option carries its own title');
+    assert.strictEqual(select.value, '5', 'the stored entry_promo_story_id is what the select shows');
+    assert.ok(calls.adminPaths.includes('/api/stories'), 'the story list is read through adminFetch');
+
+    select.value = '6';
+    await dom.window.saveEntryPromoStory();
+    assert.strictEqual(puts.length, 1, 'saving goes through PUT /api/admin/settings');
+    assert.deepStrictEqual(puts[0], { entry_promo_story_id: '6' }, 'the chosen story id is sent as a string');
+
+    // «تلقائي» يرسل نصاً فارغاً صريحاً: مسح التثبيت لا حذف المفتاح من الجسم.
+    select.value = '';
+    await dom.window.saveEntryPromoStory();
+    assert.strictEqual(puts.length, 2);
+    assert.ok(Object.prototype.hasOwnProperty.call(puts[1], 'entry_promo_story_id'), 'the key is sent, not omitted');
+    assert.strictEqual(puts[1].entry_promo_story_id, '');
+  });
+
   await test('ستوريو التسويق is hidden from a town admin — the tab is absent, not disabled', () => {
     const dom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط'] });
     const btn = dom.window.document.getElementById('tabStoriesBtn');
@@ -8045,14 +8258,21 @@ async function run() {
         return jsonResponse({ success: true, album, photos: [photo] });
       }
       if (requestPath === '/api/admin/photo-tags' && method === 'GET') {
-        return jsonResponse({ success: true, tags: [{
-          id: 21,
-          photo_id: 3,
-          name: 'فاطمة',
-          status: 'pending',
-          requester_name: 'فاطمة',
-          photo: { thumb_url: 'https://cdn.test/p-thumb.jpg', album_title: 'ألبوم العرس', event_title: 'عرس أحمد', town: 'رهط' }
-        }] });
+        return jsonResponse({
+          success: true,
+          counts: { pending: 2, approved: 3, rejected: 1 },
+          tags: [{
+            id: 21,
+            photo_id: 3,
+            name: 'فاطمة',
+            status: 'pending',
+            requester_name: 'فاطمة',
+            self_description: 'بنت خالة العريس',
+            caption_suggestion: 'صورة القاعة الكبيرة',
+            created_at: '2026-10-01T09:00:00.000Z',
+            photo: { thumb_url: 'https://cdn.test/p-thumb.jpg', album_title: 'ألبوم العرس', event_title: 'عرس أحمد', town: 'رهط' }
+          }]
+        });
       }
       if (requestPath === '/api/admin/photo-reports' && method === 'GET') {
         return jsonResponse({ success: true, reports: [{
@@ -8091,8 +8311,49 @@ async function run() {
     await dom.window.addAdminPhotoName(3);
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3/tags' && call.method === 'POST' && call.body.name === 'راني'));
 
+    // طابور الوسوم صار يُقرأ بجملته: من طلب، وفي أي صورة، وماذا قال عن نفسه
+    // (T-07) — والعدّادات من الخادم، لا محسوبة هنا.
+    await waitFor(() => document.querySelectorAll('#adminPhotoTagsQueue .admin-moderation-card').length === 1);
+    const tagTabs = document.getElementById('adminPhotoTagTabs');
+    assert.ok(tagTabs, 'the status select became a row of tabs');
+    assert.ok(tagTabs.textContent.includes('بانتظار القرار (2)'), 'the pending count is the server count');
+    assert.ok(tagTabs.textContent.includes('مقبولة (3)'), 'the approved count is the server count');
+    assert.ok(tagTabs.textContent.includes('مرفوضة (1)'), 'the rejected count is the server count');
+    assert.strictEqual(
+      tagTabs.querySelector('[data-tag-status="pending"]').getAttribute('aria-pressed'),
+      'true',
+      'the active tab is pressed'
+    );
+    assert.strictEqual(
+      tagTabs.querySelector('[data-tag-status="approved"]').getAttribute('aria-pressed'),
+      'false'
+    );
+
+    const tagQueueText = document.getElementById('adminPhotoTagsQueue').textContent;
+    assert.ok(
+      tagQueueText.includes('فاطمة يطلب أن يُوسم باسمه في هذه الصورة'),
+      'the card states the request as a sentence, not as a bare name'
+    );
+    assert.ok(tagQueueText.includes('قال عن نفسه: بنت خالة العريس'), 'the self-description is shown');
+    assert.ok(tagQueueText.includes('اقترح وصفاً للصورة: صورة القاعة الكبيرة'), 'the caption suggestion is shown');
+    assert.ok(tagQueueText.includes('بانتظار القرار'), 'the status is Arabic');
+    assert.ok(!tagQueueText.includes('pending'), 'the raw status never leaks into the card');
+    assert.ok(document.getElementById('adminTagApply-21'), 'the pending card offers «اجعله وصف الصورة»');
+
+    document.getElementById('adminTagApply-21').checked = true;
     await dom.window.moderateAdminTag(21, 'approved');
-    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.status === 'approved'));
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.apply_caption === true));
+    const appliedPatch = calls.filter(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH').pop();
+    assert.deepStrictEqual(appliedPatch.body, { status: 'approved', apply_caption: true },
+      'a checked «اجعله وصف الصورة» asks the server to adopt the caption');
+
+    document.getElementById('adminTagApply-21').checked = false;
+    await dom.window.moderateAdminTag(21, 'approved');
+    await waitFor(() => calls.filter(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH' && call.body.apply_caption === false).length === 1);
+    const plainPatch = calls.filter(call => call.requestPath === '/api/admin/photo-tags/21' && call.method === 'PATCH').pop();
+    assert.deepStrictEqual(plainPatch.body, { status: 'approved', apply_caption: false },
+      'an unchecked box never adopts a caption by accident');
+
     await dom.window.hideAdminReportedPhoto(3);
     await waitFor(() => calls.some(call => call.requestPath === '/api/admin/photos/3' && call.method === 'PATCH' && call.body.status === 'hidden'));
   });
@@ -8223,6 +8484,119 @@ async function run() {
     assert.strictEqual(document.querySelector('#adminAlbumPhotos .admin-photo-move'), null, 'and no move-select for a no-event album');
   });
 
+  console.log('\nAdmin album videos — add, hide/show, delete (T-11)');
+
+  /**
+   * فيديوهات الألبوم في اللوحة (T-11): `openAdminAlbum` يجلب فيديوهات الألبوم
+   * بعد صوره، وبطاقة كل فيديو تحمل عنوانه ومصغّرته ووسم منصّته وحالته بالعربية
+   * («ظاهر»/«مخفي»). «إخفاء» يرسل `PATCH /api/admin/videos/:id` بجسم
+   * `{ status: 'hidden' }` وحده، و«حذف» لا يرسل `DELETE` قبل تأكيد، والإضافة
+   * ترسل `{ url, title }` إلى مسار الألبوم — ورابط فارغ لا يرسل شيئاً أصلاً.
+   */
+  await test('فيديوهات اللوحة: حالة عربية، «إخفاء» يرسل PATCH، «حذف» بعد تأكيد يرسل DELETE، والإضافة ترسل { url, title }', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const album = { id: 11, event_id: 7, title: 'ألبوم العرس', is_published: 1, photo_count: 0 };
+    let videos = [{
+      id: 71,
+      provider: 'youtube',
+      title: 'فيديو الحنّة',
+      external_url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      thumb_url: 'https://cdn.test/hanna.jpg',
+      position: 0,
+      created_at: '2026-10-01T09:00:00.000Z',
+      status: 'approved',
+      created_by: 1
+    }];
+    const calls = [];
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      calls.push({ requestPath, method, body: options.body ? JSON.parse(options.body) : null });
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'GET') {
+        return jsonResponse({ success: true, album, photos: [] });
+      }
+      if (requestPath === '/api/admin/albums/11/videos' && method === 'GET') {
+        return jsonResponse({ success: true, videos });
+      }
+      if (requestPath === '/api/admin/albums/11/videos' && method === 'POST') {
+        const body = JSON.parse(options.body);
+        videos = videos.concat([{ ...videos[0], id: 72, title: body.title, external_url: body.url, created_at: '2026-10-03T09:00:00.000Z' }]);
+        return jsonResponse({ success: true, video: videos[videos.length - 1], message: 'تمت إضافة الفيديو' }, { status: 201 });
+      }
+      if (requestPath === '/api/admin/videos/71' && method === 'PATCH') {
+        const body = JSON.parse(options.body);
+        videos = videos.map(video => (Number(video.id) === 71 ? { ...video, ...body } : video));
+        return jsonResponse({ success: true, video: videos[0], message: 'تم تحديث الفيديو' });
+      }
+      if (requestPath === '/api/admin/videos/71' && method === 'DELETE') {
+        videos = videos.filter(video => Number(video.id) !== 71);
+        return jsonResponse({ success: true, message: 'تم حذف الفيديو' });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await dom.window.openAdminAlbum(11);
+    await waitFor(() => document.querySelectorAll('#adminAlbumVideos .admin-album-video-card').length === 1);
+
+    assert.ok(document.getElementById('adminAlbumVideoUrl'), 'expected the video link field inside the album panel');
+    assert.strictEqual(document.getElementById('adminAlbumVideoUrl').getAttribute('dir'), 'ltr', 'a link reads LTR');
+    const addBtn = document.getElementById('adminAlbumAddVideoBtn');
+    assert.ok(addBtn && addBtn.textContent.includes('أضف فيديو'), 'and the «أضف فيديو» button');
+    assert.ok(
+      document.querySelector('.admin-album-videos .hint-text').textContent.includes('يبقى على منصّته'),
+      'the hint explains that the video stays on its own platform'
+    );
+
+    const card = document.querySelector('#adminAlbumVideos .admin-album-video-card');
+    assert.ok(card.textContent.includes('فيديو الحنّة'), 'the card carries the video title');
+    assert.ok(card.textContent.includes('يوتيوب'), 'the platform is named in Arabic');
+    assert.ok(card.querySelector('img'), 'the thumbnail is shown when the server sends one');
+    assert.strictEqual(card.querySelector('.admin-video-status').textContent, 'ظاهر', 'an approved video reads «ظاهر»');
+
+    [...card.querySelectorAll('button')].find(button => button.textContent.includes('إخفاء')).click();
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/videos/71' && call.method === 'PATCH'));
+    const patch = calls.find(call => call.requestPath === '/api/admin/videos/71' && call.method === 'PATCH');
+    assert.deepStrictEqual(patch.body, { status: 'hidden' }, '«إخفاء» sends the hidden status alone');
+
+    await waitFor(() => document.getElementById('adminAlbumVideos').textContent.includes('مخفي'));
+    const hiddenCard = document.querySelector('#adminAlbumVideos .admin-album-video-card');
+    assert.strictEqual(hiddenCard.querySelector('.admin-video-status').textContent, 'مخفي', 'the reloaded card reads «مخفي»');
+    const showBtn = [...hiddenCard.querySelectorAll('button')].find(button => button.textContent.includes('إظهار'));
+    assert.ok(showBtn, 'and the same card offers «إظهار» again');
+
+    [...hiddenCard.querySelectorAll('button')].find(button => button.textContent.includes('حذف')).click();
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/videos/71' && call.method === 'DELETE'));
+    assert.strictEqual(
+      calls.filter(call => call.requestPath === '/api/admin/videos/71' && call.method === 'DELETE').length,
+      1,
+      'a confirmed delete sends exactly one DELETE'
+    );
+    await waitFor(() => document.getElementById('adminAlbumVideos').textContent.includes('لا فيديوهات في هذا الألبوم بعد'));
+
+    const postsBefore = calls.filter(call => call.method === 'POST').length;
+    document.getElementById('adminAlbumVideoUrl').value = '   ';
+    document.getElementById('adminAlbumVideoTitle').value = '';
+    await dom.window.addAdminAlbumVideo();
+    assert.strictEqual(
+      calls.filter(call => call.method === 'POST').length,
+      postsBefore,
+      'an empty link never reaches the server'
+    );
+
+    document.getElementById('adminAlbumVideoUrl').value = ' https://www.youtube.com/watch?v=zzzzzzzzzzz ';
+    document.getElementById('adminAlbumVideoTitle').value = ' فيديو الحنّة ';
+    await dom.window.addAdminAlbumVideo();
+    await waitFor(() => calls.some(call => call.requestPath === '/api/admin/albums/11/videos' && call.method === 'POST'));
+    const post = calls.find(call => call.requestPath === '/api/admin/albums/11/videos' && call.method === 'POST');
+    assert.deepStrictEqual(
+      post.body,
+      { url: 'https://www.youtube.com/watch?v=zzzzzzzzzzz', title: 'فيديو الحنّة' },
+      'the trimmed link and title, and nothing the server derives itself'
+    );
+    assert.strictEqual(document.getElementById('adminAlbumVideoUrl').value, '', 'the link field is cleared after a successful add');
+    assert.strictEqual(document.getElementById('adminAlbumVideoTitle').value, '', 'and so is the title field');
+    await waitFor(() => document.querySelectorAll('#adminAlbumVideos .admin-album-video-card').length === 1);
+  });
+
   console.log('\nAdmin albums picker: honoree label + typed search (2026-11)');
 
   /**
@@ -8345,6 +8719,139 @@ async function run() {
     typeQuery('');
     assert.strictEqual(select.options.length, 2, 'clearing the search restores every option');
     assert.ok(optionOf(7) && optionOf(8), 'both events are back');
+  });
+
+  console.log('\nAdmin album upload — signed batches and the 429 wait message (T-02)');
+
+  /** ما يردّه محدِّد الطلبات: جسم عربي، 429، و`retry-after` كما يرسله الخادم. */
+  function albumRateLimited(retryAfter) {
+    return {
+      ok: false,
+      status: 429,
+      json: async () => ({ success: false, message: 'عدد الطلبات تجاوز الحد المسموح — يرجى المحاولة لاحقاً' }),
+      headers: { get: name => (String(name).toLowerCase() === 'retry-after' ? retryAfter : null) }
+    };
+  }
+
+  /**
+   * يفتح الألبوم 11 كما تفتحه اللوحة (`openAdminAlbum` هو الكاتب الوحيد
+   * لـ`adminAlbumCurrent`) ويوجّه كل نداء إلى `handler`، ويستبدل
+   * `uploadToCloudinary` كي لا يقع رفع حقيقي إلى Cloudinary. أمّا قراءة
+   * الألبوم التي تعقب الطابور (`GET …/photos`) فيخدمها هذا المهيّئ نفسه،
+   * فيبقى `handler` لطلبات الرفع وحدها.
+   */
+  async function openAlbumForUpload(handler) {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const album = { id: 11, event_id: 7, title: 'ألبوم العرس', is_published: 1, photo_count: 0 };
+    const calls = instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'GET') {
+        return jsonResponse({ success: true, album, photos: [] });
+      }
+      return handler(requestPath, method, options);
+    });
+    dom.window.uploadToCloudinary = async (upload, file) => ({
+      public_id: `${upload.public_id}-${file.name}`,
+      version: 7,
+      signature: 'cloudinary-answer',
+      width: 800,
+      height: 600
+    });
+    await dom.window.openAdminAlbum(11);
+    return { dom, calls };
+  }
+
+  await test('ألبومات الإدارة: رفع 45 صورة يوقّع 3 دفعات (max_batch = 20) ويُدخل صفاً لكل صورة', async () => {
+    let signatureCalls = 0;
+    let insertCalls = 0;
+    const { dom } = await openAlbumForUpload((requestPath, method, options) => {
+      if (requestPath === '/api/admin/albums/11/photos/signatures' && method === 'POST') {
+        signatureCalls += 1;
+        // الخادم الحقيقي: parseLimit يقصّ count إلى ALBUM_UPLOAD_BATCH_MAX ويعلن السقف.
+        const count = Math.min(20, JSON.parse(options.body).count);
+        return jsonResponse({
+          success: true,
+          max_batch: 20,
+          uploads: Array.from({ length: count }, (_, i) => ({
+            ...CLOUDINARY_UPLOAD,
+            public_id: `negev-events/albums/album-11/sig-${signatureCalls}-${i}`,
+            signature: `sig-${signatureCalls}-${i}`
+          }))
+        });
+      }
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'POST') {
+        insertCalls += 1;
+        return jsonResponse({ success: true, photo: { id: 1000 + insertCalls } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const files = Array.from({ length: 45 }, (_, i) => new dom.window.File(['x'], `photo-${i + 1}.jpg`, { type: 'image/jpeg' }));
+    await dom.window.handleAdminAlbumUpload({ files });
+
+    assert.strictEqual(signatureCalls, 3, '45 صورة بسقف 20 = 3 طلبات توقيع، لا 45');
+    assert.strictEqual(insertCalls, 45, 'إدخال واحد لكل صورة — التوقيع وحده تجمّع');
+    const rows = [...dom.window.document.querySelectorAll('#adminAlbumUploadQueue .archive-upload-row')];
+    assert.strictEqual(rows.length, 45, 'صفّ لكل ملف في الطابور');
+    assert.strictEqual(rows.filter(row => row.dataset.state === 'done').length, 45, 'كل الصفوف تنتهي done');
+    assert.strictEqual(rows[44].querySelector('.archive-upload-status').textContent, 'تمت الإضافة');
+  });
+
+  await test('ألبومات الإدارة: إدخال يردّ 429 برسالة انتظار — الصفّ يقول «أعد المحاولة بعد 2 دقيقة» والصفوف التالية تُحاول', async () => {
+    let insertCalls = 0;
+    const { dom } = await openAlbumForUpload((requestPath, method) => {
+      if (requestPath === '/api/admin/albums/11/photos/signatures' && method === 'POST') {
+        return jsonResponse({
+          success: true,
+          max_batch: 20,
+          uploads: [1, 2, 3].map(n => ({ ...CLOUDINARY_UPLOAD, public_id: `negev-events/albums/album-11/batch-${n}` }))
+        });
+      }
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'POST') {
+        insertCalls += 1;
+        return insertCalls === 2 ? albumRateLimited('120') : jsonResponse({ success: true, photo: { id: insertCalls } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const files = [1, 2, 3].map(n => new dom.window.File(['x'], `photo-${n}.jpg`, { type: 'image/jpeg' }));
+    await dom.window.handleAdminAlbumUpload({ files });
+
+    const rows = [...dom.window.document.querySelectorAll('#adminAlbumUploadQueue .archive-upload-row')];
+    assert.strictEqual(rows.length, 3);
+    const status = rows[1].querySelector('.archive-upload-status').textContent;
+    assert.ok(status.includes('أعد المحاولة بعد 2 دقيقة'), `retry-after: 120 يجب أن يقول دقيقتين — كانت «${status}»`);
+    assert.strictEqual(rows[1].dataset.state, 'error');
+    assert.strictEqual(rows[2].dataset.state, 'done', '429 في صورة لا يوقف بقية الطابور — الحلقة لكل صورة');
+    assert.strictEqual(insertCalls, 3, 'كل صورة أُدخلت مرة واحدة');
+  });
+
+  await test('ألبومات الإدارة: فشل التوقيع بـ 429 يوقف الطابور ويحمل الصفوف الباقية رسالة الانتظار بلا طلب ثانٍ', async () => {
+    let signatureCalls = 0;
+    let insertCalls = 0;
+    const { dom } = await openAlbumForUpload((requestPath, method) => {
+      if (requestPath === '/api/admin/albums/11/photos/signatures' && method === 'POST') {
+        signatureCalls += 1;
+        return albumRateLimited('120');
+      }
+      if (requestPath === '/api/admin/albums/11/photos' && method === 'POST') {
+        insertCalls += 1;
+        return jsonResponse({ success: true, photo: { id: insertCalls } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const files = Array.from({ length: 5 }, (_, i) => new dom.window.File(['x'], `photo-${i + 1}.jpg`, { type: 'image/jpeg' }));
+    await dom.window.handleAdminAlbumUpload({ files });
+
+    assert.strictEqual(signatureCalls, 1, 'طلب توقيع واحد لا خمسة — لا سبام على خادم يردّ 429');
+    assert.strictEqual(insertCalls, 0, 'بلا توقيع لا إدخال');
+    const rows = [...dom.window.document.querySelectorAll('#adminAlbumUploadQueue .archive-upload-row')];
+    assert.strictEqual(rows.length, 5);
+    assert.strictEqual(rows.filter(row => row.dataset.state === 'error').length, 5, 'كل الصفوف، بما فيها الأول، error');
+    assert.ok(
+      rows.every(row => row.querySelector('.archive-upload-status').textContent.includes('أعد المحاولة بعد 2 دقيقة')),
+      'كل الصفوف الباقية تحمل رسالة الانتظار نفسها'
+    );
   });
 
   console.log('\nAdmin towns & regions tab (TWN-4)');
@@ -9657,6 +10164,387 @@ async function run() {
 
     win.renderEventPage({ ...base, id: 83 });
     assert.ok(pageReminderBtn(), 'an event with no status field at all is treated as followable');
+  });
+
+  console.log('\nAccount screen (photo, name/town, phone — T-04)');
+
+  const ACCOUNT_USER = {
+    id: 501,
+    full_name: 'سالم الاختبار',
+    role: 'user',
+    phone_number: '0521234567',
+    clan_town: 'رهط',
+    avatar_url: null
+  };
+  const ACCOUNT_AVATAR_URL = 'https://res.cloudinary.com/negev-events/image/upload/v1/avatars/user-501.png';
+
+  /**
+   * buildEnv({ loggedIn: true }) whose stored user is shaped exactly like
+   * auth.service.publicUser() (what app.js reads at load), because buildEnv's
+   * default seed predates avatar_url/clan_town. It writes negev_user BEFORE
+   * the eval, the same moment a real page load would.
+   */
+  function buildAccountEnv(user) {
+    return buildEnv({
+      loggedIn: true,
+      onBeforeEval: (window) => {
+        window.localStorage.setItem('negev_user', JSON.stringify(user));
+      }
+    });
+  }
+
+  /** A fetch stub that records every call, answering only the routes a test names. */
+  function buildAccountFetchStub(replies) {
+    const calls = [];
+    const fetchFn = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      calls.push({ path: requestPath, method, headers: options.headers || {}, body: options.body });
+      const reply = replies[`${method} ${requestPath}`];
+      if (reply) return reply();
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [] });
+      return jsonResponse({ success: true });
+    };
+    return { fetchFn, calls };
+  }
+
+  await test('account avatar: a stored avatar_url shows the photo and hides the icon fallback', async () => {
+    const dom = buildAccountEnv({ ...ACCOUNT_USER, avatar_url: ACCOUNT_AVATAR_URL });
+    const win = dom.window;
+    await flushBoot();
+    win.fetch = buildAccountFetchStub({}).fetchFn;
+    win.loadAccountView();
+
+    const img = win.document.getElementById('accountAvatarImg');
+    const fallback = win.document.getElementById('accountAvatarFallback');
+    assert.ok(img && fallback, 'expected the photo and the icon inside #accountUserAvatar');
+    assert.strictEqual(img.hidden, false, 'the stored photo must be visible');
+    assert.strictEqual(img.getAttribute('src'), ACCOUNT_AVATAR_URL, 'the absolute URL publicUser returned, unchanged');
+    assert.strictEqual(fallback.hidden, true, 'the icon is only a fallback');
+  });
+
+  await test('account avatar: avatar_url = null hides the photo and brings the icon back', async () => {
+    const dom = buildAccountEnv({ ...ACCOUNT_USER, avatar_url: null });
+    const win = dom.window;
+    await flushBoot();
+    win.fetch = buildAccountFetchStub({}).fetchFn;
+    win.loadAccountView();
+
+    const img = win.document.getElementById('accountAvatarImg');
+    const fallback = win.document.getElementById('accountAvatarFallback');
+    assert.strictEqual(img.hidden, true, 'no photo to show');
+    assert.strictEqual(img.hasAttribute('src'), false, 'no stale photo URL may stay behind');
+    assert.strictEqual(fallback.hidden, false, 'the icon is what a user without a photo sees');
+  });
+
+  await test('account profile: save sends full_name + clan_town and adopts the server answer', async () => {
+    const dom = buildAccountEnv(ACCOUNT_USER);
+    const win = dom.window;
+    await flushBoot();
+    const savedUser = { ...ACCOUNT_USER, full_name: 'محمد أبو سالم', clan_town: 'حورة' };
+    const stub = buildAccountFetchStub({
+      'PATCH /api/auth/me': () => jsonResponse({ success: true, message: 'تم تحديث بيانات حسابك', user: savedUser })
+    });
+    win.fetch = stub.fetchFn;
+    win.loadAccountView();
+
+    win.document.getElementById('accountProfileNameInput').value = '  محمد أبو سالم  ';
+    win.document.getElementById('accountProfileTownInput').value = '  حورة  ';
+    await win.saveAccountProfile();
+
+    const patch = stub.calls.find(c => c.path === '/api/auth/me' && c.method === 'PATCH');
+    assert.ok(patch, 'expected the save to reach PATCH /api/auth/me');
+    assert.deepStrictEqual(
+      JSON.parse(patch.body),
+      { full_name: 'محمد أبو سالم', clan_town: 'حورة' },
+      'both profile fields, trimmed, and nothing else'
+    );
+    assert.strictEqual(patch.headers['Content-Type'], 'application/json');
+    assert.deepStrictEqual(JSON.parse(win.localStorage.getItem('negev_user')), savedUser, 'negev_user holds the server answer');
+    assert.strictEqual(win.document.getElementById('accountUserName').textContent, 'محمد أبو سالم', 'the card re-renders from the saved user');
+    assert.strictEqual(
+      win.document.getElementById('userAuthBtn').title,
+      'محمد — تسجيل الخروج',
+      'the header button is rebuilt from the new first name instead of keeping the old one'
+    );
+
+    // An empty name is refused locally — the server must not see a request at all.
+    const patchesBefore = stub.calls.filter(c => c.path === '/api/auth/me' && c.method === 'PATCH').length;
+    win.document.getElementById('accountProfileNameInput').value = '   ';
+    await win.saveAccountProfile();
+    assert.strictEqual(
+      stub.calls.filter(c => c.path === '/api/auth/me' && c.method === 'PATCH').length,
+      patchesBefore,
+      'an empty name must never be sent'
+    );
+  });
+
+  await test('account phone: save sends the number with the PIN and keeps only the fresh token', async () => {
+    const dom = buildAccountEnv(ACCOUNT_USER);
+    const win = dom.window;
+    await flushBoot();
+    const freshUser = { ...ACCOUNT_USER, phone_number: '0507654321' };
+    const stub = buildAccountFetchStub({
+      'PATCH /api/auth/me/phone': () => jsonResponse({
+        success: true,
+        message: 'تم تحديث رقم هاتفك — استخدمه في الدخول القادم',
+        token: 'fresh-token-after-phone',
+        user: freshUser
+      })
+    });
+    win.fetch = stub.fetchFn;
+    win.loadAccountView();
+
+    win.toggleAccountPhoneForm(true);
+    const form = win.document.getElementById('accountPhoneForm');
+    assert.strictEqual(form.hidden, false, '«عدّل رقمي» opens the form');
+
+    win.document.getElementById('accountPhoneInput').value = ' 0507654321 ';
+    win.document.getElementById('accountPhonePinInput').value = 'PIN-1234';
+    await win.saveAccountPhone();
+
+    const patch = stub.calls.find(c => c.path === '/api/auth/me/phone' && c.method === 'PATCH');
+    assert.ok(patch, 'expected the save to reach PATCH /api/auth/me/phone');
+    assert.deepStrictEqual(
+      JSON.parse(patch.body),
+      { phone_number: '0507654321', pin_code: 'PIN-1234' },
+      'the number is trimmed; the PIN travels exactly as typed'
+    );
+    assert.strictEqual(win.localStorage.getItem('negev_token'), 'fresh-token-after-phone', 'the re-signed token replaces the old one');
+    assert.deepStrictEqual(JSON.parse(win.localStorage.getItem('negev_user')), freshUser);
+    assert.strictEqual(win.document.getElementById('accountUserPhone').textContent, '0507654321', 'the card shows the new number');
+    assert.strictEqual(form.hidden, true, 'a successful save closes the form');
+
+    const storedValues = [];
+    for (let i = 0; i < win.localStorage.length; i += 1) storedValues.push(win.localStorage.getItem(win.localStorage.key(i)));
+    assert.ok(!storedValues.some(value => value && value.includes('PIN-1234')), 'the PIN must never be stored anywhere');
+  });
+
+  await test('account phone: a 400 wrong PIN keeps the session and the open form, and shows the server message', async () => {
+    const dom = buildAccountEnv(ACCOUNT_USER);
+    const win = dom.window;
+    await flushBoot();
+    const stub = buildAccountFetchStub({
+      'PATCH /api/auth/me/phone': () => jsonResponse(
+        { success: false, message: 'رمز الدخول غير صحيح' },
+        { status: 400 }
+      )
+    });
+    win.fetch = stub.fetchFn;
+    win.loadAccountView();
+
+    const originalToken = win.localStorage.getItem('negev_token');
+    win.toggleAccountPhoneForm(true);
+    const form = win.document.getElementById('accountPhoneForm');
+    win.document.getElementById('accountPhoneInput').value = '0507654321';
+    win.document.getElementById('accountPhonePinInput').value = '0000';
+    await win.saveAccountPhone();
+
+    const toast = win.document.querySelector('.app-toast span');
+    assert.ok(toast && toast.textContent === 'رمز الدخول غير صحيح', 'the server message reaches the user as-is');
+    assert.strictEqual(form.hidden, false, 'a refused PIN is a typo to correct, not a reason to close the form');
+    assert.strictEqual(
+      win.localStorage.getItem('negev_token'),
+      originalToken,
+      '400 means the session was never touched — this is the practical difference from 401'
+    );
+  });
+
+  await test('account avatar upload: multipart body with the `image` field and no Content-Type header', async () => {
+    const dom = buildAccountEnv(ACCOUNT_USER);
+    const win = dom.window;
+    await flushBoot();
+    const uploadedUser = { ...ACCOUNT_USER, avatar_url: ACCOUNT_AVATAR_URL };
+    const stub = buildAccountFetchStub({
+      'POST /api/auth/me/avatar': () => jsonResponse({ success: true, message: 'تم تحديث صورتك الشخصية', user: uploadedUser })
+    });
+    win.fetch = stub.fetchFn;
+    win.loadAccountView();
+
+    const input = {
+      files: [new win.File(['x'], 'a.png', { type: 'image/png' })],
+      value: 'a.png'
+    };
+    await win.handleAccountAvatarPick(input);
+
+    const upload = stub.calls.find(c => c.path === '/api/auth/me/avatar');
+    assert.ok(upload, 'expected the upload to reach POST /api/auth/me/avatar');
+    assert.strictEqual(upload.method, 'POST');
+    assert.ok(upload.body instanceof win.FormData, 'the body must be FormData so the browser can write the multipart boundary');
+    const image = upload.body.get('image');
+    assert.ok(image && image.name === 'a.png' && image.type === 'image/png', 'the chosen file travels in the `image` field');
+    assert.ok(
+      !Object.keys(upload.headers).some(name => name.toLowerCase() === 'content-type'),
+      'a Content-Type header here would leave the multipart boundary undefined and break the upload'
+    );
+    assert.strictEqual(input.value, '', 'the picker is cleared so the same file can be chosen again');
+    assert.deepStrictEqual(JSON.parse(win.localStorage.getItem('negev_user')), uploadedUser, 'the stored user carries the new avatar');
+    assert.strictEqual(
+      win.document.getElementById('accountAvatarImg').getAttribute('src'),
+      ACCOUNT_AVATAR_URL,
+      'the new photo renders without a reload'
+    );
+  });
+
+  console.log('\n«أنا في الصورة» — ورقة الوسم (T-07)');
+
+  /** يفتح العارض على صورة واحدة عبر مسار الصفحة الحقيقي، فلا حالة تُزرع من الخارج. */
+  function openPhotoTagViewer(win) {
+    win.renderEventArchive({
+      id: 5,
+      archive_photos: [{
+        id: 7,
+        image_url: 'https://cdn.test/p.jpg',
+        thumb_url: 'https://cdn.test/p-thumb.jpg',
+        caption: 'صورة القاعة',
+        tags: []
+      }]
+    }, 'chatArchive');
+    win.openArchiveViewer(0, 'chatArchive');
+  }
+
+  await test('«أنا في الصورة»: an account without a photo opens the sheet, keeps sending disabled and posts nothing', async () => {
+    const dom = buildAccountEnv({ ...ACCOUNT_USER, avatar_url: null });
+    const win = dom.window;
+    await flushBoot();
+    const stub = buildAccountFetchStub({});
+    win.fetch = stub.fetchFn;
+    openPhotoTagViewer(win);
+
+    await win.requestPhotoTag();
+
+    const { document } = win;
+    const sheet = document.getElementById('photoTagSheet');
+    assert.strictEqual(sheet.hidden, false, 'the sheet opens instead of a silent POST');
+    assert.strictEqual(
+      document.getElementById('photoTagAvatarState').textContent,
+      '⚠️ لازم ترفع صورتك الشخصية أولاً',
+      'the missing photo is named plainly'
+    );
+    assert.strictEqual(document.getElementById('photoTagUploadAvatarBtn').hidden, false, '«ارفع صورتك الآن» is offered');
+    assert.strictEqual(
+      document.getElementById('photoTagPhoneState').textContent,
+      'رقمك الشخصي: 0521234567',
+      'the number in the sheet comes from the account'
+    );
+    const submit = document.getElementById('photoTagSubmitBtn');
+    assert.strictEqual(submit.disabled, true, 'no photo, no sending');
+
+    // تأكيد الرقم لا يعوّض الصورة الغائبة — الشرطان معاً.
+    document.getElementById('photoTagConfirmPhone').checked = true;
+    win.updatePhotoTagSubmitState();
+    assert.strictEqual(submit.disabled, true, 'confirming the number does not replace the missing photo');
+    assert.strictEqual(
+      stub.calls.filter(call => call.method === 'POST' && call.path === '/api/photos/7/tags').length,
+      0,
+      'the request never leaves the browser'
+    );
+  });
+
+  await test('«أنا في الصورة»: photo + confirmed number send both descriptions with confirm_phone', async () => {
+    const dom = buildAccountEnv({ ...ACCOUNT_USER, avatar_url: ACCOUNT_AVATAR_URL });
+    const win = dom.window;
+    await flushBoot();
+    const stub = buildAccountFetchStub({
+      'POST /api/photos/7/tags': () => jsonResponse({
+        success: true,
+        status: 'pending',
+        message: 'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة'
+      }, { status: 201 })
+    });
+    win.fetch = stub.fetchFn;
+    openPhotoTagViewer(win);
+
+    await win.requestPhotoTag();
+
+    const { document } = win;
+    const sheet = document.getElementById('photoTagSheet');
+    assert.strictEqual(document.getElementById('photoTagAvatarState').textContent, '✅ صورتك الشخصية مرفوعة');
+    assert.strictEqual(document.getElementById('photoTagUploadAvatarBtn').hidden, true, 'no upload prompt when the photo exists');
+
+    const submit = document.getElementById('photoTagSubmitBtn');
+    assert.strictEqual(submit.disabled, true, 'the number still has to be confirmed');
+    document.getElementById('photoTagConfirmPhone').checked = true;
+    document.getElementById('photoTagConfirmPhone').dispatchEvent(new win.Event('change', { bubbles: true }));
+    assert.strictEqual(submit.disabled, false, 'photo + confirmed number enable sending');
+
+    document.getElementById('photoTagSelfDescription').value = '  بنت خالة العريس  ';
+    document.getElementById('photoTagCaptionSuggestion').value = '  صورة القاعة الكبيرة  ';
+    await win.submitPhotoTag();
+
+    const posts = stub.calls.filter(call => call.method === 'POST' && call.path === '/api/photos/7/tags');
+    assert.strictEqual(posts.length, 1, 'exactly one request');
+    assert.deepStrictEqual(JSON.parse(posts[0].body), {
+      self_description: 'بنت خالة العريس',
+      caption_suggestion: 'صورة القاعة الكبيرة',
+      confirm_phone: true
+    }, 'both descriptions travel trimmed, with the explicit phone confirmation');
+    assert.strictEqual(posts[0].headers['Content-Type'], 'application/json');
+    assert.strictEqual(sheet.hidden, true, 'success closes the sheet');
+    assert.ok(document.getElementById('archiveViewerTagBtn').textContent.includes('معلّق'), 'the viewer button says «طلبك معلّق»');
+    assert.strictEqual(
+      document.querySelector('.app-toast span').textContent,
+      'تم إرسال طلبك — يظهر اسمك بعد موافقة الإدارة',
+      'the server message is what the user sees'
+    );
+  });
+
+  await test('«أنا في الصورة»: a 400 shows its server message inside the sheet and leaves it open', async () => {
+    const dom = buildAccountEnv({ ...ACCOUNT_USER, avatar_url: ACCOUNT_AVATAR_URL });
+    const win = dom.window;
+    await flushBoot();
+    const message = 'ارفع صورتك الشخصية من حسابك أولاً — الوسم يربط الصورة بحسابك';
+    const stub = buildAccountFetchStub({
+      'POST /api/photos/7/tags': () => jsonResponse({ success: false, message }, { status: 400 })
+    });
+    win.fetch = stub.fetchFn;
+    openPhotoTagViewer(win);
+    await win.requestPhotoTag();
+
+    const { document } = win;
+    const sheet = document.getElementById('photoTagSheet');
+    document.getElementById('photoTagConfirmPhone').checked = true;
+    win.updatePhotoTagSubmitState();
+    await win.submitPhotoTag();
+
+    assert.strictEqual(sheet.hidden, false, 'a refusal is a correction to make, not a reason to close the sheet');
+    const errorBox = document.getElementById('photoTagError');
+    assert.strictEqual(errorBox.hidden, false, 'the error line appears');
+    assert.strictEqual(errorBox.textContent, message, 'the Arabic server message is shown as-is');
+    assert.strictEqual(
+      document.getElementById('photoTagSubmitBtn').disabled,
+      false,
+      'the user can correct and retry'
+    );
+  });
+
+  await test('طابور الوسوم: three tabs carry the server counts and switch the queue status', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const urls = [];
+    dom.window.fetch = async (url) => {
+      urls.push(String(url));
+      if (String(url).split('?')[0] === '/api/admin/photo-tags') {
+        return jsonResponse({ success: true, tags: [], counts: { pending: 4, approved: 2, rejected: 7 } });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.loadAdminPhotoTags('pending');
+
+    const tabs = [...document.querySelectorAll('#adminPhotoTagTabs .admin-tag-tab')];
+    assert.strictEqual(tabs.length, 3, 'three statuses, three tabs');
+    assert.deepStrictEqual(
+      tabs.map(tab => tab.textContent.trim()),
+      ['بانتظار القرار (4)', 'مقبولة (2)', 'مرفوضة (7)'],
+      'each tab labels its status and its server count'
+    );
+    assert.strictEqual(tabs[0].getAttribute('aria-pressed'), 'true', 'the current status is pressed');
+    assert.deepStrictEqual(tabs.slice(1).map(tab => tab.getAttribute('aria-pressed')), ['false', 'false']);
+
+    tabs[1].click();
+    await waitFor(() => document.querySelector('#adminPhotoTagTabs [data-tag-status="approved"]').getAttribute('aria-pressed') === 'true');
+    assert.ok(urls.some(url => url.includes('/api/admin/photo-tags?status=approved')), 'a tab click loads that status');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

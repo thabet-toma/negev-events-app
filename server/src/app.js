@@ -17,6 +17,7 @@ const shareCard = require('./services/shareCard.service');
 const db = require('./db/pool');
 const events = require('./services/events.service');
 const asyncHandler = require('./utils/asyncHandler');
+const { authenticatedUserId } = require('./utils/rateLimitIdentity');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
 
@@ -64,13 +65,32 @@ function createApp() {
   const PRODUCTION_LOG_FORMAT = ':method :url :status :res[content-length] - :response-time ms';
   app.use(morgan(config.isProduction ? PRODUCTION_LOG_FORMAT : 'dev'));
 
-  app.use('/api', rateLimit({
+  // Two budgets mounted together: an anonymous caller has no identity to key
+  // on and is counted per IP, while a signed-in one is counted per USER — so a
+  // bulk upload (two requests per photo) spends only its own allowance, and a
+  // shared address cannot exhaust a single admin's. Exactly one of the two
+  // applies per request, so exactly one sets the RateLimit-* headers.
+  const anonymousLimiter = rateLimit({
     windowMs: config.rateLimit.windowMs,
     max: config.rateLimit.max,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: req => req.ip || 'unknown',
+    skip: req => authenticatedUserId(req) !== null,
     message: { success: false, message: 'عدد الطلبات تجاوز الحد المسموح — يرجى المحاولة لاحقاً' }
-  }));
+  });
+
+  const userLimiter = rateLimit({
+    windowMs: config.rateLimit.windowMs,
+    max: config.rateLimit.userMax,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: req => 'user:' + authenticatedUserId(req),
+    skip: req => authenticatedUserId(req) === null,
+    message: { success: false, message: 'عدد كبير من الطلبات على حسابك — انتظر بضع دقائق ثم تابع' }
+  });
+
+  app.use('/api', anonymousLimiter, userLimiter);
 
   // Health probe for the container orchestrator / uptime monitor.
   app.get('/health', async (req, res) => {
@@ -108,12 +128,15 @@ function createApp() {
   // docs/adr/0006-server-renders-the-share-page.md. و`/live/...` توسيعٌ
   // مُوثَّق لنفس الاستثناء (‏ADR-0006، «توسيع 2026-09-20») لا استثناء ثانٍ
   // يُخترع هنا: صفحة البث المباشر (أيّاً كانت منصّته) وغلاف مشغّل يوتيوب `/live/embed`، في نفس الملف.
-  // كلٌّ يحتاج سطر nginx على الإنتاج: `/e/` و`/p/` مضافان، و`/a/` و`/live` لم يُضافا بعد.
+  // كل صفحة يرسمها الخادم تحتاج على nginx الإنتاج قسمَيها: `location = /x`
+  // و`location ^~ /x/` → 127.0.0.1:3100، وإلا أجابت حاوية الملفات الثابتة بـ404.
+  // و`/e` و`/p` و`/a` و`/person` و`/live` مضبوطة على المضيف، و`/v` مع إصدار 2026-10-26.
   app.use('/e', shareRoutes.eventRouter);
   app.use('/p', shareRoutes.photoRouter);
   app.use('/a', shareRoutes.albumRouter);
   app.use('/person', shareRoutes.personRouter);
   app.use('/live', shareRoutes.liveRouter);
+  app.use('/v', shareRoutes.videoRouter);
 
   // خريطة الموقع لمحركات البحث (SEO Sitemap) — تُولّد ديناميكياً بكل المناسبات المعتمدة
   app.get('/sitemap.xml', asyncHandler(async (req, res) => {

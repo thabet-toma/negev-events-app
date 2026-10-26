@@ -123,6 +123,21 @@ class AuthStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// يبدّل المستخدم المحفوظ وحده بعد تعديل بيانات أو صورة — الرمز والجلسة
+  /// كما هما، فالخادم لم يجدّدهما في هذين الردّين.
+  Future<void> updateUser(AppUser user) async {
+    _user = user;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// جلسة كاملة جديدة بعد تغيير رقم الدخول: الردّ يحمل رمزاً موقَّعاً بالرقم
+  /// الجديد، والرمز القديم يبقى صالحاً على الخادم حتى انتهاء مدّته، فلا بدّ
+  /// من استبداله هنا وإلا خرج المستخدم من جلسته بأول طلب لاحق.
+  Future<void> applySession(String token, AppUser user) async {
+    await _apply(token, user);
+  }
+
   Future<void> _apply(String token, AppUser user) async {
     _token = token;
     _user = user;

@@ -1,7 +1,13 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../api/api_client.dart';
+import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
+import '../models/user.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
@@ -102,16 +108,34 @@ class AccountScreen extends StatelessWidget {
                       ),
                       child: Column(
                         children: [
-                          CircleAvatar(
-                            radius: 34,
-                            backgroundColor: context.c.sky,
-                            child: Icon(
-                              Icons.person,
-                              size: 36,
-                              color: context.c.onSky,
+                          ClipOval(
+                            child: SizedBox(
+                              width: 68,
+                              height: 68,
+                              child: user.avatarUrl == null
+                                  ? _avatarFallback(context)
+                                  : Image.network(
+                                      user.avatarUrl!,
+                                      key: const Key('profile_avatar'),
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, _, _) =>
+                                          _avatarFallback(context),
+                                    ),
                             ),
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 4),
+                          TextButton.icon(
+                            key: const Key('profile_pick_avatar'),
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () => _pickAvatar(context),
+                            icon: const Icon(
+                              Icons.photo_camera_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('غيّر صورتك'),
+                          ),
                           Text(
                             user.fullName,
                             style: TextStyle(
@@ -157,6 +181,26 @@ class AccountScreen extends StatelessWidget {
                               ),
                             ),
                           ],
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  key: const Key('profile_edit_btn'),
+                                  onPressed: () => _editProfile(context, user),
+                                  child: const Text('عدّل بياناتي'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: OutlinedButton(
+                                  key: const Key('profile_phone_btn'),
+                                  onPressed: () => _changePhone(context, user),
+                                  child: const Text('عدّل رقمي'),
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
@@ -210,6 +254,257 @@ class AccountScreen extends StatelessWidget {
                 ),
         );
       },
+    );
+  }
+}
+
+/// الصورة البديلة: لا صورة شخصية بعد، أو رابطها لم يُحمَّل (انقطاع، ملف حُذف).
+/// نفس دائرة الحساب السابقة — سماء وأيقونة — كي لا يبقى في مكانها فراغ.
+Widget _avatarFallback(BuildContext context) {
+  return Container(
+    color: context.c.sky,
+    alignment: Alignment.center,
+    child: Icon(Icons.person, size: 36, color: context.c.onSky),
+  );
+}
+
+/// اختيار صورة من المعرض ورفعها. الإلغاء لا يبلغ الشبكة أصلاً، والفشل يظهر
+/// برسالة الخادم العربية كما وصلت.
+Future<void> _pickAvatar(BuildContext context) async {
+  final services = AppServices.of(context);
+  final picked = await ImagePicker().pickImage(
+    source: ImageSource.gallery,
+    maxWidth: 1024,
+    imageQuality: 85,
+  );
+  if (picked == null) return;
+
+  try {
+    final updated = await services.api.uploadAvatar(File(picked.path));
+    await services.auth.updateUser(updated);
+    if (!context.mounted) return;
+    showMessage(context, 'تم تحديث صورتك الشخصية');
+  } on ApiException catch (error) {
+    if (!context.mounted) return;
+    showMessage(context, error.message, isError: true);
+  } catch (error) {
+    if (!context.mounted) return;
+    showMessage(context, '$error', isError: true);
+  }
+}
+
+/// الاسم والبلدة — الحوار نفسه ينادي الخادم كي يبقى مفتوحاً حين يرفض، ويعود
+/// بالمستخدم المحدَّث وحده.
+Future<void> _editProfile(BuildContext context, AppUser user) async {
+  final services = AppServices.of(context);
+  final updated = await showDialog<AppUser>(
+    context: context,
+    builder: (_) => _EditProfileDialog(user: user, api: services.api),
+  );
+  if (updated == null || !context.mounted) return;
+
+  await services.auth.updateUser(updated);
+  if (!context.mounted) return;
+  showMessage(context, 'تم تحديث بيانات حسابك');
+}
+
+/// رقم الدخول — الردّ يحمل رمزاً جديداً موقَّعاً بالرقم الجديد، فيُطبَّق كجلسة
+/// كاملة لا كمستخدم وحده. ورمز خاطئ أو رقم مسجَّل يبقيان داخل الحوار: الجلسة
+/// سليمة، والخطأ في الحقل لا في الدخول.
+Future<void> _changePhone(BuildContext context, AppUser user) async {
+  final services = AppServices.of(context);
+  final result = await showDialog<({AppUser user, String token})>(
+    context: context,
+    builder: (_) => _ChangePhoneDialog(user: user, api: services.api),
+  );
+  if (result == null || !context.mounted) return;
+
+  await services.auth.applySession(result.token, result.user);
+  if (!context.mounted) return;
+  showMessage(context, 'تم تحديث رقم هاتفك — استخدمه في الدخول القادم');
+}
+
+/// تعديل الاسم والبلدة داخل الحوار. يعيد المستخدم المحدَّث عند النجاح، و`null`
+/// عند الإلغاء؛ والفشل يعرض رسالة الخادم ويترك الحوار مفتوحاً بحقوله.
+class _EditProfileDialog extends StatefulWidget {
+  const _EditProfileDialog({required this.user, required this.api});
+
+  final AppUser user;
+  final NegevApi api;
+
+  @override
+  State<_EditProfileDialog> createState() => _EditProfileDialogState();
+}
+
+class _EditProfileDialogState extends State<_EditProfileDialog> {
+  late final _nameController = TextEditingController(text: widget.user.fullName);
+  late final _townController =
+      TextEditingController(text: widget.user.clanTown ?? '');
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _townController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final fullName = _nameController.text.trim();
+    final clanTown = _townController.text.trim();
+    // اسم فارغ لا يُرسَل: الخادم سيرفضه بالرسالة نفسها، فلا داعي لطلب شبكة.
+    if (fullName.isEmpty) {
+      showMessage(context, 'الاسم لا يكون فارغاً', isError: true);
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final updated = await widget.api.updateProfile(
+        fullName: fullName,
+        clanTown: clanTown.isEmpty ? null : clanTown,
+      );
+      if (mounted) Navigator.of(context).pop(updated);
+    } on ApiException catch (error) {
+      if (mounted) showMessage(context, error.message, isError: true);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.c.surfaceSunk,
+      title: const Text('تعديل بياناتي'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('profile_name_field'),
+            controller: _nameController,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: 'الاسم الكامل'),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            key: const Key('profile_town_field'),
+            controller: _townController,
+            decoration: const InputDecoration(labelText: 'البلدة'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        TextButton(
+          key: const Key('profile_save'),
+          onPressed: _busy ? null : _save,
+          child: Text(_busy ? 'جارٍ الحفظ…' : 'حفظ'),
+        ),
+      ],
+    );
+  }
+}
+
+/// تغيير رقم الدخول داخل الحوار. يعيد المستخدم والرمز الجديدين عند النجاح،
+/// و`null` عند الإلغاء. رمز PIN خاطئ (400) أو رقم مسجَّل (409) يظهران هنا
+/// ويبقيان الحوار مفتوحاً — لا يُخرجان المستخدم من جلسته.
+class _ChangePhoneDialog extends StatefulWidget {
+  const _ChangePhoneDialog({required this.user, required this.api});
+
+  final AppUser user;
+  final NegevApi api;
+
+  @override
+  State<_ChangePhoneDialog> createState() => _ChangePhoneDialogState();
+}
+
+class _ChangePhoneDialogState extends State<_ChangePhoneDialog> {
+  late final _phoneController =
+      TextEditingController(text: widget.user.phoneNumber);
+  final _pinController = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _busy = true);
+    try {
+      final result = await widget.api.changePhone(
+        phoneNumber: _phoneController.text.trim(),
+        pinCode: _pinController.text.trim(),
+      );
+      if (mounted) Navigator.of(context).pop(result);
+    } on ApiException catch (error) {
+      if (mounted) showMessage(context, error.message, isError: true);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.c.surfaceSunk,
+      title: const Text('تعديل رقمي'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'رقمك هو اسم الدخول — ستدخل به من المرّة القادمة',
+            style: TextStyle(color: context.c.inkSoft, height: 1.6, fontSize: 13),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            key: const Key('profile_phone_field'),
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'رقم الهاتف'),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            key: const Key('profile_pin_field'),
+            controller: _pinController,
+            keyboardType: TextInputType.number,
+            obscureText: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) {
+              if (!_busy) _save();
+            },
+            decoration: const InputDecoration(labelText: 'رمز الدخول الحالي'),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'أدخل رمز الدخول الحالي للتأكيد',
+            style: TextStyle(color: context.c.inkFaint, fontSize: 12, height: 1.5),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        TextButton(
+          key: const Key('profile_phone_save'),
+          onPressed: _busy ? null : _save,
+          child: Text(_busy ? 'جارٍ الحفظ…' : 'حفظ'),
+        ),
+      ],
     );
   }
 }

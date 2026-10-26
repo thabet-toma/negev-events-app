@@ -76,7 +76,8 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 | البث المباشر ونقاش اليوم | `server/src/routes/live.routes.js` + `server/src/services/liveHub.service.js` (الحلقات والتصويت)؛ إعدادات البث و`toEmbedUrl` في `settings.service.js`؛ صفحتا `/live` و`/live/embed` في `share.routes.js` (ADR-0006) |
 | الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
 | «قائمتي» (المحفوظات) | ليست جدولاً جديداً: هي وجه «ذكّرني» (`event_reminders`، وعمود `notify` للكتم) — `listMyReminders` و`myListBucket` في `events.service.js` (الأقسام يحسبها الخادم، لا العميل)، ومسارات `/remind` و`/my-reminders` في `events.routes.js`؛ الويب `loadMyList`/`renderMyList` في `web/app.js`، والموبايل `mobile/lib/screens/my_list_screen.dart` + `models/my_list.dart`. تبويبها الثاني في الشريط السفلي، فأي فهرس تبويب بعده انزاح بواحد |
-| ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **وللألبوم وجهان (ADR-0012):** مناسبة، أو باسم العريس بلا مناسبة — `event_id` NULL و`person_id` (FK `people`) و`town`، يُنشأ من `POST /api/admin/albums`؛ وبوابات المناسبة الخمس لألبوم المناسبة وحده. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009/0012 |
+| ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **وللألبوم وجهان (ADR-0012):** مناسبة، أو باسم العريس بلا مناسبة — `event_id` NULL و`person_id` (FK `people`) و`town`، يُنشأ من `POST /api/admin/albums`؛ وبوابات المناسبة الخمس لألبوم المناسبة وحده. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009/0012؛ **وفيديوهاته** رابطٌ خارجي في `event_videos` (`POST /api/admin/albums/:id/videos` و`PATCH/DELETE /api/admin/videos/:id`) وصفحةُ مشاركته `/v/:id` — ADR-0013 |
+| بطاقة الدخول عند فتح التطبيق | ستوري واحد مثبَّت: `stories.service.entryCard` + `GET /api/stories/entry-card` (عام)، والتثبيت إعداد `entry_promo_story_id` (سوبر أدمن، وقيمة فارغة = أول قصة نشِطة تلقائياً) ومنتقيه في تبويب الستوريات بـ`web/admin.js`؛ والموبايل يعرضها تحت شريط الستوريات ثلاث ثوانٍ (`events_screen.dart`) |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
 | شكل الاستجابة أو رسالة خطأ | `server/src/utils/ApiError.js` + `server/src/middleware/error.js` |
 | أي شيء في واجهة الويب | `web/app.js` (الموقع) أو `web/admin.js` (اللوحة) |
@@ -137,10 +138,20 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 الظهور العام **لألبوم المناسبة** يبقى بعد انتهائها (نفس `EVENT_SPAN_END_SQL_E`)
 و`archive_gallery`؛ و`is_published` مع صورة معتمدة واحدة شرطٌ في الوجهين — القاعدة كلها في
 استعلامات `albums.service.js` وحدها.
+**وللفيديو صفٌّ مستقل (ADR-0013):** `event_videos` رابطٌ خارجي لا ملف — `normaliseVideoLink`
+وحده يفسّره ويشتقّ `provider`/`thumb_url`، ولا رفع ولا تخزين ولا ترميز، والحذف لا يمسّ أي ملف؛
+والرابط المكرّر في الألبوم نفسه 409، **ولا سقف لعدد الفيديوهات**، و`status` يُخفي بلا حذف.
+صفحة `/v/:id` بتغليف أعراسنا: `og:type` = `video.other` وبطاقة الخادم هي `og:image` دائماً
+(لا مصغّرة طرف ثالث)، بلا `<script>` وبـ`noindex`. وبوابة ظهوره هي بوابة الألبوم نفسها
+**بلا `PUBLIC_PHOTO_EXISTS`** — فيديو واحد يكفي صفحة مشاركة، وظهور ألبوم الصور لم يتغيّر.
 الصورة كائن مستقل: `GET /api/photos/:id` وصفحة `/p/:id` المستقلة، `caption`/`caption_key`
 قابلان للبحث، و`thumb_url` مشتقّ من رابط التسليم (`w_600`) لا مخزَّن.
 **الوسم بشري بلا تعرّف وجوه:** المستخدم يطلب وسم نفسه (الاسم من `users.full_name` لا من
-الجسم) بحالة `pending`، والأدمن يعتمد أو يرفض، والمستخدم يسحب وسمه متى شاء. البحث في
+الجسم) بحالة `pending`، والأدمن يعتمد أو يرفض، والمستخدم يسحب وسمه متى شاء. **وللوسم شرطان
+منذ ADR-0014:** الحساب يحمل صورة شخصية (`users.avatar_url`، ترفعها `POST /api/auth/me/avatar`)
+و`confirm_phone: true` — يُسجَّل `phone_confirmed_at` — ومع وصفين اختياريين (`self_description`
+/ `caption_suggestion`) يراجعهما الأدمن؛ و`apply_caption` مع الاعتماد ينسخ الاقتراح إلى
+`event_photos.caption`، والرفض لا يكتب وصفاً. البحث في
 `GET /api/search` ثلاث مجموعات: ألبومات/صور/أشخاص، ويستخدم `nameKey` و`searchVariants`
 لتوحيد الهمزات وة/ه وى/ي. **لا `FULLTEXT`**: ngram في MySQL 8 للصينية/اليابانية/الكورية،
 و`LIKE` بمفاتيح مفهرسة هو الصحيح على هذا الحجم.
@@ -174,6 +185,11 @@ API مولَّد** — `grep` و `Read` هما الأداة الصحيحة هن�
 نفس الكرت لا الأول)، ورقاقات الفلتر مع التاريخ في الموبايل. **ما لا يزال غير محدَّث: الستوريات،
 والتفاعلات** — لا تزال `coffee` `horse` `fireworks` `rose` `hand` بلا فحص نوع في طبقات العملاء.
 إن كانت مهمتك تلمس هاتين فتحقّق أولاً من حالتهما في issue #20 قبل الافتراض أنهما منتهيتان.
+
+**ومركز الإشعارات (`GET /api/notifications`) لا يعرض تعميماً نُشر قبل تسجيل المستخدم ولا منتهياً
+منذ أكثر من ٣٠ يوماً** — قيدان على هذه القائمة وحدها، والشريط الحيّ (`GET /api/broadcasts/live`)
+لا يتغيّر. وشكل عنصر التعميم مختلف عمداً: `type: 'broadcast'` و`broadcast_id` لا `id`، فعدّادا
+`notifications.id` و`broadcasts.id` مستقلّان ويتداخلان.
 
 **التبريكات/التعازي على الخادم صارت تعرف النوع فعلاً (خطوة 5).**
 `POST /api/events/:id/congratulate` صار خلف `authenticate` — الهوية تُبنى من الحساب
@@ -262,6 +278,7 @@ mock ولا قاعدة بيانات في الذاكرة. إن لم تكن MySQL 
 - **البلدات بيانات وقت تشغيل في جدولَي `regions`/`towns`**، والاسم لا المعرّف هو ما يُخزَّن في كل جدول آخر (`events.town`، `admin_towns`، …) لأن كل APK منشور يحمل الأسماء مكتوبة داخله. `mobile/lib/config.dart` لا يزال ينسخ البذرة حرفياً (قاعدة الموبايل أدناه). `web/app.js` و`web/admin.js` يجلبانها ديناميكياً من `GET /api/towns` (مع استبعاد 'الكل') منذ #85 دفعة 6أ و6د، مع احتفاظ `web/admin.js` بمصفوفة احتياطية للإقلاع عند انقطاع الاتصال (story 46). **القرى وفئات الخدمات بيانات وقت تشغيل ولا تُكرَّر في أي عميل** — تُجلب من `GET /api/towns` و `GET /api/services/categories`. نسخها إلى `mobile/lib/config.dart` أو أي عميل جديد يعيد المشكلة التي وُجدت القرى لحلّها
 - `events.village_id` و`events.requested_village_name` («قريتي غير موجودة») غير NULL **فقط** حين `town = 'القرى والتجمعات'` (‏`VILLAGES_TOWN`)، **ولا يجتمعان** — قاعدة يفرضها الكود لا القاعدة، والقرية تُورِّث إحداثياتها للمناسبة عند النشر **وعند التعديل**. نشر جديد تحت هذا البند يحمل أحدهما إلزامياً؛ اسم مكتوب يطابق قرية نشِطة يُربط بها فوراً، وغيره ينتظر `POST /admin/events/:id/promote-village` (سوبر أدمن) الذي ينشئ القرية أو يعيد تنشيطها ويربط كل مناسبة طلبت الاسم نفسه
 - الرفع عبر `middleware/upload.js` فقط: قائمة MIME بيضاء، وأسماء ملفات تُولَّد على الخادم ولا تُؤخذ من العميل
+- **حدّ الطلبات على `/api` دلوَان، لا دلوٌ لكل IP:** مجهول لكل IP بسقف `RATE_LIMIT_MAX`، وموثَّق **لكل مستخدم** بسقف `RATE_LIMIT_USER_MAX` (افتراضي 3000) — والمفتاح من `utils/rateLimitIdentity.authenticatedUserId` وحده، يقرأ التوكن نفسه الذي تقرأه `authenticate` والرمز الفاسد يعود مجهولاً. فلا تُحسَب طلبات مستخدم على عنوان IP مشترك، ولا يستهلك رفعُ ألبومٍ كبير حصةَ أحدٍ غيره؛ والتجاوز 429 مع `Retry-After`
 
 ### البث اللحظي
 - `realtime.emit` يُستدعى من **طبقة المسارات بعد نجاح الخدمة** — لا بثّ من داخل الخدمات

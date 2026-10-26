@@ -139,4 +139,7 @@ const serviceMedia = [
   verifyMedia
 ];
 
-module.exports = { upload, eventMedia, serviceMedia, verifyMedia, uploadsDir };
+/** Accepts one profile photo — the signed-in user's own avatar, field `image`. */
+const avatarMedia = [upload.single('image'), verifyMedia];
+
+module.exports = { upload, eventMedia, serviceMedia, avatarMedia, verifyMedia, uploadsDir };

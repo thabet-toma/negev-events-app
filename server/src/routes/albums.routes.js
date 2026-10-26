@@ -83,6 +83,15 @@ router.get('/photos/:id', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * فيديو واحد (T-09): رابط خارجي في ألبوم ظاهر، ومعه ألبومه بالشكل العام.
+ * 404 واحدة لغيابه أو لسقوط ألبومه عن البوابات، والشرط كله في الخدمة.
+ */
+router.get('/videos/:id', asyncHandler(async (req, res) => {
+  const videoId = parseId(req.params.id, 'معرّف الفيديو');
+  res.json({ success: true, ...await albums.getPublicVideo(videoId) });
+}));
+
+/**
  * شخصٌ واحد بصوره ومناسباته (ADR-0011، تذكرة #105). معرّف لا موجود، أو شخصٌ
  * لا شيء ظاهر له ⇒ 404 واحدة، فلا يُستدلّ على وجود اسمٍ لم يُنشر.
  */
@@ -125,7 +134,12 @@ router.get('/my-photos', authenticate, asyncHandler(async (req, res) => {
 
 router.post('/photos/:id/tags', authenticate, photoWriteLimiter, asyncHandler(async (req, res) => {
   const photoId = parseId(req.params.id, 'معرّف الصورة');
-  const result = await albums.requestTag(req.user, photoId);
+  const body = req.body || {};
+  const result = await albums.requestTag(req.user, photoId, {
+    selfDescription: cleanString(body.self_description, 200),
+    captionSuggestion: cleanString(body.caption_suggestion, 200),
+    confirmPhone: body.confirm_phone === true
+  });
   res.status(201).json({
     success: true,
     ...result,
@@ -163,6 +177,7 @@ router.use([
   '/admin/albums',
   '/admin/events/:id/albums',
   '/admin/photos',
+  '/admin/videos',
   '/admin/photo-tags',
   '/admin/photo-reports',
   '/admin/facebook'
@@ -250,7 +265,7 @@ router.get('/admin/albums/:id/photos', asyncHandler(async (req, res) => {
 router.post('/admin/albums/:id/photos/signatures', asyncHandler(async (req, res) => {
   const albumId = parseId(req.params.id, 'معرّف الألبوم');
   const count = parseLimit(req.body && req.body.count, 1, ALBUM_UPLOAD_BATCH_MAX);
-  res.json({ success: true, uploads: await albums.signPhotoUploads(req.user, albumId, count) });
+  res.json({ success: true, max_batch: ALBUM_UPLOAD_BATCH_MAX, uploads: await albums.signPhotoUploads(req.user, albumId, count) });
 }));
 
 router.post('/admin/albums/:id/photos', asyncHandler(async (req, res) => {
@@ -281,6 +296,43 @@ router.post('/admin/albums/:id/photos/import-url', asyncHandler(async (req, res)
   });
 }));
 
+// فيديوهات الألبوم (T-09): الرابط يُحلَّل ويُخزَّن في الخدمة، والجسم يحمل
+// `url` (إلزامي) و`title` (اختياري) فقط — لا `provider` ولا `position` من العميل.
+router.get('/admin/albums/:id/videos', asyncHandler(async (req, res) => {
+  const albumId = parseId(req.params.id, 'معرّف الألبوم');
+  res.json({ success: true, videos: await albums.listVideosForAdmin(req.user, albumId) });
+}));
+
+router.post('/admin/albums/:id/videos', asyncHandler(async (req, res) => {
+  const albumId = parseId(req.params.id, 'معرّف الألبوم');
+  const body = req.body || {};
+  // سقف الرابط المخزَّن ٥٠٠ (طول العمود)، لكن القراءة هنا أوسع: رابط أطول
+  // يُرفض برسالة عربية بعد التحليل، لا يُقصّ صامتاً إلى رابط آخر.
+  const url = cleanString(body.url, 2000);
+  if (!url) throw ApiError.badRequest('رابط الفيديو مطلوب');
+  const video = await albums.addAlbumVideo(req.user, albumId, {
+    url,
+    title: cleanString(body.title, 200)
+  });
+  res.status(201).json({ success: true, video, message: 'تمت إضافة الفيديو' });
+}));
+
+router.patch('/admin/videos/:id', asyncHandler(async (req, res) => {
+  const videoId = parseId(req.params.id, 'معرّف الفيديو');
+  const body = req.body || {};
+  const payload = {};
+  if (body.title !== undefined) payload.title = cleanString(body.title, 200);
+  if (body.status !== undefined) payload.status = cleanString(body.status, 20);
+  const video = await albums.updateAlbumVideo(req.user, videoId, payload);
+  res.json({ success: true, video, message: 'تم تحديث الفيديو' });
+}));
+
+router.delete('/admin/videos/:id', asyncHandler(async (req, res) => {
+  const videoId = parseId(req.params.id, 'معرّف الفيديو');
+  await albums.deleteAlbumVideo(req.user, videoId);
+  res.json({ success: true, message: 'تم حذف الفيديو' });
+}));
+
 router.patch('/admin/photos/:id', asyncHandler(async (req, res) => {
   const photoId = parseId(req.params.id, 'معرّف الصورة');
   const body = req.body || {};
@@ -301,17 +353,26 @@ router.delete('/admin/photos/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/admin/photo-tags', asyncHandler(async (req, res) => {
-  res.json({
-    success: true,
-    tags: await albums.listTagsForAdmin(req.user, { status: cleanString(req.query.status, 20) })
-  });
+  const status = cleanString(req.query.status, 20);
+  const [tags, counts] = await Promise.all([
+    albums.listTagsForAdmin(req.user, { status }),
+    albums.tagCountsForAdmin(req.user)
+  ]);
+  res.json({ success: true, tags, counts });
 }));
 
 router.patch('/admin/photo-tags/:id', asyncHandler(async (req, res) => {
   const tagId = parseId(req.params.id, 'معرّف الوسم');
   const status = cleanString(req.body && req.body.status, 20);
-  const tag = await albums.moderateTag(req.user, tagId, status);
-  res.json({ success: true, tag, message: status === 'approved' ? 'تم اعتماد الوسم' : 'تم رفض الوسم' });
+  const tag = await albums.moderateTag(req.user, tagId, status, {
+    applyCaption: req.body && req.body.apply_caption === true
+  });
+  res.json({
+    success: true,
+    tag,
+    caption_applied: tag.caption_applied,
+    message: status === 'approved' ? 'تم اعتماد الوسم' : 'تم رفض الوسم'
+  });
 }));
 
 router.post('/admin/photos/:id/tags', asyncHandler(async (req, res) => {

@@ -36,6 +36,9 @@
  * cover. Same 1200×1200 square and the same reason (WhatsApp bubble
  * proportions), but a marketing card rather than an information panel: there
  * is no row and no poster, only a topic string and an active flag.
+ * `renderVideoCard`/`getOrRenderVideoCard` do the same for one album video's
+ * `GET /v/:id` (T-10): an episode card's frame, with the video's own thumbnail
+ * as the hero and the album's name, the title and the town on the band.
  */
 
 const fs = require('fs');
@@ -133,6 +136,23 @@ const EPISODE_CARD_DESIGN_VERSION = 1;
 function episodeCacheKey({ id, title, imageUrl }) {
   const hash = crypto.createHash('sha1').update(`${title}\n${imageUrl || ''}`).digest('hex').slice(0, 16);
   return `episode-${id}-${hash}-v${EPISODE_CARD_DESIGN_VERSION}`;
+}
+
+const VIDEO_CARD_DESIGN_VERSION = 1;
+
+/**
+ * An album video's card (T-10) changes only with what it draws: the video's
+ * own title and thumbnail, and the album's name and town on the band. All four
+ * are hashed into the key exactly as an episode's two inputs are — a retitled
+ * video or a renamed album (`PATCH /api/admin/albums/:id` does rename one)
+ * draws a fresh card, and the previous file is evicted by id prefix.
+ */
+function videoCacheKey({ id, title, thumbUrl, albumTitle, town }) {
+  const hash = crypto.createHash('sha1')
+    .update(`${title || ''}\n${thumbUrl || ''}\n${albumTitle || ''}\n${town || ''}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `video-${id}-${hash}-v${VIDEO_CARD_DESIGN_VERSION}`;
 }
 
 /**
@@ -1007,6 +1027,152 @@ async function getOrRenderEpisodeCard({ id, title, imageUrl }) {
   return buffer;
 }
 
+/**
+ * One album video's card — what WhatsApp shows for `/v/:id` (T-10). The same
+ * frame as an episode's card and for the same reason: a crawler laying out a
+ * link preview cannot use a portrait video frame, so the server draws its own
+ * square. The video's own thumbnail is drawn whole over a blurred copy of
+ * itself (the same `drawHero`), and under it the band — the album's name as
+ * the chip (or «فيديو من أعراسنا» when the album is untitled), the video's
+ * title over two lines, the town when the album carries one, and the site's
+ * own line. With no thumbnail at all (TikTok, Facebook, or a YouTube thumbnail
+ * that failed to load) the band alone is centred under the large brand mark,
+ * exactly like an episode with no share image: a typographic card, not a
+ * picture that failed.
+ */
+async function renderVideoCard({ title, thumbUrl, albumTitle, town }) {
+  const palette = PALETTES.festive;
+  const canvas = createCanvas(WIDTH, HEIGHT);
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  let image = null;
+  const buffer = thumbUrl ? await loadPosterBuffer(jpegVariant(thumbUrl)) : null;
+  if (buffer) {
+    try {
+      image = await loadImage(buffer);
+    } catch (err) {
+      logger.warn(`[shareCard] failed to decode video thumbnail: ${err.message}`);
+    }
+  }
+
+  if (image) {
+    drawHero(ctx, image, palette);
+  } else {
+    const wash = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+    wash.addColorStop(0, palette.card);
+    wash.addColorStop(1, palette.bg);
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+
+  let bandTop = HERO_HEIGHT;
+  if (!image) {
+    const bigMark = 220;
+    const gapAfterMark = 70;
+    const blockHeight = bigMark + gapAfterMark + BAND_HEIGHT - 40;
+    const top = Math.round((HEIGHT - blockHeight) / 2);
+    drawBrandMark(ctx, WIDTH / 2 - bigMark / 2, top, bigMark);
+    bandTop = top + bigMark + gapAfterMark;
+  }
+
+  if (image) {
+    const bandWash = ctx.createLinearGradient(0, bandTop, 0, bandTop + BAND_HEIGHT);
+    bandWash.addColorStop(0, palette.card);
+    bandWash.addColorStop(1, palette.bg);
+    ctx.fillStyle = bandWash;
+    ctx.fillRect(0, bandTop, WIDTH, BAND_HEIGHT);
+    ctx.fillStyle = palette.accent;
+    ctx.fillRect(0, bandTop, WIDTH, 3);
+  } else {
+    ctx.fillStyle = palette.accent;
+    ctx.fillRect(WIDTH / 2 - 60, bandTop - 12, 120, 4);
+  }
+
+  const centreX = WIDTH / 2;
+  // Same fallback the share page uses for its heading, so the card and the
+  // page never disagree about what an untitled video is called.
+  const heading = String(title || '').trim() || `فيديو من ${albumTitle || palette.wordmark}`;
+
+  // The chip is the album's name — and, ellipsised to one line, the thing that
+  // still names the wedding when the video itself is untitled. Measured before
+  // drawChip draws it: drawChip measures the string as handed to it and never
+  // wraps, so a long album title would run off the card.
+  ctx.font = `600 27px "${BOLD_FAMILY}"`;
+  const chipLabel = wrapLines(ctx, albumTitle || 'فيديو من أعراسنا', WIDTH - MARGIN * 2 - 52, 1)[0] || 'فيديو من أعراسنا';
+  drawChip(ctx, { occasion_type_name: chipLabel }, palette, centreX, bandTop + 50, palette.accent);
+
+  // Up to two lines, like an episode's title: a video title is a sentence more
+  // often than a name. 36px rather than the episode's 44px — this band carries
+  // one more line (the town) than that one does.
+  ctx.save();
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = palette.ink;
+  ctx.font = `700 36px "${BOLD_FAMILY}"`;
+  const titleLines = wrapLines(ctx, heading, WIDTH - MARGIN * 2, 2);
+  const firstLineY = titleLines.length > 1 ? bandTop + 108 : bandTop + 130;
+  titleLines.forEach((line, i) => ctx.fillText(line, centreX, firstLineY + i * 42));
+  ctx.restore();
+
+  if (town) {
+    ctx.save();
+    ctx.direction = 'rtl';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `24px "${REGULAR_FAMILY}"`;
+    ctx.fillStyle = palette.faint;
+    const townLines = wrapLines(ctx, String(town), WIDTH - MARGIN * 2, 1);
+    if (townLines[0]) ctx.fillText(townLines[0], centreX, bandTop + 190);
+    ctx.restore();
+  }
+
+  // The site's line — same group as the episode card's (mark + text, centred);
+  // the small mark is dropped when the large one already leads the card.
+  const brandFont = `600 24px "${BOLD_FAMILY}"`;
+  const brandText = `${palette.wordmark} · شاهد الفيديو في التطبيق`;
+  ctx.font = brandFont;
+  const brandTextWidth = ctx.measureText(brandText).width;
+  const markSize = image ? 44 : 0;
+  const markGap = image ? 14 : 0;
+  const rowY = image ? HEIGHT - 80 : bandTop + BAND_HEIGHT - 56;
+  const groupRight = centreX + (markSize + markGap + brandTextWidth) / 2;
+  const markX = groupRight - markSize;
+  if (image) drawBrandMark(ctx, markX, rowY - markSize / 2, markSize);
+  ctx.save();
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = brandFont;
+  ctx.fillStyle = withAlpha(palette.accent, 0.95);
+  ctx.fillText(brandText, markX - markGap, rowY + 2);
+  ctx.restore();
+
+  drawFrame(ctx, palette, 'festive');
+
+  return canvas.toBuffer('image/jpeg', 88);
+}
+
+/** Render-once-reuse for a video card — see videoCacheKey for what invalidates it. */
+async function getOrRenderVideoCard({ id, title, thumbUrl, albumTitle, town }) {
+  const key = videoCacheKey({ id, title, thumbUrl, albumTitle, town });
+  const file = cachePath(key);
+
+  try {
+    return await fsp.readFile(file);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+
+  const buffer = await renderVideoCard({ title, thumbUrl, albumTitle, town });
+  await fsp.writeFile(file, buffer);
+  await evictStale(`video-${id}-`, key);
+  return buffer;
+}
+
 module.exports = {
   WIDTH,
   HEIGHT,
@@ -1017,6 +1183,8 @@ module.exports = {
   getOrRenderLiveCover,
   renderEpisodeCard,
   getOrRenderEpisodeCard,
+  renderVideoCard,
+  getOrRenderVideoCard,
   // The story studio draws the same brand mark on a 1080×1920 card; exporting
   // the one drawing function is cheaper than a second copy of the geometry.
   drawBrandMark

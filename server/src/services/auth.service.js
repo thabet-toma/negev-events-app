@@ -1,11 +1,16 @@
 'use strict';
 
+const fsp = require('fs/promises');
+const path = require('path');
 const bcrypt = require('bcryptjs');
 const db = require('../db/pool');
 const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const { signToken, ADMIN_ROLES } = require('../middleware/auth');
+const { uploadsDir } = require('../middleware/upload');
+const { absoluteMediaUrl } = require('../utils/mediaUrl');
+const cloudinary = require('./cloudinary.service');
 const people = require('./people.service');
 
 function publicUser(user) {
@@ -14,6 +19,11 @@ function publicUser(user) {
     phone_number: user.phone_number,
     full_name: user.full_name,
     clan_town: user.clan_town,
+    // Absolute on the way out, like every other media column; `|| null` so a
+    // brand-new account answers an explicit null — register()'s literal
+    // object has no avatar property at all, and undefined is not an answer a
+    // client can tell apart from "this API forgot the field".
+    avatar_url: absoluteMediaUrl(user.avatar_url) || null,
     role: user.role,
     // Exposed so a client can render the opt-out switch (issue #44, privacy
     // layer part 2). register()'s literal user object has no such property —
@@ -76,11 +86,19 @@ async function adminLogin({ phone_number, pin_code }) {
 
 async function findById(id) {
   const user = await db.queryOne(
-    'SELECT id, phone_number, full_name, clan_town, role, created_at, analytics_opt_out FROM users WHERE id = ?',
+    `SELECT id, phone_number, full_name, clan_town, role, created_at, analytics_opt_out, avatar_url
+       FROM users WHERE id = ?`,
     [id]
   );
   if (!user) return null;
-  return { ...user, analytics_opt_out: Boolean(user.analytics_opt_out) };
+  return {
+    ...user,
+    // Same absolute-on-read rule as every media column: the column holds the
+    // relative `/uploads/…` path when Cloudinary is off, and GET /auth/me
+    // answers what a client can actually load.
+    avatar_url: absoluteMediaUrl(user.avatar_url) || null,
+    analytics_opt_out: Boolean(user.analytics_opt_out)
+  };
 }
 
 /**
@@ -93,6 +111,102 @@ async function setAnalyticsOptOut(userId, optOut) {
   const user = await findById(userId);
   if (!user) throw ApiError.notFound('المستخدم غير موجود');
   return user;
+}
+
+/**
+ * Removes the profile photo an account just stopped using: from Cloudinary
+ * when this server forwarded it there, from local disk when it never left.
+ * Best-effort on purpose — the row already holds the new URL, so a failed
+ * cleanup is one leftover file, never a failed request.
+ */
+async function releaseAvatar(oldUrl) {
+  if (!oldUrl || typeof oldUrl !== 'string') return;
+
+  const publicId = cloudinary.forwardedPublicId(oldUrl);
+  if (publicId) {
+    await cloudinary.destroy(publicId);
+    return;
+  }
+
+  if (!oldUrl.startsWith('/uploads/')) return;
+  try {
+    await fsp.unlink(path.join(uploadsDir, path.basename(oldUrl)));
+  } catch {
+    // Already gone (or never written) — nothing to undo.
+  }
+}
+
+/**
+ * Stores a user's own profile photo and makes it the account's avatar. The
+ * bytes arrive through upload.js (sniffed there already) and go on to
+ * Cloudinary when it is configured, staying on this server otherwise — the
+ * same two paths every other forwarded image takes.
+ */
+async function updateAvatar(userId, file) {
+  const stored = await cloudinary.storeUploadedImage(file, 'avatars', 'user-' + userId);
+
+  const current = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [userId]);
+  await db.execute('UPDATE users SET avatar_url = ? WHERE id = ?', [stored, userId]);
+  await releaseAvatar(current && current.avatar_url);
+
+  const user = await findById(userId);
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+  return publicUser(user);
+}
+
+/**
+ * The two profile facts a user edits themselves — their name and their town.
+ * Only what was provided is written, so a request carrying one of them never
+ * blanks the other. The route has already trimmed and validated both.
+ */
+async function updateProfile(userId, { fullName, clanTown } = {}) {
+  if (fullName !== undefined) {
+    await db.execute('UPDATE users SET full_name = ? WHERE id = ?', [fullName, userId]);
+  }
+  if (clanTown !== undefined) {
+    await db.execute('UPDATE users SET clan_town = ? WHERE id = ?', [clanTown, userId]);
+  }
+
+  const user = await findById(userId);
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+  return publicUser(user);
+}
+
+/**
+ * Moves an account to another phone number. The PIN is the re-authentication:
+ * a stolen token alone must not redirect where someone signs in. The phone
+ * number is the sign-in identifier, so the old one stops working the moment
+ * this write lands — which is why a fresh token is issued with the answer.
+ */
+async function changePhoneNumber(userId, phoneNumber, pinCode) {
+  const user = await db.queryOne(
+    'SELECT id, phone_number, pin_code FROM users WHERE id = ?',
+    [userId]
+  );
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+
+  // 400, not 401: the session token is valid here — only the typed PIN is
+  // wrong. Every client treats 401 as "your session ended" (web/api.js signs
+  // the user out on it), so a typo must not end the session. 401 stays for
+  // /auth/login, where the rejected thing is the credential itself.
+  if (!bcrypt.compareSync(pinCode, user.pin_code)) {
+    throw ApiError.badRequest('رمز الدخول غير صحيح');
+  }
+  if (phoneNumber === user.phone_number) {
+    throw ApiError.badRequest('هذا رقمك الحالي');
+  }
+
+  const taken = await db.queryOne(
+    'SELECT id FROM users WHERE phone_number = ? AND id <> ?',
+    [phoneNumber, userId]
+  );
+  if (taken) throw ApiError.conflict('رقم الهاتف مسجل مسبقاً');
+
+  await db.execute('UPDATE users SET phone_number = ? WHERE id = ?', [phoneNumber, userId]);
+
+  const fresh = await findById(userId);
+  if (!fresh) throw ApiError.notFound('المستخدم غير موجود');
+  return { token: issueToken(fresh), user: publicUser(fresh) };
 }
 
 /**
@@ -176,6 +290,9 @@ module.exports = {
   findById,
   publicUser,
   setAnalyticsOptOut,
+  updateAvatar,
+  updateProfile,
+  changePhoneNumber,
   renewToken,
   deleteAccount,
   deleteAccountAsAdmin

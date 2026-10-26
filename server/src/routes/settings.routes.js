@@ -119,6 +119,25 @@ function parseLiveUntil(raw) {
   return date.toISOString();
 }
 
+/**
+ * The entry card's pinned story. Kept as text because `app_settings.setting_value`
+ * is textual — one spelling on disk, parsed back by
+ * settings.service.getEntryPromoStoryId. An empty value is the explicit
+ * "nothing pinned" and means «the first active story, automatically»: a cleared
+ * setting must never leave the card pointing at a stale story.
+ */
+function parseEntryPromoStoryId(raw) {
+  const cleaned = cleanString(raw, 20);
+  if (!cleaned) return null;
+
+  const id = Number.parseInt(cleaned, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw ApiError.badRequest('معرّف القصة غير صالح');
+  }
+
+  return String(id);
+}
+
 // كل قيمة قابلة للحفظ تمرّ بمُحقِّقها الخاص — إضافة مفتاح جديد لاحقاً تعني
 // إضافته هنا وفي SETTING_KEYS معاً، لا تخفيف هذا التحقق.
 const VALIDATORS = {
@@ -127,7 +146,8 @@ const VALIDATORS = {
   [settings.SETTING_KEYS.LIVE_CHANNEL_URL]: parseStreamUrl,
   [settings.SETTING_KEYS.LIVE_TITLE]: parseLiveTitle,
   [settings.SETTING_KEYS.LIVE_UNTIL]: parseLiveUntil,
-  [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl
+  [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl,
+  [settings.SETTING_KEYS.ENTRY_PROMO_STORY_ID]: parseEntryPromoStoryId
 };
 
 /** The four keys that together describe a live — touching any of them is a live-status change (plan26-9 §3.6). */

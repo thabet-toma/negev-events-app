@@ -29,6 +29,14 @@ router.get('/stories', asyncHandler(async (req, res) => {
   res.json({ success: true, stories: await stories.listPublicStories() });
 }));
 
+// The entry card: one story to show when the app opens — a super_admin's
+// pinned one when it is still active, else the first of the strip. Registered
+// right after the strip and before any `/stories/:id` GET route on purpose, so
+// it can never be swallowed by an id pattern (there is none today).
+router.get('/stories/entry-card', asyncHandler(async (req, res) => {
+  res.json({ success: true, ...await stories.entryCard() });
+}));
+
 /**
  * The 2-second "watched" threshold this endpoint exists to enforce is
  * measured by the viewer's device, not the server — so this call is the

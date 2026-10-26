@@ -168,6 +168,52 @@ class EventPhoto {
   }
 }
 
+/// فيديو داخل ألبوم (`videos` في `GET /api/albums/:id`) — رابطٌ خارجي إلى
+/// يوتيوب/تيك توك/فيسبوك، لا ملفٌ على خادمنا ولا مشغّلٌ في التطبيق. صفحة
+/// المشاركة `/v/:id` على الخادم هي التي تغلّفه ببطاقة «اعراسنا» (ADR-0006).
+class EventVideo {
+  final int id;
+  final String? provider;
+  final String? title;
+  final String? externalUrl;
+  final String? thumbUrl;
+
+  const EventVideo({
+    required this.id,
+    this.provider,
+    this.title,
+    this.externalUrl,
+    this.thumbUrl,
+  });
+
+  /// اسم المنصّة بالعربية. الغائب أو المجهول ⇒ «فيديو»: وسمٌ عامّ أصدق من
+  /// `null` معروض، وأصدق من اسم منصّة لم يقلها الخادم.
+  String get providerLabel {
+    switch (provider) {
+      case 'youtube':
+        return 'يوتيوب';
+      case 'tiktok':
+        return 'تيك توك';
+      case 'facebook':
+        return 'فيسبوك';
+      case 'instagram':
+        return 'إنستغرام';
+      case 'website':
+        return 'الموقع';
+      default:
+        return 'فيديو';
+    }
+  }
+
+  factory EventVideo.fromJson(Map<String, dynamic> json) => EventVideo(
+        id: _toInt(json['id']),
+        provider: _nullableString(json['provider']),
+        title: _nullableString(json['title']),
+        externalUrl: _nullableString(json['external_url']),
+        thumbUrl: _nullableString(json['thumb_url']),
+      );
+}
+
 class AlbumPhotoPage {
   final EventAlbum album;
   final List<EventPhoto> photos;

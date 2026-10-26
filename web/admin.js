@@ -12,6 +12,7 @@ let adminAlbumsEventChoices = []; // خيارات منتقي «ألبومات ا
 let adminAlbumCurrent = null;
 let adminAlbumPhotoCache = [];
 let adminPhotoTagsStatus = 'pending';
+let adminPhotoTagCounts = { pending: 0, approved: 0, rejected: 0 };
 let adminPhotoReportsStatus = 'open';
 let allServiceProviders = [];
 let allPublicCategories = [];
@@ -2377,6 +2378,7 @@ function switchAdminTab(tabId) {
     initAdminAlbumsTab();
   } else if (tabId === 'tabStories') {
     loadAdminStories();
+    loadEntryPromoStorySetting();
   } else if (tabId === 'tabSettings') {
     fetchAdminSettings();
     fetchLiveEpisodes();
@@ -2572,7 +2574,7 @@ async function initAdminAlbumsTab() {
     adminAlbumsEventChoices.length ? '' : 'لا تظهر مناسبة الآن — تأكد أن نوعها يحمل «أرشيف صور» وأنها داخل بلداتك.',
     adminAlbumsEventChoices.length > 0
   );
-  loadAdminPhotoTags(document.getElementById('adminPhotoTagsStatus')?.value || adminPhotoTagsStatus);
+  loadAdminPhotoTags(adminPhotoTagsStatus);
   loadAdminPhotoReports(document.getElementById('adminPhotoReportsStatus')?.value || adminPhotoReportsStatus);
 }
 
@@ -2655,6 +2657,9 @@ async function openAdminAlbum(albumId) {
   document.getElementById('adminAlbumDetailTitle').innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري تحميل الألبوم...';
   document.getElementById('adminAlbumDetailMeta').textContent = '';
   document.getElementById('adminAlbumPhotos').innerHTML = '';
+  // فيديوهات الألبوم المفتوح سابقاً تُفرَّغ هنا أيضاً، فلا تبقى تحت ألبوم آخر (T-11).
+  const videosBox = document.getElementById('adminAlbumVideos');
+  if (videosBox) videosBox.innerHTML = '';
   adminAlbumsNotice('', true);
   try {
     const res = await adminFetch(`/api/admin/albums/${Number(albumId)}/photos?limit=100`);
@@ -2663,6 +2668,7 @@ async function openAdminAlbum(albumId) {
     adminAlbumCurrent = data.album;
     adminAlbumPhotoCache = Array.isArray(data.photos) ? data.photos : [];
     renderAdminAlbumDetail();
+    await loadAdminAlbumVideos(albumId);
   } catch (err) {
     document.getElementById('adminAlbumDetailTitle').innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> تعذّر تحميل الألبوم';
     document.getElementById('adminAlbumDetailMeta').textContent = arabicErrorMessage(err, 'تعذّر تحميل الألبوم');
@@ -2728,6 +2734,130 @@ function renderAdminAlbumPhotos() {
       </article>
     `;
   }).join('');
+}
+
+// --- فيديوهات الألبوم (T-11) ------------------------------------------
+// الفيديو يبقى على منصّته (يوتيوب/تيك توك/فيسبوك/إنستغرام/موقع)، وتُخزَّن
+// صورتُه المصغّرة ورابطه المعتمد من الخادم — هنا عرضٌ وإدارة فقط.
+
+/** أسماء المنصّات بالعربية — خريطة محلية مطابقة لأسماء الخادم (`provider`). */
+const ADMIN_VIDEO_PROVIDER_LABELS = {
+  youtube: 'يوتيوب',
+  tiktok: 'تيك توك',
+  facebook: 'فيسبوك',
+  instagram: 'إنستغرام',
+  website: 'الموقع'
+};
+
+function adminVideoProviderLabel(provider) {
+  return ADMIN_VIDEO_PROVIDER_LABELS[String(provider || '').toLowerCase()] || 'فيديو';
+}
+
+/** فيديوهات الألبوم المفتوح وحدها — بعد تغيير حالة أو حذف أو إضافة (T-11). */
+async function loadAdminAlbumVideos(albumId) {
+  const box = document.getElementById('adminAlbumVideos');
+  if (!box) return;
+  try {
+    const res = await adminFetch(`/api/admin/albums/${Number(albumId)}/videos`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تحميل الفيديوهات');
+    renderAdminAlbumVideos(data.videos || []);
+  } catch (err) {
+    box.innerHTML = `<div class="admin-empty">${escapeHtml(arabicErrorMessage(err, 'تعذّر تحميل الفيديوهات'))}</div>`;
+  }
+}
+
+function renderAdminAlbumVideos(videos) {
+  const box = document.getElementById('adminAlbumVideos');
+  if (!box) return;
+  const list = Array.isArray(videos) ? videos : [];
+  if (!list.length) {
+    box.innerHTML = '<div class="admin-empty">لا فيديوهات في هذا الألبوم بعد.</div>';
+    return;
+  }
+  box.innerHTML = list.map(video => {
+    const hidden = video.status === 'hidden';
+    const status = hidden ? 'مخفي' : 'ظاهر';
+    const thumb = video.thumb_url
+      ? `<img src="${escapeHtml(video.thumb_url)}" alt="" loading="lazy">`
+      : '<i class="fa-solid fa-film" aria-hidden="true"></i>';
+    return `
+      <article class="admin-album-video-card" data-video-id="${Number(video.id)}">
+        <span class="admin-album-video-thumb">${thumb}</span>
+        <div class="admin-album-video-body">
+          <strong>${escapeHtml(video.title || 'فيديو من الألبوم')}</strong>
+          <span class="admin-album-video-meta">
+            ${escapeHtml(adminVideoProviderLabel(video.provider))} ·
+            <span class="admin-video-status ${hidden ? 'hidden' : ''}">${status}</span>
+          </span>
+          <div class="admin-album-video-actions">
+            <button type="button" class="admin-btn-ghost" onclick="toggleAdminAlbumVideo(${Number(video.id)}, '${hidden ? 'approved' : 'hidden'}')">${hidden ? 'إظهار' : 'إخفاء'}</button>
+            <button type="button" class="btn-reject" onclick="deleteAdminAlbumVideo(${Number(video.id)})"><i class="fa-solid fa-trash-can"></i> حذف</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function toggleAdminAlbumVideo(videoId, status) {
+  if (!adminAlbumCurrent || !adminAlbumCurrent.id) return;
+  try {
+    const res = await adminFetch(`/api/admin/videos/${Number(videoId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر تغيير حالة الفيديو');
+    await loadAdminAlbumVideos(adminAlbumCurrent.id);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر تغيير حالة الفيديو'), 'خطأ');
+  }
+}
+
+async function deleteAdminAlbumVideo(videoId) {
+  if (!adminAlbumCurrent || !adminAlbumCurrent.id) return;
+  if (!confirm('حذف هذا الفيديو من الألبوم؟ يبقى على منصّته.')) return;
+  try {
+    const res = await adminFetch(`/api/admin/videos/${Number(videoId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر حذف الفيديو');
+    await loadAdminAlbumVideos(adminAlbumCurrent.id);
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر حذف الفيديو'), 'خطأ');
+  }
+}
+
+/**
+ * إضافة فيديو برابطه — الخادم وحده يحلّل الرابط ويستخرج المنصّة والمعرّف
+ * والصورة المصغّرة، فلا يُرسَل منها شيء من هنا. ورابط فارغ لا يُرسَل أصلاً.
+ */
+async function addAdminAlbumVideo() {
+  const urlInput = document.getElementById('adminAlbumVideoUrl');
+  const titleInput = document.getElementById('adminAlbumVideoTitle');
+  const url = urlInput ? urlInput.value.trim() : '';
+  const title = titleInput ? titleInput.value.trim() : '';
+  if (!url) {
+    showAdminNotice('الصق رابط الفيديو أولاً.', 'تنبيه');
+    return;
+  }
+  if (!adminAlbumCurrent || !adminAlbumCurrent.id) return;
+  try {
+    const res = await adminFetch(`/api/admin/albums/${Number(adminAlbumCurrent.id)}/videos`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, title })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'تعذّر إضافة الفيديو');
+    if (urlInput) urlInput.value = '';
+    if (titleInput) titleInput.value = '';
+    await loadAdminAlbumVideos(adminAlbumCurrent.id);
+    showAdminNotice(data.message || 'تمت إضافة الفيديو');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر إضافة الفيديو'), 'خطأ');
+  }
 }
 
 /**
@@ -3023,6 +3153,30 @@ async function importAdminAlbumPhotoUrl() {
   }
 }
 
+/**
+ * رسالة فشل رفع صورة في الألبوم. 429 من محدِّد الطلبات يعني «انتظر» لا أن
+ * الصورة رُفضت، فلا يُعرض نصّه الخام أمام الأدمن: `retry-after` ثوانٍ من
+ * الخادم وتُقرَّب إلى دقيقة على الأقل، وغيابها يعطي رسالة الانتظار القصيرة.
+ */
+async function albumUploadErrorMessage(res, fallback) {
+  if (res && res.status === 429) {
+    const header = res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;
+    const seconds = Number(header);
+    if (header === null || header === '' || !Number.isFinite(seconds)) {
+      return 'تجاوزنا حدّ الطلبات — انتظر قليلاً ثم أعد المحاولة';
+    }
+    return `تجاوزنا حدّ الطلبات — أعد المحاولة بعد ${Math.max(1, Math.ceil(seconds / 60))} دقيقة`;
+  }
+  let message = '';
+  try {
+    const data = await res.json();
+    message = data && data.message ? String(data.message) : '';
+  } catch (err) {
+    message = '';
+  }
+  return message && /[\u0600-\u06FF]/.test(message) ? message : fallback;
+}
+
 async function handleAdminAlbumUpload(input) {
   const files = input && input.files ? Array.from(input.files) : [];
   if (input) input.value = '';
@@ -3048,23 +3202,52 @@ async function handleAdminAlbumUpload(input) {
     row.li.dataset.state = state;
   };
 
+  // التوقيع على دفعات: الخادم يملك السقف ويعلنه في max_batch، والخزانة هنا
+  // تُملأ مرة كلّما فرغت بدل طلب توقيع لكل صورة — رفع ٤٥ صورة كان يكلّف ٤٥
+  // طلباً زائداً يُصطدم بها حدّ المعدّل. Infinity قبل أوّل ردّ = «اطلب كل ما
+  // تبقّى» والخادم يقصّه إلى سقفه ويخبرنا به، وغياب max_batch (خادم أقدم)
+  // يعيدنا إلى توقيع واحد في الطلب كما كان.
+  let batchMax = Infinity;
+  let buffer = [];
+  let refillError = '';
+  let fileIndex = 0;
   for (const row of rows) {
+    const index = fileIndex++;
     if (!adminAlbumCurrent || Number(adminAlbumCurrent.id) !== Number(albumId)) {
       setRow(row, 'أُلغي — تغيّر الألبوم', 'error');
       continue;
     }
-    try {
+    if (refillError) {
+      // فشل طلب توقيع واحد لا يُكرَّر لكل صورة متبقية: الصفوف الباقية تحمل
+      // الرسالة نفسها وتتوقف الطلبات، فلا سبام على خادم يرفض أصلاً.
+      setRow(row, refillError, 'error');
+      continue;
+    }
+    if (!buffer.length) {
       setRow(row, 'جارٍ التجهيز…', 'busy');
-      const sigRes = await adminFetch(`/api/admin/albums/${albumId}/photos/signatures`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: 1 })
-      });
-      const sig = await sigRes.json();
-      if (!sig.success) throw new Error(sig.message || 'تعذّر تجهيز الرفع');
-      const upload = Array.isArray(sig.uploads) ? sig.uploads[0] : null;
-      if (!upload) throw new Error('تعذّر تجهيز الرفع');
+      try {
+        const sigRes = await adminFetch(`/api/admin/albums/${albumId}/photos/signatures`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count: Math.min(batchMax, files.length - index) })
+        });
+        if (!sigRes.ok) throw new Error(await albumUploadErrorMessage(sigRes, 'تعذّر تجهيز الرفع'));
+        const sig = await sigRes.json();
+        if (!sig.success) throw new Error(sig.message || 'تعذّر تجهيز الرفع');
+        const uploads = Array.isArray(sig.uploads) ? sig.uploads : [];
+        if (!uploads.length) throw new Error('تعذّر تجهيز الرفع');
+        const cap = Number(sig.max_batch);
+        batchMax = Number.isFinite(cap) && cap >= 1 ? Math.floor(cap) : 1;
+        buffer = uploads;
+      } catch (err) {
+        refillError = arabicErrorMessage(err, 'تعذّر تجهيز الرفع');
+        setRow(row, refillError, 'error');
+        continue;
+      }
+    }
 
+    try {
+      const upload = buffer.shift();
       setRow(row, 'جارٍ الرفع…', 'busy');
       const uploaded = await uploadToCloudinary(upload, row.file);
 
@@ -3080,6 +3263,7 @@ async function handleAdminAlbumUpload(input) {
           height: uploaded.height
         })
       });
+      if (!res.ok) throw new Error(await albumUploadErrorMessage(res, 'تعذّر حفظ الصورة'));
       const data = await res.json();
       if (!data.success) throw new Error(data.message || 'تعذّر حفظ الصورة');
       setRow(row, 'تمت الإضافة', 'done');
@@ -3105,10 +3289,43 @@ async function loadAdminPhotoTags(status = 'pending') {
     const res = await adminFetch(`/api/admin/photo-tags?status=${encodeURIComponent(adminPhotoTagsStatus)}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'تعذّر تحميل الوسوم');
+    // العدّادات تأتي من نفس الخادم الذي يأتي منه الصفّ — لا حساب في العميل.
+    adminPhotoTagCounts = {
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+      ...(data.counts && typeof data.counts === 'object' ? data.counts : {})
+    };
+    renderAdminPhotoTagTabs();
     renderAdminPhotoTags(Array.isArray(data.tags) ? data.tags : []);
   } catch (err) {
     box.innerHTML = `<div class="empty-state" style="padding:24px; text-align:center; color:var(--danger);"><p>${escapeHtml(arabicErrorMessage(err, 'تعذّر تحميل الوسوم'))}</p></div>`;
   }
+}
+
+/** تبويبات الطابور الثلاثة بعدّاداتها — الزرّ الحالي معلَّم بـ`aria-pressed`. */
+function renderAdminPhotoTagTabs() {
+  const box = document.getElementById('adminPhotoTagTabs');
+  if (!box) return;
+  const tabs = [
+    ['pending', 'بانتظار القرار'],
+    ['approved', 'مقبولة'],
+    ['rejected', 'مرفوضة']
+  ];
+  box.innerHTML = tabs.map(([value, label]) => {
+    const active = adminPhotoTagsStatus === value;
+    return `
+      <button type="button" class="admin-tag-tab${active ? ' is-active' : ''}"
+              data-tag-status="${value}" aria-pressed="${active ? 'true' : 'false'}"
+              onclick="loadAdminPhotoTags('${value}')">${label} (${Number(adminPhotoTagCounts[value] || 0)})</button>`;
+  }).join('');
+}
+
+/** الحالة بالعربية في البطاقة — `pending` وحدها لا تُعرض كما هي. */
+function tagStatusLabel(status) {
+  if (status === 'approved') return 'مقبولة';
+  if (status === 'rejected') return 'مرفوضة';
+  return 'بانتظار القرار';
 }
 
 function renderAdminPhotoTags(tags) {
@@ -3118,33 +3335,60 @@ function renderAdminPhotoTags(tags) {
     box.innerHTML = '<div class="empty-state" style="padding:24px; text-align:center; color:var(--text-dim);"><i class="fa-solid fa-user-check" style="font-size:1.8rem; color:var(--gold-main);"></i><p>لا وسوم في هذه الحالة.</p></div>';
     return;
   }
-  box.innerHTML = tags.map(tag => `
+  box.innerHTML = tags.map(tag => {
+    const id = Number(tag.id);
+    const requester = String(tag.requester_name || '').trim();
+    const sentence = requester
+      ? `${requester} يطلب أن يُوسم باسمه في هذه الصورة`
+      : 'أضاف أحد الإداريين هذا الاسم';
+    const created = tag.created_at ? new Date(tag.created_at).toLocaleDateString('ar-EG') : '';
+    const context = [tag.photo?.album_title, tag.photo?.event_title, tag.photo?.town, created]
+      .filter(Boolean).map(escapeHtml).join(' · ');
+    return `
     <article class="admin-moderation-card">
       <img src="${escapeHtml(tag.photo?.thumb_url || tag.photo?.image_url || '')}" alt="" loading="lazy">
       <div class="admin-moderation-body">
-        <strong>${escapeHtml(tag.name || '')}</strong>
-        <span>${escapeHtml(tag.photo?.album_title || '')} · ${escapeHtml(tag.photo?.event_title || '')} · ${escapeHtml(tag.photo?.town || '')}</span>
-        <small>${tag.requester_name ? `بطلب من ${escapeHtml(tag.requester_name)}` : 'أُضيف بواسطة الإدارة'} · ${escapeHtml(tag.status)}</small>
+        <strong>${escapeHtml(sentence)}</strong>
+        <span>${context}</span>
+        <small class="admin-tag-status">${escapeHtml(tagStatusLabel(tag.status))}</small>
+        ${tag.self_description ? `<span>قال عن نفسه: ${escapeHtml(tag.self_description)}</span>` : ''}
+        ${tag.caption_suggestion ? `<span>اقترح وصفاً للصورة: ${escapeHtml(tag.caption_suggestion)}</span>` : ''}
+        ${tag.status === 'pending' && tag.caption_suggestion ? `
+          <label class="admin-tag-apply">
+            <input type="checkbox" id="adminTagApply-${id}">
+            <span>اجعله وصف الصورة</span>
+          </label>` : ''}
         <div class="admin-moderation-actions">
           ${tag.status === 'pending' ? `
-            <button type="button" class="admin-btn-primary" onclick="moderateAdminTag(${Number(tag.id)}, 'approved')">اعتماد</button>
-            <button type="button" class="btn-reject" onclick="moderateAdminTag(${Number(tag.id)}, 'rejected')">رفض</button>` : ''}
-          <button type="button" class="admin-btn-ghost" onclick="deleteAdminTag(${Number(tag.id)})">حذف</button>
+            <button type="button" class="admin-btn-primary" onclick="moderateAdminTag(${id}, 'approved')">قبول</button>
+            <button type="button" class="btn-reject" onclick="moderateAdminTag(${id}, 'rejected')">رفض</button>` : ''}
+          <button type="button" class="admin-btn-ghost" onclick="deleteAdminTag(${id})">حذف</button>
         </div>
       </div>
     </article>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function moderateAdminTag(tagId, status) {
   try {
+    const payload = { status };
+    // تبني «اجعله وصف الصورة» اختيارَ الأدمن الصريح — لا تُرسَل إلا مع القبول.
+    if (status === 'approved') {
+      const applyBox = document.getElementById(`adminTagApply-${Number(tagId)}`);
+      payload.apply_caption = applyBox ? applyBox.checked === true : false;
+    }
     const res = await adminFetch(`/api/admin/photo-tags/${Number(tagId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.message || 'تعذّر تحديث الوسم');
+    const notice = data.caption_applied
+      ? `${data.message || 'تم تحديث الوسم'} — واعتُمد وصف الصورة`
+      : (data.message || 'تم تحديث الوسم');
+    showAdminNotice(notice, 'طابور الوسوم');
     await loadAdminPhotoTags(adminPhotoTagsStatus);
   } catch (err) {
     showAdminNotice(arabicErrorMessage(err, 'تعذّر تحديث الوسم'), 'خطأ');
@@ -3369,8 +3613,81 @@ async function publishStoryStudio() {
     toggleStoryAdvertiserField();
     setStoryStudioNotice('نُشرت القصة — تظهر الآن في شريط الستوريات.', true);
     await loadAdminStories();
+    await loadEntryPromoStorySetting();
   } catch (err) {
     setStoryStudioNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// «بطاقة الدخول» (2026-10): أول ما يفتح المستخدم التطبيق تظهر له بطاقة سريعة
+// تشير إلى أول ستوري ثم تختفي. الخادم يحسم القصة (`GET /api/stories/entry-card`)،
+// واللوحة تثبّت واحدة بالإعداد `entry_promo_story_id`: `''` = تلقائي.
+const ENTRY_PROMO_AUTO_LABEL = 'تلقائي — أول ستوري نشِط';
+
+function setEntryPromoStoryError(message) {
+  const el = document.getElementById('entryPromoStoryNotice');
+  if (!el) return;
+  el.textContent = message || '';
+  el.style.display = message ? 'block' : 'none';
+}
+
+async function loadEntryPromoStorySetting() {
+  const select = document.getElementById('entryPromoStorySelect');
+  if (!select) return;
+  setEntryPromoStoryError(null);
+
+  try {
+    const [settingsRes, storiesRes] = await Promise.all([
+      adminFetch('/api/admin/settings'),
+      adminFetch('/api/stories')
+    ]);
+    const settingsData = await settingsRes.json();
+    const storiesData = await storiesRes.json();
+    if (!settingsData.success) throw new Error(settingsData.message || 'تعذّر تحميل بطاقة الدخول');
+    if (!storiesData.success) throw new Error(storiesData.message || 'تعذّر تحميل القصص');
+
+    const stories = Array.isArray(storiesData.stories) ? storiesData.stories : [];
+    select.innerHTML = [
+      `<option value="">${ENTRY_PROMO_AUTO_LABEL}</option>`,
+      ...stories.map(story => `<option value="${Number(story.id)}">#${Number(story.id)} — ${escapeHtml(String(story.title || 'قصة'))}</option>`)
+    ].join('');
+
+    // المثبَّتة قد تكون انتهت أو حُذفت فتغيب عن `/api/stories` — حينها «تلقائي»
+    // هي القراءة الصادقة، لا قيمة لا خيار لها في المنتقي.
+    const pinned = settingsData.settings && settingsData.settings.entry_promo_story_id
+      ? String(settingsData.settings.entry_promo_story_id)
+      : '';
+    const exists = Array.prototype.some.call(select.options, option => option.value === pinned);
+    select.value = exists ? pinned : '';
+  } catch (err) {
+    // فشل التحميل لا يُفشل بقية التبويب: يبقى «تلقائي» محدَّداً والسبب في سطر صغير.
+    select.innerHTML = `<option value="">${ENTRY_PROMO_AUTO_LABEL}</option>`;
+    select.value = '';
+    setEntryPromoStoryError(arabicErrorMessage(err, 'تعذّر تحميل بطاقة الدخول — بقيت تلقائية'));
+  }
+}
+
+async function saveEntryPromoStory() {
+  const select = document.getElementById('entryPromoStorySelect');
+  if (!select) return;
+  const button = document.getElementById('entryPromoStorySaveBtn');
+  if (button) button.disabled = true;
+  setEntryPromoStoryError(null);
+
+  try {
+    const res = await adminFetch('/api/admin/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      // `''` تمسح التثبيت (لا تحذف المفتاح) فيعود الخادم لأول قصة نشِطة تلقائياً.
+      body: JSON.stringify({ entry_promo_story_id: select.value })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || 'فشل حفظ بطاقة الدخول');
+    showAdminNotice('تم حفظ بطاقة الدخول');
+  } catch (err) {
+    showAdminNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), 'خطأ');
   } finally {
     if (button) button.disabled = false;
   }
@@ -3493,6 +3810,7 @@ async function deleteAdminStory(id) {
     if (!data.success) throw new Error(data.message || 'تعذّر حذف القصة');
     showAdminNotice('تم حذف القصة وصورتها.', 'تم');
     await loadAdminStories();
+    await loadEntryPromoStorySetting();
   } catch (err) {
     showAdminNotice(arabicErrorMessage(err, 'تعذّر الاتصال بالخادم'), 'خطأ');
   }
