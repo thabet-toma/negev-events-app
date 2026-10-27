@@ -234,13 +234,23 @@ function renewToken(user) {
  * The delete runs inside an explicit transaction even though it is one
  * statement, so the intent is written down rather than inferred.
  *
+ * The profile photo is the one thing no foreign key reaches: `avatar_url`
+ * names a file on Cloudinary (or under `uploads/` when Cloudinary is off),
+ * and the column goes with the row while the file does not. So the file is
+ * released through `releaseAvatar` AFTER the delete has committed — the same
+ * call a replacement makes, on either storage. Releasing it first would strip
+ * the photo of an account whose delete then failed.
+ *
  * Known limit: the JWT is never revoked. `authenticate` verifies the signature
  * only and reads no user row, so a token issued before the deletion stays
  * cryptographically valid until it expires — every endpoint that looks the
  * user up now answers 404, but nothing can invalidate the string itself.
  */
 async function deleteAccount(userId, pinCode) {
-  const user = await db.queryOne('SELECT id, pin_code FROM users WHERE id = ?', [userId]);
+  const user = await db.queryOne(
+    'SELECT id, pin_code, avatar_url FROM users WHERE id = ?',
+    [userId]
+  );
   if (!user) throw ApiError.notFound('الحساب غير موجود');
 
   if (!bcrypt.compareSync(pinCode, user.pin_code)) {
@@ -250,6 +260,9 @@ async function deleteAccount(userId, pinCode) {
   await db.transaction(async connection => {
     await connection.execute('DELETE FROM users WHERE id = ?', [userId]);
   });
+
+  // ملف الصورة يُحرَّر بعد نجاح الحذف لا قبله: صفّ فشل حذفه يبقى ومعه صورته.
+  await releaseAvatar(user.avatar_url);
 
   // Audit line carrying no personal data — the id alone, no phone, no name.
   logger.info('account.delete', { userId });
@@ -265,9 +278,14 @@ async function deleteAccount(userId, pinCode) {
  * goes with the user and closing it afterwards would find nothing at all.
  */
 async function deleteAccountAsAdmin(userId, adminId) {
+  // Read inside the transaction — after it the row is gone — and held out
+  // here so the photo can be released once the delete has actually committed.
+  let avatarUrl = null;
+
   await db.transaction(async connection => {
-    const [rows] = await connection.execute('SELECT id FROM users WHERE id = ?', [userId]);
+    const [rows] = await connection.execute('SELECT id, avatar_url FROM users WHERE id = ?', [userId]);
     if (!rows.length) throw ApiError.notFound('المستخدم غير موجود');
+    avatarUrl = rows[0].avatar_url;
 
     await connection.execute(
       `UPDATE privacy_requests
@@ -278,6 +296,9 @@ async function deleteAccountAsAdmin(userId, adminId) {
 
     await connection.execute('DELETE FROM users WHERE id = ?', [userId]);
   });
+
+  // ملف الصورة يُحرَّر بعد نجاح الحذف لا قبله، كما في حذف الحساب الذاتي.
+  await releaseAvatar(avatarUrl);
 
   logger.info('account.delete', { userId, by: adminId });
   return { deleted: true };

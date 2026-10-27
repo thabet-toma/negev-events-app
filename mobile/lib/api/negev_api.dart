@@ -1045,6 +1045,40 @@ class NegevApi {
     return (token: token, user: AppUser.fromJson(user));
   }
 
+  // --- الخصوصية: إحصاءات الاستخدام ----------------------------------
+
+  /// رفض إحصاءات الاستخدام أو التراجع عنه — `PATCH /api/auth/me` بالحقل
+  /// `analytics_opt_out` وحده، فالاسم والبلدة لهما [updateProfile] ولا يُعاد
+  /// إرسالهما هنا كي لا يُكتب ما لم يغيّره المستخدم. ردّ الخادم يحمل المستخدم
+  /// كاملاً، فالشاشة تبدّل المحفوظ منه بلا قراءة أخرى.
+  Future<AppUser> setAnalyticsOptOut(bool value) async {
+    final data = await _client.patch(
+      '/api/auth/me',
+      body: {'analytics_opt_out': value},
+      auth: true,
+    );
+    final user = data['user'];
+    if (user is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة بيانات الحساب');
+    }
+    return AppUser.fromJson(user);
+  }
+
+  /// حذف فوري لبيانات الإحصاءات الخاصة بصاحب الجلسة — `POST
+  /// /api/privacy/analytics-erasure`. لا جسم: الهوية في الرمز وحده، ولا شيء في
+  /// الطلب يستطيع تسمية مستخدم آخر على الخادم.
+  ///
+  /// يعيد رسالة الخادم العربية كما هي لتعرضها الشاشة — نصّ الحذف في الخادم
+  /// وحده (نفس نصّ الويب)، فلا نسخة ثانية منه هنا. وأخطاء 4xx/5xx ترميها
+  /// `ApiClient` كـ[ApiException] قبل أن تصل، كما في كل دوال الملف.
+  Future<String> eraseAnalytics() async {
+    final data = await _client.post('/api/privacy/analytics-erasure', auth: true);
+    final message = data['message'];
+    return message is String && message.isNotEmpty
+        ? message
+        : 'تم حذف بيانات التحليلات السلوكية الخاصة بك';
+  }
+
   // --- دفتر النقوط (يتطلب تسجيل دخول) -------------------------------
 
   Future<NokootLedger> nokoot() async {

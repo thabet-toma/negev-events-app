@@ -226,6 +226,8 @@ class AccountScreen extends StatelessWidget {
                     const SizedBox(height: 14),
                     const _ThemeModeTile(),
                     const SizedBox(height: 14),
+                    const _PrivacyBlock(),
+                    const SizedBox(height: 14),
                     OutlinedButton.icon(
                       onPressed: () async {
                         await auth.signOut();
@@ -580,6 +582,162 @@ class _ThemeModeTile extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// «الخصوصية» — مفتاح إحصاءات الاستخدام وحذف بياناتها.
+///
+/// سياسة الخصوصية المنشورة (`web/privacy.html`) تعد بذلك من صفحة «حسابي»،
+/// وهما على الويب `analyticsOptOutToggle` و`handleAnalyticsErasure` في
+/// `web/app.js`؛ هذا نظيرهما في التطبيق — ولا نصّ ثانٍ منهما هنا، فالرسائل من
+/// الخادم ونصوص الأزرار وحدها محلية.
+class _PrivacyBlock extends StatefulWidget {
+  const _PrivacyBlock();
+
+  @override
+  State<_PrivacyBlock> createState() => _PrivacyBlockState();
+}
+
+class _PrivacyBlockState extends State<_PrivacyBlock> {
+  /// نداء جارٍ — المفتاح والصفّ معطّلان معاً كي لا يتضاعف الطلب بنقرتين.
+  bool _busy = false;
+
+  /// المفتاح يعكس `auth.user.analyticsOptOut` وحده، ولا يُقلَب محلياً قبل ردّ
+  /// الخادم: عند الفشل تبقى العلامة حيث كانت (إعادة الرسم من `auth`)، فلا
+  /// تظهر حالة كاذبة ولو للحظة.
+  Future<void> _setOptOut(bool value) async {
+    final services = AppServices.of(context);
+    setState(() => _busy = true);
+    try {
+      final updated = await services.api.setAnalyticsOptOut(value);
+      await services.auth.updateUser(updated);
+      if (!mounted) return;
+      showMessage(context, 'تم حفظ إعداد إحصاءات الاستخدام');
+    } on ApiException catch (error) {
+      if (mounted) showMessage(context, error.message, isError: true);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// حذف لا رجعة فيه — حوار تأكيد صريح يسمّي ما سيُحذف، ثم النداء. رسالة ما
+  /// بعد النجاح هي رسالة الخادم نفسها (بخطأ عربي منه عند الفشل)، لا نسخة
+  /// محلية منها قد تتخلّف عن نصّ السياسة.
+  Future<void> _erase() async {
+    final services = AppServices.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: dialogContext.c.surfaceSunk,
+        icon: Icon(
+          Icons.delete_sweep_outlined,
+          color: dialogContext.c.danger,
+          size: 32,
+        ),
+        title: const Text('حذف بيانات الإحصائيات'),
+        content: const Text(
+          'سيُحذف فوراً كل ما سُجّل عنك من بيانات التحليلات. متابعة؟',
+          style: TextStyle(height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            key: const Key('profile_analytics_erase_confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              'حذف',
+              style: TextStyle(color: dialogContext.c.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final message = await services.api.eraseAnalytics();
+      if (!mounted) return;
+      showMessage(context, message);
+    } on ApiException catch (error) {
+      if (mounted) showMessage(context, error.message, isError: true);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = AppServices.of(context).auth.user;
+    // الشاشة لا تبني هذا البلوك لزائر؛ الشرط احتياط لأن الحالة تأتي من خارج
+    // شجرة هذا الودجت.
+    if (user == null) return const SizedBox.shrink();
+
+    // اللون على `Material` لا على صندوق مزخرف فوقه: `ListTile` (ومعه
+    // `SwitchListTile`) يرسم خلفيته ونقرة حبره على أقرب `Material`، فحجبه
+    // بخلفية معتمة بينهما يُخفي الأثر — وهو ما يشتكي منه إطار التصحيح.
+    return Material(
+      color: context.c.surface,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: context.c.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                'الخصوصية',
+                style: TextStyle(color: context.c.inkSoft, fontSize: 13),
+              ),
+            ),
+            SwitchListTile(
+              key: const Key('profile_analytics_switch'),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              value: user.analyticsOptOut,
+              onChanged: _busy ? null : _setOptOut,
+              title: const Text('إحصاءات الاستخدام'),
+              subtitle: Text(
+                'لا تُعطّل أي ميزة — توقف تسجيل ما تفعله في التطبيق فقط',
+                style: TextStyle(
+                  color: context.c.inkFaint,
+                  fontSize: 12.5,
+                  height: 1.5,
+                ),
+              ),
+            ),
+            Divider(height: 1, color: context.c.lineSoft),
+            ListTile(
+              key: const Key('profile_analytics_erase'),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              enabled: !_busy,
+              onTap: _busy ? null : _erase,
+              leading: Icon(
+                Icons.delete_sweep_outlined,
+                size: 20,
+                color: context.c.danger,
+              ),
+              title: Text(
+                'حذف بيانات الإحصائيات',
+                style: TextStyle(fontSize: 14, color: context.c.danger),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

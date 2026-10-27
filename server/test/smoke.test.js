@@ -7581,6 +7581,109 @@ async function run() {
     assert.strictEqual(missing.status, 404);
   });
 
+  /**
+   * The avatar file is the one piece of a deleted account that no foreign key
+   * reaches: CASCADE removes the `users` row (and with it the `avatar_url`
+   * that names the file), but the image itself stays online on Cloudinary —
+   * or on this server's disk when Cloudinary is off — unless the deletion
+   * path releases it the way a replacement already does.
+   *
+   * Cloudinary is stubbed for these two tests alone: the shared stub further
+   * down declares its recorder after this point, and the upload here has to
+   * be real so the column holds a URL this server itself forwarded.
+   */
+  const avatarReleaseRealFetch = globalThis.fetch;
+  const avatarReleaseCalls = [];
+  const savedAvatarReleaseCloudinary = { ...config.cloudinary };
+  Object.assign(config.cloudinary, {
+    cloudName: 'test-cloud', apiKey: '111222333', apiSecret: 'test-cloudinary-secret'
+  });
+  globalThis.fetch = async (url, options) => {
+    const target = String(url);
+    if (!target.startsWith('https://api.cloudinary.com/') && !target.startsWith('https://res.cloudinary.com/')) {
+      return avatarReleaseRealFetch(url, options);
+    }
+    const form = options && options.body instanceof FormData ? options.body : null;
+    avatarReleaseCalls.push({ url: target, body: options && options.body ? String(options.body) : '' });
+    if (target.endsWith('/image/upload') && form) {
+      return new Response(JSON.stringify({ public_id: form.get('public_id'), version: 1700000009 }), { status: 200 });
+    }
+    return new Response('{"result":"ok"}', { status: 200 });
+  };
+  const releasedIds = () => avatarReleaseCalls
+    .filter(call => call.url.endsWith('/image/destroy'))
+    .map(call => new URLSearchParams(call.body).get('public_id'));
+  const cloudinaryIdOf = url => url.split(/\/v\d+\//)[1];
+
+  try {
+    await test('deleting your own account deletes your profile photo from Cloudinary, not just the row that pointed at it', async () => {
+      const owner = await insertTestUser('مستخدم يحذف حسابه وصورته');
+      try {
+        const uploaded = await apiUpload('/api/auth/me/avatar', {
+          token: owner.token,
+          files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'avatar.png' }]
+        });
+        assert.strictEqual(uploaded.status, 200, JSON.stringify(uploaded.body));
+
+        const row = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [owner.id]);
+        assert.ok(
+          row.avatar_url.startsWith('https://res.cloudinary.com/test-cloud/'),
+          `the upload must be forwarded to Cloudinary, got: ${row.avatar_url}`
+        );
+        const avatarPublicId = cloudinaryIdOf(row.avatar_url);
+
+        avatarReleaseCalls.length = 0;
+        const deleted = await api('DELETE', '/api/account', {
+          token: owner.token, body: { pin_code: '1234' }
+        });
+        assert.strictEqual(deleted.status, 200, deleted.body.message);
+
+        assert.deepStrictEqual(
+          releasedIds(),
+          [avatarPublicId],
+          'the deleted account\'s photo must be destroyed by its public_id, or it stays online at its old link'
+        );
+        assert.strictEqual(await db.queryOne('SELECT id FROM users WHERE id = ?', [owner.id]), null);
+      } finally {
+        await db.execute('DELETE FROM users WHERE id = ?', [owner.id]);
+      }
+    });
+
+    await test('a super_admin deleting an account from the panel deletes its profile photo too', async () => {
+      const victim = await insertTestUser('مستخدم يحذفه السوبر أدمن مع صورته');
+      try {
+        const uploaded = await apiUpload('/api/auth/me/avatar', {
+          token: victim.token,
+          files: [{ field: 'image', buffer: TINY_PNG, type: 'image/png', name: 'avatar.png' }]
+        });
+        assert.strictEqual(uploaded.status, 200, JSON.stringify(uploaded.body));
+
+        const row = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [victim.id]);
+        assert.ok(
+          row.avatar_url.startsWith('https://res.cloudinary.com/test-cloud/'),
+          `the upload must be forwarded to Cloudinary, got: ${row.avatar_url}`
+        );
+        const avatarPublicId = cloudinaryIdOf(row.avatar_url);
+
+        avatarReleaseCalls.length = 0;
+        const deleted = await api('DELETE', `/api/admin/users/${victim.id}`, { token: superAdminToken });
+        assert.strictEqual(deleted.status, 200, deleted.body.message);
+
+        assert.deepStrictEqual(
+          releasedIds(),
+          [avatarPublicId],
+          'the panel path must release the photo the same way the self-service path does'
+        );
+        assert.strictEqual(await db.queryOne('SELECT id FROM users WHERE id = ?', [victim.id]), null);
+      } finally {
+        await db.execute('DELETE FROM users WHERE id = ?', [victim.id]);
+      }
+    });
+  } finally {
+    globalThis.fetch = avatarReleaseRealFetch;
+    Object.assign(config.cloudinary, savedAvatarReleaseCloudinary);
+  }
+
   await test('GET /api/admin/analytics/users/:id (issue #44, user story 45) — a super_admin reads one user\'s own rows, isolated from another user\'s, with no event id of any kind, and pagination that behaves', async () => {
     const rowsUser = await insertTestUser('مستخدم لاختبار قراءة السجل الفردي');
     const otherUser = await insertTestUser('مستخدم آخر يجب ألا تظهر بياناته هنا');
