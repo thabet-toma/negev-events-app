@@ -6638,6 +6638,20 @@ function albumIdentityText(album) {
   return [name, album.town].filter(Boolean).join(' · ');
 }
 
+/**
+ * عدّاد الألبوم في المواضع الثلاثة (بطاقة القائمة، شريط ألبومات المناسبة، رأس
+ * صفحة الألبوم) بقاعدة واحدة: الصور أولاً — «N صورة» كما كانت حرفياً — فإن لم
+ * تكن فالفيديوهات «M فيديو»، وإلا «0 صورة». ألبوم الفيديو وحده صار ظاهراً
+ * (ADR-0013، قرار المالك 2026-10-27)، فلا بطاقة تعدّ صفراً وهي تحمل فيديوهات.
+ */
+function albumMediaCountText(album) {
+  const photoCount = Number(album.photo_count) || 0;
+  if (photoCount > 0) return `${photoCount} صورة`;
+  const videoCount = Number(album.video_count) || 0;
+  if (videoCount > 0) return `${videoCount} فيديو`;
+  return '0 صورة';
+}
+
 function albumCardHtml(album) {
   const cover = safeHttpUrl(album.cover_thumb_url || album.cover_url) ? (album.cover_thumb_url || album.cover_url) : '';
   const event = album.event || {};
@@ -6654,7 +6668,7 @@ function albumCardHtml(album) {
       <span class="album-card-body">
         <strong>${escapeHtml(album.title || 'ألبوم عرس')}</strong>
         ${subtitle}
-        <small>${Number(album.photo_count) || 0} صورة</small>
+        <small>${albumMediaCountText(album)}</small>
       </span>
     </button>
   `;
@@ -7020,7 +7034,7 @@ function renderAlbumDetail() {
       <div>
         <h2>${escapeHtml(album.title || 'ألبوم عرس')}</h2>
         ${subtitle}
-        <span class="album-detail-count">${Number(album.photo_count) || albumsAlbumPhotos.length} صورة</span>
+        <span class="album-detail-count">${albumMediaCountText(album)}</span>
         <button type="button" class="album-share-btn" onclick="shareAlbum(${Number(album.id)})">
           <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> مشاركة
         </button>
@@ -7450,7 +7464,7 @@ function renderEventAlbumsHtml(evt) {
             <button type="button" class="event-album-card" onclick="openAlbumFromEvent(${Number(album.id)})">
               <span class="event-album-cover">${cover ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy">` : '<i class="fa-solid fa-images" aria-hidden="true"></i>'}</span>
               <strong>${escapeHtml(album.title || 'ألبوم')}</strong>
-              <small>${Number(album.photo_count) || 0} صورة</small>
+              <small>${albumMediaCountText(album)}</small>
             </button>`;
         }).join('')}
       </div>

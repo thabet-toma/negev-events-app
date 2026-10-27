@@ -208,11 +208,13 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
         return _Message(
           icon: Icons.photo_library_outlined,
           title: query.isEmpty ? 'لا ألبومات ظاهرة بعد' : 'لا ألبومات تطابق بحثك',
-          // الشروط مسمّاة كما هي في الخادم: الأربعة في publicAlbumConditions()
-          // **وصورةٌ معتمدة واحدة** (PUBLIC_PHOTO_EXISTS) — ألبومٌ يمرّ بالأربعة
-          // بلا صورة لا يظهر، فقولُ «أربعة» وحده يكذب. (تذكرة #101، القرار D1)
+          // الظهور ليس «منشوراً» وحده: ألبوم المناسبة يمرّ ببواباتها (معتمدة،
+          // ونوعها يسمح بالأرشيف، وانقضى امتدادها)، وألبوم العريس يكتفي بأن
+          // يكون منشوراً وله شخص، **ووسيطٌ معتمد واحد على الأقل: صورة أو فيديو**
+          // — ألبوم بلا أيٍّ منهما لا يظهر، فقولُ «منشور ومُعتمد» وحده يكذب.
+          // (تذكرة #101، والقرار: فيديو واحد يكفي كما في /v/:id)
           body: query.isEmpty
-              ? 'الألبوم يظهر بعد خمسة شروط: أن يكون منشوراً، وأن تكون المناسبة معتمدة، وأن يسمح نوعها بألبوم صور، وأن تكون المناسبة قد انتهت، وأن تحمل صورةً معتمدة واحدة على الأقل.'
+              ? 'الألبوم يظهر إذا كان منشوراً، ومناسبتُه معتمدة منتهية ويسمح نوعها بالأرشيف (أو يحمل اسم العريس)، وفيه صورة معتمدة أو فيديو معتمد على الأقل.'
               : 'جرّب كلمة واحدة من اسم العريس أو العشيرة أو البلدة.',
           action: query.isEmpty
               ? TextButton(
@@ -310,6 +312,16 @@ class _AlbumsScreenState extends State<AlbumsScreen> {
   }
 }
 
+/// عدّ الألبوم كما يراه المستخدم — قاعدة واحدة للبطاقة ورأس التفاصيل:
+/// «N صورة» ما دام فيه صورة معتمدة، وإلا «M فيديو» لألبومٍ لا صور فيه وفيه
+/// فيديو معتمد، وإلا «0 صورة». لا صيغة تجمع الاثنين: الرقم يبقى صادقاً
+/// وأحادياً، ويُقرأ منه ما في الألبوم فعلاً.
+String _albumCountLabel(int photoCount, int videoCount) {
+  if (photoCount > 0) return '$photoCount صورة';
+  if (videoCount > 0) return '$videoCount فيديو';
+  return '0 صورة';
+}
+
 class _AlbumCard extends StatelessWidget {
   const _AlbumCard({required this.album, required this.onTap});
 
@@ -368,7 +380,8 @@ class _AlbumCard extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(height: 2),
-                  Text('${album.photoCount} صورة', style: TextStyle(color: c.inkFaint, fontSize: 11)),
+                  Text(_albumCountLabel(album.photoCount, album.videoCount),
+                      style: TextStyle(color: c.inkFaint, fontSize: 11)),
                 ],
               ),
             ),
@@ -551,7 +564,11 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                                   style: TextStyle(color: context.c.inkFaint, fontSize: 12),
                                 ),
                               ),
-                            Text('${_album?.photoCount ?? _photos.length} صورة',
+                            Text(
+                                _albumCountLabel(
+                                  _album?.photoCount ?? _photos.length,
+                                  _album?.videoCount ?? _videos.length,
+                                ),
                                 style: TextStyle(color: context.c.inkFaint, fontSize: 12)),
                           ],
                         ),
@@ -579,10 +596,14 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                         ),
                       Expanded(
                         child: _photos.isEmpty
-                            ? const _Message(
+                            ? _Message(
                                 icon: Icons.image_not_supported,
                                 title: 'لا صور ظاهرة',
-                                body: 'الألبوم موجود لكن لا صور معتمدة فيه بعد.',
+                                // ألبومٌ فيه فيديو ليس ألبوماً فارغاً: النصّ
+                                // يحيل إلى الشريط فوقه بدل أن يوحي بالخلوّ.
+                                body: _videos.isEmpty
+                                    ? 'الألبوم موجود لكن لا صور معتمدة فيه بعد.'
+                                    : 'لا صور في هذا الألبوم بعد — فيديوهاته في الأعلى.',
                               )
                             : _PhotoGrid(
                                 photos: _photos,

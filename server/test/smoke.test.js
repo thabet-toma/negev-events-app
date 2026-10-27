@@ -10192,7 +10192,7 @@ async function run() {
         assert.strictEqual(eventAlbum.body.pagination.total, 0);
       });
 
-      await test('a no-event album is public only once it holds one approved photo — the list and the search both wait', async () => {
+      await test('a no-event album with no approved photo and no video is not public — the list, the search and its page all wait', async () => {
         const listBefore = await api('GET', '/api/albums?limit=60');
         assert.ok(
           !listBefore.body.albums.some(album => album.id === standaloneAlbum.id),
@@ -10418,8 +10418,8 @@ async function run() {
       /**
        * فيديوهات الألبوم (T-09): الرابط خارجي يُحلَّل ويُخزَّن رابطه لا بايتاته،
        * فالحذف لا يمسّ Cloudinary. الألبوم هنا هو ألبوم عرس منتهٍ فيه صور
-       * معتمدة (‏bulkEvent)، فـ`GET /api/albums/:id` يمرّ بـ`PUBLIC_PHOTO_EXISTS`
-       * كما يمرّ أي ألبوم صور عاديّ — وظهور الفيديو وحده لا يعتمد عليها.
+       * معتمدة (‏bulkEvent)، فـ`GET /api/albums/:id` يمرّ ببوابة الوسيط المعتمد
+       * (`PUBLIC_MEDIA_EXISTS`، صورة أو فيديو) كما يمرّ أي ألبوم صور عاديّ.
        */
       const videoAlbum = await db.queryOne(
         'SELECT id FROM event_albums WHERE event_id = ? ORDER BY id ASC LIMIT 1',
@@ -10692,6 +10692,152 @@ async function run() {
         for (const id of ['abc', '999999999']) {
           assert.strictEqual((await fetch(`${baseUrl}/v/${id}`)).status, 404, `page ${id}`);
           assert.strictEqual((await fetch(`${baseUrl}/v/${id}/card.jpg`)).status, 404, `card ${id}`);
+        }
+      });
+
+      /**
+       * بوابة «وسيط معتمد واحد» (قرار المالك 2026-10-27): ألبوم المناسبة المنشور
+       * بلا صورة معتمدة كان يخفيه `PUBLIC_PHOTO_EXISTS`، فيبقى ألبوم فيديوهات
+       * العرس غير مرئي. صار الظهور يكفيه فيديو معتمد واحد، و`GET /a/:id` بلا غلاف
+       * يُعرض بلا صورة (لا `og:image` مصطنع من مصغّرة طرف ثالث قد تُزال).
+       */
+      await test('an ended-wedding album with no approved photo but one approved video is public — list, detail, /a/:id — and hiding the video hides it again', async () => {
+        const created = await api('POST', `/api/admin/events/${endedWedding}/albums`, {
+          token: superAdminToken,
+          body: { title: 'ألبوم فيديو بلا صور' }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        const videoOnlyAlbumId = created.body.album.id;
+        let videoOnlyVideoId = 0;
+        try {
+          const added = await api('POST', `/api/admin/albums/${videoOnlyAlbumId}/videos`, {
+            token: superAdminToken,
+            body: { url: 'https://www.youtube.com/watch?v=NoPhotoVd01', title: 'فيديو وحده' }
+          });
+          assert.strictEqual(added.status, 201, JSON.stringify(added.body));
+          videoOnlyVideoId = added.body.video.id;
+
+          const list = await api('GET', '/api/albums?limit=60');
+          const listed = list.body.albums.find(album => album.id === videoOnlyAlbumId);
+          assert.ok(listed, 'one approved video with no photo puts the album on the public list');
+          assert.strictEqual(listed.photo_count, 0, 'it still reports zero photos — nothing is invented');
+          assert.strictEqual(listed.video_count, 1, 'and it reports the video that put it there');
+          assert.strictEqual(listed.cover_url, null, 'no cover without a photo');
+
+          const detail = await api('GET', `/api/albums/${videoOnlyAlbumId}`);
+          assert.strictEqual(detail.status, 200, JSON.stringify(detail.body));
+          assert.deepStrictEqual(detail.body.photos, []);
+          assert.deepStrictEqual(detail.body.videos.map(video => video.id), [videoOnlyVideoId]);
+          assert.strictEqual(detail.body.album.video_count, 1);
+
+          const page = await rawGet(`/a/${videoOnlyAlbumId}`);
+          assert.strictEqual(page.status, 200, 'a video-only album still has its share page');
+          assert.ok(page.text.includes('1 فيديو'), 'the page names its videos');
+          assert.ok(!page.text.includes('0 صورة'), 'and never writes a zero-photo count beside them');
+          assert.ok(page.text.includes('noindex'), 'a wedding album is not for search engines');
+          assert.ok(!page.text.includes('<script'), 'the album page carries no script at all');
+          assert.ok(!/property="og:image"/.test(page.text), 'no og:image is invented without a cover');
+          assert.ok(!/name="twitter:image"/.test(page.text), 'nor a twitter:image');
+          assert.ok(!/<img class="shot"/.test(page.text), 'and no empty <img> where the cover would be');
+
+          const hidden = await api('PATCH', `/api/admin/videos/${videoOnlyVideoId}`, {
+            token: superAdminToken,
+            body: { status: 'hidden' }
+          });
+          assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+          const listAfterHide = await api('GET', '/api/albums?limit=60');
+          assert.ok(
+            !listAfterHide.body.albums.some(album => album.id === videoOnlyAlbumId),
+            'hiding the only approved video leaves no approved medium, so the album is hidden again'
+          );
+          assert.strictEqual((await api('GET', `/api/albums/${videoOnlyAlbumId}`)).status, 404);
+          assert.strictEqual((await rawGet(`/a/${videoOnlyAlbumId}`)).status, 404);
+
+          const restored = await api('PATCH', `/api/admin/videos/${videoOnlyVideoId}`, {
+            token: superAdminToken,
+            body: { status: 'approved' }
+          });
+          assert.strictEqual(restored.status, 200, JSON.stringify(restored.body));
+          assert.strictEqual(
+            (await rawGet(`/a/${videoOnlyAlbumId}`)).status,
+            200,
+            'approving it again brings the album and its page back'
+          );
+        } finally {
+          // حذف الألبوم يحذف فيديوهاته معه (CASCADE)، فلا يبقى صفّ يمسّ اختباراً لاحقاً.
+          await db.execute('DELETE FROM event_albums WHERE id = ?', [videoOnlyAlbumId]);
+        }
+      });
+
+      /**
+       * الوجه الثاني (ADR-0012): ألبوم العريس بلا مناسبة لا بوابات مناسبة له،
+       * فبوابته المنشورية + وسيط معتمد واحد. فيديو واحد على تيك توك يكفي أن
+       * يُحمَل في القائمة والبحث (بالاسم وبالبلدة) وصفحة الشخص — وإخفاؤه يعيده
+       * غير ظاهر: صفحة شخصٍ لا شيء ظاهر له 404 كما قبل.
+       */
+      await test('a groom-only album with no photo but one approved video is public in the list, the search and the person page — hiding the video hides it again', async () => {
+        const groomName = `عريس فيديو بلا صورة ${standaloneSuffix}`;
+        const created = await api('POST', '/api/admin/albums', {
+          token: superAdminToken,
+          body: { honoree_name: groomName, town: 'رهط' }
+        });
+        assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+        const groomAlbumId = created.body.album.id;
+        const groomPersonId = created.body.album.person.id;
+        let groomOnlyVideoId = 0;
+        try {
+          const added = await api('POST', `/api/admin/albums/${groomAlbumId}/videos`, {
+            token: superAdminToken,
+            body: { url: 'https://www.tiktok.com/@negev/video/7300000000000000011', title: 'فيديو العريس' }
+          });
+          assert.strictEqual(added.status, 201, JSON.stringify(added.body));
+          groomOnlyVideoId = added.body.video.id;
+
+          const list = await api('GET', '/api/albums?limit=60');
+          const listed = list.body.albums.find(album => album.id === groomAlbumId);
+          assert.ok(listed, 'one approved video is enough for a no-event album too');
+          assert.strictEqual(listed.event, null);
+          assert.strictEqual(listed.photo_count, 0);
+          assert.strictEqual(listed.video_count, 1);
+          assert.strictEqual(listed.cover_url, null);
+
+          const byGroom = await api('GET', `/api/search?q=${encodeURIComponent(groomName)}`);
+          assert.strictEqual(byGroom.status, 200, JSON.stringify(byGroom.body));
+          assert.ok(byGroom.body.albums.some(album => album.id === groomAlbumId), 'search finds it by the groom name');
+          const byTown = await api('GET', `/api/search?q=${encodeURIComponent('رهط')}`);
+          assert.ok(byTown.body.albums.some(album => album.id === groomAlbumId), 'and by the town the admin typed');
+
+          const person = await api('GET', `/api/people/${groomPersonId}`);
+          assert.strictEqual(person.status, 200, JSON.stringify(person.body));
+          assert.ok(person.body.person.albums.some(album => album.id === groomAlbumId), 'the person page carries it in albums');
+
+          const hidden = await api('PATCH', `/api/admin/videos/${groomOnlyVideoId}`, {
+            token: superAdminToken,
+            body: { status: 'hidden' }
+          });
+          assert.strictEqual(hidden.status, 200, JSON.stringify(hidden.body));
+          const listAfterHide = await api('GET', '/api/albums?limit=60');
+          assert.ok(
+            !listAfterHide.body.albums.some(album => album.id === groomAlbumId),
+            'with its only approved video hidden the album is back to invisible'
+          );
+          const searchAfterHide = await api('GET', `/api/search?q=${encodeURIComponent(groomName)}`);
+          assert.ok(!searchAfterHide.body.albums.some(album => album.id === groomAlbumId), 'and search drops it');
+          assert.strictEqual(
+            (await api('GET', `/api/people/${groomPersonId}`)).status,
+            404,
+            'a person with nothing visible left is the same 404 as any absent person'
+          );
+
+          const restored = await api('PATCH', `/api/admin/videos/${groomOnlyVideoId}`, {
+            token: superAdminToken,
+            body: { status: 'approved' }
+          });
+          assert.strictEqual(restored.status, 200, JSON.stringify(restored.body));
+          assert.strictEqual((await api('GET', `/api/people/${groomPersonId}`)).status, 200);
+        } finally {
+          await db.execute('DELETE FROM event_albums WHERE id = ?', [groomAlbumId]);
+          await db.execute('DELETE FROM people WHERE id = ?', [groomPersonId]);
         }
       });
     } finally {

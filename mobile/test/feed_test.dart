@@ -1186,8 +1186,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('ألبومات الأعراس'), findsOneWidget, reason: 'نقرة واحدة تفتح الشاشة');
+        // الشرط الأخير صار «صورة معتمدة أو فيديو معتمد» — ألبومٌ فيه فيديو
+        // وحده يظهر الآن، فعدُّ «خمسة» صار كذباً ووُصف الشرط بنصّه.
         expect(
-          find.textContaining('خمسة شروط'),
+          find.textContaining('صورة معتمدة أو فيديو معتمد'),
           findsOneWidget,
           reason: 'الحالة الفارغة تسمّي الشروط، لا «لا ألبومات» وحدها',
         );

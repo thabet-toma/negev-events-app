@@ -1576,6 +1576,99 @@ async function run() {
     assert.ok(box.querySelector('.event-albums-all').getAttribute('onclick').includes('openAlbumsForEvent'));
   });
 
+  /**
+   * ألبوم الفيديو وحده (ADR-0013): ألبومٌ منشورٌ فيه فيديو معتمد ولا صورة معتمدة
+   * صار ظاهراً للزائر (قرار المالك 2026-10-27). عدّاده في الويب ثلاثة مواضع
+   * (بطاقة قائمة الألبومات، شريط ألبومات صفحة المناسبة، رأس صفحة الألبوم) وقاعدة
+   * واحدة: الصور أولاً كما كانت حرفياً، فإن لم تكن فالفيديوهات، وإلا «0 صورة» —
+   * فلا بطاقة تقول «0 صورة» لألبوم فيه فيديوهات، ولا بطاقة فيها صور يتغيّر نصّها.
+   */
+  await test('ألبوم بلا صور وفيديوهان: البطاقة وشريط المناسبة ورأس التفاصيل تكتب «2 فيديو»، والصور تبقى أولاً', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const doc = dom.window.document;
+    const videoOnly = {
+      id: 71,
+      title: 'عرس بلا صور',
+      event_id: null,
+      town: 'رهط',
+      event: null,
+      photo_count: 0,
+      video_count: 2
+    };
+
+    const cardOf = album => {
+      const box = doc.createElement('div');
+      box.innerHTML = dom.window.albumCardHtml(album);
+      return box.querySelector('.album-card');
+    };
+    assert.strictEqual(
+      cardOf(videoOnly).querySelector('.album-card-body small').textContent,
+      '2 فيديو',
+      'a video-only album counts its videos, not its zero photos'
+    );
+
+    const strip = doc.createElement('div');
+    strip.innerHTML = dom.window.renderEventAlbumsHtml({ albums: [videoOnly] });
+    assert.strictEqual(strip.querySelector('.event-album-card small').textContent, '2 فيديو');
+
+    // صور وفيديو معاً: الصور هي النصّ كما كان — لا يتبدّل نصّ ألبوم قائم.
+    assert.strictEqual(
+      cardOf({ ...videoOnly, photo_count: 3 }).querySelector('.album-card-body small').textContent,
+      '3 صورة',
+      'photos win the line when both kinds exist'
+    );
+    // لا صور ولا فيديو: النصّ الذي كان يُكتب قبل التغيير بالضبط.
+    assert.strictEqual(
+      cardOf({ ...videoOnly, video_count: 0 }).querySelector('.album-card-body small').textContent,
+      '0 صورة'
+    );
+
+    // رأس صفحة الألبوم يقرأ استجابة GET /api/albums/:id نفسها التي يقرأها الزائر.
+    const videos = [
+      {
+        id: 601,
+        provider: 'youtube',
+        title: 'فيديو أول',
+        external_url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
+        thumb_url: null,
+        position: 0,
+        created_at: '2026-10-01T09:00:00.000Z'
+      },
+      {
+        id: 602,
+        provider: 'tiktok',
+        title: 'فيديو ثانٍ',
+        external_url: 'https://www.tiktok.com/@aarasna/video/2',
+        thumb_url: null,
+        position: 1,
+        created_at: '2026-10-02T09:00:00.000Z'
+      }
+    ];
+    const fallbackFetch = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/albums/71') {
+        return jsonResponse({
+          success: true,
+          album: { ...videoOnly, video_count: videos.length },
+          photos: [],
+          videos,
+          pagination: { page: 1, limit: 24, total: 0, totalPages: 1 }
+        });
+      }
+      return fallbackFetch(url, options);
+    };
+
+    await dom.window.openAlbumDetail(71);
+    assert.strictEqual(
+      doc.getElementById('albumDetailHeader').querySelector('.album-detail-count').textContent,
+      '2 فيديو',
+      'the album header names its two videos when it has no photos'
+    );
+    assert.strictEqual(doc.querySelectorAll('#albumDetailVideos .album-video-card').length, 2);
+  });
+
   await test('the «مباشر» badge shows on both buttons only while live.active, and turns itself off at until', async () => {
     const dom = buildEnv();
     await flushBoot();

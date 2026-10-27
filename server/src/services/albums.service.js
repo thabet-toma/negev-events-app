@@ -89,8 +89,10 @@ function publicEventConditions() {
  *    انتهى امتدادها + منشور).
  *  - ألبوم بلا مناسبة (ألبوم العريس، 2026-10): منشور وله شخص. لا بوابات
  *    مناسبة له — ليس له `e` ولا `ot` أصلاً، والفرع الأول يخرج NULL.
- * وجود صورة معتمدة واحدة ليس هنا: إنه `PUBLIC_PHOTO_EXISTS` في كل قراءة
- * تُعرض فيها صور، فلا يظهر ألبوم فارغ في قائمة ولا في بحث.
+ * وجود وسيط معتمد واحد ليس هنا: إنه `PUBLIC_MEDIA_EXISTS` في كل قراءة يظهر
+ * فيها الألبوم نفسه (القائمة، والألبوم الواحد، وقائمة صفحة الشخص) — صورة
+ * معتمدة **أو** فيديو معتمد (قرار المالك 2026-10-27)، فلا يظهر ألبومٌ بلا
+ * صورة وبلا فيديو في قائمة ولا في بحث.
  */
 function publicAlbumConditions() {
   return [
@@ -99,23 +101,35 @@ function publicAlbumConditions() {
   ];
 }
 
-const PUBLIC_PHOTO_EXISTS = "EXISTS (SELECT 1 FROM event_photos pub WHERE pub.album_id = al.id AND pub.status = 'approved')";
+/**
+ * بوابة «وسيط معتمد واحد»: صورة معتمدة **أو** فيديو معتمد في الألبوم نفسه.
+ * تُضاف إلى `publicAlbumConditions()` في المواضع التي يظهر فيها الألبوم
+ * (القائمة، والألبوم الواحد، وقائمة صفحة الشخص) — ولا تُستعمل في قراءات
+ * الصور: شرط `p.status = 'approved'` فيها قائم وحده كما كان.
+ */
+const PUBLIC_MEDIA_EXISTS = "(EXISTS (SELECT 1 FROM event_photos med WHERE med.album_id = al.id AND med.status = 'approved') OR EXISTS (SELECT 1 FROM event_videos medv WHERE medv.album_id = al.id AND medv.status = 'approved'))";
 
 /**
  * صفّ ألبوم واحد مشترك بين القراءات العامة واللوحة. `events` و`occasion_types`
  * و`people` كلها `LEFT JOIN` لأن ألبوم العريس (2026-10) قد لا يكون لمناسبة:
  * فحينها `event_*` كلها NULL و`person_*`/`album_town` هي ما يُعرض.
- * `photoCount` اختلاف مقصود واحد: العام يعدّ المعتمد وحده، واللوحة تعدّ كلها.
+ * `photoCount` اختلاف مقصود واحد: العام يعدّ المعتمد وحده، واللوحة تعدّ كلها —
+ * والفيديوهات تعدّ بالمنطق نفسه (`video_count`): المعتمد وحده للزائر، وكلها
+ * في اللوحة، فلا يختلف الرقم بين شكلين.
  */
 function albumRowSelect({ photoCount = 'approved' } = {}) {
   const count = photoCount === 'all'
     ? '(SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id)'
     : "(SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved')";
+  const videoCount = photoCount === 'all'
+    ? '(SELECT COUNT(*) FROM event_videos v WHERE v.album_id = al.id)'
+    : "(SELECT COUNT(*) FROM event_videos v WHERE v.album_id = al.id AND v.status = 'approved')";
   return `SELECT al.id, al.event_id, al.person_id, al.town AS album_town,
                  al.title, al.description, al.is_published, al.created_at,
                  e.title AS event_title, e.town AS event_town, e.event_date,
                  ot.name AS occasion_type_name, pp.name AS person_name,
                  ${count} AS photo_count,
+                 ${videoCount} AS video_count,
                  (SELECT p.image_url FROM event_photos p
                    WHERE p.album_id = al.id AND p.status = 'approved'
                    ORDER BY p.is_cover DESC, p.position ASC, p.id ASC LIMIT 1) AS cover_image_url
@@ -249,6 +263,9 @@ function publicAlbumShape(row) {
     description: row.description,
     is_published: Boolean(row.is_published),
     photo_count: Number(row.photo_count || 0),
+    // الفيديوهات المعتمدة وحدها في الشكل العام — والمصدر الوحيد لهذا الرقم هو
+    // `albumRowSelect`، فلا يُعاد حسابه من `videos.length` في مكان آخر.
+    video_count: Number(row.video_count || 0),
     cover_url: row.cover_image_url || null,
     cover_thumb_url: thumbFromImageUrl(row.cover_image_url),
     // The shareable page the server renders at GET /a/:id. Built here, next to
@@ -302,7 +319,7 @@ async function listPublicAlbums({ search = null, eventId = null, page = 1, limit
     conditions.push(searchPart.clause);
     params.push(...searchPart.params);
   }
-  conditions.push(PUBLIC_PHOTO_EXISTS);
+  conditions.push(PUBLIC_MEDIA_EXISTS);
   const where = conditions.join(' AND ');
 
   const countRow = await db.queryOne(
@@ -332,7 +349,7 @@ async function listPublicAlbums({ search = null, eventId = null, page = 1, limit
 
 async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } = {}) {
   const conditions = publicAlbumConditions();
-  conditions.push(PUBLIC_PHOTO_EXISTS);
+  conditions.push(PUBLIC_MEDIA_EXISTS);
   const albumRow = await db.queryOne(
     `${albumRowSelect()}
       WHERE al.id = ? AND ${conditions.join(' AND ')}`,
@@ -343,7 +360,7 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   const photos = await listPublicPhotos({ albumId, page, limit, search });
   const videos = await videosForAlbum(albumId);
   return {
-    album: { ...publicAlbumShape(albumRow), video_count: videos.length },
+    album: publicAlbumShape(albumRow),
     photos: photos.photos,
     videos,
     pagination: photos.pagination
@@ -522,7 +539,7 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
       WHERE (al.person_id = ?
              OR EXISTS (SELECT 1 FROM event_honorees h
                          WHERE h.event_id = al.event_id AND h.person_id = ?))
-        AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_PHOTO_EXISTS}
+        AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_MEDIA_EXISTS}
       ORDER BY COALESCE(e.event_date, DATE(al.created_at)) DESC, al.id DESC`,
     [personId, personId]
   );
@@ -1179,8 +1196,11 @@ async function videosForAlbum(albumId, { includeHidden = false, shape = videoSha
 /**
  * فيديو واحد للزائر: صفّه المعتمد + ألبومه بالشكل العام (`albumRowSelect()`
  * لا صفّاً خاماً). البوابة هي بوابة الألبوم نفسها (`publicAlbumConditions`،
- * والمنشور منها) **بلا** `PUBLIC_PHOTO_EXISTS`: فيديو واحد يكفي صفحة مشاركة،
- * وإضافة شرط الصورة هنا كانت ستُغيّر ظهور الألبوم العام نفسه — وهو ما لم يُطلب.
+ * والمنشور منها) **بلا** `PUBLIC_MEDIA_EXISTS`: فيديو واحد يكفي صفحة مشاركة —
+ * وهذا ما كان مقصوداً هنا حين كان قسم الصور في الألبوم يمرّ بشرط صورة معتمدة.
+ * وبوابة ظهور الألبوم صارت تقبل الفيديو نفسه وسيطاً معتمداً (قرار المالك
+ * 2026-10-27)، فلم يبقَ فرقٌ في النتيجة، لكن ترك البوابة الواحدة هنا صريحاً
+ * يحفظ قاعدة «لا بوابة جديدة لظهور الفيديو».
  * والردّ 404 واحدة لغياب الفيديو أو سقوط ألبومه، فلا يُستدلّ على مخفيّ.
  */
 async function getPublicVideo(videoId) {

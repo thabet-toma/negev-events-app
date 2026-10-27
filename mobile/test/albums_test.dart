@@ -34,6 +34,29 @@ void main() {
       expect(album.town, 'رهط');
     });
 
+    // ألبومٌ لا صور معتمدة فيه وفيه فيديو صار يظهر في القائمة: عدّ الفيديوهات
+    // يجب أن يصل النموذج، وسقوطه إلى الصفر هو ما يجعل «0 صورة» تظهر كذباً.
+    test('video_count يُقرأ، وغياب الحقل صفر لخادمٍ يسبق الحقل', () {
+      final album = EventAlbum.fromJson({
+        'id': 31,
+        'event_id': 0,
+        'title': 'عرس أحمد — فيديوهات',
+        'photo_count': 0,
+        'video_count': 3,
+      });
+      expect(album.videoCount, 3);
+      expect(album.photoCount, 0, reason: 'ألبوم فيديو فقط — لا صورة معتمدة');
+
+      final older = EventAlbum.fromJson({
+        'id': 32,
+        'event_id': 5,
+        'title': 'ألبوم الحنّة',
+        'photo_count': 2,
+      });
+      expect(older.videoCount, 0, reason: 'حقل غائب كصفر — لا استثناء');
+      expect(older.photoCount, 2, reason: 'عدّ الصور لا يتأثّر بغياب عدّ الفيديو');
+    });
+
     test('EventPhoto.fromJson يحمل الوسوم والعنوان ومصغّرة مستقلة', () {
       final photo = EventPhoto.fromJson({
         'id': 7,

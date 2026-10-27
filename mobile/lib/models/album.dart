@@ -8,6 +8,10 @@ class EventAlbum {
   final String? description;
   final bool isPublished;
   final int photoCount;
+  /// عدّ الفيديوهات المعتمدة في الألبوم (`video_count`) كما يحسبه الخادم:
+  /// صفرٌ لألبوم صورٍ فقط، وصفرٌ أيضاً للخادم الذي يسبق الحقل — فتعود البطاقة
+  /// إلى عدّ الصور بدل أن تنقص عدداً لا تعرفه.
+  final int videoCount;
   final String? coverUrl;
   final String? coverThumbUrl;
   /// صفحة المشاركة على الخادم (`/a/:id`) — يأتي جاهزاً من الحمولة، فلا يركّبه
@@ -31,6 +35,7 @@ class EventAlbum {
     this.description,
     this.isPublished = true,
     this.photoCount = 0,
+    this.videoCount = 0,
     this.coverUrl,
     this.coverThumbUrl,
     this.shareUrl,
@@ -71,6 +76,7 @@ class EventAlbum {
       description: _nullableString(json['description']),
       isPublished: json['is_published'] != false,
       photoCount: _toInt(json['photo_count']),
+      videoCount: _toInt(json['video_count']),
       coverUrl: _nullableString(json['cover_url']),
       coverThumbUrl: _nullableString(json['cover_thumb_url']),
       shareUrl: _nullableString(json['share_url']),

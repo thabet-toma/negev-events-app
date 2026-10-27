@@ -62,10 +62,12 @@ AND ( (e.status = 'approved'
        AND EVENT_SPAN_END_SQL_E < CURDATE()
        AND ot.archive_gallery = 1)
       OR (al.event_id IS NULL AND al.person_id IS NOT NULL) )
-AND EXISTS (SELECT 1 FROM event_photos pub WHERE pub.album_id = al.id AND pub.status = 'approved')
+AND ( EXISTS (SELECT 1 FROM event_photos pub WHERE pub.album_id = al.id AND pub.status = 'approved')
+      OR EXISTS (SELECT 1 FROM event_videos pubv WHERE pubv.album_id = al.id AND pubv.status = 'approved') )
 ```
 
-فألبوم بلا مناسبة يظهر بـ**المنشورية وصورة معتمدة واحدة**؛ والبوابات الخمس لألبوم المناسبة
+فألبوم بلا مناسبة يظهر بـ**المنشورية وصورة معتمدة واحدة** (أو **فيديو معتمد واحد** منذ
+قرار المالك 2026-10-27، ADR-0013)؛ والبوابات الخمس لألبوم المناسبة
 **لم تُمسّ**، والفرع الأول يخرج NULL لألبومٍ لا `e` له ولا `ot`، فليس ثمة تخفيف مقايض. وألبوم
 بلا مناسبة وبلا شخص («يتيم») لا يكتبه الكود ويرفضه الشرط. والرفع إليه متاح لأن
 `assertAlbumAllowsGallery` لا يجد نوعاً يفحصه — والنطاق وبقية البوابات في مكانها.

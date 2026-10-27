@@ -611,21 +611,31 @@ function renderPhotoPage(photo) {
 /**
  * `GET /a/:id` — one album's own share page (ADR-0006 pattern, issue #100).
  * The cover is the preview, because an album's cover is what a family
- * recognises in a WhatsApp bubble. Deliberately `noindex` like `/p/:id`: an
- * album is shared with a circle, not with an image search. No script, no
- * phone, and every user-written value escaped before interpolation.
+ * recognises in a WhatsApp bubble — and when the album has no approved photo
+ * there is no preview image at all: nothing is invented out of a video
+ * thumbnail (ADR-0013), the page just shows its text. Deliberately `noindex`
+ * like `/p/:id`: an album is shared with a circle, not with an image search.
+ * No script, no phone, and every user-written value escaped before
+ * interpolation.
  */
-function renderAlbumPage(album, photos) {
+function renderAlbumPage(album, photos, videos = []) {
   const event = album.event || {};
   const heading = album.title || 'ألبوم عرس';
-  const description = [event.title, event.town, event.event_date, `${album.photo_count} صورة`]
+  // العدّاد أجزاء: الصور إن وُجدت، ثم الفيديوهات إن وُجدت — وألبوم الفيديو
+  // وحده لا يُعرض عليه «0 صورة» (قرار المالك 2026-10-27). `videos` هي
+  // المعتمدة وحدها، وهي نفس ما يعدّه `album.video_count` في الشكل العام.
+  const counts = [
+    Number(album.photo_count) > 0 ? `${Number(album.photo_count)} صورة` : '',
+    videos.length > 0 ? `${videos.length} فيديو` : ''
+  ].filter(Boolean).join(' · ');
+  const description = [event.title, event.town, event.event_date, counts]
     .filter(Boolean)
     .join(' — ');
   const pageUrl = album.share_url;
-  // `getPublicAlbum` gates on PUBLIC_PHOTO_EXISTS, so a published album always
-  // has at least one approved photo — the fallback is `photos[0]`, not a
-  // static placeholder nobody can reach.
-  const cover = album.cover_url || photos[0].image_url;
+  // البوابة صارت تقبل فيديو معتمداً وحده، فالألبوم المنشور قد لا يحمل صورة
+  // واحدة: الغلاف اختياري، وحين يغيب تُعرض الصفحة بلا `og:image` ولا `<img>`
+  // — كما في `renderPersonPage` بالضبط، لا بصورة مصطنعة من مصغّرة فيديو.
+  const cover = album.cover_url || (photos[0] && photos[0].image_url) || '';
   const thumbs = photos.slice(0, 12);
 
   return `<!doctype html>
@@ -639,11 +649,11 @@ function renderAlbumPage(album, photos) {
   <meta property="og:type" content="article">
   <meta property="og:title" content="${escapeHtml(heading)}">
   <meta property="og:description" content="${escapeHtml(description)}">
-  <meta property="og:image" content="${escapeHtml(cover)}">
+  ${cover ? `<meta property="og:image" content="${escapeHtml(cover)}">` : ''}
   <meta property="og:url" content="${escapeHtml(pageUrl)}">
   <meta property="og:site_name" content="اعراسنا">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="${escapeHtml(cover)}">
+  ${cover ? '<meta name="twitter:card" content="summary_large_image">' : ''}
+  ${cover ? `<meta name="twitter:image" content="${escapeHtml(cover)}">` : ''}
   <style>${SHARE_PAGE_CSS}
     .shot { width: 100%; max-height: 62vh; object-fit: cover; border-radius: 18px; background: #0d1b27; border: 1px solid #24384a; }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 20px; }
@@ -653,7 +663,7 @@ function renderAlbumPage(album, photos) {
 <body>
   <main>
     <div class="brand"><span>اعراسنا · مناسبات النقب</span><a href="${escapeHtml(config.publicUrl)}">الموقع</a></div>
-    <img class="shot" src="${escapeHtml(cover)}" alt="${escapeHtml(heading)}">
+    ${cover ? `<img class="shot" src="${escapeHtml(cover)}" alt="${escapeHtml(heading)}">` : ''}
     <h1>${escapeHtml(heading)}</h1>
     ${description ? `<p>${escapeHtml(description)}</p>` : ''}
     ${thumbs.length > 1 ? `<div class="grid">${thumbs.map(photo => `<img src="${escapeHtml(photo.thumb_url || photo.image_url)}" alt="${escapeHtml(photo.caption || '')}" loading="lazy">`).join('')}</div>` : ''}
@@ -1563,7 +1573,7 @@ albumRouter.get('/:id', asyncHandler(async (req, res) => {
       'X-Robots-Tag': 'noindex, nofollow',
       'Cache-Control': 'public, max-age=300'
     })
-    .send(renderAlbumPage(data.album, data.photos));
+    .send(renderAlbumPage(data.album, data.photos, data.videos));
 }));
 
 personRouter.get('/:id', asyncHandler(async (req, res) => {
