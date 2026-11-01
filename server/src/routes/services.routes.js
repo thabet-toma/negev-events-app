@@ -5,7 +5,8 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
 const events = require('../services/events.service');
-const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { regionIdForRequest } = require('../middleware/region');
 const { serviceMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
 const { cleanString, requireFields, parseId, parseAmount, isValidPhone } = require('../middleware/validate');
@@ -66,11 +67,19 @@ router.get('/services/categories', asyncHandler(async (req, res) => {
   res.json({ success: true, categories: await services.listActiveCategories() });
 }));
 
-router.get('/services/providers', asyncHandler(async (req, res) => {
+/**
+ * دليل الخدمات سطح اكتشاف: مزوّدون يخدمون بلدة واحدة على الأقل من محافظة
+ * الطلب (تذكرة #122)، و`optionalAuthenticate` كي يرى المسجَّل محافظة حسابه بلا
+ * ترويسة كما في `/api/events`. **والمزوّد المفرد** أدناه لا يتقيّد — صفحة
+ * المزوّد تُفتح بالمعرّف من أي محافظة.
+ */
+router.get('/services/providers', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const regionId = await regionIdForRequest(req);
   const { providers, pagination } = await services.listPublicProviders({
     categoryId: req.query.category_id ? parseId(req.query.category_id, 'معرّف الفئة') : null,
     town: cleanString(req.query.town, 100),
     search: cleanString(req.query.search, 100),
+    regionId,
     page: req.query.page,
     limit: req.query.limit
   });

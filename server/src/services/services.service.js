@@ -226,8 +226,15 @@ async function townsForProviders(providerIds) {
  * It only ever comes back from `getPublicProviderById`. The phone is optional,
  * so each row carries `has_phone` (computed in SQL, never the number itself)
  * for clients deciding whether to offer a contact button.
+ *
+ * و`regionId` (تذكرة #122) شرط المحافظة: مزوّد يخدم بلدة واحدة على الأقل من
+ * محافظتها يظهر. `service_provider_towns` تحمل **أسماء بلدات** دائماً —
+ * `assertTownsWithinScope` ومسار الإرسال يتحقّقان من `knownTownNames()` /
+ * `activeNames()` وهما بلدات `towns` وحدها، فلا يُسنَد مزوّد لاسم محافظة —
+ * فلا فرع لاسم محافظة هنا. `null` = بلا تقييد، فتبقى اللوحة وصفحة المزوّد
+ * بلا تغيير.
  */
-async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE } = {}) {
+async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE, regionId = null } = {}) {
   const limitVal = safeLimit(limit);
   const pageVal = safePage(page);
 
@@ -237,6 +244,12 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
   if (categoryId) {
     conditions.push('sp.category_id = ?');
     params.push(categoryId);
+  }
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push(
+      'EXISTS (SELECT 1 FROM service_provider_towns spt JOIN towns t ON t.name = spt.town WHERE spt.provider_id = sp.id AND t.region_id = ?)'
+    );
+    params.push(regionId);
   }
   if (town) {
     conditions.push(

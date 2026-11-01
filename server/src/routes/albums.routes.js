@@ -5,7 +5,8 @@ const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const albums = require('../services/albums.service');
-const { authenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { authenticate, optionalAuthenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
+const { regionIdForRequest } = require('../middleware/region');
 const {
   cleanString,
   parseId,
@@ -39,13 +40,19 @@ function parseDimension(value) {
 }
 
 // --- Public -----------------------------------------------------------
+// مسارات الاكتشاف وحدها تتقيّد بالمحافظة (تذكرة #122): القائمة والصور
+// والبحث. و`optionalAuthenticate` كي يرى المسجَّل محافظة حسابه بلا ترويسة،
+// كما في `/api/events` — ولا يتغيّر شيء للمجهول.
+// **ما لا يتقيّد**: `/albums/:id` و`/photos/:id` و`/videos/:id` و`/people/:id`
+// تُفتح بالمعرّف من أي محافظة (وصفحات `/a/:id` و`/p/:id` و`/v/:id` كذلك).
 
-router.get('/albums', asyncHandler(async (req, res) => {
+router.get('/albums', optionalAuthenticate, asyncHandler(async (req, res) => {
   res.json({
     success: true,
     ...await albums.listPublicAlbums({
       search: cleanString(req.query.search, 100),
       eventId: optionalId(req.query.event_id, 'معرّف المناسبة'),
+      regionId: await regionIdForRequest(req),
       page: parsePage(req.query.page),
       limit: parseLimit(req.query.limit, 24, 60)
     })
@@ -64,13 +71,14 @@ router.get('/albums/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-router.get('/photos', asyncHandler(async (req, res) => {
+router.get('/photos', optionalAuthenticate, asyncHandler(async (req, res) => {
   res.json({
     success: true,
     ...await albums.listPublicPhotos({
       search: cleanString(req.query.search, 100),
       albumId: optionalId(req.query.album_id, 'معرّف الألبوم'),
       person: cleanString(req.query.person, 150),
+      regionId: await regionIdForRequest(req),
       page: parsePage(req.query.page),
       limit: parseLimit(req.query.limit, 24, 60)
     })
@@ -109,15 +117,18 @@ router.get('/people/:id', asyncHandler(async (req, res) => {
 /**
  * One box, three groups: albums, photos, people. An empty q is not a 400 —
  * it is "nothing typed yet", which the UI renders as an empty result rather
- * than an error it has to special-case.
+ * than an error it has to special-case. والمحافظة تُقرأ قبل الفراغ كي لا
+ * ترويسة `X-Region` فاسدة تمرّ بلا فحص على هذا المسار وحده (تذكرة #122):
+ * الألبومات والصور تتقيّد بها، والأشخاص عالميون.
  */
-router.get('/search', asyncHandler(async (req, res) => {
+router.get('/search', optionalAuthenticate, asyncHandler(async (req, res) => {
   const query = cleanString(req.query.q, 100);
+  const regionId = await regionIdForRequest(req);
   if (!query) {
     res.json({ success: true, query: '', albums: [], photos: [], people: [] });
     return;
   }
-  res.json({ success: true, query, ...await albums.searchPublic(query) });
+  res.json({ success: true, query, ...await albums.searchPublic(query, 1, 24, { regionId }) });
 }));
 
 // --- Signed-in user ---------------------------------------------------

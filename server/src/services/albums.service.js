@@ -110,6 +110,38 @@ function publicAlbumConditions() {
 const PUBLIC_MEDIA_EXISTS = "(EXISTS (SELECT 1 FROM event_photos med WHERE med.album_id = al.id AND med.status = 'approved') OR EXISTS (SELECT 1 FROM event_videos medv WHERE medv.album_id = al.id AND medv.status = 'approved'))";
 
 /**
+ * شرط محافظة الألبوم في قوائم الاكتشاف (تذكرة #122). مكان الألبوم المخزَّن
+ * واحد: بلدته هو (ألبوم العريس، ADR-0012) وإلا بلدة مناسبتها —
+ * `COALESCE(al.town, e.town)`. ويُقارن باسم بلدة في المحافظة **أو** باسم
+ * المحافظة نفسها: ADR-0007 يجعل اسم المحافظة مكاناً صالحاً لنشر مناسبة بلدتها
+ * غير معروفة، فلا تختفي من محافظتها لأن بلدتها اسم محافظة.
+ *
+ * و**المكان غير المعروف** (`NULL` — ألبوم عريس بلا بلدة ولا مناسبة، وهو ما
+ * تسمح به اللوحة للسوبر أدمن) يظهر في **كل** المحافظات: `IS NULL` فرع صريح
+ * هنا، وإخفاؤه من القائمة والبحث في كل المناطق تراجعٌ لا تطلبه التذكرة —
+ * نفس حكم الستوري بلا بلدة في stories.service.js بالحرف.
+ *
+ * استعلامان فرعيان مُعامَلان (`?`) لا دمج نصوص، والشرط يُضاف إلى `conditions`
+ * وحدها فيصيب استعلام العدّ واستعلام الصفوف معاً لأن `where` مشترك.
+ *
+ * ولا يُضاف إلى `publicAlbumConditions()` نفسها: `getPublicAlbum` و
+ * `getPublicPhoto` و`listDefaultAlbumPhotosForEvent` وصفحة الشخص تُقرأ
+ * بالمعرّف ولا تتقيّد بمحافظة — رابط `/a/:id` يوصل زوّاره من أي مكان.
+ *
+ * `null`/`undefined` = بلا تقييد، فتبقى كل قراءة داخلية (اللوحة، أرشيف
+ * المناسبة، صفحة الشخص) بسلوكها الحالي حرفياً.
+ */
+function albumRegionCondition(regionId) {
+  if (regionId === null || regionId === undefined) return { clause: '', params: [] };
+  return {
+    clause: `(COALESCE(al.town, e.town) IS NULL
+              OR COALESCE(al.town, e.town) IN (SELECT name FROM towns WHERE region_id = ?)
+              OR COALESCE(al.town, e.town) = (SELECT name FROM regions WHERE id = ?))`,
+    params: [regionId, regionId]
+  };
+}
+
+/**
  * صفّ ألبوم واحد مشترك بين القراءات العامة واللوحة. `events` و`occasion_types`
  * و`people` كلها `LEFT JOIN` لأن ألبوم العريس (2026-10) قد لا يكون لمناسبة:
  * فحينها `event_*` كلها NULL و`person_*`/`album_town` هي ما يُعرض.
@@ -307,9 +339,14 @@ async function tagsForPhotos(photoIds, { approvedOnly = true } = {}) {
 
 // --- Public reads -----------------------------------------------------
 
-async function listPublicAlbums({ search = null, eventId = null, page = 1, limit = 24 } = {}) {
+async function listPublicAlbums({ search = null, eventId = null, page = 1, limit = 24, regionId = null } = {}) {
   const conditions = publicAlbumConditions();
   const params = [];
+  const region = albumRegionCondition(regionId);
+  if (region.clause) {
+    conditions.push(region.clause);
+    params.push(...region.params);
+  }
   if (eventId !== null) {
     conditions.push('al.event_id = ?');
     params.push(eventId);
@@ -367,9 +404,16 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   };
 }
 
-async function listPublicPhotos({ search = null, albumId = null, person = null, personId = null, mineUserId = null, page = 1, limit = 24 } = {}) {
+async function listPublicPhotos({ search = null, albumId = null, person = null, personId = null, mineUserId = null, page = 1, limit = 24, regionId = null } = {}) {
   const conditions = [...publicAlbumConditions(), "p.status = 'approved'"];
   const params = [];
+  // شرط المحافظة يُضاف هنا لا داخل `publicAlbumConditions()`: الصورة تتبع
+  // ألبومها في الاكتشاف، لكن `getPublicPhoto` وصفحة الشخص يقرآنها بالمعرّف.
+  const region = albumRegionCondition(regionId);
+  if (region.clause) {
+    conditions.push(region.clause);
+    params.push(...region.params);
+  }
 
   if (albumId !== null) {
     conditions.push('p.album_id = ?');
@@ -608,10 +652,16 @@ async function listDefaultAlbumPhotosForEvent(eventId) {
   }));
 }
 
-async function searchPublic(search, page = 1, limit = 24) {
+/**
+ * صندوق بحث واحد وثلاث مجموعات. `regionId` (تذكرة #122) يصل إلى **الألبومات
+ * والصور** وحدها — أي إلى ما له مكان في هذا العالم؛ و`searchPeople` تبقى بلا
+ * محافظة عن قصد: الأشخاص عالميون بقرار المواصفة (#119)، فاسمٌ واحد يظهر في كل
+ * المحافظات.
+ */
+async function searchPublic(search, page = 1, limit = 24, { regionId } = {}) {
   const [albums, photos, people] = await Promise.all([
-    listPublicAlbums({ search, page: 1, limit: 12 }),
-    listPublicPhotos({ search, page: 1, limit: 12 }),
+    listPublicAlbums({ search, page: 1, limit: 12, regionId }),
+    listPublicPhotos({ search, page: 1, limit: 12, regionId }),
     searchPeople(search, 12)
   ]);
   return { albums: albums.albums, photos: photos.photos, people };

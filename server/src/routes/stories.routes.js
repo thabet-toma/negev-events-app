@@ -7,6 +7,7 @@ const ApiError = require('../utils/ApiError');
 const stories = require('../services/stories.service');
 const storyStudio = require('../services/storyStudio.service');
 const { authenticate, optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
+const { regionIdForRequest } = require('../middleware/region');
 const { cleanString, parseId, optionalDateTime, parseHttpUrl } = require('../middleware/validate');
 const { STORY_LINK_PLATFORMS } = require('../constants');
 
@@ -25,8 +26,16 @@ const storyWriteLimiter = rateLimit({
 
 // --- Public reads/writes --------------------------------------------
 
-router.get('/stories', asyncHandler(async (req, res) => {
-  res.json({ success: true, stories: await stories.listPublicStories() });
+/**
+ * شريط الستوريات هو سطح اكتشاف، فيتقيّد بمحافظة الطلب (تذكرة #122): ستوري
+ * بلدة في محافظتها، وستوري بلا بلدة وإعلان المنصة في كل المحافظات.
+ * `optionalAuthenticate` كي يرى المسجَّل محافظة حسابه بلا ترويسة، كما في
+ * `/api/events`. **ولا يتقيّد** بطاقةُ الدخول أدناه (ستوري واحد مثبَّت
+ * للمنصة كلها) ولا `/:id/view`.
+ */
+router.get('/stories', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const regionId = await regionIdForRequest(req);
+  res.json({ success: true, stories: await stories.listPublicStories({ regionId }) });
 }));
 
 // The entry card: one story to show when the app opens — a super_admin's

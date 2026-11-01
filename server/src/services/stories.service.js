@@ -51,11 +51,28 @@ function shapeStory(row) {
  * the MySQL session/server timezone — which is not guaranteed to be UTC. Two
  * different clocks compared against each other would silently misjudge
  * "expired" whenever the server's timezone isn't UTC.
+ *
+ * و`regionId` (تذكرة #122) شرط المحافظة في شريط الاكتشاف: ستوري مربوط ببلدة
+ * يظهر في محافظتها وحدها، وستوري بلا بلدة — وكذلك إعلان المنصة — يظهر في كل
+ * المحافظات (مواصفة #119: «ستوريات منطقتي، وإعلانات المنصة في كل المناطق»).
+ * والبلدة تُقارن باسمها في `towns` أو باسم محافظة صريح (ADR-0007)، باستعلامين
+ * فرعيين مُعامَلين. `null` = بلا تقييد، فتبقى `entryCard()` عالمية لأنها
+ * تستدعي هذه الدالة بلا محافظة.
  */
-async function listPublicStories() {
+async function listPublicStories({ regionId = null } = {}) {
+  const conditions = ['(expires_at IS NULL OR expires_at > UTC_TIMESTAMP())'];
+  const params = [];
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push(`(town IS NULL OR town = '' OR is_ad = 1
+      OR town IN (SELECT name FROM towns WHERE region_id = ?)
+      OR town = (SELECT name FROM regions WHERE id = ?))`);
+    params.push(regionId, regionId);
+  }
+
   const rows = await db.query(
-    `SELECT * FROM stories WHERE expires_at IS NULL OR expires_at > UTC_TIMESTAMP()
-      ORDER BY is_live DESC, id ASC`
+    `SELECT * FROM stories WHERE ${conditions.join(' AND ')}
+      ORDER BY is_live DESC, id ASC`,
+    params
   );
   return rows.map(shapeStory);
 }

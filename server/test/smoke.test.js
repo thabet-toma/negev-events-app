@@ -12070,6 +12070,361 @@ async function run() {
   await db.execute('DELETE FROM regions WHERE id = ?', [isolationRegionId]);
   await db.execute('DELETE FROM users WHERE id = ?', [isolationUserId]);
 
+  console.log('\nDiscovery scoped to the governorate: albums, photos, search, stories and the services directory (تذكرة #122)');
+
+  // محافظة ثانية وبلدة فيها — صفّان مباشران كما في قسم #121 (لا مسار إداري
+  // لإنشاء محافظة)، والاسم مؤقّت وفريد كي لا يصادم تشغيلاً سابقاً فاشلاً.
+  const discoveryRegionName = `محافظة الاكتشاف ${Date.now()}`;
+  const { insertId: discoveryRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 32.4, 35.1, 9, 95, 1)`,
+    [discoveryRegionName]
+  );
+  const discoveryTownName = `بلدة الاكتشاف ${Date.now()}`;
+  const { insertId: discoveryTownId } = await db.execute(
+    'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, 95, 1)',
+    [discoveryRegionId, discoveryTownName, 32.41, 35.11]
+  );
+
+  const peopleService = require('../src/services/people.service');
+  const discoveryNameKey = require('../src/utils/arabicName').nameKey;
+  const discoveryEventIds = [];
+  const discoveryAlbumIds = [];
+  const discoveryPersonIds = [];
+  const discoveryStoryIds = [];
+  const discoveryProviderIds = [];
+
+  // مناسبة منتهية تحت النوع نفسه في كل محافظة: الألبوم العام لا يظهر إلا بعد
+  // انتهاء امتداد مناسبتها، فالتاريخ قبل اليوم بيومين (لا مستقبل ولا حدّ
+  // التاريخ نفسه في منطقة زمنية أخرى).
+  const endedDay = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const insertDiscoveryEvent = async (title, town, regionId) => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name, event_date, status)
+       VALUES (?, 'عريس الاكتشاف', 'آل الاكتشاف', ?, ?, ?, 'ديوان الاكتشاف', ?, 'approved')`,
+      [title, weddingType.id, town, regionId, endedDay]
+    );
+    discoveryEventIds.push(insertId);
+    return insertId;
+  };
+  // ألبوم منشور وصورة معتمدة: `PUBLIC_MEDIA_EXISTS` لا يظهر ألبوماً بلا وسيط.
+  const insertDiscoveryAlbum = async ({ eventId = null, personId = null, town = null, title, suffix }) => {
+    const { insertId: albumId } = await db.execute(
+      `INSERT INTO event_albums (event_id, person_id, town, title, is_published)
+       VALUES (?, ?, ?, ?, 1)`,
+      [eventId, personId, town, title]
+    );
+    discoveryAlbumIds.push(albumId);
+    const { insertId: photoId } = await db.execute(
+      `INSERT INTO event_photos (event_id, album_id, public_id, image_url, position)
+       VALUES (?, ?, ?, ?, 0)`,
+      [
+        eventId,
+        albumId,
+        `negev-events/albums/album-${albumId}/discovery-${suffix}`,
+        'https://res.cloudinary.com/test-cloud/image/upload/f_auto,q_auto,c_limit,w_1600/v1/discovery.jpg'
+      ]
+    );
+    return { albumId, photoId };
+  };
+
+  // مصطلح واحد يحمل صفوف المحافظتين معاً، فالمتغيّر الوحيد بين التراويس هو
+  // المحافظة نفسها لا البحث.
+  const discoveryTerm = `اكتشاف${Date.now()}`;
+  const discoveryNegevEventId = await insertDiscoveryEvent(`عرس ${discoveryTerm} النقب`, 'حورة', defaultRegionId);
+  const discoverySecondEventId = await insertDiscoveryEvent(`عرس ${discoveryTerm} الثانية`, discoveryTownName, discoveryRegionId);
+  const discoveryNegevAlbum = await insertDiscoveryAlbum({
+    eventId: discoveryNegevEventId, title: `ألبوم ${discoveryTerm} النقب`, suffix: 'negev'
+  });
+  const discoverySecondAlbum = await insertDiscoveryAlbum({
+    eventId: discoverySecondEventId, title: `ألبوم ${discoveryTerm} الثانية`, suffix: 'second'
+  });
+
+  // ألبوم عريس بلا مناسبة (ADR-0012): محافظته من بلدته هو لا من مناسبة.
+  const discoveryGroomName = `عريس بلدة الاكتشاف ${Date.now()}`;
+  const discoveryGroomPersonId = await peopleService.resolveByName(discoveryGroomName);
+  discoveryPersonIds.push(discoveryGroomPersonId);
+  const discoveryGroomAlbum = await insertDiscoveryAlbum({
+    personId: discoveryGroomPersonId, town: discoveryTownName, title: `عرس ${discoveryGroomName}`, suffix: 'groom'
+  });
+
+  // ألبوم عريس بلا بلدة: مكانُه غير معروف، فيظهر في كل المحافظات (تذكرة #122).
+  // يُنشأ عبر المسار الحقيقي — اللوحة تسمح للسوبر أدمن بترك البلدة فارغة —
+  // ويُعتمد له فيديو كي يمرّ من بوابة «وسيط معتمد واحد»، بلا رفع صور ولا
+  // Cloudinary. صاحبه في `people` يُنظَّف معه.
+  const discoveryTownlessGroom = `عريس بلا بلدة ${Date.now()}`;
+  const discoveryTownlessCreated = await api('POST', '/api/admin/albums', {
+    token: superAdminToken,
+    body: { honoree_name: discoveryTownlessGroom }
+  });
+  assert.strictEqual(discoveryTownlessCreated.status, 201, JSON.stringify(discoveryTownlessCreated.body));
+  assert.strictEqual(discoveryTownlessCreated.body.album.town, null, 'the album carries no town on purpose');
+  const discoveryTownlessAlbumId = discoveryTownlessCreated.body.album.id;
+  discoveryAlbumIds.push(discoveryTownlessAlbumId);
+  discoveryPersonIds.push(discoveryTownlessCreated.body.album.person.id);
+  const discoveryTownlessVideo = await api('POST', `/api/admin/albums/${discoveryTownlessAlbumId}/videos`, {
+    token: superAdminToken,
+    body: { url: 'https://www.youtube.com/watch?v=NoTownVd001', title: 'فيديو بلا بلدة' }
+  });
+  assert.strictEqual(discoveryTownlessVideo.status, 201, JSON.stringify(discoveryTownlessVideo.body));
+
+  // شخص موسوم على صورة في ألبوم المحافظة الثانية — دليل أن البحث في الأشخاص
+  // عالمي: نتيجته لا تتغيّر بين التراويس.
+  const discoveryPersonName = `شخص ${discoveryTerm}`;
+  const discoveryPersonId = await peopleService.resolveByName(discoveryPersonName);
+  discoveryPersonIds.push(discoveryPersonId);
+  await db.execute(
+    `INSERT INTO photo_tags (photo_id, name, name_key, person_id, status) VALUES (?, ?, ?, ?, 'approved')`,
+    [discoverySecondAlbum.photoId, discoveryPersonName, discoveryNameKey(discoveryPersonName), discoveryPersonId]
+  );
+
+  const createDiscoveryStory = async body => {
+    const created = await api('POST', '/api/admin/stories', { token: superAdminToken, body });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    discoveryStoryIds.push(created.body.story.id);
+    return created.body.story.id;
+  };
+  const discoverySecondStoryId = await createDiscoveryStory({
+    title: `ستوري ${discoveryTerm} الثانية`, town: discoveryTownName
+  });
+  const discoveryTownlessStoryId = await createDiscoveryStory({ title: `ستوري ${discoveryTerm} بلا بلدة` });
+  const discoveryAdStoryId = await createDiscoveryStory({
+    title: `إعلان المنصة ${discoveryTerm}`,
+    town: discoveryTownName,
+    is_ad: true,
+    advertiser_name: 'معلن الاختبار'
+  });
+
+  // فئة خدمة صفّ مباشر (لا اختبار للفئات هنا)، ثم مزوّدان عبر المسار الحقيقي:
+  // واحد يخدم بلدة في الثانية وواحد يخدم بلدة نقبية، فالقائمتان تتبادلان.
+  const { insertId: discoveryCategoryId } = await db.execute(
+    "INSERT INTO service_categories (name, icon, color, position, is_active) VALUES (?, '🛠️', '#336699', 95, 1)",
+    [`فئة الاكتشاف ${Date.now()}`]
+  );
+  const createDiscoveryProvider = async (name, town) => {
+    const created = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: { category_id: discoveryCategoryId, name, towns: [town] }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    discoveryProviderIds.push(created.body.providerId);
+    return created.body.providerId;
+  };
+  const discoverySecondProviderId = await createDiscoveryProvider(`مزوّد ${discoveryTerm} الثانية`, discoveryTownName);
+  const discoveryNegevProviderId = await createDiscoveryProvider(`مزوّد ${discoveryTerm} النقب`, 'حورة');
+
+  await test('Set up: ألبوم في كل محافظة، وألبوم عريس في الثانية، وصورة موسومة لأجل البحث في الأشخاص (تذكرة #122)', async () => {
+    assert.notStrictEqual(discoveryRegionId, defaultRegionId, 'the whole section is vacuous if both governorates are the same');
+    const rows = await db.query(
+      `SELECT al.id,
+              (SELECT COUNT(*) FROM event_photos p WHERE p.album_id = al.id AND p.status = 'approved') AS approved
+         FROM event_albums al
+        WHERE al.id IN (?, ?, ?)`,
+      [discoveryNegevAlbum.albumId, discoverySecondAlbum.albumId, discoveryGroomAlbum.albumId]
+    );
+    assert.strictEqual(rows.length, 3);
+    for (const row of rows) {
+      assert.strictEqual(Number(row.approved), 1, 'every fixture album carries its one approved photo');
+    }
+    const tag = await db.queryOne('SELECT person_id FROM photo_tags WHERE photo_id = ?', [discoverySecondAlbum.photoId]);
+    assert.strictEqual(tag.person_id, discoveryPersonId, 'the second-governorate photo is tagged with the global person');
+  });
+
+  await test('GET /api/albums يعرض ألبومات المحافظة وحدها: ألبوم الثانية لا يظهر افتراضياً ويظهر بترويسة محافظتها، والعكس لألبوم النقب (تذكرة #122)', async () => {
+    const byDefault = await api('GET', '/api/albums?limit=60');
+    assert.strictEqual(byDefault.status, 200);
+    const defaultIds = byDefault.body.albums.map(album => album.id);
+    assert.ok(defaultIds.includes(discoveryNegevAlbum.albumId), 'the Negev album must be in the default list, or the check proves nothing');
+    assert.ok(!defaultIds.includes(discoverySecondAlbum.albumId), 'an album from the second governorate leaked into the default list');
+
+    const second = await api('GET', '/api/albums?limit=60', { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    const secondIds = second.body.albums.map(album => album.id);
+    assert.ok(secondIds.includes(discoverySecondAlbum.albumId), 'the second governorate must see its own album');
+    assert.ok(!secondIds.includes(discoveryNegevAlbum.albumId), 'a Negev album leaked into the second governorate list');
+  });
+
+  await test('ألبوم العريس يتقيّد ببلدة صاحبه: ألبوم في بلدة المحافظة الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)', async () => {
+    const search = `?limit=60&search=${encodeURIComponent(discoveryGroomName)}`;
+
+    const byDefault = await api('GET', `/api/albums${search}`);
+    assert.strictEqual(byDefault.status, 200);
+    assert.ok(
+      !byDefault.body.albums.some(album => album.id === discoveryGroomAlbum.albumId),
+      'a groom album has no event — its own town alone decides its governorate'
+    );
+
+    const second = await api('GET', `/api/albums${search}`, { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    assert.deepStrictEqual(second.body.albums.map(album => album.id), [discoveryGroomAlbum.albumId]);
+  });
+
+  await test('ألبوم العريس بلا بلدة مكانه غير معروف فيظهر في كل المحافظات — القائمة والبحث بالترويسين (تذكرة #122)', async () => {
+    for (const [label, headers] of [['بلا ترويسة', {}], ['بترويسة المحافظة الثانية', { region: discoveryRegionId }]]) {
+      const list = await api('GET', '/api/albums?limit=60', headers);
+      assert.strictEqual(list.status, 200, label);
+      const listed = list.body.albums.find(album => album.id === discoveryTownlessAlbumId);
+      assert.ok(listed, `${label}: an album with no known place must show in every governorate`);
+      assert.strictEqual(listed.town, null, 'it really carries no town — the rule is about the unknown place, not a guess');
+
+      const found = await api('GET', `/api/search?q=${encodeURIComponent(discoveryTownlessGroom)}`, headers);
+      assert.strictEqual(found.status, 200, label);
+      assert.ok(
+        found.body.albums.some(album => album.id === discoveryTownlessAlbumId),
+        `${label}: search finds it under every governorate too`
+      );
+    }
+  });
+
+  await test('GET /api/photos يتقيّد بالألبوم: صورة ألبوم المحافظة الثانية لا تظهر افتراضياً وتظهر بترويسة محافظتها (تذكرة #122)', async () => {
+    const path = `/api/photos?album_id=${discoverySecondAlbum.albumId}&limit=60`;
+
+    const byDefault = await api('GET', path);
+    assert.strictEqual(byDefault.status, 200);
+    assert.deepStrictEqual(byDefault.body.photos, [], 'a photo follows its album — the other governorate excludes it');
+    assert.strictEqual(byDefault.body.pagination.total, 0);
+
+    const second = await api('GET', path, { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    assert.deepStrictEqual(second.body.photos.map(photo => photo.id), [discoverySecondAlbum.photoId]);
+
+    const negevOnly = await api(
+      'GET',
+      `/api/photos?album_id=${discoveryNegevAlbum.albumId}&limit=60`,
+      { region: discoveryRegionId }
+    );
+    assert.deepStrictEqual(negevOnly.body.photos, [], 'and the Negev photo never leaks into the other governorate');
+  });
+
+  await test('GET /api/search بنفس الكلمة: الألبوم والصورة يتقيّدان بالمحافظة، والأشخاص عالميون في التراويس كلها (تذكرة #122)', async () => {
+    const path = `/api/search?q=${encodeURIComponent(discoveryTerm)}`;
+
+    const byDefault = await api('GET', path);
+    assert.strictEqual(byDefault.status, 200);
+    assert.deepStrictEqual(byDefault.body.albums.map(album => album.id), [discoveryNegevAlbum.albumId], 'the album group is the default governorate');
+    assert.deepStrictEqual(byDefault.body.photos.map(photo => photo.id), [discoveryNegevAlbum.photoId], 'and so is the photo group');
+    const defaultPeople = byDefault.body.people.map(person => person.id);
+    assert.ok(defaultPeople.includes(discoveryPersonId), 'the tagged person is a global result, not a governorate one');
+
+    const second = await api('GET', path, { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    assert.deepStrictEqual(second.body.albums.map(album => album.id), [discoverySecondAlbum.albumId]);
+    assert.deepStrictEqual(second.body.photos.map(photo => photo.id), [discoverySecondAlbum.photoId]);
+    assert.deepStrictEqual(
+      second.body.people.map(person => person.id),
+      defaultPeople,
+      'people must be the same list under every X-Region — this one is tagged in the other governorate'
+    );
+  });
+
+  await test('GET /api/stories: ستوري البلدة في محافظتها وحدها، وستوري بلا بلدة وإعلان المنصة في كل المحافظات (تذكرة #122)', async () => {
+    const byDefault = await api('GET', '/api/stories');
+    assert.strictEqual(byDefault.status, 200);
+    const defaultIds = byDefault.body.stories.map(story => story.id);
+    assert.ok(defaultIds.includes(discoveryTownlessStoryId), 'a story with no town is for every governorate');
+    assert.ok(defaultIds.includes(discoveryAdStoryId), 'a platform ad is for every governorate, whatever town it names');
+    assert.ok(!defaultIds.includes(discoverySecondStoryId), 'a town story leaked out of its governorate');
+
+    const second = await api('GET', '/api/stories', { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    const secondIds = second.body.stories.map(story => story.id);
+    assert.ok(secondIds.includes(discoverySecondStoryId), 'the story of that town shows in its own governorate');
+    assert.ok(secondIds.includes(discoveryTownlessStoryId), 'and the town-less one is there too');
+    assert.ok(secondIds.includes(discoveryAdStoryId), 'and the platform ad');
+
+    // بطاقة الدخول ليست شريط اكتشاف: تثبيت ستوري المحافظة الثانية يعرضها
+    // لطلب المحافظة الافتراضية أيضاً، فـ`entryCard()` لا تتقيّد.
+    const pinnedBefore = await db.queryOne(
+      "SELECT setting_value FROM app_settings WHERE setting_key = 'entry_promo_story_id'"
+    );
+    try {
+      await db.execute(
+        `INSERT INTO app_settings (setting_key, setting_value) VALUES ('entry_promo_story_id', ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [String(discoverySecondStoryId)]
+      );
+      const entry = await api('GET', '/api/stories/entry-card');
+      assert.strictEqual(entry.status, 200, 'the entry card stays platform-wide — it is not the discovery strip');
+      assert.strictEqual(entry.body.source, 'pinned');
+      assert.strictEqual(entry.body.story.id, discoverySecondStoryId, 'a pinned story is shown in every governorate');
+    } finally {
+      if (pinnedBefore && pinnedBefore.setting_value !== null) {
+        await db.execute(
+          "UPDATE app_settings SET setting_value = ? WHERE setting_key = 'entry_promo_story_id'",
+          [pinnedBefore.setting_value]
+        );
+      } else {
+        await db.execute("DELETE FROM app_settings WHERE setting_key = 'entry_promo_story_id'");
+      }
+    }
+  });
+
+  await test('GET /api/services/providers يعرض من يخدم بلدة في المحافظة وحدها: مزوّد الثانية لا يظهر افتراضياً ويظهر لمحافظتها (تذكرة #122)', async () => {
+    const path = `/api/services/providers?category_id=${discoveryCategoryId}&limit=100`;
+
+    const byDefault = await api('GET', path);
+    assert.strictEqual(byDefault.status, 200);
+    const defaultIds = byDefault.body.providers.map(provider => provider.id);
+    assert.ok(defaultIds.includes(discoveryNegevProviderId), 'the Negev provider must be listed by default');
+    assert.ok(!defaultIds.includes(discoverySecondProviderId), 'a provider serving the other governorate leaked in');
+
+    const second = await api('GET', path, { region: discoveryRegionId });
+    assert.strictEqual(second.status, 200);
+    assert.deepStrictEqual(second.body.providers.map(provider => provider.id), [discoverySecondProviderId]);
+  });
+
+  await test('GET /api/albums/:id و GET /api/people/:id يفتحان بالمعرّف لصفّ من محافظة أخرى بلا ترويسة (تذكرة #122)', async () => {
+    const album = await api('GET', `/api/albums/${discoverySecondAlbum.albumId}`);
+    assert.strictEqual(album.status, 200, JSON.stringify(album.body));
+    assert.strictEqual(album.body.album.id, discoverySecondAlbum.albumId);
+    assert.deepStrictEqual(album.body.photos.map(photo => photo.id), [discoverySecondAlbum.photoId]);
+
+    assert.strictEqual((await api('GET', `/api/photos/${discoverySecondAlbum.photoId}`)).status, 200);
+    assert.strictEqual(
+      (await api('GET', `/api/photos/${discoverySecondAlbum.photoId}`, { region: defaultRegionId })).status,
+      200,
+      'a photo page opens by id from any governorate'
+    );
+
+    const person = await api('GET', `/api/people/${discoveryPersonId}`);
+    assert.strictEqual(person.status, 200, JSON.stringify(person.body));
+    assert.strictEqual(person.body.person.id, discoveryPersonId);
+
+    const groom = await api('GET', `/api/people/${discoveryGroomPersonId}`);
+    assert.strictEqual(groom.status, 200, 'the groom page opens by id from any governorate too');
+  });
+
+  await test('غياب X-Region لا يقيّد أكثر من المحافظة الافتراضية: نتائج الاكتشاف مطابقة لطلب صريح بالنقب (تذكرة #122)', async () => {
+    for (const [path, key] of [
+      ['/api/albums?limit=60', 'albums'],
+      ['/api/photos?limit=60', 'photos'],
+      ['/api/stories', 'stories'],
+      ['/api/services/providers?limit=100', 'providers']
+    ]) {
+      const implicit = await api('GET', path);
+      const explicit = await api('GET', path, { region: defaultRegionId });
+      assert.strictEqual(implicit.status, 200, path);
+      assert.strictEqual(explicit.status, 200, path);
+      assert.deepStrictEqual(
+        implicit.body[key].map(row => row.id),
+        explicit.body[key].map(row => row.id),
+        `${path}: a client that sends no X-Region sees exactly the default governorate`
+      );
+    }
+  });
+
+  // تنظيف ما أنشأه هذا القسم — بالترتيب الذي تسمح به المفاتيح الأجنبية:
+  // الستوريات، ثم الألبومات (تحذف صورها ووسومها معها)، فالمناسبات، ثم
+  // المزوّدون وفئتهم، ثم الأشخاص، وأخيراً البلدة والمحافظة الثانية.
+  for (const id of discoveryStoryIds) await db.execute('DELETE FROM stories WHERE id = ?', [id]);
+  for (const id of discoveryAlbumIds) await db.execute('DELETE FROM event_albums WHERE id = ?', [id]);
+  for (const id of discoveryEventIds) await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  for (const id of discoveryProviderIds) await db.execute('DELETE FROM service_providers WHERE id = ?', [id]);
+  await db.execute('DELETE FROM service_categories WHERE id = ?', [discoveryCategoryId]);
+  for (const id of discoveryPersonIds) await db.execute('DELETE FROM people WHERE id = ?', [id]);
+  await db.execute('DELETE FROM towns WHERE id = ?', [discoveryTownId]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [discoveryRegionId]);
+
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {
     await fsp.unlink(storedAvatarPath(leftoverAvatar.avatar_url)).catch(() => {});
