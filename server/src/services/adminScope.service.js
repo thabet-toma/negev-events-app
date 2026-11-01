@@ -66,22 +66,28 @@ async function townScopeClause(user, alias = 'e') {
 }
 
 /**
- * Resolves which towns a broadcast from `user` (a non-super-admin, town-
- * scoped `admin`) should be written to (issue #85, story 23/24) — the sole
- * module that decides "which towns may this admin act on" (CLAUDE.md:
- * «نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر»), same as
- * `assertEventInScope` for a single event. `requestedTowns` empty defaults
- * to every town `user` owns; naming even one town outside that ownership is
- * 404, never 403 — the same "never confirm what the caller doesn't own"
- * rule `assertEventInScope` already follows. An admin owning zero towns is
- * refused outright before any town list is even considered (story 24).
+ * Resolves the audience a broadcast from `user` should be written to, for BOTH
+ * roles (issue #85, story 23/24; issue #128) — the sole module that decides it
+ * (CLAUDE.md: «نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر»), same as
+ * `assertEventInScope` for a single event. The route layer only shapes the raw
+ * request body and hands over `req.user` + `req.body.towns`.
  *
- * A governorate's own name is a broadcast target too (issue #128): it expands
- * HERE — and only here — into that governorate's active towns, then meets the
- * admin's own scope, so an admin holding two towns of a governorate reaches
- * those two and nobody else, and one holding none of its towns gets the very
- * same 404 a foreign town name gets (never 403). The route layer above keeps
- * forwarding `req.body.towns` untouched; it builds no scope of its own.
+ * A `super_admin` names nothing by default: one `[null]` row, the platform-wide
+ * broadcast, exactly as before. When it DOES name a governorate (or a town),
+ * the audience narrows to that governorate's active towns — see
+ * `resolvePlatformBroadcastTowns` below.
+ *
+ * A town-scoped `admin`: `requestedTowns` empty defaults to every town `user`
+ * owns; naming even one town outside that ownership is 404, never 403 — the
+ * same "never confirm what the caller doesn't own" rule `assertEventInScope`
+ * already follows. An admin owning zero towns is refused outright before any
+ * town list is even considered (story 24).
+ *
+ * A governorate's own name is a broadcast target too: it expands HERE — and
+ * only here — into that governorate's active towns, then meets the admin's own
+ * scope, so an admin holding two towns of a governorate reaches those two and
+ * nobody else, and one holding none of its towns gets the very same 404 a
+ * foreign town name gets (never 403).
  *
  * A name the admin owns verbatim wins before that expansion: `admin_towns` may
  * hold a governorate's own name (a region-level scope), and such an admin keeps
@@ -89,19 +95,21 @@ async function townScopeClause(user, alias = 'e') {
  * held. Expansion is additive; it replaces nothing.
  */
 async function resolveBroadcastTowns(user, requestedTowns) {
+  if (user && user.role === 'super_admin') return resolvePlatformBroadcastTowns(requestedTowns);
+
   const ownTowns = await listTownsFor(user);
   if (!ownTowns.length) {
     throw ApiError.badRequest('لا تملك أي بلدة مُسنَدة، فلا يمكنك بثّ تعميم لأحد');
   }
   if (!requestedTowns.length) return ownTowns;
 
-  /** One row per town, in the order the caller named them — never a repeat. */
-  const resolved = [];
-  const add = town => { if (!resolved.includes(town)) resolved.push(town); };
   const regionsByName = new Map(
     (await townsService.listActiveRegions()).map(region => [region.name, region])
   );
 
+  /** One row per town, in the order the caller named them — never a repeat. */
+  const resolved = [];
+  const add = town => { if (!resolved.includes(town)) resolved.push(town); };
   for (const requested of requestedTowns) {
     if (ownTowns.includes(requested)) {
       add(requested);
@@ -116,6 +124,49 @@ async function resolveBroadcastTowns(user, requestedTowns) {
       throw ApiError.notFound('بلدة غير موجودة ضمن نطاقك');
     }
     ownInRegion.forEach(add);
+  }
+  return resolved;
+}
+
+/**
+ * The `super_admin`'s broadcast audience (issue #128): `[null]` — one
+ * platform-wide row — unless the request names a place, in which case a town
+ * stays itself and a governorate becomes its active towns, one row per town
+ * (`scope_town` never holds a governorate's own name: readers scope on real
+ * town names, and a user's `clan_town` is a town name). Naming nothing keeps
+ * the old global behaviour byte for byte.
+ *
+ * An unknown place is 404, the same refusal a town admin gets for a town
+ * outside its scope, and a name set that expands to no active town at all is a
+ * 400 rather than a silent "broadcast to nobody" (zero rows, success):
+ * `sendBroadcast` writes one row per entry, so an empty audience must never
+ * reach it.
+ */
+async function resolvePlatformBroadcastTowns(requestedTowns) {
+  if (!requestedTowns.length) return [null];
+
+  const [activeTowns, regions] = await Promise.all([
+    townsService.activeNames(),
+    townsService.listActiveRegions()
+  ]);
+  const regionsByName = new Map(regions.map(region => [region.name, region]));
+
+  /** One row per town, in the order the caller named them — never a repeat. */
+  const resolved = [];
+  const add = town => { if (!resolved.includes(town)) resolved.push(town); };
+  for (const requested of requestedTowns) {
+    if (activeTowns.includes(requested)) {
+      add(requested);
+      continue;
+    }
+    const region = regionsByName.get(requested);
+    if (!region) {
+      throw ApiError.notFound('بلدة أو محافظة غير معروفة');
+    }
+    region.towns.forEach(add);
+  }
+  if (!resolved.length) {
+    throw ApiError.badRequest('لا بلدات نشطة في المحافظة المختارة بعد، فلا يمكن البثّ إليها');
   }
   return resolved;
 }

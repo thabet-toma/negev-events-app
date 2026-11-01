@@ -370,11 +370,12 @@
           <div id="broadcastScopeNotice" class="admin-scope-banner" style="display:none;"></div>
 
           <form id="broadcastForm" class="admin-form" onsubmit="handleSendBroadcast(event)">
-            <!-- منتقي البلدات لأدمن البلدة فقط (مخفي تماماً عن السوبر أدمن، ومخفي إن كانت البلدات صفر) -->
+            <!-- منتقي النطاق (تذكرة #128): بلدات أدمن البلدات ومحافظاتها، ومحافظات المنصة
+                 وخيار «كل المناطق» للسوبر أدمن — نصّ التلميح يتبدّل حسب الدور في web/admin.js -->
             <div class="form-group" id="broadcastTownsGroup" style="display:none;">
-              <label>البلدات المستهدفة بالتعميم</label>
+              <label>نطاق التعميم</label>
               <div id="broadcastTownsPicker" class="provider-towns-picker"></div>
-              <span class="hint-text">اختر بلدة واحدة أو أكثر، أو محافظة كاملة (بند «كل بلدات المحافظة» — يبلغ بلداتك أنت في تلك المحافظة وحدها)، أو اترك الكل دون تحديد للبث لكافة بلداتك المُسنَدة.</span>
+              <span class="hint-text" id="broadcastTargetsHint">اختر بلدة أو محافظة، أو اترك الكل دون تحديد للبث لكافة بلداتك المُسنَدة.</span>
             </div>
 
             <div class="form-group">

@@ -1728,10 +1728,32 @@ function broadcastRegionsFor(myTowns) {
     .map(region => region.name);
 }
 
+/** كل المحافظات النشطة — قائمة السوبر أدمن، من `GET /api/towns` أيضاً. */
+function allBroadcastRegionNames() {
+  return REGIONS.map(region => region && region.name).filter(Boolean);
+}
+
+/**
+ * «كل المناطق» و«كل بلدات <المحافظة>» خياران متعارضان (تذكرة #128): اختيار
+ * أحدهما يُلغي الآخر، فيبقى ما سيُرسَل صريحاً بلا حالة ملتبسة. و«كل المناطق»
+ * تعني حرفياً ما كان البثّ يفعله قبل التذكرة: بلا `towns` في الطلب = صفّ عام.
+ */
+function handleBroadcastGlobalToggle(checkbox) {
+  if (!checkbox.checked) return;
+  document.querySelectorAll('.broadcast-region-check').forEach(item => { item.checked = false; });
+}
+
+function handleBroadcastRegionToggle(checkbox) {
+  if (!checkbox.checked) return;
+  const globalCheck = document.querySelector('.broadcast-global-check');
+  if (globalCheck) globalCheck.checked = false;
+}
+
 function renderBroadcastComposer() {
   const scopeNotice = document.getElementById('broadcastScopeNotice');
   const townsGroup = document.getElementById('broadcastTownsGroup');
   const townsPicker = document.getElementById('broadcastTownsPicker');
+  const targetsHint = document.getElementById('broadcastTargetsHint');
   const titleInput = document.getElementById('broadcastTitleInput');
   const messageInput = document.getElementById('broadcastMessageInput');
   const submitBtn = document.getElementById('sendBroadcastBtn');
@@ -1742,8 +1764,26 @@ function renderBroadcastComposer() {
   if (isSuper) {
     scopeNotice.style.display = 'flex';
     scopeNotice.className = 'admin-scope-banner';
-    scopeNotice.innerHTML = '<i class="fa-solid fa-earth-africa"></i> بث عام وشامل — يصل تعميمك إلى جميع مستخدمي المنصة في كافة البلدات';
-    if (townsGroup) townsGroup.style.display = 'none';
+    scopeNotice.innerHTML = '<i class="fa-solid fa-earth-africa"></i> بث عام وشامل — بلا اختيار يصل تعميمك إلى كل المنصة، واختيار محافظة يحصره في بلداتها النشطة';
+    if (targetsHint) {
+      targetsHint.textContent = 'اترك «كل المناطق» مختاراً للبثّ العام، أو اختر محافظة فيصل تعميمك إلى بلداتها النشطة وحدها — صفّ لكل بلدة.';
+    }
+    // بلا محافظات محمّلة (`GET /api/towns` لم يصل) يبقى البثّ عاماً كما كان.
+    const allRegions = allBroadcastRegionNames();
+    if (townsGroup && townsPicker && allRegions.length) {
+      townsGroup.style.display = 'block';
+      townsPicker.innerHTML = `
+        <label class="ot-check">
+          <input type="checkbox" class="broadcast-global-check" checked onchange="handleBroadcastGlobalToggle(this)"> كل المناطق (بث عام)
+        </label>
+      ` + allRegions.map(region => `
+        <label class="ot-check">
+          <input type="checkbox" class="broadcast-region-check" value="${escapeHtml(region)}" onchange="handleBroadcastRegionToggle(this)"> كل بلدات ${escapeHtml(region)}
+        </label>
+      `).join('');
+    } else if (townsGroup) {
+      townsGroup.style.display = 'none';
+    }
     if (titleInput) titleInput.disabled = false;
     if (messageInput) messageInput.disabled = false;
     if (submitBtn) submitBtn.disabled = false;
@@ -1767,7 +1807,10 @@ function renderBroadcastComposer() {
   scopeNotice.style.display = 'flex';
   scopeNotice.className = 'admin-scope-banner';
   scopeNotice.innerHTML = `<i class="fa-solid fa-map-location-dot"></i> نطاق البث الخاص بك: ${myTowns.map(escapeHtml).join(' · ')}`;
-  
+  if (targetsHint) {
+    targetsHint.textContent = 'اختر بلدة أو محافظة (بند «كل بلدات المحافظة» — يبلغ بلداتك أنت في تلك المحافظة وحدها)، أو اترك الكل دون تحديد للبث لكافة بلداتك المُسنَدة.';
+  }
+
   if (townsGroup && townsPicker) {
     townsGroup.style.display = 'block';
     // البلدات أولاً، ثم بند «كل بلدات <المحافظة>» لكل محافظة يملك فيها الأدمن
@@ -1811,14 +1854,14 @@ async function handleSendBroadcast(e) {
   };
   if (title) payload.title = title;
 
-  if (!isSuperAdminRole()) {
-    // البلدات والمحافظات في القائمتين معاً: اسم المحافظة يُرسَل كما هو ويوسّعه الخادم.
-    const checkedTowns = Array.from(
-      document.querySelectorAll('.broadcast-town-check:checked, .broadcast-region-check:checked')
-    ).map(cb => cb.value);
-    if (checkedTowns.length > 0) {
-      payload.towns = checkedTowns;
-    }
+  // البلدات والمحافظات في القائمتين معاً: اسم المحافظة يُرسَل كما هو ويوسّعه
+  // الخادم. بلا أي اختيار يبقى `towns` غائباً = بثّ عام واحد — سلوك السوبر أدمن
+  // قبل التذكرة حرفياً، وسلوك «كل المناطق» المختارة عمداً.
+  const checkedTowns = Array.from(
+    document.querySelectorAll('.broadcast-town-check:checked, .broadcast-region-check:checked')
+  ).map(cb => cb.value);
+  if (checkedTowns.length > 0) {
+    payload.towns = checkedTowns;
   }
 
   btn.disabled = true;
@@ -1840,7 +1883,8 @@ async function handleSendBroadcast(e) {
       if (titleInp) titleInp.value = '';
       selectBroadcastTone('info');
       selectBroadcastDuration('day');
-      document.querySelectorAll('.broadcast-town-check, .broadcast-region-check').forEach(cb => { cb.checked = false; });
+      // إعادة بناء المنتقي لا تفريغه فقط: السوبر أدمن يعود إلى «كل المناطق».
+      renderBroadcastComposer();
     } else {
       showAdminNotice(data.message || 'فشل إرسال البث', 'خطأ في البث');
     }
@@ -6892,7 +6936,10 @@ function renderAnalyticsOverview() {
 
 /**
  * جدول «النشاط بحسب المحافظة» (تذكرة #128): نفس مؤشرات الكروت أعلاه مجموعاً
- * لكل محافظة — مفتاح `by_region` الإضافي وحده، بلا تغيير في أي حقل قائم.
+ * لكل محافظة — مفتاح `by_region` الإضافي وحده، بلا تغيير في أي حقل قائم ولا
+ * مقياس جديد. الصفّ الأخير `region_id: null` باسم «غير محدَّد» هو ما تعذّر
+ * إسناده إلى محافظة (بند القرى الجامع، بلدة محذوفة، بلا محتوى) — يُعرض كي
+ * تساوي المجاميع الملخّص أعلاه بدل أن تتفارق بصمت.
  */
 function renderAnalyticsRegionTable(rows) {
   const container = document.getElementById('analyticsRegionTable');
@@ -6916,7 +6963,6 @@ function renderAnalyticsRegionTable(rows) {
       <thead>
         <tr>
           <th>المحافظة</th>
-          <th>المناسبات</th>
           <th>المشاهدات</th>
           <th>المشاهدون (فريد)</th>
           <th>المشاركات</th>
@@ -6926,9 +6972,8 @@ function renderAnalyticsRegionTable(rows) {
       </thead>
       <tbody>
         ${rows.map(row => `
-          <tr data-region-id="${Number(row.region_id)}">
+          <tr data-region-id="${row.region_id == null ? '' : Number(row.region_id)}">
             <td><strong><i class="fa-solid fa-map"></i> ${escapeHtml(row.name || '')}</strong></td>
-            <td>${num(row.events)}</td>
             <td>${cell(row.views, 'total')}</td>
             <td>${cell(row.views, 'unique')}</td>
             <td>${cell(row.shares, 'total')}</td>

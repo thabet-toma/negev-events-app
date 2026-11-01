@@ -256,18 +256,19 @@ function resolveBroadcastExpiry(body) {
 /**
  * Broadcasts a general announcement — no longer super_admin-only (story 23):
  * the guard here is the router-wide `requireAdmin` from line 29, and the
- * AUDIENCE, not the router, decides who reaches whom. A super_admin always
- * writes one row with `scope_town = NULL` (story 22 — everyone). A town
- * admin names one or more of its OWN towns, resolved entirely by
- * `adminScope.resolveBroadcastTowns` (never here) — a town outside that
- * scope is 404, never 403; naming none defaults to all of the admin's towns;
- * an admin holding zero towns is refused outright, zero rows written, never
- * a silent success (story 24).
+ * AUDIENCE, not the router, decides who reaches whom. Both roles go through
+ * the same service call below; this route only hands over `req.user` and the
+ * towns the body named.
  *
- * A governorate's own name (issue #128) is a target too — forwarded below as
- * received, never turned into a scope here: `resolveBroadcastTowns` expands it
- * into that governorate's active towns and intersects the result with the
- * admin's own scope, exactly as it does for a town name.
+ * A super_admin naming nothing keeps one row with `scope_town = NULL` (story
+ * 22 — everyone). Naming a governorate (issue #128) narrows the audience to
+ * that governorate's active towns, one row per town. A town admin names one or
+ * more of its OWN towns — a town outside that scope is 404, never 403; naming
+ * none defaults to all of the admin's towns; an admin holding zero towns is
+ * refused outright, zero rows written, never a silent success (story 24).
+ *
+ * Every one of those decisions lives in `adminScope.resolveBroadcastTowns`
+ * (never here), including the super_admin's global default.
  */
 router.post('/admin/broadcast', asyncHandler(async (req, res) => {
   requireFields(req.body, ['message']);
@@ -282,23 +283,17 @@ router.post('/admin/broadcast', asyncHandler(async (req, res) => {
 
   const expiresAt = resolveBroadcastExpiry(req.body);
 
-  let scopeTowns;
-  if (req.user.role === 'super_admin') {
-    scopeTowns = [null];
-  } else {
-    let requestedTowns = [];
-    if (req.body.towns !== undefined) {
-      if (!Array.isArray(req.body.towns)) {
-        throw ApiError.badRequest('قائمة البلدات غير صالحة');
-      }
-      requestedTowns = [...new Set(req.body.towns.map(town => cleanString(town, 100)).filter(Boolean))];
+  let requestedTowns = [];
+  if (req.body.towns !== undefined) {
+    if (!Array.isArray(req.body.towns)) {
+      throw ApiError.badRequest('قائمة البلدات غير صالحة');
     }
-
-    // Which towns this admin may actually reach — resolved entirely inside
-    // adminScope.service.js, never here (CLAUDE.md: "نطاق الأدمن المحلي داخل
-    // الاستعلام لا في الراوتر"). This route only shapes the raw request body.
-    scopeTowns = await adminScope.resolveBroadcastTowns(req.user, requestedTowns);
+    requestedTowns = [...new Set(req.body.towns.map(town => cleanString(town, 100)).filter(Boolean))];
   }
+
+  // Who actually receives this — resolved entirely inside adminScope.service.js,
+  // never here (CLAUDE.md: "نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر").
+  const scopeTowns = await adminScope.resolveBroadcastTowns(req.user, requestedTowns);
 
   const rows = await broadcastsService.sendBroadcast({
     title, message, sentBy: req.user.id, expiresAt, tone, scopeTowns

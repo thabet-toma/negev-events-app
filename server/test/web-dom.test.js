@@ -4655,16 +4655,74 @@ async function run() {
     assert.strictEqual(broadcastCalls[0].body.duration, 'none');
   });
 
-  await test('super admin sees no town picker; town admin sees only their own assigned towns', async () => {
-    // 1. Super admin sees no town picker
-    const superDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
-    superDom.window.renderBroadcastComposer();
-    const superTownsGroup = superDom.window.document.getElementById('broadcastTownsGroup');
-    assert.strictEqual(superTownsGroup.style.display, 'none', 'super admin must not see a town picker');
-    const superNotice = superDom.window.document.getElementById('broadcastScopeNotice').textContent;
-    assert.ok(superNotice.includes('بث عام وشامل'), 'super admin notice must describe global reach');
+  await test('super admin gets «كل المناطق» plus one «كل بلدات <المحافظة>» target per governorate, and no regions hides the picker (تذكرة #128)', async () => {
+    // 1. بلا محافظات محمّلة (GET /api/towns لم يصل) يبقى البثّ عاماً كما كان.
+    const bareDom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    bareDom.window.renderBroadcastComposer();
+    assert.strictEqual(bareDom.window.document.getElementById('broadcastTownsGroup').style.display, 'none',
+      'no governorates loaded means the global broadcast, exactly as before');
+    assert.ok(bareDom.window.document.getElementById('broadcastScopeNotice').textContent.includes('بث عام وشامل'));
 
-    // 2. Town admin sees only their own assigned towns
+    // 2. وبمحافظات محمّلة يظهر المنتقي: «كل المناطق» (مختار) + بند لكل محافظة.
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const broadcastCalls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (requestPath === '/api/towns') {
+        return jsonResponse({
+          success: true,
+          towns: TOWNS,
+          town_coordinates: TOWN_COORDINATES,
+          villages: [],
+          regions: [
+            { id: 1, name: 'النقب', latitude: 31.25, longitude: 34.79, map_zoom: 9, position: 0, towns: TOWNS },
+            { id: 2, name: 'طولكرم', latitude: 32.31, longitude: 35.03, map_zoom: 10, position: 1, towns: ['بلدة طولكرم'] }
+          ]
+        });
+      }
+      if (method === 'POST' && requestPath === '/api/admin/broadcast') {
+        broadcastCalls.push({ body: JSON.parse(options.body) });
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: true });
+    };
+    await dom.window.fetchTowns();
+    dom.window.renderBroadcastComposer();
+
+    const { document } = dom.window;
+    assert.strictEqual(document.getElementById('broadcastTownsGroup').style.display, 'block',
+      'a super admin naming a governorate must be possible from the panel');
+
+    const globalCheck = document.querySelector('#broadcastTownsPicker .broadcast-global-check');
+    assert.ok(globalCheck, 'expected the «كل المناطق» option');
+    assert.strictEqual(globalCheck.checked, true, 'the default stays the global broadcast');
+    assert.ok(globalCheck.closest('label').textContent.includes('كل المناطق'));
+
+    const regionChecks = Array.from(document.querySelectorAll('#broadcastTownsPicker .broadcast-region-check'));
+    assert.deepStrictEqual(regionChecks.map(check => check.value), ['النقب', 'طولكرم']);
+    assert.ok(regionChecks.every(check => check.closest('label').textContent.includes('كل بلدات ')));
+
+    // اختيار محافظة يُلغي «كل المناطق» ويُرسَل اسمها وحده — الخادم يوسّعه.
+    regionChecks[1].checked = true;
+    regionChecks[1].dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(globalCheck.checked, false, 'the two targets are mutually exclusive');
+    document.getElementById('broadcastMessageInput').value = 'تعميم لمحافظة طولكرم';
+    document.getElementById('broadcastForm').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 0);
+    assert.deepStrictEqual(broadcastCalls[0].body.towns, ['طولكرم'], 'the governorate name travels as-is');
+
+    // وإعادة اختيار «كل المناطق» تُفرغ المحافظات ويبقى الطلب بلا `towns` = عام.
+    globalCheck.checked = true;
+    globalCheck.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    assert.strictEqual(regionChecks.every(check => !check.checked), true, '«كل المناطق» clears the governorates');
+    document.getElementById('broadcastMessageInput').value = 'تعميم عام';
+    document.getElementById('broadcastForm').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 1);
+    assert.strictEqual('towns' in broadcastCalls[1].body, false, 'no towns key means one global row — the pre-ticket behaviour');
+  });
+
+  await test('town admin sees only their own assigned towns among the broadcast targets', async () => {
     const townDom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط', 'حورة'] });
     await townDom.window.fetchAdminIdentity();
     townDom.window.renderBroadcastComposer();
@@ -4673,6 +4731,8 @@ async function run() {
     const checkboxes = Array.from(townDom.window.document.querySelectorAll('#broadcastTownsPicker .broadcast-town-check'));
     const renderedTowns = checkboxes.map(cb => cb.value);
     assert.deepStrictEqual(renderedTowns, ['رهط', 'حورة'], 'town admin can pick only from their assigned towns');
+    assert.strictEqual(townDom.window.document.querySelector('#broadcastTownsPicker .broadcast-global-check'), null,
+      'a town admin never gets the platform-wide option');
 
     // Select one town and submit
     checkboxes[0].checked = true;
@@ -9283,8 +9343,10 @@ async function run() {
     assert.deepStrictEqual(broadcastCalls[0].body.towns, ['النقب'], 'the governorate name is sent as-is; expanding it is the service\'s job');
   });
 
-  await test('the analytics tab renders the per-governorate breakdown from overview.by_region, leaving the summary KPIs as they were (تذكرة #128)', async () => {
+  await test('the analytics tab renders the per-governorate breakdown from overview.by_region, with the «غير محدَّد» row, leaving the summary KPIs as they were (تذكرة #128)', async () => {
     const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    // بلا `events`: مفتاح `by_region` يحمل مقاييس الملخّص نفسها فقط، ولا عدّاد
+    // مناسبات مخترَعاً — عدّاد المناسبات يعيش في GET /api/towns#regions.
     const overview = {
       period: 'all',
       views: { total: 10, unique: 4, breakdown: { app_opened: 5, event_viewed: 4, share_page_viewed: 1 } },
@@ -9293,8 +9355,9 @@ async function run() {
       platforms: { web: { total_events: 5, unique_viewers: 3 }, mobile: { total_events: 5, unique_viewers: 2 } },
       audience: { total_active_devices: 7, unregistered_devices: 5, registered_users: 2 },
       by_region: [
-        { region_id: 1, name: 'النقب', events: 12, views: { total: 8, unique: 3 }, shares: { total: 2, unique: 2 }, clicks: { total: 3, unique: 2 }, audience: { total_active_devices: 6 } },
-        { region_id: 2, name: 'طولكرم', events: 0, views: { total: 2, unique: 1 }, shares: { total: 0, unique: 0 }, clicks: { total: 0, unique: 0 }, audience: { total_active_devices: 1 } }
+        { region_id: 1, name: 'النقب', views: { total: 8, unique: 3 }, shares: { total: 2, unique: 2 }, clicks: { total: 3, unique: 2 }, audience: { total_active_devices: 6 } },
+        { region_id: 2, name: 'طولكرم', views: { total: 1, unique: 0 }, shares: { total: 0, unique: 0 }, clicks: { total: 0, unique: 0 }, audience: { total_active_devices: 1 } },
+        { region_id: null, name: 'غير محدَّد', views: { total: 1, unique: 1 }, shares: { total: 0, unique: 0 }, clicks: { total: 0, unique: 0 }, audience: { total_active_devices: 0 } }
       ]
     };
     dom.window.fetch = async (url) => {
@@ -9307,12 +9370,16 @@ async function run() {
 
     const table = dom.window.document.getElementById('analyticsRegionTable');
     const rows = [...table.querySelectorAll('tr[data-region-id]')];
-    assert.deepStrictEqual(rows.map(row => row.getAttribute('data-region-id')), ['1', '2']);
-    assert.ok(table.textContent.includes('النقب') && table.textContent.includes('طولكرم'));
+    assert.deepStrictEqual(rows.map(row => row.getAttribute('data-region-id')), ['1', '2', ''],
+      'one row per governorate plus the single «غير محدَّد» row (an empty data-region-id)');
+    assert.ok(table.textContent.includes('النقب') && table.textContent.includes('طولكرم') && table.textContent.includes('غير محدَّد'));
+    assert.strictEqual(table.textContent.includes('المناسبات'), false,
+      'no invented occasion count column — that number lives in GET /api/towns#regions');
 
     const arNumber = value => Number(value).toLocaleString('ar-EG');
-    assert.ok(rows[0].textContent.includes(arNumber(12)), 'the occasion count per governorate is shown');
     assert.ok(rows[0].textContent.includes(arNumber(8)), 'the governorate\'s own views are shown');
+    assert.ok(rows[0].textContent.includes(arNumber(3)), 'and its unique viewers');
+    assert.ok(rows[2].textContent.includes(arNumber(1)), 'the unattributed row keeps its own column values');
     assert.ok(dom.window.document.getElementById('kpiTotalViews').textContent.includes(arNumber(10)),
       'the summary KPI keeps rendering the same totals');
   });

@@ -2947,6 +2947,105 @@ async function run() {
     }
   });
 
+  // TWN-5 (#127): `regions` on GET /api/towns became the region picker's read —
+  // every governorate with its real counts — while publishing still validates
+  // against the active ones only. The rows below are created here and removed
+  // at the end of this block; names are unique so a failed earlier run cannot
+  // collide with them.
+  const discoveryStamp = Date.now();
+  const discoveryActiveRegionName = `محافظة اكتشاف ${discoveryStamp}`;
+  const discoveryStoppedName = `محافظة موقوفة ${discoveryStamp}`;
+  const discoveryCleanup = { eventIds: [], townIds: [], regionIds: [] };
+
+  await test('GET /api/towns regions carries is_active and real towns_count/events_count for an active and a stopped governorate, and publishing still accepts only the active name (#127)', async () => {
+    const { insertId: activeRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.31, 35.03, 10, 90, 1)`,
+      [discoveryActiveRegionName]
+    );
+    discoveryCleanup.regionIds.push(activeRegionId);
+    const { insertId: stoppedRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.5, 35.2, 9, 91, 0)`,
+      [discoveryStoppedName]
+    );
+    discoveryCleanup.regionIds.push(stoppedRegionId);
+
+    const { insertId: activeTownId } = await db.execute(
+      'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, 32.32, 35.04, 90, 1)',
+      [activeRegionId, `بلدة اكتشاف ${discoveryStamp}`]
+    );
+    discoveryCleanup.townIds.push(activeTownId);
+    const { insertId: stoppedTownId } = await db.execute(
+      'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, 32.33, 35.05, 91, 0)',
+      [activeRegionId, `بلدة اكتشاف موقوفة ${discoveryStamp}`]
+    );
+    discoveryCleanup.townIds.push(stoppedTownId);
+
+    // Three rows on purposes: pending, approved, rejected. The count the towns
+    // tab shows (listForAdmin) is every row — no status filter — so that is
+    // what the picker's number must be too.
+    const insertEvent = async (status, eventDate) => {
+      const { insertId } = await db.execute(
+        `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status)
+         VALUES ('دعوة اكتشاف', 'عريس الاكتشاف', '', ?, ?, 'غير محدد', ?, ?)`,
+        [discoveryActiveRegionName, activeRegionId, eventDate, status]
+      );
+      discoveryCleanup.eventIds.push(insertId);
+      return insertId;
+    };
+    await insertEvent('pending', '2027-05-01');
+    await insertEvent('approved', '2027-05-02');
+    await insertEvent('rejected', '2027-05-03');
+
+    // Publishing into the active governorate by its own name still works — the
+    // region-level place contract is untouched by the discovery read.
+    const published = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ town: discoveryActiveRegionName, event_date: '2027-05-04' })
+    });
+    assert.strictEqual(published.status, 201, published.body.message);
+    discoveryCleanup.eventIds.push(published.body.eventId);
+    const publishedRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [published.body.eventId]);
+    assert.strictEqual(publishedRow.region_id, activeRegionId, 'the active governorate name is still a valid place');
+
+    const { body } = await api('GET', '/api/towns');
+    const active = body.regions.find(region => region.id === activeRegionId);
+    const stopped = body.regions.find(region => region.id === stoppedRegionId);
+    assert.ok(active, 'a governorate created at runtime must appear in regions');
+    assert.strictEqual(active.name, discoveryActiveRegionName);
+    assert.strictEqual(active.is_active, true);
+    assert.strictEqual(active.towns_count, 1, 'a disabled town is not counted');
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM events WHERE region_id = ?', [activeRegionId]);
+    assert.strictEqual(active.events_count, Number(total), 'the count is read from the database, and equals every row on events.region_id');
+    assert.strictEqual(active.events_count, 4, 'three seeded rows plus the published one — no status filter');
+    assert.ok(active.towns.length === 1, 'regions keeps its active town names — clients publish and centre the map on them');
+    assert.ok(body.regions.every(region => typeof region.is_active === 'boolean'), 'every row carries is_active');
+
+    assert.ok(stopped, 'a stopped governorate stays in the discovery read instead of vanishing');
+    assert.strictEqual(stopped.is_active, false);
+    assert.strictEqual(stopped.towns_count, 0);
+    assert.strictEqual(stopped.events_count, 0);
+
+    // ...and it is not a place anything may be published into.
+    const refused = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ town: discoveryStoppedName, event_date: '2027-05-05' })
+    });
+    assert.strictEqual(refused.status, 400, 'a stopped governorate name must stay out of publishing');
+
+    await db.execute(
+      `DELETE FROM activity_log WHERE event_id IN (${discoveryCleanup.eventIds.map(() => '?').join(', ')})`,
+      discoveryCleanup.eventIds
+    );
+    await db.execute(
+      `DELETE FROM events WHERE id IN (${discoveryCleanup.eventIds.map(() => '?').join(', ')})`,
+      discoveryCleanup.eventIds
+    );
+    for (const townId of discoveryCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [townId]);
+    for (const regionId of discoveryCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [regionId]);
+  });
+
   // TWN-3: super_admin management of towns and regions.
   const negevRegionId = (await db.queryOne('SELECT id FROM regions ORDER BY position ASC, id ASC LIMIT 1')).id;
 
@@ -12616,7 +12715,14 @@ async function run() {
   const ticket128TownA = `بلدة لوحة أ ${Date.now()}`;
   const ticket128TownB = `بلدة لوحة ب ${Date.now()}`;
   const ticket128VillageName = `قرية لوحة ${Date.now()}`;
-  const ticket128Cleanup = { regionIds: [], townIds: [], villageIds: [], userIds: [], broadcastIds: [], contentTowns: [ticket128TownA, ticket128TownB] };
+  const ticket128Cleanup = {
+    regionIds: [], townIds: [], villageIds: [], userIds: [], broadcastIds: [], eventIds: [],
+    contentTowns: [ticket128TownA, ticket128TownB]
+  };
+  // معرّف جهاز فريد لكل صفّ تحليلات يكتبه هذا القسم: ينظّفه وحده (LIKE 'ticket128-%')
+  // ويجعل «المشاهدين الفريدين» قابلة للحساب بالضبط، لا `>= 1`.
+  let ticket128DeviceSeq = 0;
+  const ticket128Device = () => `ticket128-${Date.now()}-${++ticket128DeviceSeq}`;
 
   let ticket128RegionId = 0;
   await test('POST /api/admin/regions ينشئ محافظة على نمط «إضافة بلدة»؛ الاسم المكرر 409، وبلا إحداثيات 400، وأدمن بلدة 403 (تذكرة #128)', async () => {
@@ -12808,53 +12914,145 @@ async function run() {
     assert.strictEqual(Number(after.total), Number(before.total), 'الرفض لا يكتب أي صفّ');
   });
 
-  await test('GET /api/admin/analytics/overview يحمل by_region إضافياً بمجاميع المحافظة، وبقية الحقول كما هي (تذكرة #128)', async () => {
-    // صفّ تحليلات بمحتوى بلدة في المحافظة الجديدة. يُكتب بـ SQL لا بمسار
-    // POST /api/analytics/events: هذا المسار على دلو الطلبات المجهولة، والقسم
-    // هنا لا يقيس تحديد المعدّل بل التجميع.
-    await db.execute(
-      `INSERT INTO analytics_events (event_name, device_id, platform, content_town)
-       VALUES ('event_viewed', ?, 'web', ?)`,
-      [`ticket128-${Date.now()}`, ticket128TownA]
+  await test('سوبر أدمن يسمّي محافظة: صفّ لكل بلدة نشطة فيها ولا صفّ عام؛ وبلا اسم: صفّ عام واحد كما كان (تذكرة #128)', async () => {
+    const byRegion = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'تعميم السوبر أدمن لمحافظة الاختبار', duration: 'none', towns: [ticket128RegionName] }
+    });
+    assert.strictEqual(byRegion.status, 200, JSON.stringify(byRegion.body));
+    byRegion.body.broadcasts.forEach(row => ticket128Cleanup.broadcastIds.push(row.id));
+    assert.strictEqual(byRegion.body.broadcasts.length, 2, 'صفّ لكل بلدة نشطة في المحافظة، لا أكثر');
+    assert.deepStrictEqual(
+      byRegion.body.broadcasts.map(row => row.scope_town).sort(),
+      [ticket128TownA, ticket128TownB].sort(),
+      'لا صفّ عام NULL ولا صفّ باسم المحافظة — بلداتها النشطة وحدها'
     );
 
+    const scopedRows = await db.query(
+      `SELECT scope_town FROM broadcasts WHERE id IN (${byRegion.body.broadcasts.map(() => '?').join(', ')})`,
+      byRegion.body.broadcasts.map(row => row.id)
+    );
+    assert.deepStrictEqual(scopedRows.map(row => row.scope_town).sort(), [ticket128TownA, ticket128TownB].sort());
+    assert.ok(scopedRows.every(row => row.scope_town !== null), 'ولا صفّ عام بينها');
+
+    // وبلا `towns` يبقى البثّ العام: صفّ واحد `scope_town = NULL` لكل المنصة.
+    const globalBefore = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts WHERE scope_town IS NULL');
+    const global = await api('POST', '/api/admin/broadcast', {
+      token: superAdminToken,
+      body: { message: 'تعميم السوبر أدمن العام', duration: 'none' }
+    });
+    assert.strictEqual(global.status, 200, JSON.stringify(global.body));
+    assert.strictEqual(global.body.broadcasts.length, 1, 'صفّ عام واحد، لا صفّ لكل بلدة');
+    assert.strictEqual(global.body.broadcasts[0].scope_town, null);
+    ticket128Cleanup.broadcastIds.push(global.body.broadcasts[0].id);
+    const globalAfter = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts WHERE scope_town IS NULL');
+    assert.strictEqual(Number(globalAfter.total), Number(globalBefore.total) + 1);
+  });
+
+  /** لقطة من `GET /api/admin/analytics/overview` — الفرق بين لقطتين يُقاس بالضبط. */
+  const ticket128Overview = async () => {
     const { status, body } = await api('GET', '/api/admin/analytics/overview?period=all', { token: superAdminToken });
-    assert.strictEqual(status, 200);
-    const overview = body.overview;
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    return body.overview;
+  };
+
+  await test('GET /api/admin/analytics/overview يحمل by_region إضافياً، وحدثان على بلدة المحافظة الثانية يزيدانها اثنين بالضبط (تذكرة #128)', async () => {
+    const before = await ticket128Overview();
 
     // الشكل القائم كما هو بالحرف — الإضافة مفتاح جديد وحده.
-    assert.deepStrictEqual(Object.keys(overview.views).sort(), ['breakdown', 'total', 'unique']);
-    assert.deepStrictEqual(Object.keys(overview.shares).sort(), ['total', 'unique']);
-    assert.deepStrictEqual(Object.keys(overview.clicks).sort(), ['breakdown', 'total', 'unique']);
-    assert.deepStrictEqual(Object.keys(overview.platforms).sort(), ['mobile', 'web']);
-    assert.deepStrictEqual(Object.keys(overview.audience).sort(), ['registered_users', 'total_active_devices', 'unregistered_devices']);
-    assert.strictEqual(overview.period, 'all');
+    assert.deepStrictEqual(Object.keys(before).sort(), ['audience', 'by_region', 'clicks', 'period', 'platforms', 'shares', 'views']);
+    assert.deepStrictEqual(Object.keys(before.views).sort(), ['breakdown', 'total', 'unique']);
+    assert.deepStrictEqual(Object.keys(before.shares).sort(), ['total', 'unique']);
+    assert.deepStrictEqual(Object.keys(before.clicks).sort(), ['breakdown', 'total', 'unique']);
+    assert.deepStrictEqual(Object.keys(before.platforms).sort(), ['mobile', 'web']);
+    assert.deepStrictEqual(Object.keys(before.audience).sort(), ['registered_users', 'total_active_devices', 'unregistered_devices']);
+    assert.strictEqual(before.period, 'all');
 
-    assert.ok(Array.isArray(overview.by_region), 'by_region مفتاح إضافي');
+    // صفّ لكل محافظة، + صفّ واحد «غير محدَّد» لما تعذّر إسناده — لا صفّ يُسقَط.
     const { total: regionsCount } = await db.queryOne('SELECT COUNT(*) AS total FROM regions');
-    assert.strictEqual(overview.by_region.length, Number(regionsCount), 'صفّ لكل محافظة، حتى التي بلا نشاط');
+    assert.strictEqual(before.by_region.length, Number(regionsCount) + 1, 'كل محافظة + صفّ «غير محدَّد»');
+    const unassignedRows = before.by_region.filter(row => row.region_id === null);
+    assert.strictEqual(unassignedRows.length, 1, 'صفّ «غير محدَّد» واحد لا أكثر');
+    assert.strictEqual(unassignedRows[0].name, 'غير محدَّد');
 
-    const region = overview.by_region.find(row => row.region_id === ticket128RegionId);
-    assert.ok(region, 'المحافظة الجديدة ظاهرة في التجميع');
-    assert.strictEqual(region.name, ticket128RegionName);
-    assert.ok(region.views.total >= 1, 'المشاهدة المسجَّلة على بلدة في المحافظة تُحسب لها');
-    assert.ok(region.views.unique >= 1);
-    assert.deepStrictEqual(Object.keys(region.views).sort(), ['total', 'unique']);
-    assert.deepStrictEqual(Object.keys(region.shares).sort(), ['total', 'unique']);
-    assert.deepStrictEqual(Object.keys(region.clicks).sort(), ['total', 'unique']);
-    assert.deepStrictEqual(Object.keys(region.audience), ['total_active_devices']);
-    assert.strictEqual(typeof region.events, 'number', 'عدد المناسبات المُدرَجة على المحافظة');
+    // المجاميع تساوي الملخّص بالحرف — هذا ما يجعله تجميعاً لا تقريراً ثانياً.
+    const sumOf = (rows, pick) => rows.reduce((total, row) => total + pick(row), 0);
+    assert.strictEqual(sumOf(before.by_region, row => row.views.total), before.views.total);
+    assert.strictEqual(sumOf(before.by_region, row => row.shares.total), before.shares.total);
+    assert.strictEqual(sumOf(before.by_region, row => row.clicks.total), before.clicks.total);
 
-    // المحصّلة الإجمالية نفسها لم تتغيّر بالكتابة — بلا أي صفّ تحليلات لهذه البلدات.
-    const emptyRegion = overview.by_region.find(row => row.region_id !== ticket128RegionId && row.views.total === 0 && row.events === 0);
-    if (emptyRegion) {
-      assert.strictEqual(emptyRegion.views.unique, 0);
-      assert.strictEqual(emptyRegion.clicks.total, 0);
+    const regionBefore = before.by_region.find(row => row.region_id === ticket128RegionId);
+    assert.ok(regionBefore, 'المحافظة الجديدة ظاهرة في التجميع');
+    assert.strictEqual(regionBefore.name, ticket128RegionName);
+    assert.deepStrictEqual(Object.keys(regionBefore).sort(), ['audience', 'clicks', 'name', 'region_id', 'shares', 'views']);
+    assert.deepStrictEqual(Object.keys(regionBefore.views).sort(), ['total', 'unique']);
+
+    // حدثان (مشاهدتان) على بلدة في هذه المحافظة، عبر الخدمة لا مسار
+    // POST /api/analytics/events: ذاك على دلو الطلبات المجهولة، والقسم هنا يقيس
+    // التجميع لا تحديد المعدّل.
+    await analyticsService.record({ eventName: 'event_viewed', deviceId: ticket128Device(), platform: 'web', contentTown: ticket128TownA });
+    await analyticsService.record({ eventName: 'event_viewed', deviceId: ticket128Device(), platform: 'web', contentTown: ticket128TownA });
+
+    const after = await ticket128Overview();
+    const regionAfter = after.by_region.find(row => row.region_id === ticket128RegionId);
+    assert.strictEqual(regionAfter.views.total, regionBefore.views.total + 2, 'الزيادة = عدد الحدثين بالضبط');
+    assert.strictEqual(regionAfter.views.unique, regionBefore.views.unique + 2, 'جهازان مختلفان = مشاهدَين فريدين');
+    assert.strictEqual(after.views.total, before.views.total + 2, 'الملخّص نفسه يزيد اثنين أيضاً');
+    assert.strictEqual(sumOf(after.by_region, row => row.views.total), after.views.total, 'والمجاميع تبقى مطابقة');
+
+    // ولا صفّ آخر تحرّك: حدثا بلدة المحافظة الثانية لم يُضافا إلى محافظة أخرى.
+    for (const row of after.by_region) {
+      if (row.region_id === ticket128RegionId) continue;
+      const previous = before.by_region.find(candidate => candidate.region_id === row.region_id);
+      assert.deepStrictEqual(row, previous, `لا صفّ آخر تغيّر — ${row.name}`);
     }
   });
 
-  // تنظيف القسم: البثّ، ثم التحليلات (بمحتوى بلدتَيه وحدهما)، ثم القرية، ثم
-  // إسنادات الأدمن وحساباتهم، ثم البلدات، ثم المحافظة.
+  await test('صفّ بـ content_town = «القرى والتجمعات» مع مناسبة في المحافظة الثانية يذهب إلى «غير محدَّد» ولا يُسقَط (تذكرة #128)', async () => {
+    // مناسبة حقيقية في المحافظة الثانية تحت البند الجامع، كي لا يكون الاختبار
+    // نظرياً: الصفّ التحليلي يحمل اسم البند الجامع وحده، بلا معرّف مناسبة.
+    const catchAllEvent = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: weddingEventBody({
+        honorees: [{ name: `عريس البند الجامع ${Date.now()}` }],
+        town: 'القرى والتجمعات',
+        requested_village_name: `قرية غير معلنة ${Date.now()}`,
+        region_id: ticket128RegionId,
+        event_date: '2027-04-01'
+      })
+    });
+    assert.strictEqual(catchAllEvent.status, 201, catchAllEvent.body.message);
+    ticket128Cleanup.eventIds.push(catchAllEvent.body.eventId);
+
+    const before = await ticket128Overview();
+    const unassignedBefore = before.by_region.find(row => row.region_id === null);
+    const regionBefore = before.by_region.find(row => row.region_id === ticket128RegionId);
+    assert.ok(unassignedBefore && regionBefore);
+
+    await analyticsService.record({
+      eventName: 'share_clicked',
+      deviceId: ticket128Device(),
+      platform: 'web',
+      contentTown: 'القرى والتجمعات'
+    });
+
+    const after = await ticket128Overview();
+    const unassignedAfter = after.by_region.find(row => row.region_id === null);
+    const regionAfter = after.by_region.find(row => row.region_id === ticket128RegionId);
+
+    // الإسناد الدقيق مستحيل: analytics_events لا يحمل content_id/event_id، فاسم
+    // البند الجامع لا يقود إلى محافظة المناسبة. لا نُسقطه ولا نخترع له محافظة.
+    assert.strictEqual(unassignedAfter.shares.total, unassignedBefore.shares.total + 1, 'المشاركة تذهب إلى «غير محدَّد»');
+    assert.strictEqual(unassignedAfter.shares.unique, unassignedBefore.shares.unique + 1);
+    assert.strictEqual(after.shares.total, before.shares.total + 1, 'وتبقى داخل المجموع كاملاً');
+    assert.strictEqual(regionAfter.shares.total, regionBefore.shares.total, 'ولا تُنسب إلى محافظة المناسبة اختراعاً');
+    assert.strictEqual(after.by_region.length, before.by_region.length, 'ولا يُضاف صفّ آخر');
+  });
+
+  // تنظيف القسم: البثّ، ثم التحليلات (بلدتاه + كل جهاز باسم ticket128-)، ثم
+  // المناسبات وسجلّها، ثم القرية، ثم إسنادات الأدمن وحساباتهم، ثم البلدات،
+  // ثم المحافظة. صفوف التحليلات تُحدَّد بمعرّف الجهاز أيضاً كي لا يُمسّ صفّ
+  // قديم بالبند الجامع سبق هذا القسم.
   if (ticket128Cleanup.broadcastIds.length) {
     await db.execute(
       `DELETE FROM broadcasts WHERE id IN (${ticket128Cleanup.broadcastIds.map(() => '?').join(', ')})`,
@@ -12862,9 +13060,21 @@ async function run() {
     );
   }
   await db.execute(
-    `DELETE FROM analytics_events WHERE content_town IN (${ticket128Cleanup.contentTowns.map(() => '?').join(', ')})`,
+    `DELETE FROM analytics_events
+      WHERE content_town IN (${ticket128Cleanup.contentTowns.map(() => '?').join(', ')})
+         OR device_id LIKE 'ticket128-%'`,
     ticket128Cleanup.contentTowns
   );
+  if (ticket128Cleanup.eventIds.length) {
+    await db.execute(
+      `DELETE FROM activity_log WHERE event_id IN (${ticket128Cleanup.eventIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.eventIds
+    );
+    await db.execute(
+      `DELETE FROM events WHERE id IN (${ticket128Cleanup.eventIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.eventIds
+    );
+  }
   if (ticket128Cleanup.villageIds.length) {
     await db.execute(
       `DELETE FROM villages WHERE id IN (${ticket128Cleanup.villageIds.map(() => '?').join(', ')})`,
