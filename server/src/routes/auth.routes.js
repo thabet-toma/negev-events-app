@@ -5,9 +5,10 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const auth = require('../services/auth.service');
 const analytics = require('../services/analytics.service');
+const townsService = require('../services/towns.service');
 const { authenticate } = require('../middleware/auth');
 const { avatarMedia } = require('../middleware/upload');
-const { cleanString, requireFields, isValidPhone } = require('../middleware/validate');
+const { cleanString, requireFields, isValidPhone, optionalId } = require('../middleware/validate');
 
 const router = express.Router();
 
@@ -90,15 +91,21 @@ router.get('/auth/me', authenticate, asyncHandler(async (req, res) => {
 /**
  * "My account" edits: the analytics opt-out switch (issue #44, privacy layer
  * part 2), and — since T-03 — the two self-reported profile facts, name and
- * town. A request carrying neither profile field is the original opt-out
+ * town. A request carrying none of the profile fields is the original opt-out
  * branch, unchanged down to its two messages. `phone_number` is read nowhere
  * here on purpose: it is the sign-in identifier, so changing it needs the
  * current PIN and has its own route below.
+ *
+ * `region_id` (تذكرة #121) is the account's governorate preference — the
+ * discovery routes read it when a signed-in caller sends no `X-Region`. It
+ * joins the profile branch's guard, otherwise a request carrying only a
+ * governorate would be answered by the opt-out branch's
+ * "analytics_opt_out must be true or false" 400.
  */
 router.patch('/auth/me', authenticate, asyncHandler(async (req, res) => {
   const body = req.body || {};
 
-  if (body.full_name === undefined && body.clan_town === undefined) {
+  if (body.full_name === undefined && body.clan_town === undefined && body.region_id === undefined) {
     if (typeof body.analytics_opt_out !== 'boolean') {
       throw ApiError.badRequest('قيمة analytics_opt_out يجب أن تكون true أو false');
     }
@@ -124,11 +131,28 @@ router.patch('/auth/me', authenticate, asyncHandler(async (req, res) => {
     if (!clanTown) throw ApiError.badRequest('البلدة لا تكون فارغة');
   }
 
+  // وجود المفتاح هو ما يعني «غيّر المحافظة»؛ `null` أو نص فارغ يعني «امسح
+  // التفضيل» (`optionalId` تجمعهما معاً، فلا يُكتب في العمود إلا ما اختاره
+  // صاحب الحساب فعلاً). رقم ← محافظة نشطة أو 400 عربي، لا مفتاح أجنبي يسقط
+  // الاستعلام بـ500.
+  let regionId;
+  let regionTouched = false;
+  if (body.region_id !== undefined) {
+    regionTouched = true;
+    regionId = optionalId(body.region_id, 'المنطقة');
+    if (regionId !== null && !(await townsService.isActiveRegionId(regionId))) {
+      throw ApiError.badRequest('المنطقة المختارة غير معروفة أو غير نشطة');
+    }
+  }
+
   let user = await auth.updateProfile(req.user.id, { fullName, clanTown });
   // The opt-out switch may ride along on the same request; the answer still
   // reports the profile change the user actually asked for.
   if (typeof body.analytics_opt_out === 'boolean') {
     user = await auth.setAnalyticsOptOut(req.user.id, body.analytics_opt_out);
+  }
+  if (regionTouched) {
+    user = await auth.setRegion(req.user.id, regionId);
   }
 
   res.json({ success: true, user, message: 'تم تحديث بيانات حسابك' });

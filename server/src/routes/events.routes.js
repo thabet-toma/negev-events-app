@@ -18,6 +18,7 @@ const realtime = require('../realtime');
 const { eventMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
+const { regionIdForRequest } = require('../middleware/region');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
   parseEventDays, parseCsvList, parseFlag, MAX_HONOREES
@@ -90,10 +91,15 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const archive = req.query.archive === '1' || req.query.archive === 'true';
   const upcoming = req.query.upcoming === '1' || req.query.upcoming === 'true';
   const legacyOnly = isLegacyClient(req);
+  // محافظة الاكتشاف (تذكرة #121): تُقرأ دائماً — ترويسة `X-Region`، أو محافظة
+  // الحساب لمسجَّل بلا ترويسة، أو الافتراضية. الخدمة وحدها تقرّر كيف تُترجَم
+  // إلى شرط استعلام، فتبقى بلا `req`/`res`.
+  const regionId = await regionIdForRequest(req);
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
       towns, search, date, dateFrom, dateTo, occasionTypeIds, villageIds, archive, upcoming, legacyOnly,
+      regionId,
       page: req.query.page,
       limit: req.query.limit,
       userId: req.user ? req.user.id : null
@@ -103,14 +109,19 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, ...result, announcements });
 }));
 
-router.get('/map/events', asyncHandler(async (req, res) => {
+// `optionalAuthenticate` هنا أيضاً كي يرى المسجَّل خريطة محافظة حسابه بلا
+// ترويسة، بنفس قاعدة `/events` — لا شيء في الاستجابة يتغيّر لغيره.
+router.get('/map/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   const towns = parseTownListParam(req.query.town);
   const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
   const villageIds = parseIdListParam(req.query.village_id, 'القرية');
+  const regionId = await regionIdForRequest(req);
 
   res.json({
     success: true,
-    points: await events.listMapPoints({ towns, occasionTypeIds, villageIds, legacyOnly: isLegacyClient(req) })
+    points: await events.listMapPoints({
+      towns, occasionTypeIds, villageIds, legacyOnly: isLegacyClient(req), regionId
+    })
   });
 }));
 

@@ -174,6 +174,18 @@ async function isActiveRegionId(regionId) {
 }
 
 /**
+ * صفّ محافظة بمعرّفها كما هو في القاعدة (تذكرة #121)، أو `null` إن لم يجده.
+ * يقرأ `is_active` أيضاً لأن قارئ المحافظة في طبقة المسار يفرّق بين حالتين لا
+ * يجوز خلطهما: محافظة **مجهولة** (400 عربي) ومحافظة **موقوفة** (الافتراضية +
+ * سطر في السجل). `listActiveRegions` لا تصلح لذلك: تُخفي الموقوفة فتصير
+ * المجهولة والموقوفة شيئاً واحداً.
+ */
+async function findRegionById(id) {
+  if (!Number.isInteger(id)) return null;
+  return db.queryOne('SELECT id, name, is_active FROM regions WHERE id = ?', [id]);
+}
+
+/**
  * محافظة اسم مكان (تذكرة #120): اسم بلدة نشطة ← محافظة بلدتها، واسم محافظة
  * نشطة ← معرّفها، وأي اسم آخر ← `null`. المقارنة حرفية في JS كما في
  * `isActiveTown`، لا `WHERE name = ?`: تهيئة العمود utf8mb4_unicode_ci تجعل
@@ -552,6 +564,8 @@ module.exports = {
   knownPlaceNames,
   defaultRegionName,
   defaultRegionId,
+  findRegionById,
+  isActiveRegionId,
   findRegionIdForPlace,
   resolveRegionForEventPlace,
   nameKey,

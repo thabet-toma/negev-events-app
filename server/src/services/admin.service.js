@@ -438,7 +438,7 @@ async function promoteToAdmin(userId, promotedBy) {
     await connection.execute("UPDATE users SET role = 'admin' WHERE id = ?", [userId]);
 
     const [rows] = await connection.execute(
-      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out FROM users WHERE id = ?',
+      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out, region_id FROM users WHERE id = ?',
       [userId]
     );
     return rows[0];
@@ -488,7 +488,7 @@ async function demoteToUser(userId, actingUserId) {
     await connection.execute('DELETE FROM admin_towns WHERE user_id = ?', [userId]);
 
     const [rows] = await connection.execute(
-      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out FROM users WHERE id = ?',
+      'SELECT id, phone_number, full_name, clan_town, role, analytics_opt_out, region_id FROM users WHERE id = ?',
       [userId]
     );
     return { user: rows[0], priorRole: targetUser.role };

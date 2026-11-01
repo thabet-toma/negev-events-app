@@ -25,6 +25,11 @@ function publicUser(user) {
     // client can tell apart from "this API forgot the field".
     avatar_url: absoluteMediaUrl(user.avatar_url) || null,
     role: user.role,
+    // محافظة الحساب (تذكرة #121) — اختيار صريح، لا تُستنتج من `clan_town`.
+    // `?? null` كي يجيب `register()` أيضاً بـ`null` صريحة: كائنُه الحرفي لا
+    // يحمل الخاصية أصلاً، و`undefined` ليست جواباً يفرّقه العميل عن «نسي الـAPI
+    // الحقل». `NULL` هنا تعني «لم أختر» — لا «النقب».
+    region_id: user.region_id ?? null,
     // Exposed so a client can render the opt-out switch (issue #44, privacy
     // layer part 2). register()'s literal user object has no such property —
     // Boolean(undefined) === false, which matches the column's real DEFAULT 0.
@@ -86,7 +91,7 @@ async function adminLogin({ phone_number, pin_code }) {
 
 async function findById(id) {
   const user = await db.queryOne(
-    `SELECT id, phone_number, full_name, clan_town, role, created_at, analytics_opt_out, avatar_url
+    `SELECT id, phone_number, full_name, clan_town, role, created_at, analytics_opt_out, avatar_url, region_id
        FROM users WHERE id = ?`,
     [id]
   );
@@ -111,6 +116,32 @@ async function setAnalyticsOptOut(userId, optOut) {
   const user = await findById(userId);
   if (!user) throw ApiError.notFound('المستخدم غير موجود');
   return user;
+}
+
+/**
+ * محافظة الحساب كما هي مخزَّنة (تذكرة #121)، أو `null` إن لم يختر صاحبها بعد.
+ * تقرأ العمود وحده: مسار الاكتشاف يستدعيها لكل طلب مسجَّل بلا ترويسة `X-Region`،
+ * فلا معنى لجلب صفّ الحساب كاملاً (وصورةً مطلقة) لمعرّف واحد.
+ */
+async function findRegionIdById(userId) {
+  const row = await db.queryOne('SELECT region_id FROM users WHERE id = ?', [userId]);
+  return row ? row.region_id : null;
+}
+
+/**
+ * تفضيل المحافظة على الحساب (تذكرة #121): `null` تمسح التفضيل — ولا تُكتب
+ * المحافظة الافتراضية بدلاً منها، لأن «لم أختر» و«اخترت النقب» حكمان مختلفان
+ * (الافتراضية قد تتبدّل يوم تصبح محافظة أخرى أول النشطات).
+ *
+ * التحقق من أن المعرّف **محافظة نشطة** مسؤولية المسار
+ * (`towns.service.isActiveRegionId`): هذه الدالة تكتب ما وصها، كما يكتب
+ * `updateProfile` ما وصه بعد تحقق المسار.
+ */
+async function setRegion(userId, regionId) {
+  await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [regionId, userId]);
+  const user = await findById(userId);
+  if (!user) throw ApiError.notFound('المستخدم غير موجود');
+  return publicUser(user);
 }
 
 /**
@@ -311,6 +342,8 @@ module.exports = {
   findById,
   publicUser,
   setAnalyticsOptOut,
+  findRegionIdById,
+  setRegion,
   updateAvatar,
   updateProfile,
   changePhoneNumber,

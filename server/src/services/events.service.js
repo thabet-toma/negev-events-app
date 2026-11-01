@@ -571,16 +571,28 @@ function buildPlaceCondition(towns, villageIds, villageColumn) {
  * — a legacy client's own UI cannot even render a type outside its supported
  * set, so asking for one by id must never widen past it (#20 step 4,
  * decision و).
+ *
+ * `regionId` (تذكرة #121) is the discovery feed's governorate filter: an
+ * integer narrows to that region, `null` means "no restriction" so every
+ * internal caller that knows nothing about regions keeps its behaviour
+ * unchanged. The public route always passes a resolved region
+ * (`middleware/region.js`), never `null`.
  */
 async function listPublicEvents({
   towns = null, date, dateFrom = null, dateTo = null, search, occasionTypeIds = null, villageIds = null,
-  legacyOnly = false, archive = false, upcoming = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null
+  legacyOnly = false, archive = false, upcoming = false, page = 1, limit = DEFAULT_PAGE_SIZE, userId = null,
+  regionId = null
 } = {}) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
 
   const conditions = ["status = 'approved'"];
   const params = [];
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('events.region_id = ?');
+    params.push(regionId);
+  }
 
   if (dateFrom || dateTo) {
     if (dateFrom) {
@@ -765,13 +777,22 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
  * Approved, upcoming events that carry coordinates, shaped for the map view.
  * Same upcoming cutoff, legacy-client type filter, and town/type/village list
  * filtering as `listPublicEvents` (#20 step 4, decisions أ and و; #85 batch 5).
+ * `regionId` is the same governorate isolation as `listPublicEvents` — `null`
+ * leaves the query unrestricted, and only the public map route passes one.
  */
-async function listMapPoints({ towns = null, occasionTypeIds = null, villageIds = null, legacyOnly = false } = {}) {
+async function listMapPoints({
+  towns = null, occasionTypeIds = null, villageIds = null, legacyOnly = false, regionId = null
+} = {}) {
   const conditions = [
     "status = 'approved'", 'latitude IS NOT NULL', 'longitude IS NOT NULL',
     `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
   const params = [];
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('region_id = ?');
+    params.push(regionId);
+  }
 
   const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
   if (typeFilterIds && !typeFilterIds.length) return [];

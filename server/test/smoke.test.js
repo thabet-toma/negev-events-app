@@ -110,10 +110,14 @@ function withDuplicateConfirmed(method, path, body, yes = true) {
   return { ...body, confirm_duplicate: yes };
 }
 
-async function api(method, path, { body, token, legacy = false } = {}) {
+async function api(method, path, { body, token, legacy = false, region } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (!legacy) headers['X-App-Version'] = '2.0.0';
+  // The discovery governorate header (#121): an id, or a deliberately bad value
+  // to exercise the 400 path. Sent only when a test asks for it, so every
+  // existing call keeps sending exactly the request it sent before.
+  if (region !== undefined) headers['X-Region'] = String(region);
 
   const sent = withDuplicateConfirmed(method, path, body);
   const res = await fetch(`${baseUrl}${path}`, {
@@ -11810,6 +11814,261 @@ async function run() {
   if (promotedRegionVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [promotedRegionVillageId]);
   if (probeVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [probeVillageId]);
   await db.execute('DELETE FROM regions WHERE id = ?', [secondRegionId]);
+
+  console.log('\nRegions: X-Region and discovery isolation (تذكرة #121)');
+
+  // محافظة ثانية خاصة بهذا القسم: صفّ مباشر، لا مسار إداري لإنشاء محافظة (خارج
+  // نطاق التذكرة)، والاسم مؤقّت وفريد كي لا يصادم تشغيلاً سابقاً فاشلاً. البلدتان
+  // والمناسبتان تحملان اسم صاحب مناسبة واحد، كي يكون الفلتر الوحيد الفعّال في
+  // الاختبار هو المحافظة نفسها لا البحث.
+  const isolationRegionName = `محافظة العزل ${Date.now()}`;
+  const { insertId: isolationRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 32.3, 35.0, 9, 97, 1)`,
+    [isolationRegionName]
+  );
+  const isolationTownName = `بلدة العزل ${Date.now()}`;
+  const { insertId: isolationTownId } = await db.execute(
+    'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, 97, 1)',
+    [isolationRegionId, isolationTownName, 32.31, 35.01]
+  );
+
+  const sharedHonoree = `عريس عزل المناطق ${Date.now()}`;
+  const isolationEventIds = [];
+  const publishIsolationEvent = async (overrides) => {
+    const published = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: weddingEventBody({ honorees: [{ name: sharedHonoree }], ...overrides })
+    });
+    assert.strictEqual(published.status, 201, published.body.message);
+    assert.strictEqual(published.body.status, 'approved', 'the super_admin publishes immediately');
+    isolationEventIds.push(published.body.eventId);
+    return published.body.eventId;
+  };
+
+  // مناسبة النقب في بلدة من البذرة، ومناسبة المحافظة الثانية في بلدتها — كلتاهما
+  // بإحداثيات كي تقع على الخريطة أيضاً.
+  const isolationNegevEventId = await publishIsolationEvent({
+    town: 'حورة', event_date: '2027-05-01', latitude: 31.39, longitude: 34.75
+  });
+  const isolationSecondEventId = await publishIsolationEvent({
+    town: isolationTownName, event_date: '2027-05-02', latitude: 32.31, longitude: 35.01
+  });
+
+  // مناسبة قروية تحت البند الجامع نُشرت صراحةً على المحافظة الثانية (#120) — هي
+  // معيار القبول: تظهر لطلب المحافظة الثانية ولا تظهر لطلب النقب.
+  const isolationVillageHonoree = `عريس قرية العزل ${Date.now()}`;
+  const isolationVillagePublished = await api('POST', '/api/events', {
+    token: superAdminToken,
+    body: weddingEventBody({
+      honorees: [{ name: isolationVillageHonoree }],
+      town: 'القرى والتجمعات',
+      requested_village_name: `قرية العزل ${Date.now()}`,
+      region_id: isolationRegionId,
+      event_date: '2027-05-03'
+    })
+  });
+  assert.strictEqual(isolationVillagePublished.status, 201, isolationVillagePublished.body.message);
+  const isolationVillageEventId = isolationVillagePublished.body.eventId;
+  isolationEventIds.push(isolationVillageEventId);
+
+  const regionOfEvent = async (id) => (await db.queryOne('SELECT region_id FROM events WHERE id = ?', [id])).region_id;
+
+  await test('Set up: كل مناسبة اختبار تحمل محافظتها — النقب للبلدية، والثانية للثانية والقروية (تذكرة #121)', async () => {
+    assert.notStrictEqual(isolationRegionId, defaultRegionId, 'the whole section is vacuous if both governorates are the same');
+    assert.strictEqual(await regionOfEvent(isolationNegevEventId), defaultRegionId);
+    assert.strictEqual(await regionOfEvent(isolationSecondEventId), isolationRegionId);
+    assert.strictEqual(await regionOfEvent(isolationVillageEventId), isolationRegionId);
+  });
+
+  await test('GET /api/events بلا X-Region لا يعيد أي مناسبة من المحافظة الثانية (تذكرة #121)', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=100&search=${encodeURIComponent(sharedHonoree)}`);
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(isolationNegevEventId), 'the Negev event must be in the default feed, or the check proves nothing');
+    assert.ok(!ids.includes(isolationSecondEventId), 'an event from the second governorate leaked into the default feed');
+  });
+
+  await test('GET /api/events بـ X-Region للمحافظة الثانية يعيد صفوفها وحدها (تذكرة #121)', async () => {
+    const { status, body } = await api('GET', `/api/events?limit=100&search=${encodeURIComponent(sharedHonoree)}`, {
+      region: isolationRegionId
+    });
+    assert.strictEqual(status, 200);
+    const ids = body.events.map(e => e.id);
+    assert.ok(ids.includes(isolationSecondEventId), 'the second governorate must see its own event');
+    assert.ok(!ids.includes(isolationNegevEventId), 'a Negev event leaked into the second governorate feed');
+  });
+
+  await test('GET /api/map/events يعزل المحافظة نفسها: دبّوس لكل محافظة ولا تسريب (تذكرة #121)', async () => {
+    const defaultMap = await api('GET', '/api/map/events');
+    assert.strictEqual(defaultMap.status, 200);
+    const defaultIds = defaultMap.body.points.map(p => p.id);
+    assert.ok(defaultIds.includes(isolationNegevEventId), 'the Negev pin must be on the default map');
+    assert.ok(!defaultIds.includes(isolationSecondEventId), 'a pin from the second governorate leaked onto the default map');
+
+    const secondMap = await api('GET', '/api/map/events', { region: isolationRegionId });
+    assert.strictEqual(secondMap.status, 200);
+    const secondIds = secondMap.body.points.map(p => p.id);
+    assert.ok(secondIds.includes(isolationSecondEventId), 'the second governorate must see its own pin');
+    assert.ok(!secondIds.includes(isolationNegevEventId), 'a Negev pin leaked onto the second governorate map');
+  });
+
+  await test('مناسبة قروية تحت البند الجامع بمحافظة ثانية تظهر لطلبها ولا تظهر لطلب النقب (تذكرة #121)', async () => {
+    const search = `?limit=100&search=${encodeURIComponent(isolationVillageHonoree)}`;
+
+    const requested = await api('GET', `/api/events${search}`, { region: isolationRegionId });
+    assert.strictEqual(requested.status, 200);
+    assert.deepStrictEqual(requested.body.events.map(e => e.id), [isolationVillageEventId]);
+
+    const negev = await api('GET', `/api/events${search}`);
+    assert.strictEqual(negev.status, 200);
+    assert.deepStrictEqual(negev.body.events.map(e => e.id), [], 'the catch-all event stayed under its own governorate');
+  });
+
+  await test('X-Region غير رقمي أو معرّف لا وجود له → 400 برسالة عربية (تذكرة #121)', async () => {
+    const malformed = await api('GET', '/api/events', { region: 'abc' });
+    assert.strictEqual(malformed.status, 400);
+    assert.ok(/المنطقة/.test(malformed.body.message || ''), malformed.body.message);
+
+    const unknown = await api('GET', '/api/events', { region: 999999 });
+    assert.strictEqual(unknown.status, 400);
+    assert.ok(/المنطقة/.test(unknown.body.message || ''), unknown.body.message);
+  });
+
+  await test('محافظة موقوفة (is_active = 0) → الطلب ينجح ويعيد صفوف المحافظة الافتراضية (تذكرة #121)', async () => {
+    await db.execute('UPDATE regions SET is_active = 0 WHERE id = ?', [isolationRegionId]);
+    try {
+      const { status, body } = await api('GET', `/api/events?limit=100&search=${encodeURIComponent(sharedHonoree)}`, {
+        region: isolationRegionId
+      });
+      assert.strictEqual(status, 200, 'a stopped governorate must fall back, never fail the request');
+      const ids = body.events.map(e => e.id);
+      assert.ok(ids.includes(isolationNegevEventId), 'the fallback is the default governorate');
+      assert.ok(!ids.includes(isolationSecondEventId), 'a stopped governorate must not serve its own rows');
+    } finally {
+      await db.execute('UPDATE regions SET is_active = 1 WHERE id = ?', [isolationRegionId]);
+    }
+  });
+
+  // حساب اختبار خاص بهذا القسم: يُكتب صفّه مباشرةً (لا تسجيل عبر المسار) لأن
+  // الاختبار يخصّ تفضيل المحافظة وحده، ويُحذف في نهاية القسم.
+  const isolationUserName = 'مستخدم محافظة الاختبار';
+  const isolationUserPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const { insertId: isolationUserId } = await db.execute(
+    "INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, 'user')",
+    [isolationUserPhone, isolationUserName, bcrypt.hashSync('1234', config.bcryptRounds)]
+  );
+  const isolationUserToken = signToken({
+    id: isolationUserId, phone_number: isolationUserPhone, full_name: isolationUserName, role: 'user'
+  }, '1h');
+
+  await test('PATCH /api/auth/me يقبل region_id، و publicUser و GET /api/auth/me يرجّعانه (تذكرة #121)', async () => {
+    const patched = await api('PATCH', '/api/auth/me', {
+      token: isolationUserToken,
+      body: { region_id: isolationRegionId }
+    });
+    assert.strictEqual(patched.status, 200, patched.body.message);
+    assert.strictEqual(patched.body.user.region_id, isolationRegionId);
+
+    const me = await api('GET', '/api/auth/me', { token: isolationUserToken });
+    assert.strictEqual(me.status, 200);
+    assert.strictEqual(me.body.user.region_id, isolationRegionId);
+
+    const row = await db.queryOne('SELECT region_id FROM users WHERE id = ?', [isolationUserId]);
+    assert.strictEqual(row.region_id, isolationRegionId);
+  });
+
+  await test('PATCH /api/auth/me بمعرّف محافظة وهمي → 400 عربي ولا يمسّ المكتوب (تذكرة #121)', async () => {
+    const { status, body } = await api('PATCH', '/api/auth/me', {
+      token: isolationUserToken,
+      body: { region_id: 999999 }
+    });
+    assert.strictEqual(status, 400);
+    assert.ok(/المنطقة/.test(body.message || ''), body.message);
+
+    const row = await db.queryOne('SELECT region_id FROM users WHERE id = ?', [isolationUserId]);
+    assert.strictEqual(row.region_id, isolationRegionId, 'a refused preference must not overwrite the stored one');
+  });
+
+  await test('مسجَّل بلا X-Region يرى محافظة حسابه، ومسح التفضيل (null) يعيده إلى الافتراضية (تذكرة #121)', async () => {
+    const search = `?limit=100&search=${encodeURIComponent(sharedHonoree)}`;
+
+    const accountFeed = await api('GET', `/api/events${search}`, { token: isolationUserToken });
+    assert.strictEqual(accountFeed.status, 200);
+    const accountIds = accountFeed.body.events.map(e => e.id);
+    assert.ok(accountIds.includes(isolationSecondEventId), "a signed-in caller's own governorate must be used");
+    assert.ok(!accountIds.includes(isolationNegevEventId), 'a Negev event leaked into the account governorate feed');
+
+    const cleared = await api('PATCH', '/api/auth/me', {
+      token: isolationUserToken,
+      body: { region_id: null }
+    });
+    assert.strictEqual(cleared.status, 200, cleared.body.message);
+    assert.strictEqual(cleared.body.user.region_id, null, 'NULL means "not chosen", never the default governorate');
+
+    const afterClear = await api('GET', `/api/events${search}`, { token: isolationUserToken });
+    assert.deepStrictEqual(afterClear.body.events.map(e => e.id), [isolationNegevEventId]);
+  });
+
+  await test('حساب على محافظة موقوفة بلا X-Region يرى صفوف المحافظة الافتراضية (تذكرة #121)', async () => {
+    // الاختيار يُكتب مباشرةً لأن `PATCH /api/auth/me` يرفض محافظة موقوفة عن
+    // قصد (المسار لا يكتب إلا نشطة) — والسيناريو هنا هو «اختارها وهي نشطة ثم
+    // أُوقفت»، وهو ما يقع فعلاً حين تُوقف محافظة بعد أن اختارها أصحابها.
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [isolationRegionId, isolationUserId]);
+    await db.execute('UPDATE regions SET is_active = 0 WHERE id = ?', [isolationRegionId]);
+    try {
+      const { status, body } = await api('GET', `/api/events?limit=100&search=${encodeURIComponent(sharedHonoree)}`, {
+        token: isolationUserToken
+      });
+      assert.strictEqual(status, 200, 'a stopped governorate must fall back, never fail the request');
+      const ids = body.events.map(e => e.id);
+      assert.ok(ids.includes(isolationNegevEventId), 'the fallback is the default governorate, exactly as for the header branch');
+      assert.ok(!ids.includes(isolationSecondEventId), 'an account on a stopped governorate must not keep seeing its rows');
+    } finally {
+      await db.execute('UPDATE regions SET is_active = 1 WHERE id = ?', [isolationRegionId]);
+      await db.execute('UPDATE users SET region_id = NULL WHERE id = ?', [isolationUserId]);
+    }
+  });
+
+  await test('GET /api/events/:id لمناسبة في محافظة أخرى يبقى 200 بترويسة النقب — التفاصيل عالمية (تذكرة #121)', async () => {
+    const { status, body } = await api('GET', `/api/events/${isolationSecondEventId}`, { region: defaultRegionId });
+    assert.strictEqual(status, 200, body.message);
+    assert.strictEqual(body.event.id, isolationSecondEventId);
+  });
+
+  await test('غياب X-Region لا يغيّر صفوف فيد النقب ولا ترتيبها: مطابق تماماً لطلب صريح بـ X-Region: النقب (تذكرة #121)', async () => {
+    const implicit = await api('GET', '/api/events?limit=10');
+    const explicit = await api('GET', '/api/events?limit=10', { region: defaultRegionId });
+    assert.strictEqual(implicit.status, 200);
+    assert.strictEqual(explicit.status, 200);
+    assert.deepStrictEqual(
+      implicit.body.events.map(e => e.id),
+      explicit.body.events.map(e => e.id),
+      'the default feed must keep its rows and order for a client that sends no X-Region'
+    );
+    assert.deepStrictEqual(implicit.body.pagination, explicit.body.pagination);
+  });
+
+  await test('CORS: طلب OPTIONS يسمح بترويسة X-Region القادمة من المتصفّح (تذكرة #121)', async () => {
+    const res = await fetch(`${baseUrl}/api/events`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://web.example',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'x-region'
+      }
+    });
+    const allowed = (res.headers.get('access-control-allow-headers') || '').toLowerCase();
+    assert.ok(res.status === 200 || res.status === 204, `unexpected preflight status ${res.status}`);
+    assert.ok(allowed.includes('x-region'), `the browser would block X-Region; allowed headers were: "${allowed}"`);
+  });
+
+  // تنظيف ما أنشأه هذا القسم — بالترتيب الذي تسمح به المفاتيح الأجنبية:
+  // المناسبات أولاً، ثم البلدة، ثم المحافظة الثانية، والحساب.
+  for (const id of isolationEventIds) await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  await db.execute('DELETE FROM towns WHERE id = ?', [isolationTownId]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [isolationRegionId]);
+  await db.execute('DELETE FROM users WHERE id = ?', [isolationUserId]);
 
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {
