@@ -6412,10 +6412,71 @@ async function run() {
     assert.ok(/القرى والتجمعات/.test(body.message || ''), `expected the villages-catch-all Arabic message, got: ${body.message}`);
   });
 
-  await test('Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key', async () => {
+  await test('Case 12: GET /api/towns with no X-App-Version returns the towns array unchanged, element by element, plus the new villages key, each row carrying its real region_id', async () => {
     const { body } = await api('GET', '/api/towns', { legacy: true });
     assert.deepStrictEqual(body.towns, ['الكل', ...SEED_TOWN_NAMES]);
     assert.ok(Array.isArray(body.villages), 'expected a villages array');
+
+    // The added field is additive only: every row keeps the five keys it
+    // carried before and gains exactly `region_id`, a real numeric governorate.
+    assert.ok(body.villages.length > 0, 'expected at least one active village');
+    for (const village of body.villages) {
+      assert.deepStrictEqual(
+        Object.keys(village).sort(),
+        ['id', 'latitude', 'longitude', 'name', 'position', 'region_id'],
+        `a villages row keeps its five keys and gains exactly region_id, got: ${Object.keys(village).sort().join(', ')}`
+      );
+      assert.ok(Number.isInteger(village.region_id), `region_id must be a number, got: ${village.region_id}`);
+      assert.strictEqual(typeof village.id, 'number');
+      assert.strictEqual(typeof village.name, 'string');
+      assert.strictEqual(typeof village.latitude, 'number');
+      assert.strictEqual(typeof village.longitude, 'number');
+      assert.strictEqual(typeof village.position, 'number');
+    }
+
+    // The value is the row's own column, never a guess or the default region:
+    // read one village straight from the table and compare it with the payload.
+    const fixtureRow = await db.queryOne('SELECT region_id FROM villages WHERE id = ?', [villageFixtureId]);
+    assert.ok(fixtureRow, 'the fixture village must still exist at this point');
+    const fixtureVillage = body.villages.find(village => village.id === villageFixtureId);
+    assert.ok(fixtureVillage, 'the active fixture village must appear in the villages array');
+    assert.strictEqual(
+      fixtureVillage.region_id,
+      fixtureRow.region_id,
+      "the payload's region_id is the row's own villages.region_id"
+    );
+
+    // And the same for every active row at once, so a row that silently fell
+    // back to the default governorate could not slip through either.
+    const activeRows = await db.query('SELECT id, region_id FROM villages WHERE is_active = 1');
+    const regionByVillage = new Map(activeRows.map(row => [row.id, row.region_id]));
+    for (const village of body.villages) {
+      assert.strictEqual(
+        village.region_id,
+        regionByVillage.get(village.id),
+        `village ${village.id} must carry its own villages.region_id`
+      );
+    }
+
+    // towns (asserted above), regions and town_coordinates are outside this
+    // change: no new key, no new shape reached any of them. Both guards below
+    // assert a non-empty list first, so neither can pass on nothing.
+    assert.ok(body.regions.length > 0, 'expected at least one active region');
+    for (const region of body.regions) {
+      assert.deepStrictEqual(
+        Object.keys(region).sort(),
+        ['events_count', 'id', 'is_active', 'latitude', 'longitude', 'map_zoom', 'name', 'position', 'towns', 'towns_count'],
+        `a regions row keeps its discovery shape, got: ${Object.keys(region).sort().join(', ')}`
+      );
+      assert.ok(!('region_id' in region), 'regions rows carry id, never region_id');
+    }
+    assert.ok(Object.keys(body.town_coordinates).length > 0, 'expected at least one town centre');
+    for (const [townName, centre] of Object.entries(body.town_coordinates)) {
+      assert.deepStrictEqual(Object.keys(centre).sort(), ['lat', 'lng'], `${townName} keeps its { lat, lng } centre and nothing else`);
+      assert.strictEqual(typeof centre.lat, 'number');
+      assert.strictEqual(typeof centre.lng, 'number');
+    }
+    assert.strictEqual(body.town_coordinates['القرى والتجمعات'], undefined);
   });
 
   await api('DELETE', `/api/admin/villages/${villageFixtureId}`, { token: superAdminToken });

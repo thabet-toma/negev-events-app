@@ -25,18 +25,21 @@ function shapeVillage(row) {
 /**
  * Active villages, ordered for display. This is the function a sibling's
  * `GET /api/towns` calls to fill its new `villages` key — the contract is
- * `{ id, name, latitude, longitude, position }`, no `is_active` (every row
- * here is already active by definition).
+ * `{ id, region_id, name, latitude, longitude, position }`, no `is_active`
+ * (every row here is already active by definition). `region_id` is the
+ * village's own governorate (the column is NOT NULL since the #120
+ * migration), so a client can filter villages by region from this one read.
  */
 async function listActive() {
   const rows = await db.query(
-    `SELECT id, name, latitude, longitude, position
+    `SELECT id, region_id, name, latitude, longitude, position
        FROM villages
       WHERE is_active = 1
       ORDER BY position ASC, name ASC`
   );
   return rows.map(row => ({
     id: row.id,
+    region_id: row.region_id,
     name: row.name,
     latitude: Number(row.latitude),
     longitude: Number(row.longitude),
