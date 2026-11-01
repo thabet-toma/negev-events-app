@@ -12025,6 +12025,57 @@ async function run() {
     assert.ok(!secondIds.includes(isolationNegevEventId), 'a Negev pin leaked onto the second governorate map');
   });
 
+  await test('إعلانات تغيير التاريخ في GET /api/events تعزل المحافظة كالمناسبة نفسها (تذكرة #121)', async () => {
+    // إعلان حالي واحد لكل محافظة، يُكتب مباشرةً كي يكشف الاختبار إعلاناً يسافر
+    // من محافظة إلى أخرى. يُحذف الصفّان هنا نفسهما — لا اعتماداً على CASCADE
+    // حذف المناسبات في نهاية القسم — لأنهما هما ما تُبنى عليه التأكيدات.
+    const announcementIds = [];
+    try {
+      const negevAnnouncement = await db.execute(
+        `INSERT INTO event_announcements (event_id, old_value, new_value, published_at, is_current)
+         VALUES (?, ?, ?, NOW(), 1)`,
+        [isolationNegevEventId, '2027-05-01', '2027-05-05']
+      );
+      announcementIds.push(negevAnnouncement.insertId);
+      const secondAnnouncement = await db.execute(
+        `INSERT INTO event_announcements (event_id, old_value, new_value, published_at, is_current)
+         VALUES (?, ?, ?, NOW(), 1)`,
+        [isolationSecondEventId, '2027-05-02', '2027-05-06']
+      );
+      announcementIds.push(secondAnnouncement.insertId);
+
+      const search = `?limit=100&search=${encodeURIComponent(sharedHonoree)}`;
+
+      const defaultFeed = await api('GET', `/api/events${search}`);
+      assert.strictEqual(defaultFeed.status, 200);
+      const defaultAnnouncementEventIds = defaultFeed.body.announcements.map(a => a.event_id);
+      assert.ok(
+        defaultAnnouncementEventIds.includes(isolationNegevEventId),
+        'the Negev announcement must be in the default feed, or the check proves nothing'
+      );
+      assert.ok(
+        !defaultAnnouncementEventIds.includes(isolationSecondEventId),
+        'an announcement from the second governorate leaked into the default feed'
+      );
+
+      const secondFeed = await api('GET', `/api/events${search}`, { region: isolationRegionId });
+      assert.strictEqual(secondFeed.status, 200);
+      const secondAnnouncementEventIds = secondFeed.body.announcements.map(a => a.event_id);
+      assert.ok(
+        secondAnnouncementEventIds.includes(isolationSecondEventId),
+        'the second governorate must see its own announcement'
+      );
+      assert.ok(
+        !secondAnnouncementEventIds.includes(isolationNegevEventId),
+        'a Negev announcement leaked into the second governorate feed'
+      );
+    } finally {
+      for (const id of announcementIds) {
+        await db.execute('DELETE FROM event_announcements WHERE id = ?', [id]);
+      }
+    }
+  });
+
   await test('مناسبة قروية تحت البند الجامع بمحافظة ثانية تظهر لطلبها ولا تظهر لطلب النقب (تذكرة #121)', async () => {
     const search = `?limit=100&search=${encodeURIComponent(isolationVillageHonoree)}`;
 

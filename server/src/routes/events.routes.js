@@ -104,7 +104,7 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
       limit: req.query.limit,
       userId: req.user ? req.user.id : null
     }),
-    events.listLiveAnnouncements({ legacyOnly })
+    events.listLiveAnnouncements({ legacyOnly, regionId })
   ]);
   res.json({ success: true, ...result, announcements });
 }));

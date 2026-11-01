@@ -386,13 +386,23 @@ async function listMyReminders(userId, { legacyOnly = false } = {}) {
  * at the original event. `legacyOnly` applies the same occasion-type filter
  * as the list/map/detail endpoints — an announcement about a type an old
  * client cannot render must not leak through this door either.
+ *
+ * `regionId` (تذكرة #121) يعزل الإعلان في محافظة الطلب وحدها كما في مسارات
+ * القائمة والخريطة والتفاصيل: عدد صحيح يقصر الإعلانات على مناسبات تلك
+ * المحافظة، و`null` تعني «بلا تقييد» لكل نداء داخلي لا يعرف المحافظات،
+ * والمسار العام يمرّر دائماً محافظة محلولة (`middleware/region.js`).
  */
-async function listLiveAnnouncements({ legacyOnly = false } = {}) {
+async function listLiveAnnouncements({ legacyOnly = false, regionId = null } = {}) {
   const conditions = [
     'a.is_current = 1', "e.status = 'approved'",
     `${EVENT_SPAN_END_SQL_E} >= CURDATE()`
   ];
   const params = [];
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('e.region_id = ?');
+    params.push(regionId);
+  }
 
   if (legacyOnly) {
     const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
