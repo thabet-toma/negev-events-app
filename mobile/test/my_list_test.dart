@@ -15,6 +15,7 @@ import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/my_list_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
+import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -544,6 +545,9 @@ void main() {
       'ستّ وجهات، «قائمتي» ثانيةً، وزرّ النشر مخفيّ في تبويب النقوط (٣) '
       'وظاهر فيما سواه — على عرض ٣٦٠dp',
       (tester) async {
+        // ورقة أول تشغيل (تذكرة #126) لا شأن لها بهذا الاختبار: نعلن أن
+        // السؤال سبق أن طُرح كي لا تبقى ورقة مفتوحة تحجب نقرات الشريط.
+        SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
         tester.view.physicalSize = const Size(360, 800);
         tester.view.devicePixelRatio = 1.0;
         addTearDown(tester.view.reset);

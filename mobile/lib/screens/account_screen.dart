@@ -12,6 +12,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
 import '../widgets/auth_action_button.dart';
+import '../widgets/region_onboarding_sheet.dart';
 import 'live_screen.dart';
 import 'my_events_screen.dart';
 
@@ -695,6 +696,20 @@ class _RegionSectionState extends State<_RegionSection> {
                         onSelected: _busy ? null : (_) => _select(region.id),
                       ),
                   ],
+                ),
+                // الباب الوحيد لإعادة ورقة أول تشغيل (تذكرة #126) — نفس
+                // الورقة ونفس المنطق لا نسخة ثانية: «استخدم موقعي» أو الاختيار
+                // اليدوي، بلا إذن موقع إلا بضغط صريح.
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    key: const Key('account_region_reopen'),
+                    onPressed: _busy
+                        ? null
+                        : () => showRegionOnboardingSheet(context),
+                    icon: const Icon(Icons.my_location, size: 18),
+                    label: const Text('تحديد منطقتي بالموقع أو يدوياً'),
+                  ),
                 ),
               ],
             ),

@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../state/region_onboarding.dart';
 import '../state/update_checker.dart';
+import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart';
@@ -44,6 +46,9 @@ class _HomeShellState extends State<HomeShell> {
   String? _banner;
   bool _updateChecked = false;
 
+  /// ورقة أول تشغيل — محاولة واحدة لكل تشغيل تطبيق، لا مع كل إعادة بناء.
+  bool _onboardingAttempted = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -65,6 +70,34 @@ class _HomeShellState extends State<HomeShell> {
       _updateChecked = true;
       _checkForUpdate();
     }
+
+    if (!_onboardingAttempted) {
+      _onboardingAttempted = true;
+      unawaited(_maybeShowRegionOnboarding());
+    }
+  }
+
+  /// «من أي منطقة أنت؟» مرّة واحدة (تذكرة #126) — بعد أول إطار، وبلا حجب
+  /// الشاشة: ورقةٌ سفلية والتغذية ظاهرة تحتها.
+  ///
+  /// لا تُعرض إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة) — وهذا
+  /// يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل الإنجاز حينها، فتعود في
+  /// الإقلاع التالي بدل أن تفوت. و«محاولة واحدة» تعني مرةً واحدة لهذا
+  /// التشغيل: `_onboardingAttempted` يمنع تكرار المحاولة مع كل إعادة بناء.
+  Future<void> _maybeShowRegionOnboarding() async {
+    // ننتظر أول إطار كي لا تُفتح ورقة أثناء البناء، وأول ما يصل إليه المستخدم
+    // شاشته لا حوار.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !_isShellOnTop) return;
+    if (await isRegionOnboarded()) return;
+    if (!mounted || !_isShellOnTop) return;
+    await showRegionOnboardingSheet(context);
+  }
+
+  /// الهيكل وحده على الشاشة: لا شاشة مدفوعة فوقه ولا ورقة أخرى.
+  bool get _isShellOnTop {
+    final route = ModalRoute.of(context);
+    return (route == null || route.isCurrent) && !Navigator.of(context).canPop();
   }
 
   /// يستهلك الطلب ثم يعيده إلى «لا طلب» — قيمة سنتين على نفس الرقم ليست
