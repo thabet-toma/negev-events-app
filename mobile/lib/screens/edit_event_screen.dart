@@ -536,14 +536,21 @@ class _EditEventScreenState extends State<EditEventScreen> {
           ..._textFieldWidget(type, 'family_clan'),
           // بلدة المناسبة الأصلية تبقى بنداً حتى لو لم يعد الخادم يعرضها — وإلا
           // سقط المنتقي بتأكيد «لا بند بهذه القيمة» قبل أن يلمسه أحد.
+          //
+          // والبنود بلدات **محافظة المناسبة نفسها** (+ اسمها مكاناً لمن لم
+          // تُعرف بلدتها) لا بلدات محافظة أخرى، كما في النشر. والمناسبة التي
+          // تقع في محافظةٍ لم تعد نشطة، أو ليست في الكتالوج الاحتياطي، تعود
+          // لقائمة الخادم الشاملة، و`keep` يقيّد بلدتها بنفسه.
           DropdownButtonFormField<String>(
             initialValue: _town,
             decoration: InputDecoration(
               labelText: '${type?.labelFor('town') ?? 'البلدة'} *',
             ),
-            items: eventTownOptions(AppServices.of(context).places.catalog, keep: _originalTown)
-                .map((o) => DropdownMenuItem(value: o.value, child: Text(o.label)))
-                .toList(),
+            items: eventTownOptions(
+              AppServices.of(context).places.catalog,
+              regionId: widget.event.regionId,
+              keep: _originalTown,
+            ).map((o) => DropdownMenuItem(value: o.value, child: Text(o.label))).toList(),
             onChanged: (value) {
               if (value == null) return;
               setState(() {

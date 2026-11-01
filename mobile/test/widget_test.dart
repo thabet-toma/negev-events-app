@@ -22,6 +22,7 @@ import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/analytics.dart';
 import 'package:negev_events/state/audio_coordinator.dart';
 import 'package:negev_events/state/auth_store.dart';
+import 'package:negev_events/state/places_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/update_checker.dart';
@@ -2501,14 +2502,231 @@ void main() {
       expect(catalog.regions, isEmpty);
     });
 
+    // منتقي البلدة صار محافظةً أولاً (عزل المحافظات): بلدات محافظة المستخدم
+    // واسمها وحده، والقائمة الشاملة احتياطٌ حين لا محافظة مطابقة.
+    PlacesCatalog twoRegionsCatalog() => const PlacesCatalog(
+          towns: ['رهط', 'حورة', 'الطيبة', 'كفر قاسم'],
+          regions: [
+            Region(
+              id: 1,
+              name: 'النقب',
+              latitude: 31.25,
+              longitude: 34.79,
+              mapZoom: 9,
+              towns: ['رهط', 'حورة'],
+            ),
+            Region(
+              id: 2,
+              name: 'المثلث',
+              latitude: 32.2,
+              longitude: 35.0,
+              mapZoom: 10,
+              towns: ['الطيبة', 'كفر قاسم'],
+            ),
+            Region(
+              id: 3,
+              name: 'المرجّ',
+              latitude: 32.0,
+              longitude: 35.0,
+              mapZoom: 9,
+              isActive: false,
+              towns: ['كسيفة'],
+            ),
+          ],
+        );
+
+    List<String> optionValues(List<PlaceOption> options) =>
+        options.map((o) => o.value).toList();
+
+    test('eventTownOptions: بلدات المحافظة المختارة وحدها ثم اسمها «بلا بلدة محدّدة»', () {
+      final options = eventTownOptions(twoRegionsCatalog(), regionId: 2);
+
+      expect(optionValues(options), ['الطيبة', 'كفر قاسم', 'المثلث']);
+      expect(options.last.value, 'المثلث');
+      expect(options.last.label, 'المثلث — بلا بلدة محدّدة');
+      // لا بلدة من محافظة أخرى ولا بند لها.
+      expect(optionValues(options), isNot(contains('رهط')));
+      expect(optionValues(options), isNot(contains('النقب')));
+    });
+
+    test('eventTownOptions: بلا regionId تعود القائمة الشاملة وكل محافظة نشطة', () {
+      final options = eventTownOptions(twoRegionsCatalog());
+
+      expect(
+        optionValues(options),
+        ['رهط', 'حورة', 'الطيبة', 'كفر قاسم', 'النقب', 'المثلث'],
+      );
+      // الموقوفة ليست مكان نشر، فلا بند لها.
+      expect(optionValues(options), isNot(contains('المرجّ')));
+    });
+
+    test('eventTownOptions: محافظة غير معروفة أو موقوفة = القائمة الشاملة', () {
+      final catalog = twoRegionsCatalog();
+
+      // معرّف لا وجود له (كتالوج أحدث أو أبعد) — لا قائمة فارغة.
+      expect(
+        optionValues(eventTownOptions(catalog, regionId: 99)),
+        optionValues(eventTownOptions(catalog)),
+      );
+      // محافظة عُطّلت بعد حفظها: بلداتها لا تظهر وحدها، والقائمة الاحتياطية تعمل.
+      expect(
+        optionValues(eventTownOptions(catalog, regionId: 3)),
+        optionValues(eventTownOptions(catalog)),
+      );
+    });
+
+    test('eventTownOptions: الكتالوج الاحتياطي بلا اتصال يعرض بلدات config.dart', () {
+      final options = eventTownOptions(PlacesCatalog.fallback(), regionId: 1);
+
+      expect(optionValues(options), AppConfig.towns);
+      expect(options.any((o) => o.label.contains('بلا بلدة محدّدة')), isFalse);
+    });
+
+    test('eventTownOptions: keep يقيّد البلدة المحفوظة بلا تكرار', () {
+      final catalog = twoRegionsCatalog();
+
+      // مناسبة من محافظة أخرى تُعدَّل: بلدتها تبقى بنداً أخيراً.
+      expect(
+        optionValues(eventTownOptions(catalog, regionId: 2, keep: 'رهط')),
+        ['الطيبة', 'كفر قاسم', 'المثلث', 'رهط'],
+      );
+      // وبلدة موجودة أصلاً لا تُضاف مرّة ثانية.
+      expect(
+        optionValues(eventTownOptions(catalog, regionId: 2, keep: 'الطيبة')),
+        ['الطيبة', 'كفر قاسم', 'المثلث'],
+      );
+    });
+
+    test('eventTownOptions: محافظة بلا بلدات تُبقي بند اسمها وحده', () {
+      const catalog = PlacesCatalog(
+        towns: ['رهط'],
+        regions: [
+          Region(
+            id: 4,
+            name: 'الأغوار',
+            latitude: 31.8,
+            longitude: 35.5,
+            mapZoom: 9,
+          ),
+        ],
+      );
+
+      expect(optionValues(eventTownOptions(catalog, regionId: 4)), ['الأغوار']);
+    });
+
+    // محافظتان بقُراهما، والبند الجامع («القرى والتجمعات») صفٌّ في النقب وحده
+    // — وطولكرم محافظة ثانية لها قرى تحته هو نفسه (`VILLAGES_TOWN`)، لا في
+    // بلداتها. فالمنتقي يجب أن يلحق البند لكل محافظة لا تسرده.
+    PlacesCatalog catchAllCatalog() => const PlacesCatalog(
+          towns: ['رهط', 'حورة', 'القرى والتجمعات', 'كفر قرع', 'باقة الغربية'],
+          regions: [
+            Region(
+              id: 1,
+              name: 'النقب',
+              latitude: 31.25,
+              longitude: 34.79,
+              mapZoom: 9,
+              towns: ['رهط', 'حورة', 'القرى والتجمعات'],
+            ),
+            Region(
+              id: 2,
+              name: 'طولكرم',
+              latitude: 32.31,
+              longitude: 35.03,
+              mapZoom: 10,
+              towns: ['كفر قرع', 'باقة الغربية'],
+            ),
+          ],
+        );
+
+    test('eventTownOptions: البند الجامع مرّة واحدة في كل محافظة — ولا مرّتين في النقب',
+        () {
+      final catalog = catchAllCatalog();
+
+      for (final region in catalog.activeRegions) {
+        final values = optionValues(eventTownOptions(catalog, regionId: region.id));
+        expect(
+          values.where((value) => value == 'القرى والتجمعات'),
+          hasLength(1),
+          reason: '${region.name}: بند جامع واحد لا اثنان',
+        );
+      }
+
+      // النقب تسرده في بلداتها أصلاً، فلا تُلحق نسخة ثانية قبيل اسمها.
+      expect(
+        optionValues(eventTownOptions(catalog, regionId: 1)),
+        ['رهط', 'حورة', 'القرى والتجمعات', 'النقب'],
+      );
+    });
+
+    test('eventTownOptions: ناشر طولكرم يرى قرى محافظته والبند الجامع، لا بلدات النقب',
+        () {
+      final options = eventTownOptions(catchAllCatalog(), regionId: 2);
+
+      expect(
+        optionValues(options),
+        ['كفر قرع', 'باقة الغربية', 'القرى والتجمعات', 'طولكرم'],
+      );
+      // البند الجامع آخر بلدة، وقبل بند اسم المحافظة مباشرة.
+      expect(options[options.length - 2].value, 'القرى والتجمعات');
+      expect(options.last.label, 'طولكرم — بلا بلدة محدّدة');
+      // ولا بلدة نقبية ولا بند محافظة أخرى.
+      expect(optionValues(options), isNot(contains('رهط')));
+      expect(optionValues(options), isNot(contains('حورة')));
+      expect(optionValues(options), isNot(contains('النقب')));
+    });
+
+    test('villagesForRegion: قرى المحافظة وحدها، وكاملة إن غابت المحافظة عن القرى',
+        () {
+      const negevVillage = Village(
+        id: 4,
+        name: 'أم بطين',
+        latitude: 31.25,
+        longitude: 34.85,
+        position: 1,
+        regionId: 1,
+      );
+      const tulkarmVillage = Village(
+        id: 5,
+        name: 'كفر قرع',
+        latitude: 32.31,
+        longitude: 35.03,
+        position: 2,
+        regionId: 2,
+      );
+      // نفس القريتين في ردّ لا يحمل `region_id` (عميل/خادم أقدم).
+      const regionlessVillage = Village(
+        id: 4,
+        name: 'أم بطين',
+        latitude: 31.25,
+        longitude: 34.85,
+        position: 1,
+      );
+
+      expect(
+        villagesForRegion([negevVillage, tulkarmVillage], 1).map((v) => v.name),
+        ['أم بطين'],
+      );
+      expect(
+        villagesForRegion([negevVillage, tulkarmVillage], 2).map((v) => v.name),
+        ['كفر قرع'],
+      );
+      // بلا محافظة في النموذج: لا تصفية.
+      expect(villagesForRegion([negevVillage, tulkarmVillage], null), hasLength(2));
+      // خادم لم يضف `region_id` بعد: القائمة كما هي، لا منتقٍ فارغ.
+      expect(villagesForRegion([regionlessVillage], 2), [regionlessVillage]);
+    });
+
     testWidgets(
-      'منتقي بلدة النشر: بلدة يعرفها الخادم وحده، وبند المحافظة، والنشر به يرسل town=النقب',
+      'منتقي بلدة النشر: بلدات محافظة الجهاز واسمها، والنشر به يرسل town=النقب',
       (tester) async {
         final posted = <String>[];
         await pumpScreen(tester, placesApi(postedBodies: posted), const AddEventScreen());
 
         final values = townDropdownValues(tester);
-        expect(values, containsAllInOrder(['رهط', 'بلدة جديدة', 'النقب']));
+        // بلا اختيار جهاز تُستعمل الأولى نشاطاً: بلداتها واسمها وحدهما، ولا
+        // بلدة الخادم التي لا تنتمي إليها ('بلدة جديدة').
+        expect(values, ['رهط', 'حورة', 'النقب']);
         // البلدات الاحتياطية لا تظهر حين يجيب الخادم.
         expect(values, isNot(contains('عرعرة النقب')));
 
@@ -2517,7 +2735,7 @@ void main() {
         await tester.tap(find.text('رهط').first);
         await tester.pump();
         await tester.pump(const Duration(seconds: 1));
-        expect(find.text('بلدة جديدة'), findsWidgets);
+        expect(find.text('حورة'), findsWidgets);
         await tester.tap(find.text('النقب — بلا بلدة محدّدة').last);
         await tester.pump();
         await tester.pump(const Duration(seconds: 1));

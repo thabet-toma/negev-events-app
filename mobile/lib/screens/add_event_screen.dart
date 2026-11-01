@@ -105,6 +105,23 @@ XFile resolveCroppedPoster(XFile picked, CroppedFile? cropped) {
   return cropped == null ? picked : XFile(cropped.path);
 }
 
+/// القرى المعروضة في منتقي القرية تحت البند الجامع (٢٠٢٦-١٠): **قرى المحافظة
+/// المختارة وحدها**، لا كل قرى المنصّة.
+///
+/// كان المنتقي يعرض `catalog.villages` كاملاً، فحين صارت لطولكرم قرى رأى
+/// النقبيُّ قرى طولكرم وبالعكس — ومحافظة النشر في النموذج (`_regionId`) هي
+/// الفاصل نفسه الذي تُبنى به قائمة البلدات.
+///
+/// **والتصفية مشروطة:** إن غابت محافظة **أي** قرية (`Village.regionId` فارغ)
+/// فالردّ لا يحمل `region_id` (عميل/خادم أقدم)، فتُعرض القائمة كما هي بدل
+/// منتقٍ فارغ — نفس شرط `placeFilterVillageOptions` في `web/app.js`.
+/// و[regionId] فارغاً يعني «لا محافظة بعد»، فلا تصفية.
+List<Village> villagesForRegion(List<Village> villages, int? regionId) {
+  if (regionId == null) return villages;
+  if (villages.any((village) => village.regionId == null)) return villages;
+  return villages.where((village) => village.regionId == regionId).toList();
+}
+
 /// صيغة `YYYY-MM-DD` التي يفهمها الخادم — عام كي تعيد شاشة تعديل المناسبة
 /// استعماله بدل نسخة ثانية.
 String formatEventDate(DateTime date) {
@@ -291,7 +308,9 @@ class AddEventScreen extends StatefulWidget {
 class _AddEventScreenState extends State<AddEventScreen> {
   Future<List<OccasionType>>? _typesFuture;
   Future<Map<String, TownCoordinate>>? _townCoordsFuture;
-  Future<List<Village>>? _villagesFuture;
+  // قرى الخادم كما وصلت، **بلا تصفية** — التصفية بمحافظة النموذج تحدث عند
+  // العرض، ويحتاجها منتقي المحافظة فور تغييره (لا snapshot داخل FutureBuilder).
+  List<Village> _villagesList = const [];
   bool _placesRequested = false;
   OccasionType? _type;
 
@@ -308,6 +327,8 @@ class _AddEventScreenState extends State<AddEventScreen> {
   final _requestedVillageController = TextEditingController();
   // محافظة القرية (تذكرة #125) — معرّف من `GET /api/towns`، إلزامي تحت البند
   // الجامع كالقرية نفسها، ويُرسَل `region_id` مع الطلب (كما في الويب).
+  // **وهو نفس محافظة النموذج الفعّالة** ([_publishRegionId]): يبدأ عليها لا
+  // فارغاً، فقرى منتقي القرية قرى محافظة الناشر منذ أول بناء.
   int? _regionId;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
@@ -334,20 +355,44 @@ class _AddEventScreenState extends State<AddEventScreen> {
     // ولا خطأ يفلت منه (الفشل يعيد البلدات الاحتياطية بلا مراكز ولا قرى).
     _townCoordsFuture ??=
         AppServices.of(context).places.load().then((c) => c.townCoordinates);
-    _villagesFuture ??= AppServices.of(context).places.load().then((c) => c.villages);
     if (!_placesRequested) {
       _placesRequested = true;
       // وصول بلدات الخادم قد يُسقط البلدة المختارة افتراضياً (بلدة احتياطية
-      // عطّلها السوبر أدمن) — نعود حينها لأول بند كي لا يُبنى منتقٍ بقيمة
-      // خارج بنوده.
+      // عطّلها السوبر أدمن، أو بلدة محافظة أخرى) — نعود حينها لأول بند كي لا
+      // يُبنى منتقٍ بقيمة خارج بنوده.
       AppServices.of(context).places.load().then((catalog) {
         if (!mounted) return;
-        final options = eventTownOptions(catalog);
+        final options = _townOptions();
         setState(() {
+          _villagesList = catalog.villages;
+          // المحافظة تبدأ على الفعّالة — نفس محافظة قائمة البلدات وترويسة
+          // `X-Region` — لا فارغة: ناشرُ طولكرم يجد قرى طولكرم مباشرة بلا
+          // اختيار مسبق، وهو ما يجعله ينشر في محافظته بلا خطأ.
+          _regionId ??= _publishRegionId(catalog);
           if (!options.any((o) => o.value == _town)) _town = options.first.value;
         });
       });
     }
+  }
+
+  /// بنود منتقي البلدة — بلدات المحافظة الفعّالة واسمها وحده (عزل المحافظات)،
+  /// أو القائمة الشاملة في الاحتياط.
+  List<PlaceOption> _townOptions() {
+    final catalog = AppServices.of(context).places.catalog;
+    return eventTownOptions(catalog, regionId: _publishRegionId(catalog));
+  }
+
+  /// المحافظة التي تُنشَر فيها المناسبة الآن — **نفس** ما يحمله `X-Region`
+  /// ([RegionStore.headerRegionId]، ومنه بلدات المنتقي)، فما يراه الناشر هو ما
+  /// يُرسَل. الترويسة نصّ، و`null` حين لا اختيار جهاز ولا محافظة حساب؛ حينها
+  /// الأولى نشاطاً في الكتالوج — نفس ما يفتح عليه الاكتشاف. وكتالوج بلا
+  /// محافظات (احتياطي بلا اتصال) يعيد `null` = القائمة الشاملة.
+  int? _publishRegionId(PlacesCatalog catalog) {
+    final header = AppServices.of(context).regions.headerRegionId;
+    final sent = header == null ? null : int.tryParse(header);
+    if (sent != null) return sent;
+    final active = catalog.activeRegions;
+    return active.isEmpty ? null : active.first.id;
   }
 
   @override
@@ -711,7 +756,8 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _town = AppServices.of(context).places.catalog.towns.first;
       _selectedVillage = null;
       _villageNotListed = false;
-      _regionId = null;
+      // النموذج الفارغ يبدأ على المحافظة الفعّالة نفسها لا بلا محافظة.
+      _regionId = _publishRegionId(AppServices.of(context).places.catalog);
       _latitude = null;
       _longitude = null;
       _locationPickerGeneration++;
@@ -797,7 +843,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
           decoration: InputDecoration(
             labelText: '${type.labelFor('town') ?? 'البلدة'} *',
           ),
-          items: eventTownOptions(AppServices.of(context).places.catalog)
+          items: _townOptions()
               .map((o) => DropdownMenuItem(value: o.value, child: Text(o.label)))
               .toList(),
           onChanged: (value) {
@@ -816,28 +862,29 @@ class _AddEventScreenState extends State<AddEventScreen> {
         ),
         if (_town == kVillagesTown) ...[
           const SizedBox(height: 12),
-          FutureBuilder<List<Village>>(
-            future: _villagesFuture,
-            builder: (context, snapshot) {
-              final villages = snapshot.data ?? const <Village>[];
-              return DropdownButtonFormField<Village>(
-                initialValue: _villageNotListed ? kVillageNotListedOption : _selectedVillage,
-                decoration: const InputDecoration(labelText: 'القرية *'),
-                items: [
-                  ...villages.map(
-                    (village) => DropdownMenuItem(value: village, child: Text(village.name)),
-                  ),
-                  const DropdownMenuItem(
-                    value: kVillageNotListedOption,
-                    child: Text('قريتي غير موجودة ✎'),
-                  ),
-                ],
-                onChanged: (value) => setState(() {
-                  _villageNotListed = identical(value, kVillageNotListedOption);
-                  _selectedVillage = _villageNotListed ? null : value;
-                }),
-              );
-            },
+          DropdownButtonFormField<Village>(
+            // مفتاح بمحافظة النموذج: تغييرها يُعيد بناء الحقل فوراً بقيمة
+            // `_selectedVillage` الجديدة (المُفرَّغة) — `initialValue` لا
+            // يُحدَّث في `FormField` بعد أول بناء، فلولا المفتاح بقي منتقٍ
+            // يعرض قرية محافظة أخرى أو يسقط بتأكيد «لا بند بهذه القيمة».
+            key: ValueKey<int?>(_regionId),
+            initialValue: _villageNotListed ? kVillageNotListedOption : _selectedVillage,
+            decoration: const InputDecoration(labelText: 'القرية *'),
+            items: [
+              // قرى المحافظة المختارة وحدها (وفلترة معطَّلة إن لم يرسل
+              // الخادم `region_id` بعد) — لا خليط محافظات.
+              ...villagesForRegion(_villagesList, _regionId).map(
+                (village) => DropdownMenuItem(value: village, child: Text(village.name)),
+              ),
+              const DropdownMenuItem(
+                value: kVillageNotListedOption,
+                child: Text('قريتي غير موجودة ✎'),
+              ),
+            ],
+            onChanged: (value) => setState(() {
+              _villageNotListed = identical(value, kVillageNotListedOption);
+              _selectedVillage = _villageNotListed ? null : value;
+            }),
           ),
           if (_villageNotListed) ...[
             const SizedBox(height: 12),
@@ -870,7 +917,17 @@ class _AddEventScreenState extends State<AddEventScreen> {
                     ),
                   )
                   .toList(),
-              onChanged: (value) => setState(() => _regionId = value),
+              onChanged: (value) => setState(() {
+                _regionId = value;
+                // قرى المنتقي صارت قرى المحافظة الجديدة: قرية مختارة سابقاً
+                // من محافظة أخرى لم تعد بنداً فيه (ومن منتقٍ لا بند بقيمته)،
+                // فتُفرَّغ مع تغيير المحافظة.
+                final villages = villagesForRegion(_villagesList, _regionId);
+                if (_selectedVillage != null &&
+                    !villages.any((village) => village.id == _selectedVillage!.id)) {
+                  _selectedVillage = null;
+                }
+              }),
             ),
           ],
         ],

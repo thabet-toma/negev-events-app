@@ -140,6 +140,13 @@ Future<void> _signedIn(_RegionServer server, AuthStore auth) async {
 /// خادم نموذج النشر: بند جامع فيه قرية واحدة ومحافظتان، ونوع عرس بحقوله
 /// الدنيا. كل جسم `POST /api/events` يُلتقط لقراءة حقول multipart كما وصلت.
 class _FormServer {
+  _FormServer({this.villagesHaveRegion = false});
+
+  /// هل تحمل القرى `region_id`؟ `false` = ردّ بلا الحقل، فيبقى منتقي القرية
+  /// بلا تصفية؛ و`true` يمثّل الردّ الحالي (`villages.listActive` يرسله مع كل
+  /// قرية) الذي تُصفّى به القرى بمحافظة النموذج.
+  final bool villagesHaveRegion;
+
   final posted = <String>[];
 
   /// أجسام `PATCH /api/events/:id` — عليها يُقرأ ما أرسلته شاشة التعديل.
@@ -173,7 +180,7 @@ class _FormServer {
     if (path.endsWith('/api/towns')) {
       return _json({
         'success': true,
-        'towns': ['الكل', 'رهط', 'القرى والتجمعات'],
+        'towns': ['الكل', 'رهط', 'القرى والتجمعات', 'كفر قاسم'],
         'regions': [
           {
             'id': 1,
@@ -182,7 +189,7 @@ class _FormServer {
             'longitude': 34.79,
             'map_zoom': 10,
             'position': 1,
-            'towns': ['رهط'],
+            'towns': ['رهط', 'القرى والتجمعات'],
           },
           {
             'id': 2,
@@ -191,12 +198,31 @@ class _FormServer {
             'longitude': 35.0,
             'map_zoom': 10,
             'position': 2,
-            'towns': const <String>[],
+            'towns': ['كفر قاسم'],
           },
         ],
-        'villages': [
-          {'id': 4, 'name': 'أم بطين', 'latitude': 31.25, 'longitude': 34.85, 'position': 1},
-        ],
+        'villages': villagesHaveRegion
+            ? [
+                {
+                  'id': 4,
+                  'name': 'أم بطين',
+                  'latitude': 31.25,
+                  'longitude': 34.85,
+                  'position': 1,
+                  'region_id': 1,
+                },
+                {
+                  'id': 5,
+                  'name': 'دير حنا',
+                  'latitude': 32.2,
+                  'longitude': 35.1,
+                  'position': 2,
+                  'region_id': 2,
+                },
+              ]
+            : [
+                {'id': 4, 'name': 'أم بطين', 'latitude': 31.25, 'longitude': 34.85, 'position': 1},
+              ],
         'town_coordinates': {
           'رهط': {'lat': 31.39, 'lng': 34.75},
         },
@@ -524,7 +550,7 @@ void main() {
   });
 
   group('نموذج النشر — محافظة القرية', () {
-    testWidgets('إلزامية تحت «القرى والتجمعات»، وتُرسَل region_id مع الطلب',
+    testWidgets('تبدأ على المحافظة الفعّالة، ويُرسَل region_id مع الطلب',
         (tester) async {
       final server = _FormServer();
       final api = NegevApi(ApiClient(client: MockClient(server.handle)));
@@ -583,17 +609,13 @@ void main() {
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
 
-      // بلا محافظة: لا إرسال، ورسالة عربية قصيرة.
-      await tester.tap(find.text('إرسال المناسبة'));
-      await tester.pumpAndSettle();
-      expect(find.text('اختر المحافظة التي تنتمي إليها القرية'), findsOneWidget);
-      expect(server.posted, isEmpty);
-
-      // باختيارها: يُرسَل المعرّف الرقمي في جسم الطلب.
-      await tester.tap(find.byKey(const Key('add_region_picker')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('المثلث').last);
-      await tester.pumpAndSettle();
+      // المحافظة ليست فارغة تحت البند الجامع: تبدأ على محافظة الجهاز
+      // الفعّالة (أول النشطة هنا: النقب) — فالنموذج يُرسَل بلا اختيار مسبق،
+      // وقرى المحافظة نفسها هي المعروضة في منتقي القرية.
+      final regionPicker = tester.widget<DropdownButtonFormField<int>>(
+        find.byKey(const Key('add_region_picker')),
+      );
+      expect(regionPicker.initialValue, 1);
 
       await tester.tap(find.text('إرسال المناسبة'));
       await tester.pumpAndSettle();
@@ -603,11 +625,80 @@ void main() {
       final regionPart = body
           .split('--')
           .firstWhere((part) => part.contains('name="region_id"'));
-      expect(regionPart, contains('\r\n\r\n2\r\n'));
+      expect(regionPart, contains('\r\n\r\n1\r\n'));
       final villagePart = body
           .split('--')
           .firstWhere((part) => part.contains('name="village_id"'));
       expect(villagePart, contains('\r\n\r\n4\r\n'));
+    });
+
+    testWidgets('قرية المنتقي من محافظة النموذج وحدها، وتُفرَّغ حين تُبدَّل المحافظة',
+        (tester) async {
+      // ردّ يحمل `region_id` مع كل قرية — وهو الذي يُفعِّل تصفية المنتقي.
+      final server = _FormServer(villagesHaveRegion: true);
+      final api = NegevApi(ApiClient(client: MockClient(server.handle)));
+      final auth = AuthStore(api);
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'test-token',
+        'negev_user': jsonEncode({
+          'id': 7,
+          'phone_number': '0500000000',
+          'full_name': 'مستخدم',
+          'role': 'user',
+        }),
+      });
+      await auth.load();
+
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: const AddEventScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('رهط').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('القرى والتجمعات').last);
+      await tester.pumpAndSettle();
+
+      // المحافظة افتراضاً النقب (1): قرى النقب وحدها.
+      await tester.tap(find.byType(DropdownButton<Village>));
+      await tester.pumpAndSettle();
+      expect(find.text('أم بطين'), findsWidgets);
+      expect(find.text('دير حنا'), findsNothing, reason: 'قرية المثلث ليست في النقب');
+
+      await tester.tap(find.text('أم بطين').last);
+      await tester.pumpAndSettle();
+      expect(find.text('أم بطين'), findsOneWidget, reason: 'القرية مختارة');
+
+      // تبديل المحافظة يُعيد بناء القائمة: قرى المثلث وحدها، والقرية النقبية
+      // المختارة تُفرَّغ لئلا يبقى منتقٍ بقيمة خارج بنوده.
+      await tester.tap(find.byKey(const Key('add_region_picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('المثلث').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('أم بطين'), findsNothing, reason: 'قرية المحافظة السابقة');
+
+      await tester.tap(find.byType(DropdownButton<Village>));
+      await tester.pumpAndSettle();
+      expect(find.text('دير حنا'), findsWidgets);
+      expect(find.text('أم بطين'), findsNothing);
     });
   });
 
@@ -683,10 +774,14 @@ void main() {
       );
       expect(server.patches.single['region_id'], 1);
 
-      // والبلدة حرِجة فعلاً — التحذير يظهر قبل الإرسال الثاني.
+      // والبلدة حرِجة فعلاً — التحذير يظهر قبل الإرسال الثاني. منتقي التعديل
+      // بلدات محافظة المناسبة (المثلث) وحدها، فبند «كفر قاسم» من محافظتها،
+      // و«القرى والتجمعات» بندٌ فيها أيضاً (`eventTownOptions` يلحقه آخر بلدة
+      // قبل بند اسم المحافظة لكل محافظة لا تسرده) — كما يدخل بند `keep` حين
+      // تكون بلدة المناسبة الحالية.
       await tester.tap(find.text('القرى والتجمعات').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('رهط').last);
+      await tester.tap(find.text('كفر قاسم').last);
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('save_event_button')));

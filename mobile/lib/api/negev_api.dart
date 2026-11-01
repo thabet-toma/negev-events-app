@@ -1242,12 +1242,18 @@ class Village {
   final double longitude;
   final int position;
 
+  /// محافظة القرية (`region_id`) — يرسلها `GET /api/towns` مع كل قرية، ومنتقي
+  /// القرية في شاشة النشر يُصفّي بها. و`null` حين يغيب الحقل (ردّ قديم أو
+  /// خادم لا يعرفه)، فتبقى التصفية معطَّلة بدل منتقٍ فارغ.
+  final int? regionId;
+
   const Village({
     required this.id,
     required this.name,
     required this.latitude,
     required this.longitude,
     required this.position,
+    this.regionId,
   });
 
   factory Village.fromJson(Map<String, dynamic> json) {
@@ -1255,12 +1261,16 @@ class Village {
     final lat = json['latitude'];
     final lng = json['longitude'];
     final position = json['position'];
+    final regionId = json['region_id'];
     return Village(
       id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
       name: '${json['name'] ?? ''}',
       latitude: lat is num ? lat.toDouble() : double.tryParse('$lat') ?? 0,
       longitude: lng is num ? lng.toDouble() : double.tryParse('$lng') ?? 0,
       position: position is int ? position : int.tryParse('${position ?? ''}') ?? 0,
+      regionId: regionId is int
+          ? regionId
+          : int.tryParse('${regionId ?? ''}'),
     );
   }
 }
