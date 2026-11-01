@@ -877,8 +877,14 @@ async function checkTownMismatch(town, latitude, longitude) {
  * that still reads it) is derived from the first honoree by `position`,
  * written in the same transaction rather than a follow-up job. Admins publish
  * immediately; everyone else lands in the moderation queue.
+ *
+ * `regionId` is the governorate **already resolved by the caller** (#123): the
+ * publish route resolves it once and hands the same value to the duplicate
+ * guard, so what the guard compared against and what the row stores can never
+ * drift apart even if the resolution's inputs change later. Callers that do not
+ * pass it (seed, importer, scripts) get the one rule below, exactly as before.
  */
-async function createEvent(data, { autoApprove = false, createdBy = null } = {}) {
+async function createEvent(data, { autoApprove = false, createdBy = null, regionId = null } = {}) {
   // The villages catch-all has no centre of its own — `data.villageCoords`
   // (the chosen village's own lat/lng, looked up by the route) fills that gap
   // the exact same way a real town's centre does, so a village event gets a
@@ -888,13 +894,17 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
   const longitude = data.longitude ?? coords.lng ?? null;
   const status = autoApprove ? 'approved' : 'pending';
 
-  // محافظة المناسبة (تذكرة #120) — تُحسب مرّة هنا وتُنسخ على الصفّ، لا تُشتقّ
-  // في أي قراءة. `data.region_id` يصل من المسار اختيارياً فقط؛ وغيابه (كل عميل
+  // محافظة المناسبة (تذكرة #120) — تُحسب في مكان واحد وتُنسخ على الصفّ، لا
+  // تُشتقّ في أي قراءة. حين يمرّر المسار `regionId` المحلولة (تذكرة #123) فهي
+  // هي نفسها التي قارن بها حارس التكرار، وتُستعمل كما هي. وأي نداء آخر يمرّ
+  // بالقاعدة الوحيدة هنا: `data.region_id` اختياري من العميل، وغيابه (كل عميل
   // منشور اليوم، ومنه 1.21.3) يُسقط إلى محافظة البلدة أو إلى الافتراضية.
-  const regionId = await townsService.resolveRegionForEventPlace({
-    town: data.town,
-    regionId: data.region_id ?? null
-  });
+  const resolvedRegionId = regionId === null || regionId === undefined
+    ? await townsService.resolveRegionForEventPlace({
+      town: data.town,
+      regionId: data.region_id ?? null
+    })
+    : regionId;
 
   // A field the route silently dropped (hidden for this occasion type) is
   // simply absent from `data` — `undefined`, not `null`. The raw connection
@@ -932,7 +942,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
         groomName,
         familyClan,
         data.occasion_type_id,
-        regionId,
+        resolvedRegionId,
         data.town,
         villageId,
         requestedVillageName,
@@ -1487,11 +1497,14 @@ function placeKey(row) {
  * counts at all in the same place. The occasion type is deliberately not
  * compared: a wedding republished as «خطوبة» by mistake is still the same one.
  *
- * The governorate is not compared here — `findPossibleDuplicates` never lets a
- * candidate from another one through (#123), so both sides are already in the
- * same governorate and `regionNames` means exactly one thing: a place name that
- * is a governorate is "town unknown *inside this governorate*", not "another
- * place", which is why two different governorates' names never meet here.
+ * The governorate is not compared here. Once a subject carries a `region_id`,
+ * `findPossibleDuplicates` drops every candidate from another governorate
+ * (#123), so the only place names that reach this function are inside that one
+ * governorate — and there a name that is a governorate means "town unknown
+ * *inside this governorate*", never "another place". The exception is a subject
+ * with no `region_id` (an internal caller that predates #120): candidates are
+ * not filtered at all then, so another governorate's names can meet here — the
+ * older, unrestricted behaviour, kept on purpose for those callers only.
  */
 function matchDuplicate(subject, candidate, regionNames) {
   // Dates first: the cheap test, and the one that rules out almost every

@@ -12561,10 +12561,14 @@ async function run() {
     queue: `عريس طابور المحافظة ${dupGuardStamp}`,
     sameGovernorate: `عريس المحافظة نفسها ${dupGuardStamp}`,
     regularUser: `عريس الحارس للمستخدم ${dupGuardStamp}`,
-    regionAsTown: `عريس اسم المحافظة ${dupGuardStamp}`
+    regionAsTown: `عريس اسم المحافظة ${dupGuardStamp}`,
+    approvalAcross: `عريس الاعتماد عبر المحافظات ${dupGuardStamp}`,
+    approvalSame: `عريس الاعتماد داخل المحافظة ${dupGuardStamp}`,
+    catchAll: `عريس البند الجامع ${dupGuardStamp}`
   };
   const dupGuardEventIds = [];
   let dupGuardNegevEventId = 0;
+  let dupGuardSecondEventId = 0;
 
   // confirm_duplicate: false صراحةً في كل نشر هنا: `api()` تضيفه true تلقائياً
   // لمسار النشر (withDuplicateConfirmed)، فبدونه لا يقيس القسم الحارس أصلاً.
@@ -12577,7 +12581,7 @@ async function run() {
     token, body: dupGuardBody(name, overrides)
   });
 
-  await test('مناسبة في النقب ونفس الاسم والتاريخ في محافظة ثانية: نشر فوري بلا 409 وبلا تنبيه (تذكرة #123)', async () => {
+  await test('مناسبة في النقب ونفس الاسم والتاريخ في محافظة ثانية: نشر فوري بلا 409 (تذكرة #123)', async () => {
     const negev = await dupGuardPublish(superAdminToken, dupGuardNames.acrossGovernorates, {
       town: 'حورة', event_date: '2028-04-01'
     });
@@ -12591,19 +12595,25 @@ async function run() {
     });
     assert.strictEqual(second.status, 201, `متوقّع 201 عبر المحافظات، وصل: ${JSON.stringify(second.body)}`);
     assert.strictEqual(second.body.status, 'approved');
-    assert.strictEqual(second.body.details, undefined, 'لا تفاصيل تكرار حين لا مطابقة');
-    dupGuardEventIds.push(second.body.eventId);
+    dupGuardSecondEventId = second.body.eventId;
+    dupGuardEventIds.push(dupGuardSecondEventId);
   });
 
-  await test('نداء داخلي قديم بلا region_id يبقى على السلوك السابق بلا انفجار (تذكرة #123)', async () => {
-    // الموضوع بلا `region_id` يصل من نداء داخلي سابق لـ#120 — لا يُقيَّد، ولا
-    // يرمي: نفس مطابقة اليوم.
-    const [matches] = await eventsService.findPossibleDuplicates([{
-      names: [dupGuardNames.acrossGovernorates], town: 'حورة', event_date: '2028-04-01'
-    }]);
-    const match = matches.find(row => row.id === dupGuardNegevEventId);
-    assert.ok(match, 'موضوع بلا محافظة يرى مرشّحيه كما كان');
-    assert.strictEqual(match.confidence, 'certain');
+  await test('نداء داخلي بلا region_id يرى مرشّح كل محافظة، وبمحافظة النقب لا يرى الثاني (تذكرة #123)', async () => {
+    // موضوع بلا `region_id` = نداء داخلي سابق لـ#120: التقييد معطَّل كله، فيطابق
+    // مرشّح النقب **ومرشّح المحافظة الثانية** معاً. ثم نفس الموضوع بمحافظة
+    // النقب: المرشّح الثاني يختفي — وهذا وحده ما يقيس التقييد فعلاً.
+    const subject = { names: [dupGuardNames.acrossGovernorates], town: 'حورة', event_date: '2028-04-01' };
+
+    const [unrestricted] = await eventsService.findPossibleDuplicates([subject]);
+    const unrestrictedIds = unrestricted.map(row => row.id);
+    assert.ok(unrestrictedIds.includes(dupGuardNegevEventId), 'مرشّح النقب مطلوب');
+    assert.ok(unrestrictedIds.includes(dupGuardSecondEventId), 'بلا محافظة لا يُقصّ مرشّح من محافظة أخرى');
+
+    const [restricted] = await eventsService.findPossibleDuplicates([{ ...subject, region_id: defaultRegionId }]);
+    const restrictedIds = restricted.map(row => row.id);
+    assert.ok(restrictedIds.includes(dupGuardNegevEventId), 'مرشّح نفس المحافظة يبقى');
+    assert.ok(!restrictedIds.includes(dupGuardSecondEventId), 'مرشّح محافظة أخرى لا يُقارَن');
   });
 
   await test('طلب مستخدم بنفس الاسم والتاريخ في محافظة ثانية لا يظهر تكراراً لصفّ النقب في الطابور (تذكرة #123)', async () => {
@@ -12699,6 +12709,101 @@ async function run() {
     });
     assert.strictEqual(inNegev.status, 201, `لا تنبيه عبر المحافظات: ${JSON.stringify(inNegev.body)}`);
     dupGuardEventIds.push(inNegev.body.eventId);
+  });
+
+  await test('الاعتماد: تطابق في محافظة ثانية يمرّ بلا 409، وداخل المحافظة نفسها يُرفض بـ409 (تذكرة #123)', async () => {
+    // نداء اعتماد لا يمرّ بالمسار نفسه الذي يبني موضوع الحارس من الطلب، بل يقرأ
+    // الصفّ (`getEventForEdit`) — فهذا الاختبار يقيس أن `region_id` يصل معه.
+    const negevApproved = await dupGuardPublish(superAdminToken, dupGuardNames.approvalAcross, {
+      town: 'حورة', event_date: '2028-04-06'
+    });
+    assert.strictEqual(negevApproved.status, 201, negevApproved.body.message);
+    dupGuardEventIds.push(negevApproved.body.eventId);
+
+    const pendingAcross = await dupGuardPublish(userToken, dupGuardNames.approvalAcross, {
+      town: dupGuardTownName, event_date: '2028-04-06'
+    });
+    assert.strictEqual(pendingAcross.status, 201, pendingAcross.body.message);
+    assert.strictEqual(pendingAcross.body.status, 'pending');
+    dupGuardEventIds.push(pendingAcross.body.eventId);
+
+    const approved = await api('PATCH', `/api/admin/events/${pendingAcross.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+    const approvedRow = await db.queryOne('SELECT status FROM events WHERE id = ?', [pendingAcross.body.eventId]);
+    assert.strictEqual(approvedRow.status, 'approved');
+
+    // نفس الترتيب داخل المحافظة الثانية: 409 كما كان، والصفّ يبقى معلّقاً.
+    const secondApproved = await dupGuardPublish(superAdminToken, dupGuardNames.approvalSame, {
+      town: dupGuardTownName, event_date: '2028-04-07'
+    });
+    assert.strictEqual(secondApproved.status, 201, secondApproved.body.message);
+    dupGuardEventIds.push(secondApproved.body.eventId);
+
+    const pendingSame = await dupGuardPublish(userToken, dupGuardNames.approvalSame, {
+      town: dupGuardTownName, event_date: '2028-04-07'
+    });
+    assert.strictEqual(pendingSame.status, 201, pendingSame.body.message);
+    dupGuardEventIds.push(pendingSame.body.eventId);
+
+    const refused = await api('PATCH', `/api/admin/events/${pendingSame.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(refused.status, 409);
+    assert.strictEqual(refused.body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.ok(refused.body.details.duplicates.some(row => row.id === secondApproved.body.eventId));
+    const stillPending = await db.queryOne('SELECT status FROM events WHERE id = ?', [pendingSame.body.eventId]);
+    assert.strictEqual(stillPending.status, 'pending');
+  });
+
+  await test('البند الجامع: المكان نفسه في محافظة أخرى لا يتصادم، وداخل المحافظة نفسها يتصادم (تذكرة #123)', async () => {
+    // الموضع الوحيد الذي تُرسَل فيه المحافظة صراحةً: البند الجامع ليس مكاناً،
+    // فمحافظته هي `region_id` المرسلة — وهي أيضاً مفتاح المكان الوحيد المتاح
+    // لهذه المقارنة، إذ `towns.name` فريد فلا بلدة باسمٍ واحد في محافظتين.
+    const villageName = `قرية التكرار ${dupGuardStamp}`;
+    const inSecond = await dupGuardPublish(superAdminToken, dupGuardNames.catchAll, {
+      town: 'القرى والتجمعات', requested_village_name: villageName,
+      region_id: dupGuardRegionId, event_date: '2028-04-08'
+    });
+    assert.strictEqual(inSecond.status, 201, inSecond.body.message);
+    dupGuardEventIds.push(inSecond.body.eventId);
+    const storedSecond = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [inSecond.body.eventId]);
+    assert.strictEqual(storedSecond.region_id, dupGuardRegionId, 'البند الجامع يأخذ region_id المرسلة');
+
+    // النقب: الاسم والتاريخ والقرية نفسها (مفتاح المكان نفسه) — ولا تنبيه.
+    const inNegev = await dupGuardPublish(superAdminToken, dupGuardNames.catchAll, {
+      town: 'القرى والتجمعات', requested_village_name: villageName,
+      region_id: defaultRegionId, event_date: '2028-04-08'
+    });
+    assert.strictEqual(inNegev.status, 201, `متوقّع 201 عبر المحافظات، وصل: ${JSON.stringify(inNegev.body)}`);
+    dupGuardEventIds.push(inNegev.body.eventId);
+    const storedNegev = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [inNegev.body.eventId]);
+    assert.strictEqual(storedNegev.region_id, defaultRegionId);
+
+    // المحافظة الثانية مرة أخرى: المكان نفسه والتاريخ نفسه — 409.
+    const twice = await dupGuardPublish(superAdminToken, dupGuardNames.catchAll, {
+      town: 'القرى والتجمعات', requested_village_name: villageName,
+      region_id: dupGuardRegionId, event_date: '2028-04-08'
+    });
+    assert.strictEqual(twice.status, 409, JSON.stringify(twice.body));
+    assert.ok(
+      twice.body.details.duplicates.some(row => row.id === inSecond.body.eventId),
+      'التصادم داخل المحافظة الثانية'
+    );
+    assert.ok(
+      !twice.body.details.duplicates.some(row => row.id === inNegev.body.eventId),
+      'ولا ذكر لمناسبة النقب'
+    );
+
+    // واسم البلدة نفسه لا يُسجَّل في محافظتين أصلاً (`uq_towns_name`)، فهذا
+    // السيناريو غير قابل للبناء — والمقارنة أعلاه بمفتاح المكان نفسه هي البديل.
+    const sameName = await api('POST', '/api/admin/towns', {
+      token: superAdminToken,
+      body: { region_id: defaultRegionId, name: dupGuardTownName, latitude: 31.05, longitude: 34.95 }
+    });
+    assert.strictEqual(sameName.status, 409, JSON.stringify(sameName.body));
+    assert.ok(/بهذا الاسم مسبقاً/.test(sameName.body.message || ''), sameName.body.message);
   });
 
   // تنظيف ما أنشأه هذا القسم — المناسبات (مع سجلّها) أولاً، ثم البلدة والمحافظة.

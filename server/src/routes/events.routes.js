@@ -328,6 +328,12 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     payload[key] = value;
   }
 
+  // محافظة المناسبة الجديدة تُحسب **مرّة واحدة** هنا بالقاعدة الوحيدة (تذكرة
+  // #120)، ويُمرَّر الناتج إلى `createEvent` كما هو وتستعمله موضوعُ الحارس أيضاً
+  // (تذكرة #123): المحافظة التي قارن بها الحارس هي نفسها التي تُخزَّن، فلا
+  // يفترقان ولو تغيّرت وسائط الحساب لاحقاً (تذكرة #121 — محافظة القرية مثلاً).
+  const eventRegionId = await townsService.resolveRegionForEventPlace({ town, regionId });
+
   // Possible-duplicate guard — only where this publish goes live at once.
   // Anything that lands in the queue is checked by the admin who approves it
   // (PATCH /admin/events/:id/status); an ordinary user is never told and
@@ -336,13 +342,9 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   const autoApprove = await isAdminForTown(req.user, town);
   let duplicates = [];
   if (autoApprove) {
-    // محافظة المناسبة الجديدة تُحسب هنا **بنفس القاعدة الوحيدة** التي يكتب بها
-    // `createEvent` الصفّ (تذكرة #120)، لا بمنطق مكرَّر هنا: الحارس صار يقارن
-    // داخل محافظة واحدة (تذكرة #123)، فالموضوع المبني يدوياً يجب أن يحملها.
-    const subjectRegionId = await townsService.resolveRegionForEventPlace({ town, regionId });
     [duplicates] = await events.findPossibleDuplicates([{
       names: honorees.map(honoree => honoree.name),
-      region_id: subjectRegionId,
+      region_id: eventRegionId,
       town,
       village_id: villageId,
       requested_village_name: requestedVillageName,
@@ -369,7 +371,9 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   // anyone else's, never rejected (services-directory spec, story 25).
   const created = await events.createEvent(payload, {
     autoApprove,
-    createdBy: req.user.id
+    createdBy: req.user.id,
+    // المحلولة أعلاه — لا تُحسب مرّتين.
+    regionId: eventRegionId
   });
 
   realtime.emit('admin_new_pending_event', created);
