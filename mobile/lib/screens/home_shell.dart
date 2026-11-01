@@ -108,17 +108,43 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر صراحةً
-    // متى لم تعد المختارة كي تُسكت صوتها.
-    final screens = [
-      EventsScreen(isActive: _index == AppServices.feedTabIndex),
-      MyListScreen(isActive: _index == AppServices.myListTabIndex),
-      const MapScreen(),
-      const NokootScreen(),
-      const AccountScreen(),
-      const ServicesScreen(),
-    ];
+    final services = AppServices.of(context);
 
+    // تبديل المحافظة (تذكرة #125) يُعيد بناء الأسطح التي تحتفظ ببياناتها في
+    // الذاكرة: التغذية — وفيها شريط الستوريات — والخريطة والخدمات، بمفتاح هو
+    // **قيمة `X-Region` المُرسَلة فعلاً** لا الاختيار الصريح وحده: محافظة
+    // الحساب تُرسَل ترويسةً أيضاً، ومسحُ محفوظٍ لم يعد موجوداً يغيّرها بلا
+    // اختيار جديد. حياةٌ جديدة تعني جلباً جديداً بالترويسة الجديدة، فلا تبقى
+    // تغذية المحافظة السابقة على الشاشة.
+    //
+    // الألبومات شاشات مدفوعة فوق التغذية، ولا تبقى حيّة وقت التبديل (منتقيه
+    // في «حسابي»)، فتُجلب بمحافظتها عند أول فتح بعده. و«قائمتي» والنقوط
+    // بيانات صاحب الحساب لا اكتشافُ محافظة، فلا تُمسّ.
+    return ListenableBuilder(
+      listenable: services.regions,
+      builder: (context, _) {
+        final regionKey = services.regions.headerRegionId;
+        final screens = [
+          EventsScreen(
+            key: ValueKey('feed_$regionKey'),
+            isActive: _index == AppServices.feedTabIndex,
+          ),
+          MyListScreen(isActive: _index == AppServices.myListTabIndex),
+          MapScreen(key: ValueKey('map_$regionKey')),
+          const NokootScreen(),
+          const AccountScreen(),
+          ServicesScreen(key: ValueKey('services_$regionKey')),
+        ];
+
+        return _shell(screens);
+      },
+    );
+  }
+
+  /// الهيكل نفسه — لا يعرف المحافظة ولا مفاتيحها، فيبقى `build` مسؤولاً عنها.
+  Widget _shell(List<Widget> screens) {
+    // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر
+    // صراحةً متى لم تعد المختارة كي تُسكت صوتها.
     return Scaffold(
       body: Column(
         children: [

@@ -13,6 +13,11 @@ class AppUser {
   /// مفتاح لا شرط استخدام: لا يُعطّل أي ميزة، ولا يُخفي شيئاً عن صاحبه.
   final bool analyticsOptOut;
 
+  /// محافظة الحساب — معرّف صفّ في `regions`، أو `null` أي «لم يختر بعد».
+  /// تُكتب من `PATCH /api/auth/me` بحقل `region_id` وحده، وتغلبها ترويسة
+  /// `X-Region` على الخادم حين يوجد اختيار صريح على الجهاز.
+  final int? regionId;
+
   const AppUser({
     required this.id,
     required this.phoneNumber,
@@ -21,6 +26,7 @@ class AppUser {
     this.clanTown,
     this.avatarUrl,
     this.analyticsOptOut = false,
+    this.regionId,
   });
 
   bool get isAdmin => role == 'admin' || role == 'super_admin';
@@ -35,7 +41,15 @@ class AppUser {
       role: '${json['role'] ?? 'user'}',
       avatarUrl: json['avatar_url'] == null ? null : '${json['avatar_url']}',
       analyticsOptOut: json['analytics_opt_out'] == true,
+      regionId: _toNullableInt(json['region_id']),
     );
+  }
+
+  /// `null` أو مفتاح غائب = بلا محافظة؛ القيمة قد تصل نصّاً من صفّ قديم.
+  static int? _toNullableInt(Object? value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    return int.tryParse('$value');
   }
 
   /// الجلسة تُحفظ من هذا الملفّ وتُقرأ بـ[AppUser.fromJson] عند الإقلاع،
@@ -49,5 +63,6 @@ class AppUser {
         'role': role,
         'avatar_url': avatarUrl,
         'analytics_opt_out': analyticsOptOut,
+        'region_id': regionId,
       };
 }

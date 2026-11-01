@@ -306,6 +306,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
   Village? _selectedVillage;
   bool _villageNotListed = false;
   final _requestedVillageController = TextEditingController();
+  // محافظة القرية (تذكرة #125) — معرّف من `GET /api/towns`، إلزامي تحت البند
+  // الجامع كالقرية نفسها، ويُرسَل `region_id` مع الطلب (كما في الويب).
+  int? _regionId;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -475,6 +478,12 @@ class _AddEventScreenState extends State<AddEventScreen> {
       } else if (_selectedVillage == null) {
         return 'يرجى اختيار القرية';
       }
+      // إلزامية فقط حين وصلت المحافظات فعلاً — خادم بلا محافظات أو انقطاع
+      // شبكة لا يجعل النموذج غير قابل للإرسال.
+      if (AppServices.of(context).places.catalog.regions.isNotEmpty &&
+          _regionId == null) {
+        return 'اختر المحافظة التي تنتمي إليها القرية';
+      }
     }
 
     if (_eventDate == null) {
@@ -546,6 +555,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         } else if (_selectedVillage != null) {
           fields['village_id'] = '${_selectedVillage!.id}';
         }
+        // محافظة القرية (تذكرة #125) — تحت البند الجامع وحده، كما يفرضه
+        // الخادم؛ بلدة معروفة تُستنتج محافظتها منه بلا حقل.
+        if (_regionId != null) fields['region_id'] = '$_regionId';
       }
       if (type.showsField('event_end_date') && _eventEndDate != null) {
         fields['event_end_date'] = formatEventDate(_eventEndDate!);
@@ -698,6 +710,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _town = AppServices.of(context).places.catalog.towns.first;
       _selectedVillage = null;
       _villageNotListed = false;
+      _regionId = null;
       _latitude = null;
       _longitude = null;
       _locationPickerGeneration++;
@@ -832,6 +845,29 @@ class _AddEventScreenState extends State<AddEventScreen> {
               controller: _requestedVillageController,
               maxLength: kRequestedVillageNameMaxLength,
               decoration: const InputDecoration(labelText: 'اكتب اسم قريتك *'),
+            ),
+          ],
+          // محافظة القرية (تذكرة #125) — إلزامية تحت البند الجامع كما في الويب،
+          // وبنودها من `GET /api/towns` وحده. تُخفى إن لم تصل محافظات بعد،
+          // فلا يُقفل النموذج على خادم لا يعرف المحافظات.
+          if (AppServices.of(context).places.catalog.regions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              key: const Key('add_region_picker'),
+              initialValue: _regionId,
+              decoration: const InputDecoration(labelText: 'المحافظة *'),
+              items: AppServices.of(context)
+                  .places
+                  .catalog
+                  .regions
+                  .map(
+                    (region) => DropdownMenuItem(
+                      value: region.id,
+                      child: Text(region.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _regionId = value),
             ),
           ],
         ],

@@ -41,10 +41,12 @@ class AccountScreen extends StatelessWidget {
           ),
           body: user == null
               ? Center(
-                  child: Padding(
+                  // قابل للتمرير بعد إضافة قسم المنطقة: عمود طويل على شاشة
+                  // قصيرة كان يتجاوز ارتفاعها بلا مخرج.
+                  child: SingleChildScrollView(
                     padding: const EdgeInsets.all(30),
                     child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
                           Icons.person_outline,
@@ -91,6 +93,7 @@ class AccountScreen extends StatelessWidget {
                         ),
                         const _LiveRow(),
                         const SizedBox(height: 26),
+                        const _RegionSection(),
                         const _ThemeModeTile(),
                       ],
                     ),
@@ -205,6 +208,7 @@ class AccountScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 22),
+                    const _RegionSection(),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const MyEventsScreen()),
@@ -579,6 +583,121 @@ class _ThemeModeTile extends StatelessWidget {
                     themeStore.setMode(selection.first),
               ),
             ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// «المنطقة» — منتقي محافظة الاكتشاف (تذكرة #125).
+///
+/// المحافظات من `GET /api/towns` وحدها (بيانات وقت تشغيل، ولا نسخة منها في
+/// `lib/config.dart`)، والحالة من `RegionStore` لا من نسخة محلية: النقر يبدّل
+/// المخزن، فيُعاد رسم هذا القسم و`HomeShell` معاً — ومنه تُعاد التغذية
+/// والخريطة والستوريات والخدمات بترويسة `X-Region` الجديدة.
+///
+/// المختارة معلَّمة بعلامة صحّ ولون (وهو ما يقرؤه قارئ الشاشة `selected`
+/// في `ChoiceChip`). تُحفظ على الجهاز فوراً وعلى الحساب إن كان المستخدم
+/// مسجَّلاً؛ وفشل الحساب لا يتراجع عن حفظ الجهاز، ويُقال للمستخدم بالعربية
+/// القصيرة وحدها.
+class _RegionSection extends StatefulWidget {
+  const _RegionSection();
+
+  @override
+  State<_RegionSection> createState() => _RegionSectionState();
+}
+
+class _RegionSectionState extends State<_RegionSection> {
+  bool _placesRequested = false;
+
+  /// نداء الحساب جارٍ — المنتقي معطّل كي لا يتضاعف الطلب بنقرتين.
+  bool _busy = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_placesRequested) return;
+    _placesRequested = true;
+    // الفشل يعيد كتالوجاً احتياطياً بلا محافظات، فيُخفى القسم بدل أن يبقى
+    // فارغاً — لا رسالة خطأ هنا: باقي الشاشة تعمل.
+    AppServices.of(context).places.load();
+  }
+
+  Future<void> _select(int regionId) async {
+    final regions = AppServices.of(context).regions;
+    // نقرة على الاختيار الصريح نفسه لا طلب لها؛ أما نقرة على محافظة معروضة
+    // «مختارة» بحكم الافتراض أو الحساب فتحفظها اختياراً صريحاً على الجهاز.
+    if (regions.regionId == regionId) return;
+
+    setState(() => _busy = true);
+    try {
+      await regions.select(regionId);
+    } on ApiException {
+      if (mounted) {
+        showMessage(
+          context,
+          'حُفظت المحافظة على جهازك، لكن تعذّر حفظها على حسابك',
+          isError: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppServices.of(context);
+
+    return ListenableBuilder(
+      listenable: Listenable.merge([services.places, services.regions]),
+      builder: (context, _) {
+        final active = services.regions.regions;
+        if (active.isEmpty) return const SizedBox.shrink();
+        final selectedId = services.regions.effectiveRegionId;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: context.c.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: context.c.line),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'المنطقة',
+                  style: TextStyle(color: context.c.inkSoft, fontSize: 13),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'تُعرض المناسبات والخدمات من المحافظة المختارة.',
+                  style: TextStyle(
+                    color: context.c.inkFaint,
+                    fontSize: 12.5,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final region in active)
+                      ChoiceChip(
+                        key: Key('region_chip_${region.id}'),
+                        label: Text(region.name),
+                        selected: region.id == selectedId,
+                        onSelected: _busy ? null : (_) => _select(region.id),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },

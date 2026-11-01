@@ -985,6 +985,26 @@ class NegevApi {
     return AppUser.fromJson(user);
   }
 
+  /// محافظة الحساب — `PATCH /api/auth/me` بحقل `region_id` وحده (تذكرة #125).
+  /// الويب لا يكتبها على الحساب (اختياره محلي في `localStorage` وحده)، أما
+  /// التطبيق فيحفظها في المكانين: الجهاز أولاً، ثم الحساب.
+  ///
+  /// الحقل منفصل عن [updateProfile] عمداً: إرسال الاسم والبلدة معه كان
+  /// يُعيد كتابة ما لم يغيّره المستخدم. الخادم يرفض (400 برسالة عربية)
+  /// معرّفاً غير نشط، والردّ يحمل المستخدم المحدَّث كاملاً لا المعرّف وحده.
+  Future<AppUser> setRegion(int regionId) async {
+    final data = await _client.patch(
+      '/api/auth/me',
+      body: {'region_id': regionId},
+      auth: true,
+    );
+    final user = data['user'];
+    if (user is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة بيانات الحساب');
+    }
+    return AppUser.fromJson(user);
+  }
+
   /// تغيير رقم الدخول نفسه — يتطلّب رمز الدخول الحالي، ويردّ رمزاً جديداً موقَّعاً
   /// بالرقم الجديد كي لا يُخرِج المستخدمَ تغييرُه هو. رمز خاطئ يردّ 400 لا 401،
   /// فالجلسة تبقى قائمة والرسالة تظهر للحوار المفتوح.

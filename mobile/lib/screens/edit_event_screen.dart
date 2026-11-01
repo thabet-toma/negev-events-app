@@ -35,6 +35,10 @@ import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 /// `extra_days` ليست فيها: الخادم يصنّفها على محتواها لا على اسم العمود —
 /// حرِجة حين يتحرّك جدول الأيام وحدها، تجميلية حين يتغيّر اسمٌ أو وقت. قرارها
 /// يُبنى بـ`eventDaysPlacementChanged` بجانب هذه القائمة.
+///
+/// و`region_id` ليست فيها: محافظة القرية مشتقّة على الخادم ولا تدخل
+/// `changedColumns` أصلاً (وسيط مستقلّ في `updateEvent`)، فتغييرها وحده لا
+/// يعيد المناسبة إلى المراجعة — وتحذيرها كان كذباً على المستخدم.
 const _fieldsThatMayTriggerReview = {
   'event_date',
   'event_end_date',
@@ -119,6 +123,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
   int? _villageId;
   bool _villageNotListed = false;
   final _requestedVillageController = TextEditingController();
+  // محافظة القرية (تذكرة #125) — تُعرض بمحافظة المناسبة نفسها، وتُرسَل عند
+  // تغييرها وحدها (مفتاح غائب = «بلا تعديل» عند الخادم).
+  int? _regionId;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -132,6 +139,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
   late String _originalTown;
   int? _originalVillageId;
   String _originalRequestedVillageName = '';
+  int? _originalRegionId;
   String? _originalEventDate;
   String? _originalEventEndDate;
   String? _originalYouthDate;
@@ -216,6 +224,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
         event.villageId == null ? (event.requestedVillageName ?? '') : '';
     _villageNotListed = _originalRequestedVillageName.isNotEmpty;
     _requestedVillageController.text = _originalRequestedVillageName;
+
+    _regionId = event.regionId;
+    _originalRegionId = event.regionId;
 
     _eventDate = event.eventDate.isEmpty ? null : DateTime.tryParse(event.eventDate);
     _originalEventDate = event.eventDate.isEmpty ? null : event.eventDate;
@@ -317,6 +328,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
       } else if (_villageId != _originalVillageId) {
         changes['village_id'] = _villageId;
       }
+      // تُرسَل عند تغييرها وحدها — والمفتاح الغائب يعني «بلا تعديل» عند
+      // الخادم، فلا يُعاد كتابة ما لم يلمسه أحد.
+      if (_regionId != _originalRegionId) changes['region_id'] = _regionId;
     }
 
     final eventDateText = _eventDate == null ? null : formatEventDate(_eventDate!);
@@ -399,6 +413,14 @@ class _EditEventScreenState extends State<EditEventScreen> {
       showMessage(context, 'اكتب اسم قريتك', isError: true);
       return;
     }
+    // كالويب: إلزامية ما دام المنتقي ظاهراً (وصلت محافظات)، لا حين يتعذّر
+    // وصولها من الخادم.
+    if (_town == kVillagesTown &&
+        AppServices.of(context).places.catalog.regions.isNotEmpty &&
+        _regionId == null) {
+      showMessage(context, 'اختر المحافظة التي تنتمي إليها القرية', isError: true);
+      return;
+    }
 
     // نلتقط الخدمة قبل أي await حتى لا نلمس context بعد فجوة غير متزامنة —
     // نفس نمط شاشة النشر.
@@ -430,11 +452,16 @@ class _EditEventScreenState extends State<EditEventScreen> {
           _originalVillageId = _villageNotListed ? null : _villageId;
           _originalRequestedVillageName =
               _villageNotListed ? _requestedVillageController.text.trim() : '';
+          _originalRegionId = _regionId;
         } else {
           _villageId = null;
           _villageNotListed = false;
           _originalVillageId = null;
           _originalRequestedVillageName = '';
+          // الخادم يمسح محافظة القرية مع مغادرة البند الجامع — تبقى الحالة
+          // المحلية مطابقة لما حُفظ فعلاً.
+          _regionId = null;
+          _originalRegionId = null;
         }
         _originalEventDate = _eventDate == null ? null : formatEventDate(_eventDate!);
         _originalEventEndDate = _eventEndDate == null ? null : formatEventDate(_eventEndDate!);
@@ -529,6 +556,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
             },
           ),
           if (_town == kVillagesTown) ..._villageEditor(),
+          if (_town == kVillagesTown) ..._regionEditor(),
           const SizedBox(height: 12),
           FutureBuilder<Map<String, TownCoordinate>>(
             future: _townCoordsFuture,
@@ -672,6 +700,39 @@ class _EditEventScreenState extends State<EditEventScreen> {
           decoration: const InputDecoration(labelText: 'اكتب اسم قريتك *'),
         ),
       ],
+    ];
+  }
+
+  /// منتقي محافظة القرية (تذكرة #125) — بنوده من `GET /api/towns` وحده،
+  /// ويبدأ بمحافظة المناسبة نفسها. محافظة عُطّلت بعد النشر تبقى بنداً باسم
+  /// «المحافظة الحالية» كي لا يسقط المنتقي بقيمة خارج بنوده.
+  List<Widget> _regionEditor() {
+    final regions = AppServices.of(context).places.catalog.regions;
+    if (regions.isEmpty) return const [];
+
+    final items = [
+      for (final region in regions)
+        DropdownMenuItem(value: region.id, child: Text(region.name)),
+    ];
+    final current = _regionId;
+    if (current != null && !regions.any((region) => region.id == current)) {
+      items.add(
+        DropdownMenuItem(
+          value: current,
+          child: const Text('المحافظة الحالية'),
+        ),
+      );
+    }
+
+    return [
+      const SizedBox(height: 12),
+      DropdownButtonFormField<int>(
+        key: const Key('edit_region_picker'),
+        initialValue: current,
+        decoration: const InputDecoration(labelText: 'المحافظة *'),
+        items: items,
+        onChanged: (value) => setState(() => _regionId = value),
+      ),
     ];
   }
 

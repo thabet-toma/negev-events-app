@@ -67,6 +67,15 @@ class ApiClient {
   /// يُضبط من AuthStore بعد تسجيل الدخول.
   String? token;
 
+  /// محافظة الاكتشاف — تُرفق `X-Region` في **كل** نداء. يضبطها `RegionStore`
+  /// من التفضيل المحفوظ على الجهاز، فقيمتها معرّف رقمي نصّاً كما في الويب
+  /// (`negev_region` في `localStorage`).
+  ///
+  /// `null` أو نصّ فارغ = لا ترويسة إطلاقاً — أي سلوك ما قبل #125: الخادم
+  /// يقرّر محافظة الحساب أو الافتراضية. الترويسة تغلب محافظة الحساب على
+  /// الخادم (`middleware/region.js`)، فلا تُضبط إلا باختيار صريح من المستخدم.
+  String? regionId;
+
   /// يُستدعى حين يرفض الخادم بـ401 طلباً أُرفق به رمز فعلاً — أي أنّ الجلسة
   /// انتهت — ومعه الرمز المرفوض نفسه. يسجّله AuthStore؛ طلب عام أو بلا رمز
   /// لا يستدعيه أبداً.
@@ -94,6 +103,8 @@ class ApiClient {
       'Accept': 'application/json',
       'X-App-Version': _appVersionHeader,
     };
+    final region = regionId;
+    if (region != null && region.isNotEmpty) headers['X-Region'] = region;
     if (json) headers['Content-Type'] = 'application/json; charset=utf-8';
     if (auth && token != null && token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';

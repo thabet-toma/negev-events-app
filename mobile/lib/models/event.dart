@@ -32,6 +32,11 @@ class Event {
   /// أن تعتمدها الإدارة. لا يجتمع مع `villageId` أبداً (قاعدة خادمية).
   final String? requestedVillageName;
 
+  /// محافظة المناسبة (`events.region_id`) — تصل من الصفّ الكامل وحده
+  /// (`GET /api/events/:id` و`GET /api/my-events`)، وتُقرأ في شاشة التعديل
+  /// لتبدأ بمحافظة المناسبة كما هي لا بغيرها. `null` = بلا محافظة مسجَّلة.
+  final int? regionId;
+
   /// حقلا الفنان — من `OCCASION_FIELDS`، ظاهران فقط لنوع يُشعلهما. غيابهما
   /// يعني عدم ظهورهما على الكرت والتفاصيل، لا نصّاً بديلاً.
   final String? artistName;
@@ -88,6 +93,7 @@ class Event {
     this.villageId,
     this.villageName,
     this.requestedVillageName,
+    this.regionId,
     this.artistName,
     this.artistImageUrl,
     this.viewsCount = 0,
@@ -294,6 +300,7 @@ class Event {
       villageId: json['village_id'] == null ? null : _toInt(json['village_id']),
       villageName: _nullableString(json['village_name']),
       requestedVillageName: _nullableString(json['requested_village_name']),
+      regionId: json['region_id'] == null ? null : _toInt(json['region_id']),
       artistName: _nullableString(json['artist_name']),
       artistImageUrl: _nullableString(json['artist_image_url']),
       viewsCount: _toInt(json['views_count']),

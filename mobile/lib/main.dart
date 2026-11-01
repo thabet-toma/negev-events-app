@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -13,6 +15,7 @@ import 'state/auth_store.dart';
 import 'state/deep_link_handler.dart';
 import 'state/places_store.dart';
 import 'state/realtime.dart';
+import 'state/region_store.dart';
 import 'state/reminder_scheduler.dart';
 import 'state/theme_store.dart';
 import 'theme.dart';
@@ -40,7 +43,7 @@ void _registerFontLicenses() {
   });
 }
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _registerFontLicenses();
 
@@ -51,6 +54,7 @@ void main() {
   final reminders = ReminderScheduler(api: api, auth: auth);
   final audio = AudioCoordinator();
   final places = PlacesStore(api);
+  final regions = RegionStore(api, places, auth);
 
   // خلفية ثابتة كرسائل الخطأ في `showMessage` — لا سياق هنا لقراءة الألوان.
   // زرّ «تسجيل الدخول» في الرسالة نفسها يفتح شاشة الدخول من أي مكان، بدل دفعها
@@ -75,6 +79,11 @@ void main() {
       );
   };
 
+  // محافظة الاكتشاف تُقرأ من الجهاز **قبل** أول نداء شبكة (تذكرة #125): أول
+  // `GET /api/events` يحمل `X-Region` الصحيحة بدل أن يسبقه طلب بلا ترويسة
+  // يصل جوابه بعدها. القراءة محلية وحدها، فلا تؤخّر أول إطار بشبكة.
+  await regions.restore();
+
   // تسجيل فتح التطبيق بالمعرّف/التوكن العشوائي
   recordAnalyticsEvent(api, 'app_opened');
 
@@ -86,6 +95,11 @@ void main() {
   audio.bindLifecycle();
   audio.defaultTrack(api);
   places.load();
+  // محافظة الحساب تُتبنّى للعرض ما دام لا اختيار جهاز صريح (كما في الويب)،
+  // والتحقق من أن المحفوظ ما زال محافظة نشطة يجري بعد وصول المحافظات وحدها —
+  // بلا حجب أول إطار، ولا حكم على قائمة احتياطية وصلت من انقطاع.
+  auth.addListener(regions.adoptAccountRegion);
+  unawaited(regions.reconcile());
   // إعادة بناء خطّة المنبّهات كل ما تغيّرت هويّة الحساب المسجَّل — يغطّي فتح
   // التطبيق (أول notifyListeners بعد auth.load())، تسجيل الدخول، وتبديل
   // الحساب معاً بمسار واحد؛ تسجيل الخروج يُلغي كل منبّه بلا استثناء (قصة ١٩
@@ -104,6 +118,7 @@ void main() {
       reminders: reminders,
       audio: audio,
       places: places,
+      regions: regions,
       child: const NegevApp(),
     ),
   );
@@ -114,7 +129,8 @@ void main() {
 /// `themeStore` اختياري (يُبنى افتراضياً بوضع `system`) كي لا تحتاج شاشات
 /// الاختبار الحالية التي تُنشئ `AppServices` مباشرة أن تعرف عنه — و`audio`
 /// كذلك (منسّق بلا مشغّل حتى أول تشغيل فعلي)، و`places` (يبدأ بالبلدات
-/// الاحتياطية ويحمّل الخادم عند أول طلب من شاشة).
+/// الاحتياطية ويحمّل الخادم عند أول طلب من شاشة)، و`regions` (يُبنى فوق تلك
+/// `places` نفسها وبلا اختيار محفوظ).
 ///
 /// وإشارات «قائمتي» الأربع اختيارية بالسبب نفسه: كرت التغذية وشاشة التفاصيل
 /// يبدّلان التذكير من خارج الشاشة، و`HomeShell` وحده يعرف فهارس تبويباته —
@@ -129,6 +145,7 @@ class AppServices extends InheritedWidget {
     ReminderScheduler? reminders,
     AudioCoordinator? audio,
     PlacesStore? places,
+    RegionStore? regions,
     ValueNotifier<int>? tabRequest,
     ValueNotifier<int>? myListRevision,
     ValueNotifier<int>? myListNowCount,
@@ -142,7 +159,11 @@ class AppServices extends InheritedWidget {
         myListRevision = myListRevision ?? ValueNotifier<int>(0),
         myListNowCount = myListNowCount ?? ValueNotifier<int>(0),
         savedChange = savedChange ??
-            ValueNotifier<({int eventId, bool saved})?>(null);
+            ValueNotifier<({int eventId, bool saved})?>(null) {
+    // في جسم الباني لا في قائمة التهيئة: المخزن يحتاج **نفس** `places` الذي
+    // وُلد للتوّ، وقراءة حقل من قائمة التهيئة مستحيلة.
+    this.regions = regions ?? RegionStore(api, this.places, auth);
+  }
 
   /// فهرس وجهة «المناسبات» في الشريط السفلي.
   static const int feedTabIndex = 0;
@@ -160,6 +181,11 @@ class AppServices extends InheritedWidget {
   final ReminderScheduler reminders;
   final AudioCoordinator audio;
   final PlacesStore places;
+
+  /// محافظة الاكتشاف المختارة — يقرؤها المنتقي في «حسابي» ويسمعها `HomeShell`
+  /// كي يُعيد بناء الأسطح التي تحمل بيانات المحافظة السابقة (تغذية/خريطة/
+  /// ستوريات/خدمات).
+  late final RegionStore regions;
 
   /// طلب تبديل تبويب من خارج الشريط السفلي — يستهلكه `HomeShell` ويعيده إلى
   /// [_noTabRequest]. قيمة لا استدعاء: الكرت لا يستورد هيكل الشريط لأجل رقم.
@@ -218,6 +244,7 @@ class AppServices extends InheritedWidget {
       reminders != oldWidget.reminders ||
       audio != oldWidget.audio ||
       places != oldWidget.places ||
+      regions != oldWidget.regions ||
       tabRequest != oldWidget.tabRequest ||
       myListRevision != oldWidget.myListRevision ||
       myListNowCount != oldWidget.myListNowCount ||
