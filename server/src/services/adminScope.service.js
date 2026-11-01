@@ -75,6 +75,18 @@ async function townScopeClause(user, alias = 'e') {
  * 404, never 403 — the same "never confirm what the caller doesn't own"
  * rule `assertEventInScope` already follows. An admin owning zero towns is
  * refused outright before any town list is even considered (story 24).
+ *
+ * A governorate's own name is a broadcast target too (issue #128): it expands
+ * HERE — and only here — into that governorate's active towns, then meets the
+ * admin's own scope, so an admin holding two towns of a governorate reaches
+ * those two and nobody else, and one holding none of its towns gets the very
+ * same 404 a foreign town name gets (never 403). The route layer above keeps
+ * forwarding `req.body.towns` untouched; it builds no scope of its own.
+ *
+ * A name the admin owns verbatim wins before that expansion: `admin_towns` may
+ * hold a governorate's own name (a region-level scope), and such an admin keeps
+ * broadcasting exactly as before instead of being narrowed to towns they never
+ * held. Expansion is additive; it replaces nothing.
  */
 async function resolveBroadcastTowns(user, requestedTowns) {
   const ownTowns = await listTownsFor(user);
@@ -83,12 +95,29 @@ async function resolveBroadcastTowns(user, requestedTowns) {
   }
   if (!requestedTowns.length) return ownTowns;
 
-  for (const town of requestedTowns) {
-    if (!ownTowns.includes(town)) {
+  /** One row per town, in the order the caller named them — never a repeat. */
+  const resolved = [];
+  const add = town => { if (!resolved.includes(town)) resolved.push(town); };
+  const regionsByName = new Map(
+    (await townsService.listActiveRegions()).map(region => [region.name, region])
+  );
+
+  for (const requested of requestedTowns) {
+    if (ownTowns.includes(requested)) {
+      add(requested);
+      continue;
+    }
+    const region = regionsByName.get(requested);
+    if (!region) {
       throw ApiError.notFound('بلدة غير موجودة ضمن نطاقك');
     }
+    const ownInRegion = region.towns.filter(town => ownTowns.includes(town));
+    if (!ownInRegion.length) {
+      throw ApiError.notFound('بلدة غير موجودة ضمن نطاقك');
+    }
+    ownInRegion.forEach(add);
   }
-  return requestedTowns;
+  return resolved;
 }
 
 /**

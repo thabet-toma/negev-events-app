@@ -12603,6 +12603,297 @@ async function run() {
   await db.execute('DELETE FROM towns WHERE id = ?', [dupGuardTownId]);
   await db.execute('DELETE FROM regions WHERE id = ?', [dupGuardRegionId]);
 
+  // ======================================================================
+  // اللوحة: جغرافيا المنطقتين والبثّ والتحليلات (تذكرة #128)
+  //
+  // كل صفوف هذا القسم تُنشأ هنا وتُحذف في آخره: محافظة، بلدتان فيها، قرية
+  // بمحافظتها، وأدمن بلدتين، وتعيمانان، وصفّ تحليلات بمحتوى إحدى بلدتيها.
+  // الأسماء مؤقّتة وفريدة كي لا تصادم تشغيلاً سابقاً فاشلاً.
+  // ======================================================================
+  console.log('\nاللوحة: جغرافيا المنطقتين والبثّ والتحليلات (تذكرة #128)');
+
+  const ticket128RegionName = `محافظة لوحة ${Date.now()}`;
+  const ticket128TownA = `بلدة لوحة أ ${Date.now()}`;
+  const ticket128TownB = `بلدة لوحة ب ${Date.now()}`;
+  const ticket128VillageName = `قرية لوحة ${Date.now()}`;
+  const ticket128Cleanup = { regionIds: [], townIds: [], villageIds: [], userIds: [], broadcastIds: [], contentTowns: [ticket128TownA, ticket128TownB] };
+
+  let ticket128RegionId = 0;
+  await test('POST /api/admin/regions ينشئ محافظة على نمط «إضافة بلدة»؛ الاسم المكرر 409، وبلا إحداثيات 400، وأدمن بلدة 403 (تذكرة #128)', async () => {
+    const created = await api('POST', '/api/admin/regions', {
+      token: superAdminToken,
+      body: { name: ticket128RegionName, latitude: 32.31, longitude: 35.03 }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.success, true);
+    ticket128RegionId = created.body.region.id;
+    ticket128Cleanup.regionIds.push(ticket128RegionId);
+
+    const region = created.body.region;
+    assert.strictEqual(region.name, ticket128RegionName);
+    assert.strictEqual(Number(region.latitude), 32.31);
+    assert.strictEqual(Number(region.longitude), 35.03);
+    assert.strictEqual(Number(region.map_zoom), 9, 'بلا map_zoom يأخذ افتراضي العمود نفسه');
+    assert.strictEqual(region.is_active, true);
+    assert.deepStrictEqual(region.towns, [], 'محافظة جديدة تبدأ بلا بلدات');
+
+    // الترتيب في النهاية ما لم يُرسَل صراحةً — نفس قاعدة createTown.
+    const { maxPosition } = await db.queryOne('SELECT COALESCE(MAX(position), -1) AS maxPosition FROM regions WHERE id <> ?', [ticket128RegionId]);
+    assert.strictEqual(Number(region.position), Number(maxPosition) + 1);
+
+    const duplicate = await api('POST', '/api/admin/regions', {
+      token: superAdminToken,
+      body: { name: `  ${ticket128RegionName}  `, latitude: 32.3, longitude: 35 }
+    });
+    assert.strictEqual(duplicate.status, 409, 'اسم مكرّر (بعد trim) يُرفض');
+    assert.ok(/مسبقاً|اسم محافظة/.test(duplicate.body.message || ''), duplicate.body.message);
+
+    const noCoords = await api('POST', '/api/admin/regions', {
+      token: superAdminToken,
+      body: { name: `${ticket128RegionName} بلا إحداثيات` }
+    });
+    assert.strictEqual(noCoords.status, 400);
+    assert.ok(/خط العرض مطلوب/.test(noCoords.body.message || ''), noCoords.body.message);
+
+    const badZoom = await api('POST', '/api/admin/regions', {
+      token: superAdminToken,
+      body: { name: `${ticket128RegionName} بتقريب خاطئ`, latitude: 32.3, longitude: 35, map_zoom: 30 }
+    });
+    assert.strictEqual(badZoom.status, 400);
+    assert.ok(/التقريب|تقريب/.test(badZoom.body.message || ''), badZoom.body.message);
+
+    const townAdminAttempt = await api('POST', '/api/admin/regions', {
+      token: scopedAdminToken,
+      body: { name: `${ticket128RegionName} من أدمن`, latitude: 32.3, longitude: 35 }
+    });
+    assert.strictEqual(townAdminAttempt.status, 403, 'أدمن بلدة لا ينشئ محافظة');
+
+    const userAttempt = await api('POST', '/api/admin/regions', {
+      token: userToken,
+      body: { name: `${ticket128RegionName} من مستخدم`, latitude: 32.3, longitude: 35 }
+    });
+    assert.strictEqual(userAttempt.status, 403, 'ولا مستخدم عادي');
+
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM regions WHERE name LIKE ?', [`%${ticket128RegionName}%`]);
+    assert.strictEqual(Number(total), 1, 'كل الطلبات المرفوضة كتبت صفر صفوف');
+  });
+
+  let ticket128VillageId = 0;
+  await test('POST /api/admin/villages بمحافظة يُخزّنها، و GET /api/admin/villages يعيد region_id في الصفّ (تذكرة #128)', async () => {
+    const created = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: {
+        region_id: ticket128RegionId,
+        name: ticket128VillageName,
+        latitude: 32.32,
+        longitude: 35.04
+      }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    ticket128VillageId = created.body.village.id;
+    ticket128Cleanup.villageIds.push(ticket128VillageId);
+    assert.strictEqual(created.body.village.region_id, ticket128RegionId);
+
+    const row = await db.queryOne('SELECT region_id FROM villages WHERE id = ?', [ticket128VillageId]);
+    assert.strictEqual(row.region_id, ticket128RegionId, 'المحافظة المرسلة هي المخزَّنة، لا الافتراضية');
+
+    // اللوحة تفلتر القرى عميلياً على region_id هذا في كل صفّ.
+    const list = await api('GET', '/api/admin/villages', { token: superAdminToken });
+    const listed = list.body.villages.find(village => village.id === ticket128VillageId);
+    assert.ok(listed, 'القرية الجديدة ظاهرة في قائمة اللوحة');
+    assert.strictEqual(listed.region_id, ticket128RegionId);
+  });
+
+  let ticket128AdminToken = '';
+  await test('بثّ باسم محافظة يكتب صفّاً لكل بلدة من بلداتها داخل نطاق الأدمن، ولا صفّ باسم المحافظة نفسه (تذكرة #128)', async () => {
+    for (const [name, latitude] of [[ticket128TownA, 32.33], [ticket128TownB, 32.34]]) {
+      const town = await api('POST', '/api/admin/towns', {
+        token: superAdminToken,
+        body: { region_id: ticket128RegionId, name, latitude, longitude: 35.05 }
+      });
+      assert.strictEqual(town.status, 201, town.body.message);
+      ticket128Cleanup.townIds.push(town.body.town.id);
+    }
+
+    const adminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: adminId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [adminPhone, 'أدمن محافظة الاختبار', bcrypt.hashSync('1234', config.bcryptRounds), ticket128TownA]
+    );
+    ticket128Cleanup.userIds.push(adminId);
+    ticket128AdminToken = signToken(
+      { id: adminId, phone_number: adminPhone, full_name: 'أدمن محافظة الاختبار', role: 'admin' },
+      '1h'
+    );
+
+    const assigned = await api('PUT', `/api/admin/admins/${adminId}/towns`, {
+      token: superAdminToken,
+      body: { towns: [ticket128TownA, ticket128TownB] }
+    });
+    assert.strictEqual(assigned.status, 200, JSON.stringify(assigned.body));
+
+    // اسم المحافظة وحده في الطلب — التوسيع كله داخل adminScope.service.js.
+    const broadcast = await api('POST', '/api/admin/broadcast', {
+      token: ticket128AdminToken,
+      body: { message: 'تعميم محافظة الاختبار', duration: 'none', towns: [ticket128RegionName] }
+    });
+    assert.strictEqual(broadcast.status, 200, JSON.stringify(broadcast.body));
+    assert.strictEqual(broadcast.body.broadcasts.length, 2, 'صفّ لكل بلدة من بلدات المحافظة في نطاق الأدمن');
+    broadcast.body.broadcasts.forEach(row => ticket128Cleanup.broadcastIds.push(row.id));
+    assert.deepStrictEqual(
+      broadcast.body.broadcasts.map(row => row.scope_town).sort(),
+      [ticket128TownA, ticket128TownB].sort()
+    );
+
+    const rows = await db.query(
+      `SELECT scope_town FROM broadcasts WHERE id IN (${broadcast.body.broadcasts.map(() => '?').join(', ')})`,
+      broadcast.body.broadcasts.map(row => row.id)
+    );
+    const scopes = rows.map(row => row.scope_town).sort();
+    assert.deepStrictEqual(scopes, [ticket128TownA, ticket128TownB].sort(), 'broadcasts.scope_town في القاعدة نفسها');
+    assert.ok(!scopes.includes(ticket128RegionName), 'لا صفّ باسم المحافظة — التوسيع إلى بلداتها');
+  });
+
+  await test('أدمن يملك بلدة واحدة في المحافظة يبثّ لها وحدها؛ وأدمن لا يملك شيئاً منها يُرفض 404 بلا كتابة (تذكرة #128)', async () => {
+    const singlePhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: singleAdminId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [singlePhone, 'أدمن بلدة واحدة في المحافظة', bcrypt.hashSync('1234', config.bcryptRounds), ticket128TownA]
+    );
+    ticket128Cleanup.userIds.push(singleAdminId);
+    const singleAdminToken = signToken(
+      { id: singleAdminId, phone_number: singlePhone, full_name: 'أدمن بلدة واحدة في المحافظة', role: 'admin' },
+      '1h'
+    );
+    await api('PUT', `/api/admin/admins/${singleAdminId}/towns`, {
+      token: superAdminToken,
+      body: { towns: [ticket128TownA] }
+    });
+
+    const one = await api('POST', '/api/admin/broadcast', {
+      token: singleAdminToken,
+      body: { message: 'تعميم بلدة واحدة من المحافظة', duration: 'none', towns: [ticket128RegionName] }
+    });
+    assert.strictEqual(one.status, 200, JSON.stringify(one.body));
+    assert.strictEqual(one.body.broadcasts.length, 1, 'صفّ واحد فقط، لا المحافظة كلها');
+    assert.strictEqual(one.body.broadcasts[0].scope_town, ticket128TownA);
+    ticket128Cleanup.broadcastIds.push(one.body.broadcasts[0].id);
+
+    // أدمن يملك بلدة في محافظة أخرى تماماً — لا يملك أي بلدة في هذه المحافظة →
+    // نفس 404 البلدة الغريبة، لا 403. حسابه خاص بهذا القسم: `scopedAdminId`
+    // السابق حُذف في قسم سابق، وحساب محذوف لا يملك بلدات.
+    const foreignPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId: foreignAdminId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [foreignPhone, 'أدمن محافظة أخرى', bcrypt.hashSync('1234', config.bcryptRounds), scopedTown]
+    );
+    ticket128Cleanup.userIds.push(foreignAdminId);
+    const foreignAdminToken = signToken(
+      { id: foreignAdminId, phone_number: foreignPhone, full_name: 'أدمن محافظة أخرى', role: 'admin' },
+      '1h'
+    );
+    await api('PUT', `/api/admin/admins/${foreignAdminId}/towns`, {
+      token: superAdminToken,
+      body: { towns: [scopedTown] }
+    });
+
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    const foreign = await api('POST', '/api/admin/broadcast', {
+      token: foreignAdminToken,
+      body: { message: 'تعميم محافظة خارج النطاق', duration: 'none', towns: [ticket128RegionName] }
+    });
+    assert.strictEqual(foreign.status, 404);
+    assert.ok(/بلدة غير موجودة ضمن نطاقك/.test(foreign.body.message || ''), foreign.body.message);
+    const after = await db.queryOne('SELECT COUNT(*) AS total FROM broadcasts');
+    assert.strictEqual(Number(after.total), Number(before.total), 'الرفض لا يكتب أي صفّ');
+  });
+
+  await test('GET /api/admin/analytics/overview يحمل by_region إضافياً بمجاميع المحافظة، وبقية الحقول كما هي (تذكرة #128)', async () => {
+    // صفّ تحليلات بمحتوى بلدة في المحافظة الجديدة. يُكتب بـ SQL لا بمسار
+    // POST /api/analytics/events: هذا المسار على دلو الطلبات المجهولة، والقسم
+    // هنا لا يقيس تحديد المعدّل بل التجميع.
+    await db.execute(
+      `INSERT INTO analytics_events (event_name, device_id, platform, content_town)
+       VALUES ('event_viewed', ?, 'web', ?)`,
+      [`ticket128-${Date.now()}`, ticket128TownA]
+    );
+
+    const { status, body } = await api('GET', '/api/admin/analytics/overview?period=all', { token: superAdminToken });
+    assert.strictEqual(status, 200);
+    const overview = body.overview;
+
+    // الشكل القائم كما هو بالحرف — الإضافة مفتاح جديد وحده.
+    assert.deepStrictEqual(Object.keys(overview.views).sort(), ['breakdown', 'total', 'unique']);
+    assert.deepStrictEqual(Object.keys(overview.shares).sort(), ['total', 'unique']);
+    assert.deepStrictEqual(Object.keys(overview.clicks).sort(), ['breakdown', 'total', 'unique']);
+    assert.deepStrictEqual(Object.keys(overview.platforms).sort(), ['mobile', 'web']);
+    assert.deepStrictEqual(Object.keys(overview.audience).sort(), ['registered_users', 'total_active_devices', 'unregistered_devices']);
+    assert.strictEqual(overview.period, 'all');
+
+    assert.ok(Array.isArray(overview.by_region), 'by_region مفتاح إضافي');
+    const { total: regionsCount } = await db.queryOne('SELECT COUNT(*) AS total FROM regions');
+    assert.strictEqual(overview.by_region.length, Number(regionsCount), 'صفّ لكل محافظة، حتى التي بلا نشاط');
+
+    const region = overview.by_region.find(row => row.region_id === ticket128RegionId);
+    assert.ok(region, 'المحافظة الجديدة ظاهرة في التجميع');
+    assert.strictEqual(region.name, ticket128RegionName);
+    assert.ok(region.views.total >= 1, 'المشاهدة المسجَّلة على بلدة في المحافظة تُحسب لها');
+    assert.ok(region.views.unique >= 1);
+    assert.deepStrictEqual(Object.keys(region.views).sort(), ['total', 'unique']);
+    assert.deepStrictEqual(Object.keys(region.shares).sort(), ['total', 'unique']);
+    assert.deepStrictEqual(Object.keys(region.clicks).sort(), ['total', 'unique']);
+    assert.deepStrictEqual(Object.keys(region.audience), ['total_active_devices']);
+    assert.strictEqual(typeof region.events, 'number', 'عدد المناسبات المُدرَجة على المحافظة');
+
+    // المحصّلة الإجمالية نفسها لم تتغيّر بالكتابة — بلا أي صفّ تحليلات لهذه البلدات.
+    const emptyRegion = overview.by_region.find(row => row.region_id !== ticket128RegionId && row.views.total === 0 && row.events === 0);
+    if (emptyRegion) {
+      assert.strictEqual(emptyRegion.views.unique, 0);
+      assert.strictEqual(emptyRegion.clicks.total, 0);
+    }
+  });
+
+  // تنظيف القسم: البثّ، ثم التحليلات (بمحتوى بلدتَيه وحدهما)، ثم القرية، ثم
+  // إسنادات الأدمن وحساباتهم، ثم البلدات، ثم المحافظة.
+  if (ticket128Cleanup.broadcastIds.length) {
+    await db.execute(
+      `DELETE FROM broadcasts WHERE id IN (${ticket128Cleanup.broadcastIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.broadcastIds
+    );
+  }
+  await db.execute(
+    `DELETE FROM analytics_events WHERE content_town IN (${ticket128Cleanup.contentTowns.map(() => '?').join(', ')})`,
+    ticket128Cleanup.contentTowns
+  );
+  if (ticket128Cleanup.villageIds.length) {
+    await db.execute(
+      `DELETE FROM villages WHERE id IN (${ticket128Cleanup.villageIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.villageIds
+    );
+  }
+  if (ticket128Cleanup.userIds.length) {
+    await db.execute(
+      `DELETE FROM admin_towns WHERE user_id IN (${ticket128Cleanup.userIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.userIds
+    );
+    await db.execute(
+      `DELETE FROM users WHERE id IN (${ticket128Cleanup.userIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.userIds
+    );
+  }
+  if (ticket128Cleanup.townIds.length) {
+    await db.execute(
+      `DELETE FROM towns WHERE id IN (${ticket128Cleanup.townIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.townIds
+    );
+  }
+  if (ticket128Cleanup.regionIds.length) {
+    await db.execute(
+      `DELETE FROM regions WHERE id IN (${ticket128Cleanup.regionIds.map(() => '?').join(', ')})`,
+      ticket128Cleanup.regionIds
+    );
+  }
+
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {
     await fsp.unlink(storedAvatarPath(leftoverAvatar.avatar_url)).catch(() => {});

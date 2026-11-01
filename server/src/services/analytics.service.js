@@ -162,6 +162,14 @@ const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
 
 /**
+ * The three "view" events the overview counts together, and the four
+ * "click/interaction" events — named once, here, so the per-governorate
+ * aggregation added in #128 cannot drift from the totals above it.
+ */
+const VIEW_EVENT_NAMES = ['app_opened', 'event_viewed', 'share_page_viewed'];
+const CLICK_EVENT_NAMES = ['location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked'];
+
+/**
  * One user's own recorded analytics rows — issue #44 user story 45 ("كصاحب
  * منتج، أريد أن أفتح مستخدماً بعينه وأرى ما فعله بالتطبيق، كما طلبتُ
  * صراحةً"), which shipped with no implementation at all until now. It is
@@ -280,17 +288,19 @@ async function getAnalyticsOverview({ period = 'all' } = {}) {
     );
     for (const f of foldedRows) {
       const cnt = Number(f.cnt) || 0;
-      if (['app_opened', 'event_viewed', 'share_page_viewed'].includes(f.event_name)) {
+      if (VIEW_EVENT_NAMES.includes(f.event_name)) {
         foldedViews += cnt;
       } else if (f.event_name === 'share_clicked') {
         foldedShares += cnt;
-      } else if (['location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked'].includes(f.event_name)) {
+      } else if (CLICK_EVENT_NAMES.includes(f.event_name)) {
         foldedClicks += cnt;
       }
       if (f.platform === 'web') foldedWeb += cnt;
       else if (['android', 'mobile'].includes(f.platform)) foldedMobile += cnt;
     }
   }
+
+  const byRegion = await getRegionBreakdown(period, periodClause);
 
   return {
     period,
@@ -331,8 +341,111 @@ async function getAnalyticsOverview({ period = 'all' } = {}) {
       total_active_devices: Number(row.total_active_devices),
       unregistered_devices: Number(row.unregistered_devices),
       registered_users: Number(row.registered_users)
-    }
+    },
+    // Additive, read-only (issue #128): the same measures above, summed per
+    // governorate. No existing key changes and no new measure is invented —
+    // see getRegionBreakdown below for what each row holds.
+    by_region: byRegion
   };
+}
+
+/**
+ * The overview's own measures, grouped by governorate (issue #128) — an
+ * additive read-only key, never a second source of truth: the totals above
+ * stay exactly what they were.
+ *
+ * `analytics_events` carries the CONTENT's town, never the viewer's, so a row
+ * belongs to the governorate of that town — or to the governorate whose own
+ * name it holds (an event filed under «بلا بلدة محدّدة», which stores the
+ * governorate's name as its town). The two scalar subqueries resolve exactly
+ * one governorate for a row, chosen over a JOIN on purpose: joining `towns`
+ * and `regions` on the same name would multiply the region-name rows by the
+ * number of that governorate's towns and inflate every count with them.
+ *
+ * Per row: `events` is the number of occasion rows filed under the
+ * governorate (`events.region_id`) — the same count the towns panel shows —
+ * and views/shares/clicks/audience are the overview's own measures. Only the
+ * `all` period folds in `analytics_daily_counters` (they carry no viewer, so
+ * they add to totals exactly as the summary's own folding does).
+ */
+async function getRegionBreakdown(period, periodClause) {
+  const [regionRows, eventRows, regions, foldedRows] = await Promise.all([
+    db.query(
+      `SELECT x.region_id,
+              COALESCE(SUM(x.event_name IN ('app_opened', 'event_viewed', 'share_page_viewed')), 0) AS total_views,
+              COALESCE(COUNT(DISTINCT CASE WHEN x.event_name IN ('app_opened', 'event_viewed', 'share_page_viewed') AND x.viewer_key IS NOT NULL THEN x.viewer_key END), 0) AS unique_viewers,
+              COALESCE(SUM(x.event_name = 'share_clicked'), 0) AS total_shares,
+              COALESCE(COUNT(DISTINCT CASE WHEN x.event_name = 'share_clicked' AND x.viewer_key IS NOT NULL THEN x.viewer_key END), 0) AS unique_sharers,
+              COALESCE(SUM(x.event_name IN ('location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked')), 0) AS total_clicks,
+              COALESCE(COUNT(DISTINCT CASE WHEN x.event_name IN ('location_clicked', 'contact_clicked', 'reminder_clicked', 'app_download_clicked') AND x.viewer_key IS NOT NULL THEN x.viewer_key END), 0) AS unique_clickers,
+              COALESCE(COUNT(DISTINCT x.viewer_key), 0) AS total_active_devices
+         FROM (
+           SELECT ae.event_name, ae.viewer_key,
+                  COALESCE(
+                    (SELECT t.region_id FROM towns t WHERE t.name = ae.content_town),
+                    (SELECT r.id FROM regions r WHERE r.name = ae.content_town)
+                  ) AS region_id
+             FROM analytics_events ae
+            WHERE 1 = 1 ${periodClause}
+         ) x
+        WHERE x.region_id IS NOT NULL
+        GROUP BY x.region_id`
+    ),
+    db.query('SELECT region_id, COUNT(*) AS total FROM events GROUP BY region_id'),
+    db.query('SELECT id, name FROM regions ORDER BY position ASC, id ASC'),
+    period === 'all'
+      ? db.query(
+        `SELECT x.region_id, x.event_name, SUM(x.cnt) AS cnt
+           FROM (
+             SELECT c.event_name, c.\`count\` AS cnt,
+                    COALESCE(
+                      (SELECT t.region_id FROM towns t WHERE t.name = c.content_town),
+                      (SELECT r.id FROM regions r WHERE r.name = c.content_town)
+                    ) AS region_id
+               FROM analytics_daily_counters c
+           ) x
+          WHERE x.region_id IS NOT NULL
+          GROUP BY x.region_id, x.event_name`
+      )
+      : Promise.resolve([])
+  ]);
+
+  const metricsByRegion = new Map(regionRows.map(row => [row.region_id, row]));
+  const eventsByRegion = new Map(eventRows.map(row => [row.region_id, Number(row.total) || 0]));
+  const foldedByRegion = new Map();
+  for (const folded of foldedRows) {
+    const entry = foldedByRegion.get(folded.region_id) || { views: 0, shares: 0, clicks: 0 };
+    const cnt = Number(folded.cnt) || 0;
+    if (VIEW_EVENT_NAMES.includes(folded.event_name)) entry.views += cnt;
+    else if (folded.event_name === 'share_clicked') entry.shares += cnt;
+    else if (CLICK_EVENT_NAMES.includes(folded.event_name)) entry.clicks += cnt;
+    foldedByRegion.set(folded.region_id, entry);
+  }
+
+  return regions.map(region => {
+    const metrics = metricsByRegion.get(region.id) || {};
+    const folded = foldedByRegion.get(region.id) || { views: 0, shares: 0, clicks: 0 };
+    return {
+      region_id: region.id,
+      name: region.name,
+      events: eventsByRegion.get(region.id) || 0,
+      views: {
+        total: Number(metrics.total_views || 0) + folded.views,
+        unique: Number(metrics.unique_viewers || 0)
+      },
+      shares: {
+        total: Number(metrics.total_shares || 0) + folded.shares,
+        unique: Number(metrics.unique_sharers || 0)
+      },
+      clicks: {
+        total: Number(metrics.total_clicks || 0) + folded.clicks,
+        unique: Number(metrics.unique_clickers || 0)
+      },
+      audience: {
+        total_active_devices: Number(metrics.total_active_devices || 0)
+      }
+    };
+  });
 }
 
 /**

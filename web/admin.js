@@ -19,6 +19,8 @@ let allPublicCategories = [];
 let editingProviderId = null;
 let allVillages = [];
 let editingVillageId = null;
+// محافظة القرى المعروضة الآن (تذكرة #128) — القائمة تعرض قرى محافظة واحدة فقط.
+let selectedVillageRegionId = null;
 let adminTownRegions = []; // من GET /api/admin/towns — المحافظات وبلداتها كاملة، معطَّلها أيضاً (سوبر أدمن)
 let editingTownId = null;
 let adminEventsTownFilter = ''; // مطابقة حرفية للبلدة — «عرض المناسبات بلا بلدة» لا البحث النصّي (includes)
@@ -1119,6 +1121,9 @@ async function promoteRequestedVillage(eventId) {
     if (data.success) {
       showAdminNotice(data.message || 'تمت إضافة القرية', 'تم');
       fetchAdminEvents();
+      // القرية الجديدة تُولد على محافظة المناسبة نفسها (تذكرة #120): الجدول يعرض
+      // محافظتها فوراً، وإلا ظنّ الأدمن أن الاعتماد لم يكتب شيئاً.
+      if (evt && evt.region_id != null) selectedVillageRegionId = Number(evt.region_id);
       // القرية الجديدة تدخل منتقيات القرى في اللوحة وتبويب القرى بلا إعادة تحميل.
       townsFetchPromise = null;
       fetchTowns();
@@ -1711,6 +1716,18 @@ function selectBroadcastDuration(duration) {
   }
 }
 
+/**
+ * محافظات بلدات الأدمن (تذكرة #128): اسم المحافظة بندٌ واحد يوسّعه الخادم
+ * (`resolveBroadcastTowns`) إلى بلداتها النشطة ثم يقاطعه بنطاق الأدمن — فلا
+ * يصل البثّ إلا إلى بلدات هذا الأدمن في تلك المحافظة. المصدر `GET /api/towns`
+ * (`REGIONS`) لا أسماء مكتوبة هنا؛ وبلا هذا المصدر يبقى المنتقي بلدات فقط.
+ */
+function broadcastRegionsFor(myTowns) {
+  return REGIONS
+    .filter(region => Array.isArray(region.towns) && region.towns.some(town => myTowns.includes(town)))
+    .map(region => region.name);
+}
+
 function renderBroadcastComposer() {
   const scopeNotice = document.getElementById('broadcastScopeNotice');
   const townsGroup = document.getElementById('broadcastTownsGroup');
@@ -1753,9 +1770,16 @@ function renderBroadcastComposer() {
   
   if (townsGroup && townsPicker) {
     townsGroup.style.display = 'block';
+    // البلدات أولاً، ثم بند «كل بلدات <المحافظة>» لكل محافظة يملك فيها الأدمن
+    // بلدة (تذكرة #128) — قيمة البند اسم المحافظة نفسه، والخادم يوسّعه.
+    const regions = broadcastRegionsFor(myTowns);
     townsPicker.innerHTML = myTowns.map(town => `
       <label class="ot-check">
         <input type="checkbox" class="broadcast-town-check" value="${escapeHtml(town)}"> ${escapeHtml(town)}
+      </label>
+    `).join('') + regions.map(region => `
+      <label class="ot-check">
+        <input type="checkbox" class="broadcast-region-check" value="${escapeHtml(region)}"> كل بلدات ${escapeHtml(region)}
       </label>
     `).join('');
   }
@@ -1788,7 +1812,10 @@ async function handleSendBroadcast(e) {
   if (title) payload.title = title;
 
   if (!isSuperAdminRole()) {
-    const checkedTowns = Array.from(document.querySelectorAll('.broadcast-town-check:checked')).map(cb => cb.value);
+    // البلدات والمحافظات في القائمتين معاً: اسم المحافظة يُرسَل كما هو ويوسّعه الخادم.
+    const checkedTowns = Array.from(
+      document.querySelectorAll('.broadcast-town-check:checked, .broadcast-region-check:checked')
+    ).map(cb => cb.value);
     if (checkedTowns.length > 0) {
       payload.towns = checkedTowns;
     }
@@ -1813,7 +1840,7 @@ async function handleSendBroadcast(e) {
       if (titleInp) titleInp.value = '';
       selectBroadcastTone('info');
       selectBroadcastDuration('day');
-      document.querySelectorAll('.broadcast-town-check').forEach(cb => { cb.checked = false; });
+      document.querySelectorAll('.broadcast-town-check, .broadcast-region-check').forEach(cb => { cb.checked = false; });
     } else {
       showAdminNotice(data.message || 'فشل إرسال البث', 'خطأ في البث');
     }
@@ -4349,6 +4376,8 @@ function onTownsUpdated() {
     const scopedTowns = isSuperAdminRole() ? TOWNS : deriveScopedTowns();
     renderProviderTownsPicker(scopedTowns, checked);
   }
+  // `REGIONS` هنا احتياط مصدر محافظات القرى حين يعجز GET /api/admin/towns.
+  syncVillageRegionControls();
 }
 
 /** يجلب البلدات والقرى من GET /api/towns العام، ويستبعد 'الكل'. */
@@ -5481,7 +5510,85 @@ async function handleDeleteProvider(id) {
 
 // ======================================================================
 // 10. Villages — سوبر أدمن حصراً (قصص 32-33)
+//
+// المحافظة إلزامية هنا (تذكرة #128): كل قرية تُنسب إلى محافظة، والقائمة تعرض
+// قرى محافظة واحدة في المرة (منتقٍ فوق الجدول) بدل جدول واحد تختلط فيه قرى
+// محافظتين. المصدر `GET /api/admin/towns` (يشمل المحافظات الموقوفة، فقرية في
+// محافظة عُطِّلت تبقى قابلة للتعديل)، و`REGIONS` من `GET /api/towns` احتياطاً.
+// وكل `region_id` يُرسَل من نموذج القرية دائماً — لا طلب بدون محافظة.
 // ======================================================================
+
+/** محافظات لوحة القرى: `GET /api/admin/towns` أولاً، ثم المحافظات النشطة العامة. */
+function villageRegions() {
+  if (adminTownRegions.length) {
+    return adminTownRegions.map(region => ({
+      id: Number(region.id),
+      name: region.name,
+      is_active: Boolean(region.is_active)
+    }));
+  }
+  return REGIONS.map(region => ({ id: Number(region.id), name: region.name, is_active: true }));
+}
+
+function villageRegionName(regionId) {
+  const region = villageRegions().find(row => row.id === Number(regionId));
+  return region ? region.name : '';
+}
+
+/** المحافظة المعروضة الآن — أول محافظة إن لم يكن المختار قائماً أو لم يُختَر بعد. */
+function currentVillageRegionId() {
+  const regions = villageRegions();
+  if (!regions.length) {
+    selectedVillageRegionId = null;
+    return null;
+  }
+  if (!regions.some(region => region.id === selectedVillageRegionId)) {
+    selectedVillageRegionId = regions[0].id;
+  }
+  return selectedVillageRegionId;
+}
+
+function villageRegionOptionsHtml() {
+  return villageRegions()
+    .map(region => `<option value="${region.id}">${escapeHtml(region.name)}</option>`)
+    .join('');
+}
+
+/**
+ * يملأ منتقي المحافظة فوق الجدول ومنتقي النموذج من المصدر نفسه، ثم يعيد رسم
+ * الجدول — يُستدعى بعد كل جلب للمحافظات والقرى، فلا يبقى منتقٍ بقائمة قديمة.
+ */
+function syncVillageRegionControls() {
+  const regions = villageRegions();
+  const currentId = currentVillageRegionId();
+
+  const filter = document.getElementById('vilRegionFilter');
+  if (filter) {
+    filter.innerHTML = villageRegionOptionsHtml();
+    if (currentId != null) filter.value = String(currentId);
+  }
+
+  const select = document.getElementById('vilRegionId');
+  if (select) {
+    const previous = Number(select.value);
+    select.innerHTML = villageRegionOptionsHtml();
+    const keep = regions.some(region => region.id === previous) ? previous : currentId;
+    select.value = keep != null ? String(keep) : '';
+  }
+
+  renderVillagesList();
+}
+
+/** تغيير المحافظة المعروضة: الجدول وحده يتغيّر، والنموذج يتبع إن لم يكن يعدّل قرية بعينها. */
+function handleVillageRegionFilterChange(value) {
+  const regionId = Number(value);
+  selectedVillageRegionId = Number.isInteger(regionId) && regionId > 0 ? regionId : null;
+  if (!editingVillageId) {
+    const select = document.getElementById('vilRegionId');
+    if (select && selectedVillageRegionId != null) select.value = String(selectedVillageRegionId);
+  }
+  renderVillagesList();
+}
 
 async function fetchAdminVillages() {
   try {
@@ -5490,7 +5597,8 @@ async function fetchAdminVillages() {
     if (res.status === 403) { renderVillagesForbidden(data.message); return; }
     if (data.success) {
       allVillages = data.villages;
-      renderVillagesList();
+      // المنتقيان يُعاد بناؤهما هنا أيضاً: المحافظات قد تصل بعد القرى في الإقلاع.
+      syncVillageRegionControls();
     }
   } catch (e) {
     console.error('Villages error:', e);
@@ -5514,11 +5622,27 @@ function renderVillagesList() {
   const container = document.getElementById('villagesList');
   if (!container) return;
 
-  if (!allVillages.length) {
+  const regions = villageRegions();
+  const regionId = currentVillageRegionId();
+
+  if (!regions.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-map-location-dot" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد محافظات محمّلة — أضِف محافظة من تبويب «البلدات والمحافظات» أولاً، فكل قرية تُنسب إلى محافظة</p>
+      </div>
+    `;
+    return;
+  }
+
+  // فلترة عميلية على `region_id` الوارد في كل صفّ من GET /api/admin/villages.
+  const rows = allVillages.filter(village => Number(village.region_id) === regionId);
+
+  if (!rows.length) {
     container.innerHTML = `
       <div class="empty-state" style="padding: 40px; text-align: center; color: var(--text-dim);">
         <i class="fa-solid fa-folder-open" style="font-size: 2.2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
-        <p>لا توجد قرى بعد</p>
+        <p>لا قرى في محافظة ${escapeHtml(villageRegionName(regionId))} بعد</p>
       </div>
     `;
     return;
@@ -5529,6 +5653,7 @@ function renderVillagesList() {
       <thead>
         <tr>
           <th>الاسم</th>
+          <th>المحافظة</th>
           <th>خط العرض</th>
           <th>خط الطول</th>
           <th>الترتيب</th>
@@ -5538,9 +5663,10 @@ function renderVillagesList() {
         </tr>
       </thead>
       <tbody>
-        ${allVillages.map(v => `
-          <tr>
+        ${rows.map(v => `
+          <tr data-village-id="${Number(v.id)}">
             <td><strong>${escapeHtml(v.name)}</strong></td>
+            <td><i class="fa-solid fa-map"></i> ${escapeHtml(villageRegionName(v.region_id) || '—')}</td>
             <td>${v.latitude}</td>
             <td>${v.longitude}</td>
             <td>${v.position}</td>
@@ -5572,6 +5698,17 @@ function openVillageForm(id) {
     ? `<i class="fa-solid fa-pen"></i> تعديل قرية: ${escapeHtml(village.name)}`
     : `<i class="fa-solid fa-plus"></i> قرية جديدة`;
 
+  // محافظة القرية إلزامية: القرية المحفوظة تحمل محافظتها، والجديدة تفتح على
+  // المحافظة المعروضة في الجدول — لكن الاختيار يبقى بيد الأدمن قبل الحفظ.
+  syncVillageRegionControls();
+  const regionSelect = document.getElementById('vilRegionId');
+  if (regionSelect) {
+    const regionId = village ? Number(village.region_id) : currentVillageRegionId();
+    if (regionId != null && villageRegions().some(region => region.id === regionId)) {
+      regionSelect.value = String(regionId);
+    }
+  }
+
   document.getElementById('vilId').value = village ? village.id : '';
   document.getElementById('vilName').value = village ? village.name : '';
   document.getElementById('vilPosition').value = village ? village.position : 0;
@@ -5601,6 +5738,13 @@ function closeVillageForm() {
 async function handleVillageSubmit(e) {
   e.preventDefault();
 
+  const regionSelect = document.getElementById('vilRegionId');
+  const regionId = regionSelect ? Number(regionSelect.value) : 0;
+  if (!Number.isInteger(regionId) || regionId <= 0) {
+    alert('اختر محافظة القرية أولاً — كل قرية تُنسب إلى محافظة، ومناسباتها ترثها');
+    return;
+  }
+
   const lat = document.getElementById('vilLat').value;
   const lng = document.getElementById('vilLng').value;
   if (lat === '' || lng === '') {
@@ -5609,6 +5753,8 @@ async function handleVillageSubmit(e) {
   }
 
   const payload = {
+    // تُرسَل دائماً: الخادم يقبل غيابها (تذكرة #120) لكن اللوحة لم تعد تعمل بدونه.
+    region_id: regionId,
     name: document.getElementById('vilName').value.trim(),
     latitude: parseFloat(lat),
     longitude: parseFloat(lng),
@@ -5630,6 +5776,8 @@ async function handleVillageSubmit(e) {
     const data = await res.json();
     if (data.success) {
       alert(data.message || 'تم الحفظ بنجاح');
+      // الجدول يتبع ما حُفظ: القرية الجديدة تظهر في محافظتها مباشرةً.
+      selectedVillageRegionId = regionId;
       closeVillageForm();
       await fetchAdminVillages();
     } else {
@@ -5684,6 +5832,8 @@ async function fetchAdminTowns() {
     if (data.success) {
       adminTownRegions = Array.isArray(data.regions) ? data.regions : [];
       renderTownsRegionsList();
+      // منتقيا محافظة القرى يتبعان هذه القائمة (تذكرة #128) — وقد تصل بعدها في الإقلاع.
+      syncVillageRegionControls();
     }
   } catch (e) {
     console.error('Towns error:', e);
@@ -5877,6 +6027,90 @@ function closeTownForm() {
   if (wrapper) wrapper.style.display = 'none';
   const form = document.getElementById('townForm');
   if (form) form.reset();
+}
+
+// ----------------------------------------------------------------------
+// إضافة محافظة (تذكرة #128) — POST /api/admin/regions على نمط «إضافة بلدة»
+// تماماً: نفس الحارس (requireSuperAdmin)، ونفس التحقق من الإحداثيات والتقريب
+// في الراوتر. بلا منتقي خريطة: خريطة المحافظة مركزها فقط، وقد تُضبط رقمياً.
+// ----------------------------------------------------------------------
+
+function openRegionForm() {
+  const wrapper = document.getElementById('regionFormWrapper');
+  if (!wrapper) return;
+  const form = document.getElementById('regionForm');
+  if (form) form.reset();
+  const zoom = document.getElementById('regNewZoom');
+  if (zoom) zoom.value = '9';
+  const active = document.getElementById('regIsActive');
+  if (active) active.checked = true;
+
+  closeTownForm(); // نموذجان معاً فوق بعضهما يربكان أكثر ممّا يفيدان
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeRegionForm() {
+  const wrapper = document.getElementById('regionFormWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  const form = document.getElementById('regionForm');
+  if (form) form.reset();
+}
+
+async function handleNewRegionSubmit(e) {
+  e.preventDefault();
+
+  const name = document.getElementById('regName').value.trim();
+  if (!name) {
+    alert('اسم المحافظة مطلوب');
+    return;
+  }
+  const lat = document.getElementById('regNewLat').value;
+  const lng = document.getElementById('regNewLng').value;
+  if (lat === '' || lng === '') {
+    alert('مركز الخريطة إلزامي — محافظة بلا مركز لا تفتح خريطتها على شيء');
+    return;
+  }
+
+  const payload = {
+    name,
+    latitude: parseFloat(lat),
+    longitude: parseFloat(lng),
+    is_active: document.getElementById('regIsActive').checked
+  };
+  // التقريب يُرسَل فقط إن كُتب: الخادم يرفض (400) ما هو خارج 5-16، والترك فارغاً
+  // يعني «افتراضي العمود» (9) — نفس ما يعرضه الحقل ابتداءً.
+  const zoomRaw = document.getElementById('regNewZoom').value;
+  const zoom = Number.parseInt(zoomRaw, 10);
+  if (zoomRaw.trim() !== '' && Number.isInteger(zoom)) payload.map_zoom = zoom;
+  const positionRaw = document.getElementById('regPosition').value;
+  const position = Number.parseInt(positionRaw, 10);
+  if (positionRaw.trim() !== '' && Number.isInteger(position)) payload.position = position;
+
+  const btn = document.getElementById('regSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    const res = await adminFetch('/api/admin/regions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message || 'تمت إضافة المحافظة بنجاح');
+      closeRegionForm();
+      await afterTownsWrite();
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ المحافظة';
+  }
 }
 
 /**
@@ -6652,6 +6886,59 @@ function renderAnalyticsOverview() {
   const kpiUnregisteredCount = document.getElementById('kpiUnregisteredCount');
   if (kpiTotalDevices) kpiTotalDevices.textContent = (o.audience.total_active_devices || 0).toLocaleString('ar-EG');
   if (kpiUnregisteredCount) kpiUnregisteredCount.textContent = (o.audience.unregistered_devices || 0).toLocaleString('ar-EG');
+
+  renderAnalyticsRegionTable(o.by_region);
+}
+
+/**
+ * جدول «النشاط بحسب المحافظة» (تذكرة #128): نفس مؤشرات الكروت أعلاه مجموعاً
+ * لكل محافظة — مفتاح `by_region` الإضافي وحده، بلا تغيير في أي حقل قائم.
+ */
+function renderAnalyticsRegionTable(rows) {
+  const container = document.getElementById('analyticsRegionTable');
+  if (!container) return;
+
+  if (!Array.isArray(rows) || !rows.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding: 30px; text-align: center; color: var(--text-dim);">
+        <i class="fa-solid fa-map-location-dot" style="font-size: 2rem; color: var(--gold-main); margin-bottom: 10px;"></i>
+        <p>لا توجد محافظات بعد — أضِف محافظة من تبويب «البلدات والمحافظات»</p>
+      </div>
+    `;
+    return;
+  }
+
+  const num = value => Number(value || 0).toLocaleString('ar-EG');
+  const cell = (group, key) => num(group ? group[key] : 0);
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>المحافظة</th>
+          <th>المناسبات</th>
+          <th>المشاهدات</th>
+          <th>المشاهدون (فريد)</th>
+          <th>المشاركات</th>
+          <th>النقرات</th>
+          <th>الأجهزة النشطة</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr data-region-id="${Number(row.region_id)}">
+            <td><strong><i class="fa-solid fa-map"></i> ${escapeHtml(row.name || '')}</strong></td>
+            <td>${num(row.events)}</td>
+            <td>${cell(row.views, 'total')}</td>
+            <td>${cell(row.views, 'unique')}</td>
+            <td>${cell(row.shares, 'total')}</td>
+            <td>${cell(row.clicks, 'total')}</td>
+            <td>${cell(row.audience, 'total_active_devices')}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function switchAnalyticsPeriod(period, btnElement) {

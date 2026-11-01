@@ -374,7 +374,7 @@
             <div class="form-group" id="broadcastTownsGroup" style="display:none;">
               <label>البلدات المستهدفة بالتعميم</label>
               <div id="broadcastTownsPicker" class="provider-towns-picker"></div>
-              <span class="hint-text">اختر بلدة واحدة أو أكثر، أو اتركها جميعاً دون تحديد للبث لكافة بلداتك المُسنَدة.</span>
+              <span class="hint-text">اختر بلدة واحدة أو أكثر، أو محافظة كاملة (بند «كل بلدات المحافظة» — يبلغ بلداتك أنت في تلك المحافظة وحدها)، أو اترك الكل دون تحديد للبث لكافة بلداتك المُسنَدة.</span>
             </div>
 
             <div class="form-group">
@@ -693,6 +693,11 @@
             <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openVillageForm()">
               <i class="fa-solid fa-plus"></i> قرية جديدة
             </button>
+            <!-- محافظة القرى المعروضة (تذكرة #128): القائمة تحتها تعرض قرى هذه المحافظة وحدها -->
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <label for="vilRegionFilter" style="color:var(--text-dim); font-size:0.85rem; font-weight:700;">قرى المحافظة</label>
+              <select id="vilRegionFilter" class="activity-filter-select" onchange="handleVillageRegionFilterChange(this.value)"></select>
+            </div>
           </div>
           <div id="villagesList" class="admin-table-wrapper"></div>
         </div>
@@ -704,14 +709,19 @@
           <form id="villageForm" class="admin-form" onsubmit="handleVillageSubmit(event)">
             <input type="hidden" id="vilId">
             <div class="form-row">
+              <!-- المحافظة إلزامية (تذكرة #128): كل قرية تُنسب إليها، والمناسبة في القرية ترثها -->
+              <div class="form-group half">
+                <label>المحافظة *</label>
+                <select id="vilRegionId" required></select>
+              </div>
               <div class="form-group half">
                 <label>اسم القرية *</label>
                 <input type="text" id="vilName" required>
               </div>
-              <div class="form-group half">
-                <label>الترتيب</label>
-                <input type="number" id="vilPosition" value="0" step="1">
-              </div>
+            </div>
+            <div class="form-group">
+              <label>الترتيب</label>
+              <input type="number" id="vilPosition" value="0" step="1">
             </div>
             <div class="form-group">
               <label>موقع القرية على الخريطة *</label>
@@ -752,9 +762,15 @@
             <p>كل بلدة تحتاج إحداثيات حقيقية لدبّوسها على الخريطة. بلدة لها مناسبات لا تُحذف بل تُعطَّل، واسمها لا يتغيّر بعد أول استعمال</p>
           </div>
           <div class="pane-controls-bar">
-            <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openTownForm()">
-              <i class="fa-solid fa-plus"></i> بلدة جديدة
-            </button>
+            <div class="status-filter-group">
+              <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openTownForm()">
+                <i class="fa-solid fa-plus"></i> بلدة جديدة
+              </button>
+              <!-- إنشاء محافظة (تذكرة #128) — كان التعديل وحده متاحاً، فمحافظة جديدة كانت تحتاج مهاجرة -->
+              <button type="button" class="admin-btn-primary occasion-type-new-btn" onclick="openRegionForm()">
+                <i class="fa-solid fa-plus"></i> إضافة محافظة
+              </button>
+            </div>
           </div>
           <div id="townsRegionsList"></div>
         </div>
@@ -804,6 +820,53 @@
                 <i class="fa-solid fa-check"></i> حفظ البلدة
               </button>
               <button type="button" class="btn-reject" onclick="closeTownForm()">إلغاء</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- إضافة محافظة (تذكرة #128) — الاسم والمركز والتقريب فقط، بلا منتقي خريطة:
+             نفس الحقول التي يعدّلها PATCH /api/admin/regions/:id. -->
+        <div class="pane-box" id="regionFormWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-plus"></i> محافظة جديدة</h2>
+            <p>المحافظة إطار القرى والبلدات كلها — اسمها يصلح مكاناً للمناسبة «بلا بلدة محدّدة»، ومركزها يفتح خريطتها عليه</p>
+          </div>
+          <form id="regionForm" class="admin-form" onsubmit="handleNewRegionSubmit(event)">
+            <div class="form-row">
+              <div class="form-group half">
+                <label>اسم المحافظة *</label>
+                <input type="text" id="regName" required maxlength="100">
+              </div>
+              <div class="form-group half">
+                <label>الترتيب</label>
+                <input type="number" id="regPosition" step="1" placeholder="اتركه فارغاً ليكون الأخير">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>مركز الخريطة — خط العرض *</label>
+                <input type="number" id="regNewLat" step="any" placeholder="مثال: 32.31" required>
+              </div>
+              <div class="form-group half">
+                <label>خط الطول *</label>
+                <input type="number" id="regNewLng" step="any" placeholder="مثال: 35.03" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>التقريب (5-16)</label>
+                <input type="number" id="regNewZoom" step="1" min="5" max="16" value="9">
+              </div>
+              <div class="form-group half" style="display:flex; align-items:flex-end;">
+                <label class="ot-check"><input type="checkbox" id="regIsActive" checked> نشِطة (تظهر في منتقيات النشر)</label>
+              </div>
+            </div>
+            <span class="hint-text">الاسم الفريد عبر المحافظات والبلدات معاً — لا بلدة تحمل اسم محافظة، ولا محافظة تحمل اسم بلدة</span>
+            <div class="form-row" style="margin-top:18px;">
+              <button type="submit" class="admin-btn-primary" id="regSubmitBtn" style="flex:1;">
+                <i class="fa-solid fa-check"></i> حفظ المحافظة
+              </button>
+              <button type="button" class="btn-reject" onclick="closeRegionForm()">إلغاء</button>
             </div>
           </form>
         </div>
@@ -1001,6 +1064,20 @@
                   <span id="kpiUnregisteredRatio"><strong id="kpiUnregisteredCount" style="color:var(--text-main);">0</strong> زائر غير مسجل بالتوكن</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 1ب. تجميع النشاط بحسب المحافظة (تذكرة #128) — قراءة فقط، أرقام الملخّص نفسها -->
+        <div class="pane-box" style="margin-bottom:20px;">
+          <div class="pane-header">
+            <h2><i class="fa-solid fa-map-location-dot"></i> النشاط بحسب المحافظة</h2>
+            <p>نفس مؤشرات الملخّص أعلاه، مجموعاً لكل محافظة على حدة — للقراءة فقط، بلا تغيير في شكل التسجيل</p>
+          </div>
+          <div id="analyticsRegionTable" class="admin-table-wrapper">
+            <div class="empty-state" style="padding:30px; text-align:center; color:var(--text-dim);">
+              <i class="fa-solid fa-spinner fa-spin" style="font-size:1.8rem; color:var(--gold-main); margin-bottom:10px;"></i>
+              <p>جاري تحميل التجميع بحسب المحافظة...</p>
             </div>
           </div>
         </div>

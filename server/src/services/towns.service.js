@@ -394,6 +394,30 @@ async function createTown(data, { actorId = null } = {}) {
 }
 
 /**
+ * إنشاء محافظة جديدة (تذكرة #128) — على نمط `createTown` نفسه، وبلا مسار آخر:
+ * الاسم هو ما يُخزَّن في كل جدول آخر (`events.region_id` معرّف، لكن اسم المحافظة
+ * نفسه بلدة صالحة للمناسبة)، فـ`assertNameAvailable` يرفض أي اسم مكرّر داخل
+ * البلدات أو المحافظات (409). الإحداثيات والتكبير يتحقق منهما الراوتر كما في
+ * `PATCH /admin/regions/:id`، و`map_zoom` يأخذ افتراضي العمود (9) إن لم يُرسل.
+ */
+async function createRegion(data, { actorId = null } = {}) {
+  await assertNameAvailable(data.name);
+
+  let position = data.position;
+  if (position === undefined || position === null) {
+    const row = await db.queryOne('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM regions');
+    position = Number(row.next);
+  }
+  const { insertId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [data.name, data.latitude, data.longitude, data.map_zoom ?? 9, position, data.is_active === false ? 0 : 1]
+  );
+  logger.info('regions.create', { regionId: insertId, actorId });
+  return (await listForAdmin()).find(region => region.id === insertId);
+}
+
+/**
  * نقل بلدة بين محافظتين (تذكرة #120): لا يبقى صفّ مناسبتها — ولا قرية مرتبطة
  * بمناسباتها — على المحافظة القديمة. تُستدعى داخل معاملة `updateTown` نفسها
  * التي تحدّث صفّ البلدة، فلا تُقرأ بلدة في محافظة ومناسباتها في أخرى لحظةً ما.
@@ -574,5 +598,6 @@ module.exports = {
   updateTown,
   deleteTown,
   reorderTowns,
+  createRegion,
   updateRegion
 };

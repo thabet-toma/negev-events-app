@@ -263,6 +263,11 @@ function resolveBroadcastExpiry(body) {
  * scope is 404, never 403; naming none defaults to all of the admin's towns;
  * an admin holding zero towns is refused outright, zero rows written, never
  * a silent success (story 24).
+ *
+ * A governorate's own name (issue #128) is a target too — forwarded below as
+ * received, never turned into a scope here: `resolveBroadcastTowns` expands it
+ * into that governorate's active towns and intersects the result with the
+ * admin's own scope, exactly as it does for a town name.
  */
 router.post('/admin/broadcast', asyncHandler(async (req, res) => {
   requireFields(req.body, ['message']);

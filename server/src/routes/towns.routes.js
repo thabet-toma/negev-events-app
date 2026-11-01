@@ -31,6 +31,15 @@ function parsePosition(value) {
   return Number.isInteger(value) ? value : 0;
 }
 
+/** مستوى تقريب الخريطة — الحدّ نفسه في الإنشاء والتعديل. */
+function parseMapZoom(value) {
+  const zoom = Number(value);
+  if (!Number.isInteger(zoom) || zoom < MIN_MAP_ZOOM || zoom > MAX_MAP_ZOOM) {
+    throw ApiError.badRequest(`مستوى تقريب الخريطة يجب أن يكون بين ${MIN_MAP_ZOOM} و${MAX_MAP_ZOOM}`);
+  }
+  return zoom;
+}
+
 router.get('/admin/towns', asyncHandler(async (req, res) => {
   res.json({ success: true, regions: await towns.listForAdmin() });
 }));
@@ -88,6 +97,25 @@ router.delete('/admin/towns/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, message, ...result });
 }));
 
+/**
+ * إنشاء محافظة (تذكرة #128): كانت اللوحة تعرف تعديل محافظة قائمة فقط، فإدخال
+ * محافظة جديدة كان يقتضي مهاجرة يدوية. الحارس هو `requireSuperAdmin` نفسه أعلاه،
+ * والإحداثيات والتكبير يُتحقَّق منهما هنا كما في `PATCH` تماماً.
+ */
+router.post('/admin/regions', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const payload = {
+    name: parseName(body.name, 'المحافظة'),
+    latitude: requireCoordinate(body.latitude, MAX_LAT, 'خط العرض'),
+    longitude: requireCoordinate(body.longitude, MAX_LNG, 'خط الطول'),
+    map_zoom: body.map_zoom === undefined ? undefined : parseMapZoom(body.map_zoom),
+    position: body.position === undefined ? undefined : parsePosition(body.position),
+    is_active: body.is_active !== false
+  };
+  const region = await towns.createRegion(payload, { actorId: req.user.id });
+  res.status(201).json({ success: true, region, message: 'تمت إضافة المحافظة بنجاح' });
+}));
+
 router.patch('/admin/regions/:id', asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف المحافظة');
   const body = req.body || {};
@@ -95,13 +123,7 @@ router.patch('/admin/regions/:id', asyncHandler(async (req, res) => {
   if (body.name !== undefined) payload.name = parseName(body.name, 'المحافظة');
   if (body.latitude !== undefined) payload.latitude = requireCoordinate(body.latitude, MAX_LAT, 'خط العرض');
   if (body.longitude !== undefined) payload.longitude = requireCoordinate(body.longitude, MAX_LNG, 'خط الطول');
-  if (body.map_zoom !== undefined) {
-    const zoom = Number(body.map_zoom);
-    if (!Number.isInteger(zoom) || zoom < MIN_MAP_ZOOM || zoom > MAX_MAP_ZOOM) {
-      throw ApiError.badRequest(`مستوى تقريب الخريطة يجب أن يكون بين ${MIN_MAP_ZOOM} و${MAX_MAP_ZOOM}`);
-    }
-    payload.map_zoom = zoom;
-  }
+  if (body.map_zoom !== undefined) payload.map_zoom = parseMapZoom(body.map_zoom);
   if (!Object.keys(payload).length) throw ApiError.badRequest('لم يتم إرسال أي تعديل');
 
   const region = await towns.updateRegion(id, payload, { actorId: req.user.id });

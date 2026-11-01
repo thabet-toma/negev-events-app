@@ -9124,6 +9124,199 @@ async function run() {
     assert.ok(document.getElementById('tabEvents').classList.contains('active-pane'), 'the events tab must be shown');
   });
 
+  console.log('\nAdmin geography — القرية بمحافظتها، البثّ لمحافظة، والتقرير لكل محافظة (تذكرة #128)');
+
+  // GET /api/admin/towns shape (super_admin): two governorates, no towns under
+  // either — this section is about the geography keys, not the town grid.
+  const GEO_REGIONS_FIXTURE = [
+    { id: 1, name: 'النقب', latitude: 31.25, longitude: 34.79, map_zoom: 9, position: 0, is_active: 1, unplaced_events: 0, towns: [] },
+    { id: 2, name: 'طولكرم', latitude: 32.31, longitude: 35.03, map_zoom: 10, position: 1, is_active: 1, unplaced_events: 0, towns: [] }
+  ];
+  // GET /api/admin/villages rows — `region_id` on every row is what the panel filters on.
+  const GEO_VILLAGES_FIXTURE = [
+    { id: 31, region_id: 1, name: 'قرية نقبية', latitude: 31.2, longitude: 34.8, position: 0, is_active: 1, events_count: 1 },
+    { id: 32, region_id: 2, name: 'قرية طولكرمية', latitude: 32.3, longitude: 35.0, position: 1, is_active: 1, events_count: 0 }
+  ];
+  const GEO_PUBLIC_REGIONS_FIXTURE = GEO_REGIONS_FIXTURE.map(region => ({ ...region, towns: TOWNS }));
+
+  /** An admin env whose geography endpoints answer from the fixtures above; `handler` may override any path. */
+  function buildGeographyAdminEnv(handler) {
+    const dom = buildAdminEnv();
+    dom.window.localStorage.setItem('negev_admin_token', 'test-admin-token');
+    dom.window.localStorage.setItem('negev_admin_role', 'super_admin');
+    const calls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      calls.push({ path: requestPath, method, headers: options.headers || {}, body: options.body ? JSON.parse(options.body) : null });
+      const answer = handler && handler(requestPath, method, options);
+      if (answer) return answer;
+      if (requestPath === '/api/admin/towns') return jsonResponse({ success: true, regions: GEO_REGIONS_FIXTURE });
+      if (requestPath === '/api/admin/villages') return jsonResponse({ success: true, villages: GEO_VILLAGES_FIXTURE });
+      if (requestPath === '/api/towns') {
+        return jsonResponse({ success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [], regions: GEO_PUBLIC_REGIONS_FIXTURE });
+      }
+      return jsonResponse({ success: true });
+    };
+    return { dom, calls };
+  }
+
+  await test('the village form carries a mandatory governorate picker and every create sends region_id (تذكرة #128)', async () => {
+    const { dom, calls } = buildGeographyAdminEnv((requestPath, method) => {
+      if (requestPath === '/api/admin/villages' && method === 'POST') {
+        return jsonResponse({ success: true, message: 'تمت إضافة القرية بنجاح', village: { id: 33, region_id: 2 } }, { status: 201 });
+      }
+      return null;
+    });
+    const { document } = dom.window;
+    await dom.window.fetchAdminTowns();
+    await dom.window.fetchAdminVillages();
+    dom.window.openVillageForm();
+
+    const select = document.getElementById('vilRegionId');
+    assert.ok(select, 'expected a governorate picker in the village form');
+    assert.strictEqual(select.required, true, 'the governorate must be mandatory, not an optional extra');
+    assert.deepStrictEqual([...select.options].map(option => option.value), ['1', '2'], 'options come from the regions the server sent');
+    assert.deepStrictEqual([...select.options].map(option => option.textContent), ['النقب', 'طولكرم']);
+
+    document.getElementById('vilName').value = 'قرية جديدة';
+    document.getElementById('vilLat').value = '32.31';
+    document.getElementById('vilLng').value = '35.03';
+    select.value = '2';
+    await dom.window.handleVillageSubmit({ preventDefault() {} });
+
+    const post = calls.find(call => call.path === '/api/admin/villages' && call.method === 'POST');
+    assert.ok(post, 'expected a POST /api/admin/villages');
+    assert.strictEqual(post.body.region_id, 2, 'region_id must ride along on every create — never omitted');
+    assert.strictEqual(post.body.name, 'قرية جديدة');
+    assert.strictEqual(post.headers.Authorization, 'Bearer test-admin-token');
+  });
+
+  await test('the villages table shows only the chosen governorate\'s villages, names that governorate, and follows the picker (تذكرة #128)', async () => {
+    const { dom } = buildGeographyAdminEnv();
+    const { document } = dom.window;
+    await dom.window.fetchAdminTowns();
+    await dom.window.fetchAdminVillages();
+
+    const renderedIds = () => [...document.querySelectorAll('#villagesList tr[data-village-id]')]
+      .map(row => row.getAttribute('data-village-id'));
+
+    assert.deepStrictEqual(renderedIds(), ['31'], 'only the first governorate\'s villages');
+    const firstRow = document.querySelector('#villagesList tr[data-village-id="31"]');
+    assert.ok(firstRow.textContent.includes('قرية نقبية'));
+    assert.ok(firstRow.textContent.includes('النقب'), 'the governorate column names it');
+    assert.ok(!document.getElementById('villagesList').textContent.includes('قرية طولكرمية'),
+      'a village of another governorate must not leak into this one\'s table');
+
+    const filter = document.getElementById('vilRegionFilter');
+    filter.value = '2';
+    filter.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+    assert.deepStrictEqual(renderedIds(), ['32'], 'choosing a governorate shows its villages only');
+    assert.ok(document.getElementById('villagesList').textContent.includes('طولكرم'));
+  });
+
+  await test('the «إضافة محافظة» button opens a form that POSTs the governorate to /api/admin/regions (تذكرة #128)', async () => {
+    const { dom, calls } = buildGeographyAdminEnv((requestPath, method) => {
+      if (requestPath === '/api/admin/regions' && method === 'POST') {
+        return jsonResponse({ success: true, message: 'تمت إضافة المحافظة بنجاح', region: { id: 3 } }, { status: 201 });
+      }
+      return null;
+    });
+    const { document } = dom.window;
+    await dom.window.fetchAdminTowns();
+
+    document.querySelector('#tabTowns button[onclick="openRegionForm()"]').click();
+    assert.notStrictEqual(document.getElementById('regionFormWrapper').style.display, 'none', 'the form must open');
+
+    document.getElementById('regName').value = ' محافظة جديدة ';
+    document.getElementById('regNewLat').value = '32.31';
+    document.getElementById('regNewLng').value = '35.03';
+    document.getElementById('regNewZoom').value = '10';
+    await dom.window.handleNewRegionSubmit({ preventDefault() {} });
+
+    const post = calls.find(call => call.path === '/api/admin/regions' && call.method === 'POST');
+    assert.ok(post, 'expected a POST /api/admin/regions');
+    assert.strictEqual(post.body.name, 'محافظة جديدة', 'the name is trimmed before it is sent');
+    assert.strictEqual(post.body.latitude, 32.31);
+    assert.strictEqual(post.body.longitude, 35.03);
+    assert.strictEqual(post.body.map_zoom, 10);
+    assert.strictEqual(post.headers.Authorization, 'Bearer test-admin-token');
+  });
+
+  await test('the broadcast target offers «كل بلدات <المحافظة>» from GET /api/towns and sends the governorate name for the server to expand (تذكرة #128)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'admin', towns: ['رهط', 'حورة'] });
+    const broadcastCalls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (options && options.method) || 'GET';
+      if (requestPath === '/api/towns') {
+        return jsonResponse({ success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [], regions: GEO_PUBLIC_REGIONS_FIXTURE });
+      }
+      if (requestPath === '/api/admin/me') return jsonResponse({ success: true, user: { id: 1, role: 'admin' }, towns: ['رهط', 'حورة'] });
+      if (method === 'POST' && requestPath === '/api/admin/broadcast') {
+        broadcastCalls.push({ body: JSON.parse(options.body) });
+        return jsonResponse({ success: true });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.fetchTowns();
+    await dom.window.fetchAdminIdentity();
+    dom.window.renderBroadcastComposer();
+
+    const { document } = dom.window;
+    const townChecks = [...document.querySelectorAll('#broadcastTownsPicker .broadcast-town-check')];
+    assert.deepStrictEqual(townChecks.map(check => check.value), ['رهط', 'حورة'], 'the towns stay exactly as they were');
+
+    const regionCheck = document.querySelector('#broadcastTownsPicker .broadcast-region-check');
+    assert.ok(regionCheck, 'expected one governorate target next to the towns');
+    assert.strictEqual(regionCheck.value, 'النقب', 'the governorate travels by its own name');
+    assert.ok(regionCheck.closest('label').textContent.includes('كل بلدات النقب'),
+      'the target must read «كل بلدات <المحافظة>», derived from the server list — never a hardcoded name');
+
+    regionCheck.checked = true;
+    document.getElementById('broadcastMessageInput').value = 'تعميم لكل بلدات المحافظة';
+    document.getElementById('broadcastForm').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => broadcastCalls.length > 0);
+
+    assert.deepStrictEqual(broadcastCalls[0].body.towns, ['النقب'], 'the governorate name is sent as-is; expanding it is the service\'s job');
+  });
+
+  await test('the analytics tab renders the per-governorate breakdown from overview.by_region, leaving the summary KPIs as they were (تذكرة #128)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const overview = {
+      period: 'all',
+      views: { total: 10, unique: 4, breakdown: { app_opened: 5, event_viewed: 4, share_page_viewed: 1 } },
+      shares: { total: 2, unique: 2 },
+      clicks: { total: 3, unique: 2, breakdown: { location: 1, contact: 1, reminder: 1, download: 0 } },
+      platforms: { web: { total_events: 5, unique_viewers: 3 }, mobile: { total_events: 5, unique_viewers: 2 } },
+      audience: { total_active_devices: 7, unregistered_devices: 5, registered_users: 2 },
+      by_region: [
+        { region_id: 1, name: 'النقب', events: 12, views: { total: 8, unique: 3 }, shares: { total: 2, unique: 2 }, clicks: { total: 3, unique: 2 }, audience: { total_active_devices: 6 } },
+        { region_id: 2, name: 'طولكرم', events: 0, views: { total: 2, unique: 1 }, shares: { total: 0, unique: 0 }, clicks: { total: 0, unique: 0 }, audience: { total_active_devices: 1 } }
+      ]
+    };
+    dom.window.fetch = async (url) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/admin/analytics/overview') return jsonResponse({ success: true, overview });
+      return jsonResponse({ success: true });
+    };
+
+    await dom.window.fetchAdminAnalyticsOverview('all');
+
+    const table = dom.window.document.getElementById('analyticsRegionTable');
+    const rows = [...table.querySelectorAll('tr[data-region-id]')];
+    assert.deepStrictEqual(rows.map(row => row.getAttribute('data-region-id')), ['1', '2']);
+    assert.ok(table.textContent.includes('النقب') && table.textContent.includes('طولكرم'));
+
+    const arNumber = value => Number(value).toLocaleString('ar-EG');
+    assert.ok(rows[0].textContent.includes(arNumber(12)), 'the occasion count per governorate is shown');
+    assert.ok(rows[0].textContent.includes(arNumber(8)), 'the governorate\'s own views are shown');
+    assert.ok(dom.window.document.getElementById('kpiTotalViews').textContent.includes(arNumber(10)),
+      'the summary KPI keeps rendering the same totals');
+  });
+
   console.log('\nRegions on the public site — a region name as the place «بلا بلدة محدّدة» (TWN-5)');
 
   // Reused, not re-typed: the one region a fresh server seeds (constants.SEED_REGION),
