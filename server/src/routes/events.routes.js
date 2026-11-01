@@ -19,8 +19,8 @@ const { eventMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const {
-  cleanString, requireDate, optionalDate, parseCoordinate, parseId, parseHonorees, parseEventDays,
-  parseCsvList, parseFlag, MAX_HONOREES
+  cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
+  parseEventDays, parseCsvList, parseFlag, MAX_HONOREES
 } = require('../middleware/validate');
 const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
 
@@ -224,6 +224,12 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     throw ApiError.badRequest(`قيمة ${labelOf('town', 'البلدة')} غير صالحة`);
   }
 
+  // المحافظة اختيارية (تذكرة #120): تُقرأ فقط إن أُرسلت، ولا تُلزم — عميل
+  // 1.21.3 المنشور لا يعرفها أصلاً، وترويسة `X-Region` ليست موضوع هذه التذكرة
+  // (#121). الخدمة تتحقق أنها محافظة نشطة وتشتقّ من البلدة أو الافتراضية عند
+  // غيابها، فلا يتغيّر سلوك أي طلب لا يرسلها.
+  const regionId = optionalId(req.body.region_id, 'المحافظة');
+
   // Integrity rule enforced here, not by the schema: `village_id` and
   // `requested_village_name` ("قريتي غير موجودة") may only be set under the
   // villages catch-all, never both at once, and a NEW publish under it must
@@ -282,6 +288,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     village_id: villageId,
     requested_village_name: requestedVillageName,
     villageCoords: village ? { lat: village.latitude, lng: village.longitude } : null,
+    region_id: regionId,
     event_date: eventDate,
     latitude,
     longitude
@@ -419,6 +426,12 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     }
   }
 
+  // محافظة اختيارية (تذكرة #120) — تُقرأ فقط إن أُرسلت، ولا تدخل `changes`:
+  // الخدمة تعيد حساب المحافظة من المكان بنفسها وتكتبها في نفس `UPDATE`، فلا
+  // يظهر حقل مشتقّ في سجل التعديلات. غيابها (كل عميل منشور اليوم) يعني «اترك
+  // المحافظة كما هي»، إلا إن تحرّك المكان فيُعاد حسابها.
+  const regionId = optionalId(body.region_id, 'المحافظة');
+
   if (body.title !== undefined) changes.title = cleanString(body.title, 255) || existing.title;
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
   // A client that re-sends the event's own town unchanged (web/app.js does on
@@ -546,7 +559,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
   }
 
-  if (!Object.keys(changes).length && honorees === null && extraDays === null) {
+  if (!Object.keys(changes).length && honorees === null && extraDays === null && regionId === null) {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 
@@ -587,7 +600,9 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     changes.artist_image_url = await cloudinary.storeUploadedImage(uploadedMedia.artist_image_url, 'artists');
   }
 
-  const result = await events.updateEvent(eventId, existing, { changes, honorees, extraDays, changedBy: req.user.id });
+  const result = await events.updateEvent(eventId, existing, {
+    changes, honorees, extraDays, regionId, changedBy: req.user.id
+  });
   if (changes.poster_url !== undefined) await events.releaseReplacedImage(existing.poster_url, changes.poster_url);
   if (changes.artist_image_url !== undefined) {
     await events.releaseReplacedImage(existing.artist_image_url, changes.artist_image_url);

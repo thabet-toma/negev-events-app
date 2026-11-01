@@ -4,6 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
+const villagesService = require('./villages.service');
 const albums = require('./albums.service');
 const people = require('./people.service');
 const cloudinary = require('./cloudinary.service');
@@ -866,6 +867,14 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
   const longitude = data.longitude ?? coords.lng ?? null;
   const status = autoApprove ? 'approved' : 'pending';
 
+  // محافظة المناسبة (تذكرة #120) — تُحسب مرّة هنا وتُنسخ على الصفّ، لا تُشتقّ
+  // في أي قراءة. `data.region_id` يصل من المسار اختيارياً فقط؛ وغيابه (كل عميل
+  // منشور اليوم، ومنه 1.21.3) يُسقط إلى محافظة البلدة أو إلى الافتراضية.
+  const regionId = await townsService.resolveRegionForEventPlace({
+    town: data.town,
+    regionId: data.region_id ?? null
+  });
+
   // A field the route silently dropped (hidden for this occasion type) is
   // simply absent from `data` — `undefined`, not `null`. The raw connection
   // used inside a transaction skips pool.js's normalise(), and mysql2 rejects
@@ -892,16 +901,17 @@ async function createEvent(data, { autoApprove = false, createdBy = null } = {})
 
     const [result] = await connection.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, occasion_type_id, town, village_id, requested_village_name,
+         (title, groom_name, family_clan, occasion_type_id, region_id, town, village_id, requested_village_name,
           location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
           audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by, first_approved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
       [
         title,
         groomName,
         familyClan,
         data.occasion_type_id,
+        regionId,
         data.town,
         villageId,
         requestedVillageName,
@@ -1139,13 +1149,38 @@ function columnValueChanged(column, storedValue, submittedValue) {
  * travelling alongside a critical one in one request is still logged
  * `approved` immediately — it never went through review either.
  */
-async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null } = {}) {
+async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null, regionId = null } = {}) {
   // Only columns whose value actually differs count towards the
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
   const changedColumns = Object.keys(changes).filter(
     column => columnValueChanged(column, existing[column], changes[column])
   );
+
+  // المحافظة (تذكرة #120) مشتقّة من المكان لا حقلاً يحرّره المستخدم: تُعاد
+  // حسابها كلما مسّ التعديل البلدة أو اختيار القرية، أو أرسل العميل محافظة
+  // صريحة (البند الجامع وحده يحتاجها). ولا تدخل `changes` عمداً — فلا تظهر
+  // في سجل التعديلات، ولا تغيّر تصنيف التعديل الحرِج. وتُحسب قبل المعاملة كي
+  // يُرفض معرّف المحافظة غير النشِط بـ400 قبل كتابة أي صفّ.
+  //
+  // القرية المختارة هي مصدر محافظتها حين لا تُرسَل محافظة صريحة: تمرير البلدة
+  // وحدها كان يجعل البند الجامع يعود إلى المحافظة الافتراضية، فتصير مناسبة
+  // طولكرمية تُغيَّر قريتها نقبية. وإن لم تكن هناك قرية (بند جامع بلا قرية)
+  // بقيت المناسبة على محافظتها الحالية، لا على الافتراضية.
+  const nextTown = changes.town !== undefined ? changes.town : existing.town;
+  const villageRegionId = changes.village_id !== undefined && changes.village_id !== null
+    ? await villagesService.regionIdById(changes.village_id)
+    : null;
+  const regionNeedsRewrite = changes.town !== undefined || changes.village_id !== undefined
+    || (regionId !== null && regionId !== undefined);
+  const resolvedRegionId = regionNeedsRewrite
+    ? await townsService.resolveRegionForEventPlace({
+      town: nextTown,
+      regionId: regionId ?? null,
+      villageRegionId,
+      fallbackRegionId: existing.region_id ?? null
+    })
+    : null;
 
   const { amendment, status: nextStatus, extraDaysChanged, honoreesChanged } = await db.transaction(async connection => {
     // The stored honorees are read here, before any replacement: the same
@@ -1188,6 +1223,12 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     for (const [column, value] of Object.entries(changes)) {
       assignments.push(`${column} = ?`);
       params.push(value);
+    }
+    // محافظة الصفّ تُكتب في نفس `UPDATE` أعلاه، لا في عبارة ثانية: تعديل
+    // يغيّر البلدة والقرية والمحافظة معاً يصل إلى القاعدة ذرّياً.
+    if (resolvedRegionId !== null) {
+      assignments.push('region_id = ?');
+      params.push(resolvedRegionId);
     }
     if (nextStatus !== existing.status) {
       assignments.push('status = ?');

@@ -17,6 +17,27 @@ CREATE TABLE IF NOT EXISTS people (
   UNIQUE KEY uq_people_name_key (name_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Regions (محافظات) sit above towns so the platform can grow past the Negev
+-- one region at a time. The centre/zoom open a map picker on a region-level
+-- place, and is never written onto an event as a pin (a pin in the middle
+-- of a region sends a guest nowhere useful).
+--
+-- تُعرَّف **قبل** كل جدول يشير إليها (users, villages, towns, events) كي
+-- تُبنى مفاتيحها الأجنبية، فلا تنقل هذا التعريف إلى أسفل الملف.
+CREATE TABLE IF NOT EXISTS regions (
+  id         INT UNSIGNED     NOT NULL AUTO_INCREMENT,
+  name       VARCHAR(100)     NOT NULL,
+  latitude   DECIMAL(10,7)    NOT NULL,
+  longitude  DECIMAL(10,7)    NOT NULL,
+  map_zoom   TINYINT UNSIGNED NOT NULL DEFAULT 9,
+  position   INT              NOT NULL DEFAULT 0,
+  is_active  TINYINT(1)       NOT NULL DEFAULT 1,
+  created_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_regions_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS users (
   id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
   phone_number      VARCHAR(20)  NOT NULL,
@@ -35,6 +56,10 @@ CREATE TABLE IF NOT EXISTS users (
   -- الشخص الذي هو هذا الحساب (ADR-0011). NULLable عن قصد: الحساب سجلّ هوية،
   -- والشخص صفٌّ يُنشأ عند التسجيل عبر people.resolveByName، لا هنا.
   person_id         INT UNSIGNED DEFAULT NULL,
+  -- محافظة الحساب (تذكرة #120). NULL تعني «لم يختر محافظة بعد» — ولا تُستنتج
+  -- من clan_town أبداً: تلك بلدة يكتبها صاحب الحساب عن نفسه، وهذه اختيار صريح.
+  -- ON DELETE SET NULL كي لا يمنع حذف محافظةٌ حذفَ حساب، ولا يمحو الحسابَ معها.
+  region_id         INT UNSIGNED DEFAULT NULL,
   -- صورة الملف الشخصي: رابط Cloudinary مطلق، أو `/uploads/…` حين Cloudinary متوقّف.
   -- ووسم المستخدم نفسه في صورة ألبوم يتطلّب وجودها (photo_tags من الحساب).
   avatar_url        VARCHAR(500) DEFAULT NULL,
@@ -44,7 +69,9 @@ CREATE TABLE IF NOT EXISTS users (
   UNIQUE KEY uq_users_phone (phone_number),
   KEY idx_users_role (role),
   KEY idx_users_person (person_id),
-  CONSTRAINT fk_users_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL
+  KEY idx_users_region (region_id),
+  CONSTRAINT fk_users_person FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE SET NULL,
+  CONSTRAINT fk_users_region FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- سجلّ تدقيق دمج شخصين (تذكرة #107). `from_id`/`into_id` أعداد صحيحة بلا مفتاح
@@ -152,31 +179,19 @@ CREATE TABLE IF NOT EXISTS occasion_type_reactions (
 -- bug the catch-all town has today (services-directory spec, decision #23).
 CREATE TABLE IF NOT EXISTS villages (
   id        INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  -- محافظة القرية (تذكرة #120). كل قرى اليوم تحت بند «القرى والتجمعات»،
+  -- ومحافظتها محافظة ذلك البند — نسخة على صفّ القرية كي تُنقل القرية مع
+  -- بلدتها ولا تحتاج كل قراءة إلى المرور بجدول البلدات.
+  region_id INT UNSIGNED  NOT NULL,
   name      VARCHAR(100)  NOT NULL,
   latitude  DECIMAL(10,7) NOT NULL,
   longitude DECIMAL(10,7) NOT NULL,
   position  INT           NOT NULL DEFAULT 0,
   is_active TINYINT(1)    NOT NULL DEFAULT 1,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_villages_name (name)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Regions (محافظات) sit above towns so the platform can grow past the Negev
--- one region at a time. The centre/zoom open a map picker on a region-level
--- place, and is never written onto an event as a pin (a pin in the middle
--- of a region sends a guest nowhere useful).
-CREATE TABLE IF NOT EXISTS regions (
-  id         INT UNSIGNED     NOT NULL AUTO_INCREMENT,
-  name       VARCHAR(100)     NOT NULL,
-  latitude   DECIMAL(10,7)    NOT NULL,
-  longitude  DECIMAL(10,7)    NOT NULL,
-  map_zoom   TINYINT UNSIGNED NOT NULL DEFAULT 9,
-  position   INT              NOT NULL DEFAULT 0,
-  is_active  TINYINT(1)       NOT NULL DEFAULT 1,
-  created_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_regions_name (name)
+  UNIQUE KEY uq_villages_name (name),
+  KEY idx_villages_region (region_id),
+  CONSTRAINT fk_villages_region FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Towns are runtime data (rows, not constants). Every other
@@ -206,6 +221,13 @@ CREATE TABLE IF NOT EXISTS events (
   groom_name       VARCHAR(150) NOT NULL,
   family_clan      VARCHAR(150) NOT NULL,
   occasion_type_id INT UNSIGNED DEFAULT NULL,
+  -- محافظة المناسبة (تذكرة #120) — **منسوخة على صفّ المناسبة** وقت الكتابة،
+  -- لا مشتقّة وقت القراءة. السبب: اسم القرية الحرّ (`requested_village_name`)
+  -- لا يحمل محافظة أصلاً، واشتقاقها عند كل قراءة يعني ربطاً بجدول البلدات ثم
+  -- سقوطاً إلى محافظة افتراضية — عملٌ يتكرّر في كل استعلام بدل مرّة واحدة هنا.
+  -- وهي أيضاً لقطة صحيحة للمناسبة: نقل بلدة بين محافظتين يحدّث صفوفها معها
+  -- (towns.service.js#updateTown) لا أن يتركها تُقرأ بمحافظة جديدة صامتة.
+  region_id        INT UNSIGNED NOT NULL,
   town             VARCHAR(100) NOT NULL,
   village_id       INT UNSIGNED NULL,
   -- "قريتي غير موجودة": free text typed under the villages catch-all while
@@ -244,8 +266,10 @@ CREATE TABLE IF NOT EXISTS events (
   KEY idx_events_clan (family_clan),
   KEY idx_events_occasion_type (occasion_type_id),
   KEY idx_events_village (village_id),
+  KEY idx_events_region_date (region_id, event_date),
   CONSTRAINT fk_events_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_events_occasion_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_events_region FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE RESTRICT,
   CONSTRAINT fk_events_village FOREIGN KEY (village_id) REFERENCES villages(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

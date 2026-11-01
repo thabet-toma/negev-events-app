@@ -140,14 +140,19 @@ async function run() {
 
     const town = event.town === UNKNOWN ? regionName : event.town;
     const coords = townCoordinates[town] || {};
+    // محافظة المناسبة (تذكرة #120): `events.region_id` NOT NULL بلا افتراضي،
+    // فكل INSERT يحتاجها. تُحسب من البلدة بعد تطبيعها أعلاه (بلدة معروفة، أو
+    // اسم المحافظة، وإلا الافتراضية) — لا تخمين بلدة، ولا تغيير لأي قاعدة
+    // استيراد أخرى في هذا السكربت.
+    const regionId = await townsService.resolveRegionForEventPlace({ town });
 
     const { insertId } = await db.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, town, location_name, latitude, longitude,
+         (title, groom_name, family_clan, town, region_id, location_name, latitude, longitude,
           event_date, youth_party_date, dinner_time, poster_url, host_phone, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        event.title, event.groom_name, event.family_clan, town, event.location_name,
+        event.title, event.groom_name, event.family_clan, town, regionId, event.location_name,
         coords.lat ?? null, coords.lng ?? null, event.event_date, event.youth_party_date,
         event.dinner_time, event.poster_url, event.host_phone, event.status
       ]

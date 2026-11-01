@@ -150,14 +150,17 @@ async function seedEvents() {
     // No fallback to another town's coordinates: a town with no centre
     // (e.g. 'القرى والتجمعات') gets no pin, not a wrong one.
     const coords = townCoordinates[event.town] || {};
+    // محافظة المناسبة (تذكرة #120) تُحسب بنفس دالة النشر، لا تُكتب يدوياً هنا:
+    // بلدة في DEMO_EVENTS لا تحتاج تعديلاً في البذرة كي تحصل على محافظتها.
+    const regionId = await townsService.resolveRegionForEventPlace({ town: event.town });
     const { insertId } = await db.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, town, location_name, latitude, longitude,
+         (title, groom_name, family_clan, town, region_id, location_name, latitude, longitude,
           event_date, youth_party_date, dinner_time, poster_url, audio_url, audio_title,
           host_phone, status, views_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 245)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 245)`,
       [
-        event.title, event.groom_name, event.family_clan, event.town, event.location_name,
+        event.title, event.groom_name, event.family_clan, event.town, regionId, event.location_name,
         coords.lat ?? null, coords.lng ?? null, event.event_date, event.youth_party_date, event.dinner_time,
         event.poster_url, event.audio_url, event.audio_title, event.host_phone
       ]

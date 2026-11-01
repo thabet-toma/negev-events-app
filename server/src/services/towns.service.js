@@ -154,6 +154,102 @@ async function defaultRegionName() {
   return first || null;
 }
 
+/**
+ * معرّف المحافظة الافتراضية (تذكرة #120): أول محافظة نشطة بترتيب العرض، أو
+ * `null` إن لم توجد محافظة نشطة أصلاً. هذه هي محافظة أي مناسبة أو قرية لا
+ * يحمل مكانها محافظة معروفة — وبها يبقى عميل 1.21.3 المنشور (ينشر تحت بند
+ * «القرى والتجمعات» بلا محافظة) يعمل بلا أي تغيير في سلوكه.
+ */
+async function defaultRegionId() {
+  const row = await db.queryOne(
+    'SELECT id FROM regions WHERE is_active = 1 ORDER BY position ASC, id ASC LIMIT 1'
+  );
+  return row ? row.id : null;
+}
+
+/** هل هذا معرّف محافظة **نشطة**؟ — التحقق الذي تطلبه المحافظة المرسلة صراحةً. */
+async function isActiveRegionId(regionId) {
+  if (!Number.isInteger(regionId)) return false;
+  return (await listActiveRegions()).some(region => region.id === regionId);
+}
+
+/**
+ * محافظة اسم مكان (تذكرة #120): اسم بلدة نشطة ← محافظة بلدتها، واسم محافظة
+ * نشطة ← معرّفها، وأي اسم آخر ← `null`. المقارنة حرفية في JS كما في
+ * `isActiveTown`، لا `WHERE name = ?`: تهيئة العمود utf8mb4_unicode_ci تجعل
+ * الصيغة الإملائية الأخرى تطابق في SQL، والاسم هو المفتاح المخزَّن في كل جدول
+ * آخر (ADR-0007).
+ */
+async function findRegionIdForPlace(name) {
+  if (!name) return null;
+  const [towns, regions] = await Promise.all([listActive(), listActiveRegions()]);
+  const town = towns.find(row => row.name === name);
+  if (town) return town.region_id;
+  const region = regions.find(row => row.name === name);
+  return region ? region.id : null;
+}
+
+/**
+ * القاعدة الوحيدة لحساب محافظة المناسبة (تذكرة #120) — تُستدعى من كل كتابة
+ * لصفّ مناسبة: النشر، التعديل، البذرة، المستورِد، وسكربتات الاستيراد.
+ *
+ * - `regionId` صريحة ← هي، بعد التحقق أنها محافظة نشطة.
+ * - بلدة حقيقية ← محافظتها. اسم محافظة ← هي.
+ * - القرية المختارة ← محافظة القرية (`villageRegionId`). كانت الدالة لا ترى
+ *   القرية، فتغيير `village_id` وحده تحت البند الجامع يعود إلى المحافظة
+ *   الافتراضية — أي أن مناسبة طولكرمية تُغيَّر قريتها تصير نقبية.
+ * - البند الجامع («القرى والتجمعات») ليس مكاناً: صفّه في `towns` يحمل محافظةً
+ *   للعرض فقط، فلا تُشتقّ منها. تُؤخذ `regionId` المرسلة، وإلا محافظة القرية
+ *   (`villageRegionId`، التعديل وحده يمرّرها)، وإلا `fallbackRegionId`
+ *   (محافظة المناسبة الحالية في التعديل)، وإلا الافتراضية — وهذا ما يُبقي عميل
+ *   1.21.3 المنشور، الذي ينشر تحت البند بلا محافظة، على سلوكه اليوم حرفياً.
+ *   والنشر الجديد لا يمرّر محافظة القرية عمداً: قرار مقفول أن نشر البند الجامع
+ *   بلا `region_id` يأخذ الافتراضية، فأي قرية يختارها عميل قديم لا تغيّره.
+ * - اسم غير معروف ← `regionId` إن أُرسلت، وإلا `fallbackRegionId`، وإلا
+ *   الافتراضية. لا خطأ هنا: طبقة المسار تتحقق من البلدة أصلاً (`isActivePlace`)،
+ *   فالوصول إلى هنا باسم مجهول يعني قراءة صفّ قديم لا نشراً جديداً.
+ *
+ * وكل `regionId` تُرسَل صريحة تُتحقَّق **مرّة واحدة** في أوّل الدالة، أيّاً كان
+ * الفرع الذي سيُحسب منه بعدها: معرّف محافظة غير موجود أو معطَّل كان يصل إلى
+ * عمود المفتاح الأجنبي فيسقط بخطأ SQL (500) بدل رفض عربي مفهوم (400).
+ *
+ * يعيد معرّف المحافظة (number).
+ */
+async function resolveRegionForEventPlace({
+  town,
+  regionId = null,
+  villageRegionId = null,
+  fallbackRegionId = null
+}) {
+  const hasRegion = regionId !== null && regionId !== undefined;
+  const hasVillageRegion = villageRegionId !== null && villageRegionId !== undefined;
+  const hasFallback = fallbackRegionId !== null && fallbackRegionId !== undefined;
+
+  if (hasRegion && !(await isActiveRegionId(regionId))) {
+    throw ApiError.badRequest('المحافظة المختارة غير معروفة أو غير نشطة');
+  }
+
+  if (town === VILLAGES_TOWN) {
+    if (hasRegion) return regionId;
+    if (hasVillageRegion) return villageRegionId;
+    return hasFallback ? fallbackRegionId : requireDefaultRegionId();
+  }
+
+  const placeRegionId = await findRegionIdForPlace(town);
+  if (placeRegionId) return placeRegionId;
+  if (hasRegion) return regionId;
+  return hasFallback ? fallbackRegionId : requireDefaultRegionId();
+}
+
+/** `defaultRegionId()` أو رفض عربي واضح — عمود `events.region_id` لا يقبل NULL. */
+async function requireDefaultRegionId() {
+  const id = await defaultRegionId();
+  if (id === null) {
+    throw ApiError.badRequest('لا توجد محافظة نشطة في المنصة — تعذّر تحديد محافظة المكان');
+  }
+  return id;
+}
+
 // ======================================================================
 // super_admin management (TWN-3). Names are the key every other table
 // stores, so the rules below exist to keep a stored name meaningful:
@@ -286,6 +382,36 @@ async function createTown(data, { actorId = null } = {}) {
 }
 
 /**
+ * نقل بلدة بين محافظتين (تذكرة #120): لا يبقى صفّ مناسبتها — ولا قرية مرتبطة
+ * بمناسباتها — على المحافظة القديمة. تُستدعى داخل معاملة `updateTown` نفسها
+ * التي تحدّث صفّ البلدة، فلا تُقرأ بلدة في محافظة ومناسباتها في أخرى لحظةً ما.
+ *
+ * البند الجامع حالة خاصة: كل قرى المنصّة تحته، فتُحدَّث كل صفوف `villages`،
+ * لا القرى المرتبطة بمناسباته وحدها. الفرع أدناه **دفاعي فقط**: `updateTown`
+ * يقفل تغيير محافظة البند الجامع اليوم (`locked`)، فلا يصل إليه طلب فعلي؛
+ * فتحُه يقتضي إقرار نقل كل قرى المنصّة معه، لا إسقاط هذا الفرع.
+ * الجداول الملموسة: `events` و`villages` فقط.
+ */
+async function moveTownRegion(connection, { townName, regionId, isCatchAll = false }) {
+  await connection.execute(
+    'UPDATE events SET region_id = ? WHERE town = ?',
+    [regionId, townName]
+  );
+
+  if (isCatchAll) {
+    await connection.execute('UPDATE villages SET region_id = ?', [regionId]);
+  } else {
+    await connection.execute(
+      `UPDATE villages v
+         JOIN events e ON e.village_id = v.id
+          SET v.region_id = ?
+        WHERE e.town = ?`,
+      [regionId, townName]
+    );
+  }
+}
+
+/**
  * Partial update. The villages catch-all may only be reordered; any other
  * town may be renamed only while nothing stores its name yet (a typo fixed
  * right after adding it) — once used, the answer is a new town plus
@@ -316,10 +442,26 @@ async function updateTown(id, data, { actorId = null } = {}) {
     assignments.push(`${column} = ?`);
     params.push(column === 'is_active' ? (data[column] ? 1 : 0) : data[column]);
   }
+  // نقلٌ فعلي بين محافظتين — لا مجرّد إعادة إرسال المحافظة نفسها — هو ما
+  // يستدعي تحديث مناسبات البلدة وقُراها.
+  const regionChanged = data.region_id !== undefined && data.region_id !== existing.region_id;
+
   if (assignments.length) {
     params.push(id);
-    await db.execute(`UPDATE towns SET ${assignments.join(', ')} WHERE id = ?`, params);
-    logger.info('towns.update', { townId: id, fields: Object.keys(data).filter(key => data[key] !== undefined), actorId });
+    if (regionChanged) {
+      await db.transaction(async connection => {
+        await connection.execute(`UPDATE towns SET ${assignments.join(', ')} WHERE id = ?`, params);
+        await moveTownRegion(connection, { townName: existing.name, regionId: data.region_id, isCatchAll: locked });
+      });
+    } else {
+      await db.execute(`UPDATE towns SET ${assignments.join(', ')} WHERE id = ?`, params);
+    }
+    logger.info('towns.update', {
+      townId: id,
+      fields: Object.keys(data).filter(key => data[key] !== undefined),
+      regionMoved: regionChanged,
+      actorId
+    });
   }
   return shapeAdminTown(await findTownRow(id));
 }
@@ -409,6 +551,9 @@ module.exports = {
   knownTownNames,
   knownPlaceNames,
   defaultRegionName,
+  defaultRegionId,
+  findRegionIdForPlace,
+  resolveRegionForEventPlace,
   nameKey,
   listForAdmin,
   createTown,

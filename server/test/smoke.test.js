@@ -159,6 +159,12 @@ async function run() {
   // Seeded by dataMigrations.js before this suite even boots the app.
   const weddingType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عرس'");
   const funeralType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'عزا'");
+  // المحافظة الافتراضية (تذكرة #120): كل صفّ مناسبة أو قرية يُكتب دون محافظة
+  // صريحة يأخذها. الصفوف الخام أسفل تحتاجها صراحةً لأن `region_id` NOT NULL بلا
+  // افتراضي في القاعدة، فلا يمكن أن يتركها INSERT بلا قيمة.
+  const defaultRegionId = (await db.queryOne(
+    'SELECT id FROM regions WHERE is_active = 1 ORDER BY position ASC, id ASC LIMIT 1'
+  )).id;
 
   /** A minimal, valid عرس publish body — one honoree, no token attached by the caller. */
   function weddingEventBody(overrides = {}) {
@@ -545,9 +551,9 @@ async function run() {
     const typeId = created.typeId;
 
     const { insertId: eventId } = await db.execute(
-      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, location_name, event_date, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['اختبار الحذف', 'صاحب المناسبة', 'عائلة الاختبار', typeId, 'رهط', 'مكان الاختبار', '2027-02-01']
+      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
+      ['اختبار الحذف', 'صاحب المناسبة', 'عائلة الاختبار', typeId, 'رهط', defaultRegionId, 'مكان الاختبار', '2027-02-01']
     );
 
     const del = await api('DELETE', `/api/admin/occasion-types/${typeId}`, { token: superAdminToken });
@@ -612,9 +618,9 @@ async function run() {
     // first row in the public list is whatever sorts earliest, which stopped
     // being a wedding the moment any other occasion type existed.
     const { insertId } = await db.execute(
-      `INSERT INTO events (title, groom_name, family_clan, town, location_name, event_date, status, occasion_type_id)
-       VALUES (?, ?, ?, ?, ?, ?, 'approved', NULL)`,
-      ['مناسبة قديمة', 'عريس ما قبل الأنواع', 'آل فلان', 'رهط', 'الديوان', '2027-04-04']
+      `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status, occasion_type_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', NULL)`,
+      ['مناسبة قديمة', 'عريس ما قبل الأنواع', 'آل فلان', 'رهط', defaultRegionId, 'الديوان', '2027-04-04']
     );
 
     await migrate();
@@ -2046,9 +2052,9 @@ async function run() {
   const insertWithCoords = async (town, lat, lng, eventDate) => {
     const { insertId } = await db.execute(
       `INSERT INTO events
-         (title, groom_name, family_clan, town, location_name, latitude, longitude, event_date, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['اختبار الترحيل', 'عريس الترحيل', 'عائلة الترحيل', town, 'ديوان الاختبار', lat, lng, eventDate]
+         (title, groom_name, family_clan, town, region_id, location_name, latitude, longitude, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
+      ['اختبار الترحيل', 'عريس الترحيل', 'عائلة الترحيل', town, defaultRegionId, 'ديوان الاختبار', lat, lng, eventDate]
     );
     return insertId;
   };
@@ -2116,9 +2122,9 @@ async function run() {
 
   await test("A legacy row under 'القرى والتجمعات' with a NULL village_id and no requested name — inserted directly, since no publish path can produce one any more — still gets no pin", async () => {
     const { insertId } = await db.execute(
-      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, village_id, location_name, event_date, status)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'approved')`,
-      ['مناسبة قرية قديمة', 'عريس قديم بلا قرية', 'عائلة الاختبار', weddingType.id, 'القرى والتجمعات', 'ديوان الاختبار', '2027-01-05']
+      `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, region_id, village_id, location_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, 'approved')`,
+      ['مناسبة قرية قديمة', 'عريس قديم بلا قرية', 'عائلة الاختبار', weddingType.id, 'القرى والتجمعات', defaultRegionId, 'ديوان الاختبار', '2027-01-05']
     );
     const row = await db.queryOne('SELECT latitude, longitude, village_id FROM events WHERE id = ?', [insertId]);
     assert.strictEqual(row.village_id, null);
@@ -2866,9 +2872,9 @@ async function run() {
 
   await test("migrate moves every legacy 'غير محدد' town onto the region, and leaves real towns alone (TWN-2)", async () => {
     const insertLegacy = town => db.execute(
-      `INSERT INTO events (title, groom_name, family_clan, town, location_name, event_date, status)
-       VALUES ('دعوة مستوردة', 'عريس بلا بلدة', '', ?, 'غير محدد', '2026-12-20', 'pending')`,
-      [town]
+      `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status)
+       VALUES ('دعوة مستوردة', 'عريس بلا بلدة', '', ?, ?, 'غير محدد', '2026-12-20', 'pending')`,
+      [town, defaultRegionId]
     );
     const { insertId: unknownId } = await insertLegacy('غير محدد');
     const { insertId: knownId } = await insertLegacy('كسيفة');
@@ -9472,9 +9478,9 @@ async function run() {
     // «أرشيف الأعراس»
     const insertArchiveEvent = async (typeId, date, status = 'approved') => {
       const { insertId } = await db.execute(
-        `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, location_name, event_date, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['عرس الأرشيف', 'عريس الأرشيف', 'آل الأرشيف', typeId, 'رهط', 'الديوان', date, status]
+        `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name, event_date, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['عرس الأرشيف', 'عريس الأرشيف', 'آل الأرشيف', typeId, 'رهط', defaultRegionId, 'الديوان', date, status]
       );
       return insertId;
     };
@@ -11563,6 +11569,247 @@ async function run() {
     const row = await db.queryOne('SELECT phone_number FROM users WHERE id = ?', [phoneUser.id]);
     assert.strictEqual(row.phone_number, changedPhone, 'the number is only ever written by /auth/me/phone');
   });
+
+  console.log('\nRegions: every occasion row carries its governorate (تذكرة #120)');
+
+  // المحافظة الثانية تُنشأ بصفّ مباشر: لا مسار إداري لإنشاء محافظة أصلاً (وهذا
+  // خارج نطاق التذكرة)، والاسم مؤقّت وفريد كي لا يصادم تشغيلاً سابقاً فاشلاً.
+  const secondRegionName = `محافظة الاختبار ${Date.now()}`;
+  const { insertId: secondRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 30.5, 34.9, 9, 99, 1)`,
+    [secondRegionName]
+  );
+
+  const regionSectionEventIds = [];
+  const publishRegionEvent = async (overrides) => {
+    const published = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody(overrides)
+    });
+    assert.strictEqual(published.status, 201, published.body.message);
+    regionSectionEventIds.push(published.body.eventId);
+    return published.body.eventId;
+  };
+
+  await test('مناسبة منشورة في بلدة حقيقية تحمل محافظة تلك البلدة (تذكرة #120)', async () => {
+    const townRow = await db.queryOne('SELECT id, region_id FROM towns WHERE name = ?', ['حورة']);
+    assert.ok(townRow, 'expected the seeded town to exist');
+
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس محافظة البلدة' }],
+      town: 'حورة',
+      event_date: '2027-03-01'
+    });
+
+    const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.region_id, townRow.region_id, "the row carries its own town's governorate");
+    assert.strictEqual(row.region_id, defaultRegionId, 'the seeded town sits in the one seeded governorate');
+  });
+
+  await test('مناسبة تحت البند الجامع مع region_id تحمل المحافظة المرسلة (تذكرة #120)', async () => {
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس البند الجامع بمحافظة' }],
+      town: 'القرى والتجمعات',
+      requested_village_name: `قرية المحافظة الثانية ${Date.now()}`,
+      region_id: secondRegionId,
+      event_date: '2027-03-02'
+    });
+
+    const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.region_id, secondRegionId, 'an explicit region wins under the catch-all');
+  });
+
+  await test("مناسبة تحت البند الجامع بلا region_id تحمل المحافظة الافتراضية — سلوك عميل 1.21.3 المنشور (تذكرة #120)", async () => {
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس البند الجامع بلا محافظة' }],
+      town: 'القرى والتجمعات',
+      requested_village_name: `قرية افتراضية ${Date.now()}`,
+      event_date: '2027-03-03'
+    });
+
+    const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.region_id, defaultRegionId, 'no header, no field — the default governorate');
+  });
+
+  let probeVillageId = 0;
+  await test('طلب لوحة قديم بلا region_id ينجح ويأخذ محافظة البند الجامع، وكل صفوف villages تحمل region_id (تذكرة #120)', async () => {
+    const created = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية الفحص ${Date.now()}`, latitude: 31.2, longitude: 34.9 }
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    probeVillageId = created.body.village.id;
+    assert.strictEqual(
+      created.body.village.region_id,
+      defaultRegionId,
+      'a panel request that knows nothing about region_id must keep working'
+    );
+
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM villages WHERE region_id IS NULL');
+    assert.strictEqual(Number(total), 0, 'the migration must leave no village without a governorate');
+    const all = await db.queryOne('SELECT COUNT(*) AS total FROM villages');
+    assert.ok(Number(all.total) > 0, 'the village just created makes this check non-vacuous');
+  });
+
+  let promotedRegionVillageId = 0;
+  await test('POST /api/admin/events/:id/promote-village ينشئ القرية على محافظة مناسبتها (تذكرة #120)', async () => {
+    const requestedName = `قرية المحافظة الثانية ${Date.now()}`;
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس قرية المحافظة' }],
+      town: 'القرى والتجمعات',
+      requested_village_name: requestedName,
+      region_id: secondRegionId,
+      latitude: 31.19,
+      longitude: 34.9,
+      event_date: '2027-03-04'
+    });
+
+    const promoted = await api('POST', `/api/admin/events/${eventId}/promote-village`, {
+      token: superAdminToken,
+      body: {}
+    });
+    assert.strictEqual(promoted.status, 200, JSON.stringify(promoted.body));
+    promotedRegionVillageId = promoted.body.village.id;
+
+    const row = await db.queryOne('SELECT region_id FROM villages WHERE id = ?', [promotedRegionVillageId]);
+    assert.strictEqual(row.region_id, secondRegionId, "the village is born on its own event's governorate");
+  });
+
+  let movedTownId = 0;
+  let movedVillageId = 0;
+  let movedEventId = 0;
+  await test('PATCH /api/admin/towns/:id بنقل بلدة إلى محافظة ثانية يحدّث مناسباتها وقُراها في المعاملة نفسها (تذكرة #120)', async () => {
+    const townName = `بلدة النقل ${Date.now()}`;
+    const town = await api('POST', '/api/admin/towns', {
+      token: superAdminToken,
+      body: { region_id: defaultRegionId, name: townName, latitude: 31.07, longitude: 34.97 }
+    });
+    assert.strictEqual(town.status, 201, town.body.message);
+    movedTownId = town.body.town.id;
+
+    // طلب لوحة بلا region_id: القرية تُولد على محافظة البند الجامع (الافتراضية)
+    // — إثبات أن واجهة اللوحة الحالية لم تنكسر.
+    const village = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: `قرية النقل ${Date.now()}`, latitude: 31.08, longitude: 34.98 }
+    });
+    assert.strictEqual(village.status, 201, village.body.message);
+    movedVillageId = village.body.village.id;
+    assert.strictEqual(village.body.village.region_id, defaultRegionId);
+
+    // صفّ مناسبة يحمل البلدة والقرية معاً — الفرع الوحيد الذي يمرّ به فرع
+    // القرى في نقل البلدة. يُكتب مباشرةً لأن مسار النشر لا يسمح بقرية خارج
+    // البند الجامع (قاعدة يفرضها الكود)، والاختبار يخصّ معاملة النقل وحدها.
+    const inserted = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, town, region_id, village_id, location_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
+      ['مناسبة نقل البلدة', 'عريس نقل البلدة', 'آل الاختبار', townName, defaultRegionId, movedVillageId, 'الديوان', '2027-03-05']
+    );
+    movedEventId = inserted.insertId;
+
+    const moved = await api('PATCH', `/api/admin/towns/${movedTownId}`, {
+      token: superAdminToken,
+      body: { region_id: secondRegionId }
+    });
+    assert.strictEqual(moved.status, 200, moved.body.message);
+    assert.strictEqual(moved.body.town.region_id, secondRegionId);
+
+    const eventRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [movedEventId]);
+    assert.strictEqual(eventRow.region_id, secondRegionId, "the town's events moved with it");
+    const villageRow = await db.queryOne('SELECT region_id FROM villages WHERE id = ?', [movedVillageId]);
+    assert.strictEqual(villageRow.region_id, secondRegionId, "the villages of that town's events moved with it");
+  });
+
+  let villageRegionVillageId = 0;
+  await test('تغيير village_id وحده يحفظ محافظة القرية لا المحافظة الافتراضية (تذكرة #120)', async () => {
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس تغيير القرية' }],
+      town: 'القرى والتجمعات',
+      requested_village_name: `قرية قبل التغيير ${Date.now()}`,
+      region_id: secondRegionId,
+      event_date: '2027-03-06'
+    });
+
+    const village = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: {
+        region_id: secondRegionId,
+        name: `قرية تغيير القرية ${Date.now()}`,
+        latitude: 31.21,
+        longitude: 34.91
+      }
+    });
+    assert.strictEqual(village.status, 201, village.body.message);
+    villageRegionVillageId = village.body.village.id;
+    assert.strictEqual(village.body.village.region_id, secondRegionId);
+
+    // القرية وحدها في الطلب — لا `region_id` صريحة. المحافظة تُشتقّ من القرية،
+    // لا من البند الجامع (الذي كان يُسقطها إلى الافتراضية).
+    const patched = await api('PATCH', `/api/events/${eventId}`, {
+      token: userToken,
+      body: { village_id: villageRegionVillageId }
+    });
+    assert.strictEqual(patched.status, 200, JSON.stringify(patched.body));
+
+    const row = await db.queryOne('SELECT region_id, village_id FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.village_id, villageRegionVillageId);
+    assert.notStrictEqual(secondRegionId, defaultRegionId, 'the test is vacuous if both governorates are the same');
+    assert.strictEqual(row.region_id, secondRegionId, "the event keeps its village's governorate, not the default");
+  });
+
+  await test('promote-village يرفض ربط مناسبة في محافظة ثانية بقرية تحمل الاسم نفسه في محافظة أخرى (تذكرة #120)', async () => {
+    const sharedName = `قرية الاسم المشترك ${Date.now()}`;
+    const eventId = await publishRegionEvent({
+      honorees: [{ name: 'عريس الاسم المشترك' }],
+      town: 'القرى والتجمعات',
+      requested_village_name: sharedName,
+      region_id: secondRegionId,
+      latitude: 31.22,
+      longitude: 34.92,
+      event_date: '2027-03-07'
+    });
+
+    // قرية الاسم نفسه في المحافظة الافتراضية، تُنشأ بعد النشر كي لا يربطها
+    // مسار النشر بالاسم فوراً — الاختبار يخصّ مسار الاعتماد وحده.
+    const village = await api('POST', '/api/admin/villages', {
+      token: superAdminToken,
+      body: { name: sharedName, latitude: 31.23, longitude: 34.93 }
+    });
+    assert.strictEqual(village.status, 201, village.body.message);
+    assert.strictEqual(village.body.village.region_id, defaultRegionId);
+    const foreignVillageId = village.body.village.id;
+
+    const promoted = await api('POST', `/api/admin/events/${eventId}/promote-village`, {
+      token: superAdminToken,
+      body: {}
+    });
+    assert.strictEqual(promoted.status, 400, JSON.stringify(promoted.body));
+    assert.ok(
+      /توجد قرية بهذا الاسم في محافظة أخرى/.test(promoted.body.message || ''),
+      `expected the other-governorate Arabic message, got: ${promoted.body.message}`
+    );
+
+    const row = await db.queryOne('SELECT village_id, requested_village_name FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.village_id, null, 'no event may be linked to a village in another governorate');
+    assert.strictEqual(row.requested_village_name, sharedName);
+
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM villages WHERE name = ?', [sharedName]);
+    assert.strictEqual(Number(total), 1, 'the refused promote must not create a second village');
+
+    await db.execute('DELETE FROM villages WHERE id = ?', [foreignVillageId]);
+  });
+
+  // تنظيف ما أنشأه هذا القسم — بالترتيب الذي تسمح به المفاتيح الأجنبية:
+  // المناسبات أولاً، ثم البلدة والقرى، ثم المحافظة الثانية.
+  for (const id of regionSectionEventIds) await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  if (movedEventId) await db.execute('DELETE FROM events WHERE id = ?', [movedEventId]);
+  if (movedTownId) await db.execute('DELETE FROM towns WHERE id = ?', [movedTownId]);
+  if (movedVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [movedVillageId]);
+  if (villageRegionVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [villageRegionVillageId]);
+  if (promotedRegionVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [promotedRegionVillageId]);
+  if (probeVillageId) await db.execute('DELETE FROM villages WHERE id = ?', [probeVillageId]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [secondRegionId]);
 
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {

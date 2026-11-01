@@ -6,7 +6,7 @@ const ApiError = require('../utils/ApiError');
 const villages = require('../services/villages.service');
 const activity = require('../services/activity.service');
 const { requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, parseId, requireCoordinate } = require('../middleware/validate');
+const { cleanString, parseId, optionalId, requireCoordinate } = require('../middleware/validate');
 
 const router = express.Router();
 
@@ -39,6 +39,12 @@ router.post('/admin/villages', asyncHandler(async (req, res) => {
     is_active: body.is_active !== false
   };
 
+  // محافظة القرية اختيارية (تذكرة #120): تُقرأ فقط إن أُرسلت بقيمة فعلية، وإلا
+  // تأخذ الخدمة الافتراضية — فلا تتغيّر واجهة اللوحة الحالية. الغائب و`null`
+  // و`''` سواء: كلها «لم تُرسل»، كما في مسارات المناسبات.
+  const regionId = optionalId(body.region_id, 'المحافظة');
+  if (regionId !== null) payload.region_id = regionId;
+
   const village = await villages.createVillage(payload);
   res.status(201).json({ success: true, village, message: 'تمت إضافة القرية بنجاح' });
 }));
@@ -57,6 +63,10 @@ router.patch('/admin/villages/:id', asyncHandler(async (req, res) => {
   if (body.longitude !== undefined) payload.longitude = requireCoordinate(body.longitude, MAX_LNG, 'خط الطول');
   if (body.position !== undefined) payload.position = Number.isInteger(body.position) ? body.position : 0;
   if (body.is_active !== undefined) payload.is_active = Boolean(body.is_active);
+  // محافظة اختيارية (تذكرة #120) — خدمة القرى تتحقق أنها محافظة نشطة. الغائب
+  // و`null` و`''` سواء: «لم تُرسل»، فتبقى المحافظة الحالية كما هي.
+  const regionId = optionalId(body.region_id, 'المحافظة');
+  if (regionId !== null) payload.region_id = regionId;
 
   const village = await villages.updateVillage(id, payload);
   res.json({ success: true, village, message: 'تم تحديث القرية بنجاح' });

@@ -11,7 +11,7 @@
  */
 
 const logger = require('../utils/logger');
-const { SEED_REGION, SEED_TOWNS, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
+const { SEED_REGION, SEED_TOWNS, VILLAGES_TOWN, REACTION_TYPES, OCCASION_FIELDS, DEFAULT_POSTER } = require('../constants');
 
 // The two pre-towns-table steps below read the town list/centres they were
 // written against. Those values now live only as seed data (towns moved into
@@ -2100,6 +2100,133 @@ const steps = [
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
       logger.info('[migrations] create-event-videos-2026-10: table created.');
+    }
+  },
+  {
+    // «أساس المناطق» (تذكرة #120): كل مناسبة وكل قرية تحمل محافظتها، والحساب
+    // يحملها إن اختارها. الأعمدة تُضاف NULLable أوّلاً ثم تُعبَّأ صفوف اليوم ثم
+    // تُشدَّد إلى NOT NULL بعد التحقق أن لا NULL بقي — لأن ALTER إلى NOT NULL
+    // على قاعدة حيّة بصفوف قائمة يُرفض ما لم تسبقه التعبئة.
+    // المحافظة القديمة الوحيدة هي النقب، وقاعدة الجدول كانت واحدة، فالتعبئة
+    // لا تخمّن محافظة جديدة لأحد: بلدة معروفة ← محافظتها، واسم محافظة ← هي،
+    // وما بقي (اسم بلدة غير معروف) ← أول محافظة نشطة. لا يبقى صفّ بلا محافظة.
+    // و`users.region_id` يبقى NULLable بحكم التصميم: NULL تعني «لم يختر محافظة
+    // بعد»، ولا استنتاج لها من `clan_town` (ملفّ شخصي لا اختيار محافظة).
+    name: 'add-regions-to-events-villages-users-2026-11',
+    async run(connection) {
+      // 1) الأعمدة أوّلاً — NULLable، وفي الموضع نفسه الذي تحتلّه في schema.sql.
+      if (!(await columnExists(connection, 'villages', 'region_id'))) {
+        await connection.execute('ALTER TABLE villages ADD COLUMN region_id INT UNSIGNED DEFAULT NULL AFTER id');
+      }
+      if (!(await columnExists(connection, 'events', 'region_id'))) {
+        await connection.execute('ALTER TABLE events ADD COLUMN region_id INT UNSIGNED DEFAULT NULL AFTER occasion_type_id');
+      }
+      if (!(await columnExists(connection, 'users', 'region_id'))) {
+        await connection.execute('ALTER TABLE users ADD COLUMN region_id INT UNSIGNED DEFAULT NULL AFTER person_id');
+      }
+
+      // 2) أول محافظة نشطة — السقوط الأخير لأي اسم لا يعرفه جدول البلدات.
+      const [[firstRegion]] = await connection.execute(
+        'SELECT id FROM regions WHERE is_active = 1 ORDER BY position ASC, id ASC LIMIT 1'
+      );
+      const defaultRegionId = firstRegion ? firstRegion.id : null;
+
+      // 3) القرى: محافظة بلدة البند الجامع — كل قرى اليوم تحته. وإن لم يوجد
+      //    صفّ البند نفسه فالمحافظة الافتراضية.
+      const [[catchAllTown]] = await connection.execute(
+        'SELECT region_id FROM towns WHERE name = ? LIMIT 1',
+        [VILLAGES_TOWN]
+      );
+      const villagesRegionId = catchAllTown ? catchAllTown.region_id : defaultRegionId;
+      let villagesFilled = 0;
+      if (villagesRegionId !== null) {
+        const [result] = await connection.execute(
+          'UPDATE villages SET region_id = ? WHERE region_id IS NULL',
+          [villagesRegionId]
+        );
+        villagesFilled = result.affectedRows;
+      }
+
+      // 4) المناسبات: بلدة معروفة ← محافظتها، ثم اسم محافظة صريح ← هي، ثم
+      //    الباقي ← الافتراضية. كل بوّابة `region_id IS NULL`، فإعادة التشغيل
+      //    لا تجد ما تملؤه.
+      const [byTownResult] = await connection.execute(
+        `UPDATE events e JOIN towns t ON t.name = e.town
+            SET e.region_id = t.region_id
+          WHERE e.region_id IS NULL`
+      );
+      const [byRegionNameResult] = await connection.execute(
+        `UPDATE events e JOIN regions r ON r.name = e.town
+            SET e.region_id = r.id
+          WHERE e.region_id IS NULL`
+      );
+      let eventsFilled = byTownResult.affectedRows + byRegionNameResult.affectedRows;
+      if (defaultRegionId !== null) {
+        const [result] = await connection.execute(
+          'UPDATE events SET region_id = ? WHERE region_id IS NULL',
+          [defaultRegionId]
+        );
+        eventsFilled += result.affectedRows;
+      }
+
+      // 5) الشدّ إلى NOT NULL — بعد التحقق وحده، ولكل عمود على حدة. قاعدة بلا
+      //    محافظة نشطة (تنصيب مقطوع) تبقى NULLable بدل أن تسقط الترحيل كلها.
+      const [[eventsNulls]] = await connection.execute(
+        'SELECT COUNT(*) AS cnt FROM events WHERE region_id IS NULL'
+      );
+      const [[villagesNulls]] = await connection.execute(
+        'SELECT COUNT(*) AS cnt FROM villages WHERE region_id IS NULL'
+      );
+      const eventsLeftNull = Number(eventsNulls.cnt);
+      const villagesLeftNull = Number(villagesNulls.cnt);
+      if (eventsLeftNull === 0 && await columnIsNullable(connection, 'events', 'region_id')) {
+        await connection.execute('ALTER TABLE events MODIFY COLUMN region_id INT UNSIGNED NOT NULL');
+      }
+      if (villagesLeftNull === 0 && await columnIsNullable(connection, 'villages', 'region_id')) {
+        await connection.execute('ALTER TABLE villages MODIFY COLUMN region_id INT UNSIGNED NOT NULL');
+      }
+
+      // 6) الفهارس ثم المفاتيح الأجنبية — كل واحد داخل حارسه.
+      if (!(await indexExists(connection, 'villages', 'idx_villages_region'))) {
+        await connection.execute('ALTER TABLE villages ADD KEY idx_villages_region (region_id)');
+      }
+      if (!(await constraintExists(connection, 'villages', 'fk_villages_region'))) {
+        await connection.execute(
+          `ALTER TABLE villages ADD CONSTRAINT fk_villages_region
+             FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE RESTRICT`
+        );
+      }
+      if (!(await indexExists(connection, 'events', 'idx_events_region_date'))) {
+        await connection.execute('ALTER TABLE events ADD KEY idx_events_region_date (region_id, event_date)');
+      }
+      if (!(await constraintExists(connection, 'events', 'fk_events_region'))) {
+        await connection.execute(
+          `ALTER TABLE events ADD CONSTRAINT fk_events_region
+             FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE RESTRICT`
+        );
+      }
+      if (!(await indexExists(connection, 'users', 'idx_users_region'))) {
+        await connection.execute('ALTER TABLE users ADD KEY idx_users_region (region_id)');
+      }
+      if (!(await constraintExists(connection, 'users', 'fk_users_region'))) {
+        await connection.execute(
+          `ALTER TABLE users ADD CONSTRAINT fk_users_region
+             FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE SET NULL`
+        );
+      }
+
+      if (eventsLeftNull || villagesLeftNull) {
+        logger.warn(
+          '[migrations] add-regions-to-events-villages-users-2026-11: '
+          + `${eventsLeftNull} event(s) and ${villagesLeftNull} village(s) left without a region `
+          + '(no active region to fall back to) — both columns stay nullable.'
+        );
+      }
+      logger.info(
+        `[migrations] add-regions-to-events-villages-users-2026-11: ensured columns/indexes/FKs; `
+        + `${eventsFilled} event(s) and ${villagesFilled} village(s) given a region; `
+        + `users.region_id stays NULL for every existing account.`
+      );
     }
   }
 ];

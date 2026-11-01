@@ -110,6 +110,21 @@ function parseId(value, label = 'المعرّف') {
   return id;
 }
 
+/**
+ * An id a client may simply not send — a governorate on a publish or an edit, a
+ * village's region in the panel. Absent in any of its three shapes (the key is
+ * missing, `null`, or an empty string) means the same thing: "not sent".
+ * Clients disagree on how they spell "nothing" — a JSON body sends `null`, a
+ * form `''` — and the two routes used to read those differently (`null` was an
+ * error on the villages path, ignored on the events path). Returns `null` for
+ * "not sent"; a real value is parsed by `parseId` and rejected with its own
+ * Arabic label.
+ */
+function optionalId(value, label = 'المعرّف') {
+  if (value === undefined || value === null || value === '') return null;
+  return parseId(value, label);
+}
+
 /** Ceiling on distinct values a comma-separated filter query parameter may carry (#85 batch 5). */
 const MAX_FILTER_VALUES = 20;
 
@@ -297,6 +312,7 @@ module.exports = {
   parseCoordinate,
   requireCoordinate,
   parseId,
+  optionalId,
   parseAmount,
   parseFlag,
   parseHonorees,
