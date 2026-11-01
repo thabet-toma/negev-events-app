@@ -1486,6 +1486,12 @@ function placeKey(row) {
  * 'likely'. A one-word name is too common to stand on its own, so it only
  * counts at all in the same place. The occasion type is deliberately not
  * compared: a wedding republished as «خطوبة» by mistake is still the same one.
+ *
+ * The governorate is not compared here — `findPossibleDuplicates` never lets a
+ * candidate from another one through (#123), so both sides are already in the
+ * same governorate and `regionNames` means exactly one thing: a place name that
+ * is a governorate is "town unknown *inside this governorate*", not "another
+ * place", which is why two different governorates' names never meet here.
  */
 function matchDuplicate(subject, candidate, regionNames) {
   // Dates first: the cheap test, and the one that rules out almost every
@@ -1521,10 +1527,10 @@ function matchDuplicate(subject, candidate, regionNames) {
 
 /**
  * The possible-duplicate guard's lookup. For each subject (`{ id?, names?,
- * town, village_id, requested_village_name, event_date, event_end_date }`)
- * returns, at the same index, the events that look like the same occasion —
- * 'certain' ones first. A subject with an `id` but no `names` has its
- * honorees read here, and is never reported as its own duplicate.
+ * region_id, town, village_id, requested_village_name, event_date,
+ * event_end_date }`) returns, at the same index, the events that look like the
+ * same occasion — 'certain' ones first. A subject with an `id` but no `names`
+ * has its honorees read here, and is never reported as its own duplicate.
  *
  * One query covers every subject: the date window narrows candidates in SQL;
  * the name comparison runs here because it is fuzzy and MySQL has no edit
@@ -1532,6 +1538,12 @@ function matchDuplicate(subject, candidate, regionNames) {
  * pending ones inside `scope` — the caller's `adminScope.townScopeClause`, so
  * a town admin is never shown another town's unpublished request. Rejected
  * events are never candidates: rejecting one is how a duplicate is cleared.
+ *
+ * Candidates are also narrowed by governorate (#123): two identical occasions
+ * in two governorates are two different occasions, so `e.region_id` is read
+ * and a candidate is never compared against a subject from another one. A
+ * subject with no `region_id` — an internal caller that predates #120 — keeps
+ * the older, unrestricted behaviour instead of failing.
  */
 async function findPossibleDuplicates(subjects, { scope = { clause: '', params: [] } } = {}) {
   if (!subjects.length) return [];
@@ -1544,7 +1556,7 @@ async function findPossibleDuplicates(subjects, { scope = { clause: '', params: 
   );
 
   const candidates = await db.query(
-    `SELECT e.id, e.title, e.groom_name, e.town, e.village_id, e.requested_village_name,
+    `SELECT e.id, e.title, e.groom_name, e.region_id, e.town, e.village_id, e.requested_village_name,
             e.event_date, e.event_end_date, e.status, e.poster_url, ot.name AS occasion_type_name
        FROM events e
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
@@ -1569,9 +1581,14 @@ async function findPossibleDuplicates(subjects, { scope = { clause: '', params: 
 
   return subjects.map(subject => {
     const resolved = subject.names ? subject : { ...subject, names: namesOf(subject) };
+    // The governorate boundary (#123). `events.region_id` is NOT NULL, so every
+    // candidate has one; only a subject can lack it, and then this restriction
+    // is switched off rather than throwing.
+    const regionUnknown = resolved.region_id === null || resolved.region_id === undefined;
     const matches = [];
     for (const candidate of candidates) {
       if (resolved.id && candidate.id === resolved.id) continue;
+      if (!regionUnknown && candidate.region_id !== resolved.region_id) continue;
       const match = matchDuplicate(resolved, candidate, regionSet);
       if (!match) continue;
       matches.push({

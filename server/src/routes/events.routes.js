@@ -325,8 +325,13 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   const autoApprove = await isAdminForTown(req.user, town);
   let duplicates = [];
   if (autoApprove) {
+    // محافظة المناسبة الجديدة تُحسب هنا **بنفس القاعدة الوحيدة** التي يكتب بها
+    // `createEvent` الصفّ (تذكرة #120)، لا بمنطق مكرَّر هنا: الحارس صار يقارن
+    // داخل محافظة واحدة (تذكرة #123)، فالموضوع المبني يدوياً يجب أن يحملها.
+    const subjectRegionId = await townsService.resolveRegionForEventPlace({ town, regionId });
     [duplicates] = await events.findPossibleDuplicates([{
       names: honorees.map(honoree => honoree.name),
+      region_id: subjectRegionId,
       town,
       village_id: villageId,
       requested_village_name: requestedVillageName,

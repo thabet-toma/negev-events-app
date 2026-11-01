@@ -12425,6 +12425,184 @@ async function run() {
   await db.execute('DELETE FROM towns WHERE id = ?', [discoveryTownId]);
   await db.execute('DELETE FROM regions WHERE id = ?', [discoveryRegionId]);
 
+  console.log('\nDuplicate detection inside one governorate (تذكرة #123)');
+
+  // محافظة ثانية وبلدتها بصفّين مباشرين، كما في قسمَي #120/#121: لا مسار إداري
+  // لإنشاء محافظة (خارج نطاق التذكرة)، والاسم مؤقّت وفريد كي لا يصادم تشغيلاً
+  // سابقاً فاشلاً. البلدات الحقيقية في النقب تأتي من البذرة، فالمقارنة العابرة
+  // للمحافظات هي فعلاً عابرة.
+  const dupGuardStamp = Date.now();
+  const dupGuardRegionName = `محافظة التكرار ${dupGuardStamp}`;
+  const { insertId: dupGuardRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 32.4, 35.0, 9, 96, 1)`,
+    [dupGuardRegionName]
+  );
+  const dupGuardTownName = `بلدة التكرار ${dupGuardStamp}`;
+  const { insertId: dupGuardTownId } = await db.execute(
+    'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, 96, 1)',
+    [dupGuardRegionId, dupGuardTownName, 32.41, 35.01]
+  );
+
+  const dupGuardNames = {
+    acrossGovernorates: `عريس عبر المحافظات ${dupGuardStamp}`,
+    queue: `عريس طابور المحافظة ${dupGuardStamp}`,
+    sameGovernorate: `عريس المحافظة نفسها ${dupGuardStamp}`,
+    regularUser: `عريس الحارس للمستخدم ${dupGuardStamp}`,
+    regionAsTown: `عريس اسم المحافظة ${dupGuardStamp}`
+  };
+  const dupGuardEventIds = [];
+  let dupGuardNegevEventId = 0;
+
+  // confirm_duplicate: false صراحةً في كل نشر هنا: `api()` تضيفه true تلقائياً
+  // لمسار النشر (withDuplicateConfirmed)، فبدونه لا يقيس القسم الحارس أصلاً.
+  const dupGuardBody = (name, overrides = {}) => weddingEventBody({
+    honorees: [{ name, role: 'العريس' }],
+    confirm_duplicate: false,
+    ...overrides
+  });
+  const dupGuardPublish = (token, name, overrides) => api('POST', '/api/events', {
+    token, body: dupGuardBody(name, overrides)
+  });
+
+  await test('مناسبة في النقب ونفس الاسم والتاريخ في محافظة ثانية: نشر فوري بلا 409 وبلا تنبيه (تذكرة #123)', async () => {
+    const negev = await dupGuardPublish(superAdminToken, dupGuardNames.acrossGovernorates, {
+      town: 'حورة', event_date: '2028-04-01'
+    });
+    assert.strictEqual(negev.status, 201, negev.body.message);
+    assert.strictEqual(negev.body.status, 'approved');
+    dupGuardNegevEventId = negev.body.eventId;
+    dupGuardEventIds.push(dupGuardNegevEventId);
+
+    const second = await dupGuardPublish(superAdminToken, dupGuardNames.acrossGovernorates, {
+      town: dupGuardTownName, event_date: '2028-04-01'
+    });
+    assert.strictEqual(second.status, 201, `متوقّع 201 عبر المحافظات، وصل: ${JSON.stringify(second.body)}`);
+    assert.strictEqual(second.body.status, 'approved');
+    assert.strictEqual(second.body.details, undefined, 'لا تفاصيل تكرار حين لا مطابقة');
+    dupGuardEventIds.push(second.body.eventId);
+  });
+
+  await test('نداء داخلي قديم بلا region_id يبقى على السلوك السابق بلا انفجار (تذكرة #123)', async () => {
+    // الموضوع بلا `region_id` يصل من نداء داخلي سابق لـ#120 — لا يُقيَّد، ولا
+    // يرمي: نفس مطابقة اليوم.
+    const [matches] = await eventsService.findPossibleDuplicates([{
+      names: [dupGuardNames.acrossGovernorates], town: 'حورة', event_date: '2028-04-01'
+    }]);
+    const match = matches.find(row => row.id === dupGuardNegevEventId);
+    assert.ok(match, 'موضوع بلا محافظة يرى مرشّحيه كما كان');
+    assert.strictEqual(match.confidence, 'certain');
+  });
+
+  await test('طلب مستخدم بنفس الاسم والتاريخ في محافظة ثانية لا يظهر تكراراً لصفّ النقب في الطابور (تذكرة #123)', async () => {
+    const negev = await dupGuardPublish(superAdminToken, dupGuardNames.queue, {
+      town: 'حورة', event_date: '2028-04-02'
+    });
+    assert.strictEqual(negev.status, 201, negev.body.message);
+    dupGuardEventIds.push(negev.body.eventId);
+
+    const queued = await dupGuardPublish(userToken, dupGuardNames.queue, {
+      town: dupGuardTownName, event_date: '2028-04-02'
+    });
+    assert.strictEqual(queued.status, 201, queued.body.message);
+    assert.strictEqual(queued.body.status, 'pending');
+    dupGuardEventIds.push(queued.body.eventId);
+
+    const { body } = await api('GET', '/api/admin/events', { token: superAdminToken });
+    const row = body.events.find(event => event.id === queued.body.eventId);
+    assert.ok(row, 'الطلب ظاهر في الطابور');
+    assert.deepStrictEqual(row.possible_duplicates, [], 'مناسبة في محافظة أخرى ليست التكرار نفسه');
+  });
+
+  await test('نفس الاسم والتاريخ داخل المحافظة نفسها: الأدمن يُرفض بـ409 كما كان بالحرف (تذكرة #123)', async () => {
+    const first = await dupGuardPublish(superAdminToken, dupGuardNames.sameGovernorate, {
+      town: dupGuardTownName, event_date: '2028-04-03'
+    });
+    assert.strictEqual(first.status, 201, first.body.message);
+    dupGuardEventIds.push(first.body.eventId);
+
+    const second = await dupGuardPublish(superAdminToken, dupGuardNames.sameGovernorate, {
+      town: dupGuardTownName, event_date: '2028-04-03'
+    });
+    assert.strictEqual(second.status, 409);
+    assert.strictEqual(second.body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.ok(/تشبه مناسبة موجودة/.test(second.body.message), second.body.message);
+    const match = second.body.details.duplicates.find(row => row.id === first.body.eventId);
+    assert.ok(match, 'المناسبة المنشورة داخل المحافظة نفسها مرشّح');
+    assert.strictEqual(match.confidence, 'certain');
+    assert.deepStrictEqual(match.reasons, ['الاسم مطابق', 'نفس التاريخ', 'نفس البلدة']);
+
+    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM events WHERE groom_name = ?', [dupGuardNames.sameGovernorate]);
+    assert.strictEqual(Number(total), 1, 'النشر المرفوض لا يكتب صفّاً');
+  });
+
+  await test('نفس الاسم والتاريخ داخل المحافظة نفسها: المستخدم العادي لا يُمنع وطلبه يدخل الطابور (تذكرة #123)', async () => {
+    const approved = await dupGuardPublish(superAdminToken, dupGuardNames.regularUser, {
+      town: dupGuardTownName, event_date: '2028-04-04'
+    });
+    assert.strictEqual(approved.status, 201, approved.body.message);
+    dupGuardEventIds.push(approved.body.eventId);
+
+    const queued = await dupGuardPublish(userToken, dupGuardNames.regularUser, {
+      town: dupGuardTownName, event_date: '2028-04-04'
+    });
+    assert.strictEqual(queued.status, 201, 'الحارس لا يمنع المستخدم العادي');
+    assert.strictEqual(queued.body.status, 'pending');
+    assert.strictEqual(queued.body.details, undefined, 'المستخدم لا يرى الحارس');
+    dupGuardEventIds.push(queued.body.eventId);
+
+    const { body } = await api('GET', '/api/admin/events', { token: superAdminToken });
+    const row = body.events.find(event => event.id === queued.body.eventId);
+    assert.ok(row, 'طلبه دخل الطابور');
+    const match = row.possible_duplicates.find(duplicate => duplicate.id === approved.body.eventId);
+    assert.ok(match, 'التنبيه داخل المحافظة نفسها باقٍ');
+    assert.strictEqual(match.confidence, 'certain');
+  });
+
+  await test('town = اسم المحافظة يعني «مكان غير معروف» داخل محافظتها وحدها (تذكرة #123)', async () => {
+    const unknownPlace = await dupGuardPublish(superAdminToken, dupGuardNames.regionAsTown, {
+      town: dupGuardRegionName, event_date: '2028-04-05'
+    });
+    assert.strictEqual(unknownPlace.status, 201, unknownPlace.body.message);
+    dupGuardEventIds.push(unknownPlace.body.eventId);
+    const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [unknownPlace.body.eventId]);
+    assert.strictEqual(row.region_id, dupGuardRegionId, 'اسم المحافظة في town يُحلّ إلى محافظتها');
+
+    // بلدة داخل المحافظة الثانية — القاعدة القائمة: 'certain' مع «البلدة غير محدَّدة»
+    const insideSecond = await dupGuardPublish(superAdminToken, dupGuardNames.regionAsTown, {
+      town: dupGuardTownName, event_date: '2028-04-05'
+    });
+    assert.strictEqual(insideSecond.status, 409, JSON.stringify(insideSecond.body));
+    const insideMatch = insideSecond.body.details.duplicates.find(duplicate => duplicate.id === unknownPlace.body.eventId);
+    assert.ok(insideMatch, 'اسم المحافظة في town مرشّح داخل محافظته');
+    assert.strictEqual(insideMatch.confidence, 'certain');
+    assert.ok(
+      insideMatch.reasons.includes('البلدة غير محدَّدة في إحداهما'),
+      insideMatch.reasons.join('، ')
+    );
+
+    // بلدة في النقب — محافظة أخرى، فلا تنبيه أصلاً
+    const inNegev = await dupGuardPublish(superAdminToken, dupGuardNames.regionAsTown, {
+      town: 'حورة', event_date: '2028-04-05'
+    });
+    assert.strictEqual(inNegev.status, 201, `لا تنبيه عبر المحافظات: ${JSON.stringify(inNegev.body)}`);
+    dupGuardEventIds.push(inNegev.body.eventId);
+  });
+
+  // تنظيف ما أنشأه هذا القسم — المناسبات (مع سجلّها) أولاً، ثم البلدة والمحافظة.
+  if (dupGuardEventIds.length) {
+    await db.execute(
+      `DELETE FROM activity_log WHERE event_id IN (${dupGuardEventIds.map(() => '?').join(', ')})`,
+      dupGuardEventIds
+    );
+    await db.execute(
+      `DELETE FROM events WHERE id IN (${dupGuardEventIds.map(() => '?').join(', ')})`,
+      dupGuardEventIds
+    );
+  }
+  await db.execute('DELETE FROM towns WHERE id = ?', [dupGuardTownId]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [dupGuardRegionId]);
+
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {
     await fsp.unlink(storedAvatarPath(leftoverAvatar.avatar_url)).catch(() => {});
