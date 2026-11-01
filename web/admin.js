@@ -71,6 +71,10 @@ let TOWNS = [...FALLBACK_TOWNS];
 // المحافظات من GET /api/towns (`regions`) — اسم المحافظة نفسه بلدة صالحة للمناسبة
 // تعني «بلا بلدة محدّدة». لا احتياط أوفلاين: بلا الخادم لا تُعرض كخيار إضافي فقط.
 let REGIONS = [];
+// هل اختار الأدمن محافظة النشر المباشر بنفسه؟ الافتراضية (محافظة بلداته) تُحسب
+// من `GET /api/admin/me`، وقد تصل بعد بناء النموذج — فإعادة الحساب لا تدهس
+// اختياراً وقع فعلاً، والاختيار اليدوي يعلو على الافتراضي دائماً.
+let dirRegionTouchedByUser = false;
 
 /** أسماء المحافظات التي ليست بلدة في TOWNS — تُعرض بعد البلدات في كل منتقٍ. */
 function regionTownNames() {
@@ -90,6 +94,51 @@ function townSelectOptionsHtml(currentVal) {
     html += `<option value="${escapeHtml(currentVal)}">${escapeHtml(currentVal)}</option>`;
   }
   return html;
+}
+
+/** محافظة بالمعرّف من REGIONS (النشطة وحدها — GET /api/towns لا يحمل غيرها)، أو null. */
+function regionById(regionId) {
+  const id = Number(regionId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return REGIONS.find(region => Number(region.id) === id) || null;
+}
+
+/**
+ * خيارات منتقي البلدة لمحافظة واحدة: بلداتها بترتيب الخادم، ثم اسمها هي
+ * «بلا بلدة محدّدة». بلا محافظة معروفة (GET /api/towns فشل أو محافظة لم تبق
+ * قائمة) يعود إلى القائمة الكاملة: منتقٍ فارغ أسوأ من قائمة غير معزولة.
+ * وبلدة حالية خارج القائمة تُضاف مختارةً — بلدة عُطِّلت أو مناسبة قديمة أو
+ * مسودّة — كي لا يُرسَل الحفظ بلدةً غير التي عليها المناسبة بصمت.
+ *
+ * و«القرى والتجمعات» ليست مكاناً: صفّها مسجَّل تحت محافظة واحدة للعرض، وكل
+ * قرى المنصة تحته، فتُلحَق بكل محافظة لا تسجّلها — وإلا لم يستطع أدمن تلك
+ * المحافظة نشر مناسبة قروية أصلاً. ولا تُكرَّر حين تسجّلها محافظتها.
+ */
+function regionTownOptionsHtml(regionId, currentVal) {
+  const region = regionById(regionId);
+  const towns = region && Array.isArray(region.towns) && region.towns.length ? region.towns : null;
+  if (!towns) return townSelectOptionsHtml(currentVal);
+  const catchAll = TOWNS.includes(VILLAGES_TOWN) && !towns.includes(VILLAGES_TOWN) ? [VILLAGES_TOWN] : [];
+  const names = [...towns, ...catchAll];
+  let html = names.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  html += `<option value="${escapeHtml(region.name)}">${escapeHtml(region.name)} — بلا بلدة محدّدة</option>`;
+  if (currentVal && currentVal !== region.name && !names.includes(currentVal)) {
+    html += `<option value="${escapeHtml(currentVal)}">${escapeHtml(currentVal)}</option>`;
+  }
+  return html;
+}
+
+/**
+ * قرى منتقي القرية في النشر المباشر: قرى المحافظة المختارة في #dirRegion وحدها
+ * حين تحمل كل صفوف GET /api/towns حقل `region_id`، وإلا القرى كلها (نفس قاعدة
+ * الموقع العام) — فلا تختلط قرى محافظتين في منتقٍ واحد.
+ */
+function dirVillageList() {
+  const regionSelect = document.getElementById('dirRegion');
+  const regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
+  if (regionId === null || !allTownVillages.length) return allTownVillages;
+  const villagesHaveRegion = allTownVillages.every(v => v.region_id !== undefined && v.region_id !== null);
+  return villagesHaveRegion ? allTownVillages.filter(v => Number(v.region_id) === regionId) : allTownVillages;
 }
 
 
@@ -429,9 +478,9 @@ function collectDirectAddFormDraft() {
     const val = el.value;
     if (val !== undefined && val !== null && val !== '') {
       values[el.id] = val;
-      // التاريخ والبلدة وحدهما يُملآن تلقائياً عند فتح النموذج، فوجود قيمة
-      // فيهما لا يعني مسودّة. وقت العشاء لم يعد كذلك — صار كتابة المستخدم وحده.
-      if (el.id !== 'dirEventDate' && el.id !== 'dirTown') {
+      // التاريخ والبلدة والمحافظة وحدها تُملأ تلقائياً عند فتح النموذج، فوجود
+      // قيمة فيها لا يعني مسودّة. وقت العشاء لم يعد كذلك — صار كتابة المستخدم وحده.
+      if (el.id !== 'dirEventDate' && el.id !== 'dirTown' && el.id !== 'dirRegion') {
         hasAnyText = true;
       }
     }
@@ -496,6 +545,21 @@ function discardDirectAddDraft() {
   if (fileNotice) fileNotice.style.display = 'none';
 }
 
+/**
+ * يسترجع محافظة مسودّة النشر المباشر: محافظة لم تبق نشطة (لم تعد في REGIONS)
+ * تعود إلى الافتراضية، فلا تُختار قيمة لا يملكها المنتقي ويبقى #dirTown فارغاً.
+ */
+function applyDraftDirRegion(draftRegionId) {
+  const select = document.getElementById('dirRegion');
+  if (!select) return;
+  if (!select.options.length) populateDirRegionSelect();
+  const region = regionById(draftRegionId);
+  const regionId = region ? Number(region.id) : defaultDirRegionId();
+  // قيمة المسودّة اختيار وقع فعلاً — لا يُدهَس بالافتراضي بعد اليوم.
+  dirRegionTouchedByUser = true;
+  select.value = regionId !== null ? String(regionId) : '';
+}
+
 function applyDirectAddDraft() {
   try {
     const raw = localStorage.getItem('negev_draft_direct_add');
@@ -515,15 +579,18 @@ function applyDirectAddDraft() {
     }
 
     if (draft.values) {
+      // المحافظة والبلدة أولاً وقبل بقية الحقول: قائمة #dirTown تُبنى من بلدات
+      // المحافظة، ومسودّة محافظة عُطِّلت تعود إلى الافتراضية بدل منتقٍ فارغ.
+      applyDraftDirRegion(draft.values.dirRegion);
+      populateDirTownSelect(draft.values.dirTown || '');
       Object.keys(draft.values).forEach(id => {
+        if (id === 'dirRegion' || id === 'dirTown') return;
         const el = document.getElementById(id);
         if (el) {
           el.value = draft.values[id];
-          if (id === 'dirTown') {
-            handleDirTownChange();
-          }
         }
       });
+      handleDirTownChange();
       if (draft.values.dirVillage) {
         const vilEl = document.getElementById('dirVillage');
         if (vilEl) vilEl.value = draft.values.dirVillage;
@@ -1449,6 +1516,10 @@ const DIRECT_ADD_FIELD_CTX = {
     </button>`,
   overrides: {
     town: (field, { label, req }) => `
+      <div class="form-group">
+        <label>المحافظة</label>
+        <select id="dirRegion" onchange="handleDirRegionChange()"></select>
+      </div>
       <div class="form-row">
         <div class="form-group half">
           <label>${label}${req}</label>
@@ -1476,21 +1547,86 @@ function renderDirectAddFields(type) {
     if (dateInput) dateInput.value = isoLocalDay(new Date());
   }
   if (fieldsByKey.town) {
-    populateDirTownSelect();
-    handleDirTownChange();
+    syncDirRegionControls();
   }
   if (fieldsByKey.honorees) addHonoreeRow('dirHonoreesList');
 }
 
-/** يملأ منتقي البلدة من TOWNS المجلوبة من الخادم (أو الاحتياطية عند الفشل) — نفس مصدر كل بلدة أخرى في اللوحة. */
-function populateDirTownSelect() {
+/**
+ * المحافظة الافتراضية في النشر المباشر: التي تحتوي إحدى بلدات الأدمن نفسه
+ * (`deriveScopedTowns`)، وإلا الأولى. أدمن طولكرم لا يبدأ على النقب فيغيّرها
+ * كل مرة. السوبر أدمن بلا بلدات مسنَدة فيقع على الأولى كالسابق.
+ */
+function defaultDirRegionId() {
+  const myTowns = deriveScopedTowns();
+  const mine = REGIONS.find(region => Array.isArray(region.towns) && region.towns.some(town => myTowns.includes(town)));
+  if (mine) return Number(mine.id);
+  return REGIONS.length ? Number(REGIONS[0].id) : null;
+}
+
+/** يملأ منتقي محافظة النشر المباشر من REGIONS — الاختيار اليدوي يبقى، وإلا الافتراضي. */
+function populateDirRegionSelect() {
+  const select = document.getElementById('dirRegion');
+  if (!select) return;
+  const previous = regionById(select.value) ? Number(select.value) : null;
+  select.innerHTML = REGIONS.map(region =>
+    `<option value="${escapeHtml(String(region.id))}">${escapeHtml(region.name)}</option>`).join('');
+  const regionId = dirRegionTouchedByUser && previous !== null ? previous : defaultDirRegionId();
+  select.value = regionId !== null ? String(regionId) : '';
+}
+
+/**
+ * يضبط منتقيَي النشر المباشر معاً: المحافظة ثم بلداتها وحدها. يُستدعى عند بناء
+ * النموذج وبعد وصول البلدات أو بلدات الأدمن متأخرة، فبيانات `GET /api/admin/me`
+ * قد تصل بعد أول بناء — ومع تغيّر المحافظة تُختار أول بلدة من جديد بدل بلدة
+ * المحافظة السابقة.
+ */
+function syncDirRegionControls() {
+  const regionSelect = document.getElementById('dirRegion');
+  if (!regionSelect) return;
+
+  const before = regionSelect.value;
+  populateDirRegionSelect();
+  // مع تغيّر المحافظة تُختار أول بلدة من جديد بدل بلدة المحافظة السابقة.
+  const currentVal = regionSelect.value !== before ? '' : undefined;
+  populateDirTownSelect(currentVal);
+  // منتقي القرية يتبع البلدة الناتجة دائماً — سواء تغيّرت المحافظة أو بُنيت
+  // القائمة للتو.
+  handleDirTownChange();
+}
+
+/**
+ * يملأ منتقي البلدة من محافظة النشر المباشر المختارة (أو كل البلدات إن غابت
+ * المحافظات) — نفس مصدر كل بلدة أخرى في اللوحة. بلا بلدة مطلوبة تُختار الأولى،
+ * وبلدة مطلوبة غريبة عن المحافظة تبقى خياراً مختاراً (مسودّة أو بلدة قديمة).
+ */
+function populateDirTownSelect(selectedTown) {
   const select = document.getElementById('dirTown');
   if (!select) return;
-  const currentVal = select.value;
-  select.innerHTML = townSelectOptionsHtml(currentVal);
+  const currentVal = selectedTown !== undefined ? selectedTown : select.value;
+  const regionSelect = document.getElementById('dirRegion');
+  select.innerHTML = regionTownOptionsHtml(regionSelect ? regionSelect.value : '', currentVal);
   if (currentVal) {
     select.value = currentVal;
+  } else if (select.options.length) {
+    select.selectedIndex = 0;
   }
+}
+
+/**
+ * تغيير محافظة النشر المباشر: تُبنى بلداتها وحدها، وتبقى البلدة المختارة إن
+ * كانت في القائمة الجديدة (البند الجامع حاضر في كل محافظة) وإلا فالأولى — ثم
+ * يُستدعى معالج البلدة نفسه كي يتبع منتقي القرية المحافظة الجديدة.
+ */
+function handleDirRegionChange() {
+  dirRegionTouchedByUser = true;
+  const townSelect = document.getElementById('dirTown');
+  const previous = townSelect ? townSelect.value : '';
+  populateDirTownSelect('');
+  if (previous && townSelect && Array.from(townSelect.options).some(o => o.value === previous)) {
+    townSelect.value = previous;
+  }
+  handleDirTownChange();
 }
 
 /** يُظهر منتقي القرية فقط تحت بند "القرى والتجمعات" — نفس قاعدة app.js وتعديل مناسبة. */
@@ -1507,8 +1643,12 @@ async function handleDirTownChange() {
     const select = document.getElementById('dirVillage');
     if (select) {
       const curVillage = select.value;
-      select.innerHTML = villageSelectOptionsHtml(allTownVillages);
-      if (curVillage) select.value = curVillage;
+      // قرى المحافظة المختارة في #dirRegion وحدها، وقرية من محافظة أخرى تُمسح
+      // بدل أن تبقى مختارةً تحت قائمة محافظتها الجديدة.
+      const villages = dirVillageList();
+      select.innerHTML = villageSelectOptionsHtml(villages);
+      const kept = curVillage && villages.some(v => String(v.id) === curVillage);
+      select.value = kept ? curVillage : '';
     }
   } else {
     group.style.display = 'none';
@@ -4153,15 +4293,18 @@ function applyEventEditDraft() {
     if (!draft) return;
 
     if (draft.values) {
+      // المحافظة قبل البلدة: قائمة #evtTown تُبنى من بلدات المحافظة، ومحافظة
+      // مسودّة لم تبق نشطة تعود إلى محافظة المناسبة نفسها.
+      populateEvtRegionSelect(draft.values.evtRegion);
+      populateEvtTownSelect(draft.values.evtTown || '');
       Object.keys(draft.values).forEach(id => {
+        if (id === 'evtRegion' || id === 'evtTown') return;
         const el = document.getElementById(id);
         if (el) {
           el.value = draft.values[id];
-          if (id === 'evtTown') {
-            handleEventEditTownChange();
-          }
         }
       });
+      handleEventEditTownChange();
       if (draft.values.evtVillage) {
         const vilEl = document.getElementById('evtVillage');
         if (vilEl) vilEl.value = draft.values.evtVillage;
@@ -4254,6 +4397,11 @@ function ensureEventEditFormMounted() {
         <button type="button" class="btn-approve" style="flex:none; width:auto; margin-top:8px;" onclick="addEventHonoreeRow()">
           <i class="fa-solid fa-plus"></i> إضافة اسم
         </button>
+      </div>
+
+      <div class="form-group">
+        <label>المحافظة</label>
+        <select id="evtRegion" onchange="handleEvtRegionChange()"></select>
       </div>
 
       <div class="form-row">
@@ -4396,20 +4544,53 @@ function ensureEventEditFormMounted() {
   }
 }
 
+/**
+ * يملأ منتقي محافظة المناسبة في اللوحة من REGIONS ويختار: محافظة المناسبة نفسها
+ * إن كانت نشطة، وإلا المحافظة التي تحتوي بلدتها، وإلا الأولى — منتقٍ بلا اختيار
+ * يقفل منتقي البلدة على قائمة كل المنصة.
+ */
+function populateEvtRegionSelect(regionId) {
+  const select = document.getElementById('evtRegion');
+  if (!select) return;
+  const town = editingEventOriginal ? editingEventOriginal.town : '';
+  const containing = REGIONS.find(region => Array.isArray(region.towns) && region.towns.includes(town)) || null;
+  const chosen = regionById(regionId) || containing || REGIONS[0] || null;
+  select.innerHTML = REGIONS.map(region =>
+    `<option value="${escapeHtml(String(region.id))}">${escapeHtml(region.name)}</option>`).join('');
+  select.value = chosen ? String(chosen.id) : '';
+}
+
+/**
+ * تغيير محافظة المناسبة: بلداتها وحدها وتُختار الأولى، ثم معالج البلدة نفسه كي
+ * يتبع منتقي القرية («القرى والتجمعات») البلدة الناتجة.
+ */
+function handleEvtRegionChange() {
+  const regionSelect = document.getElementById('evtRegion');
+  const townSelect = document.getElementById('evtTown');
+  if (!regionSelect || !townSelect) return;
+  townSelect.innerHTML = regionTownOptionsHtml(regionSelect.value, '');
+  if (townSelect.options.length) townSelect.selectedIndex = 0;
+  handleEventEditTownChange();
+}
+
 function populateEvtTownSelect(selectedVal) {
   const select = document.getElementById('evtTown');
   if (!select) return;
   const val = selectedVal !== undefined ? selectedVal : select.value;
-  // بلدة المناسبة الحالية تبقى خياراً مختاراً حتى لو غابت عن TOWNS (معطَّلة
-  // أو قديمة) — وإلا اختار المتصفّح أول بلدة وأرسلها الحفظ فرقاً لم يطلبه أحد.
-  select.innerHTML = townSelectOptionsHtml(val);
+  const regionSelect = document.getElementById('evtRegion');
+  // بلدة المناسبة الحالية تبقى خياراً مختاراً حتى لو غابت عن قائمة محافظتها
+  // (معطَّلة أو قديمة) — وإلا اختار المتصفّح أول بلدة وأرسلها الحفظ فرقاً لم
+  // يطلبه أحد. وقائمة المحافظة وحدها هي المعروضة تحتها.
+  select.innerHTML = regionTownOptionsHtml(regionSelect ? regionSelect.value : '', val);
   if (val) {
     select.value = val;
   }
 }
 
 function onTownsUpdated() {
-  populateDirTownSelect();
+  // كل منتقٍ يعاد بناؤه من مصدره الجديد: محافظة النشر المباشر قد تسبق وصول
+  // محافظات GET /api/towns، ومنتقي المناسبة يتبع محافظتها هي.
+  syncDirRegionControls();
   populateEvtTownSelect();
   if (typeof allAdminsWithTowns !== 'undefined' && allAdminsWithTowns.length > 0) {
     renderAdminsList();
@@ -4673,6 +4854,9 @@ async function openEventEditForm(id) {
     title: evt.title || '',
     family_clan: evt.family_clan || '',
     town: evt.town || '',
+    // محافظة المناسبة نفسها — تقود منتقي البلدة وحده، ولا تدخل حمولة الحفظ
+    // (region_id لا يُرسَل من اللوحة أصلاً؛ الخادم يشتقّه من البلدة/القرية).
+    region_id: evt.region_id ?? null,
     village_id: evt.village_id ?? null,
     requested_village_name: evt.requested_village_name || '',
     location_name: evt.location_name || '',
@@ -4699,6 +4883,8 @@ async function openEventEditForm(id) {
 
   document.getElementById('evtTitle').value = editingEventOriginal.title;
   document.getElementById('evtFamilyClan').value = editingEventOriginal.family_clan;
+  // المحافظة أولاً ثم بلداتها: منتقي البلدة يُبنى من محافظة المناسبة نفسها.
+  populateEvtRegionSelect(editingEventOriginal.region_id);
   populateEvtTownSelect(editingEventOriginal.town);
   document.getElementById('evtTown').value = editingEventOriginal.town;
   document.getElementById('evtLocationName').value = editingEventOriginal.location_name;

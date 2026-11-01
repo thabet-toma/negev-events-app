@@ -11086,6 +11086,10 @@ async function run() {
     });
     const win = dom.window;
     const { document } = win;
+    // المحافظة الافتراضية تُثبَّت قبل بناء النموذج: منتقي محافظة القرية صار
+    // يتبعها بدل أن يبدأ فارغاً، فيصل المستخدم إلى خياره من أول مرة.
+    await waitFor(() => document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
     await openPublishTabAfterBrowsingHome(dom);
     await waitFor(() => document.getElementById('addTown') && Array.from(document.getElementById('addTown').options).some(o => o.value === VILLAGES_TOWN_VALUE));
     fillRequiredPublishFields(document);
@@ -11094,10 +11098,11 @@ async function run() {
     townSelect.value = VILLAGES_TOWN_VALUE;
     townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
     assert.strictEqual(document.getElementById('addRegionGroup').style.display, 'block', 'the region picker appears under the villages catch-all');
-    assert.strictEqual(document.getElementById('addRegion').value, '', 'no region is preselected — the publisher must choose');
+    assert.strictEqual(document.getElementById('addRegion').value, '1', 'the picker defaults to the visitor\'s region, not to the first row');
 
     document.getElementById('addVillage').value = '__other__';
     document.getElementById('addRequestedVillage').value = 'قرية الاختبار';
+    document.getElementById('addRegion').value = '';
     await win.handleEventSubmit({ preventDefault() {} });
     assert.ok(alerts.some(message => message.includes('اختر المحافظة')), 'publishing without a region is refused in Arabic');
     assert.strictEqual(posts.length, 0, 'nothing is posted without the required region');
@@ -11361,6 +11366,271 @@ async function run() {
     await delay(80);
 
     assert.deepStrictEqual(feedCardIds(win), [920], 'the stale first-region response must not replace the second region\'s cards');
+  });
+
+  console.log('\nاختيار المنطقة أولاً ثم البلدة — العزل في منتقيات النشر والتعديل (الموقع ولوحة الإدارة)');
+
+  // محافظة ثانية كما يعيدها GET /api/towns: اسم المحافظة لا يساوي اسم أي بلدة
+  // فيها، فلا يلتبس خيار «بلا بلدة محدّدة» بخيار بلدة بالاسم نفسه.
+  const TULKARM_REGION = {
+    id: 2, name: 'محافظة طولكرم', latitude: 32.311, longitude: 35.03, map_zoom: 10, position: 2,
+    towns: ['طولكرم', 'بلعا', 'عنبتا']
+  };
+  const NEGEV_TULKARM_FIXTURE = { ...TOWNS_WITH_REGIONS_FIXTURE, regions: [REGIONS_FIXTURE[0], TULKARM_REGION] };
+
+  /** buildEnv() whose GET /api/towns carries النقب and محافظة طولكرم — a visitor sees only one of them. */
+  function buildNegevTulkarmEnv(extraFetch) {
+    return buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          if (String(url).split('?')[0] === '/api/towns') return jsonResponse(NEGEV_TULKARM_FIXTURE);
+          const extra = extraFetch && await extraFetch(url, opts);
+          return extra || base(url, opts);
+        };
+      }
+    });
+  }
+
+  // قرى المنصّة كما تعود من GET /api/towns وقد صار لكلّ قرية محافظتها —
+  // الحقل الذي يفلتر به منتقي القرية (والفلتر نفسه يسقط إلى «الكل» بلا الحقل).
+  const REGION_VILLAGES = [
+    { id: 11, name: 'قرية نقبية', latitude: 31.2, longitude: 34.9, position: 0, region_id: REGIONS_FIXTURE[0].id },
+    { id: 12, name: 'قرية طولكرمية', latitude: 32.3, longitude: 35.0, position: 1, region_id: TULKARM_REGION.id }
+  ];
+  const VILLAGES_BY_REGION_FIXTURE = { ...NEGEV_TULKARM_FIXTURE, villages: REGION_VILLAGES };
+  const NEGEV_TOWNS_ONLY = TOWNS.filter(name => name !== VILLAGES_TOWN_VALUE);
+  const TULKARM_TOWN_VALUES = [...TULKARM_REGION.towns, VILLAGES_TOWN_VALUE, TULKARM_REGION.name];
+
+  /** buildEnv() as a «محافظة طولكرم» visitor whose GET /api/towns carries both regions and both regions' villages. */
+  function buildTulkarmVisitorEnv() {
+    return buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.localStorage.setItem('negev_region', String(TULKARM_REGION.id));
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => (String(url).split('?')[0] === '/api/towns'
+          ? jsonResponse(VILLAGES_BY_REGION_FIXTURE)
+          : base(url, opts));
+      }
+    });
+  }
+
+  /** يفتح نموذج النشر في زيارة قد سكنت أرضها ثم ينتظر بلداتها. */
+  async function openPublishFormWithTowns(dom) {
+    const win = dom.window;
+    await flushBoot();
+    await win.initRegionPicker();
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => {
+      const town = win.document.getElementById('addTown');
+      return !!town && town.options.length > 0;
+    });
+    return win;
+  }
+
+  await test('ناشر النقب يرى في نموذج النشر بلدات النقب وحدها ثم «النقب — بلا بلدة محدّدة»', async () => {
+    const dom = buildNegevTulkarmEnv();
+    const win = await openPublishFormWithTowns(dom);
+    const { document } = win;
+
+    const options = [...document.getElementById('addTown').options];
+    assert.deepStrictEqual(options.map(o => o.value), [...TOWNS, SEED_REGION.name],
+      'بلدات محافظة الزائر بترتيب الخادم ثم اسمها — لا كل بلدات المنصة');
+    assert.ok(!options.some(o => o.value === 'بلعا'), 'بلدة في محافظة أخرى لا تُعرض لناشر النقب');
+    assert.strictEqual(options[options.length - 1].textContent, REGION_OPTION_LABEL,
+      'خيار «بلا بلدة محدّدة» يحمل اسم محافظة الزائر');
+    // البند الجامع مسجَّل تحت النقب أصلاً، فلا يُضاف مرة ثانية.
+    assert.strictEqual(options.filter(o => o.value === VILLAGES_TOWN_VALUE).length, 1,
+      '«القرى والتجمعات» مرة واحدة في قائمة النقب — لا تكرار');
+  });
+
+  await test('ناشر طولكرم يرى «القرى والتجمعات» في آخر بلداته — ولا بلدة نقبية واحدة', async () => {
+    const dom = buildTulkarmVisitorEnv();
+    const win = await openPublishFormWithTowns(dom);
+    const { document } = win;
+
+    const values = [...document.getElementById('addTown').options].map(o => o.value);
+    assert.deepStrictEqual(values, TULKARM_TOWN_VALUES,
+      'بلدات طولكرم ثم البند الجامع قبل خيار المحافظة — لا بلدات المنصة كلها');
+    assert.strictEqual(values.filter(v => v === VILLAGES_TOWN_VALUE).length, 1,
+      'البند الجامع مرة واحدة لا مرتين');
+    assert.ok(!values.some(v => NEGEV_TOWNS_ONLY.includes(v)),
+      'لا بلدة نقبية واحدة في قائمة ناشر طولكرم');
+
+    // اختيار البند الجامع يكشف قرى طولكرم وحدها — القرى كلها تحته، ومحافظتها
+    // هي المختارة في #addRegion.
+    const townSelect = document.getElementById('addTown');
+    townSelect.value = VILLAGES_TOWN_VALUE;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    assert.strictEqual(document.getElementById('addRegionGroup').style.display, 'block');
+    assert.strictEqual(document.getElementById('addRegion').value, String(TULKARM_REGION.id),
+      'محافظة الزائر افتراضاً تحت البند الجامع');
+    const villageValues = [...document.getElementById('addVillage').options].map(o => o.value);
+    assert.ok(villageValues.includes(String(REGION_VILLAGES[1].id)), 'قرية طولكرم معروضة');
+    assert.ok(!villageValues.includes(String(REGION_VILLAGES[0].id)), 'وقرية النقب ليست في قائمتها');
+
+    // تبديل المحافظة يبني القرى من جديد ويُسقط قرية المحافظة السابقة.
+    document.getElementById('addVillage').value = String(REGION_VILLAGES[1].id);
+    const regionSelect = document.getElementById('addRegion');
+    regionSelect.value = String(REGIONS_FIXTURE[0].id);
+    regionSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    const rebuilt = [...document.getElementById('addVillage').options].map(o => o.value);
+    assert.ok(rebuilt.includes(String(REGION_VILLAGES[0].id)), 'قرية المحافظة المختارة الآن');
+    assert.ok(!rebuilt.includes(String(REGION_VILLAGES[1].id)), 'وقرية المحافظة السابقة غابت عن القائمة');
+    assert.strictEqual(document.getElementById('addVillage').value, '', 'والاختيار السابق مُسح لا بقي صامتاً');
+
+    // حبة المحافظة نفسها: البند الجامع حاضر في كل محافظة فيبقى مختاراً،
+    // وقائمة القرى تتبعه إلى المحافظة الجديدة.
+    townSelect.value = VILLAGES_TOWN_VALUE;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await win.selectRegion(REGIONS_FIXTURE[0].id);
+    assert.strictEqual(townSelect.value, VILLAGES_TOWN_VALUE,
+      'اختيار البند الجامع يبقى بعد تبديل حبة المحافظة — إنه ليس مكاناً');
+    const afterChip = [...document.getElementById('addVillage').options].map(o => o.value);
+    assert.ok(afterChip.includes(String(REGION_VILLAGES[0].id)) && !afterChip.includes(String(REGION_VILLAGES[1].id)),
+      'وقائمة القرى صارت قرى المحافظة الجديدة وحدها');
+  });
+
+  await test('تبديل حبة المحافظة يعيد بناء بلدات نموذج النشر المفتوح على المحافظة الجديدة', async () => {
+    const dom = buildNegevTulkarmEnv();
+    const win = await openPublishFormWithTowns(dom);
+    const { document } = win;
+
+    const townSelect = document.getElementById('addTown');
+    townSelect.value = 'رهط';
+    await win.selectRegion(TULKARM_REGION.id);
+
+    assert.deepStrictEqual([...townSelect.options].map(o => o.value), TULKARM_TOWN_VALUES,
+      'بلدات المحافظة الجديدة وحدها بعد تبديل الحبة');
+    assert.strictEqual(townSelect.value, TULKARM_REGION.towns[0],
+      'بلدة المحافظة السابقة استبدلتها الأولى — لا تبقى مختارة تحت قائمة أخرى');
+    assert.ok(![...townSelect.options].some(o => o.value === 'رهط'), 'بلدة المحافظة السابقة لم تبق في القائمة');
+  });
+
+  await test('نافذة التعديل تعرض بلدات محافظة المناسبة وتُبقي بلدةً خارجها مختارة', async () => {
+    const ownEvents = [
+      { id: 98, title: 'عرس', town: 'بلعا', region_id: TULKARM_REGION.id, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE },
+      { id: 99, title: 'عرس', town: 'رهط', region_id: TULKARM_REGION.id, event_date: '2026-10-11', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE }
+    ];
+    const dom = buildNegevTulkarmEnv(async (url) => {
+      if (String(url).split('?')[0] === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+      return null;
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(98);
+    const townSelect = win.document.getElementById('editTown');
+    assert.deepStrictEqual([...townSelect.options].map(o => o.value), TULKARM_TOWN_VALUES,
+      'بلدات محافظة المناسبة وحدها — لا بلدات المنصة كلها');
+    assert.strictEqual(townSelect.value, 'بلعا', 'بلدة المناسبة مختارة كما هي');
+
+    win.openEditEventModal(99);
+    assert.ok([...townSelect.options].map(o => o.value).includes('رهط'),
+      'بلدة المناسبة الغائبة عن قائمة محافظتها تُضاف خياراً');
+    assert.strictEqual(townSelect.value, 'رهط', 'وتبقى مختارة لا تستبدلها الأولى');
+  });
+
+  await test('النشر المباشر: محافظة الأدمن افتراضاً، وتبديل المحافظة يعيد بناء بلداتها وحدها', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, towns: ['بلعا'] });
+    const win = dom.window;
+    const { document } = win;
+    const base = buildFetchStub();
+    win.fetch = async (url, opts = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/towns') return jsonResponse(VILLAGES_BY_REGION_FIXTURE);
+      // بلدات الأدمن نفسه — مصدر المحافظة الافتراضية، بنفس شكل GET /api/admin/me.
+      if (requestPath === '/api/admin/me') {
+        return jsonResponse({ success: true, user: { id: 1, role: 'admin' }, towns: ['بلعا'] });
+      }
+      return base(url, opts);
+    };
+
+    await win.fetchAdminIdentity();
+    await win.initDirectAddForm();
+
+    assert.strictEqual(document.getElementById('dirRegion').value, String(TULKARM_REGION.id),
+      'المحافظة الافتراضية هي التي تحتوي بلدةً من بلدات الأدمن نفسه');
+    assert.deepStrictEqual([...document.getElementById('dirTown').options].map(o => o.value),
+      TULKARM_TOWN_VALUES, 'بلدات المحافظة الافتراضية وحدها ثم البند الجامع');
+
+    document.getElementById('dirRegion').value = String(REGIONS_FIXTURE[0].id);
+    win.handleDirRegionChange();
+
+    const townSelect = document.getElementById('dirTown');
+    assert.deepStrictEqual([...townSelect.options].map(o => o.value), [...TOWNS, SEED_REGION.name],
+      'بلدات المحافظة المختارة وحدها — ومنها البند الجامع «القرى والتجمعات» بلا تكرار');
+    assert.strictEqual(townSelect.value, TOWNS[0], 'البلدة الأولى في المحافظة الجديدة');
+    assert.ok(![...townSelect.options].some(o => o.value === 'بلعا'),
+      'بلدة المحافظة السابقة لم تبق في القائمة');
+
+    // منتقي قرى النشر المباشر يتبع المحافظة المختارة هو أيضاً.
+    townSelect.value = VILLAGES_TOWN_VALUE;
+    await win.handleDirTownChange();
+    const villageValues = [...document.getElementById('dirVillage').options].map(o => o.value);
+    assert.ok(villageValues.includes(String(REGION_VILLAGES[0].id)), 'قرية المحافظة المختارة معروضة');
+    assert.ok(!villageValues.includes(String(REGION_VILLAGES[1].id)), 'وقرية المحافظة الأخرى ليست في قائمتها');
+  });
+
+  await test('لوحة التعديل: منتقي البلدة يُبنى من محافظة المناسبة ويُبقي بلدة خارجها مختارة', async () => {
+    const tulkarmEvent = { ...ADMIN_EVENT_FIXTURE, id: 72, town: TULKARM_REGION.towns[1], region_id: TULKARM_REGION.id };
+    const strayTownEvent = { ...ADMIN_EVENT_FIXTURE, id: 73, town: 'رهط', region_id: TULKARM_REGION.id };
+    const dom = buildAdminEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    win.fetch = async (url) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/towns') return jsonResponse(NEGEV_TULKARM_FIXTURE);
+      if (requestPath === '/api/admin/events') return jsonResponse({ success: true, events: [tulkarmEvent, strayTownEvent] });
+      if (requestPath.endsWith('/amendments')) return jsonResponse({ success: true, amendments: [] });
+      const detail = [tulkarmEvent, strayTownEvent].find(e => requestPath === `/api/events/${e.id}`);
+      if (detail) return jsonResponse({ success: true, event: { ...detail, honorees: [{ name: 'راني', role: '' }] } });
+      return jsonResponse({ success: true });
+    };
+
+    await win.fetchAdminEvents();
+    await win.openEventEditForm(72);
+    const regionSelect = document.getElementById('evtRegion');
+    const townSelect = document.getElementById('evtTown');
+    assert.strictEqual(regionSelect.value, String(TULKARM_REGION.id), 'محافظة المناسبة نفسها هي القيمة الابتدائية');
+    assert.deepStrictEqual([...townSelect.options].map(o => o.value), TULKARM_TOWN_VALUES,
+      'بلدات محافظة المناسبة وحدها ثم البند الجامع ثم اسمها «بلا بلدة محدّدة»');
+    assert.strictEqual(townSelect.value, TULKARM_REGION.towns[1], 'بلدة المناسبة مختارة كما هي');
+
+    await win.openEventEditForm(73);
+    assert.ok([...townSelect.options].map(o => o.value).includes('رهط'),
+      'بلدة المناسبة الغائبة عن قائمة محافظتها تبقى خياراً');
+    assert.strictEqual(townSelect.value, 'رهط', 'وتبقى مختارة لا تستبدلها الأولى');
+  });
+
+  await test('مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً', async () => {
+    const dom = buildAdminEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const base = buildFetchStub();
+    win.fetch = async (url, opts = {}) => (String(url).split('?')[0] === '/api/towns'
+      ? jsonResponse(NEGEV_TULKARM_FIXTURE)
+      : base(url, opts));
+    await win.initDirectAddForm();
+
+    win.localStorage.setItem('negev_draft_direct_add', JSON.stringify({
+      occasion_type_id: OCCASION_TYPES_FIXTURE[0].id,
+      values: { dirRegion: '99', dirTown: 'بلعا', dirEventDate: '2026-10-10' },
+      honorees: [{ name: 'محمد وفاطمة', role: '' }],
+      extra_days: [],
+      hadFiles: false,
+      updated_at: Date.now()
+    }));
+    win.applyDirectAddDraft();
+
+    const regionValue = document.getElementById('dirRegion').value;
+    assert.ok(regionValue && REGIONS_FIXTURE[0] && String(REGIONS_FIXTURE[0].id) === regionValue,
+      'المحافظة المحفوظة لم تعد قائمة ⇒ الافتراضية (الأولى) لا قيمة معلَّقة');
+    assert.ok(document.getElementById('dirTown').value, 'منتقي البلدة لم يبق فارغاً بعد استرجاع المسودّة');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
