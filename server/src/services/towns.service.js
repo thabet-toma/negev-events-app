@@ -103,6 +103,74 @@ async function listActiveRegions() {
   }));
 }
 
+/**
+ * قراءة الاكتشاف لمنتقي المناطق (تذكرة #127) — **مفتاحان** لا قائمة واحدة:
+ * `{ regions, soon }`.
+ *
+ * - `regions`: المحافظات **النشطة وحدها**، بالشكل الذي كانت عليه قبل هذه
+ *   التذكرة (`id, name, latitude, longitude, map_zoom, position, towns`) زائد
+ *   `is_active: true` والعدّادين. **لا تُضاف الموقوفة إلى هذه القائمة أبداً:**
+ *   كل APK منشور قبل #127 يبني منتقي بلدة النشر من `regions` بلا فحص حالة،
+ *   فوجود موقوفة فيها يجعله يعرضها مكاناً صالحاً ثم يأخذ 400 «البلدة المختارة
+ *   غير معروفة» عند النشر — وكل عميل منشور يرسل `X-App-Version`، فلا يمكن
+ *   التفريق بينه وبين الجديد على الخادم. القراءة الجديدة صنفٌ ثانٍ للموقوفة.
+ * - `soon`: الموقوفة بمعرّفها واسمها **فقط** — منتقي الاكتشاف يرسمها «قريباً»
+ *   بلا اختيار. بلا إحداثيات ولا أعداد عمداً: ليست مكان نشر، ولا تُوسَّط عليها
+ *   خريطة، ولا رقم لها يُعرَض.
+ *
+ * - `towns_count` عدد **البلدات النشطة** في المحافظة وحدها: بلدة موقوفة لا
+ *   تظهر في أي منتقٍ، فعدّها يعد بأماكن لا وجود لها في الاكتشاف.
+ * - `events_count` عدد المناسبات **المعتمدة** (`status = 'approved'`) على
+ *   `events.region_id`. الرقم يظهر للجمهور في ورقة التوسّع، فعدّ المعلَّق
+ *   والمرفوض يجعله أوسع من المعروض فعلاً في التغذية — والصدق هنا مقدَّم على
+ *   مطابقة عدّاد اللوحة الداخلي.
+ * - `towns` و`position` يبقيان كما كانا: `towns` أسماء البلدات النشطة في
+ *   المحافظة (اسم المحافظة وبلداتها أماكنُ نشر صالحة، ومنتقيات النشر وخريطة
+ *   النشر تقرآنها)، و`position` ترتيب العرض.
+ *
+ * لماذا لا `listActiveRegions` هنا: تلك تُغذّي منطق النشر والتحقّق والبثّ ولا
+ * تحمل عدّاداً؛ وهذه **قراءة اكتشاف** بالعدّادين، ولا يُستعمل ناتجها للتحقق من
+ * مكان نشر أبداً.
+ */
+async function listDiscoveryRegions() {
+  const [regions, towns] = await Promise.all([
+    db.query(
+      `SELECT r.id, r.name, r.is_active, r.latitude, r.longitude, r.map_zoom, r.position,
+              (SELECT COUNT(*) FROM towns t WHERE t.region_id = r.id AND t.is_active = 1) AS towns_count,
+              (SELECT COUNT(*) FROM events e WHERE e.region_id = r.id AND e.status = 'approved') AS events_count
+         FROM regions r
+        ORDER BY r.position ASC, r.id ASC`
+    ),
+    db.query(
+      `SELECT region_id, name
+         FROM towns
+        WHERE is_active = 1
+        ORDER BY position ASC, id ASC`
+    )
+  ]);
+  const active = [];
+  const soon = [];
+  for (const region of regions) {
+    if (!region.is_active) {
+      soon.push({ id: region.id, name: region.name });
+      continue;
+    }
+    active.push({
+      id: region.id,
+      name: region.name,
+      is_active: true,
+      latitude: toCoordinate(region.latitude),
+      longitude: toCoordinate(region.longitude),
+      map_zoom: Number(region.map_zoom),
+      towns_count: Number(region.towns_count),
+      events_count: Number(region.events_count),
+      position: Number(region.position),
+      towns: towns.filter(town => town.region_id === region.id).map(town => town.name)
+    });
+  }
+  return { regions: active, soon };
+}
+
 /** Names of every active region, in display order. */
 async function activeRegionNames() {
   return (await listActiveRegions()).map(region => region.name);
@@ -581,6 +649,7 @@ module.exports = {
   coordinatesByName,
   isActiveTown,
   listActiveRegions,
+  listDiscoveryRegions,
   activeRegionNames,
   isRegionName,
   isActivePlace,

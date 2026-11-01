@@ -115,10 +115,10 @@ class NegevApi {
   }
 
   /// كتالوج الأماكن كاملاً بطلب واحد إلى GET /api/towns: البلدات النشِطة
-  /// (بلا «الكل»)، ومراكزها، والقرى، والمحافظات. البلدات صارت بيانات وقت
-  /// تشغيل يديرها السوبر أدمن، فلا تُقرأ من `lib/config.dart` إلا احتياطاً:
-  /// أي فشل (انقطاع، ردّ غير متوقَّع) يعيد [PlacesCatalog.fallback] لا خطأً،
-  /// كي لا يبقى منتقٍ بلا بلدات أبداً.
+  /// (بلا «الكل»)، ومراكزها، والقرى، والمحافظات النشطة، والموقوفة («قريباً»).
+  /// البلدات صارت بيانات وقت تشغيل يديرها السوبر أدمن، فلا تُقرأ من
+  /// `lib/config.dart` إلا احتياطاً: أي فشل (انقطاع، ردّ غير متوقَّع) يعيد
+  /// [PlacesCatalog.fallback] لا خطأً، كي لا يبقى منتقٍ بلا بلدات أبداً.
   Future<PlacesCatalog> placesCatalog() async {
     try {
       final data = await _client.get('/api/towns');
@@ -130,6 +130,7 @@ class NegevApi {
 
       final rawVillages = data['villages'];
       final rawRegions = data['regions'];
+      final rawSoon = data['regions_soon'];
       return PlacesCatalog(
         towns: towns,
         townCoordinates: _parseTownCoordinates(data['town_coordinates']),
@@ -140,6 +141,13 @@ class NegevApi {
             ? rawRegions
                 .whereType<Map<String, dynamic>>()
                 .map(Region.fromJson)
+                .where((r) => r.name.isNotEmpty)
+                .toList()
+            : const [],
+        soonRegions: rawSoon is List
+            ? rawSoon
+                .whereType<Map<String, dynamic>>()
+                .map(Region.soonFromJson)
                 .where((r) => r.name.isNotEmpty)
                 .toList()
             : const [],
@@ -1260,13 +1268,30 @@ class Village {
 /// محافظة (منطقة) — من مفتاح `regions` في GET /api/towns. اسمها نفسه مكانٌ
 /// صالح لمناسبة لم تُعرف بلدتها بالضبط («النقب»): مركزها يفتح الخريطة فقط،
 /// ولا يُكتب دبّوساً أبداً.
+///
+/// **`regions` لا تحمل إلا النشطة (تذكرة #127):** الموقوفة تصل في مفتاح
+/// `regions_soon` باسمها ومعرّفها فقط، وتُبنى بـ[Region.soonFromJson]، فلا
+/// تُختار ولا تُنشر فيها ولا تُوسَّط عليها خريطة.
 class Region {
   final int id;
   final String name;
+
+  /// هل المحافظة نشطة؟ `is_active` من الخادم، وصحيحٌ عند غيابه: خادم لم يعرف
+  /// الحقل بعد لا يعيد في `regions` إلا النشطة أصلاً.
+  final bool isActive;
+
   final double latitude;
   final double longitude;
   final double mapZoom;
   final List<String> towns;
+
+  /// عدد البلدات **النشطة** في المحافظة — رقم من الخادم (تذكرة #127).
+  /// `null` حين لا يرسله الخادم، فلا يُعرض رقم مخترع.
+  final int? townsCount;
+
+  /// عدد المناسبات **المعتمدة** على `events.region_id` — نفس الرقم الذي يراه
+  /// الجمهور في التغذية. `null` حين لا يرسله الخادم.
+  final int? eventsCount;
 
   const Region({
     required this.id,
@@ -1274,21 +1299,56 @@ class Region {
     required this.latitude,
     required this.longitude,
     required this.mapZoom,
+    this.isActive = true,
     this.towns = const [],
+    this.townsCount,
+    this.eventsCount,
   });
+
+  /// محافظة موقوفة كما تصل في `regions_soon`: `{ id, name }` وحدهما. لا اسمٌ
+  /// آخر ولا مركز ولا عدّاد — فبلا إحداثيات وبلا أرقام عمداً، ومن يعرضها
+  /// «قريباً» لا غير.
+  factory Region.soonFromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    return Region(
+      id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
+      name: '${json['name'] ?? ''}',
+      latitude: 0,
+      longitude: 0,
+      mapZoom: 9,
+      isActive: false,
+    );
+  }
 
   factory Region.fromJson(Map<String, dynamic> json) {
     double toDouble(Object? value, double fallback) =>
         value is num ? value.toDouble() : double.tryParse('${value ?? ''}') ?? fallback;
+    int? toCount(Object? value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse('${value ?? ''}');
+    }
+
+    // غياب الحقل = خادم لم يعرفه بعد، وكل ما يعيده نشط.
+    bool toActive(Object? value) {
+      if (value == null) return true;
+      if (value is bool) return value;
+      final text = '$value'.trim().toLowerCase();
+      return text != '0' && text != 'false';
+    }
+
     final id = json['id'];
     final towns = json['towns'];
     return Region(
       id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
       name: '${json['name'] ?? ''}',
+      isActive: toActive(json['is_active']),
       latitude: toDouble(json['latitude'], 0),
       longitude: toDouble(json['longitude'], 0),
       mapZoom: toDouble(json['map_zoom'], 9),
       towns: towns is List ? towns.map((t) => '$t').toList() : const [],
+      townsCount: toCount(json['towns_count']),
+      eventsCount: toCount(json['events_count']),
     );
   }
 }
@@ -1299,7 +1359,14 @@ class PlacesCatalog {
   final List<String> towns;
   final Map<String, TownCoordinate> townCoordinates;
   final List<Village> villages;
+
+  /// المحافظات **النشطة** وحدها — `regions`. كل ما يُختار ويُرسَل ترويسةً
+  /// ويُنشر فيه يأتي من هنا أو من [activeRegions].
   final List<Region> regions;
+
+  /// المحافظات **الموقوفة** — `regions_soon`، بلا اسمٍ آخر ولا مركز ولا رقم.
+  /// تُعرض «قريباً» في منتقي الاكتشاف فقط، ولا تدخل [regions] أبداً.
+  final List<Region> soonRegions;
 
   /// `false` للنسخة الاحتياطية من `lib/config.dart` — المخزن يعيد المحاولة.
   final bool fromServer;
@@ -1309,8 +1376,16 @@ class PlacesCatalog {
     this.townCoordinates = const {},
     this.villages = const [],
     this.regions = const [],
+    this.soonRegions = const [],
     this.fromServer = false,
   });
+
+  /// المحافظات النشطة — ما يجوز اختياره للاكتشاف أو النشر فيه.
+  ///
+  /// `regions` نفسها لا تحمل موقوفة منذ #127 (تلك في [soonRegions])، فالمرشِّح
+  /// هنا للدفاع لا للفصل: خادم قديم أو مخزَّن بلا `is_active` يعني نشطة.
+  List<Region> get activeRegions =>
+      regions.where((region) => region.isActive).toList();
 
   /// بلا اتصال: بلدات `AppConfig.towns`، بلا محافظات ولا قرى ولا مراكز.
   factory PlacesCatalog.fallback() => const PlacesCatalog(towns: AppConfig.towns);

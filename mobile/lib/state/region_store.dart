@@ -41,10 +41,18 @@ class RegionStore extends ChangeNotifier {
   /// الاختيار الصريح وحده — ومنه مسحُ محفوظٍ لم يعد موجوداً.
   String? get headerRegionId => api.client.regionId;
 
-  /// المحافظات النشطة — من كتالوج البلدات المشترك (`GET /api/towns`).
-  /// قائمة فارغة قبل وصول الخادم أو عند انقطاعه، فتُخفى المنتقي ولا يُحكم
-  /// على المحفوظ.
+  /// المحافظات **النشطة** — من كتالوج البلدات المشترك (`GET /api/towns`،
+  /// مفتاح `regions`). قائمة فارغة قبل وصول الخادم أو عند انقطاعه، فتُخفى
+  /// المنتقيات ولا يُحكم على المحفوظ.
   List<Region> get regions => places.catalog.regions;
+
+  /// المحافظات **الموقوفة** — `regions_soon`، تُعرض في منتقي الاكتشاف
+  /// «قريباً» بلا اختيار ولا نشر. منفصلة عن [regions] عمداً (تذكرة #127):
+  /// أبقينا `regions` كما كانت لكل APK منشور قبل التذكرة.
+  List<Region> get soonRegions => places.catalog.soonRegions;
+
+  /// المحافظات النشطة وحدها — ما يُختار ويُرسَل ترويسةً ويُنشر فيه.
+  List<Region> get activeRegions => places.catalog.activeRegions;
 
   /// ما يُعلَّم في المنتقي: الاختيار الصريح، وإلا محافظة الحساب النشطة، وإلا
   /// الأولى — فالتطبيق «يفتح على المحافظة المحفوظة، وإلا الافتراضية».
@@ -53,7 +61,7 @@ class RegionStore extends ChangeNotifier {
     if (explicit != null) return explicit;
     final account = _activeAccountRegionId;
     if (account != null) return account;
-    final active = regions;
+    final active = activeRegions;
     return active.isEmpty ? null : active.first.id;
   }
 
@@ -159,8 +167,8 @@ class RegionStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  static bool _isActive(List<Region> active, int id) =>
-      active.any((region) => region.id == id);
+  static bool _isActive(List<Region> regions, int id) =>
+      regions.any((region) => region.id == id && region.isActive);
 
   /// `null` لكل ما ليس معرّفاً رقمياً موجباً — والقيمة المخزَّنة نصّ كما يكتبها
   /// الويب، فرقم سالب أو نصّ مختلط يُعامل «بلا اختيار» ولا يُرسَل للخادم.

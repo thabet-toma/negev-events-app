@@ -348,7 +348,7 @@ class _LiveScreenState extends State<LiveScreen> {
     final live = hub?.channel.live;
     final title = (live != null && live.active && live.title.isNotEmpty)
         ? live.title
-        : 'البث المباشر — مناسبات النقب';
+        : 'البث المباشر — مناسبات منطقتك';
     try {
       await SharePlus.instance.share(ShareParams(text: '$title\n$url'));
     } catch (_) {
@@ -394,7 +394,7 @@ class _LiveScreenState extends State<LiveScreen> {
       showMessage(context, 'لا يوجد رابط لهذه الحلقة', isError: true);
       return;
     }
-    final title = episode.title.isEmpty ? 'حلقة من البث — مناسبات النقب' : episode.title;
+    final title = episode.title.isEmpty ? 'حلقة من البث — مناسبات منطقتك' : episode.title;
     try {
       await SharePlus.instance.share(ShareParams(text: '$title\n$url'));
     } catch (_) {

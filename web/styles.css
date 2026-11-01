@@ -658,6 +658,21 @@ body {
   border-color: var(--sky);
   box-shadow: 0 4px 12px rgba(3, 105, 161, 0.25);
 }
+/* محافظة موقوفة — «قريباً» (تذكرة #127): تُعرض للعلم ولا تُختار إطلاقاً، فلا
+   مؤشّر يد ولا تفاعل hover ولا ظلّ. القاعدة بعد .active و:hover لتغلبها بنفس
+   الخصوصية، و:hover صريح هنا لأن الزرّ يحمل `aria-disabled` لا `disabled` —
+   فيبقى في التنقّل ويقرؤه قارئ الشاشة، وقد يطابق :hover فيبدو قابلاً للنقر. */
+.region-chip.soon,
+.region-chip.soon:hover,
+.region-chip[aria-disabled="true"],
+.region-chip[aria-disabled="true"]:hover {
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+  border-color: var(--line-soft);
+  border-style: dashed;
+  cursor: default;
+  box-shadow: none;
+}
 /* فاصل رقيق قبل الحالة داخل الحبة، بلون النص نفسه في القاعدة والمختارة */
 .region-chip-state {
   font-size: 0.68rem;

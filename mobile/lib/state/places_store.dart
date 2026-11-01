@@ -37,13 +37,15 @@ class PlaceOption {
 }
 
 /// بنود منتقي بلدة المناسبة (النشر والتعديل): بلدات الخادم، ثم بند لكل
-/// محافظة باسمها («النقب — بلا بلدة محدّدة»). [keep] قيمة حالية يجب أن تبقى
-/// بنداً حتى لو لم يعد الخادم يعرضها (بلدة عُطّلت بعد نشر المناسبة) — وإلا
-/// سقط `DropdownButton` بتأكيد «لا بند بهذه القيمة».
+/// **محافظة نشطة** باسمها («النقب — بلا بلدة محدّدة»). المحافظة الموقوفة ليست
+/// مكان نشر (تذكرة #127)، وهي في `regions_soon` لا في `regions`، فلا تصل إلى
+/// هنا أصلاً. [keep] قيمة حالية يجب أن تبقى بنداً حتى لو لم يعد الخادم
+/// يعرضها (بلدة عُطّلت بعد نشر المناسبة) — وإلا سقط `DropdownButton` بتأكيد
+/// «لا بند بهذه القيمة».
 List<PlaceOption> eventTownOptions(PlacesCatalog catalog, {String? keep}) {
   final options = <PlaceOption>[
     ...catalog.towns.map((town) => PlaceOption(town, town)),
-    ...catalog.regions.map((region) => PlaceOption(region.name, '${region.name} — بلا بلدة محدّدة')),
+    ...catalog.activeRegions.map((region) => PlaceOption(region.name, '${region.name} — بلا بلدة محدّدة')),
   ];
   if (keep != null && keep.isNotEmpty && !options.any((o) => o.value == keep)) {
     options.add(PlaceOption(keep, keep));

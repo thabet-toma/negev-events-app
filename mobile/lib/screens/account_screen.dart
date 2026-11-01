@@ -654,8 +654,11 @@ class _RegionSectionState extends State<_RegionSection> {
     return ListenableBuilder(
       listenable: Listenable.merge([services.places, services.regions]),
       builder: (context, _) {
+        // النشطة تُختار، والموقوفة (`regions_soon`) تُعرض «قريباً» ليعرف
+        // المستخدم أنها قادمة ولا يبحث عنها. قائمتان منفصلتان لأن الخادم
+        // يعيدهما مفتاحين (تذكرة #127).
         final active = services.regions.regions;
-        if (active.isEmpty) return const SizedBox.shrink();
+        final soon = services.regions.soonRegions;
         final selectedId = services.regions.effectiveRegionId;
 
         return Padding(
@@ -683,30 +686,33 @@ class _RegionSectionState extends State<_RegionSection> {
                     height: 1.5,
                   ),
                 ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final region in active)
-                      ChoiceChip(
-                        key: Key('region_chip_${region.id}'),
-                        label: Text(region.name),
-                        selected: region.id == selectedId,
-                        onSelected: _busy ? null : (_) => _select(region.id),
-                      ),
-                  ],
-                ),
+                if (active.isNotEmpty || soon.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final region in active)
+                        _regionChip(context, region, selectedId),
+                      // «قريباً» بعد المتاحة دائماً: الترتيب نفسه في الويب.
+                      for (final region in soon)
+                        _regionChip(context, region, selectedId),
+                    ],
+                  ),
+                ],
                 // الباب الوحيد لإعادة ورقة أول تشغيل (تذكرة #126) — نفس
                 // الورقة ونفس المنطق لا نسخة ثانية: «استخدم موقعي» أو الاختيار
                 // اليدوي، بلا إذن موقع إلا بضغط صريح.
+                //
+                // **خارج** حارس «القائمة غير فارغة»: هذا الزرّ هو المدخل الوحيد
+                // بعد المرة الأولى، وغيابه عند فشل `GET /api/towns` يترك
+                // المستخدم بلا طريق إلى محافظته. القائمة الفارغة تُقال برسالة
+                // قصيرة عند الضغط بدل أن تُخفي الزرّ.
                 Align(
                   alignment: AlignmentDirectional.centerStart,
                   child: TextButton.icon(
                     key: const Key('account_region_reopen'),
-                    onPressed: _busy
-                        ? null
-                        : () => showRegionOnboardingSheet(context),
+                    onPressed: _busy ? null : _reopenOnboarding,
                     icon: const Icon(Icons.my_location, size: 18),
                     label: const Text('تحديد منطقتي بالموقع أو يدوياً'),
                   ),
@@ -717,6 +723,81 @@ class _RegionSectionState extends State<_RegionSection> {
         );
       },
     );
+  }
+
+  /// إعادة الورقة من «حسابي» — أو رسالة قصيرة إن لم تصل المحافظات بعد.
+  Future<void> _reopenOnboarding() async {
+    if (AppServices.of(context).regions.regions.isEmpty) {
+      showMessage(
+        context,
+        'تعذّر جلب المحافظات — تحقّق من اتصالك ثم حاول مرة أخرى',
+        isError: true,
+      );
+      // محاولة أخرى في الخلفية كي ينجح الضغط التالي بدل أن يكرّر الرسالة.
+      AppServices.of(context).places.load();
+      return;
+    }
+    await showRegionOnboardingSheet(context);
+  }
+
+  /// حبة محافظة واحدة: النشطة «مختارة» إن كانت الفعّالة وإلا «متاحة»،
+  /// والموقوفة «قريباً» — بلون خفيف وغير قابلة للاختيار. الحالتان كلتاهما من
+  /// الحالة التي يرسلها الخادم (تذكرة #127)، لا من قائمة مكتوبة هنا.
+  Widget _regionChip(BuildContext context, Region region, int? selectedId) {
+    final selected = region.isActive && region.id == selectedId;
+    // سطر الحالة يحمل عدد بلدات المحافظة مع حالته (تذكرة #127): الرقم من
+    // `towns_count` الذي يرسله الخادم، ولا يظهر للموقوفة لأن `regions_soon`
+    // لا يحمل أعداداً أصلاً.
+    final townsCount = region.townsCount;
+    final stateText = !region.isActive
+        ? 'قريباً'
+        : [
+            selected ? 'مختارة' : 'متاحة',
+            if (townsCount != null) _townsCountLabel(townsCount),
+          ].join(' · ');
+    final nameStyle = TextStyle(
+      color: region.isActive ? context.c.ink : context.c.inkFaint,
+    );
+    final stateStyle = TextStyle(
+      fontSize: 10.5,
+      height: 1.4,
+      color: !region.isActive
+          ? context.c.inkFaint
+          : (selected ? context.c.sky : context.c.inkSoft),
+    );
+    final label = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(region.name, style: nameStyle),
+        Text(stateText, style: stateStyle),
+      ],
+    );
+
+    if (!region.isActive) {
+      return Chip(
+        key: Key('region_chip_${region.id}'),
+        label: label,
+        backgroundColor: context.c.surfaceSunk,
+        side: BorderSide(color: context.c.lineSoft),
+        // بلا `onPressed`/`onSelected` أصلاً: لا شيء يختار محافظة موقوفة.
+      );
+    }
+    return ChoiceChip(
+      key: Key('region_chip_${region.id}'),
+      label: label,
+      selected: selected,
+      onSelected: _busy ? null : (_) => _select(region.id),
+    );
+  }
+
+  /// عدد بلدات المحافظة بصيغة عربية صحيحة — «بلدة واحدة» و«بلدتان» و«٣ بلدات»
+  /// ليست «3 بلدة». صفر لا يُدعى: «بلا بلدات» تقول الحقيقة بدل رقم مقلوب.
+  static String _townsCountLabel(int count) {
+    if (count <= 0) return 'بلا بلدات';
+    if (count == 1) return 'بلدة واحدة';
+    if (count == 2) return 'بلدتان';
+    if (count <= 10) return '$count بلدات';
+    return '$count بلدة';
   }
 }
 

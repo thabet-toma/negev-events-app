@@ -20,15 +20,17 @@ typedef RegionOnboardingChoice = ({
 
 /// ورقة أول تشغيل — «من أي منطقة أنت؟» (تذكرة #126).
 ///
-/// تُعرض مرّة واحدة لكل تثبيت، **بلا حجب الشاشة**: الورقة سفلية والمستخدم يرى
-/// التغذية تحتها، و«تخطّي» ظاهر دائماً فلا يُحتجَز في ورقة. ولا تُغلق بنقرة
-/// خارجها ولا بسحبها (النقر على الخارج يُلغي ورداً في منتصفه)؛ مخرجها زرّ.
+/// تُعرض مرّة واحدة لكل تثبيت، **ولا تحجب أي شاشة**: ورقةٌ سفلية والتغذية
+/// ظاهرة تحتها، وتُغلق بالنقر خارجها أو بسحبها أو بزرّ رجوع الجهاز كما تُغلق
+/// كل ورقة — والإغلاق العابر **بمثابة تخطٍّ**: يُسجَّل الإنجاز ولا يتغيّر
+/// الاختيار. و«تخطّي» ظاهر دائماً من يريد الخروج صراحةً أو يبقى في مكانه.
 ///
 /// لا إذن موقع عند الإقلاع: `Geolocator` لا يُسأل شيئاً حتى يُضغط «استخدم
 /// موقعي»، وكل رفضٍ أو تعطّلٍ أو فشلٍ تحديد ينقل إلى الاختيار اليدوي داخل
 /// الورقة نفسها برسالة قصيرة — لا شاشة خطأ ولا إغلاق.
 ///
-/// الإنجاز يُسجَّل هنا بعد أي خروج (اختيار أو تخطٍّ)، لا في كل زرّ على حدة.
+/// الإنجاز يُسجَّل هنا بعد أي خروج (اختيار، تخطٍّ، إغلاق عابر)، لا في كل زرّ
+/// على حدة — فلا مسار خروج ينساه أحد.
 Future<RegionOnboardingChoice?> showRegionOnboardingSheet(
   BuildContext context, {
   LocationLookup? location,
@@ -36,8 +38,6 @@ Future<RegionOnboardingChoice?> showRegionOnboardingSheet(
   final choice = await showModalBottomSheet<RegionOnboardingChoice>(
     context: context,
     isScrollControlled: true,
-    isDismissible: false,
-    enableDrag: false,
     backgroundColor: context.c.surfaceSunk,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
@@ -84,6 +84,16 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
   /// نداء الموقع جارٍ — الأزرار معطّلة كي لا يتضاعف الطلب.
   bool _busy = false;
 
+  /// حفظٌ جارٍ — حارسٌ واحد يغطّي **كل** طرق `_commit` (الموقع، والبلدة، وزرّ
+  /// الحفظ، والمحافظة بلا بلدات). يُضبط **قبل** أول `await`، لأن تعطيل الأزرار
+  /// في الشجرة لا يلحق نقرتين متلاصقتين: الودجة القديمة تحمل `onPressed` غير
+  /// معدوم حتى يُعاد البناء، فتصل النقرة الثانية إلى `Navigator.pop` ثانيةٍ
+  /// تُسقط الشاشة تحتها.
+  bool _committing = false;
+
+  /// لا نقرة تُقبل ما دام هناك عملٌ جارٍ — للعرض وحده؛ الحقيقة في الحارسَين.
+  bool get _locked => _busy || _committing;
+
   bool _placesRequested = false;
 
   @override
@@ -107,6 +117,7 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
 
   /// إذن الموقع يُطلب **من هنا وحدها** — بضغطة صريحة على «استخدم موقعي».
   Future<void> _useLocation() async {
+    if (_locked) return;
     setState(() {
       _busy = true;
       _notice = null;
@@ -137,13 +148,16 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
       }
 
       if (!mounted) return;
-      final region = nearestRegionFor(
-        fix.latitude,
-        fix.longitude,
-        AppServices.of(context).places.catalog,
-      );
+      final catalog = AppServices.of(context).places.catalog;
+      final region = nearestRegionFor(fix.latitude, fix.longitude, catalog);
       if (region == null) {
-        _fallback('تعذّر جلب المناطق — اختر منطقتك يدوياً.');
+        // فرقٌ بين عطلِ جلبٍ وموقعٍ بعيد: كلاهما ينتهي إلى الاختيار اليدوي،
+        // والرسالة تقول السبب بدل تعليقٍ عام.
+        _fallback(
+          catalog.activeRegions.isEmpty
+              ? 'تعذّر جلب المناطق — اختر منطقتك يدوياً.'
+              : 'موقعك بعيد عن المناطق المعروفة — اختر منطقتك يدوياً.',
+        );
         return;
       }
       await _commit(region);
@@ -157,37 +171,67 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
 
   /// حفظ المحافظة ثم إغلاق الورقة بنتيجتها — الجهاز أولاً في `RegionStore`،
   /// وفشل الحساب لا يتراجع عن الحفظ المحلي.
+  ///
+  /// الحارس [_committing] هنا لا في الأزرار وحدها: البلدة وزرّ الحفظ متلاصقان،
+  /// ونقرتان قبل انتهاء `await` تصلان إلى `Navigator.pop` مرتين فتُسقط
+  /// `HomeShell` تحت الورقة. ومن هنا يمرّ كل مسار حفظ، ومنه [_openTowns] حين
+  /// تكون المحافظة بلا بلدات.
   Future<void> _commit(Region region) async {
+    if (_committing) return;
+    setState(() => _committing = true);
+
     final regions = AppServices.of(context).regions;
     try {
       await regions.select(region.id);
-      if (!mounted) return;
-      Navigator.of(context).pop((
-        regionId: region.id,
-        name: region.name,
-        warning: null,
-      ));
+      _close(region);
     } on ApiException {
-      if (!mounted) return;
-      Navigator.of(context).pop((
-        regionId: region.id,
-        name: region.name,
+      // الجهاز حُفظ والترويسة سارية — الرسالة عن الحساب وحده.
+      _close(
+        region,
         warning: 'حُفظت منطقتك على جهازك، لكن تعذّر حفظها على حسابك',
-      ));
+      );
+    } catch (_) {
+      // فشلٌ غير متوقّع بعد الحفظ المحلي: لا وعد بنجاح ولا ابتلاع للورقة —
+      // تعود الأزرار ورسالة قصيرة، والاختيار اليدوي ما زال أمام المستخدم.
+      if (!mounted) return;
+      setState(() {
+        _committing = false;
+        _notice = 'تعذّر حفظ منطقتك — حاول مرة أخرى.';
+      });
     }
   }
 
+  /// إغلاق الورقة بنتيجتها — من موضع واحد كي لا يختلف مسار عن آخر.
+  ///
+  /// ولا يُغلق إلا إن كانت الورقة لا تزال على الشاشة: من أغلقها بالنقر خارجها
+  /// أثناء الحفظ يبقى إغلاقه هو الإغلاق الوحيد، ولا `pop` ثانٍ يسقط الشاشة
+  /// تحتها بعد انتهاء `await`.
+  void _close(Region region, {String? warning}) {
+    if (!mounted) return;
+    // حزامٌ ثانٍ: لو أغلقها المستخدم بنفسه بينما الحفظ جارٍ، فلا `pop` باسم
+    // الحفظ بعد إغلاقه.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    Navigator.of(context).pop((
+      regionId: region.id,
+      name: region.name,
+      warning: warning,
+    ));
+  }
+
   void _openRegions() {
+    if (_locked) return;
     setState(() {
       _step = _Step.regions;
       _region = null;
     });
   }
 
-  void _openTowns(Region region) {
+  Future<void> _openTowns(Region region) async {
+    if (_locked) return;
     // محافظة بلا بلدات في الكتالوج تُحفظ مباشرة — لا خطوة تأكيد فارغة.
     if (region.towns.isEmpty) {
-      _commit(region);
+      await _commit(region);
       return;
     }
     setState(() {
@@ -209,25 +253,22 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      // زرّ رجوع الجهاز لا يُغلقها: المخرج زرّ «تخطّي» الظاهر، فالإنجاز
-      // يُسجَّل فعلاً حين يخرج المستخدم.
-      canPop: false,
-      child: SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.78,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_step == _Step.intro) ..._intro(context) else ..._picker(context),
-              ],
-            ),
+    // بلا `PopScope`: زرّ رجوع الجهاز يُغلقها كما يُغلق أي ورقة، والإغلاق
+    // العابر تخطٍّ يُسجَّل في `showRegionOnboardingSheet` بعد عودتها.
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.78,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_step == _Step.intro) ..._intro(context) else ..._picker(context),
+            ],
           ),
         ),
       ),
@@ -254,7 +295,7 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
       ),
       const SizedBox(height: 10),
       Text(
-        'بدأ التطبيق بأهل النقب، ووصل إلى مناطق أخرى. اختر منطقتك لترى '
+        'بدأ التطبيق بمنطقة واحدة، ووصل إلى مناطق أخرى. اختر منطقتك لترى '
         'مناسباتها وخدماتها.',
         style: TextStyle(color: context.c.inkSoft, fontSize: 13.5, height: 1.6),
       ),
@@ -265,7 +306,7 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
       const SizedBox(height: 18),
       FilledButton.icon(
         key: const Key('region_onboarding_use_location'),
-        onPressed: _busy ? null : _useLocation,
+        onPressed: _locked ? null : _useLocation,
         icon: _busy
             ? const SizedBox(
                 width: 16,
@@ -278,13 +319,13 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
       const SizedBox(height: 10),
       OutlinedButton.icon(
         key: const Key('region_onboarding_manual'),
-        onPressed: _busy ? null : _openRegions,
+        onPressed: _locked ? null : _openRegions,
         icon: const Icon(Icons.list_alt, size: 18),
         label: const Text('اختيار يدوي'),
       ),
       TextButton(
         key: const Key('region_onboarding_skip'),
-        onPressed: _busy ? null : () => Navigator.of(context).pop(),
+        onPressed: _locked ? null : () => Navigator.of(context).pop(),
         child: const Text('تخطّي'),
       ),
     ];
@@ -299,7 +340,7 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
         children: [
           IconButton(
             key: const Key('region_onboarding_back'),
-            onPressed: _busy ? null : _back,
+            onPressed: _locked ? null : _back,
             icon: const Icon(Icons.arrow_back),
             tooltip: 'رجوع',
           ),
@@ -326,14 +367,17 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
         child: ListenableBuilder(
           listenable: Listenable.merge([services.places, services.regions]),
           builder: (context, _) {
+            // محافظات هذه الورقة **النشطة** وحدها (#127): ورقة الاختيار ليست
+            // منتقي الاكتشاف، واختيار محافظة موقوفة يُردّ إلى الافتراضية.
+            final active = services.regions.activeRegions;
             if (townsStep) {
-              final region = services.regions.regions.firstWhere(
+              final region = active.firstWhere(
                 (r) => r.id == _region!.id,
                 orElse: () => _region!,
               );
               return _townList(context, region);
             }
-            return _regionList(context, services.regions.regions);
+            return _regionList(context, active);
           },
         ),
       ),
@@ -385,7 +429,7 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
           contentPadding: EdgeInsets.zero,
           title: Text(region.name, style: TextStyle(color: context.c.ink)),
           trailing: const Icon(Icons.chevron_left, size: 20),
-          onTap: _busy ? null : () => _openTowns(region),
+          onTap: _locked ? null : () => _openTowns(region),
         );
       },
     );
@@ -404,14 +448,14 @@ class _RegionOnboardingSheetState extends State<_RegionOnboardingSheet> {
               region.towns[index],
               style: TextStyle(color: context.c.ink),
             ),
-            onTap: _busy ? null : () => _commit(region),
+            onTap: _locked ? null : () => _commit(region),
           ),
         const SizedBox(height: 6),
         Padding(
           padding: const EdgeInsets.only(top: 6),
           child: FilledButton(
             key: const Key('region_onboarding_save'),
-            onPressed: _busy ? null : () => _commit(region),
+            onPressed: _locked ? null : () => _commit(region),
             child: Text('حفظ «${region.name}»'),
           ),
         ),

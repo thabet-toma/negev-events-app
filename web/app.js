@@ -20,8 +20,14 @@ let pickerPinPlacedByUser = false;
 let townCoordinates = {};
 let townsList = [];
 let villagesList = []; // من GET /api/towns (villages) — لا تُكرَّر في أي عميل (خريطة #21)
-// من GET /api/towns (regions): اسم المنطقة نفسه مكان صالح لمناسبة بلدتها غير معروفة
+// من GET /api/towns (regions): المحافظات **النشطة** وحدها. اسم المحافظة نفسه
+// مكان صالح لمناسبة بلدتها غير معروفة.
 let regionsList = [];
+// من GET /api/towns (regions_soon): المحافظات الموقوفة — `{ id, name }` فقط،
+// تُعرض في منتقي الاكتشاف «قريباً» بلا اختيار (تذكرة #127). منفصلة عن
+// regionsList عمداً: تلك قائمة **أماكن نشر** يقرؤها كل عميل منشور بلا فحص،
+// فوجود موقوفة فيها يجعله ينشر فيها فيأخذ 400.
+let regionsSoonList = [];
 // المحافظة المختارة للاكتشاف (تذكرة #124) — معرّفها الرقمي من regionsList،
 // وnull حتى يصل GET /api/towns. المتغيّر للرسم وحده: الحقيقة المحفوظة هي
 // negev_region في localStorage، وهي وحدها ما يقرؤه apiFetch ليرسل X-Region.
@@ -400,8 +406,8 @@ async function initAppDownload() {
 
     btn.href = data.apk_url;
     btn.title = data.latest_version
-      ? `تطبيق مناسبات النقب — الإصدار ${data.latest_version}`
-      : 'تطبيق مناسبات النقب لأجهزة أندرويد';
+      ? `تطبيق مناسبات منطقتك — الإصدار ${data.latest_version}`
+      : 'تطبيق مناسبات منطقتك لأجهزة أندرويد';
 
     const size = await fetchDownloadSize(data.apk_url);
     if (size) {
@@ -2182,7 +2188,9 @@ function selectedPlacesHtml() {
   const tokens = FILTER_SHEETS.place.selected();
   if (!tokens.length) {
     const regionName = activeRegionName();
-    return regionName ? escapeHtml(`منطقة ${regionName}`) : 'منطقة النقب';
+    // بلا محافظة فعّالة يقول «منطقتك» لا اسم محافظة (تذكرة #127): النصّ العام
+    // يخاطب كل المحافظات التي وصل إليها التطبيق، لا واحدة بعينها.
+    return regionName ? escapeHtml(`منطقة ${regionName}`) : 'منطقتك';
   }
   const resolvedNames = tokens.map(t => resolveFilterOptionLabel(FILTER_SHEETS.place, t)).filter(Boolean);
   if (resolvedNames.length) return escapeHtml(resolvedNames.join('، '));
@@ -2223,7 +2231,13 @@ function eventNavUrls(evt) {
       mapsUrl: `https://www.google.com/maps/search/?api=1&query=${evt.latitude},${evt.longitude}`
     };
   }
-  const q = encodeURIComponent(`${evt.location_name} ${evt.town} النقب`);
+  // محافظة **المناسبة** نفسها بدل «النقب» الثابت (تذكرة #127): إلحاق النقب
+  // بمناسبة في طولكرم يحيّد نتائج البحث ويرسل السائق إلى المكان الخطأ.
+  // تُسقَط إن كان اسم البلدة هو اسم المحافظة نفسه (مناسبة على مستوى المحافظة).
+  const regionName = regionNameById(evt.region_id);
+  const parts = [evt.location_name, evt.town];
+  if (regionName && regionName !== evt.town) parts.push(regionName);
+  const q = encodeURIComponent(parts.filter(Boolean).join(' '));
   return {
     wazeUrl: `https://waze.com/ul?q=${q}&navigate=yes`,
     mapsUrl: `https://www.google.com/maps/search/?api=1&query=${q}`
@@ -3514,6 +3528,7 @@ async function loadTownCoordinates() {
       if (data.towns) townsList = data.towns.filter(t => t !== 'الكل');
       if (data.villages) villagesList = data.villages;
       if (data.regions) regionsList = data.regions;
+      if (data.regions_soon) regionsSoonList = data.regions_soon;
       return true;
     }
     return false;
@@ -3529,6 +3544,32 @@ function findRegionByName(name) {
 }
 
 /**
+ * المحافظات **النشطة** — `regions` من GET /api/towns، ولا يحمل إلا النشطة
+ * (الموقوفة في `regions_soon`، تذكرة #127). المرشِّح هنا للدفاع لا للفصل:
+ * `is_active !== false` يعامل ردّاً قديماً بلا الحقل على أنه نشط.
+ */
+function activeRegionsList() {
+  return regionsList.filter(r => r.is_active !== false);
+}
+
+/** المحافظات الموقوفة — `regions_soon`: `{ id, name }` تُعرض «قريباً» فقط. */
+function soonRegionsList() {
+  return regionsSoonList.filter(r => r && r.name);
+}
+
+/**
+ * اسم المحافظة بمعرّفها من القائمتين (نشطة أو موقوفة)، أو null.
+ * يخدم ما يحتاج اسم محافظة المناسبة — بحث الخرائط مثلاً — فلا يُلحق اسم
+ * محافظةٍ ثابتة بمناسبةٍ في محافظة أخرى.
+ */
+function regionNameById(regionId) {
+  const id = Number(regionId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const region = regionsList.find(r => r.id === id) || regionsSoonList.find(r => r.id === id);
+  return region ? region.name : null;
+}
+
+/**
  * يملأ قائمة بلدات منسدلة من townsList (مجلوبة من الخادم، لا قائمة مثبَّتة)،
  * وبعدها خيار لكل منطقة «بلا بلدة محدّدة». قيمة حالية ليست بين الخيارات
  * (بلدة أوقفها الأدمن مثلاً) تُضاف مختارةً — وإلا فرغت القائمة وحُفظ '' بدلها.
@@ -3538,7 +3579,8 @@ function populateTownSelect(selectId, selectedValue) {
   if (!select) return;
   const options = [
     ...townsList.map(t => ({ value: t, label: t })),
-    ...regionsList.map(r => ({ value: r.name, label: `${r.name} — بلا بلدة محدّدة` }))
+    // المحافظة **النشطة** وحدها مكاناً (تذكرة #127) — الموقوفة ليست مكان نشر.
+    ...activeRegionsList().map(r => ({ value: r.name, label: `${r.name} — بلا بلدة محدّدة` }))
   ];
   if (selectedValue && !options.some(o => o.value === selectedValue)) {
     options.push({ value: selectedValue, label: selectedValue });
@@ -3549,8 +3591,9 @@ function populateTownSelect(selectId, selectedValue) {
 
 /**
  * يهيّئ منتقي المحافظة (#124): يقرأ المحفوظ في negev_region — إن كان محافظة
- * نشطة فهو المختار، وإلا فمحافظة الحساب النشطة إن وُجدت (وهي ما يستعمله
- * الخادم بلا ترويسة)، وإلا فأول محافظة نشطة هي الافتراضية بلا رسالة خطأ.
+ * **نشطة** فهو المختار (الموقوفة تُعامل كأنها ليست اختياراً، #127)، وإلا فمحافظة
+ * الحساب النشطة إن وُجدت (وهي ما يستعمله الخادم بلا ترويسة)، وإلا فأول محافظة
+ * نشطة هي الافتراضية بلا رسالة خطأ.
  * مفتاح قديم لم يعد نشطاً يُمسح ويعامل كأنه لا اختيار، كي لا يرسل apiFetch
  * معرّفاً يردّ عليه الخادم 400. والحفظ لا يحدث هنا: زائر بلا اختيار يبقى
  * بلا ترويسة، والخادم نفسه يعرض المحافظة الافتراضية.
@@ -3562,12 +3605,13 @@ async function initRegionPicker() {
 
 /** يثبّت المحافظة النشطة من القائمة المجلوبة والمحفوظ، ثم يرسم. */
 function syncRegionPickerSelection() {
-  if (!regionsList.length) {
+  const active = activeRegionsList();
+  if (!active.length) {
     renderRegionPicker();
     return;
   }
   const saved = readSavedRegionId();
-  const savedRegion = saved !== null ? regionsList.find(r => r.id === saved) : null;
+  const savedRegion = saved !== null ? active.find(r => r.id === saved) : null;
   if (savedRegion) {
     selectedRegionId = savedRegion.id;
   } else {
@@ -3578,8 +3622,8 @@ function syncRegionPickerSelection() {
     const accountRegionId = currentUser && currentUser.region_id !== null && currentUser.region_id !== undefined
       ? Number(currentUser.region_id)
       : null;
-    const accountRegion = accountRegionId !== null ? regionsList.find(r => r.id === accountRegionId) : null;
-    selectedRegionId = (accountRegion || regionsList[0]).id;
+    const accountRegion = accountRegionId !== null ? active.find(r => r.id === accountRegionId) : null;
+    selectedRegionId = (accountRegion || active[0]).id;
   }
   renderRegionPicker();
 }
@@ -3587,11 +3631,12 @@ function syncRegionPickerSelection() {
 /**
  * يتبنّى محافظة الحساب بعد وصولها من GET /api/auth/me ويرسمها — لكن لا
  * يعلو على اختيار صريح محفوظ في المتصفّح، ولا على محافظة غير نشطة (الخادم
- * نفسه يعود للافتراضية فيها). يُستدعى بعد تحديث currentUser في أي مسار جلسة.
+ * نفسه يعود للافتراضية فيها).
+ * يُستدعى بعد تحديث currentUser في أي مسار جلسة.
  */
 function adoptAccountRegion(regionId) {
   if (readSavedRegionId() !== null) return;
-  const region = regionsList.find(r => r.id === Number(regionId));
+  const region = activeRegionsList().find(r => r.id === Number(regionId));
   if (!region || selectedRegionId === region.id) return;
   selectedRegionId = region.id;
   renderRegionPicker();
@@ -3599,7 +3644,8 @@ function adoptAccountRegion(regionId) {
 
 /** محافظة الاكتشاف الفعّالة الآن (التي يرسمها المنتقي)، أو null قبل وصول القائمة. */
 function activeRegion() {
-  return regionsList.find(r => r.id === selectedRegionId) || regionsList[0] || null;
+  const active = activeRegionsList();
+  return active.find(r => r.id === selectedRegionId) || active[0] || null;
 }
 
 /** اسم المحافظة المعروضة الآن — من activeRegion وحدها، وإلا null. */
@@ -3610,23 +3656,35 @@ function activeRegionName() {
 
 /**
  * يرسم حبوب المحافظات في الموضعين: أعلى التغذية، ونسخة الدرج على الهاتف.
- * كل حبة تحمل حالتها — «مختارة» أو «متاحة» — واسم المحافظة من regions وحدها.
+ * النشطة تحمل حالتها — «مختارة» أو «متاحة» — وهي وحدها القابلة للاختيار.
+ * والموقوفة (`regions_soon`) تُرسم «قريباً» بلونٍ خفيف ومع `aria-disabled`
+ * **لا `disabled`**: الزرّ المعطّل يخرج من التنقّل فيفقد قارئ الشاشة نصّه
+ * («اسم المحافظة — قريباً»)، ومع `aria-disabled` يبقى مقروءاً وقابلاً للتركيز
+ * لكن بلا `onclick` فلا شيء يختاره. واسم المحافظة من الخادم وحده.
  * القائمة فارغة قبل وصول GET /api/towns أو عند فشله، فيبقى المنتقي مخفياً.
  */
 function renderRegionPicker() {
-  const chipsHtml = regionsList.map(region => {
-    const isSelected = region.id === selectedRegionId;
-    return `<button type="button" class="region-chip${isSelected ? ' active' : ''}" data-region-id="${region.id}" aria-pressed="${isSelected}" onclick="selectRegion(${region.id})">
+  const chipHtml = (region, { soon, selected }) => {
+    const state = soon ? 'قريباً' : (selected ? 'مختارة' : 'متاحة');
+    const classes = `region-chip${selected ? ' active' : ''}${soon ? ' soon' : ''}`;
+    const ariaDisabled = soon ? ' aria-disabled="true"' : '';
+    const onClick = soon ? '' : ` onclick="selectRegion(${region.id})"`;
+    return `<button type="button" class="${classes}" data-region-id="${region.id}" aria-pressed="${selected}"${ariaDisabled}${onClick}>
       <span class="region-chip-name">${escapeHtml(region.name)}</span>
-      <span class="region-chip-state">${isSelected ? 'مختارة' : 'متاحة'}</span>
+      <span class="region-chip-state">${state}</span>
     </button>`;
-  }).join('');
+  };
+
+  const chipsHtml = [
+    ...activeRegionsList().map(region => chipHtml(region, { soon: false, selected: region.id === selectedRegionId })),
+    ...soonRegionsList().map(region => chipHtml(region, { soon: true, selected: false }))
+  ].join('');
 
   [['regionPicker', 'regionPickerChips'], ['drawerRegionPicker', 'drawerRegionPickerChips']].forEach(([wrapId, chipsId]) => {
     const wrap = document.getElementById(wrapId);
     const chips = document.getElementById(chipsId);
     if (!wrap || !chips) return;
-    wrap.hidden = !regionsList.length;
+    wrap.hidden = !chipsHtml;
     chips.innerHTML = chipsHtml;
   });
 }
@@ -3640,6 +3698,8 @@ function renderRegionPicker() {
  */
 async function selectRegion(regionId) {
   const region = regionsList.find(r => r.id === Number(regionId));
+  // الموقوفة تُعرض «قريباً» ولا تُختار (تذكرة #127): معرّفاتها في
+  // regionsSoonList لا في regionsList، فلا يجدها البحث هنا ولا تُحفظ ولا تُجلب.
   if (!region) return;
 
   // لا خروج مبكر إلا حين تكون الحبة هي الفعّالة **والمحفوظة** فعلاً: المحافظة
@@ -3702,7 +3762,8 @@ function clearMapMarkers() {
 }
 
 /**
- * يملأ منتقي المحافظة المنسدل (#124) من regionsList النشطة. الخيار الفارغ
+ * يملأ منتقي المحافظة المنسدل (#124) من المحافظات **النشطة** (تذكرة #127:
+ * الموقوفة مكانٌ لا تُنشر فيه مناسبة). الخيار الفارغ
  * أولاً يمنع إرسال محافظة بلا اختيار صريح — العميل هو من يُلزم بها، والخادم
  * يقبل region_id اختيارياً (#120). قيمة حالية غير نشطة (محافظة أُوقفت بعد
  * النشر) تُضاف مختارةً بنفس قاعدة populateTownSelect، فلا يضيع تعديل بلا سبب.
@@ -3710,7 +3771,7 @@ function clearMapMarkers() {
 function populateRegionSelect(selectId, selectedValue) {
   const select = document.getElementById(selectId);
   if (!select) return;
-  const options = regionsList.map(r => ({ value: String(r.id), label: r.name }));
+  const options = activeRegionsList().map(r => ({ value: String(r.id), label: r.name }));
   if (selectedValue !== null && selectedValue !== undefined && !options.some(o => o.value === String(selectedValue))) {
     options.push({ value: String(selectedValue), label: 'المحافظة الحالية' });
   }
@@ -3793,7 +3854,9 @@ function recenterLocationPicker() {
 
 /** منظر عام بلا بلدة: مركز المنطقة الأولى وتكبيرها متى وصلت المناطق، وإلا الثابت الاحتياطي. */
 function neutralPickerView() {
-  const region = regionsList[0];
+  // محافظة **نشطة** (تذكرة #127): منظر منتقي مكان النشر لا يقف على محافظة
+  // موقوفة «قريباً» لا يُنشر فيها شيء.
+  const region = activeRegionsList()[0];
   if (region) return { center: [region.latitude, region.longitude], zoom: region.map_zoom };
   return { center: NEGEV_NEUTRAL_CENTER, zoom: 9 };
 }
@@ -3904,7 +3967,7 @@ function copyAIPoem() {
 function sharePoemToWhatsApp() {
   const line1 = document.getElementById('poemLine1').textContent;
   const line2 = document.getElementById('poemLine2').textContent;
-  const text = encodeURIComponent(`🎉 تهنئة مباركة:\n\n${line1}\n${line2}\n\nعبر تطبيق وموقع مناسبات النقب: ${window.location.origin}`);
+  const text = encodeURIComponent(`🎉 تهنئة مباركة:\n\n${line1}\n${line2}\n\nعبر تطبيق وموقع مناسبات منطقتك: ${window.location.origin}`);
   window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
 }
 
@@ -4394,7 +4457,9 @@ function placeFilterTownOptions() {
   if (!region) {
     return [
       ...townsList.map(name => ({ kind: 'town', id: name, label: name })),
-      ...regionsList.map(r => ({ kind: 'town', id: r.name, label: `${r.name} (بلا بلدة محدّدة)` }))
+      // بلدات كل المحافظات؛ والمحافظة **النشطة** وحدها مكاناً (#127) — الموقوفة
+      // لا تُعرض للاكتشاف فلا تظهر في فلتره.
+      ...activeRegionsList().map(r => ({ kind: 'town', id: r.name, label: `${r.name} (بلا بلدة محدّدة)` }))
     ];
   }
   const regionTowns = Array.isArray(region.towns) ? region.towns : townsList;
@@ -5257,13 +5322,15 @@ function updateVillagePickerVisibility() {
   const isVillages = townSelect.value === VILLAGES_TOWN;
   group.style.display = isVillages ? 'block' : 'none';
 
-  // المحافظة إلزامية تحت البند الجامع وحده (تذكرة #124): تُملأ من regionsList
-  // مرة واحدة ثم تبقى، فلا يمسح تبديلُ البلدة ذهاباً وإياباً اختيار المستخدم.
-  // وقائمة محافظات فارغة (فشل GET /api/towns) لا تعرض حقلاً لا خيار فيه.
+  // المحافظة إلزامية تحت البند الجامع وحده (تذكرة #124): تُملأ من
+  // regionsList **النشطة** (تذكرة #127) مرة واحدة ثم تبقى، فلا يمسح تبديلُ
+  // البلدة ذهاباً وإياباً اختيار المستخدم. وقائمة محافظات فارغة (فشل
+  // GET /api/towns، أو كلها موقوفة) لا تعرض حقلاً لا خيار فيه.
   const regionGroup = document.getElementById('addRegionGroup');
   const regionSelect = document.getElementById('addRegion');
-  if (regionGroup) regionGroup.style.display = isVillages && regionsList.length ? 'block' : 'none';
-  if (regionSelect && isVillages && regionsList.length && regionSelect.options.length <= 1) {
+  const activeRegionCount = activeRegionsList().length;
+  if (regionGroup) regionGroup.style.display = isVillages && activeRegionCount ? 'block' : 'none';
+  if (regionSelect && isVillages && activeRegionCount && regionSelect.options.length <= 1) {
     populateRegionSelect('addRegion');
   }
 
@@ -6417,9 +6484,10 @@ async function handleEventSubmit(e) {
     }
     const regionSelect = document.getElementById('addRegion');
     regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
-    // تُلزَم فقط إن كانت قائمة المحافظات قد وصلت فعلاً؛ تعذّر GET /api/towns
-    // يترك الحقل بلا خيارات، فلا يُحوَّل إلى منع نشر — الخادم يشتقّ الافتراضية.
-    if (!regionId && regionsList.length) {
+    // تُلزَم فقط إن كانت قائمة المحافظات **النشطة** قد وصلت فعلاً (تذكرة #127)؛
+    // تعذّر GET /api/towns، أو كون كلها موقوفة، يترك الحقل بلا خيارات فلا
+    // يُحوَّل إلى منع نشر — الخادم يشتقّ الافتراضية.
+    if (!regionId && activeRegionsList().length) {
       alert('اختر المحافظة التي تنتمي إليها القرية');
       return;
     }
@@ -6790,13 +6858,13 @@ function updateEditRegionGroupVisibility() {
   if (!group || !townSelect) return;
   const townGroup = townSelect.closest('.form-group');
   const townVisible = !townGroup || townGroup.style.display !== 'none';
-  group.style.display = townVisible && regionsList.length && townSelect.value === VILLAGES_TOWN ? 'block' : 'none';
+  group.style.display = townVisible && activeRegionsList().length && townSelect.value === VILLAGES_TOWN ? 'block' : 'none';
 }
 
 /** تبديل بلدة المناسبة في التعديل — يُظهر/يُخفي منتقي المحافظة ويجهّز خياراته. */
 function handleEditTownChange() {
   const regionSelect = document.getElementById('editRegion');
-  if (regionSelect && regionsList.length && regionSelect.options.length <= 1) {
+  if (regionSelect && activeRegionsList().length && regionSelect.options.length <= 1) {
     populateRegionSelect('editRegion', editEventRegionId);
   }
   updateEditRegionGroupVisibility();
@@ -6876,7 +6944,7 @@ async function handleEventEditSubmit(e) {
   const editRegionSelect = document.getElementById('editRegion');
   if (editRegionGroup && editRegionGroup.style.display !== 'none' && editRegionSelect) {
     const chosenRegionId = editRegionSelect.value ? Number(editRegionSelect.value) : null;
-    if (!chosenRegionId && regionsList.length) {
+    if (!chosenRegionId && activeRegionsList().length) {
       alert('اختر المحافظة');
       return;
     }
@@ -8215,7 +8283,7 @@ async function fetchNokootRecords() {
       list.innerHTML = data.records.map(item => `
         <div class="nokoot-item-card">
           <div class="nokoot-item-info">
-            <h4>${escapeHtml(item.recipient_name)} (${escapeHtml(item.clan_town || 'النقب')})</h4>
+            <h4>${escapeHtml(item.recipient_name)} (${escapeHtml(item.clan_town || 'منطقتك')})</h4>
             <div class="nokoot-item-meta">
               <span><i class="fa-regular fa-calendar"></i> ${item.event_date}</span>
               ${item.notes ? ` • <span>${escapeHtml(item.notes)}</span>` : ''}
@@ -8285,7 +8353,7 @@ function exportNokootData() {
       const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `سجل-النقوط-مناسبات-النقب-${Date.now()}.csv`;
+      link.download = `سجل-النقوط-مناسبات-منطقتك-${Date.now()}.csv`;
       link.click();
     });
 }
@@ -9240,13 +9308,13 @@ function renderStickerCanvas() {
 
   ctx.fillStyle = 'rgba(223, 177, 91, 0.7)';
   ctx.font = '14px Tajawal, sans-serif';
-  ctx.fillText('مناسبات وأعراس النقب • دياركم عامرة', width / 2, 340);
+  ctx.fillText('مناسبات وأعراس منطقتك • دياركم عامرة', width / 2, 340);
 }
 
 function downloadStickerImage() {
   const canvas = document.getElementById('stickerCanvas');
   const link = document.createElement('a');
-  link.download = `تهنئة-مناسبات-النقب-${Date.now()}.png`;
+  link.download = `تهنئة-مناسبات-منطقتك-${Date.now()}.png`;
   link.href = canvas.toDataURL('image/png');
   link.click();
 }
@@ -9254,7 +9322,7 @@ function downloadStickerImage() {
 function shareStickerToWhatsApp() {
   const sender = document.getElementById('stickerSenderName').value || 'أخوكم';
   const phrase = document.getElementById('stickerPhrase').value;
-  const text = encodeURIComponent(`🎉 ${phrase}\nتهنئة خاصة من: ${sender}\n\nعبر تطبيق وموقع مناسبات النقب: ${window.location.origin}`);
+  const text = encodeURIComponent(`🎉 ${phrase}\nتهنئة خاصة من: ${sender}\n\nعبر تطبيق وموقع مناسبات منطقتك: ${window.location.origin}`);
   window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
 }
 

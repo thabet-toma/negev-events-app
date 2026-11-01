@@ -441,7 +441,7 @@ void main() {
       expect(find.text('البث المباشر'), findsNothing);
       expect(find.text('بث مباشر'), findsNothing);
       // الحارس على الغياب لا يمرّ على لوح لم يُفتح أصلاً.
-      expect(find.text('مناسبات النقب'), findsOneWidget);
+      expect(find.text('مناسبات منطقتك'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
     });
   });

@@ -2947,17 +2947,21 @@ async function run() {
     }
   });
 
-  // TWN-5 (#127): `regions` on GET /api/towns became the region picker's read —
-  // every governorate with its real counts — while publishing still validates
-  // against the active ones only. The rows below are created here and removed
-  // at the end of this block; names are unique so a failed earlier run cannot
-  // collide with them.
+  // TWN-5 (#127): GET /api/towns carries the discovery picker's read. `regions`
+  // stays exactly what it always was — the ACTIVE governorates — plus
+  // `is_active: true` and the two counts; the stopped ones travel in a separate
+  // `regions_soon: [{ id, name }]`. That split is a compatibility rule, not a
+  // preference: every APK published before #127 builds the publish town picker
+  // from `regions` without checking any state, so a stopped governorate in that
+  // array is offered as a valid place and then refused with 400 — and every
+  // published client sends `X-App-Version`, so the server cannot tell them
+  // apart. Publishing still validates against the active names only.
   const discoveryStamp = Date.now();
   const discoveryActiveRegionName = `محافظة اكتشاف ${discoveryStamp}`;
   const discoveryStoppedName = `محافظة موقوفة ${discoveryStamp}`;
   const discoveryCleanup = { eventIds: [], townIds: [], regionIds: [] };
 
-  await test('GET /api/towns regions carries is_active and real towns_count/events_count for an active and a stopped governorate, and publishing still accepts only the active name (#127)', async () => {
+  await test('GET /api/towns keeps regions active-only with is_active and real counts, moves a stopped governorate to regions_soon as {id,name}, and still publishes only into the active name (#127)', async () => {
     const { insertId: activeRegionId } = await db.execute(
       `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
        VALUES (?, 32.31, 35.03, 10, 90, 1)`,
@@ -2982,9 +2986,10 @@ async function run() {
     );
     discoveryCleanup.townIds.push(stoppedTownId);
 
-    // Three rows on purposes: pending, approved, rejected. The count the towns
-    // tab shows (listForAdmin) is every row — no status filter — so that is
-    // what the picker's number must be too.
+    // Three rows on purpose: pending, approved, rejected — plus one more that
+    // the regular user's publish queues as pending below. **Only the approved
+    // row counts:** the number is shown to the public in the expansion sheet,
+    // and counting the moderation queue would overstate what the feed shows.
     const insertEvent = async (status, eventDate) => {
       const { insertId } = await db.execute(
         `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status)
@@ -3006,26 +3011,34 @@ async function run() {
     });
     assert.strictEqual(published.status, 201, published.body.message);
     discoveryCleanup.eventIds.push(published.body.eventId);
-    const publishedRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [published.body.eventId]);
+    const publishedRow = await db.queryOne('SELECT region_id, status FROM events WHERE id = ?', [published.body.eventId]);
     assert.strictEqual(publishedRow.region_id, activeRegionId, 'the active governorate name is still a valid place');
+    assert.notStrictEqual(publishedRow.status, 'approved', 'this row is a queued request, so it must not reach the public count');
 
     const { body } = await api('GET', '/api/towns');
     const active = body.regions.find(region => region.id === activeRegionId);
-    const stopped = body.regions.find(region => region.id === stoppedRegionId);
+    const stoppedInRegions = body.regions.find(region => region.id === stoppedRegionId);
     assert.ok(active, 'a governorate created at runtime must appear in regions');
+    assert.strictEqual(stoppedInRegions, undefined, 'a stopped governorate must never reach regions — a pre-#127 APK publishes from that array without checking any state');
     assert.strictEqual(active.name, discoveryActiveRegionName);
     assert.strictEqual(active.is_active, true);
     assert.strictEqual(active.towns_count, 1, 'a disabled town is not counted');
-    const { total } = await db.queryOne('SELECT COUNT(*) AS total FROM events WHERE region_id = ?', [activeRegionId]);
-    assert.strictEqual(active.events_count, Number(total), 'the count is read from the database, and equals every row on events.region_id');
-    assert.strictEqual(active.events_count, 4, 'three seeded rows plus the published one — no status filter');
+    const { approved } = await db.queryOne(
+      "SELECT COUNT(*) AS approved FROM events WHERE region_id = ? AND status = 'approved'",
+      [activeRegionId]
+    );
+    assert.strictEqual(active.events_count, Number(approved), 'the count is read from the database and equals the approved rows only');
+    assert.strictEqual(active.events_count, 1, 'one approved row — the pending request and the rejection do not count');
     assert.ok(active.towns.length === 1, 'regions keeps its active town names — clients publish and centre the map on them');
-    assert.ok(body.regions.every(region => typeof region.is_active === 'boolean'), 'every row carries is_active');
+    assert.ok(body.regions.every(region => region.is_active === true), 'every row in regions carries is_active: true');
 
-    assert.ok(stopped, 'a stopped governorate stays in the discovery read instead of vanishing');
-    assert.strictEqual(stopped.is_active, false);
-    assert.strictEqual(stopped.towns_count, 0);
-    assert.strictEqual(stopped.events_count, 0);
+    // ...and the stopped one is still announced — as a name and an id, nothing else.
+    assert.ok(Array.isArray(body.regions_soon), 'regions_soon must be present even when empty');
+    const soon = body.regions_soon.find(region => region.id === stoppedRegionId);
+    assert.ok(soon, 'a stopped governorate is listed in regions_soon instead of vanishing');
+    assert.deepStrictEqual(Object.keys(soon).sort(), ['id', 'name'], 'regions_soon carries the name and the id only — no centre, no counts, no is_active');
+    assert.strictEqual(soon.name, discoveryStoppedName);
+    assert.ok(!body.towns.includes(discoveryStoppedName), 'a stopped governorate is not a publishable town either');
 
     // ...and it is not a place anything may be published into.
     const refused = await api('POST', '/api/events', {

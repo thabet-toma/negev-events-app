@@ -7,9 +7,10 @@ import '../api/negev_api.dart';
 
 /// مفتاح «سُئل عن منطقته» — معرّف الورقة مرة واحدة لكل تثبيت (تذكرة #126).
 ///
-/// يُكتب عند **أي** خروج من الورقة: اختيار محافظة، أو تخطٍّ. فحين يغلقها
-/// المستخدم للتخطّي لا تعود في الإقلاع التالي، ولا يبقى لها مدخل في التطبيق
-/// إلا من «حسابي» (زرّ إعادة الفتح في قسم «المنطقة»).
+/// يُكتب عند **أي** خروج من الورقة: اختيار محافظة، أو «تخطّي»، أو إغلاقٍ
+/// عابر (نقرة خارج الورقة أو زرّ رجوع الجهاز) — والإغلاق العابر بمثابة تخطٍّ
+/// فلا يتغيّر الاختيار. فحين تغلق لا تعود في الإقلاع التالي، ولا يبقى لها
+/// مدخل في التطبيق إلا من «حسابي» (زرّ إعادة الفتح في قسم «المنطقة»).
 const String regionOnboardedKey = 'negev_region_onboarded';
 
 /// هل سُئل المستخدم عن منطقته سابقاً؟ تعذّر قراءة التخزين = «لم يُسأل» كي
@@ -37,8 +38,11 @@ Future<void> markRegionOnboarded() async {
 /// مسافة دائرة عظمى بالكيلومترات — تُستعمل لمقارنة قربٍ لا لقياس دقيق، فالأرض
 /// كرة في هذه الحسبة (خطأ أقل من نسبة في المدى المحلّي).
 ///
-/// `latlong2` لا يوفّرها في الكتالوج، والمشروع لا يحمل دالة مسافة سابقة —
-/// فنسخة واحدة صغيرة موثّقة هنا خير من تكرار الحساب في كل من يطلبه.
+/// للمعادلة نظيرٌ على الخادم: `haversineDistanceKm` في
+/// `server/src/utils/geo.js`. وهي **مكرَّرة هنا عمداً**: التطبيق لا يستورد وحدات
+/// الخادم ولا يجوز أن يستوردها (وحدتان منفصلتان لا تتشاركان حزمة، والقاعدة
+/// تمنع منطق الأعمال في العميل)، فمعادلةٌ من ستّة أسطر تُكرَّر بدل ربطٍ لا
+/// وجود له. أي تعديل على إحداهما يوجب مراجعة الأخرى.
 double haversineDistanceKm(
   double latitude1,
   double longitude1,
@@ -58,6 +62,14 @@ double haversineDistanceKm(
   return 2 * earthKm * math.asin(math.min(1, math.sqrt(a)));
 }
 
+/// سقف المسافة بين موقع الجهاز وأقرب مكان معروف في الكتالوج — بالكيلومتر.
+///
+/// خارجه **لا تُنسب النقطة إلى محافظة إطلاقاً**: بلا سقف كان موقعٌ في قارةٍ
+/// أخرى «ينجح» فتُسجَّل له النقب لمجرّد أنها أقرب المحافظات إليه، وهذا أسوأ من
+/// سؤال صريح. الحدّ اختيار متعمَّد — من كان أبعد من أي مكان معروف يختار
+/// محافظته بيده، والتدفّق ينتهي إلى الاختيار اليدوي برسالته القصيرة.
+const double maxRegionDistanceKm = 150;
+
 /// المحافظة التي يقع فيها أقرب مكانٍ معروف إلى [latitude]/[longitude].
 ///
 /// **أقرب بلدة أولاً:** المحافظة تُشتقّ من بلدةٍ لها مركز في الكتالوج
@@ -69,13 +81,19 @@ double haversineDistanceKm(
 /// محافظات بلا بلدات) رجعنا إلى مركز المحافظة نفسها — أقرب منطقة معروفة، وهو
 /// أدقّ ما يبقى بلا اختراع نقطة.
 ///
-/// `null` حين لا محافظات إطلاقاً — قبل وصول `GET /api/towns` أي.
+/// `null` في ثلاثة مواضع، وكلها تنتهي إلى الاختيار اليدوي: لا محافظات نشطة
+/// (قبل وصول `GET /api/towns` أي)، أو كلها بلا إحداثيات، أو أقرب مكان أبعد من
+/// [maxRegionDistanceKm] — موقعٌ على الطرف الآخر من العالم ليس دليلاً على
+/// محافظة.
+///
+/// المحافظات **النشطة** وحدها مرشَّحة (#127): الموقوفة تظهر في منتقي
+/// الاكتشاف «قريباً» ولا تُختار، فموقع المستخدم لا يفتح عليها.
 Region? nearestRegionFor(
   double latitude,
   double longitude,
   PlacesCatalog catalog,
 ) {
-  final regions = catalog.regions;
+  final regions = catalog.activeRegions;
   if (regions.isEmpty) return null;
 
   Region? nearest;
@@ -92,23 +110,26 @@ Region? nearestRegionFor(
       }
     }
   }
-  if (nearest != null) return nearest;
 
-  for (final region in regions) {
-    // محافظة بلا مركز (صفر/صفر = «لا إحداثيات» كما يقرؤها `Region.fromJson`)
-    // لا تصلح مرشَّحاً، وإلا فازت كل نقطةٍ في العالم بخليج غينيا.
-    if (region.latitude == 0 && region.longitude == 0) continue;
-    final km = haversineDistanceKm(
-      latitude,
-      longitude,
-      region.latitude,
-      region.longitude,
-    );
-    if (km < nearestKm) {
-      nearestKm = km;
-      nearest = region;
+  if (nearest == null) {
+    for (final region in regions) {
+      // محافظة بلا مركز (صفر/صفر = «لا إحداثيات» كما يقرؤها `Region.fromJson`)
+      // لا تصلح مرشَّحاً، وإلا فازت كل نقطةٍ في العالم بخليج غينيا.
+      if (region.latitude == 0 && region.longitude == 0) continue;
+      final km = haversineDistanceKm(
+        latitude,
+        longitude,
+        region.latitude,
+        region.longitude,
+      );
+      if (km < nearestKm) {
+        nearestKm = km;
+        nearest = region;
+      }
     }
   }
+
+  if (nearest == null || nearestKm > maxRegionDistanceKm) return null;
   return nearest;
 }
 

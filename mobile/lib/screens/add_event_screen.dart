@@ -479,8 +479,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         return 'يرجى اختيار القرية';
       }
       // إلزامية فقط حين وصلت المحافظات فعلاً — خادم بلا محافظات أو انقطاع
-      // شبكة لا يجعل النموذج غير قابل للإرسال.
-      if (AppServices.of(context).places.catalog.regions.isNotEmpty &&
+      // شبكة لا يجعل النموذج غير قابل للإرسال. والنشطة وحدها تدخل هنا: محافظة
+      // موقوفة ليست مكان نشر (تذكرة #127).
+      if (AppServices.of(context).places.catalog.activeRegions.isNotEmpty &&
           _regionId == null) {
         return 'اختر المحافظة التي تنتمي إليها القرية';
       }
@@ -849,8 +850,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
           ],
           // محافظة القرية (تذكرة #125) — إلزامية تحت البند الجامع كما في الويب،
           // وبنودها من `GET /api/towns` وحده. تُخفى إن لم تصل محافظات بعد،
-          // فلا يُقفل النموذج على خادم لا يعرف المحافظات.
-          if (AppServices.of(context).places.catalog.regions.isNotEmpty) ...[
+          // فلا يُقفل النموذج على خادم لا يعرف المحافظات. **والنشطة وحدها**
+          // بنداً (تذكرة #127): الموقوفة تُعرض «قريباً» في منتقي الاكتشاف،
+          // ولا تُنشر فيها مناسبة.
+          if (AppServices.of(context).places.catalog.activeRegions.isNotEmpty) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               key: const Key('add_region_picker'),
@@ -859,7 +862,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
               items: AppServices.of(context)
                   .places
                   .catalog
-                  .regions
+                  .activeRegions
                   .map(
                     (region) => DropdownMenuItem(
                       value: region.id,
@@ -890,7 +893,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
               key: ValueKey(_locationPickerGeneration),
               town: _town,
               townCoordinates: coords,
-              regions: AppServices.of(context).places.catalog.regions,
+              // المحافظات النشطة: البند المختار نفسه يأتي منها، فالخريطة تفتح
+              // على مركز محافظة تُنشر فيها فعلاً (تذكرة #127).
+              regions: AppServices.of(context).places.catalog.activeRegions,
               onChanged: (lat, lng) => setState(() {
                 _latitude = lat;
                 _longitude = lng;

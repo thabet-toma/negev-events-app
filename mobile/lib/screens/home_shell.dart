@@ -6,6 +6,7 @@ import '../main.dart';
 import '../state/region_onboarding.dart';
 import '../state/update_checker.dart';
 import '../widgets/region_onboarding_sheet.dart';
+import '../widgets/region_story_sheet.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart';
@@ -73,25 +74,53 @@ class _HomeShellState extends State<HomeShell> {
 
     if (!_onboardingAttempted) {
       _onboardingAttempted = true;
-      unawaited(_maybeShowRegionOnboarding());
+      unawaited(_maybeShowBootSheets());
     }
   }
 
-  /// «من أي منطقة أنت؟» مرّة واحدة (تذكرة #126) — بعد أول إطار، وبلا حجب
-  /// الشاشة: ورقةٌ سفلية والتغذية ظاهرة تحتها.
+  /// أوراق الإقلاع، بترتيب صريح (تذكرة #127): **#126 أولاً، وقصة التوسّع في
+  /// تشغيل لاحق**. فمن لم يُسأل عن منطقته بعد يرى ورقة الاختيار وحدها، ولو
+  /// اختار منها الآن لا تتبعه قصةٌ في الجلسة نفسها — قاعدة التذكرة «كي لا
+  /// تتراكم ورقتان»، وسببها أن القصة تحيّة لا سؤال.
   ///
-  /// لا تُعرض إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة) — وهذا
-  /// يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل الإنجاز حينها، فتعود في
-  /// الإقلاع التالي بدل أن تفوت. و«محاولة واحدة» تعني مرةً واحدة لهذا
+  /// ولا تُعرض أية ورقة إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة)
+  /// — وهذا يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل شيء حينها، فتعود
+  /// في الإقلاع التالي بدل أن تفوت. و«محاولة واحدة» تعني مرةً واحدة لهذا
   /// التشغيل: `_onboardingAttempted` يمنع تكرار المحاولة مع كل إعادة بناء.
-  Future<void> _maybeShowRegionOnboarding() async {
+  Future<void> _maybeShowBootSheets() async {
     // ننتظر أول إطار كي لا تُفتح ورقة أثناء البناء، وأول ما يصل إليه المستخدم
     // شاشته لا حوار.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || !_isShellOnTop) return;
-    if (await isRegionOnboarded()) return;
+
+    if (!await isRegionOnboarded()) {
+      if (!mounted || !_isShellOnTop) return;
+      await showRegionOnboardingSheet(context);
+      // القصة تشغيل لاحق دائماً — ولو اختار المستخدم منطقته للتوّ (#127).
+      return;
+    }
+
+    await _maybeShowRegionStory();
+  }
+
+  /// قصة التوسّع (#127): مرة واحدة لكل تثبيت، وبعد وصول المحافظات وأرقامها من
+  /// `GET /api/towns` وحده. بلا وصول (قائمة احتياطية) أو بلا محافظتين لهما
+  /// رقمان، لا تُعرض — لا رقم مخترع.
+  Future<void> _maybeShowRegionStory() async {
+    if (await isRegionStorySeen()) return;
     if (!mounted || !_isShellOnTop) return;
-    await showRegionOnboardingSheet(context);
+
+    final services = AppServices.of(context);
+    final catalog = await services.places.load();
+    if (!mounted || !_isShellOnTop || !catalog.fromServer) return;
+
+    final story = buildRegionStory(
+      regions: catalog.regions,
+      selectedRegionId: services.regions.effectiveRegionId,
+    );
+    if (story == null) return;
+
+    await showRegionStorySheet(context, story: story);
   }
 
   /// الهيكل وحده على الشاشة: لا شاشة مدفوعة فوقه ولا ورقة أخرى.

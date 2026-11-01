@@ -652,10 +652,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   }
 
   /// وصف مكان الفراغ («لا توجد مناسبات في…») — يذكر الأسماء إن أمكن حلّها،
-  /// وإلا العدّة، ولا يعود أبداً لـ«النقب» طالما هناك اختيار فعلي.
+  /// وإلا العدّة، ولا يعود أبداً لاسم محافظة ثابتة طالما هناك اختيار فعلي.
+  /// وبلا اختيار يقول «منطقتك» لا «النقب»: التطبيق صار يغطّي أكثر من منطقة،
+  /// واسم محافظة في نصّ عام يخاطب جمهوراً ليس فيها (#127).
   String get _placeDescriptionForEmptyState {
     final total = _selectedTowns.length + _selectedVillageIds.length;
-    if (total == 0) return 'منطقة النقب';
+    if (total == 0) return 'منطقتك';
     final names = <String>[
       ..._selectedTowns,
       ..._selectedVillageIds.map(_villageName).where((n) => n.isNotEmpty),
@@ -665,12 +667,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   }
 
   Future<void> _openPlaceFilter() async {
-    // المحافظة («النقب») بند مكان كالبلدة: قيمتها اسمها، وتمسك المناسبات
-    // التي لم تُعرف بلدتها بالضبط.
+    // المحافظة بند مكان كالبلدة: قيمتها اسمها، وتمسك المناسبات التي لم تُعرف
+    // بلدتها بالضبط. **النشطة وحدها** (تذكرة #127): الموقوفة في `regions_soon`
+    // ولا صفوف لها في التغذية، فإدراجها في الفلتر يعِد بنتائج لا وجود لها.
     final places = AppServices.of(context).places.catalog;
     final options = <FilterOption>[
       ...places.towns.map((t) => FilterOption(kind: 'town', id: t, label: t)),
-      ...places.regions.map(
+      ...places.activeRegions.map(
         (r) => FilterOption(kind: 'town', id: r.name, label: '${r.name} (بلا بلدة محدّدة)'),
       ),
       ..._villagesList.map((v) => FilterOption(kind: 'village', id: v.id, label: v.name)),
@@ -1078,7 +1081,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                         child: Row(
                           children: [
                             const Text(
-                              'مناسبات النقب',
+                              'مناسبات منطقتك',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,

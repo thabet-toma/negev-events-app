@@ -653,9 +653,11 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
   Widget build(BuildContext context) {
     final p = widget.provider;
     final toneColor = _resolveToneColor(context);
-    final townsText = p.towns.isNotEmpty
-        ? (p.towns.length > 4 ? 'يخدم جميع بلدات ومناطق النقب' : 'يخدم: ${p.towns.join('، ')}')
-        : 'يخدم مناطق النقب';
+    // «جميع بلدات منطقتك» ادّعاءٌ لا يُقال بلا بيانات (تذكرة #127): القائمة
+    // الطويلة وحدها تبرّره، والفارغة تقول الحقيقة — لا تُنسب إليه بلدة.
+    final townsText = p.towns.isEmpty
+        ? 'مناطق الخدمة غير محدَّدة'
+        : (p.towns.length > 4 ? 'يخدم جميع بلدات منطقتك' : 'يخدم: ${p.towns.join('، ')}');
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),

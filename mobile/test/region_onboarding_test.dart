@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -73,6 +74,25 @@ class _FakeLocation implements LocationLookup {
 
 /// محافظتان ببلداتٍ لها مراكز، كما يعيدها `GET /api/towns`.
 class _TownsServer {
+  _TownsServer({this.withRegions = true});
+
+  /// `false` = ردٌّ بلا محافظات، كما في فشل `GET /api/towns` الجزئي.
+  final bool withRegions;
+
+  /// حاجزٌ يوقف ردّ `PATCH /api/auth/me` حتى يُفتح — لمحاكاة حفظٍ بطيء تكون
+  /// فيه نقرتان ممكنتين قبل انتهائه.
+  Completer<void>? patchGate;
+
+  /// عدد طلبات تعديل الحساب فعلياً — عليه يُقاس «حفظٌ واحد».
+  int patchCount = 0;
+
+  var user = <String, dynamic>{
+    'id': 7,
+    'phone_number': '0500000000',
+    'full_name': 'سالم أبو محمد',
+    'role': 'user',
+  };
+
   final requests = <http.Request>[];
 
   http.Response _json(Map<String, dynamic> body, [int status = 200]) =>
@@ -90,26 +110,29 @@ class _TownsServer {
       return _json({
         'success': true,
         'towns': ['الكل', 'رهط', 'حورة', 'الطيبة', 'كفر قاسم'],
-        'regions': [
-          {
-            'id': 1,
-            'name': 'النقب',
-            'latitude': 31.25,
-            'longitude': 34.79,
-            'map_zoom': 9,
-            'position': 1,
-            'towns': ['رهط', 'حورة'],
-          },
-          {
-            'id': 2,
-            'name': 'المثلث',
-            'latitude': 32.2,
-            'longitude': 35.0,
-            'map_zoom': 10,
-            'position': 2,
-            'towns': ['الطيبة', 'كفر قاسم'],
-          },
-        ],
+        // `withRegions: false` = خادم يردّ بلا محافظات (فشلٌ جزئي أو نسخة قديمة)
+        'regions': withRegions
+            ? [
+                {
+                  'id': 1,
+                  'name': 'النقب',
+                  'latitude': 31.25,
+                  'longitude': 34.79,
+                  'map_zoom': 9,
+                  'position': 1,
+                  'towns': ['رهط', 'حورة'],
+                },
+                {
+                  'id': 2,
+                  'name': 'المثلث',
+                  'latitude': 32.2,
+                  'longitude': 35.0,
+                  'map_zoom': 10,
+                  'position': 2,
+                  'towns': ['الطيبة', 'كفر قاسم'],
+                },
+              ]
+            : const <Map<String, dynamic>>[],
         'villages': const <Map<String, dynamic>>[],
         'town_coordinates': {
           'رهط': {'lat': 31.392, 'lng': 34.756},
@@ -119,6 +142,19 @@ class _TownsServer {
         },
       });
     }
+
+    if (path.endsWith('/api/auth/me')) {
+      if (request.method == 'PATCH') {
+        patchCount++;
+        final gate = patchGate;
+        if (gate != null) await gate.future;
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        user = {...user, 'region_id': body['region_id']};
+        return _json({'success': true, 'user': user, 'message': 'تم تحديث البيانات'});
+      }
+      return _json({'success': true, 'user': user});
+    }
+
     return _json({'success': true});
   }
 }
@@ -252,6 +288,19 @@ void main() {
         isNull,
       );
     });
+
+    test('موقع بعيد عن كل مكان معروف: لا محافظة إطلاقاً (سقف المسافة)', () {
+      final places = catalog(coordinates: {
+        'رهط': const TownCoordinate(lat: 31.392, lng: 34.756),
+        'الطيبة': const TownCoordinate(lat: 32.266, lng: 35.008),
+      });
+
+      // لندن: أقرب مركز بلدة عنده يبعد آلاف الكيلومترات — لا «النقب» ولا غيرها.
+      expect(nearestRegionFor(51.5074, -0.1278, places), isNull);
+      // والحدّ نفسه يمرّ: نقطة على بُعد أقل من السقف ما زالت تُنسب.
+      expect(maxRegionDistanceKm, greaterThan(0));
+      expect(nearestRegionFor(31.40, 34.76, places)!.id, 1);
+    });
   });
 
   group('ورقة أول تشغيل', () {
@@ -276,11 +325,6 @@ void main() {
         isEmpty,
         reason: 'لا يُسأل الموقع عند فتح الورقة — الضغطة الصريحة شرط',
       );
-
-      // نقرة خارج الورقة لا تُغلقها: مخرجها زرّ لا نقر عابر.
-      await tester.tapAt(const Offset(400, 40));
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text(_title), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('region_onboarding_use_location')));
       await tester.pump();
@@ -500,6 +544,215 @@ void main() {
 
       expect(services.regions.regionId, 1);
       expect(find.text('منطقتك: النقب'), findsOneWidget);
+      await _drainMessages(tester);
+    });
+
+    testWidgets('الإغلاق بنقرة خارج الورقة: تخطٍّ يُسجَّل ولا يغيّر المحافظة',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final services = _services(_TownsServer());
+      await services.places.load();
+
+      await tester.pumpWidget(
+        _app(services, _SheetHost(location: _FakeLocation())),
+      );
+      await _openSheet(tester);
+      expect(find.text(_title), findsOneWidget);
+
+      // فوق الورقة: الحاجز الخارجي — إغلاق عادي كأي ورقة، لا حجب.
+      await tester.tapAt(const Offset(400, 40));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text(_title), findsNothing);
+      expect(services.regions.regionId, isNull, reason: 'الإغلاق العابر تخطٍّ');
+      expect(services.regions.headerRegionId, isNull);
+      expect(await _savedFlag(), isTrue, reason: 'يُسجَّل كي لا تعود');
+      expect(
+        find.byKey(const Key('host_open_sheet')),
+        findsOneWidget,
+        reason: 'الشاشة تحتها لم تُمسّ',
+      );
+    });
+
+    testWidgets('الإغلاق بزرّ الرجوع: تخطٍّ يُسجَّل ولا يغيّر المحافظة',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final services = _services(_TownsServer());
+      await services.places.load();
+
+      await tester.pumpWidget(
+        _app(services, _SheetHost(location: _FakeLocation())),
+      );
+      await _openSheet(tester);
+      expect(find.text(_title), findsOneWidget);
+
+      // زرّ الرجوع على أندرويد — لا يُبتلع.
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text(_title), findsNothing);
+      expect(services.regions.regionId, isNull);
+      expect(await _savedFlag(), isTrue);
+      expect(find.byKey(const Key('host_open_sheet')), findsOneWidget);
+    });
+
+    testWidgets('نقرتان سريعتان: حفظٌ واحد وإغلاقٌ واحد — لا سقوط للشاشة تحتها',
+        (tester) async {
+      final server = _TownsServer();
+      // الردّ محبوس: الحفظ الأول لا ينتهي قبل النقرة الثانية، وهي الحالة التي
+      // كانت تصل فيها النقرتان إلى `Navigator.pop` مرتين فتُسقط ما تحت الورقة.
+      final gate = Completer<void>();
+      server.patchGate = gate;
+
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'test-token',
+        'negev_user': jsonEncode(server.user),
+      });
+      final services = _services(server);
+      await services.auth.load();
+      await services.places.load();
+      expect(services.auth.isSignedIn, isTrue, reason: 'شرط الاختبار: حفظ على الحساب');
+
+      var notifications = 0;
+      services.regions.addListener(() => notifications++);
+
+      await tester.pumpWidget(
+        _app(services, _SheetHost(location: _FakeLocation())),
+      );
+      await _openSheet(tester);
+
+      await tester.tap(find.byKey(const Key('region_onboarding_manual')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const Key('region_onboarding_region_1')));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // النقرتان في إطارٍ واحد: الشجرة لم تُعَد بناؤها بعد، فأزرار الورقة
+      // القديمة ما زالت مفعّلة — الحالة التي كانت تُغلق الورقة مرتين.
+      await tester.tap(find.byKey(const Key('region_onboarding_town_0')));
+      await tester.tap(find.byKey(const Key('region_onboarding_save')));
+      await tester.pump();
+      expect(notifications, 1, reason: 'الاختيار لم يتكرّر');
+
+      gate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(server.patchCount, 1, reason: 'حفظٌ واحد على الحساب');
+      expect(notifications, 1);
+      expect(services.regions.regionId, 1);
+      expect(find.text(_title), findsNothing);
+      expect(
+        find.byKey(const Key('host_open_sheet')),
+        findsOneWidget,
+        reason: '`pop` واحد: الشاشة تحت الورقة لم تُسقط',
+      );
+      await _drainMessages(tester);
+    });
+
+    testWidgets('إغلاق أثناء الحفظ: يبقى تخطّياً، ولا يسقط الشاشة تحته',
+        (tester) async {
+      final server = _TownsServer();
+      final gate = Completer<void>();
+      server.patchGate = gate;
+
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'test-token',
+        'negev_user': jsonEncode(server.user),
+      });
+      final services = _services(server);
+      await services.auth.load();
+      await services.places.load();
+
+      await tester.pumpWidget(
+        _app(services, _SheetHost(location: _FakeLocation())),
+      );
+      await _openSheet(tester);
+
+      await tester.tap(find.byKey(const Key('region_onboarding_manual')));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const Key('region_onboarding_region_1')));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // يبدأ الحفظ ثم يغلق المستخدم الورقة قبل انتهائه — الإغلاق هو الإغلاق.
+      await tester.tap(find.byKey(const Key('region_onboarding_town_0')));
+      await tester.pump();
+      await tester.tapAt(const Offset(400, 40));
+      gate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text(_title), findsNothing);
+
+      expect(await _savedFlag(), isTrue, reason: 'الإغلاق العابر تخطٍّ');
+      expect(
+        find.byKey(const Key('host_open_sheet')),
+        findsOneWidget,
+        reason: 'إغلاقٌ واحد: لا `pop` ثانٍ بعد انتهاء الحفظ',
+      );
+      expect(server.patchCount, 1);
+      await _drainMessages(tester);
+    });
+
+    testWidgets('موقع بعيد جداً: اختيار يدوي برسالة قصيرة، بلا نسبة إلى محافظة',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final services = _services(_TownsServer());
+      await services.places.load();
+
+      // لندن — أقرب مركز بلدة في الكتالوج يبعد آلاف الكيلومترات.
+      final location = _FakeLocation(fix: (latitude: 51.5074, longitude: -0.1278));
+
+      await tester.pumpWidget(_app(services, _SheetHost(location: location)));
+      await _openSheet(tester);
+
+      await tester.tap(find.byKey(const Key('region_onboarding_use_location')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        find.text('موقعك بعيد عن المناطق المعروفة — اختر منطقتك يدوياً.'),
+        findsOneWidget,
+      );
+      expect(find.text('اختر محافظتك'), findsOneWidget);
+      expect(
+        services.regions.regionId,
+        isNull,
+        reason: 'لا تُنسب محافظة إلى موقع على الطرف الآخر من العالم',
+      );
+      expect(await _savedFlag(), isNull, reason: 'الورقة ما زالت مفتوحة');
+    });
+
+    testWidgets('«حسابي» بلا محافظات: الزرّ يبقى ظاهراً ويقول رسالة قصيرة',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      // خادم لا يعيد محافظات — كما عند فشل `GET /api/towns` أو نسخة قديمة.
+      final services = _services(_TownsServer(withRegions: false));
+      await services.auth.load();
+      await services.places.load();
+      expect(services.regions.regions, isEmpty, reason: 'شرط الاختبار نفسه');
+
+      await tester.pumpWidget(_app(services, const AccountScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(
+        find.byKey(const Key('account_region_reopen')),
+        findsOneWidget,
+        reason: 'الباب الوحيد إلى محافظتي لا يغيب بفشل الجلب',
+      );
+
+      await tester.ensureVisible(find.byKey(const Key('account_region_reopen')));
+      await tester.tap(find.byKey(const Key('account_region_reopen')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        find.text('تعذّر جلب المحافظات — تحقّق من اتصالك ثم حاول مرة أخرى'),
+        findsOneWidget,
+      );
+      expect(find.text(_title), findsNothing, reason: 'لا ورقة بقائمة فارغة');
+      expect(services.regions.regionId, isNull);
       await _drainMessages(tester);
     });
   });

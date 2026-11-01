@@ -136,19 +136,30 @@ router.get('/map/events', optionalAuthenticate, asyncHandler(async (req, res) =>
  * disables appears in (or leaves) the two together.
  */
 router.get('/towns', asyncHandler(async (req, res) => {
-  const [townNames, townCoordinates, regions] = await Promise.all([
+  const [townNames, townCoordinates, discovery] = await Promise.all([
     townsService.activeNames(),
     townsService.coordinatesByName(),
-    townsService.listActiveRegions()
+    // قراءة الاكتشاف (تذكرة #127) — صنفان: النشطة بالعدّادين، والموقوفة
+    // بالاسم والمعرّف وحدهما. لا تُستعمل للتحقق من مكان نشر.
+    townsService.listDiscoveryRegions()
   ]);
   res.json({
     success: true,
     towns: ['الكل', ...townNames],
     town_coordinates: townCoordinates,
-    // Additive: each region (محافظة) with its centre and its towns' names. A
+    // Additive: each **active** region (محافظة) with its centre, its active
+    // towns' names, and its real counts (active towns / approved events). A
     // region's own name is also a publishable place — the fallback when the
     // exact town is not known — so clients offer it after that region's towns.
-    regions,
+    //
+    // The stopped ones are deliberately NOT here. Every APK published before
+    // #127 builds the publish town picker from `regions` without checking any
+    // state, so a stopped region in this array would be offered as a valid
+    // place and then refused with 400. They travel in `regions_soon` instead.
+    regions: discovery.regions,
+    // `{ id, name }` only: shown «قريباً» in the discovery picker, never
+    // selectable, never published into, never a map centre.
+    regions_soon: discovery.soon,
     villages: await villages.listActive(),
     stats: await events.townStats()
   });

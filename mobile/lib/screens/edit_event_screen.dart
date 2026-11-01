@@ -413,10 +413,10 @@ class _EditEventScreenState extends State<EditEventScreen> {
       showMessage(context, 'اكتب اسم قريتك', isError: true);
       return;
     }
-    // كالويب: إلزامية ما دام المنتقي ظاهراً (وصلت محافظات)، لا حين يتعذّر
-    // وصولها من الخادم.
+    // كالويب: إلزامية ما دام المنتقي ظاهراً (وصلت محافظات **نشطة**)، لا حين
+    // يتعذّر وصولها من الخادم ولا حين تكون كلها موقوفة (تذكرة #127).
     if (_town == kVillagesTown &&
-        AppServices.of(context).places.catalog.regions.isNotEmpty &&
+        AppServices.of(context).places.catalog.activeRegions.isNotEmpty &&
         _regionId == null) {
       showMessage(context, 'اختر المحافظة التي تنتمي إليها القرية', isError: true);
       return;
@@ -564,7 +564,12 @@ class _EditEventScreenState extends State<EditEventScreen> {
               return LocationPickerMap(
                 town: _town,
                 townCoordinates: snapshot.data ?? const {},
-                regions: AppServices.of(context).places.catalog.regions,
+                // المحافظات النشطة وحدها — مثل شاشة النشر بالحرف (تذكرة #127):
+                // خريطة التعديل تفتح على مركز محافظة يُنشر فيها فعلاً. محافظة
+                // المناسبة الموقوفة تبقى بنداً في المنسدل («المحافظة الحالية»،
+                // قاعدة keep) لكن مركزها لم يعد يصل، فتفتح الخريطة على المنظر
+                // العام بدل أن تدّعي مركزاً لا نعرفه.
+                regions: AppServices.of(context).places.catalog.activeRegions,
                 initialLatitude: widget.event.latitude,
                 initialLongitude: widget.event.longitude,
                 onChanged: (lat, lng) => setState(() {
@@ -704,10 +709,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
   }
 
   /// منتقي محافظة القرية (تذكرة #125) — بنوده من `GET /api/towns` وحده،
-  /// ويبدأ بمحافظة المناسبة نفسها. محافظة عُطّلت بعد النشر تبقى بنداً باسم
+  /// ويبدأ بمحافظة المناسبة نفسها. **النشطة وحدها** بنداً (تذكرة #127): لا
+  /// تُنقل قرية إلى محافظة موقوفة، ومحافظة عُطّلت بعد النشر تبقى بنداً باسم
   /// «المحافظة الحالية» كي لا يسقط المنتقي بقيمة خارج بنوده.
   List<Widget> _regionEditor() {
-    final regions = AppServices.of(context).places.catalog.regions;
+    final regions = AppServices.of(context).places.catalog.activeRegions;
     if (regions.isEmpty) return const [];
 
     final items = [
