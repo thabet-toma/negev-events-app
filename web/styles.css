@@ -2129,10 +2129,58 @@ body {
 .status-tag.approved { background: var(--success-wash); color: var(--success); }
 .status-tag.rejected { background: var(--danger-wash); color: var(--danger); }
 
-/* إعلان تعديل التاريخ (#20 step 10) — نفس بطاقة المناسبة، فقط حدّها الجانبي
-   أخضر بدل السماوي الافتراضي (كانت شريطاً علوياً بـ::before؛ لم يعد له محل
-   بعد أن صار حدّ الكرت الجانبي هو لغة التمييز الجديدة) */
+/* إعلان تعديل الموعد (#20 step 10) — كرت المناسبة نفسه، بحدّ جانبي أخضر
+   وشريط علوي عنصرٍ حقيقي يحمل نصّ الخبر (لا `::before`). والكرت يعيش في حاوية
+   الإعلانات والدرج خارج التغذية، حيث لا ارتفاع يفرضه: حافته المطلقة تُسكَن في
+   التدفّق كي ينمو بمحتواه بدل أن ينكمش إلى صفر. */
 .announcement-card { border-inline-start-color: var(--success); }
+
+.announcement-card .card-bezel {
+  position: relative;
+  inset: auto;
+  height: auto;
+  padding: 10px;
+}
+
+.announcement-card .card-framed { height: auto; }
+
+/* صندوق الملصق: ارتفاع محدَّد كي يملأه الملصق (`height: 100%` على الصورة)،
+   وبلا `flex: 1` — الكرت هنا يأخذ ارتفاع محتواه لا ارتفاع الشاشة. */
+.announcement-card .card-media {
+  flex: 0 0 auto;
+  height: 220px;
+}
+
+.announcement-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--success-wash);
+  color: var(--success);
+  border-bottom: 1px solid var(--success);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+/* سطر التغيير: جملة كاملة تُلفّ على أكثر من سطر ولا تُختصر بـline-clamp —
+   التاريخان القديم والجديد هما خبر الإعلان كلّه. */
+.announcement-change-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--success-wash);
+  color: var(--success);
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.announcement-change-line i { margin-top: 3px; }
 
 /* توست الإشعارات اللحظية — كان يحمل لوناً صلباً وموضعاً inline في app.js (#20 خطوة 11) */
 .app-toast {

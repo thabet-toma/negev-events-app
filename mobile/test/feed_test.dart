@@ -502,7 +502,7 @@ void main() {
         expect(
           find.descendant(
             of: pageViewFinder,
-            matching: find.text('تغيّر موعد المناسبة'),
+            matching: find.textContaining('تغيّر موعد المناسبة'),
           ),
           findsNothing,
         );
@@ -525,7 +525,7 @@ void main() {
         await tester.tap(find.text('الفلاتر والبحث'));
         await tester.pumpAndSettle();
 
-        expect(find.text('تغيّر موعد المناسبة'), findsOneWidget);
+        expect(find.textContaining('تغيّر موعد المناسبة'), findsOneWidget);
         expect(find.byType(TextField), findsOneWidget);
         // ولا زرّ «عرض المزيد» عائماً في أيّ طبقة: كان يغطّي صفّ أزرار الكرت،
         // والصفحة التالية تُجلب تلقائياً من `onPageChanged`.
@@ -538,6 +538,76 @@ void main() {
         // مناسبتان في التجهيزة أعلاه، وتعميم واحد، وصفحة تالية متاحة — فلو
         // بقي أيٌّ من الاثنين على المحور لصار العدد ثلاثة أو أربعة.
         expect(pageView.childrenDelegate.estimatedChildCount, 2);
+      },
+    );
+
+    // بلاغ المالك 2026-11-01: الإعلان كان يصل بحقول مختصرة (`title`, `town`,
+    // `occasion_type_id`) فتخرج مناسبتان في البلدة نفسها كرتين متطابقين
+    // مكتوباً فيهما «رهط». صار الخادم يرسل كرت المناسبة كاملاً، والكرت يقرأه
+    // بنموذج `Event` نفسه الذي يقرأ به كرت التغذية.
+    testWidgets(
+      'the announcement card names the honoree, the type and the change — not the town its title carries',
+      (tester) async {
+        final api = feedScreenApi(
+          eventsBody: {
+            'success': true,
+            'events': <Map<String, dynamic>>[],
+            'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+            'announcements': [
+              {
+                'id': 5,
+                'event_id': 121,
+                'old_value': '2027-03-04',
+                'new_value': '2027-03-10',
+                'event': {
+                  'id': 121,
+                  'title': 'رهط',
+                  'groom_name': 'أيوب نصر حمودة القصاصي',
+                  'family_clan': 'آل القصاصي',
+                  'town': 'رهط',
+                  'event_date': '2027-03-10',
+                  'occasion_type': {
+                    'id': 1,
+                    'name': 'عرس',
+                    'icon': '💍',
+                    'color': '#0369a1',
+                    'tone': 'festive',
+                    'fields': <Map<String, dynamic>>[],
+                    'reactions': <String>[],
+                  },
+                  'honorees': [
+                    {
+                      'name': 'أيوب نصر حمودة القصاصي',
+                      'role': 'العريس',
+                      'position': 0,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        );
+
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        // كرت الإعلان في الكروم الثابت — يُفتح من كبسة «الفلاتر والبحث».
+        await tester.tap(find.text('الفلاتر والبحث'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('إعلان تعديل موعد'), findsOneWidget);
+        // العنوان: النوع واسم صاحب المناسبة، لا `title` («رهط») وحده.
+        expect(find.text('عرس أيوب نصر حمودة القصاصي'), findsOneWidget);
+        expect(find.text('آل القصاصي'), findsOneWidget);
+        // سطر التغيير بالتاريخ العربي الطويل لا ISO خام.
+        expect(
+          find.text(
+            'تغيّر موعد المناسبة من '
+            '${arabicEventDate('2027-03-04')} إلى ${arabicEventDate('2027-03-10')}',
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('2027-03-04'), findsNothing);
       },
     );
 

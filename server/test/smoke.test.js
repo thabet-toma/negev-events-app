@@ -3905,6 +3905,21 @@ async function run() {
     assert.strictEqual(announcement.old_value, '2027-09-01');
     assert.strictEqual(announcement.new_value, '2027-09-15');
     assert.strictEqual(announcement.event.id, reminderEventId);
+    // بيانات الكرت كاملة لا اسم البلدة وحده (بلاغ المالك 2026-11-01): الإعلان
+    // المناسبة ونوعها بتسميته وعائلتها، كما يحملها كرت `GET /api/events`
+    // نفسه — وإلا تطابقت كرتان لمناسبتين مختلفتين في البلدة نفسها.
+    assert.ok(
+      Array.isArray(announcement.event.honorees) && announcement.event.honorees.length > 0,
+      'the announcement card must carry the event honorees, not just its town'
+    );
+    assert.ok(
+      announcement.event.occasion_type && announcement.event.occasion_type.name,
+      'the announcement card must carry the occasion type with its name'
+    );
+    assert.ok(
+      announcement.event.family_clan,
+      'the announcement card must carry the family clan'
+    );
   });
 
   await test('The follower is notified; the owner who edited it themself is not, even though they also follow it', async () => {

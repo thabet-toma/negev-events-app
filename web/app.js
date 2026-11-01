@@ -2022,9 +2022,13 @@ function syncUpcomingUi() {
 }
 
 /**
- * إعلانات تعديل التاريخ — خبر عن مناسبة قائمة لا مناسبة جديدة، فتُعرَض ككرت
- * مميّز بعرض القائمة، بالحقيقة الحالية فقط (من كذا إلى كذا) (#20 step 10).
- * الخادم يرسل الحيّ وحده ضمن `announcements` — لا فلترة ولا منطق انتهاء هنا.
+ * إعلانات تعديل التاريخ — خبر عن مناسبة قائمة لا مناسبة جديدة، فتُعرَض بكرت
+ * المناسبة نفسه (نفس الصورة والعنوان والأسطر) بشريط «إعلان تعديل موعد» وسطر
+ * التغيير، وبلا أزرار لا معنى لها على خبر (#20 step 10).
+ * الخادم يرسل الحيّ وحده ضمن `announcements` — لا فلترة ولا منطق انتهاء هنا —
+ * ومع كل إعلان بيانات كرت المناسبة كاملة (`honorees`، `occasion_type`)، فلم
+ * يبقَ لاسم البلدة وحده محلّ (بلاغ المالك 2026-11-01: كانت مناسبتان في رهط
+ * تظهران كرتين متطابقين).
  */
 function renderAnnouncements(announcements) {
   const containers = [
@@ -2038,22 +2042,9 @@ function renderAnnouncements(announcements) {
     return;
   }
 
-  const html = announcements.map(a => `
-    <div class="event-card announcement-card">
-      <div class="card-header-bar">
-        <div class="card-clan-town">
-          <span class="town-badge">${escapeHtml(a.event.town)}</span>
-        </div>
-        <span class="countdown-badge"><i class="fa-solid fa-bullhorn"></i> إعلان تعديل موعد</span>
-      </div>
-      <div class="card-body">
-        <h2 class="event-main-title">${escapeHtml(a.event.title || a.event.groom_name || '')}</h2>
-        <p style="color:var(--text-secondary); margin-top:6px;">
-          تغيّر موعد المناسبة من <strong>${escapeHtml(String(a.old_value))}</strong> إلى <strong>${escapeHtml(String(a.new_value))}</strong>.
-        </p>
-      </div>
-    </div>
-  `).join('');
+  const html = announcements
+    .map(a => renderSingleEventCardHtml(a.event, { announcement: a }))
+    .join('');
   containers.forEach(c => c.innerHTML = html);
   updateFeedDimensions();
 }
@@ -2223,6 +2214,29 @@ function formatEventDayLong(evt) {
   }).format(eventDayDate(evt));
 }
 
+/**
+ * قيمة من إعلان تعديل الموعد: قد تكون تاريخاً ('YYYY-MM-DD') وقد تكون نصاً
+ * حرّاً كتبه الأدمن (اسم يوم، «بعد أسبوع»…). التاريخ وحده يُصاغ عربياً طويلاً،
+ * وغيره يُعرَض كما وصل — الصيغة العربية على قيمة لا تُقرأ تاريخاً تُلقي استثناءً
+ * (`Intl.DateTimeFormat` على تاريخ غير صالح)، فتسقط معها القائمة كلها.
+ */
+function announcementDateLabel(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  if (Number.isNaN(eventDayDate({ event_date: raw }).getTime())) return raw;
+  return formatEventDayLong({ event_date: raw });
+}
+
+/** سطر التغيير في كرت الإعلان — «من … إلى …» بالتاريخ العربي لا ISO خام. */
+function announcementChangeText(announcement) {
+  const from = announcementDateLabel(announcement.old_value);
+  const to = announcementDateLabel(announcement.new_value);
+  if (!from && !to) return 'تغيّر موعد المناسبة';
+  if (!from) return `تغيّر موعد المناسبة إلى ${to}`;
+  if (!to) return `تغيّر موعد المناسبة من ${from}`;
+  return `تغيّر موعد المناسبة من ${from} إلى ${to}`;
+}
+
 /** روابط Waze وخرائط Google: الإحداثيات إن وُجدت، وإلا بحث باسم المكان والبلدة. */
 function eventNavUrls(evt) {
   if (evt.latitude && evt.longitude) {
@@ -2269,7 +2283,16 @@ function renderEventAudioBlockHtml(evt) {
   `;
 }
 
-function renderSingleEventCardHtml(evt) {
+/**
+ * كرت مناسبة واحد — وهو نفسه كرت الإعلان حين يصل `opts.announcement`
+ * (`{ event_id, old_value, new_value }`): شريط «إعلان تعديل موعد» أعلى الكرت
+ * وسطر التغيير، وزرّ «التفاصيل» وحده. «ذكّرني» و«التبريكات» و«المشاركة» لا
+ * معنى لها على خبر عن مناسبة ليست جديدة، و`data-audio-url` يُسقط لأن المناسبة
+ * نفسها في التغذية فلا يتنافس مقطعان. بلا `opts.announcement` يخرج الكرت كما
+ * هو تماماً (#20 step 10).
+ */
+function renderSingleEventCardHtml(evt, opts = {}) {
+  const announcement = opts.announcement || null;
   const eventDate = eventDayDate(evt);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -2284,7 +2307,7 @@ function renderSingleEventCardHtml(evt) {
   else countdownText = 'مناسبة سابقة';
 
   const formattedDate = formatEventDayLong(evt);
-  const effectiveAudio = effectiveEventAudio(evt);
+  const effectiveAudio = announcement ? null : effectiveEventAudio(evt);
 
   const isMourning = isMourningTone(evt);
   const toneColor = evt.occasion_type && evt.occasion_type.color
@@ -2316,15 +2339,27 @@ function renderSingleEventCardHtml(evt) {
   const subtitle = eventCardSubtitle(evt);
   const subtitleHtml = subtitle ? `<div class="card-subtitle card-clamp-1-line">${escapeHtml(subtitle)}</div>` : '';
 
-  const captionHtml = `
-    <div class="card-caption">
-      <div class="card-caption-chips">
-        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-        ${countdownChipHtml}
-      </div>
-      <h2 class="event-main-title card-clamp-2-line"><a href="/e/${evt.id}" class="card-title-link" onclick="handleCardTitleClick(event, ${evt.id})">${escapeHtml(eventCardHeadline(evt))}</a></h2>
-      ${subtitleHtml}
-      <div class="card-info-lines">${infoLinesHtml}</div>
+  // الشريط العلوي وسطر التغيير — للكرت الإعلاني وحده، وبلا قصّ لسطر التغيير:
+  // «من … إلى …» جملةٌ تُقرأ كاملة لا عنواناً يُختصر. يبدأ كلٌّ منهما بسطر جديد
+  // كي يبقى كرت التغذية العادي (الفرعان فارغان) مطابقاً حرفياً لما كان.
+  const announcementBannerHtml = announcement ? `
+          <div class="announcement-banner">
+            <i class="fa-solid fa-bullhorn" aria-hidden="true"></i>
+            <span>إعلان تعديل موعد</span>
+          </div>` : '';
+  const announcementLineHtml = announcement ? `
+        <div class="announcement-change-line">
+          <i class="fa-solid fa-right-left" aria-hidden="true"></i>
+          <span>${escapeHtml(announcementChangeText(announcement))}</span>
+        </div>` : '';
+
+  // الإعلان زرّه واحد: «التفاصيل» بمعرّف المناسبة — الخبر لا يُحفظ ولا يُشارَك.
+  const actionsHtml = announcement ? `
+      <div class="card-caption-actions">
+        <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${announcement.event_id != null ? announcement.event_id : evt.id})">
+          <i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>
+        </button>
+      </div>` : `
       <div class="card-caption-actions">
         <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${evt.id})">
           <i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>
@@ -2336,13 +2371,27 @@ function renderSingleEventCardHtml(evt) {
         <button type="button" class="share-event-btn card-action-btn" onclick="shareEventById(${evt.id})">
           <i class="fa-solid fa-share-nodes"></i> <span>${escapeHtml(shareButtonLabel(evt))}</span>
         </button>
+      </div>`;
+
+  const captionHtml = `
+    <div class="card-caption">
+      <div class="card-caption-chips">
+        <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
+        ${countdownChipHtml}
       </div>
+      <h2 class="event-main-title card-clamp-2-line"><a href="/e/${evt.id}" class="card-title-link" onclick="handleCardTitleClick(event, ${evt.id})">${escapeHtml(eventCardHeadline(evt))}</a></h2>
+      ${subtitleHtml}
+      <div class="card-info-lines">${infoLinesHtml}</div>${announcementLineHtml}${actionsHtml}
     </div>`;
 
+  // `announcementCard-` لا `eventCard-`: للمناسبة الواحدة كرتان في الصفحة
+  // (إعلانها وكرتها في التغذية)، ومعرّف مكرَّر في مستند واحد ليس معرّفاً.
+  const cardIdPrefix = announcement ? 'announcementCard' : 'eventCard';
+
   return `
-    <div class="event-card${isMourning ? ' tone-mourning' : ''}" id="eventCard-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
+    <div class="event-card${isMourning ? ' tone-mourning' : ''}${announcement ? ' announcement-card' : ''}" id="${cardIdPrefix}-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
       <div class="card-bezel"${bezelStyle}>
-        <div class="card-framed">
+        <div class="card-framed">${announcementBannerHtml}
           <div class="card-media${hasShot ? '' : ' card-media-empty'}" onclick="openEventPage(${evt.id})">
             ${mediaContent}
           </div>

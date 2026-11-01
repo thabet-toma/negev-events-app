@@ -25,10 +25,11 @@ import 'event_details_screen.dart';
 import 'live_screen.dart';
 import 'story_viewer_screen.dart';
 
-/// أقصى ارتفاع لشريط الإعلانات في الكروم الثابت: كرت إعلان واحد (‏‎~٩٦px‎)
+/// أقصى ارتفاع لشريط الإعلانات في الكروم الثابت: كرت إعلان واحد كاملاً — شريط
+/// الخبر، والملصق، والعنوان، وأسطر التاريخ والمكان والعائلة، وسطر التغيير —
 /// وطرفُ الذي يليه، فيُقرأ أنّ تحته المزيد. وما زاد يُمرَّر داخل الشريط. سقفٌ
 /// لازم لأنّ الكروم غير قابل للتمرير وتحته `Expanded`.
-const double _announcementsMaxHeight = 132;
+const double _announcementsMaxHeight = 320;
 
 /// فلتر التاريخ في التغذية: يوم أو أيام متتالية تُرسَل `date_from`/`date_to`.
 /// الأسبوع هنا من الأحد إلى السبت، و«الخميس – السبت» ليالي الأعراس القادمة —
@@ -1757,67 +1758,239 @@ class _FilterChip extends StatelessWidget {
   }
 }
 
-/// كرت إعلان تعديل تاريخ/مكان — خبر عن مناسبة، لا مناسبة نفسها. بلا شارة نوع
-/// (الإعلان لا يحمل نوعاً كاملاً، `occasion_type_id` وحده) ويعرض الحقيقة
-/// الحالية للمناسبة، لا تاريخ التعديل نفسه.
+/// كرت إعلان تعديل موعد — خبر عن مناسبة قائمة لا مناسبة نفسها، لكنه يحمل
+/// بياناتها كاملة كما يحملها كرت التغذية: الملصق، وشارة النوع، والعنوان (النوع
+/// واسم صاحب المناسبة)، والتاريخ، والمكان، والعائلة، ثم سطر التغيير «من … إلى …».
+/// اسم البلدة وحده كان يجعل مناسبتين في البلدة نفسها كرتين متطابقتين.
 class _AnnouncementCard extends StatelessWidget {
   const _AnnouncementCard({required this.announcement, required this.onTap});
 
   final Announcement announcement;
   final VoidCallback onTap;
 
+  /// سطر التغيير — التاريخ بالصيغة العربية الطويلة لا ISO خام، وما ليس تاريخاً
+  /// (نصّ حرّ كتبه الأدمن) يصل كما هو: `arabicEventDate` تعيد الخام حين يتعذّر
+  /// التحليل.
+  String get _changeText {
+    final from = arabicEventDate(announcement.oldValue.trim());
+    final to = arabicEventDate(announcement.newValue.trim());
+    if (from.isEmpty && to.isEmpty) return 'تغيّر موعد المناسبة';
+    if (from.isEmpty) return 'تغيّر موعد المناسبة إلى $to';
+    if (to.isEmpty) return 'تغيّر موعد المناسبة من $from';
+    return 'تغيّر موعد المناسبة من $from إلى $to';
+  }
+
   @override
   Widget build(BuildContext context) {
     final event = announcement.event;
+    final type = event.occasionType;
+    final toneColor = occasionTypeColor(type?.color, cardGold);
+    final hasPoster = (event.posterUrl ?? '').trim().isNotEmpty;
+
     return Card(
       color: context.c.surface,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Icon(Icons.campaign_outlined, color: context.c.sky, size: 22),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'تغيّر موعد المناسبة',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.bold,
-                        color: context.c.ink,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // شريط الخبر أعلى الكرت — فعلٌ مستقل عن بيانات المناسبة تحته.
+            Container(
+              color: context.c.successWash,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.campaign_outlined,
+                    size: 16,
+                    color: context.c.success,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'إعلان تعديل موعد',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.success,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (hasPoster) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 62,
+                        height: 84,
+                        child: EventPoster(
+                          url: event.posterUrl,
+                          height: 84,
+                          isSolemn: type?.isSolemn ?? false,
+                          toneColor: toneColor,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      event.displayTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, color: context.c.inkSoft),
-                    ),
-                    const SizedBox(height: 4),
-                    // ما تغيّر هو كل قيمة هذا الكرت: من رتّب وقته على الموعد
-                    // القديم يحتاج القديم والجديد معاً، لا الجديد وحده.
-                    // الاستجابة لا تسمّي الحقل المتغيّر (تاريخ بداية أم انتهاء)
-                    // فالصياغة عامة عمداً، ولا تخمّن أيّهما.
-                    Text(
-                      announcement.oldValue.isEmpty
-                          ? '${event.town} — ${event.eventDate}'
-                          : '${event.town} — من ${announcement.oldValue}'
-                              ' إلى ${announcement.newValue}',
-                      style: TextStyle(fontSize: 12, color: context.c.inkFaint),
-                    ),
+                    const SizedBox(width: 10),
                   ],
-                ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (type != null) ...[
+                          _AnnouncementTypeBadge(type: type, color: toneColor),
+                          const SizedBox(height: 4),
+                        ],
+                        // العنوان: النوع واسم صاحب المناسبة («عرس محمد فارس …»)
+                        // بلا `maxLines` — اسمٌ ناقص أسوأ من كرت أطول، والقائمة
+                        // كلها قابلة للتمرير.
+                        Text(
+                          event.cardHeadline,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                            height: 1.35,
+                            color: context.c.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        _AnnouncementInfoLine(
+                          icon: Icons.event_outlined,
+                          color: toneColor,
+                          text: arabicEventDate(event.eventDate),
+                        ),
+                        // المكان: اسم القرية حين تكون المناسبة تحت البند الجامع
+                        // «القرى والتجمعات»، وإلا البلدة.
+                        _AnnouncementInfoLine(
+                          icon: Icons.location_on_outlined,
+                          color: toneColor,
+                          text: event.villageDisplayName ?? event.town,
+                        ),
+                        _AnnouncementInfoLine(
+                          icon: Icons.groups_outlined,
+                          color: toneColor,
+                          text: event.familyClan,
+                        ),
+                        const SizedBox(height: 6),
+                        // ما تغيّر هو كل قيمة هذا الكرت: من رتّب وقته على الموعد
+                        // القديم يحتاج القديم والجديد معاً، لا الجديد وحده.
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.swap_horiz,
+                              size: 15,
+                              color: context.c.success,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                _changeText,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.5,
+                                  color: context.c.success,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              Icon(Icons.chevron_left, color: context.c.inkFaint),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// شارة نوع المناسبة في كرت الإعلان — نسخة مصغّرة من شارة كرت التغذية، لأن
+/// تلك خاصّة بملف `widgets/event_card.dart` ولا تُستعمل من هنا.
+class _AnnouncementTypeBadge extends StatelessWidget {
+  const _AnnouncementTypeBadge({required this.type, required this.color});
+
+  final OccasionType type;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (type.icon.isNotEmpty) ...[
+            Text(type.icon, style: const TextStyle(fontSize: 11)),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            type.name,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// سطر معلومة في كرت الإعلان: أيقونة بلون النوع ثم النصّ. سطر فارغ لا يُرسم.
+class _AnnouncementInfoLine extends StatelessWidget {
+  const _AnnouncementInfoLine({
+    required this.icon,
+    required this.color,
+    required this.text,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.trim().isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                height: 1.4,
+                color: context.c.inkSoft,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

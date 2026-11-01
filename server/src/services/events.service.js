@@ -391,56 +391,58 @@ async function listMyReminders(userId, { legacyOnly = false } = {}) {
  * القائمة والخريطة والتفاصيل: عدد صحيح يقصر الإعلانات على مناسبات تلك
  * المحافظة، و`null` تعني «بلا تقييد» لكل نداء داخلي لا يعرف المحافظات،
  * والمسار العام يمرّر دائماً محافظة محلولة (`middleware/region.js`).
+ *
+ * **`event` يحمل بيانات الكرت كاملة، لا حقولاً مختصرة:** نفس `LIST_COLUMNS`
+ * التي تحملها القائمة العامة + `village_name` من `villages`، ثم
+ * `withAbsoluteMedia` و`attachHonoreesAndTypes` — فتصله `honorees`
+ * و`occasion_type` (بحقوله وتسمياته) و`extra_days` و`poster_url`. الحقول
+ * المختصرة كانت تُظهر «رهط» وحدها حين يكون `title` اسم البلدة، فتتطابق كرتان
+ * لمناسبتين مختلفتين في البلدة نفسها. والحقول القديمة (`title`, `groom_name`,
+ * `town`, `event_date`, `event_end_date`, `occasion_type_id`, `poster_url`)
+ * باقية كلها كي لا تنكسر نسخة `1.21.3` المنشورة على Google Play — الحقول
+ * الزائدة تتجاهلها.
  */
 async function listLiveAnnouncements({ legacyOnly = false, regionId = null } = {}) {
   const conditions = [
-    'a.is_current = 1', "e.status = 'approved'",
-    `${EVENT_SPAN_END_SQL_E} >= CURDATE()`
+    'a.is_current = 1', "events.status = 'approved'",
+    `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
   const params = [];
 
   if (regionId !== null && regionId !== undefined) {
-    conditions.push('e.region_id = ?');
+    conditions.push('events.region_id = ?');
     params.push(regionId);
   }
 
   if (legacyOnly) {
     const legacyTypeIds = await occasionTypes.getLegacyTypeIds();
     if (!legacyTypeIds.length) return [];
-    conditions.push(`e.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
+    conditions.push(`events.occasion_type_id IN (${legacyTypeIds.map(() => '?').join(',')})`);
     params.push(...legacyTypeIds);
   }
 
+  // `a.id AS announcement_id` ضروري: `event_announcements.id` و`events.id`
+  // كلاهما `id`، واستعمال أحدهما بلا استعارة يُفقد الآخر. `village_name`
+  // يُضاف من `villages` كما في `listPublicEvents` — القرية مكان يشير إليه
+  // `village_id`، ولا يُخزَّن على المناسبة نفسها.
   const rows = await db.query(
-    `SELECT a.id, a.event_id, a.old_value, a.new_value, a.published_at,
-            e.title, e.groom_name, e.town, e.event_date, e.event_end_date,
-            e.occasion_type_id, e.poster_url
+    `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
+            a.id AS announcement_id, a.event_id, a.old_value, a.new_value, a.published_at
        FROM event_announcements a
-       JOIN events e ON e.id = a.event_id
+       JOIN events ON events.id = a.event_id
+       LEFT JOIN villages ON villages.id = events.village_id
       WHERE ${conditions.join(' AND ')}
       ORDER BY a.published_at DESC`,
     params
   );
 
-  return rows.map(row => {
-    const media = withAbsoluteMedia(row);
-    return {
-      id: row.id,
-      event_id: row.event_id,
-      old_value: row.old_value,
-      new_value: row.new_value,
-      published_at: row.published_at,
-      event: {
-        id: row.event_id,
-        title: row.title,
-        groom_name: row.groom_name,
-        town: row.town,
-        event_date: row.event_date,
-        event_end_date: row.event_end_date,
-        occasion_type_id: row.occasion_type_id,
-        poster_url: media.poster_url
-      }
-    };
+  // استعلامات مجمَّعة لا استعلام داخل حلقة: أصحاب المناسبة والأيام والنوع
+  // تُجلب لكل الإعلانات دفعة واحدة، كما في `listPublicEvents`.
+  const withCardData = await attachHonoreesAndTypes(rows.map(withAbsoluteMedia));
+
+  return withCardData.map(row => {
+    const { announcement_id, event_id, old_value, new_value, published_at, ...event } = row;
+    return { id: announcement_id, event_id, old_value, new_value, published_at, event };
   });
 }
 

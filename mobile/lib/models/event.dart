@@ -699,14 +699,18 @@ class Pagination {
 }
 
 /// إعلان تعديل تاريخ/مكان مناسبة — من `announcements` في GET /api/events.
-/// بلا نوع مناسبة كامل (`occasion_type_id` وحده) — فلا شارة نوع تُبنى عليه.
+///
+/// `event` هو كرت المناسبة **كاملاً**، بنفس شكل `GET /api/events`
+/// (`honorees`، `occasion_type` بحقوله، `village_name`، `extra_days`) — لا
+/// حقولاً مختصرة. الحقول المختصرة كانت تُظهر اسم البلدة وحده حين يكون `title`
+/// هو اسم البلدة، فتتطابق كرتان لمناسبتين مختلفتين في البلدة نفسها.
 class Announcement {
   final int id;
   final int eventId;
   final String oldValue;
   final String newValue;
   final String? publishedAt;
-  final AnnouncementEvent event;
+  final Event event;
 
   const Announcement({
     required this.id,
@@ -725,49 +729,12 @@ class Announcement {
       oldValue: '${json['old_value'] ?? ''}',
       newValue: '${json['new_value'] ?? ''}',
       publishedAt: _nullableString(json['published_at']),
+      // خادم أقدم بلا `event` لا يُسقط الشاشة: كرت بلا بيانات يبقى فارغاً.
       event: rawEvent is Map<String, dynamic>
-          ? AnnouncementEvent.fromJson(rawEvent)
-          : AnnouncementEvent.fromJson(const {}),
+          ? Event.fromJson(rawEvent)
+          : Event.fromJson(const <String, dynamic>{}),
     );
   }
-}
-
-/// المناسبة المرفقة بإعلان — حقول مختصرة فقط، بلا نوع مناسبة كامل.
-class AnnouncementEvent {
-  final int id;
-  final String title;
-  final String groomName;
-  final String town;
-  final String eventDate;
-  final String? eventEndDate;
-  final int? occasionTypeId;
-  final String? posterUrl;
-
-  const AnnouncementEvent({
-    required this.id,
-    required this.title,
-    required this.groomName,
-    required this.town,
-    required this.eventDate,
-    this.eventEndDate,
-    this.occasionTypeId,
-    this.posterUrl,
-  });
-
-  String get displayTitle => title.isEmpty ? groomName : title;
-
-  factory AnnouncementEvent.fromJson(Map<String, dynamic> json) => AnnouncementEvent(
-        id: _toInt(json['id']),
-        title: '${json['title'] ?? ''}',
-        groomName: '${json['groom_name'] ?? ''}',
-        town: '${json['town'] ?? ''}',
-        eventDate: _toDate(json['event_date']),
-        eventEndDate:
-            json['event_end_date'] == null ? null : _toDate(json['event_end_date']),
-        occasionTypeId:
-            json['occasion_type_id'] == null ? null : _toInt(json['occasion_type_id']),
-        posterUrl: _nullableString(json['poster_url']),
-      );
 }
 
 /// سطر واحد في سجلّ تعديلات مناسبة — من GET /api/events/:id/amendments.

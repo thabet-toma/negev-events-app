@@ -3202,6 +3202,133 @@ async function run() {
     assert.ok(/\.card-clamp-2-line\s*\{[^}]*-webkit-line-clamp:\s*2/.test(STYLES_CSS), 'the headline may take two lines, no more');
   });
 
+  console.log('\nAnnouncement card — بيانات المناسبة كاملة لا اسم البلدة وحده (بلاغ المالك 2026-11-01)');
+
+  /**
+   * بلاغ المالك 2026-11-01: `title` في صفّي المناسبتين 32 و121 في الإنتاج هو اسم البلدة
+   * («رهط»)، وكان الإعلان يصل بحقول مختصرة بلا `honorees` ولا `occasion_type`،
+   * فتخرج المناسبتان كرتين متطابقين مكتوباً فيهما «رهط» وحدهما. الخادم صار
+   * يرسل كرت المناسبة كاملاً، والكرت يبنى بالدالة نفسها التي تبني كرت التغذية.
+   */
+  const ANNOUNCEMENT_WEDDING_TYPE = {
+    ...WEDDING_TYPE,
+    fields: [
+      ...WEDDING_TYPE.fields,
+      { field_key: 'audio_url', label: 'مقطع صوتي', is_required: false, position: 8 }
+    ]
+  };
+
+  const ANNOUNCEMENT_EVENT_FIXTURE = {
+    id: 121,
+    title: 'رهط',
+    groom_name: 'أيوب نصر حمودة القصاصي',
+    family_clan: 'آل القصاصي',
+    town: 'رهط',
+    event_date: '2027-03-10',
+    location_name: 'ديوان آل القصاصي',
+    occasion_type_id: ANNOUNCEMENT_WEDDING_TYPE.id,
+    occasion_type: ANNOUNCEMENT_WEDDING_TYPE,
+    honorees: [{ name: 'أيوب نصر حمودة القصاصي', role: 'العريس', position: 0 }],
+    extra_days: [],
+    poster_url: 'https://example.test/uploads/announcement121.jpg',
+    audio_url: 'https://example.test/uploads/audio121.mp3',
+    audio_title: 'شيلة آل القصاصي',
+    reactions: {}
+  };
+
+  function renderAnnouncementFixture() {
+    const dom = buildEnv();
+    dom.window.renderAnnouncements([
+      {
+        id: 5,
+        event_id: 121,
+        old_value: '2027-03-04',
+        new_value: '2027-03-10',
+        published_at: '2027-02-01T10:00:00.000Z',
+        event: ANNOUNCEMENT_EVENT_FIXTURE
+      }
+    ]);
+    const container = dom.window.document.getElementById('announcementsContainer');
+    return { dom, container, card: container.querySelector('.event-card.announcement-card') };
+  }
+
+  await test('an announcement card names the honoree and the type, not the town its `title` carries', () => {
+    const { dom, container, card } = renderAnnouncementFixture();
+    assert.ok(card, 'expected one announcement card inside #announcementsContainer');
+
+    const text = container.textContent;
+    assert.ok(text.includes('أيوب نصر حمودة القصاصي'), 'the announcer names the person the occasion is for');
+    assert.ok(text.includes('آل القصاصي'), 'and the family clan');
+    // «رهط» وحدها لا تثبت شيئاً: هي `title` و`town` معاً، فوجودها في نصّ الكرت
+    // كان صحيحاً حتى في الكرتين المتطابقين. الإثبات أن اسم صاحب المناسبة نفسه
+    // صار عليه.
+    assert.strictEqual(
+      card.querySelector('.event-main-title').textContent,
+      'عرس أيوب نصر حمودة القصاصي',
+      'the headline is the type and the honoree, never the town-only title'
+    );
+    assert.ok(card.querySelector('.announcement-banner'), 'a banner marks the card as an announcement');
+    assert.ok(card.querySelector('.announcement-banner').textContent.includes('إعلان تعديل موعد'));
+    assert.ok(card.querySelector('.fa-bullhorn'), 'the banner carries the megaphone icon');
+
+    // سطر التغيير: التاريخ بصيغته العربية الطويلة، لا ISO خام.
+    const longOld = dom.window.formatEventDayLong({ event_date: '2027-03-04' });
+    const changeLine = card.querySelector('.announcement-change-line');
+    assert.ok(changeLine, 'expected the change line on the announcement card');
+    assert.ok(changeLine.textContent.includes('تغيّر موعد المناسبة من'), 'the change is stated in words');
+    assert.ok(changeLine.textContent.includes(longOld), 'the old date is formatted like every other date on the card');
+    assert.ok(!card.textContent.includes('2027-03-04'), 'the raw ISO old date must not leak into the card');
+  });
+
+  await test('the announcement card has one «التفاصيل» action that opens the event, and no «ذكّرني»/«التبريكات»/«المشاركة» or audio', () => {
+    const { dom, card } = renderAnnouncementFixture();
+
+    const actions = card.querySelectorAll('.card-caption-actions button');
+    assert.strictEqual(actions.length, 1, 'an announcement is news, not an occasion: one action only');
+    assert.ok(actions[0].classList.contains('card-more-details-btn'));
+    assert.strictEqual(actions[0].textContent.trim(), 'التفاصيل');
+
+    let openedId = null;
+    dom.window.openEventPage = (id) => { openedId = id; };
+    actions[0].click();
+    assert.strictEqual(openedId, 121, '«التفاصيل» opens the original event by its id');
+
+    assert.strictEqual(card.querySelector('.chat-trigger-btn'), null, 'no «التبريكات» button on an announcement');
+    assert.strictEqual(card.querySelector('.share-event-btn'), null, 'no «المشاركة» button on an announcement');
+    assert.strictEqual(card.querySelector('.reminder-btn'), null, 'no «ذكّرني» button on an announcement');
+    // المناسبة نفسها لها صوت — فغيابه عن كرت الإعلان قرارٌ في الكرت لا نتيجة
+    // نوع لا يظهر له حقل الصوت.
+    assert.ok(
+      dom.window.effectiveEventAudio(ANNOUNCEMENT_EVENT_FIXTURE),
+      'the event itself does carry audio, so the assertion below is about the announcement card dropping it'
+    );
+    assert.strictEqual(
+      card.getAttribute('data-audio-url'), null,
+      'the announcement card must not carry an audio url — the feed card for the same event already plays it'
+    );
+    // الصورة تفتح صفحة المناسبة كما في الكرت العادي.
+    const media = card.querySelector('.card-media');
+    assert.ok(media.querySelector('.card-media-img'), 'the poster stays on the announcement card');
+    openedId = null;
+    media.click();
+    assert.strictEqual(openedId, 121, 'the poster opens the same event page as the regular card');
+  });
+
+  await test('the same card without opts keeps its four actions and its audio hook — the feed card is untouched', () => {
+    const dom = buildEnv();
+    dom.window.renderEvents([ANNOUNCEMENT_EVENT_FIXTURE]);
+    const card = dom.window.document.getElementById('eventCard-121');
+    assert.ok(card, 'expected the regular feed card to render unchanged');
+    assert.strictEqual(card.querySelector('.announcement-banner'), null, 'no announcement banner on a feed card');
+    assert.strictEqual(card.querySelector('.announcement-change-line'), null, 'no change line on a feed card');
+    assert.strictEqual(card.classList.contains('announcement-card'), false);
+    assert.strictEqual(card.querySelectorAll('.card-caption-actions button').length, 4, 'all four card actions stay');
+    assert.strictEqual(
+      card.getAttribute('data-audio-url'), ANNOUNCEMENT_EVENT_FIXTURE.audio_url,
+      'the feed card still exposes its audio so the feed can play it'
+    );
+  });
+
   console.log('\nNotification centre — merged personal + broadcast feed (issue #85, review round 2 FIX 1)');
 
   /**
