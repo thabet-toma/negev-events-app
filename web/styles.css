@@ -610,6 +610,64 @@ body {
 .filter-chip-clear { margin-inline-start: auto; background: transparent; border-style: dashed; color: var(--ink-faint); }
 .filter-chip-clear:hover { border-color: var(--danger); color: var(--danger); }
 
+/* منتقي المحافظة (#124) — حبوب فوق رقاقات الفلتر، بنفس لغة الرقاقات:
+   الحبة المختارة بلون السماء، وحالة كل محافظة مكتوبة بجانب اسمها لا لوناً
+   وحده. النسخة نفسها في الدرج (region-picker-drawer) للهاتف. */
+.region-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+.region-picker[hidden] { display: none; }
+.region-picker-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.region-picker-label i { color: var(--sky); }
+.region-picker-chips { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.region-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.region-chip:hover { border-color: var(--sky); color: var(--sky-deep); }
+.region-chip.active {
+  background: var(--sky);
+  color: var(--on-sky);
+  border-color: var(--sky);
+  box-shadow: 0 4px 12px rgba(3, 105, 161, 0.25);
+}
+/* فاصل رقيق قبل الحالة داخل الحبة، بلون النص نفسه في القاعدة والمختارة */
+.region-chip-state {
+  font-size: 0.68rem;
+  font-weight: 700;
+  opacity: 0.85;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid currentColor;
+}
+.region-picker-drawer { margin: 0 0 14px; }
+
 /* ورقة الفلتر (مكان/نوع) — نفس بطاقة المودال، ببحث فوق قائمة قابلة للتمرير */
 .filter-sheet-card { display: flex; flex-direction: column; }
 .filter-sheet-search { margin-bottom: 14px; flex-shrink: 0; }
@@ -3194,6 +3252,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     z-index: 10;
   }
 
+  #tabHome > .region-picker,
   #tabHome > .filter-chips-row,
   #tabHome > .search-bar-container,
   #tabHome > #announcementsContainer,

@@ -8,6 +8,39 @@
 
 const API_BASE = (window.NEGEV_CONFIG && window.NEGEV_CONFIG.apiBase) || '';
 
+// محافظة الاكتشاف المحفوظة في المتصفّح (تذكرة #124) — معرّف رقمي **نصّاً** في
+// localStorage، هو المصدر الوحيد الذي يقرؤه apiFetch لبناء ترويسة `X-Region`.
+// لا قيمة = لا ترويسة إطلاقاً، فيقع الطلب على المحافظة الافتراضية على الخادم
+// تماماً كما كان كل طلب قبل #124 (وسلوك النسخة المنشورة لا يتغيّر).
+const REGION_STORAGE_KEY = 'negev_region';
+
+/** يعيد معرّف المحافظة المحفوظ، أو `null` إن لم يوجد أو كان قيمته ليست رقماً صحيحاً. */
+function readSavedRegionId() {
+  try {
+    const raw = localStorage.getItem(REGION_STORAGE_KEY);
+    return raw !== null && /^\d+$/.test(raw) ? Number(raw) : null;
+  } catch (e) {
+    return null; // التخزين المحلي معطَّل — لا محافظة محفوظة، والحالة تعمل
+  }
+}
+
+/** يحفظ معرّف محافظة رقمياً — يعيد true إن كُتب، وfalse لقيمة غير صالحة أو تخزين معطَّل. */
+function saveRegionId(regionId) {
+  const text = String(regionId === null || regionId === undefined ? '' : regionId).trim();
+  if (!/^\d+$/.test(text)) return false;
+  try {
+    localStorage.setItem(REGION_STORAGE_KEY, text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** يمسح المحافظة المحفوظة — بعده لا يرسل apiFetch ترويسة إطلاقاً. */
+function clearSavedRegionId() {
+  try { localStorage.removeItem(REGION_STORAGE_KEY); } catch (e) { /* معطَّل أو ممتلئ */ }
+}
+
 /** يبني عنواناً مطلقاً لمسار في الخادم. */
 function apiUrl(path) {
   return API_BASE + path;
@@ -17,12 +50,21 @@ function apiUrl(path) {
  * نداء للخادم.
  * options.auth: أرفق رمز الدخول (افتراضياً لا).
  * options.tokenKey: مفتاح الرمز في localStorage — رمز الموقع أو رمز الإدارة.
+ * options.region: أرفق `X-Region` من المحافظة المحفوظة (افتراضياً نعم) — الإدارة
+ *   وحدها تمرّر false (adminFetch)، فهي سطح عالمي لا محافظة متصفّح.
  */
 async function apiFetch(path, options = {}) {
-  const { auth = false, tokenKey = 'negev_token', headers = {}, ...rest } = options;
+  const { auth = false, tokenKey = 'negev_token', headers = {}, region = true, ...rest } = options;
   // يُعلن هذا العميل نفسه حديثاً فيرى كل أنواع المناسبات — القيمة نفسها غير
   // مقروءة على الخادم، وجودها فقط هو ما يهم (#20 خطوة 10).
   const finalHeaders = { 'X-App-Version': 'web', ...headers };
+
+  // ترويسة المحافظة تُبنى من التخزين المحلي لحظة كل طلب، لا من متغيّر في
+  // الذاكرة: تبديل المحافظة في تبويب آخر من الموقع نفسه يسري على الطلب التالي.
+  if (region) {
+    const regionId = readSavedRegionId();
+    if (regionId !== null) finalHeaders['X-Region'] = String(regionId);
+  }
 
   if (auth) {
     const token = localStorage.getItem(tokenKey);
@@ -77,9 +119,15 @@ async function uploadToCloudinary(upload, file) {
   return data;
 }
 
-/** نداء يحمل رمز الإدارة. */
+/**
+ * نداء يحمل رمز الإدارة. **ولا يرسل `X-Region` أبداً، ولو كانت المحافظة
+ * محفوظة في المتصفّح**: اللوحة سطح إداري عالمي، ومنتقي الستوري في بطاقة الدخول
+ * فيها يقرأ GET /api/stories العام — لو ضيّقناه بمحافظة المتصفّح لاختفت
+ * ستوريات المناطق الأخرى عن المدير بلا أن يطلب ذلك. المحافظة قرار مسار
+ * الاكتشاف العام وحده، ورمز الإدارة لا يحملها.
+ */
 async function adminFetch(path, options = {}) {
-  const res = await apiFetch(path, { ...options, auth: true, tokenKey: 'negev_admin_token' });
+  const res = await apiFetch(path, { ...options, auth: true, tokenKey: 'negev_admin_token', region: false });
   if (res.status === 401) {
     if (typeof window !== 'undefined' && typeof window.handleAdminSessionExpired === 'function') {
       window.handleAdminSessionExpired();

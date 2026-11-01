@@ -6748,7 +6748,10 @@ async function run() {
               success: true,
               towns: TOWNS,
               town_coordinates: TOWN_COORDINATES,
-              villages: [{ id: 3, name: 'قرية مدرجة', latitude: 31.1, longitude: 34.8 }]
+              villages: [{ id: 3, name: 'قرية مدرجة', latitude: 31.1, longitude: 34.8 }],
+              // The active region the required region picker (#124) is filled from —
+              // this test publishes under the villages catch-all, so it must choose one.
+              regions: [{ id: 1, name: 'النقب', latitude: 31.2858, longitude: 34.8431, map_zoom: 9, position: 1, towns: TOWNS }]
             });
           }
           return base(url, opts);
@@ -6798,6 +6801,9 @@ async function run() {
     assert.ok(alerts.includes('اختر القرية من القائمة أو اكتب اسم قريتك'), `expected the either/or message, got ${JSON.stringify(alerts)}`);
 
     nameInput.value = '  وادي النعم الجديدة  ';
+    // المحافظة إلزامية تحت البند الجامع منذ #124 — هذا الاختبار يخصّ اسم
+    // القرية المكتوب، فيختار المحافظة الوحيدة صراحةً قبل الإرسال.
+    document.getElementById('addRegion').value = '1';
     await win.handleEventSubmit({ preventDefault() {} });
     assertNoUnhandledRejections('publish with a typed village');
 
@@ -10638,6 +10644,463 @@ async function run() {
     tabs[1].click();
     await waitFor(() => document.querySelector('#adminPhotoTagTabs [data-tag-status="approved"]').getAttribute('aria-pressed') === 'true');
     assert.ok(urls.some(url => url.includes('/api/admin/photo-tags?status=approved')), 'a tab click loads that status');
+  });
+
+  console.log('\nRegion picker — X-Region and discovery isolation (تذكرة #124)');
+
+  // A second governorate beside the seeded one — the picker and the header only
+  // ever see what GET /api/towns returns, so this is the same shape as the real
+  // `regions` array (towns.service.js#listActiveRegions).
+  const SECOND_REGION = { id: 2, name: 'طولكرم', latitude: 32.31, longitude: 35.03, map_zoom: 10, position: 2, towns: ['طولكرم'] };
+  const TWO_REGIONS_FIXTURE = [REGIONS_FIXTURE[0], SECOND_REGION];
+  const TOWNS_TWO_REGIONS_FIXTURE = { ...TOWNS_WITH_REGIONS_FIXTURE, regions: TWO_REGIONS_FIXTURE };
+  // The catch-all bucket's value, read from the one server constant (never a
+  // second hand-typed copy of it).
+  const { VILLAGES_TOWN: VILLAGES_TOWN_VALUE } = require('../src/constants');
+
+  /** buildEnv() whose GET /api/towns carries both active regions. */
+  function buildTwoRegionsEnv(extraFetch) {
+    return buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          if (String(url).split('?')[0] === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          const extra = extraFetch && await extraFetch(url, opts);
+          return extra || base(url, opts);
+        };
+      }
+    });
+  }
+
+  await test('apiFetch sends X-Region only for a numeric negev_region — no saved value means no header at all', async () => {
+    const dom = buildEnv();
+    await flushBoot(); // boot's own discovery calls settle before the stub is installed
+    const win = dom.window;
+    const sent = [];
+    win.fetch = async (url, options = {}) => {
+      sent.push(options.headers || {});
+      return jsonResponse({ success: true });
+    };
+
+    await win.apiFetch('/api/events');
+    assert.strictEqual(sent[0]['X-Region'], undefined, 'a visitor with no saved region must send no X-Region header at all, exactly as before #124');
+
+    win.localStorage.setItem('negev_region', '2');
+    await win.apiFetch('/api/events');
+    assert.strictEqual(sent[1]['X-Region'], '2', 'the saved region travels as the numeric string it was stored as');
+
+    win.localStorage.setItem('negev_region', 'abc');
+    await win.apiFetch('/api/events');
+    assert.strictEqual(sent[2]['X-Region'], undefined, 'only /^\\d+$/ counts as a region id — anything else is not sent');
+  });
+
+  await test('adminFetch never sends X-Region, even when the browser has one saved', async () => {
+    const dom = buildEnv();
+    await flushBoot(); // same reason: a pending boot request must not be mistaken for the admin call
+    const win = dom.window;
+    win.localStorage.setItem('negev_admin_token', 'admin-token-web-dom');
+    win.localStorage.setItem('negev_region', '2');
+    let sentHeaders = null;
+    win.fetch = async (url, options = {}) => {
+      sentHeaders = options.headers || {};
+      return jsonResponse({ success: true });
+    };
+
+    await win.adminFetch('/api/admin/events');
+
+    assert.strictEqual(sentHeaders['X-Region'], undefined, 'the admin panel is a global surface — the browser region must never narrow it');
+    assert.strictEqual(sentHeaders.Authorization, 'Bearer admin-token-web-dom', 'the admin token still travels as before');
+  });
+
+  await test('the region picker is drawn above the feed chips from GET /api/towns (regions), with each region\'s state', async () => {
+    const dom = buildTwoRegionsEnv();
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
+
+    const picker = win.document.getElementById('regionPicker');
+    assert.ok(picker, 'expected #regionPicker in web/index.html');
+    assert.strictEqual(picker.hidden, false, 'the picker must be visible above the feed');
+    assert.ok(picker.textContent.includes('منطقتك'), 'the picker names the choice «منطقتك»');
+
+    const chips = [...picker.querySelectorAll('.region-chip')];
+    assert.deepStrictEqual(chips.map(chip => chip.dataset.regionId), ['1', '2'], 'the active regions, in server order');
+    assert.ok(chips[0].textContent.includes(SEED_REGION.name));
+    assert.ok(chips[1].textContent.includes(SECOND_REGION.name));
+    assert.strictEqual(chips[0].getAttribute('aria-pressed'), 'true', 'with no saved choice the first region is the default');
+    assert.ok(chips[0].textContent.includes('مختارة'), 'the selected region carries its state');
+    assert.strictEqual(chips[1].getAttribute('aria-pressed'), 'false');
+    assert.ok(chips[1].textContent.includes('متاحة'), 'the other active region is shown as available');
+    assert.strictEqual(win.localStorage.getItem('negev_region'), null, 'the default is shown selected but never stored as a choice');
+
+    const filterRow = win.document.querySelector('#tabHome > .filter-chips-row');
+    assert.ok(picker.compareDocumentPosition(filterRow) & 4, 'the picker must sit above the filter chips row in the feed header');
+    assert.ok(!win.document.body.textContent.includes('حدث خطأ في الاتصال'), 'a visitor with no choice sees the default with no error message');
+  });
+
+  await test('a saved region is selected again when the page opens, and the drawer copy shows the same state', async () => {
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        w.localStorage.setItem('negev_region', '2');
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => (String(url).split('?')[0] === '/api/towns'
+          ? jsonResponse(TOWNS_TWO_REGIONS_FIXTURE)
+          : base(url, opts));
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.initRegionPicker();
+
+    const chips = [...win.document.querySelectorAll('#regionPickerChips .region-chip')];
+    assert.deepStrictEqual(chips.map(chip => chip.getAttribute('aria-pressed')), ['false', 'true'], 'the stored region is the active one');
+    assert.ok(chips[1].textContent.includes('مختارة'));
+    assert.strictEqual(win.localStorage.getItem('negev_region'), '2', 'opening the page must not rewrite the stored choice');
+
+    const drawerChips = [...win.document.querySelectorAll('#drawerRegionPickerChips .region-chip')];
+    assert.deepStrictEqual(drawerChips.map(chip => chip.getAttribute('aria-pressed')), ['false', 'true'], 'the drawer copy agrees with the feed picker');
+  });
+
+  await test('choosing another region saves it, empties the previous list, and refetches page 1 with the new X-Region', async () => {
+    const calls = [];
+    let releaseSecondRegion = null;
+    const secondRegionGate = new Promise(resolve => { releaseSecondRegion = resolve; });
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/events') {
+            calls.push({ url: String(url), headers: opts.headers || {} });
+            if ((opts.headers || {})['X-Region'] === '2') {
+              // A gated answer proves the old list is gone BEFORE the new one lands.
+              await secondRegionGate;
+              return jsonResponse({ success: true, events: [feedSignatureEvent(902)], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+            }
+            return jsonResponse({ success: true, events: [feedSignatureEvent(901)], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => feedCardIds(win).join(',') === '901');
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+
+    const changed = win.selectRegion(2);
+
+    assert.deepStrictEqual(feedCardIds(win), [], 'no card from the previous region may stay while the new region loads');
+    assert.strictEqual(win.document.getElementById('feedBackPill').hidden, true, 'the previous-results snapshot must be dropped with the old region');
+    const lastCall = calls[calls.length - 1];
+    assert.strictEqual(lastCall.headers['X-Region'], '2', 'the new feed request declares the chosen region');
+    assert.strictEqual(queryParam(lastCall.url, 'page'), '1', 'the new region is fetched from its first page');
+    assert.strictEqual(win.localStorage.getItem('negev_region'), '2', 'the choice is stored before the request leaves');
+
+    releaseSecondRegion();
+    await changed;
+    await waitFor(() => feedCardIds(win).join(',') === '902');
+    assert.deepStrictEqual(feedCardIds(win), [902], 'only the new region\'s rows remain');
+  });
+
+  await test('publishing under «القرى والتجمعات» requires a region and sends region_id', async () => {
+    const alerts = [];
+    const posts = [];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.alert = message => alerts.push(String(message));
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/events' && opts.method === 'POST') {
+            posts.push(opts);
+            return jsonResponse({ success: true, status: 'pending' });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    const { document } = win;
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addTown') && Array.from(document.getElementById('addTown').options).some(o => o.value === VILLAGES_TOWN_VALUE));
+    fillRequiredPublishFields(document);
+
+    const townSelect = document.getElementById('addTown');
+    townSelect.value = VILLAGES_TOWN_VALUE;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    assert.strictEqual(document.getElementById('addRegionGroup').style.display, 'block', 'the region picker appears under the villages catch-all');
+    assert.strictEqual(document.getElementById('addRegion').value, '', 'no region is preselected — the publisher must choose');
+
+    document.getElementById('addVillage').value = '__other__';
+    document.getElementById('addRequestedVillage').value = 'قرية الاختبار';
+    await win.handleEventSubmit({ preventDefault() {} });
+    assert.ok(alerts.some(message => message.includes('اختر المحافظة')), 'publishing without a region is refused in Arabic');
+    assert.strictEqual(posts.length, 0, 'nothing is posted without the required region');
+
+    document.getElementById('addRegion').value = '2';
+    await win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(posts.length, 1, 'the corrected submit goes out once');
+    assert.strictEqual(posts[0].body.get('region_id'), '2', 'the chosen region travels in the publish body');
+    assert.strictEqual(posts[0].body.get('town'), VILLAGES_TOWN_VALUE);
+  });
+
+  await test('the edit modal shows the event\'s region and sends region_id only when the user changes it', async () => {
+    const patches = [];
+    const ownEvents = [
+      { id: 96, title: 'عرس', town: VILLAGES_TOWN_VALUE, region_id: 1, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE }
+    ];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+          if (opts.method === 'PATCH') {
+            patches.push(JSON.parse(opts.body));
+            return jsonResponse({ success: true, message: 'تم حفظ التعديل' });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(96);
+    assert.strictEqual(win.document.getElementById('editRegionGroup').style.display, 'block', 'the region group shows for the villages catch-all');
+    assert.strictEqual(win.document.getElementById('editRegion').value, '1', 'the event\'s own region is the initial value');
+
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.ok(patches[0], 'expected a PATCH');
+    assert.ok(!('region_id' in patches[0]), 'an unchanged region is not sent — the server derives it');
+
+    win.openEditEventModal(96);
+    win.document.getElementById('editRegion').value = '2';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.strictEqual(patches[1].region_id, 2, 'a changed region travels with the edit');
+  });
+
+  await test('the very first feed request carries X-Region of the saved region, not the first one', async () => {
+    const feedCalls = [];
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        w.localStorage.setItem('negev_region', '2');
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/events') {
+            feedCalls.push(opts.headers || {});
+            return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => feedCalls.length > 0);
+
+    assert.strictEqual(feedCalls[0]['X-Region'], '2', 'the boot feed must already declare the stored region — drawing it in the picker is not enough');
+  });
+
+  await test('a signed-in visitor with no stored choice is shown the account region the server actually uses', async () => {
+    const accountUser = {
+      id: 501, full_name: 'مستخدم الاختبار', role: 'user', phone_number: '0521234567', region_id: 2
+    };
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/auth/me') return jsonResponse({ success: true, user: accountUser });
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    // إن وصلت المحافظات قبل الحساب أو بعده، النتيجة نفسها: حبة الحساب مختارة.
+    await waitFor(() => {
+      const chips = [...win.document.querySelectorAll('#regionPickerChips .region-chip')];
+      return chips.length === 2 && chips[1].getAttribute('aria-pressed') === 'true';
+    });
+
+    assert.strictEqual(win.document.querySelectorAll('#regionPickerChips .region-chip')[1].getAttribute('aria-pressed'), 'true',
+      'the account region is what an unheadered request shows, so the picker must not claim the first region');
+    assert.strictEqual(win.localStorage.getItem('negev_region'), null, 'adopting the account region is not a stored browser choice');
+  });
+
+  await test('clicking the drawn default region stores it explicitly and refetches', async () => {
+    const feedHeaders = [];
+    const dom = buildTwoRegionsEnv(async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events') {
+        feedHeaders.push(opts.headers || {});
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+      }
+      return null;
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
+
+    // الحبة الأولى مرسومة «مختارة» لكن لا قيمة محفوظة بعد — الضغط عليها يجب
+    // أن يثبّتها ويجلب بها، لا أن يعود مبكراً بلا فعل (#124).
+    assert.strictEqual(win.localStorage.getItem('negev_region'), null);
+    await win.selectRegion(1);
+
+    assert.strictEqual(win.localStorage.getItem('negev_region'), '1', 'the drawn default is stored on an explicit click');
+    await waitFor(() => feedHeaders.some(headers => headers['X-Region'] === '1'));
+  });
+
+  await test('the place filter offers only the active region\'s towns, and an open sheet is rebuilt on a region change', async () => {
+    const dom = buildTwoRegionsEnv();
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
+
+    const optionLabels = () => [...win.document.querySelectorAll('#placeFilterList .filter-option-row')]
+      .map(row => row.textContent.trim());
+
+    win.openFilterSheet('place');
+    assert.ok(optionLabels().some(label => label.includes('رهط')), 'a town of the active region is offered');
+    assert.ok(!optionLabels().some(label => label.includes('طولكرم')), 'a town belonging to another region must not be offered');
+
+    await win.selectRegion(2);
+    assert.ok(optionLabels().some(label => label.includes('طولكرم')), 'the still-open sheet is rebuilt with the new region\'s towns');
+    assert.ok(!optionLabels().some(label => label.includes('رهط')), 'the previous region\'s towns are gone from the filter');
+  });
+
+  await test('editing still saves when GET /api/towns returned no regions — the region is only required when a list exists', async () => {
+    const patches = [];
+    const alerts = [];
+    const ownEvents = [
+      { id: 97, title: 'عرس', town: VILLAGES_TOWN_VALUE, region_id: null, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE }
+    ];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        w.alert = message => alerts.push(String(message));
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+          if (opts.method === 'PATCH') {
+            patches.push(JSON.parse(opts.body));
+            return jsonResponse({ success: true, message: 'تم حفظ التعديل' });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(97);
+    assert.strictEqual(win.document.getElementById('editRegionGroup').style.display, 'none',
+      'an obligatory region field with no options must not be shown');
+
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    assert.strictEqual(patches.length, 1, 'the edit must not be blocked by an empty region list');
+    assert.ok(!('region_id' in patches[0]), 'no region is sent when there is no list to choose from — the server derives it');
+    assert.ok(!alerts.includes('اختر المحافظة'), 'no false region error is raised');
+  });
+
+  await test('the map opens on the active region\'s centre and re-centres when the region changes', async () => {
+    const setViews = [];
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => (String(url).split('?')[0] === '/api/towns'
+          ? jsonResponse(TOWNS_TWO_REGIONS_FIXTURE)
+          : base(url, opts));
+        const fakeLeaflet = buildFakeLeaflet();
+        const makeMap = fakeLeaflet.map;
+        fakeLeaflet.map = (...args) => {
+          const map = makeMap(...args);
+          map.setView = (center, zoom) => { setViews.push({ center: Array.from(center), zoom }); return map; };
+          return map;
+        };
+        w.L = fakeLeaflet;
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
+
+    await win.initLeafletMap();
+    const firstView = setViews[setViews.length - 1];
+    assert.deepStrictEqual(firstView, { center: [SEED_REGION.latitude, SEED_REGION.longitude], zoom: SEED_REGION.map_zoom },
+      'the map opens on the active region\'s centre, not the fixed Negev centre');
+
+    await win.selectRegion(2);
+    await waitFor(() => {
+      const last = setViews[setViews.length - 1];
+      return last.center[0] === SECOND_REGION.latitude;
+    });
+    const regionView = setViews[setViews.length - 1];
+    assert.deepStrictEqual(regionView, { center: [SECOND_REGION.latitude, SECOND_REGION.longitude], zoom: SECOND_REGION.map_zoom },
+      'a region change re-centres the map on the selected region');
+  });
+
+  await test('a slow answer from the previous region cannot land on the new region\'s feed', async () => {
+    const feedRegions = [];
+    let releaseOld = null;
+    let releaseNew = null;
+    const oldGate = new Promise(resolve => { releaseOld = resolve; });
+    const newGate = new Promise(resolve => { releaseNew = resolve; });
+
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TOWNS_TWO_REGIONS_FIXTURE);
+          if (requestPath === '/api/events') {
+            const region = (opts.headers || {})['X-Region'] || '1';
+            feedRegions.push(region);
+            if (region === '2') {
+              await newGate;
+              return jsonResponse({ success: true, events: [feedSignatureEvent(920)], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+            }
+            await oldGate;
+            return jsonResponse({ success: true, events: [feedSignatureEvent(919)], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => feedRegions.length === 1 && win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+
+    win.selectRegion(2); // طلب المحافظة الثانية ينتظر بوّابته أيضاً
+    await waitFor(() => feedRegions.length === 2);
+
+    releaseNew();
+    await waitFor(() => feedCardIds(win).join(',') === '920');
+    // الآن يصل ردّ المحافظة الأولى متأخراً — حارس التسلسل يجب أن يتجاهله.
+    releaseOld();
+    await delay(80);
+
+    assert.deepStrictEqual(feedCardIds(win), [920], 'the stale first-region response must not replace the second region\'s cards');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

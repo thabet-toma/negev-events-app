@@ -228,7 +228,7 @@
   <div id="topChromeBackdrop" class="top-chrome-backdrop" onclick="toggleTopChrome(false)" style="display:none;"></div>
   <div id="topChromeDrawer" class="top-chrome-drawer" style="display:none;">
     <div class="drawer-header-row">
-      <h3 class="drawer-title">مناسبات النقب</h3>
+      <h3 class="drawer-title">مناسبات منطقتك</h3>
       <div class="drawer-header-actions">
         <button class="drawer-action-btn" onclick="openAgendaModal()" title="أجندة المناسبات">
           <i class="fa-solid fa-calendar-days"></i>
@@ -240,6 +240,14 @@
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
+    </div>
+
+    <!-- منتقي المحافظة في الدرج (هاتف) — نفس منتقي أعلى التغذية ونفس الحالة
+         (#124): عنصر واحد في الشاشة الكبيرة، ونسخة في الدرج حين يختفي شريط
+         التغذية خلف بطاقة الموبايل الملتقطة. يُرسم من GET /api/towns. -->
+    <div class="region-picker region-picker-drawer" id="drawerRegionPicker" role="group" aria-label="منطقتك" hidden>
+      <span class="region-picker-label"><i class="fa-solid fa-map-location-dot" aria-hidden="true"></i> منطقتك</span>
+      <div class="region-picker-chips" id="drawerRegionPickerChips"></div>
     </div>
 
     <!-- Stories inside Drawer -->
@@ -333,6 +341,16 @@
     <!-- TAB 1: HOME FEED (الأفراح والمناسبات) -->
     <section id="tabHome" class="tab-content active-tab">
 
+      <!-- منتقي المحافظة (#124) — أعلى التغذية وفوق رقاقات الفلتر. يُرسم من
+           GET /api/towns (المفتاح regions) وحده، لا قائمة محافظات مكتوبة هنا.
+           الاختيار يُحفظ في localStorage (negev_region) ويُرسل X-Region عبر
+           web/api.js؛ زائر بلا اختيار يرى المحافظة الأولى (الافتراضية) بلا
+           رسالة خطأ. نسخة الهاتف في الدرج أعلاه. -->
+      <div class="region-picker" id="regionPicker" role="group" aria-label="منطقتك" hidden>
+        <span class="region-picker-label"><i class="fa-solid fa-map-location-dot" aria-hidden="true"></i> منطقتك</span>
+        <div class="region-picker-chips" id="regionPickerChips"></div>
+      </div>
+
       <!-- فلتر المكان والنوع — رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا
            يأكلان أعلى تبويب التغذية هذا وحده (#85 خطوة 40-46). البلدات والقرى
            تُجلب معاً من GET /api/towns — لا قائمة بلدات ثابتة هنا. «مسح
@@ -401,7 +419,7 @@
       <div class="map-view-card">
         <div class="map-header-bar">
           <div>
-            <h3><i class="fa-solid fa-map-location-dot"></i> رادار وخريطة أفراح النقب</h3>
+            <h3><i class="fa-solid fa-map-location-dot"></i> رادار وخريطة أفراح منطقتك</h3>
             <p>شاهد جميع مواقع الأعراس المفتوحة والدواوين مباشرة على الخريطة</p>
           </div>
           <button class="map-refresh-btn" onclick="initLeafletMap()"><i class="fa-solid fa-rotate"></i> تحديث</button>
@@ -823,7 +841,7 @@
       <div class="page-title-box" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
         <div>
           <h2><i class="fa-solid fa-screwdriver-wrench"></i> دليل خدمات المناسبات</h2>
-          <p>بيوت شعر، كراسي وضيافة، طهاة، مصوّرون، وفنانون يخدمون مناسبات النقب مع الأسعار والمواصفات التقديرية</p>
+          <p>بيوت شعر، كراسي وضيافة، طهاة، مصوّرون، وفنانون يخدمون مناسبات منطقتك مع الأسعار والمواصفات التقديرية</p>
         </div>
         <button type="button" class="service-submit-offer-btn" onclick="openSubmitServiceModal()">
           <i class="fa-solid fa-plus-circle"></i> قدّم عرض خدمتك
@@ -1177,12 +1195,19 @@
         <div class="form-row">
           <div class="form-group half">
             <label>البلدة</label>
-            <select id="editTown"></select>
+            <select id="editTown" onchange="handleEditTownChange()"></select>
           </div>
           <div class="form-group half">
             <label>العائلة / العشيرة</label>
             <input type="text" id="editFamily">
           </div>
+        </div>
+
+        <!-- المحافظة (#124) — تحت البند الجامع وحده، وقيمتها الابتدائية محافظة
+             المناسبة نفسها؛ تُرسل إن غيّرها المستخدم فقط. -->
+        <div class="form-group" id="editRegionGroup" style="display:none;">
+          <label>المحافظة *</label>
+          <select id="editRegion"></select>
         </div>
 
         <div class="form-row">
@@ -1519,7 +1544,7 @@
       <div class="modal-header">
         <div class="modal-title-area">
           <h3><i class="fa-solid fa-calendar-days" style="color:var(--sky);"></i> أجندة وتقويم المناسبات</h3>
-          <span class="modal-sub">استعراض مواعيد وأيام الأعراس والمناسبات في النقب</span>
+          <span class="modal-sub">استعراض مواعيد وأيام الأعراس والمناسبات في منطقتك</span>
         </div>
         <button class="close-modal-btn" onclick="closeAgendaModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
