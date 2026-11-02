@@ -12,7 +12,7 @@ const String erpPlatformUrl = 'https://ktra-pro.tech/';
 /// «خدماتنا» — وجهة الشريط الأولى بعد المناسبات: منصات شركة كترا للحلول
 /// الذكية الثلاث، أوّلها «آخر خبر» داخل التطبيق، والباقي خارجيّ.
 ///
-/// الشاشة عامة بلا حساب، ولا تعرض أي بيانات: بطاقات تعريفية فقط.
+/// الشاشة عامة بلا حساب، ولا تعرض أي بيانات: بطاقات صور تعريفية فقط.
 class ServicesHubScreen extends StatelessWidget {
   const ServicesHubScreen({super.key});
 
@@ -33,42 +33,48 @@ class ServicesHubScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          _HubCard(
-            key: const Key('hub_card_news'),
-            icon: Icons.newspaper,
-            title: 'آخر خبر',
-            description: 'أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية',
-            actionLabel: 'افتح',
-            actionIcon: Icons.arrow_forward,
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const NewsScreen()),
-            ),
+          // صورتان في صفّ واحد — الأولى يميناً في RTL — ثم العريضة تحتهما.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _HubCard(
+                  key: const Key('hub_card_news'),
+                  imageAsset: 'assets/platforms/news.jpg',
+                  icon: Icons.newspaper,
+                  title: 'آخر خبر',
+                  short: 'أخبار منطقتك أولاً بأول',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const NewsScreen()),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _HubCard(
+                  key: const Key('hub_card_stores'),
+                  imageAsset: 'assets/platforms/stores.jpg',
+                  logoAsset: 'assets/platforms/logo-stores.png',
+                  title: 'متاجرنا',
+                  short: 'مطاعم ومتاجر بلدتك',
+                  onTap: () => openExternalLink(
+                    context,
+                    Uri.parse(storesPlatformUrl),
+                    failureMessage: 'تعذّر فتح منصة متاجرنا',
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 14),
-          _HubCard(
-            key: const Key('hub_card_stores'),
-            icon: Icons.storefront,
-            title: 'متاجرنا',
-            description: 'مطاعم ومتاجر بلدتك، هواتف وإلكترونيات، بقالة '
-                'ومستلزمات، مع توصيل ودفع عند الاستلام',
-            actionLabel: 'زيارة المنصة',
-            actionIcon: Icons.open_in_new,
-            onPressed: () => openExternalLink(
-              context,
-              Uri.parse(storesPlatformUrl),
-              failureMessage: 'تعذّر فتح منصة متاجرنا',
-            ),
-          ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           _HubCard(
             key: const Key('hub_card_erp'),
-            icon: Icons.insights,
+            imageAsset: 'assets/platforms/erp.jpg',
+            logoAsset: 'assets/platforms/logo-erp.png',
             title: 'K.T.R.A ERP',
-            description: 'إدارة الاستيراد والمخزون والفواتير والمحاسبة، مع '
-                'بوابة خاصة للمحاسب القانوني',
-            actionLabel: 'زيارة المنصة',
-            actionIcon: Icons.open_in_new,
-            onPressed: () => openExternalLink(
+            short: 'مخزون وفواتير ومحاسبة',
+            wide: true,
+            onTap: () => openExternalLink(
               context,
               Uri.parse(erpPlatformUrl),
               failureMessage: 'تعذّر فتح منصة K.T.R.A ERP',
@@ -80,102 +86,170 @@ class ServicesHubScreen extends StatelessWidget {
   }
 }
 
-/// بطاقة منصة: أيقونة في دائرة ذهبية، اسم، وصف، وزرّ واحد. نفس طابع بطاقات
-/// المشروع الفاخرة (سطح + إطار ذهبي خفيف + ظلّ ناعم) وبألوان `theme.dart`.
+/// بطاقة منصة صورةً كاملة: الغلاف هو الصورة، والاسم والوصف القصير فوقها على
+/// تدرّج داكن أسفلها، والبطاقة كلها هدف ضغط واحد بلا زرّ منفصل.
+///
+/// الشارة مربّع صغير: أيقونة بيضاء على أحمر للخبر، أو شعار المنصة على أبيض
+/// للاثنتين الأخريين. والعريضة وحدها تحمل كبسولة «افتح» (بلا فعل مستقل).
 class _HubCard extends StatelessWidget {
   const _HubCard({
     super.key,
-    required this.icon,
+    required this.imageAsset,
     required this.title,
-    required this.description,
-    required this.actionLabel,
-    required this.actionIcon,
-    required this.onPressed,
-  });
+    required this.short,
+    required this.onTap,
+    this.wide = false,
+    this.icon,
+    this.logoAsset,
+  }) : assert(
+         (icon == null) != (logoAsset == null),
+         'شارة البطاقة إمّا أيقونة أو شعار، لا الاثنان ولا دونهما',
+       );
 
-  final IconData icon;
+  final String imageAsset;
   final String title;
-  final String description;
-  final String actionLabel;
-  final IconData actionIcon;
-  final VoidCallback onPressed;
+  final String short;
+  final VoidCallback onTap;
+  final bool wide;
+  final IconData? icon;
+  final String? logoAsset;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: context.c.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: cardGold.withValues(alpha: 0.35),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: context.c.goldWash,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: cardGold.withValues(alpha: 0.45),
-                  ),
-                ),
-                child: Icon(icon, size: 21, color: context.c.gold),
+    return Semantics(
+      button: true,
+      label: '$title — $short',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AspectRatio(
+          aspectRatio: wide ? 16 / 7 : 4 / 5,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: cardGold.withValues(alpha: 0.35),
+                width: 1.2,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold,
-                    color: context.c.ink,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    imageAsset,
+                    fit: BoxFit.cover,
+                    excludeFromSemantics: true,
                   ),
-                ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        stops: [0, .36, .68],
+                        colors: [
+                          Color(0xF0040E16),
+                          Color(0xA8040E16),
+                          Color(0x0F040E16),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.all(wide ? 16 : 13),
+                    child: wide
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Expanded(child: _texts()),
+                              const SizedBox(width: 10),
+                              _openCapsule(),
+                            ],
+                          )
+                        : _texts(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// شارة + الاسم + الوصف القصير، محاذاةً للبداية وأسفل الصورة.
+  Widget _texts() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        _badge(),
+        const SizedBox(height: 8),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            height: 1.2,
+            color: Colors.white,
+            shadows: [
+              Shadow(
+                color: Color(0x99000000),
+                blurRadius: 6,
+                offset: Offset(0, 1),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            description,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.7,
-              color: context.c.inkSoft,
-            ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          short,
+          style: TextStyle(
+            fontSize: 11.5,
+            height: 1.3,
+            color: Colors.white.withValues(alpha: 0.85),
           ),
-          const SizedBox(height: 14),
-          Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: ElevatedButton.icon(
-              onPressed: onPressed,
-              style: ElevatedButton.styleFrom(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                textStyle: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              icon: Icon(actionIcon, size: 17),
-              label: Text(actionLabel),
+        ),
+      ],
+    );
+  }
+
+  Widget _badge() {
+    final hasIcon = icon != null;
+    return Container(
+      width: 34,
+      height: 34,
+      padding: hasIcon ? null : const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: hasIcon ? const Color(0xFFC81E2B) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: hasIcon
+          ? Icon(icon, size: 19, color: Colors.white)
+          : Image.asset(
+              logoAsset!,
+              fit: BoxFit.contain,
+              excludeFromSemantics: true,
             ),
-          ),
-        ],
+    );
+  }
+
+  /// كبسولة العريضة وحدها — شكل بلا فعل مستقل، النقر كلّه للبطاقة.
+  Widget _openCapsule() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.55)),
+      ),
+      child: const Text(
+        'افتح',
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
       ),
     );
   }

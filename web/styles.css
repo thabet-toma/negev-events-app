@@ -4852,79 +4852,143 @@ body.albums-page-open { overflow: hidden; }
 .about-foot a:hover { text-decoration: underline; }
 
 /* ===== «خدماتنا» و«آخر خبر» =====
-   وجهة المنصّات الثلاث، وشاشة الأخبار التي تفتحها. كل الألوان من متغيّرات
-   المظهرين — لا لون صريح هنا، فتعمل ليلاً بلا قاعدة ثانية. */
+   وجهة المنصّات الثلاث، وشاشة الأخبار التي تفتحها. البطاقة صورة من مشروع
+   المنصّة نفسها وشارة شعارها فوقها، والكلام على الصورة لا تحتها. كل الألوان
+   من متغيّرات المظهرين — لا لون صريح هنا، فتعمل ليلاً بلا قاعدة ثانية. */
 
 .our-platforms-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   margin-bottom: 24px;
 }
 
 .our-platform-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 18px 16px;
+  position: relative;
+  display: block;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.our-platform-icon {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: var(--sky-wash);
-  color: var(--sky-deep);
-  font-size: 1.1rem;
-}
-
-.our-platform-card-news .our-platform-icon {
-  background: var(--warn-wash);
-  color: var(--warn);
-}
-
-.our-platform-name { font-size: 1.02rem; font-weight: 900; color: var(--ink); }
-
-.our-platform-desc {
-  flex: 1;
-  color: var(--ink-soft);
-  font-size: 0.88rem;
-  line-height: 1.8;
-}
-
-.our-platform-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  align-self: flex-start;
-  padding: 9px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
   background: var(--surface-sunk);
-  color: var(--ink);
+  color: #fff;
   font-family: var(--font-main);
-  font-size: 0.86rem;
-  font-weight: 800;
+  text-align: start;
   text-decoration: none;
+  box-shadow: var(--shadow);
   cursor: pointer;
 }
 
-.our-platform-btn:hover { border-color: var(--sky); color: var(--sky-deep); }
-
-.our-platform-btn-primary {
-  background: var(--sky);
-  border-color: var(--sky);
-  color: var(--on-sky);
+.our-platform-photo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.our-platform-btn-primary:hover { background: var(--sky-deep); color: var(--on-sky); }
+.our-platform-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 14px 13px;
+  background: linear-gradient(to top, rgba(4, 14, 22, .94) 0%, rgba(4, 14, 22, .66) 36%, rgba(4, 14, 22, .06) 68%);
+}
+
+.our-platform-chip {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  background: rgba(255, 255, 255, .16);
+  font-size: .9rem;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.our-platform-chip img { width: 100%; height: 100%; object-fit: contain; border-radius: 6px; }
+.our-platform-chip-plate { background: #fff; border-color: rgba(255, 255, 255, .55); padding: 3px; }
+.our-platform-chip-news { background: #c81e2b; border-color: #e24150; }
+
+.our-platform-name {
+  font-size: 1.05rem;
+  font-weight: 900;
+  line-height: 1.25;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+
+.our-platform-short {
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, .85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
+
+.our-platform-card-tall { aspect-ratio: 4 / 5; }
+
+.our-platform-card-wide { grid-column: 1 / -1; aspect-ratio: 16 / 7; }
+
+.our-platform-card-wide .our-platform-scrim {
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.our-platform-text { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
+.our-platform-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(255, 255, 255, .16);
+  font-size: .72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.our-platform-card:focus-visible { outline: 2px solid var(--sky); outline-offset: 3px; }
+
+@media (hover: hover) {
+  .our-platform-photo { transition: transform .45s ease; }
+  .our-platform-card:hover .our-platform-photo,
+  .our-platform-card:focus-visible .our-platform-photo { transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .our-platform-photo { transition: none; }
+  .our-platform-card:hover .our-platform-photo { transform: none; }
+}
+
+/* سطح المكتب: الثلاث في صفّ واحد، فتتساوى البطاقات ويختفي الامتداد.
+   عرض عمود المحتوى 650px هنا، فثلاثة أعمدة تعطي كل بطاقة نحو مئتي بكسل. */
+@media (min-width: 760px) {
+  .our-platforms-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .our-platform-card-wide { grid-column: auto; aspect-ratio: 4 / 5; }
+  .our-platform-card-wide .our-platform-scrim {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-end;
+    padding: 14px 13px;
+  }
+  .our-platform-card-wide .our-platform-cta { display: none; }
+}
 
 /* بطاقات الوصول السريع داخل «حسابي» — الوجوه التي غادرت الشريط السفلي. */
 .account-quick-grid {

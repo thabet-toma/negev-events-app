@@ -10492,23 +10492,62 @@ async function run() {
       ['آخر خبر', 'متاجرنا', 'K.T.R.A ERP'],
       'the order is fixed: the news reader first'
     );
+    assert.deepStrictEqual(
+      Array.from(cards).map(card => card.querySelector('.our-platform-short').textContent.trim()),
+      ['أخبار منطقتك أولاً بأول', 'مطاعم ومتاجر بلدتك', 'مخزون وفواتير ومحاسبة'],
+      'each card carries one short line over the photo, not the old paragraph'
+    );
+    assert.deepStrictEqual(
+      Array.from(cards).map(card => card.querySelector('img.our-platform-photo').getAttribute('src')),
+      ['images/platforms/news.jpg', 'images/platforms/stores.jpg', 'images/platforms/erp.jpg'],
+      'each card is our own project screenshot, served from the site root'
+    );
 
-    assert.ok(cards[0].textContent.includes('أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية'));
-    cards[0].querySelector('.our-platform-btn').click();
+    // الشارة: أيقونة الخبر للخبر، وصورة لوغو كل مشروع للاثنتين الأخريين
+    assert.ok(cards[0].querySelector('.our-platform-chip i'), 'the news card keeps its own mark');
+    assert.ok(cards[1].querySelector('.our-platform-chip img').getAttribute('src').includes('logo-stores.png'));
+    assert.ok(cards[2].querySelector('.our-platform-chip img').getAttribute('src').includes('logo-erp.png'));
+
+    // البطاقة الأولى كبسة واحدة تفتح القارئ داخل الموقع، وليست رابطاً خارجياً
+    assert.strictEqual(cards[0].tagName, 'BUTTON');
+    cards[0].click();
     assert.strictEqual(document.getElementById('newsScreen').hidden, false,
-      '«افتح» opens the news screen inside the site rather than navigating away');
+      'tapping the card opens the news screen inside the site rather than navigating away');
 
-    // البطاقتان الأخريان رابط خارجي صريح في تبويب جديد، بلا فتح وصول للصفحة.
-    const shopLink = cards[1].querySelector('a.our-platform-btn');
-    assert.strictEqual(shopLink.getAttribute('href'), 'https://kolshee.ktra-pro.tech/');
-    assert.strictEqual(shopLink.getAttribute('target'), '_blank');
-    assert.ok((shopLink.getAttribute('rel') || '').includes('noopener'), 'rel="noopener" is not optional on a new tab');
+    // البطاقتان الأخريان رابط خارجي صريح في تبويب جديد
+    assert.strictEqual(cards[1].tagName, 'A');
+    assert.strictEqual(cards[1].getAttribute('href'), 'https://kolshee.ktra-pro.tech/');
+    assert.strictEqual(cards[1].getAttribute('target'), '_blank');
+    assert.ok((cards[1].getAttribute('rel') || '').includes('noopener'), 'rel="noopener" is not optional on a new tab');
 
-    const erpLink = cards[2].querySelector('a.our-platform-btn');
-    assert.strictEqual(erpLink.getAttribute('href'), 'https://ktra-pro.tech/');
-    assert.strictEqual(erpLink.getAttribute('target'), '_blank');
-    assert.ok((erpLink.getAttribute('rel') || '').includes('noopener'));
-    assert.strictEqual(cards[2].querySelector('.our-platform-btn').textContent.includes('زيارة المنصة'), true);
+    assert.strictEqual(cards[2].tagName, 'A');
+    assert.strictEqual(cards[2].getAttribute('href'), 'https://ktra-pro.tech/');
+    assert.strictEqual(cards[2].getAttribute('target'), '_blank');
+    assert.ok((cards[2].getAttribute('rel') || '').includes('noopener'));
+  });
+
+  await test('the add-service window names its purpose, and no outside button borrows that wording', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    const modal = document.getElementById('submitServiceModal');
+    assert.ok(modal, 'the sheet exists in the page');
+    const heading = modal.querySelector('.modal-header h3');
+    assert.strictEqual(heading.textContent.trim(), 'عرّف الناس بخدمتك',
+      'the heading says what the person gets, not «قدّم عرض خدمتك»');
+    assert.ok(modal.querySelector('.modal-sub').textContent.includes('ليصل إليك من يحتاجه في منطقتك'));
+
+    // لا يظهر هذا النص على أي زرّ يفتح النافذة من الخارج
+    const outside = Array.from(document.querySelectorAll('button, a'))
+      .filter(el => !modal.contains(el))
+      .map(el => el.textContent.trim());
+    assert.strictEqual(outside.some(text => text.includes('عرّف الناس')), false,
+      'the new heading stays inside the sheet — the outside buttons keep their short labels');
+
+    const capsule = document.querySelector('.nav-publish-capsules button:last-child');
+    assert.strictEqual(capsule.textContent.trim(), 'أضف خدمتك', 'the floating capsule keeps its short label');
+    assert.ok(document.querySelector('#tabServices .service-submit-offer-btn').textContent.includes('قدّم عرض خدمتك'),
+      'the directory button keeps its label too');
   });
 
   await test('«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape', async () => {

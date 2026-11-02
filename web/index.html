@@ -926,7 +926,8 @@
     </section>
 
     <!-- TAB: «خدماتنا» — وجهة عامة بلا حساب: منصّات شركة كترا الأخرى، بثلاث
-         بطاقات ثابتة الترتيب. «آخر خبر» يفتح شاشة الأخبار داخل الموقع
+         بطاقات صور ثابتة الترتيب: صورتان في الصف والثالثة عريضة تحتهما،
+         والكلام على الصورة لا تحتها. «آخر خبر» يفتح شاشة الأخبار داخل الموقع
          (#newsScreen)، والبطاقتان الأخريان رابط خارجي في تبويب جديد. لا
          محتوى يجلب من الخادم هنا — الصفحة كلها وسوم ثابتة. -->
     <section id="tabOurServices" class="tab-content">
@@ -936,32 +937,35 @@
       </div>
 
       <div class="our-platforms-grid">
-        <article class="our-platform-card our-platform-card-news">
-          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-bolt"></i></div>
-          <h3 class="our-platform-name">آخر خبر</h3>
-          <p class="our-platform-desc">أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية</p>
-          <button type="button" class="our-platform-btn our-platform-btn-primary" onclick="openNewsScreen()">
-            <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> افتح
-          </button>
-        </article>
+        <button type="button" class="our-platform-card our-platform-card-tall" onclick="openNewsScreen()">
+          <img class="our-platform-photo" src="images/platforms/news.jpg" alt="" aria-hidden="true" decoding="async">
+          <span class="our-platform-scrim">
+            <span class="our-platform-chip our-platform-chip-news" aria-hidden="true"><i class="fa-solid fa-newspaper"></i></span>
+            <span class="our-platform-name">آخر خبر</span>
+            <span class="our-platform-short">أخبار منطقتك أولاً بأول</span>
+          </span>
+        </button>
 
-        <article class="our-platform-card">
-          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-store"></i></div>
-          <h3 class="our-platform-name">متاجرنا</h3>
-          <p class="our-platform-desc">مطاعم ومتاجر بلدتك، هواتف وإلكترونيات، بقالة ومستلزمات، مع توصيل ودفع عند الاستلام</p>
-          <a class="our-platform-btn" href="https://kolshee.ktra-pro.tech/" target="_blank" rel="noopener">
-            زيارة المنصة <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
-          </a>
-        </article>
+        <a class="our-platform-card our-platform-card-tall" href="https://kolshee.ktra-pro.tech/" target="_blank" rel="noopener">
+          <img class="our-platform-photo" src="images/platforms/stores.jpg" alt="" aria-hidden="true" decoding="async">
+          <span class="our-platform-scrim">
+            <span class="our-platform-chip our-platform-chip-plate" aria-hidden="true"><img src="images/platforms/logo-stores.png" alt=""></span>
+            <span class="our-platform-name">متاجرنا</span>
+            <span class="our-platform-short">مطاعم ومتاجر بلدتك</span>
+          </span>
+        </a>
 
-        <article class="our-platform-card">
-          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-cubes"></i></div>
-          <h3 class="our-platform-name">K.T.R.A ERP</h3>
-          <p class="our-platform-desc">إدارة الاستيراد والمخزون والفواتير والمحاسبة، مع بوابة خاصة للمحاسب القانوني</p>
-          <a class="our-platform-btn" href="https://ktra-pro.tech/" target="_blank" rel="noopener">
-            زيارة المنصة <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
-          </a>
-        </article>
+        <a class="our-platform-card our-platform-card-wide" href="https://ktra-pro.tech/" target="_blank" rel="noopener">
+          <img class="our-platform-photo" src="images/platforms/erp.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async">
+          <span class="our-platform-scrim">
+            <span class="our-platform-text">
+              <span class="our-platform-chip our-platform-chip-plate" aria-hidden="true"><img src="images/platforms/logo-erp.png" alt=""></span>
+              <span class="our-platform-name">K.T.R.A ERP</span>
+              <span class="our-platform-short">مخزون وفواتير ومحاسبة</span>
+            </span>
+            <span class="our-platform-cta" aria-hidden="true">افتح <i class="fa-solid fa-arrow-left"></i></span>
+          </span>
+        </a>
       </div>
     </section>
 
@@ -1674,8 +1678,8 @@
     <div class="modal-card" style="max-width:580px; max-height:90vh; overflow-y:auto;">
       <div class="modal-header">
         <div class="modal-title-area">
-          <h3><i class="fa-solid fa-screwdriver-wrench" style="color:var(--gold-primary);"></i> قدّم عرض خدمتك</h3>
-          <span class="modal-sub">سيظهر عرضك في دليل خدمات المناسبات بعد مراجعة الإدارة واعتماده</span>
+          <h3><i class="fa-solid fa-screwdriver-wrench" style="color:var(--gold-primary);"></i> عرّف الناس بخدمتك</h3>
+          <span class="modal-sub">التصوير، الطبخ، الخيام والكراسي، الصوت والإضاءة… اكتب ما تجيده والبلدات التي تخدمها، ليصل إليك من يحتاجه في منطقتك بعد اعتماد الإدارة.</span>
         </div>
         <button type="button" class="close-modal-btn" onclick="closeSubmitServiceModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>

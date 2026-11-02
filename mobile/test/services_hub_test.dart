@@ -69,7 +69,7 @@ Future<void> pumpHub(WidgetTester tester, NegevApi api) async {
 
 void main() {
   group('شاشة «خدماتنا» — بطاقات منصات كترا الثلاث', () {
-    testWidgets('تُبني بالعنوان والوصف والبطاقات الثلاث بترتيبها', (tester) async {
+    testWidgets('تُبني بالعنوان والوصف والبطاقات الثلاث بتخطيطها', (tester) async {
       await pumpHub(tester, hubApi());
 
       expect(find.byType(ServicesHubScreen), findsOneWidget);
@@ -84,13 +84,35 @@ void main() {
       expect(find.byKey(const Key('hub_card_stores')), findsOneWidget);
       expect(find.byKey(const Key('hub_card_erp')), findsOneWidget);
 
-      // الترتيب المرئي: آخر خبر، ثم متاجرنا، ثم K.T.R.A ERP — لا ترتيباً آخر.
-      final newsTop = tester.getTopLeft(find.byKey(const Key('hub_card_news'))).dy;
-      final storesTop =
-          tester.getTopLeft(find.byKey(const Key('hub_card_stores'))).dy;
-      final erpTop = tester.getTopLeft(find.byKey(const Key('hub_card_erp'))).dy;
-      expect(newsTop, lessThan(storesTop));
-      expect(storesTop, lessThan(erpTop));
+      // الترتيب المرئي: الأولى والثانية في صفّ واحد (الأولى يميناً في RTL)،
+      // والعريضة تحتهما بعرض الصفّ كلّه.
+      final newsRect = tester.getRect(find.byKey(const Key('hub_card_news')));
+      final storesRect = tester.getRect(find.byKey(const Key('hub_card_stores')));
+      final erpRect = tester.getRect(find.byKey(const Key('hub_card_erp')));
+      expect(storesRect.top, moreOrLessEquals(newsRect.top, epsilon: 1),
+          reason: 'البطاقتان في صفّ واحد');
+      expect(newsRect.left, greaterThan(storesRect.left),
+          reason: 'في RTL الأولى على اليمين');
+      expect(erpRect.top, greaterThan(newsRect.top),
+          reason: 'العريضة تحتهما');
+      expect(erpRect.width, greaterThan(storesRect.width),
+          reason: 'العريضة بعرض الصفّ');
+
+      // كل بطاقة تحمل صورتها.
+      for (final key in const [
+        'hub_card_news',
+        'hub_card_stores',
+        'hub_card_erp',
+      ]) {
+        expect(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.byType(Image),
+          ),
+          findsWidgets,
+          reason: 'صورة البطاقة $key',
+        );
+      }
 
       // النصوص العربية كما في الشاشة، كلٌّ داخل بطاقته.
       expect(
@@ -103,7 +125,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const Key('hub_card_news')),
-          matching: find.text('أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية'),
+          matching: find.text('أخبار منطقتك أولاً بأول'),
         ),
         findsOneWidget,
       );
@@ -117,10 +139,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const Key('hub_card_stores')),
-          matching: find.text(
-            'مطاعم ومتاجر بلدتك، هواتف وإلكترونيات، بقالة ومستلزمات، '
-            'مع توصيل ودفع عند الاستلام',
-          ),
+          matching: find.text('مطاعم ومتاجر بلدتك'),
         ),
         findsOneWidget,
       );
@@ -134,37 +153,18 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const Key('hub_card_erp')),
-          matching: find.text(
-            'إدارة الاستيراد والمخزون والفواتير والمحاسبة، مع بوابة خاصة '
-            'للمحاسب القانوني',
-          ),
+          matching: find.text('مخزون وفواتير ومحاسبة'),
         ),
         findsOneWidget,
       );
-
-      // زرّ «افتح» في الأولى وحدها، و«زيارة المنصة» في الخارجيتين.
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('hub_card_news')),
-          matching: find.text('افتح'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('افتح'), findsOneWidget);
-      expect(find.text('زيارة المنصة'), findsNWidgets(2));
     });
 
-    testWidgets('زرّ «افتح» يدفع NewsScreen داخل الشجرة', (tester) async {
+    testWidgets('بطاقة «آخر خبر» تدفع NewsScreen داخل الشجرة', (tester) async {
       await pumpHub(tester, hubApi());
 
       expect(find.byType(NewsScreen), findsNothing);
 
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const Key('hub_card_news')),
-          matching: find.text('افتح'),
-        ),
-      );
+      await tester.tap(find.byKey(const Key('hub_card_news')));
       await tester.pumpAndSettle();
 
       // الشاشة المدفوعة نفسها، لا رابط خارجي. و«خدماتنا» باقية خلفها في مكدّس

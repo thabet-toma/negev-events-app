@@ -1373,7 +1373,7 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
               ),
               const SizedBox(height: 16),
               Text(
-                'قدّم عرض خدمتك',
+                'عرّف الناس بخدمتك',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -1382,7 +1382,9 @@ class _SubmitServiceSheetState extends State<_SubmitServiceSheet> {
               ),
               const SizedBox(height: 4),
               Text(
-                'سيظهر عرضك في دليل الخدمات بعد موافقة الإدارة',
+                'التصوير، الطبخ، الخيام والكراسي، الصوت والإضاءة… اكتب ما تجيده '
+                'والبلدات التي تخدمها، ليصل إليك من يحتاجه في منطقتك بعد اعتماد '
+                'الإدارة.',
                 style: TextStyle(fontSize: 13, color: context.c.inkSoft),
               ),
               const SizedBox(height: 18),
