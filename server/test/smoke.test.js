@@ -13548,6 +13548,31 @@ async function run() {
     assert.strictEqual(degraded.body.has_more, true);
   });
 
+  await test('رسالة ApiError المقصودة تمرّ في الإنتاج، ورسالة الخطأ الداخلي تُحجب', () => {
+    const { userFacingMessage } = require('../src/middleware/error');
+    const ApiError = require('../src/utils/ApiError');
+    const newsMessage = 'تعذّر جلب الأخبار من منصة كترا الآن';
+
+    // القاعدة التي كان غيابها يظهر في الإنتاج وحده: الاختبارات تعمل بـ
+    // NODE_ENV=test فلا يحجب وسيط الأخطاء شيئاً، فمرّت رسالة 502 العامة
+    // (‏«حدث خطأ غير متوقع في الخادم») بدل رسالة المصدر العربية.
+    assert.strictEqual(
+      userFacingMessage(ApiError.badGateway(newsMessage), newsMessage, true),
+      newsMessage,
+      'خطأ خارجي مقصود (502) يصل بمعناه في الإنتاج أيضاً'
+    );
+    assert.strictEqual(
+      userFacingMessage(new Error('ER_LOCK_DEADLOCK: تفاصيل داخلية'), 'ER_LOCK_DEADLOCK: تفاصيل داخلية', true),
+      'حدث خطأ غير متوقع في الخادم',
+      'خطأ داخلي غير مقصود يبقى محجوباً في الإنتاج'
+    );
+    assert.strictEqual(
+      userFacingMessage(new Error('boom'), 'boom', false),
+      'boom',
+      'خارج الإنتاج لا حجب إطلاقاً'
+    );
+  });
+
   // استعادة الحالة: المصدر الوهمي يُغلق، ومتغيّرا البيئة يُمسحان كي لا يعتمد
   // أي طلب لاحق (أو إعادة تشغيل) على خادم لم يعد موجوداً.
   katraFailing = false;

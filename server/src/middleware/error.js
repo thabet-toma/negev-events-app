@@ -10,6 +10,19 @@ function notFound(req, res, next) {
   next(ApiError.notFound('المسار المطلوب غير موجود'));
 }
 
+/**
+ * الرسالة التي تصل المستخدم: خطأ داخلي غير مقصود يُحجب في الإنتاج، ورسالة
+ * `ApiError` تمرّ كما كُتبت — هي مكتوبة للمستخدم بعربية مقصودة.
+ *
+ * لماذا دالة مستقلّة: حارس `isProduction` ثابتٌ عند التحميل، فالاختبارات تعمل
+ * بـ`NODE_ENV=test` ولا تحجب شيئاً — فكان فشل هذه القاعدة يظهر في الإنتاج وحده.
+ * تمرير العلم صريحاً يجعلها قابلة للسقوط في اختبار.
+ */
+function userFacingMessage(err, message, isProduction) {
+  if (!isProduction) return message;
+  return err instanceof ApiError ? message : 'حدث خطأ غير متوقع في الخادم';
+}
+
 /** Maps known error shapes onto clean JSON responses. */
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
@@ -41,7 +54,8 @@ function errorHandler(err, req, res, next) {
 
   if (status >= 500) {
     logger.error(`${req.method} ${req.originalUrl} →`, err.stack || err.message);
-    if (config.isProduction) message = 'حدث خطأ غير متوقع في الخادم';
+    // الحجب في الإنتاج يخصّ الأخطاء **غير المقصودة** وحدها — انظر userFacingMessage.
+    message = userFacingMessage(err, message, config.isProduction);
   }
 
   res.status(status).json({
@@ -51,4 +65,4 @@ function errorHandler(err, req, res, next) {
   });
 }
 
-module.exports = { notFound, errorHandler };
+module.exports = { notFound, errorHandler, userFacingMessage };
