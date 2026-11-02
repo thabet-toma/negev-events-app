@@ -129,16 +129,29 @@ function regionTownOptionsHtml(regionId, currentVal) {
 }
 
 /**
- * قرى منتقي القرية في النشر المباشر: قرى المحافظة المختارة في #dirRegion وحدها
- * حين تحمل كل صفوف GET /api/towns حقل `region_id`، وإلا القرى كلها (نفس قاعدة
- * الموقع العام) — فلا تختلط قرى محافظتين في منتقٍ واحد.
+ * قرى محافظة واحدة من GET /api/towns: صفوف المحافظة وحدها حين تحمل كل الصفوف
+ * حقل `region_id`، وإلا القرى كلها (خادم أقدم أو قائمة احتياطية) — منتقٍ فارغ
+ * أسوأ من قائمة غير معزولة. القاعدة واحدة في منتقيَي النشر المباشر وتعديل
+ * المناسبة، فلا تختلط قرى محافظتين في منتقٍ واحد ولا تتباعد القاعدتان.
  */
-function dirVillageList() {
-  const regionSelect = document.getElementById('dirRegion');
-  const regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
+function villagesForRegion(regionId) {
   if (regionId === null || !allTownVillages.length) return allTownVillages;
   const villagesHaveRegion = allTownVillages.every(v => v.region_id !== undefined && v.region_id !== null);
   return villagesHaveRegion ? allTownVillages.filter(v => Number(v.region_id) === regionId) : allTownVillages;
+}
+
+/** قرى منتقي القرية في النشر المباشر — تقرأ محافظة #dirRegion وتترك القاعدة لـvillagesForRegion. */
+function dirVillageList() {
+  const regionSelect = document.getElementById('dirRegion');
+  const regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
+  return villagesForRegion(regionId);
+}
+
+/** قرى منتقي القرية في نموذج تعديل المناسبة — تقرأ محافظة #evtRegion بنفس القاعدة. */
+function evtVillageList() {
+  const regionSelect = document.getElementById('evtRegion');
+  const regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
+  return villagesForRegion(regionId);
 }
 
 
@@ -4592,6 +4605,9 @@ function onTownsUpdated() {
   // محافظات GET /api/towns، ومنتقي المناسبة يتبع محافظتها هي.
   syncDirRegionControls();
   populateEvtTownSelect();
+  // قرى المناسبة تتبع المصدر نفسه: قد تصل GET /api/towns بعد فتح النموذج
+  // (اعتماد قرية أو جلب متأخر)، فتُعاد خيارات منتقيها إن كان ظاهراً.
+  handleEventEditTownChange();
   if (typeof allAdminsWithTowns !== 'undefined' && allAdminsWithTowns.length > 0) {
     renderAdminsList();
   }
@@ -4639,20 +4655,40 @@ async function fetchTowns() {
   return townsFetchPromise;
 }
 
+/**
+ * يبني خيارات قرية المناسبة من محافظة النموذج (#evtRegion) وحدها. والقرية
+ * الحالية تبقى خياراً مختاراً حتى لو غابت عن القائمة المصغّرة (قرية عُطِّلت أو
+ * نُقلت أو قيمة قديمة) — بنفس قاعدة بلدة المناسبة — كي لا يُرسَل الحفظ فرقاً لم
+ * يطلبه أحد. بلا معرّف مطلوب يُحفظ ما هو مختار الآن: المصدر تغيّر لا المستخدم.
+ */
 function renderEventVillageOptions(selectedId) {
   const select = document.getElementById('evtVillage');
   if (!select) return;
-  select.innerHTML = villageSelectOptionsHtml(allTownVillages, '— بلا قرية محددة —');
-  select.value = selectedId != null ? String(selectedId) : '';
+  const current = selectedId === undefined ? select.value : (selectedId != null ? String(selectedId) : '');
+  const villages = evtVillageList();
+  let html = villageSelectOptionsHtml(villages, '— بلا قرية محددة —');
+  if (current && current !== VILLAGE_OTHER_VALUE && !villages.some(v => String(v.id) === current)) {
+    const known = allTownVillages.find(v => String(v.id) === current);
+    html += `<option value="${escapeHtml(current)}">${escapeHtml(known ? known.name : 'القرية الحالية')}</option>`;
+  }
+  select.innerHTML = html;
+  select.value = current;
 }
 
-/** إظهار/إخفاء منتقي القرية حسب البلدة — village_id غير مقبول أصلاً إلا ضمن VILLAGES_TOWN (قيد ٣، 400 من الخادم غير ذلك). */
+/**
+ * إظهار/إخفاء منتقي القرية حسب البلدة — village_id غير مقبول أصلاً إلا ضمن
+ * VILLAGES_TOWN (قيد ٣، 400 من الخادم غير ذلك). وحين يظهر المنتقي تُعاد خياراته
+ * من المحافظة الحالية إن تغيّرت، مع الإبقاء على القرية المختارة.
+ */
 function handleEventEditTownChange() {
-  const town = document.getElementById('evtTown').value;
+  const townSelect = document.getElementById('evtTown');
   const group = document.getElementById('evtVillageGroup');
   const select = document.getElementById('evtVillage');
-  if (town === VILLAGES_TOWN) {
+  // قد يُستدعى عند وصول GET /api/towns قبل بناء النموذج أصلاً.
+  if (!townSelect || !group || !select) return;
+  if (townSelect.value === VILLAGES_TOWN) {
     group.style.display = '';
+    renderEventVillageOptions();
   } else {
     group.style.display = 'none';
     select.value = '';

@@ -12007,6 +12007,102 @@ async function run() {
     assert.strictEqual(townSelect.value, 'رهط', 'وتبقى مختارة لا تستبدلها الأولى');
   });
 
+  /**
+   * buildAdminEnv() whose GET /api/towns carries both regions' villages (or the
+   * given rows), and whose one edit-form event is answered by GET /api/events/:id
+   * exactly as openEventEditForm() asks for it.
+   */
+  function buildVillageEditEnv(event, villages = REGION_VILLAGES) {
+    const dom = buildAdminEnv({ loggedIn: true });
+    const win = dom.window;
+    win.fetch = async (url) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/towns') return jsonResponse({ ...NEGEV_TULKARM_FIXTURE, villages });
+      if (requestPath === '/api/admin/events') return jsonResponse({ success: true, events: [event] });
+      if (requestPath.endsWith('/amendments')) return jsonResponse({ success: true, amendments: [] });
+      if (requestPath === `/api/events/${event.id}`) {
+        return jsonResponse({ success: true, event: { ...event, honorees: [{ name: 'راني', role: '' }] } });
+      }
+      return jsonResponse({ success: true });
+    };
+    return win;
+  }
+
+  /** مناسبة قروية في محافظة طولكرم — بلدة المناسبة «القرى والتجمعات» كما يخزّنها الخادم. */
+  const villageEventInTulkarm = (id, villageId) => ({
+    ...ADMIN_EVENT_FIXTURE, id, town: VILLAGES_TOWN_VALUE, region_id: TULKARM_REGION.id, village_id: villageId
+  });
+
+  await test('نموذج تعديل مناسبة قروية في طولكرم يعرض قرى طولكرم وحدها في منتقي القرية', async () => {
+    const event = villageEventInTulkarm(74, REGION_VILLAGES[1].id);
+    const win = buildVillageEditEnv(event);
+    await win.fetchAdminEvents();
+    await win.openEventEditForm(74);
+    const { document } = win;
+
+    const villageSelect = document.getElementById('evtVillage');
+    // '__other__' هي قيمة «قريتي غير موجودة» في occasionForm.js — لا اسم لها في نطاق Node.
+    assert.deepStrictEqual([...villageSelect.options].map(o => o.value),
+      ['', String(REGION_VILLAGES[1].id), '__other__'],
+      'قرى محافظة المناسبة وحدها بين الفارغ و«قريتي غير موجودة» — لا قرى النقب');
+    assert.strictEqual(villageSelect.value, String(REGION_VILLAGES[1].id), 'وقرية المناسبة مختارة كما هي');
+    assert.strictEqual(document.getElementById('evtVillageGroup').style.display, '',
+      'منتقي القرية ظاهر تحت «القرى والتجمعات»');
+  });
+
+  await test('تبديل محافظة نموذج التعديل إلى النقب يعيد بناء قرى منتقي القرية من النقب', async () => {
+    const event = villageEventInTulkarm(75, REGION_VILLAGES[1].id);
+    const win = buildVillageEditEnv(event);
+    await win.fetchAdminEvents();
+    await win.openEventEditForm(75);
+    const { document } = win;
+
+    const regionSelect = document.getElementById('evtRegion');
+    regionSelect.value = String(REGIONS_FIXTURE[0].id);
+    regionSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    // المحافظة الجديدة أعادت بلداتها؛ «القرى والتجمعات» بندها الجامع في كل محافظة.
+    const townSelect = document.getElementById('evtTown');
+    assert.deepStrictEqual([...townSelect.options].map(o => o.value), [...TOWNS, SEED_REGION.name],
+      'بلدات المحافظة الجديدة وحدها بعد تبديل المحافظة');
+    townSelect.value = VILLAGES_TOWN_VALUE;
+    townSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const villageSelect = document.getElementById('evtVillage');
+    assert.deepStrictEqual([...villageSelect.options].map(o => o.value),
+      ['', String(REGION_VILLAGES[0].id), '__other__'],
+      'قرى النقب وحدها في القائمة الجديدة — وقرية طولكرم غابت');
+    assert.strictEqual(villageSelect.value, '', 'والاختيار السابق لم يبق صامتاً تحت قائمة أخرى');
+  });
+
+  await test('صفوف قرى بلا region_id (خادم أقدم أو قائمة احتياطية) تُعرض كاملة في منتقي التعديل', async () => {
+    const legacyVillages = REGION_VILLAGES.map(v => ({ id: v.id, name: v.name }));
+    const event = villageEventInTulkarm(76, REGION_VILLAGES[1].id);
+    const win = buildVillageEditEnv(event, legacyVillages);
+    await win.fetchAdminEvents();
+    await win.openEventEditForm(76);
+
+    assert.deepStrictEqual([...win.document.getElementById('evtVillage').options].map(o => o.value),
+      ['', String(REGION_VILLAGES[0].id), String(REGION_VILLAGES[1].id), '__other__'],
+      'القائمة كاملة كما كانت — لا تُفرَّغ بلا خانة region_id');
+    assert.strictEqual(win.document.getElementById('evtVillage').value, String(REGION_VILLAGES[1].id),
+      'وقرية المناسبة تبقى مختارة');
+  });
+
+  await test('قرية المناسبة الحالية خارج قرى محافظتها تبقى خياراً مختاراً في منتقي التعديل', async () => {
+    const event = villageEventInTulkarm(77, REGION_VILLAGES[0].id);
+    const win = buildVillageEditEnv(event);
+    await win.fetchAdminEvents();
+    await win.openEventEditForm(77);
+
+    const villageSelect = win.document.getElementById('evtVillage');
+    const kept = [...villageSelect.options].find(o => o.value === String(REGION_VILLAGES[0].id));
+    assert.ok(kept, 'القرية الحالية أُضيفت خياراً رغم غيابها عن قرى محافظة المناسبة');
+    assert.strictEqual(kept.textContent, REGION_VILLAGES[0].name, 'وباسمها لا برقمها');
+    assert.strictEqual(villageSelect.value, String(REGION_VILLAGES[0].id),
+      'وتبقى مختارة لا تستبدلها الأولى — كي لا يرسل الحفظ فرقاً لم يطلبه أحد');
+  });
+
   await test('مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً', async () => {
     const dom = buildAdminEnv({ loggedIn: true });
     const win = dom.window;
