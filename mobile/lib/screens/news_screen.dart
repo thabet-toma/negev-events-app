@@ -163,7 +163,32 @@ class _NewsScreenState extends State<NewsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_title)),
+      appBar: AppBar(
+        title: Text(_title),
+        actions: [
+          // وسم «عامة» كما في هيدر الويب: يعلن أنّ الوجه المعروض أخبار محلية
+          // عامة لا أخبار المحافظة، فلا يُقرأ العنوان على أنه محافظة أخرى.
+          if (_general)
+            Center(
+              child: Container(
+                key: const Key('news_general_tag'),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: context.c.skyWash,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  'عامة',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: context.c.sky,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: RefreshIndicator(onRefresh: _load, child: _buildBody()),
     );
   }

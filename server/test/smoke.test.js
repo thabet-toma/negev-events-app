@@ -13367,7 +13367,14 @@ async function run() {
   const KATRA_FIXTURE_ITEMS = Array.from({ length: 52 }, (_, index) => ({
     id: 900 + index,
     title: `خبر الاختبار ${index + 1}`,
-    excerpt: `مقتطف الخبر ${index + 1}`,
+    // ثلاثة أشكال للمقتطف كما يرسلها المصدر فعلاً (تحقّق حيّ 2026-11-02): بادئة
+    // قسم ثم العنوان، أو العنوان أولاً ثم المتن، أو مقتطف مسحوق من صفحة الخبر
+    // بأزرار الموقع. أيّها ظهر لا يُعرض عنوان مكرّراً ولا «0 اخبار محلية».
+    excerpt: index === 1
+      ? `خبر الاختبار ${index + 1} مقتطف الخبر ${index + 1}`
+      : index === 2
+        ? `ك ا كل العرب محاكم وجنائيات حجم الخط A- A+ مقتطف الخبر ${index + 1}`
+        : `0 اخبار محلية خبر الاختبار ${index + 1} مقتطف الخبر ${index + 1}`,
     // صورة كل خبر ثانٍ غائبة — الصورة اختيارية في العقد، لا شرطاً لعرض الخبر.
     image: index % 2 === 0 ? `https://radio.ktra-pro.tech/news/${index + 1}.jpg` : null,
     url: `https://radio.ktra-pro.tech/news/${900 + index}`,
@@ -13403,11 +13410,17 @@ async function run() {
     const detailId = requestUrl.searchParams.get('id');
     if (detailId !== null) {
       const found = KATRA_FIXTURE_ITEMS.find(item => item.id === Number(detailId));
+      // المصدر الحقيقي يردّ 404 بجسم JSON لخبر غير موجود (تحقّق حيّ 2026-11-02)؛
+      // هذا الحارس يقلّده بدل `{ ok: true, item: null }` كي لا يمرّ 502
+      // «مصدر متعطّل» مكان 404 «الخبر غير موجود» بلا أن يمسكه اختبار.
+      if (!found) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'not_found', message: 'الخبر غير موجود' }));
+        return;
+      }
       res.end(JSON.stringify({
         ok: true,
-        item: found
-          ? { ...found, author_name: 'محرّر كترا', body_text: 'الفقرة الأولى من الخبر.\nالفقرة الثانية من الخبر.' }
-          : null
+        item: { ...found, author_name: 'محرّر كترا', body_text: 'الفقرة الأولى من الخبر.\nحجم الخط A- A+ ✓تم النسخ ⤴واتساب\nالفقرة الثانية من الخبر.' }
       }));
       return;
     }
@@ -13435,15 +13448,15 @@ async function run() {
     assert.strictEqual(body.success, true);
     assert.strictEqual(body.region_id, newsRegionRow.id);
     assert.strictEqual(body.region_name, SEED_REGION.name, 'اسم المحافظة هو ما يعرضه هيدر الشاشة');
-    assert.strictEqual(body.area, 'negev', '«النقب» مفتاحها negev في NEWS_AREA_BY_REGION_NAME');
+    assert.strictEqual(body.area, 'النقب', '«النقب» مفتاحها عربي في NEWS_AREA_BY_REGION_NAME — مفاتيح المصدر عربية');
     assert.strictEqual(body.general, false);
     assert.strictEqual(body.items.length, 50, 'عنصران مشوّهان يُسقطان بصمت، والصفحة تبقى خمسين سليماً');
     assert.strictEqual(body.has_more, true);
 
     const sent = lastKatraRequest();
     assert.ok(sent, 'the route must actually call the source');
-    assert.strictEqual(sent.search.get('areas'), 'negev');
-    assert.strictEqual(sent.search.get('area'), 'negev', 'المنطقة المحدَّدة تُمرَّر في المعاملين');
+    assert.strictEqual(sent.search.get('areas'), 'النقب');
+    assert.strictEqual(sent.search.get('area'), 'النقب', 'المنطقة المحدَّدة تُمرَّر في المعاملين');
     assert.strictEqual(sent.search.get('limit'), '50');
     assert.strictEqual(sent.search.get('offset'), '0');
 
@@ -13455,6 +13468,9 @@ async function run() {
     assert.deepStrictEqual(first.category, { id: 3, name: 'أخبار المنطقة' });
     assert.strictEqual(body.items[1].image, null, 'الخبر بلا صورة يبقى بلا صورة');
     assert.strictEqual(body.items[1].is_breaking, false);
+    assert.strictEqual(first.excerpt, 'مقتطف الخبر 1', 'بادئة المصدر («0 اخبار محلية») وعنوانه لا يتكرّران في المقتطف');
+    assert.strictEqual(body.items[1].excerpt, 'مقتطف الخبر 2', 'والشكل الآخر — عنوان في أوّل المقتطف — يُسقط عنوانه أيضاً');
+    assert.strictEqual(body.items[2].excerpt, null, 'مقتطف مسحوق بأزرار الموقع يُسقط كاملاً بدل عرض زخرفته');
     assert.ok(!body.items.some(item => item.id === 1001), 'خبر بلا عنوان يُسقَط');
   });
 
@@ -13469,6 +13485,20 @@ async function run() {
     const sent = lastKatraRequest();
     assert.strictEqual(sent.search.get('areas'), 'general');
     assert.strictEqual(sent.search.get('area'), null, 'الوجه العام لا يقيّد بـarea');
+  });
+
+  await test('مفاتيح مناطق الأخبار عربية — المصدر يردّ zone_not_found لكل مفتاح لاتيني', () => {
+    const { NEWS_AREA_BY_REGION_NAME } = require('../src/constants');
+    const entries = Object.entries(NEWS_AREA_BY_REGION_NAME);
+    assert.ok(entries.length >= 3, 'كل محافظة معروفة لها منطقة عند المصدر');
+    for (const [regionName, slug] of entries) {
+      // كان `negev`/`tulkarm`/`lod-ramla-yafa` وكلّها مرفوضة عند المصدر، فكان
+      // «آخر خبر» يعرض 502 دائماً. المصدر ينشر `slug` عربياً في `?zones=1`.
+      assert.ok(
+        !/[A-Za-z]/.test(slug),
+        `مفتاح المصدر لمنطقة «${regionName}» لاتيني (${slug}) — المصدر يريد slug عربياً`
+      );
+    }
   });
 
   await test('?limit= يُقصّ إلى سقف الخمسين بدل أن يُرفض أو يُمرَّر', async () => {
@@ -13506,6 +13536,8 @@ async function run() {
     assert.strictEqual(body.item.title, 'خبر الاختبار 4');
     assert.strictEqual(body.item.author_name, 'محرّر كترا');
     assert.ok(body.item.body_text.includes('\n'), 'النصّ يصل بفواصله ليُعرض فقرات');
+    assert.ok(!body.item.body_text.includes('تم النسخ'), 'زخرفة صفحة المصدر لا تُعرض فقرةً في القارئ');
+    assert.ok(body.item.body_text.includes('الفقرة الثانية'), 'وحذف سطرها لا يبتلع نصّ الخبر حوله');
     assert.deepStrictEqual(body.item.category, { id: 3, name: 'أخبار المنطقة' });
   });
 

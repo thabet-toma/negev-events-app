@@ -128,7 +128,8 @@ let eventsFeedFirstLoadDone = false; // ظهور متدرّج للشاشة ال�
 let notificationsList = [];
 let congratsQueueEventId = null;
 
-// «قائمتي» — الوجه المرئي لمتابعة «ذكّرني» في تبويبها الثاني (الشريط السفلي).
+// «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»، صفحتها `tabMyList` كما هي وتُفتح
+// من بطاقة الوصول السريع داخل «حسابي» (لم تعد وجهة في الشريط السفلي).
 // التجميع والترتيب وكل التواريخ تأتي من الخادم (bucket وspan_start/span_end و
 // days_until_start) — لا يعيد العميل اشتقاق تاريخ ولا ترتيباً. myListChip
 // تفضيل هذه الجلسة وحدها (بلا تخزين)، و«انتهت سابقاً» مطويّة افتراضياً.
@@ -6685,6 +6686,7 @@ async function handlePublicSubmitService(e) {
 function openNewsScreen() {
   const screen = document.getElementById('newsScreen');
   if (!screen) return;
+  if (!screen.hidden) return; // مفتوحة أصلاً — لا نُصفّر ما يقرأه القارئ الآن
 
   newsItems = [];
   newsOffset = 0;
@@ -6762,7 +6764,10 @@ async function loadNews({ reset = false } = {}) {
     updateNewsHeader();
     renderNewsList();
   } catch (e) {
-    renderNewsError();
+    // فشل «المزيد» لا يمحو ما قُرئ: الكروت تبقى، والرسالة العربية تقول ما جرى
+    // ويبقى الزرّ للمحاولة مرّة أخرى. الفشل الأول وحده يُنشئ حالة الخطأ.
+    if (newsItems.length) showToast('تعذّر تحميل المزيد من الأخبار — حاول مرة أخرى');
+    else renderNewsError();
   } finally {
     newsLoading = false;
     updateNewsLoadMore();

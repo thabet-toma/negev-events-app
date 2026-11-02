@@ -79,6 +79,63 @@ function cleanText(value) {
   return trimmed || null;
 }
 
+/**
+ * الزخرفة التي يضعها المصدر **قبل** العنوان في مقتطفه ونصّه: عدّاد قسمه واسمه
+ * («0 اخبار محلية عرعرة النقب: …»، تحقّق حيّ 2026-11-02). بدون قطعها يبدأ كل
+ * كرت في الشاشة بـ«0 اخبار محلية»، ويتكرّر العنوان مرّتين: في الكرت ثم في أوّل
+ * سطر من مقتطفه.
+ *
+ * القطع مشروط: البادئة ٤٠ حرفاً فأقل وبلا نقطة، أي لا يمكن أن تكون جملة —
+ * فلا يُقتطع خبر حقيقي لمجرد أن عنوانه ورد في وسطه. وحين لا بادئة، يعود النصّ
+ * كما هو (والنداء يقرّر هل يُسقط العنوان نفسه).
+ */
+function withoutSourcePrefix(text, title) {
+  const index = title ? text.indexOf(title) : -1;
+  if (index <= 0) return text;
+  const prefix = text.slice(0, index);
+  if (prefix.length > 40 || prefix.includes('.')) return text;
+  return text.slice(index);
+}
+
+/**
+ * زخرفة صفحة المصدر التي تصل مخلوطة بالنصّ: شريط حجم الخط، وأزرار «تم النسخ»،
+ * وسطر المشاركة باسم الموقع («ك ا كل العرب …»). ليست من الخبر، وكانت تُعرض
+ * فقرةً في القارئ ومقتطفاً في الكرت. لو حُجب النصّ كله بها يبقى كما وصل:
+ * إظهار زخرفة أهون من إظهار خبر فارغ.
+ */
+const SOURCE_CHROME_MARKERS = ['حجم الخط', 'تم النسخ', 'ك ا كل العرب'];
+
+function hasSourceChrome(text) {
+  return Boolean(text) && SOURCE_CHROME_MARKERS.some(marker => text.includes(marker));
+}
+
+/** مقتطف الكرت: بادئة المصدر تسقط، والعنوان أيضاً لأنه معروض فوقه. */
+function excerptFor(rawExcerpt, title) {
+  const text = cleanText(rawExcerpt);
+  if (!text) return null;
+  // مقتطف مسحوق من صفحة الخبر لا ملخّص له: الكرت يعرض العنوان والوقت وحدهما
+  // بدل نصّ مخلوط بأزرار الموقع.
+  if (hasSourceChrome(text)) return null;
+  const withoutPrefix = withoutSourcePrefix(text, title);
+  if (withoutPrefix !== text) return cleanText(withoutPrefix.slice(title.length)) || text;
+  // ومقتطف يبدأ بالعنوان نفسه (شكل آخر من المصدر): العنوان فوق الكرت أصلاً.
+  if (title && text.startsWith(title)) return cleanText(text.slice(title.length)) || text;
+  return text;
+}
+
+/** نصّ الخبر: سطور الزخرفة تسقط (البادئة قبل العنوان تُقطع كما في المقتطف)،
+ * ويبقى ما حولها من نصّ حقيقي. */
+function bodyTextFor(rawBody, title) {
+  const text = cleanText(rawBody);
+  if (!text) return null;
+  const withoutPrefix = withoutSourcePrefix(text, title);
+  const kept = withoutPrefix
+    .split('\n')
+    .filter(line => !SOURCE_CHROME_MARKERS.some(marker => line.includes(marker)))
+    .join('\n');
+  return cleanText(kept) || text;
+}
+
 /** رابط مطلق http(s) أو `null` — لا `javascript:` ولا مسار نسبي يصل زرّاً في الصفحة. */
 function cleanHttpUrl(value) {
   const text = cleanText(value);
@@ -132,7 +189,7 @@ function normaliseItem(raw) {
   return {
     id,
     title,
-    excerpt: cleanText(raw.excerpt),
+    excerpt: excerptFor(raw.excerpt, title),
     image: cleanHttpUrl(raw.image),
     url: cleanHttpUrl(raw.url),
     published_at: cleanIsoDate(raw.published_at),
@@ -149,7 +206,7 @@ function normaliseItemDetail(raw) {
   return {
     ...item,
     author_name: cleanText(raw.author_name),
-    body_text: cleanText(raw.body_text)
+    body_text: bodyTextFor(raw.body_text, item.title)
   };
 }
 
@@ -177,6 +234,14 @@ async function fetchSource(url) {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(timeoutMs())
   });
+  // 404 من المصدر تعني «الخبر غير موجود» لا «المصدر متعطّل»: تُترجَم إلى `null`
+  // في `newsItem` وحده، ومنها 404 عربي. بلا هذا كان خبر محذوف أو رقم خاطئ
+  // يخرج 502 «تعذّر جلب الأخبار» — رسالة كاذبة عن عطل لم يقع (تحقّق حيّ).
+  if (res.status === 404) {
+    const missing = new Error('news source reported 404');
+    missing.sourceStatus = 404;
+    throw missing;
+  }
   if (!res.ok) throw new Error(`news source responded ${res.status}`);
 
   let payload;
@@ -187,7 +252,11 @@ async function fetchSource(url) {
     throw new Error('news source returned a non-JSON body');
   }
   if (!payload || typeof payload !== 'object' || payload.ok !== true) {
-    throw new Error('news source returned an unexpected body');
+    const unexpected = new Error('news source returned an unexpected body');
+    // جسم `{ ok: false, error: 'not_found' }` بحالة 200 (ودهيئة أخرى للمصدر):
+    // خبر غير موجود أيضاً، لا عطل.
+    if (payload && payload.error === 'not_found') unexpected.sourceStatus = 404;
+    throw unexpected;
   }
   return payload;
 }
@@ -274,6 +343,8 @@ async function newsItem(id) {
     const payload = await fetchSource(sourceUrl({ id: numericId }));
     return normaliseItemDetail(payload.item);
   } catch (err) {
+    // 404 من المصدر: خبر محذوف أو غير منشور — يعود `null` ليترجمه المسار 404.
+    if (err.sourceStatus === 404) return null;
     logSourceFailure(err.message, { id: numericId });
     throw ApiError.badGateway(NEWS_UNAVAILABLE_MESSAGE);
   }
