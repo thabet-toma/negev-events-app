@@ -11495,29 +11495,35 @@ async function run() {
     assert.deepStrictEqual(feedCardIds(win), [920], 'the stale first-region response must not replace the second region\'s cards');
   });
 
-  console.log('\nقصة التوسّع — ورقة الترحيب التسويقية على الويب (تذكرة #127)');
+  console.log('\nشريط التوسّع — خبر داخليّ داخل التغذية يتبع المحافظة المختارة (#127)');
 
-  /** محافظة كما يعيدها GET /api/towns، مع العدّادين اللذين تقرأهما القصة. */
-  function storyRegion(region, { events = 0, towns = 0 } = {}) {
+  /** محافظة كما يعيدها GET /api/towns، مع العدّادين اللذين يقرؤهما الشريط. */
+  function bannerRegion(region, { events = 0, towns = 0 } = {}) {
     return { ...region, is_active: true, events_count: events, towns_count: towns };
   }
 
+  // الأسماء كما يرسلها الخادم في الإنتاج — الشريط يكتبها كما وصلت، لا نسخة عميل.
+  const BANNER_TULKARM = { ...SECOND_REGION, name: 'محافظة طولكرم' };
+  const BANNER_LOD = {
+    id: 3, name: 'اللد والرملة ويافا', latitude: 31.95, longitude: 34.9, map_zoom: 10, position: 3,
+    towns: ['اللد', 'الرملة', 'يافا']
+  };
+
   /**
-   * buildEnv() بـ GET /api/towns يحمل محافظات القصة وحدها. `beforeTowns` بوابة
-   * تنتظر داخل الطلب نفسه، فتسمح بفتح نافذة قبل أن تصل المحافظات — اختبار
-   * «لا تُكدَّس فوق طبقة أخرى». `state.townsCalls` يثبت أن القصة لا تكرّر الطلب.
+   * buildEnv() بـ GET /api/towns يحمل محافظات الشريط. `state.townsCalls` يثبت أن
+   * الشريط لا يكرّر الطلب (أرقامه من الاستجابة نفسها)، و`dismissed` تُسبق الإقلاع
+   * بمفاتيح الإخفاء في localStorage — إعادة تحميل بعد أن أخفى الزائر شريط محافظة.
    */
-  function buildStoryEnv({ regions, soon = [], savedRegion = null, seen = false, beforeTowns = null } = {}) {
+  function buildBannerEnv({ regions, soon = [], savedRegion = null, dismissed = [] } = {}) {
     const state = { townsCalls: 0 };
     const dom = buildEnv({
       onBeforeEval: (w) => {
         if (savedRegion !== null) w.localStorage.setItem('negev_region', String(savedRegion));
-        if (seen) w.localStorage.setItem('negev_region_story_seen', '1');
+        dismissed.forEach(id => w.localStorage.setItem(`negev_region_banner_${id}`, '1'));
         const base = buildFetchStub();
         w.fetch = async (url, opts = {}) => {
           if (String(url).split('?')[0] === '/api/towns') {
             state.townsCalls += 1;
-            if (beforeTowns) await beforeTowns(w);
             return jsonResponse({
               success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [],
               regions, regions_soon: soon
@@ -11530,242 +11536,274 @@ async function run() {
     return { dom, state };
   }
 
-  function storySheetOf(win) {
-    return win.document.getElementById('regionStorySheet');
+  function regionBannerOf(win) {
+    return win.document.getElementById('regionBanner');
   }
 
-  function storyShown(win) {
-    return storySheetOf(win).style.display === 'flex';
+  function bannerShown(win) {
+    return regionBannerOf(win).hidden === false;
   }
 
-  function storyStats(win) {
-    return [...win.document.querySelectorAll('#regionStoryStats .region-story-stat')];
+  function bannerTitle(win) {
+    return win.document.getElementById('regionBannerTitle').textContent;
   }
 
-  /** ينتظر ظهور الورقة أو انتهاء المهلة — يعيد هل ظهرت فعلاً. */
-  async function waitForStory(win) {
-    await waitFor(() => storyShown(win));
-    return storyShown(win);
+  function bannerLine(win) {
+    return win.document.getElementById('regionBannerLine').textContent;
   }
 
-  await test('تظهر مرة واحدة بالأسماء والأرقام من الخادم، والمفتاح يُكتب عند الإغلاق لا قبله', async () => {
-    const origin = storyRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 });
-    const destination = storyRegion(SECOND_REGION, { events: 4, towns: 3 });
-    const { dom, state } = buildStoryEnv({ regions: [origin, destination] });
-    const win = dom.window;
-    await flushBoot();
+  /** ينتظر رسم حبوب المحافظات — الشريط يُرسم معها في المسار نفسه. */
+  async function waitForRegionChips(win, count) {
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === count);
+  }
 
-    assert.ok(await waitForStory(win), 'the sheet must appear once the active regions arrive');
-    const sheet = storySheetOf(win);
-    const title = win.document.getElementById('regionStoryTitle');
-
-    assert.strictEqual(sheet.getAttribute('role'), 'dialog');
-    assert.strictEqual(sheet.getAttribute('aria-modal'), 'true');
-    assert.strictEqual(title.textContent, `بلّشنا بـ${SEED_REGION.name}، وهلق ${SECOND_REGION.name} معنا`,
-      'the title is the ticket wording, with both names exactly as the server sent them');
-
-    const stats = storyStats(win);
-    assert.strictEqual(stats.length, 2, 'one tile for the origin and one for the destination');
-    assert.ok(stats[0].textContent.includes('12') && stats[0].textContent.includes(`مناسبة في ${SEED_REGION.name}`),
-      'the origin tile counts its approved events');
-    assert.ok(stats[1].textContent.includes('4') && stats[1].textContent.includes(`مناسبة في ${SECOND_REGION.name}`),
-      'the destination tile counts its approved events, not its towns');
-    assert.ok(stats[1].classList.contains('is-destination'), 'the destination is the highlighted tile');
-    assert.strictEqual(win.document.activeElement, win.document.getElementById('regionStoryDismissBtn'),
-      'the primary button takes focus when the sheet opens');
-    assert.strictEqual(win.localStorage.getItem('negev_region_story_seen'), null,
-      'nothing is recorded while the sheet is still on screen');
-    assert.strictEqual(state.townsCalls, 1, 'the story reuses the boot GET /api/towns — it must not request it again');
-
-    win.document.getElementById('regionStoryDismissBtn').click();
-    assert.strictEqual(sheet.style.display, 'none', '«يلا نشوف المناسبات» closes the sheet');
-    assert.strictEqual(win.localStorage.getItem('negev_region_story_seen'), '1',
-      'closing the sheet is reading it — the key is written now, not at open');
-
-    const second = buildStoryEnv({ regions: [origin, destination], seen: true });
-    await flushBoot();
-    await waitFor(() => second.dom.window.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
-    await delay(80);
-    assert.strictEqual(storyShown(second.dom.window), false, 'a browser that already saw the story is not shown it again');
-  });
-
-  await test('وجهة بصفر مناسبات: عدد البلدات بصيغة عربية وسطر «كون أول»، ولا «0 مناسبة» في أي نص', async () => {
-    const origin = storyRegion(REGIONS_FIXTURE[0], { events: 9, towns: 4 });
-    const destination = storyRegion(SECOND_REGION, { events: 0, towns: 3 });
-    const { dom } = buildStoryEnv({ regions: [origin, destination] });
-    const win = dom.window;
-    await flushBoot();
-    assert.ok(await waitForStory(win));
-
-    const sheet = storySheetOf(win);
-    const destinationTile = storyStats(win)[1];
-    assert.ok(destinationTile.textContent.includes('3'), 'the town count is the number on the tile');
-    assert.ok(destinationTile.textContent.includes(`بلدات في ${SECOND_REGION.name}`),
-      '3 towns takes the paucity plural «بلدات»');
-    assert.strictEqual(win.document.getElementById('regionStoryFirst').hidden, false,
-      'the invitation shows under the two tiles');
-    assert.ok(sheet.textContent.includes('كون أول من يعلن مناسبة فيها'));
-    assert.strictEqual(sheet.textContent.includes('0 مناسبة'), false,
-      'a hello sheet never says «0 مناسبة» — the town count stands in for it');
-  });
-
-  await test('وجهة فيها مناسبة معتمدة واحدة: يظهر رقم المناسبات لا عدد البلدات', async () => {
-    const origin = storyRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 });
-    const destination = storyRegion(SECOND_REGION, { events: 1, towns: 8 });
-    const { dom } = buildStoryEnv({ regions: [origin, destination] });
-    const win = dom.window;
-    await flushBoot();
-    assert.ok(await waitForStory(win));
-
-    const destinationTile = storyStats(win)[1];
-    assert.ok(destinationTile.textContent.includes('1'), 'the approved event count is shown');
-    assert.ok(destinationTile.textContent.includes(`مناسبة في ${SECOND_REGION.name}`));
-    assert.strictEqual(destinationTile.textContent.includes('بلدات'), false,
-      'a destination with an approved event must not fall back to its town count');
-    assert.strictEqual(win.document.getElementById('regionStoryFirst').hidden, true,
-      'no «be the first» line for a region that already has events');
-  });
-
-  await test('صيغ الجمع الأربع: بلدة، بلدتان، بلدات، بلدة', async () => {
-    const dom = buildEnv();
-    const win = dom.window;
-    assert.strictEqual(win.regionStoryTownsNoun(1), 'بلدة');
-    assert.strictEqual(win.regionStoryTownsNoun(2), 'بلدتان');
-    assert.strictEqual(win.regionStoryTownsNoun(3), 'بلدات');
-    assert.strictEqual(win.regionStoryTownsNoun(10), 'بلدات');
-    assert.strictEqual(win.regionStoryTownsNoun(11), 'بلدة');
-  });
-
-  await test('فشل GET /api/towns أو محافظة واحدة أو وجهة بلا محتوى: لا ورقة ولا مفتاح مكتوب', async () => {
-    const failing = buildEnv({
-      onBeforeEval: (w) => {
-        const base = buildFetchStub();
-        w.fetch = async (url, opts = {}) => {
-          if (String(url).split('?')[0] === '/api/towns') throw new Error('offline');
-          return base(url, opts);
-        };
-      }
-    });
-    await flushBoot();
-    await delay(80);
-    assert.strictEqual(storyShown(failing.window), false, 'a failed GET /api/towns tells no story');
-    assert.strictEqual(failing.window.localStorage.getItem('negev_region_story_seen'), null,
-      'and a story that never showed is not recorded as seen');
-
-    const one = buildStoryEnv({ regions: [storyRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 })] });
-    await flushBoot();
-    await waitFor(() => one.dom.window.document.querySelectorAll('#regionPickerChips .region-chip').length === 1);
-    await delay(60);
-    assert.strictEqual(storyShown(one.dom.window), false, 'one active region is no expansion story');
-    assert.strictEqual(one.dom.window.localStorage.getItem('negev_region_story_seen'), null);
-
-    const empty = buildStoryEnv({
+  await test('المحافظة الأصلية (النقب) بلا شريط: الشريط خبر توسّع لا تحيّة، ولا ورقة قديمة ولا مفتاحها', async () => {
+    const { dom, state } = buildBannerEnv({
       regions: [
-        storyRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 }),
-        storyRegion(SECOND_REGION, { events: 0, towns: 0 })
+        bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 })
       ]
     });
-    await flushBoot();
-    await waitFor(() => empty.dom.window.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
-    await delay(60);
-    assert.strictEqual(storyShown(empty.dom.window), false, 'a destination with neither events nor towns cannot be told');
-    assert.strictEqual(empty.dom.window.localStorage.getItem('negev_region_story_seen'), null);
-  });
-
-  await test('الأصل والوجهة يتبعان الاختيار: محافظة مختارة غير الأصل تُعرض وجهةً', async () => {
-    const origin = storyRegion(REGIONS_FIXTURE[0], { events: 20, towns: 5 });
-    const chosen = storyRegion(SECOND_REGION, { events: 2, towns: 4 });
-    const later = storyRegion(
-      { id: 3, name: 'بئر السبع', latitude: 31.25, longitude: 34.79, map_zoom: 10, position: 3, towns: [] },
-      { events: 7, towns: 1 }
-    );
-    const { dom } = buildStoryEnv({ regions: [origin, chosen, later], savedRegion: 2 });
     const win = dom.window;
     await flushBoot();
-    assert.ok(await waitForStory(win));
+    await waitForRegionChips(win, 2);
 
-    assert.strictEqual(win.document.getElementById('regionStoryTitle').textContent,
-      `بلّشنا بـ${SEED_REGION.name}، وهلق ${SECOND_REGION.name} معنا`,
-      'the origin stays the server\'s first region; the chosen one is the destination');
-    assert.ok(storyStats(win)[1].textContent.includes(`مناسبة في ${SECOND_REGION.name}`),
-      'the destination is the selected region, not the first other region with events');
+    assert.strictEqual(bannerShown(win), false, 'the seeded region is the starting point — no banner on it');
+    assert.strictEqual(win.document.getElementById('regionStorySheet'), null, 'the old sheet is gone from the page, not just hidden');
+    assert.strictEqual(win.localStorage.getItem('negev_region_story_seen'), null, 'and its old "seen" key is never written');
+    assert.strictEqual(state.townsCalls, 1, 'one GET /api/towns at boot, exactly as before');
   });
 
-  await test('محافظة مختارة بلا محتوى: الوجهة أول محافظة أخرى فيها مناسبات، لا المختارة', async () => {
-    const origin = storyRegion(REGIONS_FIXTURE[0], { events: 20, towns: 5 });
-    const chosenEmpty = storyRegion(SECOND_REGION, { events: 0, towns: 0 });
-    const withEvents = storyRegion(
-      { id: 3, name: 'بئر السبع', latitude: 31.25, longitude: 34.79, map_zoom: 10, position: 3, towns: [] },
-      { events: 7, towns: 1 }
-    );
-    const { dom } = buildStoryEnv({ regions: [origin, chosenEmpty, withEvents], savedRegion: 2 });
-    const win = dom.window;
-    await flushBoot();
-    assert.ok(await waitForStory(win));
-
-    assert.strictEqual(win.document.getElementById('regionStoryTitle').textContent,
-      `بلّشنا بـ${SEED_REGION.name}، وهلق ${withEvents.name} معنا`,
-      'an empty selected region is skipped for the first one with approved events');
-  });
-
-  await test('نافذة أخرى مفتوحة عند وصول المحافظات: لا قصة ولا مفتاح — لا تُكدَّس فوقها', async () => {
-    let releaseTowns;
-    const gate = new Promise(resolve => { releaseTowns = resolve; });
-    const { dom } = buildStoryEnv({
+  await test('التبديل إلى محافظة طولكرم: شريط داخل الصفحة بنصّ الخادم وعدد بلداتها — لا طبقة ولا حوار', async () => {
+    const { dom, state } = buildBannerEnv({
       regions: [
-        storyRegion(REGIONS_FIXTURE[0], { events: 6, towns: 2 }),
-        storyRegion(SECOND_REGION, { events: 1, towns: 1 })
+        bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 })
+      ]
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitForRegionChips(win, 2);
+    await win.selectRegion(BANNER_TULKARM.id);
+
+    assert.strictEqual(bannerShown(win), true, 'switching away from the origin shows the banner');
+    assert.strictEqual(bannerTitle(win), `بعد النجاح في ${SEED_REGION.name}… توسّعنا إلى ${BANNER_TULKARM.name}`,
+      'both names come from the server response, never from a constant in the client');
+    assert.ok(bannerLine(win).includes('4') && bannerLine(win).includes(`بلدات في ${BANNER_TULKARM.name}`),
+      'four towns take the paucity plural «بلدات»');
+
+    const banner = regionBannerOf(win);
+    // مكانه في الصفحة: بين منتقي المحافظة ورقاقات الفلترة، في تدفّق الصفحة.
+    assert.strictEqual(banner.previousElementSibling.id, 'regionPicker');
+    assert.ok(banner.nextElementSibling.classList.contains('filter-chips-row'), 'the banner sits above the filter chips');
+    assert.strictEqual(banner.classList.contains('modal-overlay'), false, 'an in-page ribbon, not a modal overlay');
+    assert.strictEqual(banner.hasAttribute('aria-modal'), false);
+    assert.strictEqual(banner.closest('[aria-modal]'), null, 'nothing around it claims to be a dialog');
+    assert.strictEqual(banner.getAttribute('role'), 'status', 'a piece of news, not a dialog');
+    assert.strictEqual(banner.getAttribute('aria-live'), 'polite');
+    assert.strictEqual(win.document.getElementById('regionBannerCloseBtn').getAttribute('aria-label'), 'إخفاء شريط التوسّع');
+
+    // لا حجب: المحتوى تحته ما زال في الصفحة، ولا طبقة مفتوحة، ولا قفل تمرير.
+    assert.ok(win.document.getElementById('eventsContainer'), 'the feed under it is still in the page');
+    assert.strictEqual(win.document.querySelector('.filter-chips-row').hidden, false);
+    assert.deepStrictEqual(
+      [...win.document.querySelectorAll('.modal-overlay')].filter(overlay => !overlay.hidden && overlay.style.display !== 'none').map(overlay => overlay.id),
+      [],
+      'the banner opens no overlay at all'
+    );
+    assert.strictEqual(win.document.body.style.overflow, '', 'and locks no scrolling');
+    const bannerRule = STYLES_CSS_RAW.match(/\.region-banner\s*\{([^}]*)\}/)[1];
+    assert.strictEqual(/position\s*:/.test(bannerRule), false, 'the banner stays in flow — never position: fixed');
+    assert.strictEqual(state.townsCalls, 1, 'the banner reused the boot response — no second GET /api/towns');
+  });
+
+  await test('تبديل ثانٍ إلى اللد والرملة ويافا: الشريط يتبع كل تبديل بنصّ المحافظة الجديدة وعدد بلداتها (٣)', async () => {
+    const { dom } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 }),
+        bannerRegion(BANNER_LOD, { events: 0, towns: 3 })
       ],
-      beforeTowns: () => gate
+      savedRegion: BANNER_TULKARM.id
     });
     const win = dom.window;
     await flushBoot();
-    win.document.getElementById('notificationsModal').style.display = 'flex';
-    releaseTowns();
-    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
-    await delay(60);
+    await waitForRegionChips(win, 3);
+    assert.strictEqual(bannerTitle(win), `بعد النجاح في ${SEED_REGION.name}… توسّعنا إلى ${BANNER_TULKARM.name}`,
+      'a remembered region shows its own banner at boot');
 
-    assert.strictEqual(storyShown(win), false, 'the story must not stack over an open notification centre');
-    assert.strictEqual(win.localStorage.getItem('negev_region_story_seen'), null,
-      'and a blocked story is not recorded as seen');
+    await win.selectRegion(BANNER_LOD.id);
+    assert.strictEqual(bannerTitle(win), `بعد النجاح في ${SEED_REGION.name}… توسّعنا إلى ${BANNER_LOD.name}`);
+    assert.ok(bannerLine(win).includes('3') && bannerLine(win).includes(`بلدات في ${BANNER_LOD.name}`),
+      'its three towns are the number shown while it has no approved events');
+
+    await win.selectRegion(BANNER_TULKARM.id);
+    assert.ok(bannerTitle(win).includes(BANNER_TULKARM.name), 'switching back re-renders the earlier region\'s banner');
   });
 
-  await test('Escape والنقر خارج البطاقة يغلقان الورقة ويسجّلان العرض', async () => {
+  await test('محافظة بصفر مناسبات: عدد البلدات وسطر «كن أول»، ولا «0 مناسبة» في أي نصّ', async () => {
+    const { dom } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 9, towns: 4 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 3 })
+      ],
+      savedRegion: BANNER_TULKARM.id
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitForRegionChips(win, 2);
+
+    assert.strictEqual(bannerShown(win), true);
+    assert.ok(bannerLine(win).includes(`3 بلدات في ${BANNER_TULKARM.name}`));
+    assert.ok(bannerLine(win).includes('كن أول من يعلن مناسبة فيها'), 'the invitation rides on the same single line');
+    assert.strictEqual(regionBannerOf(win).textContent.includes('0 مناسبة'), false,
+      'the banner never says «0 مناسبة» — the town count stands in for it');
+  });
+
+  await test('محافظة فيها مناسبة معتمدة: رقم المناسبات لا عدد البلدات', async () => {
+    const { dom } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 }),
+        bannerRegion(BANNER_TULKARM, { events: 1, towns: 9 })
+      ],
+      savedRegion: BANNER_TULKARM.id
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitForRegionChips(win, 2);
+
+    assert.strictEqual(bannerLine(win), `1 مناسبة في ${BANNER_TULKARM.name}`, 'the approved event count is the news');
+    assert.strictEqual(bannerLine(win).includes('بلدات'), false, 'a region with an approved event never falls back to its town count');
+  });
+
+  await test('صيغ العدد العربية: بلدة، بلدتان، بلدات، بلدة — وكذلك المناسبات', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const region = { name: 'طولكرم' };
+
+    assert.strictEqual(win.regionBannerLineHtml(region, 0, 1), '1 بلدة في طولكرم — كن أول من يعلن مناسبة فيها');
+    assert.strictEqual(win.regionBannerLineHtml(region, 0, 2), '2 بلدتان في طولكرم — كن أول من يعلن مناسبة فيها');
+    assert.strictEqual(win.regionBannerLineHtml(region, 0, 10), '10 بلدات في طولكرم — كن أول من يعلن مناسبة فيها');
+    assert.strictEqual(win.regionBannerLineHtml(region, 0, 11), '11 بلدة في طولكرم — كن أول من يعلن مناسبة فيها');
+    assert.strictEqual(win.regionBannerLineHtml(region, 0, 0), 'بلا بلدات في طولكرم — كن أول من يعلن مناسبة فيها',
+      'zero towns is «بلا بلدات», never «0 بلدة»');
+
+    assert.strictEqual(win.regionBannerLineHtml(region, 1, 9), '1 مناسبة في طولكرم');
+    assert.strictEqual(win.regionBannerLineHtml(region, 2, 9), '2 مناسبتان في طولكرم');
+    assert.strictEqual(win.regionBannerLineHtml(region, 3, 9), '3 مناسبات في طولكرم');
+    assert.strictEqual(win.regionBannerLineHtml(region, 11, 9), '11 مناسبة في طولكرم');
+  });
+
+  await test('× يُخفي الشريط ويسجّل الإخفاء لهذه المحافظة وحدها — ويبقى بعد إعادة التحميل', async () => {
     const regions = [
-      storyRegion(REGIONS_FIXTURE[0], { events: 6, towns: 2 }),
-      storyRegion(SECOND_REGION, { events: 1, towns: 1 })
+      bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+      bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 }),
+      bannerRegion(BANNER_LOD, { events: 0, towns: 3 })
     ];
-
-    const first = buildStoryEnv({ regions });
+    const { dom } = buildBannerEnv({ regions, savedRegion: BANNER_TULKARM.id });
+    const win = dom.window;
     await flushBoot();
-    assert.ok(await waitForStory(first.dom.window));
-    first.dom.window.document.dispatchEvent(new first.dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
-    assert.strictEqual(storyShown(first.dom.window), false, 'Escape closes the sheet');
-    assert.strictEqual(first.dom.window.localStorage.getItem('negev_region_story_seen'), '1',
-      'closing with Escape is reading it too');
+    await waitForRegionChips(win, 3);
+    assert.strictEqual(bannerShown(win), true);
 
-    const second = buildStoryEnv({ regions });
+    win.document.getElementById('regionBannerCloseBtn').click();
+    assert.strictEqual(bannerShown(win), false, 'the × hides the banner');
+    assert.strictEqual(win.localStorage.getItem(`negev_region_banner_${BANNER_TULKARM.id}`), '1',
+      'the hide is recorded for that one region');
+    assert.strictEqual(win.localStorage.getItem(`negev_region_banner_${BANNER_LOD.id}`), null,
+      'and for no other region');
+
+    await win.selectRegion(BANNER_LOD.id);
+    assert.strictEqual(bannerShown(win), true, 'another region still gets its own banner');
+    assert.ok(bannerTitle(win).includes(BANNER_LOD.name));
+
+    await win.selectRegion(BANNER_TULKARM.id);
+    assert.strictEqual(bannerShown(win), false, 'coming back to the dismissed region keeps it hidden');
+
+    // إعادة التحميل: المفتاح نفسه في localStorage يمنع العودة، ولا يمنعها لغيره.
+    const reloaded = buildBannerEnv({ regions, savedRegion: BANNER_TULKARM.id, dismissed: [BANNER_TULKARM.id] });
     await flushBoot();
-    assert.ok(await waitForStory(second.dom.window));
-    storySheetOf(second.dom.window).dispatchEvent(new second.dom.window.MouseEvent('click', { bubbles: true }));
-    assert.strictEqual(storyShown(second.dom.window), false, 'a click outside the card closes the sheet');
-    assert.strictEqual(second.dom.window.localStorage.getItem('negev_region_story_seen'), '1');
+    await waitForRegionChips(reloaded.dom.window, 3);
+    assert.strictEqual(bannerShown(reloaded.dom.window), false, 'a reload keeps the dismissed region quiet');
+
+    const otherRegion = buildBannerEnv({ regions, savedRegion: BANNER_LOD.id, dismissed: [BANNER_TULKARM.id] });
+    await flushBoot();
+    await waitForRegionChips(otherRegion.dom.window, 3);
+    assert.strictEqual(bannerShown(otherRegion.dom.window), true,
+      'the dismissal belongs to its region alone — another region still explains the expansion');
   });
 
-  await test('أسماء المحافظات تمرّ عبر escapeHtml — لا HTML من الخادم', async () => {
+  await test('اسم المحافظة يمرّ عبر escapeHtml — لا HTML من الخادم في العنوان أو السطر', async () => {
     const evilName = '<b>طولكرم</b>';
-    const destination = storyRegion({ ...SECOND_REGION, name: evilName }, { events: 2, towns: 1 });
-    const { dom } = buildStoryEnv({
-      regions: [storyRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 }), destination]
+    const { dom } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 5, towns: 2 }),
+        bannerRegion({ ...BANNER_TULKARM, name: evilName }, { events: 2, towns: 1 })
+      ],
+      savedRegion: BANNER_TULKARM.id
     });
     const win = dom.window;
     await flushBoot();
-    assert.ok(await waitForStory(win));
+    await waitForRegionChips(win, 2);
 
-    const title = win.document.getElementById('regionStoryTitle');
-    assert.strictEqual(title.querySelectorAll('b').length, 0, 'markup from the server stays text');
-    assert.ok(title.textContent.includes(evilName), 'the name is shown literally, escaped');
-    assert.strictEqual(storyStats(win)[1].querySelectorAll('b').length, 0);
+    assert.strictEqual(regionBannerOf(win).querySelectorAll('b').length, 0, 'markup from the server stays text');
+    assert.ok(bannerTitle(win).includes(evilName), 'the name is shown literally, escaped');
+    assert.ok(bannerLine(win).includes(evilName));
+  });
+
+  await test('تبديل المحافظة لا يطلب /api/towns مرة أخرى — الأرقام من استجابة الإقلاع نفسها', async () => {
+    const { dom, state } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 }),
+        bannerRegion(BANNER_LOD, { events: 0, towns: 3 })
+      ]
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitForRegionChips(win, 3);
+    const townsAfterBoot = state.townsCalls;
+    assert.strictEqual(townsAfterBoot, 1);
+
+    await win.selectRegion(BANNER_TULKARM.id);
+    await win.selectRegion(BANNER_LOD.id);
+    await win.selectRegion(REGIONS_FIXTURE[0].id);
+    assert.strictEqual(state.townsCalls, townsAfterBoot, 'three switches, still one GET /api/towns');
+    assert.strictEqual(bannerShown(win), false, 'and back on the origin the banner is gone again');
+  });
+
+  await test('الموقوفة لا تُختار ولا شريط لها، ومحافظة بلا عدّادين من الخادم لا شريط لها', async () => {
+    const { dom } = buildBannerEnv({
+      regions: [
+        bannerRegion(REGIONS_FIXTURE[0], { events: 12, towns: 6 }),
+        bannerRegion(BANNER_TULKARM, { events: 0, towns: 4 })
+      ],
+      soon: [{ id: 9, name: 'محافظة غزة' }]
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitForRegionChips(win, 3);
+    await win.selectRegion(BANNER_TULKARM.id);
+    assert.strictEqual(bannerShown(win), true);
+
+    const soonChip = win.document.querySelector('#regionPickerChips .region-chip[aria-disabled="true"]');
+    assert.ok(soonChip.textContent.includes('قريباً'));
+    await win.selectRegion(9);
+    assert.strictEqual(win.document.querySelector('#regionPickerChips .region-chip.active').getAttribute('data-region-id'), '2',
+      'the paused region is never selected');
+    assert.ok(bannerTitle(win).includes(BANNER_TULKARM.name), 'and the banner keeps telling the chosen region\'s story');
+
+    const missingCounters = buildBannerEnv({
+      regions: [
+        { id: 1, name: SEED_REGION.name, is_active: true },
+        { id: 2, name: 'محافظة طولكرم', is_active: true }
+      ],
+      savedRegion: 2
+    });
+    await flushBoot();
+    await waitForRegionChips(missingCounters.dom.window, 2);
+    assert.strictEqual(bannerShown(missingCounters.dom.window), false,
+      'no counters from the server means no banner — never an invented number');
   });
 
   console.log('\nاختيار المنطقة أولاً ثم البلدة — العزل في منتقيات النشر والتعديل (الموقع ولوحة الإدارة)');

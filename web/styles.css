@@ -683,26 +683,49 @@ body {
 }
 .region-picker-drawer { margin: 0 0 14px; }
 
-/* قصة التوسّع (#127) — ورقة تحيّة تُعرض مرة واحدة لكل متصفّح بعد وصول
-   المحافظات من الخادم. بطاقة المودال نفسها، برقمين من GET /api/towns لا من
-   نصّ مكتوب هنا: الأصل عدّاد مناسباته، والوجهة عدد بلداتها حين لا مناسبات
-   معتمدة فيها بعد. بطاقتا الرقمين متساويتان، والوجهة وحدها بإطار السماء. */
-.region-story-head { display: flex; align-items: flex-start; gap: 8px; }
-.region-story-head i { color: var(--sky); font-size: 1.1rem; margin-block-start: 5px; flex-shrink: 0; }
-.region-story-title { font-size: 1.08rem; font-weight: 900; color: var(--ink); line-height: 1.6; }
-.region-story-sub { margin-block: 10px 14px; color: var(--ink-soft); font-size: 0.86rem; line-height: 1.7; }
-.region-story-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.region-story-stat {
-  padding: 14px 12px;
-  background: var(--surface);
-  border: 1px solid var(--line);
+/* شريط التوسّع (#127) — خبر داخليّ تحت منتقي المحافظة وفوق رقاقات الفلترة:
+   سطران بحدّ أقصى بنغمة ذهبية، لا طبقة تحته ولا قفل تمرير ولا موضع ثابت.
+   الدخول انزلاق خفيف (٢٤٠ms) يُلغى كاملاً مع prefers-reduced-motion، والزرّ ×
+   في الطرف يخفيه لهذه المحافظة وحدها. */
+.region-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  background: var(--gold-wash);
+  border: 1px solid var(--gold);
   border-radius: var(--radius-md);
+  animation: region-banner-in 240ms ease-out both;
 }
-.region-story-stat.is-destination { border-color: var(--sky); }
-.region-story-stat-count { display: block; font-size: 1.55rem; font-weight: 900; color: var(--ink); font-variant-numeric: tabular-nums; }
-.region-story-stat.is-destination .region-story-stat-count { color: var(--sky); }
-.region-story-stat-label { display: block; margin-block-start: 2px; font-size: 0.8rem; color: var(--ink-soft); line-height: 1.6; }
-.region-story-first { margin-block-start: 12px; color: var(--sky-deep); font-size: 0.84rem; font-weight: 800; }
+.region-banner[hidden] { display: none; }
+.region-banner-icon { flex-shrink: 0; margin-block-start: 4px; color: var(--gold); font-size: 1rem; }
+.region-banner-body { flex: 1; min-width: 0; }
+.region-banner-title { font-size: 0.9rem; font-weight: 900; line-height: 1.6; color: var(--ink); }
+.region-banner-line { margin-block-start: 2px; font-size: 0.8rem; font-weight: 700; line-height: 1.6; color: var(--gold); }
+.region-banner-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--gold);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.region-banner-close:hover { background: var(--gold); color: var(--surface); }
+@keyframes region-banner-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .region-banner { animation: none; }
+}
 
 /* ورقة الفلتر (مكان/نوع) — نفس بطاقة المودال، ببحث فوق قائمة قابلة للتمرير */
 .filter-sheet-card { display: flex; flex-direction: column; }
@@ -3336,6 +3359,9 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     z-index: 10;
   }
 
+  /* شريط التوسّع ليس نسخةً من منتقي المحافظة فتُنقل إلى الدرج: خبرٌ يُقرأ مرة
+     عند تبديل المحافظة، ومكانه الطبيعي فوق الكروت على الهاتف أيضاً — وإخفاؤه
+     هنا كان يعني ألّا يراه أحد على الهاتف إطلاقاً (صاحب المنتج يجرّب هناك). */
   #tabHome > .region-picker,
   #tabHome > .filter-chips-row,
   #tabHome > .search-bar-container,

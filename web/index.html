@@ -351,6 +351,20 @@
         <div class="region-picker-chips" id="regionPickerChips"></div>
       </div>
 
+      <!-- شريط التوسّع (#127) — سطران داخل الصفحة لا ورقة حواريّة: تحت منتقي
+           المحافظة وفوق رقاقات الفلترة، ويتبع المحافظة الفعّالة (لا شريط على
+           الأصل). العنوان والسطر والأرقام كلها من GET /api/towns وحده
+           (renderRegionBanner في app.js)، و× يُخفيه لهذه المحافظة وحدها في
+           negev_region_banner_<id>. -->
+      <div class="region-banner" id="regionBanner" role="status" aria-live="polite" hidden>
+        <i class="fa-solid fa-wand-magic-sparkles region-banner-icon" aria-hidden="true"></i>
+        <div class="region-banner-body">
+          <p class="region-banner-title" id="regionBannerTitle"></p>
+          <p class="region-banner-line" id="regionBannerLine"></p>
+        </div>
+        <button type="button" class="region-banner-close" id="regionBannerCloseBtn" aria-label="إخفاء شريط التوسّع" onclick="dismissRegionBanner()"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+
       <!-- فلتر المكان والنوع — رقاقتان تفتحان ورقة بحث بدل شريطين زاحفين كانا
            يأكلان أعلى تبويب التغذية هذا وحده (#85 خطوة 40-46). البلدات والقرى
            تُجلب معاً من GET /api/towns — لا قائمة بلدات ثابتة هنا. «مسح
@@ -1596,24 +1610,6 @@
         سفاري، ثم اختر <b>«إضافة إلى الشاشة الرئيسية»</b>.
       </p>
       <p class="install-hint-why">وبذلك تُفتح المنصة كأي تطبيق، ويبقى دخولك محفوظاً.</p>
-    </div>
-  </div>
-
-  <!-- قصة التوسّع (#127) — نسخة الويب من ورقة الترحيب التسويقية التي بنتها
-       نسخة الموبايل: تُروى مرة واحدة لكل متصفّح بعد وصول المحافظات من
-       GET /api/towns فعلاً (maybeShowRegionStory في app.js)، ولا تُعرض فوق
-       نافذة أخرى مفتوحة. اسم المحافظة وعدّاداها يُرسمان من الخادم وحده،
-       والمفتاح negev_region_story_seen يُكتب عند الإغلاق لا قبله. -->
-  <div id="regionStorySheet" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="regionStoryTitle" aria-describedby="regionStorySub" onclick="if (event.target === this) closeRegionStorySheet()">
-    <div class="modal-card">
-      <div class="region-story-head">
-        <i class="fa-solid fa-map-location-dot" aria-hidden="true"></i>
-        <h3 id="regionStoryTitle" class="region-story-title"></h3>
-      </div>
-      <p id="regionStorySub" class="region-story-sub">المناسبات والخدمات صارت لمنطقتك: من كل محافظة على حدة، في «أعراسنا» نفسه.</p>
-      <div id="regionStoryStats" class="region-story-stats"></div>
-      <p id="regionStoryFirst" class="region-story-first" hidden>كون أول من يعلن مناسبة فيها</p>
-      <button type="button" id="regionStoryDismissBtn" class="submit-btn" onclick="closeRegionStorySheet()">يلا نشوف المناسبات</button>
     </div>
   </div>
 
