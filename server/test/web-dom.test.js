@@ -6796,7 +6796,7 @@ async function run() {
     assert.ok(cardHtml.includes('الكميات قابلة للتعديل والزيادة'), 'expected flexibility notice in card');
   });
 
-  console.log('\nSession expiry, the explicit auth button, «قريتي غير موجودة», and the default event audio');
+  console.log('\nSession expiry, the «حسابي» button, «قريتي غير موجودة», and the default event audio');
 
   const SESSION_EXPIRED_MESSAGE = 'انتهت جلستك، يرجى تسجيل الدخول من جديد';
 
@@ -6821,7 +6821,7 @@ async function run() {
     assert.strictEqual(document.getElementById('authModal').style.display, 'flex', 'the login modal must open so the visitor can sign in again');
     const notices = Array.from(document.querySelectorAll('.app-toast')).filter(t => t.textContent === SESSION_EXPIRED_MESSAGE);
     assert.strictEqual(notices.length, 1, `two parallel 401s must surface ONE session-expired notice, got ${notices.length}`);
-    assert.strictEqual(document.getElementById('userAuthLabel').textContent, 'تسجيل الدخول', 'the header must fall back to the logged-out state');
+    assert.strictEqual(document.getElementById('userAuthBtn').title, 'حسابي', 'with the session gone the account button carries no first name any more');
   });
 
   await test('a 401 on a call WITHOUT auth:true (or on the admin token) leaves the site session alone', async () => {
@@ -6881,35 +6881,74 @@ async function run() {
     assert.strictEqual(publishAttempts[1], 'Bearer fresh-token', 'the retry must carry the NEW token');
   });
 
-  await test('the header auth button says تسجيل الخروج when logged in and تسجيل الدخول when not — and the floating bar carries its own auth button', async () => {
+  await test('the header and floating account buttons always read «حسابي» with a person icon, open #tabAccount instead of a login form or a logout, and leave the logout inside «حسابي» alone', async () => {
     const guest = buildEnv({ loggedIn: false });
     await flushBoot();
     const gDoc = guest.window.document;
-    assert.strictEqual(gDoc.getElementById('userAuthLabel').textContent, 'تسجيل الدخول');
+    const guestBtn = gDoc.getElementById('userAuthBtn');
+    assert.strictEqual(gDoc.getElementById('userAuthLabel').textContent, 'حسابي');
+    assert.strictEqual(guestBtn.querySelector('i').className, 'fa-solid fa-user', 'a person icon, not the old login lock');
+    assert.strictEqual(guestBtn.title, 'حسابي', 'no session, so no first name to carry in the title');
+
     const floatingAuthBtn = gDoc.querySelector('#floatingTopBar #floatingAuthBtn');
-    assert.ok(floatingAuthBtn, 'the phone/PWA floating bar must hold an auth button — the header is hidden there');
-    assert.strictEqual(gDoc.getElementById('floatingAuthLabel').textContent, 'تسجيل الدخول');
+    assert.ok(floatingAuthBtn, 'the phone/PWA floating bar must hold an account button — the header is hidden there');
+    assert.strictEqual(gDoc.getElementById('floatingAuthLabel').textContent, 'حسابي');
+    assert.strictEqual(floatingAuthBtn.querySelector('i').className, 'fa-solid fa-user');
     assert.strictEqual(gDoc.getElementById('adminPanelBtn').hidden, true, 'no admin link for a visitor');
+
     floatingAuthBtn.click();
-    assert.strictEqual(gDoc.getElementById('authModal').style.display, 'flex', 'the floating button must open the login modal for a visitor');
+    assert.ok(
+      gDoc.getElementById('tabAccount').classList.contains('active-tab'),
+      'the floating button must land on «حسابي»'
+    );
+    assert.strictEqual(
+      gDoc.getElementById('authModal').style.display,
+      'none',
+      'a visitor lands on the account page, whose own button opens the login form — not the other way round'
+    );
+    assert.strictEqual(
+      gDoc.getElementById('accountGuestView').style.display,
+      'block',
+      'the sign-in door is inside «حسابي» for a visitor'
+    );
 
     // A plain user whose phone is the old hard-coded «admin» number gets no admin link — the role decides, not the phone.
+    const confirms = [];
     const user = buildEnv({
       onBeforeEval: (w) => {
         w.localStorage.setItem('negev_user', JSON.stringify({ id: 9, full_name: 'سالم الاختبار', role: 'user', phone_number: '0500000000' }));
         w.localStorage.setItem('negev_token', 'user-token');
+        w.confirm = (message) => { confirms.push(message); return true; };
       }
     });
     await flushBoot();
     const uDoc = user.window.document;
-    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'تسجيل الخروج', 'a logged-in visitor must see an explicit logout, not their name');
-    assert.strictEqual(uDoc.getElementById('floatingAuthLabel').textContent, 'تسجيل الخروج');
-    assert.ok(uDoc.getElementById('userAuthBtn').title.includes('سالم'), 'the first name may live in the title, not the label');
+    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'حسابي', 'a signed-in visitor sees «حسابي», not an explicit logout');
+    assert.strictEqual(uDoc.getElementById('floatingAuthLabel').textContent, 'حسابي');
+    assert.strictEqual(uDoc.getElementById('userAuthBtn').title, 'سالم — حسابي', 'the first name lives in the title alone');
     assert.strictEqual(uDoc.getElementById('adminPanelBtn').hidden, true, 'role user must not get the admin link, whatever the phone number');
 
-    uDoc.getElementById('userAuthBtn').click(); // window.confirm is stubbed to true in buildEnv
-    assert.strictEqual(uDoc.getElementById('userAuthLabel').textContent, 'تسجيل الدخول', 'confirming logout must log out');
-    assert.strictEqual(user.window.localStorage.getItem('negev_token'), null);
+    const headerAuthWords = uDoc.getElementById('userAuthBtn').closest('header').textContent.match(/تسجيل (?:الدخول|الخروج)/g);
+    assert.strictEqual(headerAuthWords, null, 'no «تسجيل الدخول/الخروج» is left in the header');
+    const floatingAuthWords = uDoc.getElementById('floatingTopBar').textContent.match(/تسجيل (?:الدخول|الخروج)/g);
+    assert.strictEqual(floatingAuthWords, null, 'nor in the phone/PWA floating bar');
+
+    uDoc.getElementById('userAuthBtn').click();
+    assert.deepStrictEqual(confirms, [], 'opening «حسابي» must ask nothing — no logout confirmation');
+    assert.ok(
+      uDoc.getElementById('tabAccount').classList.contains('active-tab'),
+      'the header button opens «حسابي» for a signed-in user too'
+    );
+    assert.strictEqual(uDoc.getElementById('authModal').style.display, 'none', 'a signed-in user is not shown a login form');
+    assert.strictEqual(user.window.localStorage.getItem('negev_token'), 'user-token', 'opening «حسابي» must not sign the user out');
+
+    // The page's one logout lives inside «حسابي», and it is what ends the session.
+    const logoutBtn = uDoc.querySelector('#tabAccount .account-logout-btn');
+    assert.ok(logoutBtn, '«حسابي» must hold the logout button');
+    assert.strictEqual(logoutBtn.closest('#tabAccount').id, 'tabAccount', 'the logout button lives inside #tabAccount, not in the header');
+    logoutBtn.click();
+    assert.strictEqual(user.window.localStorage.getItem('negev_token'), null, 'the logout inside «حسابي» ends the session');
+    assert.strictEqual(uDoc.getElementById('userAuthBtn').title, 'حسابي', 'the account button drops the first name once the session is gone');
 
     const admin = buildEnv({
       onBeforeEval: (w) => {
@@ -6920,7 +6959,8 @@ async function run() {
     await flushBoot();
     const aDoc = admin.window.document;
     assert.strictEqual(aDoc.getElementById('adminPanelBtn').hidden, false, 'super_admin gets the separate «لوحة الإدارة» link');
-    assert.strictEqual(aDoc.getElementById('userAuthLabel').textContent, 'تسجيل الخروج', 'the auth button stays an explicit logout for admins too');
+    assert.strictEqual(aDoc.getElementById('userAuthLabel').textContent, 'حسابي', 'the account button reads the same for admins');
+    assert.strictEqual(aDoc.getElementById('userAuthBtn').title, 'مدير — حسابي');
   });
 
   await test('choosing «قريتي غير موجودة» reveals a name field and the publish POST carries requested_village_name with no village_id', async () => {
@@ -11080,8 +11120,8 @@ async function run() {
     assert.strictEqual(win.document.getElementById('accountUserName').textContent, 'محمد أبو سالم', 'the card re-renders from the saved user');
     assert.strictEqual(
       win.document.getElementById('userAuthBtn').title,
-      'محمد — تسجيل الخروج',
-      'the header button is rebuilt from the new first name instead of keeping the old one'
+      'محمد — حسابي',
+      'the account button is rebuilt from the new first name instead of keeping the old one'
     );
 
     // An empty name is refused locally — the server must not see a request at all.

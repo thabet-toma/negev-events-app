@@ -4568,15 +4568,6 @@ function handleLogout() {
   switchTab('tabHome');
 }
 
-/** زرّ الهوية (الترويسة والشريط العائم معاً) — دخول لمن لا جلسة له، وخروج مؤكَّد لمن له جلسة. */
-function handleAuthButtonClick() {
-  if (currentUser) {
-    if (confirm('هل تريد تسجيل الخروج؟')) handleLogout();
-    return;
-  }
-  openAuthModal();
-}
-
 /**
  * جلسة الموقع انتهت (401 من أي نداء يحمل رمز الموقع — api.js يستدعيها مركزياً).
  * تمسح الجلسة كما يفعل handleLogout لكن بلا تبديل تبويب: نموذج نصف مكتمل يبقى
@@ -9740,10 +9731,11 @@ async function unsubscribeFromPush() {
 }
 
 /**
- * زرّ الهوية صريح دائماً: «تسجيل الدخول» أو «تسجيل الخروج» — لا اسم المستخدم
- * مكان الفعل (الاسم الأول في title فقط). الزرّان (الترويسة والشريط العائم
- * للهاتف) يستدعيان handleAuthButtonClick نفسها. «لوحة الإدارة» زرّ منفصل يظهر
- * لدوري admin وsuper_admin وحدهما — الدور من استجابة الخادم، لا رقم هاتف ثابت.
+ * زرّ «حسابي» في الترويسة والشريط العائم (للهاتف): رمز شخص ونصّ واحد لا
+ * يتبدّلان مع الجلسة — النقر (في index.html) يفتح وجهة «حسابي» للزائر
+ * وللمسجَّل معاً، والدخول والخروج داخلها. الاسم الأول يظهر في title وحده.
+ * «لوحة الإدارة» زرّ منفصل يظهر لدوري admin وsuper_admin وحدهما — الدور من
+ * استجابة الخادم، لا رقم هاتف ثابت.
  */
 function updateAuthUI() {
   updateNotificationsBadge();
@@ -9751,27 +9743,17 @@ function updateAuthUI() {
 
   const loggedIn = !!currentUser;
   const firstName = loggedIn ? String(currentUser.full_name || '').split(' ')[0] : '';
-  const title = loggedIn ? (firstName ? `${firstName} — تسجيل الخروج` : 'تسجيل الخروج') : 'تسجيل الدخول';
-  const iconClass = loggedIn ? 'fa-solid fa-right-from-bracket' : 'fa-solid fa-user-lock';
+  const title = loggedIn && firstName ? `${firstName} — حسابي` : 'حسابي';
 
   const label = document.getElementById('userAuthLabel');
   const btn = document.getElementById('userAuthBtn');
-  if (label) label.textContent = loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول';
-  if (btn) {
-    btn.title = title;
-    const icon = btn.querySelector('i');
-    if (icon) icon.className = iconClass;
-  }
+  if (label) label.textContent = 'حسابي';
+  if (btn) btn.title = title;
 
   const floatingLabel = document.getElementById('floatingAuthLabel');
   const floatingBtn = document.getElementById('floatingAuthBtn');
-  if (floatingLabel) floatingLabel.textContent = loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول';
-  if (floatingBtn) {
-    floatingBtn.title = title;
-    floatingBtn.setAttribute('aria-label', loggedIn ? 'تسجيل الخروج' : 'تسجيل الدخول');
-    const icon = floatingBtn.querySelector('i');
-    if (icon) icon.className = iconClass;
-  }
+  if (floatingLabel) floatingLabel.textContent = 'حسابي';
+  if (floatingBtn) floatingBtn.title = title;
 
   const adminBtn = document.getElementById('adminPanelBtn');
   if (adminBtn) {
@@ -9783,7 +9765,7 @@ function updateAuthUI() {
 //
 // هذا القسم يعيش داخل تبويب النقوط (index.html، #privacyAccountSection)،
 // ووُضع هناك حين كان زرّ الهوية في الترويسة يفتح tabNokoot للمسجَّل دخوله —
-// الزرّ اليوم دخول/خروج صريح (updateAuthUI أعلاه)، والقسم باقٍ في مكانه.
+// الزرّ اليوم «حسابي» ويفتح tabAccount (updateAuthUI أعلاه)، والقسم باقٍ في مكانه.
 
 let privacyNoticeCache = null; // نص واحد لا يتغيّر أثناء الجلسة — يُجلب مرة، لا نداء عند كل فتح
 

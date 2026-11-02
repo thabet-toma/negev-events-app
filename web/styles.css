@@ -2739,8 +2739,8 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .live-entry-floating-btn.is-live { color: #fecaca; }
 .floating-badge.live-entry-floating-badge { top: -6px; left: -10px; padding: 1px 4px; font-size: 0.55rem; }
 
-/* زرّ الهوية في الشريط العائم — أيقونة + «تسجيل الدخول/الخروج» كاملة، بارتفاع
-   أزرار الأيقونات نفسها كي لا يكبر الشريط. */
+/* زرّ «حسابي» في الشريط العائم — أيقونة شخص + الكلمة، بارتفاع أزرار الأيقونات
+   نفسها كي لا يكبر الشريط. */
 .floating-auth-btn {
   display: inline-flex;
   align-items: center;

@@ -458,9 +458,9 @@ void main() {
     expect(find.byTooltip('الإشعارات'), findsOneWidget);
     expect(find.text('البث المباشر'), findsOneWidget);
     expect(find.text('مباشر'), findsOneWidget);
-    // الدخول/الخروج رمزٌ بتلميحه لا كلمة: الكلمة لم تعد في الشريط.
-    expect(find.byTooltip('تسجيل الخروج'), findsOneWidget);
-    expect(find.text('تسجيل الخروج'), findsNothing);
+    // «حسابي» رمزٌ بتلميحه لا كلمة: الكلمة لم تعد في الشريط.
+    expect(find.byTooltip('حسابي'), findsOneWidget);
+    expect(find.text('حسابي'), findsNothing);
     final rail = find.byKey(const Key('stories_strip'));
     final tile = find.byKey(const Key('stories_live_tile'));
     expect(find.descendant(of: rail, matching: tile), findsOneWidget);
@@ -522,10 +522,10 @@ void main() {
     expect(railBottom, lessThanOrEqualTo(feedTop));
     expect(tester.getRect(find.byType(EventCard)).top, greaterThanOrEqualTo(railBottom));
 
-    // ٢. الكروم صفّ واحد: كبسة الفلاتر وأيقونة الدخول/الخروج في حزمة أفقية
+    // ٢. الكروم صفّ واحد: كبسة الفلاتر وأيقونة «حسابي» في حزمة أفقية
     // واحدة، لا صفّان فوق بعضهما كما كان.
     final filterChip = find.text('الفلاتر والبحث');
-    final auth = find.byTooltip('تسجيل الخروج');
+    final auth = find.byTooltip('حسابي');
     expect(filterChip, findsOneWidget);
     expect(auth, findsOneWidget);
     expect(
@@ -534,7 +534,7 @@ void main() {
     );
 
     // ٣. الشريط ستّة أزرار لمسجَّل: أوّلها «إعلان مناسبة» (زرّ التمييز)،
-    // وآخرها الدخول/الخروج برمز لا بكلمة. ولا دعم واتساب في الشريط: بقي
+    // وآخرها «حسابي» برمز لا بكلمة. ولا دعم واتساب في الشريط: بقي
     // في لوح الفلاتر وحده.
     final group = find.byKey(const Key('feed_controls_bar'));
     final buttons = tester
@@ -544,8 +544,8 @@ void main() {
         .toList();
     expect(buttons, hasLength(6));
     expect(buttons.first.tooltip, 'إعلان مناسبة');
-    expect(buttons.last.tooltip, 'تسجيل الخروج');
-    expect(find.text('تسجيل الخروج'), findsNothing);
+    expect(buttons.last.tooltip, 'حسابي');
+    expect(find.text('حسابي'), findsNothing);
     expect(find.byTooltip('الدعم الفني عبر واتساب'), findsNothing);
 
     // والكرت نفسه لا يفيض بعد أن قصرت التغذية: ارتفاعه يوزَّع بين الصورة

@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../main.dart';
-import '../screens/account_screen.dart';
-import 'async_view.dart' show showMessage;
 
-/// زرّ الدخول/الخروج الظاهر دائماً في أعلى كل شاشة رئيسية — يتبع `AuthStore`
-/// فيتبدّل وحده عند الدخول، والخروج، وانتهاء الجلسة.
+/// زرّ «حسابي» الظاهر دائماً في أعلى كل شاشة رئيسية — رمز شخص ونصّ واحد لا
+/// يتبدّلان مع الجلسة. النقر يفتح وجهة «حسابي»، والدخول والخروج مقيما هناك
+/// (`account_screen.dart`): لا نموذج دخول من هذا الزرّ ولا حوار تأكيد خروج.
 ///
 /// `compact` أيقونة وحدها بتلميح، لشريط علوي مزدحم على هاتف ضيّق.
 /// `stacked` يضع الأيقونة فوق النص في تغذية ضيّقة. `color` لمن يرسمه فوق
@@ -22,93 +21,65 @@ class AuthActionButton extends StatelessWidget {
   final bool stacked;
   final Color? color;
 
-  Future<void> _signIn(BuildContext context) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const SignInScreen()),
-    );
-  }
+  /// النصّ الوحيد — تلميحاً في الصيغة المضغوطة، وكلمةً في الأخريين.
+  static const String label = 'حسابي';
 
-  Future<void> _signOut(BuildContext context) async {
-    final auth = AppServices.of(context).auth;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('تسجيل الخروج'),
-        content: const Text('هل تريد تسجيل الخروج؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('تسجيل الخروج'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+  static const IconData _icon = Icons.person_outline;
 
-    await auth.signOut();
-    if (context.mounted) showMessage(context, 'تم تسجيل الخروج');
+  /// يفتح وجهة «حسابي». الزرّ يعيش في شاشات مدفوعة فوق الشلّ أيضاً (التفاصيل،
+  /// النشر، الخريطة، «قائمتي»…)، فلا يكفي طلب الوجهة وحده: الرجوع إلى الجذر
+  /// أولاً يزيل الشاشة المدفوعة من تحت وجه «حسابي»، ثم يستهلك `HomeShell`
+  /// الطلب بـ`tabRequest` كما يفعل أي طالب تبديل آخر.
+  void _openAccount(BuildContext context) {
+    final services = AppServices.of(context);
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.popUntil((route) => route.isFirst);
+    services.tabRequest.value = AppServices.accountTabIndex;
   }
 
   @override
   Widget build(BuildContext context) {
-    final auth = AppServices.of(context).auth;
+    void onPressed() => _openAccount(context);
 
-    return AnimatedBuilder(
-      animation: auth,
-      builder: (context, _) {
-        // قبل قراءة الجلسة المحفوظة لا نعرف أيّ الزرّين نرسم — لا وميض خاطئ.
-        if (!auth.isReady) return const SizedBox.shrink();
-
-        final signedIn = auth.isSignedIn;
-        final label = signedIn ? 'تسجيل الخروج' : 'تسجيل الدخول';
-        final icon = Icon(signedIn ? Icons.logout : Icons.login, size: compact ? 22 : 18);
-        void onPressed() => signedIn ? _signOut(context) : _signIn(context);
-
-        if (compact) {
-          return IconButton(
-            tooltip: label,
-            icon: icon,
-            color: color,
-            onPressed: onPressed,
-          );
-        }
-        if (stacked) {
-          return SizedBox(
-            width: 100,
-            child: TextButton(
-              style: TextButton.styleFrom(
-                foregroundColor: color,
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: onPressed,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(signedIn ? Icons.logout : Icons.login, size: 18),
-                  const SizedBox(height: 2),
-                  Text(label, style: const TextStyle(fontSize: 12)),
-                ],
-              ),
-            ),
-          );
-        }
-        return TextButton.icon(
+    if (compact) {
+      return IconButton(
+        tooltip: label,
+        icon: const Icon(_icon, size: 22),
+        color: color,
+        onPressed: onPressed,
+      );
+    }
+    if (stacked) {
+      return SizedBox(
+        width: 100,
+        child: TextButton(
           style: TextButton.styleFrom(
             foregroundColor: color,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
             visualDensity: VisualDensity.compact,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          icon: icon,
-          label: Text(label, style: const TextStyle(fontSize: 13)),
           onPressed: onPressed,
-        );
-      },
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_icon, size: 18),
+              SizedBox(height: 2),
+              Text(label, style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+      );
+    }
+    return TextButton.icon(
+      style: TextButton.styleFrom(
+        foregroundColor: color,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        visualDensity: VisualDensity.compact,
+      ),
+      icon: const Icon(_icon, size: 18),
+      label: const Text(label, style: TextStyle(fontSize: 13)),
+      onPressed: onPressed,
     );
   }
 }

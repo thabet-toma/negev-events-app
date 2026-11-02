@@ -152,10 +152,11 @@
           <span aria-hidden="true">👑</span>
           <span>لوحة الإدارة</span>
         </a>
-        <!-- دخول/خروج صريح دائماً — نفس الدالة لزرّ الشريط العائم في الهاتف -->
-        <button id="userAuthBtn" class="auth-pill-btn" onclick="handleAuthButtonClick()" title="تسجيل الدخول">
-          <i class="fa-solid fa-user-lock"></i>
-          <span id="userAuthLabel">تسجيل الدخول</span>
+        <!-- «حسابي» دائماً — وجهة واحدة للزائر والمسجَّل (الدخول والخروج داخلها)،
+             ونفس السلوك لزرّ الشريط العائم في الهاتف -->
+        <button id="userAuthBtn" class="auth-pill-btn" onclick="switchTab('tabAccount')" title="حسابي">
+          <i class="fa-solid fa-user"></i>
+          <span id="userAuthLabel">حسابي</span>
         </button>
         <!-- كتم/تفعيل التشغيل التلقائي لمقاطع المناسبات — تفضيل هذا الزائر وحده -->
         <button id="soundToggleBtn" class="theme-toggle-btn" onclick="toggleSoundMuted()" title="الصوت مفعَّل — اضغط لكتمه" aria-label="كتم الصوت" aria-pressed="false">
@@ -212,10 +213,10 @@
         <button id="floatingSoundBtn" class="floating-icon-btn" onclick="toggleSoundMuted()" title="الصوت مفعَّل — اضغط لكتمه" aria-label="كتم الصوت" aria-pressed="false">
           <i class="fa-solid fa-volume-high"></i>
         </button>
-        <!-- الترويسة مخفية على الهاتف وفي التطبيق المثبَّت — هذا زرّ الهوية الوحيد هناك، ظاهر على كل تبويب -->
-        <button id="floatingAuthBtn" class="floating-auth-btn" onclick="handleAuthButtonClick()" title="تسجيل الدخول" aria-label="تسجيل الدخول">
-          <i class="fa-solid fa-user-lock"></i>
-          <span id="floatingAuthLabel">تسجيل الدخول</span>
+        <!-- الترويسة مخفية على الهاتف وفي التطبيق المثبَّت — هذا زرّ «حسابي» الوحيد هناك، ظاهر على كل تبويب -->
+        <button id="floatingAuthBtn" class="floating-auth-btn" onclick="switchTab('tabAccount')" title="حسابي" aria-label="حسابي">
+          <i class="fa-solid fa-user"></i>
+          <span id="floatingAuthLabel">حسابي</span>
         </button>
       </div>
     </div>

@@ -12,7 +12,6 @@ import '../models/user.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
-import '../widgets/auth_action_button.dart';
 import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/region_banner.dart' show arabicCountUnit;
 import 'live_screen.dart';
@@ -46,10 +45,7 @@ class AccountScreen extends StatelessWidget {
         final user = auth.user;
 
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('حسابي'),
-            actions: const [AuthActionButton()],
-          ),
+          appBar: AppBar(title: const Text('حسابي')),
           body: user == null
               ? Center(
                   // قابل للتمرير بعد إضافة قسم المنطقة: عمود طويل على شاشة

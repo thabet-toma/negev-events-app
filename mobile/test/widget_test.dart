@@ -2186,19 +2186,25 @@ void main() {
     });
   });
 
-  group('زرّ الدخول/الخروج الظاهر دائماً', () {
-    Future<void> pumpButton(WidgetTester tester, AuthStore auth) async {
+  group('زرّ «حسابي» الظاهر دائماً', () {
+    /// يضع الزرّ في شريط تطبيق وحده، ويحقن إشارة `tabRequest` التي يستهلكها
+    /// `HomeShell` عادةً — فما يُقاس هو الطلب نفسه لا واجهة تبويبات كاملة.
+    Future<void> pumpButton(
+      WidgetTester tester,
+      AuthStore auth,
+      ValueNotifier<int> tabRequest, {
+      AuthActionButton button = const AuthActionButton(),
+    }) async {
       await tester.pumpWidget(
         AppServices(
           api: auth.api,
           auth: auth,
           realtime: RealtimeService(),
+          tabRequest: tabRequest,
           child: MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
-              child: Scaffold(
-                appBar: AppBar(actions: const [AuthActionButton()]),
-              ),
+              child: Scaffold(appBar: AppBar(actions: [button])),
             ),
           ),
         ),
@@ -2206,18 +2212,12 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('بلا جلسة: «تسجيل الدخول»', (tester) async {
+    AuthStore guestAuth() {
       SharedPreferences.setMockInitialValues({});
-      final auth = AuthStore(apiReturning({'success': true}));
-      await tester.runAsync(auth.load);
+      return AuthStore(apiReturning({'success': true}));
+    }
 
-      await pumpButton(tester, auth);
-
-      expect(find.text('تسجيل الدخول'), findsOneWidget);
-      expect(find.text('تسجيل الخروج'), findsNothing);
-    });
-
-    testWidgets('بجلسة محفوظة: «تسجيل الخروج»، وتأكيده يُخرج المستخدم', (tester) async {
+    AuthStore signedInAuth() {
       final userJson = {
         'id': 5,
         'phone_number': '0501234567',
@@ -2229,25 +2229,120 @@ void main() {
         'negev_token': 'a-token',
         'negev_user': jsonEncode(userJson),
       });
-      final auth = AuthStore(apiReturning({'success': true, 'user': userJson}));
+      return AuthStore(apiReturning({'success': true, 'user': userJson}));
+    }
+
+    testWidgets('بلا جلسة: «حسابي» وأيقونة شخص، والنقر يفتح وجه «حسابي»', (tester) async {
+      final auth = guestAuth();
       await tester.runAsync(auth.load);
+      final tabRequest = ValueNotifier<int>(-1);
 
-      await pumpButton(tester, auth);
+      await pumpButton(tester, auth, tabRequest);
 
-      expect(find.text('تسجيل الخروج'), findsOneWidget);
+      expect(find.text('حسابي'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
       expect(find.text('تسجيل الدخول'), findsNothing);
+      expect(find.text('تسجيل الخروج'), findsNothing);
 
-      await tester.tap(find.text('تسجيل الخروج'));
+      await tester.tap(find.byType(AuthActionButton));
+      await tester.pump();
+
+      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(find.text('تسجيل الدخول'), findsNothing, reason: 'لا نموذج دخول من الزرّ نفسه');
+    });
+
+    testWidgets('الصيغة المضغوطة: تلميح «حسابي» وأيقونة شخص، والنقر يفتح الوجه', (tester) async {
+      final auth = guestAuth();
+      await tester.runAsync(auth.load);
+      final tabRequest = ValueNotifier<int>(-1);
+
+      await pumpButton(tester, auth, tabRequest, button: const AuthActionButton(compact: true));
+
+      expect(find.byTooltip('حسابي'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
+      expect(find.text('تسجيل الدخول'), findsNothing);
+      expect(find.text('تسجيل الخروج'), findsNothing);
+
+      await tester.tap(find.byType(AuthActionButton));
+      await tester.pump();
+
+      expect(tabRequest.value, AppServices.accountTabIndex);
+    });
+
+    testWidgets('الصيغة المائلة (stacked): الكلمة ظاهرة تحت الأيقونة', (tester) async {
+      final auth = guestAuth();
+      await tester.runAsync(auth.load);
+      final tabRequest = ValueNotifier<int>(-1);
+
+      await pumpButton(tester, auth, tabRequest, button: const AuthActionButton(stacked: true));
+
+      expect(find.text('حسابي'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
+    });
+
+    testWidgets('بجلسة محفوظة: «حسابي» أيضاً — النقر يفتح الوجه ولا يُخرج المستخدم', (tester) async {
+      final auth = signedInAuth();
+      await tester.runAsync(auth.load);
+      final tabRequest = ValueNotifier<int>(-1);
+
+      await pumpButton(tester, auth, tabRequest);
+
+      expect(find.text('حسابي'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
+      expect(find.text('تسجيل الخروج'), findsNothing);
+
+      await tester.tap(find.byType(AuthActionButton));
       await tester.pumpAndSettle();
-      expect(find.text('هل تريد تسجيل الخروج؟'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(ElevatedButton, 'تسجيل الخروج'));
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(auth.isSignedIn, isTrue, reason: 'الزرّ يفتح «حسابي» ولا يسجّل الخروج');
+      expect(find.text('هل تريد تسجيل الخروج؟'), findsNothing);
+    });
+
+    testWidgets('من شاشة مدفوعة: يرجع إلى الجذر ثم يفتح وجه «حسابي»', (tester) async {
+      final auth = guestAuth();
+      await tester.runAsync(auth.load);
+      final tabRequest = ValueNotifier<int>(-1);
+
+      await tester.pumpWidget(
+        AppServices(
+          api: auth.api,
+          auth: auth,
+          realtime: RealtimeService(),
+          tabRequest: tabRequest,
+          child: MaterialApp(
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: Scaffold(
+                body: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => Scaffold(
+                          appBar: AppBar(actions: const [AuthActionButton()]),
+                          body: const Text('شاشة مدفوعة'),
+                        ),
+                      ),
+                    ),
+                    child: const Text('افتح شاشة مدفوعة'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('افتح شاشة مدفوعة'));
+      await tester.pumpAndSettle();
+      expect(find.text('شاشة مدفوعة'), findsOneWidget);
+
+      await tester.tap(find.byType(AuthActionButton));
       await tester.pumpAndSettle();
 
-      expect(auth.isSignedIn, isFalse);
-      expect(find.text('تسجيل الدخول'), findsOneWidget);
-      expect(find.text('تم تسجيل الخروج'), findsOneWidget);
+      expect(find.text('شاشة مدفوعة'), findsNothing, reason: 'لا تبقى شاشة مدفوعة تحت وجه «حسابي»');
+      expect(tabRequest.value, AppServices.accountTabIndex);
     });
   });
 
