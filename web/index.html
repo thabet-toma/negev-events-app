@@ -767,6 +767,26 @@
           </a>
         </div>
 
+        <!-- وصول سريع إلى الوجوه التي غادرت الشريط السفلي (أربع وجهات فقط):
+             دفتر النقوط، الخريطة، وقائمتي. العدّاد على «قائمتي» هو عدد مناسبات
+             اليوم الجارية وحدها — نفس رقم شارة الشريط، يحدّثه
+             app.js#updateMyListNavBadge معها فلا يختلفان أبداً. -->
+        <div class="account-quick-grid">
+          <button type="button" class="account-quick-card" onclick="switchTab('tabNokoot')">
+            <i class="fa-solid fa-wallet" aria-hidden="true"></i>
+            <span>دفتر النقوط</span>
+          </button>
+          <button type="button" class="account-quick-card" onclick="switchTab('tabMap')">
+            <i class="fa-solid fa-map-location-dot" aria-hidden="true"></i>
+            <span>الخريطة</span>
+          </button>
+          <button type="button" class="account-quick-card" onclick="switchTab('tabMyList')">
+            <i class="fa-solid fa-bookmark" aria-hidden="true"></i>
+            <span>قائمتي</span>
+            <span id="accountMyListTodayCount" class="account-quick-count" hidden></span>
+          </button>
+        </div>
+
         <!-- صوري — صور وُسم فيها المستخدم بموافقة الإدارة -->
         <div class="chart-card-box">
           <div class="chart-header">
@@ -901,6 +921,46 @@
       </div>
     </section>
 
+    <!-- TAB: «خدماتنا» — وجهة عامة بلا حساب: منصّات شركة كترا الأخرى، بثلاث
+         بطاقات ثابتة الترتيب. «آخر خبر» يفتح شاشة الأخبار داخل الموقع
+         (#newsScreen)، والبطاقتان الأخريان رابط خارجي في تبويب جديد. لا
+         محتوى يجلب من الخادم هنا — الصفحة كلها وسوم ثابتة. -->
+    <section id="tabOurServices" class="tab-content">
+      <div class="page-title-box">
+        <h2><i class="fa-solid fa-layer-group"></i> خدماتنا</h2>
+        <p>منصاتنا الأخرى من شركة كترا للحلول الذكية</p>
+      </div>
+
+      <div class="our-platforms-grid">
+        <article class="our-platform-card our-platform-card-news">
+          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-bolt"></i></div>
+          <h3 class="our-platform-name">آخر خبر</h3>
+          <p class="our-platform-desc">أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية</p>
+          <button type="button" class="our-platform-btn our-platform-btn-primary" onclick="openNewsScreen()">
+            <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> افتح
+          </button>
+        </article>
+
+        <article class="our-platform-card">
+          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-store"></i></div>
+          <h3 class="our-platform-name">متاجرنا</h3>
+          <p class="our-platform-desc">مطاعم ومتاجر بلدتك، هواتف وإلكترونيات، بقالة ومستلزمات، مع توصيل ودفع عند الاستلام</p>
+          <a class="our-platform-btn" href="https://kolshee.ktra-pro.tech/" target="_blank" rel="noopener">
+            زيارة المنصة <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+          </a>
+        </article>
+
+        <article class="our-platform-card">
+          <div class="our-platform-icon" aria-hidden="true"><i class="fa-solid fa-cubes"></i></div>
+          <h3 class="our-platform-name">K.T.R.A ERP</h3>
+          <p class="our-platform-desc">إدارة الاستيراد والمخزون والفواتير والمحاسبة، مع بوابة خاصة للمحاسب القانوني</p>
+          <a class="our-platform-btn" href="https://ktra-pro.tech/" target="_blank" rel="noopener">
+            زيارة المنصة <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+          </a>
+        </article>
+      </div>
+    </section>
+
     <!-- «عن المنصة» ظاهرة دائماً أسفل المحتوى، لا في تبويب: من يصل من بحث
          عن المنصة ولا يعرفها يجب أن يجد شرحها من أول تمرير، لا أن يفتح
          وجهاً مخفياً ليصادفه. لذلك قسم عادي بلا `tab-content` وبلا أي إخفاء. -->
@@ -942,43 +1002,39 @@
   </main>
 
   <!--
-    الشريط السفلي — ستّ وجهات (المناسبات، قائمتي، الخريطة، النقوط، حسابي، الخدمات) + زر نشر عائم (FAB).
-    «قائمتي» ثانيةً بعد «المناسبات»: هي وجهة المتابعة نفسها («ذكّرني»)، وشارتها عدد
-    مناسبات اليوم الجارية وحدها، وتُخفى حين لا شيء اليوم أو حين لا جلسة.
+    الشريط السفلي — أربع وجهات فقط، من اليمين في RTL: المناسبات · خدماتنا ·
+    خدمات الأعراس · حسابي. «الخريطة» و«قائمتي» و«النقوط» غادرت الشريط وصفحاتها
+    باقية كما هي، ويُوصل إليها من بطاقات الوصول السريع داخل «حسابي» — وكذلك
+    حالة `active`: تبقى على «حسابي» في هذه الصفحات الثلاث لأنها وجوه تحته.
+    فوق الشريط كبستان عائمتان في الوسط: «أضف عرسك» البارزة و«أضف خدمتك»
+    الأهدأ، بدل زرّ النشر الدائري المفرد. وشارة مناسبات اليوم على «حسابي».
   -->
   <div class="bottom-nav-wrap">
-    <button class="fab-publish" onclick="openAddEventModal()" aria-label="إعلان مناسبة جديدة" title="إعلان مناسبة جديدة">
-      <i class="fa-solid fa-plus"></i>
-    </button>
+    <div class="nav-publish-capsules">
+      <button type="button" class="nav-capsule nav-capsule-primary" onclick="openAddEventModal()">
+        <i class="fa-solid fa-plus" aria-hidden="true"></i> <span>أضف عرسك</span>
+      </button>
+      <button type="button" class="nav-capsule nav-capsule-secondary" onclick="openSubmitServiceModal()">
+        <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i> <span>أضف خدمتك</span>
+      </button>
+    </div>
     <nav class="bottom-navbar">
       <button class="nav-btn active" id="navBtnHome" onclick="switchTab('tabHome')">
         <i class="fa-solid fa-champagne-glasses"></i>
         <span>المناسبات</span>
       </button>
-      <button class="nav-btn" id="navBtnMyList" onclick="switchTab('tabMyList')">
-        <i class="fa-solid fa-bookmark"></i>
-        <span>قائمتي</span>
-        <span class="nav-badge" id="myListNavBadge" hidden></span>
+      <button class="nav-btn" id="navBtnOurServices" onclick="openOurServices()">
+        <i class="fa-solid fa-layer-group"></i>
+        <span>خدماتنا</span>
       </button>
-      <button class="nav-btn" id="navBtnMap" onclick="switchTab('tabMap')">
-        <i class="fa-solid fa-map-location-dot"></i>
-        <span>الخريطة</span>
-      </button>
-      <!-- خانة فارغة بعرض زرّ النشر العائم: الوسط لم يعد محايداً بعد الوجهة
-           السادسة، والزرّ (left:50%) كان يغطّي أيقونة «الخريطة» المقاسة
-           عند 375px. الـspan لا يحمل .nav-btn فلا يراه عدّاد switchTab. -->
-      <span class="nav-fab-gap" aria-hidden="true"></span>
-      <button class="nav-btn" id="navBtnNokoot" onclick="switchTab('tabNokoot')">
-        <i class="fa-solid fa-wallet"></i>
-        <span>النقوط</span>
+      <button class="nav-btn" id="navBtnServices" onclick="switchTab('tabServices')">
+        <i class="fa-solid fa-screwdriver-wrench"></i>
+        <span>خدمات الأعراس</span>
       </button>
       <button class="nav-btn" id="navBtnAccount" onclick="switchTab('tabAccount')">
         <i class="fa-solid fa-user"></i>
         <span>حسابي</span>
-      </button>
-      <button class="nav-btn" id="navBtnServices" onclick="switchTab('tabServices')">
-        <i class="fa-solid fa-screwdriver-wrench"></i>
-        <span>الخدمات</span>
+        <span class="nav-badge" id="myListNavBadge" hidden></span>
       </button>
     </nav>
   </div>
@@ -1710,8 +1766,8 @@
   </div>
 
   <!-- صفحة ألبومات الأعراس (ADR-0009) — بحث واحد بثلاث مجموعات، ألبوم، وصورة.
-       لا تبويب سابع في الشريط السفلي: الشريط ستة أهداف بقياس مقصود، والمدخل
-       رقاقة «ألبومات الأعراس» في الفلاتر والدرج. -->
+       ليست وجهة في الشريط السفلي: الشريط أربع وجهات (المناسبات، خدماتنا،
+       خدمات الأعراس، حسابي)، والمدخل رقاقة «ألبومات الأعراس» في الفلاتر والدرج. -->
   <div id="albumsPage" class="albums-page" role="dialog" aria-modal="true" aria-labelledby="albumsPageTitle" hidden>
     <div class="albums-page-bar">
       <button type="button" class="event-page-back" onclick="closeAlbumsPage()" aria-label="رجوع">
@@ -1764,6 +1820,29 @@
       <span class="event-page-bar-title">تفاصيل المناسبة</span>
     </div>
     <div id="eventPageBody" class="event-page-body"></div>
+  </div>
+
+  <!-- شاشة «آخر الأخبار» — طبقة ملء الشاشة فوق الصفحة (لا تغادر الموقع)، تُغلق
+       بـ× وبـEscape. القائمة تُرسم من GET /api/news، والتفصيل يُفتح داخل الطبقة
+       نفسها بزرّ رجوع. الحالات الثلاث (تحميل/خطأ/فارغ) ترسمها
+       app.js#renderNewsList وما حولها في #newsList وحدها. -->
+  <div id="newsScreen" class="news-screen" role="dialog" aria-modal="true" aria-labelledby="newsScreenTitle" hidden>
+    <div class="news-screen-bar">
+      <strong id="newsScreenTitle" class="news-screen-title">آخر الأخبار</strong>
+      <span id="newsGeneralTag" class="news-general-tag" hidden>عامة</span>
+      <button type="button" class="news-screen-close" onclick="closeNewsScreen()" aria-label="إغلاق">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="news-screen-scroll">
+      <div id="newsListView">
+        <div id="newsList" class="news-list"></div>
+        <div id="newsLoadMoreWrapper" class="news-load-more-wrap" hidden>
+          <button type="button" id="newsLoadMoreBtn" class="news-load-more" onclick="loadMoreNews()">المزيد</button>
+        </div>
+      </div>
+      <div id="newsDetailView" class="news-detail-view" hidden></div>
+    </div>
   </div>
 
   <!-- نافذة المشاركة الخاصة بالموقع — على الكمبيوتر بدل نافذة النظام (كروم/ويندوز 10

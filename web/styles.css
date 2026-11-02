@@ -2018,8 +2018,8 @@ body {
   padding-inline-end: 4px;
 }
 
-/* Bottom Navigation Bar — الحاوية الثابتة تحمل الشريط وزرّ النشر العائم معاً،
-   فيتوسّط الزرّ نفس عرض الشريط (650px) بلا أن يعتمد على عرض النافذة (#31، الخيار ج) */
+/* Bottom Navigation Bar — الحاوية الثابتة تحمل الشريط وكبستَي النشر معاً،
+   فيتوسّطهما نفس عرض الشريط (650px) بلا أن يعتمدا على عرض النافذة (#31، الخيار ج) */
 .bottom-nav-wrap {
   position: fixed;
   bottom: 0;
@@ -2044,27 +2044,59 @@ body {
 .nav-btn.active { color: var(--sky); font-weight: 800; }
 .nav-btn.active i { transform: translateY(-2px); }
 
-/* زرّ النشر العائم — فعل لا وجهة، فلا يأخذ خانة في الشريط. الوسط محايد في
-   RTL (left/translateX لا يتأثران باتجاه النص، بخلاف right) (#4، #31). */
-.fab-publish {
+/* كبستا النشر العائمتان فوق الشريط في الوسط — فعلان لا وجهتان، فلا تأخذان
+   خانة فيه. «أضف عرسك» بارزة بلون السماء، و«أضف خدمتك» أهدأ على سطح الصفحة
+   نفسه كي لا تتنافسا على العين. الوسط محايد في RTL (left/translateX لا
+   يتأثّران باتجاه النص، بخلاف right) (#4، #31). */
+.nav-publish-capsules {
   position: absolute;
-  top: -26px;
+  bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: var(--sky);
-  color: var(--on-sky);
-  border: 4px solid var(--surface);
-  display: grid;
-  place-items: center;
-  font-size: 1.4rem;
-  cursor: pointer;
-  box-shadow: 0 6px 18px rgba(3, 105, 161, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 8px;
   z-index: 101;
+  max-width: calc(100vw - 24px);
 }
-.fab-publish:hover { background: var(--sky-deep); }
+
+.nav-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.15s ease, background-color 0.2s ease;
+}
+
+.nav-capsule:active { transform: scale(0.97); }
+.nav-capsule:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+.nav-capsule-primary {
+  background: var(--sky);
+  border-color: var(--sky);
+  color: var(--on-sky);
+  box-shadow: 0 6px 18px rgba(3, 105, 161, 0.4);
+}
+
+.nav-capsule-primary:hover { background: var(--sky-deep); }
+
+/* الأهدأ: سطح الصفحة وحده بحدّها، بلا ظلّ ولا لون ممتلئ. */
+.nav-capsule-secondary {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.nav-capsule-secondary:hover { border-color: var(--sky); color: var(--sky-deep); }
 
 .loading-spinner { text-align: center; padding: 44px 20px; color: var(--ink-faint); }
 
@@ -2745,10 +2777,10 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   .floating-auth-btn { height: 31px; padding: 0 7px; gap: 4px; font-size: 0.72rem; }
 }
 
-/* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وزرّ النشر العائم، في الوسط. */
+/* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وكبستَي النشر، في الوسط. */
 .sound-unlock-chip {
   position: fixed;
-  bottom: calc(108px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(122px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 102;
@@ -2774,12 +2806,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .sound-unlock-chip[hidden] { display: none; }
 
 /* زرّ «رجوع لنتائجك السابقة» — لقطة واحدة بعد تغيير فلتر فعلي. عائم فوق
-   الشريط السفلي وزرّ النشر العائم (أعلاهما بـ104px)، فلا يتقاطع مع
-   `.bottom-navbar`، وبعيد عن `.floating-top-bar` في الأعلى. ظاهر على الهاتف
-   والديسكتوب معاً. */
+   الشريط السفلي وكبستَي النشر (أعلاهما بـ118px: الشريط 68 + الكبستان 44)،
+   فلا يتقاطع مع `.bottom-navbar`، وبعيد عن `.floating-top-bar` في الأعلى.
+   ظاهر على الهاتف والديسكتوب معاً. */
 .feed-back-pill {
   position: fixed;
-  bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(118px + env(safe-area-inset-bottom, 0px));
   inset-inline-end: 12px;
   z-index: 103;
   display: inline-flex;
@@ -3379,11 +3411,11 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   }
 
   /* الحافة `position: absolute; inset: 0` فلا يحميها `padding-bottom` الكرت:
-     بـ8px كان صفّ أزرار الكرت تحت الشريط السفلي (‏~69px) وزرّ «+» البارز فوقه
-     بـ26px — مخفيّاً عن القارئ. 102 = 69 + 26 + فسحة 7. */
+     بـ8px كان صفّ أزرار الكرت تحت الشريط السفلي (‏~68px) وكبستَي النشر
+     فوقه (‏44px: 36 + فسحة 8) — مخفيّاً عن القارئ. 119 = 68 + 44 + فسحة 7. */
   .events-feed > .event-card .card-bezel {
     padding-top: max(56px, calc(56px + env(safe-area-inset-top, 0px))) !important;
-    padding-bottom: calc(102px + env(safe-area-inset-bottom, 0px)) !important;
+    padding-bottom: calc(119px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   /* الخلفية الذهبية الفاخرة للبوسترات في الموبايل والـ PWA */
@@ -4181,21 +4213,20 @@ body.event-page-open { overflow: hidden; }
 .event-page-congrats .sender-badge { font-size: 0.72rem; color: var(--tone, var(--sky)); }
 .event-page-congrats .chat-msg-text { color: var(--ink-soft); font-size: 0.92rem; line-height: 1.5; overflow-wrap: anywhere; }
 
-/* «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»: شارة وجهة الشريط السفلي، وحالة
-   زرّ الحفظ النشِطة، وفعل داخل التوست، وصفوف التبويب. لا رمز لون جديد هنا —
-   رموز الملف وحدها (وأبيض واحد فوق الأخضر المصمت كما في .record-nokoot-btn)،
-   فتعمل في الوضعين الفاتح والداكن بلا استثناء. */
-#navBtnMyList { position: relative; }
+/* «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»: شارة وجهة «حسابي» في الشريط
+   السفلي (فحيث صارت بطاقةً داخل الحساب)، وحالة زرّ الحفظ النشِطة، وفعل داخل
+   التوست، وصفوف التبويب. لا رمز لون جديد هنا — رموز الملف وحدها (وأبيض واحد
+   فوق الأخضر المصمت كما في .record-nokoot-btn)، فتعمل في الوضعين الفاتح
+   والداكن بلا استثناء. */
+#navBtnAccount { position: relative; }
 
-/* الوجهات الستّ تتقاسم ما بقي بعد خانة زرّ النشر العائم، وتسمية كل وجهة في
-   سطر واحد. `.nav-fab-gap` يحفظ للزرّ وسطه الفارغ دون أن يكون زرّاً —
-   `switchTab` تعُدّ `.nav-btn` وحدها فلا تراه. */
+/* الوجهات الأربع تتقاسم الشريط بالتساوي، وتسمية كل وجهة في سطر واحد — «خدمات
+   الأعراس» أطولها. لا خانة محجوزة لزرّ نشر: صار كبستين عائمتين فوق الشريط. */
 .bottom-navbar .nav-btn { flex: 1 1 0; min-width: 0; }
 .bottom-navbar .nav-btn > span { white-space: nowrap; }
-.nav-fab-gap { flex: 0 0 58px; }
 
-/* 375px وما دونها: ستّ تسميات وزرّ نشر في الوسط لا تتّسع بحشوة 12px وخطّ
-   0.72rem، فتُضيّق الحشوة ويصغر الخطّ بدل أن تفيض التسميات على بعضها. */
+/* 380px وما دونها: تسمية «خدمات الأعراس» لا تتّسع بحشوة 12px وخطّ 0.72rem،
+   فتُضيّق الحشوة ويصغر الخطّ بدل أن تفيض التسميات على بعضها. */
 @media (max-width: 380px) {
   .bottom-navbar { padding: 10px 6px; }
   .nav-btn { font-size: 0.66rem; }
@@ -4816,3 +4847,399 @@ body.albums-page-open { overflow: hidden; }
 .about-foot { margin: 12px 0 0; font-size: 0.86rem; color: var(--ink-soft); }
 .about-foot a { color: var(--sky); font-weight: 700; text-decoration: none; }
 .about-foot a:hover { text-decoration: underline; }
+
+/* ===== «خدماتنا» و«آخر خبر» =====
+   وجهة المنصّات الثلاث، وشاشة الأخبار التي تفتحها. كل الألوان من متغيّرات
+   المظهرين — لا لون صريح هنا، فتعمل ليلاً بلا قاعدة ثانية. */
+
+.our-platforms-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.our-platform-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.our-platform-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  font-size: 1.1rem;
+}
+
+.our-platform-card-news .our-platform-icon {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+
+.our-platform-name { font-size: 1.02rem; font-weight: 900; color: var(--ink); }
+
+.our-platform-desc {
+  flex: 1;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.8;
+}
+
+.our-platform-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 9px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-main);
+  font-size: 0.86rem;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.our-platform-btn:hover { border-color: var(--sky); color: var(--sky-deep); }
+
+.our-platform-btn-primary {
+  background: var(--sky);
+  border-color: var(--sky);
+  color: var(--on-sky);
+}
+
+.our-platform-btn-primary:hover { background: var(--sky-deep); color: var(--on-sky); }
+
+/* بطاقات الوصول السريع داخل «حسابي» — الوجوه التي غادرت الشريط السفلي. */
+.account-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.account-quick-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-main);
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.account-quick-card i { font-size: 1.15rem; color: var(--sky); }
+.account-quick-card:hover { border-color: var(--sky); }
+
+.account-quick-count {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 8px;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-size: 0.66rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+
+/* شاشة «آخر الأخبار» — طبقة ملء الشاشة فوق الصفحة، تحت النوافذ (1000)
+   وفوق صفحة المناسبة (950) وصفحة الألبومات (960): هي وجهة مستقلة لا تنافس
+   أي نافذة تُفتح من داخلها. */
+.news-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 970;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+}
+
+.news-screen[hidden] { display: none; }
+body.news-screen-open { overflow: hidden; }
+
+.news-screen-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.news-screen-title {
+  font-weight: 900;
+  font-size: 1rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.news-general-tag {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.news-general-tag[hidden] { display: none; }
+
+.news-screen-close {
+  margin-inline-start: auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.news-screen-close:hover { border-color: var(--sky); color: var(--sky-deep); }
+
+.news-screen-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 14px 14px calc(40px + env(safe-area-inset-bottom, 0px));
+}
+
+.news-list,
+.news-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.news-detail-view[hidden] { display: none; }
+
+.news-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.news-card-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-main);
+  text-align: start;
+  cursor: pointer;
+}
+
+/* صورة 16:9 كما في كروت المناسبات — النسبة ثابتة ولو كانت الصورة مربّعة. */
+.news-card-media {
+  aspect-ratio: 16 / 9;
+  background: var(--surface-sunk);
+  overflow: hidden;
+}
+
+.news-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.news-card-media-empty {
+  display: grid;
+  place-items: center;
+  color: var(--ink-faint);
+  font-size: 1.6rem;
+}
+
+.news-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+
+.news-card-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.news-breaking {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.news-card-category { color: var(--sky-deep); font-size: 0.76rem; font-weight: 800; }
+
+.news-card-title { font-size: 1rem; font-weight: 900; line-height: 1.45; color: var(--ink); }
+
+.news-card-excerpt {
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.75;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-card-time { color: var(--ink-faint); font-size: 0.76rem; font-weight: 700; }
+
+.news-load-more-wrap { text-align: center; margin: 8px 0 4px; }
+.news-load-more-wrap[hidden] { display: none; }
+
+.news-load-more {
+  padding: 10px 26px;
+  border: 1px solid var(--sky);
+  border-radius: var(--radius-pill);
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  font-family: var(--font-main);
+  font-size: 0.88rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.news-load-more:disabled { opacity: 0.6; cursor: default; }
+
+/* الهيكل العظمي بنفس مقاس الكرت — لا دوّارة تقفز بالتمرير. صنفه مستقل عن
+   `.news-card` كي لا يُحسب كرت خبر في أي عدّ (ولا في الاختبارات). */
+.news-skeleton {
+  padding: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.news-skeleton-media { aspect-ratio: 16 / 9; background: var(--surface-sunk); }
+.news-skeleton-line { height: 12px; margin: 12px 14px 0; border-radius: 8px; background: var(--surface-sunk); }
+.news-skeleton-line-short { width: 45%; }
+
+.news-empty { margin: 24px auto; max-width: 480px; }
+.news-empty h3 { font-size: 1rem; font-weight: 900; color: var(--ink); }
+.news-empty p { color: var(--ink-soft); font-size: 0.88rem; line-height: 1.8; }
+
+.news-detail { display: flex; flex-direction: column; gap: 12px; }
+
+.news-detail-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  color: var(--ink);
+  font-family: var(--font-main);
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.news-detail-back:hover { border-color: var(--sky); color: var(--sky-deep); }
+
+.news-detail-media {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-sunk);
+}
+
+.news-detail-media img { display: block; width: 100%; height: auto; }
+
+.news-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.news-detail-title { font-size: 1.25rem; font-weight: 900; line-height: 1.45; color: var(--ink); }
+
+.news-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.news-detail-text {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.news-detail-paragraph {
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 2;
+  margin-bottom: 12px;
+}
+
+.news-detail-paragraph:last-child { margin-bottom: 0; }
+
+.news-detail-source { color: var(--ink-faint); font-size: 0.82rem; font-weight: 700; }
+
+.news-detail-open {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.news-detail-open:hover { background: var(--sky-deep); }
+
+@media (max-width: 380px) {
+  .account-quick-grid { gap: 6px; }
+  .account-quick-card { font-size: 0.78rem; padding: 12px 6px; }
+  .nav-publish-capsules { gap: 6px; }
+  .nav-capsule { padding: 8px 12px; font-size: 0.78rem; }
+}

@@ -10337,31 +10337,361 @@ async function run() {
     assert.ok(empty.dom.window.document.getElementById('myListBody').textContent.includes('لا مناسبات منتهية في قائمتك'));
   });
 
-  await test('the bottom nav holds six destinations with «قائمتي» second, and switchTab activates that button', () => {
+  await test('the bottom nav holds four destinations — المناسبات · خدماتنا · خدمات الأعراس · حسابي — and switchTab keeps «حسابي» lit for the pages that left the bar', () => {
     const dom = buildEnv();
     const { document } = dom.window;
 
     const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
-    assert.strictEqual(navBtns.length, 6, 'the bar must hold exactly six destinations');
-    assert.strictEqual(navBtns[1].id, 'navBtnMyList', '«قائمتي» must sit immediately after «المناسبات»');
-    assert.ok(navBtns[1].textContent.includes('قائمتي'));
+    assert.strictEqual(navBtns.length, 4, 'the bar must hold exactly four destinations');
+    assert.deepStrictEqual(
+      Array.from(navBtns).map(btn => btn.id),
+      ['navBtnHome', 'navBtnOurServices', 'navBtnServices', 'navBtnAccount'],
+      'RTL order from the right: المناسبات · خدماتنا · خدمات الأعراس · حسابي'
+    );
+    assert.deepStrictEqual(
+      Array.from(navBtns).map(btn => btn.querySelector('span').textContent.trim()),
+      ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي']
+    );
+
+    // «قائمتي» و«الخريطة» و«النقوط» غادرت الشريط — لا أثر لأزرارها فيه.
+    for (const gone of ['navBtnMyList', 'navBtnMap', 'navBtnNokoot']) {
+      assert.strictEqual(document.getElementById(gone), null, `${gone} must not remain as a bottom-bar destination`);
+    }
+    assert.strictEqual(document.querySelector('.nav-fab-gap'), null, 'the old reserved FAB slot is gone with the FAB');
+
+    // شارة مناسبات اليوم تبقى على «حسابي» الآن، مخفيةً بلا جلسة.
     const badge = document.getElementById('myListNavBadge');
     assert.ok(badge, 'the destination carries its badge span');
+    assert.strictEqual(badge.closest('.nav-btn'), navBtns[3], 'the badge rides the «حسابي» icon');
     assert.strictEqual(badge.hidden, true, 'the badge starts hidden — no signed-in list, nothing today');
 
-    // The FAB's slot: the empty span must sit exactly between «الخريطة» and
-    // «النقوط», and must not be a .nav-btn (switchTab counts those).
-    const gap = document.querySelector('.bottom-navbar .nav-fab-gap');
-    assert.ok(gap, 'the bar must reserve a slot for the centre «+» button');
-    assert.strictEqual(gap.nextElementSibling.id, 'navBtnNokoot', 'the gap closes the slot the FAB occupies');
-    assert.strictEqual(gap.previousElementSibling.id, 'navBtnMap', 'and opens right after «الخريطة»');
-    assert.ok(!gap.classList.contains('nav-btn'), 'the gap is not a destination');
+    // الكبستان العائمتان بدل .fab-publish: بارزة للعرس، أهدأ للخدمة.
+    assert.strictEqual(document.querySelector('.fab-publish'), null, 'the single round FAB is replaced, not kept alongside');
+    const capsules = document.querySelectorAll('.nav-publish-capsules .nav-capsule');
+    assert.strictEqual(capsules.length, 2, 'two floating capsules, no more');
+    assert.ok(capsules[0].classList.contains('nav-capsule-primary'), '«أضف عرسك» is the prominent one');
+    assert.ok(capsules[0].textContent.includes('أضف عرسك'));
+    assert.ok(capsules[1].classList.contains('nav-capsule-secondary'), '«أضف خدمتك» is the quieter one');
+    assert.ok(capsules[1].textContent.includes('أضف خدمتك'));
 
-    dom.window.switchTab('tabMyList');
-    assert.ok(navBtns[1].classList.contains('active'), 'switchTab must activate the button at the matching nav index');
-    assert.ok(document.getElementById('tabMyList').classList.contains('active-tab'));
-    assert.strictEqual(document.getElementById('myListLockedView').style.display, 'block',
+    let addEventTaps = 0;
+    let addServiceTaps = 0;
+    dom.window.openAddEventModal = () => { addEventTaps += 1; };
+    dom.window.openSubmitServiceModal = () => { addServiceTaps += 1; };
+    capsules[0].click();
+    capsules[1].click();
+    assert.strictEqual(addEventTaps, 1, 'the prominent capsule opens the event form');
+    assert.strictEqual(addServiceTaps, 1, 'the quiet capsule opens the service offer form');
+
+    // الصفحات التي غادرت الشريط تفتح فعّالةً كأنها «حسابي» لأنها تحته.
+    for (const page of ['tabMyList', 'tabMap', 'tabNokoot', 'tabAccount']) {
+      dom.window.switchTab(page);
+      assert.ok(navBtns[3].classList.contains('active'), `${page} must light «حسابي»`);
+      assert.ok(document.getElementById(page).classList.contains('active-tab'));
+      assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 1,
+        'exactly one destination is lit at a time');
+    }
+    assert.ok(document.getElementById('myListLockedView').style.display === 'block',
       'a visitor with no session sees the sign-in card, never a blank tab');
+
+    // وجهة بلا زرّ في الشريط (الستيكرات) لا تُضيء شيئاً.
+    dom.window.switchTab('tabStickers');
+    assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0,
+      'a page outside the bar lights no destination at all');
+  });
+
+  await test('«خدماتنا» is a public page with the three Ktra platform cards in order, the news one opening the reader in-place', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    document.getElementById('navBtnOurServices').click();
+
+    const page = document.getElementById('tabOurServices');
+    assert.ok(page.classList.contains('active-tab'), 'the destination opens its own page');
+    assert.ok(page.textContent.includes('منصاتنا الأخرى من شركة كترا للحلول الذكية'),
+      'the subtitle names whose platforms these are');
+
+    const cards = page.querySelectorAll('.our-platform-card');
+    assert.strictEqual(cards.length, 3, 'exactly three platform cards');
+    assert.deepStrictEqual(
+      Array.from(cards).map(card => card.querySelector('.our-platform-name').textContent.trim()),
+      ['آخر خبر', 'متاجرنا', 'K.T.R.A ERP'],
+      'the order is fixed: the news reader first'
+    );
+
+    assert.ok(cards[0].textContent.includes('أخبار منطقتك لحظة بلحظة، من منصة كترا الإخبارية'));
+    cards[0].querySelector('.our-platform-btn').click();
+    assert.strictEqual(document.getElementById('newsScreen').hidden, false,
+      '«افتح» opens the news screen inside the site rather than navigating away');
+
+    // البطاقتان الأخريان رابط خارجي صريح في تبويب جديد، بلا فتح وصول للصفحة.
+    const shopLink = cards[1].querySelector('a.our-platform-btn');
+    assert.strictEqual(shopLink.getAttribute('href'), 'https://kolshee.ktra-pro.tech/');
+    assert.strictEqual(shopLink.getAttribute('target'), '_blank');
+    assert.ok((shopLink.getAttribute('rel') || '').includes('noopener'), 'rel="noopener" is not optional on a new tab');
+
+    const erpLink = cards[2].querySelector('a.our-platform-btn');
+    assert.strictEqual(erpLink.getAttribute('href'), 'https://ktra-pro.tech/');
+    assert.strictEqual(erpLink.getAttribute('target'), '_blank');
+    assert.ok((erpLink.getAttribute('rel') || '').includes('noopener'));
+    assert.strictEqual(cards[2].querySelector('.our-platform-btn').textContent.includes('زيارة المنصة'), true);
+  });
+
+  await test('«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+
+    const newsRequests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const rawUrl = String(url);
+      if (rawUrl.split('?')[0] === '/api/news') {
+        newsRequests.push({ url: rawUrl, headers: options.headers || {} });
+        return jsonResponse({
+          success: true,
+          region_id: 1,
+          region_name: 'النقب',
+          area: 'negev',
+          general: false,
+          items: [
+            {
+              id: 11,
+              title: 'خبر عاجل من رهط',
+              excerpt: 'مقتطف الخبر الأول',
+              image: 'https://radio.ktra-pro.tech/news/11.jpg',
+              url: 'https://radio.ktra-pro.tech/news/11',
+              published_at: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+              is_breaking: true,
+              category: { id: 3, name: 'أخبار المنطقة' }
+            },
+            {
+              id: 12,
+              title: 'خبر بلا صورة',
+              excerpt: null,
+              image: null,
+              url: null,
+              published_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+              is_breaking: false,
+              category: { id: 4, name: 'محليات' }
+            }
+          ],
+          has_more: true
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openNewsScreen();
+    await waitFor(() => document.querySelectorAll('#newsList .news-card').length === 2);
+
+    assert.strictEqual(document.getElementById('newsScreen').hidden, false);
+    assert.strictEqual(newsRequests.length, 1, 'one page is enough for the first screen');
+    const firstUrl = new URL(newsRequests[0].url, 'http://localhost');
+    assert.strictEqual(firstUrl.searchParams.get('limit'), '50', 'the reader asks for fifty items');
+    assert.strictEqual(firstUrl.searchParams.get('offset'), '0');
+    assert.strictEqual(firstUrl.searchParams.get('general'), '0');
+    assert.strictEqual(newsRequests[0].headers.Authorization, undefined,
+      'the news reader is public — no site token rides along');
+
+    assert.strictEqual(document.getElementById('newsScreenTitle').textContent, 'آخر الأخبار — النقب',
+      'the header names the visitor’s governorate as the server resolved it');
+    assert.strictEqual(document.getElementById('newsGeneralTag').hidden, true, 'not the general feed yet');
+
+    const cards = document.querySelectorAll('#newsList .news-card');
+    assert.ok(cards[0].querySelector('.news-breaking').textContent.includes('عاجل'), 'a breaking item carries its badge');
+    assert.ok(cards[0].querySelector('.news-card-category').textContent.includes('أخبار المنطقة'));
+    assert.ok(cards[0].querySelector('.news-card-time').textContent.includes('قبل 3 دقائق'),
+      'the time is relative Arabic, not raw ISO');
+    assert.ok(cards[0].querySelector('img.news-card-media, .news-card-media img'),
+      'a provided image is rendered');
+    assert.ok(cards[0].querySelector('.news-card-media img').getAttribute('src').startsWith('https://'));
+    assert.ok(cards[1].querySelector('.news-card-media-empty'), 'an item without an image keeps the same card shape');
+    assert.strictEqual(cards[1].querySelector('.news-breaking'), null);
+
+    assert.strictEqual(document.getElementById('newsLoadMoreWrapper').hidden, false,
+      'has_more surfaces the «المزيد» button');
+    assert.ok(document.getElementById('newsLoadMoreBtn').textContent.includes('المزيد'));
+
+    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+    assert.strictEqual(document.getElementById('newsScreen').hidden, true, 'Escape closes the layer');
+  });
+
+  await test('the empty governorate offers «أخبار محلية عامة», and choosing it refetches with general=1 and shows the «عامة» tag', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+
+    const requestedGenerals = [];
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const rawUrl = String(url);
+      if (rawUrl.split('?')[0] === '/api/news') {
+        const general = new URL(rawUrl, 'http://localhost').searchParams.get('general');
+        requestedGenerals.push(general);
+        return jsonResponse({
+          success: true,
+          region_id: 1,
+          region_name: 'النقب',
+          area: general === '1' ? 'general' : 'negev',
+          general: general === '1',
+          items: general === '1'
+            ? [{
+              id: 21,
+              title: 'خبر عام',
+              excerpt: null,
+              image: null,
+              url: null,
+              published_at: new Date().toISOString(),
+              is_breaking: false,
+              category: null
+            }]
+            : [],
+          has_more: false
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openNewsScreen();
+    await waitFor(() => document.querySelector('#newsList .news-empty'));
+
+    assert.ok(document.getElementById('newsList').textContent.includes('لا أخبار لمحافظتك بعد'));
+    const generalBtn = document.querySelector('#newsList .news-empty button');
+    assert.ok(generalBtn && generalBtn.textContent.includes('أخبار محلية عامة'), 'the empty state offers the general feed');
+
+    generalBtn.click();
+    await waitFor(() => document.querySelector('#newsList .news-card'));
+
+    assert.deepStrictEqual(requestedGenerals, ['0', '1'], 'the retry asks the general feed, not the same empty one');
+    assert.strictEqual(document.getElementById('newsGeneralTag').hidden, false, 'the header now says the feed is general');
+    assert.ok(document.getElementById('newsScreenTitle').textContent.includes('النقب'));
+    assert.strictEqual(document.getElementById('newsLoadMoreWrapper').hidden, true, 'nothing more to load');
+  });
+
+  await test('tapping a news card opens its detail inside the layer — body paragraphs, source line, «افتح على كترا» — and back restores the list', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/news') {
+        return jsonResponse({
+          success: true,
+          region_id: 1,
+          region_name: 'النقب',
+          area: 'negev',
+          general: false,
+          items: [{
+            id: 31,
+            title: 'عنوان القائمة',
+            excerpt: null,
+            image: null,
+            url: null,
+            published_at: new Date().toISOString(),
+            is_breaking: false,
+            category: null
+          }],
+          has_more: false
+        });
+      }
+      if (requestPath === '/api/news/31') {
+        return jsonResponse({
+          success: true,
+          item: {
+            id: 31,
+            title: 'عنوان الخبر الكامل',
+            excerpt: 'مقتطف',
+            image: 'https://radio.ktra-pro.tech/news/31.jpg',
+            url: 'https://radio.ktra-pro.tech/news/31',
+            published_at: '2026-10-20T09:00:00.000Z',
+            is_breaking: true,
+            category: { id: 3, name: 'أخبار المنطقة' },
+            author_name: 'محرّر كترا',
+            body_text: 'الفقرة الأولى الكاملة.\nالفقرة الثانية الكاملة.'
+          }
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openNewsScreen();
+    await waitFor(() => document.querySelector('#newsList .news-card'));
+    document.querySelector('#newsList .news-card .news-card-open').click();
+    await waitFor(() => document.querySelector('#newsDetailView .news-detail'));
+
+    assert.strictEqual(document.getElementById('newsListView').hidden, true, 'the detail replaces the list inside the same layer');
+    assert.strictEqual(document.getElementById('newsDetailView').hidden, false);
+    assert.strictEqual(document.getElementById('newsScreen').hidden, false, 'still inside the news layer, no page change');
+
+    const paragraphs = document.querySelectorAll('#newsDetailView .news-detail-paragraph');
+    assert.strictEqual(paragraphs.length, 2, 'the body arrives as paragraphs, not one blob');
+    assert.ok(paragraphs[0].textContent.includes('الفقرة الأولى الكاملة'));
+    assert.ok(document.querySelector('#newsDetailView .news-detail-title').textContent.includes('عنوان الخبر الكامل'));
+    assert.ok(document.querySelector('#newsDetailView .news-breaking').textContent.includes('عاجل'));
+    assert.ok(document.querySelector('#newsDetailView .news-card-category').textContent.includes('أخبار المنطقة'));
+    assert.ok(document.querySelector('#newsDetailView .news-detail-meta').textContent.includes('أكتوبر'),
+      'the date is written in Arabic, never raw ISO');
+    assert.strictEqual(document.querySelector('#newsDetailView .news-detail-source').textContent.trim(),
+      'من منصة كترا الإخبارية');
+
+    const openLink = document.querySelector('#newsDetailView .news-detail-open');
+    assert.ok(openLink, 'the item’s own link is offered');
+    assert.strictEqual(openLink.getAttribute('href'), 'https://radio.ktra-pro.tech/news/31');
+    assert.strictEqual(openLink.getAttribute('target'), '_blank');
+    assert.ok((openLink.getAttribute('rel') || '').includes('noopener'));
+    assert.ok(openLink.textContent.includes('افتح على كترا'));
+
+    dom.window.backToNewsList();
+    assert.strictEqual(document.getElementById('newsListView').hidden, false, 'back returns to the list it came from');
+    assert.strictEqual(document.getElementById('newsDetailView').hidden, true);
+    assert.ok(document.querySelector('#newsList .news-card'), 'the list was never refetched — the cards are still there');
+  });
+
+  await test('a failing /api/news shows the Arabic error with «إعادة المحاولة», and the retry refetches', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+
+    let attempts = 0;
+    const base = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      if (String(url).split('?')[0] === '/api/news') {
+        attempts += 1;
+        if (attempts === 1) return jsonResponse({ success: false, message: 'تعذّر جلب الأخبار من منصة كترا الآن' }, { status: 502 });
+        return jsonResponse({
+          success: true,
+          region_id: 1,
+          region_name: 'النقب',
+          area: 'negev',
+          general: false,
+          items: [{
+            id: 41,
+            title: 'خبر بعد إعادة المحاولة',
+            excerpt: null,
+            image: null,
+            url: null,
+            published_at: null,
+            is_breaking: false,
+            category: null
+          }],
+          has_more: false
+        });
+      }
+      return base(url, options);
+    };
+
+    dom.window.openNewsScreen();
+    await waitFor(() => document.querySelector('#newsList .news-empty'));
+
+    assert.ok(document.getElementById('newsList').textContent.includes('تعذّر تحميل الأخبار'),
+      'a source failure is an Arabic message, never a blank screen');
+
+    document.querySelector('#newsList .news-empty button').click();
+    await waitFor(() => document.querySelector('#newsList .news-card'));
+    assert.strictEqual(attempts, 2, '«إعادة المحاولة» issues a real request');
   });
 
   await test('resumePendingIntent with { type: \'remind\' } POSTs /api/events/:id/remind after sign-in', async () => {

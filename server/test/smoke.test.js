@@ -25,7 +25,7 @@ const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
 const { authenticatedUserId } = require('../src/utils/rateLimitIdentity');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
 
 // The eight towns (and their centres) exactly as they stood as constants
 // before towns moved into the `towns` table — what the seeded table must
@@ -44,6 +44,7 @@ const settingsService = require('../src/services/settings.service');
 const logger = require('../src/utils/logger');
 const realtime = require('../src/realtime');
 const shareCard = require('../src/services/shareCard.service');
+const newsService = require('../src/services/news.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
 let baseUrl = '';
@@ -13348,6 +13349,212 @@ async function run() {
       ticket128Cleanup.regionIds
     );
   }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // «آخر خبر» — القارئ الإخباري في وجهة «خدماتنا»، ومصدره منصة كترا الخارجية.
+  //
+  // المصدر خادم HTTP وهمي على منفذ عابر: العقد يُختبَر كما يُنشَر (شبكة حقيقية
+  // في العملية نفسها)، ولا يتوقّف الاختبار على توفّر خادم طرف ثالث في وقت
+  // التشغيل. `KATRA_NEWS_CACHE_TTL_MS=0` يجعل كل طلب يذهب إلى المصدر — وهو ما
+  // يسمح بإثبات «النسخة القديمة تُخدَم عند السقوط» بدل إثبات مهلة كاش غير مرئية.
+  // ────────────────────────────────────────────────────────────────────────────
+  console.log('\nآخر خبر: أخبار المحافظة وتفصيلها من منصة كترا (وجهة «خدماتنا»)');
+
+  const newsRegionRow = await db.queryOne('SELECT id, name FROM regions WHERE name = ?', [SEED_REGION.name]);
+  assert.ok(newsRegionRow, 'the seeded governorate must exist — it is the key of the news area map');
+
+  // عنصران منهما يُسقطهما التطبيع: بلا معرّف وبلا عنوان. ثم اثنان وخمسون سليماً.
+  const KATRA_FIXTURE_ITEMS = Array.from({ length: 52 }, (_, index) => ({
+    id: 900 + index,
+    title: `خبر الاختبار ${index + 1}`,
+    excerpt: `مقتطف الخبر ${index + 1}`,
+    // صورة كل خبر ثانٍ غائبة — الصورة اختيارية في العقد، لا شرطاً لعرض الخبر.
+    image: index % 2 === 0 ? `https://radio.ktra-pro.tech/news/${index + 1}.jpg` : null,
+    url: `https://radio.ktra-pro.tech/news/${900 + index}`,
+    published_at: new Date(Date.UTC(2026, 9, 27, 8, 0, 0) - index * 3600000).toISOString(),
+    is_breaking: index === 0,
+    category: { id: 3, name: 'أخبار المنطقة' }
+  }));
+  const KATRA_FIXTURE_MALFORMED = [
+    { id: 'ليس معرّفاً', title: 'عنوان بلا معرّف', excerpt: null, image: null, url: null, published_at: null, is_breaking: false, category: null },
+    { id: 1001, title: '   ', excerpt: 'عنوان فارغ', image: null, url: null, published_at: null, is_breaking: false, category: null }
+  ];
+
+  /** ما وصل إلى المصدر فعلاً — كل نداء يُسجَّل للتحقق من `limit`/`offset`/`areas`. */
+  const katraRequests = [];
+  let katraFailing = false;
+
+  const katraServer = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url, 'http://127.0.0.1');
+    if (requestUrl.pathname !== '/api/news.php') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false }));
+      return;
+    }
+    if (katraFailing) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, message: 'down' }));
+      return;
+    }
+
+    katraRequests.push({ path: requestUrl.pathname, search: requestUrl.searchParams });
+    res.setHeader('Content-Type', 'application/json');
+
+    const detailId = requestUrl.searchParams.get('id');
+    if (detailId !== null) {
+      const found = KATRA_FIXTURE_ITEMS.find(item => item.id === Number(detailId));
+      res.end(JSON.stringify({
+        ok: true,
+        item: found
+          ? { ...found, author_name: 'محرّر كترا', body_text: 'الفقرة الأولى من الخبر.\nالفقرة الثانية من الخبر.' }
+          : null
+      }));
+      return;
+    }
+
+    const limit = Number(requestUrl.searchParams.get('limit') || 50);
+    const offset = Number(requestUrl.searchParams.get('offset') || 0);
+    const all = [...KATRA_FIXTURE_ITEMS, ...KATRA_FIXTURE_MALFORMED];
+    res.end(JSON.stringify({
+      ok: true,
+      items: all.slice(offset, offset + limit),
+      has_more: offset + limit < all.length
+    }));
+  });
+  await new Promise(resolve => katraServer.listen(0, '127.0.0.1', resolve));
+  process.env.KATRA_NEWS_BASE_URL = `http://127.0.0.1:${katraServer.address().port}`;
+  process.env.KATRA_NEWS_CACHE_TTL_MS = '0';
+
+  const lastKatraRequest = () => katraRequests[katraRequests.length - 1];
+
+  await test('GET /api/news يشتقّ منطقة المحافظة من اسمها ويعيد عقد القائمة كاملاً (وجهة «خدماتنا»)', async () => {
+    katraFailing = false;
+    const { status, body } = await api('GET', '/api/news?limit=50&offset=0', { region: newsRegionRow.id });
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.region_id, newsRegionRow.id);
+    assert.strictEqual(body.region_name, SEED_REGION.name, 'اسم المحافظة هو ما يعرضه هيدر الشاشة');
+    assert.strictEqual(body.area, 'negev', '«النقب» مفتاحها negev في NEWS_AREA_BY_REGION_NAME');
+    assert.strictEqual(body.general, false);
+    assert.strictEqual(body.items.length, 50, 'عنصران مشوّهان يُسقطان بصمت، والصفحة تبقى خمسين سليماً');
+    assert.strictEqual(body.has_more, true);
+
+    const sent = lastKatraRequest();
+    assert.ok(sent, 'the route must actually call the source');
+    assert.strictEqual(sent.search.get('areas'), 'negev');
+    assert.strictEqual(sent.search.get('area'), 'negev', 'المنطقة المحدَّدة تُمرَّر في المعاملين');
+    assert.strictEqual(sent.search.get('limit'), '50');
+    assert.strictEqual(sent.search.get('offset'), '0');
+
+    const first = body.items[0];
+    assert.strictEqual(first.id, 900);
+    assert.strictEqual(first.is_breaking, true, 'الخبر العاجل يصل منطقياً true');
+    assert.ok(first.image.startsWith('https://'), 'الصورة المطلقة تعبر كما هي');
+    assert.ok(/Z$/.test(first.published_at), 'published_at يخرج ISO 8601 UTC');
+    assert.deepStrictEqual(first.category, { id: 3, name: 'أخبار المنطقة' });
+    assert.strictEqual(body.items[1].image, null, 'الخبر بلا صورة يبقى بلا صورة');
+    assert.strictEqual(body.items[1].is_breaking, false);
+    assert.ok(!body.items.some(item => item.id === 1001), 'خبر بلا عنوان يُسقَط');
+  });
+
+  await test('general=1 يجبر الوجه العام بلا منطقة، ولا يرسل area للمصدر', async () => {
+    const { status, body } = await api('GET', '/api/news?limit=50&general=1', { region: newsRegionRow.id });
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.area, 'general');
+    assert.strictEqual(body.general, true);
+    assert.strictEqual(body.region_name, SEED_REGION.name, 'اسم المحافظة يبقى في الرد حتى في الوجه العام');
+
+    const sent = lastKatraRequest();
+    assert.strictEqual(sent.search.get('areas'), 'general');
+    assert.strictEqual(sent.search.get('area'), null, 'الوجه العام لا يقيّد بـarea');
+  });
+
+  await test('?limit= يُقصّ إلى سقف الخمسين بدل أن يُرفض أو يُمرَّر', async () => {
+    const { status, body } = await api('GET', '/api/news?limit=500&offset=0', { region: newsRegionRow.id });
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.items.length, 50);
+    assert.strictEqual(lastKatraRequest().search.get('limit'), '50', 'الخادم لا يحوّل سقفاً إلى استعلام أكبر');
+  });
+
+  await test('?offset= ينتقل إلى الصفحة التالية ويُبلغ has_more بالصدق', async () => {
+    const { status, body } = await api('GET', '/api/news?limit=50&offset=50', { region: newsRegionRow.id });
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(lastKatraRequest().search.get('offset'), '50');
+    assert.strictEqual(body.items.length, 2, 'الخمسون الأولى انتهت قبل العنصرين المشوّهين');
+    assert.strictEqual(body.has_more, false);
+  });
+
+  await test('إزاحة غير صالحة (سالب أو نصّ) تُرفض 400 برسالة عربية', async () => {
+    const negative = await api('GET', '/api/news?offset=-5', { region: newsRegionRow.id });
+    assert.strictEqual(negative.status, 400);
+    assert.ok(/الإزاحة/.test(negative.body.message || ''), negative.body.message);
+
+    const text = await api('GET', '/api/news?offset=page', { region: newsRegionRow.id });
+    assert.strictEqual(text.status, 400);
+  });
+
+  await test('GET /api/news/:id يعيد التفصيل: الكاتب والنصّ الكامل فقرات', async () => {
+    const { status, body } = await api('GET', '/api/news/903');
+
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.item.id, 903);
+    assert.strictEqual(body.item.title, 'خبر الاختبار 4');
+    assert.strictEqual(body.item.author_name, 'محرّر كترا');
+    assert.ok(body.item.body_text.includes('\n'), 'النصّ يصل بفواصله ليُعرض فقرات');
+    assert.deepStrictEqual(body.item.category, { id: 3, name: 'أخبار المنطقة' });
+  });
+
+  await test('خبر غير موجود أو غير منشور عند المصدر ← 404 عربي', async () => {
+    const { status, body } = await api('GET', '/api/news/123456');
+    assert.strictEqual(status, 404);
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.message, 'الخبر غير موجود');
+
+    const invalid = await api('GET', '/api/news/abc');
+    assert.strictEqual(invalid.status, 400);
+    assert.ok(/معرّف الخبر/.test(invalid.body.message || ''), invalid.body.message);
+  });
+
+  await test('فشل المصدر بلا كاش ← 502 بالرسالة العربية، لا قائمة فارغة تُوهم بالهدوء', async () => {
+    newsService.clearCache();
+    katraFailing = true;
+
+    const { status, body } = await api('GET', '/api/news?limit=50&offset=0', { region: newsRegionRow.id });
+    assert.strictEqual(status, 502);
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.message, 'تعذّر جلب الأخبار من منصة كترا الآن');
+
+    const detail = await api('GET', '/api/news/900');
+    assert.strictEqual(detail.status, 502, 'التفصيل أيضاً 502 — لا كاش له');
+  });
+
+  await test('بعد نجاح سابق، سقوط المصدر يخدم آخر نسخة محفوظة بدل 502', async () => {
+    katraFailing = false;
+    const healthy = await api('GET', '/api/news?limit=50&offset=0', { region: newsRegionRow.id });
+    assert.strictEqual(healthy.status, 200, healthy.body.message);
+
+    katraFailing = true;
+    const degraded = await api('GET', '/api/news?limit=50&offset=0', { region: newsRegionRow.id });
+
+    assert.strictEqual(degraded.status, 200, 'تعطّل مصدر الأخبار لا يجوز أن يُفرغ الشاشة');
+    assert.strictEqual(degraded.body.success, true);
+    assert.strictEqual(degraded.body.items.length, 50, 'نفس القائمة المحفوظة');
+    assert.strictEqual(degraded.body.items[0].id, 900);
+    assert.strictEqual(degraded.body.has_more, true);
+  });
+
+  // استعادة الحالة: المصدر الوهمي يُغلق، ومتغيّرا البيئة يُمسحان كي لا يعتمد
+  // أي طلب لاحق (أو إعادة تشغيل) على خادم لم يعد موجوداً.
+  katraFailing = false;
+  delete process.env.KATRA_NEWS_BASE_URL;
+  delete process.env.KATRA_NEWS_CACHE_TTL_MS;
+  newsService.clearCache();
+  await new Promise(resolve => katraServer.close(resolve));
 
   const leftoverAvatar = await db.queryOne('SELECT avatar_url FROM users WHERE id = ?', [avatarUser.id]);
   if (leftoverAvatar && leftoverAvatar.avatar_url && leftoverAvatar.avatar_url.startsWith('/uploads/')) {

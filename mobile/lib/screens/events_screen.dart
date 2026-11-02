@@ -17,6 +17,7 @@ import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
+import '../widgets/region_banner.dart';
 import 'add_event_screen.dart';
 import 'agenda_screen.dart';
 import 'albums_screen.dart';
@@ -1019,6 +1020,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               // يرسم أدواته بنفسه، فلا تبقى وراءه نسخة ثانية من شريط
               // الستوريات ولا من كبسة الفلاتر.
               if (!_showTopChrome) _feedHeader(),
+              // شريط التوسّع (#127): خبر المحافظة في سطرين داخل التغذية، فوق
+              // الكروت مباشرةً كبطاقة الدخول — يدفعها قليلاً ثم يختفي بـ×،
+              // ولا طبقة تحجبها ولا ورقة حواريّة. يتبع تبديل المحافظة بنفسه.
+              const RegionBanner(),
               // بطاقة الدخول التسويقية: عنصر عادي في عمود التغذية — **تحت**
               // شريط الستوريات لا فوقه — فتدفع الكروت قليلاً ثم تختفي ويعود
               // التخطيط. بطاقةٌ تشير إلى أوّل ستوري لا يجوز أن تحجبه.

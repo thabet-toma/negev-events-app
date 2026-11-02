@@ -244,6 +244,25 @@ const STORY_THUMB_HOSTS = [
 ];
 
 /**
+ * وجه «آخر خبر» في «خدماتنا» — مفتاح منطقة منصة كترا الإخبارية مقابل **اسم
+ * المحافظة** القادم من `towns.service` (الاسم هو المفتاح المخزَّن، ADR-0007).
+ * اسم لا مفتاح له هنا يسقط إلى الوجه العام، لا إلى خطأ: محافظة تُضاف غداً من
+ * اللوحة يجب أن تفتح الشاشة على أخبار عامة، لا أن تكسرها.
+ */
+const NEWS_AREA_BY_REGION_NAME = {
+  'النقب': 'negev',
+  'محافظة طولكرم': 'tulkarm',
+  'اللد والرملة ويافا': 'lod-ramla-yafa'
+};
+
+/** الوجه العام حين لا منطقة للمحافظة — أو حين يطلبه العميل صراحةً (`general=1`). */
+const NEWS_AREA_GENERAL = 'general';
+
+/** صفحة الأخبار الواحدة: الافتراضي والسقف الصلب نفسهما — خمسون خبراً في الطلب. */
+const NEWS_PAGE_DEFAULT = 50;
+const NEWS_PAGE_MAX = 50;
+
+/**
  * تاريخ آخر تعديل جوهري على الصفحة الرئيسية (web/index.html) وعلى web/about.html.
  * يُستخدم `lastmod` لهذين المدخلين في خريطة الموقع وحدها. **حدّثه عند تغيير المحتوى** —
  * لا يُشتقّ من تاريخ اليوم: lastmod يتغيّر كل يوم معناه أنه لا يعني شيئاً لمحرك البحث.
@@ -277,5 +296,9 @@ module.exports = {
   PHOTO_REPORT_HIDE_THRESHOLD,
   STORY_LINK_PLATFORMS,
   STORY_THUMB_HOSTS,
+  NEWS_AREA_BY_REGION_NAME,
+  NEWS_AREA_GENERAL,
+  NEWS_PAGE_DEFAULT,
+  NEWS_PAGE_MAX,
   ABOUT_LASTMOD
 };

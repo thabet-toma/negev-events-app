@@ -120,6 +120,16 @@ const config = {
     apiSecret: process.env.CLOUDINARY_API_SECRET || null
   },
 
+  // منصة كترا الإخبارية (وجهة «خدماتنا» ← «آخر خبر») — مصدر خارجي وحده. بلا
+  // هذا الإعداد يعمل كل شيء آخر كما هو، ومسارا `/api/news` يردّان 502 عربياً
+  // حين يتعذّر الوصول إليه. الخدمة تقرأ البيئة عند كل استدعاء أيضاً، انظر
+  // news.service.js — الأمثلة على ذلك منذ اختبارات الخادم الوهمي.
+  katraNewsBaseUrl: stripTrailingSlash(process.env.KATRA_NEWS_BASE_URL || 'https://radio.ktra-pro.tech'),
+  // قائمة واحدة تُخدَّم من الذاكرة خمس دقائق: الأخبار لا تتحرّك كل ثانية، وكل
+  // طلب يمرّ إلى طرف ثالث يجعل مصدره البطيء عطلاً لنا.
+  katraNewsCacheTtlMs: toInt(process.env.KATRA_NEWS_CACHE_TTL_MS, 300000),
+  katraNewsTimeoutMs: toInt(process.env.KATRA_NEWS_TIMEOUT_MS, 5000),
+
   // Facebook Page Integration (auto-publishing approved events)
   facebook: {
     pageId: process.env.FACEBOOK_PAGE_ID || null,

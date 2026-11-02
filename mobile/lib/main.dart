@@ -9,6 +9,7 @@ import 'api/api_client.dart';
 import 'api/negev_api.dart';
 import 'screens/account_screen.dart' show SignInScreen;
 import 'screens/home_shell.dart';
+import 'screens/my_list_screen.dart';
 import 'state/analytics.dart';
 import 'state/audio_coordinator.dart';
 import 'state/auth_store.dart';
@@ -168,8 +169,14 @@ class AppServices extends InheritedWidget {
   /// فهرس وجهة «المناسبات» في الشريط السفلي.
   static const int feedTabIndex = 0;
 
-  /// فهرس وجهة «قائمتي» — ثانيةً مباشرةً بعد المناسبات.
-  static const int myListTabIndex = 1;
+  /// فهرس وجهة «خدماتنا» — منصات كترا الأخرى (آخر خبر، متاجرنا، K.T.R.A ERP).
+  static const int hubTabIndex = 1;
+
+  /// فهرس وجهة «خدمات الأعراس» — دليل مزوّدي الخدمة.
+  static const int servicesTabIndex = 2;
+
+  /// فهرس وجهة «حسابي» — آخر وجهات الشريط الأربع.
+  static const int accountTabIndex = 3;
 
   /// «لا طلب تبديل» — القيمة الابتدائية الوحيدة التي لا تُقرأ كطلب.
   static const int _noTabRequest = -1;
@@ -195,7 +202,7 @@ class AppServices extends InheritedWidget {
   /// الجلب عند ظهورها. عدّاد لا قيمة منطقية: التغيير نفسه هو الخبر.
   final ValueNotifier<int> myListRevision;
 
-  /// عدد مناسبات «قائمتي» الجارية اليوم — شارة تبويبها في الشريط السفلي.
+  /// عدد مناسبات «قائمتي» الجارية اليوم — عدّاد بطاقة «قائمتي» في «حسابي».
   /// تكتبه شاشة «قائمتي» وحدها بعد كل جلب ناجح، وتحصفره عند الخروج.
   final ValueNotifier<int> myListNowCount;
 
@@ -210,11 +217,17 @@ class AppServices extends InheritedWidget {
   /// لمن كبس زرّه لاحقاً.
   final ValueNotifier<({int eventId, bool saved})?> savedChange;
 
-  /// يفتح «قائمتي» — زرّ «عرض» في رسالة الإضافة، ومعها إشارة إعادة الجلب كي
-  /// لا يرى المستخدم قائمة بلحظة ما قبل الإضافة.
+  /// يفتح «قائمتي» — زرّ «عرض» في رسالة الإضافة، وبطاقة الوصل السريع في
+  /// «حسابي» تمرّ بالشاشة نفسها مباشرةً.
+  ///
+  /// **شاشة مدفوعة لا تبويب**: خرجت «قائمتي» من الشريط السفلي (٤ وجهات)، فلم
+  /// يبقَ لـ`tabRequest` رقمها؛ يُدفع المسار من جذر الملاحة ([navigatorKey])
+  /// ليصل أيضاً من حيث لا `BuildContext` للنقر (رسالة عائمة فوق صفحة مناسبة).
   void openMyList() {
     myListRevision.value++;
-    tabRequest.value = myListTabIndex;
+    navigatorKey.currentState?.push(
+      MaterialPageRoute<void>(builder: (_) => const MyListScreen()),
+    );
   }
 
   /// يفتح تبويب المناسبات — زرّ «تصفّح المناسبات» في القائمة الفارغة.

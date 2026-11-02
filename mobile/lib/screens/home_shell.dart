@@ -5,34 +5,24 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../state/region_onboarding.dart';
 import '../state/update_checker.dart';
+import '../theme.dart';
 import '../widgets/region_onboarding_sheet.dart';
-import '../widgets/region_story_sheet.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart';
 import 'events_screen.dart';
-import 'map_screen.dart';
-import 'my_list_screen.dart';
-import 'nokoot_screen.dart';
+import 'services_hub_screen.dart';
 import 'services_screen.dart';
 
-/// فهرس وجهة «النقوط» — تُخفي زرّ النشر العائم (شاشتها لها زرّها الخاصّ).
-const int _nokootTabIndex = 3;
-
-/// الهيكل الرئيسي — ستّ وجهات بشريط تنقّل سفلي، وزرّ عائم للنشر في تبويباته ما
-/// عدا التغذية (نشرُها في رأسها، `feed_publish_button` في `EventsScreen`) والنقوط
-/// (شاشتها لها زرّها الخاصّ).
+/// الهيكل الرئيسي — أربع وجهات بشريط تنقّل سفلي: المناسبات، خدماتنا، خدمات
+/// الأعراس، حسابي (بهذا الترتيب في RTL من اليمين).
 ///
-/// «إضافة» ليست وجهة بل فعل (wayfinder #21 خطوة ١): خرجت من الشريط إلى زرّ
-/// عائم، فأفرغت خانة أخذتها «الخدمات». والوجهات الستّ بترتيبها: المناسبات،
-/// قائمتي، الخريطة، النقوط، حسابي، الخدمات — الأربعة الأصليون (المناسبات،
-/// الخريطة، النقوط، حسابي) بقوا كما هم، ولم يتنحَّ أحد.
+/// الخريطة و«قائمتي» والنقوط خرجت من الشريط حين ضاق بستّ وجهات، وشاشاتها باقية
+/// كما هي ويُوصل إليها من بطاقات الوصل السريع في «حسابي» — لم تُحذف ولم تُنسخ.
 ///
-/// و«قائمتي» (الوجه الظاهر لـ«ذكّرني») تُعرض **ثانيةً** مباشرةً بعد
-/// «المناسبات»: هي نتيجة التصفّح، فمكانها بجانبه لا في آخره.
-///
-/// الخانة الأخيرة هنا «حسابي»، بينما نظيرتها في الويب «الستيكرات» — قرار
-/// موثَّق لا انحراف بين العميلين (spec #21 خطوة ١، القرار ٢).
+/// وزرّ النشر العائم (FAB) لم تبقَ له حاجة: فوق الشريط كبستان ثابتان —
+/// «أضف عرسك» (بارز) و«أضف خدمتك» (أهدأ) — يظهران في كل الوجهات، ونشر التغذية
+/// يبقى في رأسها أيضاً (`feed_publish_button` في `EventsScreen`).
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -74,53 +64,27 @@ class _HomeShellState extends State<HomeShell> {
 
     if (!_onboardingAttempted) {
       _onboardingAttempted = true;
-      unawaited(_maybeShowBootSheets());
+      unawaited(_maybeShowOnboardingSheet());
     }
   }
 
-  /// أوراق الإقلاع، بترتيب صريح (تذكرة #127): **#126 أولاً، وقصة التوسّع في
-  /// تشغيل لاحق**. فمن لم يُسأل عن منطقته بعد يرى ورقة الاختيار وحدها، ولو
-  /// اختار منها الآن لا تتبعه قصةٌ في الجلسة نفسها — قاعدة التذكرة «كي لا
-  /// تتراكم ورقتان»، وسببها أن القصة تحيّة لا سؤال.
+  /// ورقة أول تشغيل (#126) — السؤال الوحيد عند الإقلاع منذ #127: صارت قصة
+  /// التوسّع شريطاً داخل التغذية (`RegionBanner`) يتبع المحافظة، فلا تُعرض في
+  /// الإقلاع ولا تُسجَّل رؤيتها.
   ///
-  /// ولا تُعرض أية ورقة إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة)
-  /// — وهذا يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل شيء حينها، فتعود
+  /// ولا تُعرض الورقة إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة) —
+  /// وهذا يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل شيء حينها، فتعود
   /// في الإقلاع التالي بدل أن تفوت. و«محاولة واحدة» تعني مرةً واحدة لهذا
   /// التشغيل: `_onboardingAttempted` يمنع تكرار المحاولة مع كل إعادة بناء.
-  Future<void> _maybeShowBootSheets() async {
+  Future<void> _maybeShowOnboardingSheet() async {
     // ننتظر أول إطار كي لا تُفتح ورقة أثناء البناء، وأول ما يصل إليه المستخدم
     // شاشته لا حوار.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || !_isShellOnTop) return;
 
-    if (!await isRegionOnboarded()) {
-      if (!mounted || !_isShellOnTop) return;
-      await showRegionOnboardingSheet(context);
-      // القصة تشغيل لاحق دائماً — ولو اختار المستخدم منطقته للتوّ (#127).
-      return;
-    }
-
-    await _maybeShowRegionStory();
-  }
-
-  /// قصة التوسّع (#127): مرة واحدة لكل تثبيت، وبعد وصول المحافظات وأرقامها من
-  /// `GET /api/towns` وحده. بلا وصول (قائمة احتياطية) أو بلا محافظتين لهما
-  /// رقمان، لا تُعرض — لا رقم مخترع.
-  Future<void> _maybeShowRegionStory() async {
-    if (await isRegionStorySeen()) return;
+    if (await isRegionOnboarded()) return;
     if (!mounted || !_isShellOnTop) return;
-
-    final services = AppServices.of(context);
-    final catalog = await services.places.load();
-    if (!mounted || !_isShellOnTop || !catalog.fromServer) return;
-
-    final story = buildRegionStory(
-      regions: catalog.regions,
-      selectedRegionId: services.regions.effectiveRegionId,
-    );
-    if (story == null) return;
-
-    await showRegionStorySheet(context, story: story);
+    await showRegionOnboardingSheet(context);
   }
 
   /// الهيكل وحده على الشاشة: لا شاشة مدفوعة فوقه ولا ورقة أخرى.
@@ -160,7 +124,7 @@ class _HomeShellState extends State<HomeShell> {
   /// يفتح شاشة النشر — نفس ما كان يفعله تبويب «إضافة» بالضبط، فقط كدفعٍ
   /// جديد بدل تبديل تبويب. حاجز الحساب لم يتغيّر: يبقى داخل `AddEventScreen`
   /// نفسها عند الإرسال، لا هنا (`_submit` في add_event_screen.dart).
-  /// يخدم الزرّ العائم في تبويبات الشريط؛ التغذية تدفع الشاشة نفسها من زرّ
+  /// يخدم كبسة «أضف عرسك» فوق الشريط؛ والتغذية تدفع الشاشة نفسها من زرّ
   /// «إعلان مناسبة» في رأسها (`_chromePublishButton`).
   void _openAddEvent() {
     Navigator.of(context).push(
@@ -168,13 +132,17 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// كبسة «أضف خدمتك» — الورقة نفسها التي تفتحها «خدمات الأعراس»، بحارس
+  /// الحساب وفئات الخدمة داخلها (`openSubmitServiceSheet`)، لا نموذج ثانٍ.
+  Future<void> _openAddService() => openSubmitServiceSheet(context);
+
   @override
   Widget build(BuildContext context) {
     final services = AppServices.of(context);
 
     // تبديل المحافظة (تذكرة #125) يُعيد بناء الأسطح التي تحتفظ ببياناتها في
-    // الذاكرة: التغذية — وفيها شريط الستوريات — والخريطة والخدمات، بمفتاح هو
-    // **قيمة `X-Region` المُرسَلة فعلاً** لا الاختيار الصريح وحده: محافظة
+    // الذاكرة: التغذية — وفيها شريط الستوريات — وشاشة «خدمات الأعراس»، بمفتاح
+    // هو **قيمة `X-Region` المُرسَلة فعلاً** لا الاختيار الصريح وحده: محافظة
     // الحساب تُرسَل ترويسةً أيضاً، ومسحُ محفوظٍ لم يعد موجوداً يغيّرها بلا
     // اختيار جديد. حياةٌ جديدة تعني جلباً جديداً بالترويسة الجديدة، فلا تبقى
     // تغذية المحافظة السابقة على الشاشة.
@@ -191,11 +159,9 @@ class _HomeShellState extends State<HomeShell> {
             key: ValueKey('feed_$regionKey'),
             isActive: _index == AppServices.feedTabIndex,
           ),
-          MyListScreen(isActive: _index == AppServices.myListTabIndex),
-          MapScreen(key: ValueKey('map_$regionKey')),
-          const NokootScreen(),
-          const AccountScreen(),
+          ServicesHubScreen(key: ValueKey('hub_$regionKey')),
           ServicesScreen(key: ValueKey('services_$regionKey')),
+          AccountScreen(isActive: _index == AppServices.accountTabIndex),
         ];
 
         return _shell(screens);
@@ -219,80 +185,92 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      // تبويب التغذية وحده بلا زرّ نشر عائم: نشره في رأس التغذية نفسه
-      // (`feed_publish_button`)، فلا شيء يطفو فوق الكرت ولا فوق أيقونات الشريط.
-      floatingActionButton: _index == AppServices.feedTabIndex ||
-              _index == _nokootTabIndex
-          ? null
-          : FloatingActionButton.small(
-              onPressed: _openAddEvent,
-              tooltip: 'إعلان مناسبة',
-              elevation: 4,
-              child: const Icon(Icons.add, size: 20),
-            ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (value) => setState(() => _index = value),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.celebration_outlined),
-            selectedIcon: Icon(Icons.celebration),
-            label: 'المناسبات',
-          ),
-          NavigationDestination(
-            icon: _MyListNavIcon(),
-            selectedIcon: _MyListNavIcon(selected: true),
-            label: 'قائمتي',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.map_outlined),
-            selectedIcon: Icon(Icons.map),
-            label: 'الخريطة',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet),
-            label: 'النقوط',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'حسابي',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.handyman_outlined),
-            selectedIcon: Icon(Icons.handyman),
-            label: 'الخدمات',
+      // لا زرّ نشر عائم: الكبستان فوق الشريط تغطّيان النشر من كل وجهة، ونشر
+      // التغذية في رأسها (`feed_publish_button`) أيضاً.
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _publishActions(),
+          NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: (value) => setState(() => _index = value),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.celebration_outlined),
+                selectedIcon: Icon(Icons.celebration),
+                label: 'المناسبات',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.apps_outlined),
+                selectedIcon: Icon(Icons.apps),
+                label: 'خدماتنا',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.handyman_outlined),
+                selectedIcon: Icon(Icons.handyman),
+                label: 'خدمات الأعراس',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline),
+                selectedIcon: Icon(Icons.person),
+                label: 'حسابي',
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-}
 
-/// أيقونة «قائمتي» في الشريط مع شارة عدد مناسبات اليوم الجارية — تُخفى حين لا
-/// شيء جارٍ أو حين لا حساب، فلا رقم بلا معنى. العدّاد تكتبه شاشة «قائمتي»
-/// وحدها (`myListNowCount`) بعد كل جلب ناجح.
-class _MyListNavIcon extends StatelessWidget {
-  const _MyListNavIcon({this.selected = false});
-
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final services = AppServices.of(context);
-    return AnimatedBuilder(
-      animation: Listenable.merge([services.auth, services.myListNowCount]),
-      builder: (context, _) {
-        final count =
-            services.auth.isSignedIn ? services.myListNowCount.value : 0;
-        return Badge(
-          isLabelVisible: count > 0,
-          label: Text('$count'),
-          child: Icon(selected ? Icons.bookmark : Icons.bookmark_border),
-        );
-      },
+  /// الكبستان الثابتتان فوق الشريط السفلي — بديل زرّ النشر العائم.
+  ///
+  /// «أضف عرسك» بارزة بلون العرس الذهبي، و«أضف خدمتك» أهدأ بإطار على سطح
+  /// الشريط. كلٌّ منهما تفتح ما كانت تفتحه قبل التغيير نفسه: شاشة النشر، وورقة
+  /// تقديم عرض الخدمة (`openSubmitServiceSheet`).
+  Widget _publishActions() {
+    return Container(
+      color: context.c.surfaceSunk,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              key: const Key('shell_add_event'),
+              onPressed: _openAddEvent,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: context.c.gold,
+                foregroundColor: context.c.onSky,
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              icon: const Icon(Icons.celebration_outlined, size: 18),
+              label: const Text('أضف عرسك'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              key: const Key('shell_add_service'),
+              onPressed: _openAddService,
+              style: OutlinedButton.styleFrom(
+                backgroundColor: context.c.surface,
+                foregroundColor: context.c.inkSoft,
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                side: BorderSide(color: context.c.line),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              icon: const Icon(Icons.handyman_outlined, size: 18),
+              label: const Text('أضف خدمتك'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

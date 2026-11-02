@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,13 +14,21 @@ import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/region_onboarding_sheet.dart';
-import '../widgets/region_story_sheet.dart' show arabicCountUnit;
+import '../widgets/region_banner.dart' show arabicCountUnit;
 import 'live_screen.dart';
+import 'map_screen.dart';
 import 'my_events_screen.dart';
+import 'my_list_screen.dart';
+import 'nokoot_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
 class AccountScreen extends StatelessWidget {
-  const AccountScreen({super.key});
+  const AccountScreen({super.key, this.isActive = true});
+
+  /// هل وجهة «حسابي» هي المختارة في الشريط الآن؟ تُمرَّر من `HomeShell` كي
+  /// لا يجلب عدّاد «قائمتي» من كل مستخدم مسجَّل عند إقلاع التطبيق، بل عند
+  /// فتح الشاشة وحدها (نفس نمط `EventsScreen`/`MyListScreen`).
+  final bool isActive;
 
   @override
   Widget build(BuildContext context) {
@@ -210,6 +219,8 @@ class AccountScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 22),
+                    _QuickLinks(isActive: isActive),
+                    const SizedBox(height: 18),
                     const _RegionSection(),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(
@@ -274,6 +285,163 @@ Widget _avatarFallback(BuildContext context) {
     alignment: Alignment.center,
     child: Icon(Icons.person, size: 36, color: context.c.onSky),
   );
+}
+
+/// بطاقات الوصل السريع الثلاث داخل العرض المسجَّل: دفتر النقوط، الخريطة،
+/// «قائمتي» — الوجه الوحيد إلى الشاشات التي خرجت من الشريط السفلي. الزائر لا
+/// يراها، فبطاقة الدخول وحدها هي شاشته.
+///
+/// عدّاد «قائمتي» ([AppServices.myListNowCount]) تكتبه شاشة «قائمتي» بعد كل
+/// جلب؛ وتُحدَّث هنا مرّة واحدة عند فتح «حسابي» ([isActive]) كي لا يظهر صفرٌ
+/// كاذب على بطاقة لم تُفتح بعد، ولا يدفع كل مستخدم مسجَّل نداءً عند الإقلاع.
+class _QuickLinks extends StatefulWidget {
+  const _QuickLinks({required this.isActive});
+
+  final bool isActive;
+
+  @override
+  State<_QuickLinks> createState() => _QuickLinksState();
+}
+
+class _QuickLinksState extends State<_QuickLinks> {
+  /// طلب واحد لكل تفعيل للشاشة — لا مع كل إعادة بناء.
+  bool _synced = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.isActive) _syncNowCount();
+  }
+
+  @override
+  void didUpdateWidget(covariant _QuickLinks oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      _synced = false;
+      _syncNowCount();
+    }
+  }
+
+  /// الفشل صامت: العدّاد زينة لا خبر، وآخر رقم معروف يبقى كما هو.
+  Future<void> _syncNowCount() async {
+    if (_synced) return;
+    _synced = true;
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) return;
+    try {
+      final list = await services.api.myList();
+      if (!mounted) return;
+      services.myListNowCount.value = list.nowCount;
+    } catch (_) {
+      // بلا شبكة يبقى آخر رقم معروف — لا صفر كاذب.
+    }
+  }
+
+  void _open(Widget screen) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => screen),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final services = AppServices.of(context);
+    return AnimatedBuilder(
+      animation: Listenable.merge([services.auth, services.myListNowCount]),
+      builder: (context, _) {
+        final nowCount =
+            services.auth.isSignedIn ? services.myListNowCount.value : 0;
+        return Row(
+          children: [
+            Expanded(
+              child: _QuickCard(
+                key: const Key('account_quick_nokoot'),
+                icon: Icons.account_balance_wallet_outlined,
+                label: 'دفتر النقوط',
+                onTap: () => _open(const NokootScreen()),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _QuickCard(
+                key: const Key('account_quick_map'),
+                icon: Icons.map_outlined,
+                label: 'الخريطة',
+                onTap: () => _open(const MapScreen()),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _QuickCard(
+                key: const Key('account_quick_my_list'),
+                icon: Icons.bookmark_border,
+                label: 'قائمتي',
+                badgeCount: nowCount,
+                onTap: () => _open(const MyListScreen()),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// بطاقة وصل واحدة: أيقونة (مع شارة العدّاد إن وُجد) واسم الشاشة.
+class _QuickCard extends StatelessWidget {
+  const _QuickCard({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.badgeCount = 0,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  /// ٠ تعني «بلا شارة» — لا رقم بلا معنى.
+  final int badgeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: context.c.surface,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: context.c.line),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Badge(
+                isLabelVisible: badgeCount > 0,
+                label: Text('$badgeCount'),
+                child: Icon(icon, size: 22, color: context.c.sky),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: context.c.ink,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// اختيار صورة من المعرض ورفعها. الإلغاء لا يبلغ الشبكة أصلاً، والفشل يظهر

@@ -28,6 +28,14 @@ class ApiError extends Error {
   static conflict(message = 'العنصر موجود مسبقاً', details) {
     return new ApiError(409, message, details);
   }
+
+  /**
+   * طرف ثالث (منصة كترا الإخبارية اليوم) لم يجب بما يصلح: الخلل في وسيط لا
+   * في طلب العميل، فلا 400 ولا 500 — 502 تقول ذلك بعينه.
+   */
+  static badGateway(message = 'تعذّر الوصول إلى الخدمة الخارجية الآن') {
+    return new ApiError(502, message);
+  }
 }
 
 module.exports = ApiError;

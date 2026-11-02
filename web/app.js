@@ -77,6 +77,19 @@ let servicesPage = 1;
 let servicesPagination = null;
 let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل صريح (#25)
 
+// «خدماتنا» و«آخر خبر» — وجهة عامة بلا حساب (منصّات كترا)، وشاشة أخبار
+// المحافظة من مصدرها الخارجي عبر GET /api/news. لا رمز ولا محافظة محسوبة هنا:
+// apiFetch يرفق X-Region من المحفوظ، والخادم يعيد `region_name` فيعرضه الهيدر
+// كما حسبه هو — لا نسخة ثانية من الاسم في العميل.
+const NEWS_PAGE_SIZE = 50;
+let newsItems = [];
+let newsOffset = 0;
+let newsHasMore = false;
+let newsGeneral = false; // true = الوجه العام (بعد زرّ «أخبار محلية عامة»)
+let newsRegionName = ''; // اسم محافظة الزائر كما أعاده /api/news
+let newsLoading = false;
+
+
 // Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
 let currentPage = 1;
 const EVENTS_PAGE_SIZE = 30;
@@ -2888,22 +2901,27 @@ function clearMyList() {
 /**
  * شارة التبويب: عدد مناسبات اليوم الجارية (bucket 'now') وحده — هي وحدها ما
  * يستحقّ لفتة عين. تُخفى حين صفر أو حين لا جلسة، لا تظهر «0» أبداً.
+ *
+ * وبعد أن صارت «قائمتي» بطاقةً داخل «حسابي» بدل وجهة في الشريط، الشارة على
+ * «حسابي» وعدّاد البطاقة يُكتبان من هنا معاً — رقم واحد في مكانين لا يجوز أن
+ * يختلفا، فمصدرهما هذا الموضع الوحيد.
  */
 function updateMyListNavBadge() {
-  const badge = document.getElementById('myListNavBadge');
-  if (!badge) return;
-
   const todayCount = (currentUser && authToken && myListData && Array.isArray(myListData.events))
     ? myListData.events.filter(evt => evt.bucket === 'now').length
     : 0;
+  const countText = todayCount > 0 ? (todayCount > 99 ? '99+' : String(todayCount)) : '';
 
-  if (todayCount > 0) {
-    badge.textContent = todayCount > 99 ? '99+' : String(todayCount);
-    badge.hidden = false;
-  } else {
-    badge.textContent = '';
-    badge.hidden = true;
+  const accountCount = document.getElementById('accountMyListTodayCount');
+  if (accountCount) {
+    accountCount.textContent = countText;
+    accountCount.hidden = todayCount <= 0;
   }
+
+  const badge = document.getElementById('myListNavBadge');
+  if (!badge) return;
+  badge.textContent = countText;
+  badge.hidden = todayCount <= 0;
 }
 
 /** يقرّر ما يراه زائر التبويب: بطاقة الدخول لغير المسجَّل، والقائمة للمسجَّل. */
@@ -4246,6 +4264,21 @@ async function sendReaction(eventId, type, btnElement) {
 // «إعلان مناسبة» هو أول لحظة كتابة، فالدخول يُطلَب هنا فقط — القراءة (باقي
 // التبويبات) تبقى مفتوحة بلا حساب (#20 step 9). طلب الدخول يحفظ النيّة
 // (pendingIntent) ليعود الزائر لهذا التبويب نفسه بعد الدخول، لا أن يضيع طلبه.
+//
+// الشريط السفلي أربع وجهات بالترتيب الذي في index.html — والمفتاح أدناه هو
+// ربط المعرّف بموضعه. tabMap/tabMyList/tabNokoot غادرت الشريط وصفحاتها باقية،
+// فتفتح فعالةً كأنها «حسابي» لأنها بطاقات وصول سريع داخله؛ tabAdd وtabStickers
+// وباقي الصفحات بلا زرّ نشِط إطلاقاً.
+const BOTTOM_NAV_INDEX = {
+  tabHome: 0,
+  tabOurServices: 1,
+  tabServices: 2,
+  tabAccount: 3,
+  tabMap: 3,
+  tabMyList: 3,
+  tabNokoot: 3
+};
+
 function switchTab(tabId) {
   if (tabId === 'tabAdd' && !requireAuth({ type: 'publish' })) return;
 
@@ -4260,9 +4293,9 @@ function switchTab(tabId) {
   const targetTab = document.getElementById(tabId);
   if (targetTab) targetTab.classList.add('active-tab');
 
-  const navIndex = ['tabHome', 'tabMyList', 'tabMap', 'tabNokoot', 'tabAccount', 'tabServices'].indexOf(tabId);
+  const navIndex = BOTTOM_NAV_INDEX[tabId];
   const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
-  if (navBtns[navIndex]) navBtns[navIndex].classList.add('active');
+  if (navIndex !== undefined && navBtns[navIndex]) navBtns[navIndex].classList.add('active');
 
   if (feedToRestore) window.scrollTo(0, feedToRestore.page);
   else window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4293,6 +4326,11 @@ function switchTab(tabId) {
 function openAddEventModal() {
   if (!requireAuth({ type: 'publish' })) return;
   switchTab('tabAdd');
+}
+
+/** وجهة «خدماتنا» — صفحة ثابتة بلا نداء شبكة: بطاقاتها الثلاث وسوم في index.html. */
+function openOurServices() {
+  switchTab('tabOurServices');
 }
 
 function closeAddEventModal() {
@@ -4366,6 +4404,9 @@ function loadAccountView() {
     if (toggle) {
       toggle.checked = localStorage.getItem('negev_analytics_opt_out') === 'true';
     }
+
+    // عدّاد «قائمتي» في بطاقة الوصول السريع — يُكتب من نفس موضع شارة الشريط.
+    updateMyListNavBadge();
 
     fetchMyEvents();
   } else {
@@ -6632,6 +6673,344 @@ async function handlePublicSubmitService(e) {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال العرض للمراجعة';
   }
+}
+
+// 12d. «آخر خبر» — شاشة أخبار المحافظة داخل الموقع (وجهة «خدماتنا»).
+// المصدر منصة كترا الإخبارية عبر GET /api/news، والخادم وحده يعرف مفتاح
+// المنطقة: هو يشتقّه من اسم محافظة الزائر ويعيد الاسم نفسه في `region_name`،
+// فلا يبني العميل نسخة ثانية من خريطة الأسماء. لا رمز هنا (auth غير مفعّل)،
+// وX-Region يرفقه apiFetch من المحفوظ تلقائياً.
+
+/** يفتح الشاشة من الصفر: حالة نظيفة، هيدر، ثم أول صفحة. */
+function openNewsScreen() {
+  const screen = document.getElementById('newsScreen');
+  if (!screen) return;
+
+  newsItems = [];
+  newsOffset = 0;
+  newsHasMore = false;
+  newsGeneral = false;
+  newsRegionName = '';
+  newsLoading = false;
+
+  screen.hidden = false;
+  document.body.classList.add('news-screen-open');
+  document.addEventListener('keydown', handleNewsKeydown);
+
+  showNewsList();
+  updateNewsHeader();
+  loadNews({ reset: true });
+}
+
+/** × وEscape — الطريقان الوحيدان للخروج، والطبقة تكشف ما تحتها بلا تغيير. */
+function closeNewsScreen() {
+  const screen = document.getElementById('newsScreen');
+  if (screen) screen.hidden = true;
+  document.body.classList.remove('news-screen-open');
+  document.removeEventListener('keydown', handleNewsKeydown);
+}
+
+function handleNewsKeydown(event) {
+  if (event.key === 'Escape') closeNewsScreen();
+}
+
+/**
+ * هيدر الشاشة: «آخر الأخبار — {اسم محافظة الزائر}» ثم وسم «عامة» حين يكون
+ * الوجه عاماً. الاسم من ردّ الخادم أولاً، وقبله من المحافظة المعروضة في
+ * المنتقي (نفس ما سيرسله apiFetch) كي لا يظهر الهيدر بلا اسم لحظة التحميل.
+ */
+function updateNewsHeader() {
+  const title = document.getElementById('newsScreenTitle');
+  const tag = document.getElementById('newsGeneralTag');
+  const name = newsRegionName || activeRegionName();
+  if (title) title.textContent = name ? `آخر الأخبار — ${name}` : 'آخر الأخبار';
+  if (tag) tag.hidden = !newsGeneral;
+}
+
+/**
+ * جلب صفحة أخبار: `reset` يبدأ من أولها ويرسم هيكل التحميل، وبدونه يُلحق
+ * بالصفحة المزيد ويُبقي الكروت المعروضة في مكانها (زرّ «المزيد»).
+ */
+async function loadNews({ reset = false } = {}) {
+  if (newsLoading) return;
+  newsLoading = true;
+
+  if (reset) {
+    newsOffset = 0;
+    newsItems = [];
+    renderNewsSkeleton();
+  }
+  updateNewsLoadMore();
+
+  try {
+    const res = await apiFetch(`/api/news?limit=${NEWS_PAGE_SIZE}&offset=${newsOffset}&general=${newsGeneral ? 1 : 0}`);
+    const data = await res.json();
+    if (!res.ok || !data || data.success !== true || !Array.isArray(data.items)) {
+      throw new Error('bad news response');
+    }
+
+    newsRegionName = data.region_name || newsRegionName;
+    newsGeneral = data.general === true;
+    newsHasMore = data.has_more === true;
+
+    const received = data.items.length;
+    newsItems = reset ? data.items : newsItems.concat(data.items);
+    newsOffset += received;
+    // صفحة فارغة مع has_more تعني أن المصدر لا يقدّم أكثر — لا نستمرّ في السؤال.
+    if (!received) newsHasMore = false;
+
+    updateNewsHeader();
+    renderNewsList();
+  } catch (e) {
+    renderNewsError();
+  } finally {
+    newsLoading = false;
+    updateNewsLoadMore();
+  }
+}
+
+/** «المزيد» — تكملة الصفحة نفسها، والإزاحة هي عدد ما وصل فعلاً. */
+function loadMoreNews() {
+  if (newsLoading || !newsHasMore) return;
+  loadNews();
+}
+
+/** زرّ الحالة الفارغة: يعيد الجلب على الوجه العام ويرفع وسم «عامة» في الهيدر. */
+function loadGeneralNews() {
+  newsGeneral = true;
+  updateNewsHeader();
+  loadNews({ reset: true });
+}
+
+function updateNewsLoadMore() {
+  const wrapper = document.getElementById('newsLoadMoreWrapper');
+  const btn = document.getElementById('newsLoadMoreBtn');
+  if (!wrapper) return;
+  wrapper.hidden = !(newsHasMore && newsItems.length > 0);
+  if (btn) btn.disabled = newsLoading;
+}
+
+/** هيكل تحميل بشكل الكرت نفسه بدل دوّارة وسط الشاشة. */
+function renderNewsSkeleton() {
+  const list = document.getElementById('newsList');
+  if (!list) return;
+  list.innerHTML = Array.from({ length: 4 }).map(() => `
+    <div class="news-skeleton" aria-hidden="true">
+      <div class="news-skeleton-media skeleton-shimmer"></div>
+      <div class="news-skeleton-line skeleton-shimmer"></div>
+      <div class="news-skeleton-line news-skeleton-line-short skeleton-shimmer"></div>
+    </div>`).join('');
+}
+
+function renderNewsList() {
+  const list = document.getElementById('newsList');
+  if (!list) return;
+  if (!newsItems.length) {
+    renderNewsEmpty();
+    return;
+  }
+  list.innerHTML = newsItems.map(renderNewsCardHtml).join('');
+}
+
+/** كرت خبر واحد — صورة 16:9 إن وُجدت، شارة «عاجل»، العنوان، القسم، الوقت النسبي. */
+function renderNewsCardHtml(item) {
+  const media = item.image
+    ? `<div class="news-card-media"><img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.title)}" loading="lazy"></div>`
+    : '<div class="news-card-media news-card-media-empty"><i class="fa-regular fa-newspaper" aria-hidden="true"></i></div>';
+  const chips = [
+    item.is_breaking ? '<span class="news-breaking">عاجل</span>' : '',
+    item.category && item.category.name ? `<span class="news-card-category">${escapeHtml(item.category.name)}</span>` : ''
+  ].join('');
+  const time = formatNewsRelativeTime(item.published_at);
+
+  return `
+    <article class="news-card" data-news-id="${item.id}">
+      <button type="button" class="news-card-open" onclick="openNewsItem(${item.id})">
+        ${media}
+        <div class="news-card-body">
+          <div class="news-card-chips">${chips}</div>
+          <h3 class="news-card-title">${escapeHtml(item.title)}</h3>
+          ${item.excerpt ? `<p class="news-card-excerpt">${escapeHtml(item.excerpt)}</p>` : ''}
+          ${time ? `<div class="news-card-time"><i class="fa-regular fa-clock" aria-hidden="true"></i> ${escapeHtml(time)}</div>` : ''}
+        </div>
+      </button>
+    </article>`;
+}
+
+function renderNewsError() {
+  const list = document.getElementById('newsList');
+  if (!list) return;
+  newsHasMore = false;
+  list.innerHTML = `
+    <div class="empty-state news-empty">
+      <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+      <h3>تعذّر تحميل الأخبار</h3>
+      <p>تحقّق من الاتصال ثم أعد المحاولة.</p>
+      <button type="button" class="gold-action-btn" onclick="loadNews({ reset: true })">
+        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> إعادة المحاولة
+      </button>
+    </div>`;
+}
+
+function renderNewsEmpty() {
+  const list = document.getElementById('newsList');
+  if (!list) return;
+
+  // الوجه العام نفسه بلا أخبار: لا زرّ يعيد الجلب إلى الوجه العام مرّة أخرى.
+  if (newsGeneral) {
+    list.innerHTML = `
+      <div class="empty-state news-empty">
+        <i class="fa-regular fa-newspaper" aria-hidden="true"></i>
+        <h3>لا أخبار بعد</h3>
+        <p>لم يصلنا أي خبر عام حتى الآن — عُد قريباً.</p>
+      </div>`;
+    return;
+  }
+
+  list.innerHTML = `
+    <div class="empty-state news-empty">
+      <i class="fa-regular fa-newspaper" aria-hidden="true"></i>
+      <h3>لا أخبار لمحافظتك بعد</h3>
+      <p>لم يصلنا خبر من محافظتك حتى اللحظة.</p>
+      <button type="button" class="gold-action-btn" onclick="loadGeneralNews()">
+        <i class="fa-solid fa-globe" aria-hidden="true"></i> أخبار محلية عامة
+      </button>
+    </div>`;
+}
+
+/** يبدّل إلى عرض التفصيل ويجلب الخبر — الفتح داخل الطبقة نفسها، لا صفحة جديدة. */
+async function openNewsItem(id) {
+  const detail = document.getElementById('newsDetailView');
+  if (!detail) return;
+
+  showNewsDetail();
+  detail.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+
+  try {
+    const res = await apiFetch(`/api/news/${id}`);
+    const data = await res.json();
+    if (!res.ok || !data || data.success !== true || !data.item) throw new Error('bad news item');
+    renderNewsDetail(data.item);
+  } catch (e) {
+    detail.innerHTML = `
+      <div class="empty-state news-empty">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <p>تعذّر تحميل الخبر — تحقّق من الاتصال</p>
+        <button type="button" class="gold-action-btn" onclick="openNewsItem(${id})">
+          <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> إعادة المحاولة
+        </button>
+      </div>`;
+  }
+}
+
+/** زرّ الرجوع داخل التفصيل — يعود إلى القائمة كما كانت، بلا إعادة جلب. */
+function backToNewsList() {
+  showNewsList();
+}
+
+function showNewsList() {
+  const listView = document.getElementById('newsListView');
+  const detailView = document.getElementById('newsDetailView');
+  if (listView) listView.hidden = false;
+  if (detailView) detailView.hidden = true;
+}
+
+function showNewsDetail() {
+  const listView = document.getElementById('newsListView');
+  const detailView = document.getElementById('newsDetailView');
+  if (listView) listView.hidden = true;
+  if (detailView) detailView.hidden = false;
+  // التفصيل يبدأ من أعلاه: الطبقة نفسها هي الحاوية المُمرَّرة.
+  const scroller = document.querySelector('.news-screen-scroll');
+  if (scroller) scroller.scrollTop = 0;
+}
+
+function renderNewsDetail(item) {
+  const detail = document.getElementById('newsDetailView');
+  if (!detail) return;
+
+  const time = formatNewsRelativeTime(item.published_at);
+  const date = formatNewsDay(item.published_at);
+  const paragraphs = String(item.body_text || '')
+    .split(/\n+/)
+    .map(paragraph => paragraph.trim())
+    .filter(Boolean);
+  const bodyHtml = paragraphs.length
+    ? paragraphs.map(paragraph => `<p class="news-detail-paragraph">${escapeHtml(paragraph)}</p>`).join('')
+    : (item.excerpt ? `<p class="news-detail-paragraph">${escapeHtml(item.excerpt)}</p>` : '');
+  const meta = [
+    date ? `<span><i class="fa-regular fa-calendar" aria-hidden="true"></i> ${escapeHtml(date)}</span>` : '',
+    time ? `<span><i class="fa-regular fa-clock" aria-hidden="true"></i> ${escapeHtml(time)}</span>` : ''
+  ].join('');
+  const chips = [
+    item.is_breaking ? '<span class="news-breaking">عاجل</span>' : '',
+    item.category && item.category.name ? `<span class="news-card-category">${escapeHtml(item.category.name)}</span>` : ''
+  ].join('');
+
+  detail.innerHTML = `
+    <div class="news-detail">
+      <button type="button" class="news-detail-back" onclick="backToNewsList()">
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> رجوع
+      </button>
+      ${item.image ? `<div class="news-detail-media"><img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.title)}"></div>` : ''}
+      <div class="news-detail-head">
+        <div class="news-card-chips">${chips}</div>
+        <h2 class="news-detail-title">${escapeHtml(item.title)}</h2>
+        <div class="news-detail-meta">${meta}</div>
+      </div>
+      <div class="news-detail-text">${bodyHtml}</div>
+      <p class="news-detail-source">من منصة كترا الإخبارية</p>
+      ${item.url ? `<a class="news-detail-open" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">
+        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> افتح على كترا
+      </a>` : ''}
+    </div>`;
+}
+
+/** تاريخ يوم الخبر عربياً طويلاً — 'YYYY-MM-DD' خاماً لا يصل القارئ. */
+function formatNewsDay(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ar-EG', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(date);
+}
+
+/**
+ * الوقت النسبي بالعربية: «الآن» ثم «قبل ٥ دقائق / ٣ ساعات / يومين»، وما تجاوز
+ * أسبوعاً يخرج تاريخاً — «قبل ٤٠ يوماً» لا تُقرأ أسرع من «٥ سبتمبر ٢٠٢٦».
+ */
+function formatNewsRelativeTime(iso) {
+  if (!iso) return '';
+  const published = new Date(iso);
+  if (Number.isNaN(published.getTime())) return '';
+
+  const minutes = Math.floor((Date.now() - published.getTime()) / 60000);
+  if (minutes < 1) return 'الآن';
+  if (minutes < 60) return `قبل ${arabicUnit(minutes, 'دقيقة', 'دقيقتين', 'دقائق')}`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `قبل ${arabicUnit(hours, 'ساعة', 'ساعتين', 'ساعات')}`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `قبل ${arabicUnit(days, 'يوم', 'يومين', 'أيام')}`;
+
+  return formatNewsDay(iso);
+}
+
+/**
+ * صيغة العدد العربية: ١ «دقيقة»، ٢ «دقيقتين»، ٣–١٠ «٣ دقائق»، ١١ فأكثر
+ * بالمفرد المنصوب («١١ دقيقة» — صيغة ما فوق العشرة الصحيحة بلا تشكيل) —
+ * التي يتكلّمها القارئ، لا «قبل 1 يوم».
+ */
+function arabicUnit(count, singular, dual, plural) {
+  if (count === 1) return singular;
+  if (count === 2) return dual;
+  if (count >= 3 && count <= 10) return `${count} ${plural}`;
+  return `${count} ${singular}`;
 }
 
 // 13. Add Event & Collision Check

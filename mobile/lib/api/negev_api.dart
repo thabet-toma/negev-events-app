@@ -8,6 +8,7 @@ import '../models/album.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/my_list.dart';
+import '../models/news.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
 import '../models/reminder_schedule.dart';
@@ -191,6 +192,41 @@ class NegevApi {
     final raw = data['villages'];
     if (raw is! List) return const [];
     return raw.whereType<Map<String, dynamic>>().map(Village.fromJson).toList();
+  }
+
+  // --- آخر الأخبار (منصة كترا الإخبارية، عام) -------------------------
+
+  /// صفحة أخبار المحافظة — `GET /api/news`، عام بلا رمز.
+  ///
+  /// المحافظة **لا تُرسَل في الاستعلام**: الخادم يشتقّها من ترويسة `X-Region`
+  /// التي يضيفها [ApiClient] مع كل نداء (هنا كبقية النداءات)، فيكفي أن يكون
+  /// `RegionStore` قد ضبطها. [general] يطلب الأخبار المحلية العامة بدل أخبار
+  /// المحافظة (زرّ «أخبار محلية عامة» في الحالة الفارغة)، ويُرسَل دائماً `1`
+  /// أو `0` كما في العقد.
+  Future<NewsFeed> newsFeed({
+    int limit = 50,
+    int offset = 0,
+    bool general = false,
+  }) async {
+    final data = await _client.get(
+      '/api/news',
+      query: {
+        'limit': '$limit',
+        'offset': '$offset',
+        'general': general ? '1' : '0',
+      },
+    );
+    return NewsFeed.fromJson(data);
+  }
+
+  /// خبر واحد كاملاً بنصّه (`body_text`) وكاتبه — `GET /api/news/:id`.
+  Future<NewsItem> newsItem(int id) async {
+    final data = await _client.get('/api/news/$id');
+    final raw = data['item'];
+    if (raw is! Map) {
+      throw const ApiException('تعذّر قراءة الخبر');
+    }
+    return NewsItem.fromJson(Map<String, dynamic>.from(raw));
   }
 
   // --- دليل الخدمات (عام، بلا حساب) ----------------------------------

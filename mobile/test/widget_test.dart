@@ -1472,10 +1472,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-      expect(navBar.destinations, hasLength(6));
+      // الشريط أربع وجهات: «قائمتي» و«النقوط» و«الخريطة» صارت بطاقات وصل سريع
+      // داخل «حسابي»، لا وجهاتٍ في الشريط.
+      expect(navBar.destinations, hasLength(4));
       expect(
-        (navBar.destinations[1] as NavigationDestination).label,
-        'قائمتي',
+        [
+          for (final destination in navBar.destinations)
+            (destination as NavigationDestination).label,
+        ],
+        ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي'],
       );
 
       // «إضافة» لم تعد وجهة في الشريط. وفي تبويب التغذية لا زرّ عائم إطلاقاً:
@@ -1483,10 +1488,6 @@ void main() {
       expect(
         find.descendant(of: find.byType(NavigationBar), matching: find.text('إضافة')),
         findsNothing,
-      );
-      expect(
-        find.descendant(of: find.byType(NavigationBar), matching: find.text('الخدمات')),
-        findsOneWidget,
       );
       expect(
         find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),

@@ -14,6 +14,32 @@ import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
 import 'service_provider_details_screen.dart';
 
+/// يفتح ورقة تقديم عرض الخدمة — **التعريف الوحيد** لفتحها: زرّ «قدّم عرضك»
+/// في هذه الشاشة، وزرّ «أضف خدمتك» فوق الشريط السفلي في `HomeShell`، كلاهما
+/// يمرّ من هنا. حارس الحساب (`openSignInGate`) والفئات داخل الورقة نفسها، فلا
+/// نسخة ثانية من النموذج ولا من الحارس في ملف آخر.
+///
+/// [categories] تسمح لصاحب الشاشة بتمرير الفئات المجلوبة مسبقاً بدل طلب جديد،
+/// وغيابها (من الشريط) يعني جلبها الآن.
+Future<void> openSubmitServiceSheet(
+  BuildContext context, {
+  Future<List<ServiceCategory>>? categories,
+}) async {
+  final services = AppServices.of(context);
+  if (!services.auth.isSignedIn) {
+    await openSignInGate(context, 'سجّل الدخول لتقديم عرض خدمتك');
+    return;
+  }
+  final list = await (categories ?? services.api.serviceCategories());
+  if (!context.mounted) return;
+  await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetContext) => _SubmitServiceSheet(categories: list),
+  );
+}
+
 /// دليل الخدمات — كروت فاخرة بمواصفات وحزم تقديرية استرشادية،
 /// وبحث فوري وتواصل مباشر عبر الواتساب والاتصال.
 class ServicesScreen extends StatefulWidget {
@@ -198,27 +224,16 @@ class _ServicesScreenState extends State<ServicesScreen> {
     );
   }
 
-  Future<void> _openSubmitService() async {
-    final auth = AppServices.of(context).auth;
-    if (!auth.isSignedIn) {
-      await openSignInGate(context, 'سجّل الدخول لتقديم عرض خدمتك');
-      return;
-    }
-    final categories = await (_categories ?? AppServices.of(context).api.serviceCategories());
-    if (!mounted) return;
-    await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (sheetContext) => _SubmitServiceSheet(categories: categories),
-    );
-  }
+  Future<void> _openSubmitService() => openSubmitServiceSheet(
+        context,
+        categories: _categories,
+      );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('دليل الخدمات'),
+        title: const Text('خدمات الأعراس'),
         actions: [
           IconButton(
             tooltip: 'فلترة حسب البلدة',

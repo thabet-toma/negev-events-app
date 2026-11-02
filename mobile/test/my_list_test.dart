@@ -540,10 +540,10 @@ void main() {
     });
   });
 
-  group('(و) الشريط السفلي — «قائمتي» ثانيةً', () {
+  group('(و) الشريط السفلي — أربع وجهات، و«قائمتي» و«النقوط» في «حسابي»', () {
     testWidgets(
-      'ستّ وجهات، «قائمتي» ثانيةً، وزرّ النشر مخفيّ في تبويب النقوط (٣) '
-      'وظاهر فيما سواه — على عرض ٣٦٠dp',
+      'أربع وجهات بلا «قائمتي» ولا «النقوط»، وزرّ النشر في رأس التغذية لا عائماً '
+      '— على عرض ٣٦٠dp',
       (tester) async {
         // ورقة أول تشغيل (تذكرة #126) لا شأن لها بهذا الاختبار: نعلن أن
         // السؤال سبق أن طُرح كي لا تبقى ورقة مفتوحة تحجب نقرات الشريط.
@@ -582,39 +582,32 @@ void main() {
         await settleTab();
 
         final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-        expect(navBar.destinations, hasLength(6));
+        // الشريط أربع وجهات: «قائمتي» و«دفتر النقوط» و«الخريطة» خرجت منه إلى
+        // بطاقات الوصل السريع داخل «حسابي» (account_screen.dart)، فلا وجهة
+        // لها هنا ولا تُعاد إلى الشريط بلا قرار جديد.
+        expect(navBar.destinations, hasLength(4));
         expect(
-          (navBar.destinations[1] as NavigationDestination).label,
-          'قائمتي',
-          reason: '«قائمتي» تأتي ثانيةً مباشرةً بعد «المناسبات»',
+          [
+            for (final destination in navBar.destinations)
+              (destination as NavigationDestination).label,
+          ],
+          ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي'],
         );
         expect(
-          (navBar.destinations[0] as NavigationDestination).label,
-          'المناسبات',
+          find.descendant(of: find.byType(NavigationBar), matching: find.text('قائمتي')),
+          findsNothing,
+          reason: '«قائمتي» لم تعد وجهة في الشريط',
+        );
+        expect(
+          find.descendant(of: find.byType(NavigationBar), matching: find.text('النقوط')),
+          findsNothing,
+          reason: 'دفتر النقوط لم يعد وجهة في الشريط',
         );
 
-        // تبويب المناسبات (٠): لا زرّ عائم — نشرُه في رأس التغذية نفسه
+        // تبويب المناسبات: لا زرّ عائم — نشرُه في رأس التغذية نفسه
         // (`feed_publish_button`)، فلا شيء يطفو فوق الكرت.
         expect(find.byType(FloatingActionButton), findsNothing);
-
-        await tester.tap(find.text('النقوط'));
-        await settleTab();
-        expect(
-          tester
-              .widget<NavigationBar>(find.byType(NavigationBar))
-              .selectedIndex,
-          3,
-          reason: 'النقوط صار ثالثاً بعد إضافة «قائمتي»',
-        );
-        expect(
-          find.byType(FloatingActionButton),
-          findsNothing,
-          reason: 'دفتر النقوط له زرّه الخاصّ — لا زرّ نشر فوقه',
-        );
-
-        await tester.tap(find.text('الخريطة'));
-        await settleTab();
-        expect(find.byType(FloatingActionButton), findsOneWidget);
+        expect(find.byTooltip('إعلان مناسبة'), findsOneWidget);
       },
     );
   });

@@ -47,9 +47,8 @@ enum _MyListFilter { all, upcoming, ended }
 class MyListScreen extends StatefulWidget {
   const MyListScreen({super.key, this.isActive = true});
 
-  /// هل تبويب «قائمتي» هو المختار الآن؟ `IndexedStack` في `HomeShell` يُبقي
-  /// الشاشة حيّة خلف التبويبات الأخرى، فلا بدّ أن تُخبَر صراحةً كي تجلب
-  /// الجديد عند عودتها.
+  /// هل الشاشة مرئيّة الآن؟ تُدفَع من بطاقة «قائمتي» في «حسابي» فتبقى `true`،
+  /// ويُمرَّر `false` من أبٍ يضمّها مخفيّةً خلف سطح آخر كي لا تجلب وهي بعيدة.
   final bool isActive;
 
   @override
@@ -118,15 +117,15 @@ class _MyListScreenState extends State<MyListScreen> {
 
   /// تبديل تذكير وقع في شاشة أخرى («المناسبات» أو صفحة المناسبة).
   ///
-  /// القائمة خلف تبويب آخر تُجلب بياناتها **صامتة**: العدّاد والصفوف يتقدّمان
-  /// فوراً بلا مؤشّر تحميل ولا مساس بالفلتر أو بموضع التمرير.
+  /// القائمة المخفيّة خلف سطح آخر تُجلب بياناتها **صامتة**: العدّاد والصفوف
+  /// يتقدّمان فوراً بلا مؤشّر تحميل ولا مساس بالفلتر أو بموضع التمرير.
   void _handleRevision() {
     if (!mounted) return;
     _load(quiet: !widget.isActive);
   }
 
-  /// يُبقي شارة «قائمتي» في الشريط مطابقةً لما تعرضه الشاشة الآن — تُستدعى بعد
-  /// كل تغيير في `_data`، فالشارة لا تنتظر جلباً كاملاً لتصحّ.
+  /// يُبقي عدّاد «قائمتي» في بطاقة «حسابي» مطابقاً لما تعرضه الشاشة الآن —
+  /// تُستدعى بعد كل تغيير في `_data`، فالعدّاد لا ينتظر جلباً كاملاً ليصحّ.
   void _syncNowCount(AppServices services) {
     final data = _data;
     if (data != null) services.myListNowCount.value = data.nowCount;
@@ -533,7 +532,12 @@ class _MyListScreenState extends State<MyListScreen> {
           if (browse) ...[
             const SizedBox(height: 18),
             ElevatedButton.icon(
-              onPressed: AppServices.of(context).openFeed,
+              // تبديل تبويب من الشاشة المدفوعة لا يكفي: يُرجعها إلى الهيكل
+              // أوّلاً كي يرى المستخدم التغذية بدل قائمة فارغة تحته.
+              onPressed: () {
+                AppServices.of(context).openFeed();
+                Navigator.of(context).maybePop();
+              },
               icon: const Icon(Icons.celebration_outlined),
               label: const Text('تصفّح المناسبات'),
             ),
