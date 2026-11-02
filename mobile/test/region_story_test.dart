@@ -60,10 +60,17 @@ const _soonRegion = <String, dynamic>{
 
 /// خادم `GET /api/towns` الوهمي — بقيّة المسارات ردود عامة كافية لهيكل الشاشة.
 class _DiscoveryServer {
-  _DiscoveryServer({this.townsFail = false});
+  _DiscoveryServer({
+    this.townsFail = false,
+    List<Map<String, dynamic>>? regions,
+  }) : regions = regions ?? const [_originRegion, _destinationRegion];
 
   /// فشل `GET /api/towns` — الكتالوج يعود احتياطياً (`fromServer: false`).
   final bool townsFail;
+
+  /// محافظات مفتاح `regions` — الافتراضية محافظتا الملف، ويبدّلها اختبارٌ
+  /// يحتاج حالةً أخرى (صفر مناسبات، بلدات…) بدل نسخة ثانية من الخادم.
+  final List<Map<String, dynamic>> regions;
 
   http.Response _json(Map<String, dynamic> body, [int status = 200]) =>
       http.Response(
@@ -78,7 +85,7 @@ class _DiscoveryServer {
       return _json({
         'success': true,
         'towns': ['الكل', 'رهط', 'حورة', _destinationName],
-        'regions': const [_originRegion, _destinationRegion],
+        'regions': regions,
         'regions_soon': const [_soonRegion],
         'villages': const <Map<String, dynamic>>[],
         'town_coordinates': {
@@ -143,6 +150,34 @@ Future<void> _boot(WidgetTester tester, Widget home) async {
 Future<bool?> _storySeenFlag() async =>
     (await SharedPreferences.getInstance()).getBool(regionStorySeenKey);
 
+/// نصّ كل `Text` داخل ورقة القصة — لا عنصراً واحداً: «لا صفر» حكمٌ على الورقة
+/// كلها لا على سطر البلدات وحده.
+List<String> _sheetTexts(WidgetTester tester) {
+  final texts = tester.widgetList<Text>(
+    find.descendant(
+      of: find.byKey(const Key('region_story_sheet')),
+      matching: find.byType(Text),
+    ),
+  );
+  return [for (final text in texts) text.data ?? ''];
+}
+
+/// نصّ بطاقة محافظة واحدة مجموعاً — العدد ثم الصيغة سطران في الواجهة،
+/// فالاختبار يقرأهما كما يقرأهما المستخدم: «10 بلدات في طولكرم».
+String _statText(WidgetTester tester, String key) => tester
+    .widgetList<Text>(
+      find.descendant(
+        of: find.byKey(Key(key)),
+        matching: find.byType(Text),
+      ),
+    )
+    .map((text) => text.data ?? '')
+    .join(' ');
+
+/// صفرٌ وحده في نصّ — لا الصفر الذي داخل «10»: العدّ نفسه يجوز أن يحمل الصفر
+/// رقماً داخلياً، والممنوع أن يُعرض العدّ صفراً.
+final RegExp _standaloneZero = RegExp(r'(^|[^0-9٠-٩])[0٠]([^0-9٠-٩]|$)');
+
 void main() {
   group('قصة التوسّع — من استجابة الخادم وحدها', () {
     test('الأسماء والأرقام تُقرأ من المحافظات الواصلة، لا من ثوابت', () {
@@ -156,8 +191,12 @@ void main() {
 
       expect(story, isNotNull);
       expect(story!.title, 'بلّشنا بـ$_originName، وهلق $_destinationName معنا');
-      expect(story.originEvents, _originRegion['events_count']);
-      expect(story.destinationEvents, _destinationRegion['events_count']);
+      // العدد ووحدته معاً: رقمٌ بلا وحدته لا يقول أيّ الرقمين يُعرض.
+      expect(story.originCount, _originRegion['events_count']);
+      expect(story.originUnit, RegionStoryUnit.events);
+      expect(story.destinationCount, _destinationRegion['events_count']);
+      expect(story.destinationUnit, RegionStoryUnit.events);
+      expect(story.destinationHasEvents, isTrue);
     });
 
     test('المحافظة المختارة هي الوجهة، والأولى هي البداية', () {
@@ -173,6 +212,24 @@ void main() {
       // اختيار المحافظة الأولى نفسها لا يجعلها وجهةً لنفسها — تُعرض الثانية.
       final sameOrigin = buildRegionStory(regions: regions, selectedRegionId: 1);
       expect(sameOrigin!.destination.id, _destinationRegion['id']);
+
+      // ومختارةٌ فيها مناسبات تسبق محافظةً أخرى فيها مناسبات أيضاً: القصة
+      // تحيّةٌ لمن وصل إليها قبل أن تكون قائمةً بالترتيب.
+      final earlierEvents = <String, dynamic>{
+        ..._originRegion,
+        'id': 4,
+        'name': 'محافظة رابعة',
+        'events_count': 9,
+      };
+      final preferred = buildRegionStory(
+        regions: [
+          _region(_originRegion),
+          _region(earlierEvents),
+          _region(_destinationRegion),
+        ],
+        selectedRegionId: 2,
+      );
+      expect(preferred!.destination.id, _destinationRegion['id']);
     });
 
     test('بلا محافظتين، أو بلا رقم مناسبات: لا قصة — ولا رقم مخترع', () {
@@ -191,40 +248,107 @@ void main() {
         isNull,
         reason: 'خادم قديم بلا events_count لا يُعرض له رقم',
       );
-    });
 
-    test('الوجهة لا تُختار بصفر مناسبات، والمختارة الموقوفة لا تصل أصلاً', () {
-      // `events_count` يعدّ المعتمد وحده: محافظة وصلت للتوّ قد تكون بصفر
-      // يوم الإطلاق، و«0 مناسبة في …» في ورقة تحيّة نفيٌ للخبر لا خبر.
-      final emptyDestination = Map<String, dynamic>.from(_destinationRegion)
-        ..['events_count'] = 0;
+      // ولا تُقرأ بلدات بديلاً عن عدّ غائب: صفرُ مناسباتٍ لا يُستنتج من غياب
+      // الحقل، فلا يُروى عن المحافظة الأولى رقمٌ لا نعرفه.
+      final originWithoutCount = Map<String, dynamic>.from(_originRegion)
+        ..remove('events_count');
       expect(
         buildRegionStory(
-          regions: [_region(_originRegion), _region(emptyDestination)],
+          regions: [_region(originWithoutCount), _region(_destinationRegion)],
         ),
         isNull,
-        reason: 'لا وجهة بصفر — ولا تُروى القصة بلا وجهة',
+        reason: 'الأصل بلا events_count لا يُروى عنه رقم',
+      );
+    });
+
+    test('وجهة بصفر مناسبات ولها بلدات: تُروى ببلداتها لا بصفر', () {
+      final newRegion = Map<String, dynamic>.from(_destinationRegion)
+        ..['events_count'] = 0
+        ..['towns_count'] = 10;
+
+      final story = buildRegionStory(
+        regions: [_region(_originRegion), _region(newRegion)],
       );
 
-      // محافظة ثالثة فيها مناسبات تُختار بدل الصفرية، ولو كانت الصفرية هي
-      // المختارة على الجهاز.
+      expect(story, isNotNull, reason: 'صفر المناسبات ليس صفر محتوى');
+      expect(story!.destinationUnit, RegionStoryUnit.towns);
+      expect(story.destinationCount, 10);
+      expect(story.destinationHasEvents, isFalse);
+      // وأصلُ القصة يبقى بصيغته: 12 مناسبة.
+      expect(story.originUnit, RegionStoryUnit.events);
+      expect(story.originCount, _originRegion['events_count']);
+    });
+
+    test('محافظة بلا مناسبات وبلا بلدات: لا قصة', () {
+      final empty = Map<String, dynamic>.from(_destinationRegion)
+        ..['events_count'] = 0
+        ..['towns_count'] = 0;
+      expect(
+        buildRegionStory(regions: [_region(_originRegion), _region(empty)]),
+        isNull,
+        reason: 'لا رقم يُعرض: لا مناسبات ولا بلدات',
+      );
+
+      // وغياب `towns_count` عند صفر المناسبات مانع كذلك — لا رقم مخترع.
+      final withoutTowns = Map<String, dynamic>.from(_destinationRegion)
+        ..['events_count'] = 0
+        ..remove('towns_count');
+      expect(
+        buildRegionStory(
+          regions: [_region(_originRegion), _region(withoutTowns)],
+        ),
+        isNull,
+        reason: 'صفر مناسبات بلا towns_count ليس بلداتٍ نعرف عددها',
+      );
+    });
+
+    test('وجهة بمناسبة معتمدة واحدة: عدد المناسبات لا عدد البلدات', () {
+      final oneEvent = Map<String, dynamic>.from(_destinationRegion)
+        ..['events_count'] = 1
+        ..['towns_count'] = 10;
+
+      final story = buildRegionStory(
+        regions: [_region(_originRegion), _region(oneEvent)],
+      );
+
+      expect(story!.destinationUnit, RegionStoryUnit.events);
+      expect(story.destinationCount, 1);
+      expect(story.destinationHasEvents, isTrue);
+    });
+
+    test('المختارة الصفرية لا تحجب مناسبات غيرها، وتعود وجهةً ببلداتها وحدها', () {
+      final emptySelected = Map<String, dynamic>.from(_destinationRegion)
+        ..['events_count'] = 0
+        ..['towns_count'] = 5;
       final withEvents = <String, dynamic>{
         ..._destinationRegion,
         'id': 4,
         'name': 'محافظة ثالثة',
         'events_count': 3,
       };
-      final story = buildRegionStory(
+
+      // الأسبقية للمناسبات: مختارةٌ بصفر مناسبات لا تحجب محافظة فيها مناسبات.
+      final third = buildRegionStory(
         regions: [
           _region(_originRegion),
-          _region(emptyDestination),
+          _region(emptySelected),
           _region(withEvents),
         ],
         selectedRegionId: 2,
       );
-      expect(story, isNotNull);
-      expect(story!.destination.id, 4, reason: 'الصفرية لا تكون وجهة أبداً');
-      expect(story.destinationEvents, 3);
+      expect(third!.destination.id, 4);
+      expect(third.destinationUnit, RegionStoryUnit.events);
+      expect(third.destinationCount, 3);
+
+      // ولا ثالثة فيها شيء: المختارة الصفرية وجهةٌ ببلداتها لا بصفرها.
+      final only = buildRegionStory(
+        regions: [_region(_originRegion), _region(emptySelected)],
+        selectedRegionId: 2,
+      );
+      expect(only!.destination.id, 2);
+      expect(only.destinationUnit, RegionStoryUnit.towns);
+      expect(only.destinationCount, 5);
     });
 
     test('الموقوفة تصل في regions_soon وحدها — لا في regions ولا وجهةً', () {
@@ -261,7 +385,11 @@ void main() {
       // الرقمان كما وصلا، لا رقمان مكتوبان في الواجهة.
       expect(find.text('${_originRegion['events_count']}'), findsOneWidget);
       expect(find.text('${_destinationRegion['events_count']}'), findsOneWidget);
-      expect(find.text('مناسبة في $_destinationName'), findsOneWidget);
+      // والوحدة بصيغة عددها: ١٢ مناسبة (١١ فأكثر)، و٧ مناسبات (٣–١٠).
+      expect(find.text('مناسبة في $_originName'), findsOneWidget);
+      expect(find.text('مناسبات في $_destinationName'), findsOneWidget);
+      // ووجهةٌ فيها مناسبات لا تُدعى إلى «أول مناسبة».
+      expect(find.text('كون أول من يعلن مناسبة فيها'), findsNothing);
       // **المفتاح لا يُكتب قبل العرض** (تعديل مراجعة): كتابته قبل الورقة
       // تسجّل «عُرضت» ولو سقطت قبل أن تُرسم، فتفوت القصة أبداً.
       expect(await _storySeenFlag(), isNull,
@@ -278,6 +406,71 @@ void main() {
       await _boot(tester, _app(services, const HomeShell()));
       expect(find.byKey(const Key('region_story_sheet')), findsNothing);
       expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets('وجهة بصفر مناسبات تُعرض ببلداتها، ولا صفر في أي نصّ',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      final services = _services(
+        _DiscoveryServer(
+          regions: [
+            _originRegion,
+            <String, dynamic>{
+              ..._destinationRegion,
+              'events_count': 0,
+              'towns_count': 10,
+            },
+          ],
+        ),
+      );
+
+      await _boot(tester, _app(services, const HomeShell()));
+
+      expect(find.byKey(const Key('region_story_sheet')), findsOneWidget);
+      // العدد بلدات المحافظة، لا مناسباتها الصفرية، والجمع صحيح.
+      expect(
+        _statText(tester, 'region_story_destination_stat'),
+        contains('10 بلدات في $_destinationName'),
+      );
+      // ودعوةٌ صريحة بدل نفي الخبر.
+      expect(find.text('كون أول من يعلن مناسبة فيها'), findsOneWidget);
+      // ولا يُعرض «0» في أي نصّ من الورقة — كل `Text` لا سطر البلدات وحده.
+      final texts = _sheetTexts(tester);
+      expect(
+        texts.where(_standaloneZero.hasMatch),
+        isEmpty,
+        reason: 'صفرٌ ظاهر في الورقة: ${texts.join(' | ')}',
+      );
+    });
+
+    testWidgets('وجهة بمناسبة معتمدة واحدة تُعرض بمناسباتها لا ببلداتها',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      final services = _services(
+        _DiscoveryServer(
+          regions: [
+            _originRegion,
+            <String, dynamic>{
+              ..._destinationRegion,
+              'events_count': 1,
+              'towns_count': 10,
+            },
+          ],
+        ),
+      );
+
+      await _boot(tester, _app(services, const HomeShell()));
+
+      expect(
+        _statText(tester, 'region_story_destination_stat'),
+        contains('1 مناسبة في $_destinationName'),
+      );
+      // المناسبات أولى من البلدات حين توجد، فلا دعوة إلى «أول مناسبة».
+      expect(
+        _sheetTexts(tester).where((text) => text.contains('بلدات')),
+        isEmpty,
+      );
+      expect(find.text('كون أول من يعلن مناسبة فيها'), findsNothing);
     });
 
     testWidgets('قبل وصول المحافظات لا تُعرض ولا يُكتب مفتاحها', (tester) async {

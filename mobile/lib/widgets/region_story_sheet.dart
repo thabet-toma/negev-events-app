@@ -30,27 +30,77 @@ Future<void> markRegionStorySeen() async {
   }
 }
 
+/// صيغة عربية صحيحة للوحدة المَعدودة — الجمع لا يُشتقّ بزيادة حرف، فالصيغ
+/// الثلاث تُمرَّر: المفرد («بلدة»)، والمثنى («بلدتان»)، وجمع ٣–١٠ («بلدات»).
+/// وما بعد العشرة يعود مفرداً («١١ بلدة»).
+///
+/// **تعريف واحد للتطبيق كلّه:** يستدعيه `_StatTile` هنا، ويستدعيه
+/// `_townsCountLabel` في منتقي محافظات «حسابي» بدل نسخة ثانية.
+String arabicCountUnit(
+  int count, {
+  required String singular,
+  required String dual,
+  required String plural,
+}) {
+  if (count == 2) return dual;
+  if (count >= 3 && count <= 10) return plural;
+  return singular;
+}
+
+/// ما يعنيه رقم محافظة في القصة: مناسباتها المعتمدة، أو بلداتها إن لم تكن
+/// فيها مناسبة معتمدة بعد.
+///
+/// الوحدة تحمل صيغها الثلاث، فلا تُكتب الصيغ مرّة هنا ومرّة حيث تُعرض.
+enum RegionStoryUnit {
+  events(singular: 'مناسبة', dual: 'مناسبتان', plural: 'مناسبات'),
+  towns(singular: 'بلدة', dual: 'بلدتان', plural: 'بلدات');
+
+  const RegionStoryUnit({
+    required this.singular,
+    required this.dual,
+    required this.plural,
+  });
+
+  final String singular;
+  final String dual;
+  final String plural;
+
+  /// الصيغة التي تُعرض بعد الرقم — «مناسبات» لسبع، و«مناسبة» لواحدة أو لأحد
+  /// عشر فأكثر، و«بلدتان» لاثنتين.
+  String label(int count) =>
+      arabicCountUnit(count, singular: singular, dual: dual, plural: plural);
+}
+
 /// قصة التوسّع كما تُعرض: عنوانٌ يبدأ من أول محافظة وصلت إلى المحافظة
-/// الأخرى، ورقمان حقيقيان من `events_count` نفسهما.
+/// الأخرى، ورقمان حقيقيان من الخادم — مناسبات المحافظة المعتمدة، أو بلداتها
+/// إن لم تكن فيها مناسبة معتمدة بعد.
 class RegionStory {
   /// المحافظة التي بدأ بها التطبيق — أول محافظة نشطة بترتيب الخادم.
   final Region origin;
 
-  /// المحافظة التي وصل إليها — المحافظة المختارة إن كانت غير الأولى، وإلا
-  /// الثانية. اسمها يأتي من الخادم، **لا من نصّ مكتوب هنا**.
+  /// المحافظة التي وصل إليها — المختارة إن كانت هي الوجهة، وإلا أول محافظة
+  /// تصلح وجهةً. اسمها يأتي من الخادم، **لا من نصّ مكتوب هنا**.
   final Region destination;
 
-  /// عدد المناسبات في كل منهما كما أعاده `GET /api/towns` — لا حساب ولا رقم
-  /// ثابت في العميل.
-  final int originEvents;
-  final int destinationEvents;
+  /// العدد المعروض لكل محافظة ووحدته. الحقلان معاً لا رقم واحد: محافظة بصفر
+  /// مناسبات تُعرض بعدد بلداتها، والعدد الخام وحده لا يقول أيّ الرقمين هو.
+  final int originCount;
+  final RegionStoryUnit originUnit;
+  final int destinationCount;
+  final RegionStoryUnit destinationUnit;
 
   const RegionStory({
     required this.origin,
     required this.destination,
-    required this.originEvents,
-    required this.destinationEvents,
+    required this.originCount,
+    required this.originUnit,
+    required this.destinationCount,
+    required this.destinationUnit,
   });
+
+  /// هل للوجهة مناسبة معتمدة؟ هو ما يخفي سطر «كون أول من يعلن مناسبة فيها»
+  /// عن وجهةٍ فيها ما يُعلن. مشتقّ من الوحدة لا حقلٌ ثالث يتناقض معها.
+  bool get destinationHasEvents => destinationUnit == RegionStoryUnit.events;
 
   /// «بلّشنا بـ{الأولى}، وهلق {الثانية} معنا» — الصياغة المعتمدة في التذكرة،
   /// والأسماء مُدرَجة من الخادم.
@@ -61,14 +111,16 @@ class RegionStory {
 ///
 /// الشروط كلها لازمة:
 /// - محافظتان نشطتان **على الأقل** — بلا ثانية لا توسّع، والقصة كذبٌ لطيف.
-/// - `events_count` وصل فعلاً لكلتيهما — بلا رقم لا يُخترع رقم.
-/// - **والوجهة فيها مناسبة معتمدة واحدة على الأقل:** `events_count` صار يعدّ
-///   المعتمد وحده، ومحافظة الوصول يوم الإطلاق جديدةٌ بلا مناسبات. «0 مناسبة
-///   في …» في ورقة تحيّة ليست خبراً بل نفيٌ للخبر، فلا تُروى قصةٌ بصفر: تُختار
-///   المختارة إن كانت غير البداية وفيها مناسبات، وإلا فأول محافظة أخرى فيها
-///   مناسبات، وإلا فلا قصة.
+/// - الرقم الذي سيُعرض وصل فعلاً من الخادم: `events_count` لكل طرف،
+///   و`towns_count` لمناسباته صفر — بلا رقم لا يُخترع رقم.
+/// - **والوجهة فيها مناسبات معتمدة أو بلدات:** المحافظة الجديدة قد تكون صفر
+///   مناسبات يوم وصولها، وورقة تحيّةٍ تقول «0 مناسبة» نفيٌ لا خبر. فتُعرض
+///   بلداتها بدل الصفر، ومعها سطر «كون أول من يعلن مناسبة فيها»؛ ومحافظةٌ بلا
+///   مناسبات وبلا بلدات لا تصلح وجهة، وكذلك ما غاب عدّاده من الخادم.
 /// - والوجهة هي المختارة إن كانت غير الأولى (فابن طولكرم يقرأ بلده في القصة،
-///   لا محافظةً لا تخصّه)، وإلا التالية بالترتيب التي فيها مناسبات.
+///   لا محافظةً لا تخصّه)، **والأسبقية للمناسبات**: مختارةٌ بصفر مناسبات لا
+///   تحجب محافظة أخرى فيها مناسبات، وتعود هي الوجهة — ببلداتها — إن لم يكن
+///   في غيرها مناسبات.
 ///
 /// الموقوفة لا تدخل: هي «قريباً» في منتقي الاكتشاف، وليست الوجهة التي وصل
 /// إليها التطبيق — وهي في `regions_soon` أصلاً، فلا تصل هذه الدالة.
@@ -76,35 +128,55 @@ RegionStory? buildRegionStory({
   required List<Region> regions,
   int? selectedRegionId,
 }) {
-  final ready = regions
-      .where((region) => region.isActive && region.eventsCount != null)
-      .toList();
-  if (ready.length < 2) return null;
+  final active = regions.where((region) => region.isActive).toList();
+  if (active.length < 2) return null;
 
-  final origin = ready.first;
-  final candidates = ready.where(
-    (region) => region.id != origin.id && region.eventsCount! > 0,
-  );
+  final origin = active.first;
+  final originUnit = _storyUnitFor(origin);
+  if (originUnit == null) return null;
 
+  final others = active.where((region) => region.id != origin.id);
   Region? destination;
-  if (selectedRegionId != null) {
-    for (final region in candidates) {
-      if (region.id == selectedRegionId) {
-        destination = region;
-        break;
-      }
-    }
+  RegionStoryUnit? destinationUnit;
+  // فئتان بترتيبهما: مناسبات ثم بلدات. والمختارة تسبق غيرها **داخل فئتها**
+  // وحدها، فلا تختفي محافظة فيها مناسبات وراء مختارةٍ بصفر.
+  for (final unit in const [RegionStoryUnit.events, RegionStoryUnit.towns]) {
+    final candidates = others.where((region) => _storyUnitFor(region) == unit);
+    if (candidates.isEmpty) continue;
+    destination = candidates.firstWhere(
+      (region) => region.id == selectedRegionId,
+      orElse: () => candidates.first,
+    );
+    destinationUnit = unit;
+    break;
   }
-  destination ??= candidates.isEmpty ? null : candidates.first;
-  if (destination == null) return null;
+  if (destination == null || destinationUnit == null) return null;
 
   return RegionStory(
     origin: origin,
     destination: destination,
-    originEvents: origin.eventsCount!,
-    destinationEvents: destination.eventsCount!,
+    originCount: _storyCount(origin, originUnit),
+    originUnit: originUnit,
+    destinationCount: _storyCount(destination, destinationUnit),
+    destinationUnit: destinationUnit,
   );
 }
+
+/// الوحدة التي تُعرض بها المحافظة، أو `null` حين لا رقم صادق لها: غياب
+/// `events_count` (خادم قديم) مانع، وصفرٌ في المناسبات والبلدات معاً لا رقم
+/// له يُعرض. صفر المناسبات وحده يعني عرض البلدات.
+RegionStoryUnit? _storyUnitFor(Region region) {
+  final events = region.eventsCount;
+  if (events == null) return null;
+
+  if (events > 0) return RegionStoryUnit.events;
+  final towns = region.townsCount;
+  return towns != null && towns > 0 ? RegionStoryUnit.towns : null;
+}
+
+/// العدد المرافق للوحدة — الحقل الذي أثبتت [_storyUnitFor] وجوده.
+int _storyCount(Region region, RegionStoryUnit unit) =>
+    unit == RegionStoryUnit.events ? region.eventsCount! : region.townsCount!;
 
 /// تعرض القصة مرّة واحدة في عمر التثبيت (تذكرة #127).
 ///
@@ -180,7 +252,8 @@ class _RegionStorySheet extends StatelessWidget {
                 Expanded(
                   child: _StatTile(
                     key: const Key('region_story_origin_stat'),
-                    count: story.originEvents,
+                    count: story.originCount,
+                    unit: story.originUnit,
                     name: story.origin.name,
                     highlighted: false,
                   ),
@@ -189,13 +262,28 @@ class _RegionStorySheet extends StatelessWidget {
                 Expanded(
                   child: _StatTile(
                     key: const Key('region_story_destination_stat'),
-                    count: story.destinationEvents,
+                    count: story.destinationCount,
+                    unit: story.destinationUnit,
                     name: story.destination.name,
                     highlighted: true,
                   ),
                 ),
               ],
             ),
+            // وجهةٌ لم تُعلن فيها مناسبة بعد: الرقم بلداتها، والورقة تدعو صاحبها
+            // إلى أول مناسبة بدل أن تنفي الخبر بصفر.
+            if (!story.destinationHasEvents) ...[
+              const SizedBox(height: 12),
+              Text(
+                'كون أول من يعلن مناسبة فيها',
+                key: const Key('region_story_first_invite'),
+                style: TextStyle(
+                  color: context.c.inkSoft,
+                  fontSize: 13.5,
+                  height: 1.6,
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             FilledButton(
               key: const Key('region_story_dismiss'),
@@ -209,16 +297,22 @@ class _RegionStorySheet extends StatelessWidget {
   }
 }
 
-/// رقم محافظة واحدة: العدّ الكبير، ثم اسمها، ثم ما يعنيه الرقم.
+/// رقم محافظة واحدة: العدّ الكبير، ثم ما يعنيه الرقم — «7 مناسبات في طولكرم»،
+/// أو «10 بلدات في طولكرم» لوجهةٍ لم تُعلن فيها مناسبة بعد.
 class _StatTile extends StatelessWidget {
   const _StatTile({
     super.key,
     required this.count,
+    required this.unit,
     required this.name,
     required this.highlighted,
   });
 
   final int count;
+
+  /// ماذا يعدّ [count] — مناسبات أو بلدات، وهي التي تعرف صيغتها العربية.
+  final RegionStoryUnit unit;
+
   final String name;
 
   /// محافظة المستخدم تُلوَّن — هي خبر الورقة.
@@ -249,7 +343,7 @@ class _StatTile extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'مناسبة في $name',
+            '${unit.label(count)} في $name',
             style: TextStyle(
               fontSize: 12.5,
               color: context.c.inkSoft,

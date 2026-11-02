@@ -683,6 +683,27 @@ body {
 }
 .region-picker-drawer { margin: 0 0 14px; }
 
+/* قصة التوسّع (#127) — ورقة تحيّة تُعرض مرة واحدة لكل متصفّح بعد وصول
+   المحافظات من الخادم. بطاقة المودال نفسها، برقمين من GET /api/towns لا من
+   نصّ مكتوب هنا: الأصل عدّاد مناسباته، والوجهة عدد بلداتها حين لا مناسبات
+   معتمدة فيها بعد. بطاقتا الرقمين متساويتان، والوجهة وحدها بإطار السماء. */
+.region-story-head { display: flex; align-items: flex-start; gap: 8px; }
+.region-story-head i { color: var(--sky); font-size: 1.1rem; margin-block-start: 5px; flex-shrink: 0; }
+.region-story-title { font-size: 1.08rem; font-weight: 900; color: var(--ink); line-height: 1.6; }
+.region-story-sub { margin-block: 10px 14px; color: var(--ink-soft); font-size: 0.86rem; line-height: 1.7; }
+.region-story-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.region-story-stat {
+  padding: 14px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.region-story-stat.is-destination { border-color: var(--sky); }
+.region-story-stat-count { display: block; font-size: 1.55rem; font-weight: 900; color: var(--ink); font-variant-numeric: tabular-nums; }
+.region-story-stat.is-destination .region-story-stat-count { color: var(--sky); }
+.region-story-stat-label { display: block; margin-block-start: 2px; font-size: 0.8rem; color: var(--ink-soft); line-height: 1.6; }
+.region-story-first { margin-block-start: 12px; color: var(--sky-deep); font-size: 0.84rem; font-weight: 800; }
+
 /* ورقة الفلتر (مكان/نوع) — نفس بطاقة المودال، ببحث فوق قائمة قابلة للتمرير */
 .filter-sheet-card { display: flex; flex-direction: column; }
 .filter-sheet-search { margin-bottom: 14px; flex-shrink: 0; }

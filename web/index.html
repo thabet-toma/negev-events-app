@@ -1599,6 +1599,24 @@
     </div>
   </div>
 
+  <!-- قصة التوسّع (#127) — نسخة الويب من ورقة الترحيب التسويقية التي بنتها
+       نسخة الموبايل: تُروى مرة واحدة لكل متصفّح بعد وصول المحافظات من
+       GET /api/towns فعلاً (maybeShowRegionStory في app.js)، ولا تُعرض فوق
+       نافذة أخرى مفتوحة. اسم المحافظة وعدّاداها يُرسمان من الخادم وحده،
+       والمفتاح negev_region_story_seen يُكتب عند الإغلاق لا قبله. -->
+  <div id="regionStorySheet" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="regionStoryTitle" aria-describedby="regionStorySub" onclick="if (event.target === this) closeRegionStorySheet()">
+    <div class="modal-card">
+      <div class="region-story-head">
+        <i class="fa-solid fa-map-location-dot" aria-hidden="true"></i>
+        <h3 id="regionStoryTitle" class="region-story-title"></h3>
+      </div>
+      <p id="regionStorySub" class="region-story-sub">المناسبات والخدمات صارت لمنطقتك: من كل محافظة على حدة، في «أعراسنا» نفسه.</p>
+      <div id="regionStoryStats" class="region-story-stats"></div>
+      <p id="regionStoryFirst" class="region-story-first" hidden>كون أول من يعلن مناسبة فيها</p>
+      <button type="button" id="regionStoryDismissBtn" class="submit-btn" onclick="closeRegionStorySheet()">يلا نشوف المناسبات</button>
+    </div>
+  </div>
+
   <!-- MODAL: SUBMIT SERVICE OFFER (تقديم عرض خدمة من المستخدم) -->
   <div id="submitServiceModal" class="modal-overlay" style="display:none;">
     <div class="modal-card" style="max-width:580px; max-height:90vh; overflow-y:auto;">

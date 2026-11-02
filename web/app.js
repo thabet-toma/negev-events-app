@@ -3702,6 +3702,9 @@ function refreshPublishTownForRegion(previousRegionId) {
 async function initRegionPicker() {
   await loadTownCoordinates();
   syncRegionPickerSelection();
+  // قصة التوسّع (#127) بعد وصول المحافظات ورسمها فعلاً — لا طلب جديد، نفس
+  // استجابة GET /api/towns التي وصلت للتوّ.
+  maybeShowRegionStory();
 }
 
 /** يثبّت المحافظة النشطة من القائمة المجلوبة والمحفوظ، ثم يرسم. */
@@ -3788,6 +3791,193 @@ function renderRegionPicker() {
     wrap.hidden = !chipsHtml;
     chips.innerHTML = chipsHtml;
   });
+}
+
+// قصة التوسّع (#127) — ورقة الترحيب التسويقية التي بنتها نسخة الموبايل وحدها،
+// وهذه نسختها على الويب. تُروى مرة واحدة لكل متصفّح بعد أن تصل المحافظات من
+// GET /api/towns فعلاً: «بلّشنا بـ{الأصل}، وهلق {الوجهة} معنا». الأرقام كلها
+// من الخادم (`events_count` ثم `towns_count`)، فلا رقم مكتوب في العميل.
+const REGION_STORY_SEEN_KEY = 'negev_region_story_seen';
+
+/** هل عُرضت القصة سابقاً؟ تعذّر قراءة التخزين = «لم تُعرض» كي تظهر. */
+function isRegionStorySeen() {
+  try {
+    return localStorage.getItem(REGION_STORY_SEEN_KEY) !== null;
+  } catch (e) {
+    return false; // التخزين معطَّل — القصة تظهر، ولا شيء يُسجَّل.
+  }
+}
+
+/**
+ * يسجّل العرض — ويُكتب عند الإغلاق لا قبله: كتابته قبل الرسم تسجّل «عُرضت»
+ * ولو سقطت الورقة قبل أن تُرى. وكل إغلاق (الزرّ، Escape، النقر خارج البطاقة)
+ * قراءةٌ فعلية، فلا تعود بعدها. فشل التخزين لا يكسر الجلسة، وقد تعود في
+ * إقلاع لاحق لا أكثر.
+ */
+function markRegionStorySeen() {
+  try {
+    localStorage.setItem(REGION_STORY_SEEN_KEY, '1');
+  } catch (e) {
+    // تخزين معطّل — لا شيء لفعله هنا.
+  }
+}
+
+/** عدّاد من الخادم، أو null حين يغيب الرقم — لا يُخترع صفر من غيابه. */
+function regionStoryCount(region, field) {
+  const value = region ? region[field] : null;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * صيغة الجمع العربية لعدد البلدات (تذكرة #127): ١ «بلدة»، ٢ «بلدتان»،
+ * ٣–١٠ «بلدات»، ١١+ «بلدة» — ليست «3 بلدة». الرقم نفسه يعرضه العدّاد الكبير
+ * فوقها، فالسطر يقرأ «3 بلدات في طولكرم» كما في مثال التذكرة. صفر يُقال
+ * «بلا بلدات» لا «0 بلدة».
+ */
+function regionStoryTownsNoun(count) {
+  if (count <= 0) return 'بلا بلدات';
+  if (count === 1) return 'بلدة';
+  if (count === 2) return 'بلدتان';
+  if (count <= 10) return 'بلدات';
+  return 'بلدة';
+}
+
+/**
+ * تبني القصة من محافظات GET /api/towns النشطة، أو null حين لا قصة تُروى.
+ *
+ * - الأصل: أول محافظة نشطة بترتيب الخادم.
+ * - الوجهة: المختارة إن كانت غير الأصل **وفيها محتوى** (مناسبات معتمدة أو
+ *   بلدات)، وإلا فأول محافظة أخرى فيها مناسبات > 0، وإلا فأول محافظة أخرى
+ *   فيها بلدات > 0. الموقوفة لا تدخل: القائمة المُمرَّرة نشطة وحدها.
+ * - محافظتان نشطتان على الأقل، وعدّادان لكل واحدة: بلا رقم من الخادم لا
+ *   تُروى قصة ولو كانت القائمة حاضرة.
+ */
+function buildRegionStory(regions, selectedId) {
+  const active = (Array.isArray(regions) ? regions : []).filter(region => region && region.is_active !== false);
+  if (active.length < 2) return null;
+
+  const rows = active.map(region => ({
+    region,
+    events: regionStoryCount(region, 'events_count'),
+    towns: regionStoryCount(region, 'towns_count')
+  }));
+  if (rows.some(row => row.events === null || row.towns === null)) return null;
+
+  const origin = rows[0];
+  const others = rows.slice(1);
+  const hasContent = row => row.events > 0 || row.towns > 0;
+  const chosen = others.find(row => row.region.id === Number(selectedId));
+  const destination = (chosen && hasContent(chosen) ? chosen : null)
+    || others.find(row => row.events > 0)
+    || others.find(row => row.towns > 0)
+    || null;
+  if (!destination) return null;
+
+  return {
+    origin: origin.region,
+    destination: destination.region,
+    originEvents: origin.events,
+    originTowns: origin.towns,
+    destinationEvents: destination.events,
+    destinationTowns: destination.towns
+  };
+}
+
+/** بطاقة رقم واحدة: العدّ الكبير، ثم ما يعنيه الرقم داخل المحافظة. */
+function regionStoryStatHtml(count, label, isDestination) {
+  return `<div class="region-story-stat${isDestination ? ' is-destination' : ''}">
+    <span class="region-story-stat-count">${escapeHtml(String(count))}</span>
+    <span class="region-story-stat-label">${escapeHtml(label)}</span>
+  </div>`;
+}
+
+/**
+ * يرسم الورقة من أرقام الخادم وحدها. أي محافظة بصفر مناسبات معتمدة — الأصل
+ * كانت أو الوجهة — تُعرض بعدد بلداتها لا بـ«0 مناسبة»: ورقةُ تحيّة لا تنفي
+ * خبرَها. وسطر «كون أول من يعلن مناسبة فيها» يخصّ الوجهة الجديدة الخالية من
+ * المناسبات — هي التي يُدعى الزائر إلى أن يكون أول من يعلن فيها.
+ */
+function renderRegionStory(story) {
+  const titleEl = document.getElementById('regionStoryTitle');
+  const statsEl = document.getElementById('regionStoryStats');
+  const firstEl = document.getElementById('regionStoryFirst');
+  if (!titleEl || !statsEl) return;
+
+  titleEl.innerHTML = escapeHtml(`بلّشنا بـ${story.origin.name}، وهلق ${story.destination.name} معنا`);
+
+  const originCount = story.originEvents > 0 ? story.originEvents : story.originTowns;
+  const originLabel = story.originEvents > 0
+    ? `مناسبة في ${story.origin.name}`
+    : `${regionStoryTownsNoun(story.originTowns)} في ${story.origin.name}`;
+  const destinationCount = story.destinationEvents > 0 ? story.destinationEvents : story.destinationTowns;
+  const destinationLabel = story.destinationEvents > 0
+    ? `مناسبة في ${story.destination.name}`
+    : `${regionStoryTownsNoun(story.destinationTowns)} في ${story.destination.name}`;
+
+  statsEl.innerHTML = [
+    regionStoryStatHtml(originCount, originLabel, false),
+    regionStoryStatHtml(destinationCount, destinationLabel, true)
+  ].join('');
+  if (firstEl) firstEl.hidden = story.destinationEvents > 0;
+}
+
+/**
+ * هل على الشاشة طبقة أخرى الآن؟ القصة لا تُكدَّس فوق نافذة تعديل/إشعارات/
+ * تثبيت/صفحة مناسبة/عارض ستوري/درج علوي: من فتح شيئاً قبل وصول المحافظات
+ * يرى ما فتحه، والقصة تنتظر إقلاعاً آخر — ولا يُكتب لها مفتاح.
+ */
+function isRegionStoryBlocked() {
+  if (isEventPageOpen()) return true;
+  // كل .modal-overlay مفتوحة بـdisplay:flex، إلا ورقة الوسم فبإزالة hidden.
+  const modalOpen = [...document.querySelectorAll('.modal-overlay')].some(overlay =>
+    !overlay.hidden && overlay.style.display !== 'none'
+  );
+  if (modalOpen) return true;
+  const storyViewer = document.getElementById('storyViewerOverlay');
+  if (storyViewer && storyViewer.style.display !== 'none') return true;
+  const archiveViewer = document.getElementById('archiveViewer');
+  if (archiveViewer && !archiveViewer.hidden) return true;
+  const installHint = document.getElementById('installHint');
+  if (installHint && !installHint.hidden) return true;
+  const drawer = document.getElementById('topChromeDrawer');
+  if (drawer && drawer.style.display !== 'none') return true;
+  return false;
+}
+
+/** يغلق الورقة ويسجّل العرض — الإغلاق بأي طريقة قراءةٌ فعلية. */
+function closeRegionStorySheet() {
+  const sheet = document.getElementById('regionStorySheet');
+  if (!sheet || sheet.style.display === 'none') return;
+  sheet.style.display = 'none';
+  document.removeEventListener('keydown', handleRegionStoryKeydown);
+  markRegionStorySeen();
+}
+
+/** Escape يغلق الورقة كبقية النوافذ. */
+function handleRegionStoryKeydown(event) {
+  if (event.key === 'Escape') closeRegionStorySheet();
+}
+
+/**
+ * تعرض القصة مرة واحدة في عمر المتصفّح: بعد وصول المحافظات، وبلا طبقة أخرى
+ * تحتها. `regionsList` لا يُكتب إلا من ردّ GET /api/towns الناجح في
+ * loadTownCoordinates، فلا قائمة احتياطية هنا تُروى منها قصة.
+ */
+function maybeShowRegionStory() {
+  if (isRegionStorySeen()) return;
+  if (!regionsList.length) return;
+  if (isRegionStoryBlocked()) return;
+  const story = buildRegionStory(activeRegionsList(), selectedRegionId);
+  if (!story) return;
+
+  const sheet = document.getElementById('regionStorySheet');
+  if (!sheet || sheet.style.display === 'flex') return;
+  renderRegionStory(story);
+  sheet.style.display = 'flex';
+  document.addEventListener('keydown', handleRegionStoryKeydown);
+  // التركيز على الزرّ عند الفتح: أول ما يصل إليه قارئ الشاشة، وEnter يغلقها.
+  const dismissBtn = document.getElementById('regionStoryDismissBtn');
+  if (dismissBtn) dismissBtn.focus();
 }
 
 /**

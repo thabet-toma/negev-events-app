@@ -13,6 +13,7 @@ import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/region_onboarding_sheet.dart';
+import '../widgets/region_story_sheet.dart' show arabicCountUnit;
 import 'live_screen.dart';
 import 'my_events_screen.dart';
 
@@ -792,12 +793,20 @@ class _RegionSectionState extends State<_RegionSection> {
 
   /// عدد بلدات المحافظة بصيغة عربية صحيحة — «بلدة واحدة» و«بلدتان» و«٣ بلدات»
   /// ليست «3 بلدة». صفر لا يُدعى: «بلا بلدات» تقول الحقيقة بدل رقم مقلوب.
+  ///
+  /// صيغة الجمع من [arabicCountUnit] — تعريف واحد للتطبيق كلّه.
   static String _townsCountLabel(int count) {
     if (count <= 0) return 'بلا بلدات';
-    if (count == 1) return 'بلدة واحدة';
-    if (count == 2) return 'بلدتان';
-    if (count <= 10) return '$count بلدات';
-    return '$count بلدة';
+    final unit = arabicCountUnit(
+      count,
+      singular: 'بلدة',
+      dual: 'بلدتان',
+      plural: 'بلدات',
+    );
+    // ١ و٢ تُقرأ بلا رقم («بلدة واحدة»، «بلدتان»)، ومن ٣ تُقرأ بالعدد.
+    if (count == 1) return '$unit واحدة';
+    if (count == 2) return unit;
+    return '$count $unit';
   }
 }
 
