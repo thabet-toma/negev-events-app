@@ -8,17 +8,20 @@ import '../state/update_checker.dart';
 import '../theme.dart';
 import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/update_dialog.dart';
-import 'account_screen.dart';
 import 'add_event_screen.dart';
 import 'events_screen.dart';
 import 'services_hub_screen.dart';
 import 'services_screen.dart';
 
-/// الهيكل الرئيسي — أربع وجهات بشريط تنقّل سفلي: المناسبات، خدماتنا، خدمات
-/// الأعراس، حسابي (بهذا الترتيب في RTL من اليمين).
+/// الهيكل الرئيسي — ثلاث وجهات بشريط تنقّل سفلي: المناسبات، خدماتنا، خدمات
+/// الأعراس (بهذا الترتيب في RTL من اليمين).
+///
+/// «حسابي» ليست وجهةً في الشريط: تُدفع شاشةً من زرّها في الترويسة
+/// (`AuthActionButton` ← `AccountScreen`)، فلا نسخة ثانية لها في الشريط.
 ///
 /// الخريطة و«قائمتي» والنقوط خرجت من الشريط حين ضاق بستّ وجهات، وشاشاتها باقية
-/// كما هي ويُوصل إليها من بطاقات الوصل السريع في «حسابي» — لم تُحذف ولم تُنسخ.
+/// كما هي ويُوصل إليها من بطاقات الوصل السريع داخل شاشة «حسابي» — لم تُحذف ولم
+/// تُنسخ.
 ///
 /// وزرّ النشر العائم (FAB) لم تبقَ له حاجة: فوق الشريط كبستان ثابتان —
 /// «أضف عرسك» (بارز) و«أضف خدمتك» (أهدأ) — يظهران في كل الوجهات، ونشر التغذية
@@ -161,7 +164,6 @@ class _HomeShellState extends State<HomeShell> {
           ),
           ServicesHubScreen(key: ValueKey('hub_$regionKey')),
           ServicesScreen(key: ValueKey('services_$regionKey')),
-          AccountScreen(isActive: _index == AppServices.accountTabIndex),
         ];
 
         return _shell(screens);
@@ -209,11 +211,6 @@ class _HomeShellState extends State<HomeShell> {
                 icon: Icon(Icons.handyman_outlined),
                 selectedIcon: Icon(Icons.handyman),
                 label: 'خدمات الأعراس',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person),
-                label: 'حسابي',
               ),
             ],
           ),

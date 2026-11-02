@@ -10377,32 +10377,34 @@ async function run() {
     assert.ok(empty.dom.window.document.getElementById('myListBody').textContent.includes('لا مناسبات منتهية في قائمتك'));
   });
 
-  await test('the bottom nav holds four destinations — المناسبات · خدماتنا · خدمات الأعراس · حسابي — and switchTab keeps «حسابي» lit for the pages that left the bar', () => {
+  await test('the bottom nav holds three destinations — المناسبات · خدماتنا · خدمات الأعراس — and «حسابي», a header button rather than a bar slot, lights nothing down there', async () => {
     const dom = buildEnv();
     const { document } = dom.window;
 
     const navBtns = document.querySelectorAll('.bottom-navbar .nav-btn');
-    assert.strictEqual(navBtns.length, 4, 'the bar must hold exactly four destinations');
+    assert.strictEqual(navBtns.length, 3, 'the bar must hold exactly three destinations');
     assert.deepStrictEqual(
       Array.from(navBtns).map(btn => btn.id),
-      ['navBtnHome', 'navBtnOurServices', 'navBtnServices', 'navBtnAccount'],
-      'RTL order from the right: المناسبات · خدماتنا · خدمات الأعراس · حسابي'
+      ['navBtnHome', 'navBtnOurServices', 'navBtnServices'],
+      'RTL order from the right: المناسبات · خدماتنا · خدمات الأعراس'
     );
     assert.deepStrictEqual(
       Array.from(navBtns).map(btn => btn.querySelector('span').textContent.trim()),
-      ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي']
+      ['المناسبات', 'خدماتنا', 'خدمات الأعراس']
     );
 
-    // «قائمتي» و«الخريطة» و«النقوط» غادرت الشريط — لا أثر لأزرارها فيه.
-    for (const gone of ['navBtnMyList', 'navBtnMap', 'navBtnNokoot']) {
+    // «حسابي» و«قائمتي» و«الخريطة» و«النقوط» ليست وجهات في الشريط — لا أثر لأزرارها فيه.
+    for (const gone of ['navBtnAccount', 'navBtnMyList', 'navBtnMap', 'navBtnNokoot']) {
       assert.strictEqual(document.getElementById(gone), null, `${gone} must not remain as a bottom-bar destination`);
     }
     assert.strictEqual(document.querySelector('.nav-fab-gap'), null, 'the old reserved FAB slot is gone with the FAB');
 
-    // شارة مناسبات اليوم تبقى على «حسابي» الآن، مخفيةً بلا جلسة.
+    // شارة مناسبات اليوم رحلت مع «حسابي» إلى زرّ الترويسة، مخفيةً بلا جلسة.
     const badge = document.getElementById('myListNavBadge');
-    assert.ok(badge, 'the destination carries its badge span');
-    assert.strictEqual(badge.closest('.nav-btn'), navBtns[3], 'the badge rides the «حسابي» icon');
+    assert.ok(badge, 'the header account button carries its badge span');
+    assert.strictEqual(badge.closest('.auth-pill-btn'), document.getElementById('userAuthBtn'),
+      'the badge rides the header «حسابي» button');
+    assert.strictEqual(badge.closest('.bottom-navbar'), null, 'no copy of it is left in the bottom bar');
     assert.strictEqual(badge.hidden, true, 'the badge starts hidden — no signed-in list, nothing today');
 
     // الكبستان العائمتان بدل .fab-publish: بارزة للعرس، أهدأ للخدمة.
@@ -10423,13 +10425,22 @@ async function run() {
     assert.strictEqual(addEventTaps, 1, 'the prominent capsule opens the event form');
     assert.strictEqual(addServiceTaps, 1, 'the quiet capsule opens the service offer form');
 
-    // الصفحات التي غادرت الشريط تفتح فعّالةً كأنها «حسابي» لأنها تحته.
+    // وجهات الشريط الثلاث: واحدة نشِطة بالضبط، وهي خانتها.
+    [['tabHome', 0], ['tabOurServices', 1], ['tabServices', 2]].forEach(([page, index]) => {
+      dom.window.switchTab(page);
+      assert.ok(document.getElementById(page).classList.contains('active-tab'), `${page} opens its own page`);
+      const lit = document.querySelectorAll('.bottom-navbar .nav-btn.active');
+      assert.strictEqual(lit.length, 1, `${page} lights exactly one destination`);
+      assert.strictEqual(lit[0], navBtns[index], `${page} lights its own slot in the bar`);
+    });
+
+    // صفحات الحساب وبطاقاته: «حسابي» غادر الشريط، فلا زرّ نشِطاً في الأسفل إطلاقاً.
     for (const page of ['tabMyList', 'tabMap', 'tabNokoot', 'tabAccount']) {
       dom.window.switchTab(page);
-      assert.ok(navBtns[3].classList.contains('active'), `${page} must light «حسابي»`);
-      assert.ok(document.getElementById(page).classList.contains('active-tab'));
-      assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 1,
-        'exactly one destination is lit at a time');
+      assert.ok(document.getElementById(page).classList.contains('active-tab'),
+        `${page} still opens — only its bar slot is gone`);
+      assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0,
+        `${page} belongs to «حسابي», which is not a bottom-bar destination — nothing may be lit for it`);
     }
     assert.ok(document.getElementById('myListLockedView').style.display === 'block',
       'a visitor with no session sees the sign-in card, never a blank tab');
@@ -10438,6 +10449,29 @@ async function run() {
     dom.window.switchTab('tabStickers');
     assert.strictEqual(document.querySelectorAll('.bottom-navbar .nav-btn.active').length, 0,
       'a page outside the bar lights no destination at all');
+
+    // والشارة بعد النقل تُكتب وتُخفى من updateMyListNavBadge نفسها: الـid لم تتغيّر،
+    // فمناسبات اليوم تساوت في الزرّ والبطاقة، وصفرها يُخفيها بدل أن يرسم «0».
+    const busy = await buildMyListEnv({
+      events: [buildMyListEvent({ id: 21 })],
+      counts: { all: 1, upcoming: 1, ended: 0 },
+      under_review_count: 0
+    });
+    const busyDoc = busy.dom.window.document;
+    assert.strictEqual(busyDoc.getElementById('myListNavBadge').textContent, '1',
+      'the day-events count fills the header badge that app.js still finds by id');
+    assert.strictEqual(busyDoc.getElementById('myListNavBadge').hidden, false, 'and the badge is shown');
+    assert.strictEqual(busyDoc.getElementById('accountMyListTodayCount').textContent, '1',
+      'the card inside «حسابي» carries the same number — one source, two places');
+
+    const quiet = await buildMyListEnv({
+      events: [buildMyListEvent({ id: 22, bucket: 'this_week', days_until_start: 3 })],
+      counts: { all: 1, upcoming: 1, ended: 0 },
+      under_review_count: 0
+    });
+    const quietBadge = quiet.dom.window.document.getElementById('myListNavBadge');
+    assert.strictEqual(quietBadge.hidden, true, 'no event today → the badge hides, it never draws «0»');
+    assert.strictEqual(quietBadge.textContent, '', 'and it carries no text while hidden');
   });
 
   await test('«خدماتنا» is a public page with the three Ktra platform cards in order, the news one opening the reader in-place', () => {

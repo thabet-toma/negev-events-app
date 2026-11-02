@@ -24,9 +24,10 @@ import 'nokoot_screen.dart';
 class AccountScreen extends StatelessWidget {
   const AccountScreen({super.key, this.isActive = true});
 
-  /// هل وجهة «حسابي» هي المختارة في الشريط الآن؟ تُمرَّر من `HomeShell` كي
-  /// لا يجلب عدّاد «قائمتي» من كل مستخدم مسجَّل عند إقلاع التطبيق، بل عند
-  /// فتح الشاشة وحدها (نفس نمط `EventsScreen`/`MyListScreen`).
+  /// هل الشاشة معروضة الآن؟ الدفعُ من زرّ «حسابي» في الترويسة يتركها على
+  /// قيمتها الافتراضية `true`، كي لا يجلب عدّاد «قائمتي» من كل مستخدم مسجَّل
+  /// عند إقلاع التطبيق، بل عند فتح الشاشة وحدها (نفس نمط
+  /// `EventsScreen`/`MyListScreen`).
   final bool isActive;
 
   @override

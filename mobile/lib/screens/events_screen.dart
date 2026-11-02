@@ -1376,9 +1376,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                 ),
               ),
               // «حسابي» أيقونةً وحدها بتلميحها: الكلمة لم تعد ظاهرة في الشريط
-              // (طلب المالك)، والنقر يفتح وجهة «حسابي» من داخل `AuthActionButton`
-              // — لا حوار تأكيد ولا خروج من هنا. `IconButtonTheme` هنا يقصّ زرّه
-              // (‏٤٨dp افتراضياً) إلى ٣٠×٣٠ بلا لمس الزرّ نفسه.
+              // (طلب المالك)، والنقر يدفع شاشة «حسابي» من داخل
+              // `AuthActionButton` — لا حوار تأكيد ولا خروج من هنا.
+              // `IconButtonTheme` هنا يقصّ زرّه (‏٤٨dp افتراضياً) إلى ٣٠×٣٠ بلا
+              // لمس الزرّ نفسه.
               IconButtonTheme(
                 data: IconButtonThemeData(
                   style: IconButton.styleFrom(

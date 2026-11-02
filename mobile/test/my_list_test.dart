@@ -540,10 +540,10 @@ void main() {
     });
   });
 
-  group('(و) الشريط السفلي — أربع وجهات، و«قائمتي» و«النقوط» في «حسابي»', () {
+  group('(و) الشريط السفلي — ثلاث وجهات، و«قائمتي» و«النقوط» في «حسابي»', () {
     testWidgets(
-      'أربع وجهات بلا «قائمتي» ولا «النقوط»، وزرّ النشر في رأس التغذية لا عائماً '
-      '— على عرض ٣٦٠dp',
+      'ثلاث وجهات بلا «قائمتي» ولا «النقوط» ولا «حسابي»، وزرّ النشر في رأس التغذية '
+      'لا عائماً — على عرض ٣٦٠dp',
       (tester) async {
         // ورقة أول تشغيل (تذكرة #126) لا شأن لها بهذا الاختبار: نعلن أن
         // السؤال سبق أن طُرح كي لا تبقى ورقة مفتوحة تحجب نقرات الشريط.
@@ -582,16 +582,17 @@ void main() {
         await settleTab();
 
         final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-        // الشريط أربع وجهات: «قائمتي» و«دفتر النقوط» و«الخريطة» خرجت منه إلى
-        // بطاقات الوصل السريع داخل «حسابي» (account_screen.dart)، فلا وجهة
-        // لها هنا ولا تُعاد إلى الشريط بلا قرار جديد.
-        expect(navBar.destinations, hasLength(4));
+        // الشريط ثلاث وجهات: «حسابي» تُدفع شاشةً من زرّ الترويسة، و«قائمتي»
+        // و«دفتر النقوط» و«الخريطة» بطاقات وصل سريع داخل شاشة الحساب
+        // (account_screen.dart)، فلا وجهة لها هنا ولا تُعاد إلى الشريط بلا
+        // قرار جديد.
+        expect(navBar.destinations, hasLength(3));
         expect(
           [
             for (final destination in navBar.destinations)
               (destination as NavigationDestination).label,
           ],
-          ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي'],
+          ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
         );
         expect(
           find.descendant(of: find.byType(NavigationBar), matching: find.text('قائمتي')),
@@ -602,6 +603,11 @@ void main() {
           find.descendant(of: find.byType(NavigationBar), matching: find.text('النقوط')),
           findsNothing,
           reason: 'دفتر النقوط لم يعد وجهة في الشريط',
+        );
+        expect(
+          find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
+          findsNothing,
+          reason: '«حسابي» لم تعد وجهة في الشريط: تُدفع من زرّ الترويسة',
         );
 
         // تبويب المناسبات: لا زرّ عائم — نشرُه في رأس التغذية نفسه

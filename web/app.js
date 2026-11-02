@@ -4266,18 +4266,15 @@ async function sendReaction(eventId, type, btnElement) {
 // التبويبات) تبقى مفتوحة بلا حساب (#20 step 9). طلب الدخول يحفظ النيّة
 // (pendingIntent) ليعود الزائر لهذا التبويب نفسه بعد الدخول، لا أن يضيع طلبه.
 //
-// الشريط السفلي أربع وجهات بالترتيب الذي في index.html — والمفتاح أدناه هو
-// ربط المعرّف بموضعه. tabMap/tabMyList/tabNokoot غادرت الشريط وصفحاتها باقية،
-// فتفتح فعالةً كأنها «حسابي» لأنها بطاقات وصول سريع داخله؛ tabAdd وtabStickers
-// وباقي الصفحات بلا زرّ نشِط إطلاقاً.
+// الشريط السفلي ثلاث وجهات بالترتيب الذي في index.html — والمفتاح أدناه هو
+// ربط المعرّف بموضعه. «حسابي» غادر الشريط ويُفتح من زرّه في الترويسة وحده،
+// فصفحاته وبطاقاته (tabAccount/tabMap/tabMyList/tabNokoot) بلا زرّ نشِط في
+// الشريط إطلاقاً؛ وtabAdd وtabStickers وباقي الصفحات كذلك. مفتاح غير معرَّف
+// هنا = لا زرّ يُضاء في الأسفل.
 const BOTTOM_NAV_INDEX = {
   tabHome: 0,
   tabOurServices: 1,
-  tabServices: 2,
-  tabAccount: 3,
-  tabMap: 3,
-  tabMyList: 3,
-  tabNokoot: 3
+  tabServices: 2
 };
 
 function switchTab(tabId) {

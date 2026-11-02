@@ -347,6 +347,7 @@ body {
 .support-modal-actions .chat-trigger-btn { flex: 1; }
 
 .auth-pill-btn {
+  position: relative;
   background: var(--sky-wash);
   color: var(--sky-deep);
   border: 1px solid var(--sky);
@@ -367,6 +368,26 @@ body {
    زرّ «لوحة الإدارة» يُشحن مخفياً ولا يظهر إلا لدورَي الإدارة. */
 .auth-pill-btn[hidden] { display: none; }
 .admin-panel-btn { text-decoration: none; }
+
+/* شارة عدّاد مناسبات اليوم على زرّ «حسابي» في الترويسة — انتقلت مع الزرّ من
+   الشريط السفلي حين غادره «حسابي» (app.js يكتبها بـ id واحدة: myListNavBadge).
+   ألوان السماء نفسها، وتطفو على الزاوية العلوية اليسرى في RTL كما شارة
+   الإشعارات فوق (`#notificationsBadge`). */
+.auth-pill-badge {
+  position: absolute;
+  top: -6px;
+  inset-inline-end: -6px;
+  min-width: 16px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.62rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
 
 /* مبدّل فاتح/داكن — يعيد استعمال موضع زر الهوية أعلى الصفحة (#20 خطوة 11) */
 .theme-toggle-btn {
@@ -4213,14 +4234,13 @@ body.event-page-open { overflow: hidden; }
 .event-page-congrats .sender-badge { font-size: 0.72rem; color: var(--tone, var(--sky)); }
 .event-page-congrats .chat-msg-text { color: var(--ink-soft); font-size: 0.92rem; line-height: 1.5; overflow-wrap: anywhere; }
 
-/* «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»: شارة وجهة «حسابي» في الشريط
-   السفلي (فحيث صارت بطاقةً داخل الحساب)، وحالة زرّ الحفظ النشِطة، وفعل داخل
-   التوست، وصفوف التبويب. لا رمز لون جديد هنا — رموز الملف وحدها (وأبيض واحد
-   فوق الأخضر المصمت كما في .record-nokoot-btn)، فتعمل في الوضعين الفاتح
-   والداكن بلا استثناء. */
-#navBtnAccount { position: relative; }
+/* «قائمتي» — الوجه المرئي لمتابعة «ذكّرني»: شارة عدّاد مناسبات اليوم على زرّ
+   «حسابي» في الترويسة (فحيث صارت بطاقةً داخل الحساب، والحساب صار هناك)، وحالة
+   زرّ الحفظ النشِطة، وفعل داخل التوست، وصفوف التبويب. لا رمز لون جديد هنا —
+   رموز الملف وحدها (وأبيض واحد فوق الأخضر المصمت كما في .record-nokoot-btn)،
+   فتعمل في الوضعين الفاتح والداكن بلا استثناء. */
 
-/* الوجهات الأربع تتقاسم الشريط بالتساوي، وتسمية كل وجهة في سطر واحد — «خدمات
+/* الوجهات الثلاث تتقاسم الشريط بالتساوي، وتسمية كل وجهة في سطر واحد — «خدمات
    الأعراس» أطولها. لا خانة محجوزة لزرّ نشر: صار كبستين عائمتين فوق الشريط. */
 .bottom-navbar .nav-btn { flex: 1 1 0; min-width: 0; }
 .bottom-navbar .nav-btn > span { white-space: nowrap; }
@@ -4230,23 +4250,6 @@ body.event-page-open { overflow: hidden; }
 @media (max-width: 380px) {
   .bottom-navbar { padding: 10px 6px; }
   .nav-btn { font-size: 0.66rem; }
-}
-
-.nav-badge {
-  position: absolute;
-  top: 2px;
-  inset-inline-start: 50%;
-  margin-inline-start: 6px;
-  min-width: 16px;
-  padding: 1px 5px;
-  border-radius: var(--radius-pill);
-  background: var(--sky);
-  color: var(--on-sky);
-  font-family: var(--font-main);
-  font-size: 0.62rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
 }
 
 /* «في قائمتي» حالة نشِطة: تسبق قواعد .record-nokoot-btn وقواعد الكرت في

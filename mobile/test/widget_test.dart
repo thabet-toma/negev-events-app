@@ -13,6 +13,7 @@ import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/nokoot.dart';
 import 'package:negev_events/models/service.dart';
+import 'package:negev_events/screens/account_screen.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/edit_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
@@ -1444,7 +1445,7 @@ void main() {
   });
 
   group('الشريط السفلي — «الخدمات» بدل «إضافة»، وزرّ عائم للنشر (wayfinder #21)', () {
-    testWidgets('ستّ وجهات بلا "إضافة" و«قائمتي» ثانيةً، و"الخدمات" ضمنها، وزرّ عائم',
+    testWidgets('ثلاث وجهات بلا "إضافة" ولا «حسابي»، و"الخدمات" ضمنها، ولا زرّ عائم',
         (tester) async {
       final api = apiReturning({'success': true});
       final auth = AuthStore(api);
@@ -1472,15 +1473,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
 
       final navBar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-      // الشريط أربع وجهات: «قائمتي» و«النقوط» و«الخريطة» صارت بطاقات وصل سريع
-      // داخل «حسابي»، لا وجهاتٍ في الشريط.
-      expect(navBar.destinations, hasLength(4));
+      // الشريط ثلاث وجهات: «حسابي» تُدفع شاشةً من زرّ الترويسة، و«قائمتي»
+      // و«النقوط» و«الخريطة» صارت بطاقات وصل سريع داخل شاشة الحساب.
+      expect(navBar.destinations, hasLength(3));
       expect(
         [
           for (final destination in navBar.destinations)
             (destination as NavigationDestination).label,
         ],
-        ['المناسبات', 'خدماتنا', 'خدمات الأعراس', 'حسابي'],
+        ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
       );
 
       // «إضافة» لم تعد وجهة في الشريط. وفي تبويب التغذية لا زرّ عائم إطلاقاً:
@@ -1491,7 +1492,8 @@ void main() {
       );
       expect(
         find.descendant(of: find.byType(NavigationBar), matching: find.text('حسابي')),
-        findsOneWidget,
+        findsNothing,
+        reason: '«حسابي» لم تسكن الشريط السفلي: تُدفع من زرّ الترويسة',
       );
       expect(
         find.byType(FloatingActionButton),
@@ -2187,12 +2189,12 @@ void main() {
   });
 
   group('زرّ «حسابي» الظاهر دائماً', () {
-    /// يضع الزرّ في شريط تطبيق وحده، ويحقن إشارة `tabRequest` التي يستهلكها
-    /// `HomeShell` عادةً — فما يُقاس هو الطلب نفسه لا واجهة تبويبات كاملة.
+    /// يضع الزرّ في شريط تطبيق وحده. النقر يدفع `AccountScreen` نفسها شاشةً
+    /// مدفوعة (لم تعد وجهةً في الشريط السفلي)، فما يُقاس هو الشاشة المدفوعة
+    /// وزرّ رجوعها، لا تبديل تبويب ولا رجوعٌ إلى الجذر.
     Future<void> pumpButton(
       WidgetTester tester,
-      AuthStore auth,
-      ValueNotifier<int> tabRequest, {
+      AuthStore auth, {
       AuthActionButton button = const AuthActionButton(),
     }) async {
       await tester.pumpWidget(
@@ -2200,7 +2202,6 @@ void main() {
           api: auth.api,
           auth: auth,
           realtime: RealtimeService(),
-          tabRequest: tabRequest,
           child: MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
@@ -2211,6 +2212,13 @@ void main() {
       );
       await tester.pump();
     }
+
+    /// زرّ الرجوع الذي وهبه `AppBar` للشاشة المدفوعة — مقيَّدٌ بـ`AccountScreen`
+    /// كي لا يلتبس بزرّ شاشةٍ تحتها في نفس المسار.
+    Finder accountBackButton() => find.descendant(
+          of: find.byType(AccountScreen),
+          matching: find.byType(BackButton),
+        );
 
     AuthStore guestAuth() {
       SharedPreferences.setMockInitialValues({});
@@ -2232,12 +2240,11 @@ void main() {
       return AuthStore(apiReturning({'success': true, 'user': userJson}));
     }
 
-    testWidgets('بلا جلسة: «حسابي» وأيقونة شخص، والنقر يفتح وجه «حسابي»', (tester) async {
+    testWidgets('بلا جلسة: «حسابي» وأيقونة شخص، والنقر يدفع شاشة الحساب', (tester) async {
       final auth = guestAuth();
       await tester.runAsync(auth.load);
-      final tabRequest = ValueNotifier<int>(-1);
 
-      await pumpButton(tester, auth, tabRequest);
+      await pumpButton(tester, auth);
 
       expect(find.text('حسابي'), findsOneWidget);
       expect(find.byIcon(Icons.person_outline), findsOneWidget);
@@ -2245,18 +2252,29 @@ void main() {
       expect(find.text('تسجيل الخروج'), findsNothing);
 
       await tester.tap(find.byType(AuthActionButton));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
-      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(find.byType(AccountScreen), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(AccountScreen), matching: find.text('حسابي')),
+        findsOneWidget,
+        reason: 'ترويسة الشاشة المدفوعة',
+      );
+      expect(
+        accountBackButton(),
+        findsOneWidget,
+        reason: 'شاشة مدفوعة ⇒ زرّ رجوع تلقائي في `AppBar`',
+      );
+      expect(find.text('لم تسجّل الدخول بعد'), findsOneWidget, reason: 'الزائر يبقى زائراً');
+      expect(auth.isSignedIn, isFalse, reason: 'الزرّ يفتح «حسابي» ولا يسجّل الدخول');
       expect(find.text('تسجيل الدخول'), findsNothing, reason: 'لا نموذج دخول من الزرّ نفسه');
     });
 
-    testWidgets('الصيغة المضغوطة: تلميح «حسابي» وأيقونة شخص، والنقر يفتح الوجه', (tester) async {
+    testWidgets('الصيغة المضغوطة: تلميح «حسابي» وأيقونة شخص، والنقر يدفع الشاشة', (tester) async {
       final auth = guestAuth();
       await tester.runAsync(auth.load);
-      final tabRequest = ValueNotifier<int>(-1);
 
-      await pumpButton(tester, auth, tabRequest, button: const AuthActionButton(compact: true));
+      await pumpButton(tester, auth, button: const AuthActionButton(compact: true));
 
       expect(find.byTooltip('حسابي'), findsOneWidget);
       expect(find.byIcon(Icons.person_outline), findsOneWidget);
@@ -2264,28 +2282,26 @@ void main() {
       expect(find.text('تسجيل الخروج'), findsNothing);
 
       await tester.tap(find.byType(AuthActionButton));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
-      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(find.byType(AccountScreen), findsOneWidget);
     });
 
     testWidgets('الصيغة المائلة (stacked): الكلمة ظاهرة تحت الأيقونة', (tester) async {
       final auth = guestAuth();
       await tester.runAsync(auth.load);
-      final tabRequest = ValueNotifier<int>(-1);
 
-      await pumpButton(tester, auth, tabRequest, button: const AuthActionButton(stacked: true));
+      await pumpButton(tester, auth, button: const AuthActionButton(stacked: true));
 
       expect(find.text('حسابي'), findsOneWidget);
       expect(find.byIcon(Icons.person_outline), findsOneWidget);
     });
 
-    testWidgets('بجلسة محفوظة: «حسابي» أيضاً — النقر يفتح الوجه ولا يُخرج المستخدم', (tester) async {
+    testWidgets('بجلسة محفوظة: «حسابي» أيضاً — النقر يدفع الشاشة ولا يُخرج المستخدم', (tester) async {
       final auth = signedInAuth();
       await tester.runAsync(auth.load);
-      final tabRequest = ValueNotifier<int>(-1);
 
-      await pumpButton(tester, auth, tabRequest);
+      await pumpButton(tester, auth);
 
       expect(find.text('حسابي'), findsOneWidget);
       expect(find.byIcon(Icons.person_outline), findsOneWidget);
@@ -2294,22 +2310,25 @@ void main() {
       await tester.tap(find.byType(AuthActionButton));
       await tester.pumpAndSettle();
 
-      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(find.byType(AccountScreen), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(AccountScreen), matching: find.text('سالم')),
+        findsOneWidget,
+        reason: 'بيانات المسجَّل داخل الشاشة المدفوعة',
+      );
       expect(auth.isSignedIn, isTrue, reason: 'الزرّ يفتح «حسابي» ولا يسجّل الخروج');
       expect(find.text('هل تريد تسجيل الخروج؟'), findsNothing);
     });
 
-    testWidgets('من شاشة مدفوعة: يرجع إلى الجذر ثم يفتح وجه «حسابي»', (tester) async {
+    testWidgets('من شاشة مدفوعة: يدفع «حسابي» فوقها، والرجوع يعود إليها', (tester) async {
       final auth = guestAuth();
       await tester.runAsync(auth.load);
-      final tabRequest = ValueNotifier<int>(-1);
 
       await tester.pumpWidget(
         AppServices(
           api: auth.api,
           auth: auth,
           realtime: RealtimeService(),
-          tabRequest: tabRequest,
           child: MaterialApp(
             home: Directionality(
               textDirection: TextDirection.rtl,
@@ -2341,8 +2360,15 @@ void main() {
       await tester.tap(find.byType(AuthActionButton));
       await tester.pumpAndSettle();
 
-      expect(find.text('شاشة مدفوعة'), findsNothing, reason: 'لا تبقى شاشة مدفوعة تحت وجه «حسابي»');
-      expect(tabRequest.value, AppServices.accountTabIndex);
+      expect(find.byType(AccountScreen), findsOneWidget);
+
+      // الرجوع من «حسابي» يعود إلى الشاشة المدفوعة لا إلى الجذر: الزرّ لم يعد
+      // يفرّغ المسار بـ`popUntil` كما كان يفعل مع طلب الوجهة.
+      await tester.tap(accountBackButton());
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccountScreen), findsNothing);
+      expect(find.text('شاشة مدفوعة'), findsOneWidget);
     });
   });
 

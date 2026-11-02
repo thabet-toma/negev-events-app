@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../main.dart';
+import '../screens/account_screen.dart';
 
 /// زرّ «حسابي» الظاهر دائماً في أعلى كل شاشة رئيسية — رمز شخص ونصّ واحد لا
-/// يتبدّلان مع الجلسة. النقر يفتح وجهة «حسابي»، والدخول والخروج مقيما هناك
-/// (`account_screen.dart`): لا نموذج دخول من هذا الزرّ ولا حوار تأكيد خروج.
+/// يتبدّلان مع الجلسة. النقر يدفع شاشة «حسابي» مدفوعةً فوق الشاشة الحالية،
+/// والدخول والخروج مقيما هناك (`account_screen.dart`): لا نموذج دخول من هذا
+/// الزرّ ولا حوار تأكيد خروج.
 ///
 /// `compact` أيقونة وحدها بتلميح، لشريط علوي مزدحم على هاتف ضيّق.
 /// `stacked` يضع الأيقونة فوق النص في تغذية ضيّقة. `color` لمن يرسمه فوق
@@ -26,15 +27,16 @@ class AuthActionButton extends StatelessWidget {
 
   static const IconData _icon = Icons.person_outline;
 
-  /// يفتح وجهة «حسابي». الزرّ يعيش في شاشات مدفوعة فوق الشلّ أيضاً (التفاصيل،
-  /// النشر، الخريطة، «قائمتي»…)، فلا يكفي طلب الوجهة وحده: الرجوع إلى الجذر
-  /// أولاً يزيل الشاشة المدفوعة من تحت وجه «حسابي»، ثم يستهلك `HomeShell`
-  /// الطلب بـ`tabRequest` كما يفعل أي طالب تبديل آخر.
+  /// يدفع شاشة «حسابي» فوق ما هو مفتوح، من أي شاشة كان الزرّ — التفاصيل،
+  /// النشر، الخريطة، «قائمتي»… لم تعد وجهةً في الشريط السفلي، فلم يبقَ طلب
+  /// تبديل ولا رجوعٌ إلى الجذر: الرجوع من الشاشة يترك المستخدم حيث كان.
+  ///
+  /// بلا وسيط `isActive` ⇒ قيمتها الافتراضية `true`، وهي المطلوبة عند الفتح
+  /// (تحديث عدّاد «قائمتي» مرةً واحدة).
   void _openAccount(BuildContext context) {
-    final services = AppServices.of(context);
-    final navigator = Navigator.of(context);
-    if (navigator.canPop()) navigator.popUntil((route) => route.isFirst);
-    services.tabRequest.value = AppServices.accountTabIndex;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AccountScreen()),
+    );
   }
 
   @override
