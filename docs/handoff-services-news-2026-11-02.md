@@ -6,12 +6,14 @@
 ## الحالة بجملة
 
 الميزة مكتملة في الخادم والويب والموبايل، وبوّابتا الاختبار خضراوان، ومصدر
-الأخبار (منصة كترا) يعمل حياً. **غير منشورة**، وتغييرات اليوم ما زالت في الشجرة
-غير ملتزمة (قرار النشر لم يُتخذ).
+الأخبار (منصة كترا) يعمل حياً، **ومنشورة على الإنتاج** (`git pull` + `build`
++ `up -d app` + `nginx -s reload`، والتحقّق الحيّ من خارج الخادم). **الـAPK
+مبنيّ ومُوقَّع ولم يُرفع** (قرار النشر لك).
 
-- الفرع: `version2`، وآخر التزام: `567cd27` (إصلاح رسالة 502 في الإنتاج).
-- قبلها `94219a9`: دمج عمل جلستين — شريط التوسّع في التغذية + تبويبات
-  «خدماتنا/آخر خبر/خدمات الأعراس» + خدمة الأخبار.
+- الفرع: `version2` — منه يُسحب على الخادم. آخر التزام: `8a24336`
+  (إصدار الموبايل 1.22.1+42).
+- قبلها: التزام الميزة `dfc91e7`، وملف التسليم `63b2d1f`، و`567cd27`
+  (إصلاح رسالة 502 في الإنتاج)، و`94219a9` (دمج عمل جلستين).
 
 ## ما اكتمل
 
@@ -95,24 +97,22 @@ pwsh -NoProfile -File "%TEMP%\negev-flutter.ps1"    # flutter test 295 + analyze
 
 ## حالة git
 
-**ملتزَم:** آخر التزام على `version2` الآن (‏`git log -1`) هو
-`feat(news): وجهة «خدماتنا» و«آخر خبر» — أخبار المحافظة من منصة كترا`.
-لم يُدفع إلى `origin`، ولم يُدمج في `main`.
+**ملتزَم ومدفوع ومنشور:** آخر التزام على `version2` هو `8a24336`
+(`chore(mobile): إصدار 1.22.1+42 — بناء APK بلا نشره`)، وقبله التزام الميزة
+`dfc91e7` ثم توثيقه `63b2d1f`. الثلاثة على `origin/version2`، وهي ما سُحب
+وبُني على الخادم.
 
-ما حمله الالتزام: `server/src/constants.js` · `server/src/services/news.service.js` ·
+ما حملته التزامات اليوم: `server/src/constants.js` · `server/src/services/news.service.js` ·
 `server/test/smoke.test.js` · `web/app.js` · `mobile/lib/screens/news_screen.dart` ·
 `mobile/test/news_screen_test.dart` · `mobile/test/services_hub_test.dart` ·
-هذا الملف · وصور `docs/handoff-shots-services-news-2026-11/`.
+`mobile/pubspec.yaml` · هذا الملف · وصور `docs/handoff-shots-services-news-2026-11/`.
 
 **بقي غير ملتزم عمداً** (عمل صاحب المنتج — لا تلمسه): `README.md` (تعديلات
 فيسبوك مختلطة بسطر توثيقي لي)، `docs/plan-albums-and-marketing-stories-2026-10.md`،
 `server/src/services/facebook.service.js`، وكل غير المتتبَّع (`docs/handoff-*`
 القديمة، `docs/prototype/`، `plan26-9.md`، `web/terms.html`، `mobile/row.id`،
-`ktra_marketing_kit/`، `.opencode/`، `.claude/launch.json`).
-
-**`version2` هي الأحدث:** `main` كله داخل `version2` (`git rev-list --count
-version2..origin/main` = 0)، و`version2` تسبقه ٢٦ التزاماً. فدمجها في `main`
-تقدّم مباشر (fast-forward) لا تعارض فيه — لكنه **إصدار** كامل، لا خطوة تقنية.
+`ktra_marketing_kit/`، `.opencode/`، `.claude/launch.json`). و`main` متأخّر
+عن `version2` ولم يُمسّ — الإنتاج لا يقرؤه.
 
 ## التحقّق البصري — تمّ بمتصفّح حقيقي (2026-11-02)
 
@@ -142,36 +142,67 @@ DOM) — خارج المستودع عمداً، تُعاد بنسخ المسار
 
 - **الموبايل على جهاز**: `flutter test` يبني الشاشات في نافذة اختبار، لا على
   هاتف حقيقي؛ الشكل النهائي لشاشة الأخبار ووسم «عامة» فيها لم يُعاين بصرياً.
-- **بيانات حيّة داخل البوابة**: اختبارات الخادم تستخدم خادماً وهمياً؛ الاتصال
-  الحقيقي بكترا تحقّق بمتصفّح وخادم محليَّين (`curl` + الصور أعلاه)، لا داخل
-  `npm test`.
+- **بيانات حيّة داخل البوابة**: اختبارات الخادم تستخدم خادماً وهمياً. الاتصال
+  الحقيقي بكترا تحقّق مرّتين: محلياً بمتصفّح وخادم محليَّين، و**في الإنتاج** بعد
+  النشر عبر الدومين — لا داخل `npm test` في الحالتين.
 
-## الخطوة التالية — النشر (قرار المالك، لم يُتخذ)
+## النشر — تمّ في الإنتاج (2026-11-02، بلا رفع أي APK)
 
-الويب وحده لا يكفي: المسار الجديد في الخادم، وخادم الإنتاج يسحب `main` لا
-`version2`. فنشرُ هذه الميزة يبدأ بنقل الفرع كله:
+**تصحيح لافتراض سابق:** خادم الإنتاج **يسحب `version2`** لا `main` — الفرع
+المُسوَّد في `/root/munasbat/app` هو `version2` متتبِّعاً `origin/version2`.
+(`main` متأخّر ٢٨ التزاماً ولم يُمسّ، ولا حاجة له.)
+
+ما جرى بالترتيب:
 
 ```bash
-# على جهازك — version2 تقدّم مباشر على main، فلا تعارض
-git checkout main && git pull origin main
-git log --oneline origin/main..version2      # ٢٦ التزاماً: اقرأها قبل الإصدار
-git merge --ff-only version2
-git push origin main
+# نسخة احتياطية أولاً — قبل أي ترحيل
+docker exec negev_events_mysql sh -c 'exec mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" \
+  --single-transaction --quick --routines negev_events' | gzip > /root/backups/negev_events-20261102-1541-pre-1.22.1.sql.gz
+# 230KB، و`gzip -t` عليها نظيف
 
-# على الخادم
-cd /root/munasbat/app && git pull origin main
-docker compose build app && docker compose up -d app     # مسار /api/news الجديد
-docker exec negev_events_web nginx -s reload             # ملفات web/ مربوطة كـvolume
-curl -fsS "$PUBLIC_URL/api/news?limit=1" -H 'X-Region: 1'
+cd /root/munasbat/app && git pull origin version2      # ‏HEAD صار 8a24336
+docker compose build app                               # صورة جديدة
+docker compose up -d app                               # الترحيلات تُطبَّق عند الإقلاع
+docker exec negev_events_web nginx -s reload           # ملفات web/ مربوطة كـvolume
 ```
 
-- **بلا رفع أي APK** وبلا تغيير `APP_LATEST_VERSION` (تجربة سوق بلاي قائمة).
-- قبل النشر: خضرة البوّابتين + قراءة `git diff` كاملاً.
-- الخادم الإنتاجي يقرأ `KATRA_NEWS_BASE_URL` (الافتراضي
-  `https://radio.ktra-pro.tech`)، و`KATRA_NEWS_CACHE_TTL_MS` (افتراضي 300000)،
-  و`KATRA_NEWS_TIMEOUT_MS` (افتراضي 5000) — لا حاجة لإضافتها.
-- **التقدّم المباشر يعني إصدار ٢٦ التزاماً معاً** لا هذه الميزة وحدها: الألبومات
-  والفيديوهات وبطاقة الدخول وتعديلات فيسبوك بينها. راجع القائمة قبل الدمج.
+الترحيلات على قاعدة الإنتاج (٢٦٢ مناسبة، ٥ ستوريات) مرّت كلها بلا تعديل صفوف
+تلقائي؛ والحاوية `Up (healthy)`.
+
+**التحقّق الحيّ بعد النشر (من خارج الخادم):**
+
+| الفحص | النتيجة |
+|---|---|
+| `GET /api/news?limit=3` مع `X-Region: 1` | 200، `area=النقب`، ثلاثة أخبار حيّة بمقتطفات منظَّفة |
+| `GET /api/news/123` | 200 بالنصّ الكامل |
+| `GET /` (واجهة) | فيها `nav-publish-capsules` و`navBtnOurServices` و`tabOurServices` و`newsScreen` |
+| `GET /app.js` و`/styles.css` | فيها `openNewsScreen` و`openOurServices` وقواعد الكبسات |
+| `/p/1` · `/live` · `/v/1` | 200 بعنوان عربي |
+| `/e/32` (مناسبة حقيقية) | 200 «عرس محمد فارس سليمان ابو حميد …» |
+| `/a/1` | 404 عربي — لا ألبوم بهذا المعرّف ظاهر، لا خطأ توجيه |
+| `/api/app/version` | **كما هو**: `latest_version = 1.21.3` |
+
+**ما لم يُفعل بقصد:** لا APK رُفع، لا `APP_LATEST_VERSION` ولا `APP_RELEASE_NOTES`
+مُسّا (تجربة سوق بلاي قائمة، وقرار الإصدار لك). و`main` لم يُمسّ.
+
+## بناء APK — بُني ولم يُنشر (2026-11-02)
+
+`mobile/pubspec.yaml` صار `1.22.1+42` (الالتزام `8a24336`)، والبناء نظيف:
+
+```powershell
+cd mobile; flutter build apk --release
+# √ Built build\app\outputs\flutter-apk\app-release.apk (62.6MB)
+```
+
+- `versionName=1.22.1` · `versionCode=42` · `package=com.negev.negev_events`.
+- التوقيع مُتحقَّق (`apksigner verify`): **v2 ناجح**، والمُوقِّع
+  `CN=thabet toma, OU=thabet, O=thabet, L=tulkarem, ST=palestine, C=ps` —
+  الشهادة نفسها التي تُحدَّث بها النسخ المثبَّتة.
+- نسخة جاهزة للتركيب على الجهاز: `C:\Users\asus\Desktop\negev-1.22.1+42.apk`.
+- **لنشره لاحقاً:** ارفعه إلى
+  `/root/munasbat/app/server/downloads/negev-events.apk`، ثم `APP_LATEST_VERSION=1.22.1`
+  و`APP_RELEASE_NOTES=…` في `.env`، ثم `docker compose up -d app` — الخطوات
+  كاملة في مهارة `release-and-deploy`.
 
 ## متابعة لاحقة (اختيارية)
 
