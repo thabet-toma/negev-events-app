@@ -10474,7 +10474,7 @@ async function run() {
     assert.strictEqual(quietBadge.textContent, '', 'and it carries no text while hidden');
   });
 
-  await test('«خدماتنا» is a public page with the three Ktra platform cards in order, the news one opening the reader in-place', () => {
+  await test('«خدماتنا» is a public page with the three Ktra platform capsules in order, the news one opening the reader in-place', () => {
     const dom = buildEnv();
     const { document } = dom.window;
 
@@ -10495,7 +10495,7 @@ async function run() {
     assert.deepStrictEqual(
       Array.from(cards).map(card => card.querySelector('.our-platform-short').textContent.trim()),
       ['أخبار منطقتك أولاً بأول', 'مطاعم ومتاجر بلدتك', 'مخزون وفواتير ومحاسبة'],
-      'each card carries one short line over the photo, not the old paragraph'
+      'each card carries one short line under the name, not the old paragraph'
     );
     assert.deepStrictEqual(
       Array.from(cards).map(card => card.querySelector('img.our-platform-photo').getAttribute('src')),
@@ -10503,10 +10503,21 @@ async function run() {
       'each card is our own project screenshot, served from the site root'
     );
 
+    // الكبسة تحمل نافذة صورتها (الصورة دائرة 56px داخلها، والشارة ملصقة على حافتها)
+    assert.ok(Array.from(cards).every(card => card.querySelector('.our-platform-media img.our-platform-photo')),
+      'every capsule holds its photo inside a .our-platform-media window, never as a full-bleed background');
+
     // الشارة: أيقونة الخبر للخبر، وصورة لوغو كل مشروع للاثنتين الأخريين
     assert.ok(cards[0].querySelector('.our-platform-chip i'), 'the news card keeps its own mark');
     assert.ok(cards[1].querySelector('.our-platform-chip img').getAttribute('src').includes('logo-stores.png'));
     assert.ok(cards[2].querySelector('.our-platform-chip img').getAttribute('src').includes('logo-erp.png'));
+
+    // كبسولة «افتح» صريحة في طرف كل كبسة، بنصّ واحد لا سهم ولا أيقونة
+    assert.deepStrictEqual(
+      Array.from(cards).map(card => card.querySelector('.our-platform-cta').textContent.trim()),
+      ['افتح', 'افتح', 'افتح'],
+      'each capsule ends with the same explicit «افتح» pill'
+    );
 
     // البطاقة الأولى كبسة واحدة تفتح القارئ داخل الموقع، وليست رابطاً خارجياً
     assert.strictEqual(cards[0].tagName, 'BUTTON');

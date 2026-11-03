@@ -69,7 +69,9 @@ Future<void> pumpHub(WidgetTester tester, NegevApi api) async {
 
 void main() {
   group('شاشة «خدماتنا» — بطاقات منصات كترا الثلاث', () {
-    testWidgets('تُبني بالعنوان والوصف والبطاقات الثلاث بتخطيطها', (tester) async {
+    testWidgets('تُبني بالعنوان والوصف والكبسات الثلاث بتخطيطها', (
+      tester,
+    ) async {
       await pumpHub(tester, hubApi());
 
       expect(find.byType(ServicesHubScreen), findsOneWidget);
@@ -79,26 +81,43 @@ void main() {
         findsOneWidget,
       );
 
-      // البطاقات الثلاث موجودة بمفاتيحها.
+      // الكبسات الثلاث موجودة بمفاتيحها.
       expect(find.byKey(const Key('hub_card_news')), findsOneWidget);
       expect(find.byKey(const Key('hub_card_stores')), findsOneWidget);
       expect(find.byKey(const Key('hub_card_erp')), findsOneWidget);
 
-      // الترتيب المرئي: الأولى والثانية في صفّ واحد (الأولى يميناً في RTL)،
-      // والعريضة تحتهما بعرض الصفّ كلّه.
+      // الترتيب المرئي: عمود من ثلاث كبسات متراصة رأسياً وبعرض واحد — لا صفّ
+      // صورتين وعريضة تحتهما.
       final newsRect = tester.getRect(find.byKey(const Key('hub_card_news')));
-      final storesRect = tester.getRect(find.byKey(const Key('hub_card_stores')));
+      final storesRect = tester.getRect(
+        find.byKey(const Key('hub_card_stores')),
+      );
       final erpRect = tester.getRect(find.byKey(const Key('hub_card_erp')));
-      expect(storesRect.top, moreOrLessEquals(newsRect.top, epsilon: 1),
-          reason: 'البطاقتان في صفّ واحد');
-      expect(newsRect.left, greaterThan(storesRect.left),
-          reason: 'في RTL الأولى على اليمين');
-      expect(erpRect.top, greaterThan(newsRect.top),
-          reason: 'العريضة تحتهما');
-      expect(erpRect.width, greaterThan(storesRect.width),
-          reason: 'العريضة بعرض الصفّ');
+      expect(
+        storesRect.top,
+        greaterThan(newsRect.top),
+        reason: 'متاجرنا تحت آخر خبر',
+      );
+      expect(
+        erpRect.top,
+        greaterThan(storesRect.top),
+        reason: 'ERP تحت متاجرنا',
+      );
+      expect(
+        (storesRect.width - newsRect.width).abs(),
+        lessThanOrEqualTo(1),
+        reason: 'عرض واحد للكبسات الثلاث',
+      );
+      expect(
+        (erpRect.width - storesRect.width).abs(),
+        lessThanOrEqualTo(1),
+        reason: 'عرض واحد للكبسات الثلاث',
+      );
+      for (final rect in [newsRect, storesRect, erpRect]) {
+        expect(rect.height, lessThan(130), reason: 'كبسة لا بطاقة صورة');
+      }
 
-      // كل بطاقة تحمل صورتها.
+      // كل كبسة تحمل صورتها وكبسولة «افتح» الواحدة.
       for (final key in const [
         'hub_card_news',
         'hub_card_stores',
@@ -110,7 +129,15 @@ void main() {
             matching: find.byType(Image),
           ),
           findsWidgets,
-          reason: 'صورة البطاقة $key',
+          reason: 'صورة الكبسة $key',
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.text('افتح'),
+          ),
+          findsOneWidget,
+          reason: 'كبسولة «افتح» في $key',
         );
       }
 

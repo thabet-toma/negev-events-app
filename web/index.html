@@ -926,10 +926,11 @@
     </section>
 
     <!-- TAB: «خدماتنا» — وجهة عامة بلا حساب: منصّات شركة كترا الأخرى، بثلاث
-         بطاقات صور ثابتة الترتيب: صورتان في الصف والثالثة عريضة تحتهما،
-         والكلام على الصورة لا تحتها. «آخر خبر» يفتح شاشة الأخبار داخل الموقع
-         (#newsScreen)، والبطاقتان الأخريان رابط خارجي في تبويب جديد. لا
-         محتوى يجلب من الخادم هنا — الصفحة كلها وسوم ثابتة. -->
+         كبسات بلاستيكية ثابتة الترتيب — كبسولة على حائط ملوّن، فيها صورة دائرية
+         وشعار المنصّة ملصقٌ على حافتها، ثم الاسم وسطر قصير، ثم كبسولة «افتح».
+         «آخر خبر» يفتح شاشة الأخبار داخل الموقع (#newsScreen)، والكبستان
+         الأخريان رابط خارجي في تبويب جديد. لا محتوى يجلب من الخادم هنا —
+         الصفحة كلها وسوم ثابتة. -->
     <section id="tabOurServices" class="tab-content">
       <div class="page-title-box">
         <h2><i class="fa-solid fa-layer-group"></i> خدماتنا</h2>
@@ -937,34 +938,40 @@
       </div>
 
       <div class="our-platforms-grid">
-        <button type="button" class="our-platform-card our-platform-card-tall" onclick="openNewsScreen()">
-          <img class="our-platform-photo" src="images/platforms/news.jpg" alt="" aria-hidden="true" decoding="async">
-          <span class="our-platform-scrim">
+        <button type="button" class="our-platform-card" onclick="openNewsScreen()">
+          <span class="our-platform-media">
+            <img class="our-platform-photo" src="images/platforms/news.jpg" alt="" aria-hidden="true" decoding="async">
             <span class="our-platform-chip our-platform-chip-news" aria-hidden="true"><i class="fa-solid fa-newspaper"></i></span>
+          </span>
+          <span class="our-platform-text">
             <span class="our-platform-name">آخر خبر</span>
             <span class="our-platform-short">أخبار منطقتك أولاً بأول</span>
           </span>
+          <span class="our-platform-cta" aria-hidden="true">افتح</span>
         </button>
 
-        <a class="our-platform-card our-platform-card-tall" href="https://kolshee.ktra-pro.tech/" target="_blank" rel="noopener">
-          <img class="our-platform-photo" src="images/platforms/stores.jpg" alt="" aria-hidden="true" decoding="async">
-          <span class="our-platform-scrim">
-            <span class="our-platform-chip our-platform-chip-plate" aria-hidden="true"><img src="images/platforms/logo-stores.png" alt=""></span>
+        <a class="our-platform-card" href="https://kolshee.ktra-pro.tech/" target="_blank" rel="noopener">
+          <span class="our-platform-media">
+            <img class="our-platform-photo" src="images/platforms/stores.jpg" alt="" aria-hidden="true" decoding="async">
+            <span class="our-platform-chip" aria-hidden="true"><img src="images/platforms/logo-stores.png" alt=""></span>
+          </span>
+          <span class="our-platform-text">
             <span class="our-platform-name">متاجرنا</span>
             <span class="our-platform-short">مطاعم ومتاجر بلدتك</span>
           </span>
+          <span class="our-platform-cta" aria-hidden="true">افتح</span>
         </a>
 
-        <a class="our-platform-card our-platform-card-wide" href="https://ktra-pro.tech/" target="_blank" rel="noopener">
-          <img class="our-platform-photo" src="images/platforms/erp.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async">
-          <span class="our-platform-scrim">
-            <span class="our-platform-text">
-              <span class="our-platform-chip our-platform-chip-plate" aria-hidden="true"><img src="images/platforms/logo-erp.png" alt=""></span>
-              <span class="our-platform-name">K.T.R.A ERP</span>
-              <span class="our-platform-short">مخزون وفواتير ومحاسبة</span>
-            </span>
-            <span class="our-platform-cta" aria-hidden="true">افتح <i class="fa-solid fa-arrow-left"></i></span>
+        <a class="our-platform-card" href="https://ktra-pro.tech/" target="_blank" rel="noopener">
+          <span class="our-platform-media">
+            <img class="our-platform-photo" src="images/platforms/erp.jpg" alt="" aria-hidden="true" loading="lazy" decoding="async">
+            <span class="our-platform-chip" aria-hidden="true"><img src="images/platforms/logo-erp.png" alt=""></span>
           </span>
+          <span class="our-platform-text">
+            <span class="our-platform-name">K.T.R.A ERP</span>
+            <span class="our-platform-short">مخزون وفواتير ومحاسبة</span>
+          </span>
+          <span class="our-platform-cta" aria-hidden="true">افتح</span>
         </a>
       </div>
     </section>
