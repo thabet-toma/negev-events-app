@@ -354,8 +354,12 @@ class NegevApi {
         .toList();
   }
 
+  /// تفاصيل المناسبة. **بالرمز حين يوجد حساب** (`auth: true` يرفقه وحده):
+  /// الخادم يقرأ الجلسة اختيارياً على هذا المسار ويعيد `my_rsvp` لصاحبها،
+  /// ومجهولاً لا يعيده إطلاقاً. بلا هذا الإرفاق تعود «لم تُجب بعد» لكل
+  /// مسجَّل بعد الحفظ ولا يظهر زرّ السحب (تذكرة #168).
   Future<Event> eventDetails(int id) async {
-    final data = await _client.get('/api/events/$id');
+    final data = await _client.get('/api/events/$id', auth: true);
     final event = data['event'];
     if (event is! Map<String, dynamic>) {
       throw const ApiException('تعذّر قراءة بيانات المناسبة');
@@ -683,6 +687,39 @@ class NegevApi {
 
   Future<void> unremind(int eventId) async {
     await _client.delete('/api/events/$eventId/remind', auth: true);
+  }
+
+  /// «جاي / مش جاي» بحساب (تذكرة #168): جواب واحد لكل حساب على المناسبة —
+  /// الثاني يُحدّث الأول على الخادم لا يُضيف ثانياً. و`yes` يُنشئ «ذكّرني» إن
+  /// غاب، و`no` لا يمسّه. النوع المطفأ والمناسبة غير المعتمدة 404.
+  /// يعيد حالة الجواب بعد الحفظ (`my_rsvp`) مع العدّاد إن سمح به النوع.
+  Future<EventRsvp?> setRsvp(
+    int eventId, {
+    required bool going,
+    int partySize = 1,
+  }) async {
+    final data = await _client.put(
+      '/api/events/$eventId/rsvp',
+      auth: true,
+      body: {
+        'response': going ? 'yes' : 'no',
+        'party_size': partySize,
+      },
+    );
+    final rsvp = data['my_rsvp'];
+    return rsvp is Map<String, dynamic> ? EventRsvp.fromJson(rsvp) : null;
+  }
+
+  /// سحب الجواب — لا يمسّ «ذكّرني». 404 لنوع مطفأ، كالإجابة نفسها.
+  Future<void> withdrawRsvp(int eventId) async {
+    await _client.delete('/api/events/$eventId/rsvp', auth: true);
+  }
+
+  /// «مين جاي» — لصاحب المناسبة أو أدمن في نطاقه وحدهما؛ 404 لغيرهما.
+  /// الأسماء والعدد والجواب والمصدر والمجاميع، **بلا هاتف** (الخادم لا يرسله).
+  Future<EventRsvpList> eventRsvps(int eventId) async {
+    final data = await _client.get('/api/events/$eventId/rsvps', auth: true);
+    return EventRsvpList.fromJson(data);
   }
 
   /// «قائمتي» — كل مناسبة معتمدة يتابعها المستخدم: القادم أولاً ثم المنتهي

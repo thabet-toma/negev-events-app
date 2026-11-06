@@ -91,6 +91,14 @@ class Event {
   final int? followersCount;
   final bool isReminded;
 
+  /// عدّاد «جايين» العلني (تذكرة #168): مجموع إجمالي الحاضرين في أجوبة «جاي».
+  /// `null` يعني أنّ المفتاح غاب — النوع يخفيه أو نغمته وقورة — لا صفر.
+  final int? rsvpGoingCount;
+
+  /// جواب المستخدم الحالي على هذه المناسبة. `null` تعني «لم يُجب بعد» — أو
+  /// أنّ الخادم لم يُرسل المفتاح أصلاً (زائر، أو نوع `rsvp_enabled` مطفأ).
+  final EventRsvp? myRsvp;
+
   /// `pending` / `approved` / `rejected` — يصل فقط من نقاط تُعيد الصف كاملاً
   /// (`GET /api/events/:id`، `GET /api/my-events`)؛ القائمة العامة تُسقطه
   /// عمداً (events.service.js LIST_COLUMNS) فيبقى `null` هناك.
@@ -139,6 +147,8 @@ class Event {
     this.latestCongratulation,
     this.followersCount,
     this.isReminded = false,
+    this.rsvpGoingCount,
+    this.myRsvp,
     this.status,
     this.archivePhotos = const [],
     this.albums = const [],
@@ -202,6 +212,8 @@ class Event {
         latestCongratulation: latestCongratulation,
         followersCount: followersCount,
         isReminded: isReminded,
+        rsvpGoingCount: rsvpGoingCount,
+        myRsvp: myRsvp,
         status: status,
         archivePhotos: archivePhotos,
       );
@@ -354,9 +366,119 @@ class Event {
           ? _toInt(json['followers_count'])
           : null,
       isReminded: json['is_reminded'] == true,
+      // الحقلان يغيبان معاً حين يخفيهما النوع أو يكون العميل زائراً — والغياب
+      // يبقى `null` لا صفراً (نفس قاعدة `followers_count` أعلاه).
+      rsvpGoingCount: json.containsKey('rsvp_going_count')
+          ? _toInt(json['rsvp_going_count'])
+          : null,
+      myRsvp: json['my_rsvp'] is Map<String, dynamic>
+          ? EventRsvp.fromJson(json['my_rsvp'] as Map<String, dynamic>)
+          : null,
       status: _nullableString(json['status']),
       archivePhotos: archivePhotos,
       albums: albums,
+    );
+  }
+}
+
+/// جواب الحضور — «جاي» أو «مش جاي» (تذكرة #168، ADR-0015).
+///
+/// `source` من الخادم (`account` اليوم، و`share_page` للضيف في تذكرة أخرى)،
+/// والعميل يعرضه ولا يستنتجه. **لا هاتف في هذا النموذج عمداً**: الخادم لا
+/// ينتقي `guest_phone` في أي ردّ، فلا حقل هنا يمكن أن يُملأ به يوماً.
+class EventRsvp {
+  final String response;
+  final int partySize;
+  final String source;
+
+  const EventRsvp({
+    required this.response,
+    required this.partySize,
+    required this.source,
+  });
+
+  /// «جاي» — الجواب الوحيد الذي يُنشئ «ذكّرني» على الخادم.
+  bool get isGoing => response == 'yes';
+
+  factory EventRsvp.fromJson(Map<String, dynamic> json) => EventRsvp(
+        response: '${json['response'] ?? ''}',
+        partySize: _toInt(json['party_size']),
+        source: '${json['source'] ?? 'account'}',
+      );
+}
+
+/// سطر واحد في «مين جاي» — اسم صاحب الجواب كما أعاده الخادم
+/// (`users.full_name` للحساب، `guest_name` للضيف) مع الجواب والعدد والمصدر.
+class EventRsvpEntry {
+  final int id;
+  final String name;
+  final String response;
+  final int partySize;
+  final String source;
+
+  const EventRsvpEntry({
+    required this.id,
+    required this.name,
+    required this.response,
+    required this.partySize,
+    required this.source,
+  });
+
+  bool get isGoing => response == 'yes';
+
+  factory EventRsvpEntry.fromJson(Map<String, dynamic> json) => EventRsvpEntry(
+        id: _toInt(json['id']),
+        name: '${json['name'] ?? ''}',
+        response: '${json['response'] ?? ''}',
+        partySize: _toInt(json['party_size']),
+        source: '${json['source'] ?? 'account'}',
+      );
+}
+
+/// مجاميع «مين جاي» — `going_count` هو مجموع العدد نفسه الذي يحمله
+/// `rsvp_going_count` العلني، و`*_rows` عدد الأجوبة لا عدد الأشخاص.
+class EventRsvpTotals {
+  final int goingCount;
+  final int goingRows;
+  final int notGoingRows;
+  final int totalRows;
+
+  const EventRsvpTotals({
+    required this.goingCount,
+    required this.goingRows,
+    required this.notGoingRows,
+    required this.totalRows,
+  });
+
+  factory EventRsvpTotals.fromJson(Map<String, dynamic> json) => EventRsvpTotals(
+        goingCount: _toInt(json['going_count']),
+        goingRows: _toInt(json['going_rows']),
+        notGoingRows: _toInt(json['not_going_rows']),
+        totalRows: _toInt(json['total_rows']),
+      );
+}
+
+/// ردّ `GET /api/events/:id/rsvps` كاملاً — للمالك أو أدمن في نطاقه وحدهما.
+class EventRsvpList {
+  final List<EventRsvpEntry> rsvps;
+  final EventRsvpTotals totals;
+
+  const EventRsvpList({required this.rsvps, required this.totals});
+
+  factory EventRsvpList.fromJson(Map<String, dynamic> json) {
+    final raw = json['rsvps'];
+    final rsvps = raw is List
+        ? raw
+            .whereType<Map<String, dynamic>>()
+            .map(EventRsvpEntry.fromJson)
+            .toList()
+        : <EventRsvpEntry>[];
+    final rawTotals = json['totals'];
+    return EventRsvpList(
+      rsvps: rsvps,
+      totals: EventRsvpTotals.fromJson(
+        rawTotals is Map<String, dynamic> ? rawTotals : const {},
+      ),
     );
   }
 }
@@ -527,6 +649,12 @@ class OccasionType {
   final String? defaultPosterUrl;
   final bool legacyClientSupported;
   final String tone;
+  /// تأكيد الحضور (تذكرة #168): يفتح زرّي «جاي/مش جاي» على مناسبات هذا النوع.
+  /// وغياب المفتاح يعني مطفأً — الميزة لا تُفترض مفعّلة.
+  final bool rsvpEnabled;
+  /// هل يُعرض عدّاد الجايين لهذا النوع؟ الخادم يُغيّبه لنوع `solemn` دائماً،
+  /// والعميل يقرأ ما وصل بدل إعادة اشتقاق القاعدة.
+  final bool showRsvpCount;
   final List<OccasionTypeField> fields;
   final List<String> reactions;
 
@@ -546,6 +674,8 @@ class OccasionType {
     required this.congratulationsLabel,
     required this.legacyClientSupported,
     required this.tone,
+    this.rsvpEnabled = false,
+    this.showRsvpCount = true,
     this.defaultBadgeTitle,
     this.defaultPosterUrl,
     this.fields = const [],
@@ -599,6 +729,10 @@ class OccasionType {
       defaultPosterUrl: _nullableString(json['default_poster_url']),
       legacyClientSupported: json['legacy_client_supported'] == true,
       tone: '${json['tone'] ?? 'festive'}',
+      rsvpEnabled: json['rsvp_enabled'] == true,
+      // الغياب يعني «لم يُقرَّر» فيُعرض العدّاد — نفس قاعدة `show_followers_count`
+      // في الخادم، والفرض الفعلي لنوع `solemn` يقع هناك لا هنا.
+      showRsvpCount: json['show_rsvp_count'] != false,
       fields: fields,
       reactions: reactions,
     );

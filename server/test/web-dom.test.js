@@ -14687,6 +14687,287 @@ async function run() {
     );
   });
 
+  console.log('\nتأكيد الحضور — «جاي / مش جاي» والعدّاد و«مين جاي» (تذكرة #168)');
+
+  /**
+   * نوع «عرس» مفتوح لتأكيد الحضور: `rsvp_enabled` وحده هو ما يرسم الأزرار،
+   * و`show_rsvp_count` وحده هو ما يُبقي العدّاد. يُبنى فوق WEDDING_TYPE كي لا
+   * يصير لصور النوع نسختان في هذا الملف.
+   */
+  const RSVP_WEDDING_TYPE = { ...WEDDING_TYPE, rsvp_enabled: true, show_rsvp_count: true };
+  /** حدث «جاي» واحد بجواب حاضر — الشكل نفسه الذي يعيده GET /api/events/:id. */
+  function buildRsvpEvent(overrides = {}) {
+    return {
+      id: 168,
+      status: 'approved',
+      title: 'فرح عائلة الاختبار',
+      groom_name: 'سالم',
+      town: 'رهط',
+      event_date: '2026-12-31',
+      occasion_type: RSVP_WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }],
+      rsvp_going_count: 3,
+      my_rsvp: { response: 'yes', party_size: 3, source: 'account' },
+      ...overrides
+    };
+  }
+
+  await test('صفحة المناسبة تعرض «جاي» و«مش جاي» والعدد 1..20 والعدّاد وحالة الجواب', () => {
+    const dom = buildEnv();
+    const html = dom.window.renderEventRsvpHtml(buildRsvpEvent());
+
+    assert.ok(html.includes('تأكيد الحضور'), 'expected the attendance block title');
+    assert.ok(/onclick="submitRsvp\('yes'\)"/.test(html), 'the «جاي» button must call submitRsvp with yes');
+    assert.ok(/onclick="submitRsvp\('no'\)"/.test(html), 'the «مش جاي» button must call submitRsvp with no');
+    assert.ok(html.includes('جايون: 3'), 'the public counter must be the server figure, not a local count');
+
+    const { document } = dom.window;
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const size = host.querySelector('#rsvpPartySize');
+    assert.ok(size, 'the party-size picker must exist');
+    assert.strictEqual(size.options.length, 20, 'the picker must offer exactly 1..20 (RSVP_PARTY_SIZE_MAX)');
+    assert.strictEqual(size.options[0].value, '1', 'the first option is 1 — party_size is never 0');
+    assert.strictEqual(size.options[19].value, '20', 'and the last is the server ceiling, 20');
+    assert.strictEqual(size.value, '3', 'the picker must start on the answer already stored');
+    assert.ok(
+      host.textContent.includes('إجمالي الحاضرين بمن فيك'),
+      'the field is named as the total attending including the answerer — not «عدد المرافقين», which undercounted the party by one'
+    );
+    assert.ok(!host.textContent.includes('عدد المرافقين'), 'the companions-only wording must be gone');
+    assert.ok(
+      dom.window.rsvpStateText({ response: 'yes', party_size: 1 }).includes('أنت وحدك'),
+      'party_size = 1 means the responder alone, the same meaning the picker now names'
+    );
+    assert.ok(host.textContent.includes('جوابك: «جاي» — 3 أشخاص'), 'the current answer must be readable as Arabic');
+  });
+
+  await test('لا أزرار حضور ولا عدّاد: لنوع solemn، ولا لنوع rsvp_enabled مطفأ، ولا حين يخفي النوع العدّاد', () => {
+    const dom = buildEnv();
+
+    const funeral = dom.window.renderEventRsvpHtml(
+      buildRsvpEvent({ occasion_type: { ...RSVP_WEDDING_TYPE, tone: 'solemn', rsvp_enabled: false } })
+    );
+    assert.strictEqual(funeral, '', 'a solemn type must render no attendance block at all');
+
+    // الحالة التي قد تصل من خادم أقدم أو من تعديل إداري بين ترحيلين: النغمة
+    // وقورة والعلَم مرفوع — الصفحة لا ترسم شيئاً، والعدّاد يُسقطه النوع نفسه.
+    const solemnFlagOn = dom.window.renderEventRsvpHtml(
+      buildRsvpEvent({ occasion_type: { ...RSVP_WEDDING_TYPE, tone: 'solemn' } })
+    );
+    assert.strictEqual(solemnFlagOn, '', 'the tone alone must hide it, whatever rsvp_enabled says');
+
+    const disabled = dom.window.renderEventRsvpHtml(
+      buildRsvpEvent({ occasion_type: { ...RSVP_WEDDING_TYPE, rsvp_enabled: false } })
+    );
+    assert.strictEqual(disabled, '', 'a type with the feature off must render no attendance block');
+
+    // العدّاد وحده مخفي: الأزرار تبقى، والرقم يغيب لأن الخادم لم يُرسل المفتاح.
+    const hiddenCount = dom.window.renderEventRsvpHtml(
+      buildRsvpEvent({ occasion_type: { ...RSVP_WEDDING_TYPE, show_rsvp_count: false }, rsvp_going_count: undefined })
+    );
+    assert.ok(hiddenCount.includes('submitRsvp'), 'the buttons stay — only the counter is the flag\'s business');
+    assert.ok(!hiddenCount.includes('جايون:'), 'a hidden counter must not be drawn, not drawn as zero');
+  });
+
+  await test('«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    // خادم وهمي صغير: الجواب المطبَّق يُحفظ، فإعادة الجلب بعد الحفظ (وهي ما تفعله
+    // الصفحة لقراءة «ذكّرني») ترى الحالة الجديدة لا القديمة.
+    const serverEvent = buildRsvpEvent({ my_rsvp: null });
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          calls.push({ path: requestPath, method: options.method || 'GET', body: options.body, headers: options.headers || {} });
+          if (requestPath === '/api/events/168') return jsonResponse({ success: true, event: serverEvent });
+          if (requestPath === '/api/events/168/rsvp' && (options.method || 'GET') === 'PUT') {
+            serverEvent.my_rsvp = { response: 'yes', party_size: 4, source: 'account' };
+            serverEvent.rsvp_going_count = 7;
+            return jsonResponse({
+              success: true,
+              message: 'تم تأكيد حضورك',
+              my_rsvp: serverEvent.my_rsvp,
+              rsvp_going_count: 7
+            });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { window } = dom;
+
+    // المسار الحقيقي: الصفحة تُفتح بندائها، فتُرسم الكتلة، ثم يُختار العدد ويُضغط الزرّ.
+    await window.openEventPage(168);
+    const sizePicker = window.document.getElementById('rsvpPartySize');
+    assert.ok(sizePicker, 'set up: the page must be drawing the attendance block');
+    sizePicker.value = '4';
+
+    await window.submitRsvp('yes');
+
+    const put = calls.find(call => call.path === '/api/events/168/rsvp');
+    assert.ok(put, 'expected a call to the rsvp route');
+    assert.strictEqual(put.method, 'PUT', 'the answer is a PUT (upsert) — the second answer updates, never adds');
+    assert.deepStrictEqual(
+      JSON.parse(put.body),
+      { response: 'yes', party_size: 4 },
+      'the body must carry the chosen answer and the party size picked in the UI'
+    );
+    assert.strictEqual(put.headers.Authorization, 'Bearer test-token-web-dom', 'the call is made with the session token');
+
+    // حالة الصفحة تُقرأ من DOM لا من متغيّر داخلي: `eventPageEvent` عائش في
+    // نطاق app.js وحده (`let` أعلى الملف)، وما يراه المستخدم هو ما يُقاس.
+    assert.ok(
+      window.document.getElementById('eventPageRsvpState').textContent.includes('4 أشخاص'),
+      'the rendered state line must show the saved party size — the server response is the source of truth'
+    );
+    assert.ok(
+      window.document.getElementById('eventPageRsvpCount').textContent.includes('7'),
+      'and the rendered counter must show the number the server just returned'
+    );
+    assert.strictEqual(
+      window.document.getElementById('rsvpPartySize').value,
+      '4',
+      'the picker must stay on the answer that was actually saved'
+    );
+  });
+
+  await test('«مش جاي» يُرسل party_size = 1، و«سحب جوابي» يستعمل DELETE على المسار نفسه', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const serverEvent = buildRsvpEvent();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          calls.push({ path: requestPath, method, body: options.body });
+          if (requestPath === '/api/events/168') return jsonResponse({ success: true, event: serverEvent });
+          if (requestPath === '/api/events/168/rsvp' && method === 'PUT') {
+            serverEvent.my_rsvp = { response: 'no', party_size: 1, source: 'account' };
+            return jsonResponse({
+              success: true,
+              my_rsvp: serverEvent.my_rsvp,
+              rsvp_going_count: 3
+            });
+          }
+          if (requestPath === '/api/events/168/rsvp' && method === 'DELETE') {
+            serverEvent.my_rsvp = null;
+            return jsonResponse({ success: true, my_rsvp: null, rsvp_going_count: 3 });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { window } = dom;
+
+    await window.openEventPage(168);
+    window.document.getElementById('rsvpPartySize').value = '9';
+
+    await window.submitRsvp('no');
+    const put = calls.find(call => call.method === 'PUT');
+    assert.deepStrictEqual(
+      JSON.parse(put.body),
+      { response: 'no', party_size: 1 },
+      'a «مش جاي» answer carries no party — sending the previous 9 would lie about a party nobody brings'
+    );
+    assert.ok(window.document.getElementById('eventPageRsvpState').textContent.includes('مش جاي'));
+    assert.ok(
+      window.document.body.innerHTML.includes('withdrawRsvp()'),
+      'an existing answer must offer «سحب جوابي», which is the only UI path to the DELETE route'
+    );
+
+    await window.withdrawRsvp();
+    const del = calls.find(call => call.method === 'DELETE' && call.path === '/api/events/168/rsvp');
+    assert.ok(del, 'withdrawing must DELETE /api/events/:id/rsvp');
+    assert.ok(window.document.getElementById('eventPageRsvpState').textContent.includes('لم تُجب بعد'));
+    assert.ok(
+      !window.document.body.innerHTML.includes('withdrawRsvp()'),
+      'with no answer left there is nothing to withdraw — the button must be gone'
+    );
+  });
+
+  await test('«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.renderRsvpList({
+      rsvps: [
+        { id: 1, name: 'سالم أبو الاختبار', response: 'yes', party_size: 4, source: 'account' },
+        { id: 2, name: 'ضيف من الرابط', response: 'yes', party_size: 1, source: 'share_page' },
+        { id: 3, name: 'مريم الاختبار', response: 'no', party_size: 1, source: 'account' }
+      ],
+      totals: { going_count: 5, going_rows: 2, not_going_rows: 1, total_rows: 3 }
+    });
+
+    const body = document.getElementById('rsvpListBody');
+    assert.ok(body.textContent.includes('سالم أبو الاختبار'), 'every name must be listed');
+    assert.ok(body.textContent.includes('ضيف من الرابط'), 'including a guest answered through the share page');
+    assert.ok(body.textContent.includes('مريم الاختبار'), 'and the ones who said «مش جاي»');
+    assert.ok(body.textContent.includes('جايون: 5'), 'the total is the sum of party sizes, not the row count');
+    assert.ok(body.textContent.includes('أجوبة «جاي»: 2'), 'the number of yes answers is shown separately');
+    assert.ok(body.textContent.includes('أجوبة «مش جاي»: 1'), 'and so is the number of no answers');
+    assert.ok(body.textContent.includes('حساب'), 'the source is translated to Arabic, not printed raw');
+    assert.ok(body.textContent.includes('رابط المشاركة'), 'and the share-page source has its own Arabic label');
+  });
+
+  await test('زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.renderMyEvents([
+      { id: 200, status: 'approved', title: 'مناسبة الحضور', town: 'رهط', event_date: '2026-12-31', occasion_type: RSVP_WEDDING_TYPE },
+      { id: 201, status: 'approved', title: 'مناسبة العزاء', town: 'رهط', event_date: '2026-12-31', occasion_type: { ...FUNERAL_TYPE, rsvp_enabled: true } },
+      { id: 202, status: 'approved', title: 'مناسبة مطفأة', town: 'رهط', event_date: '2026-12-31', occasion_type: { ...WEDDING_TYPE, rsvp_enabled: false } }
+    ]);
+
+    const html = document.getElementById('myEventsList').innerHTML;
+    assert.strictEqual((html.match(/openRsvpListModal\(/g) || []).length, 1, 'exactly one row offers «مين جاي»');
+    assert.ok(html.includes('openRsvpListModal(200)'), 'the open wedding type is the one that gets it');
+    assert.ok(!html.includes('openRsvpListModal(201)'), 'a solemn type must not offer it even if the flag was flipped');
+    assert.ok(!html.includes('openRsvpListModal(202)'), 'nor a type with the feature switched off');
+  });
+
+  await test('فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          calls.push({ path: requestPath, headers: options.headers || {} });
+          if (requestPath === '/api/events/300/rsvps') {
+            return jsonResponse({ success: true, rsvps: [], totals: { going_count: 0, going_rows: 0, not_going_rows: 0, total_rows: 0 } });
+          }
+          if (requestPath === '/api/events/404/rsvps') {
+            return jsonResponse({ success: false, message: 'المناسبة غير موجودة' }, { status: 404 });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    const { window } = dom;
+
+    await window.openRsvpListModal(300);
+    const read = calls.find(call => call.path === '/api/events/300/rsvps');
+    assert.ok(read, 'the owner list must come from the dedicated rsvps route');
+    assert.strictEqual(read.headers.Authorization, 'Bearer test-token-web-dom', 'and it must carry the session token');
+    assert.ok(
+      window.document.getElementById('rsvpListBody').textContent.includes('لا أجوبة حضور بعد'),
+      'an owner with no answers yet sees an Arabic empty state, not a blank panel'
+    );
+
+    await window.openRsvpListModal(404);
+    assert.ok(
+      window.document.getElementById('rsvpListBody').textContent.includes('المناسبة غير موجودة'),
+      'a 404 shows the server message — never an empty list that would confirm the event exists'
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

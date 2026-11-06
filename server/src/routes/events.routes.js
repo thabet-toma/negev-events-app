@@ -21,7 +21,7 @@ const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middlewa
 const { regionIdForRequest } = require('../middleware/region');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
-  parseEventDays, parseCsvList, parseFlag, parseEventVisibility, MAX_HONOREES
+  parseEventDays, parseCsvList, parseFlag, parseEventVisibility, parsePartySize, MAX_HONOREES
 } = require('../middleware/validate');
 const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
 
@@ -836,6 +836,55 @@ router.delete('/events/:id/remind', authenticate, asyncHandler(async (req, res) 
 router.get('/my-reminders', authenticate, asyncHandler(async (req, res) => {
   const result = await events.listMyReminders(req.user.id, { legacyOnly: isLegacyClient(req) });
   res.json({ success: true, ...result });
+}));
+
+// --- تأكيد الحضور بحساب: «جاي / مش جاي» (تذكرة #168، ADR-0015) -----
+//
+// الفعل هنا **بحساب** فقط: التطبيق وواجهة الويب يملكان جلسة أصلاً، ومن معه
+// التطبيق معه حساب. الباب المجهول الوحيد في ADR-0015 هو نموذج HTML في `/e/:id`،
+// وهو تذكرة أخرى غير مفتوحة في هذه الشجرة — فلا مسار جديد بلا `authenticate`.
+
+/** الجوابان المقبولان وحدهما — `response` قيمة مغلقة، وأي شيء آخر 400 عربية. */
+const RSVP_RESPONSES = ['yes', 'no'];
+
+/**
+ * «جاي» أو «مش جاي» — upsert على (event_id, user_id)، فالجواب الثاني يُحدّث ولا
+ * يُضيف. `yes` ينشئ «ذكّرني» إن غاب، و`no` لا يمسّه (القاعدة في الخدمة).
+ * ونوع `rsvp_enabled = 0`، والمناسبة غير الموجودة أو غير المعتمدة، كلها 404
+ * واحدة من الخدمة — فلا يؤكّد المسار وجود ما لا يجيب عنه.
+ */
+router.put('/events/:id/rsvp', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const response = cleanString(req.body.response, 10);
+  if (!RSVP_RESPONSES.includes(response)) {
+    throw ApiError.badRequest('الجواب يجب أن يكون «جاي» أو «مش جاي»');
+  }
+  const partySize = parsePartySize(req.body.party_size);
+
+  const state = await events.setRsvp(eventId, req.user.id, { response, partySize });
+  res.json({
+    success: true,
+    message: response === 'yes' ? 'تم تأكيد حضورك' : 'تم تسجيل أنك لا تستطيع الحضور',
+    ...state
+  });
+}));
+
+/** سحب الجواب — لا يمسّ «ذكّرني»؛ ونوع مطفأ يبقى 404 كالإجابة نفسها. */
+router.delete('/events/:id/rsvp', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const state = await events.removeRsvp(eventId, req.user.id);
+  res.json({ success: true, message: 'تم سحب جوابك', ...state });
+}));
+
+/**
+ * «مين جاي» — الأسماء والعدد والجواب والمصدر والمجاميع، لصاحب المناسبة أو
+ * أدمن في نطاقه وحدهما (404 لغيرهما). **الحكم في الخدمة** لا هنا: تمرّ
+ * `req.user` مع المعرّف، و`listEventRsvps` تبني شرط النطاق في استعلامها.
+ * والهاتف لا يدخل الاستعلام أصلاً — لا `guest_phone` ولا `SELECT *`.
+ */
+router.get('/events/:id/rsvps', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  res.json({ success: true, ...await events.listEventRsvps(eventId, req.user) });
 }));
 
 /**

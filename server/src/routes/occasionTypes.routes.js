@@ -121,6 +121,12 @@ router.post('/admin/occasion-types', asyncHandler(async (req, res) => {
     // «أرشيف الأعراس» (ADR-0008) — off unless asked for, like every flag
     // that invites something the type may not want.
     archive_gallery: Boolean(req.body.archive_gallery),
+    // تأكيد الحضور (تذكرة #168): مطفأ عند الإنشاء كـ`archive_gallery` تماماً —
+    // النوع الجديد لا يفتح باباً لا يطلبه أحد. و`show_rsvp_count` مفتوح افتراضاً
+    // (كـ`schema.sql`)، ولا قاعدة إضافية هنا لنوع `solemn`: الفرض كله في الترحيل
+    // على كل تشغيل، كما تنصّ المواصفة.
+    rsvp_enabled: Boolean(req.body.rsvp_enabled),
+    show_rsvp_count: req.body.show_rsvp_count !== false,
     tone: parseTone(req.body.tone),
     congratulations_label: cleanString(req.body.congratulations_label, 40) || 'تبريكات',
     default_badge_title: cleanString(req.body.default_badge_title, 80),
@@ -154,6 +160,10 @@ router.patch('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
     payload.legacy_client_supported = Boolean(body.legacy_client_supported);
   }
   if (body.archive_gallery !== undefined) payload.archive_gallery = Boolean(body.archive_gallery);
+  // تأكيد الحضور (تذكرة #168): يُمرَّر كما أرسله الأدمن ولا قاعدة إضافية هنا —
+  // الفرض الوحيد لنوع `solemn` في خطوة الترحيل، على كل تشغيل (كـ`notify_countdown`).
+  if (body.rsvp_enabled !== undefined) payload.rsvp_enabled = Boolean(body.rsvp_enabled);
+  if (body.show_rsvp_count !== undefined) payload.show_rsvp_count = Boolean(body.show_rsvp_count);
   if (body.tone !== undefined) payload.tone = parseTone(body.tone);
   if (body.congratulations_label !== undefined) payload.congratulations_label = cleanString(body.congratulations_label, 40);
   if (body.default_badge_title !== undefined) payload.default_badge_title = cleanString(body.default_badge_title, 80);

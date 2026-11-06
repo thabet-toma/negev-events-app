@@ -127,6 +127,16 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
 const DUPLICATE_DATE_WINDOW_DAYS = 1;
 
 /**
+ * سقف عدد الحاضرين في جواب حضور واحد («جاي» بعدد) — تذكرة #168 والمواصفة
+ * #156. الرقم نفسه في المسار (`PUT /api/events/:id/rsvp`) وفي الترحيل (عمود
+ * `party_size`، و`TINYINT UNSIGNED` يتّسع له بلا تعديل). والرقم **إجمالي
+ * الحاضرين بمن فيهم صاحب الجواب**، لا المرافقون وحدهم. وعشرون لأن رقمًا مثل
+ * ٥٠٠ على عرسٍ واحد يُفسد العدّاد العلني على الجميع — وهو السبب نفسه الذي لأجله
+ * وُجد السقف في ADR-0015 للضيف.
+ */
+const RSVP_PARTY_SIZE_MAX = 20;
+
+/**
  * Closed list of analytics event names (issue #44). The governing rule is:
  * we record what a person DID in the app, never what they READ in it — a row
  * saying "this named person opened this particular عزاء" reads as
@@ -298,6 +308,7 @@ module.exports = {
   MAX_EVENT_DAYS,
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
+  RSVP_PARTY_SIZE_MAX,
   OCCASION_TONES,
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,

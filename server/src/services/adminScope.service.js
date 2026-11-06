@@ -66,6 +66,36 @@ async function townScopeClause(user, alias = 'e') {
 }
 
 /**
+ * `townScopeClause` plus ownership: a `WHERE`-clause fragment over an
+ * `${alias}` `events` row that keeps exactly what `user` may **manage** — the
+ * rows it created OR the rows in a town it administers. `townScopeClause`
+ * alone answers "which towns", and an owner has no `admin_towns` row, so
+ * expressing both with it would either drop the owner or widen the admin.
+ *
+ * Same fail-closed shape as `townScopeClause`: `super_admin` gets no
+ * restriction; a regular user narrows to its own `created_by`; a scoped
+ * `admin` gets its own rows OR its towns' rows; an admin with zero
+ * `admin_towns` rows keeps its own rows only — never everything. A `NULL
+ * user` matches nothing (`AND 1 = 0`), the same refusal an anonymous caller
+ * already gets from `authenticate`.
+ */
+async function ownerOrTownScopeClause(user, alias = 'e') {
+  assertValidAlias(alias);
+
+  if (!user) return { clause: ' AND 1 = 0', params: [] };
+  if (user.role === 'super_admin') return { clause: '', params: [] };
+
+  const towns = await listTownsFor(user);
+  if (!towns.length) return { clause: ` AND ${alias}.created_by = ?`, params: [user.id] };
+
+  const placeholders = towns.map(() => '?').join(', ');
+  return {
+    clause: ` AND (${alias}.created_by = ? OR ${alias}.town IN (${placeholders}))`,
+    params: [user.id, ...towns]
+  };
+}
+
+/**
  * Resolves the audience a broadcast from `user` should be written to, for BOTH
  * roles (issue #85, story 23/24; issue #128) — the sole module that decides it
  * (CLAUDE.md: «نطاق الأدمن المحلي داخل الاستعلام لا في الراوتر»), same as
@@ -248,6 +278,7 @@ module.exports = {
   listTownsFor,
   isAdminForTown,
   townScopeClause,
+  ownerOrTownScopeClause,
   albumScopeClause,
   resolveBroadcastTowns,
   assertEventInScope,

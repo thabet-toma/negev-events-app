@@ -2789,6 +2789,157 @@ function eventPageInfoRowHtml(icon, label, value) {
     </div>`;
 }
 
+/**
+ * سقف إجمالي الحاضرين في جواب واحد — مطابق لـ`RSVP_PARTY_SIZE_MAX` في
+ * `server/src/constants.js`، فالواجهة لا ترسل قيمة سيرفضها الخادم بـ400.
+ * والرقم **إجمالي الحاضرين بمن فيهم صاحب الجواب**، لا المرافقون وحدهم: الخادم
+ * يجمع `party_size` في `rsvp_going_count`، واختيار 1 يعني «أنت وحدك».
+ */
+const RSVP_PARTY_SIZE_MAX = 20;
+
+/**
+ * هل تُعرض أزرار الحضور لهذه المناسبة؟ علَمان يُقرآن من نوع المناسبة كما وصلا:
+ * `rsvp_enabled` (ميزة يفتحها السوبر أدمن لكل نوع) ونغمة غير وقورة. والخادم
+ * هو الحَكَم في النهاية — هذا الاختبار يمنع رسم زرّ يجيبه 404 وحده.
+ */
+function eventRsvpVisible(evt) {
+  const type = evt && evt.occasion_type;
+  if (!type || type.tone === 'solemn') return false;
+  return type.rsvp_enabled === true;
+}
+
+/** نصّ حالة الجواب الحالي — «لم تُجب بعد» تعني `my_rsvp === null`، لا غياب مفتاح. */
+function rsvpStateText(myRsvp) {
+  if (!myRsvp) return 'لم تُجب بعد';
+  if (myRsvp.response === 'yes') {
+    const size = Number(myRsvp.party_size) || 1;
+    return size === 1 ? 'جوابك: «جاي» — أنت وحدك' : `جوابك: «جاي» — ${size} أشخاص`;
+  }
+  return 'جوابك: «مش جاي»';
+}
+
+/**
+ * كتلة تأكيد الحضور في صفحة المناسبة (تذكرة #168): زرّا «جاي» و«مش جاي» مع
+ * إجمالي الحاضرين (1..20، بمن فيهم صاحب الجواب)، وحالة الجواب، والعدّاد العلني
+ * حين يسمح النوع به (`rsvp_going_count` يغيب كلياً حين يخفيه النوع أو تطفئه
+ * الميزة — لا صفر). تُرسم لمناسبة `rsvp_enabled` وحدها، ولا تُرسم لنوع `solemn`
+ * إطلاقاً.
+ */
+function renderEventRsvpHtml(evt, { isMourning = false } = {}) {
+  if (isMourning || !eventRsvpVisible(evt)) return '';
+
+  const mine = evt.my_rsvp || null;
+  const chosen = mine ? mine.response : null;
+  const partySize = mine ? Number(mine.party_size) || 1 : 1;
+  const sizeOptions = Array.from({ length: RSVP_PARTY_SIZE_MAX }, (_, index) => index + 1)
+    .map(size => `<option value="${size}"${size === partySize ? ' selected' : ''}>${size}</option>`)
+    .join('');
+  const goingCount = evt.rsvp_going_count;
+
+  return `
+    <div class="event-page-rsvp" id="eventPageRsvp">
+      <div class="event-page-rsvp-head">
+        <span class="event-page-rsvp-title"><i class="fa-solid fa-user-check" aria-hidden="true"></i> تأكيد الحضور</span>
+        ${goingCount != null ? `<span class="event-page-rsvp-count" id="eventPageRsvpCount">جايون: ${Number(goingCount) || 0}</span>` : ''}
+      </div>
+      <div class="event-page-rsvp-controls">
+        <label class="event-page-rsvp-size-label" for="rsvpPartySize">إجمالي الحاضرين بمن فيك</label>
+        <select id="rsvpPartySize" class="event-page-rsvp-size" aria-label="إجمالي الحاضرين بمن فيك">${sizeOptions}</select>
+        <button type="button" class="event-page-btn rsvp-choice${chosen === 'yes' ? ' is-chosen' : ''}" onclick="submitRsvp('yes')">
+          <i class="fa-solid fa-check" aria-hidden="true"></i> جاي
+        </button>
+        <button type="button" class="event-page-btn rsvp-choice${chosen === 'no' ? ' is-chosen' : ''}" onclick="submitRsvp('no')">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i> مش جاي
+        </button>
+      </div>
+      <div class="event-page-rsvp-state" id="eventPageRsvpState">${escapeHtml(rsvpStateText(mine))}</div>
+      ${mine ? `
+        <button type="button" class="event-page-rsvp-withdraw" onclick="withdrawRsvp()">
+          <i class="fa-solid fa-rotate-left" aria-hidden="true"></i> سحب جوابي
+        </button>` : ''}
+    </div>`;
+}
+
+/**
+ * يحفظ الجواب على الخادم ثم يرسمه. `yes` ينشئ «ذكّرني» على الخادم أيضاً، فحالة
+ * زرّ القائمة تُحدَّث هنا بنداء الجلب نفسه (`refreshEventPage`) بعد رسم فوري
+ * يمنح الضغطة أثراً بلا انتظار.
+ */
+async function submitRsvp(response) {
+  const eventId = eventPageEvent ? eventPageEvent.id : null;
+  if (!eventId) return;
+  if (!requireAuth({ type: 'rsvp', eventId, response })) return;
+
+  const sizeEl = document.getElementById('rsvpPartySize');
+  const partySize = response === 'no' ? 1 : (parseInt(sizeEl ? sizeEl.value : '1', 10) || 1);
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/rsvp`, {
+      method: 'PUT',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response, party_size: partySize })
+    });
+    const data = await res.json();
+    if (!data || !data.success) {
+      alert((data && data.message) || 'تعذر حفظ جوابك');
+      return;
+    }
+    applyRsvpState(eventId, data);
+    showToast(response === 'yes' ? 'سجّلنا حضورك — وستبقى المناسبة في قائمتك' : 'سجّلنا أنك مش جاي');
+  } catch (e) {
+    alert('تعذر حفظ جوابك — تحقق من الاتصال بالخادم');
+  }
+}
+
+/** سحب الجواب — `DELETE` على المسار نفسه. لا يمسّ «ذكّرني» على الخادم. */
+async function withdrawRsvp() {
+  const eventId = eventPageEvent ? eventPageEvent.id : null;
+  if (!eventId) return;
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/rsvp`, { method: 'DELETE', auth: true });
+    const data = await res.json();
+    if (!data || !data.success) {
+      alert((data && data.message) || 'تعذر سحب جوابك');
+      return;
+    }
+    applyRsvpState(eventId, data);
+    showToast('سُحب جوابك');
+  } catch (e) {
+    alert('تعذر سحب جوابك — تحقق من الاتصال بالخادم');
+  }
+}
+
+/**
+ * يوائم ما رجع من الخادم مع ما هو مرسوم: الجواب والعدّاد في صفحة المناسبة.
+ * عدّاد غائب من الردّ يعني «النوع يخفيه»، فيُمحى المخزَّن بدل أن يبقى رقماً
+ * قديماً على الشاشة. و«جاي» يُنشئ «ذكّرني» على الخادم، فحالة زرّ القائمة تُقرأ
+ * من جديد (`refreshEventPage`) لا تُفترض.
+ */
+function applyRsvpState(eventId, payload) {
+  const merge = evt => {
+    if (!evt || evt.id !== eventId) return evt;
+    const next = { ...evt, my_rsvp: payload.my_rsvp || null };
+    if (payload.rsvp_going_count === undefined || payload.rsvp_going_count === null) {
+      delete next.rsvp_going_count;
+    } else {
+      next.rsvp_going_count = payload.rsvp_going_count;
+    }
+    return next;
+  };
+
+  const feedIndex = allEvents.findIndex(e => e.id === eventId);
+  // إعادة رسم التغذية لهذا الصفّ وحده — ولو لم تكن المناسبة في التغذية أصلاً
+  // (رابط عميق أو إشعار قبل تحميلها) لا تُرسم قائمة فارغة مكانها.
+  if (feedIndex !== -1) {
+    allEvents[feedIndex] = merge(allEvents[feedIndex]);
+    renderEvents(allEvents);
+  }
+  if (eventPageEvent && eventPageEvent.id === eventId) eventPageEvent = merge(eventPageEvent);
+  if (isEventPageOpen() && eventPageEvent) renderEventPage(eventPageEvent);
+  if (payload.my_rsvp && payload.my_rsvp.response === 'yes') refreshEventPage();
+}
+
 function renderEventPage(evt) {
   const body = document.getElementById('eventPageBody');
   if (!body) return;
@@ -2924,6 +3075,7 @@ function renderEventPage(evt) {
           <i class="fa-solid fa-wallet" aria-hidden="true"></i> <span>تسجيل نقوط</span>
         </button>
       </div>
+      ${renderEventRsvpHtml(evt, { isMourning })}
       ${evt.followers_count != null ? `<div class="event-page-followers">متابعون: ${Number(evt.followers_count) || 0}</div>` : ''}
       ${renderEventAlbumsHtml(evt)}
       <section id="eventPageArchive" class="event-archive" hidden></section>
@@ -5272,6 +5424,10 @@ function resumePendingIntent() {
   } else if (intent.type === 'my_list') {
     // بطاقة الدخول في تبويب «قائمتي» — يعود إليه بعد الدخول لا إلى التغذية.
     switchTab('tabMyList');
+  } else if (intent.type === 'rsvp') {
+    // زرّ «جاي»/«مش جاي» ضُغط قبل الدخول — يُنفَّذ الجواب نفسه الآن بما اختاره
+    // المستخدم من عدد (المنتقي ما زال في الصفحة تحت نافذة الدخول).
+    if (eventPageEvent && eventPageEvent.id === intent.eventId) submitRsvp(intent.response || 'yes');
   } else if (intent.type === 'congratulate') {
     // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
     const senderInput = document.getElementById('chatSenderName');
@@ -8037,11 +8193,77 @@ function renderMyEvents(events) {
             <i class="fa-solid fa-list-check"></i> مراجعة الرسائل
           </button>
         </div>
+        ${evt.occasion_type && evt.occasion_type.rsvp_enabled === true && evt.occasion_type.tone !== 'solemn' ? `
+        <button class="record-nokoot-btn" style="width:100%; margin-top:8px;" onclick="openRsvpListModal(${evt.id})">
+          <i class="fa-solid fa-user-check"></i> مين جاي
+        </button>` : ''}
       </div>
     </div>
   `).join('');
 
   containers.forEach(c => { c.innerHTML = html; });
+}
+
+// 14أ. «مين جاي» — قائمة أجوبة الحضور لصاحب المناسبة (تذكرة #168).
+// GET /api/events/:id/rsvps يعيد الأسماء والعدد والجواب والمصدر والمجاميع،
+// **بلا هاتف**: الخادم لا ينتقي `guest_phone` أصلاً، فلا شيء يُخفى هنا.
+const RSVP_SOURCE_LABELS = { account: 'حساب', share_page: 'رابط المشاركة' };
+
+async function openRsvpListModal(eventId) {
+  const modal = document.getElementById('rsvpListModal');
+  const body = document.getElementById('rsvpListBody');
+  const subtitle = document.getElementById('rsvpListSubtitle');
+  if (!modal || !body) return;
+
+  const evt = myEventsCache.find(e => e.id === eventId);
+  if (subtitle) subtitle.textContent = evt ? (evt.title || evt.groom_name || '') : '';
+  modal.style.display = 'flex';
+  body.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/rsvps`, { auth: true });
+    const data = await res.json();
+    if (!data || !data.success) {
+      body.innerHTML = `<div class="empty-state" style="padding:20px;"><p>${escapeHtml((data && data.message) || 'تعذر جلب قائمة الحضور')}</p></div>`;
+      return;
+    }
+    renderRsvpList(data);
+  } catch (e) {
+    body.innerHTML = '<div class="empty-state" style="padding:20px;"><p>تعذر جلب قائمة الحضور</p></div>';
+  }
+}
+
+function renderRsvpList({ rsvps = [], totals = {} }) {
+  const body = document.getElementById('rsvpListBody');
+  if (!body) return;
+
+  const summary = `
+    <div class="rsvp-list-summary">
+      <span>جايون: <strong>${Number(totals.going_count) || 0}</strong></span>
+      <span>أجوبة «جاي»: <strong>${Number(totals.going_rows) || 0}</strong></span>
+      <span>أجوبة «مش جاي»: <strong>${Number(totals.not_going_rows) || 0}</strong></span>
+    </div>`;
+
+  if (!rsvps.length) {
+    body.innerHTML = `${summary}<div class="empty-state" style="padding:20px;"><p>لا أجوبة حضور بعد</p></div>`;
+    return;
+  }
+
+  body.innerHTML = summary + rsvps.map(rsvp => `
+    <div class="chat-bubble">
+      <div class="chat-bubble-header">
+        <span class="sender-name">${escapeHtml(rsvp.name || '')}</span>
+        <span class="status-tag ${rsvp.response === 'yes' ? 'approved' : 'pending'}">${rsvp.response === 'yes' ? 'جاي' : 'مش جاي'}</span>
+        <span class="sender-badge">${Number(rsvp.party_size) || 1}</span>
+      </div>
+      <div class="chat-msg-text">${escapeHtml(RSVP_SOURCE_LABELS[rsvp.source] || rsvp.source || '')}</div>
+    </div>
+  `).join('');
+}
+
+function closeRsvpListModal() {
+  const modal = document.getElementById('rsvpListModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // 14b. مراجعة التبريكات/التعازي — طابور مناسبة يملكها المستخدم الحالي (#20 step 10).

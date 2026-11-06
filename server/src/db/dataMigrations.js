@@ -2278,6 +2278,118 @@ const steps = [
         + 'all existing rows are source=public (unverified), not back-filled.'
       );
     }
+  },
+  {
+    // تأكيد الحضور بحساب (تذكرة #168، والمواصفة #156، وADR-0015): علَمان على
+    // نوع المناسبة وجدول `event_rsvps`.
+    //
+    // **آمنة للتكرار بذاتها:** كل عمود داخل `columnExists`، والجدول (مع
+    // فهارسه ومفاتيحه) داخل `tableExists` — إعادة التشغيل على قاعدة طُبِّقت
+    // عليها لا تُسقط الترحيل، ولا تُعدَّل خطوة قائمة هنا.
+    //
+    // **والنوعان المختلفان في التعبئة مقصودان:**
+    //
+    // - `rsvp_enabled` يُكتب **مرة واحدة في عمر القاعدة**: «عرس» و«خطوبة» بالاسم
+    //   1، والباقي 0 كما هو افتراضي العمود. فلا يمحو تشغيلٌ لاحقٌ اختيارَ السوبر
+    //   أدمن — وهو الفرق بينه وبين `notify_countdown` أدناه. ولأن `columnExists`
+    //   وحده لا يميّز ترقيةً عن تنصيب جديد (schema.sql هناك ينشئ العمود قبل هذه
+    //   الخطوة) تُكتب علامةُ «تمّت التعبئة» في `app_settings`، وهي التي تُقرأ في
+    //   التشغيل التالي.
+    //
+    // - `show_rsvp_count` يُفرض 0 لكل نوع `tone = 'solemn'` في **كل تشغيل**، على
+    //   نمط `notify_countdown` في add-reach-and-usability-schema-2026-09 حرفياً
+    //   وللسبب نفسه: عدّاد حضور على عزاء لا معنى له، فالقيمة مشتقّة من النغمة
+    //   لا علَماً مستقلاً. (والعلَم نفسه في المسار الإداري يُترك كما يرسله
+    //   الأدمن — القاعدة الوحيدة هي هذا السطر.)
+    //
+    // **`event_rsvps`:** نفس تعريف schema.sql حرفياً — للتنصيبات الجديدة هناك
+    // وللقواعد القائمة هنا، فلا يفترقان. و`invite_id` عمود NULL بلا FK عمداً:
+    // جدول الدعوات الشخصية (`event_invites`) تذكرة أخرى غير مدموجة بعد، وإضافة
+    // المرجع الآن إمّا تكسر هذه الخطوة أو تفرض كتابة جدول تلك التذكرة هنا.
+    //
+    // **ليس في هذه الخطوة** `visibility` (موجود أصلاً من #166) ولا `publish_at`
+    // ولا `announced_at` ولا `feed_linger_days` ولا `featured_until` — كلها
+    // لتذاكر أخرى غير مدموجة في هذه الشجرة.
+    name: 'add-rsvp-2026-11',
+    async run(connection) {
+      // «هل هذا أول تشغيل للتعبئة؟» — سؤال لا يجيبه `columnExists` وحده: على
+      // قاعدة قائمة يضيف ALTER العمود فيكون جديداً، وعلى تنصيب جديد أنشأه
+      // schema.sql قبل هذه الخطوة أصلاً فيبدو «قديماً» وتبقى عرس مطفأة. والعلامة
+      // صفٌّ واحد في `app_settings` (الجدول موجود دائماً — schema.sql ينشئه قبل
+      // الخطوات)، ومفاتيحه يقرؤها `settings.service.js` من قائمة بيضاء فلا تظهر
+      // لأحد. وتُكتب بعد التعبئة، فلا تُعاد أبداً ولو غيّر السوبر أدمن الأعلام.
+      const RSVP_BACKFILL_MARKER = 'migration_rsvp_enabled_backfilled';
+      const [[backfillMarker]] = await connection.execute(
+        'SELECT setting_value FROM app_settings WHERE setting_key = ?',
+        [RSVP_BACKFILL_MARKER]
+      );
+      const columnIsNew = !(await columnExists(connection, 'occasion_types', 'rsvp_enabled'));
+
+      if (columnIsNew) {
+        await connection.execute(
+          'ALTER TABLE occasion_types ADD COLUMN rsvp_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER archive_gallery'
+        );
+      }
+
+      if (columnIsNew || !backfillMarker) {
+        // التعبئة الأولى وحدها — بالاسم لأنها بيانات تنصيب لا قاعدة عمل: لا شيء
+        // خارج db/ يفرّق بين الأنواع بالاسم.
+        const [filled] = await connection.execute(
+          "UPDATE occasion_types SET rsvp_enabled = 1 WHERE name IN ('عرس', 'خطوبة')"
+        );
+        await connection.execute(
+          `INSERT INTO app_settings (setting_key, setting_value) VALUES (?, '1')
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+          [RSVP_BACKFILL_MARKER]
+        );
+        logger.info(
+          `[migrations] add-rsvp-2026-11: rsvp_enabled=1 on ${filled.affectedRows} type(s) (عرس/خطوبة) — one-time backfill.`
+        );
+      }
+
+      if (!(await columnExists(connection, 'occasion_types', 'show_rsvp_count'))) {
+        await connection.execute(
+          'ALTER TABLE occasion_types ADD COLUMN show_rsvp_count TINYINT(1) NOT NULL DEFAULT 1 AFTER rsvp_enabled'
+        );
+      }
+      // غير محروسة عمداً، وفي كل تشغيل — كـ`notify_countdown` تماماً: على تنصيب
+      // جديد تحمل schema.sql العمود بـ`DEFAULT 1` ولا يضبطه زرع الأنواع، فحارسٌ
+      // هنا كان سيترك العزاء بعدّاد حضور. هذا السطر هو الشيء الوحيد الذي يصفّره.
+      const [rsvpCountResult] = await connection.execute(
+        "UPDATE occasion_types SET show_rsvp_count = 0 WHERE tone = 'solemn'"
+      );
+
+      if (!(await tableExists(connection, 'event_rsvps'))) {
+        await connection.query(`
+          CREATE TABLE event_rsvps (
+            id          INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+            event_id    INT UNSIGNED    NOT NULL,
+            user_id     INT UNSIGNED    DEFAULT NULL,
+            guest_name  VARCHAR(120)    DEFAULT NULL,
+            guest_phone VARCHAR(30)     DEFAULT NULL,
+            invite_id   INT UNSIGNED    DEFAULT NULL,
+            response    ENUM('yes','no') NOT NULL,
+            party_size  TINYINT UNSIGNED NOT NULL DEFAULT 1,
+            source      ENUM('account','share_page') NOT NULL DEFAULT 'account',
+            created_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_event_rsvps_user (event_id, user_id),
+            UNIQUE KEY uq_event_rsvps_guest_phone (event_id, guest_phone),
+            KEY idx_event_rsvps_event_response (event_id, response),
+            KEY idx_event_rsvps_user (user_id),
+            CONSTRAINT fk_event_rsvps_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+            CONSTRAINT fk_event_rsvps_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-rsvp-2026-11: event_rsvps table created.');
+      }
+
+      logger.info(
+        '[migrations] add-rsvp-2026-11: ensured columns/table; '
+        + `${rsvpCountResult.affectedRows} occasion_type row(s) set to show_rsvp_count=0 for tone='solemn'.`
+      );
+    }
   }
 ];
 
