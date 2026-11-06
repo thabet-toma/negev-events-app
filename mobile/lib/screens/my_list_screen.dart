@@ -5,11 +5,13 @@ import '../main.dart';
 import '../models/event.dart';
 import '../models/my_list.dart';
 import '../state/auth_store.dart';
+import '../state/rate_us.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show ErrorView, showMessage;
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart' show openSignInGate;
 import '../widgets/event_card.dart' show arabicEventDate, occasionTypeColor;
+import '../widgets/rate_us_prompt.dart';
 import 'event_details_screen.dart';
 import 'nokoot_screen.dart' show showAddNokootSheet;
 
@@ -240,7 +242,9 @@ class _MyListScreenState extends State<MyListScreen> {
   /// أطول من الشاشة، وضغط زرّها بعد `dispose` لا يجوز أن يلمس الشجرة.
   Future<void> _undoRemove(AppServices services, int eventId) async {
     try {
-      await services.api.remind(eventId);
+      // نجاح «ذكّرني» لحظة إيجابية (تذكرة #163)، حتى عبر «تراجع» — الفشل
+      // يرمي قبل العدّ.
+      await runPositiveMoment(() => services.api.remind(eventId));
     } catch (error) {
       if (mounted) showMessage(context, '$error', isError: true);
       return;
@@ -260,6 +264,8 @@ class _MyListScreenState extends State<MyListScreen> {
     // على ما هما عليه (لا نصفّرها: التذكير قائم على الخادم فعلاً).
     await _load();
     _syncNowCount(services);
+    // الحوار بعد عودة الصفّ إلى القائمة، لا فوق حركة التراجع.
+    if (mounted) await maybeShowRateUsPrompt(context);
   }
 
   Future<void> _addNokoot(MyListEntry entry) async {

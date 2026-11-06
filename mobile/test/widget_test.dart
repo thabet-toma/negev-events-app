@@ -27,6 +27,7 @@ import 'package:negev_events/state/places_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/update_checker.dart';
+import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/auth_action_button.dart';
 import 'package:negev_events/widgets/event_card.dart';
@@ -1506,7 +1507,11 @@ void main() {
     testWidgets('أيقونة «إعلان مناسبة» في الرأس تفتح شاشة النشر', (tester) async {
       // ورقة أول تشغيل (تذكرة #126) لا شأن لها بهذا الاختبار: نعلن أن السؤال
       // سبق أن طُرح كي لا تبقى ورقة مفتوحة تحجب النقر على الرأس.
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({
+        regionOnboardedKey: true,
+        // شاشة الترحيب (#163) أيضاً سبقت، فلا تحجب النقر على الرأس.
+        welcomeSeenKey: true,
+      });
       final api = apiReturning({'success': true});
       final auth = AuthStore(api);
       final realtime = RealtimeService();

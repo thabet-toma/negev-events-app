@@ -9,12 +9,14 @@ import '../models/album.dart';
 import '../models/event.dart';
 import '../state/analytics.dart';
 import '../state/audio_coordinator.dart';
+import '../state/rate_us.dart';
 import '../state/share_event.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
+import '../widgets/rate_us_prompt.dart';
 import 'albums_screen.dart';
 
 /// ارتفاع بوستر التفاصيل — عادي مقابل نبرة `solemn`، بنفس نسبة كرت القائمة
@@ -198,7 +200,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
           'reminder_clicked',
           contentTown: event.town,
         );
-        await services.api.remind(event.id);
+        await runPositiveMoment(() => services.api.remind(event.id));
       }
       // التغيير وقع على الخادم فعلاً — «قائمتي» والتغذية تُعلَمان هنا، قبل أيّ
       // مسار رسالة: رفض الإذن يمنع المنبّه لا الحفظ، والإشارة تُكتب من كل
@@ -237,6 +239,8 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
         }
       }
       _reloadQuietly();
+      // «ذكّرني» الناجح لحظة إيجابية — الحوار بعد إتمام الرسالة لا فوقها.
+      if (!event.isReminded) await maybeShowRateUsPrompt(context);
     } catch (error) {
       if (mounted) showMessage(context, '$error', isError: true);
     }

@@ -1776,6 +1776,33 @@
     </div>
   </div>
 
+  <!-- شاشة الترحيب (#163) — مرة واحدة لكل جهاز، فوق التغذية وقبل اختيار
+       المحافظة. يظهرها initWelcome() في app.js ما لم يكن
+       negev_welcome_seen = 'seen'؛ و«تخطّي» يكتب العلم فلا تعود. الشعار
+       أيقونةُ المنصّة المولَّدة (assets في web/icons) لا رسم جديد هنا. -->
+  <div id="welcomeModal" class="modal-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+    <div class="modal-card welcome-card">
+      <img class="welcome-mark" src="/icons/icon-192.png" alt="أعراسنا" width="88" height="88">
+      <h3 id="welcomeTitle">أهلاً بك في أعراسنا</h3>
+      <p class="welcome-line">منصّة مناسبات النقب: مناسبات بلدك، وألبومات الأعراس، ودفتر النقوط — في مكان واحد.</p>
+      <div class="welcome-features">
+        <div class="welcome-feature">
+          <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
+          <div><strong>مناسبات بلدك</strong><span>الأعراس والخطوبات والعزا في محافظتك، على الخريطة وفي التغذية.</span></div>
+        </div>
+        <div class="welcome-feature">
+          <i class="fa-solid fa-images" aria-hidden="true"></i>
+          <div><strong>ألبومات الأعراس</strong><span>صور وفيديوهات الأعراس بأسماء أصحابها، من أرشيف المنصّة.</span></div>
+        </div>
+        <div class="welcome-feature">
+          <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+          <div><strong>دفتر النقوط</strong><span>دفترك الخاص: سجّل من أعطيت ومن أخذت، بلا دفاتر ورقية.</span></div>
+        </div>
+      </div>
+      <button type="button" class="welcome-skip" onclick="dismissWelcome()">تخطّي</button>
+    </div>
+  </div>
+
   <!-- إرشاد التثبيت على iOS (#55) — الوجه الآخر لزرّ تحميل APK، الذي يختفي على
        الآيفون لأن الملف لا يعمل هناك. بلا هذا القسم يبقى مستخدم الآيفون بلا أي
        مسار تطبيق إطلاقاً. يُظهره app.js شرطياً؛ يبقى مخفياً لكل أحد آخر. -->

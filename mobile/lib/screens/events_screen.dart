@@ -9,6 +9,7 @@ import '../models/event.dart';
 import '../models/live.dart';
 import '../models/notification.dart' as notif;
 import '../state/audio_coordinator.dart';
+import '../state/rate_us.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
     show openSupportWhatsApp, showMessage;
@@ -17,6 +18,7 @@ import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/motion.dart';
+import '../widgets/rate_us_prompt.dart';
 import '../widgets/region_banner.dart';
 import 'add_event_screen.dart';
 import 'agenda_screen.dart';
@@ -933,7 +935,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         await services.api.unremind(event.id);
         await services.reminders.onReminderRemoved(event.id);
       } else {
-        await services.api.remind(event.id);
+        // نجاح «ذكّرني» وحده لحظة إيجابية — الفشل يرمي قبل العدّ (تذكرة #163).
+        await runPositiveMoment(() => services.api.remind(event.id));
         willAlarm = await services.reminders.onReminderAdded();
       }
       // التغيير وقع على الخادم فعلاً — «قائمتي» تجلب نفسها عند ظهورها،
@@ -978,6 +981,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             )
             .toList();
       });
+      // الحوار بعد إتمام الرسالة وتبديل الكرت، لا فوقهما.
+      if (!event.isReminded) await maybeShowRateUsPrompt(context);
     } catch (error) {
       if (mounted) showMessage(context, '$error', isError: true);
     }
