@@ -2,6 +2,7 @@
 
 const ApiError = require('../utils/ApiError');
 const { MAX_EVENT_DAYS, EVENT_VISIBILITIES } = require('../constants');
+const { zonedTimeToUtc } = require('../utils/jerusalemTime');
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PHONE_PATTERN = /^0\d{8,9}$/;
@@ -59,10 +60,15 @@ function optionalDateTime(value, label = 'التاريخ والوقت') {
 }
 
 /**
- * `'YYYY-MM-DD HH:mm:ss'` في التوقيت المحلّي للخادم — الصيغة التي يقرأها عمود
- * `DATETIME` كما يقرأ `NOW()` نفسه. تُبنى من `Date` بنفس توقيت تحليله، فما
- * أرسله العميل يعود كما هو (لا تحويل منطقة وقت في المنتصف)، وهي أيضاً ما يُكتب
- * في سجلّ التعديلات نصاً مقروءاً بدل `String(date)` الإنجليزي الطويل.
+ * `'YYYY-MM-DD HH:mm:ss'` — ساعة الحائط كما أرسلها العميل (‏`datetime-local`، بلا
+ * منطقة) في صيغة عمود `DATETIME` التي يُخزَّن بها `events.publish_at`. تُبنى من
+ * `Date` بنفس توقيت تحليله، فما أرسله العميل يعود كما هو (لا تحويل منطقة وقت في
+ * المنتصف)، وهي أيضاً ما يُكتب في سجلّ التعديلات نصاً مقروءاً بدل `String(date)`
+ * الإنجليزي الطويل.
+ *
+ * وهي **ليست** ساعة الخادم ولا ساعة قاعدة البيانات: النصّ هو ما كتبه صاحب
+ * المناسبة في القدس، ويُقارَن في SQL بساعة القدس المُمرَّرة مُعامَلةً
+ * (`events.service.publishNowClock`)، لا بـ`NOW()` الذي يقرأ منطقة الجلسة.
  */
 function sqlDateTime(date) {
   const pad = value => String(value).padStart(2, '0');
@@ -76,13 +82,19 @@ function sqlDateTime(date) {
  * يرسله كل عميل منشور اليوم وعميل الموبايل حين لا يُملأ الحقل.
  *
  * يعيد **نصّ العمود** (`sqlDateTime`) لا `Date`، لأن هذا هو ما يُكتب في
- * `events.publish_at` ويُقارَن به `NOW()`: ساعة الحائط التي كتبها صاحب المناسبة.
- * (‏`pool.js` يقرأ `DATETIME` بـ`timezone: 'Z'`، فـ`Date` العائد من قراءة الصفّ
- * لحظةٌ غير التي كتبها العميل — والنصّ لا يخطئ.)
+ * `events.publish_at` ويُقارَن به هناك: ساعة الحائط التي كتبها صاحب المناسبة،
+ * بساعة القدس المُمرَّرة مُعامَلةً. (‏`pool.js` يقرأ `DATETIME` بـ`timezone: 'Z'`،
+ * فـ`Date` العائد من قراءة الصفّ لحظةٌ غير التي كتبها العميل — والنصّ لا يخطئ.)
  *
  * والقيمة إن جاءت تُحلَّل بصيغة المشروع نفسها (`optionalDateTime`) وتُرفض بـ400
  * عربية إن كانت غير صالحة **أو في الماضي**: موعد نشرٍ مضى لا معنى له، وإخفاؤه
  * خلف «يُنشر فوراً» يجعل تعديلاً يظنّ صاحبه أنه أجّل يبدو كأنه لم يفعل شيئاً.
+ *
+ * و«الماضي» يُقاس على **لحظة مطلقة** لا على ساعة العملية: نصّ الحائط ساعةُ
+ * القدس، فتُبنى منه اللحظة عبر `zonedTimeToUtc` (المرافق المشترك نفسه) ثم
+ * تُقارَن بـ`Date.now()`. ولا `new Date(wallClock)`: يفسّره بمنطقة **عملية
+ * Node** — وهي UTC في حاوية الإنتاج (`docker-compose.yml` و`Dockerfile` بلا
+ * `TZ`) — فيقبل موعداً مضى محلياً بمقدار فارق التوقيت، ساعتين شتاءً وثلاثاً صيفاً.
  *
  * `stored` هو `publish_at` المخزَّن على الصفّ عند التعديل: إعادة إرسال الموعد
  * نفسه — وقد صار ماضياً بعد أن حلّ — ليست «موعداً في الماضي» بل «بلا تعديل»،
@@ -93,10 +105,21 @@ function parsePublishAt(value, { stored = null, label = 'موعد النشر' } 
   if (value === undefined || value === null || value === '') return null;
   const date = optionalDateTime(value, label);
   const wallClock = sqlDateTime(date);
-  if (!samePublishMinute(wallClock, stored) && date.getTime() <= Date.now()) {
+  if (!samePublishMinute(wallClock, stored) && publishInstant(wallClock) <= Date.now()) {
     throw ApiError.badRequest('موعد النشر يجب أن يكون في المستقبل');
   }
   return wallClock;
+}
+
+/**
+ * اللحظة المطلقة التي يعنَيها نصّ عمود `publish_at`: النصّ ساعةُ حائط القدس بلا
+ * منطقة مكتوبة فيه، فتُبنى اللحظة منه بـ`zonedTimeToUtc` — لا بتفسير العملية له.
+ */
+function publishInstant(wallClock) {
+  const [datePart, timePart] = String(wallClock).split(' ');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, minute, second] = (timePart || '00:00:00').split(':').map(Number);
+  return zonedTimeToUtc(year, month, day, hour, minute, second || 0).getTime();
 }
 
 /**

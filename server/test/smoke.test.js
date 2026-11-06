@@ -40,7 +40,7 @@ const scheduler = require('../src/jobs/scheduler');
 const notificationsService = require('../src/services/notifications.service');
 const pushService = require('../src/services/push.service');
 const webpush = require('web-push');
-const { runInstantForDate, jerusalemDateString } = require('../src/utils/jerusalemTime');
+const { runInstantForDate, jerusalemDateString, getZonedParts } = require('../src/utils/jerusalemTime');
 const settingsService = require('../src/services/settings.service');
 const logger = require('../src/utils/logger');
 const realtime = require('../src/realtime');
@@ -15677,6 +15677,90 @@ async function run() {
     );
   });
 
+  /**
+   * «الآن» بساعة القدس كأنّها نصّ عمود `publish_at` — تُبنى هنا من
+   * `getZonedParts` مباشرةً لا من الدالة التي يستعملها الخادم، فيسقط الحارس
+   * إن غيّر أحدهم تعريف الساعة الممرَّرة (أو مرّر `UTC_TIMESTAMP()`).
+   */
+  const publishClockOf = date => {
+    const { year, month, day, hour, minute, second } = getZonedParts(date);
+    const pad = value => String(value).padStart(2, '0');
+    return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)}`;
+  };
+
+  await test('شرط publish_at يأخذ ساعة القدس مُعامَلةً لا NOW() (ساعة الجلسة UTC في الإنتاج) وتُظهر المجدولة عند موعدها القدسي (#167)', async () => {
+    // (١) القطعة المشتركة: موضع `?` واحد لا `NOW()`. `publish_at` يحمل ساعة حائط
+    //     القدس، و`NOW()` يقرأ منطقة جلسة MySQL — وحاوية الإنتاج بلا `TZ`
+    //     فجلستها UTC، فتتأخّر المنشورة عن موعدها ساعتين شتاءً وثلاثاً صيفاً.
+    for (const [label, clause] of [
+      ['PUBLIC_EVENT_VISIBLE_SQL_EVENTS', eventsService.PUBLIC_EVENT_VISIBLE_SQL_EVENTS],
+      ['PUBLIC_EVENT_VISIBLE_SQL_E', eventsService.PUBLIC_EVENT_VISIBLE_SQL_E]
+    ]) {
+      assert.ok(!clause.includes('NOW()'), `${label} لا تقارن بـNOW(): ${clause}`);
+      assert.ok(clause.includes('publish_at <= ?'), `${label} تأخذ الساعة مُعامَلةً: ${clause}`);
+    }
+
+    // (٢) والقراءات الثلاث التي تكتب شرط الموعد نصاً بيدها (لا بالقطعة)، وإلا
+    //     عاد العيب من باب بوابة الإعلان ومن باب المجدول.
+    for (const [label, fn] of [
+      ['publishGateOpen', eventsService.publishGateOpen],
+      ['listDueScheduledPublish', eventsService.listDueScheduledPublish],
+      ['markAnnounced', eventsService.markAnnounced]
+    ]) {
+      const source = fn.toString();
+      assert.ok(
+        !/publish_at\s*(?:IS NULL OR\s*publish_at\s*)?<=\s*NOW\(\)/.test(source),
+        `${label} لا تقارن publish_at بـNOW(): ${source}`
+      );
+      assert.ok(source.includes('publish_at <= ?'), `${label} تأخذ الساعة مُعامَلةً: ${source}`);
+    }
+
+    // (٣) والقيمة الممرَّرة هي «الآن» بساعة القدس، بصيغة عمود `DATETIME`.
+    const clockBefore = publishClockOf(new Date());
+    const passedClock = eventsService.publishNowClock();
+    const clockAfter = publishClockOf(new Date());
+    assert.ok(
+      passedClock === clockBefore || passedClock === clockAfter,
+      `الساعة الممرَّرة هي الآن في القدس: المتوقّع ${clockBefore} أو ${clockAfter}، والممرَّر ${passedClock}`
+    );
+    assert.match(passedClock, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'وبصيغة عمود DATETIME لا ISO');
+
+    // (٤) سلوكياً: مناسبة بلغ موعدها **بساعة القدس** صارت ظاهرة في «القادم».
+    //     الموعد يُكتب على الصفّ مباشرةً لأن المسار يرفض موعداً ماضياً عمداً.
+    const dueHonoree = 'عريس الموعد القدسي الحاضر';
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: dueHonoree }],
+        town: SCHEDULED_TOWN,
+        event_date: addDaysToDate(schedulerToday, 28)
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    const dueId = created.body.eventId;
+    scheduledIds.push(dueId);
+
+    const dueClock = publishClockOf(new Date(Date.now() - 2 * 60 * 1000));
+    await db.execute('UPDATE events SET publish_at = ? WHERE id = ?', [dueClock, dueId]);
+    const storedDue = await db.queryOne(
+      "SELECT DATE_FORMAT(publish_at, '%Y-%m-%d %H:%i:%s') AS clock FROM events WHERE id = ?", [dueId]
+    );
+    assert.strictEqual(storedDue.clock, dueClock, 'الموعد المخزَّن ساعة حائط القدس كما كُتبت — لا محوّلة إلى منطقة الجلسة');
+
+    const dueFeed = await api(
+      'GET', `/api/events?upcoming=1&limit=100&all_regions=1&search=${encodeURIComponent(dueHonoree)}`
+    );
+    assert.strictEqual(dueFeed.status, 200, dueFeed.body.message);
+    assert.ok(
+      dueFeed.body.events.some(event => event.id === dueId),
+      `مناسبة بلغ موعدها بساعة القدس تُنشَر: ${dueFeed.body.events.map(event => event.id).join('، ') || 'لا نتائج'}`
+    );
+
+    // إعلانها قد يصل فردياً أو داخل ملخّص اليوم — والحذف يغطّي الوجهين.
+    await db.execute('DELETE FROM notifications WHERE event_id = ?', [dueId]);
+    await db.execute("DELETE FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?", [`%${dueHonoree}%`]);
+  });
+
   await test('نافذة البقاء: نجاح منتهٍ منذ ٣ أيام يظهر في «القادم» بـ«انتهت»، ومنذ ٨ لا يظهر، وعرس منتهٍ أمس لا يظهر، والخريطة لا تعرض المنتهي', async () => {
     assert.strictEqual(
       Number(celebrationType.feed_linger_days), 7,
@@ -15748,6 +15832,54 @@ async function run() {
     const pinIds = map.body.points.map(point => point.id);
     assert.ok(!pinIds.includes(recentCelebration), 'الخريطة لا تعرض النجاح المنتهي ولو بقي في التغذية');
     assert.ok(pinIds.includes(liveCelebration), 'بينما النجاح القائم على الخريطة — الشاهد الإيجابي');
+  });
+
+  await test('صفّ بلا نوع لا يبقى في «القادم» أبداً: منتهٍ منذ ٣٠ يوماً يخرج، والمنتهي اليوم يظهر (#167)', async () => {
+    const { today: noTypeToday } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+    const hura = await db.queryOne('SELECT region_id FROM towns WHERE name = ?', [SCHEDULED_TOWN]);
+    assert.ok(hura, 'بلدة الصفوف الخام موجودة في جدول البلدات');
+
+    // بلا `occasion_type_id` — كما تُدرجها البذرة (`seed.js`) والسكربتات
+    // (`munasabatna-insert.js` و`import-legacy-json.js`)؛ لا مسار نشر يُنتج صفاً بلا نوع.
+    const insertTypeless = async (honoree, eventDate) => {
+      const { insertId } = await db.execute(
+        `INSERT INTO events (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name, event_date, status)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'approved')`,
+        [`مناسبة بلا نوع — ${honoree}`, honoree, 'آل بلا نوع', SCHEDULED_TOWN, hura.region_id, 'ديوان بلا نوع', eventDate]
+      );
+      return insertId;
+    };
+
+    const goneTypelessHonoree = 'صاحب النوع الغائب القديم';
+    const todayTypelessHonoree = 'صاحب النوع الغائب اليوم';
+    const oldTypeless = await insertTypeless(goneTypelessHonoree, addDaysToDate(noTypeToday, -30));
+    const todayTypeless = await insertTypeless(todayTypelessHonoree, noTypeToday);
+    scheduledIds.push(oldTypeless, todayTypeless);
+
+    const upcomingFor = async honoree => {
+      const res = await api(
+        'GET', `/api/events?upcoming=1&limit=100&all_regions=1&search=${encodeURIComponent(honoree)}`
+      );
+      assert.strictEqual(res.status, 200, res.body.message);
+      return res.body.events;
+    };
+
+    assert.strictEqual(
+      (await upcomingFor(goneTypelessHonoree)).length, 0,
+      'مناسبة بلا نوع انتهت قبل ٣٠ يوماً لا تظهر في «القادم» — نافذتها صفر يوم، لا بقاء أبديّ'
+    );
+    const todayRow = (await upcomingFor(todayTypelessHonoree)).find(event => event.id === todayTypeless);
+    assert.ok(todayRow, 'ومناسبة بلا نوع تنتهي اليوم تظهر في «القادم» — الحدّ `span_end >= CURDATE()` حرفياً');
+    assert.strictEqual(todayRow.occasion_type_id, null, 'والصفّ فعلاً بلا نوع — والحدّ هو ما أسقطه');
+
+    // الشاهد الإيجابي: الصفّ القديم موجود وظاهر في عرض الكل، فغيابه من «القادم»
+    // من شرط النافذة وحده لا من غياب الصفّ أو إخفائه عن القراءات العامة.
+    const allFeed = await searchByHonoree(goneTypelessHonoree);
+    assert.strictEqual(allFeed.status, 200);
+    assert.ok(
+      allFeed.body.events.some(event => event.id === oldTypeless),
+      'عرض الكل يعرض المناسبة نفسها — الشاهد الإيجابي على وجودها'
+    );
   });
 
   await test('feed_linger_days: افتراضه 0، والسوبر أدمن يضبطه من مسار الأنواع (0..30) ويُرفض ما خارجه', async () => {

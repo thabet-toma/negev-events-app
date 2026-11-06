@@ -309,8 +309,9 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 - **النشر المجدول** (تذكرة #167): مناسبة `publish_at` مستقبلي — معتمدة كانت أو في الطابور — غائبة
   عن **كل** قائمة عامة (هذه التغذية، والخريطة، والبحث، و«مناسبات أخرى»، وخريطة الموقع، وعدّادات
   الاكتشاف) حتى يبلغ موعدها، وتُفتح برابطها وبمعرّفها في `GET /api/events/:id` كمناسبة «بالرابط
-  فقط». والشرط واحد في `PUBLIC_EVENT_VISIBLE_SQL_*` (`publish_at IS NULL OR publish_at <= NOW()`)
-  فلا نسخة ثانية منه في أي استعلام.
+  فقط». والشرط واحد في `PUBLIC_EVENT_VISIBLE_SQL_*` (`publish_at IS NULL OR publish_at <= ?`،
+  والساعة تُمرَّر مُعامَلةً بساعة القدس من `getZonedParts` — لا `NOW()` الذي يقرأ منطقة جلسة
+  MySQL) فلا نسخة ثانية منه في أي استعلام.
 - **مرقّمة**: `?page=` (افتراضي 1) و `?limit=` (افتراضي 30، سقف أعلى صلب 100 — طلب أكبر
   يُقصّ لا يُرفض). الاستجابة تحمل `pagination: { page, limit, total, totalPages }` إلى جانب
   `events`.

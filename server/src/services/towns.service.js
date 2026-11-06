@@ -34,6 +34,11 @@ function publicEventVisibleSql() {
   return require('./events.service').PUBLIC_EVENT_VISIBLE_SQL_E;
 }
 
+/** قيمة `?` الواحدة في القطعة أعلاه (`publish_at <= ?`) — ساعة القدس، لا `NOW()`. */
+function publicEventVisibleParam() {
+  return require('./events.service').publishNowClock();
+}
+
 /**
  * Active towns in display order: `{ id, region_id, name, latitude, longitude, position }`,
  * coordinates as numbers (or null for the villages catch-all).
@@ -150,7 +155,9 @@ async function listDiscoveryRegions() {
               (SELECT COUNT(*) FROM towns t WHERE t.region_id = r.id AND t.is_active = 1) AS towns_count,
               (SELECT COUNT(*) FROM events e WHERE e.region_id = r.id AND ${publicEventVisibleSql()}) AS events_count
          FROM regions r
-        ORDER BY r.position ASC, r.id ASC`
+        ORDER BY r.position ASC, r.id ASC`,
+      // القطعة وحدها تحمل `?` واحداً في العبارة — لا قيمة أخرى تُمرَّر معها.
+      [publicEventVisibleParam()]
     ),
     db.query(
       `SELECT region_id, name

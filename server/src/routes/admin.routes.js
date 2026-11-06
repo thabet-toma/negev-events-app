@@ -120,8 +120,8 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
     //
     // و**الاعتماد قبل الموعد لا يُعلن** (تذكرة #167): صفّ له `publish_at` مستقبلي
     // يبقى غائباً عن كل قائمة عامة، ولا يجوز أن يسمع به أحد — ولا إشارةً لحظية
-    // تحمل عنوانه — قبل موعده. البوابة تُقرأ من الصفّ نفسه بساعة القاعدة
-    // (`publishGateOpen`)، والمجدول وحده يُعلنه حين يبلغ موعده.
+    // تحمل عنوانه — قبل موعده. البوابة تُقرأ من الصفّ نفسه بساعة القدس
+    // المُمرَّرة مُعامَلةً (`publishGateOpen`)، والمجدول وحده يُعلنه حين يبلغ موعده.
     if (await events.publishGateOpen(eventId)) {
       const announcement = await notificationsService.notifyNewEvent(event);
       if (announcement) {
