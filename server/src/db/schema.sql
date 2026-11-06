@@ -250,6 +250,12 @@ CREATE TABLE IF NOT EXISTS events (
   artist_image_url TEXT         NULL,
   host_phone       VARCHAR(30)  DEFAULT NULL,
   status           ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  -- «بالرابط فقط» (تذكرة #166، والقرار في #141): المناسبة عامة افتراضاً، أو
+  -- مخفيّة عن **كل** قائمة عامة (التغذية والخريطة والبحث و«مناسبات أخرى»
+  -- وخريطة الموقع وعدّادات الاكتشاف وإشعار «مناسبة جديدة») ولا تُفتح إلا
+  -- برابطها: `/e/:id` وبالمعرّف في الـAPI. الشرط يكتبه موضع واحد في
+  -- events.service.js (PUBLIC_EVENT_VISIBLE_SQL_*) فلا يُكرَّر هنا.
+  visibility       ENUM('public','link_only') NOT NULL DEFAULT 'public',
   views_count      INT UNSIGNED NOT NULL DEFAULT 0,
   -- أول اعتماد فعلي — «مناسبة جديدة» تُعلَن مرّة واحدة في عمر المناسبة، لا
   -- عند كل إعادة اعتماد بعد رفض أو تعديل (admin.service.js#updateEventStatus).
@@ -262,6 +268,9 @@ CREATE TABLE IF NOT EXISTS events (
   KEY idx_events_town (town),
   KEY idx_events_status (status),
   KEY idx_events_status_date (status, event_date),
+  -- فهرس الظهور (تذكرة #166): كل قراءة عامة تقطعه مع `status`، ومعه يبقى
+  -- العدّ والتغذية بعيدين عن صفوف «بالرابط فقط» بلا مسح كامل.
+  KEY idx_events_visibility (visibility),
   KEY idx_events_groom (groom_name),
   KEY idx_events_clan (family_clan),
   KEY idx_events_occasion_type (occasion_type_id),

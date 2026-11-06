@@ -2530,10 +2530,19 @@ void main() {
         );
 
     /// `/api/towns` يحمل بلدة لا يعرفها `AppConfig.towns` ومحافظة «النقب» —
-    /// أو يفشل بـ500 حين `townsFail`. كل POST إلى /api/events يُلتقط جسمه.
-    NegevApi placesApi({bool townsFail = false, List<String>? postedBodies}) {
+    /// أو يفشل بـ500 حين `townsFail`. كل POST إلى /api/events يُلتقط جسمه،
+    /// وكل PATCH إلى /api/events/:id كذلك (جسمه JSON نصّاً) — تذكرة #166.
+    NegevApi placesApi({
+      bool townsFail = false,
+      List<String>? postedBodies,
+      List<String>? patchedBodies,
+    }) {
       final client = MockClient((request) async {
         final path = request.url.path;
+        if (request.method == 'PATCH' && path.contains('/api/events/')) {
+          patchedBodies?.add(utf8.decode(request.bodyBytes));
+          return jsonResponse({'success': true, 'message': 'تم حفظ التعديل'});
+        }
         if (path.endsWith('/api/towns')) {
           if (townsFail) return jsonResponse({'success': false, 'message': 'خطأ'}, 500);
           return jsonResponse({
@@ -2885,6 +2894,133 @@ void main() {
         expect(townPart, contains('\r\n\r\nالنقب\r\n'));
         // المحافظة لا تُكتب دبّوساً — لا إحداثيات بلا نقرة من المستخدم.
         expect(posted.single, isNot(contains('name="latitude"')));
+      },
+    );
+
+    /// «بالرابط فقط» (تذكرة #166، والقرار في #141): الخيار في النموذج نفسه.
+    /// افتراضه «عامة» في النشر، واختياره يسافر في جسم النشر، وفي التعديل يبدأ
+    /// من الصفّ. وهذه الاختبارات تقيس ما لا يقيسه اختبار الخادم: أن الشاشة
+    /// تعرض الخيار وتُرسله فعلاً، لا أن الـAPI يقبله فقط.
+    testWidgets(
+      'نموذج النشر: «من يرى المناسبة؟» افتراضه «عامة» ويُرسَل مع الطلب (#166)',
+      (tester) async {
+        final posted = <String>[];
+        await pumpScreen(tester, placesApi(postedBodies: posted), const AddEventScreen());
+
+        // الافتراض «عامة» — لا إخفاء بلا اختيار صريح.
+        final picker = find.text(EventVisibility.public.label).first;
+        await tester.ensureVisible(picker);
+        await tester.pump();
+        expect(picker, findsOneWidget);
+
+        await tester.enterText(find.widgetWithText(TextFormField, 'العريس/العروس'), 'محمد');
+        await tester.tap(find.text('اختر التاريخ'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        final send = find.text('إرسال المناسبة');
+        await tester.ensureVisible(send);
+        await tester.pump();
+        await tester.tap(send);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(posted, hasLength(1));
+        expect(posted.single, contains('name="visibility"'));
+        expect(posted.single, contains('\r\n\r\npublic\r\n'));
+      },
+    );
+
+    testWidgets(
+      'اختيار «بالرابط فقط» يسافر في جسم النشر (#166)',
+      (tester) async {
+        final posted = <String>[];
+        await pumpScreen(tester, placesApi(postedBodies: posted), const AddEventScreen());
+
+        final picker = find.text(EventVisibility.public.label).first;
+        await tester.ensureVisible(picker);
+        await tester.pump();
+        await tester.tap(picker);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text(EventVisibility.linkOnly.label).last);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.text(EventVisibility.linkOnly.label), findsWidgets);
+
+        await tester.enterText(find.widgetWithText(TextFormField, 'العريس/العروس'), 'محمد');
+        await tester.tap(find.text('اختر التاريخ'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        final send = find.text('إرسال المناسبة');
+        await tester.ensureVisible(send);
+        await tester.pump();
+        await tester.tap(send);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(posted, hasLength(1));
+        expect(posted.single, contains('\r\n\r\nlink_only\r\n'));
+      },
+    );
+
+    testWidgets(
+      'نموذج التعديل: «بالرابط فقط» يبدأ مختاراً ويُرسَل عند تغييره (#166)',
+      (tester) async {
+        final patched = <String>[];
+        final linked = Event.fromJson({
+          'id': 2,
+          'title': 'زفاف محمد',
+          'groom_name': 'محمد',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'قاعة الأفراح',
+          'event_date': '2026-10-01',
+          'status': 'approved',
+          'visibility': 'link_only',
+          'occasion_type': weddingTypeJson(),
+          'honorees': [
+            {'name': 'محمد', 'role': null, 'position': 1},
+          ],
+        });
+
+        await pumpScreen(
+          tester,
+          placesApi(patchedBodies: patched),
+          EditEventScreen(event: linked),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // القيمة من الصفّ لا الافتراض: مناسبة مخفيّة تُفتح على «بالرابط فقط».
+        final selected = find.text(EventVisibility.linkOnly.label).first;
+        await tester.ensureVisible(selected);
+        await tester.pump();
+        expect(selected, findsOneWidget);
+
+        await tester.tap(selected);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text(EventVisibility.public.label).last);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final save = find.byKey(const Key('save_event_button'));
+        await tester.ensureVisible(save);
+        await tester.pump();
+        await tester.tap(save);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        expect(patched, hasLength(1));
+        expect(jsonDecode(patched.single)['visibility'], 'public');
       },
     );
 

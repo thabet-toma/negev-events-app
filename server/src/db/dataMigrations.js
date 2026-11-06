@@ -2228,6 +2228,30 @@ const steps = [
         + `users.region_id stays NULL for every existing account.`
       );
     }
+  },
+  {
+    // ظهور المناسبة (تذكرة #166، والقرار في #141): «عام» افتراضاً أو «بالرابط
+    // فقط». لا تعبئة صفوف هنا: `DEFAULT 'public'` يجعل MySQL نفسه يكتب
+    // `public` في كل صفّ قائم لحظة إضافة العمود، فإعادة التشغيل لا تجد ما
+    // تملؤه أصلاً.
+    //
+    // **آمنة للتكرار بذاتها:** إضافة العمود داخل `columnExists` والفهرس داخل
+    // `indexExists` — لا ALTER أعمى يُسقط الترحيل كلها في التشغيل الثاني، ولا
+    // `IF NOT EXISTS` ناقص في نسخة MySQL قديمة. ولا تُعدَّل خطوة قائمة هنا.
+    name: 'add-event-visibility-2026-11',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'visibility'))) {
+        await connection.execute(
+          "ALTER TABLE events ADD COLUMN visibility ENUM('public','link_only') NOT NULL DEFAULT 'public' AFTER status"
+        );
+        logger.info('[migrations] add-event-visibility-2026-11: events.visibility added.');
+      }
+      if (!(await indexExists(connection, 'events', 'idx_events_visibility'))) {
+        await connection.execute('ALTER TABLE events ADD KEY idx_events_visibility (visibility)');
+        logger.info('[migrations] add-event-visibility-2026-11: idx_events_visibility added.');
+      }
+      logger.info('[migrations] add-event-visibility-2026-11: ensured column/index; existing rows are public.');
+    }
   }
 ];
 

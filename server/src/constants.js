@@ -60,6 +60,14 @@ const REACTION_TYPES = ['coffee', 'horse', 'fireworks', 'rose', 'hand'];
 
 const EVENT_STATUSES = ['pending', 'approved', 'rejected'];
 
+/**
+ * ظهور المناسبة (تذكرة #166، والقرار في #141): عامّة تظهر في كل قائمة، أو
+ * «بالرابط فقط» تُفتح برابطها (`/e/:id`) وبمعرّفها في الـAPI ولا تدخل قائمة
+ * عامة ولا إشعار «مناسبة جديدة». القيمة المغلقة الوحيدة التي يقبلها
+ * `events.visibility`.
+ */
+const EVENT_VISIBILITIES = ['public', 'link_only'];
+
 const DEFAULT_POSTER =
   'https://images.unsplash.com/photo-1519741497674-611481863552?w=800&auto=format&fit=crop&q=80';
 
@@ -280,6 +288,7 @@ module.exports = {
   VILLAGES_TOWN,
   REACTION_TYPES,
   EVENT_STATUSES,
+  EVENT_VISIBILITIES,
   DEFAULT_POSTER,
   OCCASION_FIELDS,
   OCCASION_FIELD_KEYS,
