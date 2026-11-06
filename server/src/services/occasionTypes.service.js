@@ -6,7 +6,7 @@ const ApiError = require('../utils/ApiError');
 const BOOLEAN_COLUMNS = [
   'is_active', 'creates_collision', 'warns_others', 'premoderate_messages',
   'show_congratulations_count', 'show_followers_count', 'show_views_count',
-  'legacy_client_supported', 'archive_gallery'
+  'legacy_client_supported', 'archive_gallery', 'rsvp_enabled', 'show_rsvp_count'
 ];
 
 function castBooleans(type) {
@@ -134,14 +134,16 @@ async function createType(data) {
       `INSERT INTO occasion_types
          (name, icon, color, position, is_active, creates_collision, warns_others,
           premoderate_messages, show_congratulations_count, show_followers_count,
-          show_views_count, congratulations_label, default_badge_title, tone, archive_gallery)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          show_views_count, congratulations_label, default_badge_title, tone, archive_gallery,
+          rsvp_enabled, show_rsvp_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.name, data.icon, data.color, data.position, data.is_active ? 1 : 0,
         data.creates_collision ? 1 : 0, data.warns_others ? 1 : 0, data.premoderate_messages ? 1 : 0,
         data.show_congratulations_count ? 1 : 0, data.show_followers_count ? 1 : 0,
         data.show_views_count ? 1 : 0, data.congratulations_label, data.default_badge_title || null,
-        data.tone, data.archive_gallery ? 1 : 0
+        data.tone, data.archive_gallery ? 1 : 0,
+        data.rsvp_enabled ? 1 : 0, data.show_rsvp_count ? 1 : 0
       ]
     );
     const typeId = result.insertId;
@@ -183,7 +185,8 @@ async function updateType(id, data) {
     'name', 'icon', 'color', 'position', 'is_active', 'creates_collision', 'warns_others',
     'premoderate_messages', 'show_congratulations_count', 'show_followers_count',
     'show_views_count', 'congratulations_label', 'default_badge_title',
-    'default_poster_url', 'legacy_client_supported', 'tone', 'archive_gallery'
+    'default_poster_url', 'legacy_client_supported', 'tone', 'archive_gallery',
+    'rsvp_enabled', 'show_rsvp_count'
   ];
 
   await db.transaction(async connection => {

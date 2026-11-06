@@ -4537,6 +4537,81 @@ body.event-page-open { overflow: hidden; }
 
 .event-page-followers { margin-top: -6px; font-size: 0.8rem; color: var(--ink-faint); }
 
+/* تأكيد الحضور — «جاي / مش جاي» والعدد والعدّاد (تذكرة #168). لا يُرسم هذا
+   الصفّ أصلاً لنوع ليس فيه `rsvp_enabled` أو نغمته وقورة، فالقواعد هنا للشكل
+   وحده لا للإخفاء. */
+.event-page-rsvp {
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.event-page-rsvp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.event-page-rsvp-title { font-size: 0.95rem; font-weight: 800; color: var(--ink); }
+.event-page-rsvp-count { font-size: 0.85rem; font-weight: 700; color: var(--sky); }
+
+.event-page-rsvp-controls {
+  display: grid;
+  grid-template-columns: auto 72px 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.event-page-rsvp-size-label { font-size: 0.8rem; color: var(--ink-faint); }
+
+.event-page-rsvp-size {
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 8px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.event-page-rsvp-controls .rsvp-choice { padding: 9px 6px; font-size: 0.85rem; }
+.event-page-rsvp-controls .rsvp-choice.is-chosen { border-color: var(--sky); background: rgba(3, 105, 161, 0.1); color: var(--sky); }
+
+.event-page-rsvp-state { margin-top: 8px; font-size: 0.82rem; color: var(--ink-soft); }
+
+.event-page-rsvp-withdraw {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.event-page-rsvp-withdraw:hover { color: var(--ink); }
+
+/* «مين جاي» — سطر المجاميع فوق قائمة الأسماء في نافذة صاحب المناسبة. */
+.rsvp-list-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 4px;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 430px) {
+  .event-page-rsvp-controls { grid-template-columns: 1fr 1fr; }
+  .event-page-rsvp-size-label { grid-column: 1 / -1; }
+}
+
 .event-page-congrats-head {
   display: flex;
   align-items: center;

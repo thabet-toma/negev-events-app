@@ -179,6 +179,25 @@ class ApiClient {
     );
   }
 
+  /// `PUT` — النداء الوحيد الذي يستعمله اليوم تأكيد الحضور
+  /// (`PUT /api/events/:id/rsvp`، تذكرة #168): upsert يُرسل الجواب كاملاً كل
+  /// مرة، لا تعديلاً جزئياً. وبناؤه كـ`post`/`patch` حرفياً كي لا يخترع هذا
+  /// الملف اصطلاحاً ثانياً للترويسات أو للخطأ.
+  Future<Map<String, dynamic>> put(
+    String path, {
+    Map<String, dynamic>? body,
+    bool auth = false,
+  }) async {
+    return _send(
+      () => _client.put(
+        _uri(path),
+        headers: _headers(auth: auth, json: true),
+        body: jsonEncode(body ?? const {}),
+      ),
+      auth: auth,
+    );
+  }
+
   /// إرسال متعدد الأجزاء — لرفع البوستر والصوت مع المناسبة.
   Future<Map<String, dynamic>> postMultipart(
     String path, {

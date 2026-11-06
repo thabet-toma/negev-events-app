@@ -282,6 +282,211 @@ async function clearEndedReminders(userId) {
   return affectedRows;
 }
 
+// --- تأكيد الحضور بحساب: «جاي / مش جاي» (تذكرة #168، ADR-0015) ---------
+//
+// This is the *account* face of the RSVP table alone. The guest face on
+// `/e/:id` (name + party size + mandatory phone, no account) belongs to
+// another ticket: `event_rsvps` already carries its `guest_name`,
+// `guest_phone`, `source = 'share_page'` and `invite_id` columns, but no route
+// here ever writes or reads them apart from `guest_name`'s use as the name in
+// «مين جاي» — the rest is left for that ticket.
+
+/**
+ * Whether an occasion type shows its public «كم جاي» counter. Read off the
+ * type's own flags, never off its name — with one deliberate exception stated
+ * as data, not as a branch: a `solemn` type never shows it. That is the same
+ * derivation the migration re-asserts on every run (`add-rsvp-2026-11`), and
+ * the response side must not depend on "the next migrate run will fix the flag"
+ * — an admin PATCH between two deploys would otherwise put an attendance
+ * counter on a funeral for a whole release cycle.
+ *
+ * Accepts either shape a caller holds: the type object `attachHonoreesAndTypes`
+ * builds (booleans already cast) or a raw SQL row (0/1). A missing key means
+ * "not decided" and shows the counter, the same rule
+ * `show_followers_count !== false` follows above.
+ */
+function rsvpCountVisible(occasionType) {
+  if (!occasionType || occasionType.tone === 'solemn') return false;
+  if (occasionType.show_rsvp_count === false || occasionType.show_rsvp_count === 0) return false;
+  return true;
+}
+
+/**
+ * أعداد الجايين لكل مناسبة: `SUM(party_size)` في أجوبة «جاي» وحدها، لا عدد
+ * الصفوف — الجواب الواحد يحمل مرافقيه. غياب المناسبة من الخريطة يعني صفراً.
+ */
+async function rsvpGoingCountsForEvents(eventIds) {
+  if (!eventIds.length) return {};
+
+  const placeholders = eventIds.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT event_id, SUM(party_size) AS going FROM event_rsvps
+      WHERE event_id IN (${placeholders}) AND response = 'yes'
+      GROUP BY event_id`,
+    eventIds
+  );
+
+  const map = {};
+  for (const row of rows) map[row.event_id] = Number(row.going);
+  return map;
+}
+
+/**
+ * Attaches `rsvp_going_count` to a list of events already carrying
+ * `occasion_type` — **absent entirely**, never zero, when the type hides it
+ * (`rsvpCountVisible`). A hidden counter shown as 0 is a lie about the event,
+ * so this follows `followers_count` exactly rather than inventing a third rule.
+ */
+async function attachRsvpCounters(events) {
+  if (!events.length) return events;
+
+  const visibleIds = events.filter(event => rsvpCountVisible(event.occasion_type)).map(event => event.id);
+  const countsMap = await rsvpGoingCountsForEvents(visibleIds);
+
+  return events.map(event => (
+    rsvpCountVisible(event.occasion_type)
+      ? { ...event, rsvp_going_count: countsMap[event.id] || 0 }
+      : event
+  ));
+}
+
+/**
+ * The row every RSVP read starts from: the event's own status plus its type's
+ * two flags. `null` for an id no event carries.
+ */
+async function rsvpContext(eventId) {
+  return db.queryOne(
+    `SELECT e.id, e.status, ot.rsvp_enabled, ot.show_rsvp_count, ot.tone
+       FROM events e
+       LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
+      WHERE e.id = ?`,
+    [eventId]
+  );
+}
+
+/**
+ * Asserts the event accepts an attendance answer at all, and returns its
+ * context row. **One 404 covers all three refusals** — no such event, an event
+ * not `approved` (a pending submission must not confirm its own existence), and
+ * a type whose `rsvp_enabled` is off — so the route can never be used to probe
+ * what is out there. Same door `setReminder` above keeps.
+ */
+async function assertEventAcceptsRsvp(eventId) {
+  const context = await rsvpContext(eventId);
+  if (!context || context.status !== 'approved' || !Number(context.rsvp_enabled || 0)) {
+    throw ApiError.notFound('هذه المناسبة لا تقبل تأكيد الحضور');
+  }
+  return context;
+}
+
+/** العدّادات التي يجوز أن تُعاد مع حالة الحضور — `{}` حين يخفيها النوع. */
+async function rsvpCountersForEvent(eventId, context) {
+  const row = context || await rsvpContext(eventId);
+  if (!row || !rsvpCountVisible(row)) return {};
+  const going = await db.queryOne(
+    "SELECT COALESCE(SUM(party_size), 0) AS going FROM event_rsvps WHERE event_id = ? AND response = 'yes'",
+    [eventId]
+  );
+  return { rsvp_going_count: Number(going.going) };
+}
+
+/** جواب هذا المستخدم على هذه المناسبة، أو `null`. لا هاتف ولا اسم هنا. */
+async function myRsvpFor(eventId, userId) {
+  const row = await db.queryOne(
+    'SELECT response, party_size, source FROM event_rsvps WHERE event_id = ? AND user_id = ?',
+    [eventId, userId]
+  );
+  if (!row) return null;
+  return { response: row.response, party_size: Number(row.party_size), source: row.source };
+}
+
+/**
+ * «جاي» أو «مش جاي» من حساب — upsert على (event_id, user_id) بجواب واحد لكل
+ * حساب: السؤال الثاني يُحدّث الصفّ القائم، ولا يُضيف ثانياً (المفتاح الفريد هو
+ * ما يفرض ذلك، لا فحصٌ يسبق الكتابة).
+ *
+ * و`yes` ينشئ «ذكّرني» **إن غاب** بإعادة استعمال `setReminder` نفسها — لا نسخة
+ * SQL ثانية للـINSERT — فيصل تذكير المناسبة تلقائياً. و`no` **لا يلمس** «ذكّرني»:
+ * التراجع عن الحضور لا يُخرج المناسبة من «قائمتي»، فالقائمة متابعة لا تعهّد
+ * (ADR-0015، والقاعدة نفسها في القسم أعلاه).
+ */
+async function setRsvp(eventId, userId, { response, partySize }) {
+  const context = await assertEventAcceptsRsvp(eventId);
+
+  await db.execute(
+    `INSERT INTO event_rsvps (event_id, user_id, response, party_size, source)
+     VALUES (?, ?, ?, ?, 'account')
+     ON DUPLICATE KEY UPDATE response = VALUES(response), party_size = VALUES(party_size), source = 'account'`,
+    [eventId, userId, response, partySize]
+  );
+
+  if (response === 'yes') await setReminder(eventId, userId);
+
+  return {
+    my_rsvp: await myRsvpFor(eventId, userId),
+    ...await rsvpCountersForEvent(eventId, context)
+  };
+}
+
+/**
+ * سحب الجواب — يحذف صفّ الحساب وحده (`user_id = ?` في الحذف نفسه، فلا يمسّ
+ * جواب حساب آخر)، **ولا يمسّ «ذكّرني»** بالحذف ولا بالإضافة. النوع المطفأ
+ * يبقى 404 هنا أيضاً، كالإجابة نفسها.
+ */
+async function removeRsvp(eventId, userId) {
+  const context = await assertEventAcceptsRsvp(eventId);
+  await db.execute('DELETE FROM event_rsvps WHERE event_id = ? AND user_id = ?', [eventId, userId]);
+  return { my_rsvp: null, ...await rsvpCountersForEvent(eventId, context) };
+}
+
+/**
+ * «مين جاي» — قائمة أجوبة الحضور لصاحب المناسبة أو أدمن في نطاقه (الحكم في
+ * طبقة المسار عبر `assertCanManageEvent`، لا هنا).
+ *
+ * **الهاتف لا يُنتقى في هذا الاستعلام أصلاً** — لا `guest_phone` ولا `SELECT *`
+ * لتُخفى في JS: عمود لا يدخل النتيجة لا يمكن أن يخرج في ردّ. والاسم من
+ * `users.full_name` للحساب ومن `guest_name` للضيف، ولا يُطلب الاسم من العميل
+ * لهذا الغرض.
+ *
+ * Over the two faces (account and, later, share_page) the totals count both, so
+ * the owner's number is the same number the public counter shows.
+ */
+async function listEventRsvps(eventId) {
+  const rows = await db.query(
+    `SELECT er.id,
+            COALESCE(u.full_name, er.guest_name) AS name,
+            er.response, er.party_size, er.source,
+            er.created_at, er.updated_at
+       FROM event_rsvps er
+       LEFT JOIN users u ON u.id = er.user_id
+      WHERE er.event_id = ?
+      ORDER BY er.response DESC, er.created_at ASC, er.id ASC`,
+    [eventId]
+  );
+
+  const rsvps = rows.map(row => ({
+    id: row.id,
+    name: row.name || '',
+    response: row.response,
+    party_size: Number(row.party_size),
+    source: row.source,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }));
+
+  const goingRows = rsvps.filter(rsvp => rsvp.response === 'yes');
+  return {
+    rsvps,
+    totals: {
+      // مجموع العدد في «جاي» — الرقم نفسه الذي يحمله `rsvp_going_count`.
+      going_count: goingRows.reduce((sum, rsvp) => sum + rsvp.party_size, 0),
+      going_rows: goingRows.length,
+      not_going_rows: rsvps.filter(rsvp => rsvp.response === 'no').length,
+      total_rows: rsvps.length
+    }
+  };
+}
+
 /**
  * The «قائمتي» bucket one followed event falls into, given how far its span
  * sits from today and today's day-of-week (1 = Sunday … 7 = Saturday, so the
@@ -758,9 +963,12 @@ async function listPublicEvents({
   });
 
   const withReminderState = await attachReminderState(events, userId);
+  // `rsvp_going_count` بعد أعلام النوع: الحقل يُضاف ولا يُحذف، فطلبه من عميل لا
+  // يعرفه لا يكسر شيئاً (ADR-0004)، وغيابه وحده يعني «النوع يخفيه».
+  const withRsvpCounters = await attachRsvpCounters(withReminderState);
 
   return {
-    events: withReminderState,
+    events: withRsvpCounters,
     pagination: {
       page: safePage,
       limit: safeLimit,
@@ -825,9 +1033,18 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
   for (const row of reactionRows) reactions[row.reaction_type] = Number(row.count);
 
   const [withReminderState] = await attachReminderState([withRelations], userId);
+  // العدّاد العلني حين يسمح النوع (`rsvpCountVisible`) — ويغيب كلياً حين يخفيه.
+  const [withRsvpCounters] = await attachRsvpCounters([withReminderState]);
+
+  // جواب المستخدم على المناسبة المعروضة: لعميل مسجَّل ونوع `rsvp_enabled` وحدهما،
+  // وإلا فلا مفتاح أصلاً (كـ`followers_count` أعلاه — الحقل الإضافي يغيب ولا
+  // يُملأ لزائر). و`null` هنا تعني «لم يُجب بعد»، لا «غير مسموح».
+  const withRsvpState = userId && withRsvpCounters.occasion_type?.rsvp_enabled === true
+    ? { ...withRsvpCounters, my_rsvp: await myRsvpFor(eventId, userId) }
+    : withRsvpCounters;
 
   return {
-    ...withReminderState,
+    ...withRsvpState,
     views_count: event.views_count + 1,
     reactions,
     congratulations: congratulations.map(withAbsoluteMedia),
@@ -2144,6 +2361,10 @@ module.exports = {
   removeReminder,
   setReminderNotify,
   clearEndedReminders,
+  rsvpCountVisible,
+  setRsvp,
+  removeRsvp,
+  listEventRsvps,
   myListBucket,
   listMyReminders,
   listLiveAnnouncements,

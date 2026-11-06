@@ -19,6 +19,7 @@ import 'package:negev_events/screens/edit_event_screen.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
+import 'package:negev_events/screens/my_events_screen.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/analytics.dart';
 import 'package:negev_events/state/audio_coordinator.dart';
@@ -3548,5 +3549,333 @@ void main() {
         expect(find.text('2026-09-22'), findsOneWidget);
       },
     );
+  });
+
+  group('تأكيد الحضور — «جاي / مش جاي» و«مين جاي» (تذكرة #168)', () {
+    /// نوع مناسبة بأعلام الحضور كما يرسلها الخادم: `rsvp_enabled` يفتح الميزة،
+    /// و`show_rsvp_count` يقرّر العدّاد — والنغمة `solemn` تُغلق الاثنين.
+    Map<String, dynamic> rsvpTypeJson({
+      String tone = 'festive',
+      bool enabled = true,
+      bool showCount = true,
+    }) =>
+        {
+          'id': tone == 'solemn' ? 2 : 1,
+          'name': tone == 'solemn' ? 'عزا' : 'عرس',
+          'icon': tone == 'solemn' ? '🕯️' : '💍',
+          'color': '#0369a1',
+          'position': 1,
+          'is_active': true,
+          'creates_collision': false,
+          'warns_others': false,
+          'premoderate_messages': false,
+          'show_congratulations_count': false,
+          'show_followers_count': false,
+          'show_views_count': false,
+          'rsvp_enabled': enabled,
+          'show_rsvp_count': showCount,
+          'congratulations_label': tone == 'solemn' ? 'تعازي' : 'تبريكات',
+          'default_badge_title': null,
+          'default_poster_url': null,
+          'legacy_client_supported': true,
+          'tone': tone,
+          'fields': <Map<String, dynamic>>[],
+          'reactions': <String>[],
+        };
+
+    Map<String, dynamic> rsvpEventJson({
+      int id = 168,
+      Map<String, dynamic>? type,
+      int? goingCount = 3,
+      Map<String, dynamic>? myRsvp,
+    }) {
+      final event = <String, dynamic>{
+        'id': id,
+        'status': 'approved',
+        'groom_name': 'سالم',
+        'family_clan': 'آل الاختبار',
+        'town': 'رهط',
+        'location_name': 'ديوان الاختبار',
+        'event_date': '2026-12-31',
+        'occasion_type': type ?? rsvpTypeJson(),
+        'honorees': [
+          {'name': 'سالم', 'role': null, 'position': 1},
+        ],
+      };
+      // الحقلان يغيبان كلياً حين يخفيهما النوع — الغياب لا الصفر.
+      if (goingCount != null) event['rsvp_going_count'] = goingCount;
+      if (myRsvp != null) event['my_rsvp'] = myRsvp;
+      return event;
+    }
+
+    /// شاشة التفاصيل بعميل يردّ `eventBody` للتفصيل، ويسجّل كل طلب حتى يُفحص.
+    Future<List<http.Request>> pumpDetails(
+      WidgetTester tester,
+      Map<String, dynamic> eventBody, {
+      bool signedIn = false,
+      Map<String, dynamic>? rsvpResponse,
+    }) async {
+      SharedPreferences.setMockInitialValues({});
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        if (path == '/api/auth/login') {
+          return http.Response(
+            jsonEncode({
+              'success': true,
+              'token': 'test-token',
+              'user': {
+                'id': 7,
+                'phone_number': '0500000000',
+                'full_name': 'مستخدم الاختبار',
+                'role': 'user',
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (path.endsWith('/rsvp') && request.method == 'PUT') {
+          // خادم وهمي صغير: يطبّق الجواب على الحدث المحفوظ قبل أن يُعيده، فإعادة
+          // الجلب بعد الحفظ (وهي ما تفعله الشاشة) ترى الحالة الجديدة لا القديمة.
+          final sent = jsonDecode(request.body) as Map<String, dynamic>;
+          eventBody['my_rsvp'] = {
+            'response': sent['response'],
+            'party_size': sent['party_size'],
+            'source': 'account',
+          };
+          if (rsvpResponse != null && rsvpResponse['rsvp_going_count'] != null) {
+            eventBody['rsvp_going_count'] = rsvpResponse['rsvp_going_count'];
+          }
+          return http.Response(
+            jsonEncode(rsvpResponse ?? {
+              'success': true,
+              'message': 'تم تأكيد حضورك',
+              'my_rsvp': eventBody['my_rsvp'],
+              'rsvp_going_count': 4,
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          jsonEncode({'success': true, 'event': eventBody}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      if (signedIn) await auth.signIn('0500000000', '1234');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AppServices(
+              api: api,
+              auth: auth,
+              realtime: RealtimeService(),
+              child: EventDetailsScreen(eventId: eventBody['id'] as int),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      return requests;
+    }
+
+    testWidgets('صفحة المناسبة: زرّا «جاي» و«مش جاي»، وعدد المرافقين، والعدّاد، وحالة الجواب', (tester) async {
+      await pumpDetails(
+        tester,
+        rsvpEventJson(myRsvp: {'response': 'yes', 'party_size': 3, 'source': 'account'}),
+      );
+
+      expect(find.text('تأكيد الحضور'), findsOneWidget);
+      expect(find.text('جاي'), findsOneWidget);
+      expect(find.text('مش جاي'), findsOneWidget);
+      expect(find.text('عدد المرافقين'), findsOneWidget);
+      expect(find.text('جايون: 3'), findsOneWidget, reason: 'العدّاد من الخادم، لا حساب محلي');
+      expect(find.text('جوابك: «جاي» — 3 أشخاص'), findsOneWidget);
+      expect(find.text('سحب جوابي'), findsOneWidget);
+    });
+
+    testWidgets('العزاء: لا زرّي حضور ولا عدّاد مهما كان العلَم', (tester) async {
+      await pumpDetails(tester, rsvpEventJson(type: rsvpTypeJson(tone: 'solemn')));
+
+      expect(find.text('تأكيد الحضور'), findsNothing);
+      expect(find.text('جاي'), findsNothing);
+      expect(find.text('مش جاي'), findsNothing);
+      expect(find.textContaining('جايون:'), findsNothing);
+    });
+
+    testWidgets('نوع rsvp_enabled مطفأ: لا أزرار حضور', (tester) async {
+      await pumpDetails(tester, rsvpEventJson(type: rsvpTypeJson(enabled: false)));
+
+      expect(find.text('تأكيد الحضور'), findsNothing);
+      expect(find.text('مش جاي'), findsNothing);
+    });
+
+    testWidgets('الضغط على «جاي» يُرسل PUT بالجواب والعدد المختار', (tester) async {
+      final requests = await pumpDetails(
+        tester,
+        rsvpEventJson(goingCount: 3),
+        signedIn: true,
+      );
+
+      expect(find.text('لم تُجب بعد'), findsOneWidget);
+      await tester.ensureVisible(find.text('جاي'));
+      await tester.pump();
+      await tester.tap(find.text('جاي'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final put = requests.where((r) => r.method == 'PUT' && r.url.path.endsWith('/rsvp')).toList();
+      expect(put, hasLength(1), reason: 'جواب واحد لكل ضغطة — upsert لا إضافة');
+      final body = jsonDecode(put.single.body) as Map<String, dynamic>;
+      expect(body['response'], 'yes');
+      expect(body['party_size'], 1, reason: 'المنتقي يبدأ بـ1، والعدد المختار هو ما يُرسَل');
+      expect(put.single.headers['Authorization'], 'Bearer test-token');
+    });
+
+    testWidgets('الضغط على «مش جاي» يُرسل response = no و party_size = 1', (tester) async {
+      final requests = await pumpDetails(
+        tester,
+        rsvpEventJson(),
+        signedIn: true,
+        rsvpResponse: {
+          'success': true,
+          'my_rsvp': {'response': 'no', 'party_size': 1, 'source': 'account'},
+          'rsvp_going_count': 3,
+        },
+      );
+
+      await tester.ensureVisible(find.text('مش جاي'));
+      await tester.pump();
+      await tester.tap(find.text('مش جاي'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final put = requests.where((r) => r.method == 'PUT' && r.url.path.endsWith('/rsvp')).toList();
+      expect(put, hasLength(1));
+      final body = jsonDecode(put.single.body) as Map<String, dynamic>;
+      expect(body['response'], 'no');
+      expect(body['party_size'], 1, reason: '«مش جاي» لا يحمل مرافقين');
+      expect(find.text('جوابك: «مش جاي»'), findsOneWidget);
+    });
+
+    testWidgets('«مناسباتي»: زرّ «مين جاي» لمناسبة نوعها مفتوح، وقائمة الأسماء بلا هاتف', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        Map<String, dynamic> body;
+        if (path == '/api/auth/login') {
+          body = {
+            'success': true,
+            'token': 'test-token',
+            'user': {
+              'id': 7,
+              'phone_number': '0500000000',
+              'full_name': 'مالك المناسبة',
+              'role': 'user',
+            },
+          };
+        } else if (path.endsWith('/rsvps')) {
+          body = {
+            'success': true,
+            'rsvps': [
+              {'id': 1, 'name': 'سالم أبو الاختبار', 'response': 'yes', 'party_size': 4, 'source': 'account'},
+              {'id': 2, 'name': 'ضيف من الرابط', 'response': 'yes', 'party_size': 1, 'source': 'share_page'},
+              {'id': 3, 'name': 'مريم الاختبار', 'response': 'no', 'party_size': 1, 'source': 'account'},
+            ],
+            'totals': {'going_count': 5, 'going_rows': 2, 'not_going_rows': 1, 'total_rows': 3},
+          };
+        } else {
+          body = {
+            'success': true,
+            'events': [
+              {
+                'id': 168,
+                'status': 'approved',
+                'groom_name': 'سالم',
+                'family_clan': 'آل الاختبار',
+                'town': 'رهط',
+                'location_name': 'ديوان الاختبار',
+                'event_date': '2026-12-31',
+                'occasion_type': rsvpTypeJson(),
+                'honorees': [
+                  {'name': 'سالم', 'role': null, 'position': 1},
+                ],
+              },
+              {
+                'id': 169,
+                'status': 'approved',
+                'groom_name': 'متوفَّى',
+                'family_clan': 'آل الاختبار',
+                'town': 'رهط',
+                'location_name': 'ديوان الاختبار',
+                'event_date': '2026-12-31',
+                'occasion_type': rsvpTypeJson(tone: 'solemn'),
+                'honorees': [
+                  {'name': 'متوفَّى', 'role': null, 'position': 1},
+                ],
+              },
+            ],
+          };
+        }
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      await auth.signIn('0500000000', '1234');
+
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: MyEventsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // واحد فقط من الصفّين يعرضه: نوع الحضور المفتوح، لا العزاء.
+      expect(find.text('مين جاي'), findsOneWidget);
+
+      await tester.ensureVisible(find.text('مين جاي'));
+      await tester.pump();
+      await tester.tap(find.text('مين جاي'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final rsvpsCall = requests.where((r) => r.url.path.endsWith('/rsvps')).toList();
+      expect(rsvpsCall, hasLength(1));
+      expect(rsvpsCall.single.headers['Authorization'], 'Bearer test-token');
+
+      expect(find.text('سالم أبو الاختبار'), findsOneWidget);
+      expect(find.text('ضيف من الرابط'), findsOneWidget);
+      expect(find.text('مريم الاختبار'), findsOneWidget);
+      expect(find.textContaining('جايون: 5'), findsOneWidget, reason: 'المجموع مجموع الأعداد لا عدد الصفوف');
+      expect(find.textContaining('رابط المشاركة'), findsOneWidget);
+      expect(find.text('جاي'), findsWidgets);
+      expect(find.text('مش جاي'), findsOneWidget);
+    });
   });
 }

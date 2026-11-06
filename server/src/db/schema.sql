@@ -145,6 +145,19 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   -- is never overridden by a later deploy. A funeral's photos are not
   -- something the platform should invite.
   archive_gallery             TINYINT(1)   DEFAULT NULL,
+  -- «جاي / مش جاي» بالحساب (تذكرة #168، ADR-0015). Defaults to 0 here so a type
+  -- created before the admin opts in carries no attendance buttons. The
+  -- add-rsvp-2026-11 step turns it on for عرس and خطوبة BY NAME exactly ONCE in
+  -- a database's life (the marker it leaves in app_settings is what tells the
+  -- next run the fill already happened), so a later deploy never overwrites a
+  -- super_admin's own choice for a type.
+  rsvp_enabled                TINYINT(1)   NOT NULL DEFAULT 0,
+  -- Whether an event of this type shows its public «كم جاي» counter. Defaults to
+  -- 1 here, but for a type whose tone is 'solemn' this is DERIVED from the tone
+  -- and re-asserted on EVERY migrate run by add-rsvp-2026-11 — the exact
+  -- pattern, and the exact reasoning, the notify_countdown comment above
+  -- records: an attendance counter has no meaning on a funeral.
+  show_rsvp_count             TINYINT(1)   NOT NULL DEFAULT 1,
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -359,6 +372,42 @@ CREATE TABLE IF NOT EXISTS event_reminders (
   KEY idx_event_reminders_event (event_id),
   CONSTRAINT fk_event_reminders_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_event_reminders_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- «جاي / مش جاي» — a real attendance answer, unlike the follow above (#140/#146,
+-- ADR-0015). Two faces share the table and are told apart by `source`:
+--   account     a signed-in user answers from the app or web/ (تذكرة #168).
+--               UNIQUE (event_id, user_id) makes the second answer an UPDATE.
+--   share_page  a guest with no account answers the form on /e/:id (another
+--               ticket — not built yet). UNIQUE (event_id, guest_phone) is what
+--               makes re-submitting the same phone an UPDATE, not a second row.
+-- `guest_phone` is the guest face's duplicate key and its abuse control, and it
+-- never leaves the server: no response of any route selects it.
+-- `invite_id` is deliberately a plain nullable column with NO foreign key: the
+-- personal-invite table (`event_invites`) arrives in a later ticket, and adding
+-- the reference now would either block this migration or force that ticket's
+-- table to be written here. Left unused until then, on purpose.
+CREATE TABLE IF NOT EXISTS event_rsvps (
+  id          INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+  event_id    INT UNSIGNED    NOT NULL,
+  user_id     INT UNSIGNED    DEFAULT NULL,
+  guest_name  VARCHAR(120)    DEFAULT NULL,
+  guest_phone VARCHAR(30)     DEFAULT NULL,
+  invite_id   INT UNSIGNED    DEFAULT NULL,
+  response    ENUM('yes','no') NOT NULL,
+  party_size  TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  source      ENUM('account','share_page') NOT NULL DEFAULT 'account',
+  created_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_event_rsvps_user (event_id, user_id),
+  UNIQUE KEY uq_event_rsvps_guest_phone (event_id, guest_phone),
+  KEY idx_event_rsvps_event_response (event_id, response),
+  -- `user_id` ليس أوّل عمود في المفتاح الفريد، فمفتاحه الأجنبي يحتاج فهرساً
+  -- صريحاً بدل الفهرس الضمني الذي تنشئه MySQL باسمها.
+  KEY idx_event_rsvps_user (user_id),
+  CONSTRAINT fk_event_rsvps_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_rsvps_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- The public trace of a critical date amendment, written only once an admin

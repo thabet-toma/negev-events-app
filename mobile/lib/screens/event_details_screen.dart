@@ -246,6 +246,46 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     }
   }
 
+  /// «جاي / مش جاي» — الجواب يُحفظ على الخادم بنداء واحد (upsert)، و`yes`
+  /// يُنشئ «ذكّرني» هناك. فالإشارات المشتركة تُكتب هنا كما يكتبها [_toggleRemind]
+  /// نفسه: «قائمتي» والتغذية تعرفان الحالة بلا إعادة جلب.
+  Future<void> _submitRsvp(bool going, int partySize) async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لتأكيد حضورك');
+      return;
+    }
+
+    try {
+      await services.api.setRsvp(
+        widget.eventId,
+        going: going,
+        partySize: partySize,
+      );
+      if (!mounted) return;
+      services.myListRevision.value++;
+      if (going) {
+        services.savedChange.value = (eventId: widget.eventId, saved: true);
+      }
+      showMessage(context, going ? 'سجّلنا حضورك' : 'سجّلنا أنك مش جاي');
+      _reloadQuietly();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  /// «سحب جوابي» — لا يمسّ «ذكّرني» على الخادم، فلا إشارة حفظ تُكتب هنا.
+  Future<void> _withdrawRsvp() async {
+    try {
+      await AppServices.of(context).api.withdrawRsvp(widget.eventId);
+      if (!mounted) return;
+      showMessage(context, 'سُحب جوابك');
+      _reloadQuietly();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
   Future<void> _report(int eventId, int congratulationId) async {
     try {
       await AppServices.of(context).api.reportCongratulation(eventId, congratulationId);
@@ -300,6 +340,8 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
                   audioUrl: audioUrl,
                   isPlaying: audioUrl != null && _audio!.isPlayingUrl(audioUrl),
                   onRemindTap: () => _toggleRemind(event),
+                  onRsvpAnswer: (going, partySize) => _submitRsvp(going, partySize),
+                  onRsvpWithdraw: _withdrawRsvp,
                   onReport: (congratulationId) => _report(event.id, congratulationId),
                   onToggleAudio: () {
                     if (audioUrl != null) _toggleAudio(audioUrl);
@@ -330,6 +372,8 @@ class _EventDetailsBody extends StatelessWidget {
     required this.onCallHost,
     required this.onCongratulate,
     required this.onRemindTap,
+    required this.onRsvpAnswer,
+    required this.onRsvpWithdraw,
     required this.onReport,
     required this.onShare,
   });
@@ -346,6 +390,9 @@ class _EventDetailsBody extends StatelessWidget {
   final VoidCallback onCallHost;
   final VoidCallback onCongratulate;
   final VoidCallback onRemindTap;
+  /// تأكيد الحضور (تذكرة #168): الجواب مع عدد المرافقين، وسحب الجواب.
+  final void Function(bool going, int partySize) onRsvpAnswer;
+  final VoidCallback onRsvpWithdraw;
   final ValueChanged<int> onReport;
   final VoidCallback onShare;
 
@@ -581,6 +628,17 @@ class _EventDetailsBody extends StatelessWidget {
                   ],
                 ],
               ),
+              // تأكيد الحضور (تذكرة #168): لمناسبة نوعها يفتح الميزة وحدها،
+              // ولا شيء منه لنوع `solemn` — النغمة تُقرأ من النوع لا من اسمه.
+              if (type != null && type.rsvpEnabled && !isSolemn) ...[
+                const SizedBox(height: 14),
+                _RsvpSection(
+                  myRsvp: event.myRsvp,
+                  goingCount: event.rsvpGoingCount,
+                  onAnswer: onRsvpAnswer,
+                  onWithdraw: onRsvpWithdraw,
+                ),
+              ],
               // الخادم وحده يقرّر متى تصل الصور (عرس معتمد انتهى) — لا شرط نوع هنا.
               // ألبومات ADR-0009 أولاً: الصورة تُفتح من الألبوم حيث زرّ
               // «أنا في الصورة» موجود؛ الأرشيف القديم يبقى لخادم لا يرسل albums.
@@ -664,6 +722,182 @@ class _EventDetailsBody extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// كتلة «جاي / مش جاي» في صفحة المناسبة (تذكرة #168).
+///
+/// الزرّان مع عدد المرافقين (1..20)، وحالة الجواب الحالية، والعدّاد العلني حين
+/// يرسله الخادم. `goingCount == null` تعني أنّ النوع يخفيه — لا صفراً يُعرض.
+/// `Stateful` لأن العدد المختار **قبل** الإرسال حالة محلية لا يعرفها الخادم بعد.
+class _RsvpSection extends StatefulWidget {
+  const _RsvpSection({
+    required this.myRsvp,
+    required this.goingCount,
+    required this.onAnswer,
+    required this.onWithdraw,
+  });
+
+  final EventRsvp? myRsvp;
+  final int? goingCount;
+  final void Function(bool going, int partySize) onAnswer;
+  final VoidCallback onWithdraw;
+
+  @override
+  State<_RsvpSection> createState() => _RsvpSectionState();
+}
+
+class _RsvpSectionState extends State<_RsvpSection> {
+  /// مطابق لـ`RSVP_PARTY_SIZE_MAX` في `server/src/constants.js` — الواجهة لا
+  /// ترسل عدداً يجيبه الخادم بـ400.
+  static const int _maxPartySize = 20;
+
+  int _partySize = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPartySize();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RsvpSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // ما يصل من الخادم بعد الحفظ أو السحب هو الحقيقة، لا اختيار سابق.
+    if (oldWidget.myRsvp != widget.myRsvp) _syncPartySize();
+  }
+
+  void _syncPartySize() {
+    final size = widget.myRsvp?.partySize ?? 1;
+    _partySize = size < 1
+        ? 1
+        : (size > _maxPartySize ? _maxPartySize : size);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final myRsvp = widget.myRsvp;
+    final stateText = myRsvp == null
+        ? 'لم تُجب بعد'
+        : myRsvp.isGoing
+            ? (myRsvp.partySize == 1
+                ? 'جوابك: «جاي» — أنت وحدك'
+                : 'جوابك: «جاي» — ${myRsvp.partySize} أشخاص')
+            : 'جوابك: «مش جاي»';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.how_to_reg_outlined, size: 18, color: context.c.sky),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'تأكيد الحضور',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              if (widget.goingCount != null)
+                Text(
+                  'جايون: ${widget.goingCount}',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.sky,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Text(
+                'عدد المرافقين',
+                style: TextStyle(fontSize: 12.5, color: context.c.inkSoft),
+              ),
+              const SizedBox(width: 10),
+              DropdownButton<int>(
+                value: _partySize,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                items: [
+                  for (var size = 1; size <= _maxPartySize; size++)
+                    DropdownMenuItem<int>(value: size, child: Text('$size')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _partySize = value);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => widget.onAnswer(true, _partySize),
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text('جاي'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor:
+                        myRsvp != null && myRsvp.isGoing ? context.c.sky : context.c.inkSoft,
+                    side: BorderSide(
+                      color: myRsvp != null && myRsvp.isGoing ? context.c.sky : context.c.line,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => widget.onAnswer(false, 1),
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('مش جاي'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor:
+                        myRsvp != null && !myRsvp.isGoing ? context.c.warn : context.c.inkSoft,
+                    side: BorderSide(
+                      color: myRsvp != null && !myRsvp.isGoing ? context.c.warn : context.c.line,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            stateText,
+            style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+          ),
+          if (myRsvp != null)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                onPressed: widget.onWithdraw,
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('سحب جوابي', style: TextStyle(fontSize: 12.5)),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
