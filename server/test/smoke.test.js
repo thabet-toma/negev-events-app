@@ -15449,14 +15449,18 @@ async function run() {
       assert.strictEqual(digestRows.length, 1, 'المناسبة المتزامنة الرابعة تدخل الملخّص بدل إعلان فردي رابع');
       assert.ok(digestRows[0].body.includes('(1)'), `الملخّص يعدّ المناسبة الرابعة وحدها: "${digestRows[0].body}"`);
     } finally {
+      // هذا الاختبار يكتب إشعارات فردية لكل المستلمين وملخّصاً ذا event_id =
+      // NULL، ثم يحذف صفوفه هو وحدها. لا جدول مشاهدات مستقل: `views_count`
+      // عمود في events فيُمحى معها؛ ولا ينشئ الاختبار تذكيرات، لكن حذفها هنا
+      // يحافظ على العزل إن تغيّر مسار النشر مستقبلاً.
+      const cleanupIds = [...quotaEventIds, 0, 0, 0, 0].slice(0, 4);
+      await db.execute('DELETE FROM notifications WHERE event_id IN (?, ?, ?, ?)', cleanupIds);
+      await db.execute('DELETE FROM event_reminders WHERE event_id IN (?, ?, ?, ?)', cleanupIds);
       await db.execute(
         "DELETE FROM notifications WHERE type = 'event_new_digest' AND (body LIKE ? OR body LIKE ?)",
         [`%${concurrentTwo[0]}%`, `%${concurrentTwo[1]}%`]
       );
-      await db.execute(
-        'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
-        [...quotaEventIds, 0, 0, 0, 0].slice(0, 4)
-      );
+      await db.execute('DELETE FROM events WHERE id IN (?, ?, ?, ?)', cleanupIds);
       await db.execute('DELETE FROM users WHERE id = ?', [quotaListener.id]);
     }
   });
@@ -15520,6 +15524,10 @@ async function run() {
       'نوع «نجاح» يحمل نافذة ٧ أيام من الترحيل'
     );
 
+    // هذا القسم يأتي بعد اختبارات كثيرة؛ اقرأ CURDATE() الآن كي لا يتحول
+    // «اليوم» الملتقط في بداية قسم الإشعارات إلى أمس عند عبور منتصف الليل.
+    const { today: feedWindowToday } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+
     async function publishEnded(typeId, honoree, daysAgo) {
       const created = await api('POST', '/api/events', {
         token: adminToken,
@@ -15528,7 +15536,7 @@ async function run() {
           honorees: [{ name: honoree }],
           town: SCHEDULED_TOWN,
           location_name: 'ديوان نافذة البقاء',
-          event_date: addDaysToDate(schedulerToday, daysAgo)
+          event_date: addDaysToDate(feedWindowToday, daysAgo)
         }
       });
       assert.strictEqual(created.status, 201, created.body.message);
@@ -15566,8 +15574,9 @@ async function run() {
     );
 
     const live = await searchUpcoming(LIVE_CELEBRATION);
-    assert.strictEqual(live.length, 1, 'النجاح القائم يظهر');
-    assert.strictEqual(live[0].is_ended, false, 'ولا يحمل «انتهت» — الشارة للمنتهي وحده');
+    const liveEvent = live.find(event => event.id === liveCelebration);
+    assert.ok(liveEvent, 'النجاح القائم الذي أنشأه هذا التأكيد يظهر في «القادم»');
+    assert.strictEqual(liveEvent.is_ended, false, 'ولا يحمل «انتهت» — الشارة للمنتهي وحده');
 
     // التغذية بلا `upcoming` (عرض الكل) لا تتغيّر: نافذة البقاء حدُّ «القادم» وحده.
     const all = await searchByHonoree(OLD_CELEBRATION);
