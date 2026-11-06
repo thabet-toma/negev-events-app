@@ -371,7 +371,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final launch = launched.singleWhere((call) => call.method == 'launch');
-    final url = ((launch.arguments as Map)['url'] as String);
+    final args = launch.arguments as Map;
+    final url = args['url'] as String;
     expect(
       url,
       '${AppConfig.apiBase}/api/privacy/notice',
@@ -384,6 +385,27 @@ void main() {
       Uri.parse(url).hasScheme && Uri.parse(url).host.isNotEmpty,
       isTrue,
       reason: 'يفتح في المتصفّح الخارجي، فيلزمه عنوان مطلق',
+    );
+
+    // العنوان وحده لا يثبت أن الرابط غادر التطبيق: `platformDefault` على
+    // أندرويد يمرّ عبر WebView داخلي أيضاً. هذه هي الخيارات التي يبنيها
+    // url_launcher من `LaunchMode.externalApplication` وحدها على قناة
+    // المنصّة نفسها التي يُستمع إليها أعلاه: لا Safari VC ولا WebView
+    // داخلي ولا Universal Links، بل تفويض الرابط إلى تطبيق آخر.
+    expect(
+      args['useWebView'],
+      isFalse,
+      reason: 'externalApplication لا يفتح WebView داخل التطبيق',
+    );
+    expect(
+      args['useSafariVC'],
+      isFalse,
+      reason: 'externalApplication لا يفتح Safari View Controller داخل التطبيق',
+    );
+    expect(
+      args['universalLinksOnly'],
+      isFalse,
+      reason: 'externalApplication تفويض للمتصفّح، لا تحقّق Universal Links',
     );
   });
 }

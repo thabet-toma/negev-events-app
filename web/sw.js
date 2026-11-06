@@ -16,7 +16,7 @@
  * غير هذا الاسم، فرفعُ الرقم وحده يُبطل ما خزّنه النشر السابق — ولا يبقى
  * ملف قديم يخدم طلباً بعد تحديث الموقع.
  */
-const CACHE_VERSION = '164.1';
+const CACHE_VERSION = '164.2';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
@@ -34,6 +34,9 @@ const SHELL_PATHS = [
   '/app.js',
   '/api.js',
   '/config.js',
+  // نموذج المناسبة المحلي: app.js يستدعي `isoLocalDay` منه (web/index.html،
+  // وسكربت الصفحة يُحمَّل قبله)، فإسقاطه من الهيكل يترك صفحة بلا نموذج نشر.
+  '/occasionForm.js',
   '/icons/icon.svg',
   '/icons/favicon-32.png',
   '/icons/apple-touch-icon.png',
@@ -41,7 +44,7 @@ const SHELL_PATHS = [
 ];
 
 /** مسارات الهيكل وقت التشغيل: ملفات الصفحة نفسها وأيقوناتها المحلية. */
-const SHELL_PATH_PATTERN = /^\/(?:index\.html|styles\.css|app\.js|api\.js|config\.js)$/;
+const SHELL_PATH_PATTERN = /^\/(?:index\.html|styles\.css|app\.js|api\.js|config\.js|occasionForm\.js)$/;
 
 function isShellAsset(pathname) {
   return SHELL_PATH_PATTERN.test(pathname) || pathname.startsWith('/icons/');

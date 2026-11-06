@@ -36,6 +36,7 @@ const analyticsService = require('../src/services/analytics.service');
 const adminService = require('../src/services/admin.service');
 const eventsService = require('../src/services/events.service');
 const scheduler = require('../src/jobs/scheduler');
+const privacyService = require('../src/services/privacy.service');
 const notificationsService = require('../src/services/notifications.service');
 const pushService = require('../src/services/push.service');
 const webpush = require('web-push');
@@ -7924,6 +7925,7 @@ async function run() {
     assert.strictEqual(status, 201);
     assert.strictEqual(body.request.request_type, 'access');
     assert.strictEqual(body.request.status, 'pending');
+    assert.strictEqual(body.request.source, 'account', 'an authenticated request records that control of the account was proved');
     assert.ok(/\d+\s*يوماً/.test(body.message), 'expected the response to state a deadline');
     privacyRequestId = body.request.id;
   });
@@ -8018,13 +8020,38 @@ async function run() {
     assert.strictEqual(duplicate.body.message, message);
 
     const queued = await db.query(
-      `SELECT id FROM privacy_requests WHERE user_id = ? AND request_type = 'erasure' AND status = 'pending'`,
+      `SELECT id, source FROM privacy_requests WHERE user_id = ? AND request_type = 'erasure' AND status = 'pending'`,
       [requestUser.id]
     );
     assert.strictEqual(queued.length, 1, 'a second submission must never queue a duplicate open request');
+    assert.strictEqual(
+      queued[0].source,
+      'public',
+      'a phone number without a token proves nothing — the row must stay unverified for human review'
+    );
 
     const malformed = await api('POST', '/api/privacy/deletion-request', { body: { phone_number: 'not-a-phone' } });
     assert.strictEqual(malformed.status, 400);
+
+    // Security regression (#164): this public row is now old enough that the
+    // previous implementation's "every pending erasure past the deadline" rule
+    // would delete the account it merely names. The real job pass must leave
+    // both the person and the row alone, for the super_admin queue.
+    await db.execute(
+      'UPDATE privacy_requests SET created_at = DATE_SUB(NOW(), INTERVAL 31 DAY) WHERE id = ?',
+      [queued[0].id]
+    );
+    await scheduler.runPrivacyErasurePass();
+    assert.ok(
+      await db.queryOne('SELECT id FROM users WHERE id = ?', [requestUser.id]),
+      'a public phone-only request must never delete the account it names, even past the deadline'
+    );
+    const stillQueued = await db.queryOne(
+      'SELECT status, source FROM privacy_requests WHERE id = ?',
+      [queued[0].id]
+    );
+    assert.strictEqual(stillQueued.status, 'pending', 'the row must survive for human review');
+    assert.strictEqual(stillQueued.source, 'public');
 
     // Leave no pending request behind in a reused development database.
     await db.execute('DELETE FROM users WHERE id = ?', [requestUser.id]);
@@ -8059,44 +8086,98 @@ async function run() {
     assert.strictEqual(missing.status, 404);
   });
 
-  console.log('\nScheduled erasure (#164): the daily job executes ONLY requests past their deadline');
+  console.log('\nScheduled erasure (#164): verified, overdue erasure only — public requests stay for human review');
+
+  /**
+   * Duplicate overlap: the public request was filed first, so a blanket
+   * "already pending" rule would refuse the owner's verified request or
+   * upgrade the old row. Neither may happen — the verified post inserts its own
+   * `'account'` row and leaves the old one exactly as unverified as it was.
+   *
+   * The old row is inserted directly here rather than through the public
+   * route: that route's per-IP budget is deliberately five an hour and the
+   * route test above already spends four, so another HTTP call would be a
+   * test-order 429, not a different behaviour. The source value is exactly
+   * what `fileDeletionRequest` writes.
+   */
+  await test('An old public request neither blocks the owner from filing a verified one nor gets promoted to verified', async () => {
+    const owner = await insertTestUser('مستخدم يملك حسابه وطلب عام سابق');
+    const publicRow = await db.execute(
+      `INSERT INTO privacy_requests (user_id, request_type, source, status, created_at)
+       VALUES (?, 'erasure', 'public', 'pending', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
+      [owner.id]
+    );
+    assert.ok(publicRow.insertId, 'expected a public row in the queue');
+
+    const verified = await api('POST', '/api/privacy/requests', {
+      token: owner.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(verified.status, 201, verified.body.message);
+    assert.strictEqual(verified.body.request.source, 'account', 'identity comes from req.user, never the body');
+
+    const rows = await db.query(
+      `SELECT source, status FROM privacy_requests
+        WHERE user_id = ? AND request_type = 'erasure' ORDER BY id ASC`,
+      [owner.id]
+    );
+    assert.strictEqual(rows.length, 2, 'the verified request must not be swallowed by the older public row');
+    assert.deepStrictEqual(
+      rows.map(row => row.source),
+      ['public', 'account'],
+      'the old row stays unverified; the new row is the one the job may execute'
+    );
+
+    await db.execute('DELETE FROM users WHERE id = ?', [owner.id]);
+  });
 
   /**
    * The job's own query lives in privacy.service.js and compares `created_at`
    * against `PRIVACY_REQUEST_DEADLINE_DAYS` — so the deadline is exercised the
    * way time actually passes (an old `created_at`), not by rewriting a status
-   * flag. Four rows sit in the queue at once: one overdue erasure (must be
-   * executed), one erasure still inside its deadline, one overdue `access`
-   * request (a human fulfils it — never this job), and one already-completed
-   * erasure (must not be re-executed). The daily pass the scheduler tests above
-   * call is the real entry point, so this also proves the wiring, not just the
-   * pass on its own.
+   * flag. Four rows sit in the queue at once: one verified overdue erasure
+   * (must be executed), one verified erasure still inside its deadline, one
+   * overdue `access` request (a human fulfils it — never this job), and one
+   * already-completed erasure (must not be re-executed). The daily pass the
+   * scheduler tests above call is the real entry point, so this also proves the
+   * wiring, not just the pass on its own. It is then run again: a second run
+   * must be a no-op on what survived.
    */
-  await test('The scheduled daily pass deletes a user whose erasure request passed the 30-day deadline — and leaves the fresh, the access-only and the already-closed requests untouched', async () => {
+  await test('The scheduled daily pass deletes a user whose VERIFIED erasure request passed the 30-day deadline — and leaves the fresh, the access-only and the already-closed requests untouched; a second run is safe', async () => {
     const dueUser = await insertTestUser('مستخدم انتهت مهلة حذفه');
     const freshUser = await insertTestUser('مستخدم ما زالت مهلة طلبه سارية');
     const accessUser = await insertTestUser('مستخدم طلب وصولاً قديماً');
     const closedUser = await insertTestUser('مستخدم أُغلق طلبه');
 
+    const dueRequest = await api('POST', '/api/privacy/requests', {
+      token: dueUser.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(dueRequest.status, 201);
+    const freshRequestRow = await api('POST', '/api/privacy/requests', {
+      token: freshUser.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(freshRequestRow.status, 201);
+    const accessRequest = await api('POST', '/api/privacy/requests', {
+      token: accessUser.token, body: { request_type: 'access' }
+    });
+    assert.strictEqual(accessRequest.status, 201);
+    const closedRequest = await api('POST', '/api/privacy/requests', {
+      token: closedUser.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(closedRequest.status, 201);
+
     await db.execute(
-      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
-       VALUES (?, 'erasure', 'pending', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
-      [dueUser.id]
+      'UPDATE privacy_requests SET created_at = DATE_SUB(NOW(), INTERVAL 31 DAY) WHERE id IN (?, ?)',
+      [dueRequest.body.request.id, accessRequest.body.request.id]
     );
     await db.execute(
-      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
-       VALUES (?, 'erasure', 'pending', DATE_SUB(NOW(), INTERVAL 29 DAY))`,
-      [freshUser.id]
+      'UPDATE privacy_requests SET created_at = DATE_SUB(NOW(), INTERVAL 29 DAY) WHERE id = ?',
+      [freshRequestRow.body.request.id]
     );
     await db.execute(
-      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
-       VALUES (?, 'access', 'pending', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
-      [accessUser.id]
-    );
-    await db.execute(
-      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
-       VALUES (?, 'erasure', 'completed', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
-      [closedUser.id]
+      `UPDATE privacy_requests
+          SET status = 'completed', created_at = DATE_SUB(NOW(), INTERVAL 31 DAY)
+        WHERE id = ?`,
+      [closedRequest.body.request.id]
     );
 
     await scheduler.runDailyPass();
@@ -8104,7 +8185,7 @@ async function run() {
     assert.strictEqual(
       await db.queryOne('SELECT id FROM users WHERE id = ?', [dueUser.id]),
       null,
-      'the overdue erasure request must be executed by the job itself — no human in the loop'
+      'the overdue verified erasure request must be executed by the job itself — no human in the loop'
     );
     assert.strictEqual(
       (await db.query('SELECT id FROM privacy_requests WHERE user_id = ?', [dueUser.id])).length,
@@ -8133,7 +8214,120 @@ async function run() {
     );
     assert.strictEqual(freshRequest.status, 'pending', 'the un-expired request stays queued, not silently closed');
 
+    await scheduler.runPrivacyErasurePass();
+
+    assert.strictEqual(
+      await db.queryOne('SELECT id FROM users WHERE id = ?', [dueUser.id]),
+      null,
+      'a repeated run must not resurrect or fail on the executed request'
+    );
+    for (const user of [freshUser, accessUser, closedUser]) {
+      assert.ok(
+        await db.queryOne('SELECT id FROM users WHERE id = ?', [user.id]),
+        `a second run must be a no-op for user ${user.id}`
+      );
+    }
+
     await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', [freshUser.id, accessUser.id, closedUser.id]);
+  });
+
+  /**
+   * The exported function is callable with any id, including one nobody
+   * listed as due. Its own comment says the candidate list is a hint; this
+   * proves the function itself does not trust it.
+   */
+  await test('executeErasureRequest refuses a fresh request when called directly — it re-proves eligibility, not just existence', async () => {
+    const user = await insertTestUser('مستخدم ما زالت مهلة طلبه سارية');
+    const filed = await api('POST', '/api/privacy/requests', {
+      token: user.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(filed.status, 201);
+
+    const result = await privacyService.executeErasureRequest(filed.body.request.id);
+
+    assert.deepStrictEqual(result, { executed: false });
+    assert.ok(await db.queryOne('SELECT id FROM users WHERE id = ?', [user.id]), 'a fresh request must never delete its account');
+    assert.strictEqual(
+      (await db.queryOne('SELECT status FROM privacy_requests WHERE id = ?', [filed.body.request.id])).status,
+      'pending',
+      'and the request must stay pending'
+    );
+
+    await db.execute('DELETE FROM users WHERE id = ?', [user.id]);
+  });
+
+  /**
+   * Deterministic close-vs-delete race, no sleep. The blocker holds the
+   * request row lock, the job is started, and the test WAITS for the job's own
+   * non-locking pre-read to complete — that read saw `pending`, which is
+   * exactly the first step of the old bug. Only then does the blocker write
+   * `completed` and commit. Because the row lock is held until that commit,
+   * the new eligibility read inside the deletion transaction cannot see
+   * anything but `completed` and must delete nobody; the old separate-
+   * transaction path, which had already passed the pre-read, would still
+   * delete the user. The pre-read is observed by wrapping `db.queryOne` for
+   * this test only, restored in `finally`.
+   */
+  await test('A close committed after the job’s pending pre-read but held under a row lock makes the atomic eligibility check prevent the deletion', async () => {
+    const user = await insertTestUser('مستخدم أُغلق طلبه أثناء تنفيذ الوظيفة');
+    const filed = await api('POST', '/api/privacy/requests', {
+      token: user.token, body: { request_type: 'erasure' }
+    });
+    assert.strictEqual(filed.status, 201);
+    await db.execute(
+      'UPDATE privacy_requests SET created_at = DATE_SUB(NOW(), INTERVAL 31 DAY) WHERE id = ?',
+      [filed.body.request.id]
+    );
+
+    const blocker = await db.pool.getConnection();
+    const realQueryOne = db.queryOne;
+    let markPreRead;
+    const preReadDone = new Promise((resolve) => { markPreRead = resolve; });
+    let timer;
+    const preReadGuard = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('the job pre-read was not observed within 3s')), 3000);
+    });
+    db.queryOne = async (sql, params) => {
+      try {
+        const result = await realQueryOne(sql, params);
+        if (typeof sql === 'string' && sql.includes('privacy_requests') && sql.includes('user_id')) markPreRead();
+        return result;
+      } catch (err) {
+        markPreRead();
+        throw err;
+      }
+    };
+
+    let execution;
+    try {
+      await blocker.beginTransaction();
+      await blocker.execute('SELECT id FROM privacy_requests WHERE id = ? FOR UPDATE', [filed.body.request.id]);
+      execution = privacyService.executeErasureRequest(filed.body.request.id);
+      await Promise.race([preReadDone, preReadGuard]);
+      await blocker.execute(
+        `UPDATE privacy_requests SET status = 'completed', handled_at = NOW() WHERE id = ?`,
+        [filed.body.request.id]
+      );
+      await blocker.commit();
+    } finally {
+      clearTimeout(timer);
+      db.queryOne = realQueryOne;
+      // A committed transaction is unaffected; a thrown-before-commit path must
+      // not hand an open transaction back to the pool.
+      await blocker.rollback().catch(() => {});
+      blocker.release();
+    }
+
+    const result = await execution;
+    assert.deepStrictEqual(result, { executed: false }, 'a request closed after the pre-read but before the locked eligibility read must not delete');
+    assert.ok(await db.queryOne('SELECT id FROM users WHERE id = ?', [user.id]), 'the account must survive the lost race');
+    assert.strictEqual(
+      (await db.queryOne('SELECT status FROM privacy_requests WHERE id = ?', [filed.body.request.id])).status,
+      'completed',
+      'the close stands'
+    );
+
+    await db.execute('DELETE FROM users WHERE id = ?', [user.id]);
   });
 
   /**

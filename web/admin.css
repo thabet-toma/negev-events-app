@@ -75,6 +75,22 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/*
+ * القاعدتان العامتان نفساهما في web/styles.css (#164) — اللوحة تحمّل
+ * `admin.css` وحدها، فلا تصلها قاعدة الموقع. كل زرّ في اللوحة 44×44 على
+ * الأقل، و`:focus-visible` عام يعمل حيث لا يكون للمكوّن بديل مرئي (حقول
+ * النموذج تحتفظ بحدودها الملوّنة عند `:focus` أدناه فتبقى كما هي).
+ */
+button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+
 body {
   font-family: var(--font-tajawal);
   background-color: var(--admin-bg);
@@ -315,7 +331,9 @@ body {
 
 .badge-pill { background: var(--warn-yellow); color: #ffffff; padding: 1px 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 900; margin-inline-end: 4px; }
 
-.admin-search-box input { padding: 10px 18px; background: var(--admin-card); border: 1px solid var(--admin-card-border); border-radius: 20px; color: var(--text-main); font-family: var(--font-tajawal); font-size: 0.88rem; outline: none; min-width: 280px; }
+/* بلا `outline: none`: لا بديل مرئي لهذا الحقل، فالقاعدة العامة أعلاه هي
+   حلقة التركيز الوحيدة (#164). */
+.admin-search-box input { padding: 10px 18px; background: var(--admin-card); border: 1px solid var(--admin-card-border); border-radius: 20px; color: var(--text-main); font-family: var(--font-tajawal); font-size: 0.88rem; min-width: 280px; }
 
 /* Admin Events Grid */
 .admin-events-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; }
@@ -506,7 +524,7 @@ body {
 .archive-photos-grid { flex-shrink: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .archive-photo { position: relative; margin: 0; aspect-ratio: 1 / 1; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-sunk); }
 .archive-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.archive-photo-delete { position: absolute; inset-block-start: 6px; inset-inline-end: 6px; width: 30px; height: 30px; border-radius: 50%; border: none; background: rgba(12, 27, 42, 0.65); color: #ffffff; cursor: pointer; }
+.archive-photo-delete { position: absolute; inset-block-start: 6px; inset-inline-end: 6px; width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(12, 27, 42, 0.65); color: #ffffff; cursor: pointer; }
 .archive-photo-delete:hover { background: var(--danger-red); }
 .archive-photos-empty { grid-column: 1 / -1; text-align: center; padding: 24px 0; }
 
@@ -710,8 +728,8 @@ body {
 .close-modal-btn {
   background: var(--surface-sunk);
   border: none;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   color: var(--text-main);
   cursor: pointer;

@@ -172,12 +172,17 @@ async function runNudgePass() {
 
 /**
  * The erasure requests past their deadline (issue #164) — the one job that
- * deletes accounts with no human in the loop. Its entire query lives in
- * privacy.service.js (`listDueErasureRequests`): nothing SQL-shaped appears in
- * this file, and a request still inside its deadline is never returned by that
- * query, so it cannot be touched here. One failing request is logged and the
- * rest of the queue still runs — a single broken row must not hold every other
- * person's overdue erasure forever.
+ * deletes accounts with no human in the loop. THIS PASS contributes no SQL of
+ * its own: the candidate query lives in privacy.service.js
+ * (`listDueErasureRequests`), and the older passes above keep the queries they
+ * already had. That query returns only verified (`source = 'account'`),
+ * pending erasures past the stated deadline; a request still inside its
+ * deadline, a public phone-only request, an access request and a closed one
+ * are never returned. `executeErasureRequest` then re-proves the same facts under a lock
+ * inside the deletion transaction, so a request closed after listing deletes
+ * nobody. One failing request is logged and the rest of the queue still runs —
+ * a single broken row must not hold every other person's overdue erasure
+ * forever.
  */
 async function runPrivacyErasurePass() {
   const due = await privacy.listDueErasureRequests();

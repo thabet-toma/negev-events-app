@@ -51,8 +51,11 @@ router.post('/privacy/analytics-erasure', authenticate, asyncHandler(async (req,
 /**
  * Access has no self-service fulfilment in this version — a super_admin
  * fulfils it by hand — so this only queues the request and states the
- * deadline. Erasure may also be filed here for a documented, handled-by
- * record, separate from the immediate button above.
+ * deadline. Erasure may also be filed here, separate from the immediate
+ * button above; because the row is built from `req.user` and nothing in the
+ * body can name another account, it is the verified form the scheduled job
+ * executes once the deadline passes. The `'account'` source is a server
+ * constant, never a client field.
  */
 router.post('/privacy/requests', authenticate, asyncHandler(async (req, res) => {
   const requestType = cleanString(req.body && req.body.request_type, 20);
@@ -60,7 +63,7 @@ router.post('/privacy/requests', authenticate, asyncHandler(async (req, res) => 
     throw ApiError.badRequest('نوع الطلب غير معروف');
   }
 
-  const request = await privacy.createRequest(req.user.id, requestType);
+  const request = await privacy.createRequest(req.user.id, requestType, 'account');
   res.status(201).json({
     success: true,
     request,
@@ -74,6 +77,11 @@ router.post('/privacy/requests', authenticate, asyncHandler(async (req, res) => 
  * with. No token, so nothing here may confirm whether that number exists —
  * the response is byte-identical for a registered number, a duplicate, and a
  * stranger, and only the admin queue ever learns which one happened.
+ *
+ * A phone number alone is not proof that the caller owns the account, so this
+ * queues a `source = 'public'` request for human review only. It is never
+ * executed by the scheduled job; the account holder's verified path is the
+ * authenticated `POST /privacy/requests`.
  */
 router.post('/privacy/deletion-request', deletionRequestLimiter, asyncHandler(async (req, res) => {
   const raw = cleanString(req.body && req.body.phone_number, 20);
@@ -91,7 +99,7 @@ router.post('/privacy/deletion-request', deletionRequestLimiter, asyncHandler(as
 
   res.json({
     success: true,
-    message: `وصلنا طلبك — إن كان هذا الرقم مسجّلاً عندنا فسيُحذف حسابه خلال ${PRIVACY_REQUEST_DEADLINE_DAYS} يوماً وسنتواصل معك على واتساب.`
+    message: `وصلنا طلبك — سيراجع فريقنا الطلب ويتحقق من ملكية الرقم قبل أي إجراء، وسنتواصل معك على واتساب خلال ${PRIVACY_REQUEST_DEADLINE_DAYS} يوماً.`
   });
 }));
 

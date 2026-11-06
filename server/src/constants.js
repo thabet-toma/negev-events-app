@@ -172,11 +172,13 @@ const COUNT_ONLY_ANALYTICS_EVENTS = ANALYTICS_EVENTS.filter(event => event.count
 
 /**
  * The two request kinds the privacy request queue (issue #44, part 3)
- * accepts. "access" has no self-service path in this version — a
+ * accepts. "access" has no self-service fulfilment in this version — a
  * super_admin fulfils it by hand — while "erasure" also has an immediate
- * self-service endpoint (POST /api/privacy/analytics-erasure); a user may
- * still file a formal erasure request here instead of/in addition to that
- * button, for a documented, handled-by record.
+ * self-service endpoint (POST /api/privacy/analytics-erasure). A user may
+ * still file a formal erasure request instead of/in addition to that button.
+ * A formal erasure filed from an authenticated session is the only kind the
+ * scheduled job executes after this deadline; the public phone-only form
+ * queues a request for human review (see privacy.service.js).
  */
 const PRIVACY_REQUEST_TYPES = ['access', 'erasure'];
 

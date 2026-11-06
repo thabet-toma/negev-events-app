@@ -102,17 +102,22 @@
 }
 
 /*
- * قاعدتان عامتان (#164)، موضوعتان قبل كل قاعدة صنف: كل ما هو أخصّ منهما
- * يغلبهما بالتحديد وحده، فيبقى سلوك المكوّنات القائم كما هو ولا حاجة إلى
- * `!important` ولا إلى محدِّد مكرَّر يغلب قاعدة قائمة.
+ * قاعدتان عامتان (#164)، موضوعتان قبل كل قاعدة صنف. `web/admin.css` تحمل
+ * القاعدتين نفسيهما: اللوحة لا تحمّل هذا الملف إطلاقاً.
  *
- * 1) هدف اللمس: كل زرّ 44×44 على الأقل. `min-height`/`min-width` تغلبان
- *    `height`/`width` الصريحين في أي قاعدة صنف لاحقة، فلا يبقى زرّ أصغر
- *    بحجّة تصميمه. الزرّ وحده مستهدَف — لا الأيقونة ولا البطاقة التي ليست
- *    زرّاً. الاستثناء الوحيد المقصود مشروح عند `.floating-icon-btn`.
+ * 1) هدف اللمس: كل زرّ 44×44 على الأقل. `min-height`/`min-width` هنا تغلبان
+ *    `height`/`width` الصريحين في أي قاعدة صنف لاحقة — فقاعدة تكتب
+ *    `width: 34px` لا تُصغّر الزرّ، بل يبقى 44 — ولا يلزم `!important`.
+ *    أما قاعدة الصنف الأخصّ التي تصرّح بـ`min-*` نفسها فتستطيع تجاوز
+ *    القاعدة العامة، وهذا مقصود بهدف إبقاء التخصيص المكوّني ممكناً. الزرّ
+ *    وحده مستهدَف — لا الأيقونة ولا البطاقة التي ليست زرّاً. لا استثناء:
+ *    الشريط العائم نفسه يُعاد ترتيبه عند 680px (انظر كتلته أدناه)
+ *    ليتّسع لأهداف 44px بلا قصّ «حسابي».
  * 2) حلقة تركيز واحدة ظاهرة. تحديدها `:focus-visible` وحده (0,1,0)، وكل
  *    قواعد التركيز القائمة من نوع `.class:focus-visible` (0,2,0) فتبقى هي
- *    الفائزة حيث وُجدت، وبهذا لا تُكرَّر قاعدة قائمة ولا تُلغى.
+ *    الفائزة حيث وُجدت، وبهذا لا تُكرَّر قاعدة قائمة ولا تُلغى. ولا قاعدة
+ *    `outline: none` على عنصر قابل للتركيز بلا بديل مرئي آخر (انظر
+ *    `.drawer-search-box input` و`:focus` حقول النموذج أدناه).
  */
 button {
   min-height: 44px;
@@ -1607,7 +1612,7 @@ body {
   transition: border-color 0.2s;
 }
 
-.form-group input:focus, .form-group select:focus { border-color: var(--sky); box-shadow: 0 0 0 3px var(--sky-wash); }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--sky); box-shadow: 0 0 0 3px var(--sky-wash); }
 
 .form-row { display: flex; gap: 14px; }
 .form-row .half { flex: 1; }
@@ -2783,7 +2788,6 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
   flex-shrink: 1;
   background: rgba(12, 27, 42, 0.75);
   backdrop-filter: blur(14px);
@@ -2834,19 +2838,16 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-/* الاستثناء الموثَّق الوحيد من قاعدة 44px (#164). عرض هذا الشريط وارتفاعه
-   مقيسان بالبكسل (القياسات في كتلة التعليق أدناه)، وحرس اختبارُ الويب القائم
-   أن تبقى أزراره مربّعة ≤29px على الهاتف: خمسة أزرار ٤٤px + زرّ «حسابي» +
-   العلامة تتجاوز حاوية ٣٦٠px وتُخرج «حسابي» عن الشاشة، ومربّعُ 28×44 يصير
-   بيضاويّاً لا دائرة. فيبقى هذا الشريط وحده بمقاسه المقيس، وما عداه 44px. */
+/* أهداف اللمس 44×44 كاملة (#164) — لا استثناء ولا `min-width: 0` يعطّلها.
+   بدل تصغير الأزرار، يعيد ترتيبُ الكتلة أدناه (≤680px) بناء الشريط على
+   صفّين: فلتر البحث و«حسابي» في صفّ، وأزرار الأفعال في صفّ ثانٍ بعرضه
+   الكامل، فتبقى الوظائف كلها ظاهرة و«حسابي» لا يُقصّ عند 360px. */
 .floating-icon-btn {
   background: transparent;
   border: none;
   color: #ffffff;
-  min-width: 0;
-  min-height: 0;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
@@ -2875,19 +2876,23 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .live-entry-floating-btn.is-live { color: #fecaca; }
 .floating-badge.live-entry-floating-badge { top: -6px; left: -10px; padding: 1px 4px; font-size: 0.55rem; }
 
-/* زرّ «حسابي» في الشريط العائم — أيقونة شخص + الكلمة، بارتفاع أزرار الأيقونات
-   نفسها كي لا يكبر الشريط. ويشاركها استثناء #164 الموثَّق فوقها. */
+/* زرّ «حسابي» في الشريط العائم — أيقونة شخص + الكلمة، بارتفاع 44px كسائر
+   أهداف اللمس (#164). انتقل خارج صندوق الأفعال ليكون مع فلتر البحث في
+   الصفّ الأول على الشاشات الضيّقة (انظر كتلة 680px أدناه). */
 .floating-auth-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-width: 0;
-  min-height: 0;
-  height: 34px;
-  padding: 0 10px;
-  border: none;
+  min-height: 44px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.14);
+  /* انتقل خارج صندوق الأفعال، فيحمل خلفيته الداكنة بنفسه كي يبقى مقروءاً
+     فوق صورة الكرت. */
+  background: rgba(12, 27, 42, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: #ffffff;
   font-family: inherit;
   font-size: 0.78rem;
@@ -2903,9 +2908,8 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
 /* علامة «اعراسنا» في الشريط العائم (#157): الترويسة العريضة مخفية على الهاتف
    وفي PWA المثبَّت، وهذا الشريط ترويستها الظاهرة. طبقة `icon` (بلا الكلمة) من
-   `web/icons/favicon-32.png` المولَّد، والحجم محصور هنا كي لا يكبر الشريط —
-   فهو يُقاس بأزرار الأيقونات حوله لا بحجمها (وحتى ٤٦٠px كتلة `max-width: 460px`
-   أدناه هي ما يُبقيه في سطر واحد، مُقاسةً في محرّك حقيقي).
+   `web/icons/favicon-32.png` المولَّد. القرص نفسه هدف لمس 44×44 (#164) والصورة
+   24px داخله؛ والكتلة أدناه (≤680px) هي ما يبقي الشريط في صفّين بلا قصّ.
    الأصل المولَّد على أرضية بيضاء مصمتة (قرار العلامة)، وعلى الحبّة الداكنة يبدو
    مربعاً أبيض إن تُرك مستطيلاً: فيُقصّ هنا قرصاً أبيض دائرياً بحشوة حوله، بلون
    الأرضية نفسه `#fff` فلا حدّ مرئي بين الصورة والقرص. */
@@ -2913,8 +2917,8 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   flex: none;
   border-radius: 50%;
   background: #ffffff;
@@ -2926,34 +2930,41 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .floating-brand-btn:active { transform: scale(0.92); }
 .floating-brand-btn:focus-visible { outline: 2px solid var(--sky-bright); outline-offset: 2px; }
 
-/* شاشات ضيّقة: الشريط العائم يحمل رقاقة الفلتر وصندوق أزرار — العلامة، وستة
-   أزرار `.floating-icon-btn` (خمسة دائمة + الإشعارات للمسجَّل وحده)، وزرّ «حسابي».
-   تسمية الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً
-   (min-width/flex-shrink على الرقاقة، flex-shrink:0 على صندوق الأزرار)، وتختفي
-   كلياً حتى 460px (الأيقونة والنقطة الملوّنة تبقيان تدلّان على فلتر نشِط).
-   ولأن النقطة هي الدليل الوحيد على فلتر نشِط حينها، فالصندوق لا يجوز أن يأكل
-   عرضها. قياس محرّك حقيقي (Edge، المستخدم مسجَّل — الأوسع): الصندوق المضغوط
-   ٢٧٢٫٩px، وعلى ٣٦٠px داخل حاوية ٣٣٦px تبقى الرقاقة ٥٠٫٨px بنقطتها ظاهرة.
-   والحدّ 460px لا 400px: الصندوق غير المضغوط ٣٥٦٫٧px مسجَّلاً، فبين ٤٠١ و٤٢٢px
-   كان يتجاوز الحاوية ويُقصّ «حسابي»، وبعدها كان يأكل النقطة إلى صفر عرض. والرقاقة
-   بنقطتها وبلا تسمية ٧٠٫٨px، فأول حاوية تتّسع لها مع الصندوق غير المضغوط
-   ٣٥٦٫٧ + ٨ + ٧٠٫٨ = ٤٣٥٫٥px، أي عرض شاشة ~٤٦٠px. أي زرّ يُضاف إلى الصندوق
-   يُعاد معه هذا القياس وهذا الحدّ. */
-
-/* #164: قاعدتا اللمس العامة (أعلى الملف) لا تمسّ هذا الشريط — `.floating-icon-btn`
-   و`.floating-auth-btn` تحملان `min-width: 0` و`min-height: 0` فتبقيان بمقاسهما
-   المقيس (34px، و28px تحت 460px)، لأن تكبيرهما إلى 44px يُخرج «حسابي» عن حاوية
-   ٣٦٠px كما حرست القياسات المسجَّلة أعلاه. */
+/* تسمية الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً، وتختفي
+   كلياً على الشاشات الضيّقة (الأيقونة والنقطة الملوّنة تبقيان تدلّان على
+   فلتر نشِط). */
 #floatingFilterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/*
+ * ترتيب الشريط الضيّق (#164). أهداف 44px × تسعة عناصر تفاعلية لا تتّسع في
+ * صفّ واحد داخل حاوية 336px (٣٦٠px ناقص هامشَي 12px) — والحساب لا يحتاج
+ * محرّك تخطيط: صفّ الأفعال وحده 44px × سبعة + فواصل + حشوة ≈ 330px. فيصير
+ * الشريط صفّين تحت 680px:
+ *   الصفّ الأول: فلتر البحث و«حسابي» (عنصران، لا يُقصّان).
+ *   الصفّ الثاني: صندوق الأفعال بعرض كامل — العلامة وستة أزرار 44px.
+ * وصندوق الأفعال نفسه `flex-wrap: wrap`، فيلفّ ما لا يتّسع على 320px بدل
+ * أن يخرج أو يُقصّ. فوق 680px تتّسع الحاوية لصفّ واحد فيه الرقاقة بتسميتها
+ * و«حسابي» وصندوق الأفعال كاملاً؛ الحدّ مرتفع لأن أهداف 44px أوسع من
+ * الصفّ القديم (34px) الذي كان يكفيه 460px.
+ * هذه قيم CSS محسوبة، لا قياس محرّك: الفحص البصري يبقى على المتصفّح.
+ */
+@media (max-width: 680px) {
+  .floating-top-inner { flex-wrap: wrap; row-gap: 4px; }
+  .floating-actions-box {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 2px;
+    padding: 2px 4px;
+  }
+  .floating-auth-btn { padding: 0 10px; gap: 4px; font-size: 0.76rem; }
+}
+
+/* التسمية تُخفى عند 460px فقط، حيث يصبح الصفّ ضيّقاً فعلاً؛ بين 461 و680
+   يبقى الصفّ الأول قادراً على حمل الرقاقة بتسميتها و«حسابي» معاً. */
 @media (max-width: 460px) {
   .floating-filter-chip-btn { padding: 8px 10px; }
   #floatingFilterLabel { display: none; }
-  .floating-actions-box { gap: 1px; padding: 4px; }
-  .floating-icon-btn { width: 28px; height: 28px; }
-  .floating-auth-btn { height: 28px; padding: 0 6px; gap: 4px; font-size: 0.72rem; }
-  .floating-brand-btn { width: 26px; height: 26px; }
-  .floating-brand-btn img { width: 20px; height: 20px; }
 }
 
 /* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وكبستَي النشر، في الوسط. */
@@ -3120,11 +3131,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   gap: 10px;
 }
 
+/* `outline: none` كان هنا بلا أي بديل مرئي، فيُبطل حلقة `:focus-visible`
+   العامة (#164). أُزيل فتعمل القاعدة العامة على هذا الحقل. */
 .drawer-search-box input {
   flex: 1;
   background: transparent;
   border: none;
-  outline: none;
   font-family: inherit;
   font-size: 0.92rem;
   color: var(--ink);
@@ -3591,9 +3603,11 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
   /* الحافة `position: absolute; inset: 0` فلا يحميها `padding-bottom` الكرت:
      بـ8px كان صفّ أزرار الكرت تحت الشريط السفلي (‏~68px) وكبستَي النشر
-     فوقه (‏52px: 44 + فسحة 8) — مخفيّاً عن القارئ. 127 = 68 + 52 + فسحة 7. */
+     فوقه (‏52px: 44 + فسحة 8) — مخفيّاً عن القارئ. 127 = 68 + 52 + فسحة 7.
+     وأعلى الشريط صفّ واحد هنا: 10 علوّ + 54 صندوق الأفعال (44 زرّاً + 8
+     حشوة + 2 حدّ) + فسحة 8 = 72؛ 56 كان يكفي أزرار 34px القديمة. */
   .events-feed > .event-card .card-bezel {
-    padding-top: max(56px, calc(56px + env(safe-area-inset-top, 0px))) !important;
+    padding-top: max(72px, calc(72px + env(safe-area-inset-top, 0px))) !important;
     padding-bottom: calc(127px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
@@ -3614,6 +3628,24 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   /* Input fields prevent iOS Safari auto-zoom */
   input, select, textarea {
     font-size: 16px !important;
+  }
+}
+
+/* الشريط العائم صار صفّين تحت 680px (#164): 10px علوّ + 44 صفّ البحث
+   و«حسابي» + 4 فسحة + 50 صندوق الأفعال (44 زرّاً + 4 حشوة + 2 حدّ) + فسحة
+   8 = 116px، فلا يغطّي الصفّ الثاني أعلى محتوى الكرت. */
+@media (max-width: 680px) {
+  .events-feed > .event-card .card-bezel {
+    padding-top: max(116px, calc(116px + env(safe-area-inset-top, 0px))) !important;
+  }
+}
+
+/* حتى 354px لا يبقى لصفّ الأفعال فسحة (330 = 330 بالضبط)، فأي كسر بكسري
+   يلفّه سطرين ويرفع الشريط إلى 10 + 44 + 4 + 96 = 154px؛ 164 تبقيه فوق
+   المحتوى. من 355px توجد فسحة، فيكفي حجز 116px. */
+@media (max-width: 354px) {
+  .events-feed > .event-card .card-bezel {
+    padding-top: max(164px, calc(164px + env(safe-area-inset-top, 0px))) !important;
   }
 }
 
