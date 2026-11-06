@@ -8,6 +8,7 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/screens/news_screen.dart';
+import 'package:negev_events/screens/services_calculators_screen.dart';
 import 'package:negev_events/screens/services_hub_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
@@ -203,6 +204,38 @@ void main() {
       // الشاشة المدفوعة نفسها، لا رابط خارجي. و«خدماتنا» باقية خلفها في مكدّس
       // الملاحة (خارج العرض الآن، فالمفتاح الافتراضي يتخطّاها).
       expect(find.byType(NewsScreen), findsOneWidget);
+      expect(
+        find.byType(ServicesHubScreen, skipOffstage: false),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('بطاقات الحاسبات الخمس تحت المنصّات تفتح الشاشة على لوحتها', (
+      tester,
+    ) async {
+      await pumpHub(tester, hubApi());
+
+      expect(find.text('حاسبات تهمّك'), findsOneWidget);
+      for (final key in const [
+        'hub_calc_budget',
+        'hub_calc_split',
+        'hub_calc_guests',
+        'hub_calc_countdown',
+        'hub_calc_hijri',
+      ]) {
+        expect(find.byKey(Key(key)), findsOneWidget, reason: 'بطاقة $key');
+      }
+      expect(
+        find.textContaining('خمس حاسبات تعمل على جهازك بلا إنترنت'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('hub_calc_hijri')));
+      await tester.pumpAndSettle();
+
+      // شاشة الحاسبات نفسها على اللوحة المطلوبة، و«خدماتنا» باقية خلفها.
+      expect(find.byType(ServicesCalculatorsScreen), findsOneWidget);
+      expect(find.byKey(const Key('calc_hijri_date')), findsOneWidget);
       expect(
         find.byType(ServicesHubScreen, skipOffstage: false),
         findsOneWidget,

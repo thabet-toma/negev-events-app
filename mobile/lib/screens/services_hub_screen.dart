@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart' show openExternalLink;
 import 'news_screen.dart';
+import 'services_calculators_screen.dart';
 
 /// منصتا كترا الأخريان — روابط خارجية تُفتح في المتصفّح بنفس مسار المشروع
 /// (`openExternalLink`)، لا `http` ولا `WebView` هنا.
@@ -88,7 +89,119 @@ class ServicesHubScreen extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 30),
+
+          // «حاسبات تهمّك» (تذكرة #190) — خمس حاسبات محلية تحت كبسات المنصّات،
+          // لكل واحدة بطاقتها التي تفتح شاشة الحاسبات على لوحتها. لا شبكة هنا
+          // ولا حفظ: الشاشة كلها تعمل في الجهاز.
+          Text(
+            'حاسبات تهمّك',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              height: 1.3,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'خمس حاسبات تعمل على جهازك بلا إنترنت: ميزانية العرس، تقسيم '
+            'المصاريف، عدد المعازيم، العدّ التنازلي، والتاريخ الهجري.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.7,
+              color: context.c.inkSoft,
+            ),
+          ),
+          const SizedBox(height: 14),
+          for (final calculator in ServicesCalculator.values) ...[
+            _CalculatorCard(calculator: calculator),
+            if (calculator != ServicesCalculator.values.last)
+              const SizedBox(height: 10),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+/// بطاقة حاسبة داخل «خدماتنا»: أيقونتها واسمها وسطرها القصير، وتفتح شاشة
+/// الحاسبات على لوحة هذه الحاسبة.
+class _CalculatorCard extends StatelessWidget {
+  const _CalculatorCard({required this.calculator});
+
+  final ServicesCalculator calculator;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final radius = BorderRadius.circular(16);
+    return Semantics(
+      button: true,
+      label: '${calculator.label} — ${calculator.short}',
+      child: Material(
+        color: c.surface,
+        borderRadius: radius,
+        child: InkWell(
+          key: Key('hub_calc_${calculator.name}'),
+          borderRadius: radius,
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => ServicesCalculatorsScreen(initial: calculator),
+            ),
+          ),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              border: Border.all(color: c.line),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: c.skyWash,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(calculator.icon, size: 19, color: c.sky),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        calculator.label,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w900,
+                          height: 1.3,
+                          color: c.ink,
+                        ),
+                      ),
+                      Text(
+                        calculator.short,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.5,
+                          color: c.inkSoft,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.chevron_left, size: 20, color: c.inkFaint),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
