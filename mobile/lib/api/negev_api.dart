@@ -30,6 +30,11 @@ class NegevApi {
   /// الترشيح كله على الخادم؛ لا تُرشَّح النتيجة ثانيةً في العميل.
   /// [dateFrom]/[dateTo] (‏`YYYY-MM-DD`) فلتر التاريخ: الخادم يطابق بالتقاطع،
   /// والنطاق يحلّ محلّ شرط «القادم» فيوم ماضٍ مختار يعيد مناسباته.
+  ///
+  /// [allRegions] «كل المحافظات» (#161): يضيف `all_regions=1` إلى هذا النداء
+  /// وحده، فيتجاوز الخادم تقييد المحافظة عليه ويعيد صفوف المحافظات كلها.
+  /// **`api.client.regionId` لا يُمسّ**: تلك ترويسة مشتركة لكل النداءات،
+  /// والعلَم للطلبات التي تطلبه صراحةً لا لكل العميل.
   Future<EventsPage> listEvents({
     Object? town,
     Iterable<String>? towns,
@@ -39,6 +44,7 @@ class NegevApi {
     Object? villageId,
     Iterable<int>? villageIds,
     bool archive = false,
+    bool allRegions = false,
     String? dateFrom,
     String? dateTo,
     int page = 1,
@@ -90,6 +96,7 @@ class NegevApi {
       query['search'] = search.trim();
     }
     if (archive) query['archive'] = '1';
+    if (allRegions) query['all_regions'] = '1';
     if (dateFrom != null) query['date_from'] = dateFrom;
     if (dateTo != null) query['date_to'] = dateTo;
 

@@ -125,6 +125,13 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   String _appliedSearch = '';
   bool _archive = false;
 
+  /// «كل المحافظات» (#161): علَم `all_regions=1` يُرسَل مع جلب هذه التغذية
+  /// وطلبات الترقيم التابعة لها، بعد «وسّع إلى كل المحافظات» في الحالة الفارغة.
+  /// في الشاشة لا في `api.client.regionId`: تلك ترويسة مشتركة لكل النداءات،
+  /// والعلَم يتجاوز تقييد المحافظة **لهذه التغذية وحدها**. واختيار محافظة
+  /// صريح يبدّل مفتاح `HomeShell` فيُعاد بناء الشاشة، فيبدأ العلَم مغلقاً.
+  bool _allRegions = false;
+
   /// `null` = كل التواريخ.
   FeedDateFilter? _dateFilter;
   /// إظهار/إخفاء لوح الفلاتر والبحث — مخفي افتراضياً لتبقى الكروت أكبر
@@ -446,6 +453,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            allRegions: _allRegions,
             dateFrom: _dateFilter?.fromParam,
             dateTo: _dateFilter?.toParam,
             page: 1,
@@ -563,6 +571,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            allRegions: _allRegions,
             dateFrom: _dateFilter?.fromParam,
             dateTo: _dateFilter?.toParam,
             page: 1,
@@ -596,6 +605,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             search: _search,
             occasionTypeIds: _selectedOccasionTypeIds,
             archive: _archive,
+            allRegions: _allRegions,
             dateFrom: _dateFilter?.fromParam,
             dateTo: _dateFilter?.toParam,
             page: pagination.page + 1,
@@ -876,6 +886,20 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (value == _archive) return;
     _captureSnapshot();
     _archive = value;
+    _loadFirstPage();
+  }
+
+  /// «وسّع إلى كل المحافظات» (#161): وضعُ عرضٍ لهذه التغذية وحدها — كل جلب
+  /// بعدها (الصفحة الأولى، الترقيم، السحب للتحديث) يحمل `all_regions=1` فيتجاوز
+  /// الخادم تقييد المحافظة عليه.
+  ///
+  /// ولا يُمسّ `api.client.regionId`: تلك ترويسة مشتركة لكل النداءات، ومسحُها
+  /// كان التوسيع المزعوم الذي لا يوسّع شيئاً (الخادم يحسم محافظةً دائماً:
+  /// محافظة الحساب أو الافتراضية). واختيارُ محافظة صريحٍ — من «حسابي» أو من
+  /// ورقة أول تشغيل — يغيّر `headerRegionId` فيُعيد `HomeShell` بناء الشاشة
+  /// بمفتاح جديد، فيبدأ هذا العلَم مغلقاً ولا يبقى معلَّقاً بعد التبديل.
+  void _expandToAllRegions() {
+    setState(() => _allRegions = true);
     _loadFirstPage();
   }
 
@@ -1490,9 +1514,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   ///
   /// الوجهات كلها آليات قائمة: شاشة النشر وشاشة الألبومات تُدفعان كما في
   /// رأس التغذية، و«خدمات الأعراس» تبويبٌ يُطلب بـ`tabRequest` فيُنفّذه
-  /// `HomeShell`، والتوسيع يمسح المحافظة عبر `RegionStore` — وحين يتغيّر ما
-  /// يُرسَل فعلاً يغيّر `headerRegionId` مفتاحَ التغذية فيُعيد بناءها وجلبها،
-  /// لا كتابة حالة عرض مستقلة هنا.
+  /// `HomeShell`، والتوسيع علَمُ طلبٍ في هذه الشاشة (`_expandToAllRegions`)
+  /// لا مسحٌ للمحافظة المشتركة.
   List<Widget> _emptyStateActions() {
     final services = AppServices.of(context);
     return [
@@ -1527,7 +1550,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       const SizedBox(height: 6),
       TextButton.icon(
         key: const Key('feed_empty_expand'),
-        onPressed: services.regions.clear,
+        onPressed: _expandToAllRegions,
         icon: const Icon(Icons.public, size: 18),
         label: const Text('وسّع إلى كل المحافظات'),
       ),

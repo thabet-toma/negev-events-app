@@ -12306,6 +12306,41 @@ async function run() {
     assert.ok(!secondIds.includes(isolationNegevEventId), 'a Negev pin leaked onto the second governorate map');
   });
 
+  await test('all_regions=1 يتجاوز تقييد المحافظة في GET /api/events و GET /api/map/events، والافتراضي يبقى مقيَّداً (تذكرة #161)', async () => {
+    const search = `?limit=100&search=${encodeURIComponent(sharedHonoree)}`;
+
+    // الحالة المرجعية: الترويسة وحدها ما زالت تقيّد، كما كانت قبل العلَم.
+    const scoped = await api('GET', `/api/events${search}`, { region: isolationRegionId });
+    assert.strictEqual(scoped.status, 200);
+    const scopedIds = scoped.body.events.map(e => e.id);
+    assert.ok(scopedIds.includes(isolationSecondEventId), 'the header alone still returns its own governorate');
+    assert.ok(!scopedIds.includes(isolationNegevEventId), 'the header alone must still hide the other governorate, or the flag proves nothing');
+
+    // والعلَم وحده يوسّع: صفّان من محافظتين مختلفتين في الاستجابة نفسها، مع
+    // الترويسة نفسها — فالمتغيّر الوحيد بين الطلبين هو `all_regions=1`.
+    const widened = await api('GET', `/api/events${search}&all_regions=1`, { region: isolationRegionId });
+    assert.strictEqual(widened.status, 200);
+    const widenedIds = widened.body.events.map(e => e.id);
+    assert.ok(widenedIds.includes(isolationNegevEventId), 'all_regions must reach the default governorate row, or nothing widened');
+    assert.ok(widenedIds.includes(isolationSecondEventId), 'and it keeps the row of the governorate the header asked for');
+    assert.strictEqual(
+      new Set([await regionOfEvent(isolationNegevEventId), await regionOfEvent(isolationSecondEventId)]).size,
+      2,
+      'the two rows of the widened feed really come from two different governorates'
+    );
+
+    // والخريطة تلحقها: دبّوسا المحافظتين معاً بالعلَم نفسه، وكلٌّ منهما وحده بلا علَم.
+    const scopedMap = await api('GET', '/api/map/events', { region: isolationRegionId });
+    assert.strictEqual(scopedMap.status, 200);
+    const scopedMapIds = scopedMap.body.points.map(p => p.id);
+    assert.ok(!scopedMapIds.includes(isolationNegevEventId), 'the map stays scoped to the header governorate without the flag');
+    const widenedMap = await api('GET', '/api/map/events?all_regions=1', { region: isolationRegionId });
+    assert.strictEqual(widenedMap.status, 200);
+    const widenedMapIds = widenedMap.body.points.map(p => p.id);
+    assert.ok(widenedMapIds.includes(isolationNegevEventId), 'the map widens with the same flag');
+    assert.ok(widenedMapIds.includes(isolationSecondEventId), 'and keeps the header governorate pin');
+  });
+
   await test('إعلانات تغيير التاريخ في GET /api/events تعزل المحافظة كالمناسبة نفسها (تذكرة #121)', async () => {
     // إعلان حالي واحد لكل محافظة، يُكتب مباشرةً كي يكشف الاختبار إعلاناً يسافر
     // من محافظة إلى أخرى. يُحذف الصفّان هنا نفسهما — لا اعتماداً على CASCADE

@@ -113,6 +113,11 @@ let feedRenderedFilterState = null;
 // تغيير فلتر فعلي، بموضع تمريرها وحالة فلترها — زرّ «رجوع لنتائجك السابقة»
 // يعيدها بلا شبكة.
 let feedBackSnapshot = null;
+// وضع «كل المحافظات» (تذكرة #161): علَم `all_regions=1` يُرسَل مع جلب التغذية
+// وحدها (والترقيم التابع له) حتى يختار المستخدم محافظة صريحة فيُلغى. في الذاكرة
+// لا في localStorage: إعادة تحميل الصفحة تعود إلى المحافظة المحفوظة، فلا تبقى
+// شاشة تعرض «الكل» بلا سبب ظاهر بعد إغلاق التبويب وفتحه.
+let feedAllRegions = false;
 // رقم أحدث دورة جلب (#124): يزيد مع كل دورة، وأي استجابة لا تحمل الرقم الحالي
 // تُتجاهَل — استجابة محافظة سابقة بطيئة لا يجوز أن تكتب `allEvents` فوق قائمة
 // المحافظة الجديدة.
@@ -1964,7 +1969,9 @@ async function fetchEvents(options = {}) {
     params.set('page', currentPage);
     params.set('limit', EVENTS_PAGE_SIZE);
 
-    const res = await apiFetch(`/api/events?${params.toString()}`);
+    // `allRegions` في وضع التوسّع (تذكرة #161): يُلحَق `all_regions=1` بكل جلب
+    // تغذية — ومنه الترقيم اللاحق — حتى يختار المستخدم محافظة صريحة.
+    const res = await apiFetch(`/api/events?${params.toString()}`, { allRegions: feedAllRegions });
     const data = await res.json();
 
     // دورة أحدث بدأت أثناء هذا الطلب (تبديل محافظة أو فلتر): هذا ردّ قديم،
@@ -4023,6 +4030,9 @@ async function selectRegion(regionId) {
   if (region.id === selectedRegionId && readSavedRegionId() === region.id) return;
 
   const previousRegionId = selectedRegionId;
+  // اختيار محافظة صريح يُلغي وضع «كل المحافظات» فوراً (تذكرة #161) — وإلا بقي
+  // الفلتر معلَّقاً على التغذية بعد أن اختار المستخدم محافظته.
+  feedAllRegions = false;
   saveRegionId(region.id);
   selectedRegionId = region.id;
   renderRegionPicker();
@@ -4037,19 +4047,17 @@ async function selectRegion(regionId) {
 
 /**
  * «وسّع إلى كل المحافظات» — خروج الحالة الفارغة من محافظةٍ لا مناسبات فيها
- * (تذكرة #161، البند 2). يمشي في مسار تبديل المحافظة القائم نفسه ولا يكتب
- * حالة ثانية: يمسح الاختيار المحفوظ (`clearSavedRegionId`، فلا تخرج ترويسة
- * `X-Region` في الطلب التالي)، ثم يعيد رسم المنتقي على ما سيستخدمه الخادم بلا
- * ترويسة (محافظة الحساب إن وُجدت، وإلا الافتراضية — `middleware/region.js` لا
- * يقبل «بلا محافظة» مطلقاً، فهذا أوسع طلب يقدّمه العقد الحالي)، ثم يصفّر
- * التغذية (الصفحة واللقطة والبصمة — `resetFeedForRegionChange`) ويجلب من
- * أولها بـ`fetchEvents({ force: true })`، ويعيد أسطح الاكتشاف.
- *
- * لا حفظ قيمة هنا: الزائر يبقى بلا اختيار، فتقود الحبة المرسومة إلى المحافظة
- * التي يعرضها الخادم فعلاً بدل أن تدّعي اختياراً لم يُحفظ.
+ * (تذكرة #161، البند 2). مسح الاختيار المحفوظ وحده لا يوسّع شيئاً: الخادم يحسم
+ * محافظةً دائماً (ترويسة، أو محافظة الحساب، أو الافتراضية)، فيعود الجلب إلى
+ * التغذية نفسها حرفياً. فالتوسيع علَم طلب صريح — `all_regions=1` عبر `apiFetch`
+ * في `fetchEvents` — يتجاوز تقييد المحافظة على الخادم لهذا الجلب وطلبات الترقيم
+ * التالية، ويبقى فعّالاً حتى يختار المستخدم محافظة صريحة (`selectRegion`
+ * تلغيه). ولا يُكتب هنا اختيار: المنتقي يرسم المحافظة التي سيستخدمها الخادم بلا
+ * علَم، والوضع وضعُ عرضٍ لا تفضيل.
  */
 function expandFeedToAllRegions() {
   clearSavedRegionId();
+  feedAllRegions = true;
   syncRegionPickerSelection();
   resetFeedForRegionChange();
   refreshPlaceFilterForRegion();

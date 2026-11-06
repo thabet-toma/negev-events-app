@@ -4694,6 +4694,38 @@ async function run() {
     );
   });
 
+  await test('«وسّع إلى كل المحافظات» يجعل الجلب التالي يحمل all_regions=1 — وإلا فالزرّ يعيد التغذية نفسها (#161)', async () => {
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: win => win.localStorage.setItem('negev_region', '2')
+    });
+    await flushBoot();
+    dom.window.renderEvents([]);
+
+    // Every request app.js sends from here on, full URL — the flag lives in the
+    // query string, not in a header, so the path alone cannot answer this.
+    const calls = [];
+    const fallbackFetch = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), headers: options.headers || {} });
+      return fallbackFetch(url, options);
+    };
+
+    calls.length = 0;
+    emptyStateButton(dom.window, 'وسّع إلى كل المحافظات').click();
+    await waitFor(() => calls.some(call => call.url.split('?')[0] === '/api/events'));
+    const eventsCall = calls.find(call => call.url.split('?')[0] === '/api/events');
+    assert.ok(eventsCall, 'expanding refetches the feed');
+
+    const params = new URLSearchParams(eventsCall.url.split('?')[1] || '');
+    assert.strictEqual(
+      params.get('all_regions'),
+      '1',
+      'the widened feed must tell the server it is not a single-governorate request — clearing the saved region alone returns the same feed'
+    );
+    assert.strictEqual(eventsCall.headers['X-Region'], undefined, 'and the cleared governorate still sends no header');
+  });
+
   await test('a Cloudinary card poster is asked for at card width, and a local poster is left exactly as it is (#161)', () => {
     // Synchronous on purpose: the startup feed fetch resolves after this frame
     // and would overwrite the fixtures (same reason as the card-rendering tests).
@@ -12434,6 +12466,40 @@ async function run() {
     await waitFor(() => feedCalls.length > 0);
 
     assert.strictEqual(feedCalls[0]['X-Region'], '2', 'the boot feed must already declare the stored region — drawing it in the picker is not enough');
+  });
+
+  await test('اختيار محافظة بعد «وسّع إلى كل المحافظات» يُلغي all_regions من الطلب التالي (#161)', async () => {
+    const feedCalls = [];
+    const dom = buildTwoRegionsEnv(async (url, opts = {}) => {
+      if (String(url).split('?')[0] === '/api/events') {
+        feedCalls.push({ url: String(url), headers: opts.headers || {} });
+      }
+      return null; // falls through to buildFetchStub's shaped answers
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.initRegionPicker();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+
+    win.renderEvents([]);
+    win.document.querySelector('#eventsContainer .feed-empty-expand').click();
+    await waitFor(() => feedCalls.some(call => new URLSearchParams(call.url.split('?')[1] || '').get('all_regions') === '1'));
+    const widened = feedCalls.find(call => new URLSearchParams(call.url.split('?')[1] || '').get('all_regions') === '1');
+    assert.ok(widened, 'expanding puts the flag on the feed request');
+
+    // A real governorate choice afterwards: the very next feed request is scoped
+    // again — otherwise the flag would stay latched and the user's own choice
+    // would keep showing every governorate.
+    const beforeSwitch = feedCalls.length;
+    await win.selectRegion(SECOND_REGION.id);
+    await waitFor(() => feedCalls.slice(beforeSwitch).some(call => call.headers['X-Region'] === String(SECOND_REGION.id)));
+    const scoped = feedCalls.slice(beforeSwitch).find(call => call.headers['X-Region'] === String(SECOND_REGION.id));
+    assert.ok(scoped, 'choosing a governorate refetches the feed with its header');
+    assert.strictEqual(
+      new URLSearchParams(scoped.url.split('?')[1] || '').get('all_regions'),
+      null,
+      'an explicit governorate choice must drop the all-regions flag, not merely add a header next to it'
+    );
   });
 
   await test('a signed-in visitor with no stored choice is shown the account region the server actually uses', async () => {

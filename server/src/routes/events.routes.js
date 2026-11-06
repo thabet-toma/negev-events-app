@@ -94,7 +94,11 @@ router.get('/events', optionalAuthenticate, asyncHandler(async (req, res) => {
   // محافظة الاكتشاف (تذكرة #121): تُقرأ دائماً — ترويسة `X-Region`، أو محافظة
   // الحساب لمسجَّل بلا ترويسة، أو الافتراضية. الخدمة وحدها تقرّر كيف تُترجَم
   // إلى شرط استعلام، فتبقى بلا `req`/`res`.
-  const regionId = await regionIdForRequest(req);
+  // و«كل المحافظات» (تذكرة #161): علَم استعلام صريح يتجاوز التقييد لهذا الطلب
+  // وحده فيعود `regionId` هنا `null` («بلا تقييد» كما تفهمه الخدمة). الافتراضي
+  // بلا العلَم لم يتغيّر.
+  const allRegions = parseFlag(req.query.all_regions);
+  const regionId = await regionIdForRequest(req, { allRegions });
 
   const [result, announcements] = await Promise.all([
     events.listPublicEvents({
@@ -115,7 +119,10 @@ router.get('/map/events', optionalAuthenticate, asyncHandler(async (req, res) =>
   const towns = parseTownListParam(req.query.town);
   const occasionTypeIds = parseIdListParam(req.query.occasion_type_id, 'نوع المناسبة');
   const villageIds = parseIdListParam(req.query.village_id, 'القرية');
-  const regionId = await regionIdForRequest(req);
+  // العلَم نفسه في `/events` (تذكرة #161): دبابيس المحافظة وحدها هي الافتراضي،
+  // و`all_regions=1` يوسّع الخريطة لهذا الطلب وحده.
+  const allRegions = parseFlag(req.query.all_regions);
+  const regionId = await regionIdForRequest(req, { allRegions });
 
   res.json({
     success: true,
