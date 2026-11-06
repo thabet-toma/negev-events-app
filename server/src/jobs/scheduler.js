@@ -30,6 +30,8 @@ const PUBLISH_TICK_MS = 60 * 1000;
 let armedTimer = null;
 /** مؤقّت إيقاع النشر المستقل عن الجولة اليومية (تذكرة #167). */
 let publishTimer = null;
+/** جيل سلسلة مؤقّت النشر؛ `stop()` يبطل دورة كانت لا تزال تنتظر دفعتها. */
+let publishTimerGeneration = 0;
 /** حارس تشغيل واحد للدفعة: الجولة اليومية والإيقاع لا يدخلانها معاً. */
 let publishPassRunning = false;
 
@@ -291,12 +293,19 @@ function armNextRun() {
  * never overlap; the interval is fixed because `publish_at` is minute-precise
  * and a minute means the same thing on both sides of a DST boundary. `unref()`
  * like the daily timer: this never keeps the process alive on its own.
+ *
+ * `generation` belongs to one `start()` lifetime. A pass can finish after
+ * `stop()` cleared its timer; without the comparison its `.finally()` would
+ * re-arm that stopped lifetime, and a later `start()` would then have two
+ * publish chains.
  */
-function armNextPublishTick() {
+function armNextPublishTick(generation) {
+  if (generation !== publishTimerGeneration) return;
   publishTimer = setTimeout(() => {
-    runScheduledPublishPass()
+    if (generation !== publishTimerGeneration) return;
+    return runScheduledPublishPass()
       .catch(err => logger.error('[scheduler] scheduled publish tick failed:', err.message))
-      .finally(armNextPublishTick);
+      .finally(() => armNextPublishTick(generation));
   }, PUBLISH_TICK_MS);
   publishTimer.unref();
 }
@@ -314,12 +323,15 @@ function armNextPublishTick() {
  */
 function start() {
   if (armedTimer) return;
+  const publishGeneration = ++publishTimerGeneration;
   armNextRun();
-  armNextPublishTick();
+  armNextPublishTick(publishGeneration);
 }
 
 /** Clears the currently-armed timers, if any — the explicit counterpart to `start()`, called from server.js's own graceful-shutdown handler and by tests that exercise the pair. */
 function stop() {
+  // Invalidates an in-flight pass as well as clearing a handle that has not fired yet.
+  publishTimerGeneration += 1;
   if (armedTimer) {
     clearTimeout(armedTimer);
     armedTimer = null;

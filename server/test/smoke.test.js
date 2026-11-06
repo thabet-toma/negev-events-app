@@ -21,6 +21,7 @@ process.env.RATE_LIMIT_USER_MAX = process.env.RATE_LIMIT_USER_MAX || '6000';
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
+const dataMigrations = require('../src/db/dataMigrations');
 const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
@@ -15057,6 +15058,49 @@ async function run() {
     );
   });
 
+  await test('دورة نشر بدأت قبل stop() لا تعيد تسليح مؤقّت بعد stop() ثم start() (#167)', async () => {
+    const originalSetTimeout = global.setTimeout;
+    const originalListDueScheduledPublish = eventsService.listDueScheduledPublish;
+    const armed = [];
+    let resolvePass;
+    let markPassStarted;
+    const passStarted = new Promise(resolve => { markPassStarted = resolve; });
+    global.setTimeout = (fn, delay) => {
+      armed.push({ fn, delay });
+      return { unref() {} };
+    };
+    eventsService.listDueScheduledPublish = () => {
+      markPassStarted();
+      return new Promise(resolve => { resolvePass = resolve; });
+    };
+
+    try {
+      scheduler.stop();
+      scheduler.start();
+      const staleTick = armed.find(entry => entry.delay === scheduler.PUBLISH_TICK_MS);
+      assert.ok(staleTick, 'توجد دورة نشر أولى لتُوقَف وهي منتظرة');
+      staleTick.fn();
+      await passStarted;
+
+      scheduler.stop();
+      scheduler.start();
+      assert.strictEqual(armed.length, 4, 'الإقلاع الجديد يسلّح مؤقّتين جديدين فقط');
+
+      resolvePass([]);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.strictEqual(
+        armed.length,
+        4,
+        'الدورة القديمة التي انتهت بعد stop() لا تعيد تسليح مؤقّت خامس فوق سلسلة start() الجديدة'
+      );
+    } finally {
+      if (resolvePass) resolvePass([]);
+      eventsService.listDueScheduledPublish = originalListDueScheduledPublish;
+      global.setTimeout = originalSetTimeout;
+      scheduler.stop();
+    }
+  });
+
   await test('مناسبة بموعد نشر مستقبلي غائبة عن كل قائمة عامة وحاضرة بالتفصيل وبالرابط، ثم تظهر ويصل إشعارها مرة واحدة', async () => {
     const created = await api('POST', '/api/events', {
       token: userToken,
@@ -15332,6 +15376,73 @@ async function run() {
     assert.strictEqual(digests.length, 0, 'ولا ملخّص «(1)» يعدّ اعتمادات لم تُعلن');
   });
 
+  await test('حصة «مناسبة جديدة» المشتركة لا تتجاوز ثلاث فرادى عند إعلان مناسبتين متزامنتين في المحافظة نفسها (#167)', async () => {
+    await resetDailyNewEventCounter();
+    const quotaListener = await createDirectUser('مستمع سباق حصة الإعلانات');
+    const quotaEventIds = [];
+    const firstTwo = ['عريس حصة التسابق الأول', 'عريس حصة التسابق الثاني'];
+    const concurrentTwo = ['عريس حصة التسابق الثالث', 'عريس حصة التسابق الرابع'];
+
+    try {
+      for (const name of firstTwo) {
+        const created = await api('POST', '/api/events', {
+          token: adminToken,
+          body: weddingEventBody({ title: name, honorees: [{ name }], town: SCHEDULED_TOWN, event_date: addDaysToDate(schedulerToday, 34) })
+        });
+        assert.strictEqual(created.status, 201, created.body.message);
+        quotaEventIds.push(created.body.eventId);
+      }
+
+      for (const name of concurrentTwo) {
+        const created = await api('POST', '/api/events', {
+          token: adminToken,
+          body: weddingEventBody({
+            title: name, honorees: [{ name }], town: SCHEDULED_TOWN, event_date: addDaysToDate(schedulerToday, 35), publish_at: futurePublishAt
+          })
+        });
+        assert.strictEqual(created.status, 201, created.body.message);
+        quotaEventIds.push(created.body.eventId);
+        await db.execute('UPDATE events SET publish_at = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [created.body.eventId]);
+      }
+
+      const due = (await eventsService.listDueScheduledPublish())
+        .filter(event => quotaEventIds.includes(event.id));
+      assert.strictEqual(due.length, 2, 'مناسبتان مختلفتان تنتظران الإعلان معاً بعد إعلانين ملتزمين');
+      await Promise.all(due.map(event => notificationsService.notifyNewEvent(event)));
+
+      const individualRows = await db.query(
+        `SELECT event_id FROM notifications
+          WHERE user_id = ? AND type = 'event_new' AND event_id IN (?, ?, ?, ?)
+          ORDER BY event_id ASC`,
+        [quotaListener.id, ...quotaEventIds]
+      );
+      const racedSingles = individualRows.filter(row => quotaEventIds.slice(2).includes(row.event_id));
+      assert.strictEqual(
+        individualRows.length,
+        3,
+        `بعد إعلانين لا يخرج من المناسبتين المتزامنتين إلا إعلان فردي واحد: ${JSON.stringify(individualRows)}`
+      );
+      assert.strictEqual(racedSingles.length, 1, 'السباق لا يمنح مناسبتين مختلفتين آخر مكانين فرديين معاً');
+
+      const digestRows = await db.query(
+        "SELECT body FROM notifications WHERE user_id = ? AND type = 'event_new_digest' AND (body LIKE ? OR body LIKE ?)",
+        [quotaListener.id, `%${concurrentTwo[0]}%`, `%${concurrentTwo[1]}%`]
+      );
+      assert.strictEqual(digestRows.length, 1, 'المناسبة المتزامنة الرابعة تدخل الملخّص بدل إعلان فردي رابع');
+      assert.ok(digestRows[0].body.includes('(1)'), `الملخّص يعدّ المناسبة الرابعة وحدها: "${digestRows[0].body}"`);
+    } finally {
+      await db.execute(
+        "DELETE FROM notifications WHERE type = 'event_new_digest' AND (body LIKE ? OR body LIKE ?)",
+        [`%${concurrentTwo[0]}%`, `%${concurrentTwo[1]}%`]
+      );
+      await db.execute(
+        'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
+        [...quotaEventIds, 0, 0, 0, 0].slice(0, 4)
+      );
+      await db.execute('DELETE FROM users WHERE id = ?', [quotaListener.id]);
+    }
+  });
+
   await test('publish_at في الماضي أو غير صالح يُرفض 400 عربية في النشر والتعديل، وإعادة الموعد المخزَّن لا تُرفض', async () => {
     const pastPublish = await api('POST', '/api/events', {
       token: userToken,
@@ -15490,30 +15601,38 @@ async function run() {
     assert.strictEqual(Number(restore.body.type.feed_linger_days), 7);
   });
 
-  await test('نافذة «نجاح» تُزرع مرّة واحدة: تشغيل الترحيل لا يكتب فوق اختيار السوبر أدمن صفراً (#167)', async () => {
-    const marker = await db.queryOne(
-      "SELECT setting_value FROM app_settings WHERE setting_key = 'seed_feed_linger_celebration_2026_11'"
+  await test('ترقية صيغة #167 الأولى بلا علَم والعمود موجود تحفظ اختيار السوبر أدمن صفراً، والتثبيت الجديد يزرع 7 (#167)', async () => {
+    const column = await db.queryOne(
+      `SELECT 1 AS present FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'occasion_types' AND COLUMN_NAME = 'feed_linger_days'`
     );
-    assert.ok(marker, 'علَم التعبئة الأولية مكتوب بعد أوّل تشغيل للترحيل');
+    assert.ok(column, 'العمود موجود قبل إعادة تشغيل الترحيل — حالة ترقية الصيغة الأولى');
+    await db.execute("DELETE FROM app_settings WHERE setting_key = 'seed_feed_linger_celebration_2026_11'");
 
     const setZero = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
       token: superAdminToken, body: { feed_linger_days: 0 }
     });
     assert.strictEqual(setZero.status, 200, setZero.body.message);
-    assert.strictEqual(Number(setZero.body.type.feed_linger_days), 0, 'اختيار إداري صالح: صفر');
+    assert.strictEqual(Number(setZero.body.type.feed_linger_days), 0, 'اختيار إداري صالح: صفر بلا علَم تعبئة');
 
-    // قبل التصحيح كان كل تشغيل للترحيل يعيدها 7؛ الآن العلَم يمنع التعبئة الثانية.
     await migrate();
 
-    const after = await db.queryOne("SELECT feed_linger_days FROM occasion_types WHERE name = 'نجاح'");
-    assert.strictEqual(Number(after.feed_linger_days), 0, 'تشغيل الترحيل التالي لا يلغي اختيار السوبر أدمن');
+    const afterUpgrade = await db.queryOne("SELECT feed_linger_days FROM occasion_types WHERE name = 'نجاح'");
+    assert.strictEqual(Number(afterUpgrade.feed_linger_days), 0, 'ترقية صيغة #167 الأولى لا تستبدل الصفر بـ7');
 
-    // إعادة النوع إلى 7 كما زرعه الترحيل، فلا يتغيّر سلوك قسم لاحق.
-    const restore = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
-      token: superAdminToken, body: { feed_linger_days: 7 }
-    });
-    assert.strictEqual(restore.status, 200);
-    assert.strictEqual(Number(restore.body.type.feed_linger_days), 7);
+    const scheduledPublishMigration = dataMigrations.find(
+      step => step.name === 'add-scheduled-publish-and-feed-linger-2026-11'
+    );
+    assert.ok(scheduledPublishMigration, 'خطوة #167 موجودة لتجربة سياق قاعدة جديدة');
+    const connection = await db.pool.getConnection();
+    try {
+      await scheduledPublishMigration.run(connection, { freshInstall: true });
+    } finally {
+      connection.release();
+    }
+
+    const afterFreshInstall = await db.queryOne("SELECT feed_linger_days FROM occasion_types WHERE name = 'نجاح'");
+    assert.strictEqual(Number(afterFreshInstall.feed_linger_days), 7, 'تثبيت جديد يزرع نافذة «نجاح» ذات السبعة أيام');
   });
 
   // Clean up this section: notifications of its events, the day's digest rows that
