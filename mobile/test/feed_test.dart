@@ -9,9 +9,14 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
+import 'package:negev_events/screens/add_event_screen.dart';
+import 'package:negev_events/screens/albums_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
+import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
+import 'package:negev_events/state/region_onboarding.dart';
+import 'package:negev_events/state/region_store.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:negev_events/widgets/motion.dart';
@@ -93,7 +98,11 @@ NegevApi feedScreenApi({
   return NegevApi(ApiClient(client: client));
 }
 
-Future<void> pumpFeedScreen(WidgetTester tester, NegevApi api) async {
+Future<void> pumpFeedScreen(
+  WidgetTester tester,
+  NegevApi api, {
+  ValueNotifier<int>? tabRequest,
+}) async {
   final auth = AuthStore(api);
   final realtime = RealtimeService();
   // `AppServices` فوق `MaterialApp` — موضعه في `main.dart` — لأن وضعَه داخل
@@ -104,6 +113,7 @@ Future<void> pumpFeedScreen(WidgetTester tester, NegevApi api) async {
       api: api,
       auth: auth,
       realtime: realtime,
+      tabRequest: tabRequest,
       child: MaterialApp(
         home: Directionality(
           textDirection: TextDirection.rtl,
@@ -1461,5 +1471,105 @@ void main() {
         reason: 'الموضع الذي كان عليه القارئ يعود معها',
       );
     });
+  });
+
+  group('الحالة الفارغة — بابٌ لا جدار (#161)', () {
+    testWidgets(
+      'تعرض «أضف مناسبتك» وبطاقتَي «خدمات الأعراس في منطقتك» و«ألبومات منطقتك» و«وسّع إلى كل المحافظات»، وكل زرّ يقود إلى وجهته',
+      (tester) async {
+        final tabRequest = ValueNotifier<int>(-1);
+        final api = feedScreenApi();
+        await pumpFeedScreen(tester, api, tabRequest: tabRequest);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('feed_empty_add_event')), findsOneWidget, reason: 'الفعل الأول ظاهر');
+        expect(find.text('أضف مناسبتك'), findsOneWidget);
+        expect(find.byKey(const Key('feed_empty_services')), findsOneWidget);
+        expect(find.text('خدمات الأعراس في منطقتك'), findsOneWidget);
+        expect(find.byKey(const Key('feed_empty_albums')), findsOneWidget);
+        expect(find.text('ألبومات منطقتك'), findsOneWidget);
+        expect(find.byKey(const Key('feed_empty_expand')), findsOneWidget);
+        expect(find.text('وسّع إلى كل المحافظات'), findsOneWidget);
+
+        // وجهة الشاشة/التبويب: طلب تبديل تُنفّذه `HomeShell` — لا دفع شاشة ثانية.
+        await tester.ensureVisible(find.byKey(const Key('feed_empty_services')));
+        await tester.tap(find.byKey(const Key('feed_empty_services')));
+        await tester.pump();
+        expect(tabRequest.value, AppServices.servicesTabIndex, reason: '«خدمات الأعراس» تبويبُ الدليل القائم');
+
+        // «ألبومات منطقتك» تدفع شاشة الألبومات نفسها التي يفتحها مدخل الألبومات.
+        await tester.ensureVisible(find.byKey(const Key('feed_empty_albums')));
+        await tester.tap(find.byKey(const Key('feed_empty_albums')));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlbumsScreen), findsOneWidget, reason: 'البطاقة تفتح شاشة الألبومات');
+        Navigator.of(tester.element(find.byType(AlbumsScreen))).pop();
+        await tester.pumpAndSettle();
+
+        // «أضف مناسبتك» شاشة النشر نفسها التي يفتحها زرّ الرأس.
+        await tester.ensureVisible(find.byKey(const Key('feed_empty_add_event')));
+        await tester.tap(find.byKey(const Key('feed_empty_add_event')));
+        await tester.pumpAndSettle();
+        expect(find.byType(AddEventScreen), findsOneWidget, reason: 'الزرّ يفتح شاشة النشر');
+      },
+    );
+
+    testWidgets(
+      '«وسّع إلى كل المحافظات» يمسح اختيار المحافظة المحفوظ، فيعيد هيكلُ التطبيق جلب التغذية بلا ترويسة',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          RegionStore.storageKey: '2',
+          // ورقة أول تشغيل سُئلت من قبل — وإلا غطّت الحالة الفارغة عند الإقلاع.
+          regionOnboardedKey: true,
+        });
+        final requests = <Uri>[];
+        final api = feedScreenApi(requests: requests);
+        final auth = AuthStore(api);
+        final realtime = RealtimeService();
+        final services = AppServices(
+          api: api,
+          auth: auth,
+          realtime: realtime,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: HomeShell(),
+            ),
+          ),
+        );
+        // الإقلاع نفسه يقرأ التفضيل المحفوظ قبل أول طلب، كما في `main.dart`.
+        await services.regions.restore();
+        await tester.pumpWidget(services);
+        await tester.pump();
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 300));
+        }
+
+        expect(api.client.regionId, '2', reason: 'المحافظة المحفوظة هي ما يُرسَل فعلاً قبل التوسيع');
+        final expand = find.byKey(const Key('feed_empty_expand'));
+        expect(expand, findsOneWidget);
+        final before = requests.where((u) => u.path.endsWith('/api/events')).length;
+
+        // يُستدعى `onPressed` مباشرةً: الزرّ آخر عنصر في الحالة الفارغة، وقد
+        // يقع مركزه تحت شريط التنقّل السفلي في نافذة الاختبار القصيرة
+        // (النقرة الحقيقية عندها على الشريط لا عليه). المقيس هو وجهة الزرّ
+        // نفسها، وهي دالة واحدة لا تعرف موضعه.
+        tester.widget<TextButton>(expand).onPressed!();
+        await tester.pump();
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 300));
+        }
+
+        expect(api.client.regionId, isNull, reason: 'لم يبقَ اختيار محافظة يُرسَل ترويسةً');
+        expect(services.regions.regionId, isNull, reason: 'الاختيار الصريح على الجهاز مُسح');
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(RegionStore.storageKey), isNull, reason: 'ومُسح من التخزين أيضاً');
+        expect(
+          requests.where((u) => u.path.endsWith('/api/events')).length,
+          greaterThan(before),
+          reason: 'تغيّر مفتاح المحافظة في `HomeShell` فجُلبت التغذية من جديد — الآلية القائمة، لا كتابة حالة هنا',
+        );
+      },
+    );
   });
 }

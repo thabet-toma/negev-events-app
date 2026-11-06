@@ -4571,9 +4571,14 @@ async function run() {
    * Blur and fixed 4:5 aspect ratio are deleted from the feed path.
    * Poster image becomes object-fit: cover with object-position: top center.
    * Snapping rules are declared in styles.css.
+   *
+   * تذكرة #161 (البند 3) أعادت أسلوباً واحداً من هذا: نسبة 4:5 على **وعاء
+   * صورة كرت المناسبة** (`.event-card .card-media`) لا كرتاً بملء الشاشة،
+   * فالمساحة تُحجز قبل تحميل الملصق. الكرت نفسه والتغذية يبقيان بلا نسبة
+   * ثابتة، والـblur باقٍ محذوفاً.
    */
-  await test('the feed card has no blur and no fixed aspect ratio, object-fit is cover from top center, and snapping is declared', () => {
-    // 1. No blur and no fixed aspect ratio anywhere in the feed path (styles.css text assertion)
+  await test('the feed card has no blur and no card-level fixed ratio, its media reserves the poster ratio, object-fit is cover from top center, and snapping is declared', () => {
+    // 1. No blur, and no fixed ratio on the card or the feed itself.
     assert.ok(
       !/\.card-poster-backdrop\s*\{[^}]*filter:\s*blur/.test(STYLES_CSS),
       'feed backdrop blur rule must be deleted from styles.css'
@@ -4583,12 +4588,19 @@ async function run() {
       'feed 4:5 fixed aspect-ratio rule must be deleted from styles.css'
     );
     assert.ok(
-      !/\.card-media\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
-      'no aspect-ratio on .card-media in styles.css'
-    );
-    assert.ok(
       !/\.events-feed\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
       'no aspect-ratio on .events-feed in styles.css'
+    );
+    // The base box itself is still free to be sized by its container; only the
+    // event card's media reserves a ratio (#161), so an empty poster box
+    // cannot push the caption down once the image loads.
+    assert.ok(
+      !/(^|\})\s*\.card-media\s*\{[^}]*aspect-ratio/.test(STYLES_CSS),
+      'the base .card-media box must not carry a fixed ratio — only .event-card .card-media does'
+    );
+    assert.ok(
+      /\.event-card \.card-media\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*5/.test(STYLES_CSS),
+      'the event card media must reserve the 4:5 poster ratio (#161)'
     );
 
     // Image object-fit and position
@@ -4612,6 +4624,113 @@ async function run() {
       '.event-card must declare scroll-snap-stop: always'
     );
   });
+
+  console.log('\nFeed empty state and card images (#161)');
+
+  /** Finds a button in the empty feed by the text it shows. */
+  function emptyStateButton(win, text) {
+    return [...win.document.querySelectorAll('#eventsContainer .feed-empty-state button')]
+      .find(button => button.textContent.includes(text)) || null;
+  }
+
+  await test('the empty feed is a door: add your event, wedding services, your albums, and expanding beyond the governorate — each lands on its destination (#161)', async () => {
+    // A saved governorate is what the expand button clears; seeding it before
+    // app.js boots is what makes the startup requests carry X-Region, so the
+    // assertion after the click is about a genuinely new, unscoped request.
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: win => win.localStorage.setItem('negev_region', '2')
+    });
+    await flushBoot();
+    const { document } = dom.window;
+
+    const calls = [];
+    const fallbackFetch = buildFetchStub();
+    dom.window.fetch = async (url, options = {}) => {
+      calls.push({ path: String(url).split('?')[0], headers: options.headers || {} });
+      return fallbackFetch(url, options);
+    };
+
+    dom.window.renderEvents([]);
+
+    const block = document.querySelector('#eventsContainer .feed-empty-state');
+    assert.ok(block, 'the empty feed renders its own block, not a bare line of text');
+    assert.ok(block.querySelector('h3'), 'the reason still reads first');
+    assert.ok(emptyStateButton(dom.window, 'أضف مناسبتك'), 'the primary action is «أضف مناسبتك»');
+    assert.ok(emptyStateButton(dom.window, 'خدمات الأعراس في منطقتك'), 'one destination card for wedding services');
+    assert.ok(emptyStateButton(dom.window, 'ألبومات منطقتك'), 'one destination card for the region\'s albums');
+    assert.ok(emptyStateButton(dom.window, 'وسّع إلى كل المحافظات'), 'and a way out of an empty governorate');
+
+    emptyStateButton(dom.window, 'خدمات الأعراس في منطقتك').click();
+    assert.ok(
+      document.getElementById('tabServices').classList.contains('active-tab'),
+      'wedding services opens the services tab'
+    );
+
+    dom.window.renderEvents([]);
+    emptyStateButton(dom.window, 'ألبومات منطقتك').click();
+    assert.ok(dom.window.isAlbumsPageOpen(), 'your albums opens the albums screen');
+    dom.window.closeAlbumsPage({ skipHash: true });
+
+    dom.window.renderEvents([]);
+    emptyStateButton(dom.window, 'أضف مناسبتك').click();
+    assert.ok(
+      document.getElementById('tabAdd').classList.contains('active-tab'),
+      'add-your-event opens the publish screen for a signed-in user'
+    );
+
+    dom.window.renderEvents([]);
+    calls.length = 0;
+    emptyStateButton(dom.window, 'وسّع إلى كل المحافظات').click();
+
+    assert.strictEqual(dom.window.localStorage.getItem('negev_region'), null, 'the saved governorate is cleared');
+    await waitFor(() => calls.some(call => call.path === '/api/events'));
+    const eventsCall = calls.find(call => call.path === '/api/events');
+    assert.ok(eventsCall, 'expanding refetches the feed');
+    assert.strictEqual(
+      eventsCall.headers['X-Region'],
+      undefined,
+      'the refetch must not claim a governorate the user no longer chose'
+    );
+  });
+
+  await test('a Cloudinary card poster is asked for at card width, and a local poster is left exactly as it is (#161)', () => {
+    // Synchronous on purpose: the startup feed fetch resolves after this frame
+    // and would overwrite the fixtures (same reason as the card-rendering tests).
+    const dom = buildEnv();
+    const { document } = dom.window;
+    const base = {
+      title: 'عرس الكرت', family_clan: null, town: 'رهط', event_date: '2027-06-01',
+      location_name: 'مكان', audio_url: null, occasion_type: WEDDING_TYPE, reactions: {}
+    };
+
+    dom.window.renderEvents([
+      {
+        ...base, id: 961,
+        poster_url: 'https://res.cloudinary.com/negev-events/image/upload/f_auto,q_auto,c_limit,w_1600/v1712/negev-events/posters/abc123'
+      },
+      {
+        ...base, id: 962,
+        poster_url: 'https://res.cloudinary.com/negev-events/image/upload/v1712/negev-events/posters/raw456'
+      },
+      { ...base, id: 963, poster_url: '/uploads/local-poster.jpg' },
+      { ...base, id: 964, poster_url: 'https://example.test/some-poster.jpg' }
+    ]);
+
+    const src = id => document.querySelector(`#eventCard-${id} .card-media-img`).getAttribute('src');
+    assert.ok(
+      src(961).includes('/image/upload/f_auto,q_auto,c_limit,w_600/'),
+      `a stored Cloudinary poster must be requested at 600px, got ${src(961)}`
+    );
+    assert.ok(!src(961).includes('w_1600'), 'the 1600px variant must not be requested for a card');
+    assert.ok(
+      src(962).includes('/image/upload/f_auto,q_auto,c_limit,w_600/v1712/negev-events/posters/raw456'),
+      `a versioned Cloudinary URL without our transform gains the card transform, got ${src(962)}`
+    );
+    assert.strictEqual(src(963), '/uploads/local-poster.jpg', 'a local /uploads/ poster is untouched — no transform server exists for it');
+    assert.strictEqual(src(964), 'https://example.test/some-poster.jpg', 'a non-Cloudinary remote URL is untouched too');
+  });
+
 
 
   console.log('\nAdmin panel — searching for a user by phone number or name (issue #83)');

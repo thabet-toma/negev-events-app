@@ -313,18 +313,35 @@ async function todayString() {
 }
 
 /**
+ * محافظة المناسبة نفسها (`events.region_id`، NOT NULL) — تُقرأ هنا مرّة واحدة
+ * لا من حقل يُمرّره المستدعي، فلا تُبنى نسخة ثانية من «محافظة المناسبة» في
+ * المسارات، ولا يختلف الحكم بين النشر من التطبيق والاعتماد من اللوحة (#161).
+ * `null` لمناسبة غير موجودة — حارسٌ دفاعي يجعل التقييد معطَّلاً كما كان.
+ */
+async function eventRegionId(eventId) {
+  const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
+  return row ? row.region_id : null;
+}
+
+/**
  * «مناسبة جديدة» لكل مستخدم أبقى هذا النوع مفعّلاً (`users.notify_new_events`)،
  * عدا ناشرها — عند أول اعتماد فقط (`events.first_approved_at`، يحرسه
  * المستدعي). أول ثلاث مناسبات في اليوم تصل فرادى (`event_new_<id>`)؛ من
  * الرابعة يتحدّث إشعار ملخّص واحد لكل مستخدم (`event_new_digest_<اليوم>`)
  * ويعود «غير مقروء»، بدل أن تتكدّس عشرة إشعارات في موسم الأعراس. يعيد ما
- * يحتاجه المُعلِن: النصّ، وهل يستحق دفعاً للأجهزة (الملخّص يُدفَع أول مرّة فقط).
+ * يحتاجه المُعلِن: النصّ، وهل يستحق دفعاً للأجهزة (الملخّص يُدفَع أول مرّة فقط)،
+ * ومحافظة المناسبة كي يقيّد الدفع بها بدوره (`push.service.deliverToAll`).
+ *
+ * وتُقيَّد الصفوف بمحافظة المناسبة (تذكرة #161): مستخدم محافظته أخرى لا يُكتب
+ * له صفّ، ومستخدم بلا محافظة يبقى يتلقّى الكل كما كان (قرار المالك). القيد
+ * داخل `INSERT ... SELECT` نفسه لا فلترة بعد الجلب.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
   const { total } = await db.queryOne(
     'SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY'
   );
   const publishedToday = Number(total);
+  const regionId = await eventRegionId(id);
 
   if (publishedToday <= NEW_EVENTS_DAILY_SINGLES) {
     const notificationTitle = 'مناسبة جديدة';
@@ -334,10 +351,11 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
        SELECT id, ?, ?, ?, ?, ?
          FROM users
         WHERE id <> ? AND notify_new_events = 1
+          AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
        ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
-      [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0]
+      [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0, regionId, regionId]
     );
-    return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, push: true };
+    return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, regionId, push: true };
   }
 
   const extra = publishedToday - NEW_EVENTS_DAILY_SINGLES;
@@ -348,13 +366,15 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
      SELECT id, NULL, ?, ?, ?, ?
        FROM users
       WHERE id <> ? AND notify_new_events = 1
+        AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
      ON DUPLICATE KEY UPDATE title = ?, body = ?, is_read = 0, created_at = CURRENT_TIMESTAMP`,
     [
       TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString()}`, createdBy ?? 0,
+      regionId, regionId,
       notificationTitle, body
     ]
   );
-  return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, push: extra === 1 };
+  return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, regionId, push: extra === 1 };
 }
 
 /**

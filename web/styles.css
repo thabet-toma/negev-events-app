@@ -1050,6 +1050,16 @@ body {
   background-color: var(--card-base-ground);
 }
 
+/*
+ * نسبة صورة الكرت (تذكرة #161، البند 3): تحجز ارتفاع الملصق قبل تحميله فلا
+ * تقفز الصفحة حين يصل. الملصق في هذا المنتج طوليّ (4:5)؛ وفي كرت التغذية
+ * بملء الشاشة يحكم الارتفاعَ `flex: 1` فيبقى الحجم كما هو، والنسبة تحرس
+ * كروت الصفوف (الإعلانات وغيرها) حيث الارتفاع تلقائي.
+ */
+.event-card .card-media {
+  aspect-ratio: 4 / 5;
+}
+
 .card-media-img {
   width: 100%;
   height: 100%;
@@ -2209,6 +2219,45 @@ body {
 
 .empty-state { text-align: center; padding: 44px 20px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--ink-soft); }
 .empty-state i { font-size: 2.8rem; color: var(--sky); margin-bottom: 12px; }
+
+/* الحالة الفارغة الفاعلة (تذكرة #161، البند 2) — فعلٌ ووجهتان وخروج من
+   المحافظة. أيقونات الأزرار تعود إلى حجم النصّ: قاعدة `.empty-state i` أعلاه
+   تُضخّم كل أيقونة داخلها (2.8rem) لولا هذا الاستثناء. */
+.feed-empty-state p { margin-bottom: 20px; }
+.feed-empty-actions { display: flex; flex-direction: column; gap: 10px; max-width: 420px; margin: 0 auto; }
+.feed-empty-actions i { font-size: 1rem; color: inherit; margin: 0; }
+.feed-empty-primary,
+.feed-empty-card,
+.feed-empty-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 16px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.feed-empty-primary { background: var(--sky); color: var(--on-sky); border: none; }
+.feed-empty-card {
+  background: var(--surface-sunk);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  justify-content: flex-start;
+  text-align: start;
+}
+.feed-empty-card span { flex: 1; }
+.feed-empty-card-arrow { color: var(--ink-faint); }
+.feed-empty-expand { background: none; color: var(--sky-deep); border: none; font-size: 0.88rem; }
+.feed-empty-primary:hover,
+.feed-empty-card:hover { transform: translateY(-1px); }
+.feed-empty-primary:focus-visible,
+.feed-empty-card:focus-visible,
+.feed-empty-expand:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
 /* Occasion type picker & dynamic honoree list (#20 step 9) */
 .type-picker-row { display: flex; flex-wrap: wrap; gap: 8px; }

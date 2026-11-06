@@ -4750,6 +4750,123 @@ async function run() {
     assert.strictEqual(Number(digest[0].is_read), 0, 'an updated digest counts as unread again');
   });
 
+  /**
+   * عزل محافظة «مناسبة جديدة» (تذكرة #161): الصفّ يُكتب لأهل محافظة المناسبة
+   * ولمن بلا محافظة (كما كان)، ولا يُكتب لمن محافظته أخرى — والدفع نفسه يبني
+   * مجموعة المستقبِلين بالقيد عينه. المحافظة الثانية هنا صفٌّ مؤقّت، ويُحذف مع
+   * مستخدميه واشتراكاتهم في نهاية الاختبار.
+   *
+   * ملاحظة الحدّ: الدفع يُختبر بلا شبكة — `webpush.sendNotification` مزيّف
+   * (كما تفعل اختبارات 429 في هذا الملف)، فالمُقاس هو **اختيار المستقبِلين**
+   * الذي تبنيه `deliverToAll` نفسها، لا تسليمُه إلى خدمة الدفع.
+   */
+  await test('«مناسبة جديدة» تصل أهل المحافظة ومن بلا محافظة ولا تصل محافظة أخرى — صفوفاً ودفعاً (#161)', async () => {
+    // العدّاد اليومي لهذا القسم صار فوق ثلاثة (الملخّص)؛ يُزاح كل اعتماد اليوم
+    // إلى أمس — قاعدة الاختبار وحدها كأول القسم — كي يقع هذا النشر على الفرع
+    // الفرادى `event_new` الذي تحرسه التأكيدات.
+    await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+    const otherRegionName = `محافظة إشعار ${Date.now()}`;
+    const { insertId: otherRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.4, 35.1, 9, 98, 1)`,
+      [otherRegionName]
+    );
+    const sameRegionUser = await createDirectUser('مستمع مناسبة من محافظتها');
+    const otherRegionUser = await createDirectUser('مستمع مناسبة من محافظة أخرى');
+    const noRegionUser = await createDirectUser('مستمع بلا محافظة');
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [defaultRegionId, sameRegionUser.id]);
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [otherRegionId, otherRegionUser.id]);
+
+    const pushEndpoints = {
+      same: 'https://push.example.com/ticket161-same-region',
+      other: 'https://push.example.com/ticket161-other-region',
+      none: 'https://push.example.com/ticket161-no-region'
+    };
+    const originalSendNotification = webpush.sendNotification;
+    const delivered = [];
+    let eventId = 0;
+
+    try {
+      // 1) النشر نفسه: الصفوف تُكتب في خدمة الإشعارات، والدفع يُنادى بمحافظة
+      //    المناسبة — نلتقط النداء كما في اختبارات البث (captureRealtime).
+      const spy = captureRealtime();
+      let created;
+      try {
+        created = await api('POST', '/api/events', {
+          token: adminToken,
+          body: weddingEventBody({
+            honorees: [{ name: 'عريس إشعار المحافظة' }],
+            town: 'رهط',
+            event_date: addDaysToDate(schedulerToday, 33)
+          })
+        });
+      } finally {
+        spy.restore();
+      }
+      assert.strictEqual(created.status, 201, created.body.message);
+      assert.strictEqual(created.body.status, 'approved', 'a super_admin publish goes live immediately');
+      eventId = created.body.eventId;
+      newsEventIds.push(eventId);
+
+      const eventRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
+      assert.strictEqual(eventRow.region_id, defaultRegionId, 'the event sits in the seeded governorate');
+
+      const rowsFor = async userId => db.query(
+        "SELECT id FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_new'",
+        [userId, eventId]
+      );
+      assert.strictEqual((await rowsFor(sameRegionUser.id)).length, 1, 'a user of the event\'s governorate receives it');
+      assert.strictEqual((await rowsFor(noRegionUser.id)).length, 1, 'a user who never chose a governorate still receives everything');
+      assert.strictEqual((await rowsFor(otherRegionUser.id)).length, 0, 'a user of another governorate must receive nothing');
+
+      // and the feed the client opens agrees with the rows
+      const otherFeed = await api('GET', '/api/notifications', { token: otherRegionUser.token });
+      assert.strictEqual(otherFeed.status, 200);
+      assert.ok(
+        !JSON.stringify(otherFeed.body).includes(`"event_id":${eventId}`),
+        'the notification centre must not carry the other-governorate event either'
+      );
+
+      // The push hand-off names the event's governorate (the route/announce seam).
+      // `sendToAllUsers` receives the payload with camelCase `eventId`; the
+      // snake_case `event_id` is what push.service writes onto the wire.
+      const announced = spy.pushes.filter(push => push.payload && push.payload.eventId === eventId);
+      assert.strictEqual(announced.length, 1, 'a single-event publish asks for one device push');
+      assert.strictEqual(announced[0].options.regionId, defaultRegionId, 'the push is scoped by the event\'s governorate');
+
+      // 2) اختيار المستقبِلين في push.service نفسه — بلا شبكة: المزوّد مزيّف.
+      webpush.sendNotification = async subscription => { delivered.push(subscription.endpoint); };
+      for (const [key, userId] of [['same', sameRegionUser.id], ['other', otherRegionUser.id], ['none', noRegionUser.id]]) {
+        await db.execute(
+          'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)',
+          [userId, pushEndpoints[key], 'p256dh-ticket161', 'auth-ticket161']
+        );
+      }
+
+      await pushService.deliverToAll({ title: 'مناسبة جديدة', body: 'نصّ', eventId }, { regionId: defaultRegionId });
+      assert.ok(delivered.includes(pushEndpoints.same), 'a subscriber in the event\'s governorate gets the push');
+      assert.ok(delivered.includes(pushEndpoints.none), 'a subscriber with no governorate gets the push');
+      assert.ok(!delivered.includes(pushEndpoints.other), 'a subscriber in another governorate never gets the push');
+
+      // A caller that names no governorate («بدأ البث»، والسلوك القديم) keeps everyone.
+      delivered.length = 0;
+      await pushService.deliverToAll({ title: 'بدأ البث المباشر', body: 'نصّ' }, { regionId: null });
+      assert.strictEqual(delivered.length, 3, 'regionId null means "every opted-in subscriber", as before');
+
+      // and the publisher is still excluded, region scoping notwithstanding.
+      delivered.length = 0;
+      await pushService.deliverToAll({ title: 'مناسبة جديدة', body: 'نصّ', eventId }, { regionId: defaultRegionId, excludeUserId: sameRegionUser.id });
+      assert.ok(!delivered.includes(pushEndpoints.same), 'the excluded user is never pushed to');
+      assert.ok(delivered.includes(pushEndpoints.none));
+    } finally {
+      webpush.sendNotification = originalSendNotification;
+      await db.execute('DELETE FROM push_subscriptions WHERE endpoint IN (?, ?, ?)', [pushEndpoints.same, pushEndpoints.other, pushEndpoints.none]);
+      await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', [sameRegionUser.id, otherRegionUser.id, noRegionUser.id]);
+      await db.execute('DELETE FROM regions WHERE id = ?', [otherRegionId]);
+    }
+  });
+
   await test('A followed event 2 days out reads «باقي يومين», the countdown\'s own idiom', async () => {
     const created = await api('POST', '/api/events', {
       token: adminToken,

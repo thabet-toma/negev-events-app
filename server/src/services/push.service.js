@@ -188,14 +188,23 @@ async function sendToUser(userId, payload) {
  * Fans a notification out to every subscribed device of every user who kept
  * «مناسبة جديدة» on (`users.notify_new_events`) — the one broadcast kind
  * pushed to everyone — minus `excludeUserId` (the event's own publisher).
+ *
+ * `regionId` (تذكرة #161): when a caller names the event's governorate, only
+ * subscribers in that governorate — plus users who have not chosen one
+ * (`users.region_id IS NULL`) — are delivered to; a user in another
+ * governorate never receives the device push, matching the notification rows
+ * `notifications.notifyNewEvent` writes for the same event. `null` (or a
+ * caller that never knew about regions, e.g. «بدأ البث») keeps the old
+ * "every opted-in subscriber" behaviour, so this is additive only.
  */
-async function deliverToAll({ title, body, notificationId = null, eventId = null, kind = null }, { excludeUserId = null } = {}) {
+async function deliverToAll({ title, body, notificationId = null, eventId = null, kind = null }, { excludeUserId = null, regionId = null } = {}) {
   const subscriptions = await db.query(
     `SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth
        FROM push_subscriptions ps
        JOIN users u ON u.id = ps.user_id
-      WHERE u.notify_new_events = 1 AND u.id <> ?`,
-    [excludeUserId ?? 0]
+      WHERE u.notify_new_events = 1 AND u.id <> ?
+        AND (? IS NULL OR u.region_id IS NULL OR u.region_id = ?)`,
+    [excludeUserId ?? 0, regionId, regionId]
   );
   if (!subscriptions.length) return;
 

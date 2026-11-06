@@ -38,11 +38,16 @@ function announceNotification({ id, user_id: userId, title, body, event_id: even
  * واحدة لكل عميل متّصل كي يعيد جلب مركز إشعاراته (بدل إشارة لكل مستخدم)،
  * ودفع للأجهزة حين يستحقه (`outcome.push` — الملخّص اليومي يُدفَع أول مرّة
  * فقط). النصّ عن مناسبة معتمدة منشورة للعموم، فلا يسرّب شيئاً لمقبس لا
- * يخصّه.
+ * يخصّه — وصمتُ مركز الإشعارات عند غير أهل المحافظة مصدره أن الصفوف نفسها لم
+ * تُكتب لهم (`notifyNewEvent`).
+ *
+ * `regionId` هي محافظة المناسبة كما أعادها `notifyNewEvent`، وتُمرَّر إلى
+ * `push.deliverToAll` كي يُقيَّد الدفع بها مثل الصفوف (#161). الإشارة اللحظية
+ * نفسها تبقى عامة: لا نصّ خاصّ فيها، وكل عميل يعيد جلب قائمته وحدها.
  */
-function announceNewEvent({ title, body, eventId = null, excludeUserId = null, push: shouldPush }) {
+function announceNewEvent({ title, body, eventId = null, excludeUserId = null, regionId = null, push: shouldPush }) {
   realtime.emit('system_notification', { title, body, event_id: eventId });
-  if (shouldPush) push.sendToAllUsers({ title, body, eventId }, { excludeUserId });
+  if (shouldPush) push.sendToAllUsers({ title, body, eventId }, { excludeUserId, regionId });
 }
 
 /**

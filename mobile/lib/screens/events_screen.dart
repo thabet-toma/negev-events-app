@@ -1485,6 +1485,99 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
+  /// الحالة الفارغة بابٌ لا جدار (#161، البند 2): زرّ «أضف مناسبتك»، وبطاقتا
+  /// «خدمات الأعراس في منطقتك» و«ألبومات منطقتك»، و«وسّع إلى كل المحافظات».
+  ///
+  /// الوجهات كلها آليات قائمة: شاشة النشر وشاشة الألبومات تُدفعان كما في
+  /// رأس التغذية، و«خدمات الأعراس» تبويبٌ يُطلب بـ`tabRequest` فيُنفّذه
+  /// `HomeShell`، والتوسيع يمسح المحافظة عبر `RegionStore` — وحين يتغيّر ما
+  /// يُرسَل فعلاً يغيّر `headerRegionId` مفتاحَ التغذية فيُعيد بناءها وجلبها،
+  /// لا كتابة حالة عرض مستقلة هنا.
+  List<Widget> _emptyStateActions() {
+    final services = AppServices.of(context);
+    return [
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          key: const Key('feed_empty_add_event'),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const AddEventScreen()),
+          ),
+          icon: const Icon(Icons.add, size: 20),
+          label: const Text('أضف مناسبتك'),
+        ),
+      ),
+      const SizedBox(height: 10),
+      _emptyDestinationCard(
+        key: const Key('feed_empty_services'),
+        icon: Icons.handyman_outlined,
+        label: 'خدمات الأعراس في منطقتك',
+        onTap: () =>
+            services.tabRequest.value = AppServices.servicesTabIndex,
+      ),
+      const SizedBox(height: 10),
+      _emptyDestinationCard(
+        key: const Key('feed_empty_albums'),
+        icon: Icons.photo_library_outlined,
+        label: 'ألبومات منطقتك',
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AlbumsScreen()),
+        ),
+      ),
+      const SizedBox(height: 6),
+      TextButton.icon(
+        key: const Key('feed_empty_expand'),
+        onPressed: services.regions.clear,
+        icon: const Icon(Icons.public, size: 18),
+        label: const Text('وسّع إلى كل المحافظات'),
+      ),
+    ];
+  }
+
+  /// بطاقة وجهة واحدة في الحالة الفارغة: أيقونة ثم التسمية ثم سهم — عنصر
+  /// لمس بارتفاع ≥44px، بنفس ألوان السطح والحدود القائمة في التغذية.
+  Widget _emptyDestinationCard({
+    required Key key,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      key: key,
+      color: context.c.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: context.c.line),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: context.c.sky),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: context.c.ink,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_left, size: 20, color: context.c.inkFaint),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildList() {
     if (_initialLoading) {
       // هياكل تحميل بدل دوّارة (٥٣)
@@ -1546,6 +1639,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                   textAlign: TextAlign.center,
                   style: TextStyle(color: context.c.inkFaint, fontSize: 15),
                 ),
+                const SizedBox(height: 22),
+                ..._emptyStateActions(),
               ],
             ),
           ),

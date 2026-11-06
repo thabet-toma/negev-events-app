@@ -2324,6 +2324,43 @@ function renderEventAudioBlockHtml(evt) {
 }
 
 /**
+ * صورة كرت المناسبة مصغّرة (تذكرة #161، البند 3): رابط Cloudinary يُطلب بتحويل
+ * `f_auto,q_auto,c_limit,w_600` — نفس اشتقاق الألبومات حرفاً
+ * (`thumbFromImageUrl` في `server/src/services/albums.service.js`)، فلا تُنزّل
+ * التغذية ملصقاً بعرض 1600px لخانة بعرض 600. ورابط `/uploads/` يبقى كما هو:
+ * يستقرّ على خادمنا المحلي بلا خدمة تحويل، فأي إلحاق به يكسره.
+ *
+ * **لا يُستعمل في صفحة المناسبة**: هناك الصورة كاملة (`w_1600`)؛ التحويل هنا
+ * لصورة الكرت وحدها. ولا يمسّ `absoluteMediaUrl` على الخادم — سلوكه العام
+ * لم يتغيّر، ولا عميل آخر يعتمد على هذا الشكل.
+ */
+const CARD_IMAGE_WIDTH = 600;
+const CLOUDINARY_UPLOAD_MARKER = '/image/upload/';
+
+function cardImageUrl(url) {
+  if (typeof url !== 'string' || !/^https?:\/\/res\.cloudinary\.com\//i.test(url)) return url;
+  const markerAt = url.indexOf(CLOUDINARY_UPLOAD_MARKER);
+  if (markerAt < 0) return url;
+  const head = url.slice(0, markerAt + CLOUDINARY_UPLOAD_MARKER.length);
+  const rest = url.slice(markerAt + CLOUDINARY_UPLOAD_MARKER.length);
+  const slashAt = rest.indexOf('/');
+  if (slashAt < 0) return url;
+  const transform = rest.slice(0, slashAt);
+  const tail = rest.slice(slashAt);
+  // الرابط الذي يخزّنه deliveryUrl نفسه: العرض وحده يتغيّر.
+  if (/^f_auto,q_auto,c_limit,w_\d+$/.test(transform)) {
+    return `${head}f_auto,q_auto,c_limit,w_${CARD_IMAGE_WIDTH}${tail}`;
+  }
+  // رابط Cloudinary بلا تحويل (`upload/v<version>/…`): يُضاف التحويل كاملاً
+  // بدل تركه بحجمه الأصلي. أي تحويل آخر مكتوب في الرابط يُترك كما هو — قد
+  // يكون مقصوداً، ولا نُخمّن مكانه.
+  if (/^v\d+$/.test(transform)) {
+    return `${head}f_auto,q_auto,c_limit,w_${CARD_IMAGE_WIDTH}/${transform}${tail}`;
+  }
+  return url;
+}
+
+/**
  * كرت مناسبة واحد — وهو نفسه كرت الإعلان حين يصل `opts.announcement`
  * (`{ event_id, old_value, new_value }`): شريط «إعلان تعديل موعد» أعلى الكرت
  * وسطر التغيير، وزرّ «التفاصيل» وحده. «ذكّرني» و«التبريكات» و«المشاركة» لا
@@ -2359,7 +2396,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
   const hasShot = !!evt.poster_url;
 
   const mediaContent = hasShot ? `
-    <img src="${escapeHtml(evt.poster_url)}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
+    <img src="${escapeHtml(cardImageUrl(evt.poster_url))}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
     <div class="card-media-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
   const countdownChipHtml = isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`;
@@ -2456,13 +2493,36 @@ function renderEvents(events) {
 
   if (!events || events.length === 0) {
     container.classList.remove('events-feed-first-load');
+    // الحالة الفارغة بابٌ لا جدار (تذكرة #161، البند 2): نصّها يقول لماذا
+    // فرغت، وتحته فعلٌ ووجهتان وخروجٌ من المحافظة — لا رسالة تُترك للمستخدم
+    // وحده. الوجهات كلها دوالّ قائمة: `openAddEventModal` و`switchTab`
+    // و`openAlbumsPage`، والتوسيع يعيد استعمال خطوات تبديل المحافظة نفسها
+    // (`resetFeedForRegionChange` و`fetchEvents`) لا حالة عرض ثانية.
     container.innerHTML = `
-      <div class="empty-state">
+      <div class="empty-state feed-empty-state">
         <i class="fa-solid fa-calendar-xmark"></i>
         <h3>لا توجد مناسبات مسجلة</h3>
         <p>${selectedDateFilter
           ? `لا مناسبات في ${selectedPlacesHtml()} — ${escapeHtml(selectedDateFilter.label)}`
           : `كن أول من يعلن عن مناسبة في ${selectedPlacesHtml()}`}</p>
+        <div class="feed-empty-actions">
+          <button type="button" class="feed-empty-primary" onclick="openAddEventModal()">
+            <i class="fa-solid fa-plus" aria-hidden="true"></i> أضف مناسبتك
+          </button>
+          <button type="button" class="feed-empty-card" onclick="switchTab('tabServices')">
+            <i class="fa-solid fa-handshake-angle" aria-hidden="true"></i>
+            <span>خدمات الأعراس في منطقتك</span>
+            <i class="fa-solid fa-chevron-left feed-empty-card-arrow" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="feed-empty-card" onclick="openAlbumsPage()">
+            <i class="fa-regular fa-images" aria-hidden="true"></i>
+            <span>ألبومات منطقتك</span>
+            <i class="fa-solid fa-chevron-left feed-empty-card-arrow" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="feed-empty-expand" onclick="expandFeedToAllRegions()">
+            <i class="fa-solid fa-globe" aria-hidden="true"></i> وسّع إلى كل المحافظات
+          </button>
+        </div>
       </div>
     `;
     updateFeedDimensions();
@@ -3969,6 +4029,28 @@ async function selectRegion(regionId) {
   // نموذج النشر المفتوح يتبع المحافظة الجديدة في بلداته أيضاً — بلدة من
   // المحافظة السابقة كانت ستبقى مختارة تحت قائمة المحافظة الجديدة.
   refreshPublishTownForRegion(previousRegionId);
+  resetFeedForRegionChange();
+  refreshPlaceFilterForRegion();
+  fetchEvents({ force: true });
+  reloadDiscoverySurfacesForRegion();
+}
+
+/**
+ * «وسّع إلى كل المحافظات» — خروج الحالة الفارغة من محافظةٍ لا مناسبات فيها
+ * (تذكرة #161، البند 2). يمشي في مسار تبديل المحافظة القائم نفسه ولا يكتب
+ * حالة ثانية: يمسح الاختيار المحفوظ (`clearSavedRegionId`، فلا تخرج ترويسة
+ * `X-Region` في الطلب التالي)، ثم يعيد رسم المنتقي على ما سيستخدمه الخادم بلا
+ * ترويسة (محافظة الحساب إن وُجدت، وإلا الافتراضية — `middleware/region.js` لا
+ * يقبل «بلا محافظة» مطلقاً، فهذا أوسع طلب يقدّمه العقد الحالي)، ثم يصفّر
+ * التغذية (الصفحة واللقطة والبصمة — `resetFeedForRegionChange`) ويجلب من
+ * أولها بـ`fetchEvents({ force: true })`، ويعيد أسطح الاكتشاف.
+ *
+ * لا حفظ قيمة هنا: الزائر يبقى بلا اختيار، فتقود الحبة المرسومة إلى المحافظة
+ * التي يعرضها الخادم فعلاً بدل أن تدّعي اختياراً لم يُحفظ.
+ */
+function expandFeedToAllRegions() {
+  clearSavedRegionId();
+  syncRegionPickerSelection();
   resetFeedForRegionChange();
   refreshPlaceFilterForRegion();
   fetchEvents({ force: true });
