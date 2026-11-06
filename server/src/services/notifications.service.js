@@ -304,7 +304,7 @@ async function scheduleForUser(userId) {
     .filter(entry => entry.offsets.length > 0);
 }
 
-/** «مناسبة جديدة» فرادى حتى هذا العدد في اليوم؛ ما بعده يُجمَع في إشعار ملخّص واحد يتحدّث. */
+/** «مناسبة جديدة» فرادى حتى هذا العدد في اليوم لكل محافظة؛ ما بعده يُجمَع في إشعار ملخّص واحد يتحدّث. */
 const NEW_EVENTS_DAILY_SINGLES = 3;
 
 async function todayString() {
@@ -326,7 +326,7 @@ async function eventRegionId(eventId) {
 /**
  * «مناسبة جديدة» لكل مستخدم أبقى هذا النوع مفعّلاً (`users.notify_new_events`)،
  * عدا ناشرها — عند أول اعتماد فقط (`events.first_approved_at`، يحرسه
- * المستدعي). أول ثلاث مناسبات في اليوم تصل فرادى (`event_new_<id>`)؛ من
+ * المستدعي). أول ثلاث مناسبات في اليوم في المحافظة تصل فرادى (`event_new_<id>`)؛ من
  * الرابعة يتحدّث إشعار ملخّص واحد لكل مستخدم (`event_new_digest_<اليوم>`)
  * ويعود «غير مقروء»، بدل أن تتكدّس عشرة إشعارات في موسم الأعراس. يعيد ما
  * يحتاجه المُعلِن: النصّ، وهل يستحق دفعاً للأجهزة (الملخّص يُدفَع أول مرّة فقط)،
@@ -335,13 +335,25 @@ async function eventRegionId(eventId) {
  * وتُقيَّد الصفوف بمحافظة المناسبة (تذكرة #161): مستخدم محافظته أخرى لا يُكتب
  * له صفّ، ومستخدم بلا محافظة يبقى يتلقّى الكل كما كان (قرار المالك). القيد
  * داخل `INSERT ... SELECT` نفسه لا فلترة بعد الجلب.
+ *
+ * **وعدّاد اليوم مقيَّد بالمحافظة نفسها** (تذكرة #161): الحصّة اليومية تُعَدّ
+ * بمحافظة المناسبة، أي بما يصل أهلها فعلاً لا باعتمادات المنصّة كلها — وإلا
+ * استهلكت محافظةٌ حصّةَ غيرها، فصار رابعُ مناسبات محافظةٍ ثانية ملخّصاً عن
+ * مناسبات لم تصل أهلها، وأُخذ `push: extra === 1` («أول ملخّص يُدفَع») قبلهم.
+ * وحين تغيب محافظة المناسبة (حارس `eventRegionId` الدفاعي) يصل الجميعَ
+ * فتُعَدّ كل مناسبات اليوم كما كان.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
+  // محافظة المناسبة تُقرأ أولاً: العدّاد أدناه مقيَّد بها، وشرط الإدراج في
+  // الفرعين يستعملها هي نفسها — قراءة واحدة تكفي الاثنين.
+  const regionId = await eventRegionId(id);
   const { total } = await db.queryOne(
-    'SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY'
+    `SELECT COUNT(*) AS total FROM events
+      WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY
+        AND (? IS NULL OR region_id = ?)`,
+    [regionId, regionId]
   );
   const publishedToday = Number(total);
-  const regionId = await eventRegionId(id);
 
   if (publishedToday <= NEW_EVENTS_DAILY_SINGLES) {
     const notificationTitle = 'مناسبة جديدة';

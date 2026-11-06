@@ -4867,6 +4867,85 @@ async function run() {
     }
   });
 
+  /**
+   * عدّاد «مناسبة جديدة» اليومي محافظةُ المناسبة وحدها (تذكرة #161، البند 3):
+   * الصفوف والدفع صارا لمحافظة المناسبة، فيجب أن يقيس العدّاد ما يصل أهلها
+   * فعلاً. أربع اعتمادات اليوم في محافظةٍ تستهلك فرادى ذلك اليوم وتُنزل أول
+   * ملخّص لها، ثم أول اعتماد في محافظةٍ ثانية يصل أهلها فردياً لا ملخّصاً نصّه
+   * «(2)»، ولا تُستهلك حصّة دفعه في محافظةٍ ليست له.
+   *
+   * المحافظة الثانية صفٌّ مؤقّت، ويُحذف مع مستخدمه ومناسبته في نهاية الاختبار.
+   */
+  await test('عدّاد «مناسبة جديدة» اليومي بمحافظة المناسبة: أول اعتماد في محافظة أخرى فرديّ لا ملخّص، ودفعه لا يستهلكه غيرها (#161)', async () => {
+    // العدّاد يبدأ نظيفاً: كل ما اعتمده هذا القسم اليوم يُزاح إلى أمس — قاعدة
+    // القسم وحدها كما أعلاه، فالأربعة والخامس هنا هما كل ما يعنيه هذا الاختبار.
+    await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+    const tallyRegionName = `محافظة عدّاد ${Date.now()}`;
+    const { insertId: tallyRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.4, 35.1, 9, 99, 1)`,
+      [tallyRegionName]
+    );
+    const tallyListener = await createDirectUser('مستمع عدّاد محافظته');
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [tallyRegionId, tallyListener.id]);
+
+    const publishToday = async (name, town) => {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({ honorees: [{ name }], town, event_date: addDaysToDate(schedulerToday, 41) })
+      });
+      assert.strictEqual(created.body.status, 'approved', created.body.message);
+      return created.body.eventId;
+    };
+
+    let otherEventId = 0;
+    try {
+      // أربع اعتمادات اليوم في المحافظة الافتراضية: ثلاث فرادى ثم أول ملخّص.
+      for (const name of ['عريس العدّاد الأول', 'عريس العدّاد الثاني', 'عريس العدّاد الثالث', 'عريس العدّاد الرابع']) {
+        newsEventIds.push(await publishToday(name, 'رهط'));
+      }
+
+      // والخامس اليوم في محافظةٍ ثانية — اسم المحافظة نفسه مكاناً (بلدتها غير
+      // معروفة) فتقع مناسبته فيها، كما يكتب المستورِد صفّ محافظةٍ بلا بلدة.
+      const spy = captureRealtime();
+      try {
+        otherEventId = await publishToday('عريس العدّاد الآخر', tallyRegionName);
+      } finally {
+        spy.restore();
+      }
+      newsEventIds.push(otherEventId);
+
+      const otherRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [otherEventId]);
+      assert.strictEqual(otherRow.region_id, tallyRegionId, 'the fifth event sits in the second governorate');
+
+      assert.strictEqual(
+        (await newsRowsFor(tallyListener.id, otherEventId)).length,
+        1,
+        'the first approval today in its own governorate is an individual notification, not a digest'
+      );
+      const digestRows = await db.query(
+        "SELECT body FROM notifications WHERE user_id = ? AND type = 'event_new_digest'", [tallyListener.id]
+      );
+      assert.strictEqual(
+        digestRows.length,
+        0,
+        `the daily tally is its own governorate's, so no digest is written for it: ${JSON.stringify(digestRows.map(row => row.body))}`
+      );
+
+      // والدفع لم تستهلكه المحافظة الأولى: `push: extra === 1` على العدّاد
+      // المقصوص، وأول مناسبة لكل محافظة تستحق دفعاً.
+      const pushed = spy.pushes.filter(push => push.payload && push.payload.eventId === otherEventId);
+      assert.strictEqual(pushed.length, 1, 'and its push is not starved by another governorate\'s quota');
+      assert.strictEqual(pushed[0].options.regionId, tallyRegionId, 'scoped by its own governorate');
+    } finally {
+      // المناسبة تُحذف قبل محافظتها (المفتاح الأجنبي)، والمستخدم قبلها.
+      if (otherEventId) await db.execute('DELETE FROM events WHERE id = ?', [otherEventId]);
+      await db.execute('DELETE FROM users WHERE id = ?', [tallyListener.id]);
+      await db.execute('DELETE FROM regions WHERE id = ?', [tallyRegionId]);
+    }
+  });
+
   await test('A followed event 2 days out reads «باقي يومين», the countdown\'s own idiom', async () => {
     const created = await api('POST', '/api/events', {
       token: adminToken,

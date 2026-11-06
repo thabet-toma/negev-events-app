@@ -4634,9 +4634,9 @@ async function run() {
   }
 
   await test('the empty feed is a door: add your event, wedding services, your albums, and expanding beyond the governorate — each lands on its destination (#161)', async () => {
-    // A saved governorate is what the expand button clears; seeding it before
-    // app.js boots is what makes the startup requests carry X-Region, so the
-    // assertion after the click is about a genuinely new, unscoped request.
+    // A saved governorate is seeded before app.js boots, so the startup
+    // requests carry X-Region; the expand click widens this fetch alone and
+    // must leave that saved choice exactly where it is.
     const dom = buildEnv({
       loggedIn: true,
       onBeforeEval: win => win.localStorage.setItem('negev_region', '2')
@@ -4683,14 +4683,18 @@ async function run() {
     calls.length = 0;
     emptyStateButton(dom.window, 'وسّع إلى كل المحافظات').click();
 
-    assert.strictEqual(dom.window.localStorage.getItem('negev_region'), null, 'the saved governorate is cleared');
+    assert.strictEqual(
+      dom.window.localStorage.getItem('negev_region'),
+      '2',
+      'expanding must not erase the governorate the user chose — the flag widens this fetch, it is not a new preference'
+    );
     await waitFor(() => calls.some(call => call.path === '/api/events'));
     const eventsCall = calls.find(call => call.path === '/api/events');
     assert.ok(eventsCall, 'expanding refetches the feed');
     assert.strictEqual(
       eventsCall.headers['X-Region'],
       undefined,
-      'the refetch must not claim a governorate the user no longer chose'
+      'a widened refetch claims no governorate, even though one is still saved'
     );
   });
 
@@ -4721,9 +4725,14 @@ async function run() {
     assert.strictEqual(
       params.get('all_regions'),
       '1',
-      'the widened feed must tell the server it is not a single-governorate request — clearing the saved region alone returns the same feed'
+      'the widened feed must tell the server it is not a single-governorate request — the saved choice alone returns the same feed'
     );
-    assert.strictEqual(eventsCall.headers['X-Region'], undefined, 'and the cleared governorate still sends no header');
+    assert.strictEqual(
+      dom.window.localStorage.getItem('negev_region'),
+      '2',
+      'the saved governorate survives the widened fetch, so a reload still opens it'
+    );
+    assert.strictEqual(eventsCall.headers['X-Region'], undefined, 'and the widened request sends no governorate header');
   });
 
   await test('a Cloudinary card poster is asked for at card width, and a local poster is left exactly as it is (#161)', () => {
@@ -12499,6 +12508,26 @@ async function run() {
       new URLSearchParams(scoped.url.split('?')[1] || '').get('all_regions'),
       null,
       'an explicit governorate choice must drop the all-regions flag, not merely add a header next to it'
+    );
+
+    // وضغطةٌ ثانية على المحافظة المحفوظة نفسها بعد توسيعٍ جديد هي الخروج أيضاً:
+    // الحبّة هي الفعّالة والمحفوظة، فبلا شرط `!feedAllRegions` في `selectRegion`
+    // يقع الخروج المبكر ويبقى العلَم معلَّقاً على التغذية بلا زرّ يُلغيه.
+    win.renderEvents([]);
+    const beforeSecondExpand = feedCalls.length;
+    win.document.querySelector('#eventsContainer .feed-empty-expand').click();
+    await waitFor(() => feedCalls.slice(beforeSecondExpand)
+      .some(call => new URLSearchParams(call.url.split('?')[1] || '').get('all_regions') === '1'));
+
+    const beforeSameRegion = feedCalls.length;
+    await win.selectRegion(SECOND_REGION.id);
+    await waitFor(() => feedCalls.slice(beforeSameRegion).some(call => call.headers['X-Region'] === String(SECOND_REGION.id)));
+    const rescoped = feedCalls.slice(beforeSameRegion).find(call => call.headers['X-Region'] === String(SECOND_REGION.id));
+    assert.ok(rescoped, 'tapping the saved governorate again refetches the feed instead of early-returning');
+    assert.strictEqual(
+      new URLSearchParams(rescoped.url.split('?')[1] || '').get('all_regions'),
+      null,
+      'and it leaves all-regions mode rather than keeping the flag latched on the feed'
     );
   });
 
