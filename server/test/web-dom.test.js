@@ -122,6 +122,17 @@ function readCssRules(source) {
 }
 
 /**
+ * True when a declaration block sets `min-height` to a px value below the 44px
+ * target. The number is compared as a number: a digit pattern such as
+ * `(?:[0-3]?\d)px` passes 40–43px straight through, and those are exactly the
+ * values a rule lowering the base would use.
+ */
+function lowers44MinHeight(body) {
+  return [...body.matchAll(/min-height:\s*(\d+(?:\.\d+)?)px/g)]
+    .some((declaration) => Number(declaration[1]) < 44);
+}
+
+/**
  * jsdom queues its DOMContentLoaded dispatch at document-parse time, which
  * lands BEFORE `window.eval(COMBINED_SCRIPT)` runs synchronously — so by the
  * time app.js's own `addEventListener('DOMContentLoaded', ...)` registers,
@@ -778,6 +789,13 @@ function installFixedLocalClock(win, { utcIso, year, monthIndex, day }) {
  * "read the file, stub the seam, never edit the source" approach buildEnv()
  * uses for app.js — and the only way to prove the /api rule (#164): a text
  * assertion on sw.js would pass on a comment just as happily as on code.
+ *
+ * Two seams are load-bearing for the install guard below:
+ * `cache.add(path)` fetches first and stores second, rejecting like the real
+ * Cache API when the download fails (a stub that just stores would make a
+ * failed precache impossible to express), and `setNetwork` swaps the network
+ * under an already-installed worker — the "installed online, opened offline"
+ * sequence a real visit produces.
  */
 function loadServiceWorker({ fetchImpl } = {}) {
   const listeners = {};
@@ -786,7 +804,12 @@ function loadServiceWorker({ fetchImpl } = {}) {
   const puts = [];
   const deleted = [];
   const fetchCalls = [];
+  let skipWaitingCalls = 0;
   const response = (label) => ({ ok: true, type: 'basic', label, clone() { return this; } });
+  // One network for both seams: request-time fetches and precache downloads
+  // are the same connection. `fetchCalls` below counts only the former, since
+  // several tests assert the worker intercepted nothing.
+  let network = fetchImpl || (async () => response('network'));
 
   function storeFor(name) {
     if (!stores.has(name)) stores.set(name, new Map());
@@ -798,6 +821,7 @@ function loadServiceWorker({ fetchImpl } = {}) {
     return {
       async add(path) {
         const url = new URL(path, worker.location.origin).href;
+        await network(path);
         added.push(url);
         store.set(url, response(path));
       },
@@ -827,7 +851,7 @@ function loadServiceWorker({ fetchImpl } = {}) {
   const worker = {
     location: { origin: 'https://web.test' },
     addEventListener(type, handler) { listeners[type] = handler; },
-    skipWaiting: async () => {},
+    skipWaiting: async () => { skipWaitingCalls += 1; },
     clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
     registration: { showNotification: async () => {} }
   };
@@ -840,7 +864,7 @@ function loadServiceWorker({ fetchImpl } = {}) {
 
   const fetchStub = async (request) => {
     fetchCalls.push(typeof request === 'string' ? request : request.url);
-    return (fetchImpl || (async () => response('network')))(request);
+    return network(request);
   };
 
   // eslint-disable-next-line no-new-func
@@ -848,7 +872,19 @@ function loadServiceWorker({ fetchImpl } = {}) {
     worker, caches, fetchStub, { error: () => ({ error: true }) }
   );
 
-  return { listeners, worker, stores, added, puts, deleted, fetchCalls };
+  return {
+    listeners,
+    worker,
+    stores,
+    added,
+    puts,
+    deleted,
+    fetchCalls,
+    /** Whether the worker took over — the "استولى" half of a failed install. */
+    get skipWaitingCalls() { return skipWaitingCalls; },
+    /** Replaces the network under an installed worker (the offline-after-install case). */
+    setNetwork(impl) { network = impl; }
+  };
 }
 
 /** Dispatches one fetch event through the worker's own listener and resolves `respondWith`, if any. */
@@ -14120,7 +14156,7 @@ async function run() {
     // exception is asserted to be gone immediately below.
     const lowering = rules.filter((rule) =>
       rule.selectors.some((selector) => /(^|[\s,>+~])button(\s|$|[:.[#])/.test(selector))
-      && /min-height:\s*(?:[0-3]?\d)px/.test(rule.body));
+      && lowers44MinHeight(rule.body));
     assert.deepStrictEqual(
       lowering.map((rule) => rule.selectors.join(', ')),
       [],
@@ -14177,7 +14213,7 @@ async function run() {
 
     const lowering = rules.filter((rule) =>
       rule.selectors.some((selector) => /(^|[\s,>+~])button(\s|$|[:.[#])/.test(selector))
-      && /min-height:\s*(?:[0-3]?\d)px/.test(rule.body));
+      && lowers44MinHeight(rule.body));
     assert.deepStrictEqual(lowering.map((rule) => rule.selectors.join(', ')), [], 'no admin rule may lower the 44px base');
 
     const searchInput = rules.find((rule) => rule.selectors.some((s) => s.includes('.admin-search-box input')));
@@ -14254,7 +14290,7 @@ async function run() {
     for (const path of localScripts) {
       assert.ok(
         precached.includes(path),
-        `${path} is loaded by index.html but missing from SHELL_PATHS — an offline shell without it is a broken page`
+        `${path} is loaded by index.html but missing from SHELL_ESSENTIAL_PATHS — an offline shell without it is a broken page`
       );
       const fetched = await runWorkerFetch(sw, { method: 'GET', url: `https://web.test${path}?v=2.5.2`, mode: 'cors' });
       assert.strictEqual(
@@ -14297,8 +14333,12 @@ async function run() {
     assert.strictEqual(css.response.label, '/styles.css', 'the cached copy answers despite the ?v= query');
     assert.deepStrictEqual(sw.fetchCalls, [], 'a cached shell file needs no network round-trip');
 
-    const offline = loadServiceWorker({ fetchImpl: async () => { throw new Error('offline'); } });
+    // A worker takes over only after a *successful* install, so the offline
+    // visit this asserts is the one a real user has: the shell was cached
+    // while the network was up, and the network is gone afterwards.
+    const offline = loadServiceWorker();
     await runWorkerLifecycle(offline, 'install');
+    offline.setNetwork(async () => { throw new Error('offline'); });
     const nav = await runWorkerFetch(offline, { method: 'GET', url: 'https://web.test/?event_id=7', mode: 'navigate' });
     assert.strictEqual(nav.responded, true, 'a navigation must still be answered when the network is gone');
     assert.strictEqual(nav.response.label, '/index.html', 'the fallback is the cached shell entry, not an error page');
@@ -14325,6 +14365,123 @@ async function run() {
     assert.ok(sw.stores.has(currentCache), 'the current version\'s cache stays');
     assert.ok(sw.stores.has('unrelated-cache'), 'a cache outside this app\'s prefix is never touched');
     assert.deepStrictEqual(sw.deleted, ['aarasna-shell-previous']);
+  });
+
+  /**
+   * The review lane's blocker, reproduced against the real worker file: a
+   * deploy whose app.js download fails. Install used to swallow every failure
+   * (`catch(() => {})` per path) and `skipWaiting()` anyway, so the new worker
+   * took over with half a shell — and `activate` then deleted the previous,
+   * good cache. The user got index.html from the fresh cache and `app.js`
+   * rejected as offline: a page with no script, and no way back. Each of the
+   * three claims below fails on that code — install resolves, the worker
+   * takes over, and the previous cache is gone.
+   */
+  await test('sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole', async () => {
+    const FAILED_PATH = '/app.js';
+
+    // The previous deploy's complete shell, produced by the worker itself
+    // rather than hand-written here, then planted where activate would look.
+    const previous = loadServiceWorker();
+    await runWorkerLifecycle(previous, 'install');
+    const previousName = 'aarasna-shell-previous';
+    const previousStore = new Map(previous.stores.get([...previous.stores.keys()][0]));
+    const previousKeys = [...previousStore.keys()].sort();
+
+    const sw = loadServiceWorker({
+      fetchImpl: async (request) => {
+        const url = typeof request === 'string' ? request : request.url;
+        if (url.endsWith(FAILED_PATH)) throw new Error('app.js download failed');
+        return { ok: true, type: 'basic' };
+      }
+    });
+    sw.stores.set(previousName, previousStore);
+
+    let installError = null;
+    try {
+      await runWorkerLifecycle(sw, 'install');
+    } catch (error) {
+      installError = error;
+    }
+
+    // The browser activates a worker only after its install succeeded. Running
+    // it on success is what lets (ب) fail: an install that swallowed the
+    // download error reaches this line, and this line is the one that deletes.
+    if (!installError) await runWorkerLifecycle(sw, 'activate');
+
+    // (أ) التثبيت لم يكتمل ولم يستولِ.
+    assert.ok(
+      installError,
+      'install must reject when an essential shell file failed to download — a half shell is not a cache'
+    );
+    assert.strictEqual(
+      sw.skipWaitingCalls,
+      0,
+      'the half-installed worker must never call skipWaiting: taking over is what retires the shell that works'
+    );
+
+    // (ب) الكاش السابق لم يُحذف.
+    assert.deepStrictEqual(sw.deleted, [], 'a failed install never activates, so no cache may be deleted');
+    const survivingStore = sw.stores.get(previousName);
+    assert.ok(survivingStore, 'the previous deploy\'s shell cache must still exist after the failed update');
+    assert.strictEqual(survivingStore, previousStore, 'and be the same untouched cache, not an empty one re-created under the old name');
+    assert.deepStrictEqual([...survivingStore.keys()].sort(), previousKeys, 'every entry the previous deploy cached is still there');
+
+    // (ج) الهيكل القديم ما زال قابلاً للخدمة: مدخل الصفحة بديلَ التنقّل،
+    // والسكربت الذي فشل تنزيله الآن موجود بنسخته الصالحة.
+    for (const path of ['/index.html', '/styles.css', FAILED_PATH, '/occasionForm.js']) {
+      assert.ok(
+        [...survivingStore.keys()].some((url) => new URL(url).pathname === path),
+        `${path} must still be servable from the previous cache after the failed update`
+      );
+    }
+  });
+
+  /**
+   * The other half of the rule: icons are optional. Losing an icon must not
+   * cost the offline shell — and it must still be fillable at runtime, which
+   * is the one place the replaced install comment's promise actually holds:
+   * the page does request its icon on a normal visit.
+   */
+  await test('sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime', async () => {
+    const ICON_PATH = '/icons/icon-192.png';
+
+    const sw = loadServiceWorker({
+      fetchImpl: async (request) => {
+        const url = typeof request === 'string' ? request : request.url;
+        if (url.includes('/icons/')) throw new Error('icon download failed');
+        return { ok: true, type: 'basic' };
+      }
+    });
+
+    await runWorkerLifecycle(sw, 'install');
+    assert.strictEqual(sw.skipWaitingCalls, 1, 'every essential file is cached, so this install must still take over');
+
+    const [cacheName] = [...sw.stores.keys()];
+    assert.match(cacheName, /^aarasna-shell-/, 'install must still open the shell cache');
+    const store = sw.stores.get(cacheName);
+    for (const path of ['/index.html', '/styles.css', '/app.js', '/api.js', '/config.js', '/occasionForm.js']) {
+      assert.ok(
+        [...store.keys()].some((url) => new URL(url).pathname === path),
+        `${path} is essential and must be precached even though an icon failed`
+      );
+    }
+    assert.strictEqual(
+      [...store.keys()].filter((url) => new URL(url).pathname.startsWith('/icons/')).length,
+      0,
+      'a failed icon leaves no entry behind: optional means absent, not invented'
+    );
+
+    // The network returns and the page asks for its icon: the runtime route
+    // caches it from then on.
+    sw.setNetwork(async () => ({ ok: true, type: 'basic', label: 'network', clone() { return this; } }));
+    const icon = await runWorkerFetch(sw, { method: 'GET', url: `https://web.test${ICON_PATH}`, mode: 'cors' });
+    assert.strictEqual(icon.responded, true, 'the icon route is still intercepted at runtime');
+    assert.strictEqual(icon.response.label, 'network', 'nothing stored it at install, so this first response is the network\'s');
+    assert.ok(
+      sw.puts.includes(`https://web.test${ICON_PATH}`),
+      'the icon is kept from the first response after the network returns'
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
