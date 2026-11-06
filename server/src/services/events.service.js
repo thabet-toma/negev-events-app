@@ -71,24 +71,33 @@ const EVENT_SPAN_START_SQL_E =
   + ' COALESCE((SELECT MIN(d.day_date) FROM event_days d WHERE d.event_id = e.id), e.event_date))';
 
 /**
- * شرط «مناسبة ظاهرة للعامة» — **القطعة الواحدة** التي تكتبها كل قراءة عامة بدل
- * نسختها اليدوية، والموضع الوحيد الذي ستضيف فيه #166 («بالرابط فقط») و#167
- * («النشر المجدول») شرطاً واحداً بدل تعديل اثني عشر موضعاً.
+ * شرط «مناسبة ظاهرة للعامة» — **القطعة الواحدة** التي تكتبها كل قراءة قائمة
+ * عامة بدل نسختها اليدوية، والموضع الوحيد لشرط الظهور في **قراءات القوائم**،
+ * وفيه ستضيف #166 («بالرابط فقط») و#167 («النشر المجدول») شرطاً واحداً بدل
+ * تعديل كل موضع. نصفها الثابت اليوم `approved` وحده.
  *
- * **تُستعمل** في كل قراءة يراها الجمهور بلا حساب: التغذية (`listPublicEvents`)،
- * والخريطة (`listMapPoints`)، والإعلانات الحية (`listLiveAnnouncements`)،
- * وصفحة المشاركة بالمعرّف (`getShareEvent` — وهي قراءة عامة بوابتها الوحيدة
- * هذا الشرط)، و«مناسبات أخرى» (`listRelatedEvents`)، وخريطة الموقع
- * (`listSitemapEvents`)، وعدّ المناسبات لكل بلدة (`townStats`) ولكل محافظة
- * (`listDiscoveryRegions` في `towns.service.js`).
+ * **تُستعمل** في كل قراءة قائمة يراها الجمهور بلا حساب: التغذية
+ * (`listPublicEvents`)، والخريطة (`listMapPoints`)، والإعلانات الحية
+ * (`listLiveAnnouncements`)، و«مناسبات أخرى» (`listRelatedEvents`)، وخريطة
+ * الموقع (`listSitemapEvents`)، وعدّ المناسبات لكل بلدة (`townStats`) ولكل
+ * محافظة (`listDiscoveryRegions` في `towns.service.js`)، ومناسبات الشخص
+ * وعدّادها في البحث (`getPublicPerson` و`searchPeople` في `albums.service.js`).
+ * وكل قراءة عامة للألبوم أو الصورة أو الفيديو هناك تمرّ بها عبر
+ * `publicAlbumConditions()` — القوائم، وصفحات المعرّف `/a/:id` و`/p/:id`
+ * و`/v/:id`.
  *
- * **ولا تُستعمل** خارجها ولو كتب الموضع `status = 'approved'` بيده: التفصيل
- * بالمعرّف (`getEventDetails` لا يقيّد الحالة أصلاً، فليس موضعاً لهذه البوابة)،
- * وطابور الأدمن (`listEvents` في `admin.service.js` — يقرأ الحالة المطلوبة
- * نفسها، لا بوابة ظهور)، ومرشّحو حارس التكرار (`findPossibleDuplicates` يقارن
- * المعتمدة والمعلّقة معاً)، و«قائمتي» الخاصة بالمستخدم (`listMyReminders`)،
- * وتحقق «ذكّرني» الداخلي (`setReminder`)، وعدّاد التبريكات — كلها تقرأ الحالة
- * لسبب آخر لا لبوابة ظهور للجمهور.
+ * **ولا تُستعمل** في غير ما سبق ولو كتب الموضع `status = 'approved'`
+ * بيده. أولها **القراءة بالمعرّف للحدث**: التفصيل (`getEventDetails`) لا يقيّد
+ * حالة المناسبة أصلاً — وإن كانت صور أرشيفه تمرّ ببوابة الألبوم أعلاه — و
+ * `getShareEvent` (`/e/:id` و`/e/:id/card.jpg` و`/e/:id/download`) يكتب
+ * `events.status = 'approved'` نصاً بيده خارج القطعة عمداً، فلا يرث شرطاً
+ * تضيفه إليها #166/#167؛ لأن `/e/:id` هو الطريق الوحيد إلى مناسبة «بالرابط
+ * فقط»، فقاعدتها تُقرَّر هناك صراحةً. ثم طابور الأدمن
+ * (`listEvents` في `admin.service.js` — يقرأ
+ * الحالة المطلوبة نفسها، لا بوابة ظهور)، ومرشّحو حارس التكرار
+ * (`findPossibleDuplicates` يقارن المعتمدة والمعلّقة معاً)، و«قائمتي» الخاصة
+ * بالمستخدم (`listMyReminders`)، وتحقق «ذكّرني» الداخلي (`setReminder`)،
+ * وعدّاد التبريكات — كلها تقرأ الحالة لسبب آخر لا لبوابة ظهور للجمهور.
  *
  * **ومرشّح النسخة (`legacyOnly` / `X-App-Version`) خارجها عمداً:** شرطه يعتمد
  * على **الطلب** لا على الصف — يُبنى من `occasionTypes.getLegacyTypeIds()` وقت
@@ -1919,10 +1928,16 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * able to tell those two apart from this function's result, any more than
  * from its own response.
  *
- * **وهو قراءة عامة بالمعرّف، فبوابته من `PUBLIC_EVENT_VISIBLE_SQL_EVENTS` لا
- * من نصّ مكتوب هنا:** الصفحة تُفتح بلا حساب، فأي شرط ظهور يُضاف إلى القطعة
- * (#166/#167) يجب أن يصلها كما يصل التغذية — ولو بقي `approved` مكتوباً بيدها
- * لصارت القراءة العامة الوحيدة التي تفلت من التعديل.
+ * **وهو قراءة بالمعرّف، فلا يستدعي `PUBLIC_EVENT_VISIBLE_SQL_EVENTS` عمداً:**
+ * `approved` مكتوبة صراحةً في `WHERE` لأن الصفحة تُفتح بلا حساب فالمعتمدة وحدها
+ * لها صفحة. فأي شرط ظهور تضيفه #166/#167 إلى القطعة **لا يصل هذه القراءة** —
+ * وهذا مقصود: `/e/:id` هي الطريق الوحيد الذي يملكه من يصله الرابط إلى مناسبة
+ * «بالرابط فقط»، فيجب على #166/#167 أن تقرّر لها قاعدتها صريحةً هنا، لا أن
+ * تحملها القطعة إليها صامتةً فتصير 404.
+ *
+ * والاستعلام نفسه يخدم أيضاً `/e/:id/card.jpg` و`/e/:id/download`: تستدعي
+ * `getShareEvent` ثلاث صفحات (`share.routes.js:858` و`:928` و`:960`)، فقاعدة
+ * هذه القراءة تسري على الثلاث معاً.
  *
  * `is_expired` reuses the exact span rule
  * (`span_end < CURDATE()`, the EVENT_SPAN_* constants) every other
@@ -1947,7 +1962,7 @@ async function getShareEvent(eventId) {
             (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_expired
        FROM events
        LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
-      WHERE events.id = ? AND ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS}`,
+      WHERE events.id = ? AND events.status = 'approved'`,
     [eventId]
   );
   if (!row) return null;
