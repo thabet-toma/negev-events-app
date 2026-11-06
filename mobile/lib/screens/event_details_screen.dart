@@ -609,8 +609,8 @@ class _EventDetailsBody extends StatelessWidget {
                       onPressed: onRemindTap,
                       icon: Icon(
                         event.isReminded
-                            ? Icons.bookmark
-                            : Icons.bookmark_border,
+                            ? Icons.favorite
+                            : Icons.favorite_border,
                       ),
                       label:
                           Text(event.isReminded ? 'في قائمتي' : 'أضف لقائمتي'),
@@ -624,15 +624,23 @@ class _EventDetailsBody extends StatelessWidget {
                         ),
                       ),
                     ),
-                  if (event.followersCount != null) ...[
-                    const SizedBox(width: 10),
-                    Text(
-                      'متابعون: ${event.followersCount}',
-                      style: TextStyle(color: context.c.inkFaint, fontSize: 12.5),
-                    ),
-                  ],
                 ],
               ),
+              // عدّادات صفحة المناسبة العلنية (تذكرة #170، والقصة ٥٦): «مهتمين»
+              // و«تبريكات» — و«جايين» في صندوق تأكيد الحضور أدناه، حيث تعيش
+              // أعلامه. كلٌّ يصل من الخادم أو يغيب، **والغائب يعني «النوع
+              // أطفأه»** لا صفراً. ولا عدّاد على العزاء: النغمة وحدها تحكم.
+              if (!isSolemn &&
+                  (event.followersCount != null ||
+                      event.congratulationsCount != null)) ...[
+                const SizedBox(height: 12),
+                _EventCountersRow(
+                  interestedCount: event.followersCount,
+                  congratulationsCount: event.congratulationsCount,
+                  congratulationsLabel:
+                      type?.congratulationsLabel ?? 'تبريكات',
+                ),
+              ],
               // تأكيد الحضور (تذكرة #168): لمناسبة نوعها يفتح الميزة وحدها،
               // ولا شيء منه لنوع `solemn` — النغمة تُقرأ من النوع لا من اسمه.
               if (type != null && type.rsvpEnabled && !isSolemn) ...[
@@ -731,6 +739,102 @@ class _EventDetailsBody extends StatelessWidget {
   }
 }
 
+/// عدّادات صفحة المناسبة العلنية (تذكرة #170): «مهتمين» و«تبريكات» — وكلٌّ
+/// يُرسم حين يصل رقمه وحده. `null` يعني أن الخادم لم يرسل الحقل، أي أن النوع
+/// أطفأه، ولا يُرسم صفراً مكانه: العدّاد المخفيّ يُرسم صفراً كذبٌ عن المناسبة.
+class _EventCountersRow extends StatelessWidget {
+  const _EventCountersRow({
+    required this.interestedCount,
+    required this.congratulationsCount,
+    required this.congratulationsLabel,
+  });
+
+  final int? interestedCount;
+  final int? congratulationsCount;
+  final String congratulationsLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = <Widget>[
+      if (interestedCount != null)
+        _EventCounterTile(
+          key: const Key('event_counter_interested'),
+          icon: Icons.favorite_border,
+          label: 'مهتمين',
+          value: interestedCount!,
+        ),
+      if (congratulationsCount != null)
+        _EventCounterTile(
+          key: const Key('event_counter_congratulations'),
+          icon: Icons.chat_bubble_outline,
+          label: congratulationsLabel,
+          value: congratulationsCount!,
+        ),
+    ];
+    if (tiles.isEmpty) return const SizedBox.shrink();
+
+    return Row(
+      key: const Key('event_counters'),
+      children: [
+        for (var index = 0; index < tiles.length; index += 1) ...[
+          if (index > 0) const SizedBox(width: 8),
+          Expanded(child: tiles[index]),
+        ],
+      ],
+    );
+  }
+}
+
+/// عدّاد واحد: الرقم بخطّ عريض لأنه المعلومة، والتسمية خافتة تحته.
+class _EventCounterTile extends StatelessWidget {
+  const _EventCounterTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final int value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 16, color: context.c.sky),
+          const SizedBox(width: 7),
+          Text(
+            '$value',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12.5, color: context.c.inkSoft),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// كتلة «جاي / مش جاي» في صفحة المناسبة (تذكرة #168).
 ///
 /// الزرّان مع إجمالي الحاضرين بمن فيهم صاحب الجواب (1..20)، وحالة الجواب
@@ -818,7 +922,7 @@ class _RsvpSectionState extends State<_RsvpSection> {
               ),
               if (widget.goingCount != null)
                 Text(
-                  'جايون: ${widget.goingCount}',
+                  'جايين: ${widget.goingCount}',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,

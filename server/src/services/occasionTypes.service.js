@@ -60,10 +60,50 @@ async function attachFieldsAndReactions(types, { visibleFieldsOnly = false } = {
   }));
 }
 
+/**
+ * The pre-written messages of a batch of types (تذكرة #170): «بارك»/«عزّي»
+ * opens a «اختر رسالة» sheet filled from here, so the copy lives in the
+ * database — one place for every client — never as a constant in the code.
+ *
+ * `activeOnly` is the public read's rule («النشِط وحده»): a message the
+ * super_admin switched off must not reach a client. The admin read passes
+ * everything, otherwise a switched-off message would vanish from the panel
+ * and could never be switched back on.
+ *
+ * Each entry is `{ id, body }` — the position is the order this query already
+ * applies, and the public caller needs nothing but the text.
+ */
+async function attachMessages(types, { activeOnly = false } = {}) {
+  if (!types.length) return types;
+
+  const ids = types.map(type => type.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT id, occasion_type_id, body, position, is_active
+       FROM occasion_type_messages
+      WHERE occasion_type_id IN (${placeholders}) ${activeOnly ? 'AND is_active = 1' : ''}
+      ORDER BY position ASC, id ASC`,
+    ids
+  );
+
+  const byType = {};
+  for (const row of rows) {
+    (byType[row.occasion_type_id] || (byType[row.occasion_type_id] = [])).push(row);
+  }
+
+  return types.map(type => ({
+    ...type,
+    messages: (byType[type.id] || []).map(row => (activeOnly
+      ? { id: row.id, body: row.body }
+      : { id: row.id, body: row.body, position: row.position, is_active: Boolean(row.is_active) }))
+  }));
+}
+
 /** Active occasion types, ordered for display, with their visible fields and reactions. */
 async function listPublicTypes() {
   const types = await db.query('SELECT * FROM occasion_types WHERE is_active = 1 ORDER BY position ASC, id ASC');
-  return attachFieldsAndReactions(types, { visibleFieldsOnly: true });
+  const withRelations = await attachFieldsAndReactions(types, { visibleFieldsOnly: true });
+  return attachMessages(withRelations, { activeOnly: true });
 }
 
 /**
@@ -116,7 +156,8 @@ async function listAllTypesForAdmin() {
       ORDER BY ot.position ASC, ot.id ASC`
   );
   const withRelations = await attachFieldsAndReactions(types);
-  return withRelations.map(type => ({ ...type, events_count: Number(type.events_count) }));
+  const withMessages = await attachMessages(withRelations);
+  return withMessages.map(type => ({ ...type, events_count: Number(type.events_count) }));
 }
 
 /**
@@ -248,6 +289,89 @@ async function deleteType(id) {
   throw ApiError.conflict('لا يمكن حذف هذا النوع لوجود مناسبات مرتبطة به — تم تعطيله بدلاً من حذفه');
 }
 
+// --- الرسائل الجاهزة (تذكرة #170) -------------------------------------
+//
+// The one place that writes `occasion_type_messages`. The route layer owns
+// validation and the name of the error; this layer owns the SQL. The type is
+// checked first so a message under a missing type is a 404, never a stray row.
+
+/** Every message of one type — active and switched off — for its admin editor. */
+async function listMessagesForType(typeId) {
+  const type = await db.queryOne('SELECT id FROM occasion_types WHERE id = ?', [typeId]);
+  if (!type) throw ApiError.notFound('نوع المناسبة غير موجود');
+
+  const rows = await db.query(
+    `SELECT id, body, position, is_active FROM occasion_type_messages
+      WHERE occasion_type_id = ?
+      ORDER BY position ASC, id ASC`,
+    [typeId]
+  );
+  return rows.map(row => ({ ...row, is_active: Boolean(row.is_active) }));
+}
+
+/** Adds one message at the end of its type's list unless a position is given. */
+async function createMessage(typeId, { body, position, isActive }) {
+  const type = await db.queryOne('SELECT id FROM occasion_types WHERE id = ?', [typeId]);
+  if (!type) throw ApiError.notFound('نوع المناسبة غير موجود');
+
+  let resolvedPosition = position;
+  if (resolvedPosition === undefined || resolvedPosition === null) {
+    // خلف آخر رسالة دائماً: رسالة جديدة تكتبها الإدارة تُقرأ في مكانها الطبيعي
+    // بدل أن تظهر فوق رسائل النوع المزروعة بترتيب صفرٍ متساوٍ.
+    const last = await db.queryOne(
+      'SELECT COALESCE(MAX(position), 0) AS last FROM occasion_type_messages WHERE occasion_type_id = ?',
+      [typeId]
+    );
+    resolvedPosition = Number(last.last) + 1;
+  }
+
+  const [result] = await db.execute(
+    `INSERT INTO occasion_type_messages (occasion_type_id, body, position, is_active)
+     VALUES (?, ?, ?, ?)`,
+    [typeId, body, resolvedPosition, isActive === false ? 0 : 1]
+  );
+
+  const row = await db.queryOne(
+    'SELECT id, body, position, is_active FROM occasion_type_messages WHERE id = ?',
+    [result.insertId]
+  );
+  return { ...row, is_active: Boolean(row.is_active) };
+}
+
+/**
+ * Partial update: only the keys the caller sent are written, so switching a
+ * message off never rewrites its text. A message id that belongs to another
+ * type is a 404 — the WHERE clause carries the type, so a wrong id cannot
+ * reach another type's rows.
+ */
+async function updateMessage(typeId, messageId, { body, position, isActive }) {
+  const existing = await db.queryOne(
+    'SELECT id FROM occasion_type_messages WHERE id = ? AND occasion_type_id = ?',
+    [messageId, typeId]
+  );
+  if (!existing) throw ApiError.notFound('الرسالة الجاهزة غير موجودة');
+
+  const assignments = [];
+  const params = [];
+  if (body !== undefined) { assignments.push('body = ?'); params.push(body); }
+  if (position !== undefined) { assignments.push('position = ?'); params.push(position); }
+  if (isActive !== undefined) { assignments.push('is_active = ?'); params.push(isActive ? 1 : 0); }
+
+  if (assignments.length) {
+    params.push(messageId, typeId);
+    await db.execute(
+      `UPDATE occasion_type_messages SET ${assignments.join(', ')} WHERE id = ? AND occasion_type_id = ?`,
+      params
+    );
+  }
+
+  const row = await db.queryOne(
+    'SELECT id, body, position, is_active FROM occasion_type_messages WHERE id = ?',
+    [messageId]
+  );
+  return { ...row, is_active: Boolean(row.is_active) };
+}
+
 module.exports = {
   listPublicTypes,
   getTypeById,
@@ -256,5 +380,8 @@ module.exports = {
   listAllTypesForAdmin,
   createType,
   updateType,
-  deleteType
+  deleteType,
+  listMessagesForType,
+  createMessage,
+  updateMessage
 };

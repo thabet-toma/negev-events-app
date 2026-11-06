@@ -51,11 +51,16 @@ Future<void> openSignInGate(BuildContext context, String message) async {
 
 /// ورقة كتابة تبريكة/تعزية — نفس منطق شاشة التفاصيل، مستخرَج هنا ليعاد
 /// استعماله من ورقة عرض الرسائل التي يفتحها الكرت مباشرةً.
+///
+/// `presetMessage` (تذكرة #170): نصّ رسالة جاهزة اختاره المستخدم من ورقة
+/// «اختر رسالة». يُكتب في الحقل ويبقى **قابلاً للتعديل** — الورقة تقترح،
+/// والإرسال زرّ المستخدم نفسه.
 Future<void> openCongratulateSheet(
   BuildContext context, {
   required int eventId,
   required String label,
   required VoidCallback onSuccess,
+  String? presetMessage,
 }) async {
   final auth = AppServices.of(context).auth;
   if (!auth.isSignedIn) {
@@ -63,7 +68,7 @@ Future<void> openCongratulateSheet(
     return;
   }
 
-  final messageController = TextEditingController();
+  final messageController = TextEditingController(text: presetMessage ?? '');
   var sending = false;
 
   /// أُرسلت التبريكة فعلاً؟ الحوار بعد إغلاق الورقة لا فوقها.
@@ -151,6 +156,117 @@ Future<void> openCongratulateSheet(
   // الورقة أُغلقت الآن، فالحوار لا يفتح فوق حقلٍ اختفى — ولا يفتح أصلاً
   // إن لم تُرسل التبريكة.
   if (sent && context.mounted) await maybeShowRateUsPrompt(context);
+}
+
+/// ورقة «اختر رسالة» (تذكرة #170، والقصة ٥٧): «بارك»/«عزّي» في الكرت يفتحها،
+/// وتعرض رسائل نوع المناسبة الجاهزة كما يرسلها الخادم — **النشِطة وحدها**،
+/// فلا نصّ تهنئة مكتوب في التطبيق. اختيار رسالة يفتح ورقة التبريك القائمة
+/// (`openCongratulateSheet`) بنصّها في الحقل، فيبقى للمستخدم أن يعدّله أو يكتب
+/// غيره من الحقل نفسه.
+Future<void> openMessageSheet(
+  BuildContext context, {
+  required int eventId,
+  required String label,
+  required List<OccasionMessage> messages,
+  required VoidCallback onSuccess,
+}) async {
+  final auth = AppServices.of(context).auth;
+  if (!auth.isSignedIn) {
+    await openSignInGate(context, 'سجّل الدخول لإرسال $label');
+    return;
+  }
+
+  final picked = await showModalBottomSheet<String>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: context.c.surfaceSunk,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'اختر رسالة',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: sheetContext.c.ink,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: messages.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (itemContext, index) {
+                  final message = messages[index];
+                  return Material(
+                    color: itemContext.c.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.of(sheetContext).pop(message.body),
+                      child: Container(
+                        padding: const EdgeInsets.all(13),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: itemContext.c.line),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.chat_bubble_outline,
+                              size: 16,
+                              color: itemContext.c.sky,
+                            ),
+                            const SizedBox(width: 9),
+                            Expanded(
+                              child: Text(
+                                message.body,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  height: 1.6,
+                                  color: itemContext.c.ink,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+            // «حرية الكتابة» باقية باباً صريحاً — الورقة لا تحبس المستخدم في
+            // قائمة الرسائل.
+            OutlinedButton(
+              onPressed: () => Navigator.of(sheetContext).pop(''),
+              child: const Text('اكتب رسالتك بنفسك'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  if (picked == null || !context.mounted) return;
+  await openCongratulateSheet(
+    context,
+    eventId: eventId,
+    label: label,
+    onSuccess: onSuccess,
+    presetMessage: picked.isEmpty ? null : picked,
+  );
 }
 
 /// بطاقة رسالة واحدة — مشتركة بين شاشة التفاصيل وورقة عرض الرسائل السريعة.

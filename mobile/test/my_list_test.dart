@@ -737,7 +737,7 @@ void main() {
 
   group('(ط) إشارة الحفظ — الكرت والتغذية', () {
     testWidgets(
-      'الكرت يختصر التسمية إلى «احفظ»/«محفوظة»، والمعنى الكامل في التلميح',
+      'الكرت يختصر التسمية إلى «ذكّرني»/«محفوظة» بالقلب، والمعنى الكامل في التلميح',
       (tester) async {
         Future<void> pumpCard({required bool reminded}) async {
           final event = Event.fromJson({
@@ -777,14 +777,14 @@ void main() {
         }
 
         await pumpCard(reminded: false);
-        expect(find.text('احفظ'), findsOneWidget);
+        expect(find.text('ذكّرني'), findsOneWidget);
         expect(find.text('محفوظة'), findsNothing);
         // النصّ الكامل لم يُفقَد — في التلميح وحده.
         expect(find.byTooltip('أضف لقائمتي'), findsOneWidget);
 
         await pumpCard(reminded: true);
         expect(find.text('محفوظة'), findsOneWidget);
-        expect(find.text('احفظ'), findsNothing);
+        expect(find.text('ذكّرني'), findsNothing);
         expect(find.byTooltip('في قائمتي'), findsOneWidget);
       },
     );
@@ -850,7 +850,7 @@ void main() {
           4,
           reason: 'عدّاد المتابعين يتبع نفس حساب _toggleRemind',
         );
-        expect(find.text('احفظ'), findsOneWidget);
+        expect(find.text('ذكّرني'), findsOneWidget);
         expect(find.text('محفوظة'), findsNothing);
       },
     );
@@ -942,7 +942,7 @@ void main() {
         expect(services.savedChange.value, (eventId: 5, saved: false));
 
         await showFeed();
-        expect(find.text('احفظ'), findsOneWidget);
+        expect(find.text('ذكّرني'), findsOneWidget);
         expect(card().event.isReminded, isFalse);
 
         // رسالة الإزالة العائمة («أُزيلت من قائمتي» + «تراجع») تجلس فوق أسفل
@@ -955,7 +955,7 @@ void main() {
 
         // (٢) إعادة الحفظ من كرت التغذية — تُكتب الإشارة هنا أيضاً، وإلا صارت
         // الإزالة التالية تكراراً مساوياً لا يُخطر أحداً.
-        await tester.tap(find.text('احفظ'));
+        await tester.tap(find.text('ذكّرني'));
         await tester.pumpAndSettle();
         expect(services.savedChange.value, (eventId: 5, saved: true));
         expect(find.text('محفوظة'), findsOneWidget);
@@ -974,7 +974,7 @@ void main() {
 
         await showFeed();
         expect(
-          find.text('احفظ'),
+          find.text('ذكّرني'),
           findsOneWidget,
           reason: 'كرت التغذية لا يجوز أن يبقى «محفوظة» بعد إزالة ثانية',
         );

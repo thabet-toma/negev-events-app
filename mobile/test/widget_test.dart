@@ -466,8 +466,8 @@ void main() {
       expect(zeroed.followersCount, 0);
 
       // الكرت بلا ورقة تفاصيل داخله: العدّادان في صفحة المناسبة وحدها (شاشة
-      // `EventDetailsScreen`، ويحرسها اختبار «متابعون» هناك)، فلا يُرسم على
-      // الكرت عدّاد لأيّ من الحالتين — لا صفر ولا رقم.
+      // `EventDetailsScreen`، ويحرسها اختبار `event_counters` هناك)، فلا يُرسم
+      // على الكرت عدّاد لأيّ من الحالتين — لا صفر ولا رقم.
       await tester.pumpWidget(
         MaterialApp(
           home: Directionality(
@@ -484,7 +484,8 @@ void main() {
         ),
       );
       expect(find.textContaining('تبريكات ('), findsNothing);
-      expect(find.textContaining('متابعون'), findsNothing);
+      expect(find.byKey(const Key('event_counters')), findsNothing);
+      expect(find.textContaining('مهتمين'), findsNothing);
     });
   });
 
@@ -1691,18 +1692,25 @@ void main() {
     );
 
     testWidgets(
-      'صفحة المناسبة: صفر المتابعين الحقيقي يُرسم صفراً',
+      'صفحة المناسبة: صفر المهتمين الحقيقي يُرسم صفراً',
       (tester) async {
         await pumpDetails(tester, {'id': 46, 'groom_name': 'م', 'town': 'رهط', 'followers_count': 0});
-        expect(find.text('متابعون: 0'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('event_counter_interested')),
+            matching: find.text('0'),
+          ),
+          findsOneWidget,
+        );
       },
     );
 
     testWidgets(
-      'صفحة المناسبة: غياب عدّاد المتابعين (النوع مطفئه) لا يُرسم صفراً',
+      'صفحة المناسبة: غياب عدّاد المهتمين (النوع مطفئه) لا يُرسم صفراً',
       (tester) async {
         await pumpDetails(tester, {'id': 47, 'groom_name': 'م', 'town': 'رهط'});
-        expect(find.textContaining('متابعون'), findsNothing);
+        expect(find.byKey(const Key('event_counter_interested')), findsNothing);
+        expect(find.textContaining('مهتمين'), findsNothing);
       },
     );
 
@@ -3706,7 +3714,7 @@ void main() {
       expect(find.text('جاي'), findsOneWidget);
       expect(find.text('مش جاي'), findsOneWidget);
       expect(find.text('إجمالي الحاضرين بمن فيك'), findsOneWidget);
-      expect(find.text('جايون: 3'), findsOneWidget, reason: 'العدّاد من الخادم، لا حساب محلي');
+      expect(find.text('جايين: 3'), findsOneWidget, reason: 'العدّاد من الخادم، لا حساب محلي');
       expect(find.text('جوابك: «جاي» — 3 أشخاص'), findsOneWidget);
       expect(find.text('سحب جوابي'), findsOneWidget);
     });
@@ -3717,7 +3725,7 @@ void main() {
       expect(find.text('تأكيد الحضور'), findsNothing);
       expect(find.text('جاي'), findsNothing);
       expect(find.text('مش جاي'), findsNothing);
-      expect(find.textContaining('جايون:'), findsNothing);
+      expect(find.textContaining('جايين:'), findsNothing);
     });
 
     testWidgets('نوع rsvp_enabled مطفأ: لا أزرار حضور', (tester) async {
@@ -3892,7 +3900,7 @@ void main() {
       expect(find.text('سالم أبو الاختبار'), findsOneWidget);
       expect(find.text('ضيف من الرابط'), findsOneWidget);
       expect(find.text('مريم الاختبار'), findsOneWidget);
-      expect(find.textContaining('جايون: 5'), findsOneWidget, reason: 'المجموع مجموع الأعداد لا عدد الصفوف');
+      expect(find.textContaining('جايين: 5'), findsOneWidget, reason: 'المجموع مجموع الأعداد لا عدد الصفوف');
       expect(find.textContaining('رابط المشاركة'), findsOneWidget);
       expect(find.text('جاي'), findsWidgets);
       expect(find.text('مش جاي'), findsOneWidget);

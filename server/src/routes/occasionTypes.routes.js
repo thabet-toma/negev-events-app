@@ -6,7 +6,7 @@ const ApiError = require('../utils/ApiError');
 const occasionTypes = require('../services/occasionTypes.service');
 const { requireSuperAdmin } = require('../middleware/auth');
 const { cleanString, requireFields, parseId } = require('../middleware/validate');
-const { REACTION_TYPES, OCCASION_FIELD_KEYS, CORE_OCCASION_FIELDS, OCCASION_TONES } = require('../constants');
+const { REACTION_TYPES, OCCASION_FIELD_KEYS, CORE_OCCASION_FIELDS, OCCASION_TONES, OCCASION_MESSAGE_BODY_MAX } = require('../constants');
 
 const router = express.Router();
 
@@ -178,6 +178,67 @@ router.delete('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف نوع المناسبة');
   const result = await occasionTypes.deleteType(id);
   res.json({ success: true, message: 'تم حذف نوع المناسبة بنجاح', ...result });
+}));
+
+// --- الرسائل الجاهزة لكل نوع (تذكرة #170) -----------------------------
+//
+// «بارك»/«عزّي» في الكرت يفتح ورقة «اختر رسالة» تُبنى من `messages` في ردّ
+// الأنواع **العام** (النشِط وحده). وهذه المسارات إدارتها: إضافة وتعديل
+// وترتيب وإطفاء — بلا مسار حذف، فالرسالة تُطفأ ولا تُمحى. والحارس هو
+// `router.use('/admin/occasion-types', requireSuperAdmin)` أعلاه، فهو بادئة كل
+// مسار هنا: أدمن البلدة يُردّ 403 كما على بقية مسارات الأنواع.
+
+/**
+ * نصّ الرسالة كما يُكتب في العمود: مُقصّ على `VARCHAR(300)`، وفارغه 400 عربية
+ * لا صفّ فارغ في القاعدة. الرسالة تصل الناس بلسان صاحبها، فحرفٌ أبيض وحده ليس
+ * رسالة.
+ */
+function parseMessageBody(rawBody) {
+  const body = cleanString(rawBody, OCCASION_MESSAGE_BODY_MAX);
+  if (!body) throw ApiError.badRequest('نص الرسالة الجاهزة مطلوب');
+  return body;
+}
+
+/** ترتيب داخل القائمة — عدد صحيح فقط؛ غيابه في الإنشاء يعني «آخر القائمة». */
+function parseMessagePosition(rawPosition) {
+  if (rawPosition === undefined || rawPosition === null || rawPosition === '') return undefined;
+  const position = Number(rawPosition);
+  if (!Number.isInteger(position)) throw ApiError.badRequest('ترتيب الرسالة يجب أن يكون عدداً صحيحاً');
+  return position;
+}
+
+router.get('/admin/occasion-types/:id/messages', asyncHandler(async (req, res) => {
+  const typeId = parseId(req.params.id, 'معرّف نوع المناسبة');
+  res.json({ success: true, messages: await occasionTypes.listMessagesForType(typeId) });
+}));
+
+router.post('/admin/occasion-types/:id/messages', asyncHandler(async (req, res) => {
+  const typeId = parseId(req.params.id, 'معرّف نوع المناسبة');
+  const message = await occasionTypes.createMessage(typeId, {
+    body: parseMessageBody(req.body.body),
+    position: parseMessagePosition(req.body.position),
+    // النشِط افتراضاً: رسالة يكتبها السوبر أدمن اليوم تُقرأ اليوم، والإطفاء
+    // قرار صريح لا نتيجة نسيان حقل.
+    isActive: req.body.is_active !== false
+  });
+  res.status(201).json({ success: true, message: 'تمت إضافة الرسالة الجاهزة', typeMessage: message });
+}));
+
+router.patch('/admin/occasion-types/:id/messages/:mid', asyncHandler(async (req, res) => {
+  const typeId = parseId(req.params.id, 'معرّف نوع المناسبة');
+  const messageId = parseId(req.params.mid, 'معرّف الرسالة الجاهزة');
+  const payload = {};
+
+  if (req.body.body !== undefined) payload.body = parseMessageBody(req.body.body);
+  if (req.body.position !== undefined) {
+    const position = parseMessagePosition(req.body.position);
+    if (position === undefined) throw ApiError.badRequest('ترتيب الرسالة يجب أن يكون عدداً صحيحاً');
+    payload.position = position;
+  }
+  if (req.body.is_active !== undefined) payload.isActive = Boolean(req.body.is_active);
+
+  const message = await occasionTypes.updateMessage(typeId, messageId, payload);
+  res.json({ success: true, message: 'تم تحديث الرسالة الجاهزة', typeMessage: message });
 }));
 
 module.exports = router;

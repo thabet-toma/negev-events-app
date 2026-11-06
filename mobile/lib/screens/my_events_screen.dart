@@ -246,7 +246,7 @@ class _RsvpListDialogState extends State<_RsvpListDialog> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
-                      'جايون: ${totals.goingCount} — أجوبة «جاي»: ${totals.goingRows} — '
+                      'جايين: ${totals.goingCount} — أجوبة «جاي»: ${totals.goingRows} — '
                       'أجوبة «مش جاي»: ${totals.notGoingRows}',
                       style: TextStyle(fontSize: 12.5, color: context.c.inkSoft),
                     ),
