@@ -109,7 +109,7 @@ async function clearAll(userId) {
  *   event_approved       | null (always a fresh row)           | no
  *   event_rejected       | null (always a fresh row)           | no
  *   event_new            | event_new_<event_id>                | no (3 a day, then the digest)
- *   event_new_digest     | event_new_digest_<YYYY-MM-DD>       | no — one row per user per day, updated in place
+ *   event_new_digest     | event_new_digest_<YYYY-MM-DD>_<region_id|all> | no — one row per user per day PER GOVERNORATE of the event, updated in place (`all` only when the event's governorate is unknown)
  *   event_updated        | event_updated_<event_id>_<YYYY-MM-DD> | no — one per follower per event per day, updated in place
  *   event_nudge          | event_nudge_<event_id>_<1|2>        | no — the owner's own event, twice at most
  *
@@ -327,8 +327,9 @@ async function eventRegionId(eventId) {
  * «مناسبة جديدة» لكل مستخدم أبقى هذا النوع مفعّلاً (`users.notify_new_events`)،
  * عدا ناشرها — عند أول اعتماد فقط (`events.first_approved_at`، يحرسه
  * المستدعي). أول ثلاث مناسبات في اليوم في المحافظة تصل فرادى (`event_new_<id>`)؛ من
- * الرابعة يتحدّث إشعار ملخّص واحد لكل مستخدم (`event_new_digest_<اليوم>`)
- * ويعود «غير مقروء»، بدل أن تتكدّس عشرة إشعارات في موسم الأعراس. يعيد ما
+ * الرابعة يتحدّث إشعار ملخّص واحد لكل مستخدم في كل محافظة
+ * (`event_new_digest_<اليوم>_<regionId>`) ويعود «غير مقروء»، بدل أن تتكدّس
+ * عشرة إشعارات في موسم الأعراس. يعيد ما
  * يحتاجه المُعلِن: النصّ، وهل يستحق دفعاً للأجهزة (الملخّص يُدفَع أول مرّة فقط)،
  * ومحافظة المناسبة كي يقيّد الدفع بها بدوره (`push.service.deliverToAll`).
  *
@@ -342,6 +343,12 @@ async function eventRegionId(eventId) {
  * مناسبات لم تصل أهلها، وأُخذ `push: extra === 1` («أول ملخّص يُدفَع») قبلهم.
  * وحين تغيب محافظة المناسبة (حارس `eventRegionId` الدفاعي) يصل الجميعَ
  * فتُعَدّ كل مناسبات اليوم كما كان.
+ *
+ * **والملخّص لكل محافظة كذلك** (تذكرة #161): مفتاحه يحمل محافظة المناسبة
+ * (`event_new_digest_<اليوم>_<regionId>`، و`all` حين تغيب)، فعدّاد كل محافظة
+ * يكتب صفّه هو. ومن بلا محافظة يتلقّى الكل، فيحصل على ملخّص مستقلّ لكل
+ * محافظة بعدده الصحيح، لا صفٍّ واحد تكتب فوقه محافظةٌ ما كتبته أخرى، ويُدفَع
+ * له ملخّص أول مرّة لكل محافظة (`extra === 1` على عدّاد محافظتها).
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
   // محافظة المناسبة تُقرأ أولاً: العدّاد أدناه مقيَّد بها، وشرط الإدراج في
@@ -381,7 +388,7 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
         AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
      ON DUPLICATE KEY UPDATE title = ?, body = ?, is_read = 0, created_at = CURRENT_TIMESTAMP`,
     [
-      TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString()}`, createdBy ?? 0,
+      TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString()}_${regionId ?? 'all'}`, createdBy ?? 0,
       regionId, regionId,
       notificationTitle, body
     ]
