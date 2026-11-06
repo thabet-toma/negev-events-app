@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../state/region_onboarding.dart';
 import '../state/update_checker.dart';
+import '../state/welcome.dart';
 import '../theme.dart';
 import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/update_dialog.dart';
+import '../widgets/welcome_sheet.dart';
 import 'add_event_screen.dart';
 import 'events_screen.dart';
 import 'services_hub_screen.dart';
@@ -50,7 +52,8 @@ class _HomeShellState extends State<HomeShell> {
   /// التغذية ولا كيف تُعاد تهيئتها، فلا يُجلب شيء بهذه الكبسة.
   final ValueNotifier<int> _feedTopRequest = ValueNotifier<int>(0);
 
-  /// ورقة أول تشغيل — محاولة واحدة لكل تشغيل تطبيق، لا مع كل إعادة بناء.
+  /// أول تشغيل (الترحيب ثم ورقة المنطقة) — محاولة واحدة لكل تشغيل تطبيق، لا
+  /// مع كل إعادة بناء.
   bool _onboardingAttempted = false;
 
   @override
@@ -81,20 +84,31 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  /// ورقة أول تشغيل (#126) — السؤال الوحيد عند الإقلاع منذ #127: صارت قصة
+  /// أول تشغيل (#126 و#163) — شاشة الترحيب ثم ورقة «من أي منطقة أنت؟».
+  ///
+  /// الترحيب يُعرض **قبل** الورقة مرة واحدة لكل تثبيت (`welcomeSeenKey`)،
+  /// و«تخطّي» فيه لا يتخطّى الورقة: النداء التالي يفتحها كما لو لم يكن هناك
+  /// ترحيب. وسؤال المنطقة هو السؤال الوحيد عند الإقلاع منذ #127 — صارت قصة
   /// التوسّع شريطاً داخل التغذية (`RegionBanner`) يتبع المحافظة، فلا تُعرض في
   /// الإقلاع ولا تُسجَّل رؤيتها.
   ///
-  /// ولا تُعرض الورقة إن كان على الشاشة غيرها (شاشة مدفوعة أو ورقة مفتوحة) —
-  /// وهذا يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل شيء حينها، فتعود
-  /// في الإقلاع التالي بدل أن تفوت. و«محاولة واحدة» تعني مرةً واحدة لهذا
-  /// التشغيل: `_onboardingAttempted` يمنع تكرار المحاولة مع كل إعادة بناء.
+  /// ولا يُعرض أيٌّ منهما إن كان على الشاشة غير الهيكل (شاشة مدفوعة أو ورقة
+  /// مفتوحة) — وهذا يشمل رابطاً عميقاً فتح شاشته قبلنا — ولا يُسجَّل شيء
+  /// حينها، فيعودان في الإقلاع التالي بدل أن يفوتا. و«محاولة واحدة» تعني
+  /// مرةً واحدة لهذا التشغيل: `_onboardingAttempted` يمنع تكرار المحاولة مع كل
+  /// إعادة بناء.
   Future<void> _maybeShowOnboardingSheet() async {
     // ننتظر أول إطار كي لا تُفتح ورقة أثناء البناء، وأول ما يصل إليه المستخدم
     // شاشته لا حوار.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted || !_isShellOnTop) return;
 
+    if (!await isWelcomeSeen()) {
+      if (!mounted || !_isShellOnTop) return;
+      await showWelcomeSheet(context);
+    }
+
+    if (!mounted || !_isShellOnTop) return;
     if (await isRegionOnboarded()) return;
     if (!mounted || !_isShellOnTop) return;
     await showRegionOnboardingSheet(context);

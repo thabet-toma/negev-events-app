@@ -15,6 +15,7 @@ import 'package:negev_events/state/places_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/region_store.dart';
+import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/region_onboarding_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -228,6 +229,12 @@ Future<void> _drainMessages(WidgetTester tester) async {
 
 Future<bool?> _savedFlag() async =>
     (await SharedPreferences.getInstance()).getBool(regionOnboardedKey);
+
+Future<bool?> _welcomeSeenFlag() async =>
+    (await SharedPreferences.getInstance()).getBool(welcomeSeenKey);
+
+/// عنوان شاشة الترحيب — تُستدعى من `HomeShell` قبل ورقة المنطقة (تذكرة #163).
+const _welcomeTitle = 'أهلاً بك في أعراسنا';
 
 void main() {
   group('أقرب بلدة ← محافظتها', () {
@@ -479,7 +486,7 @@ void main() {
       expect(location.calls, isEmpty, reason: 'التخطّي لا يطلب موقعاً');
     });
 
-    testWidgets('الإقلاع: تُعرض مرة واحدة، والتخطّي يمنع عودتها في تشغيلٍ تالٍ',
+    testWidgets('الإقلاع: الترحيب ثم ورقة المنطقة مرة واحدة، والتخطّي يمنع عودتهما',
         (tester) async {
       SharedPreferences.setMockInitialValues({});
       final server = _TownsServer();
@@ -498,8 +505,39 @@ void main() {
       }
 
       await boot();
-      expect(find.text(_title), findsOneWidget, reason: 'أول تشغيل يسأل');
+      // الترحيب أولاً (تذكرة #163): لا ورقة محافظة فوقه ولا تحته.
+      expect(find.text(_welcomeTitle), findsOneWidget, reason: 'أول تشغيل يرحّب');
+      expect(find.byKey(const Key('welcome_sheet')), findsOneWidget);
+      // والمحتوى المطلوب كاملاً: البطاقات الثلاث.
+      expect(find.byKey(const Key('welcome_card_events')), findsOneWidget);
+      expect(find.byKey(const Key('welcome_card_albums')), findsOneWidget);
+      expect(find.byKey(const Key('welcome_card_nokoot')), findsOneWidget);
+      expect(
+        find.text(_title),
+        findsNothing,
+        reason: 'ورقة المنطقة بعد الترحيب لا قبله',
+      );
+      expect(
+        await _welcomeSeenFlag(),
+        isNull,
+        reason: 'العلم لا يُكتب بمجرّد العرض — بل عند الخروج',
+      );
+
+      await tester.tap(find.byKey(const Key('welcome_skip')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text(_welcomeTitle), findsNothing, reason: '«تخطّي» يغلق الترحيب');
+      expect(find.byKey(const Key('welcome_sheet')), findsNothing);
+      expect(
+        find.text(_title),
+        findsOneWidget,
+        reason: '«تخطّي» يذهب إلى ورقة المحافظة، لا إلى التغذية مباشرة',
+      );
       expect(find.byType(NavigationBar), findsOneWidget, reason: 'الشريط تحتها');
+      expect(await _welcomeSeenFlag(), isTrue);
+      expect(await _savedFlag(), isNull, reason: 'ورقة المنطقة لم تُجب بعد');
 
       await tester.tap(find.byKey(const Key('region_onboarding_skip')));
       await tester.pump();
@@ -507,11 +545,38 @@ void main() {
       expect(find.text(_title), findsNothing);
       expect(await _savedFlag(), isTrue);
 
-      // تشغيل تالٍ: مفتاح الإنجاز يمنع الورقة، والهيكل كما هو.
+      // تشغيل تالٍ: لا ترحيب ولا ورقة، والهيكل كما هو.
       await tester.pumpWidget(const SizedBox());
       await boot();
-      expect(find.text(_title), findsNothing);
+      expect(find.text(_welcomeTitle), findsNothing, reason: 'الترحيب مرة واحدة');
+      expect(find.text(_title), findsNothing, reason: 'والمنطقة سُئلت بتخطّيها');
       expect(find.byType(NavigationBar), findsOneWidget);
+    });
+
+    testWidgets('علم الترحيب وحده يمنعه، وورقة المنطقة تُعرض كما هي',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({welcomeSeenKey: true});
+      final services = _services(_TownsServer());
+      await services.places.load();
+
+      await tester.pumpWidget(_app(services, const HomeShell()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        find.text(_welcomeTitle),
+        findsNothing,
+        reason: 'العلم المحلي يمنع الترحيب في تشغيل لاحق',
+      );
+      expect(
+        find.text(_title),
+        findsOneWidget,
+        reason: 'ولا يمسّ سؤال المنطقة: لم يُسأل بعد',
+      );
+      await tester.tap(find.byKey(const Key('region_onboarding_skip')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
     });
 
     testWidgets('بعد الإنجاز: «حسابي» وحدها تعيد الورقة، والاختيار اليدوي يُحفظ',

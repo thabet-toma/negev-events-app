@@ -593,7 +593,7 @@ function installPushFakes(window, options = {}) {
  * app.js reads negev_user/negev_token into module state at load time, the
  * same way a real page load would.
  */
-function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/' } = {}) {
+function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/', welcomeSeen = true } = {}) {
   const virtualConsole = new VirtualConsole(); // swallow jsdom's own "not implemented" noise; real throws still propagate
   const dom = new JSDOM(HTML_WITHOUT_SCRIPTS, {
     url,
@@ -607,6 +607,13 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
       id: 501, full_name: 'مستخدم الاختبار', role: 'user', phone_number: '0521234567'
     }));
     window.localStorage.setItem('negev_token', 'test-token-web-dom');
+  }
+
+  // شاشة الترحيب (#163) تُفتح في الزيارة الأولى الحقيقية فوق كل شيء، فتحجب ما
+  // يختبره هذا الملف من واجهات. وحدها اختبارات الترحيب تمرّر
+  // `welcomeSeen: false`؛ وكل ما عداها يمثّل زيارةً ليست الأولى.
+  if (welcomeSeen) {
+    window.localStorage.setItem('negev_welcome_seen', 'seen');
   }
 
   // The install hint is the one thing here that branches on the device, and it
@@ -6110,6 +6117,109 @@ async function run() {
       true,
       'nagging someone who already said no is the fastest way to lose them'
     );
+  });
+
+  /**
+   * شاشة الترحيب (#163) — مرة واحدة لكل جهاز، وفوق التغذية قبل اختيار
+   * المحافظة. العلم محلي في localStorage، فلا طلب شبكة ولا حساب. وهو لا
+   * يُكتب بمجرّد العرض بل عند الخروج، فلا تفوت الشاشة من أغلق الصفحة قبل أن
+   * يقرأها — نفس منطق إرشاد التثبيت أعلاه.
+   */
+  await test('شاشة الترحيب تظهر لزائر جديد: مخفية في الملف، بثلاث بطاقات و«تخطّي»', () => {
+    const dom = buildEnv({ welcomeSeen: false });
+    const modal = dom.window.document.getElementById('welcomeModal');
+    assert.ok(modal, 'expected index.html to ship #welcomeModal');
+    assert.strictEqual(modal.hidden, true, 'and to ship it hidden, like the install hint');
+
+    dom.window.initWelcome();
+
+    assert.strictEqual(modal.hidden, false, 'أول زيارة يجب أن ترى الترحيب');
+    assert.strictEqual(
+      dom.window.localStorage.getItem('negev_welcome_seen'),
+      null,
+      'العلم لا يُكتب بمجرّد العرض — بل عند الخروج'
+    );
+    assert.strictEqual(
+      modal.querySelectorAll('.welcome-feature').length,
+      3,
+      'ثلاث بطاقات: مناسبات بلدك، ألبومات الأعراس، دفتر النقوط'
+    );
+    assert.ok(/تخطّي/.test(modal.textContent), 'و«تخطّي» هو مخرجها');
+  });
+
+  await test('«تخطّي» يكتب negev_welcome_seen فلا تعود الشاشة في زيارة تالية', () => {
+    const first = buildEnv({ welcomeSeen: false });
+    first.window.initWelcome();
+    first.window.dismissWelcome();
+
+    assert.strictEqual(
+      first.window.document.getElementById('welcomeModal').hidden,
+      true,
+      'الضغطة تُغلقها'
+    );
+    assert.strictEqual(
+      first.window.localStorage.getItem('negev_welcome_seen'),
+      'seen',
+      'وتسجّل الصرف كي لا تعود'
+    );
+
+    // زيارة تالية بالعلم نفسه — هذا هو الزائر العائد فعلاً.
+    const second = buildEnv();
+    second.window.initWelcome();
+    assert.strictEqual(
+      second.window.document.getElementById('welcomeModal').hidden,
+      true,
+      'إظهارها ثانيةً هو بالضبط ما يمنعه العلَم'
+    );
+  });
+
+  await test('and the welcome is wired into page load, not merely defined', async () => {
+    // سلوكاً لا نصّاً: الإقلاع الحقيقي هو ما يفتحها. ذكرُ الاسم في تعليق لا
+    // يمرّ هنا، واستدعاءٌ ناقص من معالج DOMContentLoaded يسقط.
+    const dom = buildEnv({ welcomeSeen: false });
+    const modal = dom.window.document.getElementById('welcomeModal');
+    assert.strictEqual(modal.hidden, true, 'the markup ships it hidden');
+    await flushBoot();
+    assert.strictEqual(
+      modal.hidden,
+      false,
+      'the real DOMContentLoaded handler is what opens it'
+    );
+  });
+
+  await test('first visit on iPhone: the welcome comes first, and the install hint waits its turn', async () => {
+    const dom = buildEnv({ userAgent: IPHONE_UA, welcomeSeen: false });
+    const doc = dom.window.document;
+    await flushBoot();
+
+    assert.strictEqual(
+      doc.getElementById('welcomeModal').hidden,
+      false,
+      'first visit shows the welcome'
+    );
+    assert.strictEqual(
+      doc.getElementById('installHint').hidden,
+      true,
+      'the two first-run overlays must not sit on top of each other'
+    );
+
+    dom.window.dismissWelcome();
+    assert.strictEqual(
+      doc.getElementById('installHint').hidden,
+      false,
+      'once the welcome is dismissed, the iOS install hint gets its turn'
+    );
+  });
+
+  await test('الويب لا يعرض «قيّمنا» إطلاقاً — التقييم في التطبيق وحده', () => {
+    for (const [name, text] of [
+      ['app.js', APP_JS], ['index.html', INDEX_HTML_RAW], ['styles.css', STYLES_CSS_RAW]
+    ]) {
+      assert.ok(!/قيّمنا/.test(text), `expected no rate-us prompt in web/${name}`);
+      // أي حوار تقييم يحتاج رابط المتجر نفسه، فلا يكفي غياب الكلمة.
+      assert.ok(!/play\.google\.com/i.test(text), `expected no Play-store rating link in web/${name}`);
+      assert.ok(!/rate[_-]?us|RATE_US_COOLDOWN/i.test(text), `expected no rate-us code in web/${name}`);
+    }
   });
 
   console.log('\nNews ticker & support button (issue #85 batch 6b)');

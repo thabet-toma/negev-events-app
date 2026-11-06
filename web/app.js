@@ -269,7 +269,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initKindFilter();
   updateFloatingFilterLabel();
   initAppDownload();
-  initInstallHint();
+  // الترحيب أولاً: إرشاد التثبيت لا يُفتح فوقه، بل بعد «تخطّي» (dismissWelcome).
+  if (!initWelcome()) initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
   fetchLiveStatus();
@@ -513,6 +514,51 @@ function dismissInstallHint() {
   } catch (e) {
     // لا شيء يُحفظ في التصفّح الخاص، والصرف يبقى نافذاً لهذه الجلسة على الأقل.
   }
+}
+
+/**
+ * شاشة الترحيب (#163) — مرة واحدة لكل جهاز، وقبل أي ورقة أو اختيار محافظة.
+ *
+ * نفس نمط إرشاد التثبيت أعلاه: علامة محلية بلا طلب شبكة، تُقرأ عند الإقلاع
+ * وحده. ولا تُكتب بمجرّد العرض بل عند ضغط «تخطّي»، فلا تفوت الشاشة من أغلق
+ * الصفحة قبل أن يقرأها.
+ */
+const WELCOME_SEEN_KEY = 'negev_welcome_seen';
+
+/** هل صرف الزائر شاشة الترحيب سابقاً؟ */
+function hasSeenWelcome() {
+  try {
+    return localStorage.getItem(WELCOME_SEEN_KEY) === 'seen';
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * يفتح شاشة الترحيب إن لم تُصرف بعد، ويعيد هل فُتحت الآن — الإقلاع يستعمل
+ * الجواب كي يؤجّل إرشاد التثبيت إلى ما بعدها.
+ */
+function initWelcome() {
+  const modal = document.getElementById('welcomeModal');
+  if (!modal) return false;
+  if (hasSeenWelcome()) return false;
+  modal.hidden = false;
+  // هذه الشاشة عُرضت في هذا الإقلاع: إرشاد التثبيت ينتظر انصرافها، فلا ورقتان
+  // فوق بعضهما.
+  return true;
+}
+
+/** إغلاق الترحيب — يُستدعى من زرّ «تخطّي» في index.html. */
+function dismissWelcome() {
+  const modal = document.getElementById('welcomeModal');
+  if (modal) modal.hidden = true;
+  try {
+    localStorage.setItem(WELCOME_SEEN_KEY, 'seen');
+  } catch (e) {
+    // لا شيء يُحفظ في التصفّح الخاص، والإغلاق يبقى نافذاً لهذه الجلسة على الأقل.
+  }
+  // دوره الآن: كانت الشاشة تحجب موضعه في الزيارة الأولى.
+  initInstallHint();
 }
 
 /** حجم الملف من ترويسة HEAD — يعود فارغاً بهدوء إن تعذّر. */

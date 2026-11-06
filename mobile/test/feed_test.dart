@@ -17,6 +17,7 @@ import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/region_store.dart';
+import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/event_card.dart';
 import 'package:negev_events/widgets/motion.dart';
@@ -1520,6 +1521,8 @@ void main() {
           RegionStore.storageKey: '2',
           // ورقة أول تشغيل سُئلت من قبل — وإلا غطّت الحالة الفارغة عند الإقلاع.
           regionOnboardedKey: true,
+          // وشاشة الترحيب (#163) سبقت أيضاً، فلا تكون هي ما يغطي الحالة الفارغة.
+          welcomeSeenKey: true,
         });
         final requests = <Uri>[];
         final api = feedScreenApi(requests: requests);
@@ -1577,6 +1580,7 @@ void main() {
         SharedPreferences.setMockInitialValues({
           RegionStore.storageKey: '2',
           regionOnboardedKey: true,
+          welcomeSeenKey: true,
         });
         final requests = <Uri>[];
         final api = feedScreenApi(requests: requests);

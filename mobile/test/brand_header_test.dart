@@ -12,6 +12,7 @@ import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
+import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -98,7 +99,7 @@ Future<void> _pumpShell(
     tester.view.resetDevicePixelRatio();
   });
 
-  SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+  SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
 
   await tester.pumpWidget(
     AppServices(

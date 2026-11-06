@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../screens/account_screen.dart';
+import '../state/rate_us.dart';
 import '../theme.dart';
 import 'async_view.dart';
+import 'rate_us_prompt.dart';
 
 /// حاجز دخول موحّد — نفس النمط المستعمل في شاشة التفاصيل وإضافة مناسبة.
 Future<void> openSignInGate(BuildContext context, String message) async {
@@ -64,6 +66,9 @@ Future<void> openCongratulateSheet(
   final messageController = TextEditingController();
   var sending = false;
 
+  /// أُرسلت التبريكة فعلاً؟ الحوار بعد إغلاق الورقة لا فوقها.
+  var sent = false;
+
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -112,13 +117,18 @@ Future<void> openCongratulateSheet(
 
                         setSheetState(() => sending = true);
                         try {
-                          await AppServices.of(sbContext)
-                              .api
-                              .congratulate(eventId, message: message);
+                          // نجاح التبريكة وحده لحظة إيجابية (تذكرة #163):
+                          // الفشل يرمي قبل العدّ.
+                          await runPositiveMoment(
+                            () => AppServices.of(sbContext)
+                                .api
+                                .congratulate(eventId, message: message),
+                          );
                           if (sheetContext.mounted) {
                             Navigator.of(sheetContext).pop();
                           }
                           onSuccess();
+                          sent = true;
                         } catch (error) {
                           if (sbContext.mounted) {
                             showMessage(sbContext, '$error', isError: true);
@@ -137,6 +147,10 @@ Future<void> openCongratulateSheet(
   );
 
   messageController.dispose();
+
+  // الورقة أُغلقت الآن، فالحوار لا يفتح فوق حقلٍ اختفى — ولا يفتح أصلاً
+  // إن لم تُرسل التبريكة.
+  if (sent && context.mounted) await maybeShowRateUsPrompt(context);
 }
 
 /// بطاقة رسالة واحدة — مشتركة بين شاشة التفاصيل وورقة عرض الرسائل السريعة.

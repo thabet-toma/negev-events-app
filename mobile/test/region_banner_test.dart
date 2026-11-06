@@ -15,6 +15,7 @@ import 'package:negev_events/state/places_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
 import 'package:negev_events/state/region_store.dart';
+import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:negev_events/widgets/region_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -365,7 +366,7 @@ void main() {
 
   group('شريط التوسّع في التغذية — يتبع المحافظة', () {
     testWidgets('النقب الأصلية: لا شريط ولا شيء يحجب التغذية', (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(_DiscoveryServer());
 
       await _boot(tester, _app(services, const HomeShell()));
@@ -379,6 +380,8 @@ void main() {
     testWidgets('اختيار طولكرم: عنوان الشريط وسطر أرقامه', (tester) async {
       SharedPreferences.setMockInitialValues({
         regionOnboardedKey: true,
+        // شاشة الترحيب (#163) سبقت أيضاً، فلا تحجب قياسات الشريط.
+        welcomeSeenKey: true,
         RegionStore.storageKey: '2',
       });
       final services = _services(_DiscoveryServer());
@@ -405,7 +408,7 @@ void main() {
 
     testWidgets('اللد والرملة ويافا: ٣ بلدات ودعوة أول مناسبة، بلا صفر',
         (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(
         _DiscoveryServer(
           regions: const [_originRegion, _destinationRegion, _lodRegion],
@@ -435,7 +438,7 @@ void main() {
 
     testWidgets('× يُخفي ويسجّل لتلك المحافظة وحدها، ويبقى بعد إعادة البناء',
         (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(
         _DiscoveryServer(
           regions: const [_originRegion, _destinationRegion, _lodRegion],
@@ -476,7 +479,7 @@ void main() {
     });
 
     testWidgets('صفر مناسبات: سطر البلدات بلا صفر وبلا دعوة مكرّرة', (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(
         _DiscoveryServer(
           regions: [
@@ -508,7 +511,7 @@ void main() {
 
     testWidgets('مناسبة معتمدة واحدة: رقم المناسبات لا عدد البلدات',
         (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(
         _DiscoveryServer(
           regions: [
@@ -536,7 +539,7 @@ void main() {
     });
 
     testWidgets('بلدان الخادم غائبة: لا شريط ولا رقم مخترع', (tester) async {
-      SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
+      SharedPreferences.setMockInitialValues({regionOnboardedKey: true, welcomeSeenKey: true});
       final services = _services(_DiscoveryServer(townsFail: true));
       await services.regions.select(2, signedIn: false);
 
