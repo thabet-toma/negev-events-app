@@ -24,6 +24,17 @@ function toCoordinate(value) {
 }
 
 /**
+ * شرط «المناسبة الظاهرة للعامة» نفسه المُعرَّف في `events.service.js`، ويُطلب
+ * هنا **كسولاً** لأن ذاك الملف يشترط هذا الملف عند التحميل، فطلبٌ في الأعلى
+ * يصنع دورة تُقرأ فيها القطعة قبل تعريفها (نفس سبب `albums.service.js`).
+ * ولا نسخة ثانية من الشرط هنا: ما تضيفه #166/#167 إلى القطعة يجب أن يصل
+ * عدّاد المحافظة كما يصل التغذية، وإلا عرض المنتقي رقماً لا يطابق المعروض.
+ */
+function publicEventVisibleSql() {
+  return require('./events.service').PUBLIC_EVENT_VISIBLE_SQL_E;
+}
+
+/**
  * Active towns in display order: `{ id, region_id, name, latitude, longitude, position }`,
  * coordinates as numbers (or null for the villages catch-all).
  */
@@ -137,7 +148,7 @@ async function listDiscoveryRegions() {
     db.query(
       `SELECT r.id, r.name, r.is_active, r.latitude, r.longitude, r.map_zoom, r.position,
               (SELECT COUNT(*) FROM towns t WHERE t.region_id = r.id AND t.is_active = 1) AS towns_count,
-              (SELECT COUNT(*) FROM events e WHERE e.region_id = r.id AND e.status = 'approved') AS events_count
+              (SELECT COUNT(*) FROM events e WHERE e.region_id = r.id AND ${publicEventVisibleSql()}) AS events_count
          FROM regions r
         ORDER BY r.position ASC, r.id ASC`
     ),

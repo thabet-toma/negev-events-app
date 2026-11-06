@@ -70,6 +70,36 @@ const EVENT_SPAN_START_SQL_E =
   + ' COALESCE(e.youth_party_date, e.event_date),'
   + ' COALESCE((SELECT MIN(d.day_date) FROM event_days d WHERE d.event_id = e.id), e.event_date))';
 
+/**
+ * شرط «مناسبة ظاهرة للعامة» — **القطعة الواحدة** التي تكتبها كل قراءة عامة بدل
+ * نسختها اليدوية، والموضع الوحيد الذي ستضيف فيه #166 («بالرابط فقط») و#167
+ * («النشر المجدول») شرطاً واحداً بدل تعديل اثني عشر موضعاً.
+ *
+ * **تُستعمل** في كل قراءة يراها الجمهور بلا حساب: التغذية (`listPublicEvents`)،
+ * والخريطة (`listMapPoints`)، والإعلانات الحية (`listLiveAnnouncements`)،
+ * وصفحة المشاركة بالمعرّف (`getShareEvent` — وهي قراءة عامة بوابتها الوحيدة
+ * هذا الشرط)، و«مناسبات أخرى» (`listRelatedEvents`)، وخريطة الموقع
+ * (`listSitemapEvents`)، وعدّ المناسبات لكل بلدة (`townStats`) ولكل محافظة
+ * (`listDiscoveryRegions` في `towns.service.js`).
+ *
+ * **ولا تُستعمل** خارجها ولو كتب الموضع `status = 'approved'` بيده: التفصيل
+ * بالمعرّف (`getEventDetails` لا يقيّد الحالة أصلاً، فليس موضعاً لهذه البوابة)،
+ * وطابور الأدمن (`listEvents` في `admin.service.js` — يقرأ الحالة المطلوبة
+ * نفسها، لا بوابة ظهور)، ومرشّحو حارس التكرار (`findPossibleDuplicates` يقارن
+ * المعتمدة والمعلّقة معاً)، و«قائمتي» الخاصة بالمستخدم (`listMyReminders`)،
+ * وتحقق «ذكّرني» الداخلي (`setReminder`)، وعدّاد التبريكات — كلها تقرأ الحالة
+ * لسبب آخر لا لبوابة ظهور للجمهور.
+ *
+ * **ومرشّح النسخة (`legacyOnly` / `X-App-Version`) خارجها عمداً:** شرطه يعتمد
+ * على **الطلب** لا على الصف — يُبنى من `occasionTypes.getLegacyTypeIds()` وقت
+ * النداء، فيبقى في مكانه مع بقية الشروط الديناميكية. والنسختان هنا
+ * (`_EVENTS` و`_E`) على اصطلاح `EVENT_SPAN_*` نفسه: الأولى لاسم الجدول كاملاً
+ * والثانية للمُستعار `e`؛ كلتاهما سلسلة ثابتة بلا قيمة مُدرَجة ولا اسم مُمرَّر
+ * (CLAUDE.md: لا دمج نصوص SQL).
+ */
+const PUBLIC_EVENT_VISIBLE_SQL_EVENTS = "events.status = 'approved'";
+const PUBLIC_EVENT_VISIBLE_SQL_E = "e.status = 'approved'";
+
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
   return term.replace(/[\\%_]/g, char => `\\${char}`);
@@ -404,7 +434,7 @@ async function listMyReminders(userId, { legacyOnly = false } = {}) {
  */
 async function listLiveAnnouncements({ legacyOnly = false, regionId = null } = {}) {
   const conditions = [
-    'a.is_current = 1', "events.status = 'approved'",
+    'a.is_current = 1', PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
     `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
   const params = [];
@@ -598,7 +628,7 @@ async function listPublicEvents({
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
 
-  const conditions = ["status = 'approved'"];
+  const conditions = [PUBLIC_EVENT_VISIBLE_SQL_EVENTS];
   const params = [];
 
   if (regionId !== null && regionId !== undefined) {
@@ -796,7 +826,7 @@ async function listMapPoints({
   towns = null, occasionTypeIds = null, villageIds = null, legacyOnly = false, regionId = null
 } = {}) {
   const conditions = [
-    "status = 'approved'", 'latitude IS NOT NULL', 'longitude IS NOT NULL',
+    PUBLIC_EVENT_VISIBLE_SQL_EVENTS, 'latitude IS NOT NULL', 'longitude IS NOT NULL',
     `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
   const params = [];
@@ -1887,7 +1917,14 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * download button (server/src/routes/share.routes.js). Returns `null` for a
  * non-`approved` status or a non-existent id alike: the route must not be
  * able to tell those two apart from this function's result, any more than
- * from its own response. `is_expired` reuses the exact span rule
+ * from its own response.
+ *
+ * **وهو قراءة عامة بالمعرّف، فبوابته من `PUBLIC_EVENT_VISIBLE_SQL_EVENTS` لا
+ * من نصّ مكتوب هنا:** الصفحة تُفتح بلا حساب، فأي شرط ظهور يُضاف إلى القطعة
+ * (#166/#167) يجب أن يصلها كما يصل التغذية — ولو بقي `approved` مكتوباً بيدها
+ * لصارت القراءة العامة الوحيدة التي تفلت من التعديل.
+ *
+ * `is_expired` reuses the exact span rule
  * (`span_end < CURDATE()`, the EVENT_SPAN_* constants) every other
  * upcoming/archive query in this file uses, computed in SQL rather than by a
  * second, JS-side copy of the same rule.
@@ -1910,7 +1947,7 @@ async function getShareEvent(eventId) {
             (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_expired
        FROM events
        LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
-      WHERE events.id = ? AND events.status = 'approved'`,
+      WHERE events.id = ? AND ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS}`,
     [eventId]
   );
   if (!row) return null;
@@ -1951,7 +1988,7 @@ async function listRelatedEvents({ town = null, familyClan = null, excludeId = n
   if (!town && !familyClan) return [];
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 6, 1), 6);
 
-  const conditions = ["events.status = 'approved'"];
+  const conditions = [PUBLIC_EVENT_VISIBLE_SQL_EVENTS];
   const params = [];
 
   const placeConditions = [];
@@ -1991,7 +2028,7 @@ async function listRelatedEvents({ town = null, familyClan = null, excludeId = n
 /** All approved events for sitemap generation — only id and lastmod. */
 async function listSitemapEvents() {
   const rows = await db.query(
-    "SELECT id, updated_at FROM events WHERE status = 'approved' ORDER BY updated_at DESC"
+    `SELECT id, updated_at FROM events WHERE ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS} ORDER BY updated_at DESC`
   );
   return rows.map(r => ({
     id: r.id,
@@ -2004,7 +2041,7 @@ async function townStats() {
   return db.query(
     `SELECT town, COUNT(*) AS events_count
        FROM events
-      WHERE status = 'approved'
+      WHERE ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS}
       GROUP BY town
       ORDER BY events_count DESC`
   );
@@ -2028,6 +2065,8 @@ module.exports = {
   EVENT_SPAN_END_SQL_EVENTS,
   EVENT_SPAN_END_SQL_E,
   EVENT_SPAN_START_SQL_E,
+  PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
+  PUBLIC_EVENT_VISIBLE_SQL_E,
   escapeLike,
   honoreesForEvents,
   listAmendments,
