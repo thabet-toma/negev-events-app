@@ -94,6 +94,16 @@ let newsGeneral = false; // true = الوجه العام (بعد زرّ «أخب
 let newsRegionName = ''; // اسم محافظة الزائر كما أعاده /api/news
 let newsLoading = false;
 
+// «حاسبات «خدماتنا» (#190)» — خمس حاسبات تحت كبسات المنصّات في الوجهة نفسها.
+// الحساب كلّه في هذا الملف على الجهاز: لا `apiFetch` ولا `fetch` ولا حفظ، فلا
+// شبكة ولا حساب. لوحة واحدة ظاهرة في كل لحظة (openCalculator)، ونتائجها تُكتب
+// نصاً في لوحاتها.
+const CALCULATOR_KEYS = ['budget', 'split', 'guests', 'countdown', 'hijri'];
+const CALC_ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const CALC_GREGORIAN_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+const CALC_HIJRI_MONTHS = ['محرم', 'صفر', 'ربيع الأول', 'ربيع الآخر', 'جمادى الأولى', 'جمادى الآخرة', 'رجب', 'شعبان', 'رمضان', 'شوال', 'ذو القعدة', 'ذو الحجة'];
+const CALC_WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
 
 // Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
 let currentPage = 1;
@@ -4437,6 +4447,414 @@ function openAddEventModal() {
 /** وجهة «خدماتنا» — صفحة ثابتة بلا نداء شبكة: بطاقاتها الثلاث وسوم في index.html. */
 function openOurServices() {
   switchTab('tabOurServices');
+}
+
+// 10b. حاسبات «خدماتنا» (تذكرة #190) — خمس حاسبات تعمل في الجهاز وحده:
+// ميزانية العرس، تقسيم المصاريف، عدد المعازيم، العدّ التنازلي، والتاريخ الهجري.
+// لا نداء /api ولا fetch هنا إطلاقاً، ولا حفظ: كل مدخل يبقى في الصفحة وحدها،
+// فيعمل الوجه كله بلا شبكة وبلا خادم. وكل حاسبة تتحقّق من مدخلاتها بنفسها
+// وتعود برسالة عربية واحدة في نتيجتها: نجاحاً أو خطأً — ولا NaN ولا Infinity.
+
+/** يحوّل الأرقام اللاتينية في نصّ إلى نظيراتها العربية الهندية. */
+function calcDigits(text) {
+  return String(text).replace(/[0-9]/g, digit => CALC_ARABIC_DIGITS[Number(digit)]);
+}
+
+/** أرقام عربية هندية مع فاصل آلاف `٬` (والمشروع كله يكتب أرقامه هكذا). */
+function calcGroupDigits(digits) {
+  return String(digits).replace(/\B(?=(\d{3})+(?!\d))/g, '٬');
+}
+
+/** الأرقام العربية الهندية في نصّ إلى لاتينية، كي يقبل الحقل ما يكتبه العربي. */
+function calcLatinDigits(text) {
+  return String(text).replace(/[٠-٩]/g, char => String(CALC_ARABIC_DIGITS.indexOf(char)));
+}
+
+/** عدد صحيح مهيّأ للعرض: ٢٤٠، ١٬٢٥٠. */
+function calcCount(value) {
+  return calcDigits(calcGroupDigits(String(value)));
+}
+
+/** مبلغ بالأغورة (عدد صحيح) إلى نصّ بالشيكل: ٢٬٥٠٠ ₪ أو ٣٣٫٥٠ ₪. */
+function calcMoney(cents) {
+  const value = Math.max(0, Math.round(cents));
+  const shekels = calcGroupDigits(String(Math.floor(value / 100)));
+  const agorot = value % 100;
+  return `${calcDigits(agorot ? `${shekels}٫${String(agorot).padStart(2, '0')}` : shekels)} ₪`;
+}
+
+/**
+ * صيغة العدد في العربية: مفرد ومثنّى وجمع قِلّة (٣-١٠) وجمع كثرة — بصيغة
+ * الجرّ لأن كل استعمالاتها تلي حرفاً («على ٣ بنود»، «بين شخصين»).
+ */
+function calcCountPhrase(count, forms) {
+  if (count === 1) return forms.one;
+  if (count === 2) return forms.two;
+  if (count >= 3 && count <= 10) return `${calcDigits(count)} ${forms.few}`;
+  return `${calcDigits(count)} ${forms.many}`;
+}
+
+/** أيام: يوم واحد، يومين، ٣ أيام، ٤٥ يوماً. */
+function calcDaysPhrase(days) {
+  if (days === 1) return 'يوم واحد';
+  if (days === 2) return 'يومين';
+  if (days >= 3 && days <= 10) return `${calcDigits(days)} أيام`;
+  return `${calcDigits(days)} يوماً`;
+}
+
+/** ١٠ أبريل ٢٠٢٤ — بلا اسم اليوم، فاليوم يُذكر حيث يلزم وحده. */
+function calcGregorianDate(date) {
+  return `${calcDigits(date.getDate())} ${CALC_GREGORIAN_MONTHS[date.getMonth()]} ${calcDigits(date.getFullYear())}`;
+}
+
+/**
+ * يقرأ مبلغاً مكتوباً ويعيده أغورة: أرقام لاتينية أو عربية، وفاصلا آلاف
+ * `٬` و`,` يُتجاهلان. يعيد `{ cents }` أو `{ error }` برسالة عربية — ورسالة
+ * الفراغ تختلف عن رسالة النصّ والسالب كي يعرف المستخدم ما يصحّح.
+ */
+function parseCalcAmount(raw) {
+  const text = calcLatinDigits(String(raw == null ? '' : raw).trim()).replace(/[٬,،\s]/g, '');
+  if (!text) return { error: 'اكتب المبلغ' };
+  if (text.startsWith('-')) return { error: 'المبلغ لا يكون سالباً' };
+  if (!/^\d+(\.\d+)?$/.test(text)) return { error: 'المبلغ بالأرقام فقط (مثل ١٥٠٠)' };
+  const value = Number(text);
+  // حدّ عملي يمنع Infinity وتجاوز دقّة الأعداد الصحيحة في JavaScript.
+  if (!Number.isFinite(value) || value > 100000000) return { error: 'المبلغ كبير جداً' };
+  return { cents: Math.round(value * 100) };
+}
+
+/**
+ * يقرأ عدداً صحيحاً غير سالب. الفراغ صفر مسموح (حقول التقدير اختيارية)، وما
+ * عداه يُرفض برسالة تحمل اسم الحقل نفسه.
+ */
+function parseCalcCount(raw, label) {
+  const text = calcLatinDigits(String(raw == null ? '' : raw).trim()).replace(/[٬,،\s]/g, '');
+  if (!text) return { value: 0 };
+  if (text.startsWith('-')) return { error: `${label}: العدد لا يكون سالباً` };
+  if (!/^\d+$/.test(text)) return { error: `${label}: العدد بالأرقام فقط` };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value > 100000) return { error: `${label}: العدد كبير جداً` };
+  return { value };
+}
+
+/**
+ * يقرأ `YYYY-MM-DD` ويتحقّق من وجود اليوم نفسه في التقويم: `2026-02-31` يعود
+ * على `Date` يوم ٣ مارس، فيُكشف بمقارنة اليوم والشهر بعد الإنشاء. والفراغ
+ * رسالته مختلفة عن التاريخ المشوّه وعن غير الموجود.
+ */
+function parseCalcDate(raw) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return { error: 'اختر تاريخاً أولاً من التقويم' };
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return { error: 'التاريخ غير صحيح — اختره من التقويم' };
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return { error: 'هذا التاريخ غير موجود' };
+  }
+  return { date };
+}
+
+/** يكتب نتيجة الحاسبة نصاً — لا HTML، فأسماء المستخدمين لا تُفسَّر وسوماً. */
+function setCalcResult(element, message, { error = false } = {}) {
+  if (!element) return;
+  element.textContent = message;
+  element.classList.toggle('is-error', error);
+}
+
+/** يقرأ قيمة حقل بالمعرّف، وفارغ إن لم يكن في الصفحة. */
+function readCalcInput(id) {
+  const input = document.getElementById(id);
+  return input ? input.value : '';
+}
+
+/** يفتح لوحة حاسبة واحدة ويطفئ البقية — الرقاقة النشِطة وحدها `aria-selected`. */
+function openCalculator(key) {
+  if (!CALCULATOR_KEYS.includes(key)) return;
+  CALCULATOR_KEYS.forEach(name => {
+    const suffix = name.charAt(0).toUpperCase() + name.slice(1);
+    const panel = document.getElementById(`calcPanel${suffix}`);
+    const tab = document.getElementById(`calcTab${suffix}`);
+    const selected = name === key;
+    if (panel) panel.hidden = !selected;
+    if (tab) tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+  });
+  // حقل التاريخ يبدأ بيوم اليوم عند أول فتح — والحاسبة تقرأ ما فيه وحده.
+  const dateInputId = key === 'countdown' ? 'calcCountdownDate' : (key === 'hijri' ? 'calcHijriDate' : '');
+  if (dateInputId) {
+    const dateInput = document.getElementById(dateInputId);
+    if (dateInput && !dateInput.value) dateInput.value = isoLocalDay(new Date());
+  }
+}
+
+/** صفّ بند جديد في ميزانية العرس — القالب ثابت، وقيمه تُقرأ وقت الحساب. */
+function addCalcBudgetRow() {
+  const box = document.getElementById('calcBudgetRows');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.className = 'calc-row';
+  row.innerHTML = '<input type="text" class="calc-input calc-budget-name" placeholder="اسم البند" aria-label="اسم البند">'
+    + '<input type="text" inputmode="decimal" class="calc-input calc-budget-amount" placeholder="المبلغ (₪)" aria-label="مبلغ البند">'
+    + '<button type="button" class="calc-row-remove" onclick="removeCalcRow(this)" aria-label="حذف البند"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>';
+  box.appendChild(row);
+  const input = row.querySelector('.calc-budget-name');
+  if (input) input.focus();
+}
+
+/** صفّ شخص جديد في تقسيم المصاريف. */
+function addCalcSplitRow() {
+  const box = document.getElementById('calcSplitRows');
+  if (!box) return;
+  const row = document.createElement('div');
+  row.className = 'calc-row';
+  row.innerHTML = '<input type="text" class="calc-input calc-split-name" placeholder="اسم الشخص" aria-label="اسم الشخص">'
+    + '<input type="text" inputmode="decimal" class="calc-input calc-split-paid" placeholder="دفع (₪)" aria-label="ما دفعه الشخص">'
+    + '<button type="button" class="calc-row-remove" onclick="removeCalcRow(this)" aria-label="حذف الشخص"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>';
+  box.appendChild(row);
+  const input = row.querySelector('.calc-split-name');
+  if (input) input.focus();
+}
+
+/** حذف صفّ من أي قائمة بنود — الزرّ نفسه يعرف صفّه. */
+function removeCalcRow(button) {
+  const row = button && button.closest ? button.closest('.calc-row') : null;
+  if (row) row.remove();
+}
+
+/** ١ — ميزانية العرس: مجموع البنود، بلا سقف ميزانية هنا (بند وبند فقط). */
+function calculateBudget() {
+  const box = document.getElementById('calcBudgetRows');
+  const result = document.getElementById('calcBudgetResult');
+  if (!box || !result) return;
+
+  const rows = Array.from(box.querySelectorAll('.calc-row'));
+  if (!rows.length) {
+    setCalcResult(result, 'أضف بنداً واحداً على الأقل — لا شيء يُجمع حتى الآن.', { error: true });
+    return;
+  }
+
+  let totalCents = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    const nameInput = rows[index].querySelector('.calc-budget-name');
+    const amountInput = rows[index].querySelector('.calc-budget-amount');
+    const name = nameInput ? nameInput.value.trim() : '';
+    const label = `الصف ${calcDigits(index + 1)}`;
+    if (!name) {
+      setCalcResult(result, `${label}: اكتب اسم البند أولاً.`, { error: true });
+      return;
+    }
+    const amount = parseCalcAmount(amountInput ? amountInput.value : '');
+    if (amount.error) {
+      setCalcResult(result, `${label} «${name}»: ${amount.error}.`, { error: true });
+      return;
+    }
+    totalCents += amount.cents;
+  }
+
+  const count = calcCountPhrase(rows.length, { one: 'بند واحد', two: 'بندين', few: 'بنود', many: 'بنداً' });
+  setCalcResult(result, `مجموع ميزانية العرس ${calcMoney(totalCents)} على ${count}.`);
+}
+
+/**
+ * يسوّي مصاريف مجموعة أشخاص دفعوا مبالغ مختلفة: المجموع يُقسَّم بالتساوي، ثم
+ * أقلّ عدد تحويلات ممكن (المدين الأكبر إلى الدائن الأكبر حتى ينتهي الطرفان).
+ *
+ * الحساب بالأغورة (أعداد صحيحة) كي لا يضيع أوغر واحد في التقريب: الباقي
+ * يُضاف أوغراً واحداً لأوائل الصفوف، فيبقى مجموع الحصص مساوياً للمجموع تماماً.
+ * يعيد `{ totalCents, shareCents, transfers }` أو `{ error }` برسالة عربية.
+ */
+function splitSettlement(people) {
+  const totalCents = people.reduce((sum, person) => sum + person.paidCents, 0);
+  if (!people.length || totalCents <= 0) {
+    return { error: 'مجموع ما دفعه الجميع صفر — لا شيء يُقسَّم.' };
+  }
+
+  const base = Math.floor(totalCents / people.length);
+  const remainder = totalCents % people.length;
+  const creditors = [];
+  const debtors = [];
+  people.forEach((person, index) => {
+    const share = base + (index < remainder ? 1 : 0);
+    const difference = person.paidCents - share;
+    if (difference > 0) creditors.push({ name: person.name, cents: difference });
+    else if (difference < 0) debtors.push({ name: person.name, cents: -difference });
+  });
+
+  creditors.sort((left, right) => right.cents - left.cents);
+  debtors.sort((left, right) => right.cents - left.cents);
+
+  const transfers = [];
+  let debtorIndex = 0;
+  let creditorIndex = 0;
+  while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
+    const paid = Math.min(debtors[debtorIndex].cents, creditors[creditorIndex].cents);
+    if (paid > 0) {
+      transfers.push({ from: debtors[debtorIndex].name, to: creditors[creditorIndex].name, cents: paid });
+    }
+    debtors[debtorIndex].cents -= paid;
+    creditors[creditorIndex].cents -= paid;
+    if (debtors[debtorIndex].cents === 0) debtorIndex += 1;
+    if (creditors[creditorIndex].cents === 0) creditorIndex += 1;
+  }
+
+  return { totalCents, shareCents: base, transfers };
+}
+
+/** ٢ — تقسيم المصاريف: يتحقّق من الصفوف ثم يعرض خطة التسوية نصاً. */
+function calculateSplit() {
+  const box = document.getElementById('calcSplitRows');
+  const result = document.getElementById('calcSplitResult');
+  if (!box || !result) return;
+
+  const rows = Array.from(box.querySelectorAll('.calc-row'));
+  if (!rows.length) {
+    setCalcResult(result, 'أضف شخصاً واحداً على الأقل.', { error: true });
+    return;
+  }
+  if (rows.length === 1) {
+    setCalcResult(result, 'شخص واحد فقط — لا شيء يُقسَّم عليه.', { error: true });
+    return;
+  }
+
+  const people = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const nameInput = rows[index].querySelector('.calc-split-name');
+    const paidInput = rows[index].querySelector('.calc-split-paid');
+    const name = nameInput ? nameInput.value.trim() : '';
+    const label = `الصف ${calcDigits(index + 1)}`;
+    if (!name) {
+      setCalcResult(result, `${label}: اكتب اسم الشخص أولاً.`, { error: true });
+      return;
+    }
+    const amount = parseCalcAmount(paidInput ? paidInput.value : '');
+    if (amount.error) {
+      setCalcResult(result, `${label} «${name}»: ${amount.error}.`, { error: true });
+      return;
+    }
+    people.push({ name, paidCents: amount.cents });
+  }
+
+  const plan = splitSettlement(people);
+  if (plan.error) {
+    setCalcResult(result, plan.error, { error: true });
+    return;
+  }
+
+  const peoplePhrase = calcCountPhrase(people.length, { one: 'شخص واحد', two: 'شخصين', few: 'أشخاص', many: 'شخصاً' });
+  const summary = `مجموع المصاريف ${calcMoney(plan.totalCents)} على ${peoplePhrase} — حصّة كل شخص نحو ${calcMoney(plan.shareCents)}.`;
+  const settlement = plan.transfers.length
+    ? `التسوية: ${plan.transfers.map(transfer => `${transfer.from} يدفع إلى ${transfer.to} ${calcMoney(transfer.cents)}`).join(' · ')}.`
+    : 'لا تسوية لازمة — كلٌّ دفع حصّته.';
+  setCalcResult(result, `${summary} ${settlement}`);
+}
+
+/** ٣ — عدد المعازيم: عائلات × متوسطها + طاولات × متوسطها، وحقل فارغ صفر. */
+function calculateGuests() {
+  const result = document.getElementById('calcGuestsResult');
+  if (!result) return;
+
+  const families = parseCalcCount(readCalcInput('calcGuestsFamilies'), 'عدد العائلات');
+  if (families.error) return setCalcResult(result, families.error, { error: true });
+  const perFamily = parseCalcCount(readCalcInput('calcGuestsPerFamily'), 'متوسط المدعوين لكل عائلة');
+  if (perFamily.error) return setCalcResult(result, perFamily.error, { error: true });
+  const tables = parseCalcCount(readCalcInput('calcGuestsTables'), 'عدد الطاولات');
+  if (tables.error) return setCalcResult(result, tables.error, { error: true });
+  const perTable = parseCalcCount(readCalcInput('calcGuestsPerTable'), 'الجالسون على الطاولة');
+  if (perTable.error) return setCalcResult(result, perTable.error, { error: true });
+
+  const fromFamilies = families.value * perFamily.value;
+  const fromTables = tables.value * perTable.value;
+  const total = fromFamilies + fromTables;
+  if (total <= 0) {
+    setCalcResult(result, 'أدخل عدداً أكبر من صفر في أحد الحقول — لا شيء يُقدَّر.', { error: true });
+    return;
+  }
+
+  const parts = [];
+  if (fromFamilies > 0) {
+    parts.push(`العائلات ${calcCount(families.value)} × ${calcCount(perFamily.value)} = ${calcCount(fromFamilies)}`);
+  }
+  if (fromTables > 0) {
+    parts.push(`الطاولات ${calcCount(tables.value)} × ${calcCount(perTable.value)} = ${calcCount(fromTables)}`);
+  }
+  setCalcResult(result, `تقدير عدد المعازيم: ${calcCount(total)} — ${parts.join('، و')}.`);
+}
+
+/** ٤ — العدّ التنازلي: أيام تبقّت (أو مضت) بين اليوم المحلي وتاريخ مختار. */
+function calculateCountdown() {
+  const result = document.getElementById('calcCountdownResult');
+  if (!result) return;
+
+  const parsed = parseCalcDate(readCalcInput('calcCountdownDate'));
+  if (parsed.error) return setCalcResult(result, parsed.error, { error: true });
+
+  const chosen = parsed.date;
+  const now = new Date();
+  // منتصف ليل اليومين بتوقيت UTC: فروق التواريخ لا تتأثّر بساعة الصيف.
+  const days = Math.round(
+    (Date.UTC(chosen.getFullYear(), chosen.getMonth(), chosen.getDate())
+      - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000
+  );
+  const dateText = `الموعد يوم ${CALC_WEEKDAYS[chosen.getDay()]} ${calcGregorianDate(chosen)}`;
+
+  if (days > 0) setCalcResult(result, `بقي ${calcDaysPhrase(days)} على الموعد — ${dateText}.`);
+  else if (days === 0) setCalcResult(result, `الموعد اليوم — ${dateText}.`);
+  else setCalcResult(result, `مضى الموعد منذ ${calcDaysPhrase(-days)} (${dateText}).`);
+}
+
+/**
+ * ٥ — التاريخ الهجري: تقويم أم القرى حسابياً بالخوارزمية الكويتية الجدولية —
+ * يوم يولياني (Julian Day Number) من الميلادي، ثم تحويله هجرياً بدورة ٣٠ سنة
+ * فيها ١١ سنة كبيسة، بالمعادلات الجدولية المعروفة (l و n و j في الدالة).
+ * النتيجة تقريبية بيوم على الأكثر، والتنبيه «تقريبي ±يوم» ظاهر في اللوحة.
+ */
+function hijriFromJulianDay(julianDay) {
+  const l = julianDay - 1948440 + 10632;
+  const n = Math.floor((l - 1) / 10631);
+  let l2 = l - 10631 * n + 354;
+  const j = Math.floor((10985 - l2) / 5316) * Math.floor((50 * l2) / 17719)
+    + Math.floor(l2 / 5670) * Math.floor((43 * l2) / 15238);
+  l2 = l2 - Math.floor((30 - j) / 15) * Math.floor((17719 * j) / 50)
+    - Math.floor(j / 16) * Math.floor((15238 * j) / 43) + 29;
+  const month = Math.floor((24 * l2) / 709);
+  return {
+    year: 30 * n + j - 30,
+    month,
+    day: l2 - Math.floor((709 * month) / 24)
+  };
+}
+
+/** يوم ميلادي (محلي) إلى هجري: الرقم اليولياني للتاريخ ثم الجدول. */
+function gregorianToHijri(date) {
+  let year = date.getFullYear();
+  let month = date.getMonth() + 1;
+  const day = date.getDate();
+  if (month < 3) {
+    year -= 1;
+    month += 12;
+  }
+  const century = Math.floor(year / 100);
+  const correction = 2 - century + Math.floor(century / 4);
+  const julianDay = Math.floor(365.25 * (year + 4716))
+    + Math.floor(30.6001 * (month + 1))
+    + day + correction - 1524;
+  return hijriFromJulianDay(julianDay);
+}
+
+function calculateHijri() {
+  const result = document.getElementById('calcHijriResult');
+  if (!result) return;
+
+  const parsed = parseCalcDate(readCalcInput('calcHijriDate'));
+  if (parsed.error) return setCalcResult(result, parsed.error, { error: true });
+
+  const hijri = gregorianToHijri(parsed.date);
+  setCalcResult(
+    result,
+    `${CALC_WEEKDAYS[parsed.date.getDay()]} ${calcDigits(hijri.day)} ${CALC_HIJRI_MONTHS[hijri.month - 1]} ${calcDigits(hijri.year)}هـ — يوافق ${calcGregorianDate(parsed.date)}.`
+  );
 }
 
 /**

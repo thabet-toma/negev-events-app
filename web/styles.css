@@ -5224,6 +5224,122 @@ body.albums-page-open { overflow: hidden; }
   .our-platform-card{padding:14px 22px}
 }
 
+/* «حاسبات تهمّك» (تذكرة #190) أسفل كبسات «خدماتنا»: خمس حاسبات محلية.
+   رقاقة لكل حاسبة، ولوحة واحدة ظاهرة في كل لحظة — لا نوافذ ولا صفحات.
+   الحساب كلّه في app.js#calculate*، ونتيجته سطر واحد في .calc-result: أخضر
+   عند النجاح وأحمر عند الخطأ، ورسالته عربية في الحالين. */
+
+.calc-section{margin-bottom:44px}
+
+.calc-section-title{
+  font-size:1.16rem;font-weight:900;line-height:1.4;
+  color:var(--ink);margin-bottom:4px;text-align:center;
+}
+
+.calc-section-lead{
+  font-size:.8rem;font-weight:600;line-height:1.7;
+  color:var(--ink-soft);margin-bottom:14px;text-align:center;
+}
+
+.calc-tabs{
+  display:flex;flex-wrap:wrap;gap:8px;justify-content:center;
+  margin-bottom:14px;
+}
+
+.calc-tab{
+  padding:9px 14px;border-radius:var(--radius-pill);
+  border:1px solid var(--line);background:var(--surface-sunk);
+  color:var(--ink-soft);font-family:var(--font-main);
+  font-size:.78rem;font-weight:900;line-height:1;white-space:nowrap;
+  cursor:pointer;-webkit-appearance:none;appearance:none;
+}
+
+.calc-tab[aria-selected="true"]{background:var(--sky);border-color:var(--sky);color:var(--on-sky)}
+.calc-tab:focus-visible{outline:2px solid var(--sky);outline-offset:3px}
+
+.calc-panel{
+  padding:16px;border-radius:var(--radius-lg);
+  border:1px solid var(--line);background:var(--surface);
+}
+/* المتصفّح يخفي [hidden] افتراضياً، وتصريح display في .calc-panel كان سيغلبه. */
+.calc-panel[hidden]{display:none}
+
+.calc-panel-lead{
+  font-size:.8rem;font-weight:600;line-height:1.7;
+  color:var(--ink-soft);margin-bottom:12px;text-align:start;
+}
+
+.calc-rows{display:flex;flex-direction:column;gap:10px}
+
+.calc-row{display:flex;align-items:center;gap:8px}
+/* في الصفّ يقاس العرض بالمرونة لا بـ100%، فالاسم أعرض من المبلغ دائماً. */
+.calc-row .calc-input{flex:1 1 0}
+
+.calc-input{
+  width:100%;min-width:0;flex:1 1 auto;
+  padding:10px 12px;border-radius:var(--radius-sm);
+  border:1px solid var(--line);background:var(--surface-sunk);
+  color:var(--ink);font-family:var(--font-main);font-size:.9rem;
+}
+.calc-input:focus{outline:2px solid var(--sky);outline-offset:1px}
+/* اسم البند أعرض من مبلغه: المبلغ أرقام قصيرة دائماً. */
+.calc-budget-name,.calc-split-name{flex:1.6 1 0}
+
+.calc-row-remove{
+  flex:0 0 auto;display:grid;place-items:center;
+  width:36px;height:36px;border-radius:50%;
+  border:1px solid var(--line);background:var(--surface);
+  color:var(--ink-faint);font-size:.8rem;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+}
+.calc-row-remove:hover{color:var(--danger);border-color:var(--danger)}
+
+.calc-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+
+.calc-add,.calc-run{
+  padding:10px 16px;border-radius:var(--radius-pill);
+  font-family:var(--font-main);font-size:.82rem;font-weight:900;line-height:1;
+  cursor:pointer;border:1px solid transparent;
+  -webkit-appearance:none;appearance:none;
+}
+
+.calc-add{
+  background:var(--surface-sunk);border-color:var(--line);color:var(--ink-soft);
+}
+.calc-add:hover{color:var(--sky);border-color:var(--sky)}
+
+.calc-run{background:var(--sky);color:var(--on-sky)}
+.calc-run:hover{background:var(--sky-deep)}
+
+.calc-add:focus-visible,.calc-run:focus-visible{outline:2px solid var(--sky);outline-offset:3px}
+
+/* النتيجة سطر واحد (أو سطرين في التسوية): تختفي وهي فارغة، فلا صندوق أوّلَ الضغط. */
+.calc-result{
+  margin-top:14px;padding:11px 13px;border-radius:var(--radius-sm);
+  background:var(--success-wash);color:var(--success);
+  font-size:.85rem;font-weight:700;line-height:1.8;
+}
+.calc-result:empty{display:none}
+.calc-result.is-error{background:var(--danger-wash);color:var(--danger)}
+
+.calc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+
+.calc-field{
+  display:flex;flex-direction:column;gap:5px;
+  font-size:.78rem;font-weight:800;color:var(--ink-soft);text-align:start;
+}
+
+.calc-note{
+  margin-top:12px;padding:9px 12px;border-radius:var(--radius-sm);
+  background:var(--warn-wash);color:var(--warn);
+  font-size:.76rem;font-weight:700;line-height:1.7;text-align:start;
+}
+
+@media (max-width:520px){
+  .calc-grid{grid-template-columns:minmax(0,1fr)}
+  .calc-run{flex:1 1 100%}
+}
+
 /* بطاقات الوصول السريع داخل «حسابي» — الوجوه التي غادرت الشريط السفلي. */
 .account-quick-grid {
   display: grid;

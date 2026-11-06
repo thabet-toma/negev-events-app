@@ -989,6 +989,107 @@
           <span class="our-platform-cta" aria-hidden="true">افتح</span>
         </a>
       </div>
+
+      <!-- «حاسبات تهمّك» (تذكرة #190) — خمس حاسبات تجري داخل الصفحة وحدها:
+           ميزانية العرس، تقسيم المصاريف، عدد المعازيم، العدّ التنازلي، والتاريخ
+           الهجري. لا نداء /api منها إطلاقاً ولا حفظ: كل مدخل يبقى في هذه
+           الصفحة، فتعمل بلا شبكة وبلا حساب. رقاقة لكل حاسبة ثم لوحة واحدة
+           ظاهرة (calc-tabs/calc-panel في styles.css)، ولكل لوحة زرّ حساب صريح
+           ورسالة عربية واحدة في نتيجتها — نجاحاً أو خطأً. -->
+      <section class="calc-section" aria-labelledby="calcSectionTitle">
+        <h3 class="calc-section-title" id="calcSectionTitle">حاسبات تهمّك</h3>
+        <p class="calc-section-lead">خمس حاسبات للعرس والموعد — تُحسب هنا في جهازك، بلا إنترنت ولا حساب، ولا يُرسَل منها شيء.</p>
+
+        <div class="calc-tabs" role="tablist" aria-label="اختر الحاسبة">
+          <button type="button" class="calc-tab" id="calcTabBudget" role="tab" aria-selected="true" aria-controls="calcPanelBudget" onclick="openCalculator('budget')">ميزانية العرس</button>
+          <button type="button" class="calc-tab" id="calcTabSplit" role="tab" aria-selected="false" aria-controls="calcPanelSplit" onclick="openCalculator('split')">تقسيم المصاريف</button>
+          <button type="button" class="calc-tab" id="calcTabGuests" role="tab" aria-selected="false" aria-controls="calcPanelGuests" onclick="openCalculator('guests')">عدد المعازيم</button>
+          <button type="button" class="calc-tab" id="calcTabCountdown" role="tab" aria-selected="false" aria-controls="calcPanelCountdown" onclick="openCalculator('countdown')">العدّ التنازلي</button>
+          <button type="button" class="calc-tab" id="calcTabHijri" role="tab" aria-selected="false" aria-controls="calcPanelHijri" onclick="openCalculator('hijri')">التاريخ الهجري</button>
+        </div>
+
+        <div class="calc-panel" id="calcPanelBudget" role="tabpanel" aria-labelledby="calcTabBudget">
+          <p class="calc-panel-lead">اكتب بنود العرس ومبالغها، والمجموع يظهر لك فور الضغط — بلا حفظ ولا إرسال.</p>
+          <div class="calc-rows" id="calcBudgetRows">
+            <div class="calc-row">
+              <input type="text" class="calc-input calc-budget-name" placeholder="اسم البند" aria-label="اسم البند ١">
+              <input type="text" inputmode="decimal" class="calc-input calc-budget-amount" placeholder="المبلغ (₪)" aria-label="مبلغ البند ١">
+              <button type="button" class="calc-row-remove" onclick="removeCalcRow(this)" aria-label="حذف البند"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+          </div>
+          <div class="calc-actions">
+            <button type="button" class="calc-add" onclick="addCalcBudgetRow()"><i class="fa-solid fa-plus" aria-hidden="true"></i> بند جديد</button>
+            <button type="button" class="calc-run" onclick="calculateBudget()">احسب المجموع</button>
+          </div>
+          <div class="calc-result" id="calcBudgetResult" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="calc-panel" id="calcPanelSplit" role="tabpanel" aria-labelledby="calcTabSplit" hidden>
+          <p class="calc-panel-lead">اكتب كم دفع كل شخص، والتسوية تخرج لك: من يدفع لمن وكم.</p>
+          <div class="calc-rows" id="calcSplitRows">
+            <div class="calc-row">
+              <input type="text" class="calc-input calc-split-name" placeholder="اسم الشخص" aria-label="اسم الشخص ١">
+              <input type="text" inputmode="decimal" class="calc-input calc-split-paid" placeholder="دفع (₪)" aria-label="ما دفعه الشخص ١">
+              <button type="button" class="calc-row-remove" onclick="removeCalcRow(this)" aria-label="حذف الشخص"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+            <div class="calc-row">
+              <input type="text" class="calc-input calc-split-name" placeholder="اسم الشخص" aria-label="اسم الشخص ٢">
+              <input type="text" inputmode="decimal" class="calc-input calc-split-paid" placeholder="دفع (₪)" aria-label="ما دفعه الشخص ٢">
+              <button type="button" class="calc-row-remove" onclick="removeCalcRow(this)" aria-label="حذف الشخص"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+          </div>
+          <div class="calc-actions">
+            <button type="button" class="calc-add" onclick="addCalcSplitRow()"><i class="fa-solid fa-plus" aria-hidden="true"></i> شخص جديد</button>
+            <button type="button" class="calc-run" onclick="calculateSplit()">احسب التسوية</button>
+          </div>
+          <div class="calc-result" id="calcSplitResult" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="calc-panel" id="calcPanelGuests" role="tabpanel" aria-labelledby="calcTabGuests" hidden>
+          <p class="calc-panel-lead">قدّر عدد المعازيم من العائلات والطاولات — اترك ما لا تعرفه فارغاً.</p>
+          <div class="calc-grid">
+            <label class="calc-field"><span>عدد العائلات المدعوّة</span>
+              <input type="text" inputmode="numeric" class="calc-input" id="calcGuestsFamilies" placeholder="مثال: ٢٠">
+            </label>
+            <label class="calc-field"><span>متوسط المدعوين لكل عائلة</span>
+              <input type="text" inputmode="numeric" class="calc-input" id="calcGuestsPerFamily" placeholder="مثال: ٨">
+            </label>
+            <label class="calc-field"><span>عدد الطاولات</span>
+              <input type="text" inputmode="numeric" class="calc-input" id="calcGuestsTables" placeholder="مثال: ٤">
+            </label>
+            <label class="calc-field"><span>الجالسون على الطاولة</span>
+              <input type="text" inputmode="numeric" class="calc-input" id="calcGuestsPerTable" placeholder="مثال: ١٠">
+            </label>
+          </div>
+          <div class="calc-actions">
+            <button type="button" class="calc-run" onclick="calculateGuests()">قدّر العدد</button>
+          </div>
+          <div class="calc-result" id="calcGuestsResult" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="calc-panel" id="calcPanelCountdown" role="tabpanel" aria-labelledby="calcTabCountdown" hidden>
+          <p class="calc-panel-lead">اختر تاريخ المناسبة، ويظهر لك كم يوماً بقي عليها.</p>
+          <label class="calc-field"><span>تاريخ المناسبة</span>
+            <input type="date" class="calc-input" id="calcCountdownDate">
+          </label>
+          <div class="calc-actions">
+            <button type="button" class="calc-run" onclick="calculateCountdown()">كم بقي؟</button>
+          </div>
+          <div class="calc-result" id="calcCountdownResult" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="calc-panel" id="calcPanelHijri" role="tabpanel" aria-labelledby="calcTabHijri" hidden>
+          <p class="calc-panel-lead">تاريخ أم القرى مقابلاً للميلادي، يُحسب حسابياً في جهازك.</p>
+          <label class="calc-field"><span>التاريخ الميلادي</span>
+            <input type="date" class="calc-input" id="calcHijriDate">
+          </label>
+          <div class="calc-actions">
+            <button type="button" class="calc-run" onclick="calculateHijri()">اعرض التاريخ الهجري</button>
+          </div>
+          <div class="calc-result" id="calcHijriResult" role="status" aria-live="polite"></div>
+          <p class="calc-note" id="calcHijriNote"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> تقريبي ±يوم — حسابٌ جدوليّ لا رؤية هلال، فلا تعتمد عليه في المواعيد الشرعية.</p>
+        </div>
+      </section>
     </section>
 
     <!-- «عن المنصة» ظاهرة دائماً أسفل المحتوى، لا في تبويب: من يصل من بحث

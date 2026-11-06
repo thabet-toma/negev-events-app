@@ -11214,6 +11214,441 @@ async function run() {
     assert.ok((cards[2].getAttribute('rel') || '').includes('noopener'));
   });
 
+  // -------------------------------------------------------------------------
+  // «حاسبات تهمّك» (تذكرة #190) — خمس حاسبات محلية أسفل كبسات المنصّات.
+  // -------------------------------------------------------------------------
+  //
+  // jsdom لا يملك منتقي تاريخ ولا محرّك تخطيط: الحقول تُملأ بـ`.value` مباشرة
+  // (وهو ما تفعله الحاسبات نفسها — تقرأ `.value` لحظة الضغط وحده)، والنقر هنا
+  // فعل حقيقي على الأزرار التي في index.html. النصوص المتوقّعة مكتوبة بالأرقام
+  // العربية الهندية كما يعرضها `app.js#calcDigits`، فلا تُترجم في الاختبار.
+
+  /** يملأ صفّاً واحداً في حاسبة بنود: اسمه ثم مبلغه. */
+  function fillCalcRow(row, nameSelector, amountSelector, name, amount) {
+    row.querySelector(nameSelector).value = name;
+    row.querySelector(amountSelector).value = amount;
+  }
+
+  /** الصفّ الأخير بعد إضافة صفّ جديد إلى حاوية بنود. */
+  function lastCalcRow(box) {
+    const rows = box.querySelectorAll('.calc-row');
+    return rows[rows.length - 1];
+  }
+
+  /** `YYYY-MM-DD` بالتوقيت المحلي — هدف العدّ التنازلي في الاختبارات. */
+  function toLocalIsoDay(date) {
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${date.getFullYear()}-${month}-${day}`;
+  }
+
+  await test('«خدماتنا» carries the five calculators as one visible panel at a time, with the Hijri ±1 day warning in plain sight', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+
+    const page = document.getElementById('tabOurServices');
+    const tabs = page.querySelectorAll('.calc-tab');
+    assert.deepStrictEqual(
+      Array.from(tabs).map(tab => tab.textContent.trim()),
+      ['ميزانية العرس', 'تقسيم المصاريف', 'عدد المعازيم', 'العدّ التنازلي', 'التاريخ الهجري'],
+      'the five calculators are named in the destination, in order'
+    );
+
+    // لوحة واحدة ظاهرة: الميزانية أوّلاً، والباقي مخفيّ بـ[hidden] لا بـCSS وحده.
+    const panels = ['Budget', 'Split', 'Guests', 'Countdown', 'Hijri'];
+    assert.strictEqual(document.getElementById('calcPanelBudget').hidden, false);
+    panels.slice(1).forEach(suffix => {
+      assert.strictEqual(document.getElementById(`calcPanel${suffix}`).hidden, true,
+        `calcPanel${suffix} starts hidden`);
+    });
+
+    // رقاقة الهجري تفتح لوحتها وحدها، وتُعلن نفسها نشِطة للقارئ الصوتي.
+    document.getElementById('calcTabHijri').click();
+    assert.strictEqual(document.getElementById('calcPanelHijri').hidden, false);
+    assert.strictEqual(document.getElementById('calcPanelBudget').hidden, true,
+      'the budget panel goes away when another calculator is chosen');
+    assert.strictEqual(document.getElementById('calcTabHijri').getAttribute('aria-selected'), 'true');
+    assert.strictEqual(document.getElementById('calcTabBudget').getAttribute('aria-selected'), 'false');
+    assert.deepStrictEqual(
+      Array.from(document.querySelectorAll('#tabOurServices .calc-panel')).filter(panel => !panel.hidden).length,
+      1,
+      'exactly one calculator is on screen — never two stacked forms'
+    );
+
+    // التنبيه ليس tooltip ولا عنواناً مخفياً: نصّ ظاهر داخل اللوحة.
+    const note = document.getElementById('calcHijriNote');
+    assert.ok(note, 'the Hijri panel carries a visible note');
+    assert.ok(note.textContent.includes('تقريبي ±يوم'), 'the note says «تقريبي ±يوم» in words');
+    assert.strictEqual(note.hidden, false, 'and it is not hidden');
+  });
+
+  await test('the wedding budget sums its items, and refuses an empty name, a negative amount and text', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    const box = document.getElementById('calcBudgetRows');
+    const result = document.getElementById('calcBudgetResult');
+    const run = () => document.querySelector('#calcPanelBudget .calc-run').click();
+
+    // بند أوّل ثم بندان يُضافان بالزرّ نفسه الذي يستعمله الزائر.
+    fillCalcRow(box.querySelector('.calc-row'), '.calc-budget-name', '.calc-budget-amount', 'القاعة', '1500');
+    document.querySelector('#calcPanelBudget .calc-add').click();
+    fillCalcRow(lastCalcRow(box), '.calc-budget-name', '.calc-budget-amount', 'العشاء', '1000');
+    document.querySelector('#calcPanelBudget .calc-add').click();
+    fillCalcRow(lastCalcRow(box), '.calc-budget-name', '.calc-budget-amount', 'الزفة', '250.5');
+
+    run();
+    assert.strictEqual(result.textContent, 'مجموع ميزانية العرس ٢٬٧٥٠٫٥٠ ₪ على ٣ بنود.',
+      'the total is exact to the agora and the count is Arabic');
+    assert.strictEqual(result.classList.contains('is-error'), false, 'a success is not styled as an error');
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false, 'no broken number reaches the screen');
+
+    // اسم فارغ: رسالة عربية إلى الصفّ الذي يحتاج الكتابة، لا «undefined».
+    const firstName = box.querySelector('.calc-row .calc-budget-name');
+    firstName.value = ' ';
+    run();
+    assert.strictEqual(result.textContent, 'الصف ١: اكتب اسم البند أولاً.');
+    assert.strictEqual(result.classList.contains('is-error'), true, 'an invalid input is announced as an error');
+    firstName.value = 'القاعة';
+
+    // مبلغ سالب.
+    const firstAmount = box.querySelector('.calc-row .calc-budget-amount');
+    firstAmount.value = '-50';
+    run();
+    assert.ok(result.textContent.includes('المبلغ لا يكون سالباً'), 'a negative amount has its own Arabic message');
+    assert.strictEqual(result.classList.contains('is-error'), true);
+
+    // نصّ بدل رقم.
+    firstAmount.value = 'ألف';
+    run();
+    assert.ok(result.textContent.includes('المبلغ بالأرقام فقط'), 'text where a number belongs is refused in Arabic');
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+
+    // صفر بند: لا يبقى صفّ واحد.
+    firstName.value = 'القاعة';
+    firstAmount.value = '0';
+    Array.from(box.querySelectorAll('.calc-row')).forEach(row => row.querySelector('.calc-row-remove').click());
+    run();
+    assert.ok(result.textContent.includes('أضف بنداً واحداً على الأقل'),
+      'with no rows the calculator asks for one instead of showing zero');
+    assert.strictEqual(box.querySelectorAll('.calc-row').length, 0, 'the remove buttons really removed the rows');
+
+    // «بند جديد» يعيد صفّاً فارغاً — الحاسبة لا تُقفل بعد الحذف.
+    document.querySelector('#calcPanelBudget .calc-add').click();
+    assert.strictEqual(box.querySelectorAll('.calc-row').length, 1);
+  });
+
+  await test('the expense split names who pays whom, exactly, and refuses a single person and a zero total', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    document.getElementById('calcTabSplit').click();
+    const box = document.getElementById('calcSplitRows');
+    const result = document.getElementById('calcSplitResult');
+    const run = () => document.querySelector('#calcPanelSplit .calc-run').click();
+
+    // علي دفع ٦٠٠، سارة ٣٠٠، وحسن صفراً: المجموع ٩٠٠ ونصيب كل شخص ٣٠٠.
+    fillCalcRow(box.querySelector('.calc-row'), '.calc-split-name', '.calc-split-paid', 'علي', '600');
+    fillCalcRow(box.querySelectorAll('.calc-row')[1], '.calc-split-name', '.calc-split-paid', 'سارة', '300');
+    document.querySelector('#calcPanelSplit .calc-add').click();
+    fillCalcRow(lastCalcRow(box), '.calc-split-name', '.calc-split-paid', 'حسن', '0');
+
+    run();
+    assert.strictEqual(
+      result.textContent,
+      'مجموع المصاريف ٩٠٠ ₪ على ٣ أشخاص — حصّة كل شخص نحو ٣٠٠ ₪. التسوية: حسن يدفع إلى علي ٣٠٠ ₪.',
+      'one settlement line: the person who paid nothing pays the one who covered him'
+    );
+    assert.strictEqual(result.classList.contains('is-error'), false);
+
+    // مبلغ لا يقبل القسمة على ثلاثة: التسوية تبقى مضبوطة إلى الأغورة.
+    fillCalcRow(box.querySelector('.calc-row'), '.calc-split-name', '.calc-split-paid', 'علي', '100');
+    const second = box.querySelectorAll('.calc-row')[1];
+    fillCalcRow(second, '.calc-split-name', '.calc-split-paid', 'سارة', '100');
+    fillCalcRow(lastCalcRow(box), '.calc-split-name', '.calc-split-paid', 'حسن', '0');
+    run();
+    assert.strictEqual(
+      result.textContent,
+      'مجموع المصاريف ٢٠٠ ₪ على ٣ أشخاص — حصّة كل شخص نحو ٦٦٫٦٦ ₪. '
+        + 'التسوية: حسن يدفع إلى علي ٣٣٫٣٣ ₪ · حسن يدفع إلى سارة ٣٣٫٣٣ ₪.',
+      'the owed agorot add up to the whole — no coin is lost or invented'
+    );
+
+    // القسمة على صفر: مجموع ما دفعه الجميع صفر.
+    Array.from(box.querySelectorAll('.calc-split-paid')).forEach(input => { input.value = '0'; });
+    run();
+    assert.ok(result.textContent.includes('مجموع ما دفعه الجميع صفر'),
+      'a zero total is a division by zero in words, not «Infinity» on screen');
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+    assert.strictEqual(result.classList.contains('is-error'), true);
+
+    // شخص واحد: لا شيء يُقسَّم عليه.
+    const rows = box.querySelectorAll('.calc-row');
+    fillCalcRow(rows[0], '.calc-split-name', '.calc-split-paid', 'علي', '100');
+    Array.from(rows).slice(1).forEach(row => row.querySelector('.calc-row-remove').click());
+    run();
+    assert.ok(result.textContent.includes('شخص واحد فقط'), 'one participant cannot be split');
+
+    // سالب: رسالة عربية لا انهيار.
+    document.querySelector('#calcPanelSplit .calc-add').click();
+    fillCalcRow(lastCalcRow(box), '.calc-split-name', '.calc-split-paid', 'سارة', '-10');
+    run();
+    assert.ok(result.textContent.includes('المبلغ لا يكون سالباً'));
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+  });
+
+  await test('the split settlement never invents or loses an agora, across a fixed pseudo-random run', () => {
+    const dom = buildEnv();
+    // مولّد ثابت البذرة: نفس المحاولات في كل تشغيل، فلا عشوائية تُخفي فشلاً.
+    let seed = 20261013;
+    const nextSeed = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed;
+    };
+
+    for (let trial = 0; trial < 40; trial += 1) {
+      const count = 2 + (nextSeed() % 6);
+      const people = [];
+      for (let index = 0; index < count; index += 1) {
+        people.push({ name: `p${index}`, paidCents: 10000 + (nextSeed() % 500000) });
+      }
+      const total = people.reduce((sum, person) => sum + person.paidCents, 0);
+      const base = Math.floor(total / count);
+      const remainder = total % count;
+
+      const plan = dom.window.splitSettlement(people);
+      assert.strictEqual(plan.totalCents, total, `trial ${trial}: the total is the sum of what was paid`);
+      assert.strictEqual(plan.shareCents, base, `trial ${trial}: the fair share is the same base for everyone`);
+      assert.ok(plan.transfers.length <= count - 1,
+        `trial ${trial}: at most one transfer fewer than people — the greedy never exceeds it`);
+
+      const indexByName = new Map(people.map((person, index) => [person.name, index]));
+      const outflow = new Array(count).fill(0);
+      const inflow = new Array(count).fill(0);
+      const pairs = new Set();
+      for (const transfer of plan.transfers) {
+        assert.ok(Number.isInteger(transfer.cents) && transfer.cents > 0,
+          `trial ${trial}: every transfer is a positive whole agora`);
+        assert.notStrictEqual(transfer.from, transfer.to, `trial ${trial}: nobody pays themselves`);
+        assert.strictEqual(pairs.has(`${transfer.from}>${transfer.to}`), false,
+          `trial ${trial}: one transfer per pair, never two`);
+        pairs.add(`${transfer.from}>${transfer.to}`);
+        outflow[indexByName.get(transfer.from)] += transfer.cents;
+        inflow[indexByName.get(transfer.to)] += transfer.cents;
+      }
+
+      for (let index = 0; index < count; index += 1) {
+        const share = base + (index < remainder ? 1 : 0);
+        assert.strictEqual(
+          inflow[index] - outflow[index],
+          people[index].paidCents - share,
+          `trial ${trial}: person ${index} receives exactly what they over-paid, or pays exactly what they under-paid`
+        );
+      }
+    }
+
+    // ولا تسوية بلا مال: الفراغ والصفر خطأ، لا خطة صامتة.
+    assert.ok(dom.window.splitSettlement([]).error, 'nobody → an error');
+    assert.ok(
+      dom.window.splitSettlement([{ name: 'a', paidCents: 0 }, { name: 'b', paidCents: 0 }]).error,
+      'a zero total is an error, not a division by zero'
+    );
+  });
+
+  await test('the guest estimator multiplies families and tables, treats empty as zero, and refuses text', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    document.getElementById('calcTabGuests').click();
+    const result = document.getElementById('calcGuestsResult');
+    const run = () => document.querySelector('#calcPanelGuests .calc-run').click();
+
+    document.getElementById('calcGuestsFamilies').value = '20';
+    document.getElementById('calcGuestsPerFamily').value = '8';
+    document.getElementById('calcGuestsTables').value = '4';
+    document.getElementById('calcGuestsPerTable').value = '10';
+    run();
+    assert.strictEqual(
+      result.textContent,
+      'تقدير عدد المعازيم: ٢٠٠ — العائلات ٢٠ × ٨ = ١٦٠، والطاولات ٤ × ١٠ = ٤٠.',
+      'the estimate is the sum of both contributions, with the arithmetic shown'
+    );
+    assert.strictEqual(result.classList.contains('is-error'), false);
+
+    // الطاولات وحدها كافية، والفارغ صفر لا خطأ.
+    document.getElementById('calcGuestsFamilies').value = '';
+    document.getElementById('calcGuestsPerFamily').value = '';
+    run();
+    assert.strictEqual(result.textContent, 'تقدير عدد المعازيم: ٤٠ — الطاولات ٤ × ١٠ = ٤٠.',
+      'a wholly empty pair is zero, not an error');
+
+    // كل الحقول فارغة: لا شيء يُقدَّر.
+    document.getElementById('calcGuestsTables').value = '';
+    document.getElementById('calcGuestsPerTable').value = '';
+    run();
+    assert.ok(result.textContent.includes('أدخل عدداً أكبر من صفر'), 'an all-zero estimate asks for a number');
+    assert.strictEqual(result.classList.contains('is-error'), true);
+
+    // نصّ وسالب: رسالة تحمل اسم الحقل نفسه.
+    document.getElementById('calcGuestsFamilies').value = 'كثير';
+    run();
+    assert.strictEqual(result.textContent, 'عدد العائلات: العدد بالأرقام فقط');
+    document.getElementById('calcGuestsFamilies').value = '-3';
+    document.getElementById('calcGuestsPerFamily').value = '2';
+    run();
+    assert.strictEqual(result.textContent, 'عدد العائلات: العدد لا يكون سالباً');
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+  });
+
+  await test('the countdown counts local calendar days — 45 ahead, today, 3 past — and rejects a non-existent date', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    document.getElementById('calcTabCountdown').click();
+    const input = document.getElementById('calcCountdownDate');
+    const result = document.getElementById('calcCountdownResult');
+    const run = () => document.querySelector('#calcPanelCountdown .calc-run').click();
+
+    const today = new Date();
+    const target = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 45);
+    input.value = toLocalIsoDay(target);
+    run();
+    assert.ok(result.textContent.startsWith('بقي ٤٥ يوماً على الموعد — الموعد يوم '),
+      `45 local calendar days is 45, whatever the machine timezone: ${result.textContent}`);
+    assert.ok(result.textContent.includes('على الموعد'), 'the sentence says what is being counted down to');
+    assert.strictEqual(result.classList.contains('is-error'), false);
+
+    input.value = toLocalIsoDay(today);
+    run();
+    assert.ok(result.textContent.startsWith('الموعد اليوم — '), 'today is «الموعد اليوم», not «0 يوم»');
+
+    const past = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 3);
+    input.value = toLocalIsoDay(past);
+    run();
+    assert.ok(result.textContent.startsWith('مضى الموعد منذ ٣ أيام'), 'a past date is said to be past');
+
+    // سنة كبيسة: ٢٩ فبراير موجود، و٣١ فبراير غير موجود.
+    input.value = '2024-02-29';
+    run();
+    assert.strictEqual(result.classList.contains('is-error'), false, 'a real leap day is accepted');
+    assert.strictEqual(dom.window.parseCalcDate('2026-02-31').error, 'هذا التاريخ غير موجود',
+      'a date that does not exist never reaches Date arithmetic');
+    // حقل `type="date"` يرفض غير الموجود قبل وصوله إلى app.js، فيصفّيه المتصفّح
+    // إلى فراغ — واللوحة تردّ برسالة عربية لا بـ«NaN» في الحالتين.
+    input.value = '2026-02-31';
+    run();
+    assert.ok(
+      ['هذا التاريخ غير موجود', 'اختر تاريخاً أولاً من التقويم'].includes(result.textContent),
+      `a non-existent date handed to the panel still gets an Arabic message: ${result.textContent}`
+    );
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+
+    // فراغ: رسالة تخصّ الفراغ، لا «NaN».
+    input.value = '';
+    run();
+    assert.strictEqual(result.textContent, 'اختر تاريخاً أولاً من التقويم');
+    assert.strictEqual(result.classList.contains('is-error'), true);
+  });
+
+  await test('the Hijri calculator matches four Umm al-Qura reference dates exactly and shows the ±1 day note', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+
+    dom.window.openOurServices();
+    document.getElementById('calcTabHijri').click();
+    const input = document.getElementById('calcHijriDate');
+    const result = document.getElementById('calcHijriResult');
+    const run = iso => {
+      input.value = iso;
+      document.querySelector('#calcPanelHijri .calc-run').click();
+      return result.textContent;
+    };
+
+    // مراجع أم القرى المعروفة (وليس عيّنة من الخوارزمية نفسها):
+    assert.strictEqual(run('2024-04-10'), 'الأربعاء ١ شوال ١٤٤٥هـ — يوافق ١٠ أبريل ٢٠٢٤.',
+      '١ شوال ١٤٤٥ = ١٠ أبريل ٢٠٢٤ (عيد فطر ١٤٤٥)');
+    assert.strictEqual(run('2024-03-11'), 'الاثنين ١ رمضان ١٤٤٥هـ — يوافق ١١ مارس ٢٠٢٤.',
+      '١ رمضان ١٤٤٥ = ١١ مارس ٢٠٢٤');
+    assert.strictEqual(run('2023-03-23'), 'الخميس ١ رمضان ١٤٤٤هـ — يوافق ٢٣ مارس ٢٠٢٣.',
+      '١ رمضان ١٤٤٤ = ٢٣ مارس ٢٠٢٣');
+    assert.strictEqual(run('2000-01-01'), 'السبت ٢٤ رمضان ١٤٢٠هـ — يوافق ١ يناير ٢٠٠٠.',
+      '٢٤ رمضان ١٤٢٠ = ١ يناير ٢٠٠٠');
+
+    // الأرقام كلها عربية هندية في السطر، والتنبيه ظاهر تحته.
+    assert.strictEqual(/[0-9]/.test(result.textContent), false, 'no Latin digits in the Hijri line');
+    assert.ok(document.getElementById('calcHijriNote').textContent.includes('تقريبي ±يوم'),
+      'the panel keeps its ±1 day note next to the result');
+
+    // لا تاريخ: رسالة عربية، لا «NaNهـ».
+    input.value = '';
+    assert.strictEqual(run(''), 'اختر تاريخاً أولاً من التقويم');
+    assert.strictEqual(result.classList.contains('is-error'), true);
+    assert.strictEqual(/NaN|Infinity/.test(result.textContent), false);
+  });
+
+  await test('no calculator reaches /api — every one of the five computes on the device', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { document } = dom.window;
+
+    const requests = [];
+    const base = buildFetchStub();
+    dom.window.fetch = (url, options = {}) => {
+      requests.push(String(url));
+      return base(url, options);
+    };
+
+    // خطّ أساس: ما يطلبه الإقلاع (الأنواع والبلدات والتغذية…) قبل أي حاسبة. لا
+    // يُحسب على الحاسبات شيء، ويُقاس ما بعدها بعده وحده.
+    await delay(60);
+    const baseline = requests.length;
+
+    dom.window.openOurServices();
+
+    const budgetBox = document.getElementById('calcBudgetRows');
+    fillCalcRow(budgetBox.querySelector('.calc-row'), '.calc-budget-name', '.calc-budget-amount', 'قاعة', '1000');
+    document.querySelector('#calcPanelBudget .calc-run').click();
+
+    const splitBox = document.getElementById('calcSplitRows');
+    fillCalcRow(splitBox.querySelector('.calc-row'), '.calc-split-name', '.calc-split-paid', 'علي', '100');
+    fillCalcRow(lastCalcRow(splitBox), '.calc-split-name', '.calc-split-paid', 'سارة', '0');
+    document.querySelector('#calcPanelSplit .calc-run').click();
+
+    document.getElementById('calcGuestsFamilies').value = '10';
+    document.getElementById('calcGuestsPerFamily').value = '5';
+    document.querySelector('#calcPanelGuests .calc-run').click();
+
+    const inAWeek = new Date();
+    inAWeek.setDate(inAWeek.getDate() + 7);
+    document.getElementById('calcCountdownDate').value = toLocalIsoDay(inAWeek);
+    document.querySelector('#calcPanelCountdown .calc-run').click();
+
+    document.getElementById('calcHijriDate').value = '2024-04-10';
+    document.querySelector('#calcPanelHijri .calc-run').click();
+
+    // ثم الفروع غير الصالحة نفسها: لا هي تلمس الشبكة.
+    const firstName = budgetBox.querySelector('.calc-budget-name');
+    firstName.value = '';
+    document.querySelector('#calcPanelBudget .calc-run').click();
+    assert.strictEqual(document.getElementById('calcBudgetResult').classList.contains('is-error'), true,
+      'the invalid branch ran too, and still touched nothing outside the page');
+
+    await delay(30);
+    assert.strictEqual(requests.length, baseline,
+      'not one calculator makes a request — no /api, no fetch, nothing to be offline from');
+
+    // والحسابات كلها أنتجت نصاً: لا حاسبة بقيت بلا نتيجة.
+    for (const id of ['calcBudgetResult', 'calcSplitResult', 'calcGuestsResult', 'calcCountdownResult', 'calcHijriResult']) {
+      assert.ok(document.getElementById(id).textContent.trim().length > 0, `${id} produced a line`);
+    }
+  });
+
   await test('the add-service window names its purpose, and no outside button borrows that wording', () => {
     const dom = buildEnv();
     const { document } = dom.window;
