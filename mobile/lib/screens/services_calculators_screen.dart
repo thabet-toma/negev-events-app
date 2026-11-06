@@ -1091,11 +1091,19 @@ class _DateField extends StatelessWidget {
   Future<void> _pick(BuildContext context) async {
     final parsed = parseCalcDate(controller.text);
     final now = DateTime.now();
+    final firstDate = DateTime(now.year - 10);
+    final lastDate = DateTime(now.year + 20);
+    // المنتقي يرفض `initialDate` خارج [firstDate, lastDate]، والمكتوب قد يكون
+    // قديماً (تاريخ ميلاد مثلاً) أو أبعد من المدى — فيُحصر للعرض وحده، ويبقى
+    // النصّ في الحقل كما كتبه المستخدم حتى يختار من التقويم.
+    var initialDate = parsed.isOk ? parsed.value! : now;
+    if (initialDate.isBefore(firstDate)) initialDate = firstDate;
+    if (initialDate.isAfter(lastDate)) initialDate = lastDate;
     final picked = await showDatePicker(
       context: context,
-      initialDate: parsed.isOk ? parsed.value! : now,
-      firstDate: DateTime(now.year - 10),
-      lastDate: DateTime(now.year + 20),
+      initialDate: initialDate,
+      firstDate: firstDate,
+      lastDate: lastDate,
     );
     if (picked == null) return;
     controller.text = _isoDay(picked);
