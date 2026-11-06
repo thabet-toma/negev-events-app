@@ -657,6 +657,10 @@ class OccasionType {
   final bool showRsvpCount;
   final List<OccasionTypeField> fields;
   final List<String> reactions;
+  /// الرسائل الجاهزة لهذا النوع (تذكرة #170) من `GET /api/occasion-types` —
+  /// **النشِطة وحدها**، فالمطفأة لا تصل العميل أصلاً. تُغذّي ورقة «اختر رسالة»
+  /// خلف «بارك»/«عزّي»، وتغيب عن مناسبة نوعها بلا رسائل (قائمة فارغة).
+  final List<OccasionMessage> messages;
 
   const OccasionType({
     required this.id,
@@ -680,6 +684,7 @@ class OccasionType {
     this.defaultPosterUrl,
     this.fields = const [],
     this.reactions = const [],
+    this.messages = const [],
   });
 
   /// حصراً من `tone` — لا فحص على اسم النوع في أي مكان.
@@ -711,6 +716,15 @@ class OccasionType {
     final reactions =
         rawReactions is List ? rawReactions.map((r) => '$r').toList() : <String>[];
 
+    final rawMessages = json['messages'];
+    final messages = rawMessages is List
+        ? rawMessages
+            .whereType<Map<String, dynamic>>()
+            .map(OccasionMessage.fromJson)
+            .where((message) => message.body.isNotEmpty)
+            .toList()
+        : <OccasionMessage>[];
+
     return OccasionType(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
@@ -735,8 +749,23 @@ class OccasionType {
       showRsvpCount: json['show_rsvp_count'] != false,
       fields: fields,
       reactions: reactions,
+      messages: messages,
     );
   }
+}
+
+/// رسالة جاهزة واحدة لنوع مناسبة (تذكرة #170) — `{ id, body }` كما يرسلها
+/// `GET /api/occasion-types`. لا `is_active` هنا: الخادم لا يرسل المطفأة أصلاً.
+class OccasionMessage {
+  final int id;
+  final String body;
+
+  const OccasionMessage({required this.id, required this.body});
+
+  factory OccasionMessage.fromJson(Map<String, dynamic> json) => OccasionMessage(
+        id: _toInt(json['id']),
+        body: '${json['body'] ?? ''}'.trim(),
+      );
 }
 
 /// نقطة على الخريطة — من GET /api/map/events. لا يحمل نوع المناسبة (الخادم لا يرسله هنا).

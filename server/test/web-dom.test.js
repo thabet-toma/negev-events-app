@@ -7614,37 +7614,58 @@ async function run() {
 
   await test('event card countdown accurately reflects today, tomorrow, and future days without timezone drift', async () => {
     const dom = buildEnv({ loggedIn: false });
-    const now = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-
-    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const tomorrowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    const inTwoDaysDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+    // اليوم والغد **بتوقيت القدس** لا بتوقيت الجهاز — `en-CA` يعطي 'YYYY-MM-DD'
+    // مباشرةً، وهو ما يقرأه الكرت نفسه (`jerusalemTodayKey` في app.js). جهاز
+    // الاختبار في منطقة أخرى كان يجعل هذا التأكيد يسقط عند منتصف الليل وحده.
+    const keyFor = offsetDays => new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jerusalem',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000));
 
     const cardToday = dom.window.renderSingleEventCardHtml({
       id: 101,
       title: 'عرس اليوم',
-      event_date: fmt(todayDate),
+      event_date: keyFor(0),
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
     assert(cardToday.includes('card-datechip">اليوم</span>'), 'Today event must show "اليوم"');
+    assert(!cardToday.includes('card-datechip-tomorrow'), 'only tomorrow is the red capsule');
 
     const cardTomorrow = dom.window.renderSingleEventCardHtml({
       id: 102,
       title: 'عرس غداً',
-      event_date: fmt(tomorrowDate),
+      event_date: keyFor(1),
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
-    assert(cardTomorrow.includes('card-datechip">غداً</span>'), 'Tomorrow event must show "غداً"');
+    assert(
+      cardTomorrow.includes('card-datechip card-datechip-tomorrow">غداً</span>'),
+      'Tomorrow event must show "غداً" as the red capsule'
+    );
 
     const cardTwoDays = dom.window.renderSingleEventCardHtml({
       id: 103,
       title: 'عرس بعد يومين',
-      event_date: fmt(inTwoDaysDate),
+      event_date: keyFor(2),
       occasion_type: { name: 'عرس', color: '#8f6a20' }
     });
     assert(cardTwoDays.includes('card-datechip">باقي 2 أيام</span>'), 'Event in 2 days must show "باقي 2 أيام"');
+  });
+
+  await test('«غداً» is computed in Jerusalem time — a device in another zone cannot shift the day', () => {
+    const dom = buildEnv({ loggedIn: false });
+    // 2026-11-05 22:30 UTC = 00:30 من ٦ نوفمبر في القدس (UTC+2 شتاءً): جهازٌ في
+    // UTC يرى «٥ نوفمبر» فيقول الكرت القديم «غداً» عن يوم ٦ وهو اليوم نفسه هناك.
+    const at = new Date('2026-11-05T22:30:00Z');
+    assert.strictEqual(
+      dom.window.eventCountdownDays({ event_date: '2026-11-06' }, at),
+      0,
+      'the sixth is today at 00:30 in Jerusalem'
+    );
+    assert.strictEqual(dom.window.eventCountdownDays({ event_date: '2026-11-07' }, at), 1, 'and the seventh is tomorrow');
+    assert.strictEqual(dom.window.eventCountdownDays({ event_date: '2026-11-05' }, at), -1, 'the fifth has passed there');
+    assert.strictEqual(dom.window.eventCountdownDays({ event_date: '' }, at), null, 'an unreadable date draws no chip');
   });
 
   await test('services tab has filter chips, search input, filter modals, and renders luxury service cards', async () => {
@@ -11393,30 +11414,31 @@ async function run() {
     return { dom, stub };
   }
 
-  await test('the reminder button reads «أضف لقائمتي» when unsaved, and «في قائمتي» + is-saved when saved', () => {
+  await test('the reminder button reads «أضف لقائمتي» when unsaved, and «في قائمتي» + is-saved when saved, with the heart as its state marker', () => {
     const dom = buildEnv();
 
     const unsaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: false });
     assert.ok(unsaved.includes('أضف لقائمتي'), 'an unsaved event must offer «أضف لقائمتي»');
-    assert.ok(unsaved.includes('fa-regular fa-bookmark'), 'the unfilled bookmark marks "not saved yet"');
+    assert.ok(unsaved.includes('fa-regular fa-heart'), 'the outlined heart is «ذكّرني ♥» — not saved yet');
     assert.ok(!/class="[^"]*\bis-saved\b/.test(unsaved), 'is-saved must be absent while unsaved');
 
     const saved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: true });
     assert.ok(saved.includes('في قائمتي'), 'a saved event must read «في قائمتي»');
-    assert.ok(saved.includes('fa-solid fa-bookmark'), 'the filled bookmark marks "saved"');
+    assert.ok(saved.includes('fa-solid fa-heart'), 'the filled heart marks "saved"');
     assert.ok(/class="[^"]*\bis-saved\b/.test(saved), 'is-saved must mark the active state so it reads as active');
 
-    // الكرت (compact) — كلمتان قصيرتان تفيان بعرض الصفّ، والاسم الكامل لقارئ
-    // الشاشة في aria-label. الافتراضي يبقى النصّ الكامل (صفحة المناسبة).
+    // الكرت (compact) — كلمة قصيرة تفي بعرض الصفّ، والاسم الكامل لقارئ الشاشة
+    // في aria-label. الافتراضي يبقى النصّ الكامل (صفحة المناسبة). و«ذكّرني»
+    // كلمة المواصفة للفعل على الكرت (تذكرة #170).
     const compactUnsaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: false }, { compact: true });
-    assert.ok(compactUnsaved.includes('<span>احفظ</span>'), 'the compact unsaved label is «احفظ»');
-    assert.ok(compactUnsaved.includes('fa-regular fa-bookmark'));
+    assert.ok(compactUnsaved.includes('<span>ذكّرني</span>'), 'the compact unsaved label is «ذكّرني»');
+    assert.ok(compactUnsaved.includes('fa-regular fa-heart'));
     assert.ok(compactUnsaved.includes('aria-label="أضف لقائمتي"'), 'the full wording survives in aria-label');
     assert.ok(!compactUnsaved.includes('<span>أضف لقائمتي</span>'), 'the compact button must not carry the long label');
 
     const compactSaved = dom.window.renderReminderButtonHtml({ id: 5, is_reminded: true }, { compact: true });
     assert.ok(compactSaved.includes('<span>محفوظة</span>'), 'the compact saved label is «محفوظة»');
-    assert.ok(compactSaved.includes('fa-solid fa-bookmark'));
+    assert.ok(compactSaved.includes('fa-solid fa-heart'));
     assert.ok(compactSaved.includes('aria-label="في قائمتي"'));
     assert.ok(/class="[^"]*\bis-saved\b/.test(compactSaved), 'the compact saved button is active too');
   });
@@ -14719,7 +14741,7 @@ async function run() {
     assert.ok(html.includes('تأكيد الحضور'), 'expected the attendance block title');
     assert.ok(/onclick="submitRsvp\('yes'\)"/.test(html), 'the «جاي» button must call submitRsvp with yes');
     assert.ok(/onclick="submitRsvp\('no'\)"/.test(html), 'the «مش جاي» button must call submitRsvp with no');
-    assert.ok(html.includes('جايون: 3'), 'the public counter must be the server figure, not a local count');
+    assert.ok(html.includes('جايين: 3'), 'the public counter must be the server figure, not a local count');
 
     const { document } = dom.window;
     const host = document.createElement('div');
@@ -14767,7 +14789,7 @@ async function run() {
       buildRsvpEvent({ occasion_type: { ...RSVP_WEDDING_TYPE, show_rsvp_count: false }, rsvp_going_count: undefined })
     );
     assert.ok(hiddenCount.includes('submitRsvp'), 'the buttons stay — only the counter is the flag\'s business');
-    assert.ok(!hiddenCount.includes('جايون:'), 'a hidden counter must not be drawn, not drawn as zero');
+    assert.ok(!hiddenCount.includes('جايين:'), 'a hidden counter must not be drawn, not drawn as zero');
   });
 
   await test('«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم', async () => {
@@ -14907,7 +14929,7 @@ async function run() {
     assert.ok(body.textContent.includes('سالم أبو الاختبار'), 'every name must be listed');
     assert.ok(body.textContent.includes('ضيف من الرابط'), 'including a guest answered through the share page');
     assert.ok(body.textContent.includes('مريم الاختبار'), 'and the ones who said «مش جاي»');
-    assert.ok(body.textContent.includes('جايون: 5'), 'the total is the sum of party sizes, not the row count');
+    assert.ok(body.textContent.includes('جايين: 5'), 'the total is the sum of party sizes, not the row count');
     assert.ok(body.textContent.includes('أجوبة «جاي»: 2'), 'the number of yes answers is shown separately');
     assert.ok(body.textContent.includes('أجوبة «مش جاي»: 1'), 'and so is the number of no answers');
     assert.ok(body.textContent.includes('حساب'), 'the source is translated to Arabic, not printed raw');
@@ -14966,6 +14988,256 @@ async function run() {
       window.document.getElementById('rsvpListBody').textContent.includes('المناسبة غير موجودة'),
       'a 404 shows the server message — never an empty list that would confirm the event exists'
     );
+  });
+
+  console.log('\nالكرت ومحيطه — الأفعال والرسائل الجاهزة (تذكرة #170)');
+
+  /** نوع عرس مفتوح لتأكيد الحضور برسائل جاهزة — الشكل نفسه الذي يعيده الخادم. */
+  const MESSAGES_WEDDING_TYPE = {
+    ...RSVP_WEDDING_TYPE,
+    messages: [
+      { id: 11, body: 'ألف ألف مبارك، الله يبارك لهما' },
+      { id: 12, body: 'دامت الأفراح والمسرات' }
+    ]
+  };
+
+  /** مناسبة عرس واحدة — كاملة بما يكفي لكرت التغذية. */
+  function buildCardEvent(overrides = {}) {
+    return {
+      id: 170,
+      status: 'approved',
+      title: 'فرح عائلة الكرت',
+      groom_name: 'سالم',
+      town: 'رهط',
+      event_date: '2026-12-31',
+      location_name: 'قاعة الاختبار',
+      poster_url: null,
+      occasion_type: MESSAGES_WEDDING_TYPE,
+      honorees: [{ name: 'سالم' }],
+      reactions: {},
+      ...overrides
+    };
+  }
+
+  /** يقرأ نصوص أزرار الكرت بترتيبها — ما يراه المستخدم لا ما في الكود. */
+  function cardActionLabels(dom, html) {
+    const host = dom.window.document.createElement('div');
+    host.innerHTML = html;
+    return Array.from(host.querySelectorAll('.card-caption-actions button'))
+      .map(button => button.textContent.replace(/\s+/g, ' ').trim());
+  }
+
+  await test('كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»', () => {
+    const dom = buildEnv();
+
+    const wedding = dom.window.renderSingleEventCardHtml(buildCardEvent());
+    const weddingLabels = cardActionLabels(dom, wedding);
+    assert.deepStrictEqual(
+      weddingLabels.slice(0, 4),
+      ['التفاصيل', 'جاي', 'بارك', 'ذكّرني'],
+      `a wedding card must carry the three occasion actions, got ${JSON.stringify(weddingLabels)}`
+    );
+    assert.ok(wedding.includes('reminder-btn'), '«ذكّرني» keeps its existing class and route');
+    assert.ok(wedding.includes('fa-regular fa-heart'), 'with the heart the spec names — «ذكّرني ♥»');
+    assert.ok(wedding.includes('rsvp-card-btn'), '«جاي» is its own button, not the congratulations one');
+
+    // النوع الذي أطفأ `rsvp_enabled`: لا «جاي»، والأفعال الثلاثة تصير اثنين.
+    const noRsvp = dom.window.renderSingleEventCardHtml(buildCardEvent({
+      occasion_type: { ...MESSAGES_WEDDING_TYPE, rsvp_enabled: false }
+    }));
+    const noRsvpLabels = cardActionLabels(dom, noRsvp);
+    assert.ok(!noRsvp.includes('rsvp-card-btn'), 'a type with the feature off must not carry «جاي»');
+    assert.deepStrictEqual(noRsvpLabels.slice(0, 3), ['التفاصيل', 'بارك', 'ذكّرني'], 'the other actions stay');
+    assert.strictEqual(noRsvpLabels.length, 4, 'and the row keeps its share button');
+
+    // العزاء: «عزّي» وحده — لا «جاي» ولا «بارك» ولا قلب، ولا شارة عدّ (ولا «غداً»).
+    const mourning = dom.window.renderSingleEventCardHtml(buildCardEvent({
+      id: 171,
+      occasion_type: { ...FUNERAL_TYPE, rsvp_enabled: true },
+      event_date: '2099-01-01'
+    }));
+    const mourningLabels = cardActionLabels(dom, mourning);
+    assert.deepStrictEqual(
+      mourningLabels,
+      ['التفاصيل', 'عزّي', 'أرسل النعي'],
+      `a mourning card carries «عزّي» alone among the occasion actions, got ${JSON.stringify(mourningLabels)}`
+    );
+    assert.ok(!mourning.includes('rsvp-card-btn'), 'no «جاي» on a funeral');
+    assert.ok(!mourning.includes('reminder-btn'), 'and no «ذكّرني» either — «العزاء لا أزرار»');
+    assert.ok(!mourning.includes('بارك'), 'the festive wording never reaches a funeral');
+    assert.ok(!mourning.includes('card-datechip'), 'and no counter chip of any kind');
+  });
+
+  await test('«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const cardEvent = buildCardEvent({ my_rsvp: null });
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          calls.push({ path: requestPath, method, body: options.body, headers: options.headers || {} });
+          if (requestPath === '/api/events' && method === 'GET') {
+            return jsonResponse({ success: true, events: [cardEvent], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          if (requestPath === '/api/events/170' && method === 'GET') {
+            return jsonResponse({ success: true, event: cardEvent });
+          }
+          if (requestPath === '/api/events/170/rsvp' && method === 'PUT') {
+            cardEvent.my_rsvp = { response: 'yes', party_size: 1, source: 'account' };
+            return jsonResponse({ success: true, my_rsvp: cardEvent.my_rsvp, rsvp_going_count: 1 });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+    await dom.window.fetchEvents();
+    await waitFor(() => dom.window.document.querySelector('#eventCard-170 .rsvp-card-btn'));
+
+    const reminderBefore = dom.window.document.querySelector('#eventCard-170 .reminder-btn');
+    assert.ok(!reminderBefore.classList.contains('is-saved'), 'set up: the event is not in «قائمتي» yet');
+
+    dom.window.document.querySelector('#eventCard-170 .rsvp-card-btn').click();
+    await waitFor(() => calls.some(call => call.path === '/api/events/170/rsvp'));
+
+    const put = calls.find(call => call.path === '/api/events/170/rsvp');
+    assert.strictEqual(put.method, 'PUT', 'the card answer is the existing upsert route');
+    assert.deepStrictEqual(
+      JSON.parse(put.body),
+      { response: 'yes', party_size: 1 },
+      'the card answers «جاي» for one person — the count is edited on the event page'
+    );
+    assert.strictEqual(put.headers.Authorization, 'Bearer test-token-web-dom', 'and it needs the session');
+
+    // «جاي» يُنشئ «ذكّرني» على الخادم، والكرت يقول ذلك بدل انتظار إعادة تحميل.
+    await waitFor(() => dom.window.document.querySelector('#eventCard-170 .reminder-btn').classList.contains('is-saved'));
+    assert.ok(
+      dom.window.document.querySelector('#eventCard-170 .reminder-btn').getAttribute('aria-label') === 'في قائمتي',
+      'the reminder button now reads as saved'
+    );
+  });
+
+  await test('«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل', async () => {
+    const calls = [];
+    const base = buildFetchStub();
+    const cardEvent = buildCardEvent();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          const method = options.method || 'GET';
+          calls.push({ path: requestPath, method, body: options.body });
+          if (requestPath === '/api/events' && method === 'GET') {
+            return jsonResponse({ success: true, events: [cardEvent], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+          }
+          if (requestPath === '/api/occasion-types') {
+            return jsonResponse({ success: true, types: [MESSAGES_WEDDING_TYPE, FUNERAL_TYPE] });
+          }
+          if (requestPath === '/api/events/170') return jsonResponse({ success: true, event: cardEvent });
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+    await dom.window.fetchEvents();
+    await waitFor(() => dom.window.document.querySelector('#eventCard-170 .card-messages-btn'));
+
+    const sheet = dom.window.document.getElementById('messageSheetModal');
+    assert.strictEqual(sheet.style.display, 'none', 'set up: the sheet starts closed');
+
+    dom.window.document.querySelector('#eventCard-170 .card-messages-btn').click();
+    await waitFor(() => dom.window.document.querySelectorAll('#messageSheetList .message-sheet-option').length === 2);
+
+    assert.strictEqual(sheet.style.display, 'flex', '«بارك» opens the «اختر رسالة» sheet');
+    assert.ok(
+      dom.window.document.getElementById('messageSheetTitle').textContent.includes('اختر رسالة'),
+      'the sheet names itself as the spec does'
+    );
+    const options = Array.from(dom.window.document.querySelectorAll('#messageSheetList .message-sheet-option'));
+    assert.ok(options[0].textContent.includes('ألف ألف مبارك'), 'the type\'s ready messages are listed as the server sent them');
+    assert.ok(options[1].textContent.includes('دامت الأفراح'), 'and in the server\'s order');
+    assert.ok(
+      !calls.some(call => call.path.endsWith('/congratulate')),
+      'nothing is sent by opening the sheet — it proposes, the user sends'
+    );
+
+    // اختيار رسالة: الورقة تُغلق، وغرفة التبريكات القائمة تفتح بالنصّ في حقلها.
+    options[0].click();
+    await waitFor(() => dom.window.document.getElementById('chatModal').style.display === 'flex');
+    assert.strictEqual(sheet.style.display, 'none', 'picking a message closes the sheet');
+    assert.strictEqual(
+      dom.window.document.getElementById('chatInputMessage').value,
+      'ألف ألف مبارك، الله يبارك لهما',
+      'and the message lands in the existing composer, ready to edit'
+    );
+
+    // «اكتب رسالتك بنفسك» يفتح الحقل نفسه فارغاً — حرية الكتابة بابٌ لا يُغلق.
+    dom.window.closeChatModal();
+    dom.window.document.querySelector('#eventCard-170 .card-messages-btn').click();
+    await waitFor(() => dom.window.document.querySelectorAll('#messageSheetList .message-sheet-option').length === 2);
+    dom.window.document.querySelector('#messageSheetModal .message-sheet-free').click();
+    await waitFor(() => dom.window.document.getElementById('chatModal').style.display === 'flex');
+    assert.strictEqual(
+      dom.window.document.getElementById('chatInputMessage').value,
+      '',
+      '«اكتب رسالتك بنفسك» starts with an empty field, not the last ready message'
+    );
+  });
+
+  await test('ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده', async () => {
+    const base = buildFetchStub();
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (win) => {
+        win.fetch = async (url, options = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/occasion-types') {
+            // النوع نفسه، والمطفأ لا يصل من الخادم: القائمة هنا فارغة كما يعيدها
+            // الخادم بعد إطفاء كل رسائل النوع.
+            return jsonResponse({ success: true, types: [{ ...MESSAGES_WEDDING_TYPE, messages: [] }, FUNERAL_TYPE] });
+          }
+          return base(url, options);
+        };
+      }
+    });
+    await flushBoot();
+
+    await dom.window.openMessageSheet(170, MESSAGES_WEDDING_TYPE.id);
+    const list = dom.window.document.getElementById('messageSheetList');
+    assert.strictEqual(
+      dom.window.document.querySelectorAll('#messageSheetList .message-sheet-option').length,
+      0,
+      'no ready-message buttons are drawn from a constant in the client'
+    );
+    assert.ok(list.textContent.includes('اكتب رسالتك بنفسك'), 'the fallback is the free-writing door, not an empty box');
+  });
+
+  await test('عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة', async () => {
+    const dom = buildEnv();
+
+    const counters = dom.window.renderEventCountersHtml({
+      occasion_type: MESSAGES_WEDDING_TYPE,
+      interested_count: 12,
+      congratulations_count: 5
+    });
+    assert.ok(counters.includes('مهتمين'), '«مهتمين» is one of the public counters');
+    assert.ok(counters.includes('تبريكات'), 'and «تبريكات» carries the type\'s own label');
+    assert.ok(counters.includes('12') && counters.includes('5'), 'with the server figures, not local arithmetic');
+
+    // الحقل الغائب = النوع أطفأه: لا صفر يُرسم مكانه.
+    const hidden = dom.window.renderEventCountersHtml({ occasion_type: MESSAGES_WEDDING_TYPE });
+    assert.strictEqual(hidden, '', 'a type that hides both counters draws no counter block at all');
+
+    // نغمة وقورة: لا عدّاد حتى لو حمل الصفّ الرقمين.
+    const solemn = dom.window.renderEventCountersHtml(
+      { occasion_type: FUNERAL_TYPE, interested_count: 12, congratulations_count: 5 },
+      { isMourning: true }
+    );
+    assert.strictEqual(solemn, '', 'a funeral carries no counter, whatever the fields say');
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

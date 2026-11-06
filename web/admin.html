@@ -479,6 +479,46 @@
           <div id="occasionTypesList" class="occasion-types-table-wrapper"></div>
         </div>
 
+        <!-- الرسائل الجاهزة لكل نوع (تذكرة #170): «بارك»/«عزّي» في الكرت يفتح
+             ورقة «اختر رسالة» من هذه القائمة، والنشِط وحده يصل العميل — فالإطفاء
+             يخفيها بلا حذف. إضافة وتعديل وترتيب هنا، بسوبر أدمن وحده. -->
+        <div class="pane-box" id="occasionTypeMessagesWrapper" style="display:none; margin-top:20px;">
+          <div class="pane-header">
+            <h2 id="occasionTypeMessagesTitle"><i class="fa-solid fa-comments"></i> الرسائل الجاهزة</h2>
+            <p>الرسائل التي تظهر للمستخدم في ورقة «اختر رسالة» لهذا النوع — النشِطة وحدها. «إطفاء» يخفيها بلا حذف، والترتيب ترتيب ظهورها.</p>
+            <button type="button" class="admin-btn-ghost" style="margin-top:10px;" onclick="closeOccasionTypeMessages()">
+              <i class="fa-solid fa-xmark"></i> إغلاق
+            </button>
+          </div>
+
+          <div id="occasionTypeMessagesList" class="occasion-types-table-wrapper"></div>
+
+          <form id="occasionTypeMessageForm" class="admin-form" onsubmit="handleOccasionTypeMessageSubmit(event)" style="margin-top:18px;">
+            <input type="hidden" id="otmId">
+            <div class="form-group">
+              <label for="otmBody">نصّ الرسالة *</label>
+              <textarea id="otmBody" rows="2" maxlength="300" required placeholder="مثال: ألف ألف مبارك، الله يبارك لهما ويبارك عليهما" style="width:100%; padding:11px 12px; border:1px solid var(--admin-card-border); border-radius:10px; background:var(--admin-bg); color:var(--text-main); font-family:inherit; font-size:0.92rem; resize:vertical;"></textarea>
+              <span class="hint-text">٣٠٠ حرف كحدّ أقصى — والرسالة تخرج كما تُكتب هنا بلا تعديل.</span>
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label for="otmPosition">الترتيب</label>
+                <input type="number" id="otmPosition" step="1" placeholder="آخر القائمة">
+              </div>
+              <div class="form-group half">
+                <label style="display:flex; align-items:center; gap:8px; font-weight:400;">
+                  <input type="checkbox" id="otmActive" checked style="width:auto;">
+                  <span>نشِطة (تظهر في الورقة)</span>
+                </label>
+              </div>
+            </div>
+            <div class="pane-controls-bar" style="margin-bottom:0;">
+              <button type="submit" id="otmSubmitBtn" class="admin-btn-primary"><i class="fa-solid fa-plus"></i> إضافة رسالة</button>
+              <button type="button" id="otmCancelBtn" class="admin-btn-ghost" style="display:none;" onclick="cancelOccasionTypeMessageEdit()">إلغاء التعديل</button>
+            </div>
+          </form>
+        </div>
+
         <div class="pane-box" id="occasionTypeFormWrapper" style="display:none; margin-top:20px;">
           <div class="pane-header">
             <h2 id="occasionTypeFormTitle"><i class="fa-solid fa-pen"></i> نوع مناسبة جديد</h2>
@@ -1597,6 +1637,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="admin.js?v=2.8.5"></script>
+  <script src="admin.js?v=2.8.6"></script>
 </body>
 </html>

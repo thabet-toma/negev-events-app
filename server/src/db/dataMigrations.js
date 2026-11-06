@@ -2390,6 +2390,94 @@ const steps = [
         + `${rsvpCountResult.affectedRows} occasion_type row(s) set to show_rsvp_count=0 for tone='solemn'.`
       );
     }
+  },
+  {
+    // الرسائل الجاهزة لكل نوع مناسبة (تذكرة #170، المواصفة #156 — المرحلة ٢).
+    //
+    // **آمنة للتكرار بذاتها:** الجدول داخل `tableExists` (schema.sql ينشئه
+    // للتنصيبات الجديدة، وهذه الخطوة للقواعد القائمة)، والبذرة لا تُكتب إلا
+    // لنوع **بلا صفّ رسالة واحد** — فلا تستبدل رسالة موجودة، ولا تكرّر نسخة
+    // ثانية على تشغيلٍ تالٍ، ولا تُلغي اختيار السوبر أدمن (تعديله أو إطفاؤه
+    // أو حذفه يبقى كما هو لأن الشرط يصير كاذباً بعد أول بذرة).
+    //
+    // والبذرة **بالاسم** — بيانات تنصيب لا قاعدة عمل: لا شيء خارج db/ يفرّق
+    // بين الأنواع الاسم (نفس قاعدة add-rsvp-2026-11 أعلاه).
+    name: 'add-occasion-type-messages-2026-11',
+    async run(connection) {
+      if (!(await tableExists(connection, 'occasion_type_messages'))) {
+        await connection.query(`
+          CREATE TABLE occasion_type_messages (
+            id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            occasion_type_id  INT UNSIGNED NOT NULL,
+            body              VARCHAR(300) NOT NULL,
+            position          INT          NOT NULL DEFAULT 0,
+            is_active         TINYINT(1)   NOT NULL DEFAULT 1,
+            PRIMARY KEY (id),
+            KEY idx_occasion_type_messages_type (occasion_type_id, position),
+            CONSTRAINT fk_occasion_type_messages_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-occasion-type-messages-2026-11: occasion_type_messages table created.');
+      }
+
+      // رسالتان إلى ثلاث لكل نوع مزروع، بنبرة نوعه: تهنئة على الفرح وتعزية
+      // على العزاء. لا شيء هنا يقرأ هذه القائمة غير هذا الملف.
+      const SEED_MESSAGES = {
+        'عرس': [
+          'ألف ألف مبارك، الله يبارك لهما ويبارك عليهما ويجمع بينهما في خير',
+          'مبارك الفرح والزفاف، دامت الأفراح والمسرات في دياركم',
+          'تهانينا الحارة، وعسى الله يتمّم على خير ويرزقهم الذرية الصالحة'
+        ],
+        'عزا': [
+          'إنا لله وإنا إليه راجعون، لله ما أخذ وله ما أعطى، عظّم الله أجركم',
+          'للمرحوم الرحمة ولأهله الصبر والسلوان',
+          'تعازينا الحارة، سائلين الله أن يتغمّده بواسع رحمته ويسكنه فسيح جنانه'
+        ],
+        'خطوبة': [
+          'ألف مبروك الخطوبة، جعلها الله مقدمة خير وفرح',
+          'مبارك الخطوبة، وعسى الله يتمّم على خير ويبارك لهما'
+        ],
+        'نجاح': [
+          'ألف مبروك النجاح، دوام التوفيق والتميّز',
+          'تهانينا بتميّزكم، عسى الله يفتح لكم أبواب كل خير'
+        ],
+        'حج وعمرة': [
+          'حجّ مبرور وذنب مغفور وسعي مشكور',
+          'تقبّل الله طاعتكم، وجعله حجّاً مبروراً وعملاً متقبّلاً'
+        ]
+      };
+
+      let seededMessages = 0;
+      for (const [typeName, bodies] of Object.entries(SEED_MESSAGES)) {
+        const [typeRows] = await connection.execute(
+          'SELECT id FROM occasion_types WHERE name = ?',
+          [typeName]
+        );
+        if (!typeRows.length) continue;
+
+        const typeId = typeRows[0].id;
+        const [[existing]] = await connection.execute(
+          'SELECT COUNT(*) AS total FROM occasion_type_messages WHERE occasion_type_id = ?',
+          [typeId]
+        );
+        // رسالة واحدة موجودة تعني «هذا النوع مُبذور أو مُدار» — لا نكتب شيئاً،
+        // وإلا صار كل تشغيل يضيف نسخة جديدة من البذرة إلى ما اختاره الأدمن.
+        if (Number(existing.total) > 0) continue;
+
+        for (let index = 0; index < bodies.length; index += 1) {
+          await connection.execute(
+            `INSERT INTO occasion_type_messages (occasion_type_id, body, position, is_active)
+             VALUES (?, ?, ?, 1)`,
+            [typeId, bodies[index], index + 1]
+          );
+        }
+        seededMessages += bodies.length;
+      }
+
+      logger.info(
+        `[migrations] add-occasion-type-messages-2026-11: ensured table; seeded ${seededMessages} message(s) into types with none.`
+      );
+    }
   }
 ];
 

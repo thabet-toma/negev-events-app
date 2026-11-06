@@ -137,6 +137,14 @@ const DUPLICATE_DATE_WINDOW_DAYS = 1;
 const RSVP_PARTY_SIZE_MAX = 20;
 
 /**
+ * أقصى طول لنصّ الرسالة الجاهزة الواحدة (تذكرة #170، والمواصفة #156 —
+ * «`body VARCHAR(300)`»). العمود في `schema.sql` وفي خطوة الترحيل بهذا العرض
+ * نفسه، والمسار يقصّ عليه بـ`cleanString` قبل الكتابة، فلا تصل رسالة أطول إلى
+ * MySQL فتفشل بـ«البيانات أطول من العمود» بدل رسالة عربية مفهومة.
+ */
+const OCCASION_MESSAGE_BODY_MAX = 300;
+
+/**
  * Closed list of analytics event names (issue #44). The governing rule is:
  * we record what a person DID in the app, never what they READ in it — a row
  * saying "this named person opened this particular عزاء" reads as
@@ -309,6 +317,7 @@ module.exports = {
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
   RSVP_PARTY_SIZE_MAX,
+  OCCASION_MESSAGE_BODY_MAX,
   OCCASION_TONES,
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,

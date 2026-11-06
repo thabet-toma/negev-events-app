@@ -179,6 +179,36 @@ async function congratulationsForEvents(eventIds) {
   return map;
 }
 
+/**
+ * Whether the event page's public «تبريكات» counter may be drawn (تذكرة #170).
+ * Same three refusals `rsvpCountVisible` below spells out, for the same
+ * reasons: a `solemn` type carries no counter at all («العزاء لا أزرار ولا
+ * عدّادات»، #146 المرحلة ٢), a type that switched the flag off hides it, and
+ * no type means no rule to read. The type object is what callers already hold
+ * (`attachHonoreesAndTypes`), and a raw SQL row's 0/1 is accepted too.
+ */
+function congratulationsCountVisible(occasionType) {
+  if (!occasionType) return false;
+  if (occasionType.tone === 'solemn') return false;
+  if (occasionType.show_congratulations_count === false) return false;
+  if (occasionType.show_congratulations_count === 0) return false;
+  return true;
+}
+
+/**
+ * Approved congratulations of one event — the public figure. A `pending` or
+ * `hidden` row is not counted: `getEventDetails` hands the caller its own
+ * pending submission inside the list, and counting that would make the number
+ * disagree with what everyone else sees.
+ */
+async function approvedCongratulationsCount(eventId) {
+  const row = await db.queryOne(
+    "SELECT COUNT(*) AS total FROM congratulations WHERE event_id = ? AND status = 'approved'",
+    [eventId]
+  );
+  return Number(row.total);
+}
+
 /** Groups follower counts by event id: { [eventId]: count }. */
 async function followersCountsForEvents(eventIds) {
   if (!eventIds.length) return {};
@@ -1069,12 +1099,20 @@ async function getEventDetails(eventId, { legacyOnly = false, userId = null } = 
   // العدّاد العلني حين يسمح النوع (`rsvpCountVisible`) — ويغيب كلياً حين يخفيه.
   const [withRsvpCounters] = await attachRsvpCounters([withReminderState]);
 
+  // عدّاد التبريكات العلني (تذكرة #170): «تبريكات» في عدّادات صفحة المناسبة.
+  // يغيب كلياً — لا صفراً — حين يخفيه النوع أو تكون نغمته وقورة، كأخويه
+  // `followers_count` و`rsvp_going_count` أعلاه: عدّاد مخفيّ يُرسم صفراً كذبٌ
+  // عن المناسبة.
+  const withCongratsCount = congratulationsCountVisible(withRsvpCounters.occasion_type)
+    ? { ...withRsvpCounters, congratulations_count: await approvedCongratulationsCount(eventId) }
+    : withRsvpCounters;
+
   // جواب المستخدم على المناسبة المعروضة: لعميل مسجَّل ونوع `rsvp_enabled` وحدهما،
   // وإلا فلا مفتاح أصلاً (كـ`followers_count` أعلاه — الحقل الإضافي يغيب ولا
   // يُملأ لزائر). و`null` هنا تعني «لم يُجب بعد»، لا «غير مسموح».
-  const withRsvpState = userId && withRsvpCounters.occasion_type?.rsvp_enabled === true
-    ? { ...withRsvpCounters, my_rsvp: await myRsvpFor(eventId, userId) }
-    : withRsvpCounters;
+  const withRsvpState = userId && withCongratsCount.occasion_type?.rsvp_enabled === true
+    ? { ...withCongratsCount, my_rsvp: await myRsvpFor(eventId, userId) }
+    : withCongratsCount;
 
   return {
     ...withRsvpState,

@@ -922,6 +922,86 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     );
   }
 
+  /// رسائل نوع المناسبة الجاهزة (تذكرة #170) — من `GET /api/occasion-types`
+  /// المحمّلة أصلاً في هذه الشاشة (`_typesList`)، لا نصّ تهنئة في الكود.
+  List<OccasionMessage> _typeMessages(Event event) {
+    final typeId = event.occasionType?.id;
+    if (typeId == null) return const [];
+    for (final type in _typesList) {
+      if (type.id == typeId) return type.messages;
+    }
+    return const [];
+  }
+
+  /// «بارك»/«عزّي» من الكرت: ورقة «اختر رسالة» إن كان للنوع رسائل، وإلا ورقة
+  /// التبريكات القائمة كما كانت — زرّ لا يفتح ورقة فارغة.
+  Future<void> _openMessages(Event event) async {
+    final messages = _typeMessages(event);
+    if (messages.isEmpty) {
+      await _openCongratulations(event);
+      return;
+    }
+    await openMessageSheet(
+      context,
+      eventId: event.id,
+      label: event.occasionType?.congratulationsLabel ?? 'تبريكات',
+      messages: messages,
+      onSuccess: _refreshInPlace,
+    );
+  }
+
+  /// «جاي ✓» من الكرت (تذكرة #170): `PUT /api/events/:id/rsvp` بعدد 1 — والعدد
+  /// يُعدَّل من صفحة المناسبة. و`yes` يُنشئ «ذكّرني» على الخادم (تذكرة #168)،
+  /// فمنبّه الجهاز يُجدول هنا ويُقرأ الكرت «محفوظة» بنجاح الفعل نفسه.
+  Future<void> _rsvpGoingFromCard(Event event) async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      await openSignInGate(context, 'سجّل الدخول لتأكيد حضورك');
+      return;
+    }
+
+    bool willAlarm = true;
+    try {
+      // العدد 1 للجواب الأول. ومن أجاب سابقاً من صفحة المناسبة بعددٍ أكبر
+      // يُحفظ عدده كما هو — ضغطةٌ على الكرت ليست أمراً بمحو مرافقيه من العدّاد.
+      final knownPartySize = event.myRsvp?.isGoing == true ? event.myRsvp!.partySize : 1;
+      await runPositiveMoment(
+        () => services.api.setRsvp(event.id, going: true, partySize: knownPartySize),
+      );
+      if (!event.isReminded) {
+        willAlarm = await services.reminders.onReminderAdded();
+      }
+      services.myListRevision.value++;
+      services.savedChange.value = (eventId: event.id, saved: true);
+      if (!mounted) return;
+      setState(() {
+        _events = _events
+            .map(
+              (e) => e.id == event.id
+                  ? e.copyWithReminder(
+                      isReminded: true,
+                      followersCount: e.followersCount == null || event.isReminded
+                          ? e.followersCount
+                          : e.followersCount! + 1,
+                    )
+                  : e,
+            )
+            .toList();
+      });
+      if (!willAlarm) {
+        showMessage(
+          context,
+          'سجّلنا حضورك، لكن هذا الجهاز لن ينبّهك لأنّك رفضت إذن الإشعارات — فعّله من إعدادات النظام',
+          isError: true,
+        );
+      } else {
+        showMessage(context, 'تم تسجيل حضورك — وأُضيفت إلى قائمتك');
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
   Future<void> _toggleRemind(Event event) async {
     final services = AppServices.of(context);
     if (!services.auth.isSignedIn) {
@@ -1704,6 +1784,8 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               onTap: () => _openEvent(event.id),
               onCongratulationsTap: () => _openCongratulations(event),
               onRemindTap: () => _toggleRemind(event),
+              onRsvpTap: () => _rsvpGoingFromCard(event),
+              onMessagesTap: () => _openMessages(event),
             );
             // الظهور المتدرّج للشاشة الأولى وحدها — مناسبة من صفحة تالية أو
             // فلتر جديد لا تحمل معرّفها في هذه المجموعة فتُرسَم فوراً (٥٣).

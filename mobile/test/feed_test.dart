@@ -716,6 +716,7 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
+            theme: AppTheme.light(),
             home: Directionality(
               textDirection: TextDirection.rtl,
               child: Scaffold(body: EventCard(event: mourningEvent, onTap: () {})),
@@ -734,6 +735,174 @@ void main() {
         expect(find.text('التفاصيل'), findsOneWidget);
       },
     );
+
+    // أفعال الكرت (تذكرة #170): عرس يحمل «ذكّرني ♥» و«جاي ✓» و«بارك»، والعزاء
+    // «عزّي» وحده — الرسائل لا تُكتب في الكرت، بل تُفتح ورقتها.
+    Map<String, dynamic> actingEventJson({bool rsvpEnabled = true}) => {
+          'id': 611,
+          'title': '',
+          'groom_name': 'سالم أبو الاختبار',
+          'town': 'رهط',
+          'event_date': '2026-12-31',
+          'occasion_type': {
+            'id': 1,
+            'name': 'عرس',
+            'icon': '💍',
+            'color': '#b8860b',
+            'tone': 'festive',
+            'congratulations_label': 'تبريكات',
+            'rsvp_enabled': rsvpEnabled,
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+        };
+
+    Widget wrapCard(Widget card) => MaterialApp(
+          theme: AppTheme.light(),
+          home: Directionality(
+            textDirection: TextDirection.rtl,
+            child: Scaffold(body: card),
+          ),
+        );
+
+    testWidgets(
+      'a wedding card carries «ذكّرني» و«جاي» و«بارك», and each button calls its own action',
+      (tester) async {
+        var reminded = 0;
+        var rsvpd = 0;
+        var messaged = 0;
+
+        await tester.pumpWidget(wrapCard(EventCard(
+          event: Event.fromJson(actingEventJson()),
+          onTap: () {},
+          onRemindTap: () => reminded++,
+          onRsvpTap: () => rsvpd++,
+          onMessagesTap: () => messaged++,
+        )));
+
+        expect(find.text('ذكّرني'), findsOneWidget, reason: '«ذكّرني ♥» هو المسار القائم');
+        expect(find.text('جاي'), findsOneWidget, reason: '«جاي ✓» على نوع يفتح تأكيد الحضور');
+        expect(find.text('بارك'), findsOneWidget, reason: 'فعل الرسالة على الفرح');
+        // لغة المواصفة للعزاء («عزّي») لا تظهر على عرس، ولا تسمية القسم الطويلة.
+        expect(find.text('عزّي'), findsNothing);
+        expect(find.text('تبريكات'), findsNothing);
+
+        await tester.tap(find.text('ذكّرني'));
+        await tester.tap(find.text('جاي'));
+        await tester.tap(find.text('بارك'));
+        await tester.pump();
+
+        expect(reminded, 1, reason: '«ذكّرني» يمرّ بمساره القائم، والكرت لا يعرف النداء نفسه');
+        expect(rsvpd, 1, reason: '«جاي» فعل مستقل عن ورقة التبريكات');
+        expect(messaged, 1, reason: '«بارك» يفتح ورقة «اختر رسالة» لا غيرها');
+      },
+    );
+
+    testWidgets(
+      'a type with rsvp_enabled off carries no «جاي» — a live handler does not override the switch',
+      (tester) async {
+        await tester.pumpWidget(wrapCard(EventCard(
+          event: Event.fromJson(actingEventJson(rsvpEnabled: false)),
+          onTap: () {},
+          onRemindTap: () {},
+          onRsvpTap: () => fail('a switched-off type must not even offer the action'),
+          onMessagesTap: () {},
+        )));
+
+        expect(find.text('جاي'), findsNothing, reason: 'نوع بلا rsvp_enabled بلا «جاي»');
+        expect(find.text('بارك'), findsOneWidget, reason: 'والتبريك باقٍ — العلَم لا يمسّه');
+        expect(find.text('ذكّرني'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a mourning card carries «عزّي» alone: no «جاي», no «ذكّرني», and no counter chip',
+      (tester) async {
+        final funeral = Event.fromJson({
+          'id': 612,
+          'groom_name': 'المرحوم سالم',
+          'town': 'رهط',
+          'event_date': '2026-12-31',
+          'occasion_type': {
+            'id': 2,
+            'name': 'عزا',
+            'icon': '🕊️',
+            'color': '#475569',
+            'tone': 'solemn',
+            'congratulations_label': 'تعازي',
+            // العلَم مرفوع عمداً: النغمة وحدها هي ما يمنع الأزرار.
+            'rsvp_enabled': true,
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+        });
+
+        var messaged = 0;
+        await tester.pumpWidget(wrapCard(EventCard(
+          event: funeral,
+          onTap: () {},
+          onRemindTap: () => fail('no «ذكّرني» on a funeral card'),
+          onRsvpTap: () => fail('no «جاي» on a funeral card'),
+          onMessagesTap: () => messaged++,
+        )));
+
+        expect(find.text('عزّي'), findsOneWidget);
+        expect(find.text('بارك'), findsNothing);
+        expect(find.text('جاي'), findsNothing);
+        expect(find.text('ذكّرني'), findsNothing);
+        expect(find.text('غداً'), findsNothing, reason: 'العزاء لا عدّادات');
+
+        await tester.tap(find.text('عزّي'));
+        expect(messaged, 1);
+      },
+    );
+
+    test('the countdown counts days in Jerusalem time, not in the device zone', () {
+      // 2026-11-05 22:30 UTC = 00:30 من ٦ نوفمبر في القدس (‏UTC+2 شتاءً).
+      final now = DateTime.utc(2026, 11, 5, 22, 30);
+      expect(
+        countdownDaysToEvent('2026-11-06', now: now),
+        0,
+        reason: 'اليوم في القدس هو السادس — لا الغد',
+      );
+      expect(countdownDaysToEvent('2026-11-07', now: now), 1, reason: 'غداً في القدس');
+      expect(countdownDaysToEvent('2026-11-05', now: now), -1, reason: 'أمس في القدس');
+      expect(countdownDaysToEvent('ليس تاريخاً', now: now), isNull);
+    });
+
+    testWidgets('«غداً» is the only red capsule: tomorrow is red, today is not', (tester) async {
+      Map<String, dynamic> onDay(DateTime day) {
+        final key = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+        return {...actingEventJson(), 'id': 620 + day.day, 'event_date': key};
+      }
+
+      // «الغد» بتوقيت القدس — نفس القاعدة التي يطبّقها الكرت.
+      final today = jerusalemToday();
+      final tomorrow = DateTime(today.year, today.month, today.day + 1);
+
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(tomorrow)),
+        onTap: () {},
+      )));
+      final tomorrowChip = tester.widget<Text>(find.text('غداً'));
+      expect(
+        tomorrowChip.style?.color,
+        NegevPalette.light.danger,
+        reason: 'كبسولة «غداً» حمراء وحدها',
+      );
+
+      await tester.pumpWidget(wrapCard(EventCard(
+        event: Event.fromJson(onDay(today)),
+        onTap: () {},
+      )));
+      expect(find.text('اليوم'), findsOneWidget);
+      expect(find.text('غداً'), findsNothing);
+      expect(
+        tester.widget<Text>(find.text('اليوم')).style?.color,
+        NegevPalette.light.success,
+        reason: 'شارة اليوم تبقى خضراء — الأحمر للغد وحده',
+      );
+    });
 
     testWidgets(
       'place chip never reads "كل الأماكن" once a town is selected, and villages come from the server',

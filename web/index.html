@@ -104,7 +104,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="styles.css?v=2.8.3">
+  <link rel="stylesheet" href="styles.css?v=2.8.5">
 </head>
 <body>
 
@@ -2055,6 +2055,26 @@
     </div>
   </div>
 
+  <!-- ورقة «اختر رسالة» (تذكرة #170): «بارك»/«عزّي» في الكرت يفتحها، والرسائل
+       تصل من `messages` في GET /api/occasion-types (النشِط وحده). اختيار رسالة
+       يفتح غرفة التبريكات القائمة بنصّها في الحقل — فيبقى للمستخدم أن يعدّله أو
+       يكتب غيره من زرّ «اكتب رسالتك بنفسك». -->
+  <div id="messageSheetModal" class="modal-overlay" style="display:none;" onclick="if (event.target === this) closeMessageSheet()">
+    <div class="modal-card message-sheet-card" role="dialog" aria-modal="true" aria-labelledby="messageSheetTitle">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="messageSheetTitle"><i class="fa-regular fa-comment-dots" aria-hidden="true"></i> اختر رسالة</h3>
+          <span id="messageSheetSubtitle" class="modal-sub"></span>
+        </div>
+        <button type="button" class="close-modal-btn" onclick="closeMessageSheet()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="messageSheetList" class="message-sheet-list"></div>
+      <button type="button" class="message-sheet-free" onclick="openFreeMessageComposer()">
+        <i class="fa-solid fa-pen" aria-hidden="true"></i> اكتب رسالتك بنفسك
+      </button>
+    </div>
+  </div>
+
   <!-- نافذة المشاركة الخاصة بالموقع — على الكمبيوتر بدل نافذة النظام (كروم/ويندوز 10
        يعلن المشاركة ثم لا يُظهر شيئاً). آخر نافذة في الصفحة عمداً: تفتح فوق
        غرفة التبريكات والبث وصفحة المناسبة، وكلها بنفس z-index. -->
@@ -2093,6 +2113,6 @@
   <script src="config.js?v=2.5.2"></script>
   <script src="api.js?v=2.5.2"></script>
   <script src="occasionForm.js?v=2.5.2"></script>
-  <script src="app.js?v=2.8.4"></script>
+  <script src="app.js?v=2.8.5"></script>
 </body>
 </html>

@@ -2,10 +2,45 @@ import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 import '../models/event.dart';
 import '../state/share_event.dart';
 import '../theme.dart';
+
+/// منطقة الخادم — نفس `_serverZone` في `state/reminder_alarms.dart`: كل ما
+/// يحسبه الخادم (‏`fires_on`، ومناسبات اليوم) محسوب على القدس، فالعدّ التنازلي
+/// في الكرت يقاس عليها لا على منطقة الجهاز (تذكرة #170).
+const String _jerusalemZone = 'Asia/Jerusalem';
+
+bool _jerusalemLoaded = false;
+
+/// اليوم الجداري في القدس **لا في منطقة جهاز القارئ**: مغتربٌ في لندن أو
+/// نيويورك يجب أن يقرأ «اليوم» حين يكون اليومُ كذلك عند أهل المناسبة.
+/// قاعدة البيانات الزمنية تُحمَّل مرة واحدة، وهي نفس حزمة `timezone` المستعملة
+/// في المنبّه المحلي أصلاً — فلا تبعية جديدة.
+DateTime jerusalemToday([DateTime? now]) {
+  if (!_jerusalemLoaded) {
+    tzdata.initializeTimeZones();
+    _jerusalemLoaded = true;
+  }
+  final local = tz.TZDateTime.from(now ?? DateTime.now(), tz.getLocation(_jerusalemZone));
+  return DateTime(local.year, local.month, local.day);
+}
+
+/// عدد الأيام من اليوم (بتوقيت القدس) إلى يوم المناسبة: 0 اليوم، 1 غداً، سالب
+/// لمن مضت، و`null` لتاريخ لا يُقرأ. المقارنة بـ`DateTime.utc` لأن فرق يومين
+/// جداريين في المنطقة نفسها قد يكون ٢٣ أو ٢٥ ساعة عند تغيير التوقيت الصيفي،
+/// و`difference().inDays` يقصّ حينها يوماً كاملاً فيقول «اليوم» عن الغد.
+int? countdownDaysToEvent(String rawDate, {DateTime? now}) {
+  final parsed = DateTime.tryParse(rawDate);
+  if (parsed == null) return null;
+  final today = jerusalemToday(now);
+  final eventDay = DateTime.utc(parsed.year, parsed.month, parsed.day);
+  final todayDay = DateTime.utc(today.year, today.month, today.day);
+  return eventDay.difference(todayDay).inDays;
+}
 
 /// ارتفاع احتياطي للكرت حين يضعه مستدعٍ تحت أب غير محدود الارتفاع. لا يُستعمل
 /// في التغذية نفسها إطلاقاً — هناك `PageView` تفرض ارتفاع الصفحة دائماً.
@@ -102,6 +137,8 @@ class EventCard extends StatelessWidget {
     required this.onTap,
     this.onCongratulationsTap,
     this.onRemindTap,
+    this.onRsvpTap,
+    this.onMessagesTap,
   });
 
   final Event event;
@@ -109,23 +146,29 @@ class EventCard extends StatelessWidget {
   /// يفتح صفحة المناسبة — من الصورة ومن زرّ «التفاصيل» معاً.
   final VoidCallback onTap;
 
-  /// `null` يعطل النقر على التبريكات في الشريط.
+  /// `null` يعطل النقر على «بارك»/«عزّي» في لوح المعلومات.
   final VoidCallback? onCongratulationsTap;
 
-  /// `null` يعطل زرّ «احفظ» في لوح المعلومات (لقبه الكامل «أضف لقائمتي»).
+  /// `null` يعطل زرّ «ذكّرني ♥» في لوح المعلومات.
   final VoidCallback? onRemindTap;
 
+  /// «جاي ✓» من الكرت (تذكرة #170) — `null` يعطّل الزرّ فلا يُرسم: زرٌّ بلا
+  /// معالج زرٌّ لا يفعل شيئاً، و«مناسباتي» تبني الكرت بلا معالجات أفعال.
+  final VoidCallback? onRsvpTap;
+
+  /// «بارك»/«عزّي»: يفتح ورقة «اختر رسالة» ثم التبريك القائم (تذكرة #170).
+  /// `null` يفتح ورقة التبريكات القائمة مباشرةً (سلوك ما قبل التذكرة).
+  final VoidCallback? onMessagesTap;
+
+  /// عدد الأيام حتى يوم المناسبة بتوقيت القدس — «غداً» هي الحالة ١ وحدها.
+  int? get _countdownDays => countdownDaysToEvent(event.eventDate);
+
   String get _countdownText {
-    final eventDate = DateTime.tryParse(event.eventDate);
-    if (eventDate == null) return '';
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
-    final diffDays = DateTime(eventDate.year, eventDate.month, eventDate.day)
-        .difference(todayOnly)
-        .inDays;
-    if (diffDays == 0) return 'اليوم';
-    if (diffDays == 1) return 'غداً';
-    if (diffDays > 1) return 'باقي $diffDays أيام';
+    final days = _countdownDays;
+    if (days == null) return '';
+    if (days == 0) return 'اليوم';
+    if (days == 1) return 'غداً';
+    if (days > 1) return 'باقي $days أيام';
     return 'مناسبة سابقة';
   }
 
@@ -174,9 +217,12 @@ class EventCard extends StatelessWidget {
                         toneColor: toneColor,
                         isSolemn: isSolemn,
                         countdownText: _countdownText,
+                        countdownIsTomorrow: _countdownDays == 1,
                         onDetailsTap: onTap,
                         onCongratulationsTap: onCongratulationsTap,
                         onRemindTap: onRemindTap,
+                        onRsvpTap: onRsvpTap,
+                        onMessagesTap: onMessagesTap,
                         onShareTap: () => shareEvent(context, event),
                       ),
                     ],
@@ -399,8 +445,11 @@ class CardCaption extends StatelessWidget {
     required this.isSolemn,
     required this.countdownText,
     required this.onDetailsTap,
+    this.countdownIsTomorrow = false,
     this.onCongratulationsTap,
     this.onRemindTap,
+    this.onRsvpTap,
+    this.onMessagesTap,
     this.onShareTap,
   });
 
@@ -409,9 +458,14 @@ class CardCaption extends StatelessWidget {
   final Color toneColor;
   final bool isSolemn;
   final String countdownText;
+
+  /// «غداً» وحدها كبسولة حمراء (تذكرة #170) — يوم الغد هو ما يحرّك الناس فعلاً.
+  final bool countdownIsTomorrow;
   final VoidCallback onDetailsTap;
   final VoidCallback? onCongratulationsTap;
   final VoidCallback? onRemindTap;
+  final VoidCallback? onRsvpTap;
+  final VoidCallback? onMessagesTap;
   final VoidCallback? onShareTap;
 
   @override
@@ -424,9 +478,15 @@ class CardCaption extends StatelessWidget {
         .join(' — ');
     final clan = event.familyClan.trim();
 
-    final congratulationsLabel =
-        type?.congratulationsLabel ?? 'تبريكات';
     final shareLabel = isSolemn ? 'أرسل النعي' : 'شارك المناسبة';
+    // «بارك» على الفرح و«عزّي» على العزاء — فعل الكرت بنصّ المواصفة، وتسمية
+    // القسم تبقى `congratulationsLabel` («تبريكات»/«تعازي») في صفحة المناسبة.
+    final messagesLabel = isSolemn ? 'عزّي' : 'بارك';
+    // «جاي» لنوعٍ فتح تأكيد الحضور وعليه معالج فعلي: النوع وحده لا يكفي —
+    // كرت «مناسباتي» يمرّ بلا `onRsvpTap`، فكان الزرّ يُرسم ولا يفعل شيئاً.
+    final showRsvp =
+        !isSolemn && (type?.rsvpEnabled ?? false) && onRsvpTap != null;
+    final going = event.myRsvp?.isGoing ?? false;
 
     return Container(
       decoration: BoxDecoration(
@@ -448,7 +508,7 @@ class CardCaption extends StatelessWidget {
             children: [
               if (type != null) _TypeBadge(type: type!, color: toneColor),
               if (!isSolemn && countdownText.isNotEmpty)
-                _DateChip(text: countdownText),
+                _DateChip(text: countdownText, tomorrow: countdownIsTomorrow),
             ],
           ),
           const SizedBox(height: 6),
@@ -499,7 +559,10 @@ class CardCaption extends StatelessWidget {
             ),
           const SizedBox(height: 8),
 
-          // 4. صفّ الأزرار: التفاصيل (مصمت بلون النوع)، تبريكات، قائمتي، مشاركة
+          // 4. صفّا الأزرار (تذكرة #170): خمسة أفعال على العرس لا تسع صفّاً
+          // واحداً على هاتف ٣٦٠dp، فالأوّلية للفعل («جاي»/«بارك») في الصفّ
+          // الأول و«ذكّرني ♥» والمشاركة في الثاني. والعزاء: «عزّي» وحده بلا
+          // قلبٍ ولا «جاي» — التفاصيل والمشاركة تنقّل لا فعل مناسبة.
           Row(
             children: [
               Expanded(
@@ -510,32 +573,47 @@ class CardCaption extends StatelessWidget {
                   onTap: onDetailsTap,
                 ),
               ),
+              if (showRsvp) ...[
+                const SizedBox(width: 6),
+                Expanded(
+                  child: _CaptionActionButton(
+                    icon: going ? Icons.check_circle : Icons.check_circle_outline,
+                    label: 'جاي',
+                    highlight: going,
+                    // الزرّ لا يُرسم بلا معالج (أعلاه)، ولا يُحوَّل إلى ورقة
+                    // التبريكات: «جاي» فعلٌ آخر، وخلطُهما يسجّل جواباً لا قصده.
+                    onTap: onRsvpTap,
+                  ),
+                ),
+              ],
               const SizedBox(width: 6),
               Expanded(
                 child: _CaptionActionButton(
                   icon: Icons.chat_bubble_outline,
-                  // التسمية وحدها بلا عدّاد — العدّاد في صفحة المناسبة، وهناك
-                  // يحكمه النوع.
-                  label: congratulationsLabel,
-                  onTap: onCongratulationsTap,
+                  label: messagesLabel,
+                  // الورقة الجديدة حين يصل معالجها، وإلا مسار التبريكات القائم.
+                  onTap: onMessagesTap ?? onCongratulationsTap,
                 ),
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _CaptionActionButton(
-                  icon: event.isReminded
-                      ? Icons.bookmark
-                      : Icons.bookmark_border,
-                  // على الكرت كلمة واحدة قصيرة: «أضف لقائمتي» لا تنضغط بجانب
-                  // «شارك المناسبة» على هاتف ٣٦٠dp (الويب فعلت هذا أولاً).
-                  // النصّ الكامل يعيش في التلميح، وصفحة المناسبة تحمله بنفسها.
-                  label: event.isReminded ? 'محفوظة' : 'احفظ',
-                  tooltip: event.isReminded ? 'في قائمتي' : 'أضف لقائمتي',
-                  highlight: event.isReminded,
-                  onTap: onRemindTap,
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              if (!isSolemn) ...[
+                Expanded(
+                  child: _CaptionActionButton(
+                    icon: event.isReminded ? Icons.favorite : Icons.favorite_border,
+                    // على الكرت كلمة واحدة قصيرة كما في الويب؛ النصّ الكامل
+                    // («أضف لقائمتي») في التلميح وصفحة المناسبة.
+                    label: event.isReminded ? 'محفوظة' : 'ذكّرني',
+                    tooltip: event.isReminded ? 'في قائمتي' : 'أضف لقائمتي',
+                    highlight: event.isReminded,
+                    onTap: onRemindTap,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
+                const SizedBox(width: 6),
+              ],
               Expanded(
                 child: _CaptionActionButton(
                   icon: Icons.share_outlined,
@@ -545,6 +623,8 @@ class CardCaption extends StatelessWidget {
               ),
             ],
           ),
+          // التسمية الطويلة للقسم («تبريكات»/«تعازي») تبقى في صفحة المناسبة؛
+          // الكرت يحمل فعلها وحده («بارك»/«عزّي»).
         ],
       ),
     );
@@ -598,7 +678,20 @@ class _CaptionActionButton extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 14, color: foreground),
+              // «قلب متحرّك حين أضغط ذكّرني» (القصة ٥٥): القلب الفراغ يصير
+              // ممتلئاً بنبضة عند نجاح الحفظ. `AnimatedSwitcher` بمفتاح الأيقونة
+              // هو الرسم كله — لا حالة ولا مؤقّت في الكرت.
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                transitionBuilder: (child, animation) =>
+                    ScaleTransition(scale: animation, child: child),
+                child: Icon(
+                  icon,
+                  key: ValueKey<IconData>(icon),
+                  size: 14,
+                  color: foreground,
+                ),
+              ),
               const SizedBox(width: 4),
               Flexible(
                 child: Text(
@@ -624,28 +717,33 @@ class _CaptionActionButton extends StatelessWidget {
   }
 }
 
-/// شارة عدّاد/تاريخ
+/// شارة عدّاد/تاريخ. `tomorrow` يجعل «غداً» كبسولة حمراء (تذكرة #170) — لون
+/// واحد مشتقّ من النغمة نفسها المستعملة في الويب (`--danger`/`--danger-wash`)،
+/// لا شارة ثانية بنصّ آخر.
 class _DateChip extends StatelessWidget {
-  const _DateChip({required this.text});
+  const _DateChip({required this.text, this.tomorrow = false});
 
   final String text;
+  final bool tomorrow;
 
   @override
   Widget build(BuildContext context) {
     if (text.isEmpty) return const SizedBox.shrink();
+    final ground = tomorrow ? context.c.dangerWash : context.c.successWash;
+    final ink = tomorrow ? context.c.danger : context.c.success;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
       decoration: BoxDecoration(
-        color: context.c.successWash,
+        color: ground,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: context.c.success),
+        border: Border.all(color: ink),
       ),
       child: Text(
         text,
         style: TextStyle(
           fontSize: 11.5,
           fontWeight: FontWeight.w800,
-          color: context.c.success,
+          color: ink,
         ),
       ),
     );

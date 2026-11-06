@@ -4,6 +4,11 @@ let currentFilterStatus = 'all';
 let searchKeyword = '';
 let allOccasionTypes = [];
 let editingOccasionTypeId = null;
+// الرسائل الجاهزة (تذكرة #170): نوعها المفتوح الآن، ورسائله كما جلبها
+// GET /api/admin/occasion-types/:id/messages، ورسالة قيد التعديل إن وُجدت.
+let occasionTypeMessagesTypeId = null;
+let occasionTypeMessagesCache = [];
+let editingOccasionTypeMessageId = null;
 let adminStoriesCache = [];
 let storyStudioPreviewReady = false;
 let adminAlbumsEventId = null;
@@ -2367,6 +2372,7 @@ function renderOccasionTypesList() {
           <th>يظهر على النسخ المنشورة؟</th>
           <th>الحقول</th>
           <th>التفاعلات</th>
+          <th>الرسائل الجاهزة</th>
           <th>المناسبات</th>
           <th>الإجراء</th>
         </tr>
@@ -2387,8 +2393,10 @@ function renderOccasionTypesList() {
             <td><span class="status-tag ${t.legacy_client_supported ? 'approved' : 'pending'}">${t.legacy_client_supported ? 'يظهر' : 'لا يظهر'}</span></td>
             <td>${t.fields.length}</td>
             <td>${t.reactions.length}</td>
+            <td>${(t.messages || []).length}</td>
             <td>${t.events_count}</td>
             <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openOccasionTypeMessages(${t.id})" title="الرسائل الجاهزة"><i class="fa-solid fa-comments"></i> الرسائل</button>
               <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="openOccasionTypeForm(${t.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
               <button class="btn-delete" onclick="deleteOccasionType(${t.id})" title="حذف">
                 <i class="fa-solid fa-trash"></i>
@@ -2603,6 +2611,191 @@ async function deleteOccasionType(id) {
     // ٤٠٩ عملية نجحت جزئياً على الخادم (تعطيل النوع) رغم فشل الطلب ظاهرياً —
     // القائمة تُعاد تحميلها دائماً كي تعكس الحالة الحقيقية لا رسالة الخطأ وحدها.
     await fetchOccasionTypes();
+  }
+}
+
+// 9. الرسائل الجاهزة لكل نوع (تذكرة #170)
+//
+// المسارات `/api/admin/occasion-types/:id/messages` خلف `requireSuperAdmin`
+// على الخادم، فاللوحة لا تقرّر الصلاحية: نداءٌ من أدمن بلدة يُردّ رسالةً
+// عربية كما في بقية تبويب الأنواع.
+
+/** يفتح محرّر رسائل نوع: يُظهر الصندوق ويجلب رسائله كلها (المطفأة أيضاً). */
+async function openOccasionTypeMessages(typeId) {
+  const wrapper = document.getElementById('occasionTypeMessagesWrapper');
+  const title = document.getElementById('occasionTypeMessagesTitle');
+  if (!wrapper || !title) return;
+
+  occasionTypeMessagesTypeId = typeId;
+  const type = allOccasionTypes.find(t => t.id === typeId);
+  title.innerHTML = `<i class="fa-solid fa-comments"></i> الرسائل الجاهزة — ${escapeHtml(type ? type.name : '')}`;
+  wrapper.style.display = 'block';
+  wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  cancelOccasionTypeMessageEdit();
+  await fetchOccasionTypeMessages(typeId);
+}
+
+async function fetchOccasionTypeMessages(typeId) {
+  const container = document.getElementById('occasionTypeMessagesList');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state" style="padding:18px; text-align:center; color:var(--text-dim);">جاري التحميل...</div>';
+
+  try {
+    const res = await adminFetch(`/api/admin/occasion-types/${typeId}/messages`);
+    const data = await res.json();
+    if (!data.success) {
+      container.innerHTML = `<div class="empty-state" style="padding:18px; text-align:center; color:var(--text-dim);">${escapeHtml(data.message || 'تعذّر تحميل الرسائل الجاهزة')}</div>`;
+      return;
+    }
+    occasionTypeMessagesCache = data.messages || [];
+    renderOccasionTypeMessages();
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state" style="padding:18px; text-align:center; color:var(--text-dim);">تعذّر الاتصال بالخادم</div>';
+  }
+}
+
+function renderOccasionTypeMessages() {
+  const container = document.getElementById('occasionTypeMessagesList');
+  if (!container) return;
+
+  if (!occasionTypeMessagesCache.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:26px; text-align:center; color:var(--text-dim);">
+        <i class="fa-regular fa-comment-dots" style="font-size:2rem; color:var(--gold-main); margin-bottom:10px;"></i>
+        <p>لا توجد رسائل جاهزة لهذا النوع بعد — أضف أولى الرسائل من النموذج تحته</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>الترتيب</th>
+          <th>الرسالة</th>
+          <th>الحالة</th>
+          <th>الإجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${occasionTypeMessagesCache.map(message => `
+          <tr>
+            <td>${message.position}</td>
+            <td style="max-width:520px;">${escapeHtml(message.body)}</td>
+            <td><span class="status-tag ${message.is_active ? 'approved' : 'rejected'}">${message.is_active ? 'نشِطة' : 'مطفأة'}</span></td>
+            <td style="white-space:nowrap;">
+              <button class="btn-approve" style="flex:none; padding:8px 12px;" onclick="editOccasionTypeMessage(${message.id})"><i class="fa-solid fa-pen"></i> تعديل</button>
+              <button class="${message.is_active ? 'btn-delete' : 'btn-approve'}" style="flex:none; padding:8px 12px;" onclick="toggleOccasionTypeMessage(${message.id}, ${message.is_active ? 'false' : 'true'})">
+                <i class="fa-solid ${message.is_active ? 'fa-toggle-off' : 'fa-toggle-on'}"></i> ${message.is_active ? 'إطفاء' : 'إظهار'}
+              </button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+/** تعديل رسالة: النموذج نفسه يُعبَّأ، والزرّ يصير «حفظ التعديل». */
+function editOccasionTypeMessage(messageId) {
+  const message = occasionTypeMessagesCache.find(m => m.id === messageId);
+  if (!message) return;
+  editingOccasionTypeMessageId = message.id;
+  document.getElementById('otmId').value = message.id;
+  document.getElementById('otmBody').value = message.body;
+  document.getElementById('otmPosition').value = message.position;
+  document.getElementById('otmActive').checked = Boolean(message.is_active);
+  document.getElementById('otmSubmitBtn').innerHTML = '<i class="fa-solid fa-check"></i> حفظ التعديل';
+  document.getElementById('otmCancelBtn').style.display = 'inline-flex';
+  document.getElementById('otmBody').focus();
+}
+
+function cancelOccasionTypeMessageEdit() {
+  editingOccasionTypeMessageId = null;
+  const form = document.getElementById('occasionTypeMessageForm');
+  if (form) form.reset();
+  const idField = document.getElementById('otmId');
+  if (idField) idField.value = '';
+  const active = document.getElementById('otmActive');
+  if (active) active.checked = true;
+  const submitBtn = document.getElementById('otmSubmitBtn');
+  if (submitBtn) submitBtn.innerHTML = '<i class="fa-solid fa-plus"></i> إضافة رسالة';
+  const cancelBtn = document.getElementById('otmCancelBtn');
+  if (cancelBtn) cancelBtn.style.display = 'none';
+}
+
+function closeOccasionTypeMessages() {
+  const wrapper = document.getElementById('occasionTypeMessagesWrapper');
+  if (wrapper) wrapper.style.display = 'none';
+  occasionTypeMessagesTypeId = null;
+  occasionTypeMessagesCache = [];
+  cancelOccasionTypeMessageEdit();
+}
+
+/** إضافة أو حفظ تعديل — المسار واحد لكل نوع، والفرق POST/PATCH. */
+async function handleOccasionTypeMessageSubmit(event) {
+  event.preventDefault();
+  const typeId = occasionTypeMessagesTypeId;
+  if (!typeId) return;
+
+  const body = document.getElementById('otmBody').value.trim();
+  if (!body) {
+    alert('نصّ الرسالة مطلوب');
+    return;
+  }
+
+  const positionValue = document.getElementById('otmPosition').value.trim();
+  const payload = {
+    body,
+    is_active: document.getElementById('otmActive').checked
+  };
+  if (positionValue !== '') payload.position = parseInt(positionValue, 10);
+
+  const editingId = editingOccasionTypeMessageId;
+  try {
+    const res = await adminFetch(
+      editingId
+        ? `/api/admin/occasion-types/${typeId}/messages/${editingId}`
+        : `/api/admin/occasion-types/${typeId}/messages`,
+      {
+        method: editingId ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }
+    );
+    const data = await res.json();
+    if (!data.success) {
+      alert(data.message || 'تعذّر حفظ الرسالة');
+      return;
+    }
+    cancelOccasionTypeMessageEdit();
+    await fetchOccasionTypeMessages(typeId);
+    // عدّاد العمود في جدول الأنواع يقرأ من القائمة المحمّلة — تُحدَّث كي لا يكذب.
+    await fetchOccasionTypes();
+  } catch (e) {
+    alert('تعذّر الاتصال بالخادم');
+  }
+}
+
+/** إطفاء/إظهار رسالة — PATCH على الحقل وحده، بلا لمس النصّ. */
+async function toggleOccasionTypeMessage(messageId, isActive) {
+  const typeId = occasionTypeMessagesTypeId;
+  if (!typeId) return;
+  try {
+    const res = await adminFetch(`/api/admin/occasion-types/${typeId}/messages/${messageId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: isActive })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert(data.message || 'تعذّر تحديث حالة الرسالة');
+      return;
+    }
+    await fetchOccasionTypeMessages(typeId);
+    await fetchOccasionTypes();
+  } catch (e) {
+    alert('تعذّر الاتصال بالخادم');
   }
 }
 

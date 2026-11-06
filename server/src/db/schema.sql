@@ -187,6 +187,23 @@ CREATE TABLE IF NOT EXISTS occasion_type_reactions (
   CONSTRAINT fk_occasion_type_reactions_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- الرسائل الجاهزة لكل نوع مناسبة (تذكرة #170، المواصفة #156 — المرحلة ٢):
+-- يقرأها العميل من `messages` في ردّ الأنواع العام ويرسمها ورقة «اختر رسالة»
+-- خلف «بارك»/«عزّي»، ويديرها السوبر أدمن من اللوحة. بيانات وقت تشغيل كأخواتها:
+-- نصّ عربي يكتبه الأدمن، لا ثابت في الكود ولا نسخة في أي عميل. `is_active`
+-- يخفيها بلا حذف، و`position` ترتيبها في الورقة. البذرة الأولى في
+-- add-occasion-type-messages-2026-11 في dataMigrations.js.
+CREATE TABLE IF NOT EXISTS occasion_type_messages (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  occasion_type_id  INT UNSIGNED NOT NULL,
+  body              VARCHAR(300) NOT NULL,
+  position          INT          NOT NULL DEFAULT 0,
+  is_active         TINYINT(1)   NOT NULL DEFAULT 1,
+  PRIMARY KEY (id),
+  KEY idx_occasion_type_messages_type (occasion_type_id, position),
+  CONSTRAINT fk_occasion_type_messages_type FOREIGN KEY (occasion_type_id) REFERENCES occasion_types(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- The village is a real place, unlike the catch-all bucket it sits under:
 -- coordinates are NOT NULL because a village without them reproduces the pin
 -- bug the catch-all town has today (services-directory spec, decision #23).

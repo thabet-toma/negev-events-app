@@ -619,6 +619,174 @@ async function run() {
     assert.strictEqual(row2.dinner_time, originalDinnerTime);
   });
 
+  console.log('\nالرسائل الجاهزة لكل نوع (تذكرة #170)');
+
+  const seededWeddingType = async () => (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عرس');
+  const seededFuneralType = async () => (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عزا');
+
+  await test('GET /api/occasion-types يحمل messages لكل نوع مزروع — بذرة، بالشكل العام بلا أعلام إدارة، ولا نصّ في الكود', async () => {
+    const { status, body } = await api('GET', '/api/occasion-types');
+    assert.strictEqual(status, 200);
+
+    for (const type of body.types) {
+      assert.ok(Array.isArray(type.messages), `نوع ${type.name} يجب أن يحمل مصفوفة messages`);
+      assert.ok(type.messages.length > 0, `نوع ${type.name} مزروع برسائل جاهزة — لا قائمة فارغة`);
+      assert.ok(
+        type.messages.every(message => typeof message.body === 'string' && message.body.trim().length > 0),
+        'كل رسالة نصٌّ غير فارغ'
+      );
+      assert.ok(
+        type.messages.every(message => !('is_active' in message) && !('position' in message)),
+        'الشكل العام يحمل id وbody وحدهما — أعلام الإدارة لا تخرج للعميل'
+      );
+    }
+
+    // حسب النوع: رسائل العرس تهنئة، ورسائل العزا عزاء — ولا صفّ مشترك بينهما.
+    const wedding = body.types.find(t => t.name === 'عرس');
+    const funeral = body.types.find(t => t.name === 'عزا');
+    assert.ok(wedding.messages.some(message => message.body.includes('مبارك')), 'رسائل العرس تبارك');
+    assert.ok(funeral.messages.some(message => message.body.includes('لله ما أخذ')), 'ورسائل العزا تعزّي');
+    const weddingIds = new Set(wedding.messages.map(message => message.id));
+    assert.ok(
+      funeral.messages.every(message => !weddingIds.has(message.id)),
+      'كل نوع يقرأ صفوفه وحدها'
+    );
+  });
+
+  await test('السوبر أدمن وحده يدير الرسائل — أدمن البلدة يُردّ 403 على القراءة والإضافة والتعديل', async () => {
+    const wedding = await seededWeddingType();
+
+    const list = await api('GET', `/api/admin/occasion-types/${wedding.id}/messages`, { token: plainAdminToken });
+    assert.strictEqual(list.status, 403, 'قراءة رسائل النوع ليست لأدمن البلدة');
+
+    const add = await api('POST', `/api/admin/occasion-types/${wedding.id}/messages`, {
+      token: plainAdminToken, body: { body: 'رسالة من أدمن بلدة' }
+    });
+    assert.strictEqual(add.status, 403, 'ولا الإضافة');
+
+    const patch = await api('PATCH', `/api/admin/occasion-types/${wedding.id}/messages/${wedding.messages[0].id}`, {
+      token: plainAdminToken, body: { is_active: false }
+    });
+    assert.strictEqual(patch.status, 403, 'ولا الإطفاء');
+  });
+
+  await test('إضافة رسالة وإطفاؤها: تظهر في الإدارة وفي الردّ العام، ويغيب المطفأ عن العميل وحده', async () => {
+    const wedding = await seededWeddingType();
+    const originalCount = wedding.messages.length;
+
+    const created = await api('POST', `/api/admin/occasion-types/${wedding.id}/messages`, {
+      token: superAdminToken, body: { body: 'رسالة اختبار تذكرة ١٧٠' }
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    assert.strictEqual(created.body.typeMessage.is_active, true, 'رسالة يكتبها السوبر أدمن تُقرأ اليوم');
+    const messageId = created.body.typeMessage.id;
+
+    try {
+      const published = (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عرس');
+      assert.strictEqual(published.messages.length, originalCount + 1, 'الرسالة الجديدة تخرج في الردّ العام فوراً');
+      assert.ok(published.messages.some(message => message.id === messageId), 'وبمعرّفها نفسه');
+
+      const off = await api('PATCH', `/api/admin/occasion-types/${wedding.id}/messages/${messageId}`, {
+        token: superAdminToken, body: { is_active: false }
+      });
+      assert.strictEqual(off.status, 200, off.body.message);
+      assert.strictEqual(off.body.typeMessage.is_active, false);
+
+      const afterOff = (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عرس');
+      assert.ok(
+        !afterOff.messages.some(message => message.id === messageId),
+        'المطفأة لا تصل العميل — «النشِط وحده»'
+      );
+      assert.strictEqual(afterOff.messages.length, originalCount, 'والبقية كما هي');
+
+      // الإدارة ترى المطفأة — وإلا اختفت من اللوحة ولم يمكن إظهارها أبداً.
+      const adminList = await api('GET', `/api/admin/occasion-types/${wedding.id}/messages`, { token: superAdminToken });
+      assert.strictEqual(adminList.status, 200);
+      const hiddenRow = adminList.body.messages.find(message => message.id === messageId);
+      assert.ok(hiddenRow, 'المطفأة تبقى في قائمة الإدارة');
+      assert.strictEqual(hiddenRow.is_active, false, 'وبحالتها المطفأة');
+
+      const blank = await api('POST', `/api/admin/occasion-types/${wedding.id}/messages`, {
+        token: superAdminToken, body: { body: '   ' }
+      });
+      assert.strictEqual(blank.status, 400, 'رسالة فارغة تُردّ ٤٠٠ — لا صفّ نصّه مسافات');
+    } finally {
+      // لا مسار حذف للرسائل (تُطفأ ولا تُمحى) — التنظيف مباشر على القاعدة.
+      await db.execute('DELETE FROM occasion_type_messages WHERE id = ?', [messageId]);
+    }
+  });
+
+  await test('تفصيل المناسبة: congratulations_count وinterested_count يصلان إلا ما أطفأه النوع، ولا شيء منهما على العزاء', async () => {
+    const wedding = await seededWeddingType();
+    const funeral = await seededFuneralType();
+
+    const created = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: {
+        occasion_type_id: wedding.id,
+        town: 'رهط',
+        location_name: 'قاعة العدّادات',
+        event_date: '2029-08-08',
+        honorees: [{ name: 'صاحب العدّادات' }]
+      }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    const eventId = created.body.eventId;
+
+    const funeralCreated = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: {
+        occasion_type_id: funeral.id,
+        town: 'رهط',
+        location_name: 'بيت العزاء',
+        event_date: '2029-08-09',
+        event_end_date: '2029-08-10',
+        honorees: [{ name: 'المرحوم الاختبار' }]
+      }
+    });
+    assert.strictEqual(funeralCreated.status, 201, JSON.stringify(funeralCreated.body));
+    const funeralEventId = funeralCreated.body.eventId;
+
+    try {
+      const congratulated = await api('POST', `/api/events/${eventId}/congratulate`, {
+        token: adminToken, body: { message: 'ألف مبارك للعدّادات' }
+      });
+      assert.strictEqual(congratulated.status, 201, JSON.stringify(congratulated.body));
+      assert.strictEqual(congratulated.body.comment.status, 'approved', 'set up: عرس لا يُراجع مسبقاً');
+
+      const detail = await api('GET', `/api/events/${eventId}`);
+      assert.strictEqual(detail.status, 200);
+      assert.strictEqual(detail.body.event.congratulations_count, 1, 'تبريكة معتمدة واحدة تُعدّ واحدة');
+      assert.strictEqual(Number(detail.body.event.interested_count), 0, 'المهتمون عدد التذكيرات، ولو صفراً');
+
+      // إطفاء عدّاد التبريكات من النوع: الحقل يغيب كلياً، ولا صفر مكانه.
+      await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+        token: superAdminToken, body: { show_congratulations_count: false }
+      });
+      try {
+        const offDetail = await api('GET', `/api/events/${eventId}`);
+        assert.ok(
+          !('congratulations_count' in offDetail.body.event),
+          'عدّاد أطفأه النوع لا يُرسل — لا صفراً يُقرأ رقماً'
+        );
+        assert.strictEqual(Number(offDetail.body.event.interested_count), 0, 'وعدّاد المهتمين لا يمسّه علَم غيره');
+      } finally {
+        await api('PATCH', `/api/admin/occasion-types/${wedding.id}`, {
+          token: superAdminToken, body: { show_congratulations_count: true }
+        });
+      }
+
+      // العزاء: النغمة وحدها تحجب العدّادات الثلاثة، ولو كانت أعلام النوع مفتوحة.
+      const funeralDetail = await api('GET', `/api/events/${funeralEventId}`);
+      assert.strictEqual(funeralDetail.status, 200);
+      assert.ok(!('rsvp_going_count' in funeralDetail.body.event), 'لا عدّاد جايين على العزاء');
+      assert.ok(!('interested_count' in funeralDetail.body.event), 'ولا مهتمين');
+      assert.ok(!('congratulations_count' in funeralDetail.body.event), 'ولا تبريكات');
+    } finally {
+      await db.execute('DELETE FROM events WHERE id IN (?, ?)', [eventId, funeralEventId]);
+    }
+  });
+
   console.log('\nOccasion type migration backfill');
 
   await test('A legacy-shaped event row is backfilled to عرس with one event_honorees row', async () => {
@@ -661,6 +829,37 @@ async function run() {
       'SELECT (SELECT COUNT(*) FROM users WHERE person_id IS NULL) + (SELECT COUNT(*) FROM photo_tags WHERE person_id IS NULL) + (SELECT COUNT(*) FROM event_honorees WHERE person_id IS NULL) AS total'
     );
     assert.strictEqual(Number(unlinked.total), 0, 'every named row is linked to a person');
+  });
+
+  await test('إعادة الترحيل لا تكرّر رسائل الأنواع المزروعة — البذرة تُكتب في نوع بلا رسالة واحدة فقط', async () => {
+    // خطوة `add-occasion-type-messages-2026-11` تُشغَّل في كل `db:migrate`،
+    // وشرطها أن النوع لا يحمل رسالة. تشغيلٌ ثالث بعد ولادة القاعدة يجب ألا
+    // يضيف نسخة ثانية من البذرة، وألا يُلغي رسالة أطفأها أو عدّلها السوبر أدمن.
+    const before = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_type_messages');
+    assert.ok(Number(before.total) > 0, 'set up: the migration seeded at least a few messages');
+
+    // رسالة يكتبها الأدمن بنبرة مختلفة: البذرة لا تعرفها، وإعادة التشغيل لا تمسحها.
+    const wedding = (await api('GET', '/api/occasion-types')).body.types.find(t => t.name === 'عرس');
+    const custom = await api('POST', `/api/admin/occasion-types/${wedding.id}/messages`, {
+      token: superAdminToken, body: { body: 'رسالة أدمن قبل إعادة الترحيل' }
+    });
+    assert.strictEqual(custom.status, 201, custom.body.message);
+
+    try {
+      await migrate();
+      const after = await db.queryOne('SELECT COUNT(*) AS total FROM occasion_type_messages');
+      assert.strictEqual(
+        Number(after.total),
+        Number(before.total) + 1,
+        'إعادة الترحيل لم تُضف صفّاً واحداً من البذرة — الصفّ الوحيد الجديد هو رسالة الأدمن'
+      );
+
+      const kept = await db.queryOne('SELECT body FROM occasion_type_messages WHERE id = ?', [custom.body.typeMessage.id]);
+      assert.ok(kept, 'ورسالة الأدمن باقية بعد الترحيل');
+      assert.strictEqual(kept.body, 'رسالة أدمن قبل إعادة الترحيل');
+    } finally {
+      await db.execute('DELETE FROM occasion_type_messages WHERE id = ?', [custom.body.typeMessage.id]);
+    }
   });
 
   console.log('\nOccasion-aware publishing');

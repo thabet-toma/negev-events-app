@@ -2318,6 +2318,42 @@ function formatEventDayLong(evt) {
 }
 
 /**
+ * العدّ التنازلي و«غداً» يُحسبان **بتوقيت القدس** لا بتوقيت جهاز القارئ
+ * (تذكرة #170، والمواصفة #156): مغتربٌ في لندن أو نيويورك يجب أن يقرأ «اليوم»
+ * حين يكون اليومُ في القدس — وهو اليوم الذي يعيشه أهل المناسبة. `en-CA` يعطي
+ * 'YYYY-MM-DD' مباشرة، فالمفتاحان يُقارنان نصّاً بلا تحويل منطقة.
+ */
+const JERUSALEM_TIME_ZONE = 'Asia/Jerusalem';
+
+/** تاريخ اليوم في القدس بصيغة 'YYYY-MM-DD'. */
+function jerusalemTodayKey(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: JERUSALEM_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+}
+
+/** يوم المناسبة مفتاحاً 'YYYY-MM-DD' — الجزء التاريخي وحده من `event_date`. */
+function eventDayKey(evt) {
+  return String(evt && evt.event_date ? evt.event_date : '').split('T')[0];
+}
+
+/**
+ * عدد الأيام من اليوم (بتوقيت القدس) إلى يوم المناسبة: 0 اليوم، 1 غداً، سالب
+ * لمن مضت، و`null` لتاريخ لا يُقرأ. `Date.UTC` على المفتاحين يقيس فرقاً نقيّاً
+ * بالأيام، فلا ساعة صيفية ولا منطقة متصفّح تُزيح النتيجة يوماً.
+ */
+function eventCountdownDays(evt, now = new Date()) {
+  const dayKey = eventDayKey(evt);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
+  const diff = Date.parse(`${dayKey}T00:00:00Z`) - Date.parse(`${jerusalemTodayKey(now)}T00:00:00Z`);
+  if (Number.isNaN(diff)) return null;
+  return Math.round(diff / (1000 * 60 * 60 * 24));
+}
+
+/**
  * قيمة من إعلان تعديل الموعد: قد تكون تاريخاً ('YYYY-MM-DD') وقد تكون نصاً
  * حرّاً كتبه الأدمن (اسم يوم، «بعد أسبوع»…). التاريخ وحده يُصاغ عربياً طويلاً،
  * وغيره يُعرَض كما وصل — الصيغة العربية على قيمة لا تُقرأ تاريخاً تُلقي استثناءً
@@ -2433,15 +2469,13 @@ function cardImageUrl(url) {
  */
 function renderSingleEventCardHtml(evt, opts = {}) {
   const announcement = opts.announcement || null;
-  const eventDate = eventDayDate(evt);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diffTime = eventDate - today;
-  const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  // بتوقيت القدس لا بتوقيت الجهاز — انظر `eventCountdownDays`.
+  const diffDays = eventCountdownDays(evt);
 
   // العدّ التنازلي يُقرأ على كل نوع — و«الفرح» ولهبُه على نعيٍ إساءة.
   let countdownText = '';
-  if (diffDays === 0) countdownText = 'اليوم';
+  if (diffDays === null) countdownText = '';
+  else if (diffDays === 0) countdownText = 'اليوم';
   else if (diffDays === 1) countdownText = 'غداً';
   else if (diffDays > 1) countdownText = `باقي ${diffDays} أيام`;
   else countdownText = 'مناسبة سابقة';
@@ -2462,7 +2496,10 @@ function renderSingleEventCardHtml(evt, opts = {}) {
     <img src="${escapeHtml(cardImageUrl(evt.poster_url))}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
     <div class="card-media-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
-  const countdownChipHtml = isMourning ? '' : `<span class="card-datechip">${escapeHtml(countdownText)}</span>`;
+  // «غداً» كبسولة حمراء وحدها (تذكرة #170): يوم الغد هو ما يحرّك الناس فعلاً،
+  // ولونه يفصلها عن شارة «باقي N أيام» الخضراء. والعزاء بلا أي شارة.
+  const countdownChipHtml = isMourning || !countdownText ? '' : `
+        <span class="card-datechip${diffDays === 1 ? ' card-datechip-tomorrow' : ''}">${escapeHtml(countdownText)}</span>`;
 
   // سطر لكل معلومة بأيقونتها — لا سطر واحد تُحشر فيه كلها بفواصل (طلب المالك
   // 2026-09-30). التاريخ والمكان لكل الأنواع دون استثناء؛ قصة 15 تقتضي
@@ -2493,7 +2530,14 @@ function renderSingleEventCardHtml(evt, opts = {}) {
           <span>${escapeHtml(announcementChangeText(announcement))}</span>
         </div>` : '';
 
-  // الإعلان زرّه واحد: «التفاصيل» بمعرّف المناسبة — الخبر لا يُحفظ ولا يُشارَك.
+  // أفعال الكرت (تذكرة #170، وقرار #146 المرحلة ٢): «التفاصيل» دائماً، ثم أفعال
+  // المناسبة على الفرح — «جاي» (حين يفتح النوع تأكيد الحضور) و«بارك» و«ذكّرني»
+  // — ثم «المشاركة». **والعزاء لا أزرار ولا عدّادات إلا «عزّي»**: زرّ تبريك واحد
+  // بلا قلبٍ ولا «جاي»، والتبريكات تُقرأ «عزّي» من نغمة النوع لا من اسمه.
+  const messagesActionHtml = `
+        <button type="button" class="chat-trigger-btn card-action-btn card-messages-btn" onclick="openMessageSheet(${evt.id}, ${evt.occasion_type && evt.occasion_type.id ? evt.occasion_type.id : 'null'})">
+          <i class="fa-regular fa-comments"></i> <span>${isMourning ? 'عزّي' : 'بارك'}</span>
+        </button>`;
   const actionsHtml = announcement ? `
       <div class="card-caption-actions">
         <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${announcement.event_id != null ? announcement.event_id : evt.id})">
@@ -2503,11 +2547,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
       <div class="card-caption-actions">
         <button type="button" class="card-more-details-btn card-action-btn" onclick="openEventPage(${evt.id})">
           <i class="fa-solid fa-circle-info"></i> <span>التفاصيل</span>
-        </button>
-        <button type="button" class="chat-trigger-btn card-action-btn" onclick="openChatModal(${evt.id})">
-          <i class="fa-regular fa-comments"></i> <span>${escapeHtml(congratulationsLabel(evt))}</span>
-        </button>
-        ${renderReminderButtonHtml(evt, { compact: true })}
+        </button>${isMourning ? '' : renderRsvpCardButtonHtml(evt)}${messagesActionHtml}${isMourning ? '' : renderReminderButtonHtml(evt, { compact: true })}
         <button type="button" class="share-event-btn card-action-btn" onclick="shareEventById(${evt.id})">
           <i class="fa-solid fa-share-nodes"></i> <span>${escapeHtml(shareButtonLabel(evt))}</span>
         </button>
@@ -2840,7 +2880,7 @@ function renderEventRsvpHtml(evt, { isMourning = false } = {}) {
     <div class="event-page-rsvp" id="eventPageRsvp">
       <div class="event-page-rsvp-head">
         <span class="event-page-rsvp-title"><i class="fa-solid fa-user-check" aria-hidden="true"></i> تأكيد الحضور</span>
-        ${goingCount != null ? `<span class="event-page-rsvp-count" id="eventPageRsvpCount">جايون: ${Number(goingCount) || 0}</span>` : ''}
+        ${goingCount != null ? `<span class="event-page-rsvp-count" id="eventPageRsvpCount">جايين: ${Number(goingCount) || 0}</span>` : ''}
       </div>
       <div class="event-page-rsvp-controls">
         <label class="event-page-rsvp-size-label" for="rsvpPartySize">إجمالي الحاضرين بمن فيك</label>
@@ -2858,6 +2898,140 @@ function renderEventRsvpHtml(evt, { isMourning = false } = {}) {
           <i class="fa-solid fa-rotate-left" aria-hidden="true"></i> سحب جوابي
         </button>` : ''}
     </div>`;
+}
+
+/**
+ * «جاي ✓» على الكرت (تذكرة #170): الفعل السريع الوحيد من الكرت، جوابه
+ * `PUT /api/events/:id/rsvp` بعدد 1 — والعدد يُعدَّل من صفحة المناسبة. الزرّ
+ * واحد لا اثنان: «مش جاي» قرار يتغيّر على صفحة المناسبة حيث العدّاد والقائمة.
+ *
+ * لا يُرسم لنوع `rsvp_enabled` مطفأ (`eventRsvpVisible`)، ولا للعزاء (لا يصل
+ * إلى هنا أصلاً — كرت العزاء «عزّي» وحده). وحالته تُقرأ من `my_rsvp` حين
+ * يكون الصفّ قد حملها (بعد جواب سابق في هذه الجلسة)، وإلا يبقى زرّ الدعوة.
+ */
+function renderRsvpCardButtonHtml(evt) {
+  if (!eventRsvpVisible(evt)) return '';
+  const going = !!(evt.my_rsvp && evt.my_rsvp.response === 'yes');
+  return `
+        <button type="button" class="card-action-btn rsvp-card-btn${going ? ' is-chosen' : ''}" onclick="submitCardRsvp(${evt.id})">
+          <i class="fa-solid fa-check"></i> <span>جاي</span>
+        </button>`;
+}
+
+/**
+ * «جاي» من الكرت. العدد: 1 للجواب الأول، أما من سبق أن أجاب من صفحة المناسبة
+ * بعددٍ أكبر فيُحفظ عدده كما هو — ضغطةٌ على الكرت ليست أمراً بمحو مرافقيه من
+ * العدّاد العلني. و«جاي» يُنشئ «ذكّرني» على الخادم (تذكرة #168)، فحالة زرّ
+ * القائمة تُحدَّث بنجاح الفعل نفسه لا تُفترض.
+ */
+async function submitCardRsvp(eventId) {
+  if (!requireAuth({ type: 'rsvp', eventId, response: 'yes' })) return;
+
+  const known = allEvents.find(e => e.id === eventId)
+    || (eventPageEvent && eventPageEvent.id === eventId ? eventPageEvent : null);
+  const mine = known && known.my_rsvp ? known.my_rsvp : null;
+  const partySize = mine && mine.response === 'yes' ? (Number(mine.party_size) || 1) : 1;
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}/rsvp`, {
+      method: 'PUT',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response: 'yes', party_size: partySize })
+    });
+    const data = await res.json();
+    if (!data || !data.success) {
+      showToast((data && data.message) || 'تعذّر تسجيل حضورك');
+      return;
+    }
+    applyRsvpState(eventId, data);
+    // «جاي» يضيف المناسبة إلى «قائمتي» على الخادم — وزرّها في الكرت يقول ذلك.
+    applySavedState(eventId, true);
+    showToast('تم تسجيل حضورك — وأُضيفت إلى قائمتك');
+  } catch (e) {
+    showToast('تعذّر تسجيل حضورك — تحقّق من الاتصال');
+  }
+}
+
+/** المناسبة من أي قائمة يحملها العميل الآن — للورقة وصفحة المناسبة. */
+function eventByIdFromClient(eventId) {
+  return allEvents.find(e => e.id === eventId)
+    || (eventPageEvent && eventPageEvent.id === eventId ? eventPageEvent : null);
+}
+
+/** ما تعرضه ورقة «اختر رسالة» الآن: المناسبة ورسائل نوعها. */
+let messageSheetState = null;
+
+/**
+ * ورقة «اختر رسالة» (تذكرة #170، والقصة ٥٧): «بارك»/«عزّي» يفتحها، وتُبنى من
+ * `messages` التي يرسلها الخادم مع أنواع المناسبات (النشِط وحده) — فلا نصّ
+ * تهنئة مكتوب في هذا الملف. اختيار رسالة يفتح مسار التبريك القائم نفسه
+ * (`openChatModal`) بنصّها في الحقل، فيبقى للمستخدم أن يعدّله أو يكتب غيره.
+ */
+async function openMessageSheet(eventId, occasionTypeId) {
+  messageSheetState = { eventId, occasionTypeId: occasionTypeId || null, messages: [] };
+  const modal = document.getElementById('messageSheetModal');
+  const list = document.getElementById('messageSheetList');
+  const subtitle = document.getElementById('messageSheetSubtitle');
+  if (!modal || !list) return;
+
+  const evt = eventByIdFromClient(eventId);
+  if (subtitle) subtitle.textContent = evt ? congratulationsLabel(evt) : '';
+  list.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+  modal.style.display = 'flex';
+
+  const messages = await occasionTypeMessages(occasionTypeId);
+  messageSheetState.messages = messages;
+  if (!messages.length) {
+    // نوع بلا رسالة نشِطة: الورقة لا تكون جداراً — «اكتب رسالتك» وحدها باب.
+    list.innerHTML = '<p class="message-sheet-empty">لا توجد رسائل جاهزة لهذا النوع بعد — اكتب رسالتك بنفسك.</p>';
+    return;
+  }
+
+  list.innerHTML = messages.map((message, index) => `
+    <button type="button" class="message-sheet-option" onclick="pickReadyMessage(${index})">
+      <i class="fa-regular fa-comment-dots" aria-hidden="true"></i>
+      <span>${escapeHtml(message.body)}</span>
+    </button>`).join('');
+}
+
+/** رسائل نوع واحد من الذاكرة المحمّلة (GET /api/occasion-types) — بلا نداء جديد. */
+async function occasionTypeMessages(occasionTypeId) {
+  if (!occasionTypeId) return [];
+  try {
+    const types = await loadOccasionTypes();
+    const type = (types || []).find(t => Number(t.id) === Number(occasionTypeId));
+    if (!type || !Array.isArray(type.messages)) return [];
+    return type.messages.filter(message => message && message.body);
+  } catch (e) {
+    // انقطاع الشبكة لا يُسقط الزرّ: الورقة تبقى «اكتب رسالتك» كما هي.
+    return [];
+  }
+}
+
+function closeMessageSheet() {
+  const modal = document.getElementById('messageSheetModal');
+  if (modal) modal.style.display = 'none';
+  messageSheetState = null;
+}
+
+/** اختيار رسالة جاهزة: تُغلق الورقة ويُفتح التبريك بنصّها في الحقل. */
+function pickReadyMessage(index) {
+  const state = messageSheetState;
+  const message = state && state.messages ? state.messages[index] : null;
+  if (!state || !message) return;
+  const { eventId } = state;
+  closeMessageSheet();
+  openChatModal(eventId, { presetMessage: message.body });
+}
+
+/** «اكتب رسالتك بنفسك»: المسار القائم بلا نصّ مسبق. */
+function openFreeMessageComposer() {
+  const state = messageSheetState;
+  if (!state) return;
+  const { eventId } = state;
+  closeMessageSheet();
+  openChatModal(eventId);
 }
 
 /**
@@ -3076,7 +3250,7 @@ function renderEventPage(evt) {
         </button>
       </div>
       ${renderEventRsvpHtml(evt, { isMourning })}
-      ${evt.followers_count != null ? `<div class="event-page-followers">متابعون: ${Number(evt.followers_count) || 0}</div>` : ''}
+      ${renderEventCountersHtml(evt, { isMourning })}
       ${renderEventAlbumsHtml(evt)}
       <section id="eventPageArchive" class="event-archive" hidden></section>
       ${renderReactionBarHtml(evt)}
@@ -3093,6 +3267,41 @@ function renderEventPage(evt) {
   syncAudioUi();
 }
 
+/**
+ * عدّادات صفحة المناسبة العلنية (تذكرة #170، والقصة ٥٦): «مهتمين» و«تبريكات»
+ * — و«جايين» في رأس صندوق تأكيد الحضور أعلاه، حيث تعيش أعلامه. كلٌّ يُرسم حين
+ * يصل حقلُه في الردّ وحده (`interested_count`، و`congratulations_count`).
+ * **الحقل الغائب يعني «النوع أطفأه»**، لا صفراً: عدّاد مخفيّ يُرسم صفراً كذبٌ
+ * عن المناسبة — وهي القاعدة التي يطبّقها الخادم في `attachReminderState`
+ * و`congratulationsCountVisible`.
+ *
+ * **ولا عدّاد على العزاء**: «العزاء لا أزرار ولا عدّادات» (#146 المرحلة ٢)،
+ * والحجب هنا حتى لو وصل حقل — العزاء قرار النغمة لا مجموع الأعلام.
+ */
+function renderEventCountersHtml(evt, { isMourning = false } = {}) {
+  if (isMourning) return '';
+
+  const counters = [
+    evt.interested_count != null
+      ? { key: 'interested', icon: 'fa-solid fa-heart', label: 'مهتمين', value: evt.interested_count }
+      : null,
+    evt.congratulations_count != null
+      ? { key: 'congratulations', icon: 'fa-regular fa-comment-dots', label: congratulationsLabel(evt), value: evt.congratulations_count }
+      : null
+  ].filter(Boolean);
+
+  if (!counters.length) return '';
+  return `
+      <div class="event-page-counters">
+        ${counters.map(counter => `
+          <div class="event-page-counter" data-counter="${counter.key}">
+            <i class="${counter.icon}" aria-hidden="true"></i>
+            <span class="event-page-counter-value">${Number(counter.value) || 0}</span>
+            <span class="event-page-counter-label">${escapeHtml(counter.label)}</span>
+          </div>`).join('')}
+      </div>`;
+}
+
 /** أيقونة ولون نوع المناسبة من الخادم كما هما — لا لون جديد يُصمَّم هنا (#20 step 10). */
 function occasionTypeBadgeHtml(occasionType) {
   if (!occasionType) return '';
@@ -3102,23 +3311,52 @@ function occasionTypeBadgeHtml(occasionType) {
 }
 
 /**
- * «أضف لقائمتي» / «في قائمتي» — زرّ واحد لمتابعة «ذكّرني» (قرار المالك: قائمة
+ * «ذكّرني ♥» / «في قائمتي» — زرّ واحد لمتابعة «ذكّرني» (قرار المالك: قائمة
  * واحدة، لا زرّ حفظ وزرّ تنبيه). is-saved يجعل الحالة النشِطة تُقرأ بالعين،
- * والنوعان (الملء/الفراغ) يفرّقانها بلا نصّ إضافي.
+ * والقلب (الفراغ/الملء) يفرّق بينهما بلا نصّ إضافي — والقلب هو ما تسمّيه
+ * المواصفة «ذكّرني ♥» (تذكرة #170).
  *
- * `compact` لكرت التغذية وحده: صفّه أربعة أزرار متساوية، و«أضف لقائمتي» تفيض
- * منه على زرّ المشاركة عند 375px. الكلمتان القصيرتان هناك، والاسم الكامل في
- * aria-label لقارئ الشاشة — وصفحة المناسبة (رحبة) تبقى على النصّ الكامل.
+ * `compact` لكرت التغذية وحده: صفّه أزرار متساوية، و«أضف لقائمتي» تفيض منه على
+ * زرّ المشاركة عند 375px. الكلمة القصيرة هناك («ذكّرني» ثم «محفوظة»)، والاسم
+ * الكامل في aria-label لقارئ الشاشة — وصفحة المناسبة (رحبة) تبقى على النصّ
+ * الكامل.
  */
 function renderReminderButtonHtml(evt, { compact = false } = {}) {
   const isSaved = !!evt.is_reminded;
   const fullLabel = isSaved ? 'في قائمتي' : 'أضف لقائمتي';
-  const label = compact ? (isSaved ? 'محفوظة' : 'احفظ') : fullLabel;
+  const label = compact ? (isSaved ? 'محفوظة' : 'ذكّرني') : fullLabel;
   const aria = compact ? ` aria-label="${fullLabel}"` : '';
   return `
     <button class="record-nokoot-btn card-action-btn reminder-btn${isSaved ? ' is-saved' : ''}"${aria} onclick="toggleReminder(${evt.id}, ${isSaved}, this)">
-      <i class="fa-${isSaved ? 'solid' : 'regular'} fa-bookmark"></i> <span>${label}</span>
+      <i class="fa-${isSaved ? 'solid' : 'regular'} fa-heart"></i> <span>${label}</span>
     </button>`;
+}
+
+/**
+ * «قلب متحرّك حين أضغط ذكّرني» (القصة ٥٥): الصنف يُعاد إضافته بعد حذفه، لأن
+ * إعادة الإضافة وحدها لا تعيد تشغيل الرسم المتحرّك — وقراءة `offsetWidth`
+ * تُجبر المتصفّح على تثبيت الحالة الأولى قبل الثانية. بلا JS آخر: الرسم كله
+ * في `styles.css` (`@keyframes heart-pop`)، ومن يفضّل تقليل الحركة يُطفئه
+ * بـ`prefers-reduced-motion` هناك.
+ */
+function playHeartPop(btn) {
+  if (!btn || !btn.classList) return;
+  btn.classList.remove('heart-pop');
+  void btn.offsetWidth;
+  btn.classList.add('heart-pop');
+}
+
+/**
+ * أزرار «ذكّرني» المرسومة الآن لهذه المناسبة. `applySavedState` يعيد رسم
+ * الكرت/الصفحة، فالعنصر الذي وقعت عليه الضغطة يصير منفصلاً عن المستند —
+ * والنبض يُطلَق على الزرّ الجديد المرسوم فعلاً.
+ */
+function reminderButtonsFor(eventId) {
+  const buttons = Array.from(document.querySelectorAll(`#eventCard-${eventId} .reminder-btn, #announcementCard-${eventId} .reminder-btn`));
+  if (isEventPageOpen() && eventPageEvent && eventPageEvent.id === eventId) {
+    buttons.push(...document.querySelectorAll('#eventPageBody .reminder-btn'));
+  }
+  return buttons;
 }
 
 /**
@@ -3149,6 +3387,9 @@ async function toggleReminder(eventId, isReminded, btnElement) {
     if (data.success) {
       const evt = allEvents.find(e => e.id === eventId);
       applySavedState(eventId, !isReminded);
+      // القلب ينبض عند الإضافة وحدها — هو «ذكّرني ♥» في المواصفة، والإزالة
+      // ليست لحظة قلب.
+      if (!isReminded) reminderButtonsFor(eventId).forEach(playHeartPop);
       // الإضافة تحمل فعل «عرض» يوصل التبويب الجديد مباشرةً — بدونه يبقى
       // المستخدم لا يعرف أين ذهبت المناسبة (التوست يمرّ في ٣.٥ ثانية).
       showToast(
@@ -5427,7 +5668,13 @@ function resumePendingIntent() {
   } else if (intent.type === 'rsvp') {
     // زرّ «جاي»/«مش جاي» ضُغط قبل الدخول — يُنفَّذ الجواب نفسه الآن بما اختاره
     // المستخدم من عدد (المنتقي ما زال في الصفحة تحت نافذة الدخول).
-    if (eventPageEvent && eventPageEvent.id === intent.eventId) submitRsvp(intent.response || 'yes');
+    if (eventPageEvent && eventPageEvent.id === intent.eventId) {
+      submitRsvp(intent.response || 'yes');
+    } else if (intent.response === 'yes') {
+      // «جاي» من الكرت لا يفتح صفحة المناسبة، فلا منتقي عدد تحته: يُكرَّر الفعل
+      // من الكرت نفسه، وإلا صار الدخول طريقاً مسدوداً بلا جواب مسجَّل.
+      submitCardRsvp(intent.eventId);
+    }
   } else if (intent.type === 'congratulate') {
     // نافذة التبريكات لم تُغلَق أصلاً — فقط اسم المرسِل يُحدَّث الآن بعد الدخول.
     const senderInput = document.getElementById('chatSenderName');
@@ -8239,7 +8486,7 @@ function renderRsvpList({ rsvps = [], totals = {} }) {
 
   const summary = `
     <div class="rsvp-list-summary">
-      <span>جايون: <strong>${Number(totals.going_count) || 0}</strong></span>
+      <span>جايين: <strong>${Number(totals.going_count) || 0}</strong></span>
       <span>أجوبة «جاي»: <strong>${Number(totals.going_rows) || 0}</strong></span>
       <span>أجوبة «مش جاي»: <strong>${Number(totals.not_going_rows) || 0}</strong></span>
     </div>`;
@@ -8548,12 +8795,22 @@ async function handleEventEditSubmit(e) {
 }
 
 // 15. Live Chat & Congratulations Modal
-async function openChatModal(eventId) {
+/**
+ * `opts.presetMessage` (تذكرة #170): نصّ رسالة جاهزة اختارها المستخدم من ورقة
+ * «اختر رسالة». يُكتب في الحقل قبل الجلب ويبقى قابلاً للتعديل — الورقة تقترح
+ * ولا تُرسل، والإرسال زرّ المستخدم نفسه (`sendCongratulation`).
+ */
+async function openChatModal(eventId, opts = {}) {
   currentChatEventId = eventId;
   currentChatEvent = null; // يُعاد ضبطه أدناه بعد نجاح الجلب — لا زرّ مشاركة على بيانات مناسبة سابقة
   const modal = document.getElementById('chatModal');
   modal.style.display = 'flex';
   renderEventArchive(null); // لا تبقى صور مناسبة سابقة ظاهرة أثناء الجلب
+
+  const messageInput = document.getElementById('chatInputMessage');
+  const presetMessage = opts.presetMessage || '';
+  messageInput.value = presetMessage;
+  if (presetMessage) messageInput.focus();
 
   const hostBar = document.getElementById('chatHostBar');
   const stream = document.getElementById('chatMessagesStream');
