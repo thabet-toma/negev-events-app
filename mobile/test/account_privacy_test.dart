@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
+import 'package:negev_events/config.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/user.dart';
 import 'package:negev_events/screens/account_screen.dart';
@@ -330,6 +332,80 @@ void main() {
       find.text('تم حذف بيانات التحليلات السلوكية الخاصة بك'),
       findsNothing,
       reason: 'فشل 500 لا يُعرض كنجاح',
+    );
+  });
+
+  /// «سياسة الخصوصية» (#164): الصفّ في «حسابي» يفتح نصّ الإشعار المنشور نفسه
+  /// الذي يعرضه الويب — `/api/privacy/notice` على عنوان الخادم الوحيد. هذا
+  /// اختبار الوجهة لا شكل الصفّ: قناة `url_launcher` الرسمية
+  /// (`plugins.flutter.io/url_launcher`) تُستمع هنا، ويُقرأ الرابط الذي
+  /// غادر التطبيق فعلاً.
+  testWidgets(
+      '«سياسة الخصوصية» في «حسابي» تفتح /api/privacy/notice من عنوان الخادم نفسه في المتصفّح الخارجي',
+      (tester) async {
+    final launched = <MethodCall>[];
+    const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(launcherChannel, (call) async {
+      launched.add(call);
+      return true;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(launcherChannel, null);
+    });
+
+    final server = _PrivacyServer();
+    final session = await _signedIn(server);
+    await _pumpAccount(tester, session.api, session.auth);
+
+    final noticeTile = find.byKey(const Key('profile_privacy_notice'));
+    expect(
+      noticeTile,
+      findsOneWidget,
+      reason: 'الرابط صفٌّ ظاهر في «حسابي» — لا مفتاح خفيّ ولا سلوك على الحافة',
+    );
+    expect(find.text('سياسة الخصوصية'), findsOneWidget);
+
+    await tester.tap(noticeTile);
+    await tester.pumpAndSettle();
+
+    final launch = launched.singleWhere((call) => call.method == 'launch');
+    final args = launch.arguments as Map;
+    final url = args['url'] as String;
+    expect(
+      url,
+      '${AppConfig.apiBase}/api/privacy/notice',
+      reason:
+          'الرابط يُبنى من عنوان الخادم الوحيد (config.dart) — عنوان مكرَّر '
+          'هنا يعطي نسخة ثانية تتخلّف عن الإنتاج بصمت',
+    );
+    expect(Uri.parse(url).path, '/api/privacy/notice');
+    expect(
+      Uri.parse(url).hasScheme && Uri.parse(url).host.isNotEmpty,
+      isTrue,
+      reason: 'يفتح في المتصفّح الخارجي، فيلزمه عنوان مطلق',
+    );
+
+    // العنوان وحده لا يثبت أن الرابط غادر التطبيق: `platformDefault` على
+    // أندرويد يمرّ عبر WebView داخلي أيضاً. هذه هي الخيارات التي يبنيها
+    // url_launcher من `LaunchMode.externalApplication` وحدها على قناة
+    // المنصّة نفسها التي يُستمع إليها أعلاه: لا Safari VC ولا WebView
+    // داخلي ولا Universal Links، بل تفويض الرابط إلى تطبيق آخر.
+    expect(
+      args['useWebView'],
+      isFalse,
+      reason: 'externalApplication لا يفتح WebView داخل التطبيق',
+    );
+    expect(
+      args['useSafariVC'],
+      isFalse,
+      reason: 'externalApplication لا يفتح Safari View Controller داخل التطبيق',
+    );
+    expect(
+      args['universalLinksOnly'],
+      isFalse,
+      reason: 'externalApplication تفويض للمتصفّح، لا تحقّق Universal Links',
     );
   });
 }

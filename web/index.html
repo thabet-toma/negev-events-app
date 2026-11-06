@@ -2,7 +2,10 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <!-- `maximum-scale` و`user-scalable=no` كانا يمنعان التكبير بإصبعين على الهاتف
+       (#164) — وهو حقّ قراءة لا يملكه الموقع. `viewport-fit=cover` يبقى: هو ما
+       يجعل الحواف الآمنة للشاشة تعمل. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>أعراسنا | المنصة الأولى لأعراس وأفراح منطقتك</title>
   
   <!-- تطبيق ويب قابل للتثبيت (#55). الوسمان الأخيران كانا هنا وحدهما يعدان
@@ -93,8 +96,9 @@
   <!-- Leaflet CSS for Interactive Map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   
-  <!-- Chart.js for Nokoot Analytics -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Chart.js for Nokoot Analytics — إصدار صريح (#164): رابط `chart.js` بلا
+       إصدار يجلب `latest`، فيتغيّر ما يشحنه الموقع بلا نشر منّا ولا سجلّ. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1"></script>
   
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -193,14 +197,23 @@
   <!-- Floating Frosted Top Bar for Mobile & PWA (نمط تطبيق الموبايل) -->
   <div id="floatingTopBar" class="floating-top-bar">
     <div class="floating-top-inner">
-      <!-- Start: Filter Button -->
+      <!-- Filter Button -->
       <button id="floatingFilterBtn" class="floating-filter-chip-btn" onclick="toggleTopChrome(true)" aria-label="الفلاتر والبحث">
         <i class="fa-solid fa-sliders"></i>
         <span id="floatingFilterLabel">الفلاتر والبحث</span>
         <span id="floatingFilterDot" class="floating-filter-dot" style="display:none;"></span>
       </button>
 
-      <!-- End: Actions Pill -->
+      <!-- «حسابي» — خارج صندوق الأفعال لا داخله، ليصير مع فلتر البحث صفّاً
+           أول مستقلاً على ٣٦٠px، وتبقى أزرار الأفعال في صفّها الثاني بأهداف
+           44px كاملة (#164). الترويسة مخفية على الهاتف وفي التطبيق المثبَّت —
+           هذا زرّ «حسابي» الوحيد هناك، ظاهر على كل تبويب. -->
+      <button id="floatingAuthBtn" class="floating-auth-btn" onclick="switchTab('tabAccount')" title="حسابي" aria-label="حسابي">
+        <i class="fa-solid fa-user"></i>
+        <span id="floatingAuthLabel">حسابي</span>
+      </button>
+
+      <!-- Start: Actions Pill -->
       <div class="floating-actions-box">
         <!-- علامة «اعراسنا» — العودة إلى «المناسبات» (تذكرة #157). الترويسة
              العريضة مخفية على الهاتف وفي PWA المثبَّت (`styles.css`)، وهذا
@@ -231,12 +244,8 @@
         <button id="floatingSoundBtn" class="floating-icon-btn" onclick="toggleSoundMuted()" title="الصوت مفعَّل — اضغط لكتمه" aria-label="كتم الصوت" aria-pressed="false">
           <i class="fa-solid fa-volume-high"></i>
         </button>
-        <!-- الترويسة مخفية على الهاتف وفي التطبيق المثبَّت — هذا زرّ «حسابي» الوحيد هناك، ظاهر على كل تبويب -->
-        <button id="floatingAuthBtn" class="floating-auth-btn" onclick="switchTab('tabAccount')" title="حسابي" aria-label="حسابي">
-          <i class="fa-solid fa-user"></i>
-          <span id="floatingAuthLabel">حسابي</span>
-        </button>
       </div>
+      <!-- End: Actions Pill -->
     </div>
   </div>
 

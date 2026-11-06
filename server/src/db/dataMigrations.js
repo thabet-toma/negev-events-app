@@ -2252,6 +2252,32 @@ const steps = [
       }
       logger.info('[migrations] add-event-visibility-2026-11: ensured column/index; existing rows are public.');
     }
+  },
+  {
+    // The proof-of-control marker for the scheduled erasure job (issue #164).
+    // Only a request filed from an authenticated session may be executed
+    // without a human; the no-app phone form proves nothing and must not.
+    // Every existing row keeps the column DEFAULT 'public' — the database
+    // never recorded which old rows came from a token, and back-filling
+    // 'account' would invent the proof this column exists to carry. New
+    // authenticated posts write 'account' explicitly. Guarded by columnExists
+    // so a fresh install (where schema.sql already has the column) no-ops.
+    name: 'add-privacy-request-source-2026-11',
+    async run(connection) {
+      if (await columnExists(connection, 'privacy_requests', 'source')) {
+        logger.info('[migrations] add-privacy-request-source-2026-11: already present.');
+        return;
+      }
+
+      await connection.execute(
+        `ALTER TABLE privacy_requests
+           ADD COLUMN source ENUM('account','public') NOT NULL DEFAULT 'public' AFTER request_type`
+      );
+      logger.info(
+        '[migrations] add-privacy-request-source-2026-11: column added; '
+        + 'all existing rows are source=public (unverified), not back-filled.'
+      );
+    }
   }
 ];
 

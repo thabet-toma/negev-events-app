@@ -8,6 +8,7 @@ const config = require('../config');
 const ApiError = require('../utils/ApiError');
 const logger = require('../utils/logger');
 const { signToken, ADMIN_ROLES } = require('../middleware/auth');
+const { PRIVACY_REQUEST_DEADLINE_DAYS } = require('../constants');
 const { uploadsDir } = require('../middleware/upload');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const cloudinary = require('./cloudinary.service');
@@ -307,16 +308,40 @@ async function deleteAccount(userId, pinCode) {
  * An open erasure request is closed inside the same transaction, BEFORE the
  * delete — `fk_privacy_requests_user` is ON DELETE CASCADE, so the request row
  * goes with the user and closing it afterwards would find nothing at all.
+ *
+ * `options.erasureRequestId` is the scheduled job's entry (issue #164): the
+ * request must still be a pending, overdue, authenticated-session erasure for
+ * THIS user, re-proved under a row lock inside this same transaction. The
+ * daily pass listing candidates is only a hint — a request closed between that
+ * listing and this call must never delete the account, and a public phone-only
+ * request (never proof of control) can never satisfy this check. The direct
+ * admin path passes no option, so its semantics are unchanged; when the check
+ * fails the transaction commits no change and `deleted` is false.
  */
-async function deleteAccountAsAdmin(userId, adminId) {
+async function deleteAccountAsAdmin(userId, adminId, options = {}) {
   // Read inside the transaction — after it the row is gone — and held out
   // here so the photo can be released once the delete has actually committed.
   let avatarUrl = null;
 
-  await db.transaction(async connection => {
-    const [rows] = await connection.execute('SELECT id, avatar_url FROM users WHERE id = ?', [userId]);
+  const outcome = await db.transaction(async connection => {
+    // The user row is the canonical first lock for every deletion path, so two
+    // concurrent runs for the same account serialize here instead of locking
+    // two different request rows and then deadlocking on the rest of the queue.
+    const [rows] = await connection.execute('SELECT id, avatar_url FROM users WHERE id = ? FOR UPDATE', [userId]);
     if (!rows.length) throw ApiError.notFound('المستخدم غير موجود');
     avatarUrl = rows[0].avatar_url;
+
+    if (options.erasureRequestId !== undefined && options.erasureRequestId !== null) {
+      const [eligible] = await connection.execute(
+        `SELECT id FROM privacy_requests
+          WHERE id = ? AND user_id = ? AND request_type = 'erasure'
+            AND source = 'account' AND status = 'pending'
+            AND created_at <= DATE_SUB(NOW(), INTERVAL ? DAY)
+          FOR UPDATE`,
+        [options.erasureRequestId, userId, PRIVACY_REQUEST_DEADLINE_DAYS]
+      );
+      if (!eligible.length) return { deleted: false };
+    }
 
     await connection.execute(
       `UPDATE privacy_requests
@@ -326,12 +351,19 @@ async function deleteAccountAsAdmin(userId, adminId) {
     );
 
     await connection.execute('DELETE FROM users WHERE id = ?', [userId]);
+    return { deleted: true };
   });
+
+  if (!outcome.deleted) return { deleted: false };
 
   // ملف الصورة يُحرَّر بعد نجاح الحذف لا قبله، كما في حذف الحساب الذاتي.
   await releaseAvatar(avatarUrl);
 
-  logger.info('account.delete', { userId, by: adminId });
+  if (options.erasureRequestId !== undefined && options.erasureRequestId !== null) {
+    logger.info('account.delete', { userId, by: adminId, erasureRequestId: options.erasureRequestId });
+  } else {
+    logger.info('account.delete', { userId, by: adminId });
+  }
   return { deleted: true };
 }
 

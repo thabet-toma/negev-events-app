@@ -1,14 +1,18 @@
 'use strict';
 
 /**
- * Erasure and access requests (issue #44, privacy layer part 3). All SQL for
- * this domain lives here, per the project rule — routes only validate and
- * shape the request.
+ * Erasure and access requests (issue #44, privacy layer part 3). The request
+ * domain's SQL lives here, per the project rule — routes only validate and
+ * shape the request. One deliberate exception: the scheduled erasure's
+ * eligibility re-check is a locking read inside the account-deletion
+ * transaction in auth.service.js, because it must be atomic with the DELETE
+ * and the deletion path may not be copied into a second service.
  */
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
-const { PRIVACY_REQUEST_TYPES } = require('../constants');
+const auth = require('./auth.service');
+const { PRIVACY_REQUEST_TYPES, PRIVACY_REQUEST_DEADLINE_DAYS } = require('../constants');
 
 /**
  * Deletes every analytics_events row this user owns, without touching their
@@ -27,15 +31,24 @@ async function eraseAnalyticsForUser(userId) {
  * Queues a formal privacy request. Access requests have no self-service
  * fulfilment path in this version — a super_admin fulfils them by hand — so
  * this is the record of "someone asked", not the fulfilment itself.
+ *
+ * `source` is set by the CALLER, never by a request body: 'account' is only
+ * passed by the authenticated route, which builds the requester from
+ * `req.user`, and it is what allows the scheduled job to execute an overdue
+ * erasure. The default is 'public' on purpose — a caller that forgets cannot
+ * accidentally create an automatically deletable request.
  */
-async function createRequest(userId, requestType) {
+async function createRequest(userId, requestType, source = 'public') {
   if (!PRIVACY_REQUEST_TYPES.includes(requestType)) {
     throw ApiError.badRequest('نوع الطلب غير معروف');
   }
+  if (source !== 'account' && source !== 'public') {
+    throw ApiError.badRequest('مصدر الطلب غير معروف');
+  }
 
   const { insertId } = await db.execute(
-    'INSERT INTO privacy_requests (user_id, request_type) VALUES (?, ?)',
-    [userId, requestType]
+    'INSERT INTO privacy_requests (user_id, request_type, source) VALUES (?, ?, ?)',
+    [userId, requestType, source]
   );
   return db.queryOne('SELECT * FROM privacy_requests WHERE id = ?', [insertId]);
 }
@@ -63,16 +76,27 @@ async function listRequests(status) {
   );
 }
 
-/** Marks a request handled — closes it and records who closed it and when. */
+/**
+ * Marks a request handled — closes it and records who closed it and when.
+ *
+ * The UPDATE carries `status = 'pending'` rather than trusting an earlier
+ * SELECT: a close racing the scheduled erasure's transaction must either win
+ * outright (the job's locked eligibility read then sees 'completed' and
+ * deletes nobody) or lose to the delete (this UPDATE affects zero rows and the
+ * row is gone). Closing an already-completed request returns the existing row
+ * unchanged — only the pending→completed transition records a handler; a
+ * truly missing row is 404.
+ */
 async function closeRequest(id, handledBy) {
-  const existing = await db.queryOne('SELECT id FROM privacy_requests WHERE id = ?', [id]);
-  if (!existing) throw ApiError.notFound('الطلب غير موجود');
-
   await db.execute(
-    `UPDATE privacy_requests SET status = 'completed', handled_at = NOW(), handled_by = ? WHERE id = ?`,
+    `UPDATE privacy_requests
+        SET status = 'completed', handled_at = NOW(), handled_by = ?
+      WHERE id = ? AND status = 'pending'`,
     [handledBy, id]
   );
-  return db.queryOne('SELECT * FROM privacy_requests WHERE id = ?', [id]);
+  const request = await db.queryOne('SELECT * FROM privacy_requests WHERE id = ?', [id]);
+  if (!request) throw ApiError.notFound('الطلب غير موجود');
+  return request;
 }
 
 /**
@@ -106,6 +130,12 @@ function normalisePhoneNumber(value) {
  * "No user" ends here with no second query, and an account that already has an
  * open erasure request is never queued twice — a duplicate only slows the
  * queue down.
+ *
+ * This path does NOT prove that the caller controls the number, so the request
+ * it queues is always `source = 'public'` and the scheduled job can never
+ * execute it. A human reviews it first; an authenticated account holder has
+ * the separate `POST /api/privacy/requests` path, whose row is `'account'`.
+ * An older public row never blocks that path and is never upgraded by it.
  */
 async function fileDeletionRequest(phoneNumber) {
   const normalised = normalisePhoneNumber(phoneNumber);
@@ -130,8 +160,66 @@ async function fileDeletionRequest(phoneNumber) {
   );
   if (open) return { matched: true, duplicate: true };
 
-  await createRequest(user.id, 'erasure');
+  await createRequest(user.id, 'erasure', 'public');
   return { matched: true, duplicate: false };
+}
+
+/**
+ * The scheduled deletion job's candidate list (issue #164): every erasure
+ * request that has outlived the deadline stated to the person who filed it —
+ * the same `PRIVACY_REQUEST_DEADLINE_DAYS` the public confirmation and the
+ * admin queue quote. Nothing else can enter it: an `access` request is
+ * fulfilled by a human, a request still inside its deadline stays untouched,
+ * and a closed one stays closed. The deadline itself is computed here, in SQL,
+ * so the job that calls this carries no query of its own.
+ *
+ * `source = 'account'` is the second gate and the one that matters for safety:
+ * a request filed from the public phone form was never proof that its filer
+ * controls the account, so it stays for human review and can never appear
+ * here — even when it is old enough to have passed the deadline.
+ */
+async function listDueErasureRequests() {
+  return db.query(
+    `SELECT pr.id, pr.user_id
+       FROM privacy_requests pr
+       JOIN users u ON u.id = pr.user_id
+      WHERE pr.request_type = 'erasure'
+        AND pr.source = 'account'
+        AND pr.status = 'pending'
+        AND pr.created_at <= DATE_SUB(NOW(), INTERVAL ? DAY)
+      ORDER BY pr.id ASC`,
+    [PRIVACY_REQUEST_DEADLINE_DAYS]
+  );
+}
+
+/**
+ * Executes one due erasure request by deleting the account through the
+ * existing admin-fulfilment path — account deletion (cascade, avatar release,
+ * transaction) is never duplicated here. `handled_by` is left NULL because the
+ * actor is this job, not a person; the request row itself then goes with the
+ * user through `fk_privacy_requests_user ON DELETE CASCADE`, exactly as it
+ * does when a super_admin deletes the account from the panel.
+ *
+ * The `user_id` read here only addresses that existing path. It is NOT the
+ * eligibility check: `auth.deleteAccountAsAdmin` re-proves type, source,
+ * status and deadline under a row lock inside its own deletion transaction, so
+ * a request closed (or rewritten) between this read and that transaction
+ * cannot delete anyone. A direct call with a fresh request's id therefore
+ * returns `{ executed: false }`, not a deletion.
+ */
+async function executeErasureRequest(requestId) {
+  const request = await db.queryOne(
+    'SELECT user_id FROM privacy_requests WHERE id = ?',
+    [requestId]
+  );
+  if (!request) return { executed: false };
+
+  const result = await auth.deleteAccountAsAdmin(request.user_id, null, {
+    erasureRequestId: requestId
+  });
+  return result.deleted
+    ? { executed: true, userId: request.user_id }
+    : { executed: false };
 }
 
 module.exports = {
@@ -140,6 +228,8 @@ module.exports = {
   listRequests,
   closeRequest,
   fileDeletionRequest,
+  listDueErasureRequests,
+  executeErasureRequest,
   toAsciiDigits,
   normalisePhoneNumber
 };

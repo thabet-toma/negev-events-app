@@ -799,15 +799,22 @@ CREATE TABLE IF NOT EXISTS analytics_daily_counters (
 -- The access/erasure request queue (issue #44, privacy layer part 3).
 -- Erasure of one's own analytics rows already has an immediate self-service
 -- endpoint (POST /api/privacy/analytics-erasure) — this table is for the
--- request a super_admin fulfils BY HAND in this version (there is no
--- screen): who asked, what kind, when, and — once handled — when and by
--- whom. request_type covers 'erasure' too, for a user who wants a
--- documented, handled-by record instead of (or in addition to) the
--- self-service button.
+-- formal requests: who asked, what kind, when, and — once handled — when and
+-- by whom. `source` records whether control of the account was proved: an
+-- 'account' row comes only from the authenticated POST /api/privacy/requests
+-- (identity built from req.user), and the scheduled erasure job may execute
+-- it after PRIVACY_REQUEST_DEADLINE_DAYS. A 'public' row comes from the
+-- no-app phone form, which proves nothing, so it is reviewed by a human and
+-- is never executed by the job. Access requests are fulfilled by a
+-- human in this version either way.
 CREATE TABLE IF NOT EXISTS privacy_requests (
   id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id      INT UNSIGNED NOT NULL,
   request_type ENUM('access','erasure') NOT NULL,
+  -- DEFAULT 'public' is deliberate: pre-existing/unknown provenance is
+  -- unverified, never proof. The authenticated route writes 'account'
+  -- explicitly, and no client can set this column.
+  source       ENUM('account','public') NOT NULL DEFAULT 'public',
   status       ENUM('pending','completed') NOT NULL DEFAULT 'pending',
   created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   handled_at   TIMESTAMP    NULL DEFAULT NULL,

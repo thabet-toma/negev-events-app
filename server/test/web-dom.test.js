@@ -73,6 +73,66 @@ function delay(ms) {
 }
 
 /**
+ * Every style rule in a stylesheet, including rules nested one level inside
+ * @media, with comments stripped. A plain `selector { body }` regex silently
+ * swallows the FIRST rule of each at-rule block (the at-rule prelude becomes
+ * the "selector" and the inner rule's opening brace closes the match), which
+ * would hide a `button`/focus override from the checks below. This brace
+ * walker records the real selector/body pairs instead; at-rule preludes
+ * themselves are not returned.
+ */
+function readCssRules(source) {
+  const css = source.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  let i = 0;
+  let prelude = '';
+
+  while (i < css.length) {
+    const ch = css[i];
+    if (ch === '{') {
+      const selector = prelude.trim();
+      prelude = '';
+      if (selector.startsWith('@')) {
+        i += 1;
+        continue;
+      }
+      let depth = 1;
+      let j = i + 1;
+      while (j < css.length && depth > 0) {
+        if (css[j] === '{') depth += 1;
+        else if (css[j] === '}') depth -= 1;
+        j += 1;
+      }
+      rules.push({
+        selectors: selector.split(',').map(part => part.trim()).filter(Boolean),
+        body: css.slice(i + 1, j - 1)
+      });
+      i = j;
+      continue;
+    }
+    if (ch === '}') {
+      prelude = '';
+      i += 1;
+      continue;
+    }
+    prelude += ch;
+    i += 1;
+  }
+  return rules;
+}
+
+/**
+ * True when a declaration block sets `min-height` to a px value below the 44px
+ * target. The number is compared as a number: a digit pattern such as
+ * `(?:[0-3]?\d)px` passes 40–43px straight through, and those are exactly the
+ * values a rule lowering the base would use.
+ */
+function lowers44MinHeight(body) {
+  return [...body.matchAll(/min-height:\s*(\d+(?:\.\d+)?)px/g)]
+    .some((declaration) => Number(declaration[1]) < 44);
+}
+
+/**
  * jsdom queues its DOMContentLoaded dispatch at document-parse time, which
  * lands BEFORE `window.eval(COMBINED_SCRIPT)` runs synchronously — so by the
  * time app.js's own `addEventListener('DOMContentLoaded', ...)` registers,
@@ -727,6 +787,127 @@ function installFixedLocalClock(win, { utcIso, year, monthIndex, day }) {
   win.Date = FakeDate;
 
   return () => { win.Date = RealDate; };
+}
+
+/**
+ * web/sw.js evaluated in a stand-in service-worker scope: the real file, read
+ * from disk, with only the browser seams it touches faked (`caches`, `fetch`,
+ * `Response`, and an event target that records listeners). This is the same
+ * "read the file, stub the seam, never edit the source" approach buildEnv()
+ * uses for app.js — and the only way to prove the /api rule (#164): a text
+ * assertion on sw.js would pass on a comment just as happily as on code.
+ *
+ * Two seams are load-bearing for the install guard below:
+ * `cache.add(path)` fetches first and stores second, rejecting like the real
+ * Cache API when the download fails (a stub that just stores would make a
+ * failed precache impossible to express), and `setNetwork` swaps the network
+ * under an already-installed worker — the "installed online, opened offline"
+ * sequence a real visit produces.
+ */
+function loadServiceWorker({ fetchImpl } = {}) {
+  const listeners = {};
+  const stores = new Map();
+  const added = [];
+  const puts = [];
+  const deleted = [];
+  const fetchCalls = [];
+  let skipWaitingCalls = 0;
+  const response = (label) => ({ ok: true, type: 'basic', label, clone() { return this; } });
+  // One network for both seams: request-time fetches and precache downloads
+  // are the same connection. `fetchCalls` below counts only the former, since
+  // several tests assert the worker intercepted nothing.
+  let network = fetchImpl || (async () => response('network'));
+
+  function storeFor(name) {
+    if (!stores.has(name)) stores.set(name, new Map());
+    return stores.get(name);
+  }
+
+  function createCache(name) {
+    const store = storeFor(name);
+    return {
+      async add(path) {
+        const url = new URL(path, worker.location.origin).href;
+        await network(path);
+        added.push(url);
+        store.set(url, response(path));
+      },
+      async match(request, options = {}) {
+        const requested = typeof request === 'string'
+          ? new URL(request, worker.location.origin).href
+          : request.url;
+        for (const [url, cached] of store) {
+          if (options.ignoreSearch) {
+            const a = new URL(url);
+            const b = new URL(requested);
+            if (a.origin === b.origin && a.pathname === b.pathname) return cached;
+          } else if (url === requested) {
+            return cached;
+          }
+        }
+        return undefined;
+      },
+      async put(request, cached) {
+        const url = typeof request === 'string' ? request : request.url;
+        puts.push(url);
+        store.set(url, cached);
+      }
+    };
+  }
+
+  const worker = {
+    location: { origin: 'https://web.test' },
+    addEventListener(type, handler) { listeners[type] = handler; },
+    skipWaiting: async () => { skipWaitingCalls += 1; },
+    clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
+    registration: { showNotification: async () => {} }
+  };
+
+  const caches = {
+    async open(name) { return createCache(name); },
+    async keys() { return [...stores.keys()]; },
+    async delete(name) { deleted.push(name); stores.delete(name); return true; }
+  };
+
+  const fetchStub = async (request) => {
+    fetchCalls.push(typeof request === 'string' ? request : request.url);
+    return network(request);
+  };
+
+  // eslint-disable-next-line no-new-func
+  new Function('self', 'caches', 'fetch', 'Response', SW_JS)(
+    worker, caches, fetchStub, { error: () => ({ error: true }) }
+  );
+
+  return {
+    listeners,
+    worker,
+    stores,
+    added,
+    puts,
+    deleted,
+    fetchCalls,
+    /** Whether the worker took over — the "استولى" half of a failed install. */
+    get skipWaitingCalls() { return skipWaitingCalls; },
+    /** Replaces the network under an installed worker (the offline-after-install case). */
+    setNetwork(impl) { network = impl; }
+  };
+}
+
+/** Dispatches one fetch event through the worker's own listener and resolves `respondWith`, if any. */
+async function runWorkerFetch(sw, request) {
+  const event = { request, responded: false };
+  event.respondWith = (promise) => { event.responded = true; event.response = promise; };
+  sw.listeners.fetch(event);
+  if (event.response) event.response = await event.response;
+  return event;
+}
+
+/** Dispatches install/activate and waits for whatever the worker passed to `waitUntil`. */
+async function runWorkerLifecycle(sw, type) {
+  const waits = [];
+  sw.listeners[type]({ waitUntil: (promise) => waits.push(promise) });
+  await Promise.all(waits);
 }
 
 async function run() {
@@ -2936,38 +3117,97 @@ async function run() {
   });
 
   /*
-   * jsdom has no layout engine, so this cannot measure the bar: it guards the
-   * CSS VALUES the real measurement depends on, not the layout itself. The
-   * measurement (Edge, signed in — the wider box) is recorded in the comment
-   * above the narrow block: compressed box 272.9px, uncompressed 356.7px, and
-   * the chip with its dot but no label 70.8px — so the uncompressed box only
-   * fits beside the chip from a ~460px viewport. Below that, a 400px bound
-   * overflowed the bar at 401–422px (scrollWidth 399 > container) and squeezed
-   * the dot to 0px up to ~460px. So the values held here are: the bound must
-   * still reach 460px; the block must still shrink the icon buttons below
-   * their 34px base; the dot must not shrink with the truncated label; and
-   * the brand must stay a round white disc so it never reads as a white
-   * square inside the dark pill.
+   * jsdom has no layout engine, so this cannot measure the bar. What it CAN
+   * check is the choice the old ≤29px assertion forbade: keep every control a
+   * real 44px target and re-flow the bar at phone widths instead of shrinking
+   * it. At ≤680px the account button sits with the filter in a first row and
+   * the actions pill becomes a full-width, wrapping second row; no control is
+   * hidden or removed. The arithmetic is in the stylesheet; the pixel result
+   * still needs a browser (the ticket's own manual screenshot pass).
    */
-  await test('the ≤460px block keeps the signed-in pill inside one row, and the brand a round disc', () => {
-    // The narrow block is the one whose first rule compresses the filter chip
-    // (\r?\n: a Windows checkout with core.autocrlf carries CRLF).
-    const narrow = STYLES_CSS_RAW.match(/@media \(max-width: (\d+)px\) \{(\r?\n  \.floating-filter-chip-btn[\s\S]*?)\r?\n\}/);
+  await test('the floating bar keeps every control at a 44px target and re-flows to two rows instead of shrinking', () => {
+    const bar = new JSDOM(INDEX_HTML_RAW).window.document.getElementById('floatingTopBar');
+    assert.ok(bar, 'expected the floating top bar in web/index.html');
+
+    const rules = readCssRules(STYLES_CSS);
+    // The first exact-selector rule in source order is the base; later exact
+    // copies are media overrides and the no-shrink scan below checks them.
+    const ruleBody = (selector) => {
+      const matches = rules.filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === selector);
+      assert.ok(matches.length >= 1, `expected a base rule for ${selector}`);
+      return matches[0].body;
+    };
+
+    const iconRule = ruleBody('.floating-icon-btn');
+    assert.match(iconRule, /width:\s*44px/, 'an icon button is a 44px-wide target');
+    assert.match(iconRule, /height:\s*44px/, 'and 44px tall');
+    assert.ok(!/min-(?:width|height):\s*0/.test(iconRule), 'no opt-out may keep it below the general 44px base');
+
+    const authRule = ruleBody('.floating-auth-btn');
+    assert.match(authRule, /(?:min-)?height:\s*44px/, 'the account button is a 44px target too');
+    assert.ok(!/min-(?:width|height):\s*0/.test(authRule), 'and does not opt out of the base');
+
+    const smallFloating = rules.filter((rule) =>
+      rule.selectors.some((selector) => /\.floating-(?:icon|auth)-btn(?:\b|[:.[])/.test(selector))
+      && /(?:^|[;\s])(?:min-)?(?:width|height):\s*(?:[0-3]?\d)px/.test(rule.body));
+    assert.deepStrictEqual(
+      smallFloating.map((rule) => rule.selectors.join(', ')),
+      [],
+      'no other floating-bar rule may shrink an icon/account target below 44px'
+    );
+
+    const brandRule = ruleBody('.floating-brand-btn');
+    assert.match(brandRule, /width:\s*44px/);
+    assert.match(brandRule, /height:\s*44px/, 'even the brand link gets a 44px touch target');
+    assert.match(brandRule, /border-radius:\s*50%/);
+    assert.match(brandRule, /background:\s*#ffffff/i, 'the brand stays a white disc, not a white square');
+    assert.ok(/\.floating-brand-btn img \{[^}]*border-radius:\s*50%/.test(STYLES_CSS_RAW), 'and the image is clipped round');
+
+    // The narrow block whose first rule now re-flows the inner row.
+    const narrow = STYLES_CSS_RAW.match(/@media \(max-width: (\d+)px\) \{(\r?\n  \.floating-top-inner \{[\s\S]*?)\r?\n\}/);
     assert.ok(narrow, 'web/styles.css must keep its narrow floating-bar @media (max-width: …px) block');
     const [, bound, body] = narrow;
-    assert.ok(Number(bound) >= 460, `the narrow block must reach 460px — measured: a 400px bound overflowed the signed-in bar at 401–422px and zeroed the dot up to ~460px (got ${bound}px)`);
-    const iconSize = body.match(/\.floating-icon-btn \{ width: (\d+)px; height: (\d+)px; \}/);
-    assert.ok(iconSize, 'the narrow block must size .floating-icon-btn');
-    assert.ok(Number(iconSize[1]) <= 29 && iconSize[1] === iconSize[2], 'icon buttons must stay ≤29px square on a phone, or the signed-in pill overflows at 360px');
-    assert.ok(/\.floating-brand-btn \{ width: (2\d|1\d)px; height: \1px; \}/.test(body), 'the brand must shrink with them');
-    assert.ok(/#floatingFilterLabel \{ display: none; \}/.test(body), 'the label hides, leaving the dot as the only active-filter cue — which is why the budget matters');
+    assert.ok(Number(bound) >= 680, `the re-flow must cover phone widths — a one-row 44px bar no longer fits before 680px (got ${bound}px)`);
+    assert.match(body, /\.floating-top-inner \{[^}]*flex-wrap:\s*wrap/, 'the bar rows must wrap instead of overflowing');
+    assert.match(
+      body,
+      /\.floating-actions-box \{[^}]*flex:\s*1 1 100%/,
+      'the actions pill takes its own full-width row, so the account button is never clipped'
+    );
+    assert.match(body, /\.floating-actions-box \{[^}]*flex-wrap:\s*wrap/, 'and wraps again if a 320px viewport still cannot fit it');
+    assert.ok(!/\.floating-(?:icon|auth)-btn \{[^}]*width:\s*(?:[0-3]?\d)px/.test(body), 'the narrow block must not shrink any button below 44px');
 
     const dotRule = STYLES_CSS_RAW.match(/\.floating-filter-dot \{([^}]*)\}/);
-    assert.ok(dotRule && /flex-shrink:\s*0/.test(dotRule[1]), 'the dot must not shrink with a truncated label — measured at 0.7px on 461px signed in without it');
+    assert.ok(dotRule && /flex-shrink:\s*0/.test(dotRule[1]), 'the dot must not shrink with a truncated label');
 
-    const brandRule = STYLES_CSS_RAW.match(/\.floating-brand-btn \{([^}]*)\}/);
-    assert.ok(brandRule && /border-radius:\s*50%/.test(brandRule[1]) && /background:\s*#ffffff/i.test(brandRule[1]), 'the brand sits on a white disc, not a white square');
-    assert.ok(/\.floating-brand-btn img \{[^}]*border-radius:\s*50%/.test(STYLES_CSS_RAW), 'and the image itself is clipped round so its corners never poke out of the disc');
+    // Every bar function still exists in the DOM with its handler. The ≤29px
+    // budget existed because these seven actions plus the brand crowded one
+    // row; the re-flow above is what lets them all stay.
+    const expected = [
+      ['floatingFilterBtn', 'toggleTopChrome(true)'],
+      [null, 'openAgendaModal()'],
+      [null, 'refreshEventsFeed()'],
+      [null, 'handleSupportClick()'],
+      ['floatingLiveEntryBtn', 'openLiveSection()'],
+      ['floatingNotifBtn', 'toggleNotificationsPanel()'],
+      ['floatingSoundBtn', 'toggleSoundMuted()'],
+      ['floatingAuthBtn', "switchTab('tabAccount')"]
+    ];
+    const buttons = [...bar.querySelectorAll('button')];
+    assert.strictEqual(buttons.length, expected.length, 'no floating-bar button may be removed to win the space');
+    for (const [id, handler] of expected) {
+      const button = id ? bar.querySelector(`#${id}`) : buttons.find(b => (b.getAttribute('onclick') || '').includes(handler));
+      assert.ok(button, `expected the button wired to ${handler}`);
+      assert.ok((button.getAttribute('onclick') || '').includes(handler), `${handler} must stay available`);
+    }
+    const brand = bar.querySelector('.floating-brand-btn');
+    assert.ok(brand, 'the phone brand must survive the re-flow');
+    assert.strictEqual(brand.getAttribute('href'), '#tabHome');
+
+    assert.ok(
+      !bar.querySelector('.floating-actions-box #floatingAuthBtn'),
+      'the account button must leave the actions pill for the first row — that is what keeps it visible at 360px'
+    );
   });
 
   await test('on the feed itself, the header brand scrolls back to the top of the list', async () => {
@@ -14029,6 +14269,422 @@ async function run() {
     assert.ok(regionValue && REGIONS_FIXTURE[0] && String(REGIONS_FIXTURE[0].id) === regionValue,
       'المحافظة المحفوظة لم تعد قائمة ⇒ الافتراضية (الأولى) لا قيمة معلَّقة');
     assert.ok(document.getElementById('dirTown').value, 'منتقي البلدة لم يبق فارغاً بعد استرجاع المسودّة');
+  });
+
+  console.log('\nQuality — pinch-zoom, pinned Chart.js, touch targets, focus, and the shell cache (#164)');
+
+  await test('web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover', () => {
+    const meta = INDEX_HTML_RAW.match(/<meta\s+name="viewport"\s+content="([^"]*)"/i);
+    assert.ok(meta, 'expected index.html to keep a viewport meta tag');
+    const content = meta[1];
+
+    assert.ok(
+      !/maximum-scale/i.test(content),
+      `maximum-scale must stay gone (viewport is "${content}") — it caps pinch-zoom on the phones this platform serves`
+    );
+    assert.ok(
+      !/user-scalable/i.test(content),
+      `user-scalable must stay gone (viewport is "${content}") — zoom is a reading right, not a setting the page owns`
+    );
+    assert.match(content, /width=device-width/i, 'the page must still size to the device');
+    assert.match(content, /initial-scale=1/i, 'and open at 100%');
+    assert.match(content, /viewport-fit=cover/i, 'viewport-fit=cover must survive — the safe-area insets depend on it');
+  });
+
+  await test('Chart.js is pinned to one explicit version, the same in index.html and admin.html', () => {
+    const chartSources = (html) =>
+      [...html.matchAll(/<script[^>]+src="([^"]*chart\.js[^"]*)"/gi)].map((match) => match[1]);
+
+    const indexSources = chartSources(INDEX_HTML_RAW);
+    const adminSources = chartSources(ADMIN_HTML_RAW);
+    assert.strictEqual(indexSources.length, 1, 'index.html must load Chart.js exactly once');
+    assert.strictEqual(adminSources.length, 1, 'admin.html must load Chart.js exactly once');
+
+    const pinnedVersion = (src) => {
+      const match = src.match(/chart\.js@(\d+\.\d+\.\d+)(?:[/?#"]|$)/);
+      assert.ok(
+        match,
+        `expected chart.js@<major.minor.patch> in "${src}" — an unpinned CDN URL ships whatever "latest" is, with no deploy and no record`
+      );
+      return match[1];
+    };
+
+    assert.strictEqual(
+      pinnedVersion(indexSources[0]),
+      pinnedVersion(adminSources[0]),
+      'both pages must pin the SAME version — two versions of one global is a bug waiting for the first shared screen'
+    );
+  });
+
+  await test('styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers', () => {
+    // Rules are read as text, not parsed: jsdom loads no CSS here and has no
+    // layout (the ticket's own manual screenshot pass covers what a linker
+    // cannot see). readCssRules() strips comments and flattens rules inside
+    // @media, so an override parked in a media block cannot hide from the
+    // checks below.
+    const rules = readCssRules(STYLES_CSS);
+
+    const focusRules = rules.filter((rule) => rule.selectors.some((s) => s.endsWith(':focus-visible')));
+    const general = focusRules.filter((rule) => rule.selectors.every((s) => s === ':focus-visible'));
+    assert.strictEqual(
+      general.length,
+      1,
+      `expected exactly one bare :focus-visible rule, found ${general.length} — a second copy is a duplicate selector that can silently beat the first`
+    );
+    assert.match(general[0].body, /outline:\s*2px\s+solid\s+var\(--sky\)/, 'the general rule must draw a visible ring');
+    assert.ok(
+      !/!important/.test(general[0].body),
+      'no !important: a base rule that needs it is not a base rule, it is a duplicate overriding the cascade'
+    );
+
+    const scoped = focusRules.filter((rule) => rule.selectors.every((s) => s !== ':focus-visible'));
+    const scopedSelectors = scoped.reduce(
+      (count, rule) => count + rule.selectors.filter((s) => s.endsWith(':focus-visible')).length,
+      0
+    );
+    assert.ok(
+      scopedSelectors >= 16,
+      `the sixteen pre-existing per-component :focus-visible selectors must all survive — #164 adds a base, never replaces one (found ${scopedSelectors})`
+    );
+
+    const buttonRules = rules.filter((rule) => rule.selectors.every((s) => s === 'button'));
+    assert.strictEqual(buttonRules.length, 1, 'expected exactly one bare `button` rule');
+    assert.match(buttonRules[0].body, /min-height:\s*44px/);
+    assert.match(buttonRules[0].body, /min-width:\s*44px/);
+    assert.ok(!/!important/.test(buttonRules[0].body));
+
+    // A rule written against the `button` ELEMENT declaring a smaller
+    // min-height would silently win over the base (0,1,0 beats 0,0,1). Button
+    // classes are outside what this text-level check can see; the only former
+    // exception is asserted to be gone immediately below.
+    const lowering = rules.filter((rule) =>
+      rule.selectors.some((selector) => /(^|[\s,>+~])button(\s|$|[:.[#])/.test(selector))
+      && lowers44MinHeight(rule.body));
+    assert.deepStrictEqual(
+      lowering.map((rule) => rule.selectors.join(', ')),
+      [],
+      'a button selector declaring min-height below 44px would silently shrink the base target'
+    );
+
+    // No exception survives: the old floating-toolbar opt-out (`min-width: 0`
+    // / `min-height: 0`) is exactly what the ticket forbids. The bar re-flows
+    // instead, asserted as a layout decision in its own test above.
+    const floatingOptOuts = rules.filter((rule) =>
+      rule.selectors.some((selector) => /\.floating-(?:icon|auth)-btn/.test(selector))
+      && /min-(?:width|height):\s*0/.test(rule.body));
+    assert.deepStrictEqual(
+      floatingOptOuts.map((rule) => rule.selectors.join(', ')),
+      [],
+      'no floating-bar control may opt out of the 44px base — the bar re-flows instead of shrinking'
+    );
+
+    // The two focus regressions the review found: a suppressed outline with no
+    // visible alternative. Both must be fixed in place, not papered over by a
+    // second copy of the global selector.
+    const drawerInput = rules.find((rule) => rule.selectors.some((s) => s.includes('.drawer-search-box input')));
+    assert.ok(drawerInput, 'expected the drawer search input rule');
+    assert.ok(
+      !/outline:\s*(?:none|0)/.test(drawerInput.body),
+      'the drawer search input must let the general :focus-visible ring through — it has no other visible focus style'
+    );
+
+    const textareaFocus = rules.find((rule) => rule.selectors.some((s) => s.includes('.form-group textarea:focus')));
+    assert.ok(
+      textareaFocus,
+      'the form textarea must have a visible :focus style of its own (border/box-shadow), since its group still suppresses the outline'
+    );
+    assert.match(textareaFocus.body, /border-color|box-shadow/, 'and that style must actually draw something');
+  });
+
+  await test('admin.css carries the same 44px button base and general :focus-visible — the panel loads no other stylesheet', () => {
+    const rules = readCssRules(ADMIN_CSS);
+
+    const generalFocus = rules.filter((rule) => rule.selectors.every((s) => s === ':focus-visible'));
+    assert.strictEqual(generalFocus.length, 1, 'admin.css needs exactly one bare :focus-visible rule — admin.html loads no styles.css');
+    assert.match(generalFocus[0].body, /outline:\s*2px\s+solid\s+var\(--sky\)/);
+    assert.ok(!/!important/.test(generalFocus[0].body), 'no !important on the base focus ring');
+    assert.ok(
+      rules.some((rule) => rule.selectors.some((s) => s === '.admin-tag-tab:focus-visible')),
+      'the pre-existing component focus rule must survive, not be replaced by the base'
+    );
+
+    const buttonRules = rules.filter((rule) => rule.selectors.every((s) => s === 'button'));
+    assert.strictEqual(buttonRules.length, 1, 'expected exactly one bare `button` rule in admin.css');
+    assert.match(buttonRules[0].body, /min-height:\s*44px/);
+    assert.match(buttonRules[0].body, /min-width:\s*44px/);
+    assert.ok(!/!important/.test(buttonRules[0].body));
+
+    const lowering = rules.filter((rule) =>
+      rule.selectors.some((selector) => /(^|[\s,>+~])button(\s|$|[:.[#])/.test(selector))
+      && lowers44MinHeight(rule.body));
+    assert.deepStrictEqual(lowering.map((rule) => rule.selectors.join(', ')), [], 'no admin rule may lower the 44px base');
+
+    const searchInput = rules.find((rule) => rule.selectors.some((s) => s.includes('.admin-search-box input')));
+    assert.ok(searchInput, 'expected the admin search input rule');
+    assert.ok(
+      !/outline:\s*(?:none|0)/.test(searchInput.body),
+      'the admin search input has no other visible focus style, so it must not suppress the general ring'
+    );
+
+    const closeRule = rules.find((rule) => rule.selectors.length === 1 && rule.selectors[0] === '.close-modal-btn');
+    assert.ok(closeRule, 'expected the modal close button rule');
+    assert.match(closeRule.body, /width:\s*44px/);
+    assert.match(closeRule.body, /height:\s*44px/, 'the 34×34 close target is a 44px target now');
+
+    const photoDelete = rules.find((rule) => rule.selectors.length === 1 && rule.selectors[0] === '.archive-photo-delete');
+    assert.ok(photoDelete, 'expected the album photo delete button rule');
+    assert.match(photoDelete.body, /width:\s*44px/);
+    assert.match(photoDelete.body, /height:\s*44px/, 'the photo-overlay delete target is 44px too');
+  });
+
+  await test('sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL', async () => {
+    assert.match(SW_JS, /const CACHE_VERSION = '[^']+';/, 'the cache version must be a top-level constant — that one line is what invalidates a deploy');
+
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    const addedPaths = sw.added.map((url) => new URL(url).pathname).sort();
+    assert.deepStrictEqual(
+      addedPaths,
+      [
+        '/api.js',
+        '/app.js',
+        '/config.js',
+        '/icons/apple-touch-icon.png',
+        '/icons/favicon-32.png',
+        '/icons/icon-192.png',
+        '/icons/icon.svg',
+        '/index.html',
+        '/occasionForm.js',
+        '/styles.css'
+      ],
+      'expected exactly the page, its local scripts/styles and its own icons'
+    );
+    assert.ok(
+      !addedPaths.some((path) => path.startsWith('/api/')),
+      'a precached /api response would serve one user\'s data to the next — the shell list must never name one'
+    );
+
+    const cacheNames = [...sw.stores.keys()];
+    assert.strictEqual(cacheNames.length, 1, 'install must open exactly one shell cache');
+    assert.match(cacheNames[0], /^aarasna-shell-/, 'the cache name must carry the prefix activate filters on');
+  });
+
+  /**
+   * The shell list and the runtime pattern are two hand-kept copies of the same
+   * set, and both once forgot occasionForm.js while index.html loaded it and
+   * app.js called isoLocalDay from it. This test derives the required local
+   * scripts from the page itself: a new local <script src> is either added to
+   * both worker paths or this fails by name.
+   */
+  await test('sw.js covers every local script index.html loads — in the precache list AND the runtime pattern', async () => {
+    const localScripts = [...INDEX_HTML_RAW.matchAll(/<script[^>]+src="([^"]+)"/gi)]
+      .map((match) => match[1])
+      .filter((src) => !/^(?:[a-z]+:)?\/\//i.test(src))
+      .map((src) => `/${src.split('?')[0].replace(/^\.?\//, '')}`);
+
+    assert.ok(localScripts.includes('/occasionForm.js'), 'index.html must still load the local occasion form this test exists for');
+    assert.ok(localScripts.includes('/app.js'), 'and app.js itself');
+
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+    const precached = sw.added.map((url) => new URL(url).pathname);
+
+    for (const path of localScripts) {
+      assert.ok(
+        precached.includes(path),
+        `${path} is loaded by index.html but missing from SHELL_ESSENTIAL_PATHS — an offline shell without it is a broken page`
+      );
+      const fetched = await runWorkerFetch(sw, { method: 'GET', url: `https://web.test${path}?v=2.5.2`, mode: 'cors' });
+      assert.strictEqual(
+        fetched.responded,
+        true,
+        `${path} is loaded by index.html but SHELL_PATH_PATTERN does not intercept it at runtime`
+      );
+      assert.strictEqual(fetched.response.label, path, `the worker must answer ${path} with its own cached copy`);
+    }
+  });
+
+  await test('sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    const apiGet = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/api/privacy/notice', mode: 'cors' });
+    assert.strictEqual(apiGet.responded, false, 'GET /api/privacy/notice must reach the network untouched — never a cached answer');
+
+    const nonGet = await runWorkerFetch(sw, { method: 'POST', url: 'https://web.test/styles.css', mode: 'cors' });
+    assert.strictEqual(nonGet.responded, false, 'a non-GET request is never intercepted');
+
+    const crossOrigin = await runWorkerFetch(sw, { method: 'GET', url: 'https://res.cloudinary.com/demo/image/upload/w_600.jpg', mode: 'cors' });
+    assert.strictEqual(crossOrigin.responded, false, 'Cloudinary/CDN assets belong to the network, not to this cache');
+
+    const adminNavigation = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/admin.html', mode: 'navigate' });
+    assert.strictEqual(adminNavigation.responded, false, 'admin.html is not part of the public shell this worker owns');
+
+    assert.deepStrictEqual(sw.fetchCalls, [], 'not one of those requests even reached the worker\'s fetch');
+    assert.deepStrictEqual(sw.puts, [], 'and nothing was written to the cache');
+  });
+
+  await test('sw.js serves shell files from the cache and still opens the shell offline', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    // index.html asks for `styles.css?v=2.8.3`; the precache stored it without
+    // the query (the owner's decision: that number is not bumped).
+    const css = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/styles.css?v=2.8.3', mode: 'cors' });
+    assert.strictEqual(css.responded, true, 'a shell stylesheet must be answered by the worker');
+    assert.strictEqual(css.response.label, '/styles.css', 'the cached copy answers despite the ?v= query');
+    assert.deepStrictEqual(sw.fetchCalls, [], 'a cached shell file needs no network round-trip');
+
+    // A worker takes over only after a *successful* install, so the offline
+    // visit this asserts is the one a real user has: the shell was cached
+    // while the network was up, and the network is gone afterwards.
+    const offline = loadServiceWorker();
+    await runWorkerLifecycle(offline, 'install');
+    offline.setNetwork(async () => { throw new Error('offline'); });
+    const nav = await runWorkerFetch(offline, { method: 'GET', url: 'https://web.test/?event_id=7', mode: 'navigate' });
+    assert.strictEqual(nav.responded, true, 'a navigation must still be answered when the network is gone');
+    assert.strictEqual(nav.response.label, '/index.html', 'the fallback is the cached shell entry, not an error page');
+
+    const online = loadServiceWorker();
+    await runWorkerLifecycle(online, 'install');
+    const live = await runWorkerFetch(online, { method: 'GET', url: 'https://web.test/', mode: 'navigate' });
+    assert.strictEqual(live.response.label, 'network', 'navigation is network-first: a fresh page every open');
+    assert.ok(online.puts.includes('https://web.test/'), 'the served page is kept as the offline fallback');
+  });
+
+  await test('sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+    const [currentCache] = [...sw.stores.keys()];
+
+    // A cache from the previous deploy, and one that is not ours at all.
+    sw.stores.set('aarasna-shell-previous', new Map());
+    sw.stores.set('unrelated-cache', new Map());
+
+    await runWorkerLifecycle(sw, 'activate');
+
+    assert.ok(!sw.stores.has('aarasna-shell-previous'), 'the previous version\'s cache must be deleted on activate');
+    assert.ok(sw.stores.has(currentCache), 'the current version\'s cache stays');
+    assert.ok(sw.stores.has('unrelated-cache'), 'a cache outside this app\'s prefix is never touched');
+    assert.deepStrictEqual(sw.deleted, ['aarasna-shell-previous']);
+  });
+
+  /**
+   * The review lane's blocker, reproduced against the real worker file: a
+   * deploy whose app.js download fails. Install used to swallow every failure
+   * (`catch(() => {})` per path) and `skipWaiting()` anyway, so the new worker
+   * took over with half a shell — and `activate` then deleted the previous,
+   * good cache. The user got index.html from the fresh cache and `app.js`
+   * rejected as offline: a page with no script, and no way back. Each of the
+   * three claims below fails on that code — install resolves, the worker
+   * takes over, and the previous cache is gone.
+   */
+  await test('sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole', async () => {
+    const FAILED_PATH = '/app.js';
+
+    // The previous deploy's complete shell, produced by the worker itself
+    // rather than hand-written here, then planted where activate would look.
+    const previous = loadServiceWorker();
+    await runWorkerLifecycle(previous, 'install');
+    const previousName = 'aarasna-shell-previous';
+    const previousStore = new Map(previous.stores.get([...previous.stores.keys()][0]));
+    const previousKeys = [...previousStore.keys()].sort();
+
+    const sw = loadServiceWorker({
+      fetchImpl: async (request) => {
+        const url = typeof request === 'string' ? request : request.url;
+        if (url.endsWith(FAILED_PATH)) throw new Error('app.js download failed');
+        return { ok: true, type: 'basic' };
+      }
+    });
+    sw.stores.set(previousName, previousStore);
+
+    let installError = null;
+    try {
+      await runWorkerLifecycle(sw, 'install');
+    } catch (error) {
+      installError = error;
+    }
+
+    // The browser activates a worker only after its install succeeded. Running
+    // it on success is what lets (ب) fail: an install that swallowed the
+    // download error reaches this line, and this line is the one that deletes.
+    if (!installError) await runWorkerLifecycle(sw, 'activate');
+
+    // (أ) التثبيت لم يكتمل ولم يستولِ.
+    assert.ok(
+      installError,
+      'install must reject when an essential shell file failed to download — a half shell is not a cache'
+    );
+    assert.strictEqual(
+      sw.skipWaitingCalls,
+      0,
+      'the half-installed worker must never call skipWaiting: taking over is what retires the shell that works'
+    );
+
+    // (ب) الكاش السابق لم يُحذف.
+    assert.deepStrictEqual(sw.deleted, [], 'a failed install never activates, so no cache may be deleted');
+    const survivingStore = sw.stores.get(previousName);
+    assert.ok(survivingStore, 'the previous deploy\'s shell cache must still exist after the failed update');
+    assert.strictEqual(survivingStore, previousStore, 'and be the same untouched cache, not an empty one re-created under the old name');
+    assert.deepStrictEqual([...survivingStore.keys()].sort(), previousKeys, 'every entry the previous deploy cached is still there');
+
+    // (ج) الهيكل القديم ما زال قابلاً للخدمة: مدخل الصفحة بديلَ التنقّل،
+    // والسكربت الذي فشل تنزيله الآن موجود بنسخته الصالحة.
+    for (const path of ['/index.html', '/styles.css', FAILED_PATH, '/occasionForm.js']) {
+      assert.ok(
+        [...survivingStore.keys()].some((url) => new URL(url).pathname === path),
+        `${path} must still be servable from the previous cache after the failed update`
+      );
+    }
+  });
+
+  /**
+   * The other half of the rule: icons are optional. Losing an icon must not
+   * cost the offline shell — and it must still be fillable at runtime, which
+   * is the one place the replaced install comment's promise actually holds:
+   * the page does request its icon on a normal visit.
+   */
+  await test('sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime', async () => {
+    const ICON_PATH = '/icons/icon-192.png';
+
+    const sw = loadServiceWorker({
+      fetchImpl: async (request) => {
+        const url = typeof request === 'string' ? request : request.url;
+        if (url.includes('/icons/')) throw new Error('icon download failed');
+        return { ok: true, type: 'basic' };
+      }
+    });
+
+    await runWorkerLifecycle(sw, 'install');
+    assert.strictEqual(sw.skipWaitingCalls, 1, 'every essential file is cached, so this install must still take over');
+
+    const [cacheName] = [...sw.stores.keys()];
+    assert.match(cacheName, /^aarasna-shell-/, 'install must still open the shell cache');
+    const store = sw.stores.get(cacheName);
+    for (const path of ['/index.html', '/styles.css', '/app.js', '/api.js', '/config.js', '/occasionForm.js']) {
+      assert.ok(
+        [...store.keys()].some((url) => new URL(url).pathname === path),
+        `${path} is essential and must be precached even though an icon failed`
+      );
+    }
+    assert.strictEqual(
+      [...store.keys()].filter((url) => new URL(url).pathname.startsWith('/icons/')).length,
+      0,
+      'a failed icon leaves no entry behind: optional means absent, not invented'
+    );
+
+    // The network returns and the page asks for its icon: the runtime route
+    // caches it from then on.
+    sw.setNetwork(async () => ({ ok: true, type: 'basic', label: 'network', clone() { return this; } }));
+    const icon = await runWorkerFetch(sw, { method: 'GET', url: `https://web.test${ICON_PATH}`, mode: 'cors' });
+    assert.strictEqual(icon.responded, true, 'the icon route is still intercepted at runtime');
+    assert.strictEqual(icon.response.label, 'network', 'nothing stored it at install, so this first response is the network\'s');
+    assert.ok(
+      sw.puts.includes(`https://web.test${ICON_PATH}`),
+      'the icon is kept from the first response after the network returns'
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
