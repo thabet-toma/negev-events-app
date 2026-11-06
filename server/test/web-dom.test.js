@@ -722,6 +722,102 @@ function installFixedLocalClock(win, { utcIso, year, monthIndex, day }) {
   return () => { win.Date = RealDate; };
 }
 
+/**
+ * web/sw.js evaluated in a stand-in service-worker scope: the real file, read
+ * from disk, with only the browser seams it touches faked (`caches`, `fetch`,
+ * `Response`, and an event target that records listeners). This is the same
+ * "read the file, stub the seam, never edit the source" approach buildEnv()
+ * uses for app.js — and the only way to prove the /api rule (#164): a text
+ * assertion on sw.js would pass on a comment just as happily as on code.
+ */
+function loadServiceWorker({ fetchImpl } = {}) {
+  const listeners = {};
+  const stores = new Map();
+  const added = [];
+  const puts = [];
+  const deleted = [];
+  const fetchCalls = [];
+  const response = (label) => ({ ok: true, type: 'basic', label, clone() { return this; } });
+
+  function storeFor(name) {
+    if (!stores.has(name)) stores.set(name, new Map());
+    return stores.get(name);
+  }
+
+  function createCache(name) {
+    const store = storeFor(name);
+    return {
+      async add(path) {
+        const url = new URL(path, worker.location.origin).href;
+        added.push(url);
+        store.set(url, response(path));
+      },
+      async match(request, options = {}) {
+        const requested = typeof request === 'string'
+          ? new URL(request, worker.location.origin).href
+          : request.url;
+        for (const [url, cached] of store) {
+          if (options.ignoreSearch) {
+            const a = new URL(url);
+            const b = new URL(requested);
+            if (a.origin === b.origin && a.pathname === b.pathname) return cached;
+          } else if (url === requested) {
+            return cached;
+          }
+        }
+        return undefined;
+      },
+      async put(request, cached) {
+        const url = typeof request === 'string' ? request : request.url;
+        puts.push(url);
+        store.set(url, cached);
+      }
+    };
+  }
+
+  const worker = {
+    location: { origin: 'https://web.test' },
+    addEventListener(type, handler) { listeners[type] = handler; },
+    skipWaiting: async () => {},
+    clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
+    registration: { showNotification: async () => {} }
+  };
+
+  const caches = {
+    async open(name) { return createCache(name); },
+    async keys() { return [...stores.keys()]; },
+    async delete(name) { deleted.push(name); stores.delete(name); return true; }
+  };
+
+  const fetchStub = async (request) => {
+    fetchCalls.push(typeof request === 'string' ? request : request.url);
+    return (fetchImpl || (async () => response('network')))(request);
+  };
+
+  // eslint-disable-next-line no-new-func
+  new Function('self', 'caches', 'fetch', 'Response', SW_JS)(
+    worker, caches, fetchStub, { error: () => ({ error: true }) }
+  );
+
+  return { listeners, worker, stores, added, puts, deleted, fetchCalls };
+}
+
+/** Dispatches one fetch event through the worker's own listener and resolves `respondWith`, if any. */
+async function runWorkerFetch(sw, request) {
+  const event = { request, responded: false };
+  event.respondWith = (promise) => { event.responded = true; event.response = promise; };
+  sw.listeners.fetch(event);
+  if (event.response) event.response = await event.response;
+  return event;
+}
+
+/** Dispatches install/activate and waits for whatever the worker passed to `waitUntil`. */
+async function runWorkerLifecycle(sw, type) {
+  const waits = [];
+  sw.listeners[type]({ waitUntil: (promise) => waits.push(promise) });
+  await Promise.all(waits);
+}
+
 async function run() {
   console.log('\nDOM smoke seam (web/, no database)\n');
 
@@ -13826,6 +13922,210 @@ async function run() {
     assert.ok(regionValue && REGIONS_FIXTURE[0] && String(REGIONS_FIXTURE[0].id) === regionValue,
       'المحافظة المحفوظة لم تعد قائمة ⇒ الافتراضية (الأولى) لا قيمة معلَّقة');
     assert.ok(document.getElementById('dirTown').value, 'منتقي البلدة لم يبق فارغاً بعد استرجاع المسودّة');
+  });
+
+  console.log('\nQuality — pinch-zoom, pinned Chart.js, touch targets, focus, and the shell cache (#164)');
+
+  await test('web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover', () => {
+    const meta = INDEX_HTML_RAW.match(/<meta\s+name="viewport"\s+content="([^"]*)"/i);
+    assert.ok(meta, 'expected index.html to keep a viewport meta tag');
+    const content = meta[1];
+
+    assert.ok(
+      !/maximum-scale/i.test(content),
+      `maximum-scale must stay gone (viewport is "${content}") — it caps pinch-zoom on the phones this platform serves`
+    );
+    assert.ok(
+      !/user-scalable/i.test(content),
+      `user-scalable must stay gone (viewport is "${content}") — zoom is a reading right, not a setting the page owns`
+    );
+    assert.match(content, /width=device-width/i, 'the page must still size to the device');
+    assert.match(content, /initial-scale=1/i, 'and open at 100%');
+    assert.match(content, /viewport-fit=cover/i, 'viewport-fit=cover must survive — the safe-area insets depend on it');
+  });
+
+  await test('Chart.js is pinned to one explicit version, the same in index.html and admin.html', () => {
+    const chartSources = (html) =>
+      [...html.matchAll(/<script[^>]+src="([^"]*chart\.js[^"]*)"/gi)].map((match) => match[1]);
+
+    const indexSources = chartSources(INDEX_HTML_RAW);
+    const adminSources = chartSources(ADMIN_HTML_RAW);
+    assert.strictEqual(indexSources.length, 1, 'index.html must load Chart.js exactly once');
+    assert.strictEqual(adminSources.length, 1, 'admin.html must load Chart.js exactly once');
+
+    const pinnedVersion = (src) => {
+      const match = src.match(/chart\.js@(\d+\.\d+\.\d+)(?:[/?#"]|$)/);
+      assert.ok(
+        match,
+        `expected chart.js@<major.minor.patch> in "${src}" — an unpinned CDN URL ships whatever "latest" is, with no deploy and no record`
+      );
+      return match[1];
+    };
+
+    assert.strictEqual(
+      pinnedVersion(indexSources[0]),
+      pinnedVersion(adminSources[0]),
+      'both pages must pin the SAME version — two versions of one global is a bug waiting for the first shared screen'
+    );
+  });
+
+  await test('styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers', () => {
+    // Rules are read as text, not parsed: jsdom loads no CSS here and has no
+    // layout (the ticket's own manual screenshot pass covers what a linker
+    // cannot see). Comments are stripped first — a comment between two rules
+    // otherwise rides along in the next rule's "selector" — and every rule in
+    // this file is one-level `selectors { body }`, including those inside
+    // @media, so this split is faithful to it.
+    const css = STYLES_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      selectors: match[1].split(',').map((selector) => selector.trim()).filter(Boolean),
+      body: match[2]
+    }));
+
+    const focusRules = rules.filter((rule) => rule.selectors.some((s) => s.endsWith(':focus-visible')));
+    const general = focusRules.filter((rule) => rule.selectors.every((s) => s === ':focus-visible'));
+    assert.strictEqual(
+      general.length,
+      1,
+      `expected exactly one bare :focus-visible rule, found ${general.length} — a second copy is a duplicate selector that can silently beat the first`
+    );
+    assert.match(general[0].body, /outline:\s*2px\s+solid\s+var\(--sky\)/, 'the general rule must draw a visible ring');
+    assert.ok(
+      !/!important/.test(general[0].body),
+      'no !important: a base rule that needs it is not a base rule, it is a duplicate overriding the cascade'
+    );
+
+    const scoped = focusRules.filter((rule) => rule.selectors.every((s) => s !== ':focus-visible'));
+    const scopedSelectors = scoped.reduce(
+      (count, rule) => count + rule.selectors.filter((s) => s.endsWith(':focus-visible')).length,
+      0
+    );
+    assert.ok(
+      scopedSelectors >= 16,
+      `the sixteen pre-existing per-component :focus-visible selectors must all survive — #164 adds a base, never replaces one (found ${scopedSelectors})`
+    );
+
+    const buttonRules = rules.filter((rule) => rule.selectors.every((s) => s === 'button'));
+    assert.strictEqual(buttonRules.length, 1, 'expected exactly one bare `button` rule');
+    assert.match(buttonRules[0].body, /min-height:\s*44px/);
+    assert.match(buttonRules[0].body, /min-width:\s*44px/);
+    assert.ok(!/!important/.test(buttonRules[0].body));
+
+    // A rule written against the `button` ELEMENT declaring a smaller
+    // min-height would silently win over the base (0,1,0 beats 0,0,1). Button
+    // classes are outside what this text-level check can see, so the single
+    // intended exception is asserted explicitly below instead.
+    const lowering = rules.filter((rule) =>
+      rule.selectors.some((selector) => /(^|[\s,>+~])button(\s|$|[:.[#])/.test(selector))
+      && /min-height:\s*(?:[0-3]?\d)px/.test(rule.body));
+    assert.deepStrictEqual(
+      lowering.map((rule) => rule.selectors.join(', ')),
+      [],
+      'a button selector declaring min-height below 44px would silently shrink the base target'
+    );
+
+    // The ONE documented exception: the measured floating toolbar keeps its own
+    // square sizes (the pre-existing ≤460px test above forbids enlarging it, or
+    // the signed-in pill overflows at 360px). It opts out of BOTH base
+    // dimensions explicitly, so the exception is visible here rather than
+    // implied by an invisible cascade.
+    const floatingIconRule = rules.find((rule) => rule.selectors.length === 1 && rule.selectors[0] === '.floating-icon-btn');
+    assert.ok(floatingIconRule, 'expected the floating toolbar icon rule');
+    assert.match(floatingIconRule.body, /min-width:\s*0/, 'the floating icons opt out of the 44px width');
+    assert.match(floatingIconRule.body, /min-height:\s*0/, 'and out of the 44px height — a 28×44 ellipse is not a circle');
+  });
+
+  await test('sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL', async () => {
+    assert.match(SW_JS, /const CACHE_VERSION = '[^']+';/, 'the cache version must be a top-level constant — that one line is what invalidates a deploy');
+
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    const addedPaths = sw.added.map((url) => new URL(url).pathname).sort();
+    assert.deepStrictEqual(
+      addedPaths,
+      [
+        '/api.js',
+        '/app.js',
+        '/config.js',
+        '/icons/apple-touch-icon.png',
+        '/icons/favicon-32.png',
+        '/icons/icon-192.png',
+        '/icons/icon.svg',
+        '/index.html',
+        '/styles.css'
+      ],
+      'expected exactly the page, its local scripts/styles and its own icons'
+    );
+    assert.ok(
+      !addedPaths.some((path) => path.startsWith('/api/')),
+      'a precached /api response would serve one user\'s data to the next — the shell list must never name one'
+    );
+
+    const cacheNames = [...sw.stores.keys()];
+    assert.strictEqual(cacheNames.length, 1, 'install must open exactly one shell cache');
+    assert.match(cacheNames[0], /^aarasna-shell-/, 'the cache name must carry the prefix activate filters on');
+  });
+
+  await test('sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    const apiGet = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/api/privacy/notice', mode: 'cors' });
+    assert.strictEqual(apiGet.responded, false, 'GET /api/privacy/notice must reach the network untouched — never a cached answer');
+
+    const nonGet = await runWorkerFetch(sw, { method: 'POST', url: 'https://web.test/styles.css', mode: 'cors' });
+    assert.strictEqual(nonGet.responded, false, 'a non-GET request is never intercepted');
+
+    const crossOrigin = await runWorkerFetch(sw, { method: 'GET', url: 'https://res.cloudinary.com/demo/image/upload/w_600.jpg', mode: 'cors' });
+    assert.strictEqual(crossOrigin.responded, false, 'Cloudinary/CDN assets belong to the network, not to this cache');
+
+    const adminNavigation = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/admin.html', mode: 'navigate' });
+    assert.strictEqual(adminNavigation.responded, false, 'admin.html is not part of the public shell this worker owns');
+
+    assert.deepStrictEqual(sw.fetchCalls, [], 'not one of those requests even reached the worker\'s fetch');
+    assert.deepStrictEqual(sw.puts, [], 'and nothing was written to the cache');
+  });
+
+  await test('sw.js serves shell files from the cache and still opens the shell offline', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+
+    // index.html asks for `styles.css?v=2.8.3`; the precache stored it without
+    // the query (the owner's decision: that number is not bumped).
+    const css = await runWorkerFetch(sw, { method: 'GET', url: 'https://web.test/styles.css?v=2.8.3', mode: 'cors' });
+    assert.strictEqual(css.responded, true, 'a shell stylesheet must be answered by the worker');
+    assert.strictEqual(css.response.label, '/styles.css', 'the cached copy answers despite the ?v= query');
+    assert.deepStrictEqual(sw.fetchCalls, [], 'a cached shell file needs no network round-trip');
+
+    const offline = loadServiceWorker({ fetchImpl: async () => { throw new Error('offline'); } });
+    await runWorkerLifecycle(offline, 'install');
+    const nav = await runWorkerFetch(offline, { method: 'GET', url: 'https://web.test/?event_id=7', mode: 'navigate' });
+    assert.strictEqual(nav.responded, true, 'a navigation must still be answered when the network is gone');
+    assert.strictEqual(nav.response.label, '/index.html', 'the fallback is the cached shell entry, not an error page');
+
+    const online = loadServiceWorker();
+    await runWorkerLifecycle(online, 'install');
+    const live = await runWorkerFetch(online, { method: 'GET', url: 'https://web.test/', mode: 'navigate' });
+    assert.strictEqual(live.response.label, 'network', 'navigation is network-first: a fresh page every open');
+    assert.ok(online.puts.includes('https://web.test/'), 'the served page is kept as the offline fallback');
+  });
+
+  await test('sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone', async () => {
+    const sw = loadServiceWorker();
+    await runWorkerLifecycle(sw, 'install');
+    const [currentCache] = [...sw.stores.keys()];
+
+    // A cache from the previous deploy, and one that is not ours at all.
+    sw.stores.set('aarasna-shell-previous', new Map());
+    sw.stores.set('unrelated-cache', new Map());
+
+    await runWorkerLifecycle(sw, 'activate');
+
+    assert.ok(!sw.stores.has('aarasna-shell-previous'), 'the previous version\'s cache must be deleted on activate');
+    assert.ok(sw.stores.has(currentCache), 'the current version\'s cache stays');
+    assert.ok(sw.stores.has('unrelated-cache'), 'a cache outside this app\'s prefix is never touched');
+    assert.deepStrictEqual(sw.deleted, ['aarasna-shell-previous']);
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

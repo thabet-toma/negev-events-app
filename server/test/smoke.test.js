@@ -8059,6 +8059,83 @@ async function run() {
     assert.strictEqual(missing.status, 404);
   });
 
+  console.log('\nScheduled erasure (#164): the daily job executes ONLY requests past their deadline');
+
+  /**
+   * The job's own query lives in privacy.service.js and compares `created_at`
+   * against `PRIVACY_REQUEST_DEADLINE_DAYS` — so the deadline is exercised the
+   * way time actually passes (an old `created_at`), not by rewriting a status
+   * flag. Four rows sit in the queue at once: one overdue erasure (must be
+   * executed), one erasure still inside its deadline, one overdue `access`
+   * request (a human fulfils it — never this job), and one already-completed
+   * erasure (must not be re-executed). The daily pass the scheduler tests above
+   * call is the real entry point, so this also proves the wiring, not just the
+   * pass on its own.
+   */
+  await test('The scheduled daily pass deletes a user whose erasure request passed the 30-day deadline — and leaves the fresh, the access-only and the already-closed requests untouched', async () => {
+    const dueUser = await insertTestUser('مستخدم انتهت مهلة حذفه');
+    const freshUser = await insertTestUser('مستخدم ما زالت مهلة طلبه سارية');
+    const accessUser = await insertTestUser('مستخدم طلب وصولاً قديماً');
+    const closedUser = await insertTestUser('مستخدم أُغلق طلبه');
+
+    await db.execute(
+      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
+       VALUES (?, 'erasure', 'pending', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
+      [dueUser.id]
+    );
+    await db.execute(
+      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
+       VALUES (?, 'erasure', 'pending', DATE_SUB(NOW(), INTERVAL 29 DAY))`,
+      [freshUser.id]
+    );
+    await db.execute(
+      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
+       VALUES (?, 'access', 'pending', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
+      [accessUser.id]
+    );
+    await db.execute(
+      `INSERT INTO privacy_requests (user_id, request_type, status, created_at)
+       VALUES (?, 'erasure', 'completed', DATE_SUB(NOW(), INTERVAL 31 DAY))`,
+      [closedUser.id]
+    );
+
+    await scheduler.runDailyPass();
+
+    assert.strictEqual(
+      await db.queryOne('SELECT id FROM users WHERE id = ?', [dueUser.id]),
+      null,
+      'the overdue erasure request must be executed by the job itself — no human in the loop'
+    );
+    assert.strictEqual(
+      (await db.query('SELECT id FROM privacy_requests WHERE user_id = ?', [dueUser.id])).length,
+      0,
+      'the request row goes with its user (fk_privacy_requests_user, ON DELETE CASCADE) — no dangling queue entry'
+    );
+
+    for (const [user, reason] of [
+      [freshUser, 'a request still inside the stated 30-day deadline must never be executed early'],
+      [accessUser, 'an access request is fulfilled by a super_admin — this job is erasure only'],
+      [closedUser, 'an already-completed request must not be executed a second time']
+    ]) {
+      assert.ok(
+        await db.queryOne('SELECT id FROM users WHERE id = ?', [user.id]),
+        `${reason} (user ${user.id})`
+      );
+      assert.ok(
+        (await db.query('SELECT id FROM privacy_requests WHERE user_id = ?', [user.id])).length > 0,
+        `${reason} — and its request row must survive untouched (user ${user.id})`
+      );
+    }
+
+    const freshRequest = await db.queryOne(
+      `SELECT status FROM privacy_requests WHERE user_id = ? AND request_type = 'erasure'`,
+      [freshUser.id]
+    );
+    assert.strictEqual(freshRequest.status, 'pending', 'the un-expired request stays queued, not silently closed');
+
+    await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', [freshUser.id, accessUser.id, closedUser.id]);
+  });
+
   /**
    * The avatar file is the one piece of a deleted account that no foreign key
    * reaches: CASCADE removes the `users` row (and with it the `avatar_url`

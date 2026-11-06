@@ -8,7 +8,8 @@
 
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
-const { PRIVACY_REQUEST_TYPES } = require('../constants');
+const auth = require('./auth.service');
+const { PRIVACY_REQUEST_TYPES, PRIVACY_REQUEST_DEADLINE_DAYS } = require('../constants');
 
 /**
  * Deletes every analytics_events row this user owns, without touching their
@@ -134,12 +135,59 @@ async function fileDeletionRequest(phoneNumber) {
   return { matched: true, duplicate: false };
 }
 
+/**
+ * The scheduled deletion job's candidate list (issue #164): every erasure
+ * request that has outlived the deadline stated to the person who filed it —
+ * the same `PRIVACY_REQUEST_DEADLINE_DAYS` the public confirmation and the
+ * admin queue quote. Nothing else can enter it: an `access` request is
+ * fulfilled by a human, a request still inside its deadline stays untouched,
+ * and a closed one stays closed. The deadline itself is computed here, in SQL,
+ * so the job that calls this carries no query of its own.
+ */
+async function listDueErasureRequests() {
+  return db.query(
+    `SELECT pr.id, pr.user_id
+       FROM privacy_requests pr
+       JOIN users u ON u.id = pr.user_id
+      WHERE pr.request_type = 'erasure'
+        AND pr.status = 'pending'
+        AND pr.created_at <= DATE_SUB(NOW(), INTERVAL ? DAY)
+      ORDER BY pr.id ASC`,
+    [PRIVACY_REQUEST_DEADLINE_DAYS]
+  );
+}
+
+/**
+ * Executes one due erasure request by deleting the account through the
+ * existing admin-fulfilment path — account deletion (cascade, avatar release,
+ * transaction) is never duplicated here. `handled_by` is left NULL because the
+ * actor is this job, not a person; the request row itself then goes with the
+ * user through `fk_privacy_requests_user ON DELETE CASCADE`, exactly as it
+ * does when a super_admin deletes the account from the panel.
+ *
+ * Re-reads the request first, so an id that was closed or already executed
+ * between listing and this call cannot delete anything.
+ */
+async function executeErasureRequest(requestId) {
+  const request = await db.queryOne(
+    `SELECT id, user_id FROM privacy_requests
+      WHERE id = ? AND request_type = 'erasure' AND status = 'pending'`,
+    [requestId]
+  );
+  if (!request) return { executed: false };
+
+  await auth.deleteAccountAsAdmin(request.user_id, null);
+  return { executed: true, userId: request.user_id };
+}
+
 module.exports = {
   eraseAnalyticsForUser,
   createRequest,
   listRequests,
   closeRequest,
   fileDeletionRequest,
+  listDueErasureRequests,
+  executeErasureRequest,
   toAsciiDigits,
   normalisePhoneNumber
 };

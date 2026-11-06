@@ -1,17 +1,148 @@
 'use strict';
 
 /**
- * Service Worker for Negev Events / أعراسنا Web Push (issue #85 batch 6c).
- * Self-contained, dependency-free; runs in the worker scope.
+ * Service Worker for Negev Events / أعراسنا — two independent jobs that happen
+ * to share one worker scope: Web Push (issue #85 batch 6c) and the offline
+ * shell cache (issue #164). Self-contained and dependency-free; runs in the
+ * worker scope.
  */
 
-self.addEventListener('install', () => {
-  self.skipWaiting();
+/* -------------------------------------------------------------------------
+ * 1. كاش الهيكل (#164) — الصفحة وملفاتها المحلية وحدها
+ * ---------------------------------------------------------------------- */
+
+/**
+ * رقم نسخة الكاش: **يُرفَع عند كل نشر**. `activate` يحذف كل كاش هيكل يحمل
+ * غير هذا الاسم، فرفعُ الرقم وحده يُبطل ما خزّنه النشر السابق — ولا يبقى
+ * ملف قديم يخدم طلباً بعد تحديث الموقع.
+ */
+const CACHE_VERSION = '164.1';
+const CACHE_PREFIX = 'aarasna-shell-';
+const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
+
+/** مدخل الصفحة — بديل التنقّل حين تنقطع الشبكة. */
+const SHELL_ENTRY = '/index.html';
+
+/**
+ * ملفات الهيكل: الصفحة الواحدة وملفاتها المحلية وأيقوناتها. لا صور الخادم
+ * ولا Cloudinary ولا أي CDN — كل ما هو من نطاق آخر يمرّ للمتصفّح ولا يُكاش
+ * إطلاقاً (انظر `fetch` أدناه)، وهذه القائمة لا تحاكيه.
+ */
+const SHELL_PATHS = [
+  '/index.html',
+  '/styles.css',
+  '/app.js',
+  '/api.js',
+  '/config.js',
+  '/icons/icon.svg',
+  '/icons/favicon-32.png',
+  '/icons/apple-touch-icon.png',
+  '/icons/icon-192.png'
+];
+
+/** مسارات الهيكل وقت التشغيل: ملفات الصفحة نفسها وأيقوناتها المحلية. */
+const SHELL_PATH_PATTERN = /^\/(?:index\.html|styles\.css|app\.js|api\.js|config\.js)$/;
+
+function isShellAsset(pathname) {
+  return SHELL_PATH_PATTERN.test(pathname) || pathname.startsWith('/icons/');
+}
+
+/**
+ * التثبيت: تخزين الهيكل ثم الاستيلاء الفوري. ملفٌّ فشل تنزيله لا يُفشل
+ * التثبيت كلّه (`catch` لكل مسار) — الكاش وقت التشغيل سيلتقطه عند أول طلب،
+ * وفشل التثبيت هنا كان سيترك العامل القديم يخدم نسخة قديمة بلا نهاية.
+ */
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(SHELL_CACHE)
+      .then((cache) => Promise.all(SHELL_PATHS.map((path) => cache.add(path).catch(() => {}))))
+      .then(() => self.skipWaiting())
+  );
 });
 
+/**
+ * التنشيط: حذف كاش الهيكل القديم وحده (بالبادئة) قبل الاستيلاء على الصفحات
+ * المفتوحة. كاشات نطاق آخر غير هذه البادئة لا تُمسّ — البادئة هي حدّ ملكيتنا.
+ */
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys()
+      .then((names) => Promise.all(
+        names
+          .filter((name) => name.startsWith(CACHE_PREFIX) && name !== SHELL_CACHE)
+          .map((name) => caches.delete(name))
+      ))
+      .then(() => self.clients.claim())
+  );
 });
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+
+  // ما ليس GET لا يُعترَض إطلاقاً — يُترك للمتصفّح كما هو.
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
+  // نطاق آخر (Cloudinary، خرائط، CDN، أو خادم على نطاق مختلف): لا كاش ولا تدخّل.
+  if (url.origin !== self.location.origin) return;
+
+  // **لا ردّ /api يُكاش ولا يُخدَم من الكاش، بأي حال.** بياناتها تخصّ
+  // المستخدم وتتغيّر بكل طلب (وجلسة منتهية يجب أن تصل كـ401 لا كردّ محفوظ)،
+  // فتُترك للشبكة دائماً — حتى لو كان المسار GET.
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
+
+  if (request.mode === 'navigate') {
+    // الصفحة الواحدة '/' و'/index.html' فقط. أي تنقّل آخر (صفحات المشاركة
+    // التي يولّدها الخادم) لا يخصّ الهيكل، فلا يُعترَض ولا يُخدَم بديلاً.
+    if (url.pathname !== '/' && url.pathname !== SHELL_ENTRY) return;
+    event.respondWith(networkFirstNavigation(request));
+    return;
+  }
+
+  if (isShellAsset(url.pathname)) {
+    event.respondWith(cacheFirstShell(request));
+  }
+});
+
+/**
+ * التنقّل أولاً من الشبكة — الصفحة جديدة عند كل فتح، والكاش بديل عند
+ * الانقطاع وحده — وردّ الشبكة الصالح يُحفظ ليكون هو ذلك البديل.
+ */
+async function networkFirstNavigation(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const response = await fetch(request);
+    if (response && response.ok && response.type === 'basic') {
+      await cache.put(request, response.clone()).catch(() => {});
+    }
+    return response;
+  } catch (error) {
+    const cached = (await cache.match(request)) || (await cache.match(SHELL_ENTRY));
+    return cached || Response.error();
+  }
+}
+
+/**
+ * ملفات الهيكل من الكاش أولاً — إبطالها برقم النسخة لا بكل طلب. `ignoreSearch`
+ * لأن index.html يطلب `styles.css?v=2.8.3` والمخزَّن بلا `?v=` (قرار المالك:
+ * الرقم لا يُرفع).
+ */
+async function cacheFirstShell(request) {
+  const cache = await caches.open(SHELL_CACHE);
+  const cached = await cache.match(request, { ignoreSearch: true });
+  if (cached) return cached;
+
+  const response = await fetch(request);
+  if (response && response.ok && response.type === 'basic') {
+    await cache.put(request, response.clone()).catch(() => {});
+  }
+  return response;
+}
+
+/* -------------------------------------------------------------------------
+ * 2. Web Push (issue #85 batch 6c) — كما هو
+ * ---------------------------------------------------------------------- */
 
 self.addEventListener('push', (event) => {
   let data = {};

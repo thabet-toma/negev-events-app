@@ -101,6 +101,29 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/*
+ * قاعدتان عامتان (#164)، موضوعتان قبل كل قاعدة صنف: كل ما هو أخصّ منهما
+ * يغلبهما بالتحديد وحده، فيبقى سلوك المكوّنات القائم كما هو ولا حاجة إلى
+ * `!important` ولا إلى محدِّد مكرَّر يغلب قاعدة قائمة.
+ *
+ * 1) هدف اللمس: كل زرّ 44×44 على الأقل. `min-height`/`min-width` تغلبان
+ *    `height`/`width` الصريحين في أي قاعدة صنف لاحقة، فلا يبقى زرّ أصغر
+ *    بحجّة تصميمه. الزرّ وحده مستهدَف — لا الأيقونة ولا البطاقة التي ليست
+ *    زرّاً. الاستثناء الوحيد المقصود مشروح عند `.floating-icon-btn`.
+ * 2) حلقة تركيز واحدة ظاهرة. تحديدها `:focus-visible` وحده (0,1,0)، وكل
+ *    قواعد التركيز القائمة من نوع `.class:focus-visible` (0,2,0) فتبقى هي
+ *    الفائزة حيث وُجدت، وبهذا لا تُكرَّر قاعدة قائمة ولا تُلغى.
+ */
+button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+
 body {
   font-family: var(--font-main);
   background-color: var(--ground);
@@ -2125,7 +2148,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 36px;
+  /* 44px لا 36 (#164): الزرّ هنا هدف لمس مستقلّ فوق الشريط السفلي. كتلة
+     الكبستين صارت 52 = 44 + فسحة 8، فتباعدت معها العلامات المثبَّتة فوقها
+     (الرقاقة العائمة 130px، ورقاقة الرجوع 126px، وفسحة الكرت 127px). */
+  min-height: 44px;
   padding: 8px 16px;
   border-radius: var(--radius-pill);
   font-family: var(--font-main);
@@ -2808,10 +2834,17 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
+/* الاستثناء الموثَّق الوحيد من قاعدة 44px (#164). عرض هذا الشريط وارتفاعه
+   مقيسان بالبكسل (القياسات في كتلة التعليق أدناه)، وحرس اختبارُ الويب القائم
+   أن تبقى أزراره مربّعة ≤29px على الهاتف: خمسة أزرار ٤٤px + زرّ «حسابي» +
+   العلامة تتجاوز حاوية ٣٦٠px وتُخرج «حسابي» عن الشاشة، ومربّعُ 28×44 يصير
+   بيضاويّاً لا دائرة. فيبقى هذا الشريط وحده بمقاسه المقيس، وما عداه 44px. */
 .floating-icon-btn {
   background: transparent;
   border: none;
   color: #ffffff;
+  min-width: 0;
+  min-height: 0;
   width: 34px;
   height: 34px;
   border-radius: 50%;
@@ -2843,11 +2876,13 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .floating-badge.live-entry-floating-badge { top: -6px; left: -10px; padding: 1px 4px; font-size: 0.55rem; }
 
 /* زرّ «حسابي» في الشريط العائم — أيقونة شخص + الكلمة، بارتفاع أزرار الأيقونات
-   نفسها كي لا يكبر الشريط. */
+   نفسها كي لا يكبر الشريط. ويشاركها استثناء #164 الموثَّق فوقها. */
 .floating-auth-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  min-height: 0;
   height: 34px;
   padding: 0 10px;
   border: none;
@@ -2904,6 +2939,11 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
    بنقطتها وبلا تسمية ٧٠٫٨px، فأول حاوية تتّسع لها مع الصندوق غير المضغوط
    ٣٥٦٫٧ + ٨ + ٧٠٫٨ = ٤٣٥٫٥px، أي عرض شاشة ~٤٦٠px. أي زرّ يُضاف إلى الصندوق
    يُعاد معه هذا القياس وهذا الحدّ. */
+
+/* #164: قاعدتا اللمس العامة (أعلى الملف) لا تمسّ هذا الشريط — `.floating-icon-btn`
+   و`.floating-auth-btn` تحملان `min-width: 0` و`min-height: 0` فتبقيان بمقاسهما
+   المقيس (34px، و28px تحت 460px)، لأن تكبيرهما إلى 44px يُخرج «حسابي» عن حاوية
+   ٣٦٠px كما حرست القياسات المسجَّلة أعلاه. */
 #floatingFilterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 460px) {
@@ -2919,7 +2959,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 /* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وكبستَي النشر، في الوسط. */
 .sound-unlock-chip {
   position: fixed;
-  bottom: calc(122px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(130px + env(safe-area-inset-bottom, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 102;
@@ -2945,12 +2985,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .sound-unlock-chip[hidden] { display: none; }
 
 /* زرّ «رجوع لنتائجك السابقة» — لقطة واحدة بعد تغيير فلتر فعلي. عائم فوق
-   الشريط السفلي وكبستَي النشر (أعلاهما بـ118px: الشريط 68 + الكبستان 44)،
+   الشريط السفلي وكبستَي النشر (أعلاهما بـ126px: الشريط 68 + الكبستان 52)،
    فلا يتقاطع مع `.bottom-navbar`، وبعيد عن `.floating-top-bar` في الأعلى.
    ظاهر على الهاتف والديسكتوب معاً. */
 .feed-back-pill {
   position: fixed;
-  bottom: calc(118px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(126px + env(safe-area-inset-bottom, 0px));
   inset-inline-end: 12px;
   z-index: 103;
   display: inline-flex;
@@ -3551,10 +3591,10 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
   /* الحافة `position: absolute; inset: 0` فلا يحميها `padding-bottom` الكرت:
      بـ8px كان صفّ أزرار الكرت تحت الشريط السفلي (‏~68px) وكبستَي النشر
-     فوقه (‏44px: 36 + فسحة 8) — مخفيّاً عن القارئ. 119 = 68 + 44 + فسحة 7. */
+     فوقه (‏52px: 44 + فسحة 8) — مخفيّاً عن القارئ. 127 = 68 + 52 + فسحة 7. */
   .events-feed > .event-card .card-bezel {
     padding-top: max(56px, calc(56px + env(safe-area-inset-top, 0px))) !important;
-    padding-bottom: calc(119px + env(safe-area-inset-bottom, 0px)) !important;
+    padding-bottom: calc(127px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   /* الخلفية الذهبية الفاخرة للبوسترات في الموبايل والـ PWA */

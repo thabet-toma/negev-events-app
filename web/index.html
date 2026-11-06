@@ -2,7 +2,10 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <!-- `maximum-scale` و`user-scalable=no` كانا يمنعان التكبير بإصبعين على الهاتف
+       (#164) — وهو حقّ قراءة لا يملكه الموقع. `viewport-fit=cover` يبقى: هو ما
+       يجعل الحواف الآمنة للشاشة تعمل. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>أعراسنا | المنصة الأولى لأعراس وأفراح منطقتك</title>
   
   <!-- تطبيق ويب قابل للتثبيت (#55). الوسمان الأخيران كانا هنا وحدهما يعدان
@@ -93,8 +96,9 @@
   <!-- Leaflet CSS for Interactive Map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   
-  <!-- Chart.js for Nokoot Analytics -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Chart.js for Nokoot Analytics — إصدار صريح (#164): رابط `chart.js` بلا
+       إصدار يجلب `latest`، فيتغيّر ما يشحنه الموقع بلا نشر منّا ولا سجلّ. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1"></script>
   
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

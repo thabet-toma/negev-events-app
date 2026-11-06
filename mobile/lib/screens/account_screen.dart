@@ -11,7 +11,7 @@ import '../main.dart';
 import '../models/user.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
-    show openSupportWhatsApp, showMessage;
+    show openExternalLink, openSupportWhatsApp, showMessage;
 import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/region_banner.dart' show arabicCountUnit;
 import 'live_screen.dart';
@@ -975,12 +975,15 @@ class _RegionSectionState extends State<_RegionSection> {
   }
 }
 
-/// «الخصوصية» — مفتاح إحصاءات الاستخدام وحذف بياناتها.
+/// «الخصوصية» — رابط سياسة الخصوصية، ومفتاح إحصاءات الاستخدام، وحذف بياناتها.
 ///
 /// سياسة الخصوصية المنشورة (`web/privacy.html`) تعد بذلك من صفحة «حسابي»،
-/// وهما على الويب `analyticsOptOutToggle` و`handleAnalyticsErasure` في
-/// `web/app.js`؛ هذا نظيرهما في التطبيق — ولا نصّ ثانٍ منهما هنا، فالرسائل من
-/// الخادم ونصوص الأزرار وحدها محلية.
+/// وصفحة الويب تنفّذهما (`analyticsOptOutToggle` و`handleAnalyticsErasure` في
+/// `web/app.js`)، وتعرض نصّ الإشعار من `/api/privacy/notice`. هذا نظيرها في
+/// التطبيق — ولا نصّ ثانٍ منهما هنا، فالرسائل من الخادم ونصوص الأزرار وحدها
+/// محلية. ورابط الإشعار يُفتح في المتصفّح الخارجي عبر `openExternalLink`،
+/// والمسار يُبنى بـ`ApiClient.buildUrl` من عنوان الخادم الوحيد في
+/// `config.dart` — لا URL مكتوب هنا.
 class _PrivacyBlock extends StatefulWidget {
   const _PrivacyBlock();
 
@@ -1093,6 +1096,32 @@ class _PrivacyBlockState extends State<_PrivacyBlock> {
                 style: TextStyle(color: context.c.inkSoft, fontSize: 13),
               ),
             ),
+            /* رابط الإشعار المنشور (#164): `/api/privacy/notice` يعرض النصّ
+               نفسه الذي تعد به السياسة، ويُفتح في المتصفّح الخارجي — لا
+               webview داخل التطبيق، فلا يلزم أي اعتماد جديد. */
+            ListTile(
+              key: const Key('profile_privacy_notice'),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              onTap: () => openExternalLink(
+                context,
+                AppServices.of(context).api.client.buildUrl('/api/privacy/notice'),
+                failureMessage: 'تعذّر فتح سياسة الخصوصية',
+              ),
+              leading: Icon(
+                Icons.open_in_new,
+                size: 20,
+                color: context.c.sky,
+              ),
+              title: Text(
+                'سياسة الخصوصية',
+                style: TextStyle(fontSize: 14, color: context.c.ink),
+              ),
+              subtitle: Text(
+                'تُفتح في المتصفح — نصّ الإشعار المنشور على المنصة',
+                style: TextStyle(color: context.c.inkFaint, fontSize: 12.5),
+              ),
+            ),
+            Divider(height: 1, color: context.c.lineSoft),
             SwitchListTile(
               key: const Key('profile_analytics_switch'),
               contentPadding: const EdgeInsets.symmetric(horizontal: 16),

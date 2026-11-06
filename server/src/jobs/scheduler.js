@@ -13,6 +13,7 @@ const db = require('../db/pool');
 const logger = require('../utils/logger');
 const { announceNotification } = require('../realtime/announce');
 const notifications = require('../services/notifications.service');
+const privacy = require('../services/privacy.service');
 const { getZonedParts, zonedTimeToUtc, RUN_HOUR } = require('../utils/jerusalemTime');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -170,15 +171,38 @@ async function runNudgePass() {
 }
 
 /**
- * The scheduler's whole daily job body (issue #85) — countdown, digest, then the second nudge,
- * order-free and safe to run twice, since every row either pass writes
- * carries a dedupe key. Exported directly so a test can run one pass
- * deterministically instead of waiting for a timer (tests must never sleep).
+ * The erasure requests past their deadline (issue #164) — the one job that
+ * deletes accounts with no human in the loop. Its entire query lives in
+ * privacy.service.js (`listDueErasureRequests`): nothing SQL-shaped appears in
+ * this file, and a request still inside its deadline is never returned by that
+ * query, so it cannot be touched here. One failing request is logged and the
+ * rest of the queue still runs — a single broken row must not hold every other
+ * person's overdue erasure forever.
+ */
+async function runPrivacyErasurePass() {
+  const due = await privacy.listDueErasureRequests();
+  for (const request of due) {
+    try {
+      await privacy.executeErasureRequest(request.id);
+    } catch (err) {
+      logger.error('[scheduler] erasure request failed:', err.message);
+    }
+  }
+}
+
+/**
+ * The scheduler's whole daily job body (issue #85) — countdown, digest, then
+ * the second nudge and the overdue erasures (issue #164), order-free and safe
+ * to run twice, since every notification row either pass writes carries a
+ * dedupe key and an executed erasure request ceases to exist. Exported
+ * directly so a test can run one pass deterministically instead of waiting for
+ * a timer (tests must never sleep).
  */
 async function runDailyPass() {
   await runCountdownPass();
   await runModerationDigestPass();
   await runNudgePass();
+  await runPrivacyErasurePass();
 }
 
 /** Milliseconds from `now` until the next 09:00 Asia/Jerusalem — today's if it hasn't happened yet, tomorrow's otherwise. DST-safe: re-resolves the zone's offset via `getZonedParts`/`zonedTimeToUtc` on every call rather than caching one. */
@@ -236,4 +260,4 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, runDailyPass, millisecondsUntilNextRun };
+module.exports = { start, stop, runDailyPass, runPrivacyErasurePass, millisecondsUntilNextRun };
