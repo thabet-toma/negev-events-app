@@ -14972,6 +14972,382 @@ async function run() {
   }
   await db.execute('DELETE FROM users WHERE id = ?', [visibilityListener.id]);
 
+  console.log('\nالنشر المجدول ونافذة البقاء في التغذية (تذكرة #167)');
+
+  // ما اعتمده هذا التشغيل اليوم يُزاح إلى أمس (قاعدة الاختبار وحدها، كما في
+  // قسم #166): «مناسبة جديدة» تُعَدّ باليوم، فأوّل مناسبة في هذا القسم يجب أن
+  // تكون فرادى لا ملخّصاً ورث عدّاده عن اختبارات سابقة.
+  await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+  const celebrationType = await db.queryOne("SELECT id, feed_linger_days FROM occasion_types WHERE name = 'نجاح'");
+  const weddingTypeRow = await db.queryOne("SELECT id, feed_linger_days FROM occasion_types WHERE name = 'عرس'");
+  const scheduledListener = await createDirectUser('مستمع المناسبات المجدولة');
+  const SCHEDULED_HONOREE = 'ناجح المناسبة المجدولة';
+  const SCHEDULED_TOWN = 'حورة';
+  const scheduledIds = [];
+  // أسماء الشهود بكلمات أخيرة مختلفة عمداً: حارس التكرار يقارن `family_clan`
+  // (وهو «آل» + آخر كلمة) حين لا تلتقي الأسماء، فيومٌ قريب وبلدة واحدة تكفي
+  // لتشابه كاذب يوقف النشر بـ409 ويُسقط الاختبار لسبب لا علاقة له بالتذكرة.
+  const TWIN_HONOREE = 'عريس الشاهد المستقل';
+  const RECENT_CELEBRATION = 'ناجح البقاء القريب';
+  const OLD_CELEBRATION = 'ناجح البقاء البعيد';
+  const YESTERDAY_WEDDING = 'عريس البقاء الأمسي';
+  const LIVE_CELEBRATION = 'ناجح البقاء الحاضر';
+  // التاريخ المستقبلي يُبنى من `CURDATE()` الذي يقرأه الخادم نفسه، ويُرسَل
+  // بصيغة `datetime-local` التي يرسلها العميلان — لا بصيغة أخرى يفهمها أحدهما وحده.
+  const futurePublishAt = `${addDaysToDate(schedulerToday, 2)}T09:00`;
+  const pastPublishAt = `${addDaysToDate(schedulerToday, -2)}T09:00`;
+
+  /** صفوف «مناسبة جديدة» لهذه المناسبة وحدها — الفردية (بمعرّفها) لا الملخّص. */
+  const scheduledNewsRows = (userId, eventId) => db.query(
+    "SELECT * FROM notifications WHERE user_id = ? AND event_id = ? AND type = 'event_new'", [userId, eventId]
+  );
+  /**
+   * بحثٌ باسم صاحب المناسبة وحده — أقوى شاهد من صفحة أولى من التغذية: البحث
+   * يعيد كل المطابق لا أول ١٠٠، فغيابُه غيابٌ فعلي وحضوره حضورٌ فعلي.
+   */
+  const searchByHonoree = honoree => api(
+    'GET', `/api/events?limit=100&all_regions=1&search=${encodeURIComponent(honoree)}`
+  );
+
+  await test('مناسبة بموعد نشر مستقبلي غائبة عن كل قائمة عامة وحاضرة بالتفصيل وبالرابط، ثم تظهر ويصل إشعارها مرة واحدة', async () => {
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        occasion_type_id: celebrationType.id,
+        honorees: [{ name: SCHEDULED_HONOREE, role: 'الناجح' }],
+        town: SCHEDULED_TOWN,
+        event_date: addDaysToDate(schedulerToday, 20),
+        publish_at: futurePublishAt
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    const eventId = created.body.eventId;
+    scheduledIds.push(eventId);
+    assert.strictEqual(created.body.status, 'pending', 'مناسبة المستخدم العادي تدخل الطابور أوّلاً');
+
+    const approve = await api('PATCH', `/api/admin/events/${eventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    assert.strictEqual(approve.status, 200, approve.body.message);
+
+    const stored = await db.queryOne('SELECT publish_at, announced_at, status FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(stored.status, 'approved');
+    assert.ok(stored.publish_at, 'الموعد المجدول مكتوب على الصفّ');
+    assert.strictEqual(stored.announced_at, null, 'الاعتماد قبل الموعد لا يُعلن — لا تعليم إعلان ولا صفوف');
+
+    assert.strictEqual(
+      (await scheduledNewsRows(scheduledListener.id, eventId)).length, 0,
+      'الاعتماد قبل الموعد لا يكتب صفّ «مناسبة جديدة»'
+    );
+
+    // غياب تام عن كل قائمة عامة — ولكل واحدة شاهد إيجابي آخر لا ينجح الاختبار بدونه.
+    const feed = await api('GET', '/api/events?limit=100&all_regions=1');
+    assert.strictEqual(feed.status, 200);
+    const feedIds = feed.body.events.map(event => event.id);
+    assert.ok(!feedIds.includes(eventId), 'التغذية لا تعرض مناسبة لم يبلغ موعد نشرها');
+
+    const upcomingFeed = await api('GET', '/api/events?upcoming=1&limit=100&all_regions=1');
+    assert.ok(!upcomingFeed.body.events.some(event => event.id === eventId), '«القادم» لا يعرضها كذلك');
+
+    const map = await api('GET', '/api/map/events?all_regions=1');
+    assert.strictEqual(map.status, 200);
+    assert.ok(!map.body.points.some(point => point.id === eventId), 'الخريطة لا تعرضها');
+
+    const hiddenSearch = await searchByHonoree(SCHEDULED_HONOREE);
+    assert.strictEqual(hiddenSearch.status, 200);
+    assert.strictEqual(hiddenSearch.body.events.length, 0, 'البحث لا يجدها — ولا يجد شيئاً بهذا الاسم');
+
+    const sitemap = await rawGet('/sitemap.xml');
+    assert.strictEqual(sitemap.status, 200);
+    assert.ok(!sitemap.text.includes(`/e/${eventId}<`), 'خريطة الموقع لا تسردها');
+
+    // الشاهد الإيجابي: صفّ عام غير مجدول في نفس البلدة يظهر في التغذية والخريطة،
+    // فغياب المجدولة ليس لأن القائمة فارغة أو الشرط معطَّل.
+    const publicTwin = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: TWIN_HONOREE }],
+        town: SCHEDULED_TOWN,
+        event_date: addDaysToDate(schedulerToday, 21)
+      })
+    });
+    assert.strictEqual(publicTwin.status, 201, publicTwin.body.message);
+    scheduledIds.push(publicTwin.body.eventId);
+    const twinSearch = await searchByHonoree(TWIN_HONOREE);
+    assert.ok(
+      twinSearch.body.events.some(event => event.id === publicTwin.body.eventId),
+      'مناسبة معتمدة بلا جدولة يجدها البحث في التغذية كما كانت'
+    );
+    const twinMap = await api('GET', '/api/map/events?all_regions=1');
+    assert.ok(
+      twinMap.body.points.some(point => point.id === publicTwin.body.eventId),
+      'وعلى الخريطة — الشاهد الإيجابي لغياب المجدولة عنها'
+    );
+
+    // وحاضرة بالتفصيل وبالرابط — كمناسبة «بالرابط فقط» تماماً.
+    const detail = await api('GET', `/api/events/${eventId}`);
+    assert.strictEqual(detail.status, 200, detail.body.message);
+    assert.strictEqual(detail.body.event.id, eventId);
+    const sharePage = await rawGet(`/e/${eventId}`);
+    assert.strictEqual(sharePage.status, 200, 'رابط المناسبة المجدولة يفتح');
+    assert.ok(sharePage.text.includes(SCHEDULED_HONOREE), 'وصفحتها تحمل اسمها');
+
+    // ثم يبلغ الموعد: UPDATE على قاعدة الاختبار، ثم جولة المجدول.
+    await db.execute('UPDATE events SET publish_at = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [eventId]);
+
+    const spy = captureRealtime();
+    try {
+      await scheduler.runDailyPass();
+    } finally {
+      spy.restore();
+    }
+
+    const visibleSearch = await searchByHonoree(SCHEDULED_HONOREE);
+    assert.strictEqual(visibleSearch.body.events.length, 1, 'بعد بلوغ الموعد يجدها البحث');
+    assert.strictEqual(visibleSearch.body.events[0].id, eventId);
+
+    const newsRows = await scheduledNewsRows(scheduledListener.id, eventId);
+    assert.strictEqual(newsRows.length, 1, 'إشعار «مناسبة جديدة» واحد لا أكثر');
+    assert.strictEqual(newsRows[0].dedupe_key, `event_new_${eventId}`);
+    assert.strictEqual(
+      spy.emits.filter(emit => emit.channel === 'new_event_created').length, 1,
+      'إشارة لحظية واحدة «new_event_created»'
+    );
+    assert.strictEqual(
+      spy.emits.filter(emit => emit.channel === 'system_notification').length, 1,
+      'إعلان نظامي واحد'
+    );
+    assert.strictEqual(spy.pushes.length, 1, 'دفع واحد للأجهزة');
+
+    const announced = await db.queryOne('SELECT announced_at FROM events WHERE id = ?', [eventId]);
+    assert.ok(announced.announced_at, 'الصفّ معلَّم بأنه أُعلن');
+
+    // وتشغيل ثانٍ لا يكتب صفاً ولا يبثّ ولا يدفع مرّتين.
+    const secondSpy = captureRealtime();
+    try {
+      await scheduler.runDailyPass();
+      await scheduler.runDailyPass();
+    } finally {
+      secondSpy.restore();
+    }
+    assert.strictEqual(
+      (await scheduledNewsRows(scheduledListener.id, eventId)).length, 1,
+      'تشغيل الوظيفة مرّتين لا يضيف صفّاً لكل مستخدم'
+    );
+    assert.strictEqual(secondSpy.emits.filter(emit => emit.channel === 'new_event_created').length, 0, 'ولا إشارة ثانية');
+    assert.strictEqual(secondSpy.pushes.length, 0, 'ولا دفع ثانٍ');
+    const announcedAgain = await db.queryOne('SELECT announced_at FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(
+      String(announcedAgain.announced_at), String(announced.announced_at),
+      'تعليم الإعلان لا يُعاد كتابته'
+    );
+  });
+
+  await test('مناسبة بموعد نشر مستقبلي لا يُعلنها المجدول قبل موعدها ولو شُغّل عشر مرّات', async () => {
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس الانتظار المجدول' }],
+        town: SCHEDULED_TOWN,
+        event_date: addDaysToDate(schedulerToday, 25),
+        publish_at: futurePublishAt
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    const eventId = created.body.eventId;
+    scheduledIds.push(eventId);
+
+    const approve = await api('PATCH', `/api/admin/events/${eventId}/status`, { token: adminToken, body: { status: 'approved' } });
+    assert.strictEqual(approve.status, 200, approve.body.message);
+
+    const spy = captureRealtime();
+    try {
+      await scheduler.runDailyPass();
+      await scheduler.runDailyPass();
+    } finally {
+      spy.restore();
+    }
+
+    assert.strictEqual(
+      (await scheduledNewsRows(scheduledListener.id, eventId)).length, 0,
+      'الموعد لم يبلغ بعد ⇒ لا إشعار'
+    );
+    assert.strictEqual(spy.emits.filter(emit => emit.channel === 'new_event_created').length, 0, 'ولا إشارة لحظية');
+    assert.strictEqual(spy.pushes.length, 0, 'ولا دفع');
+    const row = await db.queryOne('SELECT announced_at FROM events WHERE id = ?', [eventId]);
+    assert.strictEqual(row.announced_at, null, 'ولم يُعلَّم إعلاناً');
+  });
+
+  await test('publish_at في الماضي أو غير صالح يُرفض 400 عربية في النشر والتعديل، وإعادة الموعد المخزَّن لا تُرفض', async () => {
+    const pastPublish = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس موعد ماضٍ' }], town: SCHEDULED_TOWN, publish_at: pastPublishAt })
+    });
+    assert.strictEqual(pastPublish.status, 400, 'موعد نشر في الماضي يُرفض');
+    assert.ok(
+      pastPublish.body.message.includes('المستقبل'),
+      `رسالة عربية تشرح السبب: "${pastPublish.body.message}"`
+    );
+
+    const invalidPublish = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس موعد فاسد' }], town: SCHEDULED_TOWN, publish_at: 'ليس-تاريخاً' })
+    });
+    assert.strictEqual(invalidPublish.status, 400, 'قيمة غير صالحة تُرفض كذلك');
+
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس تعديل الموعد' }], town: SCHEDULED_TOWN, event_date: addDaysToDate(schedulerToday, 22) })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    const eventId = created.body.eventId;
+    scheduledIds.push(eventId);
+
+    const pastEdit = await api('PATCH', `/api/events/${eventId}`, { token: adminToken, body: { publish_at: pastPublishAt } });
+    assert.strictEqual(pastEdit.status, 400, 'تغيير الموعد إلى ماضٍ يُرفض في التعديل');
+    assert.ok(pastEdit.body.message.includes('المستقبل'), `وبرسالة عربية: "${pastEdit.body.message}"`);
+
+    const futureEdit = await api('PATCH', `/api/events/${eventId}`, { token: adminToken, body: { publish_at: futurePublishAt } });
+    assert.strictEqual(futureEdit.status, 200, futureEdit.body.message);
+
+    // «مرّ الوقت»: القيمة المخزَّنة نفسها تصير ماضية — وإعادة إرسالها كما هي
+    // ليست «موعداً في الماضي» بل «بلا تعديل»، فلا تُرفض.
+    await db.execute('UPDATE events SET publish_at = NOW() - INTERVAL 3 DAY WHERE id = ?', [eventId]);
+    const storedClock = await db.queryOne(
+      "SELECT DATE_FORMAT(publish_at, '%Y-%m-%dT%H:%i') AS clock FROM events WHERE id = ?", [eventId]
+    );
+    const resend = await api('PATCH', `/api/events/${eventId}`, {
+      token: adminToken,
+      body: { publish_at: storedClock.clock, title: 'عنوان بعد الموعد' }
+    });
+    assert.strictEqual(resend.status, 200, `إعادة إرسال الموعد المخزَّن لا تُرفض: ${resend.body.message}`);
+
+    const afterResend = await db.queryOne(
+      "SELECT DATE_FORMAT(publish_at, '%Y-%m-%d %H:%i:%s') AS clock FROM events WHERE id = ?", [eventId]
+    );
+    assert.strictEqual(
+      afterResend.clock.slice(0, 16), storedClock.clock.replace('T', ' ').slice(0, 16),
+      'والقيمة المخزَّنة لم تتغيّر'
+    );
+  });
+
+  await test('نافذة البقاء: نجاح منتهٍ منذ ٣ أيام يظهر في «القادم» بـ«انتهت»، ومنذ ٨ لا يظهر، وعرس منتهٍ أمس لا يظهر، والخريطة لا تعرض المنتهي', async () => {
+    assert.strictEqual(
+      Number(celebrationType.feed_linger_days), 7,
+      'نوع «نجاح» يحمل نافذة ٧ أيام من الترحيل'
+    );
+
+    async function publishEnded(typeId, honoree, daysAgo) {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: {
+          occasion_type_id: typeId,
+          honorees: [{ name: honoree }],
+          town: SCHEDULED_TOWN,
+          location_name: 'ديوان نافذة البقاء',
+          event_date: addDaysToDate(schedulerToday, daysAgo)
+        }
+      });
+      assert.strictEqual(created.status, 201, created.body.message);
+      scheduledIds.push(created.body.eventId);
+      return created.body.eventId;
+    }
+
+    const recentCelebration = await publishEnded(celebrationType.id, RECENT_CELEBRATION, -3);
+    const oldCelebration = await publishEnded(celebrationType.id, OLD_CELEBRATION, -8);
+    await publishEnded(weddingTypeRow.id, YESTERDAY_WEDDING, -1);
+    const liveCelebration = await publishEnded(celebrationType.id, LIVE_CELEBRATION, 0);
+
+    // «القادم» نفسه (الحدّ الوحيد الذي تغيّر)، وبحثٌ بالاسم كي لا يعتمد الحكم
+    // على الصفحة الأولى من قائمة قد تسبقها مئة مناسبة.
+    const searchUpcoming = async honoree => {
+      const res = await api(
+        'GET', `/api/events?upcoming=1&limit=100&all_regions=1&search=${encodeURIComponent(honoree)}`
+      );
+      assert.strictEqual(res.status, 200, res.body.message);
+      return res.body.events;
+    };
+
+    const recent = await searchUpcoming(RECENT_CELEBRATION);
+    assert.strictEqual(recent.length, 1, 'نجاح منتهٍ منذ ٣ أيام يبقى في «القادم» — نافذته ٧');
+    assert.strictEqual(recent[0].id, recentCelebration);
+    assert.strictEqual(recent[0].is_ended, true, 'وكرته تحمل «انتهت» (is_ended)');
+
+    assert.strictEqual(
+      (await searchUpcoming(OLD_CELEBRATION)).length, 0,
+      'نجاح منتهٍ منذ ٨ أيام خرج من «القادم» — النافذة ٧'
+    );
+    assert.strictEqual(
+      (await searchUpcoming(YESTERDAY_WEDDING)).length, 0,
+      'العرس المنتهي أمس لا يظهر — نافذة نوعه صفر'
+    );
+
+    const live = await searchUpcoming(LIVE_CELEBRATION);
+    assert.strictEqual(live.length, 1, 'النجاح القائم يظهر');
+    assert.strictEqual(live[0].is_ended, false, 'ولا يحمل «انتهت» — الشارة للمنتهي وحده');
+
+    // التغذية بلا `upcoming` (عرض الكل) لا تتغيّر: نافذة البقاء حدُّ «القادم» وحده.
+    const all = await searchByHonoree(OLD_CELEBRATION);
+    assert.strictEqual(all.status, 200);
+    assert.ok(all.body.events.some(event => event.id === oldCelebration), 'عرض الكل يبقى يعرض المنتهي كما كان');
+
+    // الخريطة على حدّها القائم: `span_end >= CURDATE()` — المنتهي لا دبّوس له.
+    const map = await api('GET', '/api/map/events?all_regions=1');
+    assert.strictEqual(map.status, 200);
+    const pinIds = map.body.points.map(point => point.id);
+    assert.ok(!pinIds.includes(recentCelebration), 'الخريطة لا تعرض النجاح المنتهي ولو بقي في التغذية');
+    assert.ok(pinIds.includes(liveCelebration), 'بينما النجاح القائم على الخريطة — الشاهد الإيجابي');
+  });
+
+  await test('feed_linger_days: افتراضه 0، والسوبر أدمن يضبطه من مسار الأنواع (0..30) ويُرفض ما خارجه', async () => {
+    const column = await db.queryOne(
+      `SELECT COLUMN_DEFAULT, IS_NULLABLE FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'occasion_types' AND COLUMN_NAME = 'feed_linger_days'`
+    );
+    assert.ok(column, 'العمود موجود على occasion_types');
+    assert.strictEqual(String(column.COLUMN_DEFAULT), '0', 'افتراضه 0 — لا بقاء بلا اختيار صريح');
+    assert.strictEqual(column.IS_NULLABLE, 'NO', 'وغير قابل لـNULL');
+    assert.strictEqual(Number(weddingTypeRow.feed_linger_days), 0, 'العرس على الافتراضي 0');
+
+    const setFive = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
+      token: superAdminToken, body: { feed_linger_days: 5 }
+    });
+    assert.strictEqual(setFive.status, 200, setFive.body.message);
+    assert.strictEqual(Number(setFive.body.type.feed_linger_days), 5, 'الحقل يُحفظ عبر المسار القائم');
+
+    const tooBig = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
+      token: superAdminToken, body: { feed_linger_days: 31 }
+    });
+    assert.strictEqual(tooBig.status, 400, 'ما فوق 30 يُرفض');
+    const negative = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
+      token: superAdminToken, body: { feed_linger_days: -1 }
+    });
+    assert.strictEqual(negative.status, 400, 'والسالب يُرفض');
+    const fractional = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
+      token: superAdminToken, body: { feed_linger_days: 2.5 }
+    });
+    assert.strictEqual(fractional.status, 400, 'وغير الصحيح يُرفض');
+
+    // إعادة النوع إلى 7 كما زرعه الترحيل، فلا يتغيّر سلوك قسم لاحق.
+    const restore = await api('PATCH', `/api/admin/occasion-types/${celebrationType.id}`, {
+      token: superAdminToken, body: { feed_linger_days: 7 }
+    });
+    assert.strictEqual(restore.status, 200);
+    assert.strictEqual(Number(restore.body.type.feed_linger_days), 7);
+  });
+
+  // Clean up this section: notifications of its events, the day's digest rows that
+  // name them (their `event_id` is NULL, so they are recognised by the names), the
+  // events themselves, then the listener.
+  await db.execute(
+    "DELETE FROM notifications WHERE type = 'event_new_digest' AND (body LIKE ? OR body LIKE ? OR body LIKE ? OR body LIKE ?)",
+    [`%${RECENT_CELEBRATION}%`, `%${OLD_CELEBRATION}%`, `%${YESTERDAY_WEDDING}%`, `%${LIVE_CELEBRATION}%`]
+  );
+  for (const id of scheduledIds) {
+    await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
+    await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  }
+  await db.execute('DELETE FROM users WHERE id = ?', [scheduledListener.id]);
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

@@ -2431,6 +2431,8 @@ function openOccasionTypeForm(id) {
   document.getElementById('otShowFollowers').checked = type ? Boolean(type.show_followers_count) : true;
   document.getElementById('otShowViews').checked = type ? Boolean(type.show_views_count) : true;
   document.getElementById('otArchiveGallery').checked = type ? Boolean(type.archive_gallery) : false;
+  // نافذة البقاء في التغذية (#167) — رقم 0..30، افتراضه 0 عند الإنشاء.
+  document.getElementById('otFeedLingerDays').value = type ? (Number(type.feed_linger_days) || 0) : 0;
   // يبدأ مطفأً عمداً عند الإنشاء — لا يظهر على أي تطبيق منشور اليوم إلا بعد
   // إصدار نسخة تدعمه، ولا يُقلَب هنا تلقائياً حتى عند التعديل.
   document.getElementById('otLegacySupported').checked = type ? Boolean(type.legacy_client_supported) : false;
@@ -2557,6 +2559,8 @@ async function handleOccasionTypeSubmit(e) {
     show_views_count: document.getElementById('otShowViews').checked,
     archive_gallery: document.getElementById('otArchiveGallery').checked,
     legacy_client_supported: document.getElementById('otLegacySupported').checked,
+    // نافذة البقاء في التغذية (#167) — الخادم يرفض ما ليس عدداً صحيحاً 0..30.
+    feed_linger_days: parseInt(document.getElementById('otFeedLingerDays').value, 10) || 0,
     fields,
     reactions: collectOccasionTypeReactions()
   };

@@ -11,7 +11,9 @@
 
 const db = require('../db/pool');
 const logger = require('../utils/logger');
-const { announceNotification } = require('../realtime/announce');
+const realtime = require('../realtime');
+const { announceNotification, announceNewEvent } = require('../realtime/announce');
+const events = require('../services/events.service');
 const notifications = require('../services/notifications.service');
 const { getZonedParts, zonedTimeToUtc, RUN_HOUR } = require('../utils/jerusalemTime');
 
@@ -170,12 +172,49 @@ async function runNudgePass() {
 }
 
 /**
- * The scheduler's whole daily job body (issue #85) — countdown, digest, then the second nudge,
- * order-free and safe to run twice, since every row either pass writes
- * carries a dedupe key. Exported directly so a test can run one pass
- * deterministically instead of waiting for a timer (tests must never sleep).
+ * النشر المجدول (تذكرة #167) — كل مناسبة معتمدة بلغ `publish_at` ولم تُعلَن
+ * بعد يُعلَن عنها الآن: صفوف «مناسبة جديدة» مرة واحدة، وإشارة لحظية واحدة،
+ * ودفع واحد. وهي نفس مادة الإعلان التي يكتبها المسارَان (النشر الفوري
+ * والاعتماد)، فلا يفترق شكل ما يصل الناس.
+ *
+ * **الحجز قبل الإعلان** هو ما يمنع التكرار: `events.markAnnounced` ذرّي
+ * (`WHERE announced_at IS NULL`)، فتشغيل ثانٍ — أو تشغيلان متزامنان — لا
+ * ينجح منهما إلا واحد، والثاني لا يجد صفاً في `listDueScheduledPublish` أصلاً،
+ * فلا صفّ جديد ولا بثّ ولا دفع ثانٍ. ولو حجزنا بعد الإعلان لتكرّر الملخّص
+ * اليومي (`ON DUPLICATE KEY UPDATE` يعيد كتابته ويُنبّه من جديد).
+ *
+ * و`notifyNewEvent` نفسه يُعلّم الصفّ بعد الكتابة، فيبقى «أُعلنت» صحيحاً حتى لو
+ * حُوّل موعدها لاحقاً إلى المستقبل — وإلا أعاد المجدول إعلان مناسبة أُعلنت عند
+ * الاعتماد.
+ */
+async function runScheduledPublishPass() {
+  for (const event of await events.listDueScheduledPublish()) {
+    if (!(await events.markAnnounced(event.id))) continue;
+    const announcement = await notifications.notifyNewEvent(event);
+    // «بالرابط فقط» تعيد `null` فلا إشارة ولا دفع — كما في المسارين.
+    if (!announcement) continue;
+    realtime.emit('new_event_created', {
+      id: event.id,
+      title: event.title,
+      groom_name: event.groom_name,
+      town: event.town,
+      event_date: event.event_date
+    });
+    announceNewEvent(announcement);
+  }
+}
+
+/**
+ * The scheduler's whole daily job body (issue #85) — scheduled publishing first
+ * (a row that just went public may be due for today's countdown too), then
+ * countdown, digest, then the second nudge; order-free beyond that and safe to
+ * run twice, since every row either pass writes carries a dedupe key and the
+ * scheduled publish pass claims its own rows. Exported directly so a test can
+ * run one pass deterministically instead of waiting for a timer (tests must
+ * never sleep).
  */
 async function runDailyPass() {
+  await runScheduledPublishPass();
   await runCountdownPass();
   await runModerationDigestPass();
   await runNudgePass();

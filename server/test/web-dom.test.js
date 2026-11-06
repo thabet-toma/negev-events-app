@@ -894,6 +894,105 @@ async function run() {
   });
 
   /**
+   * «موعد النشر» (#167): الحقل في نموذج النشر وفي نافذة التعديل، ويُرسَل عند
+   * تعبئته ويغيب عند فراغه — الغياب هو ما يجعل الخادم يقرأ «بلا جدولة»، وما
+   * يجعل كل عميل منشور اليوم لا يتغيّر سلوكه.
+   */
+  await test('نموذج النشر يحمل «موعد النشر»، ويُرسَل في جسم النشر عند تعبئته ويغيب عند فراغه (#167)', async () => {
+    // النموذج يُصفَّر بعد نجاح النشر (`addEventForm.reset`)، فلكل حالة بيئة جديدة.
+    async function openPublishWithCapture() {
+      const dom = buildEnv({ loggedIn: true });
+      const win = dom.window;
+      const { document } = win;
+      await openPublishTabAfterBrowsingHome(dom);
+      await waitFor(() => document.getElementById('addHonoreesList') !== null);
+
+      const bodies = [];
+      win.fetch = async (url, opts = {}) => {
+        if (String(url).includes('/api/events') && opts.method === 'POST') {
+          bodies.push(opts.body);
+          return jsonResponse({ success: true, status: 'pending' });
+        }
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+      };
+      return { win, document, bodies };
+    }
+
+    // (١) فارغ افتراضاً: لا مفتاح في الجسم إطلاقاً (لا نصّ فارغ).
+    const empty = await openPublishWithCapture();
+    const input = empty.document.getElementById('addPublishAt');
+    assert.ok(input, 'expected the publish form to carry «موعد النشر»');
+    assert.strictEqual(input.type, 'datetime-local', 'تاريخ ووقت معاً، لا تاريخاً وحده');
+    assert.strictEqual(input.closest('.form-group').querySelector('label').textContent.trim(), 'موعد النشر (اختياري)');
+    assert.strictEqual(input.value, '', 'فارغ افتراضاً: بلا جدولة');
+
+    fillRequiredPublishFields(empty.document);
+    await empty.win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(empty.bodies.length, 1, 'expected the publish POST to actually fire');
+    assert.strictEqual(
+      empty.bodies[0].get('publish_at'), null,
+      'an empty field must not travel — «بلا جدولة» is the absence of the key'
+    );
+
+    // (٢) بموعد: يصل كما اختاره صاحبه.
+    const filled = await openPublishWithCapture();
+    filled.document.getElementById('addPublishAt').value = '2030-05-04T18:30';
+    fillRequiredPublishFields(filled.document);
+    await filled.win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(filled.bodies.length, 1, 'expected a publish POST');
+    assert.strictEqual(
+      filled.bodies[0].get('publish_at'), '2030-05-04T18:30',
+      'the chosen publish moment travels in the body'
+    );
+    assertNoUnhandledRejections('handleEventSubmit / publish_at');
+  });
+
+  await test('نافذة التعديل تعرض «موعد النشر» المخزَّن وتُرسله كما هو (#167)', async () => {
+    const patches = [];
+    const ownEvents = [
+      // الخادم يقرأ عمود DATETIME بتوقيت غرينتش، فـ`…T18:00Z` تعني ١٨:٠٠ على
+      // ساعة صاحب المناسبة — وهي ما يجب أن يعرضه الحقل.
+      { id: 71, title: 'نجاح', town: TOWNS[0], region_id: 1, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'ناجح', status: 'approved', publish_at: '2026-12-01T18:00:00.000Z', occasion_type: WEDDING_TYPE },
+      // صفّ بلا جدولة — الحقل يبقى فارغاً.
+      { id: 72, title: 'نجاح', town: TOWNS[0], region_id: 1, event_date: '2026-10-11', location_name: 'ديوان', groom_name: 'ناجح', status: 'approved', publish_at: null, occasion_type: WEDDING_TYPE }
+    ];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+          if (opts.method === 'PATCH') {
+            patches.push(JSON.parse(opts.body));
+            return jsonResponse({ success: true, message: 'تم حفظ التعديل' });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    const input = document.getElementById('editPublishAt');
+    assert.ok(input, 'expected the edit modal to carry «موعد النشر»');
+
+    win.openEditEventModal(71);
+    assert.strictEqual(input.value, '2026-12-01T18:00', 'the stored moment is shown on its own wall clock, not shifted to the browser timezone');
+
+    win.openEditEventModal(72);
+    assert.strictEqual(input.value, '', 'an event with no schedule opens on an empty field');
+
+    win.openEditEventModal(71);
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.ok(patches[0], 'expected a PATCH');
+    assert.strictEqual(patches[0].publish_at, '2026-12-01T18:00', 'the unchanged moment travels back verbatim — «كما هو» لا «ماضٍ»');
+  });
+
+  /**
    * The field-key switch itself moved into web/occasionForm.js and is now
    * shared with admin.js's direct-publish form (buildOccasionFieldsHtml) —
    * app.js supplies overrides only for location_name/poster_url/audio_url/
@@ -7407,6 +7506,28 @@ async function run() {
     assert(cardTwoDays.includes('card-datechip">باقي 2 أيام</span>'), 'Event in 2 days must show "باقي 2 أيام"');
   });
 
+  /**
+   * «انتهت» (#167): الحكم على نهاية أيام المناسبة يأتي من الخادم (`is_ended`،
+   * محسوباً بامتداد الأيام كاملاً) لا من حساب العميل — فمناسبة متعددة الأيام
+   * تنتهي بعد يومها الأول. والشارة تحلّ محلّ العدّاد، فلا يقول الكرت «مناسبة
+   * سابقة» و«انتهت» معاً، ولا تحملها مناسبة قائمة.
+   */
+  await test('كرت التغذية يحمل «انتهت» حين يقول الخادم إن أيام المناسبة مضت، ولا يحملها لمناسبة قائمة (#167)', async () => {
+    const dom = buildEnv({ loggedIn: false });
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const base = { id: 901, title: 'نجاح أحمد', occasion_type: { name: 'نجاح', color: '#0e7490' } };
+
+    const ended = dom.window.renderSingleEventCardHtml({ ...base, event_date: '2020-01-01', is_ended: true });
+    assert.ok(ended.includes('card-datechip is-ended">انتهت</span>'), 'an ended event says «انتهت» in the card chip');
+    assert.ok(!ended.includes('مناسبة سابقة'), 'and not also «مناسبة سابقة» — one chip, one meaning');
+
+    const live = dom.window.renderSingleEventCardHtml({ ...base, event_date: today, is_ended: false });
+    assert.ok(!live.includes('انتهت'), 'an event still running carries no «انتهت»');
+    assert.ok(live.includes('card-datechip">اليوم</span>'), 'and keeps its countdown chip — the badge replaced nothing that still applies');
+  });
+
   await test('services tab has filter chips, search input, filter modals, and renders luxury service cards', async () => {
     const dom = buildEnv({ loggedIn: false });
     const { document } = dom.window;
@@ -9137,6 +9258,39 @@ async function run() {
     await dom.window.handleOccasionTypeSubmit({ preventDefault() {} });
     assert.ok(body, 'expected the PATCH to be sent');
     assert.strictEqual(body.archive_gallery, false);
+  });
+
+  await test('لوحة الأنواع تحمل حقل feed_linger_days ويُحفظ عبر المسار القائم (#167)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    const type = {
+      id: 4, name: 'نجاح', icon: '🎓', color: '#0e7490', position: 4, tone: 'festive', congratulations_label: 'تبريكات',
+      default_badge_title: 'مبارك النجاح', is_active: true, creates_collision: false, warns_others: true, premoderate_messages: false,
+      show_congratulations_count: true, show_followers_count: true, show_views_count: true, legacy_client_supported: false,
+      archive_gallery: false, feed_linger_days: 7, events_count: 0, fields: [], reactions: []
+    };
+    let body = null;
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/occasion-types') return jsonResponse({ success: true, types: [type] });
+      if (requestPath === '/api/admin/occasion-types/4' && method === 'PATCH') {
+        body = JSON.parse(options.body);
+        return jsonResponse({ success: true, type });
+      }
+      return jsonResponse({ success: true });
+    });
+    await dom.window.fetchOccasionTypes();
+    dom.window.openOccasionTypeForm(4);
+
+    const input = document.getElementById('otFeedLingerDays');
+    assert.ok(input, 'expected the occasion-type form to carry the feed window field');
+    assert.strictEqual(input.type, 'number', 'عدد أيام صحيح، لا نصّ حرّ');
+    assert.strictEqual(input.value, '7', 'prefilled from the type itself');
+    assert.strictEqual(input.max, '30', 'with the 0..30 ceiling the server enforces');
+
+    input.value = '5';
+    await dom.window.handleOccasionTypeSubmit({ preventDefault() {} });
+    assert.ok(body, 'expected the PATCH to be sent');
+    assert.strictEqual(body.feed_linger_days, 5, 'the window is saved through the existing route');
   });
 
   await test('an ended event of an archive type gets «صور الأرشيف» (super_admin); the modal lists photos, deletes after confirm, and uploads with per-file status', async () => {

@@ -358,6 +358,82 @@ void main() {
       expect(find.textContaining('عزا'), findsWidgets);
     });
 
+    /// «انتهت» (تذكرة #167): الحكم على نهاية أيام المناسبة يأتي من الخادم
+    /// (`is_ended`، محسوباً بامتداد الأيام كاملاً) لا من حساب الشاشة — والشارة
+    /// تحلّ محلّ العدّاد، فلا يقول الكرت «مناسبة سابقة» و«انتهت» معاً.
+    testWidgets('كرت التغذية: «انتهت» لمناسبة انتهت أيامها، ولا شيء لمناسبة قائمة (#167)', (tester) async {
+      final celebrationTypeJson = {
+        'id': 4,
+        'name': 'نجاح',
+        'icon': '🎓',
+        'color': '#0e7490',
+        'position': 4,
+        'is_active': true,
+        'creates_collision': false,
+        'warns_others': true,
+        'premoderate_messages': false,
+        'show_congratulations_count': true,
+        'show_followers_count': true,
+        'show_views_count': true,
+        'congratulations_label': 'تبريكات',
+        'default_badge_title': 'مبارك النجاح',
+        'default_poster_url': null,
+        'legacy_client_supported': false,
+        'tone': 'festive',
+        'fields': [
+          {
+            'field_key': 'honorees',
+            'label': 'الناجح',
+            'is_visible': true,
+            'is_required': true,
+            'position': 1,
+          },
+          {
+            'field_key': 'event_date',
+            'label': 'تاريخ المناسبة',
+            'is_visible': true,
+            'is_required': true,
+            'position': 2,
+          },
+        ],
+        'reactions': <String>[],
+      };
+
+      Map<String, dynamic> cardJson({required bool ended}) => {
+            'id': ended ? 21 : 22,
+            'title': 'نجاح أحمد',
+            'groom_name': 'أحمد',
+            'family_clan': 'آل فلان',
+            'town': 'رهط',
+            'location_name': 'قاعة الأفراح',
+            'event_date': ended ? '2020-01-01' : '2099-01-01',
+            'dinner_time': '',
+            'is_ended': ended,
+            'occasion_type': celebrationTypeJson,
+            'honorees': [
+              {'name': 'أحمد', 'role': null, 'position': 1},
+            ],
+            'reactions': <String, dynamic>{},
+            'congratulations': <Map<String, dynamic>>[],
+          };
+
+      Future<void> pumpCard(Event event) => tester.pumpWidget(
+            MaterialApp(
+              home: Directionality(
+                textDirection: TextDirection.rtl,
+                child: Scaffold(body: EventCard(event: event, onTap: () {})),
+              ),
+            ),
+          );
+
+      await pumpCard(Event.fromJson(cardJson(ended: true)));
+      expect(find.text('انتهت'), findsOneWidget, reason: 'مناسبة انتهت أيامها تقولها على الكرت');
+      expect(find.text('مناسبة سابقة'), findsNothing, reason: 'شريحة واحدة بمعنًى واحد');
+
+      await pumpCard(Event.fromJson(cardJson(ended: false)));
+      expect(find.text('انتهت'), findsNothing, reason: 'مناسبة قائمة لا تحمل الشارة');
+    });
+
     testWidgets(
       'تفاصيل مناسبة عزا: كل تسمية من النوع، ولا "شارك فرحتهم" ولا "العريس" ولا "تاريخ العرس"',
       (tester) async {
@@ -3056,6 +3132,131 @@ void main() {
         expect(find.text('بلدة معطّلة'), findsOneWidget);
         final save = tester.widget<ElevatedButton>(find.byKey(const Key('save_event_button')));
         expect(save.onPressed, isNull);
+      },
+    );
+
+    /// «موعد النشر» (تذكرة #167): حقل اختياري في النشر والتعديل، افتراضه فارغ،
+    /// **ولا يُرسَل إن لم يُملأ** — الغياب هو ما يقرأه الخادم «بلا جدولة»، وهو
+    /// ما يبقي سلوك كل نسخة منشورة اليوم كما هو.
+    testWidgets(
+      'نموذج النشر: «موعد النشر» فارغ افتراضاً ولا يُرسَل، ويُرسَل عند تعبئته (#167)',
+      (tester) async {
+        // الحقول الإجبارية — تُعبَّأ في كل شاشة على حدة (النموذج يُفرَّغ بعد نجاح
+        // الإرسال، فلا يصحّ إعادة الإرسال من الشاشة نفسها).
+        Future<void> fillRequired() async {
+          await tester.enterText(find.widgetWithText(TextFormField, 'العريس/العروس'), 'محمد');
+          await tester.tap(find.text('اختر التاريخ'));
+          await tester.pump();
+          await tester.pump(const Duration(seconds: 1));
+          await tester.tap(find.text('OK'));
+          await tester.pump();
+          await tester.pump(const Duration(seconds: 1));
+        }
+
+        Future<void> submit() async {
+          final send = find.text('إرسال المناسبة');
+          await tester.ensureVisible(send);
+          await tester.pump();
+          await tester.tap(send);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+
+        // (١) بلا موعد: الحقل موجود وفارغ، ولا مفتاح publish_at في الجسم.
+        final emptyPosted = <String>[];
+        await pumpScreen(tester, placesApi(postedBodies: emptyPosted), const AddEventScreen());
+
+        expect(find.text('موعد النشر (اختياري)'), findsOneWidget);
+        final empty = find.text('بلا جدولة');
+        await tester.ensureVisible(empty);
+        await tester.pump();
+        expect(empty, findsOneWidget, reason: 'فارغ افتراضاً — بلا جدولة');
+
+        await fillRequired();
+        await submit();
+        expect(emptyPosted, hasLength(1));
+        expect(emptyPosted.single, isNot(contains('name="publish_at"')),
+            reason: 'حقل فارغ لا يرسل مفتاحاً — «بلا جدولة» هي غياب المفتاح');
+
+        // (٢) بموعد: منتقٍ للتاريخ ثم للوقت، ويصل في الجسم.
+        final filledPosted = <String>[];
+        await pumpScreen(tester, placesApi(postedBodies: filledPosted), const AddEventScreen());
+
+        final field = find.text('بلا جدولة');
+        await tester.ensureVisible(field);
+        await tester.pump();
+        await tester.tap(field);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.tap(find.text('OK'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        await fillRequired();
+        await submit();
+
+        expect(filledPosted, hasLength(1));
+        expect(filledPosted.single, contains('name="publish_at"'),
+            reason: 'الموعد المختار يسافر مع طلب النشر');
+        expect(
+          filledPosted.single,
+          matches(RegExp(r'name="publish_at"[\s\S]{0,200}?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}')),
+          reason: 'بصيغة datetime-local نفسها التي يفهمها الخادم',
+        );
+      },
+    );
+
+    testWidgets(
+      'نموذج التعديل: «موعد النشر» المخزَّن يبدأ ظاهراً على ساعته، والفارغ يبقى «بلا جدولة» (#167)',
+      (tester) async {
+        Map<String, dynamic> eventJson({String? publishAt}) => {
+              'id': 3,
+              'title': 'نجاح أحمد',
+              'groom_name': 'أحمد',
+              'family_clan': 'آل فلان',
+              'town': 'رهط',
+              'location_name': 'قاعة الأفراح',
+              'event_date': '2030-05-01',
+              'status': 'approved',
+              'publish_at': publishAt,
+              'occasion_type': weddingTypeJson(),
+              'honorees': [
+                {'name': 'أحمد', 'role': null, 'position': 1},
+              ],
+            };
+
+        // الخادم يقرأ DATETIME بتوقيت غرينتش — فـ18:00Z هي ساعة الحائط التي كتبها
+        // صاحب المناسبة، وهي ما يجب أن يعرضه الحقل بلا زحزحة توقيت الجهاز.
+        await pumpScreen(
+          tester,
+          placesApi(),
+          EditEventScreen(event: Event.fromJson(eventJson(publishAt: '2030-05-04T18:00:00.000Z'))),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final shown = find.textContaining('2030-05-04');
+        await tester.ensureVisible(shown);
+        await tester.pump();
+        expect(shown, findsOneWidget, reason: 'الموعد المخزَّن يظهر كما كُتب');
+        expect(find.textContaining('18:00'), findsOneWidget, reason: 'وبوقته أيضاً');
+
+        // تفريغ الشجرة أولاً: الشوط الثاني شاشةٌ لمناسبة أخرى تقف في موضع
+        // الشاشة الأولى نفسها، ولو بقيت الشجرة لاستُعيد `State` الأولى فلم
+        // يُنفَّذ `initState` ثانية، وبقي `_publishAt` موعدَ المناسبة الأولى
+        // لا `null` الصفّ الثاني — وهو حملٌ في الاختبار لا عيبٌ في الشاشة.
+        await tester.pumpWidget(const SizedBox());
+        await pumpScreen(tester, placesApi(), EditEventScreen(event: Event.fromJson(eventJson())));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final empty = find.text('بلا جدولة');
+        await tester.ensureVisible(empty);
+        await tester.pump();
+        expect(empty, findsOneWidget, reason: 'مناسبة بلا جدولة تُفتح على حقل فارغ');
       },
     );
   });

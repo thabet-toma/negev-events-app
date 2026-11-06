@@ -58,6 +58,57 @@ function optionalDateTime(value, label = 'التاريخ والوقت') {
   return parsed;
 }
 
+/**
+ * `'YYYY-MM-DD HH:mm:ss'` في التوقيت المحلّي للخادم — الصيغة التي يقرأها عمود
+ * `DATETIME` كما يقرأ `NOW()` نفسه. تُبنى من `Date` بنفس توقيت تحليله، فما
+ * أرسله العميل يعود كما هو (لا تحويل منطقة وقت في المنتصف)، وهي أيضاً ما يُكتب
+ * في سجلّ التعديلات نصاً مقروءاً بدل `String(date)` الإنجليزي الطويل.
+ */
+function sqlDateTime(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/**
+ * موعد النشر المجدول (تذكرة #167) — تاريخ ووقت اختياريان: الغياب بأشكاله
+ * الثلاثة (المفتاح غير موجود، `null`، نصّ فارغ) يعني «بلا جدولة»، وهو ما
+ * يرسله كل عميل منشور اليوم وعميل الموبايل حين لا يُملأ الحقل.
+ *
+ * يعيد **نصّ العمود** (`sqlDateTime`) لا `Date`، لأن هذا هو ما يُكتب في
+ * `events.publish_at` ويُقارَن به `NOW()`: ساعة الحائط التي كتبها صاحب المناسبة.
+ * (‏`pool.js` يقرأ `DATETIME` بـ`timezone: 'Z'`، فـ`Date` العائد من قراءة الصفّ
+ * لحظةٌ غير التي كتبها العميل — والنصّ لا يخطئ.)
+ *
+ * والقيمة إن جاءت تُحلَّل بصيغة المشروع نفسها (`optionalDateTime`) وتُرفض بـ400
+ * عربية إن كانت غير صالحة **أو في الماضي**: موعد نشرٍ مضى لا معنى له، وإخفاؤه
+ * خلف «يُنشر فوراً» يجعل تعديلاً يظنّ صاحبه أنه أجّل يبدو كأنه لم يفعل شيئاً.
+ *
+ * `stored` هو `publish_at` المخزَّن على الصفّ عند التعديل: إعادة إرسال الموعد
+ * نفسه — وقد صار ماضياً بعد أن حلّ — ليست «موعداً في الماضي» بل «بلا تعديل»،
+ * فتُقبل. والمقارنة بالدقيقة لأن `<input type="datetime-local">` لا يحمل ثواني،
+ * فرقم ثانية مخزَّن لا يجوز أن يرفض إعادة إرسال قيمته.
+ */
+function parsePublishAt(value, { stored = null, label = 'موعد النشر' } = {}) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = optionalDateTime(value, label);
+  const wallClock = sqlDateTime(date);
+  if (!samePublishMinute(wallClock, stored) && date.getTime() <= Date.now()) {
+    throw ApiError.badRequest('موعد النشر يجب أن يكون في المستقبل');
+  }
+  return wallClock;
+}
+
+/**
+ * هل الموعدان الدقيقة نفسها على ساعة الحائط؟ يقارن ما يرسله العميل
+ * (`'YYYY-MM-DD HH:mm:ss'`) بما يقرؤه الصفّ في الصيغة نفسها، ويقبل `null`
+ * (لا موعد مخزَّن) فلا يتساويان أبداً.
+ */
+function samePublishMinute(first, second) {
+  if (first === undefined || first === null || second === undefined || second === null) return false;
+  return String(first).slice(0, 16) === String(second).slice(0, 16);
+}
+
 function isValidPhone(value) {
   return PHONE_PATTERN.test(String(value || '').replace(/[\s-]/g, ''));
 }
@@ -323,6 +374,8 @@ module.exports = {
   requireDate,
   optionalDate,
   optionalDateTime,
+  parsePublishAt,
+  samePublishMinute,
   isValidPhone,
   parseCoordinate,
   requireCoordinate,

@@ -24,6 +24,9 @@ import 'add_event_screen.dart'
         kEventTextFieldKeys,
         kEventFieldHints,
         formatEventDate,
+        formatPublishAt,
+        pickPublishAt,
+        PublishAtField,
         kVillagesTown,
         kVillageNotListedOption,
         kRequestedVillageNameMaxLength;
@@ -135,6 +138,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
   // ظهور المناسبة (تذكرة #166) — من الصفّ نفسه، ويُرسَل عند تغييره وحده.
   late EventVisibility _visibility;
   late EventVisibility _originalVisibility;
+  // موعد النشر المجدول (تذكرة #167) — من الصفّ نفسه، ويُرسَل عند تغييره وحده.
+  // القيمة المخزَّنة بصيغة `YYYY-MM-DDTHH:mm` في [_originalPublishAt]، فإعادة
+  // إرسالها كما هي «بلا تعديل» عند الخادم ولو حلّ موعدها.
+  DateTime? _publishAt;
+  String? _originalPublishAt;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -239,6 +247,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
     _visibility = event.visibility;
     _originalVisibility = event.visibility;
+
+    // موعد النشر (تذكرة #167): `publishAt` ساعة حائط بتوقيت UTC (انظر
+    // `_toPublishWallClock` في النموذج)، فحقولها هي ما يُعرض ويُرسَل.
+    _publishAt = event.publishAt;
+    _originalPublishAt = event.publishAt == null ? null : formatPublishAt(event.publishAt!);
 
     _eventDate = event.eventDate.isEmpty ? null : DateTime.tryParse(event.eventDate);
     _originalEventDate = event.eventDate.isEmpty ? null : event.eventDate;
@@ -366,6 +379,13 @@ class _EditEventScreenState extends State<EditEventScreen> {
     // الظهور (تذكرة #166): مفتاح غائب = «بلا تعديل» كما في كل حقل آخر.
     if (_visibility != _originalVisibility) {
       changes['visibility'] = _visibility.wireValue;
+    }
+
+    // موعد النشر (تذكرة #167): يُرسَل عند تغييره وحده — وإعادة القيمة المخزَّنة
+    // كما هي «بلا تعديل» عند الخادم أصلاً، فلا يُرسَل مفتاح لا معنى له.
+    final publishAtText = _publishAt == null ? null : formatPublishAt(_publishAt!);
+    if (publishAtText != null && publishAtText != _originalPublishAt) {
+      changes['publish_at'] = publishAtText;
     }
 
     if (_honoreesChanged()) changes['honorees'] = _currentHonorees();
@@ -515,6 +535,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
         _originalLatitude = _latitude;
         _originalLongitude = _longitude;
         _originalVisibility = _visibility;
+        // ما حُفظ صار الأصل الجديد لموعد النشر أيضاً (#167).
+        _originalPublishAt = _publishAt == null ? null : formatPublishAt(_publishAt!);
         _originalHonorees = _currentHonorees();
         _originalDays = collectEventDays(_days);
         _amendmentsFuture = api.eventAmendments(widget.event.id);
@@ -698,6 +720,14 @@ class _EditEventScreenState extends State<EditEventScreen> {
           EventVisibilityField(
             value: _visibility,
             onChanged: (value) => setState(() => _visibility = value),
+          ),
+          const SizedBox(height: 12),
+          PublishAtField(
+            value: _publishAt,
+            onPick: () async {
+              final picked = await pickPublishAt(context, initial: _publishAt);
+              if (picked != null && mounted) setState(() => _publishAt = picked);
+            },
           ),
           const SizedBox(height: 24),
           ElevatedButton.icon(

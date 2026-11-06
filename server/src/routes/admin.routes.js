@@ -117,16 +117,23 @@ router.patch('/admin/events/:id/status', asyncHandler(async (req, res) => {
   if (status === 'approved' && isFirstApproval) {
     // «بالرابط فقط» لا تُعلَن (تذكرة #166): `notifyNewEvent` يعيد `null`، فتصمت
     // الإشارة اللحظية وصفّ الإشعار والدفع معاً — كما في النشر من التطبيق.
-    const announcement = await notificationsService.notifyNewEvent(event);
-    if (announcement) {
-      realtime.emit('new_event_created', {
-        id: event.id,
-        title: event.title,
-        groom_name: event.groom_name,
-        town: event.town,
-        event_date: event.event_date
-      });
-      announceNewEvent(announcement);
+    //
+    // و**الاعتماد قبل الموعد لا يُعلن** (تذكرة #167): صفّ له `publish_at` مستقبلي
+    // يبقى غائباً عن كل قائمة عامة، ولا يجوز أن يسمع به أحد — ولا إشارةً لحظية
+    // تحمل عنوانه — قبل موعده. البوابة تُقرأ من الصفّ نفسه بساعة القاعدة
+    // (`publishGateOpen`)، والمجدول وحده يُعلنه حين يبلغ موعده.
+    if (await events.publishGateOpen(eventId)) {
+      const announcement = await notificationsService.notifyNewEvent(event);
+      if (announcement) {
+        realtime.emit('new_event_created', {
+          id: event.id,
+          title: event.title,
+          groom_name: event.groom_name,
+          town: event.town,
+          event_date: event.event_date
+        });
+        announceNewEvent(announcement);
+      }
     }
     const nudge = await notificationsService.createEventNudge(event.id, 1);
     if (nudge) notifications.push(nudge);

@@ -1125,6 +1125,14 @@ body {
   letter-spacing: 0.1px;
 }
 
+/* «انتهت» (#167): شريحة الكرت نفسها بنبرة خافتة — لا تصميم جديد، نفس الصنف
+   وحدودُه، واللون وحده يقول «مضت». */
+.card-datechip.is-ended {
+  background: var(--surface-sunk);
+  color: var(--ink-faint);
+  border-color: var(--line);
+}
+
 .card-kindchip {
   display: inline-flex;
   align-items: center;

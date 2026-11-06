@@ -3,6 +3,7 @@
 const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const broadcasts = require('./broadcasts.service');
+const events = require('./events.service');
 const logger = require('../utils/logger');
 const { runInstantForDate } = require('../utils/jerusalemTime');
 
@@ -367,6 +368,11 @@ async function eventIsLinkOnly(eventId) {
  * وحده** (`visibility = 'public'`) داخل المحافظة: المناسبة المخفيّة لا تستهلك
  * واحدة من الثلاث الفرادى ولا تدخل في `extra`، فلا يقفز رقم الملخّص بسبب مناسبة
  * لا يراها أحد، ويبقى العدّ موافقاً لما يُعلَن فعلاً.
+ *
+ * **وتُعلَّم المناسبة «أُعلنت» هنا** (تذكرة #167): `events.markAnnounced` بعد
+ * كتابة الصفوف، في الموضع الوحيد الذي يكتب إعلاناً. بها لا يُعلن المجدول لاحقاً
+ * مناسبةً أُعلنت عند الاعتماد ثم حُوّل موعدها إلى المستقبل، ولا يحتاج أي مستدعٍ
+ * (النشر الفوري، الاعتماد، المجدول) أن يتذكّر تعليمها بنفسه.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
   // المخفيّة تُقرأ أولاً وبلا محافظة: إعلانها يُعلِن وجودها لمن لا يراها.
@@ -395,6 +401,7 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
        ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
       [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0, regionId, regionId]
     );
+    await events.markAnnounced(id);
     return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, regionId, push: true };
   }
 
@@ -414,6 +421,7 @@ async function notifyNewEvent({ id, title, town, created_by: createdBy = null })
       notificationTitle, body
     ]
   );
+  await events.markAnnounced(id);
   return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, regionId, push: extra === 1 };
 }
 

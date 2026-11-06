@@ -2252,6 +2252,49 @@ const steps = [
       }
       logger.info('[migrations] add-event-visibility-2026-11: ensured column/index; existing rows are public.');
     }
+  },
+  {
+    // جدولة النشر ونافذة البقاء (تذكرة #167): ثلاثة أعمدة، ثم قيمة واحدة.
+    //
+    // الأعمدة تُضاف داخل حرّاسها فإعادة التشغيل لا تُسقط الترحيل، ولا تعبئة
+    // صفوف لها: `DEFAULT NULL`/`DEFAULT 0` يكتبهما MySQL نفسه على كل صفّ قائم
+    // لحظة الإضافة. و`announced_at` يبقى NULL في كل صفّ قائم **عمداً**: المجدول
+    // لا يقرأ إلا ما له `publish_at` غير فارغ، فلا إعلان بأثر رجعي لمناسبة
+    // قديمة، ولا حاجة إلى تعبئة.
+    //
+    // والخطوة الوحيدة التي تمسّ بيانات: نافذة «نجاح» تُضبط 7 أيام — وفقط إن كان
+    // ما زال 0، فلا تُكتب فوق قيمة اختارها السوبر أدمن. (مَن أعادها إلى 0
+    // صراحةً بعد الترحيل يراها 7 في التشغيل التالي؛ القاعدة كما نُصّت في
+    // التذكرة: «يُضبط 7 فقط إن كان ما زال 0».)
+    name: 'add-scheduled-publish-and-feed-linger-2026-11',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'publish_at'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN publish_at DATETIME NULL DEFAULT NULL AFTER first_approved_at'
+        );
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: events.publish_at added.');
+      }
+      if (!(await columnExists(connection, 'events', 'announced_at'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN announced_at DATETIME NULL DEFAULT NULL AFTER publish_at'
+        );
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: events.announced_at added.');
+      }
+      if (!(await columnExists(connection, 'occasion_types', 'feed_linger_days'))) {
+        await connection.execute(
+          'ALTER TABLE occasion_types ADD COLUMN feed_linger_days INT NOT NULL DEFAULT 0 AFTER archive_gallery'
+        );
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: occasion_types.feed_linger_days added.');
+      }
+
+      const [celebrations] = await connection.execute(
+        "UPDATE occasion_types SET feed_linger_days = 7 WHERE name = 'نجاح' AND feed_linger_days = 0"
+      );
+      logger.info(
+        '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
+        + `${celebrations.affectedRows} «نجاح» type(s) given a 7-day feed window.`
+      );
+    }
   }
 ];
 

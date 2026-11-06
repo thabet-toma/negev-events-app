@@ -447,7 +447,13 @@ class CardCaption extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (type != null) _TypeBadge(type: type!, color: toneColor),
-              if (!isSolemn && countdownText.isNotEmpty)
+              // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد
+              // الأيام كاملاً (`is_ended`)، فتحلّ محلّ العدّاد ولا يقول الكرت
+              // «مناسبة سابقة» و«انتهت» معاً. وتُعرض لكل نوع: خبرٌ لا زينة،
+              // بخلاف العدّاد الذي يُخفى على العزاء.
+              if (event.isEnded)
+                const _DateChip(text: 'انتهت', ended: true)
+              else if (!isSolemn && countdownText.isNotEmpty)
                 _DateChip(text: countdownText),
             ],
           ),
@@ -624,28 +630,33 @@ class _CaptionActionButton extends StatelessWidget {
   }
 }
 
-/// شارة عدّاد/تاريخ
+/// شارة عدّاد/تاريخ — أو «انتهت» (`ended`، تذكرة #167) بنبرة خافتة: نفس الشكل
+/// والحدود، واللون وحده يقول «مضت».
 class _DateChip extends StatelessWidget {
-  const _DateChip({required this.text});
+  const _DateChip({required this.text, this.ended = false});
 
   final String text;
+  final bool ended;
 
   @override
   Widget build(BuildContext context) {
     if (text.isEmpty) return const SizedBox.shrink();
+    final wash = ended ? context.c.surfaceSunk : context.c.successWash;
+    final border = ended ? context.c.line : context.c.success;
+    final ink = ended ? context.c.inkFaint : context.c.success;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
       decoration: BoxDecoration(
-        color: context.c.successWash,
+        color: wash,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: context.c.success),
+        border: Border.all(color: border),
       ),
       child: Text(
         text,
         style: TextStyle(
           fontSize: 11.5,
           fontWeight: FontWeight.w800,
-          color: context.c.success,
+          color: ink,
         ),
       ),
     );

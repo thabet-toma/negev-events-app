@@ -145,6 +145,12 @@ CREATE TABLE IF NOT EXISTS occasion_types (
   -- is never overridden by a later deploy. A funeral's photos are not
   -- something the platform should invite.
   archive_gallery             TINYINT(1)   DEFAULT NULL,
+  -- نافذة بقاء المناسبة في التغذية (تذكرة #167): بعد انتهاء أيامها تبقى ظاهرةً
+  -- في «القادم» هذا العدد من الأيام، وكرتها تحمل «انتهت»؛ صفر = تختفي في اليوم
+  -- التالي لانتهائها. **التغذية وحدها** (`EVENT_FEED_WINDOW_SQL_EVENTS` في
+  -- events.service.js) — الخريطة والتقويم والتذكيرات على `span_end >= CURDATE()`
+  -- كما هي.
+  feed_linger_days            INT          NOT NULL DEFAULT 0,
   created_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at                  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -260,6 +266,16 @@ CREATE TABLE IF NOT EXISTS events (
   -- أول اعتماد فعلي — «مناسبة جديدة» تُعلَن مرّة واحدة في عمر المناسبة، لا
   -- عند كل إعادة اعتماد بعد رفض أو تعديل (admin.service.js#updateEventStatus).
   first_approved_at DATETIME    DEFAULT NULL,
+  -- جدولة النشر (تذكرة #167): موعد اختياري يبقى معه الصفّ غائباً عن كل قائمة
+  -- عامة حتى يبلغه — الشرط في `PUBLIC_EVENT_VISIBLE_SQL_*` وحده
+  -- (events.service.js) — ولا يُعلَن «مناسبة جديدة» عند الاعتماد قبله بل حين
+  -- يبلغه المجدول. NULL = بلا جدولة: يُنشر متى اعتُمد.
+  publish_at       DATETIME     DEFAULT NULL,
+  -- تعليم «أُعلنت» (تذكرة #167): يُكتب مرّة واحدة لحظة كتابة صفوف «مناسبة جديدة»
+  -- (notifications.service.js#notifyNewEvent) — فلا يُعلن المجدول مناسبةً أُعلنت
+  -- عند الاعتماد، ولا يُعلن الواحدة مرّتين. NULL في كل صفّ قائم: لا إعلان
+  -- بأثر رجعي (المجدول لا يقرأ إلا ما له `publish_at`).
+  announced_at     DATETIME     DEFAULT NULL,
   created_by       INT UNSIGNED DEFAULT NULL,
   created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

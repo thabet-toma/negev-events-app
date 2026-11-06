@@ -21,7 +21,8 @@ const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middlewa
 const { regionIdForRequest } = require('../middleware/region');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
-  parseEventDays, parseCsvList, parseFlag, parseEventVisibility, MAX_HONOREES
+  parseEventDays, parseCsvList, parseFlag, parseEventVisibility, parsePublishAt,
+  samePublishMinute, MAX_HONOREES
 } = require('../middleware/validate');
 const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
 
@@ -264,6 +265,12 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   // (كل عميل منشور اليوم) يعني «عام» فلا يتغيّر أي نشر قائم.
   const visibility = parseEventVisibility(req.body.visibility);
 
+  // موعد النشر المجدول (تذكرة #167): اختياري، وفي المستقبل حصراً — والماضي
+  // يُرفض 400 عربية. ليس حقلاً من حقول النوع ولا يمرّ بجدول
+  // `occasion_type_fields`، كالظهور فوقه تماماً؛ وغيابه (كل عميل منشور اليوم)
+  // يعني «بلا جدولة: يُنشر متى اعتُمد».
+  const publishAt = parsePublishAt(req.body.publish_at);
+
   // Integrity rule enforced here, not by the schema: `village_id` and
   // `requested_village_name` ("قريتي غير موجودة") may only be set under the
   // villages catch-all, never both at once, and a NEW publish under it must
@@ -324,6 +331,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     villageCoords: village ? { lat: village.latitude, lng: village.longitude } : null,
     region_id: regionId,
     visibility,
+    publish_at: publishAt,
     event_date: eventDate,
     latitude,
     longitude
@@ -407,10 +415,17 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     // لمناسبة «بالرابط فقط»، فيصمت معه كل ما يحمل عنوانها إلى الناس — الإشارة
     // اللحظية الواحدة التي يعيد كل عميل متّصل بسببها جلبه، وصفّ الإشعار،
     // والدفع. أما تنبيه الناشر («قوّي مناسبتك») فليس إعلاناً عاماً ويبقى.
-    const announcement = await notifications.notifyNewEvent({ ...created, created_by: req.user.id });
-    if (announcement) {
-      realtime.emit('new_event_created', created);
-      announceNewEvent(announcement);
+    //
+    // و**المجدولة لا تُعلن الآن** (تذكرة #167): الصفّ معتمد لكن `publish_at` لم
+    // يبلغ بعد، فكل قائمة عامة لا تراه — ولا يجوز أن يسمع به أحد قبل موعده.
+    // الإشارة اللحظية إعلانٌ كذلك (تحمل عنوانه وبلده وتاريخه)، فتصمت مع الصفّ،
+    // والمجدول وحده يُطلقهما حين يبلغ الموعد (`jobs/scheduler.js`).
+    if (await events.publishGateOpen(created.id)) {
+      const announcement = await notifications.notifyNewEvent({ ...created, created_by: req.user.id });
+      if (announcement) {
+        realtime.emit('new_event_created', created);
+        announceNewEvent(announcement);
+      }
     }
     const nudge = await notifications.createEventNudge(created.id, 1);
     if (nudge) announceNotification(nudge);
@@ -505,6 +520,17 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   const visibility = body.visibility === undefined
     ? null
     : parseEventVisibility(body.visibility, existing.visibility || 'public');
+
+  // موعد النشر المجدول (تذكرة #167). الغياب والفراغ كلاهما «بلا تعديل» — وهو
+  // ما يرسله عميل الموبايل حين لا يُملأ الحقل، ونموذج الويب لا يُرسل مفتاحاً
+  // فارغاً أصلاً. وإعادة إرسال الموعد المخزَّن نفسه — وقد حلّ وصار ماضياً —
+  // ليست «موعداً في الماضي» بل «كما هو»: `parsePublishAt` يقبلها بمقارنة
+  // الدقيقة، فلا يُرفض حفظٌ لم يغيّر شيئاً (وهو نصّ معيار القبول).
+  const publishAt = parsePublishAt(body.publish_at, { stored: existing.publish_at });
+  if (publishAt !== null && !samePublishMinute(publishAt, existing.publish_at)) {
+    // القيمة كما بُنيت في `parsePublishAt` (نصّ العمود نفسه) — فلا تُعاد صياغة.
+    changes.publish_at = publishAt;
+  }
 
   if (body.title !== undefined) changes.title = cleanString(body.title, 255) || existing.title;
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
@@ -633,8 +659,11 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
   }
 
+  // موعد نشر مُرسَل صالح يمرّ من هذا الحارس ولو لم يتغيّر: «بلا تعديل» ليست
+  // «طلب فارغ»، وإعادة إرسال الموعد المخزَّن نفسه (نموذج التعديل يملأ الحقل)
+  // يجب أن تُحفَظ بلا رفض — وهو نصّ معيار القبول (تذكرة #167).
   if (!Object.keys(changes).length && honorees === null && extraDays === null
-      && regionId === null && visibility === null) {
+      && regionId === null && visibility === null && publishAt === null) {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 

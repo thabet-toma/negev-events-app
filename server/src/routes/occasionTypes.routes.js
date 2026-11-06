@@ -24,6 +24,24 @@ function parseTone(value) {
   return tone;
 }
 
+/**
+ * نافذة بقاء المناسبة في التغذية (تذكرة #167) — عدد أيام صحيح من 0 إلى 30.
+ * السقف قرار مالك: نافذة أكبر تُبقي المنتهي في «القادم» أسبوعاً أو أكثر، فتصير
+ * التغذية أرشيفاً. الغياب (كل عميل لا يعرف الحقل) يعني 0 — السلوك القائم.
+ */
+const FEED_LINGER_DAYS_MAX = 30;
+
+function parseFeedLingerDays(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > FEED_LINGER_DAYS_MAX) {
+    throw ApiError.badRequest(
+      `نافذة بقاء المناسبة في التغذية يجب أن تكون عدد أيام صحيحاً بين 0 و${FEED_LINGER_DAYS_MAX}`
+    );
+  }
+  return days;
+}
+
 /** Validates and normalises a submitted field-config array. Route-layer: no DB access. */
 function parseFields(rawFields) {
   if (!Array.isArray(rawFields) || !rawFields.length) {
@@ -124,6 +142,7 @@ router.post('/admin/occasion-types', asyncHandler(async (req, res) => {
     tone: parseTone(req.body.tone),
     congratulations_label: cleanString(req.body.congratulations_label, 40) || 'تبريكات',
     default_badge_title: cleanString(req.body.default_badge_title, 80),
+    feed_linger_days: parseFeedLingerDays(req.body.feed_linger_days, 0),
     fields: parseFields(req.body.fields),
     reactions: parseReactions(req.body.reactions || [])
   };
@@ -157,6 +176,9 @@ router.patch('/admin/occasion-types/:id', asyncHandler(async (req, res) => {
   if (body.tone !== undefined) payload.tone = parseTone(body.tone);
   if (body.congratulations_label !== undefined) payload.congratulations_label = cleanString(body.congratulations_label, 40);
   if (body.default_badge_title !== undefined) payload.default_badge_title = cleanString(body.default_badge_title, 80);
+  // الغياب «بلا تعديل»؛ والفراغ صريحاً يعني 0 («لا بقاء») لا القيمة المخزَّنة —
+  // الحقل رقمي لا نصّي، و«فرغه الأدمن» قرار.
+  if (body.feed_linger_days !== undefined) payload.feed_linger_days = parseFeedLingerDays(body.feed_linger_days, 0);
   if (body.fields !== undefined) payload.fields = parseFields(body.fields);
   if (body.reactions !== undefined) payload.reactions = parseReactions(body.reactions);
 
