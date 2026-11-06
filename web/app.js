@@ -7819,6 +7819,11 @@ async function handleEventSubmit(e) {
   if (regionId) formData.append('region_id', regionId);
   formData.append('event_date', eventDate);
 
+  // ظهور المناسبة (#166): «عام» افتراضاً — نفس افتراض الخادم، فلا يتغيّر شيء
+  // في طلب لا يجد الحقل (صفحة قديمة من كاش) ولا في نشر عميل لا يعرفه أصلاً.
+  const visibilitySelect = document.getElementById('addVisibility');
+  formData.append('visibility', (visibilitySelect && visibilitySelect.value) || 'public');
+
   const latInput = document.getElementById('addLat');
   const lngInput = document.getElementById('addLng');
   if (latInput && latInput.value) formData.append('latitude', latInput.value);
@@ -8173,6 +8178,9 @@ function openEditEventModal(eventId) {
   document.getElementById('editSecondaryLocationName').value = evt.secondary_location_name || '';
   document.getElementById('editDinnerTime').value = evt.dinner_time || '';
   document.getElementById('editHostPhone').value = evt.host_phone || '';
+  // ظهور المناسبة (#166): القيمة من الصفّ نفسه؛ غيابها (خادم أقدم) تعني «عامة»
+  // كالافتراض، فلا يظهر الخيار مختاراً بالخطأ على مناسبة ظاهرة.
+  document.getElementById('editVisibility').value = evt.visibility === 'link_only' ? 'link_only' : 'public';
 
   const honoreesList = document.getElementById('editHonoreesList');
   honoreesList.innerHTML = '';
@@ -8215,6 +8223,7 @@ async function handleEventEditSubmit(e) {
     secondary_location_name: document.getElementById('editSecondaryLocationName').value,
     dinner_time: document.getElementById('editDinnerTime').value,
     host_phone: document.getElementById('editHostPhone').value,
+    visibility: document.getElementById('editVisibility').value,
     honorees
   };
 

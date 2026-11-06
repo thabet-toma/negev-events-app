@@ -324,6 +324,17 @@ async function eventRegionId(eventId) {
 }
 
 /**
+ * هل المناسبة «بالرابط فقط» (تذكرة #166)؟ تُقرأ من الصفّ نفسه لا من حقل يُمرّره
+ * المستدعي، بالسبب نفسه الذي جعل `eventRegionId` تُقرأ منه: حكم واحد من أي مسار
+ * (النشر من التطبيق والاعتماد من اللوحة). `false` لمناسبة غير موجودة — حارس
+ * دفاعي كجاره، فلا يصمت إعلان كان يخرج.
+ */
+async function eventIsLinkOnly(eventId) {
+  const row = await db.queryOne("SELECT visibility FROM events WHERE id = ? AND visibility = 'link_only'", [eventId]);
+  return Boolean(row);
+}
+
+/**
  * «مناسبة جديدة» لكل مستخدم أبقى هذا النوع مفعّلاً (`users.notify_new_events`)،
  * عدا ناشرها — عند أول اعتماد فقط (`events.first_approved_at`، يحرسه
  * المستدعي). أول ثلاث مناسبات في اليوم تصل فرادى (`event_new_<id>`)؛ من
@@ -335,8 +346,14 @@ async function eventRegionId(eventId) {
  * وتُقيَّد الصفوف بمحافظة المناسبة (تذكرة #161): مستخدم محافظته أخرى لا يُكتب
  * له صفّ، ومستخدم بلا محافظة يبقى يتلقّى الكل كما كان (قرار المالك). القيد
  * داخل `INSERT ... SELECT` نفسه لا فلترة بعد الجلب.
+ *
+ * و**«بالرابط فقط» لا تُعلَن إطلاقاً** (تذكرة #166): تُقرأ من الصفّ قبل أي
+ * كتابة، فتخرج `null` فيصمت المسارَان معاً — لا صفّ `event_new`، ولا إشارة
+ * لحظية للجميع، ولا دفع للأجهزة. وعدّاد `publishedToday` وشروطه لم يُمسّا:
+ * هو يقرأ `first_approved_at` من `events` لا من الإشعارات، ولا علاقة له بالظهور.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
+  if (await eventIsLinkOnly(id)) return null;
   const { total } = await db.queryOne(
     'SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY'
   );

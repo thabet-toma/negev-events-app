@@ -295,6 +295,39 @@ class EventDaysEditor extends StatelessWidget {
   }
 }
 
+/// منتقي «من يرى المناسبة؟» (تذكرة #166) — واحد في النشر والتعديل، فالنصّ
+/// والخياران لا يفترقان بين الشاشتين. الافتراض «عامة» كما في الخادم.
+class EventVisibilityField extends StatelessWidget {
+  const EventVisibilityField({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final EventVisibility value;
+  final ValueChanged<EventVisibility> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<EventVisibility>(
+      initialValue: value,
+      // نصّ الخيار أطول من عرض الهاتف الضيّق — `isExpanded` يجعل المنتقي
+      // يقصّه بثلاث نقاط بدل أن يفيض خارج الحقل.
+      isExpanded: true,
+      decoration: const InputDecoration(labelText: 'من يرى المناسبة؟'),
+      items: EventVisibility.values
+          .map((option) => DropdownMenuItem(
+                value: option,
+                child: Text(option.label, overflow: TextOverflow.ellipsis),
+              ))
+          .toList(),
+      onChanged: (chosen) {
+        if (chosen != null) onChanged(chosen);
+      },
+    );
+  }
+}
+
 /// تقديم مناسبة جديدة. تدخل قائمة المراجعة — الاعتماد من لوحة الإدارة.
 ///
 /// النموذج كله يُبنى من `GET /api/occasion-types`: لا نوع ثابت، ولا تسمية
@@ -314,6 +347,8 @@ class _AddEventScreenState extends State<AddEventScreen> {
   List<Village> _villagesList = const [];
   bool _placesRequested = false;
   OccasionType? _type;
+  // ظهور المناسبة (تذكرة #166): «عامة» افتراضاً — لا إخفاء بلا اختيار صريح.
+  EventVisibility _visibility = EventVisibility.public;
 
   final Map<String, TextEditingController> _controllers = {};
   final List<HonoreeRow> _honorees = [HonoreeRow()];
@@ -589,6 +624,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
       final fields = <String, String>{
         'town': _town,
         'event_date': formatEventDate(_eventDate!),
+        // الظهور (تذكرة #166) — يُرسَل دائماً، والخادم افتراضه «عام» لمن لا
+        // يعرف الحقل (كل نسخة منشورة اليوم).
+        'visibility': _visibility.wireValue,
       };
       for (final key in kEventTextFieldKeys) {
         if (!type.showsField(key)) continue;
@@ -718,6 +756,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _audio = null;
       _artistImage = null;
       _conflicts = const [];
+      _visibility = EventVisibility.public;
       _town = AppServices.of(context).places.catalog.towns.first;
       _selectedVillage = null;
       _villageNotListed = false;
@@ -1002,6 +1041,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
           ),
           ..._textFieldWidget(type, 'audio_title'),
         ],
+        const SizedBox(height: 12),
+        EventVisibilityField(
+          value: _visibility,
+          onChanged: (value) => setState(() => _visibility = value),
+        ),
         const SizedBox(height: 24),
         ElevatedButton.icon(
           onPressed: _submitting ? null : () => _submit(type),

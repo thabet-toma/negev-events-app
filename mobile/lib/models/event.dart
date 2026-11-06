@@ -1,5 +1,33 @@
 import 'album.dart';
 
+/// ظهور المناسبة (تذكرة #166، والقرار في #141): «عامة» الافتراض، أو «بالرابط
+/// فقط» — تُفتح برابطها (`/e/:id`) وبمعرّفها ولا تدخل أي قائمة عامة، ولا
+/// يُعلنها الخادم بإشعار «مناسبة جديدة». القيمة السلكية (`wireValue`) هي ما
+/// يقبله الخادم في `events.visibility`.
+enum EventVisibility {
+  public('public'),
+  linkOnly('link_only');
+
+  const EventVisibility(this.wireValue);
+
+  final String wireValue;
+
+  /// النصّ كما يُعرض في نموذج النشر والتعديل — من هنا وحده، فلا تفترق تسمية
+  /// الشاشتين. قصير عمداً: منتقي الفلاتر في هاتف ضيّق، والتفصيل يُفهم من
+  /// الخيارين نفسيهما (والخادم هو من يفرض القاعدة فعلاً).
+  String get label => switch (this) {
+        EventVisibility.public => 'عامة — تظهر للجميع',
+        EventVisibility.linkOnly => 'بالرابط فقط — لا تظهر في القوائم',
+      };
+
+  /// `link_only` وحدها تعني الإخفاء؛ أي شيء آخر — ومنه صفّ من خادم أقدم لا
+  /// يحمل المفتاح — «عامة»، مطابقةً لافتراض الخادم لا هبوطاً إلى الإخفاء.
+  static EventVisibility fromWire(Object? value) =>
+      '$value' == EventVisibility.linkOnly.wireValue
+          ? EventVisibility.linkOnly
+          : EventVisibility.public;
+}
+
 /// مناسبة — الحقول مطابقة لجدول `events` في الخادم.
 ///
 /// روابط الوسائط تصل **مطلقة** من الخادم (withAbsoluteMedia)، فلا يبني التطبيق
@@ -36,6 +64,10 @@ class Event {
   /// (`GET /api/events/:id` و`GET /api/my-events`)، وتُقرأ في شاشة التعديل
   /// لتبدأ بمحافظة المناسبة كما هي لا بغيرها. `null` = بلا محافظة مسجَّلة.
   final int? regionId;
+
+  /// ظهور المناسبة (تذكرة #166) — يصل من الصفّ الكامل وحده كذلك؛ القائمة
+  /// العامة لا تحمل إلا العامة أصلاً، وغياب المفتاح يعني «عامة» كافتراض الخادم.
+  final EventVisibility visibility;
 
   /// حقلا الفنان — من `OCCASION_FIELDS`، ظاهران فقط لنوع يُشعلهما. غيابهما
   /// يعني عدم ظهورهما على الكرت والتفاصيل، لا نصّاً بديلاً.
@@ -94,6 +126,7 @@ class Event {
     this.villageName,
     this.requestedVillageName,
     this.regionId,
+    this.visibility = EventVisibility.public,
     this.artistName,
     this.artistImageUrl,
     this.viewsCount = 0,
@@ -156,6 +189,7 @@ class Event {
         villageId: villageId,
         villageName: villageName,
         requestedVillageName: requestedVillageName,
+        visibility: visibility,
         artistName: artistName,
         artistImageUrl: artistImageUrl,
         viewsCount: viewsCount,
@@ -301,6 +335,7 @@ class Event {
       villageName: _nullableString(json['village_name']),
       requestedVillageName: _nullableString(json['requested_village_name']),
       regionId: json['region_id'] == null ? null : _toInt(json['region_id']),
+      visibility: EventVisibility.fromWire(json['visibility']),
       artistName: _nullableString(json['artist_name']),
       artistImageUrl: _nullableString(json['artist_image_url']),
       viewsCount: _toInt(json['views_count']),

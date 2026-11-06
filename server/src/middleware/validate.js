@@ -1,7 +1,7 @@
 'use strict';
 
 const ApiError = require('../utils/ApiError');
-const { MAX_EVENT_DAYS } = require('../constants');
+const { MAX_EVENT_DAYS, EVENT_VISIBILITIES } = require('../constants');
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PHONE_PATTERN = /^0\d{8,9}$/;
@@ -161,6 +161,21 @@ function parseFlag(value) {
   return value === true || value === 1 || value === 'true' || value === '1';
 }
 
+/**
+ * ظهور المناسبة (تذكرة #166): قيمة من `EVENT_VISIBILITIES` وحدها. الغياب — وكل
+ * APK منشور اليوم لا يعرف الحقل — يعيد `fallback` فلا يتغيّر سلوك أي نشر قائم
+ * («عام» هو الافتراض). وقيمة غير معروفة **تُرفض 400** ولا تهبط صامتةً إلى
+ * `public`: الهبوط الصامت يخفي خطأ عميل، ويُظهر مناسبة طلب صاحبها إخفاءها.
+ */
+function parseEventVisibility(value, fallback = 'public') {
+  if (value === undefined || value === null || value === '') return fallback;
+  const cleaned = cleanString(value, 20);
+  if (!EVENT_VISIBILITIES.includes(cleaned)) {
+    throw ApiError.badRequest('قيمة ظهور المناسبة غير صالحة');
+  }
+  return cleaned;
+}
+
 function parseAmount(value) {
   const amount = Number.parseFloat(value);
   if (Number.isNaN(amount) || amount < 0 || amount > 9999999999) {
@@ -315,6 +330,7 @@ module.exports = {
   optionalId,
   parseAmount,
   parseFlag,
+  parseEventVisibility,
   parseHonorees,
   parseEventDays,
   parseCsvList,

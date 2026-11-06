@@ -73,8 +73,10 @@ const EVENT_SPAN_START_SQL_E =
 /**
  * شرط «مناسبة ظاهرة للعامة» — **القطعة الواحدة** التي تكتبها كل قراءة قائمة
  * عامة بدل نسختها اليدوية، والموضع الوحيد لشرط الظهور في **قراءات القوائم**،
- * وفيه ستضيف #166 («بالرابط فقط») و#167 («النشر المجدول») شرطاً واحداً بدل
- * تعديل كل موضع. نصفها الثابت اليوم `approved` وحده.
+ * وفيه ستضيف #167 («النشر المجدول») شرطها الواحد بدل تعديل كل موضع. نصفاها
+ * اليوم `approved` (تذكرة #165) و`visibility = 'public'` (تذكرة #166): مناسبة
+ * «بالرابط فقط» تغيب بهاتين الكلمتين عن كل قراءة تمرّ بها، بلا شرط ظهور ثانٍ
+ * في أي استعلام.
  *
  * **تُستعمل** في كل قراءة قائمة يراها الجمهور بلا حساب: التغذية
  * (`listPublicEvents`)، والخريطة (`listMapPoints`)، والإعلانات الحية
@@ -84,30 +86,36 @@ const EVENT_SPAN_START_SQL_E =
  * وعدّادها في البحث (`getPublicPerson` و`searchPeople` في `albums.service.js`).
  * وكل قراءة عامة للألبوم أو الصورة أو الفيديو هناك تمرّ بها عبر
  * `publicAlbumConditions()` — القوائم، وصفحات المعرّف `/a/:id` و`/p/:id`
- * و`/v/:id`.
+ * و`/v/:id`. ولا إشعار «مناسبة جديدة» يخرج منها: قاعدته في
+ * `notifications.service.notifyNewEvent` صراحةً، لا هنا (تذكرة #166).
  *
  * **ولا تُستعمل** في غير ما سبق ولو كتب الموضع `status = 'approved'`
  * بيده. أولها **القراءة بالمعرّف للحدث**: التفصيل (`getEventDetails`) لا يقيّد
- * حالة المناسبة أصلاً — وإن كانت صور أرشيفه تمرّ ببوابة الألبوم أعلاه — و
+ * حالة المناسبة أصلاً — وإن كانت صور أرشيفه تمرّ ببوابة الألبوم أعلاه — ويعيد
+ * `visibility` كما قرأها (`SELECT *`)، لأن التفصيل بالمعرّف طريقٌ ثانية إلى
+ * مناسبة «بالرابط فقط» يجوز أن تفتح لمن يحمل معرّفها. و
  * `getShareEvent` (`/e/:id` و`/e/:id/card.jpg` و`/e/:id/download`) يكتب
- * `events.status = 'approved'` نصاً بيده خارج القطعة عمداً، فلا يرث شرطاً
- * تضيفه إليها #166/#167؛ لأن `/e/:id` هو الطريق الوحيد إلى مناسبة «بالرابط
- * فقط»، فقاعدتها تُقرَّر هناك صراحةً. ثم طابور الأدمن
+ * `events.status = 'approved'` نصاً بيده خارج القطعة عمداً، فلا يرث شرط
+ * الظهور؛ لأن `/e/:id` هي الطريق التي يملكها من يصله الرابط إلى المناسبة
+ * «بالرابط فقط»، فقاعدتها هناك صراحةً (`visibility` تُقرأ ولا تُصفّى). ثم طابور الأدمن
  * (`listEvents` في `admin.service.js` — يقرأ
  * الحالة المطلوبة نفسها، لا بوابة ظهور)، ومرشّحو حارس التكرار
- * (`findPossibleDuplicates` يقارن المعتمدة والمعلّقة معاً)، و«قائمتي» الخاصة
+ * (`findPossibleDuplicates` يقارن المعتمدة والمعلّقة معاً، و«بالرابط فقط»
+ * معها)، و«قائمتي» الخاصة
  * بالمستخدم (`listMyReminders`)، وتحقق «ذكّرني» الداخلي (`setReminder`)،
  * وعدّاد التبريكات — كلها تقرأ الحالة لسبب آخر لا لبوابة ظهور للجمهور.
  *
  * **ومرشّح النسخة (`legacyOnly` / `X-App-Version`) خارجها عمداً:** شرطه يعتمد
  * على **الطلب** لا على الصف — يُبنى من `occasionTypes.getLegacyTypeIds()` وقت
- * النداء، فيبقى في مكانه مع بقية الشروط الديناميكية. والنسختان هنا
+ * النداء، فيبقى في مكانه مع بقية الشروط الديناميكية. أما الظهور فشرطه على
+ * الصفّ وحده، فيسري على طلب بلا ترويسة (كل APK قديم) كما على أحدث نسخة، بلا
+ * فرع هنا. والنسختان هنا
  * (`_EVENTS` و`_E`) على اصطلاح `EVENT_SPAN_*` نفسه: الأولى لاسم الجدول كاملاً
  * والثانية للمُستعار `e`؛ كلتاهما سلسلة ثابتة بلا قيمة مُدرَجة ولا اسم مُمرَّر
  * (CLAUDE.md: لا دمج نصوص SQL).
  */
-const PUBLIC_EVENT_VISIBLE_SQL_EVENTS = "events.status = 'approved'";
-const PUBLIC_EVENT_VISIBLE_SQL_E = "e.status = 'approved'";
+const PUBLIC_EVENT_VISIBLE_SQL_EVENTS = "events.status = 'approved' AND events.visibility = 'public'";
+const PUBLIC_EVENT_VISIBLE_SQL_E = "e.status = 'approved' AND e.visibility = 'public'";
 
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
@@ -776,6 +784,10 @@ async function listPublicEvents({
  * moderation queue, are what `GET /events/:id/congratulations` is for.
  */
 async function getEventDetails(eventId, { legacyOnly = false, userId = null } = {}) {
+  // `SELECT *` لا `LIST_COLUMNS`: التفصيل بالمعرّف يعيد الصفّ كما هو، ومنه
+  // `visibility` — فلا تُصفّى «بالرابط فقط» بل تُعاد، لأن من يملك معرّف المناسبة
+  // (التطبيق والرابط العميق، تذكرة #166) يفتحها به وحدها. التصفية وظيفة
+  // القوائم العامة (`PUBLIC_EVENT_VISIBLE_SQL_*`) لا هذه القراءة.
   const event = await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
 
@@ -980,6 +992,10 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
   const requestedVillageName = data.requested_village_name ?? null;
   const artistName = data.artist_name ?? null;
   const artistImageUrl = data.artist_image_url ?? null;
+  // ظهور المناسبة (تذكرة #166): العمود NOT NULL، ونداءات لا تعرفه (بذرة،
+  // مستورد، سكربتات) تُنشر عامةً كما كانت — الغياب `public` لا `undefined`
+  // (اتصال المعاملة لا يقبل `undefined` أصلاً).
+  const visibility = data.visibility || 'public';
 
   return db.transaction(async connection => {
     const groomName = data.honorees[0].name;
@@ -995,8 +1011,8 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
          (title, groom_name, family_clan, occasion_type_id, region_id, town, village_id, requested_village_name,
           location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
-          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, created_by, first_approved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
+          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, visibility, created_by, first_approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
       [
         title,
         groomName,
@@ -1029,6 +1045,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
         artistImageUrl,
         hostPhone,
         status,
+        visibility,
         createdBy,
         status
       ]
@@ -1063,7 +1080,14 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
   });
 }
 
-/** Columns an amendment to this event that touches the map/schedule the public relies on forces re-review. */
+/**
+ * Columns an amendment to this event that touches the map/schedule the public relies on forces re-review.
+ *
+ * `visibility` غائب عنها عمداً (تذكرة #166): إخفاء مناسبة معتمدة أو إعادتها
+ * عامةً ليس تغييراً في تاريخها ولا في مكانها، فلا يُعيدها إلى المراجعة. ولأن
+ * `/e/:id` لا تفتح إلا `approved`، لولا ذلك لأصبح إخفاء المناسبة سبباً في 404
+ * لرابطها هي نفسها — عكس المطلوب.
+ */
 const CRITICAL_AMENDMENT_FIELDS = [
   'event_date', 'event_end_date', 'town', 'village_id', 'requested_village_name', 'location_name', 'latitude', 'longitude'
 ];
@@ -1282,8 +1306,15 @@ async function editedRegion(existing, { changes = {}, regionId = null } = {}) {
  * is never refused — the owner is never blocked — but it must not go live
  * unread, so the event lands `pending` and the admin queue shows what it
  * resembles.
+ *
+ * `visibility` (تذكرة #166) يصل وسيطاً مستقلاً لا مفتاحاً في `changes`،
+ * بالسببين الذين جعلا `region_id` كذلك: سجلّ التعديلات يطبع قيمة العمود كما
+ * هي، و`public`/`link_only` مفتاحان إنجليزيان في الـAPI لا نصّاً يقرأه مستخدم
+ * عربي — وثانيهما أن الإخفاء تصنيفه تجميليّ أصلاً (ليس في
+ * `CRITICAL_AMENDMENT_FIELDS`). ويُكتب في نفس `UPDATE`، ولا يُكتب إلا إن اختلف
+ * فعلاً عن المخزَّن.
  */
-async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null, regionId = null, forceReview = false } = {}) {
+async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null, regionId = null, visibility = null, forceReview = false } = {}) {
   // Only columns whose value actually differs count towards the
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
@@ -1353,6 +1384,12 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     if (resolvedRegionId !== null) {
       assignments.push('region_id = ?');
       params.push(resolvedRegionId);
+    }
+    // ظهور المناسبة (تذكرة #166) في نفس `UPDATE`، وخارج `changes` عمداً (انظر
+    // تعليق الدالة). صفّ لا يلمس الخيار لا يكتب شيئاً هنا.
+    if (visibility !== null && columnValueChanged('visibility', existing.visibility, visibility)) {
+      assignments.push('visibility = ?');
+      params.push(visibility);
     }
     if (nextStatus !== existing.status) {
       assignments.push('status = ?');
@@ -1930,10 +1967,11 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  *
  * **وهو قراءة بالمعرّف، فلا يستدعي `PUBLIC_EVENT_VISIBLE_SQL_EVENTS` عمداً:**
  * `approved` مكتوبة صراحةً في `WHERE` لأن الصفحة تُفتح بلا حساب فالمعتمدة وحدها
- * لها صفحة. فأي شرط ظهور تضيفه #166/#167 إلى القطعة **لا يصل هذه القراءة** —
- * وهذا مقصود: `/e/:id` هي الطريق الوحيد الذي يملكه من يصله الرابط إلى مناسبة
- * «بالرابط فقط»، فيجب على #166/#167 أن تقرّر لها قاعدتها صريحةً هنا، لا أن
- * تحملها القطعة إليها صامتةً فتصير 404.
+ * لها صفحة. وهذا هو ما يجعل هذه القراءة **الطريق التي يملكها من يصله الرابط
+ * إلى مناسبة «بالرابط فقط»** (تذكرة #166): شرط الظهور المضاف إلى القطعة لا
+ * يصلها، و`visibility` تُقرأ وتُعاد ولا تُصفّى — فالصفحة تُفتح للمخفيّة كما
+ * تُفتح للعامة، والفرق الوحيد `noindex` في الوسم والترويسة (`share.routes.js`).
+ * ولو مرّت بها القطعة لصارت 404، ولما بقي لصاحب المناسبة المخفيّة طريق.
  *
  * والاستعلام نفسه يخدم أيضاً `/e/:id/card.jpg` و`/e/:id/download`: تستدعي
  * `getShareEvent` ثلاث صفحات (`share.routes.js:858` و`:928` و`:960`)، فقاعدة
@@ -1953,7 +1991,7 @@ async function getShareEvent(eventId) {
   const row = await db.queryOne(
     `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
             events.event_date, events.event_end_date, events.location_name,
-            events.updated_at,
+            events.visibility, events.updated_at,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
             occasion_types.icon AS occasion_type_icon,

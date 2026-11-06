@@ -21,7 +21,7 @@ const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middlewa
 const { regionIdForRequest } = require('../middleware/region');
 const {
   cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
-  parseEventDays, parseCsvList, parseFlag, MAX_HONOREES
+  parseEventDays, parseCsvList, parseFlag, parseEventVisibility, MAX_HONOREES
 } = require('../middleware/validate');
 const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
 
@@ -259,6 +259,11 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   // غيابها، فلا يتغيّر سلوك أي طلب لا يرسلها.
   const regionId = optionalId(req.body.region_id, 'المحافظة');
 
+  // الظهور (تذكرة #166): «عام» افتراضاً أو «بالرابط فقط». ليس حقلاً من حقول
+  // النوع، فلا يمرّ بجدول `occasion_type_fields` ولا يلزم منه إعداد نوع؛ وغيابه
+  // (كل عميل منشور اليوم) يعني «عام» فلا يتغيّر أي نشر قائم.
+  const visibility = parseEventVisibility(req.body.visibility);
+
   // Integrity rule enforced here, not by the schema: `village_id` and
   // `requested_village_name` ("قريتي غير موجودة") may only be set under the
   // villages catch-all, never both at once, and a NEW publish under it must
@@ -318,6 +323,7 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     requested_village_name: requestedVillageName,
     villageCoords: village ? { lat: village.latitude, lng: village.longitude } : null,
     region_id: regionId,
+    visibility,
     event_date: eventDate,
     latitude,
     longitude
@@ -397,8 +403,15 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
     });
   }
   if (created.status === 'approved') {
-    realtime.emit('new_event_created', created);
-    announceNewEvent(await notifications.notifyNewEvent({ ...created, created_by: req.user.id }));
+    // الإعلان العام لـ«مناسبة جديدة» (تذكرة #166): `notifyNewEvent` يعيد `null`
+    // لمناسبة «بالرابط فقط»، فيصمت معه كل ما يحمل عنوانها إلى الناس — الإشارة
+    // اللحظية الواحدة التي يعيد كل عميل متّصل بسببها جلبه، وصفّ الإشعار،
+    // والدفع. أما تنبيه الناشر («قوّي مناسبتك») فليس إعلاناً عاماً ويبقى.
+    const announcement = await notifications.notifyNewEvent({ ...created, created_by: req.user.id });
+    if (announcement) {
+      realtime.emit('new_event_created', created);
+      announceNewEvent(announcement);
+    }
     const nudge = await notifications.createEventNudge(created.id, 1);
     if (nudge) announceNotification(nudge);
     facebook.publishEventSafely(created);
@@ -482,6 +495,16 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   // يظهر حقل مشتقّ في سجل التعديلات. غيابها (كل عميل منشور اليوم) يعني «اترك
   // المحافظة كما هي»، إلا إن تحرّك المكان فيُعاد حسابها.
   const regionId = optionalId(body.region_id, 'المحافظة');
+
+  // الظهور (تذكرة #166) — قيمة مغلقة تُتحقَّق في `validate.js`، والغائبة تعني
+  // «بلا تعديل» عند كل عميل منشور اليوم. ولا يدخل `changes` بل يُمرَّر وسيطاً
+  // كالمحافظة: سجلّ التعديلات يطبع قيمة العمود كما هي، و«public/link_only»
+  // مفتاحان إنجليزيان لا يصلحان نصّاً لمستخدم عربي. وتصنيفه تجميليّ أصلاً —
+  // `visibility` ليست في `CRITICAL_AMENDMENT_FIELDS` — فلا يُعيد المناسبة إلى
+  // المراجعة، وإلا صار رابطها `/e/:id` 404 وهو بالضبط ما يجب أن يبقى يعمل.
+  const visibility = body.visibility === undefined
+    ? null
+    : parseEventVisibility(body.visibility, existing.visibility || 'public');
 
   if (body.title !== undefined) changes.title = cleanString(body.title, 255) || existing.title;
   if (body.family_clan !== undefined) changes.family_clan = cleanString(body.family_clan, 150) || existing.family_clan;
@@ -610,7 +633,8 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     extraDays = parseEventDays(body.extra_days, { max: MAX_EVENT_DAYS });
   }
 
-  if (!Object.keys(changes).length && honorees === null && extraDays === null && regionId === null) {
+  if (!Object.keys(changes).length && honorees === null && extraDays === null
+      && regionId === null && visibility === null) {
     throw ApiError.badRequest('لم يتم إرسال أي تعديل');
   }
 
@@ -713,7 +737,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   const result = await events.updateEvent(eventId, existing, {
-    changes, honorees, extraDays, regionId, changedBy: req.user.id, forceReview: reviewForDuplicate
+    changes, honorees, extraDays, regionId, visibility, changedBy: req.user.id, forceReview: reviewForDuplicate
   });
   if (changes.poster_url !== undefined) await events.releaseReplacedImage(existing.poster_url, changes.poster_url);
   if (changes.artist_image_url !== undefined) {

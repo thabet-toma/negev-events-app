@@ -794,6 +794,99 @@ async function run() {
   });
 
   /**
+   * «بالرابط فقط» (#166، والقرار في #141): الخيار يوجد في نموذج النشر وفي نافذة
+   * التعديل، وافتراضه «عام» كما في الخادم. وهذان الاختباران يقيسان الشيء الذي
+   * لا يقيسه اختبار الخادم: أن الصفحة نفسها تحمل الخيار وتُرسله، لا أن الـAPI
+   * يقبله فقط. وإرسال «عام» دائماً مقصود: PATCH لا يعتبر المفتاح تعديلاً إلا
+   * حين تختلف قيمته عن المخزَّنة، فإرساله لا يكتب سطر تعديل في السجلّ.
+   */
+  await test('نموذج النشر يحمل خيار الظهور، وافتراضه «عام» (#166)', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const { document } = dom.window;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addVisibility') !== null);
+    assertNoUnhandledRejections('publish form / visibility');
+
+    const select = document.getElementById('addVisibility');
+    assert.ok(select, 'expected the publish form to carry the visibility choice');
+    assert.strictEqual(select.closest('.form-group').querySelector('label').textContent.trim(), 'من يرى المناسبة؟');
+    assert.deepStrictEqual([...select.options].map(option => option.value), ['public', 'link_only']);
+    assert.strictEqual(select.value, 'public', '«عام» is the default — nobody gets hidden by accident');
+  });
+
+  await test('اختيار «بالرابط فقط» يسافر مع طلب النشر (#166)', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addHonoreesList') !== null);
+
+    let capturedBody = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedBody = opts.body;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    document.getElementById('addVisibility').value = 'link_only';
+    fillRequiredPublishFields(document);
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit / visibility');
+
+    assert.ok(capturedBody, 'expected the publish POST to actually fire');
+    assert.strictEqual(capturedBody.get('visibility'), 'link_only', 'the chosen visibility travels in the publish body');
+  });
+
+  await test('نافذة التعديل تعرض ظهور المناسبة وتُرسله مع الحفظ (#166)', async () => {
+    const patches = [];
+    const ownEvents = [
+      { id: 61, title: 'عرس', town: TOWNS[0], region_id: 1, event_date: '2026-10-10', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', visibility: 'link_only', occasion_type: WEDDING_TYPE },
+      { id: 62, title: 'عرس', town: TOWNS[0], region_id: 1, event_date: '2026-10-11', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', visibility: 'public', occasion_type: WEDDING_TYPE },
+      // صفّ من خادم أقدم لا يحمل المفتاح أصلاً — «عامة» كالافتراض، لا «مخفيّة».
+      { id: 63, title: 'عرس', town: TOWNS[0], region_id: 1, event_date: '2026-10-12', location_name: 'ديوان', groom_name: 'عريس', status: 'approved', occasion_type: WEDDING_TYPE }
+    ];
+    const dom = buildEnv({
+      loggedIn: true,
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: ownEvents });
+          if (opts.method === 'PATCH') {
+            patches.push(JSON.parse(opts.body));
+            return jsonResponse({ success: true, message: 'تم حفظ التعديل' });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+    await win.loadTownCoordinates();
+    await win.fetchMyEvents();
+
+    win.openEditEventModal(61);
+    const select = document.getElementById('editVisibility');
+    assert.strictEqual(select.value, 'link_only', 'a hidden event opens on «بالرابط فقط», not on the default');
+
+    win.openEditEventModal(62);
+    assert.strictEqual(select.value, 'public');
+    win.openEditEventModal(63);
+    assert.strictEqual(select.value, 'public', 'a row without the key is public — the server-side default, not a hidden event');
+
+    win.openEditEventModal(61);
+    select.value = 'public';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assert.ok(patches[0], 'expected a PATCH');
+    assert.strictEqual(patches[0].visibility, 'public', 'the edit sends the chosen visibility');
+  });
+
+  /**
    * The field-key switch itself moved into web/occasionForm.js and is now
    * shared with admin.js's direct-publish form (buildOccasionFieldsHtml) —
    * app.js supplies overrides only for location_name/poster_url/audio_url/

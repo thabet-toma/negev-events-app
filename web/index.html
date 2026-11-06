@@ -499,6 +499,17 @@
         <!-- Populated by JS from the chosen occasion type's own field config -->
         <div id="dynamicFormFields"></div>
 
+        <!-- ظهور المناسبة (#166): «عام» هو الافتراض كما في الخادم، و«بالرابط فقط»
+             تُخفى من التغذية والخريطة والبحث و«مناسبات أخرى» ولا تُعلَن ولا تُفهرس،
+             وتُفتح برابطها (/e/:id) وبمعرّفها في التطبيق. -->
+        <div class="form-group">
+          <label>من يرى المناسبة؟</label>
+          <select id="addVisibility">
+            <option value="public">عامة — تظهر للجميع في التغذية والخريطة والبحث</option>
+            <option value="link_only">بالرابط فقط — لا تظهر في أي قائمة، وتفتحها برابطها</option>
+          </select>
+        </div>
+
         <button type="submit" class="submit-btn" id="submitEventBtn">
           <i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة
         </button>
@@ -1421,6 +1432,16 @@
         <div class="form-group">
           <label>سهرة الشباب والدحة (إن وجدت)</label>
           <input type="date" id="editYouthDate">
+        </div>
+
+        <!-- ظهور المناسبة (#166) — نفس الخيار في التعديل، وقيمته الابتدائية من
+             الصفّ نفسه؛ غياب المفتاح من الخادم يعني «عامة» كالافتراض. -->
+        <div class="form-group">
+          <label>من يرى المناسبة؟</label>
+          <select id="editVisibility">
+            <option value="public">عامة — تظهر للجميع في التغذية والخريطة والبحث</option>
+            <option value="link_only">بالرابط فقط — لا تظهر في أي قائمة، وتفتحها برابطها</option>
+          </select>
         </div>
 
         <div class="form-group" id="editExtraDaysGroup">

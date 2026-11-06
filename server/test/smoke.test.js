@@ -14463,6 +14463,245 @@ async function run() {
 
   await db.execute('DELETE FROM users WHERE id = ?', [privacyUserA.id]);
 
+  console.log('\n«بالرابط فقط» — مناسبة مخفيّة تُفتح برابطها وبمعرّفها (تذكرة #166)');
+
+  const visibilityListener = await createDirectUser('مستمع مناسبة بالرابط فقط');
+  const visibilityEventIds = [];
+  const VISIBILITY_TOWN = 'رهط';
+  const VISIBILITY_DAY = addDaysToDate(schedulerToday, 20);
+  const HIDDEN_HONOREE = 'عريس الرابط المخفي';
+  const PUBLIC_HONOREE = 'عريس الظهور العلني';
+  let hiddenEventId = 0;
+  let publicEventId = 0;
+
+  await test('POST /api/events defaults visibility to public, and an unknown value is refused with an Arabic 400', async () => {
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس الظهور الافتراضي' }],
+        event_date: addDaysToDate(schedulerToday, 62)
+      })
+    });
+    assert.strictEqual(created.status, 201);
+    visibilityEventIds.push(created.body.eventId);
+    const row = await db.queryOne('SELECT visibility FROM events WHERE id = ?', [created.body.eventId]);
+    assert.strictEqual(row.visibility, 'public', 'a publish that never sends the field is public — the column default');
+
+    const bad = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس ظهور خاطئ' }],
+        visibility: 'secret',
+        event_date: addDaysToDate(schedulerToday, 63)
+      })
+    });
+    assert.strictEqual(bad.status, 400);
+    assert.ok(/ظهور/.test(bad.body.message), `expected an Arabic visibility error, got "${bad.body.message}"`);
+  });
+
+  await test('A link_only event is approved silently: no «مناسبة جديدة» row and no digest for anyone', async () => {
+    const created = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: HIDDEN_HONOREE }],
+        town: VISIBILITY_TOWN,
+        visibility: 'link_only',
+        event_date: VISIBILITY_DAY
+      })
+    });
+    assert.strictEqual(created.status, 201);
+    hiddenEventId = created.body.eventId;
+    visibilityEventIds.push(hiddenEventId);
+
+    const approve = await api('PATCH', `/api/admin/events/${hiddenEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approve.status, 200, approve.body.message);
+
+    const row = await db.queryOne('SELECT status, visibility, first_approved_at FROM events WHERE id = ?', [hiddenEventId]);
+    assert.strictEqual(row.status, 'approved');
+    assert.strictEqual(row.visibility, 'link_only', 'approval does not touch the visibility');
+    assert.ok(row.first_approved_at, 'it really was a first approval — the silence comes from the visibility alone');
+
+    const rows = await db.query(
+      "SELECT * FROM notifications WHERE event_id = ? AND type IN ('event_new','event_new_digest')",
+      [hiddenEventId]
+    );
+    assert.strictEqual(rows.length, 0, 'not one listener gets a row — the announcement returns null before any write');
+    const keyed = await db.query('SELECT id FROM notifications WHERE dedupe_key = ?', [`event_new_${hiddenEventId}`]);
+    assert.strictEqual(keyed.length, 0, 'and no single «مناسبة جديدة» row was written under its key either');
+    const forListener = await db.query(
+      'SELECT id FROM notifications WHERE user_id = ? AND event_id = ?',
+      [visibilityListener.id, hiddenEventId]
+    );
+    assert.strictEqual(forListener.length, 0);
+  });
+
+  await test('The duplicate guard still compares against a link_only event — hiding never blinds it (تذكرة #166)', async () => {
+    // confirm_duplicate: false صراحةً — `api()` تضيفه true لكل نشر
+    // (withDuplicateConfirmed)، فبدونه يمرّ التوأم متجاوزاً الحارس: لو خرجت
+    // المخفيّة من مرشّحي الحارس لعاد النشر 201 وفشل هذا الاختبار.
+    const twin = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: HIDDEN_HONOREE }],
+        town: VISIBILITY_TOWN,
+        event_date: VISIBILITY_DAY,
+        confirm_duplicate: false
+      })
+    });
+    // لو نُشر رغم التحذير يُنظَّف مع بقية صفوف هذا القسم.
+    if (twin.status === 201) visibilityEventIds.push(twin.body.eventId);
+    assert.strictEqual(twin.status, 409, `a hidden event must still be a duplicate-guard candidate, got ${twin.status}`);
+    assert.strictEqual(twin.body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.strictEqual(twin.body.details.duplicates[0].id, hiddenEventId, 'the hidden twin is the match');
+  });
+
+  await test('The public twin IS still announced — the silencing is the visibility, not a broken notification path', async () => {
+    const created = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: PUBLIC_HONOREE }],
+        town: VISIBILITY_TOWN,
+        event_date: VISIBILITY_DAY
+      })
+    });
+    assert.strictEqual(created.status, 201);
+    assert.strictEqual(created.body.status, 'approved', 'an admin publishing in their own town goes live immediately');
+    publicEventId = created.body.eventId;
+    visibilityEventIds.push(publicEventId);
+
+    const single = await db.query('SELECT id FROM notifications WHERE dedupe_key = ?', [`event_new_${publicEventId}`]);
+    const digest = await db.query(
+      "SELECT id FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?",
+      [`%${PUBLIC_HONOREE}%`]
+    );
+    assert.ok(
+      single.length > 0 || digest.length > 0,
+      'a public event still reaches «مناسبة جديدة» (individually, or in that day\'s digest)'
+    );
+  });
+
+  await test('A link_only event is absent from the feed, the map, search, related events and the sitemap — even with no X-App-Version', async () => {
+    const dayQuery = `&date_from=${VISIBILITY_DAY}&date_to=${VISIBILITY_DAY}`;
+    for (const legacy of [false, true]) {
+      const label = legacy ? 'a legacy client (no X-App-Version)' : 'a current client';
+
+      const feed = await api('GET', `/api/events?limit=100&all_regions=1${dayQuery}`, { legacy });
+      assert.strictEqual(feed.status, 200);
+      const feedIds = feed.body.events.map(event => event.id);
+      assert.ok(!feedIds.includes(hiddenEventId), `the feed must not carry a hidden event for ${label}`);
+      assert.ok(feedIds.includes(publicEventId), `the feed must still carry the public twin for ${label}`);
+
+      const map = await api('GET', '/api/map/events?all_regions=1', { legacy });
+      assert.strictEqual(map.status, 200);
+      const pinIds = map.body.points.map(point => point.id);
+      assert.ok(!pinIds.includes(hiddenEventId), `the map must not carry a hidden event for ${label}`);
+      assert.ok(pinIds.includes(publicEventId), `the map must still carry the public twin for ${label}`);
+
+      const hiddenSearch = await api('GET', `/api/events?limit=100&all_regions=1&search=${encodeURIComponent(HIDDEN_HONOREE)}`, { legacy });
+      assert.strictEqual(hiddenSearch.status, 200);
+      assert.ok(!hiddenSearch.body.events.some(event => event.id === hiddenEventId), `search must not find a hidden event for ${label}`);
+
+      const publicSearch = await api('GET', `/api/events?limit=100&all_regions=1&search=${encodeURIComponent(PUBLIC_HONOREE)}`, { legacy });
+      assert.strictEqual(publicSearch.status, 200);
+      assert.ok(publicSearch.body.events.some(event => event.id === publicEventId), `search must still find the public twin for ${label}`);
+    }
+
+    const sitemap = await rawGet('/sitemap.xml');
+    assert.strictEqual(sitemap.status, 200);
+    assert.ok(!sitemap.text.includes(`/e/${hiddenEventId}<`), 'the sitemap must not list a hidden event');
+    assert.ok(sitemap.text.includes(`/e/${publicEventId}<`), 'the sitemap must still list the public twin');
+
+    const publicPage = await rawGet(`/e/${publicEventId}`);
+    assert.strictEqual(publicPage.status, 200);
+    assert.ok(
+      !publicPage.text.includes(`/e/${hiddenEventId}"`),
+      '«مناسبات أخرى» must not link to a hidden event even when it shares the town'
+    );
+
+    const towns = await api('GET', '/api/towns');
+    const statsRow = (towns.body.stats || []).find(stat => stat.town === VISIBILITY_TOWN);
+    const [{ cnt }] = await db.query(
+      "SELECT COUNT(*) AS cnt FROM events WHERE town = ? AND status = 'approved' AND visibility = 'public'",
+      [VISIBILITY_TOWN]
+    );
+    assert.strictEqual(
+      Number(statsRow ? statsRow.events_count : 0), Number(cnt),
+      'the town chip counts public events only — a hidden one is not counted'
+    );
+  });
+
+  await test('A link_only event opens by id in the API and at /e/:id, with noindex in the meta tag AND the header; a public one is unchanged', async () => {
+    const detail = await api('GET', `/api/events/${hiddenEventId}`);
+    assert.strictEqual(detail.status, 200, detail.body.message);
+    assert.strictEqual(detail.body.event.visibility, 'link_only', 'the detail returns the visibility — it does not filter on it');
+
+    const legacyDetail = await api('GET', `/api/events/${hiddenEventId}`, { legacy: true });
+    assert.strictEqual(legacyDetail.status, 200, 'an old APK holding the id still opens it — hiding is from lists only');
+
+    const page = await rawGet(`/e/${hiddenEventId}`);
+    assert.strictEqual(page.status, 200, 'the share link of a hidden event must open, not 404');
+    assert.ok(
+      page.text.includes('content="noindex, nofollow"'),
+      'the meta tag of a hidden event must say noindex, nofollow'
+    );
+    assert.strictEqual(page.headers.get('x-robots-tag'), 'noindex, nofollow', 'and the response header must say the same');
+
+    const publicPage = await rawGet(`/e/${publicEventId}`);
+    assert.strictEqual(publicPage.status, 200);
+    assert.ok(
+      publicPage.text.includes('content="index, follow, max-image-preview:large"'),
+      'a public event keeps its indexable meta tag, byte for byte'
+    );
+    assert.strictEqual(publicPage.headers.get('x-robots-tag'), null, 'and carries no X-Robots-Tag at all');
+  });
+
+  await test('Editing visibility hides an approved event without sending it back to review, and setting it public brings it back', async () => {
+    const before = await api('GET', `/api/events?limit=100&all_regions=1&date_from=${VISIBILITY_DAY}&date_to=${VISIBILITY_DAY}`);
+    assert.ok(before.body.events.some(event => event.id === publicEventId), 'set up: the twin is in the feed before the edit');
+
+    const hide = await api('PATCH', `/api/events/${publicEventId}`, {
+      token: adminToken, body: { visibility: 'link_only' }
+    });
+    assert.strictEqual(hide.status, 200, hide.body.message);
+    assert.strictEqual(hide.body.amendment, 'cosmetic', 'hiding is cosmetic — it must not bounce the event back to review');
+    assert.strictEqual(hide.body.status, 'approved');
+
+    const afterHide = await api('GET', `/api/events?limit=100&all_regions=1&date_from=${VISIBILITY_DAY}&date_to=${VISIBILITY_DAY}`);
+    assert.ok(!afterHide.body.events.some(event => event.id === publicEventId), 'the feed drops it on the very next read');
+    const stillOpen = await api('GET', `/api/events/${publicEventId}`);
+    assert.strictEqual(stillOpen.status, 200, 'while its own id still opens it');
+    const hiddenPage = await rawGet(`/e/${publicEventId}`);
+    assert.ok(hiddenPage.text.includes('content="noindex, nofollow"'), 'and its share page turns noindex');
+
+    const invalid = await api('PATCH', `/api/events/${publicEventId}`, {
+      token: adminToken, body: { visibility: 'everyone' }
+    });
+    assert.strictEqual(invalid.status, 400, 'an unknown value is refused, never coerced to the default');
+
+    const show = await api('PATCH', `/api/events/${publicEventId}`, {
+      token: adminToken, body: { visibility: 'public' }
+    });
+    assert.strictEqual(show.status, 200, show.body.message);
+    const afterShow = await api('GET', `/api/events?limit=100&all_regions=1&date_from=${VISIBILITY_DAY}&date_to=${VISIBILITY_DAY}`);
+    assert.ok(afterShow.body.events.some(event => event.id === publicEventId), 'and it comes back when set to public again');
+    const publicAgain = await rawGet(`/e/${publicEventId}`);
+    assert.strictEqual(publicAgain.headers.get('x-robots-tag'), null, 'the header goes away with the visibility');
+  });
+
+  // Clean up this section's rows: the digest row it updated (no event_id, so it
+  // is recognised by the twin's own name), then the events and the listener.
+  await db.execute(
+    "DELETE FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?",
+    [`%${PUBLIC_HONOREE}%`]
+  );
+  for (const id of visibilityEventIds) {
+    await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
+    await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  }
+  await db.execute('DELETE FROM users WHERE id = ?', [visibilityListener.id]);
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

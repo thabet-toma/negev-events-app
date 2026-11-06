@@ -18,6 +18,7 @@ import 'add_event_screen.dart'
         HonoreeRow,
         EventDayRow,
         EventDaysEditor,
+        EventVisibilityField,
         DateField,
         collectEventDays,
         kEventTextFieldKeys,
@@ -40,6 +41,10 @@ import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 /// و`region_id` ليست فيها: محافظة القرية مشتقّة على الخادم ولا تدخل
 /// `changedColumns` أصلاً (وسيط مستقلّ في `updateEvent`)، فتغييرها وحده لا
 /// يعيد المناسبة إلى المراجعة — وتحذيرها كان كذباً على المستخدم.
+///
+/// و`visibility` ليست فيها (تذكرة #166): تُصنَّف تجميلية على الخادم — إخفاء
+/// مناسبة معتمدة أو إعادتها عامةً لا يمسّ تاريخها ولا مكانها، ولا يُخرجها من
+/// الاعتماد (وإلا صار رابطها `/e/:id` 404). فتحذيرها هنا كذبٌ أيضاً.
 const _fieldsThatMayTriggerReview = {
   'event_date',
   'event_end_date',
@@ -127,6 +132,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
   // محافظة القرية (تذكرة #125) — تُعرض بمحافظة المناسبة نفسها، وتُرسَل عند
   // تغييرها وحدها (مفتاح غائب = «بلا تعديل» عند الخادم).
   int? _regionId;
+  // ظهور المناسبة (تذكرة #166) — من الصفّ نفسه، ويُرسَل عند تغييره وحده.
+  late EventVisibility _visibility;
+  late EventVisibility _originalVisibility;
   DateTime? _eventDate;
   DateTime? _eventEndDate;
   DateTime? _youthDate;
@@ -228,6 +236,9 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
     _regionId = event.regionId;
     _originalRegionId = event.regionId;
+
+    _visibility = event.visibility;
+    _originalVisibility = event.visibility;
 
     _eventDate = event.eventDate.isEmpty ? null : DateTime.tryParse(event.eventDate);
     _originalEventDate = event.eventDate.isEmpty ? null : event.eventDate;
@@ -351,6 +362,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
 
     if (_latitude != _originalLatitude) changes['latitude'] = _latitude ?? '';
     if (_longitude != _originalLongitude) changes['longitude'] = _longitude ?? '';
+
+    // الظهور (تذكرة #166): مفتاح غائب = «بلا تعديل» كما في كل حقل آخر.
+    if (_visibility != _originalVisibility) {
+      changes['visibility'] = _visibility.wireValue;
+    }
 
     if (_honoreesChanged()) changes['honorees'] = _currentHonorees();
 
@@ -498,6 +514,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
         _originalYouthDate = _youthDate == null ? null : formatEventDate(_youthDate!);
         _originalLatitude = _latitude;
         _originalLongitude = _longitude;
+        _originalVisibility = _visibility;
         _originalHonorees = _currentHonorees();
         _originalDays = collectEventDays(_days);
         _amendmentsFuture = api.eventAmendments(widget.event.id);
@@ -677,6 +694,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
             ),
             ..._textFieldWidget(type, 'audio_title'),
           ],
+          const SizedBox(height: 12),
+          EventVisibilityField(
+            value: _visibility,
+            onChanged: (value) => setState(() => _visibility = value),
+          ),
           const SizedBox(height: 24),
           ElevatedButton.icon(
             key: const Key('save_event_button'),

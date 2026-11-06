@@ -432,7 +432,7 @@ function pageStyle(palette) {
  * below) — that is the one case where the size is unknown again, and the
  * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [] }) {
+function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [], noindex = false }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
@@ -483,6 +483,12 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
     ? `<span class="chip" style="background:${escapeHtml(typeColour)}26;color:${escapeHtml(typeColour)};border:1px solid ${escapeHtml(typeColour)}59;">${icon ? `<span class="ico">${escapeHtml(icon)}</span>` : ''}${escapeHtml(typeName)}</span>`
     : '';
 
+  // الوسم `noindex` للمناسبة «بالرابط فقط» وحدها (تذكرة #166، والقرار في #141):
+  // من وصله الرابط يفتحها كاملة، ولا يلتقطها محرّك بحث. والعامة على حالها
+  // حرفياً (`index, follow, max-image-preview:large`) — لا تُمسّ صفحة قائمة.
+  // والترويسة `X-Robots-Tag` يُضيفها المسار تحت بالشرط نفسه: الزاحف قد يقرأ
+  // إحداهما وحدها، فالشيئان يقولان القاعدة نفسها.
+
   return `<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -490,7 +496,7 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(pageTitle)}</title>
 <meta name="description" content="${escapeHtml(metaDescription)}">
-<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="robots" content="${noindex ? 'noindex, nofollow' : 'index, follow, max-image-preview:large'}">
 <link rel="canonical" href="${escapeHtml(pageUrl)}">
 <meta property="og:title" content="${escapeHtml(pageTitle)}">
 <meta property="og:description" content="${escapeHtml(metaDescription)}">
@@ -907,11 +913,17 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
     imageDimensions = null;
   }
 
-  res
+  // «بالرابط فقط» (تذكرة #166): الصفحة تُفتح كما تُفتح العامة — هي الطريق إلى
+  // المناسبة لمن وصله رابطها — ولا فرق إلا في إشارة الفهرسة، ترويسةً ووسماً.
+  const noindex = event.visibility === 'link_only';
+  const response = res
     .status(200)
     .set('Content-Security-Policy', SHARE_CSP)
-    .set('Content-Type', 'text/html; charset=utf-8')
-    .send(renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents }));
+    .set('Content-Type', 'text/html; charset=utf-8');
+  if (noindex) response.set('X-Robots-Tag', 'noindex, nofollow');
+  response.send(renderEventPage(event, {
+    pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents, noindex
+  }));
 }));
 
 /**
