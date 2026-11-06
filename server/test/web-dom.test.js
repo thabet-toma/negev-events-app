@@ -2726,6 +2726,176 @@ async function run() {
     assert.deepStrictEqual(scrollCalls, [], 'and must not scroll the page to the top either');
   });
 
+  console.log('\nHeader brand — «أعراسنا» above the feed (#157)');
+
+  /**
+   * الإعداد المشترك لاختبارات الشعار الثلاثة: تغذية مفلترة ببلدة واحدة (الكرت
+   * ٨٠٠ وحده)، ثم صفحة مناسبته مفتوحة فوقها. يعيد كل ما تُقاس به الكبسة:
+   * الصفحة، وعدد الطلبات قبلها، وبصمة الفلتر ووسم رقاقته قبلها — فلا يكرّر
+   * كل اختبار الخطوات الخمس نفسها.
+   */
+  async function openFilteredEventPage() {
+    const { dom, calls } = await setupFeedSignatureEnv();
+    dom.window.openFilterSheet('place');
+    checkFilterOption(dom.window, 'placeFilterList', 'رهط');
+    dom.window.applyFilterSheet();
+    await waitFor(() => feedCardIds(dom.window).join(',') === '800');
+    const requestsBefore = calls.length;
+    const signatureBefore = dom.window.feedFilterSignature();
+    const chipBefore = dom.window.document.getElementById('placeFilterChipLabel').textContent;
+
+    dom.window.openEventPage(800);
+    const page = dom.window.document.getElementById('eventPage');
+    await waitFor(() => !page.hidden);
+    assert.strictEqual(page.hidden, false, 'the event page must be open before the brand is tapped');
+    return { dom, calls, page, requestsBefore, signatureBefore, chipBefore };
+  }
+
+  /**
+   * التذكرة #157: شعار الترويسة زرُّ «الرئيسية». من صفحة مناسبة مفتوحة يغلقها
+   * ويعود إلى التغذية؛ ومن التغذية نفسها يصعد بأوّلها. ولا يمسّ الفلتر المختار
+   * (`feedFilterSignature` نفسها قبل النقر وبعده) ولا يجلب قائمة جديدة.
+   *
+   * وهذا يختبر السلوك لا إمكانية الوصول: صفحة المناسبة تحجب الترويسة في متصفّح
+   * حقيقي (`z-index` 950 مقابل 100) ولا يرى jsdom هذا الحجب — المسار الذي ينقره
+   * المستخدم فعلاً هو الرابط داخل الصفحة، والاختبار التالي يغطّيه.
+   */
+  await test('tapping the header brand closes #eventPage and keeps the chosen filter, with no refetch', async () => {
+    const { dom, calls, page, requestsBefore, signatureBefore, chipBefore } = await openFilteredEventPage();
+    const { document } = dom.window;
+
+    const brand = document.querySelector('.app-header .logo-area');
+    assert.ok(brand, 'expected the header brand to live in web/index.html');
+    brand.click();
+
+    assert.strictEqual(page.hidden, true, 'the brand tap must close #eventPage');
+    assert.strictEqual(
+      document.getElementById('placeFilterChipLabel').textContent,
+      chipBefore,
+      'the chosen filter must stay exactly as it was'
+    );
+    assert.strictEqual(dom.window.feedFilterSignature(), signatureBefore, 'and so must the filter signature it fetches with');
+    assert.deepStrictEqual(feedCardIds(dom.window), [800], 'the same filtered card is still the feed behind it');
+    await delay(80);
+    assert.strictEqual(calls.length, requestsBefore, 'going home must not refetch the feed');
+  });
+
+  /**
+   * المسار الواقعي حين تكون الصفحة مفتوحة: `.event-page` بـ`z-index: 950` فوق
+   * `.app-header` (100)، فشعار الترويسة محجوبٌ في متصفّح حقيقي — وjsdom بلا
+   * محرّك تخطيط لا يرى هذا الحجب، فيمرّ الاختبار أعلاه ولو كان الرابط غير قابل
+   * للنقر. هذا الاختبار ينقر الرابط **داخل** الصفحة، وهو ما يراه المستخدم.
+   */
+  await test('the in-page brand closes #eventPage — the header one is covered by it', async () => {
+    const { dom, calls, page, requestsBefore, signatureBefore } = await openFilteredEventPage();
+    const { document } = dom.window;
+
+    const brand = document.querySelector('#eventPage .event-page-brand');
+    assert.ok(brand, 'expected the brand link to live inside the event page bar');
+    assert.strictEqual(brand.getAttribute('aria-label'), 'أعراسنا — العودة إلى المناسبات', 'and to carry an Arabic accessible name');
+    brand.click();
+
+    assert.strictEqual(page.hidden, true, 'the in-page brand must close #eventPage');
+    assert.strictEqual(dom.window.feedFilterSignature(), signatureBefore, 'with the chosen filter exactly as it was');
+    assert.deepStrictEqual(feedCardIds(dom.window), [800], 'and the same filtered card still the feed behind it');
+    await delay(80);
+    assert.strictEqual(calls.length, requestsBefore, 'and no refetch of the feed');
+  });
+
+  /**
+   * الهاتف: `.app-header` مخفية كلياً على عرض ≤768px وفي PWA المثبَّت، والظاهر
+   * هناك `#floatingTopBar`، فشعار الترويسة وحده لم يكن يراه أحد على الهاتف.
+   * ولا محرّك تخطيط في jsdom، فلا تُقاس الرؤية بالنقرة وحدها: يُقرأ من
+   * `styles.css` أن الكتلة التي تخفي الترويسة هي نفسها التي تُظهر الشريط، ثم
+   * يُنقر الشعار داخل الشريط نفسه ويُتحقّق أنه ينفّذ الفعل المطلوب.
+   */
+  await test('the phone/PWA header — not just the hidden wide one — carries the brand', () => {
+    const phoneHeader = /@media \(max-width: 768px\), \(display-mode: standalone\)[\s\S]{0,600}\.app-header\s*\{\s*display:\s*none !important/;
+    const phoneBar = /@media \(max-width: 768px\), \(display-mode: standalone\)[\s\S]{0,600}\.floating-top-bar\s*\{\s*display:\s*flex/;
+    assert.ok(phoneHeader.test(STYLES_CSS_RAW), 'web/styles.css must hide .app-header on a phone');
+    assert.ok(phoneBar.test(STYLES_CSS_RAW), 'and the same block must show .floating-top-bar, the phone header');
+    assert.ok(/\.floating-brand-btn\s*\{/.test(STYLES_CSS_RAW), 'the phone brand must have its own sizing rule inside the pill');
+
+    const dom = buildEnv();
+    const { document } = dom.window;
+    const bar = document.getElementById('floatingTopBar');
+    assert.ok(bar, 'expected the floating top bar in web/index.html');
+
+    const brand = bar.querySelector('.floating-brand-btn');
+    assert.ok(brand, 'the header a phone actually sees must carry the brand, not only the hidden one');
+    assert.strictEqual(brand.getAttribute('aria-label'), 'أعراسنا — العودة إلى المناسبات', 'with an Arabic accessible name');
+    const icon = brand.querySelector('img');
+    assert.ok(icon, 'the mark must be an image asset, not a hand-drawn glyph');
+    assert.strictEqual(icon.getAttribute('src'), '/icons/favicon-32.png', 'the generated icon-layer file this page already ships');
+
+    // والفعل نفسه: من وجهة أخرى، الهاتف يعود إلى «المناسبات».
+    dom.window.switchTab('tabOurServices');
+    assert.strictEqual(document.getElementById('tabHome').classList.contains('active-tab'), false, 'the test must start off the feed');
+    brand.click();
+    assert.strictEqual(document.getElementById('tabHome').classList.contains('active-tab'), true, 'the phone brand lands on the feed too');
+  });
+
+  /*
+   * jsdom has no layout engine, so this cannot measure the bar: it guards the
+   * CSS VALUES the real measurement depends on, not the layout itself. The
+   * measurement (Edge, signed in — the wider box) is recorded in the comment
+   * above the narrow block: compressed box 272.9px, uncompressed 356.7px, and
+   * the chip with its dot but no label 70.8px — so the uncompressed box only
+   * fits beside the chip from a ~460px viewport. Below that, a 400px bound
+   * overflowed the bar at 401–422px (scrollWidth 399 > container) and squeezed
+   * the dot to 0px up to ~460px. So the values held here are: the bound must
+   * still reach 460px; the block must still shrink the icon buttons below
+   * their 34px base; the dot must not shrink with the truncated label; and
+   * the brand must stay a round white disc so it never reads as a white
+   * square inside the dark pill.
+   */
+  await test('the ≤460px block keeps the signed-in pill inside one row, and the brand a round disc', () => {
+    // The narrow block is the one whose first rule compresses the filter chip
+    // (\r?\n: a Windows checkout with core.autocrlf carries CRLF).
+    const narrow = STYLES_CSS_RAW.match(/@media \(max-width: (\d+)px\) \{(\r?\n  \.floating-filter-chip-btn[\s\S]*?)\r?\n\}/);
+    assert.ok(narrow, 'web/styles.css must keep its narrow floating-bar @media (max-width: …px) block');
+    const [, bound, body] = narrow;
+    assert.ok(Number(bound) >= 460, `the narrow block must reach 460px — measured: a 400px bound overflowed the signed-in bar at 401–422px and zeroed the dot up to ~460px (got ${bound}px)`);
+    const iconSize = body.match(/\.floating-icon-btn \{ width: (\d+)px; height: (\d+)px; \}/);
+    assert.ok(iconSize, 'the narrow block must size .floating-icon-btn');
+    assert.ok(Number(iconSize[1]) <= 29 && iconSize[1] === iconSize[2], 'icon buttons must stay ≤29px square on a phone, or the signed-in pill overflows at 360px');
+    assert.ok(/\.floating-brand-btn \{ width: (2\d|1\d)px; height: \1px; \}/.test(body), 'the brand must shrink with them');
+    assert.ok(/#floatingFilterLabel \{ display: none; \}/.test(body), 'the label hides, leaving the dot as the only active-filter cue — which is why the budget matters');
+
+    const dotRule = STYLES_CSS_RAW.match(/\.floating-filter-dot \{([^}]*)\}/);
+    assert.ok(dotRule && /flex-shrink:\s*0/.test(dotRule[1]), 'the dot must not shrink with a truncated label — measured at 0.7px on 461px signed in without it');
+
+    const brandRule = STYLES_CSS_RAW.match(/\.floating-brand-btn \{([^}]*)\}/);
+    assert.ok(brandRule && /border-radius:\s*50%/.test(brandRule[1]) && /background:\s*#ffffff/i.test(brandRule[1]), 'the brand sits on a white disc, not a white square');
+    assert.ok(/\.floating-brand-btn img \{[^}]*border-radius:\s*50%/.test(STYLES_CSS_RAW), 'and the image itself is clipped round so its corners never poke out of the disc');
+  });
+
+  await test('on the feed itself, the header brand scrolls back to the top of the list', async () => {
+    const { dom } = await setupFeedSignatureEnv();
+    const { document } = dom.window;
+    const container = document.getElementById('eventsContainer');
+    const scrollCalls = [];
+    dom.window.scrollTo = (x, y) => { scrollCalls.push([x, y]); };
+    container.scrollTop = 540; // deep in the feed — jsdom keeps the value, no layout needed
+
+    document.querySelector('.app-header .logo-area').click();
+
+    assert.deepStrictEqual(scrollCalls, [[0, 0]], `expected one explicit scroll to the top, got ${JSON.stringify(scrollCalls)}`);
+    assert.strictEqual(container.scrollTop, 0, 'the feed container must be back on its first card');
+  });
+
+  await test('from another destination, the header brand lands on the feed', () => {
+    const dom = buildEnv();
+    const { document } = dom.window;
+    dom.window.switchTab('tabOurServices');
+    assert.strictEqual(document.getElementById('tabHome').classList.contains('active-tab'), false, 'the test must start off the feed');
+
+    document.querySelector('.app-header .logo-area').click();
+
+    assert.strictEqual(document.getElementById('tabHome').classList.contains('active-tab'), true, 'the brand always lands on «المناسبات»');
+    assert.strictEqual(document.getElementById('tabOurServices').classList.contains('active-tab'), false);
+  });
+
   console.log('\nLoading state — skeletons before the feed resolves, not a spinner (#85 خطوة 53-54)');
 
   await test('skeleton placeholders appear synchronously while fetchEvents is still in flight', async () => {

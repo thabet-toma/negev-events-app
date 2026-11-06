@@ -19,10 +19,23 @@ class ServicesHubScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('خدماتنا')),
+      // بلا `AppBar`: الشريط العلوي واحد في الهيكل (`_brandBar` في `HomeShell`)
+      // فوق الوجهات الثلاث كلها، فشريطان فوق بعضهما على هذه الوجهة عيبٌ لا
+      // تصميم (#157). والعنوان وسطر التعريف صارا أوّل ما في الجسم.
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 18, 14, 30),
+        padding: const EdgeInsets.fromLTRB(14, 16, 14, 30),
         children: [
+          Text(
+            'خدماتنا',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w900,
+              height: 1.3,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
           Text(
             'منصاتنا الأخرى من شركة كترا للحلول الذكية',
             textAlign: TextAlign.center,

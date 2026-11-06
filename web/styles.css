@@ -247,7 +247,23 @@ body {
   gap: 10px;
 }
 
-.logo-area { display: flex; align-items: center; gap: 12px; }
+/* الشعار رابطٌ إلى «المناسبات» (#157): الكتلة نفسها تبقى، ويُزاد عليها ما هو
+   من خواصّ الرابط وحده — مؤشّر يد، ولا خطّ ولا لون أزرق تحت اسم الموقع
+   (النصّ يأخذ ألوانه من قواعده هو)، وحلقة تركيز ظاهرة لمن يتنقّل بالكيبورد. */
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.logo-area:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 4px;
+}
 
 .logo-badge {
   width: 44px;
@@ -2724,6 +2740,9 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   border-radius: 50%;
   background-color: var(--sky-bright);
   display: inline-block;
+  /* التسمية وحدها تنكمش: بلا هذا تنكمش النقطة معها نسبةً إلى عرضها كلما قُصّت
+     التسمية (٠٫٧px على ٤٦١px مسجَّلاً، مقاسةً) — وهي الدليل على فلتر نشِط. */
+  flex-shrink: 0;
 }
 
 .floating-actions-box {
@@ -2798,18 +2817,54 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   transform: scale(0.94);
 }
 
-/* شاشات ضيّقة (360px): الشريط العائم يحمل رقاقة الفلتر وستة أزرار — تسمية
-   الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً (min-width/flex-shrink
-   على الرقاقة، flex-shrink:0 على صندوق الأزرار)، وتختفي كلياً دون 400px
-   (الأيقونة والنقطة الملوّنة تبقيان تدلّان على فلتر نشِط). */
+/* علامة «اعراسنا» في الشريط العائم (#157): الترويسة العريضة مخفية على الهاتف
+   وفي PWA المثبَّت، وهذا الشريط ترويستها الظاهرة. طبقة `icon` (بلا الكلمة) من
+   `web/icons/favicon-32.png` المولَّد، والحجم محصور هنا كي لا يكبر الشريط —
+   فهو يُقاس بأزرار الأيقونات حوله لا بحجمها (وحتى ٤٦٠px كتلة `max-width: 460px`
+   أدناه هي ما يُبقيه في سطر واحد، مُقاسةً في محرّك حقيقي).
+   الأصل المولَّد على أرضية بيضاء مصمتة (قرار العلامة)، وعلى الحبّة الداكنة يبدو
+   مربعاً أبيض إن تُرك مستطيلاً: فيُقصّ هنا قرصاً أبيض دائرياً بحشوة حوله، بلون
+   الأرضية نفسه `#fff` فلا حدّ مرئي بين الصورة والقرص. */
+.floating-brand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  background: #ffffff;
+  line-height: 0;
+  text-decoration: none;
+}
+
+.floating-brand-btn img { display: block; width: 24px; height: 24px; border-radius: 50%; }
+.floating-brand-btn:active { transform: scale(0.92); }
+.floating-brand-btn:focus-visible { outline: 2px solid var(--sky-bright); outline-offset: 2px; }
+
+/* شاشات ضيّقة: الشريط العائم يحمل رقاقة الفلتر وصندوق أزرار — العلامة، وستة
+   أزرار `.floating-icon-btn` (خمسة دائمة + الإشعارات للمسجَّل وحده)، وزرّ «حسابي».
+   تسمية الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً
+   (min-width/flex-shrink على الرقاقة، flex-shrink:0 على صندوق الأزرار)، وتختفي
+   كلياً حتى 460px (الأيقونة والنقطة الملوّنة تبقيان تدلّان على فلتر نشِط).
+   ولأن النقطة هي الدليل الوحيد على فلتر نشِط حينها، فالصندوق لا يجوز أن يأكل
+   عرضها. قياس محرّك حقيقي (Edge، المستخدم مسجَّل — الأوسع): الصندوق المضغوط
+   ٢٧٢٫٩px، وعلى ٣٦٠px داخل حاوية ٣٣٦px تبقى الرقاقة ٥٠٫٨px بنقطتها ظاهرة.
+   والحدّ 460px لا 400px: الصندوق غير المضغوط ٣٥٦٫٧px مسجَّلاً، فبين ٤٠١ و٤٢٢px
+   كان يتجاوز الحاوية ويُقصّ «حسابي»، وبعدها كان يأكل النقطة إلى صفر عرض. والرقاقة
+   بنقطتها وبلا تسمية ٧٠٫٨px، فأول حاوية تتّسع لها مع الصندوق غير المضغوط
+   ٣٥٦٫٧ + ٨ + ٧٠٫٨ = ٤٣٥٫٥px، أي عرض شاشة ~٤٦٠px. أي زرّ يُضاف إلى الصندوق
+   يُعاد معه هذا القياس وهذا الحدّ. */
 #floatingFilterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-@media (max-width: 400px) {
-  .floating-filter-chip-btn { padding: 8px 12px; }
+@media (max-width: 460px) {
+  .floating-filter-chip-btn { padding: 8px 10px; }
   #floatingFilterLabel { display: none; }
-  .floating-actions-box { gap: 2px; padding: 4px 6px; }
-  .floating-icon-btn { width: 31px; height: 31px; }
-  .floating-auth-btn { height: 31px; padding: 0 7px; gap: 4px; font-size: 0.72rem; }
+  .floating-actions-box { gap: 1px; padding: 4px; }
+  .floating-icon-btn { width: 28px; height: 28px; }
+  .floating-auth-btn { height: 28px; padding: 0 6px; gap: 4px; font-size: 0.72rem; }
+  .floating-brand-btn { width: 26px; height: 26px; }
+  .floating-brand-btn img { width: 20px; height: 20px; }
 }
 
 /* رقاقة «اضغط لتشغيل الصوت» — فوق الشريط السفلي وكبستَي النشر، في الوسط. */
@@ -4122,6 +4177,25 @@ body.event-page-open { overflow: hidden; }
 .event-page-back:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
 .event-page-bar-title { font-weight: 800; font-size: 1rem; color: var(--ink); }
+
+/* شعار «اعراسنا» في شريط صفحة المناسبة (#157) — طريق العودة إلى التغذية من
+   الصفحة نفسها: الترويسة تحتها في ترتيب الطبقات (`z-index: 100` مقابل 950)،
+   فرفعُها يقلب ترتيب النوافذ كلّه مقابل نقرٍ واحد. ولا يزحف شيء عن موضعه:
+   `margin-inline-start: auto` يدفعه إلى الطرف المقابل للعنوان وحده. */
+.event-page-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: auto;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  line-height: 0;
+}
+
+.event-page-brand img { display: block; width: 32px; height: 32px; }
+.event-page-brand:hover { background: var(--surface-sunk); }
+.event-page-brand:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
 
 .event-page-body {
   flex: 1;

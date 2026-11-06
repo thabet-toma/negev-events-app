@@ -4,7 +4,7 @@
  * يولّد كل أيقونات العلامة من تعريف واحد — الحلقتان المتشابكتان وكلمة «اعراسنا».
  *
  * الأيقونات صور ثنائية، ولو دخلت المستودع مرسومة يدوياً لصارت غير قابلة
- * لإعادة التوليد: أي تعديل على العلامة يعني إعادة رسم ٢٥ ملفاً بيدك. هندسة
+ * لإعادة التوليد: أي تعديل على العلامة يعني إعادة رسم ٢٨ ملفاً بيدك. هندسة
  * العلامة نفسها (‏`buildMarkParts` وما تحته) معرَّفة مرة واحدة في
  * `server/src/utils/brandMark.js` — لا هنا — لأن طبقة المسارات
  * (`share.routes.js`) وخدمة بطاقة المشاركة تحتاجانها أيضاً، ولا يجوز لـ
@@ -15,10 +15,11 @@
  *
  *   node scripts/brand-icons.js          (من داخل server/)
  *
- * يكتب إلى ثلاثة أماكن:
+ * يكتب إلى خمسة أماكن:
  *   web/icons/            — فافيكون، apple-touch-icon، وأيقونات PWA
  *   mobile/android/.../mipmap-*   — أيقونة الأندرويد
  *   mobile/ios/.../AppIcon.appiconset — أيقونة iOS
+ *   mobile/assets/brand/  — شعار الترويسة داخل واجهة التطبيق (#157)
  *   docs/brand/           — لقطة أساس فحص الانحراف البصري
  *
  * ولا يلمس شيئاً آخر. تشغيله متكرّراً آمن: يستبدل الملفات نفسها بالمحتوى نفسه.
@@ -255,6 +256,20 @@ const IOS_ICONS = [
   ['Icon-App-1024x1024@1x.png', 1024]
 ];
 
+/**
+ * شعار داخل واجهة التطبيق (#157) — الشريط العلوي فوق الوجهات الثلاث.
+ *
+ * المقاس المنطقي المعروض ٧٢px، وهو `FULL_MIN_SIZE` نفسه، فطبقة `'full'` أصلٌ
+ * لا اختيار ذوق: الكلمة تُقرأ عند هذا المقاس. وملفّا `2.0x`/`3.0x` صورٌ
+ * للعرض نفسه بكثافتين أعلى (تُلتقط تلقائياً من `Image.asset`)، لا مقاساً
+ * أكبر — `detailFor` يقرأ ما يُرى على الشاشة، و٧٢px فأكثر `'full'` في كل حال.
+ */
+const APP_MARK_SIZES = [
+  ['mobile/assets/brand/mark-full.png', 72],
+  ['mobile/assets/brand/2.0x/mark-full.png', 144],
+  ['mobile/assets/brand/3.0x/mark-full.png', 216]
+];
+
 async function main() {
   console.log('web/');
   fs.mkdirSync(path.join(REPO, 'web', 'icons'), { recursive: true });
@@ -273,6 +288,9 @@ async function main() {
   IOS_ICONS.forEach(([filename, size]) => {
     write(`mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/${filename}`, renderIcon(size, { detail: detailFor(size) }));
   });
+
+  console.log('\nmobile/assets — شعار الترويسة داخل الواجهة (طبقة full، ٧٢px منطقي)');
+  APP_MARK_SIZES.forEach(([target, size]) => write(target, renderIcon(size, { detail: detailFor(size) })));
 
   console.log('\ndocs/brand — لقطة أساس فحص الانحراف البصري');
   await generateReferenceImage();

@@ -76,6 +76,12 @@ void main() {
 
       expect(find.byType(ServicesHubScreen), findsOneWidget);
       expect(find.text('خدماتنا'), findsOneWidget);
+      // شريط علوي واحد (#157): الترويسة في الهيكل وحدها، لا `AppBar` هنا.
+      expect(
+        find.byType(AppBar),
+        findsNothing,
+        reason: 'الوجهة بلا شريط علوي خاص بها — الترويسة في الهيكل',
+      );
       expect(
         find.text('منصاتنا الأخرى من شركة كترا للحلول الذكية'),
         findsOneWidget,

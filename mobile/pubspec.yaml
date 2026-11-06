@@ -111,6 +111,9 @@ flutter:
   assets:
     - assets/fonts/OFL.txt
     - assets/platforms/
+    # شعار الترويسة داخل الواجهة — يولّده server/scripts/brand-icons.js
+    # (طبقة 'full'، ٧٢px منطقي + كثافتا 2.0x/3.0x)، ولا يُحرَّر بيد.
+    - assets/brand/
 
   fonts:
     - family: Cairo

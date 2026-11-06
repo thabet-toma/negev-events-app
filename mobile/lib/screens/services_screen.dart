@@ -232,40 +232,60 @@ class _ServicesScreenState extends State<ServicesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('خدمات الأعراس'),
-        actions: [
-          IconButton(
-            tooltip: 'فلترة حسب البلدة',
-            icon: Badge(
-              isLabelVisible: _town != 'الكل',
-              smallSize: 8,
-              child: const Icon(Icons.location_on_outlined),
-            ),
-            onPressed: _pickTown,
-          ),
-          // الشريط مزدحم أصلاً بزرّ «قدّم عرضك» — أيقونة وحدها تكفي هنا.
-          const AuthActionButton(compact: true),
-          Padding(
-            padding: const EdgeInsetsDirectional.only(end: 8),
-            child: TextButton.icon(
-              style: TextButton.styleFrom(
-                backgroundColor: context.c.skyWash,
-                foregroundColor: context.c.sky,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('قدّم عرضك', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
-              onPressed: _openSubmitService,
-            ),
-          ),
-        ],
-      ),
+      // بلا `AppBar`: الشريط العلوي واحد في الهيكل (`_brandBar` في `HomeShell`)
+      // فوق الوجهات الثلاث، فشريطان فوق بعضهما على هذه الوجهة عيبٌ لا تصميم
+      // (#157). ووظائفه الثلاث لم تُفقد: العنوان ومنتقي البلدة و«حسابي» و«قدّم
+      // عرضك» — صفٌّ واحد أوّل الجسم مكانها.
       body: RefreshIndicator(
         onRefresh: _loadFirstPage,
         child: Column(
           children: [
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 8, 0),
+              child: Row(
+                children: [
+                  // `Expanded` + `ellipsis`: على هاتف ضيّق يقصر العنوان ولا
+                  // يفيض الصفّ — الأدوات الثلاث تبقى بمقاسها.
+                  Expanded(
+                    child: Text(
+                      'خدمات الأعراس',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: context.c.ink,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'فلترة حسب البلدة',
+                    icon: Badge(
+                      isLabelVisible: _town != 'الكل',
+                      smallSize: 8,
+                      child: const Icon(Icons.location_on_outlined),
+                    ),
+                    onPressed: _pickTown,
+                  ),
+                  // الصفّ مزدحم أصلاً بزرّ «قدّم عرضك» — أيقونة وحدها تكفي هنا.
+                  const AuthActionButton(compact: true),
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 6),
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        backgroundColor: context.c.skyWash,
+                        foregroundColor: context.c.sky,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('قدّم عرضك', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                      onPressed: _openSubmitService,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             // شريط البحث الفوري
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),

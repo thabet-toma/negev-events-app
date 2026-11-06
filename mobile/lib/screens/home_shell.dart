@@ -16,6 +16,11 @@ import 'services_screen.dart';
 /// الهيكل الرئيسي — ثلاث وجهات بشريط تنقّل سفلي: المناسبات، خدماتنا، خدمات
 /// الأعراس (بهذا الترتيب في RTL من اليمين).
 ///
+/// وفوق الثلاث ترويسةُ الهيكل بشعار «اعراسنا» (`_brandBar`): نسخة واحدة من
+/// الأصل المولَّد، تكبس فتُعيد إلى «المناسبات» وتصعد بقائمتها إلى أولها (#157).
+/// والشاشات المدفوعة («تفاصيل مناسبة»، «حسابي»، الألبومات…) تغطّيها كلها، فلا
+/// شعار فوقها ولا ترويسة ثانية — تبقى «رجوع + عنوان» كما هي.
+///
 /// «حسابي» ليست وجهةً في الشريط: تُدفع شاشةً من زرّها في الترويسة
 /// (`AuthActionButton` ← `AccountScreen`)، فلا نسخة ثانية لها في الشريط.
 ///
@@ -39,6 +44,11 @@ class _HomeShellState extends State<HomeShell> {
   ValueNotifier<int>? _tabRequest;
   String? _banner;
   bool _updateChecked = false;
+
+  /// إشارة «اصعد إلى أوّل القائمة» إلى التغذية — يقرؤها `EventsScreen` وحده.
+  /// إشارة لا استدعاء: الهيكل يعرف الوجهة المختارة، ولا يعرف كيف تُمرَّر قائمة
+  /// التغذية ولا كيف تُعاد تهيئتها، فلا يُجلب شيء بهذه الكبسة.
+  final ValueNotifier<int> _feedTopRequest = ValueNotifier<int>(0);
 
   /// ورقة أول تشغيل — محاولة واحدة لكل تشغيل تطبيق، لا مع كل إعادة بناء.
   bool _onboardingAttempted = false;
@@ -121,6 +131,7 @@ class _HomeShellState extends State<HomeShell> {
   void dispose() {
     _broadcastSub?.cancel();
     _tabRequest?.removeListener(_handleTabRequest);
+    _feedTopRequest.dispose();
     super.dispose();
   }
 
@@ -138,6 +149,27 @@ class _HomeShellState extends State<HomeShell> {
   /// كبسة «أضف خدمتك» — الورقة نفسها التي تفتحها «خدمات الأعراس»، بحارس
   /// الحساب وفئات الخدمة داخلها (`openSubmitServiceSheet`)، لا نموذج ثانٍ.
   Future<void> _openAddService() => openSubmitServiceSheet(context);
+
+  /// شعار الترويسة — باب «الرئيسية» (تذكرة #157). يعيد إلى وجهة «المناسبات»؛
+  /// وإن كانت مختارةً أصلاً يصعد بقائمتها إلى أولها. بالتمرير وحده
+  /// (`topRequest`): لا فلتر يتغيّر ولا تغذية تُجلب.
+  ///
+  /// ولا يغلق هنا شاشةً مدفوعة: كل ما يُدفع فوق الهيكل يغطّي ترويسته كلها
+  /// بخلفيته (راجع تعليق الصنف)، فلا يُبلغ الشعار وهو فوقه — ولذلك لا فرعَ
+  /// `popUntil` هنا، فهو لا يُنفَّذ. والوحيد الذي يبقى فوقها ولا يغطّيها هو لوح
+  /// فلاتر التغذية، وهو طبقة داخل `EventsScreen` لا مسار، فيغلقه ذلك الملف
+  /// نفسه عند وصول الإشارة (`_jumpToFirstCard`).
+  ///
+  /// والإشارة تُرسَل في الحالتين: التغذية حيّة خلف `IndexedStack` وهي غير
+  /// مختارة، فلوح فلاتر فُتح فيها ثم بُدِّلت الوجهة يبقى مفتوحاً تحتها؛ وكبسة
+  /// الشعار من وجهة أخرى هي ما يجب أن تغلقه. (تصعد القائمة إلى أولها معه — لا
+  /// يُطلب ذلك، لكنه ثمن إشارة واحدة بدل ثانية، و«الرئيسية» تحتمله.)
+  void _goToFeedFromBrand() {
+    if (_index != AppServices.feedTabIndex) {
+      setState(() => _index = AppServices.feedTabIndex);
+    }
+    _feedTopRequest.value++;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -161,6 +193,7 @@ class _HomeShellState extends State<HomeShell> {
           EventsScreen(
             key: ValueKey('feed_$regionKey'),
             isActive: _index == AppServices.feedTabIndex,
+            topRequest: _feedTopRequest,
           ),
           ServicesHubScreen(key: ValueKey('hub_$regionKey')),
           ServicesScreen(key: ValueKey('services_$regionKey')),
@@ -176,16 +209,25 @@ class _HomeShellState extends State<HomeShell> {
     // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر
     // صراحةً متى لم تعد المختارة كي تُسكت صوتها.
     return Scaffold(
-      body: Column(
-        children: [
-          if (_banner != null && _banner!.isNotEmpty) _BroadcastBanner(
-            message: _banner!,
-            onDismiss: () => setState(() => _banner = null),
-          ),
-          Expanded(
-            child: IndexedStack(index: _index, children: screens),
-          ),
-        ],
+      // منطقة الأمان العلوية تُستهلك هنا مرّة واحدة، فوق الترويسة: ما تحتها
+      // (`SafeArea` في رأس التغذية، ولا `AppBar` في أي وجهة منذ #157) يقرأ
+      // `padding.top` صفراً فلا تُضيف حشوة ثانية تحت الترويسة.
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // ترويسة الهيكل فوق الوجهات الثلاث كلها: نسخة واحدة من الشعار لا
+            // ثلاث، وهي خارج `IndexedStack` فلا تُبنى مع كل تبديل وجهة.
+            _brandBar(),
+            if (_banner != null && _banner!.isNotEmpty) _BroadcastBanner(
+              message: _banner!,
+              onDismiss: () => setState(() => _banner = null),
+            ),
+            Expanded(
+              child: IndexedStack(index: _index, children: screens),
+            ),
+          ],
+        ),
       ),
       // لا زرّ نشر عائم: الكبستان فوق الشريط تغطّيان النشر من كل وجهة، ونشر
       // التغذية في رأسها (`feed_publish_button`) أيضاً.
@@ -215,6 +257,48 @@ class _HomeShellState extends State<HomeShell> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// ترويسة الهيكل: شعار «اعراسنا» على جهة البداية (يمين في RTL) فوق الوجهات
+  /// الثلاث. الأصل المولَّد `mobile/assets/brand/mark-full.png` — طبقة `full`
+  /// (بالكلمة) بمقاسها المنطقي ٧٢px، وهو حدّ القاعدة نفسه؛ و`2.0x`/`3.0x`
+  /// يلتقطهما `Image.asset` تلقائياً. لا رسم بكود Flutter ولا تنزيل من الشبكة،
+  /// فلا نسخة ثانية للعلامة في العميل.
+  ///
+  /// بلا `SafeArea` هنا: منطقة الأمان تُستهلك مرّة واحدة حول عمود الهيكل كلّه.
+  Widget _brandBar() {
+    return Material(
+      color: context.c.surface,
+      child: Container(
+        key: const Key('shell_brand_bar'),
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: context.c.line)),
+        ),
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: InkWell(
+            key: const Key('shell_brand_logo'),
+            onTap: _goToFeedFromBrand,
+            borderRadius: BorderRadius.circular(16),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.asset(
+                'assets/brand/mark-full.png',
+                width: 72,
+                height: 72,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
+                // الكلمة مرسومة في العلامة نفسها؛ هذا اسمٌ للقارئ الآلي
+                // وحده بدل أن يقرأ مسار الملف.
+                semanticLabel: 'أعراسنا — العودة إلى المناسبات',
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

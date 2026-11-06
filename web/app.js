@@ -4331,6 +4331,34 @@ function openOurServices() {
   switchTab('tabOurServices');
 }
 
+/**
+ * شعار الترويسة — زرّ «الرئيسية» (تذكرة #157). من صفحة مناسبة مفتوحة يغلقها
+ * ويعود إلى التغذية، ومن وجهة أخرى يبدّلها إلى «المناسبات»، وعلى التغذية نفسها
+ * يصعد إلى أوّل قائمتها. **لا يمسّ الفلتر ولا يعيد الجلب**: الإغلاق
+ * (`closeEventPage`) والتمرير (`restoreFeedTop`) وحدهما، فبصمة الفلتر
+ * (`feedFilterSignature`) تبقى كما هي ولا يقع طلب `/api/events`.
+ *
+ * و`eventPage` المفتوح يعود إلى نفس الكرت الذي كان عليه — كما يفعل زرّ رجوعها
+ * بزرّ المتصفّح وEscape — لأنّ التغذية لم تكن ظاهرةً تحته بعدُ؛ الصعود إلى
+ * أوّل القائمة لتغذية ظاهرة بالفعل وحدها.
+ *
+ * تُستدعى من `onclick` في index.html وتعيد `false` كي لا يقفز المتصفّح إلى
+ * `#tabHome` ويضيف تاريخاً جديداً للتبديل الذي وقع في الصفحة نفسها.
+ */
+function brandGoToFeed() {
+  const eventPageWasOpen = isEventPageOpen();
+  if (eventPageWasOpen) closeEventPage();
+
+  const homeTab = document.getElementById('tabHome');
+  const onFeed = !!(homeTab && homeTab.classList.contains('active-tab'));
+  if (!onFeed) {
+    switchTab('tabHome');
+    return false;
+  }
+  if (!eventPageWasOpen) restoreFeedTop();
+  return false;
+}
+
 function closeAddEventModal() {
   switchTab('tabHome');
 }

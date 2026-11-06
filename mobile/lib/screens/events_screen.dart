@@ -92,11 +92,18 @@ class FeedDateFilter {
 /// الكرت الظاهر يشغّل صوته الفعلي تلقائياً (`effectiveEventAudioUrl`)، ويسكت
 /// حين يغادر الكرت، أو يُختار تبويب آخر (`isActive`)، أو تُدفع شاشة فوقه.
 class EventsScreen extends StatefulWidget {
-  const EventsScreen({super.key, this.isActive = true});
+  const EventsScreen({super.key, this.isActive = true, this.topRequest});
 
   /// هل تبويب المناسبات هو المختار الآن؟ `IndexedStack` في `HomeShell` يُبقي
   /// الشاشة حيّة خلف التبويبات الأخرى، فلا بدّ أن تُخبَر صراحةً.
   final bool isActive;
+
+  /// إشارة الشعار في ترويسة الهيكل: كل زيادة تقفز بالقائمة إلى أول كرت (#157).
+  ///
+  /// إشارة لا استدعاء — الهيكل لا يعرف `_pageController` ولا كيف تُبنى القائمة،
+  /// والكبسة لا تغيّر فلتراً ولا تجلب صفحة أولى: `jumpToPage(0)` وحده، فما
+  /// اختاره المستخدم من فلتر ونتائج يبقى كما هو.
+  final ValueNotifier<int>? topRequest;
 
   @override
   State<EventsScreen> createState() => _EventsScreenState();
@@ -194,6 +201,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// إشارة «قائمتي» بتغيير حالة حفظ وقع خارج التغذية (إزالة أو تراجع) —
   /// تُلتقط هنا كي تُفكّ عند `dispose`، كما يفعل `HomeShell` بـ`tabRequest`.
   ValueNotifier<({int eventId, bool saved})?>? _savedChange;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.topRequest?.addListener(_jumpToFirstCard);
+  }
 
   @override
   void didChangeDependencies() {
@@ -333,6 +346,12 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   @override
   void didUpdateWidget(covariant EventsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // إشارة الشعار تُلتقط بالإشارة لا بالإرسال: لو جاءت مختلفة عن السابقة
+    // فالقديمة تُفكّ أوّلاً، فلا مستمعَ باقٍ على `ValueNotifier` هُجر.
+    if (oldWidget.topRequest != widget.topRequest) {
+      oldWidget.topRequest?.removeListener(_jumpToFirstCard);
+      widget.topRequest?.addListener(_jumpToFirstCard);
+    }
     if (widget.isActive == oldWidget.isActive) return;
     if (widget.isActive) {
       _autoplayCurrent();
@@ -362,9 +381,27 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _newEventSub?.cancel();
     _liveStatusSub?.cancel();
     _savedChange?.removeListener(_handleSavedChange);
+    widget.topRequest?.removeListener(_jumpToFirstCard);
     _searchController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  /// كبسة شعار الهيكل على وجهة «المناسبات» نفسها: صعود إلى أول القائمة.
+  ///
+  /// تمريرٌ وحده — لا `_loadFirstPage` ولا `force`: الفلتر المختار والنتائج
+  /// المعروضة تبقى كما هي.
+  ///
+  /// وقبل الصعود يُغلق لوح الفلاتر (`_showTopChrome`): طبقةٌ داخل هذه الشاشة
+  /// لا مسارٌ في `Navigator`، فلا يغطّي ترويسة الهيكل ولا يغلقه شيء فوقها —
+  /// الشعار يبقى مرئياً وقابلاً للنقر وهي مفتوحة، فيجب أن تُغلق هي أيضاً كي
+  /// يعني «الرئيسية» ما يقوله (#157). والإغلاق قبل حارس `hasClients` كي لا
+  /// يبقى اللوح معلَّقاً حين لا تكون القائمة مبنية (تحميل أوّلي، خطأ، فراغ).
+  void _jumpToFirstCard() {
+    if (!mounted) return;
+    if (_showTopChrome) setState(() => _showTopChrome = false);
+    if (!_pageController.hasClients) return;
+    _pageController.jumpToPage(0);
   }
 
   /// يشغّل صوت الكرت الظاهر الآن — أو يُسكت ما شغّلته التغذية إن لم يكن له

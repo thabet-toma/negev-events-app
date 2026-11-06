@@ -107,7 +107,14 @@
   <!-- Main Luxury Header -->
   <header class="app-header">
     <div class="header-container">
-      <div class="logo-area">
+      <!-- الشعار رابطٌ إلى «المناسبات» (تذكرة #157): من أي وجهة كان يعود إلى
+           التغذية، وإن كانت صفحة مناسبة مفتوحة فوقها أغلقها وعاد إلى كرتها.
+           الدلالة رابط لا زرّ: فعلُه تنقّل إلى وجهة، وهو ما يقوله `href`؛
+           و`return false` يمنع قفزة المتصفّح لأنّ التبديل يجري في الصفحة نفسها.
+           وهذا الرابط غير قابل للنقر وصفحة المناسبة مفتوحة — `.event-page` بـ
+           `z-index: 950` فوق الترويسة (100)؛ رابطُ الحالة نفسها في شريط الصفحة
+           أدناه (`.event-page-brand`). -->
+      <a class="logo-area" href="#tabHome" aria-label="أعراسنا — العودة إلى المناسبات" onclick="return brandGoToFeed()">
         <!-- العلامة: حلقتا الزواج المتشابكتان، الفصّ على اليسرى والقلب فوق اليمنى،
              كصورة الشعار التي اعتمدها المالك — طبقة 'icon' (بلا كلمة «اعراسنا»،
              فاسم التطبيق مكتوب بجانبها)، نسخة من مسار brandMark.js يحرسها اختبار. -->
@@ -120,7 +127,7 @@
           <h1>أعراسنا <span class="pro-tag">PRO</span></h1>
           <p>دياركم عامرة بالأفراح والمسرات</p>
         </div>
-      </div>
+      </a>
       <div class="header-actions">
         <button id="aiPoemBtn" class="ai-magic-btn" onclick="openAIPoemModal()" title="مولد قصائد وشيلات التهنئة بالذكاء الاصطناعي">
           <i class="fa-solid fa-wand-magic-sparkles"></i>
@@ -195,6 +202,14 @@
 
       <!-- End: Actions Pill -->
       <div class="floating-actions-box">
+        <!-- علامة «اعراسنا» — العودة إلى «المناسبات» (تذكرة #157). الترويسة
+             العريضة مخفية على الهاتف وفي PWA المثبَّت (`styles.css`)، وهذا
+             الشريط هو ترويستها الظاهرة، فلا بدّ أن تحمل العلامة نفسها وإلا لم
+             يرها أحد هناك. طبقة `icon` (بلا الكلمة) من `web/icons/favicon-32.png`
+             المولَّد، ودلالتها وفعلها كدلالة شعار الترويسة وفعله. -->
+        <a class="floating-brand-btn" href="#tabHome" aria-label="أعراسنا — العودة إلى المناسبات" onclick="return brandGoToFeed()">
+          <img src="/icons/favicon-32.png" alt="" width="24" height="24">
+        </a>
         <button class="floating-icon-btn" onclick="openAgendaModal()" title="أجندة المناسبات">
           <i class="fa-solid fa-calendar-days"></i>
         </button>
@@ -1829,6 +1844,15 @@
         <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> <span>رجوع</span>
       </button>
       <span class="event-page-bar-title">تفاصيل المناسبة</span>
+      <!-- شعار «اعراسنا» — به يُغلق المستخدم الصفحة ويعود إلى التغذية من داخل
+           الصفحة نفسها (تذكرة #157): الترويسة تحتها (`z-index: 100` مقابل 950)
+           فلا يبلغها نقرٌ من هنا. طبقة `icon` (بلا الكلمة) بمقاسها ٣٢px، وهي
+           القاعدة: `full` لما هو ٧٢px فأكثر، `icon` لما هو أصغر — والأصل من
+           `web/icons/` مولَّدٌ بـ`server/scripts/brand-icons.js`، لا مرسوم بيد.
+           ودلالته كدلالة شعار الترويسة: `brandGoToFeed()` نفسها. -->
+      <a class="event-page-brand" href="#tabHome" aria-label="أعراسنا — العودة إلى المناسبات" onclick="return brandGoToFeed()">
+        <img src="/icons/favicon-32.png" alt="" width="32" height="32">
+      </a>
     </div>
     <div id="eventPageBody" class="event-page-body"></div>
   </div>
