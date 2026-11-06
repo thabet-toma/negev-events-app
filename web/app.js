@@ -76,6 +76,11 @@ let serviceProvidersCache = [];
 let servicesPage = 1;
 let servicesPagination = null;
 let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل صريح (#25)
+// شكل عرض مزوّدي الدليل (`providers_display`، تذكرة #158): الخادم يحسم الغياب
+// والقيمة غير المعروفة، والعميل يقرأ ما يصل ويقبل `cards` وحدها؛ وما عداها —
+// ومنها الحالة قبل وصول الإعداد — صفوف مختصرة. لا تخطيط ثالث هنا ولا إعادة حسم
+// مكان الخادم، والقيمة تُطبَّق بلا إعادة تحميل.
+let providersDisplayMode = null;
 
 // «خدماتنا» و«آخر خبر» — وجهة عامة بلا حساب (منصّات كترا)، وشاشة أخبار
 // المحافظة من مصدرها الخارجي عبر GET /api/news. لا رمز ولا محافظة محسوبة هنا:
@@ -793,6 +798,9 @@ async function initSupportEntry() {
     if (data.success && data.settings) {
       supportWhatsappNumber = data.settings.support_whatsapp_number || null;
       defaultEventAudioUrl = data.settings.default_event_audio_url || null;
+      // «شكل عرض المزوّدين» (تذكرة #158) يصل من نفس الاستجابة: يُطبَّق فوراً
+      // ويُعاد رسم الدليل إن كان مفتوحاً، فلا إعادة تحميل يدوية للإعداد.
+      applyProvidersDisplaySetting(data.settings.providers_display);
       // التغذية قد تكون رُسمت قبل وصول الإعدادات — أعِد رسمها كي تظهر كتلة
       // المقطع الافتراضي على كروتها بلا انتظار جلب جديد.
       if (defaultEventAudioUrl && allEvents.length) renderEvents(allEvents);
@@ -818,6 +826,24 @@ function updateSupportButtonState() {
     fab.hidden = false;
     fab.classList.toggle('support-btn-disabled', !configured);
     fab.title = configured ? 'الدعم الفني عبر واتساب' : 'الدعم الفني غير مُفعَّل بعد';
+  }
+}
+
+/**
+ * يطبّق `providers_display` القادم من `GET /api/settings/public` (تذكرة #158).
+ * القيمة الفعّالة — ومنها الغياب والقيمة غير المعروفة — يحسمها الخادم في
+ * `RESOLVED_KEYS`، فلا قيمة افتراضية مكتوبة هنا: `cards` وحدها تبدّل الشكل،
+ * وأي شيء آخر (احتياطاً لقيمة غير متوقعة) يُعرض صفوفاً مختصرة. تغييرٌ فعلي
+ * والدليل مفتوح ⇒ إعادة رسم من الذاكرة وحدها بلا طلب شبكة، فلا إعادة تحميل.
+ */
+function applyProvidersDisplaySetting(raw) {
+  const next = raw === 'cards' ? 'cards' : null;
+  if (next === providersDisplayMode) return;
+
+  providersDisplayMode = next;
+  if (servicesInitialized && serviceProvidersCache.length) {
+    renderServiceProviders(serviceProvidersCache);
+    renderServicesLoadMoreButton();
   }
 }
 
@@ -6180,7 +6206,82 @@ function renderServiceProviders(providers) {
     return;
   }
 
-  container.innerHTML = providers.map(p => renderSingleServiceCardHtml(p)).join('');
+  container.innerHTML = providers.map(p => renderServiceProviderEntryHtml(p)).join('');
+}
+
+/**
+ * الشكل الذي يرسمه الدليل لكل مزوّد (تذكرة #158): الصفّ المختصر افتراضاً
+ * (‏٤–٥ مزوّدين في الشاشة)، والكرت الكبير حين يختار السوبر أدمن `cards`.
+ * القرار من `providersDisplayMode` وحده — الذي يصل من الخادم.
+ */
+function renderServiceProviderEntryHtml(p) {
+  return providersDisplayMode === 'cards'
+    ? renderSingleServiceCardHtml(p)
+    : renderCompactServiceRowHtml(p);
+}
+
+/** تسمية شارة السعر — واحدة للصفّ المختصر والكرت الكبير، فلا تسميتان لسعر واحد. */
+function providerPriceBadgeText(p) {
+  if (p.price_type === 'contact') return 'تواصل للسعر';
+  if (p.price_type === 'starting_at') return 'ابتداءً من';
+  if (p.price_type === 'fixed') return 'سعر محدد';
+  return 'سعر تقديري';
+}
+
+/**
+ * الصفّ المختصر (تذكرة #158): صورة مربّعة 88px، والاسم عريض 17، وسطر الفئة
+ * والبلدة، وشارة سعر صغيرة، وزرّا «اتصال» (حين يوجد رقم) و«تفاصيل».
+ * «تفاصيل» يفتح نافذة المزوّد القائمة `openProviderModal`، وهي تقرأ
+ * `GET /api/services/providers/:id` فتحمل حزمة السعر والمواصفات — والرقم
+ * نفسه لا يُجلب إلا هناك، فلا رقم في القائمة أصلاً.
+ */
+function renderCompactServiceRowHtml(p) {
+  const toneColor = p.category_color
+    ? (p.category_color.startsWith('#') ? p.category_color : `#${p.category_color}`)
+    : '#B8860B';
+
+  // القائمة تحمل has_phone فقط (لا الرقم نفسه)؛ غيابه (خادم أقدم) يعني «نعم»
+  const hasPhone = p.has_phone !== false;
+
+  const priceBadgeText = providerPriceBadgeText(p);
+
+  const mediaHtml = p.image_url
+    ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" class="service-row-img" loading="lazy">`
+    : `<span class="service-row-img service-row-img-placeholder">${p.category_icon ? escapeHtml(p.category_icon) : '🛠️'}</span>`;
+
+  // البلدان القليلة تُسمّى صراحةً، والأكثر يُسمّى منه اثنان و«وغيرها» — لا
+  // ادّعاء «جميع البلدات» من قائمة قصيرة (تذكرة #127)، ولا سطر يطول.
+  const townsText = (p.towns && p.towns.length)
+    ? (p.towns.length > 3
+        ? `${p.towns.slice(0, 2).join('، ')} وغيرها`
+        : p.towns.join('، '))
+    : 'مناطق الخدمة غير محدَّدة';
+
+  return `
+    <div class="service-row" id="serviceRow-${p.id}" style="--tone:${toneColor}">
+      <div class="service-row-summary">
+        ${mediaHtml}
+        <div class="service-row-body">
+          <h3 class="service-row-name">${escapeHtml(p.name)}</h3>
+          <div class="service-row-meta">
+            <span class="service-row-category">${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}</span>
+            <span class="service-row-town"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(townsText)}</span>
+          </div>
+          <span class="service-row-price">
+            <i class="fa-solid fa-tag"></i> <span class="service-row-price-text">${p.price != null ? `${Number(p.price).toLocaleString('ar-EG')} ₪ · ` : ''}${priceBadgeText}</span>
+          </span>
+        </div>
+      </div>
+      <div class="service-row-actions">
+        ${hasPhone ? `<button type="button" class="service-row-btn service-row-contact" onclick="openProviderModal(${p.id}, { revealContact: true })">
+          <i class="fa-solid fa-phone"></i> اتصال
+        </button>` : ''}
+        <button type="button" class="service-row-btn service-row-details" onclick="openProviderModal(${p.id})">
+          <i class="fa-solid fa-circle-info"></i> تفاصيل
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 /** رقم التواصل اختياري — السطر الهادئ الذي يحلّ محل أزرار الاتصال عند غيابه */
@@ -6200,10 +6301,7 @@ function renderSingleServiceCardHtml(p) {
   const hasPhone = p.has_phone !== false;
 
   // Price Badge text
-  let priceBadgeText = 'سعر تقديري';
-  if (p.price_type === 'contact') priceBadgeText = 'تواصل للسعر';
-  else if (p.price_type === 'starting_at') priceBadgeText = 'ابتداءً من';
-  else if (p.price_type === 'fixed') priceBadgeText = 'سعر محدد';
+  const priceBadgeText = providerPriceBadgeText(p);
 
   // Floating Media Content
   const mediaHtml = p.image_url ? `
@@ -6362,6 +6460,43 @@ function toggleServiceDetails(providerId, btnEl) {
   }
 }
 
+/**
+ * الروابط التي يُبنى منها التواصل — بناء واحد يستخدمه الصفّ المختصر ولوح
+ * الكرت معاً، فلا تتكرّر صيغة الرقم الدولي في مكانين. يُستدعى بعد فعل تواصل
+ * صريح وحده: لا رقم يُعرض قبل ذلك.
+ */
+function providerContactUrls(p) {
+  const phone = p.phone || '';
+
+  // تنظيف رقم الهاتف للواتساب الدولي (05... -> 9725...)
+  let intlPhone = phone.replace(/[^\d+]/g, '');
+  if (intlPhone.startsWith('05')) intlPhone = '972' + intlPhone.substring(1);
+  else if (intlPhone.startsWith('+')) intlPhone = intlPhone.substring(1);
+
+  const whatsappMsg = encodeURIComponent(`مرحباً ${p.name}، استفسار بخصوص خدمتك (${p.category_name || ''}) عبر منصة أعراسنا:`);
+  return {
+    phone,
+    whatsappUrl: `https://wa.me/${intlPhone}?text=${whatsappMsg}`,
+    telUrl: `tel:${phone}`
+  };
+}
+
+/** رابطا واتساب والاتصال لمزوّد جُلِب كاملاً (وفيه `phone`) — من البناء الواحد أعلاه. */
+function providerContactLinksHtml(p) {
+  const { phone, whatsappUrl, telUrl } = providerContactUrls(p);
+
+  return `
+    <div class="service-contact-row">
+      <a class="service-btn-whatsapp" href="${whatsappUrl}" target="_blank" rel="noopener">
+        <i class="fa-brands fa-whatsapp"></i> واتساب مباشر
+      </a>
+      <a class="service-btn-call" href="${telUrl}">
+        <i class="fa-solid fa-phone"></i> اتصال (${escapeHtml(phone)})
+      </a>
+    </div>
+  `;
+}
+
 async function revealServiceContact(providerId, preferredAction = null) {
   try {
     let p = providerDetailsCache[providerId];
@@ -6380,14 +6515,7 @@ async function revealServiceContact(providerId, preferredAction = null) {
       return;
     }
 
-    // تنظيف رقم الهاتف للواتساب الدولي (05... -> 9725...)
-    let intlPhone = phone.replace(/[^\d+]/g, '');
-    if (intlPhone.startsWith('05')) intlPhone = '972' + intlPhone.substring(1);
-    else if (intlPhone.startsWith('+')) intlPhone = intlPhone.substring(1);
-
-    const whatsappMsg = encodeURIComponent(`مرحباً ${p.name}، استفسار بخصوص خدمتك (${p.category_name || ''}) عبر منصة أعراسنا:`);
-    const whatsappUrl = `https://wa.me/${intlPhone}?text=${whatsappMsg}`;
-    const telUrl = `tel:${phone}`;
+    const { whatsappUrl, telUrl } = providerContactUrls(p);
 
     // إذا طلب إجراء مباشر
     if (preferredAction === 'whatsapp') {
@@ -6399,16 +6527,7 @@ async function revealServiceContact(providerId, preferredAction = null) {
     }
 
     // عرض أزرار التواصل المباشرة داخل اللوح وفي الكرت
-    const contactHtml = `
-      <div class="service-contact-row">
-        <a class="service-btn-whatsapp" href="${whatsappUrl}" target="_blank" rel="noopener">
-          <i class="fa-brands fa-whatsapp"></i> واتساب مباشر
-        </a>
-        <a class="service-btn-call" href="${telUrl}">
-          <i class="fa-solid fa-phone"></i> اتصال (${escapeHtml(phone)})
-        </a>
-      </div>
-    `;
+    const contactHtml = providerContactLinksHtml(p);
 
     // تحديث مكان التواصل في اللوح الموسع
     const rowInPanel = document.getElementById(`serviceContactRow-${providerId}`);
@@ -6424,8 +6543,14 @@ async function revealServiceContact(providerId, preferredAction = null) {
   }
 }
 
-/** فتح نافذة المزوّد المنفصلة إذا تم استدعاؤها مع كامل المواصفات */
-async function openProviderModal(providerId) {
+/**
+ * نافذة المزوّد المنفصلة — تقرأ `GET /api/services/providers/:id` فتحمل حزمة
+ * السعر والمواصفات والوصف، والرقم لا يُعرض فيها إلا بفعل صريح.
+ * «تفاصيل» في الصفّ المختصر تفتحها وحدها، و«اتصال» (تذكرة #158) تفتحها مع
+ * `revealContact: true` فتُعرض رابطا واتساب والاتصال مباشرةً — الفعل صريح
+ * أصلاً، والرقم يصل مع النافذة نفسها لا من القائمة.
+ */
+async function openProviderModal(providerId, { revealContact = false } = {}) {
   try {
     const res = await apiFetch(`/api/services/providers/${providerId}`);
     const data = await res.json();
@@ -6487,10 +6612,14 @@ async function openProviderModal(providerId) {
     document.getElementById('providerModalTowns').textContent = (p.towns && p.towns.length)
       ? `يخدم: ${p.towns.join('، ')}` : '';
 
-    document.getElementById('providerContactArea').innerHTML = currentProviderPhone ? `
-      <button type="button" class="submit-btn" onclick="revealProviderPhone()">
+    document.getElementById('providerContactArea').innerHTML = currentProviderPhone
+      ? (revealContact
+        // «اتصال» في الصفّ المختصر فعلٌ صريح أصلاً: يظهر الرقمان مباشرةً.
+        ? providerContactLinksHtml(p)
+        : `<button type="button" class="submit-btn" onclick="revealProviderPhone()">
         <i class="fa-solid fa-phone"></i> إظهار رقم التواصل
-      </button>` : noProviderPhoneHtml();
+      </button>`)
+      : noProviderPhoneHtml();
 
     document.getElementById('providerModal').style.display = 'flex';
   } catch (e) {

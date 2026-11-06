@@ -138,6 +138,25 @@ function parseEntryPromoStoryId(raw) {
   return String(id);
 }
 
+/**
+ * شكل عرض مزوّدي «خدمات الأعراس» — القيمتان المقبولتان تعيش في الخدمة وحدها
+ * (`PROVIDERS_DISPLAY_MODES`)، فلا نسخة ثانية منها هنا. قيمة فارغة = مسح
+ * الإعداد، فيقرأ العميلان الشكل المختصر عبر `RESOLVED_KEYS` في الخدمة نفسها؛
+ * وأي قيمة أخرى تُرفض برسالة عربية بدل أن تُحفظ وتُقرأ لاحقاً كأنها غير معروفة.
+ */
+function parseProvidersDisplay(raw) {
+  const cleaned = cleanString(raw, 20);
+  if (!cleaned) return null;
+
+  if (!settings.PROVIDERS_DISPLAY_MODES.includes(cleaned)) {
+    throw ApiError.badRequest(
+      'شكل عرض المزوّدين غير معروف — القيمتان المسموحتان: compact (صفوف مختصرة) أو cards (كروت كبيرة)'
+    );
+  }
+
+  return cleaned;
+}
+
 // كل قيمة قابلة للحفظ تمرّ بمُحقِّقها الخاص — إضافة مفتاح جديد لاحقاً تعني
 // إضافته هنا وفي SETTING_KEYS معاً، لا تخفيف هذا التحقق.
 const VALIDATORS = {
@@ -147,7 +166,8 @@ const VALIDATORS = {
   [settings.SETTING_KEYS.LIVE_TITLE]: parseLiveTitle,
   [settings.SETTING_KEYS.LIVE_UNTIL]: parseLiveUntil,
   [settings.SETTING_KEYS.LIVE_STREAM_URL]: parseStreamUrl,
-  [settings.SETTING_KEYS.ENTRY_PROMO_STORY_ID]: parseEntryPromoStoryId
+  [settings.SETTING_KEYS.ENTRY_PROMO_STORY_ID]: parseEntryPromoStoryId,
+  [settings.SETTING_KEYS.PROVIDERS_DISPLAY]: parseProvidersDisplay
 };
 
 /** The four keys that together describe a live — touching any of them is a live-status change (plan26-9 §3.6). */

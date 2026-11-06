@@ -65,6 +65,12 @@ class _ServicesScreenState extends State<ServicesScreen> {
   Object? _error;
   bool _didInit = false;
 
+  /// شكل العرض كما يحسمه الخادم (`providers_display`، تذكرة #158): `cards`
+  /// وحدها تبدّل التخطيط، وما عداها — ومنها الحالة قبل وصول الإعداد — صفوف
+  /// مختصرة. الخادم يحسم الغياب والقيمة غير المعروفة، والعميل يقرأ ما يصل
+  /// ويقبل `cards` وحدها: لا تخطيط ثالث هنا ولا إعادة حسم مكان الخادم.
+  bool _cardsMode = false;
+
   /// نفس نمط `events_screen.dart`: طلب فلتر جديد يُلغي أثر أيّ "عرض المزيد"
   /// كان قيد الانتظار لفلتر سابق.
   int _requestGeneration = 0;
@@ -83,8 +89,26 @@ class _ServicesScreenState extends State<ServicesScreen> {
 
     if (!_didInit) {
       _didInit = true;
+      _loadDisplayMode();
       _loadFirstPage();
     }
+  }
+
+  /// يقرأ `providers_display` من `GET /api/settings/public` — القيمة الفعّالة
+  /// يحسمها الخادم وحده (`RESOLVED_KEYS`)، والعميل لا يكتب افتراضاً: `cards`
+  /// وحدها تبدّل الشكل، وأي قيمة أخرى تبقى صفوفاً مختصرة. لا شيء يصل (انقطاع
+  /// أو خادم أقدم) يترك الشكل الحالي كما هو، فلا يعود إلى `cards` بعد أن جاء.
+  Future<void> _loadDisplayMode() async {
+    final mode = await AppServices.of(context).api.providersDisplayMode();
+    if (!mounted || mode == null) return;
+    setState(() => _cardsMode = mode == 'cards');
+  }
+
+  /// سحب للتحديث: يعيد قراءة الإعداد أيضاً، فتبديل السوبر أدمن للشكل يصل
+  /// بلا إغلاق الشاشة.
+  Future<void> _refresh() async {
+    await _loadDisplayMode();
+    await _loadFirstPage();
   }
 
   void _onSearchChanged(String val) {
@@ -237,196 +261,218 @@ class _ServicesScreenState extends State<ServicesScreen> {
       // (#157). ووظائفه الثلاث لم تُفقد: العنوان ومنتقي البلدة و«حسابي» و«قدّم
       // عرضك» — صفٌّ واحد أوّل الجسم مكانها.
       body: RefreshIndicator(
-        onRefresh: _loadFirstPage,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 8, 0),
-              child: Row(
+        onRefresh: _refresh,
+        child: CustomScrollView(
+          key: const Key('services_scroll'),
+          // دائماً قابل للتمرير كي يعمل السحب للتحديث في الحالات الفارغة أيضاً.
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            // رأس الوجهة (العنوان والبحث والفئات) صار داخل التمرير لا فوقه:
+            // كان مثبّتاً يأكل ~165px من ارتفاع القائمة فلا يظهر على الهاتف
+            // إلا ثلاثة صفوف. وظائفه ومحتواه كما هما، والشريط العلوي وشريط
+            // التنقّل يبقيان في `HomeShell` (#157).
+            SliverToBoxAdapter(
+              child: Column(
                 children: [
-                  // `Expanded` + `ellipsis`: على هاتف ضيّق يقصر العنوان ولا
-                  // يفيض الصفّ — الأدوات الثلاث تبقى بمقاسها.
-                  Expanded(
-                    child: Text(
-                      'خدمات الأعراس',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: context.c.ink,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'فلترة حسب البلدة',
-                    icon: Badge(
-                      isLabelVisible: _town != 'الكل',
-                      smallSize: 8,
-                      child: const Icon(Icons.location_on_outlined),
-                    ),
-                    onPressed: _pickTown,
-                  ),
-                  // الصفّ مزدحم أصلاً بزرّ «قدّم عرضك» — أيقونة وحدها تكفي هنا.
-                  const AuthActionButton(compact: true),
                   Padding(
-                    padding: const EdgeInsetsDirectional.only(end: 6),
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                        backgroundColor: context.c.skyWash,
-                        foregroundColor: context.c.sky,
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('قدّم عرضك', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
-                      onPressed: _openSubmitService,
+                    padding: const EdgeInsetsDirectional.fromSTEB(14, 8, 8, 0),
+                    child: Row(
+                      children: [
+                        // `Expanded` + `ellipsis`: على هاتف ضيّق يقصر العنوان ولا
+                        // يفيض الصفّ — الأدوات الثلاث تبقى بمقاسها.
+                        Expanded(
+                          child: Text(
+                            'خدمات الأعراس',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: context.c.ink,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'فلترة حسب البلدة',
+                          icon: Badge(
+                            isLabelVisible: _town != 'الكل',
+                            smallSize: 8,
+                            child: const Icon(Icons.location_on_outlined),
+                          ),
+                          onPressed: _pickTown,
+                        ),
+                        // الصفّ مزدحم أصلاً بزرّ «قدّم عرضك» — أيقونة وحدها تكفي هنا.
+                        const AuthActionButton(compact: true),
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(end: 6),
+                          child: TextButton.icon(
+                            style: TextButton.styleFrom(
+                              backgroundColor: context.c.skyWash,
+                              foregroundColor: context.c.sky,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: const Icon(Icons.add, size: 16),
+                            label: const Text('قدّم عرضك', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                            onPressed: _openSubmitService,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  // شريط البحث الفوري
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: _onSearchChanged,
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: 'ابحث باسم الخدمة، المزوّد، أو المواصفات...',
+                        hintStyle: TextStyle(fontSize: 13, color: context.c.inkFaint),
+                        prefixIcon: Icon(Icons.search, size: 20, color: context.c.inkFaint),
+                        suffixIcon: _searchController.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: _clearSearch,
+                              )
+                            : null,
+                        filled: true,
+                        fillColor: context.c.surfaceSunk,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: context.c.line),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: context.c.line),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: context.c.gold, width: 1.5),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // شريط فئات الخدمات
+                  FutureBuilder<List<ServiceCategory>>(
+                    future: _categories,
+                    builder: (context, snapshot) {
+                      final categories = snapshot.data ?? const <ServiceCategory>[];
+                      return _CategoryTabs(
+                        categories: categories,
+                        selectedId: _categoryId,
+                        onSelected: _onCategorySelected,
+                      );
+                    },
+                  ),
+                  // مؤشر الفلاتر الفعّالة
+                  if (_town != 'الكل' || _searchQuery.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                      child: Row(
+                        children: [
+                          if (_town != 'الكل') ...[
+                            Chip(
+                              label: Text(_town, style: const TextStyle(fontSize: 12)),
+                              onDeleted: () => _onTownSelected('الكل'),
+                              deleteIcon: const Icon(Icons.close, size: 14),
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          if (_searchQuery.isNotEmpty) ...[
+                            Chip(
+                              label: Text('بحث: "$_searchQuery"', style: const TextStyle(fontSize: 12)),
+                              onDeleted: _clearSearch,
+                              deleteIcon: const Icon(Icons.close, size: 14),
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  const Divider(height: 1),
                 ],
               ),
             ),
-            // شريط البحث الفوري
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
-              child: TextField(
-                controller: _searchController,
-                onChanged: _onSearchChanged,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'ابحث باسم الخدمة، المزوّد، أو المواصفات...',
-                  hintStyle: TextStyle(fontSize: 13, color: context.c.inkFaint),
-                  prefixIcon: Icon(Icons.search, size: 20, color: context.c.inkFaint),
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: _clearSearch,
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: context.c.surfaceSunk,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: context.c.line),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: context.c.line),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: context.c.gold, width: 1.5),
-                  ),
-                ),
-              ),
-            ),
-            // شريط فئات الخدمات
-            FutureBuilder<List<ServiceCategory>>(
-              future: _categories,
-              builder: (context, snapshot) {
-                final categories = snapshot.data ?? const <ServiceCategory>[];
-                return _CategoryTabs(
-                  categories: categories,
-                  selectedId: _categoryId,
-                  onSelected: _onCategorySelected,
-                );
-              },
-            ),
-            // مؤشر الفلاتر الفعّالة
-            if (_town != 'الكل' || _searchQuery.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
-                child: Row(
-                  children: [
-                    if (_town != 'الكل') ...[
-                      Chip(
-                        label: Text(_town, style: const TextStyle(fontSize: 12)),
-                        onDeleted: () => _onTownSelected('الكل'),
-                        deleteIcon: const Icon(Icons.close, size: 14),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    if (_searchQuery.isNotEmpty) ...[
-                      Chip(
-                        label: Text('بحث: "$_searchQuery"', style: const TextStyle(fontSize: 12)),
-                        onDeleted: _clearSearch,
-                        deleteIcon: const Icon(Icons.close, size: 14),
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            const Divider(height: 1),
-            Expanded(child: _buildList()),
+            _buildListSliver(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildList() {
+  Widget _buildListSliver() {
     if (_initialLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
 
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
-              const SizedBox(height: 14),
-              Text(
-                '$_error',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.c.inkSoft, height: 1.6),
-              ),
-              const SizedBox(height: 18),
-              ElevatedButton.icon(
-                onPressed: _loadFirstPage,
-                icon: const Icon(Icons.refresh),
-                label: const Text('إعادة المحاولة'),
-              ),
-            ],
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.cloud_off, size: 46, color: context.c.inkFaint),
+                const SizedBox(height: 14),
+                Text(
+                  '$_error',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: context.c.inkSoft, height: 1.6),
+                ),
+                const SizedBox(height: 18),
+                ElevatedButton.icon(
+                  onPressed: _loadFirstPage,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('إعادة المحاولة'),
+                ),
+              ],
+            ),
           ),
         ),
       );
     }
 
     if (_providers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.handyman_outlined, size: 46, color: context.c.inkFaint),
-              const SizedBox(height: 14),
-              Text(
-                'لا توجد خدمات مطابقة حالياً',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: context.c.inkFaint, fontSize: 15),
-              ),
-              if (_searchQuery.isNotEmpty || _town != 'الكل' || _categoryId != null) ...[
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    _clearSearch();
-                    _onTownSelected('الكل');
-                    _onCategorySelected(null);
-                  },
-                  child: const Text('مسح جميع الفلاتر'),
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.handyman_outlined, size: 46, color: context.c.inkFaint),
+                const SizedBox(height: 14),
+                Text(
+                  'لا توجد خدمات مطابقة حالياً',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: context.c.inkFaint, fontSize: 15),
                 ),
+                if (_searchQuery.isNotEmpty || _town != 'الكل' || _categoryId != null) ...[
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      _clearSearch();
+                      _onTownSelected('الكل');
+                      _onCategorySelected(null);
+                    },
+                    child: const Text('مسح جميع الفلاتر'),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       );
@@ -436,27 +482,39 @@ class _ServicesScreenState extends State<ServicesScreen> {
     final showFooter = hasMore || _loadingMore;
     final itemCount = _providers.length + (showFooter ? 1 : 0);
 
-    return ListView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.only(top: 6, bottom: 20),
-      itemCount: itemCount,
-      itemBuilder: (context, index) {
-        if (index < _providers.length) {
-          final provider = _providers[index];
-          return _LuxuryServiceCard(
-            provider: provider,
-            onTap: () => _openProvider(provider),
-          );
-        }
+      sliver: SliverList(
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            if (index < _providers.length) {
+              final provider = _providers[index];
+              // الشكل يقرّره إعداد المنصة (تذكرة #158): الصفّ المختصر أربعة إلى
+              // خمسة مزوّدين في الشاشة، والكرت الكبير هو ما كان قبلها.
+              if (_cardsMode) {
+                return _LuxuryServiceCard(
+                  provider: provider,
+                  onTap: () => _openProvider(provider),
+                );
+              }
+              return _CompactServiceRow(
+                provider: provider,
+                onDetails: () => _openProvider(provider),
+              );
+            }
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Center(
-            child: _loadingMore
-                ? const CircularProgressIndicator()
-                : OutlinedButton(onPressed: _loadMore, child: const Text('عرض المزيد من الخدمات')),
-          ),
-        );
-      },
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: _loadingMore
+                    ? const CircularProgressIndicator()
+                    : OutlinedButton(onPressed: _loadMore, child: const Text('عرض المزيد من الخدمات')),
+              ),
+            );
+          },
+          childCount: itemCount,
+        ),
+      ),
     );
   }
 }
@@ -539,6 +597,149 @@ Color _parseColor(String? hex, Color fallback) {
   return parsed == null ? fallback : Color(parsed);
 }
 
+/// شارة السعر — واحدة للصفّ المختصر والكرت الكبير، فلا تسميتان لسعر واحد.
+String _providerPriceBadgeText(ServiceProvider provider) =>
+    provider.displayPriceBadge ?? 'سعر تقديري';
+
+/// لون فئة المزوّد نفسه في الشكلين (`compact` و`cards`)، فلا يختلف لون
+/// الشارة بينهما.
+Color _providerTone(BuildContext context, ServiceProvider provider) =>
+    _parseColor(provider.categoryColor, context.c.gold);
+
+/// ورقة التواصل الواحدة — يفتحها الصفّ المختصر والكرت الكبير معاً (تذكرة #158)،
+/// فلا نسخة ثانية من بناء رابط واتساب ولا من صيغة الرقم الدولي في الشاشة.
+///
+/// الرقم لا يُخزَّن في الشاشة ولا يأتي مع القائمة: يُجلب من
+/// `GET /api/services/providers/:id` — الموضع الوحيد الذي يحمله — لحظة طلب
+/// التواصل الصريح. `knownPhone` يتيح لمن يملك الرقم مسبقاً تفادي نداء ثانٍ،
+/// والقيمة المُعادة هي الرقم المعروف بعد النداء كي يخزّنه من يملكه؛ `null`
+/// يعني أن الجلب فشل (وقد قيل ذلك للمستخدم برسالة عربية).
+/// `onPhoneResolved` يُنادى بعد انتهاء الجلب وقبل عرض الورقة: الكرت الكبير
+/// يرفع به مؤشّر التحميل فلا يبقى يدور ما دامت الورقة مفتوحة (سلوكه قبل
+/// استخراج الورقة المشتركة).
+Future<String?> showProviderContactSheet(
+  BuildContext context,
+  ServiceProvider provider, {
+  String? knownPhone,
+  VoidCallback? onPhoneResolved,
+}) async {
+  var phone = knownPhone ?? '';
+  if (phone.isEmpty) {
+    try {
+      phone = (await AppServices.of(context).api.serviceProviderDetails(provider.id)).phone;
+    } catch (e) {
+      if (context.mounted) {
+        showMessage(context, 'تعذّر جلب رقم التواصل: $e', isError: true);
+      }
+      onPhoneResolved?.call();
+      return null;
+    }
+  }
+  onPhoneResolved?.call();
+
+  if (!context.mounted) return phone;
+  if (phone.isEmpty) return phone;
+
+  var cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
+  if (cleanPhone.startsWith('05')) {
+    cleanPhone = '972${cleanPhone.substring(1)}';
+  } else if (cleanPhone.startsWith('+')) {
+    cleanPhone = cleanPhone.substring(1);
+  }
+
+  final greeting = Uri.encodeComponent(
+    'مرحباً ${provider.name}، استفسار بخصوص خدمتك (${provider.categoryName}) عبر تطبيق أعراسنا:',
+  );
+  final whatsappUrl = Uri.parse('https://wa.me/$cleanPhone?text=$greeting');
+  final telUri = Uri(scheme: 'tel', path: phone);
+
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: context.c.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    ),
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: sheetContext.c.line,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'تواصل مع ${provider.name}',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: sheetContext.c.ink,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              provider.categoryName,
+              style: TextStyle(
+                fontSize: 13,
+                color: sheetContext.c.inkSoft,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF25D366),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.chat, size: 20),
+              label: const Text(
+                'واتساب مباشر',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                launchUrl(whatsappUrl, mode: LaunchMode.externalApplication);
+              },
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(color: sheetContext.c.line),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: Icon(Icons.phone, size: 20, color: sheetContext.c.ink),
+              label: Text(
+                'اتصال هاتفي ($phone)',
+                style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold, color: sheetContext.c.ink),
+              ),
+              onPressed: () {
+                Navigator.of(sheetContext).pop();
+                launchUrl(telUri);
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  return phone;
+}
+
 /// بطاقة خدمة فاخرة مطابقة لكرت مناسبات المنصة مع الحزم والمواصفات الاسترشادية
 class _LuxuryServiceCard extends StatefulWidget {
   const _LuxuryServiceCard({
@@ -558,136 +759,32 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
   bool _loadingContact = false;
   String? _phone;
 
-  Color _resolveToneColor(BuildContext context) {
-    return _parseColor(widget.provider.categoryColor, context.c.gold);
-  }
-
-  String _priceBadgeText() {
-    return widget.provider.displayPriceBadge ?? 'سعر تقديري';
-  }
-
   Future<void> _revealContactSheet() async {
-    String? phone = _phone;
-    if (phone == null || phone.isEmpty) {
-      final api = AppServices.of(context).api;
+    final known = _phone;
+    if (known == null || known.isEmpty) {
       setState(() => _loadingContact = true);
-      try {
-        final detail = await api.serviceProviderDetails(widget.provider.id);
-        phone = detail.phone;
-        if (mounted) setState(() => _phone = phone);
-      } catch (e) {
-        if (mounted) showMessage(context, 'تعذّر جلب رقم التواصل: $e', isError: true);
-        return;
-      } finally {
-        if (mounted) setState(() => _loadingContact = false);
-      }
     }
-
-    if (!mounted || phone.isEmpty) return;
-
-    final provider = widget.provider;
-    var cleanPhone = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleanPhone.startsWith('05')) {
-      cleanPhone = '972${cleanPhone.substring(1)}';
-    } else if (cleanPhone.startsWith('+')) {
-      cleanPhone = cleanPhone.substring(1);
-    }
-
-    final greeting = Uri.encodeComponent(
-      'مرحباً ${provider.name}، استفسار بخصوص خدمتك (${provider.categoryName}) عبر تطبيق أعراسنا:',
+    final phone = await showProviderContactSheet(
+      context,
+      widget.provider,
+      knownPhone: known,
+      // المؤشّر يُرفع بعد الجلب وقبل عرض الورقة، كما كان قبل استخراجها: لا
+      // يبقى يدور ما دامت الورقة مفتوحة.
+      onPhoneResolved: () {
+        if (mounted && _loadingContact) {
+          setState(() => _loadingContact = false);
+        }
+      },
     );
-    final whatsappUrl = Uri.parse('https://wa.me/$cleanPhone?text=$greeting');
-    final telUri = Uri(scheme: 'tel', path: phone);
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: context.c.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: sheetContext.c.line,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'تواصل مع ${provider.name}',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: sheetContext.c.ink,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                provider.categoryName,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: sheetContext.c.inkSoft,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF25D366),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  elevation: 0,
-                ),
-                icon: const Icon(Icons.chat, size: 20),
-                label: const Text(
-                  'واتساب مباشر',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                ),
-                onPressed: () {
-                  Navigator.of(sheetContext).pop();
-                  launchUrl(whatsappUrl, mode: LaunchMode.externalApplication);
-                },
-              ),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  side: BorderSide(color: sheetContext.c.line),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                icon: Icon(Icons.phone, size: 20, color: sheetContext.c.ink),
-                label: Text(
-                  'اتصال هاتفي ($phone)',
-                  style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold, color: sheetContext.c.ink),
-                ),
-                onPressed: () {
-                  Navigator.of(sheetContext).pop();
-                  launchUrl(telUri);
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (!mounted) return;
+    // الرقم المجلوب يُحفظ للضغطة التالية، والورقة نفسها لا تعيده نصّاً هنا.
+    if (phone != null && phone.isNotEmpty) setState(() => _phone = phone);
   }
 
   @override
   Widget build(BuildContext context) {
     final p = widget.provider;
-    final toneColor = _resolveToneColor(context);
+    final toneColor = _providerTone(context, p);
     // «جميع بلدات منطقتك» ادّعاءٌ لا يُقال بلا بيانات (تذكرة #127): القائمة
     // الطويلة وحدها تبرّره، والفارغة تقول الحقيقة — لا تُنسب إليه بلدة.
     final townsText = p.towns.isEmpty
@@ -795,7 +892,7 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                           const Icon(Icons.sell, size: 12, color: Color(0xFF222222)),
                           const SizedBox(width: 4),
                           Text(
-                            p.price != null ? '${p.price} ₪ (${_priceBadgeText()})' : _priceBadgeText(),
+                            p.price != null ? '${p.price} ₪ (${_providerPriceBadgeText(p)})' : _providerPriceBadgeText(p),
                             style: const TextStyle(
                               fontSize: 11.5,
                               fontWeight: FontWeight.bold,
@@ -843,7 +940,7 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        '${_priceBadgeText()}: ',
+                        '${_providerPriceBadgeText(p)}: ',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: context.c.inkSoft),
                       ),
                       Text(
@@ -995,44 +1092,49 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Capacity & Flexibility Notice
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: context.c.surface,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border(
-                        right: BorderSide(color: cardGold, width: 3.5),
-                        top: BorderSide(color: context.c.line),
-                        left: BorderSide(color: context.c.line),
-                        bottom: BorderSide(color: context.c.line),
-                      ),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.info_outline, size: 18, color: cardGold),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'توضيح مهم بشأن المواصفات والكميات:',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: context.c.ink,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'المواصفات الموضحة أدناه هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.',
-                                style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
-                              ),
-                            ],
-                          ),
+                  // `ClipRRect` بدل `borderRadius` على `Border` غير موحّد اللون:
+                  // نفس عيب شاشة المزوّد، وكان يرمي في debug عند فتح هذه اللوحة
+                  // وحدها. القصّ يحفظ الزوايا والألوان والسماكة كما هي.
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: context.c.surface,
+                        border: Border(
+                          right: BorderSide(color: cardGold, width: 3.5),
+                          top: BorderSide(color: context.c.line),
+                          left: BorderSide(color: context.c.line),
+                          bottom: BorderSide(color: context.c.line),
                         ),
-                      ],
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, size: 18, color: cardGold),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'توضيح مهم بشأن المواصفات والكميات:',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: context.c.ink,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'المواصفات الموضحة أدناه هي مثال لحزمة قياسية تقريبية لتوضيح السعر الاسترشادي. الكميات قابلة للتعديل والزيادة (مثل 2000 كرسي أو خيام إضافية) بالاتفاق المباشر حسب حجم مناسبتك مع المزوّد.',
+                                  style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 
@@ -1137,6 +1239,235 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                 Icons.handyman_outlined,
                 size: 48,
                 color: toneColor.withValues(alpha: 0.8),
+              ),
+      ),
+    );
+  }
+}
+
+/// الصفّ المختصر لمزوّد خدمة (تذكرة #158) — أربعة إلى خمسة صفوف في الشاشة:
+/// صورة مربّعة 88px، الاسم عريض 17، سطر الفئة والبلدة، شارة سعر صغيرة، وزرّا
+/// «اتصال» (حين يوجد رقم وحده) و«تفاصيل» الذي يدفع شاشة المزوّد القائمة.
+///
+/// كل نص في الصفّ 15px أو أكبر، وكل زرّ 44px على الأقل — يحرس ذلك اختبار
+/// widget على هذه الشاشة. والرقم لا يُعرض ولا يُطلب هنا: «اتصال» يفتح الورقة
+/// المشتركة `showProviderContactSheet` التي تجلبه لحظة الطلب وحده.
+class _CompactServiceRow extends StatelessWidget {
+  const _CompactServiceRow({
+    required this.provider,
+    required this.onDetails,
+  });
+
+  /// ارتفاع هدف اللمس الأدنى لكل زرّ في الصفّ (‏أقل من 44 لا يجوز).
+  static const double actionHeight = 44;
+
+  final ServiceProvider provider;
+  final VoidCallback onDetails;
+
+  /// سطر البلدة لا يدّعي «جميع البلدات» من قائمة قصيرة (تذكرة #127): يسمّي
+  /// أول بلدتين ويشير إلى الباقي بـ«وغيرها»، والفارغ يقول الحقيقة. هذا يبقي
+  /// السطر قصيراً كما يشترط ارتفاع الصفّ (٤–٥ صفوف في الشاشة).
+  String get _townsText {
+    if (provider.towns.isEmpty) return 'مناطق الخدمة غير محدَّدة';
+    if (provider.towns.length <= 3) return provider.towns.join('، ');
+    return '${provider.towns.take(2).join('، ')} وغيرها';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = provider;
+    final tone = _providerTone(context, p);
+
+    return Container(
+      key: Key('service_row_${p.id}'),
+      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: context.c.line),
+      ),
+      child: Row(
+        // سطر واحد (~124–138px على Cairo): الصورة والبيانات والزرّان في عمود
+        // واحد جانبي — فتحمل الشاشة أربعة صفوف كاملة بعد تمرير الرأس.
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildMedia(context, tone),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  p.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: context.c.ink,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 2,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      p.categoryIcon.isEmpty
+                          ? p.categoryName
+                          : '${p.categoryIcon} ${p.categoryName}',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: tone,
+                      ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.location_on, size: 15, color: context.c.inkFaint),
+                        const SizedBox(width: 3),
+                        Flexible(
+                          child: Text(
+                            _townsText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 15, color: context.c.inkSoft),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: cardGold.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: cardGold.withValues(alpha: 0.35)),
+                  ),
+                  child: Text(
+                    // الرقم أولاً: على 360px تُقصّ الشارة من نهايتها، فلا يضيع
+                    // السعر. النصّ يبقى سطراً واحداً فلا يتضخّم الصفّ.
+                    '${p.price != null ? '${p.price} ₪ · ' : ''}${_providerPriceBadgeText(p)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: context.c.ink,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          // عمود الزرّين جانبه: 44px لكل زرّ كما هي القاعدة، وسطران لا يزيدان
+          // ارتفاع الصفّ عن ارتفاع الصورة 88px إلا بستّة بكسلات فراغ.
+          SizedBox(
+            width: 96,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (p.hasPhone) ...[
+                  SizedBox(
+                    height: actionHeight,
+                    child: ElevatedButton.icon(
+                      key: Key('service_row_contact_${p.id}'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: context.c.sky,
+                        foregroundColor: context.c.onSky,
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size.fromHeight(actionHeight),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        elevation: 0,
+                      ),
+                      icon: const Icon(Icons.phone, size: 17),
+                      label: const Text(
+                        'اتصال',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () => showProviderContactSheet(context, p),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+                SizedBox(
+                  height: actionHeight,
+                  child: OutlinedButton.icon(
+                    key: Key('service_row_details_${p.id}'),
+                    style: OutlinedButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size.fromHeight(actionHeight),
+                      side: BorderSide(color: context.c.line),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    icon: Icon(Icons.info_outline, size: 17, color: context.c.ink),
+                    label: Text(
+                      'تفاصيل',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: context.c.ink),
+                    ),
+                    onPressed: onDetails,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// الصورة المربّعة 88px — الخيار نفسه في الكرت الكبير: صورة المزوّد أو
+  /// أيقونة فئته على أرضية ذهبية هادئة.
+  Widget _buildMedia(BuildContext context, Color tone) {
+    const double side = 88;
+    final hasImage = provider.imageUrl != null && provider.imageUrl!.isNotEmpty;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: side,
+        height: side,
+        child: hasImage
+            ? CachedNetworkImage(
+                imageUrl: provider.imageUrl!,
+                fit: BoxFit.cover,
+                placeholder: (_, _) => Container(color: context.c.surfaceSunk),
+                errorWidget: (_, _, _) => _buildPlaceholderMedia(context, tone),
+              )
+            : _buildPlaceholderMedia(context, tone),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholderMedia(BuildContext context, Color tone) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: RadialGradient(
+          center: Alignment.center,
+          radius: 0.9,
+          colors: [
+            Color(0xFFFFFDF8),
+            Color(0xFFFBF1D9),
+            Color(0xFFF3DFAD),
+          ],
+        ),
+      ),
+      child: Center(
+        child: provider.categoryIcon.isNotEmpty
+            ? Text(provider.categoryIcon, style: const TextStyle(fontSize: 30))
+            : Icon(
+                Icons.handyman_outlined,
+                size: 30,
+                color: tone.withValues(alpha: 0.8),
               ),
       ),
     );

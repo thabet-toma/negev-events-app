@@ -1254,6 +1254,18 @@
               <span class="hint-text">يظهر في زر «الدعم الفني» في القائمة العامة لفتح محادثة واتساب مع المنصة. اتركه فارغاً أو اضغط زر الحذف لإلغاء تفعيل الدعم.</span>
             </div>
 
+            <!-- شكل عرض مزوّدي «خدمات الأعراس» (تذكرة #158) — إعداد واحد يخدم
+                 الموقع والتطبيق معاً من GET /api/settings/public. القيمتان
+                 هما `compact`/`cards`، وأي قيمة أخرى يردّها الخادم 400 عربياً. -->
+            <div class="form-group" style="margin-top:18px;">
+              <label>شكل عرض مزوّدي خدمات الأعراس</label>
+              <select id="settingProvidersDisplay">
+                <option value="compact">صفوف مختصرة — ٤ إلى ٥ مزوّدين في الشاشة</option>
+                <option value="cards">كروت كبيرة — كرت كامل لكل مزوّد</option>
+              </select>
+              <span class="hint-text">يُطبَّق على الموقع والتطبيق معاً. حين لا يُحفظ شيء يعرض العميلان الصفوف المختصرة.</span>
+            </div>
+
             <div class="form-row" style="margin-top:18px; gap:12px;">
               <button type="submit" class="admin-btn-primary" id="saveSettingsBtn" style="flex:1;">
                 <i class="fa-solid fa-check"></i> حفظ الإعدادات

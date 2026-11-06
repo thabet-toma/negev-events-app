@@ -193,47 +193,54 @@ class _ProviderBody extends StatelessWidget {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: context.c.ink),
               ),
               const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: context.c.gold.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border(
-                    right: BorderSide(color: context.c.gold, width: 4),
-                    top: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
-                    left: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
-                    bottom: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+              // `ClipRRect` بدل `borderRadius` على `Border` غير موحّد اللون:
+              // Flutter في وضع debug يرمي «A borderRadius can only be given on
+              // borders with uniform colors» حين تختلف ألوان الجوانب، فينفجر
+              // بناء الشاشة كلها. القصّ الخارجي يعطي الزوايا المستديرة نفسها
+              // ويحفظ لون كل جانب وسماكته بلا تغيير مرئي.
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: context.c.gold.withValues(alpha: 0.12),
+                    border: Border(
+                      right: BorderSide(color: context.c.gold, width: 4),
+                      top: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+                      left: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+                      bottom: BorderSide(color: context.c.gold.withValues(alpha: 0.3)),
+                    ),
                   ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _priceBadgeText(),
-                          style: TextStyle(fontSize: 12, color: context.c.inkSoft, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          provider.price != null ? '${provider.price} ₪' : 'تواصل للسعر',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                            color: context.c.gold,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _priceBadgeText(),
+                            style: TextStyle(fontSize: 12, color: context.c.inkSoft, fontWeight: FontWeight.bold),
                           ),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        Icon(Icons.handshake_outlined, size: 16, color: context.c.inkSoft),
-                        const SizedBox(width: 4),
-                        Text('اتفاق مباشر', style: TextStyle(fontSize: 12, color: context.c.inkSoft)),
-                      ],
-                    ),
-                  ],
+                          const SizedBox(height: 2),
+                          Text(
+                            provider.price != null ? '${provider.price} ₪' : 'تواصل للسعر',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                              color: context.c.gold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          Icon(Icons.handshake_outlined, size: 16, color: context.c.inkSoft),
+                          const SizedBox(width: 4),
+                          Text('اتفاق مباشر', style: TextStyle(fontSize: 12, color: context.c.inkSoft)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -314,44 +321,47 @@ class _ProviderBody extends StatelessWidget {
 
               // Flexible Capacity Notice
               const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: context.c.surfaceSunk,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border(
-                    right: BorderSide(color: context.c.gold, width: 3.5),
-                    top: BorderSide(color: context.c.line),
-                    left: BorderSide(color: context.c.line),
-                    bottom: BorderSide(color: context.c.line),
-                  ),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.info_outline, size: 18, color: context.c.gold),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'توضيح مهم بشأن المواصفات والكميات:',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: context.c.ink,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            'المواصفات والكميات الموضحة هنا تمثل حزمة استرشادية قياسية بهذا السعر كمثال لتقدير التكلفة. بإمكانك دائماً طلب كميات أكبر أو أصغر أو تعديل المواصفات بالاتفاق المباشر مع المزوّد لتناسب حجم مناسبتك تماماً.',
-                            style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
-                          ),
-                        ],
-                      ),
+              // نفس سبب `ClipRRect` أعلاه: حدود بألوان مختلفة مع زوايا مستديرة.
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: context.c.surfaceSunk,
+                    border: Border(
+                      right: BorderSide(color: context.c.gold, width: 3.5),
+                      top: BorderSide(color: context.c.line),
+                      left: BorderSide(color: context.c.line),
+                      bottom: BorderSide(color: context.c.line),
                     ),
-                  ],
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, size: 18, color: context.c.gold),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'توضيح مهم بشأن المواصفات والكميات:',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: context.c.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'المواصفات والكميات الموضحة هنا تمثل حزمة استرشادية قياسية بهذا السعر كمثال لتقدير التكلفة. بإمكانك دائماً طلب كميات أكبر أو أصغر أو تعديل المواصفات بالاتفاق المباشر مع المزوّد لتناسب حجم مناسبتك تماماً.',
+                              style: TextStyle(fontSize: 11.5, color: context.c.inkSoft, height: 1.45),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 

@@ -8044,14 +8044,17 @@ async function run() {
   // users/events this suite creates — start from a known-empty state so "no
   // setting was ever saved" is actually true on a re-run against the same
   // database, not just on a freshly migrated one.
-  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('support_whatsapp_number', 'default_event_audio_url')");
+  await db.execute("DELETE FROM app_settings WHERE setting_key IN ('support_whatsapp_number', 'default_event_audio_url', 'providers_display')");
 
-  await test('GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number and the default audio', async () => {
+  await test('GET /api/settings/public answers cleanly before any setting was ever saved, and exposes nothing but the support number, the default audio and the providers layout', async () => {
     const { status, body } = await api('GET', '/api/settings/public');
     assert.strictEqual(status, 200);
-    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url', 'providers_display']);
     assert.strictEqual(body.settings.support_whatsapp_number, null);
     assert.strictEqual(body.settings.default_event_audio_url, null);
+    // No row ever written means the compact layout — resolved by the service,
+    // never left to a client to guess (تذكرة #158).
+    assert.strictEqual(body.settings.providers_display, 'compact');
   });
 
   await test('A plain (town-scoped) admin is refused on both GET and PUT /api/admin/settings — super_admin only', async () => {
@@ -8092,7 +8095,7 @@ async function run() {
 
     const publicRead = await api('GET', '/api/settings/public');
     assert.strictEqual(publicRead.status, 200);
-    assert.deepStrictEqual(Object.keys(publicRead.body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
+    assert.deepStrictEqual(Object.keys(publicRead.body.settings), ['support_whatsapp_number', 'default_event_audio_url', 'providers_display']);
     assert.strictEqual(publicRead.body.settings.support_whatsapp_number, '972501234567');
 
     const resave = await api('PUT', '/api/admin/settings', {
@@ -8134,6 +8137,78 @@ async function run() {
     assert.strictEqual(emptyBody.status, 400);
     const stillSet = await api('GET', '/api/admin/settings', { token: superAdminToken });
     assert.strictEqual(stillSet.body.settings.support_whatsapp_number, '972501234567', 'a PUT that names no keys must change nothing');
+  });
+
+  console.log('\nProviders layout (تذكرة #158): providers_display on the public route');
+
+  // Same reasoning as the section above — app_settings is not reset between
+  // runs, so the layout starts from a known-unsaved state too.
+  await db.execute("DELETE FROM app_settings WHERE setting_key = 'providers_display'");
+
+  await test('providers_display: a super_admin saves «cards» and every client reads it back from the public route; a town-scoped admin is refused (403) and changes nothing', async () => {
+    const save = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { providers_display: 'cards' }
+    });
+    assert.strictEqual(save.status, 200);
+    assert.strictEqual(save.body.settings.providers_display, 'cards');
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.status, 200);
+    assert.strictEqual(publicRead.body.settings.providers_display, 'cards', 'the chosen layout must reach every client through the public route');
+
+    const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(adminRead.body.settings.providers_display, 'cards');
+
+    const refused = await api('PUT', '/api/admin/settings', {
+      token: scopedAdminToken, body: { providers_display: 'compact' }
+    });
+    assert.strictEqual(refused.status, 403, 'only a super_admin may choose the layout');
+
+    const unchanged = await api('GET', '/api/settings/public');
+    assert.strictEqual(unchanged.body.settings.providers_display, 'cards', 'a refused write must change nothing');
+  });
+
+  await test('providers_display: an unknown value is rejected with an Arabic 400 and the saved choice stays', async () => {
+    for (const bogus of ['big', 'Cards', 'rows']) {
+      const { status, body } = await api('PUT', '/api/admin/settings', {
+        token: superAdminToken, body: { providers_display: bogus }
+      });
+      assert.strictEqual(status, 400, `"${bogus}" is not one of the two modes`);
+      assert.ok(/[؀-ۿ]/.test(body.message), 'expected an Arabic error message');
+    }
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.body.settings.providers_display, 'cards', 'a refused write must change nothing');
+  });
+
+  await test('providers_display: clearing it with an explicit empty value returns the public route to the default «compact»', async () => {
+    const cleared = await api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { providers_display: '' }
+    });
+    assert.strictEqual(cleared.status, 200, 'an explicit empty value must clear the setting, not be rejected');
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.body.settings.providers_display, 'compact');
+  });
+
+  await test('providers_display: a stale value in the table also reads as «compact» — the fallback lives in the service, not in a client', async () => {
+    // Never reachable through PUT (the route rejects it), but a row written by
+    // an older/other deployment must not leave a client without a layout.
+    await db.execute(
+      `INSERT INTO app_settings (setting_key, setting_value) VALUES ('providers_display', 'big')
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`
+    );
+
+    const publicRead = await api('GET', '/api/settings/public');
+    assert.strictEqual(publicRead.body.settings.providers_display, 'compact');
+
+    const adminRead = await api('GET', '/api/admin/settings', { token: superAdminToken });
+    assert.strictEqual(adminRead.body.settings.providers_display, 'compact', 'the panel must show the effective layout, not the stale string');
+
+    // Leave the table as the sections after this one expect it: nothing saved.
+    await db.execute("DELETE FROM app_settings WHERE setting_key = 'providers_display'");
+    const afterReset = await api('GET', '/api/settings/public');
+    assert.strictEqual(afterReset.body.settings.providers_display, 'compact');
   });
 
   // The smallest byte sequence verifyMedia accepts as audio: an ID3 tag header.
@@ -8352,10 +8427,10 @@ async function run() {
     assert.strictEqual(live.body.live, null);
   });
 
-  await test('GET /api/settings/public still returns exactly its original two keys after the live settings were saved', async () => {
+  await test('GET /api/settings/public still returns exactly its three keys after the live settings were saved', async () => {
     const { status, body } = await api('GET', '/api/settings/public');
     assert.strictEqual(status, 200);
-    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url']);
+    assert.deepStrictEqual(Object.keys(body.settings), ['support_whatsapp_number', 'default_event_audio_url', 'providers_display']);
   });
 
   console.log('\n/live — the branded live stream page (share.routes.js liveRouter)');

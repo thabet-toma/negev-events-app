@@ -5096,7 +5096,7 @@ async function run() {
     assert.strictEqual(superDom.window.document.getElementById('tabSettingsBtn').style.display, 'flex', 'settings tab button must be visible for super admin');
 
     // 2. Fetch settings
-    let savedSettings = { support_whatsapp_number: '972501112233' };
+    let savedSettings = { support_whatsapp_number: '972501112233', providers_display: 'cards' };
     const calls = [];
     superDom.window.fetch = async (url, options = {}) => {
       const requestPath = String(url).split('?')[0];
@@ -5107,7 +5107,13 @@ async function run() {
       }
       if (method === 'PUT' && requestPath === '/api/admin/settings') {
         const body = JSON.parse(options.body);
-        savedSettings.support_whatsapp_number = body.support_whatsapp_number;
+        // الخادم هنا يردّ قيمته المعيارية للشكل (cards) لا مجرد صدى للطلب، كي
+        // يكشف الاختبار أن المنتقي يتبع ردّ الخادم لا القيمة التي ضبطها بنفسه.
+        savedSettings = {
+          ...savedSettings,
+          support_whatsapp_number: body.support_whatsapp_number,
+          providers_display: 'cards'
+        };
         return jsonResponse({ success: true, message: 'تم حفظ الإعدادات بنجاح', settings: savedSettings });
       }
       return jsonResponse({ success: false });
@@ -5117,12 +5123,24 @@ async function run() {
     const input = superDom.window.document.getElementById('settingSupportWhatsapp');
     assert.strictEqual(input.value, '972501112233', 'input must display fetched support number');
 
-    // 3. Save number
+    // شكل عرض المزوّدين يعرض القيمة الفعّالة التي يحسمها الخادم (‏تذكرة #158).
+    const displaySelect = superDom.window.document.getElementById('settingProvidersDisplay');
+    assert.ok(displaySelect, 'expected #settingProvidersDisplay in the settings tab');
+    assert.strictEqual(displaySelect.value, 'cards', 'the stored layout is what the select shows');
+
+    // 3. Save number and layout in one PUT
     input.value = '972509998877';
+    displaySelect.value = 'compact';
     await superDom.window.handleSaveSettings({ preventDefault() {} });
     const putCall = calls.find(c => c.method === 'PUT');
     assert.ok(putCall, 'expected a PUT call to save settings');
     assert.strictEqual(putCall.body.support_whatsapp_number, '972509998877');
+    assert.strictEqual(putCall.body.providers_display, 'compact', 'the chosen layout is saved with the same form');
+    assert.strictEqual(
+      displaySelect.value,
+      'cards',
+      'the select follows the value the server confirmed, not the one the test set'
+    );
 
     // 4. Clear number
     calls.length = 0;
@@ -6964,6 +6982,288 @@ async function run() {
     assert.ok(cardHtml.includes('1000 كرسي + برجين إضاءة = 4500 ₪'), 'expected package description in card');
     assert.ok(cardHtml.includes('عدد الكراسي'), 'expected attribute in card');
     assert.ok(cardHtml.includes('الكميات قابلة للتعديل والزيادة'), 'expected flexibility notice in card');
+  });
+
+  console.log('\nدليل الخدمات — العرض المختصر وإعداد providers_display (تذكرة #158)');
+
+  // الشكلان في هذا القسم كلاهما من `GET /api/settings/public` نفسه: لا إعداد
+  // مكتوب في app.js، والقرار يصل من الخادم مع بقية الإعدادات العامة.
+  const PROVIDERS_FIXTURE = [
+    {
+      id: 601,
+      name: 'خيام البادية',
+      category_id: 7,
+      category_name: 'بيوت شعر',
+      category_icon: '⛺',
+      category_color: '#B8860B',
+      has_phone: true,
+      image_url: null,
+      price: 4500,
+      price_type: 'estimated',
+      price_estimate_desc: '1000 كرسي + برجين إضاءة = 4500 ₪',
+      attributes: { chairs: '1000' },
+      towns: ['رهط']
+    },
+    {
+      id: 602,
+      name: 'طهاة الجليل',
+      category_id: 8,
+      category_name: 'طهاة',
+      category_icon: '🍲',
+      category_color: '#0F766E',
+      has_phone: false,
+      image_url: null,
+      price: null,
+      price_type: 'contact',
+      price_estimate_desc: null,
+      attributes: {},
+      towns: ['حورة']
+    }
+  ];
+
+  /** عميل وهمي للدليل: الإعداد، الفئات، القائمة، وصفّ مزوّد واحد كامل بالرقم. */
+  function instrumentProviders(dom, { providersDisplay, providers = PROVIDERS_FIXTURE }) {
+    const calls = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      calls.push({ path: requestPath, method });
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({
+          success: true,
+          settings: {
+            support_whatsapp_number: null,
+            default_event_audio_url: null,
+            providers_display: providersDisplay
+          }
+        });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      if (requestPath === '/api/services/providers') {
+        return jsonResponse({
+          success: true,
+          providers,
+          pagination: { page: 1, limit: 30, total: providers.length, totalPages: 1 }
+        });
+      }
+      if (requestPath === '/api/services/providers/601') {
+        return jsonResponse({
+          success: true,
+          provider: { ...PROVIDERS_FIXTURE[0], phone: '0501234567', description: 'خيام وضيافة كاملة لكل المناسبات' }
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+    return calls;
+  }
+
+  await test('العرض المختصر: صفّ لكل مزوّد (صورة، اسم، فئة وبلدة، شارة سعر، «اتصال» و«تفاصيل»)، و«اتصال» يغيب حين لا يوجد رقم', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    instrumentProviders(dom, { providersDisplay: 'compact' });
+
+    // المسار الحقيقي: الإعداد يصل مع GET /api/settings/public عند الإقلاع،
+    // ثم يُفتح تبويب الدليل — بلا أي إعادة تحميل يدوية للإعداد.
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 2);
+
+    assert.strictEqual(
+      document.querySelectorAll('#servicesListContainer .service-card').length, 0,
+      'compact must not render the big cards at all'
+    );
+
+    const rowWithPhone = document.getElementById('serviceRow-601');
+    const rowWithoutPhone = document.getElementById('serviceRow-602');
+    assert.ok(rowWithPhone && rowWithoutPhone, 'expected one compact row per provider');
+
+    assert.ok(rowWithPhone.querySelector('.service-row-img'), 'every row carries its square image slot');
+    assert.strictEqual(rowWithPhone.querySelector('.service-row-name').textContent.trim(), 'خيام البادية');
+
+    const meta = rowWithPhone.querySelector('.service-row-meta').textContent;
+    assert.ok(meta.includes('بيوت شعر'), 'the meta line carries the category');
+    assert.ok(meta.includes('رهط'), 'and the town');
+
+    const price = rowWithPhone.querySelector('.service-row-price').textContent;
+    assert.ok(price.includes('سعر تقديري') && price.includes('₪'), `the small price badge carries the price type and the currency, got: ${price}`);
+    // النص نفسه بعد trim — textContent الشارة يبدأ بمسافات القالب، فـindexOf > 0
+    // كان ينجح على كل ترتيب. الأرقام عربية-هندية (ar-EG) أو لاتينية.
+    const priceText = rowWithPhone.querySelector('.service-row-price-text').textContent.trim();
+    assert.ok(
+      /^[0-9٠-٩]/.test(priceText),
+      `the badge leads with the number so clipping never hides it, got: ${priceText}`
+    );
+    assert.ok(
+      rowWithoutPhone.querySelector('.service-row-price').textContent.includes('تواصل للسعر'),
+      'a provider priced by contact says so in its badge'
+    );
+
+    assert.ok(rowWithPhone.querySelector('.service-row-contact'), 'a provider with a phone gets the «اتصال» button');
+    assert.strictEqual(
+      rowWithoutPhone.querySelector('.service-row-contact'), null,
+      'has_phone = false must leave no contact button on the row — not a disabled one'
+    );
+    assert.ok(rowWithoutPhone.querySelector('.service-row-details'), '«تفاصيل» is on every row');
+  });
+
+  await test('العميل: غياب providers_display أو قيمته غير المعروفة يعني الصفوف المختصرة (حسم الخادم في smoke)', async () => {
+    for (const value of [undefined, 'big']) {
+      const dom = buildEnv();
+      const win = dom.window;
+      const { document } = win;
+      instrumentProviders(dom, { providersDisplay: value });
+
+      await win.initSupportEntry();
+      await win.initServicesTab();
+      await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 2);
+
+      assert.strictEqual(
+        document.querySelectorAll('#servicesListContainer .service-card').length, 0,
+        `providers_display=${value} must render compact rows, not big cards`
+      );
+    }
+  });
+
+  await test('صفّ البلدات لا يدّعي «جميع البلدات» من أربع بلدات (تذكرة #127)', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    instrumentProviders(dom, {
+      providersDisplay: 'compact',
+      providers: [
+        { ...PROVIDERS_FIXTURE[0], id: 603, towns: ['رهط', 'حورة', 'كسيفة', 'تل السبع'] }
+      ]
+    });
+
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 1);
+
+    const townLine = document.querySelector('#serviceRow-603 .service-row-town').textContent;
+    assert.ok(townLine.includes('رهط، حورة وغيرها'), `expected the first towns and «وغيرها», got: ${townLine}`);
+    assert.ok(!townLine.includes('جميع'), 'four towns are not «all towns»');
+  });
+
+  await test('«تفاصيل» في الصفّ المختصر تفتح نافذة المزوّد من GET /api/services/providers/:id بحزمة السعر والمواصفات', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentProviders(dom, { providersDisplay: 'compact' });
+
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 2);
+
+    const before = calls.length;
+    document.querySelector('#serviceRow-601 .service-row-details').click();
+    await waitFor(() => document.getElementById('providerModal').style.display === 'flex');
+
+    const detailCall = calls.slice(before)
+      .find(call => call.path === '/api/services/providers/601' && call.method === 'GET');
+    assert.ok(detailCall, 'the details window must read GET /api/services/providers/:id — the only place the number exists');
+
+    assert.strictEqual(document.getElementById('providerModalName').textContent, 'خيام البادية');
+    const packageText = document.getElementById('providerModalPackage').textContent;
+    assert.ok(packageText.includes('1000 كرسي'), `the window carries the price package, got: ${packageText}`);
+    const specsText = document.getElementById('providerModalSpecs').textContent;
+    assert.ok(specsText.includes('1000'), `the window carries the specs, got: ${specsText}`);
+    assert.ok(
+      !document.getElementById('providerContactArea').textContent.includes('0501234567'),
+      'the fetched number is not printed before the explicit contact action'
+    );
+
+    // «اتصال» في الصفّ فعلٌ صريح: يفتح النافذة نفسها برابطَي واتساب واتصال
+    // ظاهرين، والرقم جاء مع النافذة من النداء نفسه (لا نداء ثانٍ).
+    win.closeProviderModal();
+    document.querySelector('#serviceRow-601 .service-row-contact').click();
+    await waitFor(() => {
+      const area = document.getElementById('providerContactArea');
+      return document.getElementById('providerModal').style.display === 'flex' && area.querySelector('a.service-btn-call');
+    });
+
+    const callLink = document.getElementById('providerContactArea').querySelector('a.service-btn-call');
+    assert.strictEqual(callLink.getAttribute('href'), 'tel:0501234567', 'the call link dials the fetched number');
+    const whatsappLink = document.getElementById('providerContactArea').querySelector('a.service-btn-whatsapp');
+    assert.ok(
+      whatsappLink.getAttribute('href').startsWith('https://wa.me/972501234567'),
+      `the WhatsApp link uses the international form, got: ${whatsappLink.getAttribute('href')}`
+    );
+  });
+
+  await test('providers_display = cards يعيد الكروت الكبيرة، وتغيير الشكل بعد الرسم يعيده من الذاكرة بلا طلب مزوّدين جديد', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentProviders(dom, { providersDisplay: 'cards' });
+
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-card').length === 2);
+
+    assert.strictEqual(
+      document.querySelectorAll('#servicesListContainer .service-row').length, 0,
+      'cards must render the big cards, not the compact rows'
+    );
+    assert.ok(
+      document.getElementById('servicesListContainer').textContent.includes('حزمة نموذجية استرشادية'),
+      'the big card keeps its package banner'
+    );
+
+    // الإعداد تغيّر بعد أن كان التبويب مفتوحاً: الرسم يعود من الذاكرة وحدها،
+    // فلا إعادة تحميل يدوية ولا جلب مزوّدين ثانٍ.
+    const providerFetchesBefore = calls.filter(call => call.path === '/api/services/providers').length;
+    win.applyProvidersDisplaySetting('compact');
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 2);
+
+    assert.strictEqual(
+      calls.filter(call => call.path === '/api/services/providers').length,
+      providerFetchesBefore,
+      'switching the layout must not refetch the provider list'
+    );
+  });
+
+  await test('تنسيق الصفّ المختصر: لا نص أصغر من 15px ولا زرّ أقصر من 44px', () => {
+    const css = STYLES_CSS_RAW.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [];
+    const rulePattern = /([^{}]+)\{([^{}]*)\}/g;
+    let match;
+    while ((match = rulePattern.exec(css))) {
+      const selector = match[1].trim();
+      if (!selector.includes('.service-row')) continue;
+      rules.push({ selector, body: match[2] });
+    }
+    assert.ok(rules.length >= 5, `expected the compact row rules in styles.css, found ${rules.length}`);
+
+    // صفٌّ في سطر واحد لا كرت مكدّس: مع صورة 88px وزرّ 44px يبقى ارتفاعه
+    // 110–154px على Cairo بعرض 360–412px (مع التفاف سطر الفئة والبلدة إلى سطرين)،
+    // أي أربعة صفوف كاملة على هاتف (تذكرة #158).
+    const rowRule = rules.find(rule => rule.selector === '.service-row');
+    assert.ok(rowRule, 'expected a plain .service-row rule');
+    assert.ok(/flex-direction\s*:\s*row/.test(rowRule.body), 'the compact row is one horizontal line, not a stacked card');
+
+    // شارة السعر سطر واحد مهما ضاق العرض: بلا ذلك التفافُها يرفع الصفّ 110–183px.
+    const priceRule = rules.find(rule => rule.selector === '.service-row-price');
+    assert.ok(priceRule, 'expected a .service-row-price rule');
+    assert.ok(/white-space\s*:\s*nowrap/.test(priceRule.body), 'the price badge must not wrap');
+    assert.ok(/overflow\s*:\s*hidden/.test(priceRule.body), 'the price badge is clipped rather than growing the row');
+    const priceTextRule = rules.find(rule => rule.selector === '.service-row-price-text');
+    assert.ok(priceTextRule, 'expected a .service-row-price-text rule');
+    assert.ok(/text-overflow\s*:\s*ellipsis/.test(priceTextRule.body), 'the badge text ellipsizes instead of wrapping');
+
+    const tooSmall = [];
+    for (const rule of rules) {
+      for (const size of rule.body.matchAll(/font-size\s*:\s*([\d.]+)px/g)) {
+        if (Number(size[1]) < 15) tooSmall.push(`${rule.selector} → ${size[1]}px`);
+      }
+    }
+    assert.deepStrictEqual(tooSmall, [], 'no text inside the compact row may be smaller than 15px');
+
+    const buttonRules = rules.filter(rule => /\.service-row-btn|\.service-row-contact|\.service-row-details/.test(rule.selector));
+    assert.ok(buttonRules.length, 'expected the compact row action buttons in styles.css');
+    const heights = buttonRules.flatMap(rule => [...rule.body.matchAll(/min-height\s*:\s*([\d.]+)px/g)].map(m => Number(m[1])));
+    assert.ok(heights.length, 'the compact row buttons must declare a minimum height');
+    assert.ok(heights.every(height => height >= 44), `every compact row button needs ≥44px, got: ${heights.join('، ')}`);
   });
 
   console.log('\nSession expiry, the «حسابي» button, «قريتي غير موجودة», and the default event audio');

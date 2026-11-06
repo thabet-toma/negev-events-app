@@ -1214,6 +1214,25 @@ class NegevApi {
     return null;
   }
 
+  /// شكل عرض مزوّدي «خدمات الأعراس» من GET /api/settings/public (تذكرة #158):
+  /// `compact` صفوف مختصرة أو `cards` كروت كبيرة.
+  ///
+  /// الخادم وحده يحسم الغياب والقيمة غير المعروفة إلى `compact`
+  /// (`RESOLVED_KEYS` في settings.service.js)، وهذا العميل لا يكرّر ذلك
+  /// الافتراض: ما لم يصل شيء — انقطاع أو خادم أقدم — يعود `null`، فيترك
+  /// الشكل كما هو (الصفوف المختصرة أول مرة) بلا قيمة ثانية تُكتب هنا.
+  Future<String?> providersDisplayMode() async {
+    try {
+      final data = await _client.get('/api/settings/public');
+      final settings = data['settings'];
+      if (settings is Map<String, dynamic>) {
+        final mode = settings['providers_display'];
+        if (mode is String && mode.trim().isNotEmpty) return mode.trim();
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // --- التحليل السلوكي (issue #44) -----------------------------------
 
   /// `POST /api/analytics/events` — النقطة الوحيدة. القائمة المغلقة لأسماء

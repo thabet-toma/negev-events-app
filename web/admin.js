@@ -7548,6 +7548,7 @@ async function fetchAdminSettings() {
     const data = await res.json();
     if (data.success && data.settings) {
       input.value = data.settings.support_whatsapp_number || '';
+      applyProvidersDisplayToForm(data.settings.providers_display);
       renderDefaultAudioSetting(data.settings.default_event_audio_url);
       applyLiveSettingsToForm(data.settings);
       renderLiveCardPreview();
@@ -7565,6 +7566,17 @@ async function fetchAdminSettings() {
   await refreshLiveStatusStrip();
 }
 
+/**
+ * شكل عرض مزوّدي «خدمات الأعراس» (تذكرة #158). الخادم هو من يحسم الغياب
+ * والقيمة غير المعروفة (`compact`)، فهذا العرض لا يكرّر الافتراض: يعرض ما
+ * وصل حرفياً. قيمة غائبة (استجابة بلا المفتاح) تترك المنتقي على حاله.
+ */
+function applyProvidersDisplayToForm(value) {
+  const select = document.getElementById('settingProvidersDisplay');
+  if (!select || !value) return;
+  select.value = value;
+}
+
 async function handleSaveSettings(e) {
   e.preventDefault();
   const notice = document.getElementById('settingsNotice');
@@ -7573,6 +7585,11 @@ async function handleSaveSettings(e) {
   if (!input) return;
 
   const value = input.value.trim();
+  const displaySelect = document.getElementById('settingProvidersDisplay');
+  const body = { support_whatsapp_number: value };
+  // يُرسل مع الرقم في طلب واحد: المفتاح غائب عن الجسم يعني «لا تلمسه»،
+  // وهذا نموذج حفظ واحد يجب أن يحفظ ما يُعرض فيه.
+  if (displaySelect) body.providers_display = displaySelect.value;
 
   if (btn) {
     btn.disabled = true;
@@ -7583,13 +7600,14 @@ async function handleSaveSettings(e) {
     const res = await adminFetch('/api/admin/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ support_whatsapp_number: value })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
 
     if (data.success) {
       if (data.settings) {
         input.value = data.settings.support_whatsapp_number || '';
+        applyProvidersDisplayToForm(data.settings.providers_display);
       }
       if (notice) {
         notice.style.display = 'none';

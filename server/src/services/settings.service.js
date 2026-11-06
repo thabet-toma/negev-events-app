@@ -27,19 +27,46 @@ const SETTING_KEYS = {
   LIVE_STREAM_URL: 'live_stream_url',
   // معرّف قصة «بطاقة الدخول» التي يضبطها سوبر أدمن، أو فارغ = «أول قصة نشِطة
   // تلقائياً» — والاختيار نفسه في stories.service.entryCard.
-  ENTRY_PROMO_STORY_ID: 'entry_promo_story_id'
+  ENTRY_PROMO_STORY_ID: 'entry_promo_story_id',
+  // شكل عرض مزوّدي «خدمات الأعراس» (تذكرة #158): `compact` صفوف قصيرة تُظهر
+  // ٤–٥ مزوّدين في الشاشة، أو `cards` الكروت الكبيرة. القيمتان أدناه وحدهما
+  // المقبولتان، وما عداهما يقرأ الشكل المختصر.
+  PROVIDERS_DISPLAY: 'providers_display'
 };
 
 const WHITELISTED_KEYS = Object.values(SETTING_KEYS);
 
+// القيمتان المقبولتان لـ`providers_display`، وقيمة الغياب/الجهل — تُستعمل في
+// التحقق عند الكتابة (settings.routes.js) وفي قراءة القيمة الافتراضية أدناه.
+const PROVIDERS_DISPLAY_MODES = ['compact', 'cards'];
+const PROVIDERS_DISPLAY_DEFAULT = 'compact';
+
 // The only keys GET /api/settings/public may ever expose, kept as their own
 // list separate from WHITELISTED_KEYS so a future admin-only setting never
 // leaks through the public route just because it joined the general whitelist.
-const PUBLIC_KEYS = [SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER, SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL];
+const PUBLIC_KEYS = [
+  SETTING_KEYS.SUPPORT_WHATSAPP_NUMBER,
+  SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL,
+  SETTING_KEYS.PROVIDERS_DISPLAY
+];
 
 // Settings holding a stored-relative media path, made absolute on the way out
 // for the same reason withAbsoluteMedia exists (CLAUDE.md, «الوسائط»).
 const MEDIA_KEYS = [SETTING_KEYS.DEFAULT_EVENT_AUDIO_URL];
+
+/**
+ * Keys whose stored value may be absent or stale, and what they mean then —
+ * resolved on every read so the web, the app and the admin panel all agree on
+ * the effective value instead of each repeating the fallback. `providers_display`
+ * is the first of these: a missing row (or a value that is not one of
+ * PROVIDERS_DISPLAY_MODES) reads as the compact layout, and a setting cleared
+ * from the panel therefore returns to it too. Keys absent from this map keep
+ * the raw stored value, `null` included.
+ */
+const RESOLVED_KEYS = {
+  [SETTING_KEYS.PROVIDERS_DISPLAY]: value =>
+    (PROVIDERS_DISPLAY_MODES.includes(value) ? value : PROVIDERS_DISPLAY_DEFAULT)
+};
 
 // The single source of truth for the whitelist rule — the route layer calls
 // this directly (instead of re-checking `WHITELISTED_KEYS.includes(key)`
@@ -62,18 +89,23 @@ async function readKeys(keys) {
 
   const settings = {};
   for (const key of keys) {
-    const value = key in byKey ? byKey[key] : null;
-    settings[key] = MEDIA_KEYS.includes(key) ? absoluteMediaUrl(value) : value;
+    const stored = key in byKey ? byKey[key] : null;
+    const value = MEDIA_KEYS.includes(key) ? absoluteMediaUrl(stored) : stored;
+    settings[key] = RESOLVED_KEYS[key] ? RESOLVED_KEYS[key](value) : value;
   }
   return settings;
 }
 
-/** Every whitelisted setting, for the admin panel. An unset key comes back as null. */
+/**
+ * Every whitelisted setting, for the admin panel. An unset key comes back as
+ * null, except a key in RESOLVED_KEYS — that one reads as its effective value
+ * (its default) so the panel shows what is actually in force.
+ */
 async function getAllForAdmin() {
   return readKeys(WHITELISTED_KEYS);
 }
 
-/** The PUBLIC_KEYS only, for the public unauthenticated route. */
+/** The PUBLIC_KEYS only, for the public unauthenticated route — RESOLVED_KEYS applied. */
 async function getPublicSettings() {
   return readKeys(PUBLIC_KEYS);
 }
@@ -236,8 +268,9 @@ function assertLiveConsistency(next) {
 /**
  * Writes every key in `updates` ({ key: value | null }) in one transaction —
  * a multi-key PUT must not be able to half-apply. `value` is assumed already
- * validated by the route layer; `null` clears a setting back to unset
- * (renders as `null` from both getAllForAdmin and getPublicSettings), while a
+ * validated by the route layer; `null` clears a setting back to unset — it reads
+ * back as `null` from getAllForAdmin/getPublicSettings unless the key is in
+ * RESOLVED_KEYS, which then reads as its effective default — while a
  * key simply absent from `updates` is untouched, same distinction the route
  * layer already keeps. `connection.execute` inside `db.transaction` bypasses
  * pool.js's `normalise()` and mysql2 throws on an `undefined` bind, so every
@@ -268,6 +301,7 @@ async function setSettings(updates, updatedBy) {
 module.exports = {
   SETTING_KEYS,
   WHITELISTED_KEYS,
+  PROVIDERS_DISPLAY_MODES,
   assertWhitelisted,
   getAllForAdmin,
   getPublicSettings,

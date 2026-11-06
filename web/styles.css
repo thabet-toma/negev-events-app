@@ -4063,6 +4063,161 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   gap: 5px;
 }
 
+/* ===== العرض المختصر لمزوّدي الدليل (تذكرة #158) =====
+   صفّ واحد لكل مزوّد في سطر واحد: صورة مربّعة 88px، الاسم عريض 17، سطر الفئة
+   والبلدة، شارة سعر صغيرة، وزرّا «اتصال» و«تفاصيل» مكدّسين في عمود جانبي —
+   فيرتفع الصفّ 110–154px (قياس Cairo بعرض 360–412px، مع التفاف سطر الفئة
+   والبلدة إلى سطرين) ويُظهر أربعة صفوف كاملة.
+   كل نص ≥15px وكل زرّ ≥44px، ويحرس ذلك اختبار web-dom على هذا النص نفسه. */
+.service-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.service-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.service-row-img {
+  width: 88px;
+  height: 88px;
+  flex: 0 0 88px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.service-row-img-placeholder {
+  background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+  color: var(--card-gold);
+  font-size: 34px;
+}
+
+[data-theme="dark"] .service-row-img-placeholder {
+  background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
+}
+
+/* الاختيار الغائب يتبع النظام (styles.css:55)، فالوضع الداكن بلا data-theme
+   يحتاج القاعدة نفسها وإلا بقي مربّع الصورة بيجَ فاتحاً في صفحة داكنة. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .service-row-img-placeholder {
+    background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
+  }
+}
+
+.service-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.service-row-name {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.service-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.service-row-category {
+  font-weight: 700;
+  color: var(--tone, var(--ink-soft));
+}
+
+.service-row-town {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.service-row-price {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--card-gold, #cba135) 40%, var(--line));
+  background: color-mix(in srgb, var(--card-gold, #cba135) 12%, var(--surface));
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  /* الشارة سطر واحد دائماً: التفافها كان يرفع الصفّ 110–183px. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.service-row-price-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-row-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 96px;
+}
+
+.service-row-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, filter 0.15s ease;
+}
+
+.service-row-contact {
+  border-color: var(--sky);
+  background: var(--sky);
+  color: var(--on-sky);
+}
+
+.service-row-btn:hover { filter: brightness(1.04); }
+.service-row-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
 
 
 /* ===== نافذة المشاركة الخاصة بالموقع (على الكمبيوتر) — طلب المالك 2026-10-02 =====
