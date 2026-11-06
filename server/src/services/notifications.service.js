@@ -322,11 +322,13 @@ async function todayString(connection = null) {
  * لا من حقل يُمرّره المستدعي، فلا تُبنى نسخة ثانية من «محافظة المناسبة» في
  * المسارات، ولا يختلف الحكم بين النشر من التطبيق والاعتماد من اللوحة (#161).
  * `null` لمناسبة غير موجودة — حارسٌ دفاعي يجعل التقييد معطَّلاً كما كان.
- * `connection` اختياري كجارتها `markAnnounced`: يُمرَّر داخل معاملة الإعلان.
+ * `connection` اختياري كجارتها `markAnnounced`: يُمرَّر داخل معاملة الإعلان
+ * بقراءة قفل حاضرة. القراءة العادية تحت `REPEATABLE READ` تنشئ لقطة قبل انتظار
+ * قفل المحافظة، فيبقى عدّاد المعاملة المنتظرة قديماً بعد أن يفرج السابق القفل.
  */
 async function eventRegionId(eventId, connection = null) {
   if (connection) {
-    const [rows] = await connection.execute('SELECT region_id FROM events WHERE id = ?', [eventId]);
+    const [rows] = await connection.execute('SELECT region_id FROM events WHERE id = ? FOR UPDATE', [eventId]);
     return rows.length ? rows[0].region_id : null;
   }
   const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);

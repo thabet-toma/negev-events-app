@@ -15392,6 +15392,12 @@ async function run() {
         assert.strictEqual(created.status, 201, created.body.message);
         quotaEventIds.push(created.body.eventId);
       }
+      const firstTwoAnnouncements = await db.query(
+        `SELECT id FROM events
+          WHERE id IN (?, ?) AND announced_at >= CURDATE() AND announced_at < CURDATE() + INTERVAL 1 DAY`,
+        quotaEventIds
+      );
+      assert.strictEqual(firstTwoAnnouncements.length, 2, 'الإعلانان الأولان ملتزمان قبل اختبار آخر مكان فردي');
 
       for (const name of concurrentTwo) {
         const created = await api('POST', '/api/events', {
@@ -15404,6 +15410,18 @@ async function run() {
         quotaEventIds.push(created.body.eventId);
         await db.execute('UPDATE events SET publish_at = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [created.body.eventId]);
       }
+
+      const quotaRegions = await db.query(
+        'SELECT id, region_id FROM events WHERE id IN (?, ?, ?, ?) ORDER BY id ASC',
+        quotaEventIds
+      );
+      assert.strictEqual(quotaRegions.length, 4, 'الأحداث الأربعة موجودة قبل بدء سباق الحصة');
+      assert.ok(quotaRegions.every(row => row.region_id !== null), 'كل حدث يحمل محافظة صريحة');
+      assert.strictEqual(
+        new Set(quotaRegions.map(row => row.region_id)).size,
+        1,
+        `الأحداث الأربعة في المحافظة نفسها: ${JSON.stringify(quotaRegions)}`
+      );
 
       const due = (await eventsService.listDueScheduledPublish())
         .filter(event => quotaEventIds.includes(event.id));
