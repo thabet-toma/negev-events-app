@@ -349,13 +349,15 @@ async function eventIsLinkOnly(eventId) {
  *
  * و**«بالرابط فقط» لا تُعلَن إطلاقاً** (تذكرة #166): تُقرأ من الصفّ قبل أي
  * كتابة، فتخرج `null` فيصمت المسارَان معاً — لا صفّ `event_new`، ولا إشارة
- * لحظية للجميع، ولا دفع للأجهزة. وعدّاد `publishedToday` وشروطه لم يُمسّا:
- * هو يقرأ `first_approved_at` من `events` لا من الإشعارات، ولا علاقة له بالظهور.
+ * لحظية للجميع، ولا دفع للأجهزة. وعدّاد `publishedToday` يعدّ **المنشور العلني
+ * وحده** (`visibility = 'public'`): المناسبة المخفيّة لا تستهلك واحدة من
+ * الثلاث الفرادى ولا تدخل في `extra`، فلا يقفز رقم الملخّص بسبب مناسبة لا
+ * يراها أحد، ويبقى العدّ موافقاً لما يُعلَن فعلاً.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
   if (await eventIsLinkOnly(id)) return null;
   const { total } = await db.queryOne(
-    'SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY'
+    "SELECT COUNT(*) AS total FROM events WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY AND visibility = 'public'"
   );
   const publishedToday = Number(total);
   const regionId = await eventRegionId(id);

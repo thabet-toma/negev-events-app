@@ -1566,6 +1566,13 @@ async function listMyEvents(userId) {
  * counts as a conflict when something else (typically a عرس) checks against
  * it. A caller with no `occasionTypeId` (the pre-#20 request shape) gets the
  * old, type-blind behaviour untouched — any non-rejected overlap counts.
+ *
+ * **و«بالرابط فقط» لا تُرشَّح هنا (تذكرة #166):** `visibility = 'public'` في
+ * `conditions` وحدها. هذه نقطة تنبيه تصادم مواعيد في نموذج النشر، والتحذير
+ * بمناسبة مخفيّة يُعلِن وجودها واسم صاحبها وبلدةها لأي زائر يجرّب تاريخاً —
+ * فهي إعلان لا يريده صاحبها، والمناسبة التي لا تدخل أي قائمة لا تنبّه على
+ * موعد مشغول فيها. `findPossibleDuplicates` **لا** يأخذ هذا الشرط عمداً: هو
+ * حارس تكرار يمنع صفّاً ثانياً للمناسبة نفسها، فلا يصحّ أن يعميه الإخفاء.
  */
 async function findCollisions({ date, endDate = null, town = null, occasionTypeId = null, excludeEventId = null }) {
   if (occasionTypeId) {
@@ -1574,7 +1581,12 @@ async function findCollisions({ date, endDate = null, town = null, occasionTypeI
   }
 
   const rangeEnd = endDate || date;
-  const conditions = ["e.status <> 'rejected'", 'e.event_date <= ?', 'COALESCE(e.event_end_date, e.event_date) >= ?'];
+  const conditions = [
+    "e.status <> 'rejected'",
+    "e.visibility = 'public'",
+    'e.event_date <= ?',
+    'COALESCE(e.event_end_date, e.event_date) >= ?'
+  ];
   const params = [rangeEnd, date];
 
   if (town && town !== 'الكل') {
@@ -1974,8 +1986,9 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * ولو مرّت بها القطعة لصارت 404، ولما بقي لصاحب المناسبة المخفيّة طريق.
  *
  * والاستعلام نفسه يخدم أيضاً `/e/:id/card.jpg` و`/e/:id/download`: تستدعي
- * `getShareEvent` ثلاث صفحات (`share.routes.js:858` و`:928` و`:960`)، فقاعدة
- * هذه القراءة تسري على الثلاث معاً.
+ * `getShareEvent` ثلاث صفحات في `share.routes.js` — `GET /e/:id` و
+ * `GET /e/:id/card.jpg` و`GET /e/:id/download` — فقاعدة هذه القراءة تسري على
+ * الثلاث معاً.
  *
  * `is_expired` reuses the exact span rule
  * (`span_end < CURDATE()`, the EVENT_SPAN_* constants) every other

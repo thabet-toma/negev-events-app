@@ -14471,8 +14471,18 @@ async function run() {
   const VISIBILITY_DAY = addDaysToDate(schedulerToday, 20);
   const HIDDEN_HONOREE = 'عريس الرابط المخفي';
   const PUBLIC_HONOREE = 'عريس الظهور العلني';
+  // الرابعة العامة في اختبار عدّاد اليوم — تُذكر هنا كي يُنظَّف صفّ ملخّصها
+  // بعد القسم، فصفّ الملخّص بلا `event_id` ويُعرَف بجسمه وحده.
+  const FOURTH_PUBLIC_HONOREE = 'عريس العدّاد العلني الرابع';
   let hiddenEventId = 0;
   let publicEventId = 0;
+
+  // عدّاد «مناسبة جديدة» يُعَدّ باليوم: ثلاث فرادى ثم ملخّص. ما اعتمدته اختبارات
+  // سابقة اليوم يُزاح إلى أمس كي يبدأ هذا القسم من عدّاد نظيف — قاعدة الاختبار
+  // وحدها، كما يفعل قسم الإشعارات الجديدة قبل اختباراته، ولا يمسّ ذلك أي تأكيد
+  // آخر. وبدونه يبدأ القسم وعدّاده فوق الثلاث، فيسلك إعلان المناسبة المخفيّة
+  // فرعَ الملخّص، ويصير غياب `event_new` نتيجةَ الفرع لا نتيجةَ حارس الظهور.
+  await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
 
   await test('POST /api/events defaults visibility to public, and an unknown value is refused with an Arabic 400', async () => {
     const created = await api('POST', '/api/events', {
@@ -14530,6 +14540,17 @@ async function run() {
     assert.strictEqual(rows.length, 0, 'not one listener gets a row — the announcement returns null before any write');
     const keyed = await db.query('SELECT id FROM notifications WHERE dedupe_key = ?', [`event_new_${hiddenEventId}`]);
     assert.strictEqual(keyed.length, 0, 'and no single «مناسبة جديدة» row was written under its key either');
+    // وصفّ الملخّص يُكتب بـ`event_id = NULL` (فرع `publishedToday > 3` في
+    // notifications.service.js)، فلا يطابقه شرط `event_id = ?` أعلاه أبداً.
+    // يُعرَف بجسمه وحده: الجسم يحمل آخر عنوان، فيُسأل عن اسم عريس المخفيّة نفسه.
+    const digests = await db.query(
+      "SELECT id FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?",
+      [`%${HIDDEN_HONOREE}%`]
+    );
+    assert.strictEqual(
+      digests.length, 0,
+      "no digest carries the hidden event's headline either — a digest has event_id NULL, so it is recognised by its body"
+    );
     const forListener = await db.query(
       'SELECT id FROM notifications WHERE user_id = ? AND event_id = ?',
       [visibilityListener.id, hiddenEventId]
@@ -14690,11 +14711,100 @@ async function run() {
     assert.strictEqual(publicAgain.headers.get('x-robots-tag'), null, 'the header goes away with the visibility');
   });
 
+  await test('POST /api/check-collision (public, no auth) never names a link_only event, while the public twin of that day and town still shows', async () => {
+    // النقطة عامة بلا `authenticate`، والبيانات التي تُعيدها هي عنوان المناسبة
+    // وصاحبها وعائلتها ومكانها. فالتحذير بمناسبة مخفيّة يُعلِن وجودها لكل زائر
+    // يجرّب تاريخاً — والبلدة اختيارية فيصير تعداداً بلا بلدة أصلاً.
+    const res = await api('POST', '/api/check-collision', {
+      body: {
+        date: VISIBILITY_DAY,
+        event_end_date: VISIBILITY_DAY,
+        town: VISIBILITY_TOWN,
+        occasion_type_id: weddingType.id
+      }
+    });
+    assert.strictEqual(res.status, 200);
+    const ids = res.body.conflicts.map(conflict => conflict.id);
+    assert.ok(!ids.includes(hiddenEventId), 'the collision warning must not name a hidden event');
+    assert.ok(
+      !JSON.stringify(res.body.conflicts).includes(HIDDEN_HONOREE),
+      'nor leak its title, groom_name, clan or location — the hidden honoree name appears in none of them'
+    );
+    // الشاهد الإيجابي: بلا هذا السطر ينجح الاختبار لو أُفرغت الدالة من كل شيء.
+    assert.ok(
+      ids.includes(publicEventId),
+      'while the public twin of the same day and town is still reported — the filter is visibility, not an empty result'
+    );
+  });
+
+  await test('The daily «مناسبة جديدة» count is public events only — a link_only approval neither takes one of the three nor inflates the digest', async () => {
+    // العدّاد يعدّ `first_approved_at` في اليوم، والحالة تُبنى هنا صراحةً: ثلاث
+    // مناسبات عامة معتمدة اليوم، ثم المخفيّة، ثم رابعة عامة. وما اعتمده هذا
+    // القسم قبل الآن يُزاح إلى أمس أوّلاً (قاعدة الاختبار وحدها) كي لا يعتمد
+    // الملخّص على عدّاد ورثه عن اختبارات سابقة.
+    await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+    for (const offset of [0, 1, 2]) {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({
+          honorees: [{ name: `عريس عدّاد العلني ${offset + 1}` }],
+          town: VISIBILITY_TOWN,
+          event_date: addDaysToDate(schedulerToday, 70 + offset)
+        })
+      });
+      assert.strictEqual(created.status, 201, created.body.message);
+      assert.strictEqual(created.body.status, 'approved', 'a public event goes live today and fills one of the three singles');
+      visibilityEventIds.push(created.body.eventId);
+    }
+
+    const hiddenToday = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس عدّاد مخفي' }],
+        town: VISIBILITY_TOWN,
+        visibility: 'link_only',
+        event_date: addDaysToDate(schedulerToday, 73)
+      })
+    });
+    assert.strictEqual(hiddenToday.status, 201, hiddenToday.body.message);
+    visibilityEventIds.push(hiddenToday.body.eventId);
+    const approveHiddenToday = await api('PATCH', `/api/admin/events/${hiddenToday.body.eventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approveHiddenToday.status, 200, approveHiddenToday.body.message);
+    const hiddenRow = await db.queryOne('SELECT visibility, first_approved_at FROM events WHERE id = ?', [hiddenToday.body.eventId]);
+    assert.strictEqual(hiddenRow.visibility, 'link_only');
+    assert.ok(hiddenRow.first_approved_at, 'approved today — it is in the day, only not in the count');
+
+    const fourth = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: FOURTH_PUBLIC_HONOREE }],
+        town: VISIBILITY_TOWN,
+        event_date: addDaysToDate(schedulerToday, 74)
+      })
+    });
+    assert.strictEqual(fourth.status, 201, fourth.body.message);
+    assert.strictEqual(fourth.body.status, 'approved');
+    visibilityEventIds.push(fourth.body.eventId);
+
+    const digest = await db.queryOne(
+      "SELECT body FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?",
+      [`%${FOURTH_PUBLIC_HONOREE}%`]
+    );
+    assert.ok(digest, 'the fourth public event of the day must reach the digest');
+    assert.ok(
+      /\(1\)/.test(digest.body),
+      `the digest must count the fourth public event alone — extra = 1, not 2 with the hidden one in the tally: "${digest.body}"`
+    );
+  });
+
   // Clean up this section's rows: the digest row it updated (no event_id, so it
   // is recognised by the twin's own name), then the events and the listener.
   await db.execute(
-    "DELETE FROM notifications WHERE type = 'event_new_digest' AND body LIKE ?",
-    [`%${PUBLIC_HONOREE}%`]
+    "DELETE FROM notifications WHERE type = 'event_new_digest' AND (body LIKE ? OR body LIKE ?)",
+    [`%${PUBLIC_HONOREE}%`, `%${FOURTH_PUBLIC_HONOREE}%`]
   );
   for (const id of visibilityEventIds) {
     await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
