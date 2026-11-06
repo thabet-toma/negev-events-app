@@ -12,6 +12,7 @@ import 'package:negev_events/models/my_list.dart';
 import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
+import 'package:negev_events/screens/my_events_screen.dart';
 import 'package:negev_events/screens/my_list_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
@@ -29,13 +30,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// أن يجيب `/api/events` أيضاً. و`body` غير ثابت كي يبدّل اختبارٌ ما يعيده
 /// الخادم بين جلبين (الشارة تُقرأ من جلب تالٍ).
 class MyListBackend {
-  MyListBackend(this.body, {this.eventsBody});
+  MyListBackend(this.body, {this.eventsBody, this.myEventsBody});
 
   /// جسم GET /api/my-reminders — ما عدا DELETE الذي يردّ بحذف ناجح.
   Map<String, dynamic> body;
 
   /// جسم GET /api/events — التغذية الفارغة افتراضاً.
   final Map<String, dynamic>? eventsBody;
+
+  /// جسم GET /api/my-events («مناسباتي») — قائمة فارغة افتراضاً.
+  final Map<String, dynamic>? myEventsBody;
 
   final List<http.Request> requests = [];
 
@@ -63,6 +67,9 @@ class MyListBackend {
               'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
               'announcements': <Map<String, dynamic>>[],
             };
+      } else if (path.endsWith('/api/my-events')) {
+        response = myEventsBody ??
+            {'success': true, 'events': <Map<String, dynamic>>[]};
       } else if (path.endsWith('/api/my-reminders')) {
         response = request.method == 'DELETE'
             ? {
@@ -1111,6 +1118,75 @@ void main() {
         // مناسبة عامة بلا حقل حالة تبقى قابلة للحفظ.
         await pumpDetails(null);
         expect(find.text('أضف لقائمتي'), findsOneWidget);
+      },
+    );
+  });
+
+  group('(ك) «جاي» في «مناسباتي» — زرّ لا يفعل شيئاً لا يُرسم', () {
+    /// مناسبة يملكها المستخدم، نوعها يفتح تأكيد الحضور فعلاً
+    /// (`rsvp_enabled: true`) — فيقع الاختبار على المعالج وحده لا على العلَم.
+    Map<String, dynamic> ownedEvent() => {
+          'id': 41,
+          'title': 'عرس سالم',
+          'groom_name': 'سالم',
+          'family_clan': 'آل فلان',
+          'town': 'رهط',
+          'location_name': 'قاعة السلام',
+          'event_date': '2026-11-01',
+          'status': 'approved',
+          'occasion_type': {
+            'id': 1,
+            'name': 'عرس',
+            'icon': '💍',
+            'color': '#0369a1',
+            'tone': 'festive',
+            'rsvp_enabled': true,
+            'fields': <Map<String, dynamic>>[],
+            'reactions': <String>[],
+          },
+        };
+
+    testWidgets(
+      'كرت «مناسباتي» لا يُخرج زرّ «جاي» بلا معالج — زرّ لا يفعل شيئاً لا يُرسم',
+      (tester) async {
+        final backend = MyListBackend(
+          {'success': true},
+          myEventsBody: {
+            'success': true,
+            'events': [ownedEvent()],
+          },
+        );
+        final api = backend.build();
+
+        await tester.pumpWidget(
+          AppServices(
+            api: api,
+            auth: AuthStore(api),
+            realtime: RealtimeService(),
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              home: const Directionality(
+                textDirection: TextDirection.rtl,
+                child: MyEventsScreen(),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // مرساة موجِبة: الكرت رُسم فعلاً والنوع يفتح تأكيد الحضور — «مين جاي»
+        // زرّ المالك يظهر لأن `rsvp_enabled` صحيح في هذه البطاقة نفسها. فغياب
+        // «جاي» بعدهما سببه غياب المعالج وحده، لا نوعٌ مطفأ.
+        expect(find.byType(EventCard), findsOneWidget);
+        expect(find.text('منشورة'), findsOneWidget);
+        expect(find.text('مين جاي'), findsOneWidget);
+
+        expect(
+          find.text('جاي'),
+          findsNothing,
+          reason: 'شاشة «مناسباتي» تبني الكرت بلا `onRsvpTap`، فزرّ «جاي» زرّ '
+              'لا يفعل شيئاً — لا يُرسم بلا معالج',
+        );
       },
     );
   });

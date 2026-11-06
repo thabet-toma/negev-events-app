@@ -799,7 +799,7 @@ void main() {
     );
 
     testWidgets(
-      'a type with rsvp_enabled off carries no «جاي» — the flag alone decides',
+      'a type with rsvp_enabled off carries no «جاي» — a live handler does not override the switch',
       (tester) async {
         await tester.pumpWidget(wrapCard(EventCard(
           event: Event.fromJson(actingEventJson(rsvpEnabled: false)),

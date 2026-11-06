@@ -152,7 +152,8 @@ class EventCard extends StatelessWidget {
   /// `null` يعطل زرّ «ذكّرني ♥» في لوح المعلومات.
   final VoidCallback? onRemindTap;
 
-  /// «جاي ✓» من الكرت (تذكرة #170) — `null` يعني نوعاً بلا `rsvp_enabled`.
+  /// «جاي ✓» من الكرت (تذكرة #170) — `null` يعطّل الزرّ فلا يُرسم: زرٌّ بلا
+  /// معالج زرٌّ لا يفعل شيئاً، و«مناسباتي» تبني الكرت بلا معالجات أفعال.
   final VoidCallback? onRsvpTap;
 
   /// «بارك»/«عزّي»: يفتح ورقة «اختر رسالة» ثم التبريك القائم (تذكرة #170).
@@ -481,8 +482,10 @@ class CardCaption extends StatelessWidget {
     // «بارك» على الفرح و«عزّي» على العزاء — فعل الكرت بنصّ المواصفة، وتسمية
     // القسم تبقى `congratulationsLabel` («تبريكات»/«تعازي») في صفحة المناسبة.
     final messagesLabel = isSolemn ? 'عزّي' : 'بارك';
-    // «جاي» لنوعٍ فتح تأكيد الحضور وحده، والعزاء لا أزرار له إلا «عزّي».
-    final showRsvp = !isSolemn && (type?.rsvpEnabled ?? false);
+    // «جاي» لنوعٍ فتح تأكيد الحضور وعليه معالج فعلي: النوع وحده لا يكفي —
+    // كرت «مناسباتي» يمرّ بلا `onRsvpTap`، فكان الزرّ يُرسم ولا يفعل شيئاً.
+    final showRsvp =
+        !isSolemn && (type?.rsvpEnabled ?? false) && onRsvpTap != null;
     final going = event.myRsvp?.isGoing ?? false;
 
     return Container(
@@ -577,7 +580,7 @@ class CardCaption extends StatelessWidget {
                     icon: going ? Icons.check_circle : Icons.check_circle_outline,
                     label: 'جاي',
                     highlight: going,
-                    // بلا معالج لا يفعل الزرّ شيئاً — لا يُحوَّل إلى ورقة
+                    // الزرّ لا يُرسم بلا معالج (أعلاه)، ولا يُحوَّل إلى ورقة
                     // التبريكات: «جاي» فعلٌ آخر، وخلطُهما يسجّل جواباً لا قصده.
                     onTap: onRsvpTap,
                   ),
