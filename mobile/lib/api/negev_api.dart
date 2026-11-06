@@ -922,11 +922,20 @@ class NegevApi {
   /// المفاتيح التي تغيّرت فعلاً — مفتاح غائب يعني «بلا تعديل عليه» عند الخادم،
   /// لا قيمة فارغة. التصنيف (`amendment`) والحالة الجديدة (`status`) من الردّ
   /// وحده؛ لا يُعاد بناؤهما هنا.
+  ///
+  /// `confirmDuplicate` يعيد الإرسال بعد 409 «تكرار محتمل» — نفس ما يفعله
+  /// `submitEvent` عند النشر (تذكرة #159): الأدمن وحده يُوقَف بهذا الـ409،
+  /// والخادم يسجّل التجاوز.
   Future<EventUpdateResult> updateEvent(
     int eventId, {
     required Map<String, dynamic> fields,
+    bool confirmDuplicate = false,
   }) async {
-    final data = await _client.patch('/api/events/$eventId', auth: true, body: fields);
+    final data = await _client.patch(
+      '/api/events/$eventId',
+      auth: true,
+      body: confirmDuplicate ? {...fields, 'confirm_duplicate': true} : fields,
+    );
     final message = data['message'];
     final rawWarning = data['location_warning'];
     String? locationWarning;

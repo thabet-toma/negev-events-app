@@ -4346,6 +4346,94 @@ async function run() {
     assertNoUnhandledRejections('open duplicate event');
   });
 
+  /**
+   * بيئة تعديل مناسبة باللوحة: `PATCH /api/events/:id` يردّ 409 «تكرار محتمل»
+   * ما لم يحمل الطلب `confirm_duplicate` (تذكرة #159) — أي أن الاختبار يقيس
+   * النافذة القائمة نفسها على مسار التعديل، لا نسخة ثانية منها.
+   */
+  async function buildEditDuplicateEnv(evt) {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const win = dom.window;
+    const patches = [];
+    win.fetch = async (url, opts = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = (opts && opts.method) || 'GET';
+      if (method === 'PATCH' && requestPath === `/api/events/${evt.id}`) {
+        const body = opts.body ? JSON.parse(opts.body) : null;
+        patches.push(body);
+        return body && body.confirm_duplicate
+          ? jsonResponse({ success: true, message: 'تم الحفظ', status: 'approved', amendment: 'cosmetic' })
+          : duplicateConflict([DUP_CERTAIN]);
+      }
+      if (method === 'GET' && requestPath === '/api/admin/events') return jsonResponse({ success: true, events: [evt] });
+      if (method === 'GET' && requestPath === `/api/events/${evt.id}`) return jsonResponse({ success: true, event: { ...evt } });
+      if (method === 'GET' && requestPath === `/api/events/${evt.id}/amendments`) return jsonResponse({ success: true, amendments: [] });
+      return jsonResponse({ success: true });
+    };
+    await win.fetchAdminEvents();
+    return { win, patches };
+  }
+
+  const EDIT_DUP_EVENT = {
+    id: 96,
+    status: 'approved',
+    title: 'عرس سالم',
+    town: 'رهط',
+    groom_name: 'سالم',
+    family_clan: 'آل سالم',
+    occasion_type_id: WEDDING_TYPE.id,
+    occasion_type: WEDDING_TYPE,
+    event_date: '2027-06-15',
+    location_name: 'ديوان',
+    honorees: [{ name: 'سالم', role: '' }],
+    extra_days: []
+  };
+
+  await test('a 409 POSSIBLE_DUPLICATE on an edit opens the same #duplicateModal in edit context, and «حفظ رغم ذلك» re-sends that edit with confirm_duplicate', async () => {
+    const { win, patches } = await buildEditDuplicateEnv(EDIT_DUP_EVENT);
+    await win.openEventEditForm(EDIT_DUP_EVENT.id);
+    const { document } = win;
+    document.getElementById('evtTitle').value = 'عرس سالم المعدّل';
+
+    await win.handleEventEditSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('edit 409');
+
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].confirm_duplicate, undefined, 'the first save must never pre-confirm');
+    assert.strictEqual(modalOf(win).style.display, 'flex', 'the existing comparison window opens, not a generic alert');
+    assert.ok(document.getElementById('duplicateModalMessage').textContent.includes(DUP_SERVER_MESSAGE));
+    assert.ok(document.getElementById('duplicateModalCurrent').textContent.includes('عرس سالم المعدّل'),
+      'the window names the values this edit lands on, not the card\'s old ones');
+    assert.ok(document.getElementById('duplicateOverrideBtn').textContent.includes('حفظ رغم ذلك'));
+    assert.strictEqual(document.getElementById('duplicateRejectBtn').style.display, 'none', 'rejecting belongs to the approval flow');
+    assert.strictEqual(document.querySelectorAll('#duplicateModalList .duplicate-item').length, 1);
+
+    await win.confirmDuplicateOverride();
+    assertNoUnhandledRejections('edit confirmed');
+
+    assert.strictEqual(patches.length, 2);
+    assert.strictEqual(patches[1].confirm_duplicate, true);
+    assert.strictEqual(patches[1].title, 'عرس سالم المعدّل', 'the retry sends the very same edit');
+    assert.strictEqual(modalOf(win).style.display, 'none');
+  });
+
+  await test('«إلغاء» on an edit duplicate leaves the form and its values untouched and sends nothing more', async () => {
+    const { win, patches } = await buildEditDuplicateEnv(EDIT_DUP_EVENT);
+    await win.openEventEditForm(EDIT_DUP_EVENT.id);
+    const { document } = win;
+    document.getElementById('evtTitle').value = 'عرس سالم المعدّل';
+    await win.handleEventEditSubmit({ preventDefault() {} });
+
+    Array.from(document.querySelectorAll('#duplicateModal .duplicate-actions button'))
+      .find(button => button.textContent.trim() === 'إلغاء').click();
+    await delay(50);
+
+    assert.strictEqual(modalOf(win).style.display, 'none');
+    assert.strictEqual(patches.length, 1, 'cancel must not call the server again');
+    assert.strictEqual(document.getElementById('eventEditFormWrapper').style.display, 'block', 'the form stays open with the edit');
+    assert.strictEqual(document.getElementById('evtTitle').value, 'عرس سالم المعدّل');
+  });
+
   /** Fill the direct-add form far enough to pass client-side validation. */
   async function buildDirectAddEnv({ onPost }) {
     const dom = buildAdminEnv();

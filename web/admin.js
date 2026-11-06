@@ -1263,8 +1263,12 @@ async function confirmRejectEvent() {
  * يمكن الرجوع منها: «إلغاء» لا يلمس النموذج ولا المسودّة، و«فتح المناسبة» يفتح
  * نموذج تعديل المناسبة الموجودة.
  *
- * duplicateModalState: { context: 'approve' | 'direct-add', eventId, duplicates,
- *                        current, formData, type }
+ * duplicateModalState: { context: 'approve' | 'direct-add' | 'edit', eventId,
+ *                        duplicates, current, formData, type, editPayload }
+ *
+ * سياق `edit` (تذكرة #159): تعديل مناسبة معتمدة قد يخرج للعلن فوراً، فحارس
+ * التكرار يقف على تعديل الأدمن أيضاً — بنفس النافذة، لا نسخة ثانية، ويرسل
+ * الإعادة مع `confirm_duplicate`.
  */
 let duplicateModalState = null;
 
@@ -1335,6 +1339,7 @@ function renderDuplicateItemHtml(dup) {
 function openDuplicateModal(state) {
   duplicateModalState = state;
   const direct = state.context === 'direct-add';
+  const editing = state.context === 'edit';
   const current = state.current || {};
   const currentNames = (current.names || []).filter(Boolean).join(' و ');
   const currentLine = [currentNames, current.town, toDateInputValue(current.date)].filter(Boolean).join(' · ');
@@ -1344,8 +1349,11 @@ function openDuplicateModal(state) {
 
   const currentEl = document.getElementById('duplicateModalCurrent');
   if (currentEl) {
+    const label = direct
+      ? 'المناسبة التي تنشرها الآن'
+      : editing ? 'المناسبة التي تعدّلها الآن' : 'المناسبة قيد المراجعة';
     currentEl.innerHTML = `
-      <span class="duplicate-current-label">${direct ? 'المناسبة التي تنشرها الآن' : 'المناسبة قيد المراجعة'}</span>
+      <span class="duplicate-current-label">${label}</span>
       ${current.title ? `<strong>${escapeHtml(String(current.title))}</strong>` : ''}
       <span>${escapeHtml(currentLine)}</span>`;
   }
@@ -1354,11 +1362,16 @@ function openDuplicateModal(state) {
   if (listEl) listEl.innerHTML = (state.duplicates || []).map(renderDuplicateItemHtml).join('');
 
   const overrideBtn = document.getElementById('duplicateOverrideBtn');
-  if (overrideBtn) overrideBtn.innerHTML = direct
-    ? '<i class="fa-solid fa-check-double"></i> نشر رغم ذلك'
-    : '<i class="fa-solid fa-check"></i> اعتماد رغم ذلك';
+  if (overrideBtn) {
+    overrideBtn.innerHTML = direct
+      ? '<i class="fa-solid fa-check-double"></i> نشر رغم ذلك'
+      : editing
+        ? '<i class="fa-solid fa-check"></i> حفظ رغم ذلك'
+        : '<i class="fa-solid fa-check"></i> اعتماد رغم ذلك';
+  }
+  // «رفض كمكررة» يخصّ اعتماد طلب معلّق؛ لا نشر فوري ولا تعديل يمرّان به.
   const rejectBtn = document.getElementById('duplicateRejectBtn');
-  if (rejectBtn) rejectBtn.style.display = direct ? 'none' : '';
+  if (rejectBtn) rejectBtn.style.display = direct || editing ? 'none' : '';
 
   const modal = document.getElementById('duplicateModal');
   if (modal) modal.style.display = 'flex';
@@ -1370,13 +1383,20 @@ function closeDuplicateModal() {
   if (modal) modal.style.display = 'none';
 }
 
-/** «اعتماد/نشر رغم ذلك» — يعيد الإرسال نفسه مع confirm_duplicate. */
+/** «اعتماد/نشر/حفظ رغم ذلك» — يعيد الإرسال نفسه مع confirm_duplicate. */
 async function confirmDuplicateOverride() {
   const state = duplicateModalState;
   if (!state) return;
   closeDuplicateModal();
   if (state.context === 'direct-add') {
     await postDirectAdd(state.formData, state.type, { confirmDuplicate: true, summary: state.current });
+  } else if (state.context === 'edit') {
+    await sendEventEdit({
+      ...state.editPayload,
+      eventId: state.eventId,
+      summary: state.current,
+      confirmDuplicate: true
+    });
   } else {
     await updateEventStatus(state.eventId, 'approved', undefined, { confirmDuplicate: true });
   }
@@ -5249,6 +5269,70 @@ function buildEventEditFormData(payload, posterFile, audioFile) {
   return form;
 }
 
+/**
+ * يُرسل تعديل المناسبة ويعالج ردّه: نجاح (يُغلق النموذج ويحدّث اللوحة)، أو
+ * 409 POSSIBLE_DUPLICATE يفتح نافذة التأكيد القائمة بسياق `edit`، أو خطأ.
+ * يُستدعى أول مرة من `handleEventEditSubmit`، ومرة ثانية من
+ * `confirmDuplicateOverride` مع `confirmDuplicate: true` — ولا نسخة ثانية من
+ * النافذة ولا من الإرسال (تذكرة #159).
+ *
+ * `editPayload` يُحفظ في النافذة لأن `FormData` يُستهلك بالإرسال: الإعادة
+ * تُبنى من الحمولة والملفّين أنفسهما، لا من جسم لم يعد صالحاً.
+ */
+async function sendEventEdit({ eventId, payload, posterFile, audioFile, summary, confirmDuplicate = false }) {
+  const btn = document.getElementById('evtEditSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+  try {
+    // مع ملف: multipart، والفرق نفسه يُرسَل حقلاً حقلاً. بلا ملف: JSON كما كان
+    // تماماً. لا Content-Type يدوي في حالة FormData — المتصفّح يضبط الحدّ الفاصل،
+    // وضبطُه بخط اليد يكسر التحليل على الخادم.
+    const formData = (posterFile || audioFile)
+      ? buildEventEditFormData(payload, posterFile, audioFile)
+      : null;
+    if (formData && confirmDuplicate) formData.append('confirm_duplicate', '1');
+    const request = formData
+      ? { method: 'PATCH', body: formData }
+      : {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(confirmDuplicate ? { ...payload, confirm_duplicate: true } : payload)
+      };
+
+    const res = await adminFetch(`/api/events/${eventId}`, request);
+    const data = await res.json();
+
+    if (data.success) {
+      // رسالة الخادم كما هي حرفياً — هي من تشرح الحرِج/التجميلي وتحمل تنبيه
+      // التعارض مدمَجاً فيها؛ location_warning حقل منفصل فلا يُبتلع (قيد الاستجابة).
+      let fullMessage = data.message || 'تم الحفظ بنجاح';
+      if (data.location_warning) fullMessage += `\n\n⚠️ ${data.location_warning}`;
+      alert(fullMessage);
+      discardEventEditDraft();
+      closeEventEditForm();
+      await fetchAdminEvents();
+      await fetchKPIStats();
+    } else if (data.details?.code === 'POSSIBLE_DUPLICATE') {
+      openDuplicateModal({
+        context: 'edit',
+        eventId,
+        duplicates: data.details.duplicates || [],
+        message: data.message,
+        current: summary || {},
+        editPayload: { payload, posterFile, audioFile }
+      });
+    } else {
+      alert(data.message || 'حدث خطأ أثناء الحفظ');
+    }
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ التعديل';
+  }
+}
+
 async function handleEventEditSubmit(e) {
   e.preventDefault();
   if (!editingEventId || !editingEventOriginal) return;
@@ -5341,40 +5425,16 @@ async function handleEventEditSubmit(e) {
     if (!confirmed) return;
   }
 
-  const btn = document.getElementById('evtEditSubmitBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+  // ملخّص المناسبة كما ستصل إليه بالحفظ — اسم الصفّ في نافذة التأكيد حين يردّ
+  // الحارس بـ409، وهو غير ما تحمله بطاقة اللوحة (قيم ما قبل التعديل).
+  const summary = {
+    title: payload.title !== undefined ? payload.title : editingEventOriginal.title,
+    names: (payload.honorees || editingEventOriginal.honorees || []).map(honoree => honoree.name),
+    town: payload.town !== undefined ? payload.town : editingEventOriginal.town,
+    date: payload.event_date !== undefined ? payload.event_date : editingEventOriginal.event_date
+  };
 
-  try {
-    // مع ملف: multipart، والفرق نفسه يُرسَل حقلاً حقلاً. بلا ملف: JSON كما كان
-    // تماماً. لا Content-Type يدوي في حالة FormData — المتصفّح يضبط الحدّ الفاصل،
-    // وضبطُه بخط اليد يكسر التحليل على الخادم.
-    const request = (posterFile || audioFile)
-      ? { method: 'PATCH', body: buildEventEditFormData(payload, posterFile, audioFile) }
-      : { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
-
-    const res = await adminFetch(`/api/events/${editingEventId}`, request);
-    const data = await res.json();
-
-    if (data.success) {
-      // رسالة الخادم كما هي حرفياً — هي من تشرح الحرِج/التجميلي وتحمل تنبيه
-      // التعارض مدمَجاً فيها؛ location_warning حقل منفصل فلا يُبتلع (قيد الاستجابة).
-      let fullMessage = data.message || 'تم الحفظ بنجاح';
-      if (data.location_warning) fullMessage += `\n\n⚠️ ${data.location_warning}`;
-      alert(fullMessage);
-      discardEventEditDraft();
-      closeEventEditForm();
-      await fetchAdminEvents();
-      await fetchKPIStats();
-    } else {
-      alert(data.message || 'حدث خطأ أثناء الحفظ');
-    }
-  } catch (err) {
-    alert('تعذر الاتصال بالخادم');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ التعديل';
-  }
+  await sendEventEdit({ eventId: editingEventId, payload, posterFile, audioFile, summary });
 }
 
 // ======================================================================

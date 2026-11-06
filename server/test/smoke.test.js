@@ -99,14 +99,16 @@ const TINY_PNG = Buffer.from(
  * This suite runs against a persistent development database, and a run that
  * stops halfway leaves its fixed-name events behind — which the possible-
  * duplicate guard then (rightly) sees as duplicates of the next run's
- * identical publishes. So every publish and approval here confirms past the
- * guard, exactly as an admin pressing «اعتماد رغم ذلك» would; the guard's own
- * section exercises it by sending `confirm_duplicate: false` explicitly. The
- * server ignores the flag on a publish that only queues (a regular user's).
+ * identical publishes. So every publish, approval and event edit here confirms
+ * past the guard, exactly as an admin pressing «اعتماد رغم ذلك» would; the
+ * guard's own sections exercise it by sending `confirm_duplicate: false`
+ * explicitly. The server ignores the flag on a publish that only queues (a
+ * regular user's), and on an owner's edit — it is never refused.
  */
 function withDuplicateConfirmed(method, path, body, yes = true) {
   const guarded = (method === 'POST' && path === '/api/events')
-    || (method === 'PATCH' && /^\/api\/admin\/events\/\d+\/status$/.test(path));
+    || (method === 'PATCH' && /^\/api\/admin\/events\/\d+\/status$/.test(path))
+    || (method === 'PATCH' && /^\/api\/events\/\d+$/.test(path));
   if (!guarded || !body || 'confirm_duplicate' in body) return body;
   return { ...body, confirm_duplicate: yes };
 }
@@ -11562,10 +11564,20 @@ async function run() {
     assert.ok(log && log.details.includes(`#${dupOriginalId}`), 'the override names what it was warned about');
   });
 
-  await test('A different groom from the same family, same day and town, is published without any warning', async () => {
+  // The family fallback (تذكرة #159) reverses what this test asserted before:
+  // a different groom of the same family, same day and town, is now warned
+  // about — 'likely', never 'certain', because a clan can hold two weddings on
+  // one day and the guard only ever asks.
+  await test('A different groom of the same family, same day and town, is flagged — likely, never certain (تذكرة #159)', async () => {
     const { status, body } = await api('POST', '/api/events', { token: superAdminToken, body: dupBody('خالد سليمان أبو صهيبان') });
-    assert.strictEqual(status, 201, body.message);
-    dupEventIds.push(body.eventId);
+    assert.strictEqual(status, 409, JSON.stringify(body));
+    assert.strictEqual(body.details.code, 'POSSIBLE_DUPLICATE');
+    const [match] = body.details.duplicates;
+    assert.strictEqual(match.id, dupOriginalId, 'the same-family wedding, not another one');
+    assert.strictEqual(match.confidence, 'likely', 'a family match is never «certain»');
+    assert.deepStrictEqual(match.reasons, ['نفس العائلة', 'نفس التاريخ', 'نفس البلدة']);
+    const stillOne = await db.queryOne('SELECT COUNT(*) AS n FROM events WHERE groom_name = ?', ['خالد سليمان أبو صهيبان']);
+    assert.strictEqual(Number(stillOne.n), 0, 'a refused publish writes no row');
   });
 
   await test('The same name in another town is still flagged, but only as likely — two towns, possibly two people', async () => {
@@ -12775,8 +12787,14 @@ async function run() {
 
   // confirm_duplicate: false صراحةً في كل نشر هنا: `api()` تضيفه true تلقائياً
   // لمسار النشر (withDuplicateConfirmed)، فبدونه لا يقيس القسم الحارس أصلاً.
+  //
+  // ولكل مجموعة أسماء هنا عائلتها الصريحة (تذكرة #159): العائلة الواحدة تجعل
+  // مناسبتين بأسماء مختلفة في البلدة نفسها وضمن النافذة اليومية شبه تكرار —
+  // وهذا ليس ما يقيسه القسم (يقيس قصّ المحافظة). الاسم يتكرر داخل كل زوج
+  // وحده، فالعائلة المتطابقة داخل الزوج لا تغيّر نتيجة أي اختبار.
   const dupGuardBody = (name, overrides = {}) => weddingEventBody({
     honorees: [{ name, role: 'العريس' }],
+    family_clan: `عائلة ${name}`,
     confirm_duplicate: false,
     ...overrides
   });
@@ -13022,6 +13040,369 @@ async function run() {
   }
   await db.execute('DELETE FROM towns WHERE id = ?', [dupGuardTownId]);
   await db.execute('DELETE FROM regions WHERE id = ?', [dupGuardRegionId]);
+
+  // ======================================================================
+  // الخروج للعلن من باب التعديل (تذكرة #159)
+  //
+  // الحارس كان يقف عند لحظتَي الخروج للعلن: النشر الفوري والاعتماد. تعديل
+  // مناسبة معتمدة باب ثالث، وفيه أربع حالات: استثناء الذات، والعائلة حين لا
+  // تلتقي الأسماء (likely لا certain)، وتعديل الأدمن (409 ثم تجاوز مسجَّل)،
+  // وتعديل المالك (لا 409 أبداً، لكنه يعود للمراجعة). كل صفوف هذا القسم
+  // تُنشأ هنا وتُحذف في آخره، وأسماؤها وعائلاتها مؤقّتة وفريدة.
+  // ======================================================================
+  console.log('\nالخروج للعلن من باب التعديل — العائلة واستثناء الذات (تذكرة #159)');
+
+  const ed159Stamp = Date.now();
+  const ed159RegionName = `محافظة تعديل ${ed159Stamp}`;
+  const { insertId: ed159RegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 32.4, 35.0, 9, 96, 1)`,
+    [ed159RegionName]
+  );
+  const ed159TownName = `بلدة تعديل ${ed159Stamp}`;
+  const { insertId: ed159TownId } = await db.execute(
+    'INSERT INTO towns (region_id, name, latitude, longitude, position, is_active) VALUES (?, ?, ?, ?, 96, 1)',
+    [ed159RegionId, ed159TownName, 32.41, 35.01]
+  );
+
+  const ed159DateA = '2029-05-10';
+  const ed159DateB = '2029-06-20';
+  const ed159Names = {
+    a: `أحمد الفلاني ${ed159Stamp}`,
+    b: `سالم الآخر ${ed159Stamp}`,
+    self: `محمد سالم الهواشلة ${ed159Stamp}`,
+    selfRespelled: `محمد سالم الهواشله ${ed159Stamp}`,
+    owner: `مالك التعديل ${ed159Stamp}`,
+    classification: `تعديل تصنيفي ${ed159Stamp}`,
+    familyA: `أحمد العائلة ${ed159Stamp}`,
+    familyB: `يوسف العائلة ${ed159Stamp}`,
+    crossA: `أحمد عبور ${ed159Stamp}`,
+    crossB: `يوسف عبور ${ed159Stamp}`,
+    crossC: `سالم عبور ${ed159Stamp}`
+  };
+  const ed159Families = {
+    classification: `آل تصنيف ${ed159Stamp}`,
+    family: `آل عائلة الاختبار ${ed159Stamp}`,
+    // نفس العائلة مكتوبة كما يكتبها الناس: «عائلة» بة، وبلا أداة التعريف «آل»
+    // التي يشتقّها الخادم وحده — توحيد الإملاء نفسه هو ما يجعلها عائلة واحدة.
+    familyVariant: `عائله الاختبار ${ed159Stamp}`,
+    cross: `آل عبر المحافظات ${ed159Stamp}`
+  };
+  const ed159Ids = [];
+  let ed159EventA = 0;
+  let ed159EventB = 0;
+
+  // confirm_duplicate: false صراحةً — `api()` تضيفه true لكل تعديل ونشر
+  // (withDuplicateConfirmed)، فبدونه لا يقيس القسم الحارس أصلاً. ولكل اسمٍ
+  // عائلته المشتقّة منه: العائلة الواحدة تجعل مناسبتين مختلفتي الاسم في نفس
+  // البلدة والنافذة شبه تكرار (تذكرة #159)، وهو ما تقيسه اختبارات العائلة
+  // وحدها بعائلة صريحة — لا بقية القسم.
+  const ed159Body = (name, overrides = {}) => weddingEventBody({
+    honorees: [{ name, role: 'العريس' }],
+    town: 'رهط',
+    event_date: ed159DateA,
+    family_clan: `عائلة ${name}`,
+    confirm_duplicate: false,
+    ...overrides
+  });
+  const ed159Publish = (token, name, overrides) => api('POST', '/api/events', {
+    token, body: ed159Body(name, overrides)
+  });
+
+  await test('إعداد: مناسبتان معتمدتان في رهط في اليوم نفسه وعائلتان مختلفتان (تذكرة #159)', async () => {
+    const first = await ed159Publish(superAdminToken, ed159Names.a, {});
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    assert.strictEqual(first.body.status, 'approved');
+    ed159EventA = first.body.eventId;
+    ed159Ids.push(ed159EventA);
+
+    // طلب مستخدم يدخل الطابور ثم يعتمده الأدمن — لا شبيه به، فلا تجاوز.
+    const second = await ed159Publish(userToken, ed159Names.b, {});
+    assert.strictEqual(second.status, 201, JSON.stringify(second.body));
+    assert.strictEqual(second.body.status, 'pending');
+    ed159EventB = second.body.eventId;
+    ed159Ids.push(ed159EventB);
+    const approved = await api('PATCH', `/api/admin/events/${ed159EventB}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+  });
+
+  await test('تعديل الأدمن المطابق يُرفض بـ409 بنفس شكل النشر، ولا يكتب أي تغيير (تذكرة #159)', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${ed159EventB}`, {
+      token: superAdminToken,
+      body: { honorees: [{ name: ed159Names.a, role: 'العريس' }], confirm_duplicate: false }
+    });
+    assert.strictEqual(status, 409, JSON.stringify(body));
+    assert.strictEqual(body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.ok(/تشبه مناسبة موجودة/.test(body.message), body.message);
+    assert.strictEqual(body.details.duplicates.length, 1);
+    const [match] = body.details.duplicates;
+    assert.strictEqual(match.id, ed159EventA);
+    assert.strictEqual(match.confidence, 'certain');
+    assert.deepStrictEqual(match.reasons, ['الاسم مطابق', 'نفس التاريخ', 'نفس البلدة']);
+
+    const row = await db.queryOne('SELECT status, groom_name FROM events WHERE id = ?', [ed159EventB]);
+    assert.strictEqual(row.groom_name, ed159Names.b, 'التعديل المرفوض لا يكتب الاسم');
+    assert.strictEqual(row.status, 'approved');
+    const override = await db.queryOne(
+      "SELECT id FROM activity_log WHERE action = 'event_duplicate_override' AND event_id = ?", [ed159EventB]
+    );
+    assert.ok(!override, 'الرفض ليس تجاوزاً — لا سطر سجلّ بعد');
+  });
+
+  await test('إعادة تعديل الأدمن مع confirm_duplicate تنجح، والتجاوز يُسجَّل (تذكرة #159)', async () => {
+    const { status, body } = await api('PATCH', `/api/events/${ed159EventB}`, {
+      token: superAdminToken,
+      body: { honorees: [{ name: ed159Names.a, role: 'العريس' }], confirm_duplicate: true }
+    });
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.status, 'approved', 'تعديل تجميلي لا يعيد المناسبة للمراجعة');
+    assert.strictEqual(body.amendment, 'cosmetic');
+
+    const stored = await db.queryOne('SELECT groom_name, status FROM events WHERE id = ?', [ed159EventB]);
+    assert.strictEqual(stored.groom_name, ed159Names.a, 'التأكيد يكتب التعديل فعلاً');
+    assert.strictEqual(stored.status, 'approved');
+
+    const override = await db.queryOne(
+      "SELECT details FROM activity_log WHERE action = 'event_duplicate_override' AND event_id = ?", [ed159EventB]
+    );
+    assert.ok(override, 'التجاوز مسجَّل');
+    assert.strictEqual(override.details, `#${ed159EventA}`);
+  });
+
+  await test('إعادة حفظ لا تغيّر مدخلاً من مدخلات الحارس لا تعيد الـ409 ولا تسجّل تجاوزاً ثانياً (تذكرة #159)', async () => {
+    // الصفّ الآن مطابق لأخرى معتمدة بلا شك، والنموذج يعيد إرسال العائلة والتاريخ
+    // كما هما في كل حفظ. وجود المفتاح في الطلب ليس تعديلاً: لا 409 ثانية ولا سطر
+    // تجاوز جديد — وإلا صار كل حفظ لاحق، ولو لعنوانه، معركة مع الحارس.
+    const stored = await db.queryOne('SELECT family_clan, event_date FROM events WHERE id = ?', [ed159EventB]);
+    const { status, body } = await api('PATCH', `/api/events/${ed159EventB}`, {
+      token: superAdminToken,
+      body: {
+        title: `عنوان جديد ${ed159Stamp}`,
+        family_clan: stored.family_clan,
+        event_date: stored.event_date,
+        confirm_duplicate: false
+      }
+    });
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.status, 'approved');
+    const overrides = await db.queryOne(
+      "SELECT COUNT(*) AS n FROM activity_log WHERE action = 'event_duplicate_override' AND event_id = ?",
+      [ed159EventB]
+    );
+    assert.strictEqual(Number(overrides.n), 1, 'حفظ لم يغيّر مدخلاً من مدخلات الحارس لا يسجّل تجاوزاً');
+  });
+
+  await test('حفظ المالك الذي لا يغيّر مدخلاً من مدخلات الحارس يبقى منشوراً ولو كان للصفّ شبيه معتمد (تذكرة #159)', async () => {
+    // الحالة التي يصنعها الحارس نفسه: مناسبة مالك اعتُمدت بتجاوز لأنها تشبه
+    // أخرى. إصلاح عنوانها من الموقع العام — وهو يرسل العائلة والتاريخ مع كل
+    // حفظ — يجب ألا يُسقط اعتمادها، وإلا اختفت مناسبة مشروعة من الموقع بسبب
+    // حقلٍ أعاد إرساله كما هو.
+    const created = await ed159Publish(userToken, ed159Names.a, {});
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.status, 'pending');
+    ed159Ids.push(created.body.eventId);
+    const approved = await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: true }
+    });
+    assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+
+    const stored = await db.queryOne(
+      'SELECT family_clan, event_date FROM events WHERE id = ?', [created.body.eventId]
+    );
+    const { status, body } = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: userToken,
+      body: {
+        title: `عنوان مصحّح ${ed159Stamp}`,
+        family_clan: stored.family_clan,
+        event_date: stored.event_date,
+        confirm_duplicate: false
+      }
+    });
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.status, 'approved', 'ما لم يمسّ مدخلات الحارس لا يعيد المناسبة للمراجعة');
+    assert.ok(/تبقى منشورة/.test(body.message), body.message);
+    const row = await db.queryOne('SELECT status FROM events WHERE id = ?', [created.body.eventId]);
+    assert.strictEqual(row.status, 'approved');
+  });
+
+  await test('تعديل المناسبة لا يُنبّه على نفسها: تغيير إملائي في اسمها يمرّ بلا 409 (تذكرة #159)', async () => {
+    const created = await ed159Publish(superAdminToken, ed159Names.self, { town: 'حورة' });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    ed159Ids.push(created.body.eventId);
+
+    // الاسم الجديد يطابق الاسم المخزَّن بعد توحيد الإملاء — أي أن المناسبة
+    // الوحيدة المطابقة هي نفسها. الفلترة في findPossibleDuplicates هي ما يمنع
+    // الـ409 هنا، لا شيء في المسار.
+    const { status, body } = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: superAdminToken,
+      body: { honorees: [{ name: ed159Names.selfRespelled, role: 'العريس' }], confirm_duplicate: false }
+    });
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.status, 'approved');
+    const row = await db.queryOne('SELECT groom_name FROM events WHERE id = ?', [created.body.eventId]);
+    assert.strictEqual(row.groom_name, ed159Names.selfRespelled);
+  });
+
+  await test('تعديل المالك المشتبه لا يُوقَف بـ409، ويعود pending مع الشبه في طابور الأدمن (تذكرة #159)', async () => {
+    const created = await ed159Publish(userToken, ed159Names.owner, {});
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.status, 'pending');
+    ed159Ids.push(created.body.eventId);
+    const approved = await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+
+    const { status, body } = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: userToken,
+      body: { honorees: [{ name: ed159Names.a, role: 'العريس' }], confirm_duplicate: false }
+    });
+    assert.strictEqual(status, 200, JSON.stringify(body));
+    assert.strictEqual(body.details, undefined, 'المستخدم العادي لا يرى الحارس');
+    assert.strictEqual(body.status, 'pending', 'تعديله المشتبه يعود للمراجعة لا ينشر');
+    assert.ok(/قائمة المراجعة/.test(body.message), body.message);
+
+    const row = await db.queryOne('SELECT status FROM events WHERE id = ?', [created.body.eventId]);
+    assert.strictEqual(row.status, 'pending');
+    // الحارس حبس التعديل كلّه، فلا يقول سطر سجلّه «معتمد» والمناسبة معلَّقة.
+    const logged = await db.queryOne(
+      "SELECT status FROM event_amendments WHERE event_id = ? AND field = 'honorees' ORDER BY id DESC LIMIT 1",
+      [created.body.eventId]
+    );
+    assert.strictEqual(logged.status, 'pending', 'سطر السجلّ ينتظر مع المناسبة');
+
+    const queue = await api('GET', '/api/admin/events', { token: superAdminToken });
+    const queued = queue.body.events.find(event => event.id === created.body.eventId);
+    assert.ok(queued, 'التعديل المعلَّق ظاهر في الطابور');
+    const match = queued.possible_duplicates.find(duplicate => duplicate.id === ed159EventA);
+    assert.ok(match, `الشبه ظاهر في الطابور: ${JSON.stringify(queued.possible_duplicates)}`);
+    assert.strictEqual(match.confidence, 'certain');
+  });
+
+  await test('تعديل المالك غير المشتبه يتبع التصنيف القائم: التجميلي يبقى منشوراً والحرِج يعود للمراجعة (تذكرة #159)', async () => {
+    const created = await ed159Publish(userToken, ed159Names.classification, {});
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    ed159Ids.push(created.body.eventId);
+    const approved = await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, {
+      token: superAdminToken, body: { status: 'approved', confirm_duplicate: false }
+    });
+    assert.strictEqual(approved.status, 200, JSON.stringify(approved.body));
+
+    // العائلة مدخل من مدخلات الحارس، ولا شبيه هنا — فيبقى التصنيف تجميلياً.
+    const cosmetic = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: userToken,
+      body: { family_clan: ed159Families.classification, confirm_duplicate: false }
+    });
+    assert.strictEqual(cosmetic.status, 200, JSON.stringify(cosmetic.body));
+    assert.strictEqual(cosmetic.body.amendment, 'cosmetic');
+    assert.strictEqual(cosmetic.body.status, 'approved');
+
+    const critical = await api('PATCH', `/api/events/${created.body.eventId}`, {
+      token: userToken,
+      body: { event_date: ed159DateB, confirm_duplicate: false }
+    });
+    assert.strictEqual(critical.status, 200, JSON.stringify(critical.body));
+    assert.strictEqual(critical.body.amendment, 'critical');
+    assert.strictEqual(critical.body.status, 'pending');
+    assert.ok(/لأنه يمسّ تاريخ أو مكان/.test(critical.body.message), critical.body.message);
+  });
+
+  await test('أسماء مختلفة وعائلة واحدة (بإملاء آخر) في نفس البلدة والتاريخ تعطي likely لا certain (تذكرة #159)', async () => {
+    const first = await ed159Publish(superAdminToken, ed159Names.familyA, {
+      family_clan: ed159Families.family, event_date: ed159DateB
+    });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    ed159Ids.push(first.body.eventId);
+
+    // الاسم الأول مختلف تماماً فالأسماء لا تلتقي، والعائلة واحدة: ة/ه، وأداة
+    // التعريف «آل» في أولاهما وحدها (والخادم وحده هو من يشتقّها). ولا يُقارن
+    // اسم العائلة أصلاً حين تلتقي الأسماء.
+    const second = await ed159Publish(superAdminToken, ed159Names.familyB, {
+      family_clan: ed159Families.familyVariant, event_date: ed159DateB
+    });
+    assert.strictEqual(second.status, 409, JSON.stringify(second.body));
+    assert.strictEqual(second.body.details.code, 'POSSIBLE_DUPLICATE');
+    assert.strictEqual(second.body.details.duplicates.length, 1);
+    const [match] = second.body.details.duplicates;
+    assert.strictEqual(match.id, first.body.eventId);
+    assert.strictEqual(match.confidence, 'likely', 'التطابق العائلي يعطي «محتملة» أبداً «شبه مؤكدة»');
+    assert.deepStrictEqual(match.reasons, ['نفس العائلة', 'نفس التاريخ', 'نفس البلدة']);
+
+    const stillOne = await db.queryOne(
+      'SELECT COUNT(*) AS n FROM events WHERE groom_name = ?', [ed159Names.familyB]
+    );
+    assert.strictEqual(Number(stillOne.n), 0, 'النشر المرفوض لا يكتب صفّاً');
+  });
+
+  await test('نفس العائلة في محافظة أخرى لا تنبّه، ونفس الزوج في محافظة واحدة ينبّه — عبر بند «القرى والتجمعات» (تذكرة #159)', async () => {
+    // قصّ المحافظة وحده ما يقيسه هذا الاختبار، ولا يُقاس ببلدة مختلفة: فرع
+    // العائلة يشترط `samePlace` أوّلاً، فالبلدة الأخرى تعيد `null` قبل أن يُقرأ
+    // `region_id` أصلاً — يمرّ الاختبار ولو حُذف القصّ. والمكان الوحيد الذي يمكن
+    // أن يتكرّر بمحافظتين هو البند الجامع، فمفتاحه القرية المكتوبة لا البلدة (اسم
+    // البلدة نفسه لا يُسجَّل في محافظتين أصلاً — `uq_towns_name`).
+    const villageName = `قرية عائلة ${ed159Stamp}`;
+    const crossVillage = regionId => ({
+      town: 'القرى والتجمعات',
+      requested_village_name: villageName,
+      family_clan: ed159Families.cross,
+      event_date: ed159DateB,
+      region_id: regionId
+    });
+
+    // الزوج في محافظة واحدة أوّلاً: فرع العائلة يعمل فعلاً، وإلا لكان «لا تنبّه»
+    // في المحافظة الأخرى عجزاً لا قصّاً.
+    const first = await ed159Publish(superAdminToken, ed159Names.crossA, crossVillage(ed159RegionId));
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    ed159Ids.push(first.body.eventId);
+
+    const sameGovernorate = await ed159Publish(superAdminToken, ed159Names.crossB, crossVillage(ed159RegionId));
+    assert.strictEqual(sameGovernorate.status, 409, `المحافظة نفسها: ${JSON.stringify(sameGovernorate.body)}`);
+    assert.strictEqual(sameGovernorate.body.details.code, 'POSSIBLE_DUPLICATE');
+    const familyMatch = sameGovernorate.body.details.duplicates.find(row => row.id === first.body.eventId);
+    assert.ok(familyMatch, JSON.stringify(sameGovernorate.body.details.duplicates));
+    assert.strictEqual(familyMatch.confidence, 'likely', 'التطابق العائلي «محتملة» أبداً «شبه مؤكدة»');
+    assert.deepStrictEqual(
+      familyMatch.reasons, ['نفس العائلة', 'نفس التاريخ', 'نفس البلدة'],
+      'الشبه من العائلة لا من الأسماء'
+    );
+
+    // الزوج نفسه — القرية والعائلة والتاريخ — بمحافظة أخرى: 201.
+    const otherGovernorate = await ed159Publish(superAdminToken, ed159Names.crossC, crossVillage(defaultRegionId));
+    assert.strictEqual(otherGovernorate.status, 201, `محافظة أخرى: ${JSON.stringify(otherGovernorate.body)}`);
+    ed159Ids.push(otherGovernorate.body.eventId);
+
+    // الفرضية مقروءة من الصفّ لا مفترضة: المكان نفسه والعائلة نفسها فعلاً،
+    // والمحافظة مختلفة فعلاً — وإلا لم يقس هذا الاختبار قصّاً.
+    const sameRow = await db.queryOne(
+      'SELECT region_id, town, requested_village_name, family_clan FROM events WHERE id = ?', [first.body.eventId]
+    );
+    const otherRow = await db.queryOne(
+      'SELECT region_id, town, requested_village_name, family_clan FROM events WHERE id = ?',
+      [otherGovernorate.body.eventId]
+    );
+    assert.notStrictEqual(otherRow.region_id, sameRow.region_id, 'محافظة مختلفة فعلاً');
+    assert.strictEqual(sameRow.region_id, ed159RegionId, 'والأولى في محافظة القسم');
+    assert.strictEqual(sameRow.town, 'القرى والتجمعات');
+    assert.strictEqual(otherRow.town, sameRow.town, 'البند الجامع نفسه');
+    assert.strictEqual(otherRow.requested_village_name, sameRow.requested_village_name, 'القرية نفسها');
+    assert.strictEqual(otherRow.family_clan, sameRow.family_clan, 'العائلة نفسها');
+  });
+
+  // تنظيف ما أنشأه هذا القسم — المناسبات (مع سجلّها) أولاً، ثم البلدة والمحافظة.
+  if (ed159Ids.length) {
+    await db.execute(
+      `DELETE FROM activity_log WHERE event_id IN (${ed159Ids.map(() => '?').join(', ')})`,
+      ed159Ids
+    );
+    await db.execute(
+      `DELETE FROM events WHERE id IN (${ed159Ids.map(() => '?').join(', ')})`,
+      ed159Ids
+    );
+  }
+  await db.execute('DELETE FROM towns WHERE id = ?', [ed159TownId]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [ed159RegionId]);
 
   // ======================================================================
   // اللوحة: جغرافيا المنطقتين والبثّ والتحليلات (تذكرة #128)

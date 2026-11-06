@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 import '../widgets/location_picker_map.dart';
+import '../widgets/possible_duplicate_dialog.dart';
 import 'account_screen.dart';
 import 'add_event_screen.dart'
     show
@@ -403,6 +404,35 @@ class _EditEventScreenState extends State<EditEventScreen> {
     return confirmed ?? false;
   }
 
+  /// يحفظ التعديل، وإن ردّ الخادم بـ409 «تكرار محتمل» فتح **نافذة التأكيد
+  /// نفسها** التي يستعملها النشر وأعاد الإرسال مع `confirm_duplicate` (تذكرة
+  /// #159) — بلا نسخة ثانية من النافذة. `null` تعني أن المستخدم ألغى، فيبقى
+  /// النموذج كما هو ولا يُغلق شيء.
+  ///
+  /// الأدمن وحده يرى هذا الـ409 — تعديل المالك لا يُوقَف أبداً، بل يعود
+  /// للمراجعة إن وُجد شبه، ورسالة الخادم هي التي تشرح ذلك.
+  Future<EventUpdateResult?> _updateWithDuplicateConfirmation(
+    NegevApi api,
+    Map<String, dynamic> changes,
+  ) async {
+    try {
+      return await api.updateEvent(widget.event.id, fields: changes);
+    } on PossibleDuplicateException catch (duplicate) {
+      if (!mounted) return null;
+      final anyway = await confirmPossibleDuplicateAction(
+        context,
+        duplicate,
+        confirmLabel: 'حفظ رغم ذلك',
+      );
+      if (!anyway) return null;
+    }
+    return api.updateEvent(
+      widget.event.id,
+      fields: changes,
+      confirmDuplicate: true,
+    );
+  }
+
   Future<void> _save() async {
     final changes = _computeChanges();
     if (changes.isEmpty) return;
@@ -439,8 +469,8 @@ class _EditEventScreenState extends State<EditEventScreen> {
     setState(() => _saving = true);
 
     try {
-      final result = await api.updateEvent(widget.event.id, fields: changes);
-      if (!mounted) return;
+      final result = await _updateWithDuplicateConfirmation(api, changes);
+      if (result == null || !mounted) return;
 
       setState(() {
         _status = result.status;

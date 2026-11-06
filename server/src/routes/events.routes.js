@@ -344,6 +344,9 @@ router.post('/events', authenticate, eventMedia, asyncHandler(async (req, res) =
   if (autoApprove) {
     [duplicates] = await events.findPossibleDuplicates([{
       names: honorees.map(honoree => honoree.name),
+      // نفس العائلة التي سيكتبها `createEvent` (تذكرة #159) — لا مقدار مخزَّن
+      // بعد، فالقاعدة المشتركة وحدها تجعل الحارس يقارن ما سيُكتب فعلاً.
+      family_clan: events.familyClanFor(payload.family_clan, honorees),
       region_id: eventRegionId,
       town,
       village_id: villageId,
@@ -430,6 +433,16 @@ async function assertCanManageEvent(req, existing) {
 function buildCollisionMessage(conflict) {
   return `تعارض محتمل مع مناسبة "${conflict.title}" بتاريخ ${conflict.event_date}${conflict.town ? ` في ${conflict.town}` : ''}`;
 }
+
+/**
+ * أعمدة الصفّ التي يقرأها حارس التكرار وحدها: العائلة والمكان والتاريخ.
+ * والأصحاب فئة منفصلة (متعدّدة القيم) تُقرأ من `event_honorees`، والمحافظة
+ * تُحسب بقاعدتها في `editedRegion`. القائمة واحدة يبنى منها قرار «هل تحرّك
+ * مدخل؟» وملفّ المقارنة معاً، فلا تفترقان إن أُضيف عمود يوماً (تذكرة #159).
+ */
+const GUARDED_INPUT_COLUMNS = [
+  'family_clan', 'town', 'village_id', 'requested_village_name', 'event_date', 'event_end_date'
+];
 
 router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
@@ -620,6 +633,67 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     locationWarning = await events.checkTownMismatch(finalTown, finalLatitude, finalLongitude);
   }
 
+  // حارس التكرار على التعديل (تذكرة #159). لحظتا الخروج للعلن قبل اليوم كانتا
+  // النشر الفوري والاعتماد؛ وتعديل مناسبة معتمدة باب ثالث يخرج منه التغيير إلى
+  // الناس. الأدمن يُرفض بـ409 نفس شكل النشر حتى يُعيد الإرسال مع
+  // `confirm_duplicate` (ويسجَّل التجاوز)، والمالك لا يُوقَف أبداً: تعديله
+  // المشتبه يعود للمراجعة بدل أن يُنشر (قرار المالك).
+  //
+  // ولا يُقارَن التعديل إلا حين يغيّر ما يقرأه الحارس فعلاً: `changes` يحمل كل
+  // قيمة أرسلها العميل، لا الفروق وحدها — ونموذج الموقع (`web/app.js`) يعيد
+  // إرسال العائلة والتاريخ في كل حفظ. فوجود المفتاح ليس تعديلاً، والحكم للقاعدة
+  // نفسها التي يصنّف بها `updateEvent` (`columnValueChanged`)، فلا يقول الحارس
+  // «تغيّر» عمّا سيعتبره الكاتب «كما هو».
+  let duplicates = [];
+  let duplicateOverride = false;
+  let reviewForDuplicate = false;
+  if (existing.status === 'approved') {
+    const storedHonorees = (await events.honoreesForEvents([eventId]))[eventId] || [];
+    const storedNames = storedHonorees.length
+      ? storedHonorees.map(honoree => honoree.name)
+      : [existing.groom_name].filter(Boolean);
+    const finalNames = honorees === null ? storedNames : honorees.map(honoree => honoree.name);
+    // نفس الملفّ الذي سيكتبه `updateEvent`: قيمة الطلب إن جاءت، وإلا المخزَّنة.
+    const finalValue = column => (changes[column] !== undefined ? changes[column] : existing[column]);
+    const changedGuardInput = column => changes[column] !== undefined
+      && events.columnValueChanged(column, existing[column], changes[column]);
+    const movesGuardedInput = JSON.stringify(storedNames) !== JSON.stringify(finalNames)
+      || GUARDED_INPUT_COLUMNS.some(changedGuardInput)
+      || (regionId !== null && regionId !== undefined
+        && String(regionId) !== String(existing.region_id ?? ''));
+
+    if (movesGuardedInput) {
+      // الصفّ النهائي كما سيكتبه `updateEvent` — لا كما هو مخزَّن اليوم. المحافظة
+      // من الدالة نفسها التي يكتب بها، فلا يفترقان.
+      const subjectRegionId = (await events.editedRegion(existing, { changes, regionId }))
+        ?? existing.region_id;
+      // ملفّ المقارنة من القائمة نفسها، لا نسخة يدوية ثانية منها.
+      const guardedSubject = Object.fromEntries(
+        GUARDED_INPUT_COLUMNS.map(column => [column, finalValue(column)])
+      );
+      [duplicates] = await events.findPossibleDuplicates([{
+        names: finalNames,
+        region_id: subjectRegionId,
+        ...guardedSubject
+      }], { scope: await townScopeClause(req.user, 'e'), excludeEventId: eventId });
+
+      // الأدمن يُقاس ببلدة المناسبة المخزَّنة، كما يقيس `assertCanManageEvent`
+      // صلاحيته — لا ببلدة يحملها التعديل الجديد.
+      const editsAsAdmin = ADMIN_ROLES.includes(req.user.role)
+        && await isAdminForTown(req.user, existing.town);
+      if (duplicates.length && editsAsAdmin) {
+        if (!parseFlag(req.body.confirm_duplicate)) {
+          logger.info('events.duplicate_blocked_on_edit', {
+            eventId, duplicateIds: duplicates.map(duplicate => duplicate.id)
+          });
+          throw events.possibleDuplicateError(duplicates);
+        }
+        duplicateOverride = true;
+      }
+      reviewForDuplicate = duplicates.length > 0 && !editsAsAdmin;
+    }
+  }
+
   // Same as on publish: images go on to Cloudinary only after every check
   // above — the type's field visibility included, so an upload for a field
   // this type hides is never stored anywhere — and a refused edit leaves
@@ -632,7 +706,7 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   }
 
   const result = await events.updateEvent(eventId, existing, {
-    changes, honorees, extraDays, regionId, changedBy: req.user.id
+    changes, honorees, extraDays, regionId, changedBy: req.user.id, forceReview: reviewForDuplicate
   });
   if (changes.poster_url !== undefined) await events.releaseReplacedImage(existing.poster_url, changes.poster_url);
   if (changes.artist_image_url !== undefined) {
@@ -645,6 +719,16 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
   if (changedFields.length) {
     await activity.record({ actorId: req.user.id, action: 'event_edited', eventId, details: changedFields.join(',') });
   }
+  // تجاوز الأدمن حارس التكرار في تعديله — سطر مستقلّ كالاعتماد والنشر الفوري،
+  // يسمّي ما حُذّر منه.
+  if (duplicateOverride) {
+    await activity.record({
+      actorId: req.user.id,
+      action: 'event_duplicate_override',
+      eventId,
+      details: duplicates.map(duplicate => `#${duplicate.id}`).join('، ')
+    });
+  }
   // تعديل بقيت معه المناسبة منشورة يصل متابعيها الآن؛ تعديل أعادها للمراجعة
   // يصلهم عند اعتماده (admin.service.js) لا قبله.
   if (changedFields.length && existing.status === 'approved' && result.status === 'approved') {
@@ -656,9 +740,14 @@ router.patch('/events/:id', authenticate, eventMedia, asyncHandler(async (req, r
     followerNotifications.forEach(announceNotification);
   }
 
+  // رسالة المالك لا تسمّي المناسبة المشابهة ولا تعرض مقارنة: قرار المالك أن
+  // المستخدم العادي لا يرى الحارس — يرى أن تعديله في المراجعة وحسب، وتفصيل
+  // الشبه في طابور الأدمن (possible_duplicates على الصفّ المعلّق).
   let message = result.amendment === 'critical'
     ? 'تم حفظ التعديل، ولأنه يمسّ تاريخ أو مكان المناسبة أُعيدت إلى قائمة المراجعة حتى تُعتمد مجدداً'
-    : 'تم حفظ التعديل، والمناسبة تبقى منشورة كما هي';
+    : reviewForDuplicate
+      ? 'تم حفظ التعديل، وسيُعاد إلى قائمة المراجعة قبل نشره لأنه قد يكون تكراراً لمناسبة قائمة'
+      : 'تم حفظ التعديل، والمناسبة تبقى منشورة كما هي';
 
   if (result.collision?.hasCollision) {
     message += ` — تنبيه: ${buildCollisionMessage(result.collision.conflicts[0])}`;

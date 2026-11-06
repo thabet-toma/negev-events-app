@@ -12,7 +12,7 @@ const logger = require('../utils/logger');
 const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
-const { nameKey, comparePersonNames } = require('../utils/arabicName');
+const { nameKey, nameTokens, comparePersonNames } = require('../utils/arabicName');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
@@ -883,6 +883,15 @@ async function checkTownMismatch(town, latitude, longitude) {
 }
 
 /**
+ * العائلة كما تُخزَّن على الصفّ: ما كتبه العميل، وإلا «آل» وآخر كلمة من اسم
+ * صاحب المناسبة الأول. قاعدة واحدة يستعملها النشر (createEvent) وحارس التكرار
+ * معاً (تذكرة #159)، فلا يقارن الحارس عائلةً تخالف العائلة التي ستُكتب.
+ */
+function familyClanFor(familyClan, honorees) {
+  return familyClan || `آل ${honorees[0].name.split(' ').slice(-1)[0]}`;
+}
+
+/**
  * Creates an event plus its honorees and extra days in one transaction —
  * either all rows exist or none does, so a published card is never missing
  * the names it exists to display. `groom_name` (kept for every old client
@@ -935,7 +944,7 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
 
   return db.transaction(async connection => {
     const groomName = data.honorees[0].name;
-    const familyClan = data.family_clan || `آل ${groomName.split(' ').slice(-1)[0]}`;
+    const familyClan = familyClanFor(data.family_clan, data.honorees);
     const title = data.title || buildDefaultTitle(data.occasionTypeName, data.honorees, familyClan, data.town);
     // audio_title only ever defaults when there is actually an audio clip to
     // name — otherwise every event, funerals included, would silently pick
@@ -1161,8 +1170,45 @@ function columnValueChanged(column, storedValue, submittedValue) {
 }
 
 /**
- * Applies a partial edit. `changes` holds only the columns the route already
- * cleaned and confirmed differ from `existing`; `honorees`, when present,
+ * محافظة الصفّ بعد تعديل، أو `null` حين لا يُعيد التعديل حسابها (لم تُمسّ
+ * البلدة ولا القرية، ولم تُرسَل محافظة صريحة).
+ *
+ * المحافظة (تذكرة #120) مشتقّة من المكان لا حقلاً يحرّره المستخدم: تُعاد
+ * حسابها كلما مسّ التعديل البلدة أو اختيار القرية، أو أرسل العميل محافظة
+ * صريحة (البند الجامع وحده يحتاجها). ولا تدخل `changes` عمداً — فلا تظهر في
+ * سجل التعديلات، ولا تغيّر تصنيف التعديل الحرِج. وتُحسب قبل المعاملة كي
+ * يُرفض معرّف المحافظة غير النشِط بـ400 قبل كتابة أي صفّ.
+ *
+ * القرية المختارة هي مصدر محافظتها حين لا تُرسَل محافظة صريحة: تمرير البلدة
+ * وحدها كان يجعل البند الجامع يعود إلى المحافظة الافتراضية، فتصير مناسبة
+ * طولكرمية تُغيَّر قريتها نقبية. وإن لم تكن هناك قرية (بند جامع بلا قرية)
+ * بقيت المناسبة على محافظتها الحالية، لا على الافتراضية.
+ *
+ * دالة واحدة يستعملها `updateEvent` عند الكتابة وحارس التكرار قبلها (تذكرة
+ * #159): تعديل مناسبة معتمدة يُقارَن بمحافظة الصفّ النهائي، لا بمحافظته
+ * المخزَّنة، وإلا رأى الحارس مرشّحي محافظة غادرتها المناسبة.
+ */
+async function editedRegion(existing, { changes = {}, regionId = null } = {}) {
+  const nextTown = changes.town !== undefined ? changes.town : existing.town;
+  const villageRegionId = changes.village_id !== undefined && changes.village_id !== null
+    ? await villagesService.regionIdById(changes.village_id)
+    : null;
+  const regionNeedsRewrite = changes.town !== undefined || changes.village_id !== undefined
+    || (regionId !== null && regionId !== undefined);
+  if (!regionNeedsRewrite) return null;
+  return townsService.resolveRegionForEventPlace({
+    town: nextTown,
+    regionId: regionId ?? null,
+    villageRegionId,
+    fallbackRegionId: existing.region_id ?? null
+  });
+}
+
+/**
+ * Applies a partial edit. `changes` holds, for every column the client named,
+ * the value the route already cleaned — sent even when it equals what is
+ * stored; which of them actually differ is decided here, by
+ * `columnValueChanged`. `honorees`, when present,
  * fully replaces event_honorees and re-derives groom_name, and `extraDays`,
  * when present, fully replaces event_days the same way — all in the same
  * transaction as the event row update, same invariant as createEvent. A
@@ -1191,8 +1237,14 @@ function columnValueChanged(column, storedValue, submittedValue) {
  * same function reused rather than a second rule) so a cosmetic field
  * travelling alongside a critical one in one request is still logged
  * `approved` immediately — it never went through review either.
+ *
+ * `forceReview` sends an edit that would otherwise stay published back to the
+ * queue: an owner's edit the duplicate guard finds suspicious (ticket #159)
+ * is never refused — the owner is never blocked — but it must not go live
+ * unread, so the event lands `pending` and the admin queue shows what it
+ * resembles.
  */
-async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null, regionId = null } = {}) {
+async function updateEvent(eventId, existing, { changes = {}, honorees = null, extraDays = null, changedBy = null, regionId = null, forceReview = false } = {}) {
   // Only columns whose value actually differs count towards the
   // classification — a form resubmitting today's already-approved date
   // must not bounce the event back into moderation for no reason.
@@ -1200,30 +1252,9 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     column => columnValueChanged(column, existing[column], changes[column])
   );
 
-  // المحافظة (تذكرة #120) مشتقّة من المكان لا حقلاً يحرّره المستخدم: تُعاد
-  // حسابها كلما مسّ التعديل البلدة أو اختيار القرية، أو أرسل العميل محافظة
-  // صريحة (البند الجامع وحده يحتاجها). ولا تدخل `changes` عمداً — فلا تظهر
-  // في سجل التعديلات، ولا تغيّر تصنيف التعديل الحرِج. وتُحسب قبل المعاملة كي
-  // يُرفض معرّف المحافظة غير النشِط بـ400 قبل كتابة أي صفّ.
-  //
-  // القرية المختارة هي مصدر محافظتها حين لا تُرسَل محافظة صريحة: تمرير البلدة
-  // وحدها كان يجعل البند الجامع يعود إلى المحافظة الافتراضية، فتصير مناسبة
-  // طولكرمية تُغيَّر قريتها نقبية. وإن لم تكن هناك قرية (بند جامع بلا قرية)
-  // بقيت المناسبة على محافظتها الحالية، لا على الافتراضية.
-  const nextTown = changes.town !== undefined ? changes.town : existing.town;
-  const villageRegionId = changes.village_id !== undefined && changes.village_id !== null
-    ? await villagesService.regionIdById(changes.village_id)
-    : null;
-  const regionNeedsRewrite = changes.town !== undefined || changes.village_id !== undefined
-    || (regionId !== null && regionId !== undefined);
-  const resolvedRegionId = regionNeedsRewrite
-    ? await townsService.resolveRegionForEventPlace({
-      town: nextTown,
-      regionId: regionId ?? null,
-      villageRegionId,
-      fallbackRegionId: existing.region_id ?? null
-    })
-    : null;
+  // محافظة الصفّ بعد التعديل — القاعدة الوحيدة في `editedRegion`، والنداء
+  // نفسه يستعمله حارس التكرار قبل أي كتابة (تذكرة #159).
+  const resolvedRegionId = await editedRegion(existing, { changes, regionId });
 
   const { amendment, status: nextStatus, extraDaysChanged, honoreesChanged } = await db.transaction(async connection => {
     // The stored honorees are read here, before any replacement: the same
@@ -1254,12 +1285,23 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
 
     // One decision, two sources: the columns' own classifyAmendment plus the
     // extra-days comparison above. A critical change in either re-enters
-    // moderation; otherwise the event keeps the status it had.
+    // moderation; otherwise the event keeps the status it had — unless the
+    // route asked for a review (a suspicious duplicate, ticket #159), in which
+    // case an edit that would have stayed published returns to the queue.
     const amendment = classifyAmendment(changedColumns) === 'critical'
       || extraDaysEdit?.classification === 'critical'
       ? 'critical'
       : 'cosmetic';
-    const nextStatus = amendment === 'critical' && existing.status === 'approved' ? 'pending' : existing.status;
+    const nextStatus = (amendment === 'critical' || forceReview) && existing.status === 'approved'
+      ? 'pending'
+      : existing.status;
+
+    // سطر سجلّ التعديل يقول هل صار هذا التغيير نافذاً أم ينتظر مراجعة. و`forceReview`
+    // (تذكرة #159) يحبس التعديل كلّه، فلا يجوز أن يقول سطرٌ فيه «approved» والمناسبة
+    // نفسها «pending»؛ واعتماد المناسبة يحوّل أسطرها المعلّقة تباعاً (admin.service.js).
+    const amendmentRowStatus = classification => (
+      forceReview || classification === 'critical' ? 'pending' : 'approved'
+    );
 
     const assignments = [];
     const params = [];
@@ -1331,7 +1373,7 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
 
     for (const column of changedColumns) {
       const fieldClassification = classifyAmendment([column]);
-      const rowStatus = fieldClassification === 'critical' ? 'pending' : 'approved';
+      const rowStatus = amendmentRowStatus(fieldClassification);
       const oldValue = existing[column];
       const newValue = changes[column];
       await connection.execute(
@@ -1352,8 +1394,9 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
     // The extra-days list is one field, so it is one amendment row carrying
     // both lists as the readable text formatEventDaysList builds — the same
     // shape the per-column rows above use, just with a value that is itself a
-    // list. Its status matches a column row's: pending for a critical change,
-    // approved for a cosmetic one.
+    // list. Its status matches a column row's: pending for a critical change
+    // (or for any change when the guard holds the event back), approved for a
+    // cosmetic one that goes out at once.
     if (extraDaysEdit) {
       await connection.execute(
         `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
@@ -1365,14 +1408,15 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
           extraDaysEdit.newValue,
           changedBy,
           extraDaysEdit.classification,
-          extraDaysEdit.classification === 'critical' ? 'pending' : 'approved'
+          amendmentRowStatus(extraDaysEdit.classification)
         ]
       );
     }
 
     // Same one-field/one-row shape for the honorees list. Its classification
     // is always 'cosmetic': honorees are never critical, so the row is
-    // written approved exactly as a cosmetic column row is.
+    // written approved exactly as a cosmetic column row is — unless the guard
+    // holds the whole edit back.
     if (honoreesChanged) {
       await connection.execute(
         `INSERT INTO event_amendments (event_id, field, old_value, new_value, changed_by, classification, status)
@@ -1384,7 +1428,7 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
           formatHonoreesList(newHonorees),
           changedBy,
           'cosmetic',
-          'approved'
+          amendmentRowStatus('cosmetic')
         ]
       );
     }
@@ -1517,6 +1561,12 @@ function placeKey(row) {
  * with no `region_id` (an internal caller that predates #120): candidates are
  * not filtered at all then, so another governorate's names can meet here — the
  * older, unrestricted behaviour, kept on purpose for those callers only.
+ *
+ * When no pair of owner names meets, the family is the fallback signal
+ * (ticket #159): the same `family_clan`, in the same place and inside the
+ * window, is 'likely' by construction and never 'certain' — a clan can hold
+ * two weddings on one day, and the guard warns, it does not decide. It is not
+ * consulted when the names did meet, and never across towns.
  */
 function matchDuplicate(subject, candidate, regionNames) {
   // Dates first: the cheap test, and the one that rules out almost every
@@ -1537,7 +1587,16 @@ function matchDuplicate(subject, candidate, regionNames) {
       if (!best || (match.exact && !best.exact)) best = match;
     }
   }
-  if (!best) return null;
+
+  if (!best) {
+    // لم تلتقِ أسماء أصحاب المناسبة: العائلة وحدها، وبنفس البلدة وحدها
+    // (والنافذة فُحصت أعلى الدالة، والمحافظة قُصّت قبل المطابقة).
+    if (!samePlace || !sameFamilyClan(subject, candidate)) return null;
+    return {
+      confidence: 'likely',
+      reasons: ['نفس العائلة', overlaps ? 'نفس التاريخ' : 'تاريخ قريب', 'نفس البلدة']
+    };
+  }
 
   const placeUnknown = !samePlace && (regionNames.has(subject.town) || regionNames.has(candidate.town));
   return {
@@ -1551,11 +1610,39 @@ function matchDuplicate(subject, candidate, regionNames) {
 }
 
 /**
+ * مفتاح العائلة — توحيد الإملاء نفسه الذي تمرّ به أسماء الأشخاص
+ * (`nameTokens` في `arabicName.js`): همزات، ة/ه، ى/ي، «ال» التعريف،
+ * و«أبو/عبد» الملتصقة. فـ«آل الهواشلة» و«الهواشلة» عائلة واحدة.
+ *
+ * وأداة التعريف «آل» وحدها تصير «ال» بعد التوحيد وليست اسماً، فتُسقَط من أوّل
+ * المفتاح: الخادم نفسه هو من يشتقّها افتراضياً (`familyClanFor`)، فمقارنتها
+ * بمفتاح بقي فيه «آل» تعني ألا تلتقي العائلة المكتوبة بأيدي الناس أبداً.
+ * والباقي يُقارَن حرفياً: عائلتان تفترقان بحرف واحد عائلتان مختلفتان.
+ */
+function familyKey(familyClan) {
+  const tokens = nameTokens(familyClan || '');
+  if (tokens[0] === 'ال') tokens.shift();
+  return tokens.join(' ');
+}
+
+/**
+ * «نفس العائلة» — تُقارَن `family_clan` بمفتاح واحد على الطرفين (تذكرة #159).
+ * عائلة فارغة على أحد الطرفين لا تطابق شيئاً: الصفوف القديمة المزروعة
+ * مباشرة قد تحمل نصاً فارغاً، و«فارغ = فارغ» ليس دليلاً على تكرار.
+ */
+function sameFamilyClan(subject, candidate) {
+  const key = familyKey(subject.family_clan);
+  return key !== '' && key === familyKey(candidate.family_clan);
+}
+
+/**
  * The possible-duplicate guard's lookup. For each subject (`{ id?, names?,
- * region_id, town, village_id, requested_village_name, event_date,
- * event_end_date }`) returns, at the same index, the events that look like the
- * same occasion — 'certain' ones first. A subject with an `id` but no `names`
- * has its honorees read here, and is never reported as its own duplicate.
+ * family_clan?, region_id, town, village_id, requested_village_name,
+ * event_date, event_end_date }`) returns, at the same index, the events that
+ * look like the same occasion — 'certain' ones first. A subject with an `id`
+ * but no `names` has its honorees read here, and is never reported as its own
+ * duplicate; an edit passes the id in `excludeEventId` instead, because its
+ * subject carries the values the edit lands on, not the stored row.
  *
  * One query covers every subject: the date window narrows candidates in SQL;
  * the name comparison runs here because it is fuzzy and MySQL has no edit
@@ -1570,7 +1657,10 @@ function matchDuplicate(subject, candidate, regionNames) {
  * subject with no `region_id` — an internal caller that predates #120 — keeps
  * the older, unrestricted behaviour instead of failing.
  */
-async function findPossibleDuplicates(subjects, { scope = { clause: '', params: [] } } = {}) {
+async function findPossibleDuplicates(
+  subjects,
+  { scope = { clause: '', params: [] }, excludeEventId = null } = {}
+) {
   if (!subjects.length) return [];
 
   const windowStart = shiftDate(
@@ -1581,8 +1671,9 @@ async function findPossibleDuplicates(subjects, { scope = { clause: '', params: 
   );
 
   const candidates = await db.query(
-    `SELECT e.id, e.title, e.groom_name, e.region_id, e.town, e.village_id, e.requested_village_name,
-            e.event_date, e.event_end_date, e.status, e.poster_url, ot.name AS occasion_type_name
+    `SELECT e.id, e.title, e.groom_name, e.family_clan, e.region_id, e.town, e.village_id,
+            e.requested_village_name, e.event_date, e.event_end_date, e.status, e.poster_url,
+            ot.name AS occasion_type_name
        FROM events e
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE e.event_date <= ? AND COALESCE(e.event_end_date, e.event_date) >= ?
@@ -1612,6 +1703,7 @@ async function findPossibleDuplicates(subjects, { scope = { clause: '', params: 
     const regionUnknown = resolved.region_id === null || resolved.region_id === undefined;
     const matches = [];
     for (const candidate of candidates) {
+      if (excludeEventId && candidate.id === excludeEventId) continue;
       if (resolved.id && candidate.id === resolved.id) continue;
       if (!regionUnknown && candidate.region_id !== resolved.region_id) continue;
       const match = matchDuplicate(resolved, candidate, regionSet);
@@ -1637,14 +1729,16 @@ async function findPossibleDuplicates(subjects, { scope = { clause: '', params: 
  * The guard's refusal: 409 with `details.code = 'POSSIBLE_DUPLICATE'` and the
  * matches, so a client can show them side by side and resend with
  * `confirm_duplicate`. The message stands on its own for a client that
- * cannot — every APK published before the guard existed.
+ * cannot — every APK published before the guard existed. Its verb is neutral
+ * («أكّد المتابعة») because one message now serves publish, approval and edit,
+ * and each client's own button words the action differently.
  */
 function possibleDuplicateError(duplicates) {
   const [first] = duplicates;
   const more = duplicates.length > 1 ? ` (و${duplicates.length - 1} غيرها)` : '';
   return ApiError.conflict(
     `تشبه مناسبة موجودة: "${first.title}" بتاريخ ${first.event_date}${first.town ? ` في ${first.town}` : ''}${more}. `
-      + 'إن كانت مناسبة مختلفة فأكّد النشر رغم ذلك من لوحة الإدارة أو من آخر نسخة من التطبيق',
+      + 'إن كانت مناسبة مختلفة فأكّد المتابعة رغم ذلك من لوحة الإدارة أو من آخر نسخة من التطبيق',
     { code: 'POSSIBLE_DUPLICATE', duplicates }
   );
 }
@@ -1922,10 +2016,13 @@ module.exports = {
   listMapPoints,
   checkTownMismatch,
   createEvent,
+  familyClanFor,
   getEventForEdit,
   releaseReplacedImage,
   updateEvent,
+  editedRegion,
   classifyAmendment,
+  columnValueChanged,
   CRITICAL_AMENDMENT_FIELDS,
   EVENT_SPAN_START_SQL_EVENTS,
   EVENT_SPAN_END_SQL_EVENTS,
