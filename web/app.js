@@ -4037,7 +4037,11 @@ async function selectRegion(regionId) {
   // الافتراضية أو محافظة الحساب تُرسم مختارة بلا قيمة في negev_region، والضغط
   // عليها يجب أن يثبّتها في المتصفّح ويجلب بها — وإلا بقي الخادم على محافظة
   // الحساب بينما يظنّ المستخدم أنه اختار ما يراه (#124).
-  if (region.id === selectedRegionId && readSavedRegionId() === region.id) return;
+  //
+  // **ولا خروج مبكر في وضع «كل المحافظات»**: الحبّة المحفوظة تُرسم مختارة فيه،
+  // والضغط عليها هو الخروج منه — وهو ما كان يفعله مسحُ المحفوظ قبل #161. بلا
+  // هذا الشرط بقي العلَم معلَّقاً على التغذية بلا زرّ يُلغيه.
+  if (region.id === selectedRegionId && readSavedRegionId() === region.id && !feedAllRegions) return;
 
   const previousRegionId = selectedRegionId;
   // اختيار محافظة صريح يُلغي وضع «كل المحافظات» فوراً (تذكرة #161) — وإلا بقي
@@ -4062,11 +4066,13 @@ async function selectRegion(regionId) {
  * التغذية نفسها حرفياً. فالتوسيع علَم طلب صريح — `all_regions=1` عبر `apiFetch`
  * في `fetchEvents` — يتجاوز تقييد المحافظة على الخادم لهذا الجلب وطلبات الترقيم
  * التالية، ويبقى فعّالاً حتى يختار المستخدم محافظة صريحة (`selectRegion`
- * تلغيه). ولا يُكتب هنا اختيار: المنتقي يرسم المحافظة التي سيستخدمها الخادم بلا
- * علَم، والوضع وضعُ عرضٍ لا تفضيل.
+ * تلغيه).
+ *
+ * **ولا يمسّ التوسيعُ المحفوظ**: العلَم يوسّع الجلب وحده، و`negev_region` يبقى كما هو،
+ * فإعادة تحميل الصفحة تعود إلى المحافظة التي اختارها المستخدم. والطلب الموسَّع
+ * لا يحمل `X-Region` أصلاً (`apiFetch`)، فلا يدّعي محافظةً لم تخترها هذه النقرة.
  */
 function expandFeedToAllRegions() {
-  clearSavedRegionId();
   feedAllRegions = true;
   syncRegionPickerSelection();
   resetFeedForRegionChange();

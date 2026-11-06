@@ -4867,6 +4867,166 @@ async function run() {
     }
   });
 
+  /**
+   * عدّاد «مناسبة جديدة» اليومي محافظةُ المناسبة وحدها (تذكرة #161، البند 3):
+   * الصفوف والدفع صارا لمحافظة المناسبة، فيجب أن يقيس العدّاد ما يصل أهلها
+   * فعلاً. أربع اعتمادات اليوم في محافظةٍ تستهلك فرادى ذلك اليوم وتُنزل أول
+   * ملخّص لها، ثم أول اعتماد في محافظةٍ ثانية يصل أهلها فردياً لا ملخّصاً نصّه
+   * «(2)»، ولا تُستهلك حصّة دفعه في محافظةٍ ليست له.
+   *
+   * المحافظة الثانية صفٌّ مؤقّت، ويُحذف مع مستخدمه ومناسبته في نهاية الاختبار.
+   */
+  await test('عدّاد «مناسبة جديدة» اليومي بمحافظة المناسبة: أول اعتماد في محافظة أخرى فرديّ لا ملخّص، ودفعه لا يستهلكه غيرها (#161)', async () => {
+    // العدّاد يبدأ نظيفاً: كل ما اعتمده هذا القسم اليوم يُزاح إلى أمس — قاعدة
+    // القسم وحدها كما أعلاه، فالأربعة والخامس هنا هما كل ما يعنيه هذا الاختبار.
+    await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+    const tallyRegionName = `محافظة عدّاد ${Date.now()}`;
+    const { insertId: tallyRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.4, 35.1, 9, 99, 1)`,
+      [tallyRegionName]
+    );
+    const tallyListener = await createDirectUser('مستمع عدّاد محافظته');
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [tallyRegionId, tallyListener.id]);
+
+    const publishToday = async (name, town) => {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({ honorees: [{ name }], town, event_date: addDaysToDate(schedulerToday, 41) })
+      });
+      assert.strictEqual(created.body.status, 'approved', created.body.message);
+      return created.body.eventId;
+    };
+
+    let otherEventId = 0;
+    try {
+      // أربع اعتمادات اليوم في المحافظة الافتراضية: ثلاث فرادى ثم أول ملخّص.
+      for (const name of ['عريس العدّاد الأول', 'عريس العدّاد الثاني', 'عريس العدّاد الثالث', 'عريس العدّاد الرابع']) {
+        newsEventIds.push(await publishToday(name, 'رهط'));
+      }
+
+      // والخامس اليوم في محافظةٍ ثانية — اسم المحافظة نفسه مكاناً (بلدتها غير
+      // معروفة) فتقع مناسبته فيها، كما يكتب المستورِد صفّ محافظةٍ بلا بلدة.
+      const spy = captureRealtime();
+      try {
+        otherEventId = await publishToday('عريس العدّاد الآخر', tallyRegionName);
+      } finally {
+        spy.restore();
+      }
+      newsEventIds.push(otherEventId);
+
+      const otherRow = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [otherEventId]);
+      assert.strictEqual(otherRow.region_id, tallyRegionId, 'the fifth event sits in the second governorate');
+
+      assert.strictEqual(
+        (await newsRowsFor(tallyListener.id, otherEventId)).length,
+        1,
+        'the first approval today in its own governorate is an individual notification, not a digest'
+      );
+      const digestRows = await db.query(
+        "SELECT body FROM notifications WHERE user_id = ? AND type = 'event_new_digest'", [tallyListener.id]
+      );
+      assert.strictEqual(
+        digestRows.length,
+        0,
+        `the daily tally is its own governorate's, so no digest is written for it: ${JSON.stringify(digestRows.map(row => row.body))}`
+      );
+
+      // والدفع لم تستهلكه المحافظة الأولى: `push: extra === 1` على العدّاد
+      // المقصوص، وأول مناسبة لكل محافظة تستحق دفعاً.
+      const pushed = spy.pushes.filter(push => push.payload && push.payload.eventId === otherEventId);
+      assert.strictEqual(pushed.length, 1, 'and its push is not starved by another governorate\'s quota');
+      assert.strictEqual(pushed[0].options.regionId, tallyRegionId, 'scoped by its own governorate');
+    } finally {
+      // المناسبات تُحذف قبل محافظتها (المفتاح الأجنبي RESTRICT)، والمستخدم قبلها.
+      // الحذف بالمحافظة لا بالمعرّف: لو سقط تأكيد بعد أن أنشأ النشر المناسبة وقبل
+      // أن يُلتقط معرّفها، يبقى التنظيف صحيحاً فلا يحجب خطؤه الخطأَ الأصلي.
+      await db.execute('DELETE FROM events WHERE region_id = ?', [tallyRegionId]);
+      await db.execute('DELETE FROM users WHERE id = ?', [tallyListener.id]);
+      await db.execute('DELETE FROM regions WHERE id = ?', [tallyRegionId]);
+    }
+  });
+
+  /**
+   * ملخّص «مناسبات جديدة اليوم» لكل محافظة لا لكل مستخدم (تذكرة #161):
+   * العدّاد صار بمحافظة المناسبة، ومن بلا محافظة يتلقّى صفوف كل المحافظات —
+   * فلو بقي مفتاح الملخّص `event_new_digest_<اليوم>` وحده لكتبت كل محافظة فوق
+   * صفّ الأخرى بعددها هي ("(2)" ثم "(1)")، ولدُفع له ملخّص ثانٍ لأن
+   * `extra === 1` يتحقّق مرّة لكل محافظة. المقفول هنا: صفّ ملخّص مستقلّ لكل
+   * محافظة وعدده الصحيح، ودفعة واحدة لكل محافظة بعددها.
+   *
+   * `newsListener` بلا محافظة (يُتحقَّق منه بالكود أدناه). المحافظة الثانية
+   * صفٌّ مؤقّت تُحذف مناسباتها معها في نهاية الاختبار.
+   */
+  await test('من بلا محافظة يتلقّى ملخّصاً مستقلاً لكل محافظة بعددها الصحيح ودفعةً واحدة لكل منهما — لا صفّاً واحداً يُكتب فوقه (#161)', async () => {
+    // العدّاد يبدأ نظيفاً — قاعدة القسم وحدها كما في الاختبارين أعلاه.
+    await db.execute('UPDATE events SET first_approved_at = first_approved_at - INTERVAL 1 DAY WHERE first_approved_at >= CURDATE()');
+
+    const listenerRow = await db.queryOne('SELECT region_id FROM users WHERE id = ?', [newsListener.id]);
+    assert.strictEqual(listenerRow.region_id, null, 'the listener under test has no governorate');
+
+    const digestRegionName = `محافظة ملخّص ${Date.now()}`;
+    const { insertId: digestRegionId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 32.4, 35.1, 9, 97, 1)`,
+      [digestRegionName]
+    );
+
+    const publishToday = async (name, town) => {
+      const created = await api('POST', '/api/events', {
+        token: adminToken,
+        body: weddingEventBody({ honorees: [{ name }], town, event_date: addDaysToDate(schedulerToday, 43) })
+      });
+      assert.strictEqual(created.body.status, 'approved', created.body.message);
+      return created.body.eventId;
+    };
+
+    const spy = captureRealtime();
+    try {
+      // المحافظة الافتراضية: خمس اعتمادات اليوم ← ثلاث فرادى ثم ملخّص "(2)".
+      for (const name of ['عريس الملخّص أ١', 'عريس الملخّص أ٢', 'عريس الملخّص أ٣', 'عريس الملخّص أ٤', 'عريس الملخّص أ٥']) {
+        newsEventIds.push(await publishToday(name, 'رهط'));
+      }
+      // المحافظة الثانية: أربع اعتمادات ← ثلاث فرادى ثم ملخّص "(1)" — هذا ما كان
+      // يكتب فوق ملخّص الأولى بمفتاحه الواحد.
+      for (const name of ['عريس الملخّص ب١', 'عريس الملخّص ب٢', 'عريس الملخّص ب٣', 'عريس الملخّص ب٤']) {
+        await publishToday(name, digestRegionName);
+      }
+      spy.restore();
+
+      const rows = await db.query(
+        "SELECT dedupe_key, body FROM notifications WHERE user_id = ? AND type = 'event_new_digest'", [newsListener.id]
+      );
+      assert.strictEqual(
+        rows.length,
+        2,
+        `one digest row per governorate for a user with none, not one row overwritten: ${JSON.stringify(rows)}`
+      );
+      const firstRegionRow = rows.find(row => row.dedupe_key.endsWith(`_${defaultRegionId}`));
+      const secondRegionRow = rows.find(row => row.dedupe_key.endsWith(`_${digestRegionId}`));
+      assert.ok(firstRegionRow && secondRegionRow, `each key carries its governorate: ${JSON.stringify(rows)}`);
+      assert.notStrictEqual(firstRegionRow.dedupe_key, secondRegionRow.dedupe_key);
+      assert.ok(firstRegionRow.body.includes('(2)'), `the first governorate keeps its own count: "${firstRegionRow.body}"`);
+      assert.ok(secondRegionRow.body.includes('(1)'), `the second governorate has its own count: "${secondRegionRow.body}"`);
+
+      // الدفع: ملخّص واحد لكل محافظة بعدده، ولا دفعة للخامس (extra = 2).
+      const digestPushes = spy.pushes.filter(push => push.payload && push.payload.title === 'مناسبات جديدة اليوم');
+      assert.strictEqual(digestPushes.length, 2, 'exactly one digest push per governorate');
+      const firstPush = digestPushes.filter(push => push.options.regionId === defaultRegionId);
+      const secondPush = digestPushes.filter(push => push.options.regionId === digestRegionId);
+      assert.strictEqual(firstPush.length, 1, 'one digest push for the first governorate');
+      assert.strictEqual(secondPush.length, 1, 'one digest push for the second governorate');
+      assert.ok(firstPush[0].payload.body.includes('(1)'), `pushed at its first digest, count (1): "${firstPush[0].payload.body}"`);
+      assert.ok(secondPush[0].payload.body.includes('(1)'), `the second governorate's push carries its own count: "${secondPush[0].payload.body}"`);
+    } finally {
+      spy.restore();
+      // بالمحافظة لا بمعرّفات ملتقَطة: لو سقط تأكيد لا يحجب التنظيف خطأه الأصلي.
+      await db.execute('DELETE FROM events WHERE region_id = ?', [digestRegionId]);
+      await db.execute('DELETE FROM regions WHERE id = ?', [digestRegionId]);
+    }
+  });
+
   await test('A followed event 2 days out reads «باقي يومين», the countdown\'s own idiom', async () => {
     const created = await api('POST', '/api/events', {
       token: adminToken,
