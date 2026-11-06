@@ -1018,19 +1018,26 @@ async function listDueScheduledPublish() {
 /**
  * تعليم المناسبة «أُعلنت» — ذرّي: `UPDATE ... WHERE announced_at IS NULL`
  * ينجح مرّة واحدة ولو تزامن تشغيلان، فيُعلن أحدهما وحده. يُستعمل اليوم في
- * موضع واحد: أول كتابة داخل معاملة `notifications.service.notifyNewEvent`
+ * موضع واحد: داخل قفل صفّ المناسبة في معاملة `notifications.service.notifyNewEvent`
  * (تصحيح جولة #167)، فالحجز والإعلان **معاملة واحدة**: يمنع التكرار بين
  * تشغيلين متزامنين، ويسقط مع صفوف الإشعارات إن فشل الإعلان لأن المعاملة كلها
  * تتراجع — فلا يبقى `announced_at` معلَّماً على إعلان لم يصل (وهو ما كان
  * يستبعد الصفّ من كل محاولة تالية)، ولا يُعلَّم صفٌّ أعلنه المسار عند الاعتماد
  * ثم تغيّر موعده إلى المستقبل.
  *
+ * يعيد `UPDATE` فحص الأهلية الحالية تحت القفل، لا أهلية دفعة المجدول القديمة:
+ * اعتمادٌ قائم وظهورٌ عام وموعدٌ بلغ (أو NULL للنشر الفوري)، وإلا لا حجز ولا
+ * إعلان. فالتأجيل أو العودة للمراجعة بين الجلب والحجز يتركان الصفّ للمحاولة اللاحقة.
+ *
  * `connection` اختياري: يُمرَّر داخل معاملة قائمة (mysql2 يرفض `undefined`،
  * و`eventId` رقم دائم)، ويُستعمل `db` بدونه.
- * يعيد `true` للمستدعي الذي حجز الصفّ فعلاً.
+ * يعيد `true` للمستدعي الذي حجز الصفّ المؤهل فعلاً.
  */
 async function markAnnounced(eventId, connection = null) {
-  const sql = 'UPDATE events SET announced_at = NOW() WHERE id = ? AND announced_at IS NULL';
+  const sql = `UPDATE events SET announced_at = NOW()
+                WHERE id = ? AND announced_at IS NULL
+                  AND status = 'approved' AND visibility = 'public'
+                  AND (publish_at IS NULL OR publish_at <= NOW())`;
   if (connection) {
     const [result] = await connection.execute(sql, [eventId]);
     return result.affectedRows === 1;
