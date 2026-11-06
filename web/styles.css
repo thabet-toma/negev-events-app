@@ -5272,7 +5272,7 @@ body.albums-page-open { overflow: hidden; }
 .calc-rows{display:flex;flex-direction:column;gap:10px}
 
 .calc-row{display:flex;align-items:center;gap:8px}
-/* في الصفّ يقاس العرض بالمرونة لا بـ100%، فالاسم أعرض من المبلغ دائماً. */
+/* في الصفّ يقاس العرض بالمرونة لا بـ100%، فيتساوى النصيبان هنا ثم يأخذ الاسم نصيباً أكبر في القاعدة أدناه. */
 .calc-row .calc-input{flex:1 1 0}
 
 .calc-input{
@@ -5282,8 +5282,8 @@ body.albums-page-open { overflow: hidden; }
   color:var(--ink);font-family:var(--font-main);font-size:.9rem;
 }
 .calc-input:focus{outline:2px solid var(--sky);outline-offset:1px}
-/* اسم البند أعرض من مبلغه: المبلغ أرقام قصيرة دائماً. */
-.calc-budget-name,.calc-split-name{flex:1.6 1 0}
+/* اسم البند أعرض من مبلغه (1.6:1): التحديد مساوٍ لسطر الأساس عمداً، فالقاعدة تفوز بمكانها بعده وحده. */
+.calc-row .calc-budget-name,.calc-row .calc-split-name{flex:1.6 1 0}
 
 .calc-row-remove{
   flex:0 0 auto;display:grid;place-items:center;

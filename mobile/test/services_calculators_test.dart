@@ -536,5 +536,55 @@ void main() {
       );
       expect(find.textContaining('NaN'), findsNothing);
     });
+
+    testWidgets('زرّ التقويم يفتح حواره على تاريخ صالح خارج مدى المنتقي', (
+      tester,
+    ) async {
+      await pumpCalculators(tester);
+      await openTab(tester, ServicesCalculator.countdown);
+
+      // ٢٠٠٠-٠١-٠١ تاريخ صالح ويُقبل في الحقل، لكنه قبل أول مدى المنتقي
+      // (اليوم ناقص عشر سنوات)، و`showDatePicker` يرفض `initialDate` خارجه.
+      await tester.enterText(
+        find.byKey(const Key('calc_countdown_date')),
+        '2000-01-01',
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('calc_countdown_pick')));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byType(DatePickerDialog),
+        findsOneWidget,
+        reason: 'المنتقي يُفتح محصوراً داخل مداه بدل أن يرمي',
+      );
+      final dialog = tester.widget<DatePickerDialog>(
+        find.byType(DatePickerDialog),
+      );
+      expect(
+        dialog.initialDate,
+        dialog.firstDate,
+        reason: 'المكتوب قبل المدى يُحصر على حده الأدنى لا يُمرَّر كما هو',
+      );
+
+      // زرّ الإلغاء يغلقه، وما كتبه المستخدم يبقى كما هو حتى يختار.
+      final localizations = MaterialLocalizations.of(
+        tester.element(find.byType(DatePickerDialog)),
+      );
+      await tester.tap(find.text(localizations.cancelButtonLabel));
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsNothing);
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const Key('calc_countdown_date')),
+            )
+            .controller
+            ?.text,
+        '2000-01-01',
+      );
+    });
   });
 }
