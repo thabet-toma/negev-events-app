@@ -46,6 +46,10 @@ function eventSpanEndSql() {
   return require('./events.service').EVENT_SPAN_END_SQL_E;
 }
 
+function publicEventVisibleSql() {
+  return require('./events.service').PUBLIC_EVENT_VISIBLE_SQL_E;
+}
+
 function escapeLike(term) {
   return require('./events.service').escapeLike(term);
 }
@@ -72,12 +76,18 @@ function pagination(page, limit, total) {
 
 /**
  * بوابات **المناسبة** وحدها: معتمدة، نوعها يسمح بالأرشيف، وامتدادها انتهى.
+ * «معتمدة» ليست نصاً مكتوباً هنا: هي `PUBLIC_EVENT_VISIBLE_SQL_E` المشتركة في
+ * `events.service.js`، فما تضيفه #166/#167 إلى القطعة يصل إلى مستهلكَي هذا
+ * الملفّ المذكورين هنا — `getPublicPerson` (مناسبات الشخص) و`searchPeople`
+ * (عدّاد `albums_count`) — كما يصل التغذية، ولا تبقى مناسبة مخفيّة ظاهرةً في
+ * قائمة ولا معدودةً في بحث. وهي داخلة أيضاً في `publicAlbumConditions()`
+ * تحته، فبوابات الألبوم تُرثي شرط الظهور نفسه.
  * تُستعمل حيث لا ألبوم بعد — صفحة الشخص وعدّ مناسباته — لأن الألبوم يُنشأ
  * كسولاً عند أول فتح للوحة، وصاحبُ عرسٍ لم يُفتح ألبومه بعد يجب أن يُوجَد.
  */
 function publicEventConditions() {
   return [
-    "e.status = 'approved'",
+    publicEventVisibleSql(),
     'ot.archive_gallery = 1',
     `${eventSpanEndSql()} < CURDATE()`
   ];
