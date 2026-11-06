@@ -466,7 +466,7 @@ function pageStyle(palette) {
     font-size: 12px; color: ${palette.faint}; opacity: 0.75;
     margin: 14px 0 0; letter-spacing: 0.3px;
   }
-  /* جواب الضيف (تذكرة #169، ADR-0015): نموذج HTML عادي بلا `<script>`.
+  /* جواب الضيف (تذكرة #169، ADR-0015): نموذج HTML عادي بلا وسم script.
      حقوله تُرسَل إلى /e/:id/rsvp ثم يعود الزائر إلى هذه الصفحة بإعادة توجيه،
      والشارة أو رسالة الرفض تُرسم من ?rsvp= برمز من قائمة مغلقة. */
   .rsvp {
