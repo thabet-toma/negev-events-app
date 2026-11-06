@@ -4,6 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const occasionTypes = require('./occasionTypes.service');
 const townsService = require('./towns.service');
+const adminScope = require('./adminScope.service');
 const villagesService = require('./villages.service');
 const albums = require('./albums.service');
 const people = require('./people.service');
@@ -208,10 +209,17 @@ async function remindedEventIdsForUser(userId, eventIds) {
 }
 
 /**
- * Attaches `is_reminded` (always) and `followers_count` (only when the
- * event's occasion type has `show_followers_count` on — absent entirely
- * otherwise, never zero, since a hidden count must not be inferable from a
- * suspicious zero) to a list of events already carrying `occasion_type`.
+ * Attaches `is_reminded` (always), and `followers_count` + `interested_count`
+ * (only when the event's occasion type has `show_followers_count` on — absent
+ * entirely otherwise, never zero, since a hidden count must not be inferable
+ * from a suspicious zero) to a list of events already carrying
+ * `occasion_type`.
+ *
+ * The two counter keys carry the **same number** on purpose: `interested_count`
+ * is the name the #168 spec uses («التذكيرات، تحت `show_followers_count`»),
+ * and `followers_count` is what every published client already reads. An alias
+ * adds the requested name without breaking a single shipped APK; neither key
+ * is ever written without the other.
  */
 async function attachReminderState(events, userId) {
   if (!events.length) return events;
@@ -225,7 +233,9 @@ async function attachReminderState(events, userId) {
   return events.map(event => {
     const shaped = { ...event, is_reminded: remindedSet.has(event.id) };
     if (event.occasion_type?.show_followers_count !== false) {
-      shaped.followers_count = followersMap[event.id] || 0;
+      const followers = followersMap[event.id] || 0;
+      shaped.followers_count = followers;
+      shaped.interested_count = followers;
     }
     return shaped;
   });
@@ -300,6 +310,12 @@ async function clearEndedReminders(userId) {
  * — an admin PATCH between two deploys would otherwise put an attendance
  * counter on a funeral for a whole release cycle.
  *
+ * **`rsvp_enabled` closes the counter too**, not just the form: ADR-0015 §3
+ * says a type with the feature off shows «لا النموذج ولا الزرّ ولا العدّاد»
+ * and its route answers 404. Reading only `show_rsvp_count` here left the
+ * number leaving the API for a type whose whole feature — and whose route —
+ * was switched off.
+ *
  * Accepts either shape a caller holds: the type object `attachHonoreesAndTypes`
  * builds (booleans already cast) or a raw SQL row (0/1). A missing key means
  * "not decided" and shows the counter, the same rule
@@ -307,6 +323,7 @@ async function clearEndedReminders(userId) {
  */
 function rsvpCountVisible(occasionType) {
   if (!occasionType || occasionType.tone === 'solemn') return false;
+  if (occasionType.rsvp_enabled === false || occasionType.rsvp_enabled === 0) return false;
   if (occasionType.show_rsvp_count === false || occasionType.show_rsvp_count === 0) return false;
   return true;
 }
@@ -440,8 +457,14 @@ async function removeRsvp(eventId, userId) {
 }
 
 /**
- * «مين جاي» — قائمة أجوبة الحضور لصاحب المناسبة أو أدمن في نطاقه (الحكم في
- * طبقة المسار عبر `assertCanManageEvent`، لا هنا).
+ * «مين جاي» — قائمة أجوبة الحضور لصاحب المناسبة أو أدمن في نطاقه.
+ *
+ * **الحكم هنا لا في طبقة المسار** (`CLAUDE.md`: نطاق الأدمن المحلي داخل
+ * الاستعلام لا في الراوتر): `user` يُمرَّر إلى الخدمة، و
+ * `adminScope.ownerOrTownScopeClause` يبني شرط النطاق الذي يحمله استعلام
+ * القائمة نفسه — إضافةً إلى فحص الوجود أولاً بالشرط ذاته — فلا تخرج الأسماء
+ * ولو نسي مسارٌ جديد تمرير المستخدم، والرفض **404 لا 403** كي لا يُؤكَّد وجود
+ * مناسبة لمن لا يملكها (نفس نمط `assertEventInScope`).
  *
  * **الهاتف لا يُنتقى في هذا الاستعلام أصلاً** — لا `guest_phone` ولا `SELECT *`
  * لتُخفى في JS: عمود لا يدخل النتيجة لا يمكن أن يخرج في ردّ. والاسم من
@@ -451,17 +474,27 @@ async function removeRsvp(eventId, userId) {
  * Over the two faces (account and, later, share_page) the totals count both, so
  * the owner's number is the same number the public counter shows.
  */
-async function listEventRsvps(eventId) {
+async function listEventRsvps(eventId, user) {
+  const { clause, params } = await adminScope.ownerOrTownScopeClause(user, 'e');
+
+  // الوجود والنطاق في استعلام واحد: 404 واحدة لما لا يوجد ولما هو خارج النطاق.
+  const event = await db.queryOne(
+    `SELECT e.id FROM events e WHERE e.id = ?${clause}`,
+    [eventId, ...params]
+  );
+  if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+
   const rows = await db.query(
     `SELECT er.id,
             COALESCE(u.full_name, er.guest_name) AS name,
             er.response, er.party_size, er.source,
             er.created_at, er.updated_at
        FROM event_rsvps er
+       JOIN events e ON e.id = er.event_id
        LEFT JOIN users u ON u.id = er.user_id
-      WHERE er.event_id = ?
+      WHERE er.event_id = ?${clause}
       ORDER BY er.response DESC, er.created_at ASC, er.id ASC`,
-    [eventId]
+    [eventId, ...params]
   );
 
   const rsvps = rows.map(row => ({

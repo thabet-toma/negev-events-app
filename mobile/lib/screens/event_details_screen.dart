@@ -249,6 +249,10 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   /// «جاي / مش جاي» — الجواب يُحفظ على الخادم بنداء واحد (upsert)، و`yes`
   /// يُنشئ «ذكّرني» هناك. فالإشارات المشتركة تُكتب هنا كما يكتبها [_toggleRemind]
   /// نفسه: «قائمتي» والتغذية تعرفان الحالة بلا إعادة جلب.
+  ///
+  /// وإعادة الجلب بعد الحفظ تقرأ الحالة من الخادم نفسه — `eventDetails` ترفق
+  /// الرمز فتصل `my_rsvp` — فيظهر الجواب وزرّ السحب؛ بلا إرفاق الرمز تعود
+  /// الاستجابة مجهولةً وتبقى «لم تُجب بعد» (تذكرة #168).
   Future<void> _submitRsvp(bool going, int partySize) async {
     final services = AppServices.of(context);
     if (!services.auth.isSignedIn) {
@@ -390,7 +394,8 @@ class _EventDetailsBody extends StatelessWidget {
   final VoidCallback onCallHost;
   final VoidCallback onCongratulate;
   final VoidCallback onRemindTap;
-  /// تأكيد الحضور (تذكرة #168): الجواب مع عدد المرافقين، وسحب الجواب.
+  /// تأكيد الحضور (تذكرة #168): الجواب مع إجمالي الحاضرين بمن فيهم صاحب
+  /// الجواب، وسحب الجواب.
   final void Function(bool going, int partySize) onRsvpAnswer;
   final VoidCallback onRsvpWithdraw;
   final ValueChanged<int> onReport;
@@ -728,8 +733,9 @@ class _EventDetailsBody extends StatelessWidget {
 
 /// كتلة «جاي / مش جاي» في صفحة المناسبة (تذكرة #168).
 ///
-/// الزرّان مع عدد المرافقين (1..20)، وحالة الجواب الحالية، والعدّاد العلني حين
-/// يرسله الخادم. `goingCount == null` تعني أنّ النوع يخفيه — لا صفراً يُعرض.
+/// الزرّان مع إجمالي الحاضرين بمن فيهم صاحب الجواب (1..20)، وحالة الجواب
+/// الحالية، والعدّاد العلني حين يرسله الخادم. `goingCount == null` تعني أنّ
+/// النوع يخفيه — لا صفراً يُعرض. و`1` تعني «أنت وحدك»، لا «مرافق واحد».
 /// `Stateful` لأن العدد المختار **قبل** الإرسال حالة محلية لا يعرفها الخادم بعد.
 class _RsvpSection extends StatefulWidget {
   const _RsvpSection({
@@ -825,7 +831,7 @@ class _RsvpSectionState extends State<_RsvpSection> {
           Row(
             children: [
               Text(
-                'عدد المرافقين',
+                'إجمالي الحاضرين بمن فيك',
                 style: TextStyle(fontSize: 12.5, color: context.c.inkSoft),
               ),
               const SizedBox(width: 10),

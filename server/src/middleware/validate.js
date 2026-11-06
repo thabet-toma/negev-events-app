@@ -317,16 +317,18 @@ function parseLimit(value, fallback = 24, max = 100) {
 }
 
 /**
- * عدد المرافقين في جواب «جاي» (تذكرة #168): 1..`RSVP_PARTY_SIZE_MAX`، والغياب
- * يعني 1 — الجواب «جاي» بلا عدد يقول «أنا وحدي». وقيمة مرسَلة وغير صالحة
- * **تُرفض 400** ولا تهبط صامتةً إلى 1: الرفض الصامت يجعل «جاي مع ٣٠» يبدو
- * كأنه نُشر بينما حُسب واحداً، والعدّاد العلني هو ما يعنيه الرقم.
+ * عدد الحاضرين في جواب «جاي» (تذكرة #168): 1..`RSVP_PARTY_SIZE_MAX`، والغياب
+ * يعني 1. الرقم **إجمالي الحاضرين بمن فيهم صاحب الجواب** — لا عدد المرافقين
+ * وحدهم — لأن `rsvp_going_count` مجموع `party_size`، والتطبيق نفسه يقرأ 1
+ * «أنت وحدك». وقيمة مرسَلة وغير صالحة **تُرفض 400** ولا تهبط صامتةً إلى 1:
+ * الرفض الصامت يجعل «جاي مع ٣٠» يبدو كأنه نُشر بينما حُسب واحداً، والعدّاد
+ * العلني هو ما يعنيه الرقم.
  */
 function parsePartySize(value, fallback = 1) {
   if (value === undefined || value === null || value === '') return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > RSVP_PARTY_SIZE_MAX) {
-    throw ApiError.badRequest(`عدد المرافقين يجب أن يكون بين 1 و${RSVP_PARTY_SIZE_MAX}`);
+    throw ApiError.badRequest(`عدد الحاضرين يجب أن يكون بين 1 و${RSVP_PARTY_SIZE_MAX}`);
   }
   return parsed;
 }

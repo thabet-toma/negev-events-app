@@ -14074,6 +14074,15 @@ async function run() {
     assert.strictEqual(size.options[0].value, '1', 'the first option is 1 — party_size is never 0');
     assert.strictEqual(size.options[19].value, '20', 'and the last is the server ceiling, 20');
     assert.strictEqual(size.value, '3', 'the picker must start on the answer already stored');
+    assert.ok(
+      host.textContent.includes('إجمالي الحاضرين بمن فيك'),
+      'the field is named as the total attending including the answerer — not «عدد المرافقين», which undercounted the party by one'
+    );
+    assert.ok(!host.textContent.includes('عدد المرافقين'), 'the companions-only wording must be gone');
+    assert.ok(
+      dom.window.rsvpStateText({ response: 'yes', party_size: 1 }).includes('أنت وحدك'),
+      'party_size = 1 means the responder alone, the same meaning the picker now names'
+    );
     assert.ok(host.textContent.includes('جوابك: «جاي» — 3 أشخاص'), 'the current answer must be readable as Arabic');
   });
 
@@ -14105,7 +14114,7 @@ async function run() {
     assert.ok(!hiddenCount.includes('جايون:'), 'a hidden counter must not be drawn, not drawn as zero');
   });
 
-  await test('«جاي» يرسل PUT /api/events/:id/rsvp بعدد المرافقين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم', async () => {
+  await test('«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم', async () => {
     const calls = [];
     const base = buildFetchStub();
     // خادم وهمي صغير: الجواب المطبَّق يُحفظ، فإعادة الجلب بعد الحفظ (وهي ما تفعله

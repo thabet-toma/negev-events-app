@@ -354,8 +354,12 @@ class NegevApi {
         .toList();
   }
 
+  /// تفاصيل المناسبة. **بالرمز حين يوجد حساب** (`auth: true` يرفقه وحده):
+  /// الخادم يقرأ الجلسة اختيارياً على هذا المسار ويعيد `my_rsvp` لصاحبها،
+  /// ومجهولاً لا يعيده إطلاقاً. بلا هذا الإرفاق تعود «لم تُجب بعد» لكل
+  /// مسجَّل بعد الحفظ ولا يظهر زرّ السحب (تذكرة #168).
   Future<Event> eventDetails(int id) async {
-    final data = await _client.get('/api/events/$id');
+    final data = await _client.get('/api/events/$id', auth: true);
     final event = data['event'];
     if (event is! Map<String, dynamic>) {
       throw const ApiException('تعذّر قراءة بيانات المناسبة');

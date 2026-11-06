@@ -2790,8 +2790,10 @@ function eventPageInfoRowHtml(icon, label, value) {
 }
 
 /**
- * سقف عدد المرافقين — مطابق لـ`RSVP_PARTY_SIZE_MAX` في
+ * سقف إجمالي الحاضرين في جواب واحد — مطابق لـ`RSVP_PARTY_SIZE_MAX` في
  * `server/src/constants.js`، فالواجهة لا ترسل قيمة سيرفضها الخادم بـ400.
+ * والرقم **إجمالي الحاضرين بمن فيهم صاحب الجواب**، لا المرافقون وحدهم: الخادم
+ * يجمع `party_size` في `rsvp_going_count`، واختيار 1 يعني «أنت وحدك».
  */
 const RSVP_PARTY_SIZE_MAX = 20;
 
@@ -2818,9 +2820,10 @@ function rsvpStateText(myRsvp) {
 
 /**
  * كتلة تأكيد الحضور في صفحة المناسبة (تذكرة #168): زرّا «جاي» و«مش جاي» مع
- * اختيار العدد 1..20، وحالة الجواب، والعدّاد العلني حين يسمح النوع به
- * (`rsvp_going_count` يغيب كلياً حين يخفيه النوع أو نغمة العزاء — لا صفر).
- * تُرسم لمناسبة `rsvp_enabled` وحدها، ولا تُرسم لنوع `solemn` إطلاقاً.
+ * إجمالي الحاضرين (1..20، بمن فيهم صاحب الجواب)، وحالة الجواب، والعدّاد العلني
+ * حين يسمح النوع به (`rsvp_going_count` يغيب كلياً حين يخفيه النوع أو تطفئه
+ * الميزة — لا صفر). تُرسم لمناسبة `rsvp_enabled` وحدها، ولا تُرسم لنوع `solemn`
+ * إطلاقاً.
  */
 function renderEventRsvpHtml(evt, { isMourning = false } = {}) {
   if (isMourning || !eventRsvpVisible(evt)) return '';
@@ -2840,8 +2843,8 @@ function renderEventRsvpHtml(evt, { isMourning = false } = {}) {
         ${goingCount != null ? `<span class="event-page-rsvp-count" id="eventPageRsvpCount">جايون: ${Number(goingCount) || 0}</span>` : ''}
       </div>
       <div class="event-page-rsvp-controls">
-        <label class="event-page-rsvp-size-label" for="rsvpPartySize">عدد المرافقين</label>
-        <select id="rsvpPartySize" class="event-page-rsvp-size" aria-label="عدد المرافقين معك">${sizeOptions}</select>
+        <label class="event-page-rsvp-size-label" for="rsvpPartySize">إجمالي الحاضرين بمن فيك</label>
+        <select id="rsvpPartySize" class="event-page-rsvp-size" aria-label="إجمالي الحاضرين بمن فيك">${sizeOptions}</select>
         <button type="button" class="event-page-btn rsvp-choice${chosen === 'yes' ? ' is-chosen' : ''}" onclick="submitRsvp('yes')">
           <i class="fa-solid fa-check" aria-hidden="true"></i> جاي
         </button>

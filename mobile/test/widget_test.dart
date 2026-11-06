@@ -3659,8 +3659,15 @@ void main() {
             headers: {'content-type': 'application/json; charset=utf-8'},
           );
         }
+        // التفصيل المجهول لا يعيد `my_rsvp` — هذا ما يفعله الخادم الحقيقي
+        // (`optionalAuthenticate`)، وهذا الفرق هو ما يكشف إعادة الجلب بلا رمز:
+        // لو أرجع الوهمي الحالة للطلب المجهول لمرّت الشاشة القديمة كاذبةً.
+        final detailBody = Map<String, dynamic>.from(eventBody);
+        if (request.headers['Authorization'] != 'Bearer test-token') {
+          detailBody.remove('my_rsvp');
+        }
         return http.Response(
-          jsonEncode({'success': true, 'event': eventBody}),
+          jsonEncode({'success': true, 'event': detailBody}),
           200,
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
@@ -3688,16 +3695,17 @@ void main() {
       return requests;
     }
 
-    testWidgets('صفحة المناسبة: زرّا «جاي» و«مش جاي»، وعدد المرافقين، والعدّاد، وحالة الجواب', (tester) async {
+    testWidgets('صفحة المناسبة: زرّا «جاي» و«مش جاي»، وإجمالي الحاضرين، والعدّاد، وحالة الجواب', (tester) async {
       await pumpDetails(
         tester,
         rsvpEventJson(myRsvp: {'response': 'yes', 'party_size': 3, 'source': 'account'}),
+        signedIn: true,
       );
 
       expect(find.text('تأكيد الحضور'), findsOneWidget);
       expect(find.text('جاي'), findsOneWidget);
       expect(find.text('مش جاي'), findsOneWidget);
-      expect(find.text('عدد المرافقين'), findsOneWidget);
+      expect(find.text('إجمالي الحاضرين بمن فيك'), findsOneWidget);
       expect(find.text('جايون: 3'), findsOneWidget, reason: 'العدّاد من الخادم، لا حساب محلي');
       expect(find.text('جوابك: «جاي» — 3 أشخاص'), findsOneWidget);
       expect(find.text('سحب جوابي'), findsOneWidget);
@@ -3719,7 +3727,7 @@ void main() {
       expect(find.text('مش جاي'), findsNothing);
     });
 
-    testWidgets('الضغط على «جاي» يُرسل PUT بالجواب والعدد المختار', (tester) async {
+    testWidgets('الضغط على «جاي» يُرسل PUT بالجواب والعدد المختار، ويعيد الرمز مع إعادة الجلب', (tester) async {
       final requests = await pumpDetails(
         tester,
         rsvpEventJson(goingCount: 3),
@@ -3737,8 +3745,20 @@ void main() {
       expect(put, hasLength(1), reason: 'جواب واحد لكل ضغطة — upsert لا إضافة');
       final body = jsonDecode(put.single.body) as Map<String, dynamic>;
       expect(body['response'], 'yes');
-      expect(body['party_size'], 1, reason: 'المنتقي يبدأ بـ1، والعدد المختار هو ما يُرسَل');
+      expect(body['party_size'], 1,
+          reason: 'المنتقي يبدأ بـ1 = «أنت وحدك»، وهو إجمالي الحاضرين المرسَل');
       expect(put.single.headers['Authorization'], 'Bearer test-token');
+
+      // بعد الحفظ: إعادة الجلب تحمل الرمز، فتصل `my_rsvp` ويظهر الجواب وزرّ
+      // السحب. بلا رمز تعود الاستجابة مجهولةً وتبقى «لم تُجب بعد» (تذكرة #168).
+      final detailCalls = requests
+          .where((r) => r.method == 'GET' && r.url.path == '/api/events/168')
+          .toList();
+      expect(detailCalls, isNotEmpty);
+      expect(detailCalls.last.headers['Authorization'], 'Bearer test-token',
+          reason: 'التفصيل يُطلَب بالجلسة، وإلا غاب my_rsvp من كل مسجَّل');
+      expect(find.text('جوابك: «جاي» — أنت وحدك'), findsOneWidget);
+      expect(find.text('سحب جوابي'), findsOneWidget);
     });
 
     testWidgets('الضغط على «مش جاي» يُرسل response = no و party_size = 1', (tester) async {

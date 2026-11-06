@@ -848,20 +848,6 @@ router.get('/my-reminders', authenticate, asyncHandler(async (req, res) => {
 const RSVP_RESPONSES = ['yes', 'no'];
 
 /**
- * نفس حكم `assertCanManageEvent` أعلاه لكن بـ**404 لا 403**، كما تطلب تذكرة
- * #168 قائمة «مين جاي»: من لا يملك المناسبة ولا يديرها لا يتلقّى تأكيداً على
- * وجودها — والقاعدة العامة في هذا المستودع أن الرفض خارج النطاق 404.
- */
-async function assertCanManageEventOrNotFound(req, existing) {
-  try {
-    await assertCanManageEvent(req, existing);
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 403) throw ApiError.notFound('المناسبة غير موجودة');
-    throw err;
-  }
-}
-
-/**
  * «جاي» أو «مش جاي» — upsert على (event_id, user_id)، فالجواب الثاني يُحدّث ولا
  * يُضيف. `yes` ينشئ «ذكّرني» إن غاب، و`no` لا يمسّه (القاعدة في الخدمة).
  * ونوع `rsvp_enabled = 0`، والمناسبة غير الموجودة أو غير المعتمدة، كلها 404
@@ -892,15 +878,13 @@ router.delete('/events/:id/rsvp', authenticate, asyncHandler(async (req, res) =>
 
 /**
  * «مين جاي» — الأسماء والعدد والجواب والمصدر والمجاميع، لصاحب المناسبة أو
- * أدمن في نطاقه وحدهما (404 لغيرهما). والهاتف لا يدخل الاستعلام أصلاً — لا
- * `guest_phone` ولا `SELECT *` لتنقيتها بعد الجلب.
+ * أدمن في نطاقه وحدهما (404 لغيرهما). **الحكم في الخدمة** لا هنا: تمرّ
+ * `req.user` مع المعرّف، و`listEventRsvps` تبني شرط النطاق في استعلامها.
+ * والهاتف لا يدخل الاستعلام أصلاً — لا `guest_phone` ولا `SELECT *`.
  */
 router.get('/events/:id/rsvps', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
-  const existing = await events.getEventForEdit(eventId);
-  await assertCanManageEventOrNotFound(req, existing);
-
-  res.json({ success: true, ...await events.listEventRsvps(eventId) });
+  res.json({ success: true, ...await events.listEventRsvps(eventId, req.user) });
 }));
 
 /**

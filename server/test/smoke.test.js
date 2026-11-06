@@ -3556,18 +3556,28 @@ async function run() {
   await test('followers_count shows on a عرس event and disappears when show_followers_count is off — by the flag, not the type name', async () => {
     const before = await api('GET', `/api/events/${reminderEventId}`);
     assert.ok('followers_count' in before.body.event, 'expected followers_count on عرس');
+    assert.ok(
+      Number(before.body.event.followers_count) >= 1,
+      'set up: this event carries an active «ذكّرني» from the tests above'
+    );
+    assert.strictEqual(
+      before.body.event.interested_count, before.body.event.followers_count,
+      'interested_count is the spec name for the same reminders count — one number under two keys'
+    );
 
     await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
       token: superAdminToken, body: { show_followers_count: false }
     });
     const hidden = await api('GET', `/api/events/${reminderEventId}`);
     assert.ok(!('followers_count' in hidden.body.event), 'expected the counter dropped entirely, not zeroed');
+    assert.ok(!('interested_count' in hidden.body.event), 'and its alias must disappear with it — never one without the other');
 
     await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
       token: superAdminToken, body: { show_followers_count: true }
     });
     const restored = await api('GET', `/api/events/${reminderEventId}`);
     assert.ok('followers_count' in restored.body.event);
+    assert.ok('interested_count' in restored.body.event, 'the alias comes back with the old name');
   });
 
   await test('عزا is seeded with show_followers_count off, so it never carries followers_count — one death is never compared to another', async () => {
@@ -14983,6 +14993,28 @@ async function run() {
   const RSVP_ACCOUNT_NAME = 'ضيف جواب الحضور';
   const rsvpGuest = await createDirectUser(RSVP_ACCOUNT_NAME);
   const rsvpStranger = await createDirectUser('غريب عن مناسبة الحضور');
+  /**
+   * أدمنان بنطاق بلدة مختلف لحكم نطاق «مين جاي» **في الخدمة نفسها**: مناسبة
+   * الاختبار في حورة، فحورة داخله ورهط خارجه. سوبر أدمن لا يكفي — بلا قيد بلدة
+   * يمرّ أياً كان النطاق، فيبقى الفحص كاذباً.
+   */
+  async function createScopedAdminForRsvp(fullName, town) {
+    const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId } = await db.execute(
+      "INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')",
+      [phone, fullName, 'x', town]
+    );
+    const assignment = await api('PUT', `/api/admin/admins/${insertId}/towns`, {
+      token: superAdminToken, body: { towns: [town] }
+    });
+    assert.strictEqual(assignment.status, 200, assignment.body.message);
+    return {
+      id: insertId,
+      token: signToken({ id: insertId, phone_number: phone, full_name: fullName, role: 'admin' }, '1h')
+    };
+  }
+  const rsvpAdminInTown = await createScopedAdminForRsvp('أدمن حورة لمناسبة الحضور', 'حورة');
+  const rsvpAdminOutOfTown = await createScopedAdminForRsvp('أدمن رهط لمناسبة الحضور', 'رهط');
   const rsvpEventIds = [];
   const RSVP_DAY = addDaysToDate(schedulerToday, 30);
   const RSVP_FUNERAL_DAY = addDaysToDate(schedulerToday, 31);
@@ -15105,13 +15137,13 @@ async function run() {
     assert.strictEqual(remindedAfterDelete.length, 1, 'and «ذكّرني» survives the withdrawal too');
   });
 
-  await test('عدد المرافقين خارج 1..RSVP_PARTY_SIZE_MAX يُرفض بـ400 عربية، والغياب يعني 1', async () => {
+  await test('عدد الحاضرين خارج 1..RSVP_PARTY_SIZE_MAX يُرفض بـ400 عربية، والغياب يعني 1', async () => {
     for (const bad of [0, 21, -3, 'كثير']) {
       const res = await api('PUT', `/api/events/${rsvpEventId}/rsvp`, {
         token: rsvpGuest.token, body: { response: 'yes', party_size: bad }
       });
       assert.strictEqual(res.status, 400, `party_size=${bad} must be refused, got ${res.status}`);
-      assert.ok(/المرافقين/.test(res.body.message), `expected an Arabic party-size message, got "${res.body.message}"`);
+      assert.ok(/الحاضرين/.test(res.body.message), `expected an Arabic attendees message, got "${res.body.message}"`);
     }
 
     const defaulted = await api('PUT', `/api/events/${rsvpEventId}/rsvp`, {
@@ -15222,12 +15254,77 @@ async function run() {
     const asAdmin = await api('GET', `/api/events/${rsvpEventId}/rsvps`, { token: adminToken });
     assert.strictEqual(asAdmin.status, 200, 'a super_admin in scope reads the same list');
 
+    const inTown = await api('GET', `/api/events/${rsvpEventId}/rsvps`, { token: rsvpAdminInTown.token });
+    assert.strictEqual(inTown.status, 200, 'an admin scoped to the event\'s own town reads the same list');
+    assert.ok(
+      inTown.body.rsvps.some(rsvp => rsvp.name === RSVP_ACCOUNT_NAME),
+      'and its names are the same names the owner sees'
+    );
+
+    const outOfTown = await api('GET', `/api/events/${rsvpEventId}/rsvps`, { token: rsvpAdminOutOfTown.token });
+    assert.strictEqual(outOfTown.status, 404, 'an admin whose towns do not hold the event gets the stranger\'s 404');
+    assert.ok(!JSON.stringify(outOfTown.body).includes(RSVP_ACCOUNT_NAME), 'and that refusal leaks no name either');
+
+    // الحكم في الخدمة لا في الراوتر: نداء الخدمة مباشرةً بلا HTTP. لو عادت
+    // الحماية إلى طبقة المسار وحدها (أو نُسي تمرير المستخدم)، مرّ هذا النداء
+    // بالصفوف كاملة — وهو ما ترفضه تذكرة #168.
+    const serviceRefusal = await eventsService
+      .listEventRsvps(rsvpEventId, { id: rsvpAdminOutOfTown.id, role: 'admin' })
+      .then(() => null, err => err);
+    assert.ok(
+      serviceRefusal && serviceRefusal.status === 404,
+      'listEventRsvps itself must refuse an out-of-scope admin — not only the route above it'
+    );
+    const serviceInScope = await eventsService.listEventRsvps(rsvpEventId, { id: rsvpAdminInTown.id, role: 'admin' });
+    assert.ok(
+      serviceInScope.rsvps.some(rsvp => rsvp.name === RSVP_ACCOUNT_NAME),
+      'and the service reads the names for an admin whose town holds the event'
+    );
+
     const stranger = await api('GET', `/api/events/${rsvpEventId}/rsvps`, { token: rsvpStranger.token });
     assert.strictEqual(stranger.status, 404, 'anyone else gets 404 — never 403, which would confirm the event exists');
-    assert.ok(!JSON.stringify(stranger.body).includes(rsvpGuest.full_name), 'and the refusal leaks no name');
+    assert.ok(!JSON.stringify(stranger.body).includes(RSVP_ACCOUNT_NAME), 'and the refusal leaks no name');
 
     const anonymous = await api('GET', `/api/events/${rsvpEventId}/rsvps`);
     assert.strictEqual(anonymous.status, 401, 'the list is behind authenticate');
+  });
+
+  await test('نوع rsvp_enabled مطفأ لا يخرج عدّاده ولو وُجدت أجوبة — لا في التفصيل ولا في القائمة', async () => {
+    // إطفاء الميزة مؤقتاً على نوع العرس (لا على نغمة العزا): أجوبة هذه المناسبة
+    // موجودة فعلاً (7 جايين)، فالفحص يسقط لو واصل `rsvpCountVisible` قراءة
+    // `show_rsvp_count` وحدها متجاهلاً `rsvp_enabled` — وهو نصّ ADR-0015 §3.
+    try {
+      const off = await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
+        token: superAdminToken, body: { rsvp_enabled: false }
+      });
+      assert.strictEqual(off.status, 200, off.body.message);
+
+      const detail = await api('GET', `/api/events/${rsvpEventId}`, { token: rsvpGuest.token });
+      assert.strictEqual(detail.status, 200);
+      assert.ok(
+        !('rsvp_going_count' in detail.body.event),
+        'a switched-off feature must not leak its counter — the rows exist, so only the flag can be hiding it'
+      );
+      assert.ok(!('my_rsvp' in detail.body.event), 'nor the answer state, since the door is closed');
+
+      const feed = await api(
+        'GET', `/api/events?limit=100&all_regions=1&date_from=${RSVP_DAY}&date_to=${RSVP_DAY}`
+      );
+      assert.strictEqual(feed.status, 200);
+      const row = feed.body.events.find(event => event.id === rsvpEventId);
+      assert.ok(row, 'set up: the wedding must still be listed');
+      assert.ok(!('rsvp_going_count' in row), 'and the list must not carry it either');
+
+      const answer = await api('PUT', `/api/events/${rsvpEventId}/rsvp`, {
+        token: rsvpGuest.token, body: { response: 'yes', party_size: 2 }
+      });
+      assert.strictEqual(answer.status, 404, 'and the route itself is the 404 ADR-0015 mandates');
+    } finally {
+      const restore = await api('PATCH', `/api/admin/occasion-types/${weddingType.id}`, {
+        token: superAdminToken, body: { rsvp_enabled: true }
+      });
+      assert.strictEqual(restore.status, 200, 'restore the عرس flag for the tests after this one');
+    }
   });
 
   await test('طلب بلا X-App-Version لا ينكسر بالحقول الجديدة', async () => {
@@ -15260,7 +15357,7 @@ async function run() {
     await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
     await db.execute('DELETE FROM events WHERE id = ?', [id]);
   }
-  for (const user of [rsvpOwner, rsvpGuest, rsvpStranger]) {
+  for (const user of [rsvpOwner, rsvpGuest, rsvpStranger, rsvpAdminInTown, rsvpAdminOutOfTown]) {
     await db.execute('DELETE FROM users WHERE id = ?', [user.id]);
   }
 
