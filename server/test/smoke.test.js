@@ -13405,6 +13405,236 @@ async function run() {
   await db.execute('DELETE FROM regions WHERE id = ?', [ed159RegionId]);
 
   // ======================================================================
+  // سكربتات الاستيراد لا تتخطّى حارس التكرار (تذكرة #160)
+  //
+  // القرار يُقرأ من الخدمة نفسها لا من نسخة في السكربت: مدخل يشبه مناسبة
+  // قائمة لا يُدرج ويُطبع في التقرير مع المطابقة ودرجتها، وغير المشتبه يُدرج
+  // كما كان. القياس على `munasabatna-insert.js` نفسه (عملية ابن بلا شبكة،
+  // stdin مُصنَّع) لأن الثلاثة يشتركون في نقطة الفحص نفسها.
+  //
+  // الاسم هنا يختلف عن الاسم المخزَّن بحرف «ال» وحده: الحارس يوحّد الإملاء
+  // فيراهما اسماً واحداً ('certain')، بينما فحص السكربت القديم
+  // (`groom_name = ? AND event_date = ?`) لا يراهما متطابقين — فالقرار الذي
+  // نقرأه في المخرَج هو قرار الحارس حتماً، لا قرار «موجودة مسبقاً».
+  // ======================================================================
+  console.log('\nسكربتات الاستيراد لا تتخطّى حارس التكرار (تذكرة #160)');
+
+  const importGuard = require('../scripts/import-duplicate-guard');
+  const importGuardStamp = Date.now();
+  // 'محمد حارس<stamp>' (المستورَد) و'محمد الحارس<stamp>' (القائم): مفتاح
+  // `nameTokens` واحد بعد إسقاط «ال»، والنصّان مختلفان حرفياً.
+  const importGuardStoredName = `محمد الحارس${importGuardStamp}`;
+  const importGuardInputName = `محمد حارس${importGuardStamp}`;
+  const importGuardFamily = `عائلة الحارس ${importGuardStamp}`;
+  const importGuardSkipPoster = `https://munasabatna.com/test-guard-${importGuardStamp}.jpg`;
+  const importGuardFreshPoster = `https://munasabatna.com/test-fresh-${importGuardStamp}.jpg`;
+  const importGuardEventIds = [];
+
+  const { insertId: importGuardExistingId } = await db.execute(
+    `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status)
+     VALUES (?, ?, ?, 'حورة', ?, 'ديوان التكرار', '2029-02-10', 'approved')`,
+    [`أفراح المستورد ${importGuardStamp}`, importGuardStoredName, importGuardFamily, defaultRegionId]
+  );
+  importGuardEventIds.push(importGuardExistingId);
+
+  /** يشغّل سكربت الإدراج الحقيقي على مدخلات مُصنَّعة، ويعيد مخرَجه النصّي. */
+  function runMunasabatnaInsert(entries) {
+    const { execFileSync } = require('child_process');
+    return execFileSync(
+      process.execPath,
+      [path.join(__dirname, '..', 'scripts', 'munasabatna-insert.js')],
+      { input: JSON.stringify(entries), encoding: 'utf8' }
+    );
+  }
+
+  try {
+    await test('نقطة فحص الاستيراد تقرأ قرار حارس التكرار من الخدمة نفسها (تذكرة #160)', async () => {
+      const subject = {
+        names: [importGuardInputName],
+        family_clan: importGuardFamily,
+        region_id: defaultRegionId,
+        town: 'حورة',
+        event_date: '2029-02-10',
+        event_end_date: null
+      };
+
+      // الخدمة ترى المرشّح بنفسها — وهي ما تناديه `checkImportEntry` حرفياً.
+      const [candidates] = await eventsService.findPossibleDuplicates([subject]);
+      const candidate = candidates.find(row => row.id === importGuardExistingId);
+      assert.ok(candidate, JSON.stringify(candidates));
+      assert.strictEqual(candidate.confidence, 'certain');
+
+      const decision = await importGuard.checkImportEntry(subject);
+      assert.strictEqual(decision.action, 'skip', 'الشبه يعطي قرار تخطٍّ لا إدراجاً');
+      assert.strictEqual(decision.match.id, importGuardExistingId);
+      assert.strictEqual(decision.match.confidence, 'certain');
+      assert.deepStrictEqual(decision.match.reasons, ['الاسم مطابق', 'نفس التاريخ', 'نفس البلدة']);
+
+      const clear = await importGuard.checkImportEntry({
+        names: [`سالم${importGuardStamp} النجار`],
+        family_clan: '',
+        region_id: defaultRegionId,
+        town: 'رهط',
+        event_date: '2029-03-15',
+        event_end_date: null
+      });
+      assert.strictEqual(clear.action, 'insert', 'ما لا يشبه مناسبة قائمة يبقى قراره الإدراج');
+    });
+
+    await test('munasabatna-insert لا يدرج المشتبه، ويطبعه في قسم «تُخطِّي» مع المطابقة ودرجتها (تذكرة #160)', async () => {
+      const output = runMunasabatnaInsert([{
+        groom_name: importGuardInputName,
+        family_clan: importGuardFamily,
+        town: 'حورة',
+        location_name: 'ديوان التكرار',
+        event_date: '2029-02-10',
+        poster_url: importGuardSkipPoster
+      }]);
+
+      const written = await db.queryOne('SELECT id FROM events WHERE poster_url = ?', [importGuardSkipPoster]);
+      assert.strictEqual(written, null, 'المشتبه لا يُكتب في القاعدة إطلاقاً');
+      assert.ok(/— أُدرج \(0\) —/.test(output), output);
+      assert.ok(/— تُخطِّي \(1\) —/.test(output), output);
+      assert.ok(output.includes(`#${importGuardExistingId}`), `المناسبة القائمة بمعرّفها: ${output}`);
+      assert.ok(output.includes(importGuardStoredName), `وعنوانها/أصحابها: ${output}`);
+      assert.ok(/درجة الشبه: certain/.test(output), `درجة الشبه: ${output}`);
+      assert.ok(output.includes('الاسم مطابق'), `أسباب الشبه: ${output}`);
+      assert.ok(/الخلاصة: أُدرج 0 · تُخطِّي 1/.test(output), output);
+    });
+
+    await test('munasabatna-insert يُدرج المدخل غير المشتبه كما كان، ويعدّه في قسم «أُدرج» (تذكرة #160)', async () => {
+      const output = runMunasabatnaInsert([{
+        groom_name: `سالم${importGuardStamp} النجار`,
+        town: 'رهط',
+        location_name: 'قاعة الاختبار',
+        event_date: '2029-03-15',
+        poster_url: importGuardFreshPoster
+      }]);
+
+      const written = await db.queryOne(
+        'SELECT id, town, status FROM events WHERE poster_url = ?', [importGuardFreshPoster]
+      );
+      assert.ok(written, `غير المشتبه يُدرج كما اليوم: ${output}`);
+      importGuardEventIds.push(written.id);
+      assert.strictEqual(written.town, 'رهط');
+      assert.strictEqual(written.status, 'approved');
+      assert.ok(/— أُدرج \(1\) —/.test(output), output);
+      assert.ok(/— تُخطِّي \(0\) —/.test(output), output);
+      assert.ok(/الخلاصة: أُدرج 1 · تُخطِّي 0/.test(output), output);
+
+      // تشغيل ثانٍ للمدخل نفسه: «موجودة مسبقاً» قسم مستقل، لا يُخلط بعدّاد
+      // «تُخطِّي» الذي يعدّ ما أوقفه الحارس وحده — ودونه يُقرأ العدد على أنه
+      // «بطاقة أوقفها الحارس» وهو ليس كذلك.
+      const repeatOutput = runMunasabatnaInsert([{
+        groom_name: `سالم${importGuardStamp} النجار`,
+        town: 'رهط',
+        location_name: 'قاعة الاختبار',
+        event_date: '2029-03-15',
+        poster_url: importGuardFreshPoster
+      }]);
+      assert.ok(/— أُدرج \(0\) —/.test(repeatOutput), repeatOutput);
+      assert.ok(/— تُخطِّي \(0\) —/.test(repeatOutput), repeatOutput);
+      assert.ok(/— موجودة مسبقاً \(1\) —/.test(repeatOutput), repeatOutput);
+      assert.ok(/الخلاصة: أُدرج 0 · تُخطِّي 0 · موجودة مسبقاً 1/.test(repeatOutput), repeatOutput);
+      const stillOne = await db.queryOne(
+        'SELECT COUNT(*) AS total FROM events WHERE poster_url = ?', [importGuardFreshPoster]
+      );
+      assert.strictEqual(Number(stillOne.total), 1, 'التشغيل الثاني لا يكتب صفّاً ثانياً');
+    });
+
+    await test('import-legacy-json يمرّر العائلة الحقيقية ويمرّ على الحارس، وتقريره يفصل الأقسام الأربعة (تذكرة #160)', async () => {
+      const legacyStamp = `${importGuardStamp}-legacy`;
+      const legacyExistingTitle = `قائمة قديمة ${legacyStamp}`;
+      const legacyExistingGroom = `سالم ${importGuardStamp} النجار`;
+      // مناسبة قائمة تحمل اسم البلدة في family_clan — كما يكتبها المستورد القديم
+      // لصفّ لا عائلة له (`event.family_clan || event.town`).
+      const { insertId: legacyExistingId } = await db.execute(
+        `INSERT INTO events (title, groom_name, family_clan, town, region_id, location_name, event_date, status)
+         VALUES (?, ?, 'حورة', 'حورة', ?, 'ديوان', '2029-05-01', 'approved')`,
+        [legacyExistingTitle, legacyExistingGroom, defaultRegionId]
+      );
+      importGuardEventIds.push(legacyExistingId);
+
+      const legacyTitle = `مناسبة قديمة مختلفة ${legacyStamp}`;
+      // 'النجار' و'نجار' مفتاح واحد عند الحارس («ال» تُسقَط) ونصّان مختلفان في
+      // فحص «موجودة مسبقاً» الحرفي — فالسقوط هنا سقوط استدعاء الحارس نفسه.
+      const legacySuspectedGroom = `سالم ${importGuardStamp} نجار`;
+      const dir = await fsp.mkdtemp(path.join(require('os').tmpdir(), 'negev-legacy-'));
+      const file = path.join(dir, 'legacy.json');
+      await fsp.writeFile(file, JSON.stringify({
+        users: [],
+        events: [
+          {
+            id: 9001,
+            title: legacyTitle,
+            groom_name: `خالد${importGuardStamp}`,
+            town: 'حورة',
+            location_name: 'ديوان ثانٍ',
+            event_date: '2029-05-02'
+          },
+          {
+            id: 9002,
+            title: `بطاقة مشابهة ${legacyStamp}`,
+            groom_name: legacySuspectedGroom,
+            town: 'حورة',
+            location_name: 'ديوان ثالث',
+            event_date: '2029-05-01'
+          },
+          {
+            id: 9003,
+            title: `مدخل ناقص ${legacyStamp}`,
+            groom_name: 'ناقص'
+          }
+        ],
+        reactions: [],
+        congratulations: [],
+        nokoot_ledger: [],
+        stories: []
+      }), 'utf8');
+
+      const { execFileSync } = require('child_process');
+      const legacyOutput = execFileSync(
+        process.execPath,
+        [path.join(__dirname, '..', 'scripts', 'import-legacy-json.js'), file],
+        { encoding: 'utf8' }
+      );
+
+      const written = await db.queryOne('SELECT id, family_clan FROM events WHERE title = ?', [legacyTitle]);
+      assert.ok(written, `اسم البلدة ليس عائلة: المناسبة المختلفة تُدرَج — ${legacyOutput}`);
+      importGuardEventIds.push(written.id);
+      // الصفّ يُكتب كما كان (اسم البلدة في family_clan حين تغيب العائلة)؛
+      // التغيير في ما يراه الحارس وحده.
+      assert.strictEqual(written.family_clan, 'حورة');
+
+      // استدعاء الحارس في هذا السكربت نفسه: البطاقة الشبيهة لا تُكتب إطلاقاً.
+      const suspected = await db.queryOne('SELECT id FROM events WHERE groom_name = ?', [legacySuspectedGroom]);
+      assert.strictEqual(suspected, null, `المشتبه لا يُدرج — ${legacyOutput}`);
+      assert.ok(legacyOutput.includes(legacyExistingTitle), `المناسبة المطابقة في التقرير: ${legacyOutput}`);
+      assert.ok(/درجة الشبه: certain/.test(legacyOutput), legacyOutput);
+
+      // الأقسام الأربعة، ومجموعها عدد مدخلات الملف (٣)، بلا دمج «موجودة مسبقاً»
+      // في «تُخطِّي» — والمدخل الناقص له قسمه بدل أن يُسقَط من الحساب.
+      assert.ok(legacyOutput.includes('— أُدرج (1) —'), legacyOutput);
+      assert.ok(legacyOutput.includes('— تُخطِّي (1) —'), legacyOutput);
+      assert.ok(legacyOutput.includes('— موجودة مسبقاً (0) —'), legacyOutput);
+      assert.ok(legacyOutput.includes('— مشوّه/متجاهَل (1) —'), legacyOutput);
+      assert.ok(
+        legacyOutput.includes('الخلاصة: أُدرج 1 · تُخطِّي 1 · موجودة مسبقاً 0 · مشوّه 1 · المجموع 3'),
+        legacyOutput
+      );
+      assert.ok(legacyOutput.includes('1 malformed (3 in file)'), legacyOutput);
+      await fsp.rm(dir, { recursive: true, force: true });
+    });
+  } finally {
+    if (importGuardEventIds.length) {
+      await db.execute(
+        `DELETE FROM events WHERE id IN (${importGuardEventIds.map(() => '?').join(', ')})`,
+        importGuardEventIds
+      );
+    }
+  }
+
+  // ======================================================================
   // اللوحة: جغرافيا المنطقتين والبثّ والتحليلات (تذكرة #128)
   //
   // كل صفوف هذا القسم تُنشأ هنا وتُحذف في آخره: محافظة، بلدتان فيها، قرية

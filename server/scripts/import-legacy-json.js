@@ -5,6 +5,17 @@
  * into MySQL. Old ids are remapped to the new auto-increment ids, so foreign keys
  * stay consistent. Safe to re-run: rows that already exist are skipped.
  *
+ * Every legacy event is also passed through the API's own possible-duplicate
+ * guard (events.findPossibleDuplicates) before it is written. One that
+ * resembles an existing event is never inserted and is printed in the report
+ * with the matching event and its confidence, for a human to review (#160).
+ * Its child rows follow the same split, for the same reason: on the exact
+ * "already present" match (groom_name + event_date + town) they are attached
+ * to that row — it is the same occasion with certainty — while on a guard skip
+ * they are not attached (reactions and congratulations are dropped, and a
+ * story keeps `event_id` NULL), because a resemblance is a suspicion for a
+ * human to confirm, not a decision.
+ *
  *   npm run db:import-legacy [-- path/to/negev_events_data.json]
  */
 
@@ -14,6 +25,7 @@ const db = require('../src/db/pool');
 const logger = require('../src/utils/logger');
 const townsService = require('../src/services/towns.service');
 const { REACTION_TYPES } = require('../src/constants');
+const { checkImportEntry, formatDuplicateMatch, statusLabel, createImportReport } = require('./import-duplicate-guard');
 
 const DEFAULT_PATH = path.join(__dirname, '..', 'database', 'negev_events_data.json');
 
@@ -57,14 +69,23 @@ async function importUsers(users) {
 async function importEvents(events, userIdMap) {
   const townCoordinates = await townsService.coordinatesByName();
   const idMap = new Map();
-  let imported = 0;
+  const report = createImportReport();
 
   for (const event of events) {
     const eventDate = toDate(event.event_date);
     if (!event.groom_name || !event.town || !eventDate) {
+      // قسمه الخاص في التقرير: بلا هذا السطر كان المدخل الناقص يُسقَط في صمت،
+      // فمجموع الأقسام يقلّ عن عدد مدخلات الملف بلا أن يدلّ شيء على الفرق.
+      report.malformed(
+        event.title || (event.id ? `#${event.id}` : 'بلا معرّف'),
+        'ناقص: يحتاج اسم صاحب المناسبة والبلدة والتاريخ'
+      );
       logger.warn(`Skipping malformed event id=${event.id}`);
       continue;
     }
+
+    const title = event.title || `زفاف العريس ${event.groom_name}`;
+    const familyClan = event.family_clan || event.town;
 
     const duplicate = await db.queryOne(
       'SELECT id FROM events WHERE groom_name = ? AND event_date = ? AND town = ?',
@@ -72,6 +93,7 @@ async function importEvents(events, userIdMap) {
     );
     if (duplicate) {
       idMap.set(event.id, duplicate.id);
+      report.present(title, `#${duplicate.id}`);
       continue;
     }
 
@@ -82,6 +104,26 @@ async function importEvents(events, userIdMap) {
     // لم يُعرف ← أول محافظة نشطة. لا تخمين بلدة ولا تغيير لأي قاعدة استيراد.
     const regionId = await townsService.resolveRegionForEventPlace({ town: event.town });
 
+    // حارس التكرار (تذكرة #160) قبل أي كتابة: الحارس نفسه الذي يستعمله النشر
+    // والاعتماد، بمدخل الصفّ كما سيُكتب — ومن يشبه مناسبة قائمة لا يُدرج.
+    // والعائلة هنا هي `event.family_clan` وحدها: `familyClan` أعلاه يسقط إلى
+    // اسم البلدة حين تغيب العائلة، واسم البلدة ليس عائلة — تمريره إلى الحارس
+    // يجعل مناسبتين مختلفتين في البلدة نفسها «نفس العائلة» فتُخطَّى الثانية بلا سبب.
+    const decision = await checkImportEntry({
+      names: [event.groom_name],
+      family_clan: event.family_clan || '',
+      region_id: regionId,
+      town: event.town,
+      event_date: eventDate,
+      event_end_date: null
+    });
+    if (decision.action === 'skip') {
+      // لا تُربَط صفوفه التابعة بالمناسبة المطابقة: الشبه شبهة لا يقين — بخلاف
+      // مسار «موجودة مسبقاً» أعلاه، حيث الربط يقين لأنها نفس المناسبة.
+      report.skipped(title, `${formatDuplicateMatch(decision.match)} — وصفوفه التابعة لا تُنقل`);
+      continue;
+    }
+
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, town, region_id, location_name, latitude, longitude,
@@ -89,9 +131,9 @@ async function importEvents(events, userIdMap) {
           host_phone, status, views_count, created_by, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
       [
-        event.title || `زفاف العريس ${event.groom_name}`,
+        title,
         event.groom_name,
-        event.family_clan || event.town,
+        familyClan,
         event.town,
         regionId,
         event.location_name || event.town,
@@ -111,10 +153,15 @@ async function importEvents(events, userIdMap) {
       ]
     );
     idMap.set(event.id, insertId);
-    imported += 1;
+    report.inserted(title, `#${insertId} — ${statusLabel(status)}`);
   }
 
-  logger.info(`Events: ${imported} imported, ${events.length - imported} skipped/duplicate.`);
+  // تقرير الطرفية الواحد (تذكرة #160): «أُدرج» و«تُخطِّي» (شبه مناسبة قائمة)
+  // و«موجودة مسبقاً» و«مشوّه/متجاهَل» — أربعة أقسام، ومجموعها عدد مدخلات الملف.
+  report.print(logger.info);
+  const counts = report.counts();
+  logger.info(`Events: ${counts.inserted} imported, ${counts.skipped} skipped as possible duplicates,`
+    + ` ${counts.present} already present, ${counts.malformed} malformed (${events.length} in file).`);
   return idMap;
 }
 

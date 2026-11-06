@@ -13,6 +13,16 @@
  * The gate is "poster_url not already in the database", not a time window.
  * That is deliberate: if a run is skipped, fails, or the cron host is down,
  * the next run still picks up everything that was missed.
+ *
+ * Nothing is written to `events` here — this script only reads — so the
+ * possible-duplicate guard (#160) has no insert to stand before. It runs in
+ * `munasabatna-insert.js`, on every entry, before the row is written.
+ *
+ * Because a refused card is never written, its poster_url never enters the
+ * table, so this gate keeps reporting it as new on every run: `new_count` does
+ * not fall to zero while it stays on the page. That is expected — the card was
+ * already reviewed and its skip line printed in that run's report. No memory
+ * of refusals is kept here, on purpose (an owner decision).
  */
 
 const fs = require('fs');

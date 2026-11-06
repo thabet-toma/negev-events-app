@@ -16,10 +16,15 @@
  *     region's own name (e.g. 'النقب' — never a guessed town) and the row is
  *     forced to `pending`, so an admin completes it before it goes public.
  *   - latitude/longitude come from that town's centre, never from the input.
+ *   - every entry passes the API's own possible-duplicate guard
+ *     (events.findPossibleDuplicates) before it is written; a suspected entry
+ *     is never inserted and is printed in the report with the matching event
+ *     and its confidence, for a human to review (#160).
  */
 
 const db = require('../src/db/pool');
 const townsService = require('../src/services/towns.service');
+const { checkImportEntry, formatDuplicateMatch, statusLabel, createImportReport } = require('./import-duplicate-guard');
 
 const UNKNOWN = 'غير محدد';
 const REQUIRED = ['groom_name', 'event_date', 'poster_url'];
@@ -84,8 +89,10 @@ async function run() {
   if (!regionName) throw new Error('no active region in the regions table — run npm run db:migrate first');
   const events = list.map((raw, index) => normalise(raw, index, knownTowns, townCoordinates, regionName));
 
+  const report = createImportReport();
   let imported = 0;
-  let skipped = 0;
+  let importedPending = 0;
+  let alreadyPresent = 0;
 
   for (const event of events) {
     const existing = await db.queryOne(
@@ -94,8 +101,8 @@ async function run() {
     );
 
     if (existing) {
-      console.log(`skipped (already present #${existing.id}): ${event.title}`);
-      skipped += 1;
+      report.present(event.title, `#${existing.id}`);
+      alreadyPresent += 1;
       continue;
     }
 
@@ -103,6 +110,22 @@ async function run() {
     // أعلاه (بلدة معروفة، أو اسم محافظة، أو الافتراضية). لا تغيير لأي قاعدة
     // استيراد أخرى: لا تخمين بلدة، ولا تعديل صفّ موجود.
     const regionId = await townsService.resolveRegionForEventPlace({ town: event.town });
+
+    // حارس التكرار (تذكرة #160) قبل أي كتابة: الحارس نفسه الذي يستعمله النشر
+    // والاعتماد، بمدخل الصفّ كما سيُكتب — ومن يشبه مناسبة قائمة لا يُدرج.
+    const decision = await checkImportEntry({
+      names: [event.groom_name],
+      family_clan: event.family_clan,
+      region_id: regionId,
+      town: event.town,
+      event_date: event.event_date,
+      event_end_date: null
+    });
+    if (decision.action === 'skip') {
+      report.skipped(event.title, formatDuplicateMatch(decision.match));
+      continue;
+    }
+
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, town, region_id, location_name, latitude, longitude,
@@ -115,12 +138,15 @@ async function run() {
       ]
     );
 
-    console.log(`imported #${insertId} (${event.status}): ${event.title}`);
+    report.inserted(event.title, `#${insertId} — ${statusLabel(event.status)}`);
     imported += 1;
+    if (event.status === 'pending') importedPending += 1;
   }
 
-  const pending = events.filter(e => e.status === 'pending').length;
-  console.log(`done — ${imported} imported (${pending} need an admin to fill in the town), ${skipped} already present`);
+  // تقرير الطرفية الواحد (تذكرة #160): «أُدرج» و«تُخطِّي» (شبه مناسبة قائمة)
+  // و«موجودة مسبقاً» و«مشوّه/متجاهَل» — أربعة أقسام وعدّادها.
+  report.print();
+  console.log(`done — ${imported} imported (${importedPending} need an admin to fill in the town), ${alreadyPresent} already present`);
 
   await db.close();
 }

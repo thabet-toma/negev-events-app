@@ -22,7 +22,10 @@
  * `localStorage.getItem('adminToken')` in the browser console.
  *
  * Safe to re-run in both modes: an event with the same groom_name + event_date
- * is skipped.
+ * is skipped. Every entry also passes the API's own possible-duplicate guard
+ * (events.findPossibleDuplicates) before it is written; one that resembles an
+ * existing event is never inserted and is printed in the run report with the
+ * matching event and its confidence, for a human to review (#160).
  *
  * Note: the POST /api/events route rejects any town outside the towns table,
  * so in API mode the two events whose poster states no town are skipped. Give
@@ -33,6 +36,7 @@
 const db = require('../src/db/pool');
 const logger = require('../src/utils/logger');
 const townsService = require('../src/services/towns.service');
+const { checkImportEntry, formatDuplicateMatch, statusLabel, createImportReport } = require('./import-duplicate-guard');
 
 const UNKNOWN = 'غير محدد';
 const SOURCE = 'https://munasabatna.com/weddings/';
@@ -123,8 +127,9 @@ async function run() {
   // A card that names no town is filed under the region's own name, never 'غير محدد'.
   const regionName = await townsService.defaultRegionName();
   if (!regionName) throw new Error('no active region in the regions table — run npm run db:migrate first');
+  const report = createImportReport();
   let imported = 0;
-  let skipped = 0;
+  let alreadyPresent = 0;
 
   for (const event of EVENTS) {
     const existing = await db.queryOne(
@@ -133,8 +138,8 @@ async function run() {
     );
 
     if (existing) {
-      logger.info(`Skipped (already present #${existing.id}): ${event.title}`);
-      skipped += 1;
+      report.present(event.title, `#${existing.id}`);
+      alreadyPresent += 1;
       continue;
     }
 
@@ -145,6 +150,21 @@ async function run() {
     // اسم المحافظة، وإلا الافتراضية) — لا تخمين بلدة، ولا تغيير لأي قاعدة
     // استيراد أخرى في هذا السكربت.
     const regionId = await townsService.resolveRegionForEventPlace({ town });
+
+    // حارس التكرار (تذكرة #160) قبل أي كتابة: الحارس نفسه الذي يستعمله النشر
+    // والاعتماد، بمدخل الصفّ كما سيُكتب — ومن يشبه مناسبة قائمة لا يُدرج.
+    const decision = await checkImportEntry({
+      names: [event.groom_name],
+      family_clan: event.family_clan,
+      region_id: regionId,
+      town,
+      event_date: event.event_date,
+      event_end_date: null
+    });
+    if (decision.action === 'skip') {
+      report.skipped(event.title, formatDuplicateMatch(decision.match));
+      continue;
+    }
 
     const { insertId } = await db.execute(
       `INSERT INTO events
@@ -158,11 +178,14 @@ async function run() {
       ]
     );
 
-    logger.info(`Imported #${insertId} (${event.status}): ${event.title}`);
+    report.inserted(event.title, `#${insertId} — ${statusLabel(event.status)}`);
     imported += 1;
   }
 
-  logger.info(`Done — ${imported} imported, ${skipped} already present. Source: ${SOURCE}`);
+  // تقرير الطرفية الواحد (تذكرة #160): «أُدرج» و«تُخطِّي» (شبه مناسبة قائمة)
+  // و«موجودة مسبقاً» و«مشوّه/متجاهَل» — أربعة أقسام وعدّادها.
+  report.print(logger.info);
+  logger.info(`Done — ${imported} imported, ${alreadyPresent} already present. Source: ${SOURCE}`);
   await db.close();
 }
 
