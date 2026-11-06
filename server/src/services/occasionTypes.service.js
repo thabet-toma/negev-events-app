@@ -325,7 +325,10 @@ async function createMessage(typeId, { body, position, isActive }) {
     resolvedPosition = Number(last.last) + 1;
   }
 
-  const [result] = await db.execute(
+  // `db.execute` في pool.js يُفكّك صفّ mysql2 بنفسه ويُرجع `{ insertId, affectedRows }`
+  // مباشرةً (بخلاف `connection.execute` الخام في `db.transaction`) — فتفكيكٌ ثانٍ هنا
+  // يُفكّك كائناً غير قابل للتكرار ويرمي TypeError عند أول رسالة يضيفها الأدمن.
+  const result = await db.execute(
     `INSERT INTO occasion_type_messages (occasion_type_id, body, position, is_active)
      VALUES (?, ?, ?, ?)`,
     [typeId, body, resolvedPosition, isActive === false ? 0 : 1]
