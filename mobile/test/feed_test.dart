@@ -1514,7 +1514,7 @@ void main() {
     );
 
     testWidgets(
-      '«وسّع إلى كل المحافظات» يمسح اختيار المحافظة المحفوظ، فيعيد هيكلُ التطبيق جلب التغذية بلا ترويسة',
+      '«وسّع إلى كل المحافظات» يجلب بالعلَم all_regions=1 ويترك ترويسة المحافظة المشتركة كما هي',
       (tester) async {
         SharedPreferences.setMockInitialValues({
           RegionStore.storageKey: '2',
@@ -1523,12 +1523,10 @@ void main() {
         });
         final requests = <Uri>[];
         final api = feedScreenApi(requests: requests);
-        final auth = AuthStore(api);
-        final realtime = RealtimeService();
         final services = AppServices(
           api: api,
-          auth: auth,
-          realtime: realtime,
+          auth: AuthStore(api),
+          realtime: RealtimeService(),
           child: MaterialApp(
             theme: AppTheme.light(),
             home: const Directionality(
@@ -1545,29 +1543,94 @@ void main() {
           await tester.pump(const Duration(milliseconds: 300));
         }
 
+        int eventRequests() =>
+            requests.where((u) => u.path.endsWith('/api/events')).length;
         expect(api.client.regionId, '2', reason: 'المحافظة المحفوظة هي ما يُرسَل فعلاً قبل التوسيع');
-        final expand = find.byKey(const Key('feed_empty_expand'));
-        expect(expand, findsOneWidget);
-        final before = requests.where((u) => u.path.endsWith('/api/events')).length;
+        expect(
+          requests.lastWhere((u) => u.path.endsWith('/api/events')).queryParameters.containsKey('all_regions'),
+          isFalse,
+          reason: 'الافتراضي بلا علَم: الجلب الأول يعود إلى المحافظة وحدها',
+        );
+        final before = eventRequests();
 
         // يُستدعى `onPressed` مباشرةً: الزرّ آخر عنصر في الحالة الفارغة، وقد
         // يقع مركزه تحت شريط التنقّل السفلي في نافذة الاختبار القصيرة
         // (النقرة الحقيقية عندها على الشريط لا عليه). المقيس هو وجهة الزرّ
         // نفسها، وهي دالة واحدة لا تعرف موضعه.
-        tester.widget<TextButton>(expand).onPressed!();
+        tester.widget<TextButton>(find.byKey(const Key('feed_empty_expand'))).onPressed!();
         await tester.pump();
         for (var i = 0; i < 5; i++) {
           await tester.pump(const Duration(milliseconds: 300));
         }
 
-        expect(api.client.regionId, isNull, reason: 'لم يبقَ اختيار محافظة يُرسَل ترويسةً');
-        expect(services.regions.regionId, isNull, reason: 'الاختيار الصريح على الجهاز مُسح');
-        final prefs = await SharedPreferences.getInstance();
-        expect(prefs.getString(RegionStore.storageKey), isNull, reason: 'ومُسح من التخزين أيضاً');
+        expect(eventRequests(), before + 1, reason: 'التوسيع يجلب من جديد بلا انتظار إعادة بناء الهيكل');
+        final widened = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(widened.queryParameters['all_regions'], '1', reason: 'الخادم يتجاوز تقييد المحافظة بهذا العلَم');
+        expect(api.client.regionId, '2', reason: 'الترويسة المشتركة لا تُمسّ — العلَم للنداء لا للعميل كله');
+        expect(services.regions.regionId, 2, reason: 'ولا يُمحى اختيار الجهاز من تغذيةٍ طلبت التوسيع');
+      },
+    );
+
+    testWidgets(
+      'اختيار محافظة بعد التوسيع يُلغي العلَم، فلا يبقى الفلتر معلَّقاً على التغذية الجديدة',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          RegionStore.storageKey: '2',
+          regionOnboardedKey: true,
+        });
+        final requests = <Uri>[];
+        final api = feedScreenApi(requests: requests);
+        final services = AppServices(
+          api: api,
+          auth: AuthStore(api),
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: HomeShell(),
+            ),
+          ),
+        );
+        await services.regions.restore();
+        await tester.pumpWidget(services);
+        await tester.pump();
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 300));
+        }
+
+        tester.widget<TextButton>(find.byKey(const Key('feed_empty_expand'))).onPressed!();
+        await tester.pump();
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 300));
+        }
+        final afterExpand = requests.where((u) => u.path.endsWith('/api/events')).length;
+        expect(
+          requests.lastWhere((u) => u.path.endsWith('/api/events')).queryParameters['all_regions'],
+          '1',
+          reason: 'التوسيع فعّل العلَم أولاً',
+        );
+
+        // تبديل المحافظة كما يفعله منتقي «حسابي»: ترويسة جديدة، ثم إعادة بناء
+        // التغذية بمفتاح المحافظة في `HomeShell`.
+        await services.regions.select(3);
+        await tester.pump();
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 300));
+          if (requests.where((u) => u.path.endsWith('/api/events')).length > afterExpand) break;
+        }
+
+        expect(api.client.regionId, '3', reason: 'الاختيار الجديد هو ما يُرسَل ترويسةً');
         expect(
           requests.where((u) => u.path.endsWith('/api/events')).length,
-          greaterThan(before),
-          reason: 'تغيّر مفتاح المحافظة في `HomeShell` فجُلبت التغذية من جديد — الآلية القائمة، لا كتابة حالة هنا',
+          greaterThan(afterExpand),
+          reason: 'تغيّر مفتاح المحافظة فجُلبت التغذية من جديد',
+        );
+        final afterSwitch = requests.lastWhere((u) => u.path.endsWith('/api/events'));
+        expect(
+          afterSwitch.queryParameters.containsKey('all_regions'),
+          isFalse,
+          reason: 'اختيار محافظة صريح يُلغي «كل المحافظات» — لا يبقى معلَّقاً بعد التبديل',
         );
       },
     );

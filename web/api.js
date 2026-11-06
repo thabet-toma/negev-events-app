@@ -52,9 +52,15 @@ function apiUrl(path) {
  * options.tokenKey: مفتاح الرمز في localStorage — رمز الموقع أو رمز الإدارة.
  * options.region: أرفق `X-Region` من المحافظة المحفوظة (افتراضياً نعم) — الإدارة
  *   وحدها تمرّر false (adminFetch)، فهي سطح عالمي لا محافظة متصفّح.
+ * options.allRegions: ألحق `all_regions=1` — «كل المحافظات» (تذكرة #161). علَمُ
+ *   طلبٍ واحد يتجاوز تقييد المحافظة على الخادم، ولا يمسّ `X-Region` المحفوظ:
+ *   الاختيار يبقى كما هو للطلبات التي لا تحمله، والعلَم هو ما يوسّع هذا النداء
+ *   وحده. افتراضياً لا، فتبقى كل نداءات اليوم كما هي حرفاً بحرف.
  */
 async function apiFetch(path, options = {}) {
-  const { auth = false, tokenKey = 'negev_token', headers = {}, region = true, ...rest } = options;
+  const {
+    auth = false, tokenKey = 'negev_token', headers = {}, region = true, allRegions = false, ...rest
+  } = options;
   // يُعلن هذا العميل نفسه حديثاً فيرى كل أنواع المناسبات — القيمة نفسها غير
   // مقروءة على الخادم، وجودها فقط هو ما يهم (#20 خطوة 10).
   const finalHeaders = { 'X-App-Version': 'web', ...headers };
@@ -71,7 +77,13 @@ async function apiFetch(path, options = {}) {
     if (token) finalHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(apiUrl(path), { ...rest, headers: finalHeaders });
+  // العلَم يُضاف إلى المسار لا إلى الترويسات: عقد الخادم يقرأه من الاستعلام
+  // (`parseFlag(req.query.all_regions)`)، ويبقى مع بقية معاملات المسار كما هو.
+  const target = allRegions
+    ? `${path}${path.includes('?') ? '&' : '?'}all_regions=1`
+    : path;
+
+  const res = await fetch(apiUrl(target), { ...rest, headers: finalHeaders });
   // 401 = جلسة الموقع انتهت أو رمزها غير صالح (403 صار «غير مسموح» وحده) —
   // معالجة مركزية واحدة لكل نداء يحمل رمز الموقع، كما يفعل adminFetch أدناه
   // لرمز اللوحة. نداء بلا auth لا يخصّ الجلسة فلا يلمسها.
