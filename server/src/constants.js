@@ -137,6 +137,16 @@ const DUPLICATE_DATE_WINDOW_DAYS = 1;
 const RSVP_PARTY_SIZE_MAX = 20;
 
 /**
+ * حدّ الطلبات الخاص ببوابة جواب الضيف على صفحة المشاركة (`POST /e/:id/rsvp`،
+ * تذكرة #169، ADR-0015 §2): **عشرة في الساعة لكل IP**. وهو فوق الدلو المجهول
+ * العام لا بدلاً منه — ذلك الدلو على `/api` وحدها، وهذه البوابة تحت `/e/`،
+ * فالأول لا يشملها أصلاً. ورقمٌ كهذا، لا متغيّر بيئة: كل مناسبة تُنشَر في
+ * واتساب إلى عشرات الضيوف، وعشرة أجوبة من بيت واحد في ساعة تغطّي كل استعمال
+ * حقيقي، ويقف عند حدٍّ يمنع نصّاً آلياً من ملء العدّاد العلني.
+ */
+const RSVP_GUEST_RATE_LIMIT = { windowMs: 60 * 60 * 1000, max: 10 };
+
+/**
  * Closed list of analytics event names (issue #44). The governing rule is:
  * we record what a person DID in the app, never what they READ in it — a row
  * saying "this named person opened this particular عزاء" reads as
@@ -309,6 +319,7 @@ module.exports = {
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
   RSVP_PARTY_SIZE_MAX,
+  RSVP_GUEST_RATE_LIMIT,
   OCCASION_TONES,
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,

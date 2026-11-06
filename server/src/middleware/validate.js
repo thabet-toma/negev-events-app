@@ -63,6 +63,23 @@ function isValidPhone(value) {
 }
 
 /**
+ * رقم هاتف إجباري — بوابة جواب الضيف (`POST /e/:id/rsvp`، تذكرة #169،
+ * ADR-0015 §2: «اسمٌ وعددٌ وهاتفٌ إجباري»). المطبِّع هو نفسه المستعمل في تسجيل
+ * الدخول (`normalisePhone` في auth.routes.js) وفي طلب حذف الحساب
+ * (`normalisePhoneNumber` في privacy.service.js): تُزال المسافات والشُرَط ثم
+ * يقيس `isValidPhone` الشكل (`0` + ٨..٩ أرقام). ورقمٌ فاسد أو غائب **يُرفض
+ * 400** برسالة عربية، لا يهبط صامتاً إلى قيمة أخرى: الهاتف هو مفتاح التكرار
+ * الوحيد لهذا الوجه، وصفٌّ بلا مفتاح حقيقي يُضاعف الزائر نفسه في العدّاد
+ * العلني — وهو ما وُجد الهاتف لمنعه في ADR-0015.
+ */
+function requirePhone(value, label = 'رقم الهاتف') {
+  const normalised = cleanString(String(value || '').replace(/[\s-]/g, ''), 20);
+  if (!normalised) throw ApiError.badRequest(`${label} مطلوب`);
+  if (!isValidPhone(normalised)) throw ApiError.badRequest(`${label} غير صالح`);
+  return normalised;
+}
+
+/**
  * Parses a coordinate. Absent (undefined/null/empty string) → `null`, same as
  * before a pin was the only way to set one. Present but not a valid number,
  * or outside ±max, now throws instead of silently becoming `null` — once a
@@ -341,6 +358,7 @@ module.exports = {
   optionalDate,
   optionalDateTime,
   isValidPhone,
+  requirePhone,
   parseCoordinate,
   requireCoordinate,
   parseId,

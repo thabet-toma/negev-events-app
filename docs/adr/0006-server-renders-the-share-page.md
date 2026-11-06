@@ -129,16 +129,25 @@ location ^~ /live/    { proxy_pass http://127.0.0.1:3100; }
 
 ## النتائج
 
-- ثلاث صفحات فقط تُخرج HTML — `/e/:id` و `/live` و `/live/embed` — وكلها في
-  `server/src/routes/share.routes.js` بقوالب مضمَّنة ونفس دالة التهريب؛ الأوليان
-  بنفس الـCSP أدناه، و`/live/embed` بـCSP خاصة:
+- كل صفحات المشاركة التي يولّدها `server/src/routes/share.routes.js` تُخرج HTML
+  وحدها — `/e/:id` و`/p/:id` و`/a/:id` و`/person/:id` و`/v/:id` و`/live`
+  (وحلقتها `/live/e/:id`) وغلاف مشغّل يوتيوب `/live/embed` — بقوالب مضمَّنة
+  ونفس دالة التهريب، وكلها بالـCSP أدناه، و`/e/:id` وحدها تزيد عليها
+  `form-action 'self'` (أدناه)، و`/live/embed` بـCSP خاصة:
   `default-src 'none'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'unsafe-inline'`،
   مع `Referrer-Policy: strict-origin-when-cross-origin` (بدل `no-referrer` الافتراضية
   من `helmet`) و`Cache-Control: no-store`. كل شيء آخر في `server/` يبقى JSON صرفاً.
+- **تأكيد حضور الضيف بلا حساب (تذكرة #169):** `/e/:id` صارت تحمل نموذج HTML
+  عادياً — اسم وعدد وهاتف — يرسل `POST` إلى `/e/:id/rsvp`، والردّ إعادة توجيه
+  303 إلى الصفحة نفسها بشارة. حدودُ الباب كاملة في [[0015-guest-rsvp-on-the-share-page]]؛
+  وهذه الصفحة تحمله، ولا شيء من قراره يُنقض هنا.
 - أي وسم `<script>` ممنوع على هذه الصفحة، وسياسة
   `Content-Security-Policy: default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'`
   مضبوطة عليها صراحة — CSP الخاص بـ`helmet` معطَّل عالمياً في `app.js` أصلاً
   (الواجهة تحمّل موارد من عدة CDN)، فهذا المسار وحده يحتاج ضبطاً خاصاً.
+  **وتُزاد عليها `form-action 'self'` في `/e/:id` وحدها** لنموذج جواب الضيف؛
+  بقية الصفحات والـ404 المشتركة بلا هذه الزيادة، فلا فتح باب لم يحتجه أحد على
+  صفحةٍ لا نموذج فيها.
   `font-src 'self'` توسيع لاحق ومتعمَّد: الصفحة كانت تعرض النص العربي بخط
   النظام بينما البطاقة المولَّدة داخلها (‏`shareCard.service.js`) ترسمه بخط
   Cairo — فأُضيف خطّا Cairo كملفّي `woff2` يخدمهما هذا المسار نفسه

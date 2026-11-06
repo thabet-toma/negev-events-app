@@ -34,9 +34,11 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 
 const config = require('../config');
 const asyncHandler = require('../utils/asyncHandler');
+const ApiError = require('../utils/ApiError');
 const events = require('../services/events.service');
 const settings = require('../services/settings.service');
 const liveHub = require('../services/liveHub.service');
@@ -44,7 +46,8 @@ const analytics = require('../services/analytics.service');
 const albums = require('../services/albums.service');
 const shareCard = require('../services/shareCard.service');
 const logger = require('../utils/logger');
-const { parseId } = require('../middleware/validate');
+const { RSVP_GUEST_RATE_LIMIT, RSVP_PARTY_SIZE_MAX } = require('../constants');
+const { parseId, cleanString, requirePhone, parsePartySize } = require('../middleware/validate');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const { PALETTES, LIVE_RED, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
@@ -67,6 +70,13 @@ const SHARE_CSP = "default-src 'none'; img-src *; style-src 'unsafe-inline'; fon
 // `/live/embed` only (plan26-9 §3.1): still no script of our own — the one
 // thing it opens is a frame onto YouTube's two player origins.
 const EMBED_CSP = "default-src 'none'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'unsafe-inline'";
+
+// صفحة المناسبة وحدها (`GET /e/:id`): `form-action 'self'` لنموذج جواب الضيف
+// (تذكرة #169، ADR-0015 §1) — لا `<script>` ولا أصل جديد، والقيمة المسموح لها
+// بالإرسال هي هذه الصفحة نفسها. **ولا تُضاف إلى SHARE_CSP**: تلك تُستعمل في
+// `/live` و`/p` و`/a` و`/person` و`/v` وفي الـ404 المشتركة، ولا نموذج في أيٍّ
+// منها، فإضافة التوجيه هناك تفتح باباً لا يحتاجه أحد.
+const EVENT_PAGE_CSP = `${SHARE_CSP}; form-action 'self'`;
 
 // The two platform fallback PNGs (server/scripts/build-share-fallbacks.js)
 // and the two Cairo weights this page's own @font-face declares (converted
@@ -264,6 +274,56 @@ function actionButtons({ downloadUrl, siteRootUrl }) {
 }
 
 /**
+ * رموز نتيجة إرسال نموذج جواب الضيف، وخريطة مغلقة من رمز إلى نصّ عربي.
+ *
+ * `POST /e/:id/rsvp` يعيد التوجيه (PRG) في النجاح والرفض معاً، والرابط لا
+ * يحمل إلا رمزاً من هذه القائمة — لا نصّاً يكتبه العميل، ولا هاتفاً (ADR-0015
+ * §2: الهاتف لا يخرج في أي استجابة، والرابط جزء من الاستجابة). ومفتاح لا
+ * تجده هذه الخريطة لا يرسم شيئاً: صفحة المناسبة تُفتح بالرابط دائماً، وسؤال
+ * `?rsvp=` فيها لا يُلزم بشيء.
+ */
+const GUEST_RSVP_NOTICES = {
+  ok: { tone: 'ok', text: 'وصلنا جوابك — شكراً لك. وإذا تغيّر رأيك أرسل الجواب نفسه مرة أخرى، بالهاتف نفسه، وسنحدّثه.' },
+  name: { tone: 'error', text: 'الاسم مطلوب — لم يُحفظ جوابك هذه المرة.' },
+  phone: { tone: 'error', text: 'رقم الهاتف مطلوب ولا بد أن يكون صحيحاً — لم يُحفظ جوابك هذه المرة.' },
+  party: { tone: 'error', text: `عدد الحاضرين يجب أن يكون بين 1 و${RSVP_PARTY_SIZE_MAX} — لم يُحفظ جوابك هذه المرة.` },
+  answer: { tone: 'error', text: 'اختر «جاي» أو «مش جاي» — لم يُحفظ جوابك هذه المرة.' }
+};
+
+/** الرمز من `?rsvp=` كما هو إن كان من القائمة المغلقة، وإلا `null`. */
+function guestRsvpNotice(raw) {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(GUEST_RSVP_NOTICES, raw)
+    ? GUEST_RSVP_NOTICES[raw]
+    : null;
+}
+
+/**
+ * نموذج جواب الضيف — HTML عادي بلا `<script>` (ADR-0015 §1): زرّا الإرسال
+ * يحملان الاسم نفسه `response` بقيمتين، فيصل الجواب المضغوط في الجسم بلا
+ * حاجة إلى JavaScript، وكل النصوص والسمات ثابتة هنا (لا قيمة من المستخدم في
+ * هذا القالب أصلاً). و`min`/`max` للعدد من `RSVP_PARTY_SIZE_MAX` نفسها التي
+ * يتحقّق بها الخادم، فلا رقمان يفترقان.
+ */
+function renderGuestRsvpForm(eventId, notice) {
+  const noticeHtml = notice
+    ? `<p class="rsvp-notice rsvp-notice-${notice.tone}">${escapeHtml(notice.text)}</p>`
+    : '';
+  return `<form class="rsvp" method="post" action="${escapeHtml(`/e/${eventId}/rsvp`)}">
+${noticeHtml}
+<h2 class="rsvp-title">جاي على المناسبة؟</h2>
+<p class="rsvp-hint">اكتب اسمك وعددكم ورقم هاتفك — بلا حساب.</p>
+<label class="rsvp-field"><span>اسمك</span><input class="rsvp-input" type="text" name="guest_name" maxlength="120" autocomplete="name" required></label>
+<label class="rsvp-field"><span>عددكم</span><input class="rsvp-input" type="number" name="party_size" min="1" max="${RSVP_PARTY_SIZE_MAX}" step="1" value="1" inputmode="numeric" required></label>
+<label class="rsvp-field"><span>رقم الهاتف</span><input class="rsvp-input" type="tel" name="guest_phone" maxlength="20" inputmode="tel" autocomplete="tel" required></label>
+<div class="rsvp-actions">
+<button class="rsvp-go" type="submit" name="response" value="yes">جاي</button>
+<button class="rsvp-no" type="submit" name="response" value="no">مش جاي</button>
+</div>
+<p class="rsvp-note">الهاتف لا يظهر لأحد، ولا يراه صاحب المناسبة — يرى اسمك وعددك وجوابك فقط.</p>
+</form>`;
+}
+
+/**
  * What the preview actually says. The event's own `title` is free text people
  * fill with anything — on real rows it is often just the town name — so the
  * occasion type leads instead: it is the one word that tells someone what they
@@ -406,6 +466,39 @@ function pageStyle(palette) {
     font-size: 12px; color: ${palette.faint}; opacity: 0.75;
     margin: 14px 0 0; letter-spacing: 0.3px;
   }
+  /* جواب الضيف (تذكرة #169، ADR-0015): نموذج HTML عادي بلا `<script>`.
+     حقوله تُرسَل إلى /e/:id/rsvp ثم يعود الزائر إلى هذه الصفحة بإعادة توجيه،
+     والشارة أو رسالة الرفض تُرسم من ?rsvp= برمز من قائمة مغلقة. */
+  .rsvp {
+    text-align: start; margin: 0 0 18px; padding: 16px 16px 14px; border-radius: 16px;
+    background: ${withAlphaCss(palette.accent, 0.08)};
+    border: 1px solid ${withAlphaCss(palette.accent, 0.28)};
+  }
+  .rsvp-title { font-size: 16px; font-weight: 700; margin: 0 0 4px; }
+  .rsvp-hint { font-size: 12px; color: ${palette.faint}; margin: 0 0 12px; line-height: 1.7; }
+  .rsvp-field { display: block; margin: 0 0 10px; font-size: 13px; font-weight: 700; }
+  .rsvp-field span { display: block; margin: 0 0 5px; }
+  .rsvp-input {
+    width: 100%; padding: 11px 12px; border-radius: 11px;
+    font-family: inherit; font-size: 16px; color: ${palette.ink};
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid ${withAlphaCss(palette.faint, 0.45)};
+  }
+  .rsvp-input:focus { outline: 2px solid ${palette.accent}; outline-offset: 1px; }
+  .rsvp-actions { display: flex; gap: 8px; margin: 2px 0 0; }
+  .rsvp-go, .rsvp-no {
+    flex: 1 1 0; padding: 12px 10px; border-radius: 12px; border: 0; cursor: pointer;
+    font-family: inherit; font-size: 16px; font-weight: 700;
+  }
+  .rsvp-go { background: ${palette.accent}; color: ${palette.btnInk}; }
+  .rsvp-no {
+    background: transparent; color: ${palette.ink};
+    border: 1px solid ${withAlphaCss(palette.faint, 0.45)};
+  }
+  .rsvp-note { font-size: 12px; color: ${palette.faint}; margin: 10px 0 0; line-height: 1.7; }
+  .rsvp-notice { font-size: 14px; font-weight: 700; line-height: 1.7; margin: 0 0 12px; padding: 10px 13px; border-radius: 11px; }
+  .rsvp-notice-ok { background: ${withAlphaCss(palette.accent, 0.2)}; color: ${palette.ink}; }
+  .rsvp-notice-error { background: rgba(0, 0, 0, 0.28); border: 1px solid ${withAlphaCss(palette.faint, 0.5)}; color: ${palette.ink}; }
   .not-found { max-width: 380px; }
   .not-found .body { padding: 44px 26px; }
   .not-found h1 { font-size: 19px; margin: 0; font-weight: 700; }
@@ -432,7 +525,7 @@ function pageStyle(palette) {
  * below) — that is the one case where the size is unknown again, and the
  * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [], noindex = false }) {
+function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [], noindex = false, rsvp = null }) {
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
@@ -469,8 +562,9 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
   // nothing about this decision: the page still emits no <script> tag at all
   // (the CSP below is default-src 'none', and the smoke test asserts its
   // absence), and the venue must never appear in any tag a crawler reads. The
-  // page is a poster, two buttons and a short list of related pages, not a
-  // search-engine event record.
+  // page is a poster, two buttons, the guest's own plain-HTML answer form when
+  // its type allows it (ticket #169, ADR-0015), and a short list of related
+  // pages — not a search-engine event record.
   //
   // The type chip and the veil dress a *bare poster*, and the generated card
   // already carries its own type chip and name band — overlaying a second one
@@ -488,6 +582,10 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
   // حرفياً (`index, follow, max-image-preview:large`) — لا تُمسّ صفحة قائمة.
   // والترويسة `X-Robots-Tag` يُضيفها المسار تحت بالشرط نفسه: الزاحف قد يقرأ
   // إحداهما وحدها، فالشيئان يقولان القاعدة نفسها.
+
+  // بوابة جواب الضيف (تذكرة #169، ADR-0015): القالب لا يعرف أسباب الإغلاق —
+  // `guestRsvpOpen` في الخدمة وحدها تقرّر «نموذج أو لا»، وهذا السطر يرسمه.
+  const rsvpForm = rsvp && rsvp.open ? renderGuestRsvpForm(event.id, rsvp.notice) : '';
 
   return `<!doctype html>
 <html lang="ar" dir="rtl">
@@ -527,6 +625,7 @@ ${expiredDate ? `<p class="expired-date">${escapeHtml(expiredDate)}</p>` : ''}
 <hr class="rule">
 <p class="lead">${lead}</p>
 ${actionButtons({ downloadUrl, siteRootUrl })}
+${rsvpForm}
 ${reasonsStrip()}
 ${relatedEventsSection(event, relatedEvents, siteRootUrl)}
 <p class="mark">${palette.wordmark}</p>
@@ -916,14 +1015,168 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
   // «بالرابط فقط» (تذكرة #166): الصفحة تُفتح كما تُفتح العامة — هي الطريق إلى
   // المناسبة لمن وصله رابطها — ولا فرق إلا في إشارة الفهرسة، ترويسةً ووسماً.
   const noindex = event.visibility === 'link_only';
+
+  // بوابة جواب الضيف (تذكرة #169، ADR-0015): الأهلية من الخدمة (`guestRsvpOpen`)،
+  // والشارة من `?rsvp=` برمز من القائمة المغلقة وحدها — لا نصّ عميل ولا هاتف
+  // في الرابط. وحين تكون البوابة مغلقة لا شارة ولا نموذج: صفحة النوع المطفأ
+  // أو المناسبة المنتهية تبقى كما كانت قبل هذه التذكرة.
+  const guestRsvp = events.guestRsvpOpen(event)
+    ? { open: true, notice: guestRsvpNotice(req.query.rsvp) }
+    : null;
+
   const response = res
     .status(200)
-    .set('Content-Security-Policy', SHARE_CSP)
+    .set('Content-Security-Policy', EVENT_PAGE_CSP)
     .set('Content-Type', 'text/html; charset=utf-8');
   if (noindex) response.set('X-Robots-Tag', 'noindex, nofollow');
   response.send(renderEventPage(event, {
-    pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents, noindex
+    pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents, noindex, rsvp: guestRsvp
   }));
+}));
+
+/**
+ * صفحة الـ429 (تذكرة #169): نفس غلاف صفحة الـ404 — بطاقة، علامة، ونمط الصفحة
+ * نفسها — بنصّ عربي يقول ما حدث وما لم يحدث: **الجواب لم يُحفظ**. والرابط يعود
+ * إلى صفحة المناسبة إن كان المعرّف رقماً، وإلا إلى الموقع: الحدّ يعمل قبل أن
+ * نعرف أن المناسبة موجودة، فلا يُوعَد الزائر برابط مجهول.
+ */
+function renderGuestRsvpLimitedPage({ backHref, backLabel }) {
+  const palette = PALETTES.festive;
+  const downloadUrl = absoluteMediaUrl(config.app.apkUrl) || config.publicUrl;
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>طلبات كثيرة في وقت قصير</title>
+<style>${pageStyle(palette)}</style>
+</head>
+<body>
+<main class="card not-found">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
+<div class="body">
+<h1>طلبات كثيرة في وقت قصير</h1>
+<p>لم يُحفظ جوابك هذه المرة. انتظر قليلاً ثم أعِد الإرسال، أو أرسل جوابك من التطبيق.</p>
+<div class="actions" style="margin-top:18px">
+<a class="cta" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
+<a class="cta-secondary" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
+</div>
+</div>
+</main>
+</body>
+</html>`;
+}
+
+function sendGuestRsvpLimited(res, eventId) {
+  res
+    .status(429)
+    .set('Content-Security-Policy', SHARE_CSP)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .send(eventId
+      ? renderGuestRsvpLimitedPage({ backHref: `${config.publicUrl}/e/${eventId}`, backLabel: 'العودة إلى صفحة المناسبة' })
+      : renderGuestRsvpLimitedPage({ backHref: config.publicUrl, backLabel: 'العودة إلى الموقع' }));
+}
+
+/**
+ * محدِّد معدّل بوابة الضيف وحدها (تذكرة #169، ADR-0015 §2):
+ * `RSVP_GUEST_RATE_LIMIT` من `constants.js` — عشرة في الساعة لكل IP، فوق الدلو
+ * المجهول العام لا بدلاً منه (ذلك على `/api`، وهذه البوابة تحت `/e/`).
+ * والتجاوز **429 بصفحة عربية HTML** لا JSON: من يراها ضيفٌ في متصفّحه بعد
+ * ضغط «جاي»، لا عميل JSON.
+ */
+const guestRsvpLimiter = rateLimit({
+  windowMs: RSVP_GUEST_RATE_LIMIT.windowMs,
+  max: RSVP_GUEST_RATE_LIMIT.max,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => `rsvp-guest:${req.ip || 'unknown'}`,
+  handler: (req, res) => sendGuestRsvpLimited(res, shareIdOrNull(req.params.id))
+});
+
+/**
+ * يقرأ جواب الضيف من جسم النموذج، ويعيد `{ answer }` أو `{ error: <رمز> }`.
+ * التحقّق كله عبر `middleware/validate.js` — `cleanString` للاسم (سقف العمود
+ * نفسه، ١٢٠)، و`requirePhone` بالمطبِّع القائم للهاتف الإجباري،
+ * و`parsePartySize` بسقف `RSVP_PARTY_SIZE_MAX`. والرفض هنا **رمز حقل لا رسالة**:
+ * البوابة صفحة HTML، ونصّها العربي في `GUEST_RSVP_NOTICES` أعلاه.
+ */
+function readGuestAnswer(body) {
+  // جسم غير مُحلَّل (`Content-Type` لا يخصّ النموذج) يصل `undefined`، فيُقرأ
+  // كحقول فارغة ويسقط على أول رسالة رفض عربية بدل أن يرمي 500.
+  const input = body || {};
+
+  const name = cleanString(input.guest_name, 120);
+  if (!name) return { error: 'name' };
+
+  let phone;
+  try {
+    phone = requirePhone(input.guest_phone);
+  } catch (err) {
+    if (err instanceof ApiError) return { error: 'phone' };
+    throw err;
+  }
+
+  let partySize;
+  try {
+    partySize = parsePartySize(input.party_size);
+  } catch (err) {
+    if (err instanceof ApiError) return { error: 'party' };
+    throw err;
+  }
+
+  const response = input.response === 'yes' ? 'yes' : (input.response === 'no' ? 'no' : null);
+  if (!response) return { error: 'answer' };
+
+  return { answer: { name, phone, response, partySize } };
+}
+
+/**
+ * استقبال جواب الضيف من النموذج نفسه (تذكرة #169، ADR-0015 §1) — الباب
+ * المجهول الوحيد في المشروع، وحدوده في السجل: بلا حساب، وباسم وعدد وهاتف
+ * إجباريين، وبحدّ طلبات لكل IP.
+ *
+ * **إعادة توجيه 303 بعد كل نتيجة (PRG):** النجاح يعود إلى `?rsvp=ok` والرفض
+ * إلى `?rsvp=<رمز>`، فالنموذج لا يُعاد إرساله عند تحديث المتصفّح، والرابط لا
+ * يحمل هاتفاً ولا نصّاً يكتبه العميل (ADR-0015 §2: الهاتف لا يخرج في أي
+ * استجابة). والشارة والرسالة ترسمهما الصفحة من رمزها المغلق.
+ *
+ * **الأهلية قبل التحقّق عمداً:** نوع مطفأ أو مناسبة منتهية أو غير معتمدة تردّ
+ * الـ404 الموحّدة للصفحة نفسها ولو كان الجسم فارغاً — وإلا صار المسار مسباراً
+ * يفرّق بين مناسبة مفتوحة ومغلقة بما يردّه عن حقل ناقص.
+ */
+eventRouter.post('/:id/rsvp', guestRsvpLimiter, asyncHandler(async (req, res) => {
+  const eventId = shareIdOrNull(req.params.id);
+  if (!eventId) {
+    sendNotFound(res);
+    return;
+  }
+
+  if (!await events.guestRsvpContext(eventId)) {
+    sendNotFound(res);
+    return;
+  }
+
+  const read = readGuestAnswer(req.body);
+  if (read.error) {
+    res.redirect(303, `/e/${eventId}?rsvp=${read.error}`);
+    return;
+  }
+
+  // الخدمة تفحص الأهلية مرة أخرى — منادٍ لا يمرّ بهذا المسار قد يكتب بلا فحص —
+  // فقد تُغلق المناسبة بين الفحصين، وحينها الـ404 الموحّدة لا JSON من معالِج
+  // الأخطاء. (الفرق زمني صرف: تعديل نوع إلى مطفأ بين طلبين.)
+  try {
+    await events.setGuestRsvp(eventId, read.answer);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      sendNotFound(res);
+      return;
+    }
+    throw err;
+  }
+
+  res.redirect(303, `/e/${eventId}?rsvp=ok`);
 }));
 
 /**
