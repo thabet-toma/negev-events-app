@@ -2254,7 +2254,7 @@ const steps = [
     }
   },
   {
-    // جدولة النشر ونافذة البقاء (تذكرة #167): ثلاثة أعمدة، ثم قيمة واحدة.
+    // جدولة النشر ونافذة البقاء (تذكرة #167): ثلاثة أعمدة، ثم تعبئة أولية واحدة.
     //
     // الأعمدة تُضاف داخل حرّاسها فإعادة التشغيل لا تُسقط الترحيل، ولا تعبئة
     // صفوف لها: `DEFAULT NULL`/`DEFAULT 0` يكتبهما MySQL نفسه على كل صفّ قائم
@@ -2262,10 +2262,12 @@ const steps = [
     // لا يقرأ إلا ما له `publish_at` غير فارغ، فلا إعلان بأثر رجعي لمناسبة
     // قديمة، ولا حاجة إلى تعبئة.
     //
-    // والخطوة الوحيدة التي تمسّ بيانات: نافذة «نجاح» تُضبط 7 أيام — وفقط إن كان
-    // ما زال 0، فلا تُكتب فوق قيمة اختارها السوبر أدمن. (مَن أعادها إلى 0
-    // صراحةً بعد الترحيل يراها 7 في التشغيل التالي؛ القاعدة كما نُصّت في
-    // التذكرة: «يُضبط 7 فقط إن كان ما زال 0».)
+    // والتعبئة الوحيدة التي تمسّ بيانات — نافذة «نجاح» 7 أيام — تحدث **مرّة
+    // واحدة** بعلَم `app_settings`، على نمط `fix-artist-field-visibility-2026-10`
+    // (تصحيح جولة #167): لولا العلَم لأعاد كل تشغيل نافذةً اختار السوبر أدمن
+    // صفراً لها إلى 7، فيُلغي اختياراً إدارياً صالحاً عند النشر التالي. والشرط
+    // `feed_linger_days = 0` باقٍ: من أعادها إلى 0 **قبل** أول تشغيل لهذه الخطوة
+    // لا تُكتب فوقه 7، وبعد كتابة العلَم لا تُلمس القيمة أبداً.
     name: 'add-scheduled-publish-and-feed-linger-2026-11',
     async run(connection) {
       if (!(await columnExists(connection, 'events', 'publish_at'))) {
@@ -2287,13 +2289,28 @@ const steps = [
         logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: occasion_types.feed_linger_days added.');
       }
 
-      const [celebrations] = await connection.execute(
-        "UPDATE occasion_types SET feed_linger_days = 7 WHERE name = 'نجاح' AND feed_linger_days = 0"
+      const [marker] = await connection.execute(
+        "SELECT setting_value FROM app_settings WHERE setting_key = 'seed_feed_linger_celebration_2026_11'"
       );
-      logger.info(
-        '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
-        + `${celebrations.affectedRows} «نجاح» type(s) given a 7-day feed window.`
-      );
+      if (marker.length === 0) {
+        const [celebrations] = await connection.execute(
+          "UPDATE occasion_types SET feed_linger_days = 7 WHERE name = 'نجاح' AND feed_linger_days = 0"
+        );
+        await connection.execute(
+          `INSERT INTO app_settings (setting_key, setting_value)
+           VALUES ('seed_feed_linger_celebration_2026_11', 'done')
+           ON DUPLICATE KEY UPDATE setting_key = setting_key`
+        );
+        logger.info(
+          '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
+          + `${celebrations.affectedRows} «نجاح» type(s) given a 7-day feed window (one-time fill).`
+        );
+      } else {
+        logger.info(
+          '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
+          + 'feed window already seeded once — admin choice left untouched.'
+        );
+      }
     }
   }
 ];

@@ -1001,7 +1001,9 @@ async function publishGateOpen(eventId) {
  * المناسبات المعتمدة التي بلغ موعد نشرها ولم تُعلَن بعد — قراءة المجدول وحده
  * (تذكرة #167). شرط `publish_at IS NOT NULL` هو ما يمنع إعلاناً بأثر رجعي: كل
  * صفّ قائم له `announced_at` فارغ، ولولا هذا الشرط لأعلن المجدول المنصّة كلها
- * في أول تشغيل له.
+ * في أول تشغيل له. و`announced_at IS NULL` تعني «لم يكتمل إعلانها» لا «لم
+ * يبدأ»: التعليم يُكتب في معاملة الإعلان نفسها، فصفٌّ فشل إعلانه يعود NULL
+ * وتُعيده الدورة التالية (تصحيح جولة #167).
  */
 async function listDueScheduledPublish() {
   return db.query(
@@ -1015,17 +1017,25 @@ async function listDueScheduledPublish() {
 
 /**
  * تعليم المناسبة «أُعلنت» — ذرّي: `UPDATE ... WHERE announced_at IS NULL`
- * ينجح مرّة واحدة ولو تزامن تشغيلان، فيُعلن أحدهما وحده. يُستعمل في موضعين:
- * المجدول يستعمله **حجزاً قبل الإعلان** (فلا يبثّ ولا يدفع مرّتين)،
- * و`notifications.service.notifyNewEvent` يستعمله **تعليماً بعد الكتابة** (فلا
- * يُعلن المجدول لاحقاً مناسبةً أُعلنت عند الاعتماد ثم تغيّر موعدها إلى المستقبل).
+ * ينجح مرّة واحدة ولو تزامن تشغيلان، فيُعلن أحدهما وحده. يُستعمل اليوم في
+ * موضع واحد: أول كتابة داخل معاملة `notifications.service.notifyNewEvent`
+ * (تصحيح جولة #167)، فالحجز والإعلان **معاملة واحدة**: يمنع التكرار بين
+ * تشغيلين متزامنين، ويسقط مع صفوف الإشعارات إن فشل الإعلان لأن المعاملة كلها
+ * تتراجع — فلا يبقى `announced_at` معلَّماً على إعلان لم يصل (وهو ما كان
+ * يستبعد الصفّ من كل محاولة تالية)، ولا يُعلَّم صفٌّ أعلنه المسار عند الاعتماد
+ * ثم تغيّر موعده إلى المستقبل.
+ *
+ * `connection` اختياري: يُمرَّر داخل معاملة قائمة (mysql2 يرفض `undefined`،
+ * و`eventId` رقم دائم)، ويُستعمل `db` بدونه.
  * يعيد `true` للمستدعي الذي حجز الصفّ فعلاً.
  */
-async function markAnnounced(eventId) {
-  const { affectedRows } = await db.execute(
-    'UPDATE events SET announced_at = NOW() WHERE id = ? AND announced_at IS NULL',
-    [eventId]
-  );
+async function markAnnounced(eventId, connection = null) {
+  const sql = 'UPDATE events SET announced_at = NOW() WHERE id = ? AND announced_at IS NULL';
+  if (connection) {
+    const [result] = await connection.execute(sql, [eventId]);
+    return result.affectedRows === 1;
+  }
+  const { affectedRows } = await db.execute(sql, [eventId]);
   return affectedRows === 1;
 }
 

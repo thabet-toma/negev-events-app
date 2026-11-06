@@ -19,7 +19,19 @@ const { getZonedParts, zonedTimeToUtc, RUN_HOUR } = require('../utils/jerusalemT
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * إيقاع النشر المجدول المستقل (تصحيح جولة #167): دقيقة واحدة. `publish_at`
+ * يأتي من `<input type="datetime-local">` بدقّة الدقيقة، فدورة كل دقيقة تعني
+ * أن المناسبة تظهر ويصل إشعارها في دقيقة موعدها لا في الجولة اليومية التالية
+ * عند 09:00 — موعدُ نشرٍ في 09:01 كان ينتظر يوماً كاملاً قبل هذا.
+ */
+const PUBLISH_TICK_MS = 60 * 1000;
+
 let armedTimer = null;
+/** مؤقّت إيقاع النشر المستقل عن الجولة اليومية (تذكرة #167). */
+let publishTimer = null;
+/** حارس تشغيل واحد للدفعة: الجولة اليومية والإيقاع لا يدخلانها معاً. */
+let publishPassRunning = false;
 
 /** Arabic digits, for the generic "N days" fallback below. */
 const ARABIC_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
@@ -177,30 +189,45 @@ async function runNudgePass() {
  * ودفع واحد. وهي نفس مادة الإعلان التي يكتبها المسارَان (النشر الفوري
  * والاعتماد)، فلا يفترق شكل ما يصل الناس.
  *
- * **الحجز قبل الإعلان** هو ما يمنع التكرار: `events.markAnnounced` ذرّي
- * (`WHERE announced_at IS NULL`)، فتشغيل ثانٍ — أو تشغيلان متزامنان — لا
- * ينجح منهما إلا واحد، والثاني لا يجد صفاً في `listDueScheduledPublish` أصلاً،
- * فلا صفّ جديد ولا بثّ ولا دفع ثانٍ. ولو حجزنا بعد الإعلان لتكرّر الملخّص
- * اليومي (`ON DUPLICATE KEY UPDATE` يعيد كتابته ويُنبّه من جديد).
+ * **الإعلان وحجزه في معاملة واحدة** (تصحيح جولة #167): `notifications.notifyNewEvent`
+ * يحجز الصفّ (`announced_at IS NULL` ذرّياً) ويكتب صفوف الإشعارات في المعاملة
+ * نفسها، فلا يبقى صفٌّ معلَّم «أُعلن» بلا إعلان: فشل الكتابة يتراجع بالحجز معه،
+ * ويبقى الصفّ في `listDueScheduledPublish` فتُعيده الدورة التالية. و`null`
+ * تعني «بالرابط فقط» أو «حجزه تشغيل آخر» — فلا بثّ ولا دفع.
  *
- * و`notifyNewEvent` نفسه يُعلّم الصفّ بعد الكتابة، فيبقى «أُعلنت» صحيحاً حتى لو
- * حُوّل موعدها لاحقاً إلى المستقبل — وإلا أعاد المجدول إعلان مناسبة أُعلنت عند
- * الاعتماد.
+ * **وإيقاعه مستقلّ عن الجولة اليومية**: `start()` يسلّح مؤقّتين — الجولة
+ * اليومية عند 09:00 (`armNextRun`) وإيقاع النشر كل `PUBLISH_TICK_MS`
+ * (`armNextPublishTick`)، فموعد 09:01 لا ينتظر الجولة التالية. والجولة اليومية
+ * تبقى تستدعيه أوّلاً كمسحة زائدة، لا كإيقاع وحيد.
  */
 async function runScheduledPublishPass() {
-  for (const event of await events.listDueScheduledPublish()) {
-    if (!(await events.markAnnounced(event.id))) continue;
-    const announcement = await notifications.notifyNewEvent(event);
-    // «بالرابط فقط» تعيد `null` فلا إشارة ولا دفع — كما في المسارين.
-    if (!announcement) continue;
-    realtime.emit('new_event_created', {
-      id: event.id,
-      title: event.title,
-      groom_name: event.groom_name,
-      town: event.town,
-      event_date: event.event_date
-    });
-    announceNewEvent(announcement);
+  // دفعة واحدة في الوقت نفسه: الجولة اليومية قد تصادف إيقاع النشر، والحجز
+  // الذرّي يمنع التكرار أصلاً — هذا يوفّر دورة مكرّرة لا تُنتج شيئاً.
+  if (publishPassRunning) return;
+  publishPassRunning = true;
+  try {
+    for (const event of await events.listDueScheduledPublish()) {
+      try {
+        const announcement = await notifications.notifyNewEvent(event);
+        // «بالرابط فقط» تعيد `null` فلا إشارة ولا دفع — كما في المسارين، وكذلك
+        // صفّ حجزه تشغيل آخر في اللحظة نفسها.
+        if (!announcement) continue;
+        realtime.emit('new_event_created', {
+          id: event.id,
+          title: event.title,
+          groom_name: event.groom_name,
+          town: event.town,
+          event_date: event.event_date
+        });
+        announceNewEvent(announcement);
+      } catch (err) {
+        // فشل مناسبة واحدة لا يُسقط بقية الدفعة: صفّها لم يُعلَّم (المعاملة
+        // تراجعت) فتعود المحاولة في الإيقاع التالي، ولا يُفقد إعلانها.
+        logger.error(`[scheduler] scheduled publish failed for event ${event.id}:`, err.message);
+      }
+    }
+  } finally {
+    publishPassRunning = false;
   }
 }
 
@@ -212,6 +239,11 @@ async function runScheduledPublishPass() {
  * scheduled publish pass claims its own rows. Exported directly so a test can
  * run one pass deterministically instead of waiting for a timer (tests must
  * never sleep).
+ *
+ * The publish call here is a redundant sweep, not the publish rhythm: since
+ * #167 the publish pass has its own minute timer (`armNextPublishTick`), and
+ * this one only guarantees the 09:00 pass sees a row that went public exactly
+ * at 09:00 before the countdown reads the day.
  */
 async function runDailyPass() {
   await runScheduledPublishPass();
@@ -253,9 +285,27 @@ function armNextRun() {
 }
 
 /**
- * Starts the daily job inside this process (issue #85's own architectural
- * decision: no scheduling dependency, no cron). The timer is `unref()`d so
- * it never keeps the process alive on its own — Node exits once nothing else
+ * Arms the publish rhythm's own timer (تصحيح جولة #167) — separate from
+ * `armNextRun` so a publish moment never waits for the 09:00 pass. Re-armed
+ * after every completed pass rather than `setInterval`, so two passes can
+ * never overlap; the interval is fixed because `publish_at` is minute-precise
+ * and a minute means the same thing on both sides of a DST boundary. `unref()`
+ * like the daily timer: this never keeps the process alive on its own.
+ */
+function armNextPublishTick() {
+  publishTimer = setTimeout(() => {
+    runScheduledPublishPass()
+      .catch(err => logger.error('[scheduler] scheduled publish tick failed:', err.message))
+      .finally(armNextPublishTick);
+  }, PUBLISH_TICK_MS);
+  publishTimer.unref();
+}
+
+/**
+ * Starts the scheduled jobs inside this process (issue #85's own architectural
+ * decision: no scheduling dependency, no cron): the daily pass and, since
+ * #167, the independent publish rhythm. Both timers are `unref()`d so they
+ * never keep the process alive on their own — Node exits once nothing else
  * is pending — which is also what keeps `npm test` timer-free: the test
  * suite boots the app via `createApp()` directly (server.js is never
  * required), so this function is never called during a test run at all.
@@ -265,14 +315,19 @@ function armNextRun() {
 function start() {
   if (armedTimer) return;
   armNextRun();
+  armNextPublishTick();
 }
 
-/** Clears the currently-armed timer, if any — the explicit counterpart to `start()`, called from server.js's own graceful-shutdown handler and by tests that exercise the pair. */
+/** Clears the currently-armed timers, if any — the explicit counterpart to `start()`, called from server.js's own graceful-shutdown handler and by tests that exercise the pair. */
 function stop() {
   if (armedTimer) {
     clearTimeout(armedTimer);
     armedTimer = null;
   }
+  if (publishTimer) {
+    clearTimeout(publishTimer);
+    publishTimer = null;
+  }
 }
 
-module.exports = { start, stop, runDailyPass, millisecondsUntilNextRun };
+module.exports = { start, stop, runDailyPass, runScheduledPublishPass, millisecondsUntilNextRun, PUBLISH_TICK_MS };

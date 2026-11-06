@@ -308,7 +308,11 @@ async function scheduleForUser(userId) {
 /** «مناسبة جديدة» فرادى حتى هذا العدد في اليوم لكل محافظة؛ ما بعده يُجمَع في إشعار ملخّص واحد يتحدّث. */
 const NEW_EVENTS_DAILY_SINGLES = 3;
 
-async function todayString() {
+async function todayString(connection = null) {
+  if (connection) {
+    const [rows] = await connection.execute("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+    return rows[0].today;
+  }
   const { today } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
   return today;
 }
@@ -318,8 +322,13 @@ async function todayString() {
  * لا من حقل يُمرّره المستدعي، فلا تُبنى نسخة ثانية من «محافظة المناسبة» في
  * المسارات، ولا يختلف الحكم بين النشر من التطبيق والاعتماد من اللوحة (#161).
  * `null` لمناسبة غير موجودة — حارسٌ دفاعي يجعل التقييد معطَّلاً كما كان.
+ * `connection` اختياري كجارتها `markAnnounced`: يُمرَّر داخل معاملة الإعلان.
  */
-async function eventRegionId(eventId) {
+async function eventRegionId(eventId, connection = null) {
+  if (connection) {
+    const [rows] = await connection.execute('SELECT region_id FROM events WHERE id = ?', [eventId]);
+    return rows.length ? rows[0].region_id : null;
+  }
   const row = await db.queryOne('SELECT region_id FROM events WHERE id = ?', [eventId]);
   return row ? row.region_id : null;
 }
@@ -364,65 +373,81 @@ async function eventIsLinkOnly(eventId) {
  *
  * و**«بالرابط فقط» لا تُعلَن إطلاقاً** (تذكرة #166): تُقرأ من الصفّ قبل أي
  * كتابة، فتخرج `null` فيصمت المسارَان معاً — لا صفّ `event_new`، ولا إشارة
- * لحظية للجميع، ولا دفع للأجهزة. وعدّاد `publishedToday` يعدّ **المنشور العلني
- * وحده** (`visibility = 'public'`) داخل المحافظة: المناسبة المخفيّة لا تستهلك
- * واحدة من الثلاث الفرادى ولا تدخل في `extra`، فلا يقفز رقم الملخّص بسبب مناسبة
- * لا يراها أحد، ويبقى العدّ موافقاً لما يُعلَن فعلاً.
+ * لحظية للجميع، ولا دفع للأجهزة. ولا تصل إلى الحجز أدناه أصلاً، فلا تُعلَّم
+ * `announced_at` ولا تدخل في عدّاد اليوم.
  *
- * **وتُعلَّم المناسبة «أُعلنت» هنا** (تذكرة #167): `events.markAnnounced` بعد
- * كتابة الصفوف، في الموضع الوحيد الذي يكتب إعلاناً. بها لا يُعلن المجدول لاحقاً
- * مناسبةً أُعلنت عند الاعتماد ثم حُوّل موعدها إلى المستقبل، ولا يحتاج أي مستدعٍ
- * (النشر الفوري، الاعتماد، المجدول) أن يتذكّر تعليمها بنفسه.
+ * **وعدّاد اليوم يعدّ ما أُعلن فعلاً** (تصحيح جولة #167): `announced_at` لا
+ * `first_approved_at`، داخل محافظة المناسبة. اعتمادُ مناسبة بموعد نشر مستقبلي
+ * لا يستهلك واحدة من الثلاث الفرادى ولا يدخل في `extra`، لأنها لم تظهر لأحد
+ * بعد؛ وحين يبلغ موعدها وتُعلن تُعَدّ في يوم إعلانها لا في يوم اعتمادها.
+ * و`visibility = 'public'` باقٍ في الشرط شبكةَ أمان، والمخفيّة لا تصل إلى
+ * الحجز أصلاً.
+ *
+ * **والإعلان وحجزه في معاملة واحدة** (تصحيح جولة #167): أوّل ما تفعله المعاملة
+ * `events.markAnnounced` — `UPDATE ... WHERE announced_at IS NULL` ذرّي، فلا
+ * ينجح فيه إلا تشغيل واحد — ثم تُكتب صفوف الإشعارات في المعاملة نفسها. فإن
+ * فشل أيُّ جزء بعد الحجز تراجعت المعاملة بالحجز معه، فلم يبقَ صفٌّ معلَّم
+ * «أُعلن» بلا إعلان ولا استُبعد من المحاولة التالية (وهو ما كان يفقد الإعلان
+ * نهائياً). و`null` تعني: «بالرابط فقط» أو «أعلنها تشغيل آخر للتوّ» — فلا بثّ
+ * ولا دفع ثانٍ من المستدعي.
  */
 async function notifyNewEvent({ id, title, town, created_by: createdBy = null }) {
   // المخفيّة تُقرأ أولاً وبلا محافظة: إعلانها يُعلِن وجودها لمن لا يراها.
   if (await eventIsLinkOnly(id)) return null;
-  // محافظة المناسبة تُقرأ بعد ذلك: العدّاد أدناه مقيَّد بها، وشرط الإدراج في
-  // الفرعين يستعملها هي نفسها — قراءة واحدة تكفي الاثنين.
-  const regionId = await eventRegionId(id);
-  const { total } = await db.queryOne(
-    `SELECT COUNT(*) AS total FROM events
-      WHERE first_approved_at >= CURDATE() AND first_approved_at < CURDATE() + INTERVAL 1 DAY
-        AND visibility = 'public'
-        AND (? IS NULL OR region_id = ?)`,
-    [regionId, regionId]
-  );
-  const publishedToday = Number(total);
 
-  if (publishedToday <= NEW_EVENTS_DAILY_SINGLES) {
-    const notificationTitle = 'مناسبة جديدة';
-    const body = `تم نشر مناسبة جديدة: "${title}" في ${town}`;
-    await db.execute(
+  return db.transaction(async connection => {
+    // الحجز أوّلاً وداخل المعاملة: مَن حجز الصفّ هو وحده يكتب صفوفه، ولو
+    // تزامن تشغيلان (المجدول ومسار الاعتماد) لم يُعلن إلا أحدهما.
+    if (!(await events.markAnnounced(id, connection))) return null;
+
+    // محافظة المناسبة تُقرأ بعد الحجز: العدّاد أدناه مقيَّد بها، وشرط الإدراج
+    // في الفرعين يستعملها هي نفسها — قراءة واحدة تكفي الاثنين.
+    const regionId = await eventRegionId(id, connection);
+    // العدّاد يعدّ ما أُعلن اليوم لا ما اعتُمد: الحجز أعلاه كتب `announced_at`
+    // على هذا الصفّ، فهو محسوب في عدّاده هو، والاعتماد المستقبلي غير المحسوب
+    // أصلاً — كما يقتضي معيار «الاعتماد قبل الموعد لا يُعلن».
+    const [countRows] = await connection.execute(
+      `SELECT COUNT(*) AS total FROM events
+        WHERE announced_at >= CURDATE() AND announced_at < CURDATE() + INTERVAL 1 DAY
+          AND visibility = 'public'
+          AND (? IS NULL OR region_id = ?)`,
+      [regionId, regionId]
+    );
+    const publishedToday = Number(countRows[0].total);
+
+    if (publishedToday <= NEW_EVENTS_DAILY_SINGLES) {
+      const notificationTitle = 'مناسبة جديدة';
+      const body = `تم نشر مناسبة جديدة: "${title}" في ${town}`;
+      await connection.execute(
+        `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
+         SELECT id, ?, ?, ?, ?, ?
+           FROM users
+          WHERE id <> ? AND notify_new_events = 1
+            AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
+         ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
+        [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0, regionId, regionId]
+      );
+      return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, regionId, push: true };
+    }
+
+    const extra = publishedToday - NEW_EVENTS_DAILY_SINGLES;
+    const notificationTitle = 'مناسبات جديدة اليوم';
+    const body = `نُشرت اليوم مناسبات جديدة أخرى (${extra}) — آخرها "${title}" في ${town}`;
+    await connection.execute(
       `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
-       SELECT id, ?, ?, ?, ?, ?
+       SELECT id, NULL, ?, ?, ?, ?
          FROM users
         WHERE id <> ? AND notify_new_events = 1
           AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
-       ON DUPLICATE KEY UPDATE notifications.id = notifications.id`,
-      [id, TYPES.EVENT_NEW, notificationTitle, body, `event_new_${id}`, createdBy ?? 0, regionId, regionId]
+       ON DUPLICATE KEY UPDATE title = ?, body = ?, is_read = 0, created_at = CURRENT_TIMESTAMP`,
+      [
+        TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString(connection)}_${regionId ?? 'all'}`, createdBy ?? 0,
+        regionId, regionId,
+        notificationTitle, body
+      ]
     );
-    await events.markAnnounced(id);
-    return { title: notificationTitle, body, eventId: id, excludeUserId: createdBy, regionId, push: true };
-  }
-
-  const extra = publishedToday - NEW_EVENTS_DAILY_SINGLES;
-  const notificationTitle = 'مناسبات جديدة اليوم';
-  const body = `نُشرت اليوم مناسبات جديدة أخرى (${extra}) — آخرها "${title}" في ${town}`;
-  await db.execute(
-    `INSERT INTO notifications (user_id, event_id, type, title, body, dedupe_key)
-     SELECT id, NULL, ?, ?, ?, ?
-       FROM users
-      WHERE id <> ? AND notify_new_events = 1
-        AND (? IS NULL OR users.region_id IS NULL OR users.region_id = ?)
-     ON DUPLICATE KEY UPDATE title = ?, body = ?, is_read = 0, created_at = CURRENT_TIMESTAMP`,
-    [
-      TYPES.EVENT_NEW_DIGEST, notificationTitle, body, `event_new_digest_${await todayString()}_${regionId ?? 'all'}`, createdBy ?? 0,
-      regionId, regionId,
-      notificationTitle, body
-    ]
-  );
-  await events.markAnnounced(id);
-  return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, regionId, push: extra === 1 };
+    return { title: notificationTitle, body, eventId: null, excludeUserId: createdBy, regionId, push: extra === 1 };
+  });
 }
 
 /**
