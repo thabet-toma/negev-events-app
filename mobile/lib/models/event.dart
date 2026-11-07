@@ -178,7 +178,12 @@ class Event {
 
   /// نسخة بحالة تذكير محدَّثة — تحدّث محلياً بعد نجاح POST/DELETE .../remind
   /// دون إعادة جلب الصفحة كاملة فتفقد ما تراكم من "عرض المزيد".
-  Event copyWithReminder({required bool isReminded, int? followersCount}) => Event(
+  /// ويمكن إرفاق جواب الحضور وعدّاده كما وصلا من ردّ PUT /rsvp.
+  Event copyWithReminder({
+    required bool isReminded,
+    int? followersCount,
+    EventRsvpState? rsvpState,
+  }) => Event(
         id: id,
         title: title,
         groomName: groomName,
@@ -212,8 +217,8 @@ class Event {
         latestCongratulation: latestCongratulation,
         followersCount: followersCount,
         isReminded: isReminded,
-        rsvpGoingCount: rsvpGoingCount,
-        myRsvp: myRsvp,
+        rsvpGoingCount: rsvpState == null ? rsvpGoingCount : rsvpState.goingCount,
+        myRsvp: rsvpState == null ? myRsvp : rsvpState.myRsvp,
         status: status,
         archivePhotos: archivePhotos,
       );
@@ -380,6 +385,14 @@ class Event {
     );
   }
 }
+
+/// حالة الحضور والتذكير بعد PUT /rsvp؛ العدّاد المخفي يبقى null لا صفراً.
+typedef EventRsvpState = ({
+  EventRsvp? myRsvp,
+  int? goingCount,
+  bool isReminded,
+  int? followersCount,
+});
 
 /// جواب الحضور — «جاي» أو «مش جاي» (تذكرة #168، ADR-0015).
 ///

@@ -692,8 +692,8 @@ class NegevApi {
   /// «جاي / مش جاي» بحساب (تذكرة #168): جواب واحد لكل حساب على المناسبة —
   /// الثاني يُحدّث الأول على الخادم لا يُضيف ثانياً. و`yes` يُنشئ «ذكّرني» إن
   /// غاب، و`no` لا يمسّه. النوع المطفأ والمناسبة غير المعتمدة 404.
-  /// يعيد حالة الجواب بعد الحفظ (`my_rsvp`) مع العدّاد إن سمح به النوع.
-  Future<EventRsvp?> setRsvp(
+  /// يعيد حالة الحضور والتذكير من ردّ PUT نفسه، والعدّادات إن سمح بها النوع.
+  Future<EventRsvpState> setRsvp(
     int eventId, {
     required bool going,
     int partySize = 1,
@@ -707,7 +707,12 @@ class NegevApi {
       },
     );
     final rsvp = data['my_rsvp'];
-    return rsvp is Map<String, dynamic> ? EventRsvp.fromJson(rsvp) : null;
+    return (
+      myRsvp: rsvp is Map<String, dynamic> ? EventRsvp.fromJson(rsvp) : null,
+      goingCount: int.tryParse('${data['rsvp_going_count']}'),
+      isReminded: data['is_reminded'] == true,
+      followersCount: int.tryParse('${data['followers_count']}'),
+    );
   }
 
   /// سحب الجواب — لا يمسّ «ذكّرني». 404 لنوع مطفأ، كالإجابة نفسها.

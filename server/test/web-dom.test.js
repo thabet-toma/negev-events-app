@@ -15188,6 +15188,61 @@ async function run() {
     );
   });
 
+  await test('إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { window } = dom;
+    const base = buildFetchStub();
+    let resolveTypes;
+    window.loadOccasionTypes = () => new Promise(resolve => { resolveTypes = resolve; });
+    window.fetch = base;
+    const pending = window.openMessageSheet(170, MESSAGES_WEDDING_TYPE.id);
+    const sheet = window.document.getElementById('messageSheetModal');
+    const list = window.document.getElementById('messageSheetList');
+    assert.strictEqual(sheet.style.display, 'flex', 'the request starts with an open sheet');
+    assert.ok(list.querySelector('.loading-spinner'), 'types have not arrived yet');
+    window.closeMessageSheet();
+    const closedHtml = list.innerHTML;
+
+    resolveTypes([MESSAGES_WEDDING_TYPE]);
+    await assert.doesNotReject(pending, 'a closed sheet must not dereference its cleared state');
+    assert.strictEqual(sheet.style.display, 'none', 'the late response must not reopen it');
+    assert.strictEqual(list.innerHTML, closedHtml, 'the late response must not write hidden content');
+    window.openFreeMessageComposer();
+    assert.strictEqual(window.document.getElementById('chatModal').style.display, 'none', 'the cleared state stays cleared');
+    window.close();
+  });
+
+  await test('ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const { window } = dom;
+    const requests = [];
+    window.loadOccasionTypes = () => new Promise(resolve => { requests.push(resolve); });
+    const oldRequest = window.openMessageSheet(170, MESSAGES_WEDDING_TYPE.id);
+    window.closeMessageSheet();
+    const newRequest = window.openMessageSheet(171, FUNERAL_TYPE.id);
+    const newMessage = 'رسالة المناسبة الجديدة';
+    requests[1]([{ ...FUNERAL_TYPE, messages: [{ id: 21, body: newMessage }] }]);
+    await newRequest;
+    const list = window.document.getElementById('messageSheetList');
+    const newHtml = list.innerHTML;
+    assert.ok(list.textContent.includes(newMessage), 'the newer request has rendered');
+
+    requests[0]([MESSAGES_WEDDING_TYPE]);
+    await assert.doesNotReject(oldRequest);
+    assert.strictEqual(list.innerHTML, newHtml, 'the old response must not overwrite the new sheet');
+    let picked = false;
+    window.openChatModal = (eventId, options) => {
+      picked = true;
+      assert.strictEqual(eventId, 171, 'the new event remains selected');
+      assert.strictEqual(options.presetMessage, newMessage, 'the selected message belongs to the new state');
+    };
+    window.pickReadyMessage(0);
+    assert.ok(picked, 'picking a ready message still opens the composer');
+    window.close();
+  });
+
   await test('ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده', async () => {
     const base = buildFetchStub();
     const dom = buildEnv({
