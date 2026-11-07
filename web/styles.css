@@ -1179,6 +1179,38 @@ body {
   border-color: var(--danger);
 }
 
+/*
+ * «مناسبة كبرى» (تذكرة #171). الشارة ذهبية بنصّها لا بلون النوع: وسامٌ من
+ * المنصّة، ولونه الذهبي يقول ذلك بلا كلمة. وتأخذ أرضية ذهبية مصمتة لأنها
+ * تُقرأ على لوح المعلومات الفاتح دائماً — لا فوق ملصق متغيّر اللون.
+ */
+.card-featured-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3.5px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--card-gold);
+  border: 1px solid var(--card-gold);
+  color: #2b2000;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.1px;
+}
+.card-featured-badge i { font-size: 10.5px; }
+
+/*
+ * الكرت الكبير: المبرزة تُعرض ببطاقة الدعوة **كاملة** — الملصق كما صمّمه
+ * صاحبه لا قصاصة منه. `cover` كان يقصّ أعلى الملصق في الكرت بملء الشاشة
+ * (ارتفاعه محدود بالشاشة) فيضيع طرف الدعوة؛ `contain` يُظهرها كلها فوق أرضية
+ * الكرت، فما يبقى من فراغ جانبي يقرأه العين إطاراً لا فراغاً. وبعد انتهاء
+ * `featured_until` يعود الصفّ `is_featured: false` فتعود القاعدة العامة.
+ */
+.event-card.is-featured .card-media-img {
+  object-fit: contain;
+  object-position: center;
+}
+
 /* «قلب متحرّك حين أضغط ذكّرني» (القصة ٥٥): نبضة واحدة قصيرة على القلب بعد
    نجاح الإضافة. الصنف يضاف من `playHeartPop` في app.js بعد إعادة الرسم. */
 @keyframes heart-pop {

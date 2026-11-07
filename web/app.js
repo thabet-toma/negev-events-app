@@ -2507,6 +2507,14 @@ function renderSingleEventCardHtml(evt, opts = {}) {
   const countdownChipHtml = isMourning || evt.is_ended || !countdownText ? '' : `
         <span class="card-datechip${diffDays === 1 ? ' card-datechip-tomorrow' : ''}">${escapeHtml(countdownText)}</span>`;
 
+  // «مناسبة كبرى» (تذكرة #171): الخادم يحسبها على الصفّ (`is_featured`،
+  // مشتقّة من `featured_until >= CURDATE()`)، فالعميل لا يقارن تواريخ ولا
+  // يعرف معنى «انتهى الإبراز». الشارة ذهبية أبداً — لا بلون النوع — لأنها
+  // وسام المنصّة لا وسم النغمة، وتُقرأ قبل رقاقة النوع.
+  const isFeatured = evt.is_featured === true || evt.is_featured === 1 || evt.is_featured === '1';
+  const featuredBadgeHtml = isFeatured ? `
+        <span class="card-featured-badge"><i class="fa-solid fa-star" aria-hidden="true"></i> مناسبة كبرى</span>` : '';
+
   // سطر لكل معلومة بأيقونتها — لا سطر واحد تُحشر فيه كلها بفواصل (طلب المالك
   // 2026-09-30). التاريخ والمكان لكل الأنواع دون استثناء؛ قصة 15 تقتضي
   // قراءتهما مباشرة دون الحاجة لفتح التفاصيل.
@@ -2561,7 +2569,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
 
   const captionHtml = `
     <div class="card-caption">
-      <div class="card-caption-chips">
+      <div class="card-caption-chips">${featuredBadgeHtml}
         <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
         ${endedChipHtml}${countdownChipHtml}
       </div>
@@ -2575,7 +2583,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
   const cardIdPrefix = announcement ? 'announcementCard' : 'eventCard';
 
   return `
-    <div class="event-card${isMourning ? ' tone-mourning' : ''}${announcement ? ' announcement-card' : ''}" id="${cardIdPrefix}-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
+    <div class="event-card${isMourning ? ' tone-mourning' : ''}${isFeatured ? ' is-featured' : ''}${announcement ? ' announcement-card' : ''}" id="${cardIdPrefix}-${evt.id}"${toneStyle} data-solemn="${isMourning}" data-event-id="${evt.id}"${effectiveAudio ? ` data-audio-url="${escapeHtml(effectiveAudio.url)}"` : ''}>
       <div class="card-bezel"${bezelStyle}>
         <div class="card-framed">${announcementBannerHtml}
           <div class="card-media${hasShot ? '' : ' card-media-empty'}" onclick="openEventPage(${evt.id})">

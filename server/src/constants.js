@@ -127,6 +127,15 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
 const DUPLICATE_DATE_WINDOW_DAYS = 1;
 
 /**
+ * سقف المناسبات المبرزة **النشِطة** في المحافظة الواحدة (تذكرة #171). الرابعة
+ * تُردّ 409 عربية، والمحافظة الأخرى لا تتأثّر — العدّاد يُقطع بـ`region_id`
+ * دائماً. و«النشِطة» = `featured_until IS NOT NULL AND featured_until >=
+ * CURDATE()`، فالمناسبة التي انتهى إبرازها لا تحجز مقعداً. وثلاثة لأن التغذية
+ * التي تتصدّرها أكثر من ثلاث بطاقات لم تعد «مناسبة كبرى» بل قائمةً ثانية.
+ */
+const FEATURED_EVENTS_MAX_PER_REGION = 3;
+
+/**
  * سقف عدد الحاضرين في جواب حضور واحد («جاي» بعدد) — تذكرة #168 والمواصفة
  * #156. الرقم نفسه في المسار (`PUT /api/events/:id/rsvp`) وفي الترحيل (عمود
  * `party_size`، و`TINYINT UNSIGNED` يتّسع له بلا تعديل). والرقم **إجمالي
@@ -326,6 +335,7 @@ module.exports = {
   MAX_EVENT_DAYS,
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
+  FEATURED_EVENTS_MAX_PER_REGION,
   RSVP_PARTY_SIZE_MAX,
   OCCASION_MESSAGE_BODY_MAX,
   RSVP_GUEST_RATE_LIMIT,

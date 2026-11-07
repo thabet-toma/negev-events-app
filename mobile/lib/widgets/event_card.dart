@@ -506,6 +506,9 @@ class CardCaption extends StatelessWidget {
             runSpacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              // «مناسبة كبرى» (تذكرة #171) أولاً: ما يميّز هذا الكرت عن بقية
+              // التغذية يُقرأ قبل نوعه. والشعار نفسه من الخادم (`isFeatured`).
+              if (event.isFeatured) const _FeaturedBadge(),
               if (type != null) _TypeBadge(type: type!, color: toneColor),
               // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد
               // الأيام كاملاً (`is_ended`)، فتحلّ محلّ العدّاد ولا يقول الكرت
@@ -762,6 +765,43 @@ class _DateChip extends StatelessWidget {
     );
   }
 }
+
+/// شارة «مناسبة كبرى» (تذكرة #171): ذهبية أبداً — وسام المنصّة لا لون النوع،
+/// فالوسام لا يتبدّل بلون المناسبة ولا بنغمة العزاء. النصّ داكن فوق الذهبي لا
+/// أبيض، لأن الأبيض على هذا الذهبي لا يبلغ تبايناً كافياً لسطرٍ بحجم ١١.٥.
+class _FeaturedBadge extends StatelessWidget {
+  const _FeaturedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 3.5),
+      decoration: BoxDecoration(
+        color: cardGold,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cardGold),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.star_rounded, size: 13, color: _featuredInk),
+          const SizedBox(width: 4),
+          const Text(
+            'مناسبة كبرى',
+            style: TextStyle(
+              fontSize: 11.5,
+              color: _featuredInk,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// حبر الشارة الذهبية — بنّي داكن يقرأ على `cardGold` بتباين كافٍ.
+const Color _featuredInk = Color(0xFF2B2000);
 
 /// شارة نوع المناسبة
 class _TypeBadge extends StatelessWidget {

@@ -2532,6 +2532,28 @@ const steps = [
         `[migrations] add-occasion-type-messages-2026-11: ensured table; seeded ${seededMessages} message(s) into types with none.`
       );
     }
+  },
+  {
+    // «مناسبة كبرى» (تذكرة #171): عمود الإبراز وفهرسه. `schema.sql` يطبّق
+    // `CREATE TABLE IF NOT EXISTS` وحده، فعمودٌ جديد على جدول قائم لا يصل إلى
+    // قاعدة منصَّبة من قبل إلا من هنا. والخطوة آمنة التكرار: كل نصف منها محروس
+    // بفحص وجوده (`columnExists`/`indexExists`)، فلا تُعاد كتابةٌ على تشغيل ثانٍ.
+    name: 'add-event-featured-until-2026-11',
+    async run(connection) {
+      if (!(await columnExists(connection, 'events', 'featured_until'))) {
+        await connection.query(
+          'ALTER TABLE events ADD COLUMN featured_until DATE DEFAULT NULL AFTER announced_at'
+        );
+        logger.info('[migrations] add-event-featured-until-2026-11: events.featured_until added.');
+      }
+
+      if (!(await indexExists(connection, 'events', 'idx_events_featured'))) {
+        await connection.query(
+          'ALTER TABLE events ADD INDEX idx_events_featured (region_id, featured_until)'
+        );
+        logger.info('[migrations] add-event-featured-until-2026-11: idx_events_featured added.');
+      }
+    }
   }
 ];
 

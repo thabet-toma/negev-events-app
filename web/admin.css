@@ -44,6 +44,12 @@
   --warn-yellow: var(--warn);
   --danger-red: var(--danger);
   --shadow-admin: var(--shadow-lift);
+
+  /* «مناسبة كبرى» (تذكرة #171): ذهبي حقيقي لا `--gold-main` (وهو سماوي هنا —
+     لون اللوحة لا لون الوسام). القيمتان نفس `--gold`/`--gold-wash` في
+     web/styles.css، فيقرأ الوسام ذهبياً في اللوحة والموقع معاً. */
+  --featured-gold:      #8f6a20;
+  --featured-gold-wash: #fdf6e3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -58,6 +64,7 @@
     --on-sky: #06202e;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
     --shadow-lift: 0 2px 6px rgba(0,0,0,.5), 0 16px 40px rgba(0,0,0,.45);
+    --featured-gold: #e3bd6a; --featured-gold-wash: #2a2113;
   }
 }
 :root[data-theme="dark"] {
@@ -71,6 +78,7 @@
   --on-sky: #06202e;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
   --shadow-lift: 0 2px 6px rgba(0,0,0,.5), 0 16px 40px rgba(0,0,0,.45);
+  --featured-gold: #e3bd6a; --featured-gold-wash: #2a2113;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -347,6 +355,17 @@ body {
 .status-tag.pending { background: var(--warn-wash); color: var(--warn-yellow); }
 .status-tag.approved { background: var(--success-wash); color: var(--success-green); }
 .status-tag.rejected { background: var(--danger-wash); color: var(--danger-red); }
+
+/* «مناسبة كبرى» (تذكرة #171): ذهبية أبداً — وسام المنصّة لا حالة مراجعة. */
+.status-tag.featured {
+  background: var(--featured-gold-wash);
+  color: var(--featured-gold);
+  border: 1px solid var(--featured-gold);
+}
+
+/* زرّ الإبراز في صفّ أفعال البطاقة: نفس مقاس `.admin-btn-ghost` القائم. */
+.feature-event-btn { white-space: nowrap; }
+.feature-event-btn i { color: var(--featured-gold); }
 
 /* الأدمن هنا **يقرّر اعتماداً**، فيرى الملصق كاملاً لا قصاصة منه (#53): عرض
    الأدمن قصاصةً هو عرض الشيء الخطأ عليه. `contain` فوق تعبئة مطموسة من الصورة

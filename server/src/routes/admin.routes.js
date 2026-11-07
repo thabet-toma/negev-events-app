@@ -16,7 +16,7 @@ const scheduler = require('../jobs/scheduler');
 const realtime = require('../realtime');
 const { announceNotification, announceNewEvent } = require('../realtime/announce');
 const { requireAdmin, requireSuperAdmin } = require('../middleware/auth');
-const { cleanString, requireFields, parseId, parseFlag, optionalDateTime } = require('../middleware/validate');
+const { cleanString, requireFields, parseId, parseFlag, optionalDateTime, requireDate } = require('../middleware/validate');
 const logger = require('../utils/logger');
 const { EVENT_STATUSES } = require('../constants');
 
@@ -181,6 +181,35 @@ router.patch('/admin/events/:id/owner', asyncHandler(async (req, res) => {
     details: newOwner ? newOwner.full_name : null
   });
   res.json({ success: true, message: 'تم نقل ملكية المناسبة بنجاح', event });
+}));
+
+/**
+ * «مناسبة كبرى» (تذكرة #171): الأدمن يبرز مناسبة حتى تاريخ يحدّده، بلا دفع.
+ *
+ * خلف `requireAdmin` (حارس الراوتر أعلاه) **وضمن النطاق**: `assertEventInScope`
+ * أولاً، فمناسبة خارج بلدات الأدمن تُردّ 404 لا 403 — لا يُؤكَّد وجودُ ما لا
+ * يملكه (نفس قاعدة `/status` و`/owner` و`/amendments`). ثم يُتحقَّق من شكل
+ * التاريخ في `validate.js` (`requireDate`) لا يدوياً، و`null` (أو نصّ فارغ)
+ * إلغاءٌ صريح. والسقف (409) وحده في الخدمة.
+ */
+router.patch('/admin/events/:id/featured', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+
+  // النطاق قبل قراءة الجسم: طلب من أدمن خارج النطاق يُردّ 404 أياً كان جسمه،
+  // فلا يكشف ردُّه أن معرّف المناسبة موجود أصلاً.
+  const event = await adminScope.assertEventInScope(req.user, eventId);
+
+  const featuredUntil = req.body.featured_until === null || req.body.featured_until === ''
+    ? null
+    : requireDate(req.body.featured_until, 'تاريخ انتهاء الإبراز');
+
+  const updated = await events.setEventFeatured(event, featuredUntil);
+
+  res.json({
+    success: true,
+    message: featuredUntil ? 'تم إبراز المناسبة كمناسبة كبرى' : 'تم إلغاء إبراز المناسبة',
+    event: updated
+  });
 }));
 
 router.get('/admin/comments', asyncHandler(async (req, res) => {

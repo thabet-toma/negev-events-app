@@ -766,6 +766,45 @@ void main() {
         );
 
     testWidgets(
+      'a featured card carries the gold «مناسبة كبرى» badge ahead of the type badge, and a plain card carries none',
+      (tester) async {
+        await tester.pumpWidget(wrapCard(EventCard(
+          event: Event.fromJson({...actingEventJson(), 'is_featured': true}),
+          onTap: () {},
+        )));
+
+        expect(find.text('مناسبة كبرى'), findsOneWidget,
+            reason: 'الوسام يُقرأ من `is_featured` الذي يحسبه الخادم على الصفّ');
+
+        // ذهبية لا بلون النوع: حاوية الشارة نفسها تحمل `cardGold`.
+        final badgeContainer = tester
+            .widgetList<Container>(
+              find.ancestor(of: find.text('مناسبة كبرى'), matching: find.byType(Container)),
+            )
+            .firstWhere((container) => container.decoration is BoxDecoration);
+        expect(
+          (badgeContainer.decoration as BoxDecoration).color,
+          cardGold,
+          reason: 'شارة المنصّة ذهبية أبداً، لا بلون نوع المناسبة',
+        );
+
+        // «أولاً» في RTL: الشارة قبل رقاقة النوع إلى اليمين، فالوسام يُقرأ أولاً.
+        expect(
+          tester.getTopLeft(find.text('مناسبة كبرى')).dx,
+          greaterThan(tester.getTopLeft(find.text('عرس')).dx),
+          reason: 'الشارة تسبق رقاقة النوع في صفّ الشارات',
+        );
+
+        await tester.pumpWidget(wrapCard(EventCard(
+          event: Event.fromJson({...actingEventJson(), 'is_featured': false}),
+          onTap: () {},
+        )));
+        expect(find.text('مناسبة كبرى'), findsNothing,
+            reason: 'كرت غير مبرز لا يحمل الشارة');
+      },
+    );
+
+    testWidgets(
       'a wedding card carries «ذكّرني» و«جاي» و«بارك», and each button calls its own action',
       (tester) async {
         var reminded = 0;

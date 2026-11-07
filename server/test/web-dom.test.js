@@ -4754,6 +4754,110 @@ async function run() {
     assert.strictEqual(patches[1].reason, 'المناسبة منشورة مسبقاً');
   });
 
+  console.log('\n«مناسبة كبرى» in the admin panel (#171)');
+
+  /**
+   * Two approved rows in the queue — one featured until a future date, one not
+   * — and a capture of every PATCH the panel sends to the featured route.
+   */
+  function buildFeatureAdminEnv() {
+    const featuredRow = {
+      ...ADMIN_EVENT_FIXTURE, id: 61, title: 'مناسبة مبرزة', featured_until: '2099-05-01'
+    };
+    const plainRow = {
+      ...ADMIN_EVENT_FIXTURE, id: 62, title: 'مناسبة عادية', featured_until: null
+    };
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const baseFetch = dom.window.fetch;
+    const patches = [];
+    dom.window.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/admin/events') {
+        return jsonResponse({ success: true, events: [featuredRow, plainRow] });
+      }
+      if (/^\/api\/admin\/events\/\d+\/featured$/.test(requestPath)) {
+        patches.push(JSON.parse(options.body || '{}'));
+        return jsonResponse({ success: true, message: 'تم حفظ الإبراز' });
+      }
+      return baseFetch(url, options);
+    };
+    return { dom, featuredRow, plainRow, patches };
+  }
+
+  await test('the panel marks a featured event with a gold tag carrying its expiry date, and offers «إبراز» on the others', async () => {
+    const { dom } = buildFeatureAdminEnv();
+    await dom.window.fetchAdminEvents();
+    const { document } = dom.window;
+
+    const cards = Array.from(document.querySelectorAll('#adminEventsList .admin-event-card'));
+    assert.strictEqual(cards.length, 2, 'expected both queue rows to render');
+    const featuredCard = cards.find(card => card.textContent.includes('مناسبة مبرزة'));
+    const plainCard = cards.find(card => card.textContent.includes('مناسبة عادية'));
+
+    const tag = featuredCard.querySelector('.status-tag.featured');
+    assert.ok(tag, 'the featured card must carry the gold featured tag');
+    assert.ok(tag.textContent.includes('مناسبة كبرى'), `the tag must read «مناسبة كبرى», got "${tag.textContent}"`);
+    assert.ok(tag.textContent.includes('2099-05-01'), 'the tag must show the expiry date');
+
+    assert.strictEqual(plainCard.querySelector('.status-tag.featured'), null, 'a non-featured row gets no tag');
+    assert.ok(
+      featuredCard.querySelector('.feature-event-btn').textContent.includes('تعديل الإبراز'),
+      'a featured row offers editing the feature'
+    );
+    assert.ok(
+      plainCard.querySelector('.feature-event-btn').textContent.includes('إبراز'),
+      'a plain row offers featuring it'
+    );
+  });
+
+  await test('the feature modal opens with the stored expiry date, and «إلغاء الإبراز» is offered only where a date exists', async () => {
+    const { dom } = buildFeatureAdminEnv();
+    await dom.window.fetchAdminEvents();
+    const { document } = dom.window;
+
+    const cards = Array.from(document.querySelectorAll('#adminEventsList .admin-event-card'));
+    cards.find(card => card.textContent.includes('مناسبة مبرزة'))
+      .querySelector('.feature-event-btn').click();
+
+    assert.strictEqual(document.getElementById('featureEventModal').style.display, 'flex', 'the feature modal must open');
+    assert.strictEqual(
+      document.getElementById('featureEventUntilInput').value, '2099-05-01',
+      'the date input must start from the stored featured_until'
+    );
+    assert.notStrictEqual(
+      document.getElementById('clearFeatureEventBtn').style.display, 'none',
+      '«إلغاء الإبراز» must be offered on a featured event'
+    );
+
+    cards.find(card => card.textContent.includes('مناسبة عادية'))
+      .querySelector('.feature-event-btn').click();
+    assert.strictEqual(
+      document.getElementById('featureEventUntilInput').value, '',
+      'an unfeatured event starts with an empty date'
+    );
+    assert.strictEqual(
+      document.getElementById('clearFeatureEventBtn').style.display, 'none',
+      'nothing to cancel on an event that is not featured'
+    );
+  });
+
+  await test('«إبراز» PATCHes the chosen date, «إلغاء الإبراز» PATCHes null — both through the admin API', async () => {
+    const { dom, patches } = buildFeatureAdminEnv();
+    await dom.window.fetchAdminEvents();
+    const { document } = dom.window;
+
+    dom.window.openFeatureEventModal(62);
+    document.getElementById('featureEventUntilInput').value = '2027-01-15';
+    document.getElementById('confirmFeatureEventBtn').click();
+    await waitFor(() => patches.length === 1);
+    assert.deepStrictEqual(patches[0], { featured_until: '2027-01-15' }, 'the picked date travels as featured_until');
+
+    dom.window.openFeatureEventModal(61);
+    document.getElementById('clearFeatureEventBtn').click();
+    await waitFor(() => patches.length === 2);
+    assert.deepStrictEqual(patches[1], { featured_until: null }, 'cancelling sends null, as the route contract says');
+  });
+
   await test('«فتح المناسبة» opens the existing event\'s edit form when the panel has it, and a notice (not an error) when it does not', async () => {
     const other = { ...ADMIN_EVENT_FIXTURE, id: 12, status: 'approved', title: 'عرس سالم' };
     const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
@@ -5062,6 +5166,102 @@ async function run() {
       /\.event-card\s*\{[^}]*scroll-snap-stop:\s*always/.test(STYLES_CSS),
       '.event-card must declare scroll-snap-stop: always'
     );
+  });
+
+  console.log('\n«مناسبة كبرى» — the gold badge and the big invitation card (#171)');
+
+  // One renderEvents() call, asserted synchronously — same reason as
+  // renderCardFixtures above: the boot path's own fetchEvents() must not
+  // overwrite the container under the fixture.
+  function renderFeaturedFixtures() {
+    const dom = buildEnv();
+    dom.window.renderEvents([
+      {
+        id: 931, title: 'عرس أبو سالم', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-08-01', location_name: 'ديوان آل تجربة',
+        youth_party_date: null, dinner_time: null,
+        poster_url: 'https://example.test/uploads/poster931.jpg', audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}, is_featured: true
+      },
+      {
+        id: 932, title: 'عرس أبو خالد', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-08-02', location_name: 'ديوان آل تجربة',
+        youth_party_date: null, dinner_time: null,
+        poster_url: 'https://example.test/uploads/poster932.jpg', audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}, is_featured: false
+      }
+    ]);
+    return { dom, document: dom.window.document };
+  }
+
+  await test('a featured card carries the gold «مناسبة كبرى» badge, and a card without is_featured carries none', () => {
+    const { document } = renderFeaturedFixtures();
+
+    const featured = document.getElementById('eventCard-931');
+    assert.ok(featured, 'expected the featured card to render');
+    assert.ok(featured.classList.contains('is-featured'), 'the featured card must carry .is-featured');
+
+    const badge = featured.querySelector('.card-caption-chips .card-featured-badge');
+    assert.ok(badge, 'the featured card must show the gold badge');
+    assert.ok(badge.textContent.includes('مناسبة كبرى'), `the badge must read «مناسبة كبرى», got "${badge.textContent}"`);
+
+    const plain = document.getElementById('eventCard-932');
+    assert.ok(plain, 'expected the plain card to render');
+    assert.ok(!plain.classList.contains('is-featured'), 'a non-featured card must not carry .is-featured');
+    assert.strictEqual(plain.querySelector('.card-featured-badge'), null, 'a non-featured card must not show the badge');
+  });
+
+  await test('the badge is the first chip of the card, ahead of the occasion-type chip', () => {
+    const { document } = renderFeaturedFixtures();
+    const chips = document.querySelector('#eventCard-931 .card-caption-chips');
+    const children = Array.from(chips.children);
+    assert.ok(children.length >= 2, 'expected the chips row to hold the badge and the type chip');
+    assert.ok(children[0].classList.contains('card-featured-badge'), 'the gold badge must be the first chip');
+    assert.ok(children[1].classList.contains('card-kindchip'), 'the occasion-type chip must follow it');
+  });
+
+  await test('the featured card shows the whole invitation (contain) and its badge is gold', () => {
+    assert.ok(
+      /\.event-card\.is-featured \.card-media-img\s*\{[^}]*object-fit:\s*contain/.test(STYLES_CSS),
+      'the featured card must show the full poster (object-fit: contain) — the big invitation card'
+    );
+    assert.ok(
+      /\.card-media-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
+      'the base card image stays cover — the featured card alone is the uncropped invitation'
+    );
+    assert.ok(
+      /\.card-featured-badge\s*\{[^}]*background:\s*var\(--card-gold\)/.test(STYLES_CSS),
+      'the featured badge must be filled with the brand gold, not the occasion tone'
+    );
+  });
+
+  await test('the feed keeps the server\'s order and never re-sorts featured cards on the client', () => {
+    // The featured card is deliberately SECOND here: `listPublicEvents` is the
+    // one place that puts it first (#171), so a client-side sort would be a
+    // second, silently divergent rule. The DOM must mirror the array as given.
+    const { document } = renderFeaturedFixtures();
+    const ids = Array.from(document.querySelectorAll('#eventsContainer .event-card'))
+      .map(card => Number(card.dataset.eventId));
+    assert.deepStrictEqual(ids, [931, 932], 'the client must render the cards in the order the server sent them');
+
+    const dom = buildEnv();
+    dom.window.renderEvents([
+      {
+        id: 941, title: 'عرس لاحق', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-08-03', location_name: 'ديوان', youth_party_date: null,
+        dinner_time: null, poster_url: null, audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}, is_featured: false
+      },
+      {
+        id: 942, title: 'عرس مبرز متأخر', family_clan: 'آل تجربة', town: 'حورة',
+        event_date: '2027-08-04', location_name: 'ديوان', youth_party_date: null,
+        dinner_time: null, poster_url: null, audio_url: null,
+        occasion_type: WEDDING_TYPE, reactions: {}, is_featured: true
+      }
+    ]);
+    const reordered = Array.from(dom.window.document.querySelectorAll('#eventsContainer .event-card'))
+      .map(card => Number(card.dataset.eventId));
+    assert.deepStrictEqual(reordered, [941, 942], 'a featured row must not jump to the top on the client');
   });
 
   console.log('\nFeed empty state and card images (#161)');

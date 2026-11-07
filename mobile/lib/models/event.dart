@@ -74,6 +74,11 @@ class Event {
   /// خادم أقدم يعني `false` فلا شارة.
   final bool isEnded;
 
+  /// «مناسبة كبرى» (تذكرة #171) — يصل من التغذية وحدها (`is_featured` على
+  /// الصفّ، محسوباً في القاعدة من `featured_until >= CURDATE()`). غيابه في
+  /// التفاصيل أو من خادم أقدم يعني `false` فلا شارة، ولا يقارن العميل تواريخ.
+  final bool isFeatured;
+
   /// موعد النشر المجدول (تذكرة #167) — `null` يعني «يُنشر فور اعتماده».
   /// يصل من الصفّ الكامل وحده (`GET /api/my-events`)، وهو **ساعة الحائط** التي
   /// كتبها صاحب المناسبة: الخادم يقرأ عمود `DATETIME` بتوقيت غرينتش، فتُقرأ
@@ -147,6 +152,7 @@ class Event {
     this.regionId,
     this.visibility = EventVisibility.public,
     this.isEnded = false,
+    this.isFeatured = false,
     this.publishAt,
     this.artistName,
     this.artistImageUrl,
@@ -214,6 +220,7 @@ class Event {
         requestedVillageName: requestedVillageName,
         visibility: visibility,
         isEnded: isEnded,
+        isFeatured: isFeatured,
         publishAt: publishAt,
         artistName: artistName,
         artistImageUrl: artistImageUrl,
@@ -366,6 +373,9 @@ class Event {
       // «انتهت» (تذكرة #167): الخادم يرسلها `true` في التغذية وحدها؛ و1/0 من
       // خادم أقدم تُقرأ كما هي، والغياب `false`.
       isEnded: json['is_ended'] == true || json['is_ended'] == 1 || json['is_ended'] == '1',
+      // «مناسبة كبرى» (تذكرة #171): الخادم يرسلها منطقية في التغذية؛ و1/0 من
+      // خادم أقدم تُقرأ كما هي، والغياب `false` فلا شارة على كرتٍ لا يعرفها.
+      isFeatured: json['is_featured'] == true || json['is_featured'] == 1 || json['is_featured'] == '1',
       publishAt: _toPublishWallClock(json['publish_at']),
       artistName: _nullableString(json['artist_name']),
       artistImageUrl: _nullableString(json['artist_image_url']),
