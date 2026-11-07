@@ -2435,6 +2435,258 @@ async function run() {
     }
   });
 
+  console.log('\nStory placement — carousel above the feed, an ad after every 8 cards (#173)');
+
+  /** ردّ GET /api/stories كما يبنيه الخادم بعد #173: موضع لكل ستوري وفاصل الإعلان. */
+  const placementStories = (interval = 8) => ({
+    success: true,
+    feed_ad_interval: interval,
+    stories: [
+      { id: 11, title: 'ستوري الشريط', image: 'https://example.test/bar.jpg', placement: 'bar' },
+      {
+        id: 12,
+        title: 'بانر الكاروسيل',
+        image: 'https://example.test/carousel.jpg',
+        placement: 'carousel',
+        target_url: 'https://example.com/carousel',
+        cta_label: 'تسوّق'
+      },
+      {
+        id: 13,
+        title: 'إعلان أول',
+        image: 'https://example.test/ad1.jpg',
+        placement: 'feed',
+        is_ad: true,
+        advertiser_name: 'تاجر أول',
+        target_url: 'https://example.com/ad1',
+        cta_label: 'زيارة'
+      },
+      {
+        id: 14,
+        title: 'إعلان ثانٍ',
+        image: 'https://example.test/ad2.jpg',
+        placement: 'feed',
+        is_ad: true,
+        advertiser_name: 'تاجر ثانٍ',
+        target_url: 'https://example.com/ad2',
+        cta_label: 'زيارة'
+      }
+    ]
+  });
+
+  /** N cards' worth of event, ids ascending from 1201. */
+  const placementEvents = count => Array.from({ length: count }, (_, index) => ({
+    id: 1201 + index,
+    title: `مناسبة رقم ${index + 1}`,
+    family_clan: null,
+    town: 'رهط',
+    event_date: '2027-06-01',
+    location_name: 'قاعة الاختبار',
+    poster_url: null,
+    audio_url: null,
+    occasion_type: WEDDING_TYPE,
+    reactions: {}
+  }));
+
+  /** Boots a page whose /api/stories answers with the placement payload. */
+  async function bootWithPlacements(payload) {
+    const dom = buildEnv();
+    await flushBoot();
+    dom.window.fetch = buildLiveHubFetchStub({ stories: payload }).fetchFn;
+    await dom.window.fetchStories();
+    return dom;
+  }
+
+  await test('the strip holds bar stories only, and the carousel holds carousel stories only', async () => {
+    const dom = await bootWithPlacements(placementStories());
+    const doc = dom.window.document;
+
+    const stripItems = [...doc.querySelectorAll('#storiesContainer .story-item')];
+    assert.strictEqual(stripItems.length, 1, 'the strip is the bar position, nothing else');
+    assert.ok(stripItems[0].textContent.includes('ستوري الشريط'), 'the bar story is the one in the strip');
+
+    const section = doc.getElementById('storyCarouselSection');
+    assert.strictEqual(section.hasAttribute('hidden'), false, 'a carousel story must un-hide the carousel section');
+    const cards = [...doc.querySelectorAll('#storyCarousel .story-banner-card')];
+    assert.deepStrictEqual(cards.map(card => card.dataset.storyId), ['12'], 'the carousel holds the carousel story alone');
+    assert.strictEqual(doc.querySelectorAll('#storyCarousel .story-banner-card').length, 1, 'no feed story leaks into the carousel');
+  });
+
+  await test('the carousel sits inside the home tab and above the feed container, so it is the top of the feed', async () => {
+    const dom = await bootWithPlacements(placementStories());
+    const doc = dom.window.document;
+
+    const carousel = doc.getElementById('storyCarouselSection');
+    const feed = doc.getElementById('eventsContainer');
+    assert.ok(carousel && feed, 'both the carousel section and the feed exist in the markup');
+    assert.ok(carousel.closest('#tabHome'), 'the carousel belongs to the home feed tab, not the page chrome');
+    assert.ok(
+      carousel.compareDocumentPosition(feed) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+      'the carousel must precede the feed in document order — that is what "above the feed" means'
+    );
+  });
+
+  await test('a feed ad is inserted after card 8 and card 16, rotating between the feed stories', async () => {
+    const dom = await bootWithPlacements(placementStories());
+    const doc = dom.window.document;
+
+    dom.window.renderEvents(placementEvents(18));
+    const order = [...doc.getElementById('eventsContainer').children].map(element => (
+      element.classList.contains('feed-ad-card')
+        ? `ad:${element.dataset.adPosition}:${element.dataset.adStoryId}`
+        : `card:${element.dataset.eventId}`
+    ));
+
+    assert.strictEqual(order.length, 20, '18 cards plus two ads');
+    assert.strictEqual(order[7], 'card:1208', 'the eighth card is still a card');
+    assert.strictEqual(order[8], 'ad:8:13', 'the first ad comes after the eighth card');
+    assert.strictEqual(order[9], 'card:1209', 'the ninth card follows that ad');
+    assert.strictEqual(order[16], 'card:1216', 'the sixteenth card is still a card');
+    assert.strictEqual(order[17], 'ad:16:14', 'the second ad comes after the sixteenth card, and is the second feed story');
+    assert.strictEqual(order[18], 'card:1217', 'the seventeenth card follows the second ad');
+  });
+
+  await test('no ad appears before the eighth card: seven cards render none, and the eighth earns the first', async () => {
+    const dom = await bootWithPlacements(placementStories());
+    const doc = dom.window.document;
+    const feed = doc.getElementById('eventsContainer');
+    const ads = () => feed.querySelectorAll('.feed-ad-card').length;
+
+    dom.window.renderEvents(placementEvents(7));
+    assert.strictEqual(ads(), 0, 'seven cards are below the interval — no ad at all');
+
+    dom.window.renderEvents(placementEvents(8));
+    assert.strictEqual(ads(), 1, 'the eighth card crosses the interval — exactly one ad');
+    assert.strictEqual(feed.lastElementChild.dataset.adPosition, '8', 'and it sits after the eighth card, not before');
+  });
+
+  await test('the interval is the server\'s: feed_ad_interval 5 moves the first ad to after the fifth card', async () => {
+    const dom = await bootWithPlacements(placementStories(5));
+    const doc = dom.window.document;
+
+    dom.window.renderEvents(placementEvents(12));
+    const order = [...doc.getElementById('eventsContainer').children].map(element => (
+      element.classList.contains('feed-ad-card')
+        ? `ad:${element.dataset.adPosition}`
+        : `card:${element.dataset.eventId}`
+    ));
+
+    assert.strictEqual(order[4], 'card:1205', 'the fifth card is still a card');
+    assert.strictEqual(order[5], 'ad:5', 'the first ad lands after the fifth card when the server says 5');
+    assert.strictEqual(order.length, 14, 'twelve cards plus two ads (after 5 and 10)');
+  });
+
+  await test('the feed ad opens the feed story list for the view, and its CTA posts the click — not the bar list', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const stub = buildLiveHubFetchStub({ stories: placementStories() });
+    dom.window.fetch = stub.fetchFn;
+    dom.window.open = () => ({});
+    await dom.window.fetchStories();
+
+    const doc = dom.window.document;
+    dom.window.renderEvents(placementEvents(9));
+
+    const adCard = doc.querySelector('#eventsContainer .feed-ad-card');
+    assert.ok(adCard, 'the ninth-page ad card is rendered after eight cards');
+    const media = adCard.querySelector('.feed-ad-media');
+    assert.ok(
+      media.getAttribute('onclick').includes("openStoryViewer(0, 'feed')"),
+      'the ad media opens the viewer on the feed list — the same viewer that records the 2-second view'
+    );
+
+    dom.window.openStoryViewer(0, 'feed');
+    assert.strictEqual(
+      doc.getElementById('storyViewerTitle').textContent,
+      'إعلان أول',
+      'the opened slide is the feed story itself, not the first story of the bar strip'
+    );
+    assert.strictEqual(
+      doc.querySelectorAll('#storyProgressRow .story-progress-bar').length,
+      2,
+      'the viewer runs on the two feed stories alone'
+    );
+    dom.window.closeStoryViewer();
+
+    const cta = adCard.querySelector('.feed-ad-cta');
+    assert.ok(cta, 'a story with a target carries a CTA outside the viewer too');
+    cta.click();
+    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/13/click'));
+    assert.ok(
+      stub.calls.some(call => call.path === '/api/stories/13/click' && call.method === 'POST'),
+      'the ad CTA records the click from the feed position'
+    );
+  });
+
+  await test('the carousel banner opens the carousel list, and its CTA posts that story\'s click', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const stub = buildLiveHubFetchStub({ stories: placementStories() });
+    dom.window.fetch = stub.fetchFn;
+    dom.window.open = () => ({});
+    await dom.window.fetchStories();
+
+    const doc = dom.window.document;
+    const card = doc.querySelector('#storyCarousel .story-banner-card');
+    const media = card.querySelector('.story-banner-media');
+    assert.ok(
+      media.getAttribute('onclick').includes("openStoryViewer(0, 'carousel')"),
+      'the banner opens the viewer on the carousel list'
+    );
+
+    dom.window.openStoryViewer(0, 'carousel');
+    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'the banner opens its own story');
+    dom.window.closeStoryViewer();
+
+    const cta = card.querySelector('.story-banner-cta');
+    assert.ok(cta, 'a story with a target carries a CTA outside the viewer too');
+    cta.click();
+    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click'));
+    assert.ok(
+      stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
+      'the carousel CTA records the click from the carousel position'
+    );
+  });
+
+  await test('the drawer carousel holds carousel banners alone, opens that list, and records its CTA click', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const stub = buildLiveHubFetchStub({ stories: placementStories() });
+    dom.window.fetch = stub.fetchFn;
+    dom.window.open = () => ({});
+    await dom.window.fetchStories();
+
+    const doc = dom.window.document;
+    const section = doc.getElementById('drawerStoryCarouselSection');
+    const rail = doc.getElementById('drawerStoryCarousel');
+    assert.ok(section && rail, 'the top drawer owns a dedicated carousel rail; removing it fails this assertion');
+    assert.strictEqual(section.hasAttribute('hidden'), false, 'a carousel story makes the drawer carousel visible');
+    const cards = [...rail.querySelectorAll('.story-banner-card')];
+    assert.deepStrictEqual(cards.map(card => card.dataset.storyId), ['12'], 'the drawer rail renders carousel stories alone — never bar or feed');
+    assert.ok(!rail.textContent.includes('ستوري الشريط'), 'a bar story does not leak into the drawer carousel');
+    assert.ok(!rail.textContent.includes('إعلان أول'), 'a feed story does not leak into the drawer carousel');
+
+    const card = cards[0];
+    const media = card.querySelector('.story-banner-media');
+    assert.ok(
+      media.getAttribute('onclick').includes("openStoryViewer(0, 'carousel')"),
+      'the drawer banner index belongs to the carousel list'
+    );
+    dom.window.openStoryViewer(0, 'carousel');
+    assert.strictEqual(doc.getElementById('storyViewerTitle').textContent, 'بانر الكاروسيل', 'the drawer opens the carousel story, not the bar list');
+    assert.strictEqual(doc.querySelectorAll('#storyProgressRow .story-progress-bar').length, 1, 'the drawer viewer runs the carousel list alone');
+    dom.window.closeStoryViewer();
+
+    const cta = card.querySelector('.story-banner-cta');
+    assert.ok(cta, 'the drawer carousel keeps the banner CTA');
+    cta.click();
+    await waitFor(() => stub.calls.some(call => call.path === '/api/stories/12/click'));
+    assert.ok(
+      stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
+      'the drawer carousel CTA records the carousel story click'
+    );
+  });
+
   console.log('\nألبوم بلا مناسبة — ألبوم باسم العريس (event_id NULL, web/)');
 
   await test('a no-event album card names the honoree and his town, and draws no empty line where the event line sits', () => {
@@ -9913,6 +10165,50 @@ async function run() {
 
     await dom.window.deleteAdminStory(5);
     assert.strictEqual(deleted, 1, 'delete goes through the admin endpoint');
+  });
+
+  await test('ستوريو التسويق: موضع الظهور يُرسَل كما اختير ويُعاد إلى bar بعد النشر (#173)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { document } = dom.window;
+    let previewBody = null;
+    let publishBody = null;
+
+    instrumentAdminLive(dom, (requestPath, method, options) => {
+      if (requestPath === '/api/admin/stories' && method === 'GET') {
+        return jsonResponse({ success: true, stories: [] });
+      }
+      if (requestPath === '/api/admin/stories/studio/preview') {
+        previewBody = JSON.parse(options.body);
+        return jsonResponse({
+          success: true,
+          preview: 'data:image/jpeg;base64,AAAA',
+          info: { platform: 'youtube', title: 'فيديو تجريبي', canonical_url: 'https://www.youtube.com/watch?v=abcdefghijk' }
+        });
+      }
+      if (requestPath === '/api/admin/stories/studio') {
+        publishBody = JSON.parse(options.body);
+        return jsonResponse({ success: true, story: { id: 7, placement: 'feed' } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const placement = document.getElementById('storyStudioPlacement');
+    assert.ok(placement, 'the story form carries a placement field');
+    assert.strictEqual(placement.value, 'bar', 'the field defaults to the strip, so an untouched form behaves as before');
+
+    document.getElementById('storyStudioUrl').value = 'https://youtu.be/abcdefghijk';
+    document.getElementById('storyStudioTitle').value = 'عرس النقب';
+    placement.value = 'feed';
+    await dom.window.previewStoryStudio({ preventDefault() {} });
+    assert.strictEqual(previewBody.placement, 'feed', 'the preview sends the chosen placement, not a hardcoded bar');
+
+    await dom.window.publishStoryStudio();
+    assert.strictEqual(publishBody.placement, 'feed', 'the publish sends the chosen placement');
+    assert.strictEqual(placement.value, 'bar', 'the form returns to the strip default after publishing');
+    assert.ok(
+      document.getElementById('storyStudioNotice').textContent.includes('إعلان بين الكروت'),
+      'the success notice names where the story went, so a wrong choice is visible'
+    );
   });
 
   await test('بطاقة الدخول: the pinned story is preselected, and saving sends its id or an explicit empty string', async () => {

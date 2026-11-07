@@ -868,6 +868,13 @@ class Story {
   final String? ctaLabel;
   final int slideDurationSeconds;
 
+  /// موضع الظهور (تذكرة #173): `bar` شريط الستوريات كما كان، `carousel`
+  /// كاروسيل البانرات أعلى التغذية، `feed` إعلان بين الكروت بعد كل فاصل
+  /// `feed_ad_interval` يرسله الخادم (افتراضه ٨). القائمة
+  /// مغلقة على الخادم (`STORY_PLACEMENTS` في constants.js)، وهذا العميل يعرض
+  /// المواضع الثلاثة ولا يعرف رابعاً.
+  final String placement;
+
   const Story({
     required this.id,
     required this.title,
@@ -881,12 +888,17 @@ class Story {
     this.linkPlatform,
     this.ctaLabel,
     this.slideDurationSeconds = _defaultSlideDurationSeconds,
+    this.placement = defaultPlacement,
   });
 
   /// سقوط وحيد حين يغيب `slide_duration_seconds` من ردّ قديم — الخادم يرسل
   /// القيمة الفعلية دائماً لكل قصة على حدة (افتراضه هناك أيضاً ٥)، فهذا
   /// الرقم لا يُستعمل إلا حين يغيب المفتاح نفسه من الاستجابة.
   static const int _defaultSlideDurationSeconds = 5;
+
+  /// الموضع الافتراضي: ردٌّ قديم أو محفوظ بلا المفتاح (خادم سبق #173) يُقرأ
+  /// شريطاً — فلا تختفي ستوري من الشريط بسبب غياب حقل.
+  static const String defaultPlacement = 'bar';
 
   factory Story.fromJson(Map<String, dynamic> json) => Story(
         id: _toInt(json['id']),
@@ -901,7 +913,15 @@ class Story {
         linkPlatform: _nullableString(json['link_platform']),
         ctaLabel: _nullableString(json['cta_label']),
         slideDurationSeconds: _slideDuration(json['slide_duration_seconds']),
+        placement: _placement(json['placement']),
       );
+
+  /// قيمة خارج القائمة المغلقة (أو غائبة) تُقرأ `bar` لا تُعرض كما هي: موضع
+  /// مجهول لا يجوز أن يُخفي ستورياً من الشريط ولا أن يضعها في كاروسيل.
+  static String _placement(Object? raw) {
+    final value = raw is String ? raw.trim() : '';
+    return const {'bar', 'carousel', 'feed'}.contains(value) ? value : defaultPlacement;
+  }
 
   /// مدّة غير موجبة تجعل `AnimationController` يكتمل فور انطلاقه، فيقفز
   /// العارض عبر كل القصص ويُغلق نفسه — عطلٌ كامل لا تدهور. الخادم لا ينتج

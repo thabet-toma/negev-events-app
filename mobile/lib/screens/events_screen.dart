@@ -144,7 +144,21 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   StreamSubscription<Map<String, dynamic>>? _newEventSub;
   StreamSubscription<void>? _liveStatusSub;
 
-  Future<List<Story>>? _stories;
+  /// هل طُلبت الستوريات مرّة؟ مِزلاج `didChangeDependencies` وحده — القائمة
+  /// نفسها تصل في [_storiesList]، فلا `Future` محفوظ لا يقرأه أحد (تذكرة #173).
+  bool _storiesRequested = false;
+
+  /// الستوريات بعد وصولها — تحمل المواضع الثلاثة (تذكرة #173)، وكل موضع
+  /// يرشّح نسخته: الشريط `bar` والكاروسيل `carousel` والإعلان بين الكروت
+  /// `feed`. نسخة محلّية لا `FutureBuilder` حول كل موضع، لأن إعلان التغذية
+  /// يُبنى داخل `_buildList` نفسها — نفس نمط `_types`/`_typesList` أدناه.
+  List<Story> _storiesList = const [];
+
+  /// فاصل إعلان التغذية — من `feed_ad_interval` في ردّ الستوريات (تذكرة #173).
+  /// القيمة الفعلية تصل مع الردّ في [_loadStories]، والاحتياط ٨
+  /// (`NegevApi.defaultFeedAdInterval`) حين يغيب المفتاح أو يكون غير صالح —
+  /// لا رقم ثانياً في هذه الشاشة.
+  int _feedAdInterval = NegevApi.defaultFeedAdInterval;
 
   /// بطاقة الدخول التسويقية (T-14): قصة واحدة تظهر مرّة عند فتح التغذية،
   /// تشير إلى الستوري، وتختفي بمؤقّت أو بزرّ إغلاق. [Story] وحدها تُرسَم؛
@@ -234,7 +248,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _routeSubscribed = true;
       routeObserver.subscribe(this, route);
     }
-    _stories ??= AppServices.of(context).api.stories();
+    if (!_storiesRequested) {
+      _storiesRequested = true;
+      _loadStories();
+    }
     if (_types == null) {
       _types = AppServices.of(context).api.listOccasionTypes();
       _types!.then((list) {
@@ -309,6 +326,79 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     } catch (_) {}
   }
 
+  /// GET /api/stories — تحمل كل المواضع وفاصل إعلان التغذية، وكل موضع يرشّح
+  /// نسخته من [_storiesList]. النسخة المحلّية لازمة لأن إعلان «بين الكروت»
+  /// يُبنى داخل `_buildList` بلا `FutureBuilder` (تذكرة #173)، على نمط
+  /// `_types`/`_typesList` نفسه. الفشل صامت: التغذية لا تنتظر الستوريات.
+  void _loadStories() {
+    AppServices.of(context).api.stories().then(
+      (result) {
+        if (mounted) {
+          setState(() {
+            _storiesList = result.stories;
+            _feedAdInterval = result.feedAdInterval;
+          });
+        }
+      },
+      // فشل جلب الستوريات يُسكَت ولا يمنع التغذية — الشريط والكاروسيل يبقيان
+      // كما هما، والسحب للتحديث يعيد المحاولة. (بلا هذا كان الخطأ يخرج غير
+      // مُلتقَط إلى منطقة الجذر.)
+      onError: (_) {},
+    );
+  }
+
+  /// ستوريات موضع واحد (تذكرة #173). غياب `placement` في ردّ قديم يُقرأ `bar`
+  /// في `Story.fromJson`، فلا تختفي ستوري من الشريط بسبب مفتاح غائب.
+  List<Story> _storiesFor(String placement) =>
+      _storiesList.where((story) => story.placement == placement).toList(growable: false);
+
+  /// صفحات التغذية: كروت المناسبات، وبينها إعلانات ستوريات `feed` بالتناوب
+  /// بعد كل [_feedAdInterval] كرت (ثم ضعفه …). الفاصل من ردّ الخادم لا رقم
+  /// ثابت هنا (تذكرة #173). بلا ستوريات `feed` — أو بقائمة أقصر من الفاصل —
+  /// النتيجة هي `_events` نفسها بلا أي إدراج، فلا يتغيّر سلوك التغذية القائمة.
+  List<_FeedEntry> _composeFeedPages([List<Event>? events]) {
+    final list = events ?? _events;
+    final ads = _storiesFor('feed');
+    final pages = <_FeedEntry>[];
+    var adsShown = 0;
+    for (var index = 0; index < list.length; index += 1) {
+      pages.add(_FeedEntry.event(list[index], index));
+      final position = index + 1;
+      if (ads.isEmpty || position % _feedAdInterval != 0) continue;
+      final adIndex = adsShown % ads.length;
+      pages.add(_FeedEntry.ad(ads[adIndex], position, adIndex));
+      adsShown += 1;
+    }
+    return pages;
+  }
+
+  /// المناسبة المعروضة في الصفحة `page` — `null` حين تكون الصفحة إعلاناً.
+  Event? _eventAtPage(int page) {
+    final pages = _composeFeedPages();
+    if (page < 0 || page >= pages.length) return null;
+    return pages[page].event;
+  }
+
+  /// آخر مناسبة عند الصفحة `page` أو قبلها: اللقطة والتحديث في المكان لا
+  /// يقفزان إلى أول التغذية حين يكون المعروض إعلاناً بين كروت.
+  Event? _eventAtOrBeforePage(int page) {
+    final pages = _composeFeedPages();
+    if (pages.isEmpty) return null;
+    for (var index = page >= pages.length ? pages.length - 1 : page; index >= 0; index -= 1) {
+      final event = pages[index].event;
+      if (event != null) return event;
+    }
+    return null;
+  }
+
+  /// صفحة أول ظهور لمناسبة `eventId` في قائمة معيّنة — ‎-1 حين لا تكون فيها
+  /// (فتُتجاهل النتيجة بدل القفز إلى الأول سهواً). المؤشّر بعدد الإعلانات
+  /// قبلها، فترتيب المناسبة في `events` ليس رقم صفحتها.
+  int _pageForEventIdIn(List<Event> events, int? eventId) {
+    if (eventId == null) return 0;
+    return _composeFeedPages(events).indexWhere((entry) => entry.event?.id == eventId);
+  }
+
   /// بطاقة الدخول التسويقية — تُطلب مرّة واحدة لكل شاشة/تشغيل، بعد أول إطار.
   ///
   /// [_entryCardShown] تُرفع **قبل** النداء لا بعده: فشل الشبكة أو ردّ بلا
@@ -339,6 +429,18 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _entryCardTimer = null;
     if (!mounted) return;
     setState(() => _entryCardVisible = false);
+  }
+
+  /// يفتح العارض على قائمة موضع واحد ويبدأ من الحلقة المنقورة (تذكرة #173):
+  /// العارض نفسه هو من يسجّل المشاهدة بعد ثانيتين، فالمشاهدة تُقاس من كل موضع
+  /// بالمسار نفسه لا بنسخة ثانية لكل موضع.
+  void _openStoryList(List<Story> stories, int index) {
+    if (stories.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StoryViewerScreen(stories: stories, initialIndex: index),
+      ),
+    );
   }
 
   /// يفتح عارض الستوري على قصة البطاقة وحدها من حلقتها الأولى، ثم يخفي البطاقة:
@@ -414,15 +516,16 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   }
 
   /// يشغّل صوت الكرت الظاهر الآن — أو يُسكت ما شغّلته التغذية إن لم يكن له
-  /// صوت. لا شيء والتبويب غير مختار أو شاشة أخرى فوقه.
+  /// صوت. لا شيء والتبويب غير مختار أو شاشة أخرى فوقه. وصفحة إعلانٍ بين
+  /// الكروت (تذكرة #173) لا مناسبة لها، فتُسكت بدل أن تكرّر صوت جارتها.
   void _autoplayCurrent() {
     final audio = _audio;
     if (audio == null || !widget.isActive || _covered) return;
-    if (_events.isEmpty || _currentPage >= _events.length) {
+    final event = _events.isEmpty ? null : _eventAtPage(_currentPage);
+    if (event == null) {
       audio.release(this);
       return;
     }
-    final event = _events[_currentPage];
     audio.autoplay(
       effectiveEventAudioUrl(event, defaultAudioUrl: _defaultAudioUrl),
       owner: this,
@@ -492,11 +595,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   /// يلتقط ما هو معروض الآن قبل أي تغيير فلتر فعلي — القائمة وموضعها والفلتر
   /// كاملاً — كي يُعاد المستخدم إلى نتائجه بضغطة واحدة.
+  ///
+  /// والموضع **معرّف المناسبة** لا رقم صفحتها (تذكرة #173): رقم الصفحة يتغيّر
+  /// بعدد إعلانات «بين الكروت» قبلها، والمعرّف لا يتغيّر. وإعلانٌ معروض الآن
+  /// لا مناسبة له، فاللقطة تقف على الكرت الذي يسبقه.
   void _captureSnapshot() {
     _snapshot = _ResultsSnapshot(
       events: _events,
       pagination: _pagination,
-      index: _currentPage < _events.length ? _currentPage : 0,
+      eventId: _eventAtOrBeforePage(_currentPage)?.id,
       search: _search,
       towns: _selectedTowns,
       villages: _selectedVillageIds,
@@ -532,6 +639,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     final snapshot = _snapshot;
     if (snapshot == null || !mounted) return;
     _debounce?.cancel();
+    // صفحة المناسبة داخل التركيب الجديد (كروت + إعلانات) تُحسب من القائمة
+    // المستعادة قبل `setState`، فالقفزة بعد إعادة البناء تطابق معرّفاً لا رقماً.
+    final targetPage = _pageForEventIdIn(snapshot.events, snapshot.eventId);
     setState(() {
       _events = snapshot.events;
       _pagination = snapshot.pagination;
@@ -543,7 +653,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _selectedOccasionTypeIds = snapshot.kinds;
       _archive = snapshot.archive;
       _dateFilter = snapshot.dateFilter;
-      _currentPage = snapshot.index;
+      _currentPage = targetPage < 0 ? 0 : targetPage;
       _snapshot = null;
       _snapshotPending = false;
     });
@@ -552,7 +662,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     _restoringSnapshot = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_pageController.hasClients) _pageController.jumpToPage(snapshot.index);
+      if (_pageController.hasClients) _pageController.jumpToPage(_currentPage);
       _restoringSnapshot = false;
       _autoplayCurrent();
     });
@@ -564,7 +674,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// عند التحديث التالي بدل أن يُنتزع من مكانه.
   Future<void> _refreshInPlace() async {
     if (_initialLoading) return;
-    final shownId = _currentPage < _events.length ? _events[_currentPage].id : null;
+    final shownId = _eventAtOrBeforePage(_currentPage)?.id;
     final generation = _requestGeneration;
     try {
       final result = await AppServices.of(context).api.listEvents(
@@ -579,7 +689,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             page: 1,
           );
       if (!mounted || generation != _requestGeneration) return;
-      final index = shownId == null ? 0 : result.events.indexWhere((e) => e.id == shownId);
+      // الموضع الجديد بالمعرّف لا بترتيب المناسبة: الإعلانات قبلها تُزحزح
+      // رقم الصفحة وحدها (تذكرة #173).
+      final index = _pageForEventIdIn(result.events, shownId);
       if (index < 0) return;
       setState(() {
         _events = result.events;
@@ -1157,6 +1269,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
+    // ستوريات موضع `carousel` (تذكرة #173): كاروسيل بانرات أعلى التغذية
+    // مباشرة. بلا ستوريات كاروسيل لا عنصر ولا مساحة — التخطيط كما كان.
+    final carouselStories = _storiesFor('carousel');
     return Scaffold(
       body: Stack(
         fit: StackFit.expand,
@@ -1185,13 +1300,19 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                     onTap: () => _openEntryStory(_entryStory!),
                   ),
                 ),
+              // كاروسيل البانرات أعلى التغذية (تذكرة #173)، تحت بطاقة الدخول
+              // التي تختفي وحدها — ثم تبدأ الكروت.
+              if (carouselStories.isNotEmpty)
+                _StoryCarousel(
+                  stories: carouselStories,
+                  onOpen: (index) => _openStoryList(carouselStories, index),
+                  onCta: (story) => openStoryTarget(context, story),
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
                     final services = AppServices.of(context);
-                    setState(() {
-                      _stories = services.api.stories();
-                    });
+                    _loadStories();
                     _loadLiveChannel();
                     // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                     services.audio.defaultTrack(services.api, refresh: true).then((url) {
@@ -1353,9 +1474,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               ),
             ),
             // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
-            // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته.
+            // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته. وموضع الشريط
+            // `bar` وحده (تذكرة #173): الكاروسيل والإعلان لهما موضعاهما.
             _StoriesStrip(
-              future: _stories,
+              stories: _storiesFor('bar'),
               channel: _liveChannel,
               onLiveTap: () => openLiveScreen(context),
             ),
@@ -1488,10 +1610,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             icon: Icons.refresh,
             tooltip: 'تحديث',
             onPressed: () async {
-              final services = AppServices.of(context);
-              setState(() {
-                _stories = services.api.stories();
-              });
+              _loadStories();
               _loadLiveChannel();
               // تحديث في المكان: الصفحة الأولى تُستبدل والكرت المعروض يبقى
               // أمام المستخدم بدل أن يقفز إلى أوّله.
@@ -1760,28 +1879,46 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     }
 
     final hasMore = _pagination?.hasMore ?? false;
+    // صفحات التغذية: الكروت، وبعد كل [_feedAdInterval] إعلانُ ستوري موضع
+    // `feed` (تذكرة #173). بلا إعلانات تطابق `_events` صفحةً بصفحة.
+    final pages = _composeFeedPages();
+    final feedAds = _storiesFor('feed');
 
     return Stack(
       alignment: Alignment.bottomCenter,
       children: [
         PageView.builder(
+          key: const Key('feed_pager'),
           controller: _pageController,
           scrollDirection: Axis.vertical,
           physics: const AlwaysScrollableScrollPhysics(
             parent: PageScrollPhysics(),
           ),
-          itemCount: _events.length,
+          itemCount: pages.length,
           onPageChanged: (index) {
             _currentPage = index;
             _autoplayCurrent();
             // قفزة الرجوع للقطة ليست تمريراً من المستخدم، فلا تجلب «المزيد».
             if (_restoringSnapshot) return;
-            if (index >= _events.length - 2 && hasMore && !_loadingMore) {
+            if (index >= pages.length - 2 && hasMore && !_loadingMore) {
               _loadMore();
             }
           },
           itemBuilder: (context, index) {
-            final event = _events[index];
+            final entry = pages[index];
+            final ad = entry.ad;
+            // إعلان بين الكروت: صفحة كاملة كالكرت. الصورة تفتح العارض
+            // (المشاهدة) والزرّ يسجّل النقرة ثم يفتح الرابط — الموضعان
+            // يُقاسان من هنا كما من الشريط والكاروسيل.
+            if (ad != null) {
+              return _FeedAdCard(
+                story: ad,
+                position: entry.adPosition,
+                onOpen: () => _openStoryList(feedAds, entry.adIndex),
+                onCta: () => openStoryTarget(context, ad),
+              );
+            }
+            final event = entry.event!;
             final card = EventCard(
               event: event,
               onTap: () => _openEvent(event.id),
@@ -1792,8 +1929,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
             );
             // الظهور المتدرّج للشاشة الأولى وحدها — مناسبة من صفحة تالية أو
             // فلتر جديد لا تحمل معرّفها في هذه المجموعة فتُرسَم فوراً (٥٣).
+            // ورقم التدرّج ترتيب المناسبة لا رقم صفحتها، فلا يؤخّرها إعلان.
             return _entranceEventIds.contains(event.id)
-                ? FirstScreenFadeIn(index: index, child: card)
+                ? FirstScreenFadeIn(index: entry.eventIndex, child: card)
                 : card;
           },
         ),
@@ -1851,7 +1989,7 @@ class _ResultsSnapshot {
   const _ResultsSnapshot({
     required this.events,
     required this.pagination,
-    required this.index,
+    required this.eventId,
     required this.search,
     required this.towns,
     required this.villages,
@@ -1862,7 +2000,10 @@ class _ResultsSnapshot {
 
   final List<Event> events;
   final Pagination? pagination;
-  final int index;
+
+  /// معرّف المناسبة المعروضة لحظة اللقطة — لا رقم صفحتها: الإعلانات بين
+  /// الكروت تُزحزح أرقام الصفحات ولا تُزحزح المعرّف (تذكرة #173).
+  final int? eventId;
   final String search;
   final List<String> towns;
   final List<int> villages;
@@ -2252,83 +2393,366 @@ class _AnnouncementInfoLine extends StatelessWidget {
 /// (`docs/prototype/home-2026-10.html`، العرض «أ») ولا يكبر.
 const double _storiesStripHeight = 82;
 
-/// شريط الستوريات الظاهر دائماً في رأس التغذية: كبسة البث أولاً — فعل مستقل يبقى
-/// وحده إن لم تصل ستوريات — ثم ستوريات التسويق أفقياً.
+/// ارتفاع كاروسيل البانرات (تذكرة #173): بانر أفقي واحد لكل ستوري موضع
+/// `carousel`. يُقتطع من ارتفاع الكرت كما يُقتطع الشريط، فلا يغطّي شيئاً.
+const double _storyCarouselHeight = 96;
+
+/// ستوريات موضع `bar` وحدها: كل موضع يعرض ما يخصّه — الكاروسيل أعلى التغذية
+/// له موضعه، وإعلان «بين الكروت» موضعه بين الكروت. `stories` تصل مرشَّحة من
+/// `_storiesFor('bar')`، فلا ترشيح ثانياً هنا.
 class _StoriesStrip extends StatelessWidget {
   const _StoriesStrip({
-    required this.future,
+    required this.stories,
     required this.channel,
     required this.onLiveTap,
   });
 
-  final Future<List<Story>>? future;
+  final List<Story> stories;
   final LiveChannel? channel;
   final VoidCallback onLiveTap;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Story>>(
-      future: future,
-      builder: (context, snapshot) {
-        final stories = snapshot.data ?? const <Story>[];
-
-        return SizedBox(
-          key: const Key('stories_strip'),
-          height: _storiesStripHeight,
-          child: Row(
-            children: [
-              // أول عنصر في الجهة اليمنى (RTL) — كبسة البث على محاذاة صفّ
-              // «ألبومات الأعراس» فوقها (الحشو في عمود الكروم).
-              _LiveStoryTile(channel: channel, onTap: onLiveTap),
-              // بلا ستوريات: الكبسة وحدها بلا فاصل ولا شريط فارغ.
-              if (stories.isNotEmpty) ...[
-                Container(
-                  width: 1,
-                  height: 54,
-                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                  color: context.c.line,
-                ),
-                Expanded(
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    // رأسي ٢ لا ٤: كرة ٥٤ + فاصل ٥ + تسمية ١١px تبلغ ٧٥٫٥،
-                    // والـ٤ كانت تترك ٧٤ فيفيض العمود بكسلٌ واحد على الجهاز
-                    // الحقيقي (ظهر شريط الفيضان فوق الأسماء في لقطة 2026-10-25).
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    itemCount: stories.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
-                    itemBuilder: (context, index) {
-                      final story = stories[index];
-                      return _StripItem(
-                        highlighted: story.isLive,
-                        label: story.title,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => StoryViewerScreen(
-                              stories: stories,
-                              initialIndex: index,
-                            ),
-                          ),
+    return SizedBox(
+      key: const Key('stories_strip'),
+      height: _storiesStripHeight,
+      child: Row(
+        children: [
+          // أول عنصر في الجهة اليمنى (RTL) — كبسة البث على محاذاة صفّ
+          // «ألبومات الأعراس» فوقها (الحشو في عمود الكروم).
+          _LiveStoryTile(channel: channel, onTap: onLiveTap),
+          // بلا ستوريات: الكبسة وحدها بلا فاصل ولا شريط فارغ.
+          if (stories.isNotEmpty) ...[
+            Container(
+              width: 1,
+              height: 54,
+              margin: const EdgeInsets.symmetric(horizontal: 6),
+              color: context.c.line,
+            ),
+            Expanded(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                // رأسي ٢ لا ٤: كرة ٥٤ + فاصل ٥ + تسمية ١١px تبلغ ٧٥٫٥،
+                // والـ٤ كانت تترك ٧٤ فيفيض العمود بكسلٌ واحد على الجهاز
+                // الحقيقي (ظهر شريط الفيضان فوق الأسماء في لقطة 2026-10-25).
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                itemCount: stories.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 12),
+                itemBuilder: (context, index) {
+                  final story = stories[index];
+                  return _StripItem(
+                    highlighted: story.isLive,
+                    label: story.title,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => StoryViewerScreen(
+                          stories: stories,
+                          initialIndex: index,
                         ),
-                        avatar: story.image == null
-                            ? _storyFallbackAvatar(context)
-                            : Image.network(
-                                story.image!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) =>
-                                    _storyFallbackAvatar(context),
-                              ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      },
+                      ),
+                    ),
+                    avatar: story.image == null
+                        ? _storyFallbackAvatar(context)
+                        : Image.network(
+                            story.image!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                _storyFallbackAvatar(context),
+                          ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
+}
+
+/// كاروسيل البانرات أعلى التغذية (تذكرة #173): ستوريات موضع `carousel` وحدها،
+/// بانر أفقي لكل واحدة. الصورة تفتح العارض (فمشاهدة الثانيتين تُسجَّل كما في
+/// الشريط)، والزرّ يسجّل النقرة ثم يفتح الرابط — القياس من هذا الموضع لا يضيع.
+class _StoryCarousel extends StatelessWidget {
+  const _StoryCarousel({
+    required this.stories,
+    required this.onOpen,
+    required this.onCta,
+  });
+
+  final List<Story> stories;
+
+  /// فتح العارض على حلقة الكاروسيل المنقورة.
+  final void Function(int index) onOpen;
+
+  /// نقرة الزرّ: تسجيل ثم فتح الرابط (`openStoryTarget`).
+  final void Function(Story story) onCta;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return SizedBox(
+      key: const Key('story_carousel'),
+      height: _storyCarouselHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        itemCount: stories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          final story = stories[index];
+          final hasTarget = story.targetUrl != null && story.targetUrl!.isNotEmpty;
+          return Container(
+            width: 248,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: c.line),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 92,
+                  height: double.infinity,
+                  child: GestureDetector(
+                    key: Key('story_carousel_media_${story.id}'),
+                    onTap: () => onOpen(index),
+                    behavior: HitTestBehavior.opaque,
+                    child: story.image == null
+                        ? _storyPlaceholder(context)
+                        : Image.network(
+                            story.image!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                _storyPlaceholder(context),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsetsDirectional.fromSTEB(0, 8, 0, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          story.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.3,
+                            fontWeight: FontWeight.w800,
+                            color: c.ink,
+                          ),
+                        ),
+                        if (hasTarget) ...[
+                          const SizedBox(height: 5),
+                          FilledButton(
+                            key: Key('story_carousel_cta_${story.id}'),
+                            onPressed: () => onCta(story),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: c.sky,
+                              foregroundColor: c.onSky,
+                              minimumSize: const Size(0, 26),
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              textStyle: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              shape: const StadiumBorder(),
+                            ),
+                            child: Text(storyCtaLabel(story)),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// صفحة إعلانٍ بين الكروت (تذكرة #173): ستوري موضع `feed` في صفحة كاملة من
+/// تغذية الالتقاط، بعد كل فاصل إعلان التغذية الذي يرسله الخادم. الصورة تفتح العارض
+/// (فالمشاهدة تُسجَّل بحدّ الثانيتين) والزرّ يسجّل النقرة ثم يفتح الرابط.
+class _FeedAdCard extends StatelessWidget {
+  const _FeedAdCard({
+    required this.story,
+    required this.position,
+    required this.onOpen,
+    required this.onCta,
+  });
+
+  final Story story;
+
+  /// رقم الكرت الذي يلي هذا الإعلان (٨، ١٦، …) — في مفتاح الصفحة، فتعرف
+  /// الأدوات والتشخيص أي إعلان تعرضه الشاشة بالضبط.
+  final int position;
+  final VoidCallback onOpen;
+  final VoidCallback onCta;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    final hasTarget = story.targetUrl != null && story.targetUrl!.isNotEmpty;
+    return Container(
+      key: Key('feed_ad_after_$position'),
+      padding: const EdgeInsets.all(16),
+      alignment: Alignment.center,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: c.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: c.line),
+          boxShadow: const [
+            BoxShadow(color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 6)),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: c.goldWash,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: c.gold),
+                    ),
+                    child: Text(
+                      story.isAd ? 'إعلان' : 'مميّز',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: c.gold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if ((story.advertiserName ?? '').isNotEmpty)
+                    Expanded(
+                      child: Text(
+                        story.advertiserName!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, color: c.inkSoft),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            // `Flexible` حول الصورة لا ارتفاعاً صامتاً: صفحة التغذية محدودة
+            // الارتفاع بالشريط والكاروسيل، فصورةٌ ٢٢٠ ثابتة تفيض على الشاشات
+            // القصيرة. هنا تنقص الصورة وحدها عند الحاجة، ويبقى النصّ والزرّ.
+            Flexible(
+              child: GestureDetector(
+                key: Key('feed_ad_media_${story.id}'),
+                onTap: onOpen,
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox(
+                  height: 220,
+                  child: story.image == null
+                      ? _storyPlaceholder(context)
+                      : Image.network(
+                          story.image!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => _storyPlaceholder(context),
+                        ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsetsDirectional.fromSTEB(14, 10, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    story.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      height: 1.35,
+                      fontWeight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  if (hasTarget) ...[
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      key: Key('feed_ad_cta_${story.id}'),
+                      onPressed: onCta,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: c.sky,
+                        foregroundColor: c.onSky,
+                        minimumSize: const Size(0, 34),
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        shape: const StadiumBorder(),
+                      ),
+                      child: Text(storyCtaLabel(story)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// صفحة واحدة في تغذية الموبايل (تذكرة #173): كرت مناسبة، أو إعلانُ ستوري
+/// موضع `feed` بينها. تُبنى في `_composeFeedPages` ولا تُخزَّن، فرقم الصفحة
+/// يتغيّر مع وصول الستوريات ولا حالة ثانية تُدار.
+class _FeedEntry {
+  const _FeedEntry._({
+    this.event,
+    this.eventIndex = -1,
+    this.ad,
+    this.adPosition = 0,
+    this.adIndex = 0,
+  });
+
+  factory _FeedEntry.event(Event event, int index) =>
+      _FeedEntry._(event: event, eventIndex: index);
+
+  factory _FeedEntry.ad(Story story, int position, int index) =>
+      _FeedEntry._(ad: story, adPosition: position, adIndex: index);
+
+  final Event? event;
+
+  /// ترتيب المناسبة في `_events` — للتدرّج لا لرقم الصفحة.
+  final int eventIndex;
+  final Story? ad;
+
+  /// رقم الكرت الذي يلي هذا الإعلان (٨، ١٦، …) — يُعرض في المفتاح للتشخيص.
+  final int adPosition;
+
+  /// ترتيب الإعلان في قائمة ستوريات `feed`، ليفتح العارض على الحلقة الصحيحة.
+  final int adIndex;
 }
 
 /// كبسة البث في أول الشريط: مربّع متدرّج بزوايا ١٨، ظاهر دائماً حتى بلا بثّ،
@@ -2555,6 +2979,17 @@ class _EntryCard extends StatelessWidget {
 Widget _storyFallbackAvatar(BuildContext context) => ColoredBox(
       color: context.c.surface,
       child: Icon(Icons.celebration, size: 22, color: context.c.sky),
+    );
+
+/// بديل صورة الستوري في البانر وبطاقة الإعلان (تذكرة #173): يملأ الإطار
+/// الضيّق كاملاً بلا صورة، بخلاف [_storyFallbackAvatar] الذي يسكن كرةً صغيرة.
+Widget _storyPlaceholder(BuildContext context) => SizedBox.expand(
+      child: ColoredBox(
+        color: context.c.surfaceSunk,
+        child: Center(
+          child: Icon(Icons.image_outlined, size: 26, color: context.c.inkFaint),
+        ),
+      ),
     );
 
 /// الشكل الواحد لعنصر شريط القصص: حلقة دائرية ٥٤ ثم تسمية سطر واحد تحتها.

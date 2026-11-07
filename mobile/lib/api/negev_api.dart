@@ -377,11 +377,27 @@ class NegevApi {
         .toList();
   }
 
-  Future<List<Story>> stories() async {
+  /// الفاصل الافتراضي لإعلان «بين الكروت» — احتياطٌ **فقط**: يُستعمل حين
+  /// يغيب `feed_ad_interval` من الردّ أو يكون غير صالح (غير رقم أو ≤ 0).
+  /// القيمة الفعلية تأتي من الخادم في الردّ نفسه (تذكرة #173).
+  static const int defaultFeedAdInterval = 8;
+
+  /// ستوريات المواضع الثلاثة، **وفاصل إعلان التغذية معها** (تذكرة #173):
+  /// الفاصل يُقرأ من `feed_ad_interval` في الردّ لا من رقم مكتوب في العميل،
+  /// فتغيير `FEED_AD_INTERVAL` في الخادم يحرّك موضع الإعلان بلا APK جديد.
+  /// و`8` احتياطٌ وحده حين يغيب المفتاح أو يكون غير صالح (غير رقم أو ≤ 0).
+  Future<({List<Story> stories, int feedAdInterval})> stories() async {
     final data = await _client.get('/api/stories');
     final list = data['stories'];
-    if (list is! List) return const [];
-    return list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList();
+    final stories = list is List
+        ? list.whereType<Map<String, dynamic>>().map(Story.fromJson).toList()
+        : const <Story>[];
+    final raw = data['feed_ad_interval'];
+    final parsed = raw is num ? raw.floor() : int.tryParse('${raw ?? ''}'.trim());
+    return (
+      stories: stories,
+      feedAdInterval: parsed != null && parsed > 0 ? parsed : defaultFeedAdInterval,
+    );
   }
 
   /// بطاقة الدخول التسويقية — `GET /api/stories/entry-card`، مسار عام بلا

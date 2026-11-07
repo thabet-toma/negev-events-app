@@ -9,9 +9,18 @@ const storyStudio = require('../services/storyStudio.service');
 const { authenticate, optionalAuthenticate, requireSuperAdmin } = require('../middleware/auth');
 const { regionIdForRequest } = require('../middleware/region');
 const { cleanString, parseId, optionalDateTime, parseHttpUrl } = require('../middleware/validate');
-const { STORY_LINK_PLATFORMS } = require('../constants');
+const { STORY_LINK_PLATFORMS, FEED_AD_INTERVAL } = require('../constants');
 
 const router = express.Router();
+
+/**
+ * طلب بلا `X-App-Version` هو عميل سبق ترويسة الإصدار (#20)، لا عميل #173: وجود
+ * الترويسة لا قيمتها هو ما يهم — نفس قاعدة `isLegacyClient` في
+ * `events.routes.js`، والقيمة تُقارَن في العميل وحده (ADR-0004).
+ */
+function isLegacyClient(req) {
+  return !req.get('X-App-Version');
+}
 
 // Public and anonymous, and each call writes a row — same reasoning as
 // congratulateLimiter, keyed by IP (via express-rate-limit's default
@@ -32,10 +41,20 @@ const storyWriteLimiter = rateLimit({
  * `optionalAuthenticate` كي يرى المسجَّل محافظة حسابه بلا ترويسة، كما في
  * `/api/events`. **ولا يتقيّد** بطاقةُ الدخول أدناه (ستوري واحد مثبَّت
  * للمنصة كلها) ولا `/:id/view`.
+ *
+ * **وموضع الظهور (تذكرة #173):** كل ستوري يحمل `placement`، وردّ الطلب بلا
+ * `X-App-Version` يحمل موضع `bar` وحده — مرشَّحاً في استعلام الخدمة لا هنا.
  */
 router.get('/stories', optionalAuthenticate, asyncHandler(async (req, res) => {
   const regionId = await regionIdForRequest(req);
-  res.json({ success: true, stories: await stories.listPublicStories({ regionId }) });
+  res.json({
+    success: true,
+    stories: await stories.listPublicStories({ regionId, legacyOnly: isLegacyClient(req) }),
+    // فاصل إعلان الموضع `feed` — مصدره `constants.js` وحده، ويُرسَل في الردّ
+    // مع المواضع كي يبنيه العميل على قيمة الخادم (تذكرة #173). ويصل للعميل
+    // القديم أيضاً: لا يضرّ، ويريده عميلٌ قادم يعرف المواضع بلا نشر خادم.
+    feed_ad_interval: FEED_AD_INTERVAL
+  });
 }));
 
 // The entry card: one story to show when the app opens — a super_admin's
@@ -43,7 +62,7 @@ router.get('/stories', optionalAuthenticate, asyncHandler(async (req, res) => {
 // right after the strip and before any `/stories/:id` GET route on purpose, so
 // it can never be swallowed by an id pattern (there is none today).
 router.get('/stories/entry-card', asyncHandler(async (req, res) => {
-  res.json({ success: true, ...await stories.entryCard() });
+  res.json({ success: true, ...await stories.entryCard({ legacyOnly: isLegacyClient(req) }) });
 }));
 
 /**
@@ -138,6 +157,8 @@ function studioPayload(body) {
     title: cleanString(body.title, 200),
     subtitle: cleanString(body.subtitle, 150),
     cta_label: cleanString(body.cta_label, 40),
+    // الموضع خاماً حتى يتحقق منه `createStory` في الخدمة (قائمة مغلقة).
+    placement: cleanString(body.placement, 20),
     clan: cleanString(body.clan, 150),
     town: cleanString(body.town, 100),
     is_ad: Boolean(body.is_ad),
@@ -195,6 +216,9 @@ router.post('/admin/stories', asyncHandler(async (req, res) => {
     target_url: optionalTargetUrl(req.body.target_url),
     link_platform: optionalLinkPlatform(req.body.link_platform),
     cta_label: cleanString(req.body.cta_label, 40),
+    // الموضع يُترك خاماً للخدمة: التحقق من القائمة المغلقة في
+    // `stories.service.js` وحده، فيمرّ عليه كل مسار إنشاء (عام وستوديو).
+    placement: cleanString(req.body.placement, 20),
     slide_duration_seconds: req.body.slide_duration_seconds === undefined
       ? undefined
       : parseId(req.body.slide_duration_seconds, 'مدة الشريحة')
@@ -223,6 +247,7 @@ router.patch('/admin/stories/:id', asyncHandler(async (req, res) => {
   if (body.target_url !== undefined) payload.target_url = optionalTargetUrl(body.target_url);
   if (body.link_platform !== undefined) payload.link_platform = optionalLinkPlatform(body.link_platform);
   if (body.cta_label !== undefined) payload.cta_label = cleanString(body.cta_label, 40);
+  if (body.placement !== undefined) payload.placement = cleanString(body.placement, 20);
   if (body.slide_duration_seconds !== undefined) {
     payload.slide_duration_seconds = parseId(body.slide_duration_seconds, 'مدة الشريحة');
   }

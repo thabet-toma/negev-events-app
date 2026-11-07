@@ -1248,6 +1248,18 @@
               </div>
             </div>
 
+            <!-- موضع الظهور (تذكرة #173): القائمة المغلقة نفسها في
+                 STORY_PLACEMENTS بـconstants.js، والخادم يرفض ما ليس فيها. -->
+            <div class="form-group">
+              <label for="storyStudioPlacement">موضع الظهور</label>
+              <select id="storyStudioPlacement">
+                <option value="bar" selected>شريط الستوريات (كما اليوم)</option>
+                <option value="carousel">كاروسيل البانرات أعلى التغذية</option>
+                <option value="feed">إعلان بين الكروت (بعد كل ٨ كروت)</option>
+              </select>
+              <span class="hint-text">الشريط أعلى الصفحة، والكاروسيل بانر عريض فوق التغذية، وإعلان «بين الكروت» يتكرّر بعد الكرت الثامن والسادس عشر في الويب والموبايل.</span>
+            </div>
+
             <div class="form-row">
               <button type="submit" class="admin-btn-primary" id="storyStudioPreviewBtn" style="flex:1;">
                 <i class="fa-solid fa-wand-magic-sparkles"></i> معاينة البطاقة

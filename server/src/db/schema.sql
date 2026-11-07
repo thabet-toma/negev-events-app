@@ -617,6 +617,10 @@ CREATE TABLE IF NOT EXISTS stories (
   poster_public_id       VARCHAR(255) DEFAULT NULL,
   poster_source          VARCHAR(20)  DEFAULT NULL,
   slide_duration_seconds INT UNSIGNED NOT NULL DEFAULT 5,
+  -- موضع الظهور (تذكرة #173): شريط الستوريات، كاروسيل أعلى التغذية، أو إعلان
+  -- بين الكروت كل FEED_AD_INTERVAL كرتاً. القائمة المغلقة في `constants.js`،
+  -- وصفوف ما قبل #173 تأخذ `bar` فتبقى على شكلها القديم.
+  placement              ENUM('bar','carousel','feed') NOT NULL DEFAULT 'bar',
   created_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_stories_live (is_live),

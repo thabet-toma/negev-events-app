@@ -381,6 +381,11 @@ async function previewCampaign(input) {
  * asset is destroyed, so a rejected campaign leaves no orphan on Cloudinary.
  */
 async function publishCampaign(user, input, { expiresAt } = {}) {
+  // موضع الظهور (تذكرة #173) يُتحقق منه أولاً، بالمنطق المشترك في
+  // `stories.service` نفسه وقبل أي نداء خارجي (oEmbed/مصغّرة/Cloudinary)
+  // وقبل أي كتابة: موضع غير معروف يعود 400 عربية ولا يترك أثراً.
+  const placement = stories.normalisePlacement(input.placement);
+
   const link = await buildCampaignInfo(input.url);
   const buffer = await renderStoryPoster(link, input);
   const uploaded = await cloudinary.uploadBuffer(buffer, cloudinary.folderFor('stories', 'posters'), {
@@ -402,7 +407,9 @@ async function publishCampaign(user, input, { expiresAt } = {}) {
       target_url: link.canonical_url,
       link_platform: link.platform,
       cta_label: cleanText(input.cta_label, 40) || 'شاهد الفيديو',
-      slide_duration_seconds: input.slide_duration_seconds || 7
+      slide_duration_seconds: input.slide_duration_seconds || 7,
+      // الموضع الذي تحقق منه هذا الستوديو قبل الرفع — لا الخام.
+      placement
     });
     await stories.attachPoster(story.id, uploaded.public_id, 'generated');
     story.poster_public_id = uploaded.public_id;

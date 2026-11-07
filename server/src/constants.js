@@ -277,6 +277,28 @@ const PHOTO_REPORT_HIDE_THRESHOLD = 3;
 const STORY_LINK_PLATFORMS = ['youtube', 'tiktok', 'facebook', 'instagram', 'website'];
 
 /**
+ * مواضع ظهور الستوري (تذكرة #173): شريط الستوريات، كاروسيل البانرات أعلى
+ * التغذية، أو إعلان بين الكروت كل `FEED_AD_INTERVAL` كرتاً. قائمة مغلقة —
+ * القيمة الخامسة لا تدخل `stories.placement`، وخدمة الستوريات ترفضها برسالة
+ * عربية قبل أن تصل قاعدة البيانات.
+ */
+const STORY_PLACEMENTS = ['bar', 'carousel', 'feed'];
+
+/**
+ * الموضع الوحيد الذي يتلقّاه عميل لا يرسل `X-App-Version` — عميل سبق ترويسة
+ * الإصدار (#20)، لا كل APK منشور: التطبيق يرسلها فتُقرأ وجوداً لا قيمة.
+ * الستوري في الشريط كما كان، ويُرشَّح في الاستعلام نفسه لا في العميل — نفس
+ * قاعدة `legacyOnly` في `occasionTypes`/`events.service.js`.
+ */
+const STORY_LEGACY_PLACEMENTS = ['bar'];
+
+/**
+ * كل كم كرت مناسبة يتكرّر إعلان الموضع `feed` في التغذية — يُعاد في ردّ
+ * `GET /api/stories` مع المواضع، ومصدره هذا الثابت وحده لا نسخة في الخادم.
+ */
+const FEED_AD_INTERVAL = 8;
+
+/**
  * Where a video's own thumbnail may be fetched from when the studio draws a
  * story card. These are the CDNs YouTube/TikTok/Meta actually return from
  * oEmbed; an allowlist is what keeps a hostile oEmbed response from making
@@ -354,6 +376,9 @@ module.exports = {
   PHOTO_REPORT_HIDE_THRESHOLD,
   STORY_LINK_PLATFORMS,
   STORY_THUMB_HOSTS,
+  STORY_PLACEMENTS,
+  STORY_LEGACY_PLACEMENTS,
+  FEED_AD_INTERVAL,
   NEWS_AREA_BY_REGION_NAME,
   NEWS_AREA_GENERAL,
   NEWS_PAGE_DEFAULT,

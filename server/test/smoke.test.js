@@ -5984,6 +5984,39 @@ async function run() {
     }
   });
 
+  await test('Publishing a studio story validates the placement before any Cloudinary upload or database write (#173)', async () => {
+    // بلا مفاتيح Cloudinary عمداً: لو بقي `uploadBuffer` قبل التحقق لسقط الطلب
+    // بخطأ الرفع («رفع الصور غير مفعَّل بعد…») لا برسالة الموضع. فالرسالة العربية
+    // هنا هي ما يثبت ترتيب التحقق، لا مجرّد رمز 400.
+    const originalCloudinary = config.cloudinary;
+    config.cloudinary = { ...originalCloudinary, cloudName: null, apiKey: null, apiSecret: null };
+
+    try {
+      const rejected = await api('POST', '/api/admin/stories/studio', {
+        token: adminToken,
+        body: {
+          url: 'https://youtu.be/abcdefghijk',
+          title: 'موضع مجهول في الستوديو #173',
+          placement: 'sidebar'
+        }
+      });
+      assert.strictEqual(rejected.status, 400, JSON.stringify(rejected.body));
+      assert.ok(
+        rejected.body.message.includes('موضع الظهور'),
+        `the studio must refuse an unknown placement before uploading, got: ${rejected.body.message}`
+      );
+
+      // ولا صفّ ستوري كُتب: الرفض وقع قبل `stories.createStory`.
+      const after = await api('GET', '/api/admin/stories', { token: adminToken });
+      assert.ok(
+        !after.body.stories.some(story => story.title === 'موضع مجهول في الستوديو #173'),
+        'a refused studio placement leaves no story row behind'
+      );
+    } finally {
+      config.cloudinary = originalCloudinary;
+    }
+  });
+
   await test('Turning an existing story into an ad without an advertiser_name is rejected the same way on PATCH', async () => {
     const { status, body } = await api('PATCH', `/api/admin/stories/${activeStoryId}`, {
       token: adminToken,
@@ -6244,6 +6277,203 @@ async function run() {
       // test in this suite is left expired by this one.
       for (const row of saved) {
         await db.execute('UPDATE stories SET expires_at = ? WHERE id = ?', [row.expires_at, row.id]);
+      }
+    }
+  });
+
+  await test('Placement (#173): no X-App-Version receives bar stories only; a modern header receives all three', async () => {
+    const created = {};
+    try {
+      for (const placement of ['bar', 'carousel', 'feed']) {
+        const { status, body } = await api('POST', '/api/admin/stories', {
+          token: adminToken,
+          body: {
+            title: `ستوري موضع ${placement} #173`,
+            image: '/uploads/story-placement.jpg',
+            placement,
+            ...(placement === 'feed' ? { is_ad: true, advertiser_name: 'معلن الموضع' } : {})
+          }
+        });
+        assert.strictEqual(status, 201, JSON.stringify(body));
+        assert.strictEqual(body.story.placement, placement, 'the admin create stores the chosen placement');
+        created[placement] = body.story.id;
+      }
+
+      // A client that never sends X-App-Version (pre-#20) knows the strip and
+      // nothing else: the filter lives in the query itself, so neither a
+      // carousel nor a feed story can leak in.
+      const legacy = await api('GET', '/api/stories', { legacy: true });
+      assert.strictEqual(legacy.status, 200);
+      const legacyPlacements = [...new Set(legacy.body.stories.map(story => story.placement))];
+      assert.deepStrictEqual(legacyPlacements, ['bar'], 'a request with no X-App-Version must receive bar placement only');
+      const legacyIds = legacy.body.stories.map(story => story.id);
+      assert.ok(!legacyIds.includes(created.carousel), 'the carousel story never reaches a legacy client');
+      assert.ok(!legacyIds.includes(created.feed), 'the feed story never reaches a legacy client');
+      assert.strictEqual(legacy.body.feed_ad_interval, 8, 'the ad interval travels in the response for every client');
+
+      const modern = await api('GET', '/api/stories');
+      const modernIds = modern.body.stories.map(story => story.id);
+      assert.ok(modernIds.includes(created.bar), 'a modern client still sees the bar story');
+      assert.ok(modernIds.includes(created.carousel), 'a modern client sees the carousel story');
+      assert.ok(modernIds.includes(created.feed), 'a modern client sees the feed story');
+      assert.strictEqual(modern.body.feed_ad_interval, 8);
+      assert.ok(
+        modern.body.stories.every(story => ['bar', 'carousel', 'feed'].includes(story.placement)),
+        'every story carries one of the three placements'
+      );
+    } finally {
+      for (const id of Object.values(created)) {
+        await api('DELETE', `/api/admin/stories/${id}`, { token: adminToken });
+      }
+    }
+  });
+
+  await test('Placement (#173): the entry card never hands a legacy client a pinned carousel or feed story', async () => {
+    const created = {};
+    const pin = async (storyId) => api('PUT', '/api/admin/settings', {
+      token: superAdminToken, body: { entry_promo_story_id: String(storyId) }
+    });
+
+    try {
+      for (const placement of ['carousel', 'feed']) {
+        const { status, body } = await api('POST', '/api/admin/stories', {
+          token: adminToken,
+          body: {
+            title: `بطاقة دخول بموضع ${placement} #173`,
+            placement,
+            ...(placement === 'feed' ? { is_ad: true, advertiser_name: 'معلن البطاقة' } : {})
+          }
+        });
+        assert.strictEqual(status, 201, JSON.stringify(body));
+        created[placement] = body.story.id;
+      }
+
+      for (const [placement, storyId] of Object.entries(created)) {
+        const saved = await pin(storyId);
+        assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+
+        // A modern client still gets exactly the pinned story.
+        const modern = await api('GET', '/api/stories/entry-card');
+        assert.strictEqual(modern.body.source, 'pinned', 'sanity: the pin is honoured for a modern header');
+        assert.strictEqual(modern.body.story.id, storyId);
+
+        // A legacy client never learns that story exists: the pin is silently
+        // ignored and the card falls back to the first bar story — not to a
+        // placement it would draw in the strip as if it were a normal story.
+        const legacy = await api('GET', '/api/stories/entry-card', { legacy: true });
+        assert.strictEqual(legacy.body.enabled, true, `a ${placement} pin must not disable the legacy card`);
+        assert.strictEqual(legacy.body.source, 'auto', `a pinned ${placement} story is invisible to a legacy client`);
+        assert.notStrictEqual(legacy.body.story.id, storyId);
+        assert.strictEqual(legacy.body.story.placement, 'bar', `the ${placement} story never reaches the entry card`);
+      }
+    } finally {
+      await api('PUT', '/api/admin/settings', { token: superAdminToken, body: { entry_promo_story_id: '' } });
+      for (const id of Object.values(created)) {
+        await api('DELETE', `/api/admin/stories/${id}`, { token: adminToken });
+      }
+    }
+  });
+
+  await test('Placement (#173): an unknown placement is refused with 400 and an Arabic message, and nothing is stored', async () => {
+    const created = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'ستوري بموضع مجهول #173', placement: 'sidebar' }
+    });
+    assert.strictEqual(created.status, 400, JSON.stringify(created.body));
+    assert.ok(created.body.message.includes('موضع الظهور'), `expected an Arabic placement error, got: ${created.body.message}`);
+
+    // A 400 is only good news if the refusal happened *before* the insert: a
+    // row with the rejected title would mean the validation ran after writing.
+    const afterRefusal = await api('GET', '/api/admin/stories', { token: adminToken });
+    assert.ok(
+      !afterRefusal.body.stories.some(story => story.title === 'ستوري بموضع مجهول #173'),
+      'a refused placement never leaves a story row behind'
+    );
+
+    // The same closed list guards the update path, not just create.
+    const existing = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'ستوري سليم #173' }
+    });
+    assert.strictEqual(existing.status, 201, JSON.stringify(existing.body));
+    try {
+      assert.strictEqual(existing.body.story.placement, 'bar', 'the column default is bar');
+
+      const patched = await api('PATCH', `/api/admin/stories/${existing.body.story.id}`, {
+        token: adminToken,
+        body: { placement: 'sidebar' }
+      });
+      assert.strictEqual(patched.status, 400, JSON.stringify(patched.body));
+      assert.ok(patched.body.message.includes('موضع الظهور'), `expected an Arabic placement error, got: ${patched.body.message}`);
+
+      // And the refused update left the stored row exactly as it was.
+      const afterPatch = await api('GET', '/api/admin/stories', { token: adminToken });
+      const stored = afterPatch.body.stories.find(story => story.id === existing.body.story.id);
+      assert.ok(stored, 'the story still exists after the refused update');
+      assert.strictEqual(stored.placement, 'bar', 'the refused update must not overwrite the stored placement');
+    } finally {
+      await api('DELETE', `/api/admin/stories/${existing.body.story.id}`, { token: adminToken });
+    }
+  });
+
+  await test('Placement (#173): null and empty placements fall back to bar, and an update moves the story between positions', async () => {
+    const created = await api('POST', '/api/admin/stories', {
+      token: adminToken,
+      body: { title: 'ستوري موضع null #173', placement: null }
+    });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.story.placement, 'bar', 'a null placement takes the column default instead of erroring');
+
+    try {
+      const moved = await api('PATCH', `/api/admin/stories/${created.body.story.id}`, {
+        token: adminToken,
+        body: { placement: 'carousel' }
+      });
+      assert.strictEqual(moved.status, 200, JSON.stringify(moved.body));
+      assert.strictEqual(moved.body.story.placement, 'carousel', 'an update can move a story to another position');
+
+      const cleared = await api('PATCH', `/api/admin/stories/${created.body.story.id}`, {
+        token: adminToken,
+        body: { placement: '' }
+      });
+      assert.strictEqual(cleared.status, 200, JSON.stringify(cleared.body));
+      assert.strictEqual(cleared.body.story.placement, 'bar', 'an empty placement returns the story to the strip');
+    } finally {
+      await api('DELETE', `/api/admin/stories/${created.body.story.id}`, { token: adminToken });
+    }
+  });
+
+  await test('Placement (#173): views and clicks are recorded for carousel and feed stories exactly as for bar ones', async () => {
+    const placements = ['carousel', 'feed'];
+    const created = {};
+    try {
+      for (const placement of placements) {
+        const { body } = await api('POST', '/api/admin/stories', {
+          token: adminToken,
+          body: {
+            title: `قياس موضع ${placement} #173`,
+            placement,
+            ...(placement === 'feed' ? { is_ad: true, advertiser_name: 'معلن القياس' } : {})
+          }
+        });
+        created[placement] = body.story.id;
+      }
+
+      for (const placement of placements) {
+        const storyId = created[placement];
+        const device = `placement-view-${placement}-${Date.now()}`;
+        const view = await api('POST', `/api/stories/${storyId}/view`, { body: { device_id: device } });
+        assert.strictEqual(view.status, 200, `a ${placement} story must accept a view`);
+        const click = await api('POST', `/api/stories/${storyId}/click`, { body: { device_id: device } });
+        assert.strictEqual(click.status, 200, `a ${placement} story must accept a click`);
+
+        const { body } = await api('GET', `/api/admin/stories/${storyId}/metrics`, { token: adminToken });
+        assert.strictEqual(body.metrics.views, 1, `the ${placement} position is measured like the strip`);
+        assert.strictEqual(body.metrics.clicks, 1, `the ${placement} position is measured like the strip`);
+      }
+    } finally {
+      for (const id of Object.values(created)) {
+        await api('DELETE', `/api/admin/stories/${id}`, { token: adminToken });
       }
     }
   });

@@ -278,9 +278,12 @@
       <div class="region-picker-chips" id="drawerRegionPickerChips"></div>
     </div>
 
-    <!-- Stories inside Drawer -->
+    <!-- ستوريات الشريط، وبانرات carousel لسطح الهاتف/PWA داخل الدرج. -->
     <div class="drawer-stories-wrapper">
       <div class="stories-slider" id="drawerStoriesContainer"></div>
+      <div class="drawer-story-carousel-section" id="drawerStoryCarouselSection" hidden>
+        <div class="story-carousel" id="drawerStoryCarousel"></div>
+      </div>
     </div>
 
     <!-- Search input inside Drawer -->
@@ -434,6 +437,13 @@
 
       <!-- إعلانات تعديل التاريخ — خبر عن مناسبة قائمة، وليس مناسبة جديدة (#20 خطوة 10) -->
       <div id="announcementsContainer"></div>
+
+      <!-- كاروسيل البانرات (تذكرة #173): ستوريات موضع «carousel» وحدها، أعلى
+           التغذية مباشرة. يُرسم من GET /api/stories في app.js، ويبقى مخفياً
+           بلا ستوريات كاروسيل — لا هيكل فارغاً في الصفحة. -->
+      <section class="story-carousel-section" id="storyCarouselSection" hidden>
+        <div class="story-carousel" id="storyCarousel"></div>
+      </section>
 
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->
       <div id="eventsContainer" class="events-feed">

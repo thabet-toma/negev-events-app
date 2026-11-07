@@ -546,6 +546,165 @@ body {
   font-weight: 600;
 }
 
+/*
+ * كاروسيل البانرات (تذكرة #173) — ستوريات موضع `carousel` أعلى التغذية.
+ * عرضه الأقصى كعرض شريط الستوريات نفسه (650px) كي يبقى وسط الصفحة على الشاشات
+ * العريضة، ويمرّ أفقياً على الضيّقة. القسم مخفيّ بـ`hidden` ما دامت لا
+ * ستوريات كاروسيل، فلا مساحة فارغة في الصفحة.
+ */
+.story-carousel-section {
+  max-width: 650px;
+  margin: 10px auto 6px auto;
+  padding: 0 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.story-carousel-section::-webkit-scrollbar { display: none; }
+.story-carousel-section[hidden] { display: none; }
+
+.story-carousel { display: flex; gap: 12px; width: max-content; padding: 4px 2px; }
+
+.story-banner-card {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+/* الزرّ يحمل الصورة بدل `<div onclick>`: هدف لمسي حقيقي ولوحة مفاتيح بدل نقر
+   صامت على عنصر بلا دور (زرّ `type="button"` لا يُرسل نموذجاً). */
+.story-banner-media {
+  display: block;
+  width: 100%;
+  height: 132px;
+  padding: 0;
+  border: 0;
+  background: var(--surface-sunk);
+  cursor: pointer;
+}
+
+.story-banner-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.story-banner-img-empty { display: block; width: 100%; height: 100%; background: linear-gradient(135deg, var(--sky-wash), var(--surface-sunk)); }
+
+.story-banner-body { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 10px; }
+
+.story-banner-chip {
+  align-self: flex-start;
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--gold);
+  background: var(--gold-wash);
+  border: 1px solid var(--gold);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+}
+
+.story-banner-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.story-banner-cta {
+  align-self: flex-start;
+  margin-top: 2px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+/*
+ * إعلان بين الكروت (تذكرة #173) — شريحة كاملة داخل تغذية الالتقاط، مثل كرت
+ * المناسبة تماماً (`flex: 0 0 100%` + `scroll-snap-align`) كي لا يكسر
+ * الالتقاط ولا ارتفاع التغذية. `.events-feed` عمودٌ مرن، فالشريحة تحجز صفحتها.
+ */
+.events-feed > .feed-ad-card {
+  height: 100%;
+  flex: 0 0 100%;
+  min-height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.feed-ad-inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 440px;
+  max-height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-lift);
+}
+
+.feed-ad-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface-sunk); }
+
+.feed-ad-chip {
+  font-size: 0.66rem;
+  font-weight: 800;
+  color: var(--gold);
+  background: var(--gold-wash);
+  border: 1px solid var(--gold);
+  border-radius: var(--radius-pill);
+  padding: 1px 9px;
+}
+
+.feed-ad-source { font-size: 0.72rem; color: var(--ink-soft); font-weight: 600; }
+
+.feed-ad-media {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 220px;
+  padding: 0;
+  border: 0;
+  background: var(--surface-sunk);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.feed-ad-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.feed-ad-image-empty { display: block; width: 100%; height: 100%; min-height: 220px; background: linear-gradient(160deg, var(--sky-wash), var(--surface-sunk)); }
+
+.feed-ad-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
+
+.feed-ad-title { margin: 0; font-size: 1rem; font-weight: 800; color: var(--ink); line-height: 1.45; }
+
+.feed-ad-cta {
+  align-self: flex-start;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--sky);
+  color: var(--on-sky);
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+
 /* Story viewer (#20 step 18) — full-screen, explicit prev/next/close controls
    instead of implicit tap zones (README: "المقترَح للويب: أسهم وزرّ إغلاق
    صريحة"). كل قيمة اتجاهية هنا خاصية منطقية (inset-inline-*) لا left/right/
@@ -3236,6 +3395,16 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 }
 .drawer-stories-wrapper::-webkit-scrollbar { display: none; }
 
+/* بانرات موضع `carousel` في الدرج: سطح الهاتف/PWA الذي يبقى خارج تغذية
+   الالتقاط. يُخفى العنصر كله حين لا تصل ستوريات carousel. */
+.drawer-story-carousel-section {
+  margin: 4px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.drawer-story-carousel-section::-webkit-scrollbar { display: none; }
+.drawer-story-carousel-section[hidden] { display: none; }
+
 .drawer-search-box {
   display: flex;
   align-items: center;
@@ -3704,8 +3873,19 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   #tabHome > .filter-chips-row,
   #tabHome > .search-bar-container,
   #tabHome > #announcementsContainer,
+  /* كاروسيل البانرات (تذكرة #173) أيضاً: هنا التغذية شريحة ١٠٠dvh والكروم
+     يمرّ ويختفي فوقها، فبانرٌ ثابت قبلها يفسد الالتقاط. يبقى الكاروسيل متاحاً
+     لسطح الهاتف/PWA داخل الدرج العلوي، بجوار شريط الستوريات. */
+  #tabHome > .story-carousel-section,
   #tabHome > .stories-section {
     display: none !important; /* Managed through sliding top drawer on mobile */
+  }
+
+  .events-feed > .feed-ad-card {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    max-height: 100dvh !important;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   .events-feed > .event-card {
