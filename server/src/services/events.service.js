@@ -1225,10 +1225,21 @@ async function listPublicEvents({
  * والعدّ قبل الكتابة لا معها: `UPDATE` بلا معاملة يفوز فيه طلبان متزامنان
  * بالقبول معاً، وهو سباق يخصّ أدمنين اثنين في اللحظة نفسها، لا مساراً عادياً.
  *
- * الإلغاء (`null`) لا يمرّ بالسقف أصلاً: لا شيء يُضاف.
+ * **والسقف يحرس الانتقال إلى «نشِط» لا الكتابة نفسها:** لا يُفرض إلا إذا كانت
+ * القيمة الجديدة تجعل الصفّ نشِطاً (`>= CURDATE()`). تاريخ منقضٍ — و`null` —
+ * لا يزيد النشِط في المحافظة أبداً، فلا يجوز أن يُردّ 409 مهما امتلأت: وإلا
+ * لتعذّر على الأدمن سحب إبرازٍ منتهٍ أو كتابة تاريخ ماضٍ في محافظة كاملة،
+ * وهي عملية **تنقص** ولا تضيف. و«نشِطة» للقيمة الجديدة تُحسب بساعة القاعدة
+ * (`SELECT (? >= CURDATE())`) لا بساعة Node، فالحكمان هنا وفي التغذية
+ * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) لا يفترقان عند منتصف الليل.
  */
 async function setEventFeatured(event, featuredUntil) {
-  if (featuredUntil !== null) {
+  // `null` لا يمرّ بالفحص أصلاً، والقيمة غير الفارغة تسأل القاعدة أولاً:
+  // هل تجعل الصفّ نشِطاً؟ تاريخ ماضٍ جوابه «لا»، فيمرّ بلا عدّ ولا 409.
+  const becomesActive = featuredUntil !== null
+    && Number((await db.queryOne('SELECT (? >= CURDATE()) AS active', [featuredUntil])).active) === 1;
+
+  if (becomesActive) {
     const { total } = await db.queryOne(
       `SELECT COUNT(*) AS total FROM events
         WHERE events.region_id = ? AND events.id <> ?

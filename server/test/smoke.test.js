@@ -17450,6 +17450,44 @@ async function run() {
     assert.strictEqual(first.body.events[0].is_featured, true, 'the featured row still leads page one');
   });
 
+  await test('السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200', async () => {
+    // هذه المحافظة كاملة الآن بثلاثة نشِطة (f1، f2، f4)، و`featuredIds[0]` غير
+    // مبرز (تاريخه أمس من التأكيد السابق). السقف يجب أن يفرق بين الحالتين:
+    // تاريخ مستقبلي **يزيد** النشِط رابعاً فيُردّ، وتاريخ منقضٍ **لا يزيد**
+    // شيئاً فيمرّ — وإلا لتعذّر على الأدمن سحب إبرازٍ أو كتابة تاريخ ماضٍ في
+    // محافظة ممتلئة. فرضُ السقف على كل قيمة غير `null` يُسقط هذا التأكيد عند
+    // طلب التاريخ المنقضي بـ409.
+    const notFeaturedId = featuredIds[0];
+    const activeNow = await db.queryOne(
+      `SELECT COUNT(*) AS total FROM events
+        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
+          AND id IN (?, ?, ?, ?)`,
+      [defaultRegionId, ...featuredIds, featuredFourthId]
+    );
+    assert.strictEqual(Number(activeNow.total), 3, 'the governorate is full before this check');
+
+    const before = (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until;
+    const future = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: addDaysToDate(schedulerToday, 25) }
+    });
+    assert.strictEqual(future.status, 409, 'a future date on a non-featured row would be a fourth active one');
+    assert.strictEqual(
+      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until,
+      before,
+      'and nothing was written for the refused row'
+    );
+
+    const expiredDate = addDaysToDate(schedulerToday, -3);
+    const expired = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: expiredDate }
+    });
+    assert.strictEqual(expired.status, 200, 'a past date adds nothing to the active set, so the ceiling cannot refuse it');
+    assert.strictEqual(expired.body.event.featured_until, expiredDate, 'and the picked day is stored as given');
+    assert.strictEqual(expired.body.event.is_featured, false, 'while the computed flag stays false');
+  });
+
   // تنظيف قسم الإبراز: المناسبات، ثم المستخدمون (وadmin_towns معهم)، ثم البلدة
   // ثم المحافظة — بترتيب المفاتيح الأجنبية.
   for (const id of featuredCleanup.eventIds) {
