@@ -13,7 +13,9 @@
     "db:seed": "node src/db/seed.js",
     "db:import-legacy": "node scripts/import-legacy-json.js",
     "sitemap:generate": "node scripts/generate-sitemap.js",
-    "test": "node test/web-dom.test.js && node test/smoke.test.js"
+    "index:build": "node scripts/build-index.js",
+    "index:check": "node scripts/build-index.js --check",
+    "test": "npm run index:check && node test/web-dom.test.js && node test/smoke.test.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.8",
