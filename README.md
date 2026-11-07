@@ -311,7 +311,10 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
   الاكتشاف) حتى يبلغ موعدها، وتُفتح برابطها وبمعرّفها في `GET /api/events/:id` كمناسبة «بالرابط
   فقط». والشرط واحد في `PUBLIC_EVENT_VISIBLE_SQL_*` (`publish_at IS NULL OR publish_at <= ?`،
   والساعة تُمرَّر مُعامَلةً بساعة القدس من `getZonedParts` — لا `NOW()` الذي يقرأ منطقة جلسة
-  MySQL) فلا نسخة ثانية منه في أي استعلام.
+  MySQL) في **قراءات القوائم** وحدها، فلا نسخة ثانية منه في استعلام قائمة. أما بوابات الصفّ
+  الواحد للجدولة والإعلان — `publishGateOpen` و`listDueScheduledPublish` و`markAnnounced` في
+  `events.service.js` — فتعيد فحص أهلية صفٍّ واحد بنفس الساعة الممرَّرة (`publishNowClock()`) في
+  موضعها من `params`، لا بشرط ثانٍ بساعة مخالفة.
 - **مرقّمة**: `?page=` (افتراضي 1) و `?limit=` (افتراضي 30، سقف أعلى صلب 100 — طلب أكبر
   يُقصّ لا يُرفض). الاستجابة تحمل `pagination: { page, limit, total, totalPages }` إلى جانب
   `events`.
