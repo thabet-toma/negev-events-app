@@ -560,10 +560,17 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 مدة الشريحة (**٥ ثوانٍ**) تخرج من الخادم (`slide_duration_seconds` على كل ستوري، افتراضه 5)
 حتى لا تُنسَخ كرقم ثابت في كل عميل.
 
+**وموضع الظهور (تذكرة #173):** `stories.placement` (`bar`/`carousel`/`feed`، افتراضه `bar`)
+يقرّر أين يظهر الستوري نفسه في العميلين — الشريط كما اليوم، كاروسيل بانرات أعلى التغذية، أو
+إعلاناً بين الكروت بعد كل `FEED_AD_INTERVAL` (٨) كرتاً بالتناوب. والمشاهدة والنقر يُسجَّلان
+من المواضع الثلاثة كما يُسجَّلان من الشريط. **والعميل الذي لا يرسل `X-App-Version` لا
+يتلقّى إلا `bar`** — في `GET /api/stories` وبطاقة الدخول معاً، ترشيحاً في الاستعلام نفسه لا
+في العميل.
+
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| `GET` | `/api/stories` | الستوريات النشِطة فقط — `expires_at IS NULL OR expires_at > UTC_TIMESTAMP()`؛ كل ستوري يحمل `is_ad`, `advertiser_name`, `target_url`, `link_platform`, `cta_label`, `slide_duration_seconds` إضافة إلى `is_live`/`isLive` وبقية الحقول القديمة، والصورة مطلقة دائماً (ADR-0002/0010) |
-| `GET` | `/api/stories/entry-card` | القصة الواحدة التي تُعرض في «بطاقة الدخول» عند فتح التطبيق: `story` (بالشكل نفسه) و`source` — `pinned` للقصة المثبَّتة في إعداد `entry_promo_story_id`، و`auto` لأول قصة نشِطة إن لم يُثبَّت شيء أو لم تعد المثبَّتة نشِطة — و`enabled: false` مع `story: null` حين لا قصة نشِطة. عام بلا مصادقة |
+| `GET` | `/api/stories` | الستوريات النشِطة فقط — `expires_at IS NULL OR expires_at > UTC_TIMESTAMP()`؛ كل ستوري يحمل `placement` (`bar` شريط الستوريات، `carousel` كاروسيل البانرات أعلى التغذية، `feed` إعلان بين الكروت)، و`is_ad`, `advertiser_name`, `target_url`, `link_platform`, `cta_label`, `slide_duration_seconds` إضافة إلى `is_live`/`isLive` وبقية الحقول القديمة، والصورة مطلقة دائماً (ADR-0002/0010). والردّ يحمل `feed_ad_interval` (٨) — الفاصل الذي يتكرّر بعده إعلان `feed` في التغذية. **طلب بلا `X-App-Version` لا يتلقّى إلا `bar`** (ترشيح في الاستعلام نفسه، تذكرة #173) |
+| `GET` | `/api/stories/entry-card` | القصة الواحدة التي تُعرض في «بطاقة الدخول» عند فتح التطبيق: `story` (بالشكل نفسه) و`source` — `pinned` للقصة المثبَّتة في إعداد `entry_promo_story_id`، و`auto` لأول قصة نشِطة إن لم يُثبَّت شيء أو لم تعد المثبَّتة نشِطة — و`enabled: false` مع `story: null` حين لا قصة نشِطة. عام بلا مصادقة. وطلب بلا `X-App-Version` لا يحصل على ستوري `carousel`/`feed` من هذه البطاقة أيضاً — تثبيتٌ عليها يُتجاهَل ويسقط إلى أول ستوري `bar` تلقائياً (تذكرة #173) |
 | `POST` | `/api/stories/:id/view` | تسجيل مشاهدة — عام، يقبل `device_id` لغير المسجَّل؛ مرّة واحدة لكل شخص لكل ستوري يومياً (قيد فريد، ليس فحصاً مسبقاً) |
 | `POST` | `/api/stories/:id/click` | تسجيل نقرة — عام، بلا حدّ تكرار (كل نقرة حقيقية) |
 | `POST` | `/api/stories/:id/report` | إبلاغ عن ستوري — مرّة واحدة لكل مستخدم 🔒 |
@@ -586,7 +593,7 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/admin/stories` | كل الستوريات (نشِطة ومنتهية)، و `expiry_presets` (المدد الجاهزة) |
-| `POST` | `/api/admin/stories` | إنشاء ستوري — `title` إلزامي؛ `expires_at` (تاريخ ووقت حرّ) أو `expiry_preset` (`day` `3_days` `week` `month`)؛ `is_ad: true` بلا `advertiser_name` يُرفض؛ `target_url` يجب أن يبدأ بـhttp(s)، و`link_platform` من `youtube`/`tiktok`/`facebook`/`instagram`/`website`، و`cta_label` حتى ٤٠ حرفاً (ADR-0010) |
+| `POST` | `/api/admin/stories` | إنشاء ستوري — `title` إلزامي؛ `expires_at` (تاريخ ووقت حرّ) أو `expiry_preset` (`day` `3_days` `week` `month`)؛ `is_ad: true` بلا `advertiser_name` يُرفض؛ `target_url` يجب أن يبدأ بـhttp(s)، و`link_platform` من `youtube`/`tiktok`/`facebook`/`instagram`/`website`، و`cta_label` حتى ٤٠ حرفاً (ADR-0010)، و`placement` من `bar`/`carousel`/`feed` (افتراضه `bar`، وما ليس فيها 400) |
 | `PATCH` | `/api/admin/stories/:id` | تعديل جزئي، بنفس قواعد الإنشاء — تحويل ستوري قائم إلى إعلان بلا اسم معلن يُرفض أيضاً، وأي `target_url` غير http(s) يُرفض |
 | `DELETE` | `/api/admin/stories/:id` | حذف ستوري |
 | `GET` | `/api/admin/stories/:id/metrics` | `views`, `distinct_viewers`, `clicks`, `town_breakdown` — **بلا CPM ولا eCPM ولا تكرار** (لا مزاد هنا) |

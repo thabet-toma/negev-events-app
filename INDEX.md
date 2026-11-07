@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 79 | 24086 |
-| `web` | 7 | 19160 |
-| `mobile/lib` | 66 | 28570 |
+| `server/src` | 79 | 24187 |
+| `web` | 7 | 19333 |
+| `mobile/lib` | 66 | 29019 |
 
 ### توزيع `server/src`
 
@@ -22,23 +22,23 @@
 |---|---|---|
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 136 |
-| `constants.js` | 1 | 338 |
-| `db/` | 4 | 2786 |
+| `constants.js` | 1 | 360 |
+| `db/` | 4 | 2800 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 775 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 24 | 5834 |
-| `services/` | 26 | 12665 |
+| `routes/` | 24 | 5858 |
+| `services/` | 26 | 12706 |
 | `utils/` | 12 | 865 |
 
 ### ملفات `web/*.js`
 
 | الملف | الأسطر |
 |---|---|
-| `admin.js` | 8109 |
+| `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 10182 |
+| `app.js` | 10342 |
 | `config.js` | 32 |
 | `occasionForm.js` | 352 |
 | `serve.js` | 149 |
@@ -50,11 +50,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 1690 |
+| `api/` | 2 | 1705 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
-| `models/` | 11 | 2467 |
-| `screens/` | 19 | 18340 |
+| `models/` | 11 | 2484 |
+| `screens/` | 19 | 18757 |
 | `state/` | 18 | 1808 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -64,11 +64,11 @@
 | المهمة | ابدأ من |
 |---|---|
 | إضافة نقطة API | `server/src/routes/index.js:56` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
-| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2541` |
+| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2563` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:145` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
-| واجهة الويب | `web/app.js:315` · `web/admin.js` · `web/api.js:60` |
+| واجهة الويب | `web/app.js:322` · `web/admin.js` · `web/api.js:60` |
 | تطبيق الموبايل | `mobile/lib/api/negev_api.dart:21` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
@@ -163,13 +163,13 @@
 | DELETE | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:262` |
 | POST | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:250` |
 | GET | `/api/admin/stats` | `requireAdmin` | `server/src/routes/admin.routes.js:55` |
-| GET | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:167` |
-| POST | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:175` |
-| DELETE | `/api/admin/stories/:id` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:237` |
-| PATCH | `/api/admin/stories/:id` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:206` |
-| GET | `/api/admin/stories/:id/metrics` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:242` |
-| POST | `/api/admin/stories/studio` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:156` |
-| POST | `/api/admin/stories/studio/preview` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:152` |
+| GET | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:188` |
+| POST | `/api/admin/stories` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:196` |
+| DELETE | `/api/admin/stories/:id` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:262` |
+| PATCH | `/api/admin/stories/:id` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:230` |
+| GET | `/api/admin/stories/:id/metrics` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:267` |
+| POST | `/api/admin/stories/studio` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:177` |
+| POST | `/api/admin/stories/studio/preview` | `requireSuperAdmin` | `server/src/routes/stories.routes.js:173` |
 | GET | `/api/admin/towns` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:43` |
 | POST | `/api/admin/towns` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:47` |
 | DELETE | `/api/admin/towns/:id` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:91` |
@@ -259,11 +259,11 @@
 | GET | `/api/services/providers/:id` | — | `server/src/routes/services.routes.js:89` |
 | GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:268` |
 | GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:29` |
-| GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:36` |
-| POST | `/api/stories/:id/click` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:68` |
-| POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:77` |
-| POST | `/api/stories/:id/view` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:55` |
-| GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:45` |
+| GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:48` |
+| POST | `/api/stories/:id/click` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:87` |
+| POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:96` |
+| POST | `/api/stories/:id/view` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:74` |
+| GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:64` |
 | GET | `/api/towns` | — | `server/src/routes/events.routes.js:146` |
 | GET | `/api/videos/:id` | — | `server/src/routes/albums.routes.js:97` |
 | GET | `/e/:id` | — | `server/src/routes/share.routes.js:961` |

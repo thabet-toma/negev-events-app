@@ -204,6 +204,13 @@ const FEED_ACTIVE_MIN_SCORE = 0.5;
 // Story viewer (#20 step 18) — the strip's own stories list, plus the
 // viewer's playback state; opened by index into this same array.
 let allStories = [];
+// موضع الظهور (تذكرة #173). `allStories` تبقى القائمة الكاملة كما وصلت، وكل
+// موضع (شريط/كاروسيل/إعلان بين الكروت) يرشّح نسخته منها؛ والعارض يعمل على
+// قائمة الموضع الذي فُتح منه، فمؤشّره ليس المؤشّر في غيرها.
+let storyViewerList = [];
+// فاصل إعلان الموضع `feed`: من `feed_ad_interval` في ردّ الخادم، و٨ احتياطاً
+// حين يغيب المفتاح (ردّ قديم أو كاش) — الرقم لا يُنسَخ في عميل آخر.
+let feedAdInterval = 8;
 let storyViewerIndex = 0;
 let storyViewerElapsedMs = 0;
 let storyViewerViewRecorded = false;
@@ -1042,27 +1049,115 @@ function closeSupportModal() {
 }
 
 // 2. Stories / Snaps Loader
+
+/**
+ * ستوريات موضع واحد من `allStories` (تذكرة #173): الخادم يرسل كل المواضع
+ * التي يفهمها هذا الطلب، وكل موضع في الصفحة يعرض ما يخصّه وحده. غياب
+ * `placement` (ردّ قديم أو كاش) يعني `bar` — الشكل الذي كان قبل #173.
+ */
+function storiesForPlacement(placement) {
+  return allStories.filter(story => (story.placement || 'bar') === placement);
+}
+
+/** بصمة ما يغيّر إعلانات التغذية: الفاصل وهويّات ستوريات `feed` وترتيبها. */
+function feedAdSignature() {
+  return `${feedAdInterval}|${storiesForPlacement('feed').map(story => story.id).join(',')}`;
+}
+
 async function fetchStories() {
+  const adsBefore = feedAdSignature();
   try {
     const res = await apiFetch('/api/stories');
     const data = await res.json();
     if (data.success && data.stories) {
       allStories = data.stories;
+      // الفاصل من الخادم لا من رقم مكتوب هنا (تذكرة #173) — و٨ احتياطاً فقط
+      // حين يغيب المفتاح (ردّ قديم أو كاش).
+      const interval = Number(data.feed_ad_interval);
+      feedAdInterval = Number.isFinite(interval) && interval > 0 ? Math.floor(interval) : 8;
       renderStoriesStrip();
+      renderStoryCarousel();
+      renderDrawerStoryCarousel();
+      // إعلانات «بين الكروت» وصلت بعد رسم التغذية (أو تغيّرت): تُعاد من
+      // `allEvents` نفسها مع حفظ موضع التمرير، فلا يقفز الزائر إلى أول التغذية.
+      if (feedAdSignature() !== adsBefore && allEvents.length) {
+        const container = document.getElementById('eventsContainer');
+        const scroll = container ? container.scrollTop : 0;
+        renderEvents(allEvents);
+        if (container) container.scrollTop = scroll;
+      }
     }
   } catch (e) {
     console.error('Stories error:', e);
   }
 }
 
+/** نصّ زرّ الستوري: تسمية الستوديو، أو «زيارة» للإعلان و«شاهد الفيديو» لغيره. */
+function storyCtaLabel(story) {
+  const label = (story.cta_label || '').trim();
+  if (label) return label;
+  return story.is_ad ? 'زيارة' : 'شاهد الفيديو';
+}
+
 /**
- * يبني شريط القصص في الموضعين (الصفحة والدرج العلوي) من allStories وحدها —
- * openStoryViewer(i) يعتمد على i كفهرس في تلك المصفوفة تحديداً.
+ * بطاقة بانر واحدة لستوري موضع `carousel`: الصورة تفتح العارض (فمشاهدة
+ * الثانيتين تُسجَّل كما في الشريط)، وزرّها يسجّل النقرة ثم يفتح الرابط — فلا
+ * يضيع أي من القياسين في هذا الموضع (تذكرة #173).
+ */
+function storyBannerHtml(story, index, placement) {
+  const image = story.image
+    ? `<img class="story-banner-img" src="${escapeHtml(story.image)}" alt="${escapeHtml(story.title || '')}" loading="lazy">`
+    : '<span class="story-banner-img story-banner-img-empty" aria-hidden="true"></span>';
+  const target = isSafeHttpUrl(story.target_url);
+  return `
+    <article class="story-banner-card" data-story-id="${Number(story.id)}">
+      <button type="button" class="story-banner-media" onclick="openStoryViewer(${index}, '${placement}')" aria-label="${escapeHtml(story.title || 'قصة')}">${image}</button>
+      <div class="story-banner-body">
+        <span class="story-banner-chip">${story.is_ad ? 'إعلان' : 'مميّز'}</span>
+        <strong class="story-banner-title">${escapeHtml(story.title || '')}</strong>
+        ${target ? `<button type="button" class="story-banner-cta" onclick="handleStoryCtaById(${Number(story.id)})">${escapeHtml(storyCtaLabel(story))}</button>` : ''}
+      </div>
+    </article>`;
+}
+
+/**
+ * كاروسيل البانرات أعلى التغذية (تذكرة #173): ستوريات موضع `carousel` وحدها.
+ * بلا ستوريات كاروسيل يبقى القسم `hidden` ولا يُرسم شيء.
+ */
+function renderStoryCarousel() {
+  const section = document.getElementById('storyCarouselSection');
+  const rail = document.getElementById('storyCarousel');
+  if (!section || !rail) return;
+  const stories = storiesForPlacement('carousel');
+  section.hidden = stories.length === 0;
+  rail.innerHTML = stories.map((story, index) => storyBannerHtml(story, index, 'carousel')).join('');
+  updateFeedDimensions();
+}
+
+/**
+ * سطح كاروسيل البانرات في الدرج العلوي للهاتف/PWA: يبقى خارج تغذية الالتقاط
+ * بملء الشاشة، ويستخدم قائمة `carousel` نفسها ومؤشرها نفسه اللذين يستخدمهما
+ * الكاروسيل أعلى التغذية. بلا ستوريات لا يرسم شيئاً ويبقى مخفياً.
+ */
+function renderDrawerStoryCarousel() {
+  const section = document.getElementById('drawerStoryCarouselSection');
+  const rail = document.getElementById('drawerStoryCarousel');
+  if (!section || !rail) return;
+  const stories = storiesForPlacement('carousel');
+  section.hidden = stories.length === 0;
+  rail.innerHTML = stories.map((story, index) => storyBannerHtml(story, index, 'carousel')).join('');
+}
+
+/**
+ * يبني شريط القصص في الموضعين (الصفحة والدرج العلوي) من ستوريات موضع `bar`
+ * وحدها — `openStoryViewer(i)` يعتمد على i كفهرس في تلك القائمة تحديداً،
+ * و`bar` هو الموضع الافتراضي للعارض فالشريط لا يمرّر موضعاً.
  */
 function renderStoriesStrip() {
   const container = document.getElementById('storiesContainer');
   const drawerContainer = document.getElementById('drawerStoriesContainer');
-  const html = allStories.map((s, i) => `
+  const stories = storiesForPlacement('bar');
+  const html = stories.map((s, i) => `
     <div class="story-item" onclick="openStoryViewer(${i}); toggleTopChrome(false);">
       <div class="story-avatar-ring ${s.isLive ? 'live' : ''}">
         <img src="${s.image}" class="story-avatar-img" alt="${escapeHtml(s.title)}">
@@ -1073,6 +1168,54 @@ function renderStoriesStrip() {
   if (container) container.innerHTML = html;
   if (drawerContainer) drawerContainer.innerHTML = html;
   updateFeedDimensions();
+}
+
+/**
+ * إعلان بين الكروت (تذكرة #173): شريحة كاملة في تغذية الالتقاط بعد كل
+ * `feedAdInterval` كرت مناسبة. الصورة تفتح العارض (مشاهدة) والزرّ يسجّل
+ * النقرة — الموضعان يُقاسان هنا كما في الشريط. وليست مناسبة: بلا صنف
+ * `event-card` وبلا `data-event-id`، فلا تدخل عدّ كروت التغذية ولا مراقب
+ * الصوت ولا أي منطق يبحث عن مناسبة.
+ */
+function renderFeedAdCardHtml(story, position) {
+  const feedIndex = Math.max(0, storiesForPlacement('feed').indexOf(story));
+  const image = story.image
+    ? `<img src="${escapeHtml(story.image)}" alt="${escapeHtml(story.title || '')}" loading="lazy">`
+    : '<span class="feed-ad-image-empty" aria-hidden="true"></span>';
+  const target = isSafeHttpUrl(story.target_url);
+  return `
+    <article class="feed-ad-card" data-ad-story-id="${Number(story.id)}" data-ad-position="${position}">
+      <div class="feed-ad-inner">
+        <div class="feed-ad-head">
+          <span class="feed-ad-chip">${story.is_ad ? 'إعلان' : 'مميّز'}</span>
+          ${story.advertiser_name ? `<span class="feed-ad-source">${escapeHtml(story.advertiser_name)}</span>` : ''}
+        </div>
+        <button type="button" class="feed-ad-media" onclick="openStoryViewer(${feedIndex}, 'feed')">${image}</button>
+        <div class="feed-ad-body">
+          <h3 class="feed-ad-title">${escapeHtml(story.title || '')}</h3>
+          ${target ? `<button type="button" class="feed-ad-cta" onclick="handleStoryCtaById(${Number(story.id)})">${escapeHtml(storyCtaLabel(story))}</button>` : ''}
+        </div>
+      </div>
+    </article>`;
+}
+
+/**
+ * كروت التغذية وبينها إعلانات موضع `feed`: بعد كل `feedAdInterval` كرت،
+ * بالتناوب بين ستوريات الإعلان (بعد ٨ ثم ١٦ …). بلا ستوريات `feed` — أو
+ * بقائمة أقصر من الفاصل — النتيجة هي الكروت وحدها، فلا يتغيّر شيء.
+ */
+function renderFeedCardsHtml(events) {
+  const ads = storiesForPlacement('feed');
+  const parts = [];
+  let adIndex = 0;
+  events.forEach((evt, index) => {
+    parts.push(renderSingleEventCardHtml(evt));
+    const position = index + 1;
+    if (!ads.length || position % feedAdInterval !== 0) return;
+    parts.push(renderFeedAdCardHtml(ads[adIndex % ads.length], position));
+    adIndex += 1;
+  });
+  return parts.join('');
 }
 
 // «البث المباشر» — زرّان دائمان (الترويسة والشريط العائم) ونافذة واحدة.
@@ -1590,9 +1733,16 @@ function getStoryDeviceId() {
   return id;
 }
 
-function openStoryViewer(index) {
-  if (!allStories.length) return;
-  storyViewerIndex = index;
+/**
+ * يفتح العارض على ستوريات موضع واحد ويبدأ من الحلقة المنقورة. `placement`
+ * يحدّد القائمة التي يُقرأ منها المؤشّر — الشريط `bar` (الافتراضي، كما كان
+ * الاستدعاء القديم)، والكاروسيل أعلى التغذية والإعلان بين الكروت موضعاهما
+ * (تذكرة #173). لا قائمة = لا عارض.
+ */
+function openStoryViewer(index, placement = 'bar') {
+  storyViewerList = storiesForPlacement(placement);
+  if (!storyViewerList.length) return;
+  storyViewerIndex = Math.min(Math.max(Number(index) || 0, 0), storyViewerList.length - 1);
   storyViewerPaused = false;
   // الستوري تُسمَع وحدها — موسيقى التغذية تسكت ما دام العارض مفتوحاً.
   pauseCurrentAudio();
@@ -1614,14 +1764,14 @@ function closeStoryViewer() {
 }
 
 function renderStoryProgressBars() {
-  document.getElementById('storyProgressRow').innerHTML = allStories
+  document.getElementById('storyProgressRow').innerHTML = storyViewerList
     .map(() => '<div class="story-progress-bar"><div class="story-progress-fill"></div></div>')
     .join('');
 }
 
 /** يبدأ (أو يعيد بدء) الشريحة الحالية — يصفّر ساعة التقدّم ويحدّث كل ما يُعرض. */
 function startStorySlide() {
-  const story = allStories[storyViewerIndex];
+  const story = storyViewerList[storyViewerIndex];
   storyViewerElapsedMs = 0;
   storyViewerViewRecorded = false;
   storyViewerLastTickTs = performance.now();
@@ -1685,7 +1835,7 @@ function updateStoryProgressBarsForIndex() {
 }
 
 function tickStorySlide(now) {
-  const story = allStories[storyViewerIndex];
+  const story = storyViewerList[storyViewerIndex];
   const delta = now - storyViewerLastTickTs;
   storyViewerLastTickTs = now;
 
@@ -1715,7 +1865,7 @@ function tickStorySlide(now) {
 }
 
 function storyViewerGoNext() {
-  if (storyViewerIndex >= allStories.length - 1) {
+  if (storyViewerIndex >= storyViewerList.length - 1) {
     closeStoryViewer();
     return;
   }
@@ -1779,9 +1929,8 @@ async function recordStoryView(story) {
   }
 }
 
-async function handleStoryTargetClick() {
-  const story = allStories[storyViewerIndex];
-  if (!isSafeHttpUrl(story.target_url)) return;
+/** تسجيل نقرة ستوري — فشله لا يمنع فتح الرابط نفسه (مطابق للموبايل). */
+async function recordStoryClick(story) {
   try {
     await apiFetch(`/api/stories/${story.id}/click`, {
       method: 'POST',
@@ -1792,13 +1941,32 @@ async function handleStoryTargetClick() {
   } catch (e) {
     // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه (مطابق للموبايل).
   }
+}
+
+async function handleStoryTargetClick() {
+  const story = storyViewerList[storyViewerIndex];
+  if (!story || !isSafeHttpUrl(story.target_url)) return;
+  await recordStoryClick(story);
+  window.open(story.target_url, '_blank', 'noopener');
+}
+
+/**
+ * زرّ CTA خارج العارض — كاروسيل البانرات وبطاقة الإعلان بين الكروت (تذكرة
+ * #173). يسجّل النقرة ثم يفتح الرابط نفسه الذي يفتحه العارض، فالنقرة من أي
+ * موضع تصل `story_clicks` لا من الشريط وحده.
+ */
+async function handleStoryCtaById(storyId) {
+  const story = allStories.find(item => Number(item.id) === Number(storyId));
+  if (!story || !isSafeHttpUrl(story.target_url)) return;
+  await recordStoryClick(story);
   window.open(story.target_url, '_blank', 'noopener');
 }
 
 /** إبلاغ يتطلّب حساباً — زائر بلا حساب يُوجَّه لمسار الدخول القائم، لا لرسالة خطأ (نفس نمط reportCongratulation). */
 async function handleStoryReport() {
   if (!requireAuth({ type: 'report' })) return;
-  const story = allStories[storyViewerIndex];
+  const story = storyViewerList[storyViewerIndex];
+  if (!story) return;
   pauseStorySlide();
   try {
     const res = await apiFetch(`/api/stories/${story.id}/report`, { method: 'POST', auth: true });
@@ -2749,7 +2917,9 @@ function renderEvents(events) {
   }
 
   container.classList.toggle('events-feed-first-load', isFirstLoad);
-  container.innerHTML = events.map(evt => renderSingleEventCardHtml(evt)).join('');
+  // الكروت وبينها إعلانات موضع `feed` إن وُجدت (تذكرة #173) — الشكل نفسه
+  // بلا ستوريات إعلان، فلا يتغيّر شيء لمن لا إعلان له.
+  container.innerHTML = renderFeedCardsHtml(events);
   updateFeedDimensions();
   // الكروت أُعيد إنشاؤها للتو: المراقب يتبع العناصر الجديدة، وحالة الزرّ تُستعاد
   // من المقطع الذي ربما لا يزال يُسمَع (إعادة رسم لا توقف الصوت).
@@ -6308,8 +6478,9 @@ function toggleTopChrome(show) {
     drawer.style.display = 'flex';
     backdrop.style.display = 'block';
 
-    // renderStoriesStrip هي الوحيدة التي تبني الشريطين معاً، فلا يفترقان.
+    // سطرا الستوريات في الدرج يُعاد رسمهما معاً، فلا تبقى بانرات carousel قديمة.
     renderStoriesStrip();
+    renderDrawerStoryCarousel();
 
     const drawerSearch = document.getElementById('drawerSearchInput');
     if (drawerSearch) {

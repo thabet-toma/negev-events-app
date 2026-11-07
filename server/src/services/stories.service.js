@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const { withAbsoluteMedia } = require('../utils/mediaUrl');
 const cloudinary = require('./cloudinary.service');
 const settings = require('./settings.service');
+const { STORY_PLACEMENTS, STORY_LEGACY_PLACEMENTS } = require('../constants');
 
 /**
  * The four ready-made expiry lengths the admin panel offers (#20 step 8,
@@ -58,8 +59,14 @@ function shapeStory(row) {
  * والبلدة تُقارن باسمها في `towns` أو باسم محافظة صريح (ADR-0007)، باستعلامين
  * فرعيين مُعامَلين. `null` = بلا تقييد، فتبقى `entryCard()` عالمية لأنها
  * تستدعي هذه الدالة بلا محافظة.
+ *
+ * **وموضع الظهور (تذكرة #173) يُرشَّح هنا كذلك:** طلب بلا `X-App-Version`
+ * (`legacyOnly`) لا يتلقّى إلا `bar` — الستوري في شريط الستوريات كما يفهمه
+ * عميلٌ سبق ترويسة الإصدار (#20). الترشيح في الاستعلام نفسه لا في العميل (نفس قاعدة
+ * `legacyOnly` في `occasionTypes`/`events.service.js`)، والقائمة المغلقة من
+ * `constants.js` تمرّ معاملات `?` كبقية الشروط.
  */
-async function listPublicStories({ regionId = null } = {}) {
+async function listPublicStories({ regionId = null, legacyOnly = false } = {}) {
   const conditions = ['(expires_at IS NULL OR expires_at > UTC_TIMESTAMP())'];
   const params = [];
   if (regionId !== null && regionId !== undefined) {
@@ -67,6 +74,10 @@ async function listPublicStories({ regionId = null } = {}) {
       OR town IN (SELECT name FROM towns WHERE region_id = ?)
       OR town = (SELECT name FROM regions WHERE id = ?))`);
     params.push(regionId, regionId);
+  }
+  if (legacyOnly) {
+    conditions.push(`placement IN (${STORY_LEGACY_PLACEMENTS.map(() => '?').join(',')})`);
+    params.push(...STORY_LEGACY_PLACEMENTS);
   }
 
   const rows = await db.query(
@@ -84,9 +95,12 @@ async function listPublicStories({ regionId = null } = {}) {
  * expired falls back to auto instead of erroring — the card must never be
  * broken by a stale setting. `enabled: false` (with no story) when nothing is
  * active, so the client hides the card rather than drawing an empty frame.
+ *
+ * `legacyOnly` يصعد إلى `listPublicStories` كي لا يعود عميل بلا `X-App-Version`
+ * بستوري موضعٍ لا يعرفه من مسار ثانٍ (تذكرة #173) — البطاقة نفسها لا تتغيّر.
  */
-async function entryCard() {
-  const active = await listPublicStories();
+async function entryCard({ legacyOnly = false } = {}) {
+  const active = await listPublicStories({ legacyOnly });
   if (!active.length) return { enabled: false, source: null, story: null };
 
   const pinnedId = await settings.getEntryPromoStoryId();
@@ -182,19 +196,37 @@ async function getAdminStoryById(id) {
   return shapeStory(await db.queryOne('SELECT * FROM stories WHERE id = ?', [id]));
 }
 
+/**
+ * موضع الظهور قائمةٌ مغلقة (تذكرة #173)، والقيمة الخامسة لا تصل العمود لأمرين:
+ * `ENUM` في وضع MySQL غير الصارم يقبلها كسلسلة فارغة بدل أن يرفضها، والرسالة
+ * العربية يجب أن تأتي من هنا لا من خطأ SQL. `undefined` = لا تعديل (PATCH)،
+ * و`null`/الفارغ = الموضع الافتراضي `bar` — الأول في القائمة المغلقة.
+ * ويستدعيه `storyStudio.publishCampaign` **قبل** رفع الصورة (تذكرة #173)، فلا
+ * يُرفع أصل لموضع مرفوض ولا تُنسخ القائمة في خدمة ثانية.
+ */
+function normalisePlacement(value) {
+  if (value === undefined) return undefined;
+  const placement = typeof value === 'string' ? value.trim() : '';
+  if (!placement) return STORY_PLACEMENTS[0];
+  if (!STORY_PLACEMENTS.includes(placement)) throw ApiError.badRequest('موضع الظهور غير معروف');
+  return placement;
+}
+
 async function createStory(data) {
   assertAdInvariant({ isAd: data.is_ad, advertiserName: data.advertiser_name });
   await assertEventExists(data.event_id);
 
+  const placement = normalisePlacement(data.placement) || STORY_PLACEMENTS[0];
+
   const { insertId } = await db.execute(
     `INSERT INTO stories
        (title, clan, town, image, is_live, event_id, expires_at, advertiser_name, is_ad, target_url,
-        link_platform, cta_label, slide_duration_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        link_platform, cta_label, slide_duration_seconds, placement)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data.title, data.clan, data.town, data.image, data.is_live ? 1 : 0, data.event_id,
       data.expires_at, data.advertiser_name, data.is_ad ? 1 : 0, data.target_url,
-      data.link_platform, data.cta_label, data.slide_duration_seconds || 5
+      data.link_platform, data.cta_label, data.slide_duration_seconds || 5, placement
     ]
   );
   return getAdminStoryById(insertId);
@@ -203,7 +235,7 @@ async function createStory(data) {
 const UPDATABLE_COLUMNS = [
   'title', 'clan', 'town', 'image', 'is_live', 'event_id',
   'expires_at', 'advertiser_name', 'is_ad', 'target_url',
-  'link_platform', 'cta_label', 'slide_duration_seconds'
+  'link_platform', 'cta_label', 'slide_duration_seconds', 'placement'
 ];
 const BOOLEAN_COLUMNS = ['is_live', 'is_ad'];
 
@@ -218,12 +250,17 @@ async function updateStory(id, data) {
 
   if (data.event_id !== undefined) await assertEventExists(data.event_id);
 
+  // الموضع يُتحقق منه قبل بناء `SET`، فقيمة خارجة عن القائمة المغلقة لا تُكتب.
+  const payload = data.placement === undefined
+    ? data
+    : { ...data, placement: normalisePlacement(data.placement) };
+
   const assignments = [];
   const params = [];
   for (const column of UPDATABLE_COLUMNS) {
-    if (data[column] === undefined) continue;
+    if (payload[column] === undefined) continue;
     assignments.push(`${column} = ?`);
-    params.push(BOOLEAN_COLUMNS.includes(column) ? (data[column] ? 1 : 0) : data[column]);
+    params.push(BOOLEAN_COLUMNS.includes(column) ? (payload[column] ? 1 : 0) : payload[column]);
   }
   if (!assignments.length) throw ApiError.badRequest('لم يتم إرسال أي تعديل');
 
@@ -295,6 +332,7 @@ module.exports = {
   recordClick,
   reportStory,
   listAllStoriesForAdmin,
+  normalisePlacement,
   createStory,
   updateStory,
   deleteStory,

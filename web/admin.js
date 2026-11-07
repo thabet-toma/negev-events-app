@@ -4030,6 +4030,16 @@ const STORY_PLATFORM_LABELS = {
   website: 'فيديو'
 };
 
+/**
+ * أسماء مواضع الظهور كما يراها الأدمن (تذكرة #173) — القيم نفسها هي قائمة
+ * `STORY_PLACEMENTS` المغلقة في الخادم، وهذه تسمياتها وحدها.
+ */
+const STORY_PLACEMENT_LABELS = {
+  bar: 'شريط الستوريات',
+  carousel: 'كاروسيل البانرات',
+  feed: 'إعلان بين الكروت'
+};
+
 function toggleStoryAdvertiserField() {
   const enabled = Boolean(document.getElementById('storyStudioIsAd')?.checked);
   const wrap = document.getElementById('storyStudioAdvertiserWrap');
@@ -4052,6 +4062,7 @@ function storyStudioPayload() {
     title: (document.getElementById('storyStudioTitle')?.value || '').trim(),
     subtitle: (document.getElementById('storyStudioSubtitle')?.value || '').trim(),
     cta_label: (document.getElementById('storyStudioCta')?.value || '').trim(),
+    placement: document.getElementById('storyStudioPlacement')?.value || 'bar',
     expiry_preset: document.getElementById('storyStudioExpiry')?.value || 'week',
     is_ad: Boolean(document.getElementById('storyStudioIsAd')?.checked),
     advertiser_name: (document.getElementById('storyStudioAdvertiser')?.value || '').trim()
@@ -4147,8 +4158,10 @@ async function publishStoryStudio() {
     document.getElementById('storyStudioCta').value = '';
     document.getElementById('storyStudioIsAd').checked = false;
     document.getElementById('storyStudioAdvertiser').value = '';
+    const placementSelect = document.getElementById('storyStudioPlacement');
+    if (placementSelect) placementSelect.value = 'bar';
     toggleStoryAdvertiserField();
-    setStoryStudioNotice('نُشرت القصة — تظهر الآن في شريط الستوريات.', true);
+    setStoryStudioNotice(`نُشرت القصة — ${STORY_PLACEMENT_LABELS[data.story && data.story.placement] || STORY_PLACEMENT_LABELS.bar}.`, true);
     await loadAdminStories();
     await loadEntryPromoStorySetting();
   } catch (err) {
@@ -4273,6 +4286,7 @@ function renderAdminStories() {
           </div>
           <p class="admin-story-meta">
             <span>${escapeHtml(platform)}</span>
+            <span>${escapeHtml(STORY_PLACEMENT_LABELS[story.placement] || STORY_PLACEMENT_LABELS.bar)}</span>
             ${story.cta_label ? `<span>${escapeHtml(story.cta_label)}</span>` : ''}
             ${story.is_ad ? `<span class="story-ad-chip">إعلان${story.advertiser_name ? `: ${escapeHtml(story.advertiser_name)}` : ''}</span>` : ''}
             <span>${expires === null ? 'بلا انتهاء' : `تنتهي ${new Date(story.expires_at).toLocaleDateString('ar-EG')}`}</span>

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -15,6 +16,7 @@ import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/albums_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
+import 'package:negev_events/screens/story_viewer_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
@@ -33,12 +35,16 @@ NegevApi feedScreenApi({
   Object? eventsBody,
   List<Uri>? requests,
   Object? Function(Uri url)? eventsBodyFor,
+  Object? storiesBody,
 }) {
   final client = MockClient((request) async {
     requests?.add(request.url);
     if (request.url.path.endsWith('/api/stories')) {
       return http.Response(
-        jsonEncode({'success': true, 'stories': <Map<String, dynamic>>[]}),
+        jsonEncode(
+          storiesBody ??
+              {'success': true, 'stories': <Map<String, dynamic>>[]},
+        ),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
@@ -1931,6 +1937,334 @@ void main() {
           isFalse,
           reason: 'اختيار محافظة صريح يُلغي «كل المحافظات» — لا يبقى معلَّقاً بعد التبديل',
         );
+      },
+    );
+  });
+
+  group('موضع ظهور الستوري — الكاروسيل والإعلان بين الكروت (#173)', () {
+    /// ثماني عشرة مناسبة: بالفاصل ٨ يأتي إعلانٌ بعد الثامنة وآخر بعد السادسة
+    /// عشرة، فتصير الكروت ٩ و١٧ في صفحتين مختلفتين عن ترتيبهما في `events` —
+    /// وهذا بالضبط ما يكشفه سقوط أي تأكيد على رقم الصفحة. وبفاصل ٥ يقع
+    /// الإعلانان بعد الخامسة والعاشرة، فيكشفان ثابتاً داخلياً عاد إلى ٨.
+    Map<String, dynamic> eventsBody18() => {
+          'success': true,
+          'events': List<Map<String, dynamic>>.generate(18, (index) {
+            final ordinal = index + 1;
+            return {
+              'id': 300 + ordinal,
+              'title': 'مناسبة رقم $ordinal',
+              'groom_name': 'صاحب $ordinal',
+              'family_clan': 'آل فلان',
+              'town': 'رهط',
+              'location_name': 'قاعة $ordinal',
+              'event_date': '2026-12-01',
+              'poster_url': null,
+              'occasion_type': {
+                'id': 1,
+                'name': 'عرس',
+                'icon': '💍',
+                'color': '#0369a1',
+                'tone': 'festive',
+                'fields': <Map<String, dynamic>>[],
+                'reactions': <String>[],
+              },
+            };
+          }),
+          'pagination': {'page': 1, 'limit': 30, 'total': 18, 'totalPages': 1},
+          'announcements': <Map<String, dynamic>>[],
+        };
+
+    /// الردّ الحقيقي كما يبنيه الخادم بعد #173: `placement` لكل ستوري،
+    /// و`feed_ad_interval` في الردّ نفسه. [interval] يتيح اختبار فاصل غير ٨
+    /// يثبت أن العميل يقرأه من الردّ لا من ثابت داخله.
+    Map<String, dynamic> storiesBody({int interval = 8}) => {
+          'success': true,
+          'feed_ad_interval': interval,
+          'stories': [
+            {'id': 901, 'title': 'ستوري الشريط', 'placement': 'bar'},
+            {
+              'id': 902,
+              'title': 'بانر الكاروسيل',
+              'placement': 'carousel',
+              'target_url': 'https://example.com/carousel',
+              'cta_label': 'تسوّق',
+            },
+            {
+              'id': 903,
+              'title': 'إعلان أول',
+              'placement': 'feed',
+              'is_ad': true,
+              'advertiser_name': 'تاجر أول',
+              'target_url': 'https://example.com/ad1',
+              'cta_label': 'زيارة',
+            },
+            {
+              'id': 904,
+              'title': 'إعلان ثانٍ',
+              'placement': 'feed',
+              'is_ad': true,
+              'advertiser_name': 'تاجر ثانٍ',
+              'target_url': 'https://example.com/ad2',
+              'cta_label': 'زيارة',
+            },
+          ],
+        };
+
+    Future<void> pumpPlacementFeed(
+      WidgetTester tester, {
+      required NegevApi api,
+    }) async {
+      // ٣٦٠×٧٨٠ منطقيّاً: الشريط (٨٢) والكاروسيل (٩٦) يقتطعان من ارتفاع
+      // التغذية، فشاشة اختبارٍ أصغر تُنتج فيضاً لا علاقة له بالمواضع.
+      tester.view.physicalSize = const Size(1080, 2340);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      SharedPreferences.setMockInitialValues({});
+      await pumpFeedScreen(tester, api);
+      // وصول الستوريات والمناسبات معاً قبل أي قفزة: عدد الصفحات يتغيّر معها.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    /// كرت مناسبة بعينه — بالمعرّف لا بالعنوان، فالعنوان يعرضه الكرت بصياغته.
+    Finder cardFor(int id) => find.byWidgetPredicate(
+          (widget) => widget is EventCard && widget.event.id == id,
+        );
+
+    PageController pagerOf(WidgetTester tester) =>
+        tester.widget<PageView>(find.byKey(const Key('feed_pager'))).controller!;
+
+    testWidgets(
+      'الشريط bar وحده، والكاروسيل أعلى التغذية، وإعلان بعد الكرت ٨ و١٦ بالتناوب',
+      (tester) async {
+        final requests = <Uri>[];
+        final api = feedScreenApi(
+          eventsBody: eventsBody18(),
+          storiesBody: storiesBody(),
+          requests: requests,
+        );
+        await pumpPlacementFeed(tester, api: api);
+
+        // 1) الشريط: موضع `bar` وحده — لا بانر كاروسيل ولا إعلان بين الكروت.
+        final strip = find.byKey(const Key('stories_strip'));
+        expect(
+          find.descendant(of: strip, matching: find.text('ستوري الشريط')),
+          findsOneWidget,
+          reason: 'ستوري موضع bar هي وحدها ما يعرضه الشريط',
+        );
+        expect(
+          find.descendant(of: strip, matching: find.text('بانر الكاروسيل')),
+          findsNothing,
+          reason: 'ستوري الكاروسيل لا تُكرَّر في الشريط',
+        );
+        expect(
+          find.descendant(of: strip, matching: find.text('إعلان أول')),
+          findsNothing,
+          reason: 'إعلان «بين الكروت» لا يسكن الشريط',
+        );
+
+        // 2) الكاروسيل: بانر الموضع carousel وحده، وأعلى التغذية نفسها.
+        final carousel = find.byKey(const Key('story_carousel'));
+        expect(carousel, findsOneWidget, reason: 'بانر الكاروسيل يظهر حين تصل ستوريات carousel');
+        expect(
+          find.descendant(of: carousel, matching: find.text('بانر الكاروسيل')),
+          findsOneWidget,
+          reason: 'كاروسيل واحد لستوري carousel الواحدة',
+        );
+        expect(
+          find.descendant(of: carousel, matching: find.text('ستوري الشريط')),
+          findsNothing,
+          reason: 'ستوري الشريط لا تهاجر إلى الكاروسيل',
+        );
+        expect(
+          tester.getTopLeft(carousel).dy,
+          lessThan(tester.getTopLeft(find.byKey(const Key('feed_pager'))).dy),
+          reason: 'الكاروسيل أعلى التغذية لا داخلها ولا تحتها',
+        );
+
+        // 3) الإعلان بعد الثامن: الصفحة ٧ ما زالت الكرت الثامن (رقم ٣٠٨)،
+        // والصفحة ٨ إعلان، والصفحة ٩ الكرت التاسع (٣٠٩).
+        final controller = pagerOf(tester);
+
+        controller.jumpToPage(7);
+        await tester.pumpAndSettle();
+        expect(cardFor(308), findsOneWidget, reason: 'الصفحة ٧ ما زالت الكرت الثامن');
+        expect(find.byKey(const Key('feed_ad_after_8')), findsNothing, reason: 'لا إعلان قبل الكرت الثامن');
+        expect(find.byKey(const Key('feed_ad_after_16')), findsNothing, reason: 'ولا إعلان قبل الكرت الثامن');
+
+        controller.jumpToPage(8);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('feed_ad_after_8')),
+          findsOneWidget,
+          reason: 'الإعلان الأول يأتي بعد الكرت الثامن مباشرةً — الصفحة ٨',
+        );
+        expect(find.text('إعلان أول'), findsOneWidget, reason: 'أول ستوري feed هو أول إعلان بالتناوب');
+        expect(cardFor(309), findsNothing, reason: 'كرت المناسبة التاسعة بعد الإعلان لا قبله');
+
+        controller.jumpToPage(9);
+        await tester.pumpAndSettle();
+        expect(cardFor(309), findsOneWidget, reason: 'الكرت التاسع يلي الإعلان مباشرةً');
+
+        // 4) الإعلان بعد السادس عشر، وستوري feed الثاني فيها بالتناوب.
+        controller.jumpToPage(16);
+        await tester.pumpAndSettle();
+        expect(cardFor(316), findsOneWidget, reason: 'الصفحة ١٦ الكرت السادس عشر');
+
+        controller.jumpToPage(17);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('feed_ad_after_16')),
+          findsOneWidget,
+          reason: 'الإعلان الثاني بعد الكرت السادس عشر',
+        );
+        expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب: الستوري الثاني هو الإعلان الثاني');
+
+        controller.jumpToPage(18);
+        await tester.pumpAndSettle();
+        expect(cardFor(317), findsOneWidget, reason: 'الكرت السابع عشر يلي الإعلان الثاني');
+      },
+    );
+
+    testWidgets(
+      'المشاهدة والنقر من الكاروسيل ومن الإعلان بين الكروت: كلٌّ يفتح العارض ويسجّل مشاهدة ونقرة',
+      (tester) async {
+        final launched = <MethodCall>[];
+        const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(launcherChannel, (call) async {
+          launched.add(call);
+          return true;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(launcherChannel, null);
+        });
+
+        final requests = <Uri>[];
+        final api = feedScreenApi(
+          eventsBody: eventsBody18(),
+          storiesBody: storiesBody(),
+          requests: requests,
+        );
+        await pumpPlacementFeed(tester, api: api);
+
+        List<Uri> clicksTo(int storyId) =>
+            requests.where((uri) => uri.path == '/api/stories/$storyId/click').toList();
+        List<Uri> viewsTo(int storyId) =>
+            requests.where((uri) => uri.path == '/api/stories/$storyId/view').toList();
+
+        // 1) الكاروسيل: البانر يفتح العارض — وهو من يسجّل المشاهدة بعد ثانيتين.
+        await tester.tap(find.byKey(const Key('story_carousel_media_902')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(
+          find.byType(StoryViewerScreen),
+          findsOneWidget,
+          reason: 'بانر الكاروسيل يفتح العارض — مسار المشاهدة نفسه لا نسخة ثانية',
+        );
+        // ثانيتا العرض عتبة المشاهدة (`_watchedThresholdMs`) — عبورها هنا هو
+        // ما يثبت أن الفتح من الكاروسيل يصل `story_views` لا أنه فتح شكلي.
+        await tester.pump(const Duration(milliseconds: 2100));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 10));
+        expect(
+          viewsTo(902),
+          hasLength(1),
+          reason: 'المشاهدة من الكاروسيل تُسجَّل بالمسار نفسه بعد ثانيتين',
+        );
+        Navigator.of(tester.element(find.byType(StoryViewerScreen))).pop();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        // 2) وزرّه يسجّل النقرة ثم يفتح الرابط نفسه.
+        await tester.tap(find.byKey(const Key('story_carousel_cta_902')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(clicksTo(902), hasLength(1), reason: 'النقرة من الكاروسيل تصل story_clicks');
+        expect(
+          launched.where((call) => call.method == 'launch'),
+          isNotEmpty,
+          reason: 'وزرّ الكاروسيل يفتح الرابط في تطبيق خارجي',
+        );
+
+        // 3) الإعلان بين الكروت: الصورة تفتح العارض…
+        pagerOf(tester).jumpToPage(8);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('feed_ad_media_903')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(
+          find.byType(StoryViewerScreen),
+          findsOneWidget,
+          reason: 'صورة الإعلان تفتح العارض — مسار المشاهدة نفسه',
+        );
+        await tester.pump(const Duration(milliseconds: 2100));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 10));
+        expect(
+          viewsTo(903),
+          hasLength(1),
+          reason: 'المشاهدة من بطاقة الإعلان بين الكروت تُسجَّل بالمسار نفسه',
+        );
+        Navigator.of(tester.element(find.byType(StoryViewerScreen))).pop();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        // 4) …وزرّه يسجّل النقرة من موضعه لا من الشريط.
+        await tester.tap(find.byKey(const Key('feed_ad_cta_903')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(clicksTo(903), hasLength(1), reason: 'النقرة من بطاقة الإعلان تصل story_clicks');
+      },
+    );
+
+    testWidgets(
+      'فاصل الخادم: feed_ad_interval 5 يضع أول إعلان بعد الكرت الخامس لا الثامن',
+      (tester) async {
+        final api = feedScreenApi(
+          eventsBody: eventsBody18(),
+          storiesBody: storiesBody(interval: 5),
+        );
+        await pumpPlacementFeed(tester, api: api);
+
+        final controller = pagerOf(tester);
+
+        controller.jumpToPage(4);
+        await tester.pumpAndSettle();
+        expect(cardFor(305), findsOneWidget, reason: 'الصفحة ٤ ما زالت الكرت الخامس');
+        expect(find.byKey(const Key('feed_ad_after_5')), findsNothing,
+            reason: 'لا إعلان قبل الكرت الخامس');
+
+        // لو بقي الثابت 8 في العميل لكانت هذه الصفحة الكرت السادس ولا إعلان
+        // فيها — فسقوط هذا التأكيد هو ما يثبت أن الفاصل قُرئ من الردّ.
+        controller.jumpToPage(5);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('feed_ad_after_5')),
+          findsOneWidget,
+          reason: 'الفاصل من الخادم: أول إعلان بعد الكرت الخامس حين يقول 5',
+        );
+        expect(find.text('إعلان أول'), findsOneWidget, reason: 'أول ستوري feed هو أول إعلان');
+
+        controller.jumpToPage(6);
+        await tester.pumpAndSettle();
+        expect(cardFor(306), findsOneWidget, reason: 'الكرت السادس يلي الإعلان مباشرةً');
+
+        // ولا إعلان بعد الثامن: الصفحة ٨ الكرت الثامن نفسه — تأكيد يسقط لو
+        // عاد العميل إلى فاصل 8.
+        controller.jumpToPage(8);
+        await tester.pumpAndSettle();
+        expect(cardFor(308), findsOneWidget, reason: 'الصفحة ٨ الكرت الثامن مع فاصل 5');
+        expect(find.byKey(const Key('feed_ad_after_8')), findsNothing,
+            reason: 'لا إعلان بعد الكرت الثامن: الفاصل من الخادم 5 لا 8');
+
+        controller.jumpToPage(11);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('feed_ad_after_10')), findsOneWidget,
+            reason: 'الإعلان التالي بعد الكرت العاشر — الصفحة ١١ مع فاصل 5');
+        expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب بين ستوريات feed مستمر');
       },
     );
   });

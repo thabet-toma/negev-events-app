@@ -13,6 +13,45 @@ import '../widgets/congratulations.dart' show openSignInGate;
 /// مدة عرض الشريحة نفسها تأتي من `Story.slideDurationSeconds` (من الخادم).
 const int _watchedThresholdMs = 2000;
 
+/// تسمية زرّ الستوري: تسمية الستوديو، أو «زيارة» للإعلان و«شاهد الفيديو» لغيره.
+/// مشتركة بين العارض وكاروسيل البانرات وبطاقة الإعلان بين الكروت: تسمية واحدة
+/// لكل موضع، فلا يختلف نصّ الزرّ عن موضعه (تذكرة #173).
+String storyCtaLabel(Story story) {
+  final label = story.ctaLabel?.trim() ?? '';
+  if (label.isNotEmpty) return label;
+  return story.isAd ? 'زيارة' : 'شاهد الفيديو';
+}
+
+/// يسجّل نقرة الستوري ثم يفتح رابطها في تطبيق خارجي — يُستدعى من العارض ومن
+/// بطاقة الإعلان بين الكروت ومن كاروسيل البانرات، فالنقرة تُقاس من المواضع
+/// الثلاثة ولا تُنسى في موضع (تذكرة #173).
+Future<void> openStoryTarget(BuildContext context, Story story) async {
+  final url = story.targetUrl;
+  if (url == null || url.isEmpty) return;
+
+  // الخادم يرفض غير http(s) منذ ADR-0010، لكن APK منشوراً قد يحمل صفّاً
+  // قديماً؛ لا نسلّم `launchUrl` أي مخطّط آخر (javascript:/file:/intent:).
+  final uri = Uri.tryParse(url);
+  final isHttp = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
+  if (!isHttp) {
+    if (context.mounted) showMessage(context, 'رابط الوجهة غير صالح', isError: true);
+    return;
+  }
+
+  try {
+    final deviceId = await DeviceIdStore.get();
+    if (!context.mounted) return;
+    await AppServices.of(context).api.clickStory(story.id, deviceId: deviceId);
+  } catch (_) {
+    // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه.
+  }
+
+  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!launched && context.mounted) {
+    showMessage(context, 'تعذّر فتح الرابط', isError: true);
+  }
+}
+
 /// عارض ستوري ملء الشاشة — يُفتح من أي حلقة في شريط الستوريات
 /// (`_StoriesStrip` في `events_screen.dart`)، ويبدأ من الحلقة المنقورة.
 ///
@@ -129,32 +168,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
-  Future<void> _openTarget(Story story) async {
-    final url = story.targetUrl;
-    if (url == null || url.isEmpty) return;
-
-    // الخادم يرفض غير http(s) منذ ADR-0010، لكن APK منشوراً قد يحمل صفّاً
-    // قديماً؛ لا نسلّم `launchUrl` أي مخطّط آخر (javascript:/file:/intent:).
-    final uri = Uri.tryParse(url);
-    final isHttp = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isHttp) {
-      if (mounted) showMessage(context, 'رابط الوجهة غير صالح', isError: true);
-      return;
-    }
-
-    try {
-      final deviceId = await DeviceIdStore.get();
-      if (!mounted) return;
-      await AppServices.of(context).api.clickStory(story.id, deviceId: deviceId);
-    } catch (_) {
-      // فشل تسجيل النقرة لا يمنع فتح الرابط نفسه.
-    }
-
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      showMessage(context, 'تعذّر فتح الرابط', isError: true);
-    }
-  }
+  Future<void> _openTarget(Story story) => openStoryTarget(context, story);
 
   String _platformLabel(String? platform) {
     switch (platform) {
@@ -169,12 +183,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       default:
         return 'فيديو';
     }
-  }
-
-  String _ctaLabel(Story story) {
-    final label = story.ctaLabel?.trim() ?? '';
-    if (label.isNotEmpty) return label;
-    return story.isAd ? 'زيارة' : 'شاهد الفيديو';
   }
 
   Future<void> _report(Story story) async {
@@ -249,7 +257,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                                   story.targetUrl!.isNotEmpty))
                           ? _StoryActionBar(
                               story: story,
-                              ctaLabel: _ctaLabel(story),
+                              ctaLabel: storyCtaLabel(story),
                               sourceLabel: story.isAd
                                   ? (story.advertiserName ?? '')
                                   : _platformLabel(story.linkPlatform),

@@ -2554,6 +2554,21 @@ const steps = [
         logger.info('[migrations] add-event-featured-until-2026-11: idx_events_featured added.');
       }
     }
+  },
+  {
+    // موضع ظهور الستوري (تذكرة #173): عمود واحد بالقيمة الافتراضية `bar`.
+    // الصفوف القائمة تأخذ الافتراضي نفسه لحظة `ALTER` (‏NOT NULL DEFAULT)، فلا
+    // `UPDATE` ثانٍ ولا مساس بستوري قائم. محروس بـ`columnExists` وحده: تشغيل
+    // ثانٍ لا يعيد الـ`ALTER`، ولا خطوة قائمة في هذا الملف تُعدَّل.
+    name: 'add-story-placement-2026-11',
+    async run(connection) {
+      if (await columnExists(connection, 'stories', 'placement')) return;
+
+      await connection.query(
+        "ALTER TABLE stories ADD COLUMN placement ENUM('bar','carousel','feed') NOT NULL DEFAULT 'bar' AFTER slide_duration_seconds"
+      );
+      logger.info('[migrations] add-story-placement-2026-11: stories.placement added (existing rows: bar).');
+    }
   }
 ];
 
