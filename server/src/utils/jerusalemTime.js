@@ -72,4 +72,23 @@ function jerusalemDateString(date = new Date()) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-module.exports = { ZONE, RUN_HOUR, getZonedParts, zonedTimeToUtc, runInstantForDate, jerusalemDateString };
+/**
+ * The wall-clock date and time `date` reads as in `ZONE`, as
+ * `'YYYY-MM-DD HH:mm:ss'` — the `DATETIME` column shape `NOW()` would have
+ * produced there. That is the value to bind wherever a comparison is against a
+ * column storing this wall clock rather than against an instant: the pool pins
+ * `timezone: 'Z'` while `NOW()` follows the MySQL session's zone, so the two
+ * disagree whenever the container's zone is not `ZONE` (unset `TZ` in
+ * `docker-compose.yml`/`Dockerfile` makes it UTC — two hours off in winter,
+ * three in summer). Built from `getZonedParts` rather than the process zone,
+ * so it is the same clock on the developer's machine and in production.
+ */
+function jerusalemDateTimeString(date = new Date()) {
+  const { year, month, day, hour, minute, second } = getZonedParts(date);
+  const pad = value => String(value).padStart(2, '0');
+  return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)}`;
+}
+
+module.exports = {
+  ZONE, RUN_HOUR, getZonedParts, zonedTimeToUtc, runInstantForDate, jerusalemDateString, jerusalemDateTimeString
+};

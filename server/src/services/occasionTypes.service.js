@@ -176,15 +176,16 @@ async function createType(data) {
          (name, icon, color, position, is_active, creates_collision, warns_others,
           premoderate_messages, show_congratulations_count, show_followers_count,
           show_views_count, congratulations_label, default_badge_title, tone, archive_gallery,
-          rsvp_enabled, show_rsvp_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          rsvp_enabled, show_rsvp_count, feed_linger_days)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.name, data.icon, data.color, data.position, data.is_active ? 1 : 0,
         data.creates_collision ? 1 : 0, data.warns_others ? 1 : 0, data.premoderate_messages ? 1 : 0,
         data.show_congratulations_count ? 1 : 0, data.show_followers_count ? 1 : 0,
         data.show_views_count ? 1 : 0, data.congratulations_label, data.default_badge_title || null,
         data.tone, data.archive_gallery ? 1 : 0,
-        data.rsvp_enabled ? 1 : 0, data.show_rsvp_count ? 1 : 0
+        data.rsvp_enabled ? 1 : 0, data.show_rsvp_count ? 1 : 0,
+        data.feed_linger_days ?? 0
       ]
     );
     const typeId = result.insertId;
@@ -227,7 +228,10 @@ async function updateType(id, data) {
     'premoderate_messages', 'show_congratulations_count', 'show_followers_count',
     'show_views_count', 'congratulations_label', 'default_badge_title',
     'default_poster_url', 'legacy_client_supported', 'tone', 'archive_gallery',
-    'rsvp_enabled', 'show_rsvp_count'
+    'rsvp_enabled', 'show_rsvp_count',
+    // نافذة البقاء في التغذية (تذكرة #167) — عدد صحيح يتحقّق منه المسار، ولا
+    // يدخل `BOOLEAN_COLUMNS` فلا يُحوَّل إلى 0/1.
+    'feed_linger_days'
   ];
 
   await db.transaction(async connection => {

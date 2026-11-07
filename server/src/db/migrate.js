@@ -32,8 +32,18 @@ function splitStatements(sql) {
 async function migrate() {
   const { host, port, user, password, database } = config.db;
 
-  // Connect without a database selected so we can create it.
+  // Connect without a database selected so we can create it. The absence of
+  // the occasion-types table before schema.sql is migration context, not a
+  // guess from application data: it recognizes a new install even when a
+  // container pre-created the empty database, without overwriting an existing
+  // administrator's explicit zero.
   const bootstrap = await mysql.createConnection({ host, port, user, password, charset: 'utf8mb4' });
+  const [existingTypeTables] = await bootstrap.execute(
+    `SELECT TABLE_NAME FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+    [database, 'occasion_types']
+  );
+  const freshInstall = existingTypeTables.length === 0;
   await bootstrap.query(
     `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
   );
@@ -49,7 +59,7 @@ async function migrate() {
   logger.info(`Schema applied — ${statements.length} statement(s) executed.`);
 
   for (const step of dataMigrations) {
-    await step.run(connection);
+    await step.run(connection, { freshInstall });
   }
 
   await connection.end();

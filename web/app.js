@@ -2496,9 +2496,15 @@ function renderSingleEventCardHtml(evt, opts = {}) {
     <img src="${escapeHtml(cardImageUrl(evt.poster_url))}" alt="${escapeHtml(evt.title)}" class="card-media-img" loading="lazy">` : `
     <div class="card-media-placeholder"><i class="fa-solid ${isMourning ? 'fa-dove' : 'fa-champagne-glasses'}"></i></div>`;
 
+  // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد الأيام كاملاً
+  // (`is_ended` على الصفّ) لا العميل. تُحلّ محلّ شريحة العدّاد فلا يقول الكرت
+  // «مناسبة سابقة» و«انتهت» معاً، وتبقى بنفس لغة الشريحة (نفس الصنف) بنبرة
+  // خافتة. ولا تظهر لمناسبة قائمة: `is_ended` غير مرسل ⇒ لا شيء.
+  const endedChipHtml = evt.is_ended ? '<span class="card-datechip is-ended">انتهت</span>' : '';
+
   // «غداً» كبسولة حمراء وحدها (تذكرة #170): يوم الغد هو ما يحرّك الناس فعلاً،
   // ولونه يفصلها عن شارة «باقي N أيام» الخضراء. والعزاء بلا أي شارة.
-  const countdownChipHtml = isMourning || !countdownText ? '' : `
+  const countdownChipHtml = isMourning || evt.is_ended || !countdownText ? '' : `
         <span class="card-datechip${diffDays === 1 ? ' card-datechip-tomorrow' : ''}">${escapeHtml(countdownText)}</span>`;
 
   // سطر لكل معلومة بأيقونتها — لا سطر واحد تُحشر فيه كلها بفواصل (طلب المالك
@@ -2557,7 +2563,7 @@ function renderSingleEventCardHtml(evt, opts = {}) {
     <div class="card-caption">
       <div class="card-caption-chips">
         <span class="card-kindchip">${occasionTypeBadgeHtml(evt.occasion_type)}</span>
-        ${countdownChipHtml}
+        ${endedChipHtml}${countdownChipHtml}
       </div>
       <h2 class="event-main-title card-clamp-2-line"><a href="/e/${evt.id}" class="card-title-link" onclick="handleCardTitleClick(event, ${evt.id})">${escapeHtml(eventCardHeadline(evt))}</a></h2>
       ${subtitleHtml}
@@ -8279,6 +8285,11 @@ async function handleEventSubmit(e) {
   const visibilitySelect = document.getElementById('addVisibility');
   formData.append('visibility', (visibilitySelect && visibilitySelect.value) || 'public');
 
+  // موعد النشر المجدول (#167): يُرسَل فقط إن مُلئ — وغيابه «بلا جدولة»، نفس ما
+  // يرسله كل عميل منشور اليوم. والخادم يرفض الماضي بـ400 عربية.
+  const publishAtInput = document.getElementById('addPublishAt');
+  if (publishAtInput && publishAtInput.value) formData.append('publish_at', publishAtInput.value);
+
   const latInput = document.getElementById('addLat');
   const lngInput = document.getElementById('addLng');
   if (latInput && latInput.value) formData.append('latitude', latInput.value);
@@ -8677,6 +8688,19 @@ function handleEditTownChange() {
   updateEditRegionGroupVisibility();
 }
 
+/**
+ * قيمة `<input type="datetime-local">` من `publish_at` كما يعيده الخادم (#167).
+ * الخادم يقرأ عمود `DATETIME` بتوقيت غرينتش (`pool.js`: `timezone: 'Z'`)، فالجزء
+ * الأول من ISO هو ساعة الحائط التي كتبها صاحب المناسبة — لا تُحوَّل إلى توقيت
+ * المتصفّح. و`null`/الفارغ يعني «بلا جدولة» فيبقى الحقل فارغاً.
+ */
+function publishAtInputValue(stored) {
+  if (!stored) return '';
+  const date = new Date(stored);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 16);
+}
+
 function openEditEventModal(eventId) {
   const evt = myEventsCache.find(e => e.id === eventId);
   if (!evt) return;
@@ -8702,6 +8726,8 @@ function openEditEventModal(eventId) {
   // ظهور المناسبة (#166): القيمة من الصفّ نفسه؛ غيابها (خادم أقدم) تعني «عامة»
   // كالافتراض، فلا يظهر الخيار مختاراً بالخطأ على مناسبة ظاهرة.
   document.getElementById('editVisibility').value = evt.visibility === 'link_only' ? 'link_only' : 'public';
+  // موعد النشر المجدول (#167): القيمة من الصفّ نفسه — و`''` يعني «بلا جدولة».
+  document.getElementById('editPublishAt').value = publishAtInputValue(evt.publish_at);
 
   const honoreesList = document.getElementById('editHonoreesList');
   honoreesList.innerHTML = '';
@@ -8747,6 +8773,13 @@ async function handleEventEditSubmit(e) {
     visibility: document.getElementById('editVisibility').value,
     honorees
   };
+
+  // موعد النشر المجدول (#167): يُرسَل فقط حين يحمل الحقل قيمة. القيمة المخزَّنة
+  // تصل الحقل مُعبَّأة، فإرسالها كما هي يعني «بلا تعديل» (والخادم يقبلها ولو
+  // حلّ موعدها)، ومسح الحقل لا يُنشر المناسبة فوراً ولا يلغي الجدولة — يُبقيها
+  // كما هي، لأن غياب المفتاح هو «بلا تعديل» في كل عميل منشور.
+  const editPublishAt = document.getElementById('editPublishAt').value;
+  if (editPublishAt) payload.publish_at = editPublishAt;
 
   // المحافظة (#124): لا تُرسَل إلا إن غيّرها المستخدم صراحةً — الخادم يقبلها
   // اختيارية ويشتقّها من البلدة/القرية عند غيابها (#120)، فإرسالها بلا تغيير

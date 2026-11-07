@@ -2442,6 +2442,8 @@ function openOccasionTypeForm(id) {
   // تأكيد الحضور (تذكرة #168) — مطفأ عند الإنشاء كالأرشيف، والعدّاد مفتوح افتراضاً.
   document.getElementById('otRsvpEnabled').checked = type ? Boolean(type.rsvp_enabled) : false;
   document.getElementById('otShowRsvpCount').checked = type ? Boolean(type.show_rsvp_count) : true;
+  // نافذة البقاء في التغذية (#167) — رقم 0..30، افتراضه 0 عند الإنشاء.
+  document.getElementById('otFeedLingerDays').value = type ? (Number(type.feed_linger_days) || 0) : 0;
   // يبدأ مطفأً عمداً عند الإنشاء — لا يظهر على أي تطبيق منشور اليوم إلا بعد
   // إصدار نسخة تدعمه، ولا يُقلَب هنا تلقائياً حتى عند التعديل.
   document.getElementById('otLegacySupported').checked = type ? Boolean(type.legacy_client_supported) : false;
@@ -2570,6 +2572,8 @@ async function handleOccasionTypeSubmit(e) {
     rsvp_enabled: document.getElementById('otRsvpEnabled').checked,
     show_rsvp_count: document.getElementById('otShowRsvpCount').checked,
     legacy_client_supported: document.getElementById('otLegacySupported').checked,
+    // نافذة البقاء في التغذية (#167) — الخادم يرفض ما ليس عدداً صحيحاً 0..30.
+    feed_linger_days: parseInt(document.getElementById('otFeedLingerDays').value, 10) || 0,
     fields,
     reactions: collectOccasionTypeReactions()
   };

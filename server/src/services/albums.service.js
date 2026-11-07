@@ -50,6 +50,16 @@ function publicEventVisibleSql() {
   return require('./events.service').PUBLIC_EVENT_VISIBLE_SQL_E;
 }
 
+/**
+ * قيمة `?` الواحدة في قطعة الظهور المشتركة (`publish_at <= ?`) — **ساعة القدس**
+ * نفسها التي تُمرَّر في `events.service.js`، لا `NOW()` ولا ساعة الجلسة. كل
+ * مستدعٍ لـ`publicEventVisibleSql()`/`publicAlbumConditions()` يقرنها بموضع
+ * الـ`?`: أول `params` حيث تبدأ القطعة الشرط، وآخرها حيث تُضاف القطعة في الذيل.
+ */
+function publishGateParam() {
+  return require('./events.service').publishNowClock();
+}
+
 function escapeLike(term) {
   return require('./events.service').escapeLike(term);
 }
@@ -351,7 +361,8 @@ async function tagsForPhotos(photoIds, { approvedOnly = true } = {}) {
 
 async function listPublicAlbums({ search = null, eventId = null, page = 1, limit = 24, regionId = null } = {}) {
   const conditions = publicAlbumConditions();
-  const params = [];
+  // قطعة الظهور أول `?` في `conditions`، فساعة القدس أول `params`.
+  const params = [publishGateParam()];
   const region = albumRegionCondition(regionId);
   if (region.clause) {
     conditions.push(region.clause);
@@ -400,7 +411,7 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
   const albumRow = await db.queryOne(
     `${albumRowSelect()}
       WHERE al.id = ? AND ${conditions.join(' AND ')}`,
-    [albumId]
+    [albumId, publishGateParam()]
   );
   if (!albumRow) throw ApiError.notFound('الألبوم غير موجود');
 
@@ -416,7 +427,8 @@ async function getPublicAlbum(albumId, { page = 1, limit = 24, search = null } =
 
 async function listPublicPhotos({ search = null, albumId = null, person = null, personId = null, mineUserId = null, page = 1, limit = 24, regionId = null } = {}) {
   const conditions = [...publicAlbumConditions(), "p.status = 'approved'"];
-  const params = [];
+  // ساعة القدس أول `?` في `conditions` (قطعة الظهور) — قبل شرط المحافظة والصورة.
+  const params = [publishGateParam()];
   // شرط المحافظة يُضاف هنا لا داخل `publicAlbumConditions()`: الصورة تتبع
   // ألبومها في الاكتشاف، لكن `getPublicPhoto` وصفحة الشخص يقرآنها بالمعرّف.
   const region = albumRegionCondition(regionId);
@@ -498,7 +510,7 @@ async function getPublicPhoto(photoId) {
        LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.id = ? AND p.status = 'approved' AND ${publicAlbumConditions().join(' AND ')}`,
-    [photoId]
+    [photoId, publishGateParam()]
   );
   if (!row) throw ApiError.notFound('الصورة غير موجودة');
 
@@ -512,6 +524,10 @@ async function searchPeople(search, limit = 12) {
   if (!nameKey(search)) return [];
   const key = `%${escapeLike(nameKey(search))}%`;
   const gates = publicAlbumConditions().join(' AND ');
+  // القطعة تحمل `?` واحداً، وهي هنا في **موضعين**: داخل `gates` (عمود
+  // `photos_count`) وداخل `publicEventConditions()` (عمود `albums_count`) —
+  // فيُمرَّر الثابت نفسه مرّتين، بقيمة واحدة كي لا تفترق الساعتان بين العمودين.
+  const clock = publishGateParam();
 
   // من `people` لا من تجميع نصوص الوسوم (ADR-0011): فحسابٌ سجّل يظهر باسمه،
   // وصاحب المناسبة يظهر ولو لم يُوسم، والاسم الواحد لا يتفرّق على صيغ إملائية.
@@ -537,7 +553,8 @@ async function searchPeople(search, limit = 12) {
       HAVING photos_count > 0 OR albums_count > 0
       ORDER BY (photos_count + albums_count) DESC, p.name ASC
       LIMIT ?`,
-    [key, limit]
+    // ساعة القدس لموضعَي القطعة، ثم شرط الاسم والحدّ.
+    [clock, clock, key, limit]
   );
   if (!rows.length) return [];
 
@@ -552,7 +569,8 @@ async function searchPeople(search, limit = 12) {
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE t.status = 'approved' AND t.person_id IN (${placeholders}) AND ${gates}
       ORDER BY ph.id ASC`,
-    ids
+    // قطعة الظهور في `gates` آخر `?` في العبارة — بعد المعرّفات.
+    [...ids, clock]
   );
   const firstPhoto = new Map();
   for (const sample of samples) {
@@ -595,7 +613,7 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
                          WHERE h.event_id = al.event_id AND h.person_id = ?))
         AND ${publicAlbumConditions().join(' AND ')} AND ${PUBLIC_MEDIA_EXISTS}
       ORDER BY COALESCE(e.event_date, DATE(al.created_at)) DESC, al.id DESC`,
-    [personId, personId]
+    [personId, personId, publishGateParam()]
   );
 
   const occasions = await db.query(
@@ -605,7 +623,7 @@ async function getPublicPerson(personId, { page = 1, limit = 48 } = {}) {
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE h.person_id = ? AND ${publicEventConditions().join(' AND ')}
       ORDER BY e.event_date DESC`,
-    [personId]
+    [personId, publishGateParam()]
   );
 
   // لا شيء ظاهر ⇒ الشخص غير موجود، بنفس الردّ الذي يردّه لمن يعدّ المعرّفات.
@@ -1273,7 +1291,7 @@ async function getPublicVideo(videoId) {
   const albumRow = await db.queryOne(
     `${albumRowSelect()}
       WHERE al.id = ? AND ${publicAlbumConditions().join(' AND ')}`,
-    [videoRow.album_id]
+    [videoRow.album_id, publishGateParam()]
   );
   if (!albumRow) throw ApiError.notFound('الفيديو غير موجود');
 
@@ -1375,7 +1393,7 @@ async function assertPhotoVisible(photoId) {
        LEFT JOIN events e ON e.id = al.event_id
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE p.id = ? AND p.status = 'approved' AND ${publicAlbumConditions().join(' AND ')}`,
-    [photoId]
+    [photoId, publishGateParam()]
   );
   if (!row) throw ApiError.notFound('الصورة غير موجودة');
   return row;

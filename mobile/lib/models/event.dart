@@ -69,6 +69,17 @@ class Event {
   /// العامة لا تحمل إلا العامة أصلاً، وغياب المفتاح يعني «عامة» كافتراض الخادم.
   final EventVisibility visibility;
 
+  /// «انتهت» (تذكرة #167) — يصل من التغذية وحدها (`is_ended` على الصفّ،
+  /// محسوباً بامتداد أيام المناسبة كلها في القاعدة)، وغيابه في التفاصيل أو من
+  /// خادم أقدم يعني `false` فلا شارة.
+  final bool isEnded;
+
+  /// موعد النشر المجدول (تذكرة #167) — `null` يعني «يُنشر فور اعتماده».
+  /// يصل من الصفّ الكامل وحده (`GET /api/my-events`)، وهو **ساعة الحائط** التي
+  /// كتبها صاحب المناسبة: الخادم يقرأ عمود `DATETIME` بتوقيت غرينتش، فتُقرأ
+  /// حقوله بتوقيت UTC لا محلّياً (`formatPublishAt` في شاشة النشر).
+  final DateTime? publishAt;
+
   /// حقلا الفنان — من `OCCASION_FIELDS`، ظاهران فقط لنوع يُشعلهما. غيابهما
   /// يعني عدم ظهورهما على الكرت والتفاصيل، لا نصّاً بديلاً.
   final String? artistName;
@@ -135,6 +146,8 @@ class Event {
     this.requestedVillageName,
     this.regionId,
     this.visibility = EventVisibility.public,
+    this.isEnded = false,
+    this.publishAt,
     this.artistName,
     this.artistImageUrl,
     this.viewsCount = 0,
@@ -200,6 +213,8 @@ class Event {
         villageName: villageName,
         requestedVillageName: requestedVillageName,
         visibility: visibility,
+        isEnded: isEnded,
+        publishAt: publishAt,
         artistName: artistName,
         artistImageUrl: artistImageUrl,
         viewsCount: viewsCount,
@@ -348,6 +363,10 @@ class Event {
       requestedVillageName: _nullableString(json['requested_village_name']),
       regionId: json['region_id'] == null ? null : _toInt(json['region_id']),
       visibility: EventVisibility.fromWire(json['visibility']),
+      // «انتهت» (تذكرة #167): الخادم يرسلها `true` في التغذية وحدها؛ و1/0 من
+      // خادم أقدم تُقرأ كما هي، والغياب `false`.
+      isEnded: json['is_ended'] == true || json['is_ended'] == 1 || json['is_ended'] == '1',
+      publishAt: _toPublishWallClock(json['publish_at']),
       artistName: _nullableString(json['artist_name']),
       artistImageUrl: _nullableString(json['artist_image_url']),
       viewsCount: _toInt(json['views_count']),
@@ -1055,4 +1074,15 @@ String _toDate(dynamic value) {
   final month = parsed.month.toString().padLeft(2, '0');
   final day = parsed.day.toString().padLeft(2, '0');
   return '${parsed.year}-$month-$day';
+}
+
+/// موعد النشر المجدول (تذكرة #167) كـ**ساعة حائط**: الخادم يقرأ عمود `DATETIME`
+/// بتوقيت غرينتش (`pool.js`: `timezone: 'Z'`)، فيصل `publish_at` بصيغة ISO
+/// تنتهي بـ`Z` وحقوله هي ما كتبه صاحب المناسبة. تُقرأ إلى UTC كي تبقى حقولها
+/// (`hour`/`minute`) هي التي تُعرض وتُرسَل، ولا يزحزحها توقيت الجهاز.
+DateTime? _toPublishWallClock(dynamic value) {
+  final text = '${value ?? ''}'.trim();
+  if (text.isEmpty) return null;
+  final parsed = DateTime.tryParse(text);
+  return parsed?.toUtc();
 }

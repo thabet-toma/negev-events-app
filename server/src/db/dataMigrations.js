@@ -2392,6 +2392,60 @@ const steps = [
     }
   },
   {
+    // جدولة النشر ونافذة البقاء (تذكرة #167): ثلاثة أعمدة، ثم تعبئة أولية واحدة.
+    //
+    // الأعمدة تُضاف داخل حرّاسها فإعادة التشغيل لا تُسقط الترحيل، ولا تعبئة
+    // صفوف لها: `DEFAULT NULL`/`DEFAULT 0` يكتبهما MySQL نفسه على كل صفّ قائم
+    // لحظة الإضافة. و`announced_at` يبقى NULL في كل صفّ قائم **عمداً**: المجدول
+    // لا يقرأ إلا ما له `publish_at` غير فارغ، فلا إعلان بأثر رجعي لمناسبة
+    // قديمة، ولا حاجة إلى تعبئة.
+    //
+    // نافذة «نجاح» 7 أيام تُملأ حين يصل العمود إلى قاعدة قديمة، أو لتثبيت
+    // جديد لم يكن فيه جدول الأنواع قبل تطبيق المخطط. أمّا عمود موجود في قاعدة
+    // قائمة فلا يُملأ: صيغة هذه الخطوة الأولى (`e1771e1`) لم تكتب علَماً، فلا
+    // تمييز في البيانات وحدها بين ترقية اختار فيها السوبر أدمن صفراً وتثبيت
+    // جديد. `migrate.js` يمرّر وجود جدول الأنواع قبل تطبيق المخطط؛ نفضّل حماية
+    // الصفر في كل قاعدة قائمة، ولا نملأ 7 فيها إلا إذا أضفنا العمود نحن الآن.
+    name: 'add-scheduled-publish-and-feed-linger-2026-11',
+    async run(connection, { freshInstall = false } = {}) {
+      if (!(await columnExists(connection, 'events', 'publish_at'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN publish_at DATETIME NULL DEFAULT NULL AFTER first_approved_at'
+        );
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: events.publish_at added.');
+      }
+      if (!(await columnExists(connection, 'events', 'announced_at'))) {
+        await connection.execute(
+          'ALTER TABLE events ADD COLUMN announced_at DATETIME NULL DEFAULT NULL AFTER publish_at'
+        );
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: events.announced_at added.');
+      }
+      let feedLingerAdded = false;
+      if (!(await columnExists(connection, 'occasion_types', 'feed_linger_days'))) {
+        await connection.execute(
+          'ALTER TABLE occasion_types ADD COLUMN feed_linger_days INT NOT NULL DEFAULT 0 AFTER archive_gallery'
+        );
+        feedLingerAdded = true;
+        logger.info('[migrations] add-scheduled-publish-and-feed-linger-2026-11: occasion_types.feed_linger_days added.');
+      }
+
+      if (feedLingerAdded || freshInstall) {
+        const [celebrations] = await connection.execute(
+          "UPDATE occasion_types SET feed_linger_days = 7 WHERE name = 'نجاح' AND feed_linger_days = 0"
+        );
+        logger.info(
+          '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
+          + `${celebrations.affectedRows} «نجاح» type(s) given a 7-day feed window.`
+        );
+      } else {
+        logger.info(
+          '[migrations] add-scheduled-publish-and-feed-linger-2026-11: ensured columns; '
+          + 'existing feed window left untouched.'
+        );
+      }
+    }
+  },
+  {
     // الرسائل الجاهزة لكل نوع مناسبة (تذكرة #170، المواصفة #156 — المرحلة ٢).
     //
     // **آمنة للتكرار بذاتها:** الجدول داخل `tableExists` (schema.sql ينشئه

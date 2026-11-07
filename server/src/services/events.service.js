@@ -14,6 +14,7 @@ const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_D
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 const { nameKey, nameTokens, comparePersonNames } = require('../utils/arabicName');
+const { jerusalemDateTimeString } = require('../utils/jerusalemTime');
 
 const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [type]: 0 }), {});
 
@@ -73,11 +74,23 @@ const EVENT_SPAN_START_SQL_E =
 
 /**
  * شرط «مناسبة ظاهرة للعامة» — **القطعة الواحدة** التي تكتبها كل قراءة قائمة
- * عامة بدل نسختها اليدوية، والموضع الوحيد لشرط الظهور في **قراءات القوائم**،
- * وفيه ستضيف #167 («النشر المجدول») شرطها الواحد بدل تعديل كل موضع. نصفاها
- * اليوم `approved` (تذكرة #165) و`visibility = 'public'` (تذكرة #166): مناسبة
- * «بالرابط فقط» تغيب بهاتين الكلمتين عن كل قراءة تمرّ بها، بلا شرط ظهور ثانٍ
- * في أي استعلام.
+ * عامة بدل نسختها اليدوية، والموضع الوحيد لشرط الظهور في **قراءات القوائم**.
+ * أثلاثها اليوم `approved` (تذكرة #165) و`visibility = 'public'` (تذكرة #166)
+ * و`(publish_at IS NULL OR publish_at <= ?)` (تذكرة #167، النشر المجدول):
+ * مناسبة «بالرابط فقط» تغيب بهاتين الكلمتين عن كل قراءة تمرّ بها، ومناسبة
+ * جدول صاحبها نشرها تغيب بالثلث الثالث حتى يبلغ موعدها — ولا نسخة ثانية من
+ * الشرط في أي **استعلام قائمة** (وبوابات الصفّ الواحد تحته مستثناة صراحةً).
+ * والثلث الثالث لا يمسّ `status` ولا `visibility`: يُضاف إليها كشرط رابع،
+ * فمناسبة مجدولة تبقى معتمدة وعامة في الصفّ نفسه، غائبةً عن القوائم وحدها حتى
+ * موعدها.
+ *
+ * **وساعة المقارنة تُمرَّر مُعامَلةً** (`publishNowClock()`، وتُقرن بهذا الموضع
+ * من `params` عند كل مستدعٍ): `publish_at` عمود `DATETIME` يحمل ساعة الحائط
+ * التي كتبها صاحب المناسبة في القدس، بلا منطقة محفوظة معه. ومقارنته بـ`NOW()`
+ * تقارنه بساعة **جلسة MySQL** — وحاوية الإنتاج بلا `TZ` فجلستها UTC، فتظهر
+ * المجدولةُ ويُعلَن عنها متأخّرةً ساعتين شتاءً وثلاثاً صيفاً. و`publishNowClock()`
+ * يقرأ «الآن» بساعة القدس في JS (`getZonedParts`)، فلا يختلف الشرط بين عملية
+ * وأخرى ولا بين جلسة وأخرى.
  *
  * **تُستعمل** في كل قراءة قائمة يراها الجمهور بلا حساب: التغذية
  * (`listPublicEvents`)، والخريطة (`listMapPoints`)، والإعلانات الحية
@@ -104,7 +117,14 @@ const EVENT_SPAN_START_SQL_E =
  * (`findPossibleDuplicates` يقارن المعتمدة والمعلّقة معاً، و«بالرابط فقط»
  * معها)، و«قائمتي» الخاصة
  * بالمستخدم (`listMyReminders`)، وتحقق «ذكّرني» الداخلي (`setReminder`)،
- * وعدّاد التبريكات — كلها تقرأ الحالة لسبب آخر لا لبوابة ظهور للجمهور.
+ * وعدّاد التبريكات — كلها تقرأ الحالة لسبب آخر لا لبوابة ظهور للجمهور. ثم
+ * **بوابات الصفّ الواحد للجدولة والإعلان** (تذكرة #167): `publishGateOpen`
+ * (أيُعلن الآن أم ينتظر المجدول؟)، و`listDueScheduledPublish` (ما بلغ موعده ولم
+ * يُعلَن بعد)، و`markAnnounced` (حجز الإعلان ذرّياً داخل معاملة الإعلان) — وهي
+ * تعيد فحص أهلية صفٍّ واحد بنفس الساعة الممرَّرة (`publishNowClock()`) في موضعها
+ * من `params`، لا بشرط ظهور ثانٍ لقراءة قائمة. وهي ليست قراءات قوائم أصلاً:
+ * فالأولى قراءة صفٍّ بمعرّفه، والثانية مسح المجدول، والثالثة `UPDATE` — وشرط
+ * القطعة شرطُ صفّ معروض لقائمة، وهذه بوابات صفٍّ واحد تُشترَط قبل الإعلان.
  *
  * **ومرشّح النسخة (`legacyOnly` / `X-App-Version`) خارجها عمداً:** شرطه يعتمد
  * على **الطلب** لا على الصف — يُبنى من `occasionTypes.getLegacyTypeIds()` وقت
@@ -112,11 +132,56 @@ const EVENT_SPAN_START_SQL_E =
  * الصفّ وحده، فيسري على طلب بلا ترويسة (كل APK قديم) كما على أحدث نسخة، بلا
  * فرع هنا. والنسختان هنا
  * (`_EVENTS` و`_E`) على اصطلاح `EVENT_SPAN_*` نفسه: الأولى لاسم الجدول كاملاً
- * والثانية للمُستعار `e`؛ كلتاهما سلسلة ثابتة بلا قيمة مُدرَجة ولا اسم مُمرَّر
- * (CLAUDE.md: لا دمج نصوص SQL).
+ * والثانية للمُستعار `e`؛ كلتاهما سلسلة ثابتة فيها **موضع `?` واحد** للثلث
+ * الثالث، بلا قيمة مُدرَجة ولا اسم مُمرَّر (CLAUDE.md: لا دمج نصوص SQL) —
+ * ومستدعيها يضع `publishNowClock()` في موضعها من `params`.
  */
-const PUBLIC_EVENT_VISIBLE_SQL_EVENTS = "events.status = 'approved' AND events.visibility = 'public'";
-const PUBLIC_EVENT_VISIBLE_SQL_E = "e.status = 'approved' AND e.visibility = 'public'";
+const PUBLIC_EVENT_VISIBLE_SQL_EVENTS =
+  "events.status = 'approved' AND events.visibility = 'public'"
+  + ' AND (events.publish_at IS NULL OR events.publish_at <= ?)';
+const PUBLIC_EVENT_VISIBLE_SQL_E =
+  "e.status = 'approved' AND e.visibility = 'public'"
+  + ' AND (e.publish_at IS NULL OR e.publish_at <= ?)';
+
+/**
+ * «الآن» بساعة القدس، بصيغة عمود `publish_at` نفسها — القيمة الوحيدة التي
+ * تُمرَّر مكان `?` في **كل** مقارنة لـ`publish_at`: هنا، وفي
+ * `albums.service.js` و`towns.service.js` التي تستعير القطعة أعلاه.
+ *
+ * لا `NOW()` (منطقة جلسة MySQL) ولا `UTC_TIMESTAMP()` (غرينتش) — العمود يحمل
+ * ساعة حائط القدس التي كتبها صاحب المناسبة. وتُحسب لحظةَ النداء لا مرةً عند
+ * التحميل، فشرط الظهور يتقدّم مع الساعة في عملية طويلة العمر.
+ */
+function publishNowClock() {
+  return jerusalemDateTimeString();
+}
+
+/**
+ * حدّ «القادم» في **التغذية وحدها** (تذكرة #167) — نهاية أيام المناسبة
+ * (`EVENT_SPAN_END_SQL_EVENTS`، لا `COALESCE` جديد) تُقارَن باليوم ناقص نافذة
+ * البقاء الخاصة بنوعها: مناسبة «نجاح» تنتهي اليوم تبقى في «القادم» سبعة أيام
+ * وكرتها يقول «انتهت»، والعرس (صفر) يخرج غداً كما كان.
+ *
+ * **ولا تُعمَّم:** الخريطة (`listMapPoints`) والتقويم و«قائمتي» والتذكيرات
+ * و`related`/`sitemap` كلها على حدّها القائم (`span_end >= CURDATE()`)، لأن
+ * «انتهت» كلامُ تغذيةٍ لا خريطةٍ. وهي شرط واحد يُضاف إلى `conditions` في
+ * `listPublicEvents` مكان الحدّ القديم، لا في كل استعلام.
+ *
+ * `DATEDIFF(CURDATE(), span_end) <= linger` هي `span_end >= CURDATE() - linger`
+ * نفسها (و`linger = 0` يعطي الحدّ القديم حرفياً: «لم ينتهِ بعد»)، مكتوبةً بهذا
+ * الاتجاه لأن `feed_linger_days` يأتي من صفّ النوع عبر استعلام فرعي — و`INTERVAL
+ * <استعلام فرعي> DAY` غير مقبول في MySQL، بخلاف طرف مقارنة عادي.
+ *
+ * و`COALESCE(…, 0)` هو نافذة الصفّ **الذي لا نوع له** (صفوف ما قبل الأنواع،
+ * والبذرة والمستوردون الذين يُدرجون بلا `occasion_type_id`): صفر يوم، أي
+ * `span_end >= CURDATE()` حرفياً — فلا بقاء أبديّ. (كان هنا فرع
+ * `occasion_type_id IS NULL` يجعل الشرط صحيحاً دائماً، فما انتهى من تلك
+ * الصفوف لا يخرج من «القادم» أبداً.)
+ */
+const EVENT_FEED_WINDOW_SQL_EVENTS =
+  '(DATEDIFF(CURDATE(), '
+  + EVENT_SPAN_END_SQL_EVENTS
+  + ') <= COALESCE((SELECT ot.feed_linger_days FROM occasion_types ot WHERE ot.id = events.occasion_type_id), 0))';
 
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
@@ -722,7 +787,8 @@ async function listLiveAnnouncements({ legacyOnly = false, regionId = null } = {
     'a.is_current = 1', PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
     `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
-  const params = [];
+  // شرط الظهور أول شرط فيه `?`، فالساعة أول `params` — قبل شرط المحافظة والقائمة.
+  const params = [publishNowClock()];
 
   if (regionId !== null && regionId !== undefined) {
     conditions.push('events.region_id = ?');
@@ -914,7 +980,7 @@ async function listPublicEvents({
   const safePage = Math.max(Number.parseInt(page, 10) || 1, 1);
 
   const conditions = [PUBLIC_EVENT_VISIBLE_SQL_EVENTS];
-  const params = [];
+  const params = [publishNowClock()];
 
   if (regionId !== null && regionId !== undefined) {
     conditions.push('events.region_id = ?');
@@ -933,7 +999,9 @@ async function listPublicEvents({
   } else if (archive) {
     conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()`);
   } else if (upcoming) {
-    conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`);
+    // حدّ «القادم» هنا **وحده** صار نافذة بقاء النوع (تذكرة #167)؛ الخريطة
+    // والتقويم والتذكيرات على `span_end >= CURDATE()` كما هي.
+    conditions.push(EVENT_FEED_WINDOW_SQL_EVENTS);
   }
 
   const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds });
@@ -998,7 +1066,8 @@ async function listPublicEvents({
   // `village_id` merely points at.
   const rows = await db.query(
     `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
-            (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order
+            (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order,
+            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_ended
        FROM events
        LEFT JOIN villages ON villages.id = events.village_id
       WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
@@ -1013,7 +1082,9 @@ async function listPublicEvents({
   ]);
 
   const events = withRelations.map(event => {
-    const shaped = { ...event, reactions: reactionMap[event.id] || EMPTY_REACTIONS() };
+    // «انتهت» (تذكرة #167): الحكم على امتداد أيام المناسبة كاملاً يُحسب في
+    // القاعدة (`EVENT_SPAN_END_SQL_EVENTS`، لا عميل يحسبه) ويصل منطقياً لا 1/0.
+    const shaped = { ...event, reactions: reactionMap[event.id] || EMPTY_REACTIONS(), is_ended: Boolean(event.is_ended) };
 
     // Hidden by type flag, not by name — the counter/preview never appears
     // for an occasion type whose admin turned it off (#20 step 4, decision د).
@@ -1138,7 +1209,7 @@ async function listMapPoints({
     PUBLIC_EVENT_VISIBLE_SQL_EVENTS, 'latitude IS NOT NULL', 'longitude IS NOT NULL',
     `${EVENT_SPAN_END_SQL_EVENTS} >= CURDATE()`
   ];
-  const params = [];
+  const params = [publishNowClock()];
 
   if (regionId !== null && regionId !== undefined) {
     conditions.push('region_id = ?');
@@ -1231,6 +1302,77 @@ function familyClanFor(familyClan, honorees) {
 }
 
 /**
+ * هل فُتح باب النشر المجدول لهذه المناسبة؟ (تذكرة #167) — نفس شرط القطعة
+ * (`PUBLIC_EVENT_VISIBLE_SQL_*`) لكن لصفٍّ واحد، وبنفس ساعة القدس الممرَّرة
+ * مُعامَلةً (`publishNowClock()`)، لا بساعة جلسة MySQL. يستعمله
+ * مسارا الإعلان (النشر الفوري والاعتماد) وحدهما: قرار «أيُعلن الآن أم ينتظر
+ * المجدول» يجب أن يُقرأ من الصفّ لا من حقل يمرّره المستدعي، تماماً كما تُقرأ
+ * المحافظة (`eventRegionId`) والإخفاء (`eventIsLinkOnly`) في
+ * notifications.service.js. صفّ غير موجود ⇒ `false` (لا إعلان عمّا لا وجود له).
+ */
+async function publishGateOpen(eventId) {
+  const row = await db.queryOne(
+    'SELECT (publish_at IS NULL OR publish_at <= ?) AS open_gate FROM events WHERE id = ?',
+    [publishNowClock(), eventId]
+  );
+  return row ? Boolean(row.open_gate) : false;
+}
+
+/**
+ * المناسبات المعتمدة التي بلغ موعد نشرها ولم تُعلَن بعد — قراءة المجدول وحده
+ * (تذكرة #167). شرط `publish_at IS NOT NULL` هو ما يمنع إعلاناً بأثر رجعي: كل
+ * صفّ قائم له `announced_at` فارغ، ولولا هذا الشرط لأعلن المجدول المنصّة كلها
+ * في أول تشغيل له. و`announced_at IS NULL` تعني «لم يكتمل إعلانها» لا «لم
+ * يبدأ»: التعليم يُكتب في معاملة الإعلان نفسها، فصفٌّ فشل إعلانه يعود NULL
+ * وتُعيده الدورة التالية (تصحيح جولة #167).
+ */
+async function listDueScheduledPublish() {
+  return db.query(
+    `SELECT id, title, groom_name, town, event_date, created_by
+       FROM events
+      WHERE status = 'approved' AND publish_at IS NOT NULL AND publish_at <= ?
+        AND announced_at IS NULL
+      ORDER BY id ASC`,
+    [publishNowClock()]
+  );
+}
+
+/**
+ * تعليم المناسبة «أُعلنت» — ذرّي: `UPDATE ... WHERE announced_at IS NULL`
+ * ينجح مرّة واحدة ولو تزامن تشغيلان، فيُعلن أحدهما وحده. يُستعمل اليوم في
+ * موضع واحد: داخل قفل صفّ المناسبة في معاملة `notifications.service.notifyNewEvent`
+ * (تصحيح جولة #167)، فالحجز والإعلان **معاملة واحدة**: يمنع التكرار بين
+ * تشغيلين متزامنين، ويسقط مع صفوف الإشعارات إن فشل الإعلان لأن المعاملة كلها
+ * تتراجع — فلا يبقى `announced_at` معلَّماً على إعلان لم يصل (وهو ما كان
+ * يستبعد الصفّ من كل محاولة تالية)، ولا يُعلَّم صفٌّ أعلنه المسار عند الاعتماد
+ * ثم تغيّر موعده إلى المستقبل.
+ *
+ * يعيد `UPDATE` فحص الأهلية الحالية تحت القفل، لا أهلية دفعة المجدول القديمة:
+ * اعتمادٌ قائم وظهورٌ عام وموعدٌ بلغ (أو NULL للنشر الفوري)، وإلا لا حجز ولا
+ * إعلان. فالتأجيل أو العودة للمراجعة بين الجلب والحجز يتركان الصفّ للمحاولة اللاحقة.
+ *
+ * `connection` اختياري: يُمرَّر داخل معاملة قائمة (mysql2 يرفض `undefined`،
+ * و`eventId` رقم دائم)، ويُستعمل `db` بدونه.
+ * يعيد `true` للمستدعي الذي حجز الصفّ المؤهل فعلاً.
+ */
+async function markAnnounced(eventId, connection = null) {
+  const sql = `UPDATE events SET announced_at = NOW()
+                WHERE id = ? AND announced_at IS NULL
+                  AND status = 'approved' AND visibility = 'public'
+                  AND (publish_at IS NULL OR publish_at <= ?)`;
+  // `announced_at = NOW()` أعلاه ساعة خادم لا تُقارَن بـ`publish_at` (يُفحَص
+  // بـ`IS NULL` وحده)، أما أهلية الموعد فساعة القدس الممرَّرة — والساعتان في
+  // العبارة نفسها: `[eventId, publishNowClock()]`.
+  const params = [eventId, publishNowClock()];
+  if (connection) {
+    const [result] = await connection.execute(sql, params);
+    return result.affectedRows === 1;
+  }
+  const { affectedRows } = await db.execute(sql, params);
+  return affectedRows === 1;
+}
+
+/**
  * Creates an event plus its honorees and extra days in one transaction —
  * either all rows exist or none does, so a published card is never missing
  * the names it exists to display. `groom_name` (kept for every old client
@@ -1284,6 +1426,10 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
   // مستورد، سكربتات) تُنشر عامةً كما كانت — الغياب `public` لا `undefined`
   // (اتصال المعاملة لا يقبل `undefined` أصلاً).
   const visibility = data.visibility || 'public';
+  // موعد النشر المجدول (تذكرة #167): نصّ `YYYY-MM-DD HH:mm:ss` يبنيه المسار بعد
+  // التحقق أنه في المستقبل، أو `null` («يُنشر متى اعتُمد»). النداءات التي لا
+  // تعرفه (بذرة، مستورد، سكربتات) تبقى `null` فلا يتغيّر نشرها.
+  const publishAt = data.publish_at ?? null;
 
   return db.transaction(async connection => {
     const groomName = data.honorees[0].name;
@@ -1299,8 +1445,9 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
          (title, groom_name, family_clan, occasion_type_id, region_id, town, village_id, requested_village_name,
           location_name, secondary_location_name,
           latitude, longitude, event_date, event_end_date, youth_party_date, dinner_time, poster_url,
-          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, visibility, created_by, first_approved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL))`,
+          audio_url, audio_title, artist_name, artist_image_url, host_phone, status, visibility, created_by,
+          first_approved_at, publish_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'approved', NOW(), NULL), ?)`,
       [
         title,
         groomName,
@@ -1335,7 +1482,8 @@ async function createEvent(data, { autoApprove = false, createdBy = null, region
         status,
         visibility,
         createdBy,
-        status
+        status,
+        publishAt
       ]
     );
     const eventId = result.insertId;
@@ -1413,10 +1561,25 @@ async function releaseReplacedImage(oldUrl, newUrl) {
   await cloudinary.destroy(publicId);
 }
 
-/** Fetches an event row for an ownership check / edit diff, or throws 404. */
+/**
+ * Fetches an event row for an ownership check / edit diff, or throws 404.
+ *
+ * و`publish_at` يخرج منها **نصّ العمود** (`DATE_FORMAT`، بتوقيت القاعدة) لا
+ * `Date` (تذكرة #167): مسار التعديل يقارن به «هل أُرسل الموعد المخزَّن كما هو؟»
+ * و«ما القيمة القديمة في سجلّ التعديلات؟»، وكلاهما مقارنة نصّية بساعة الحائط
+ * التي كتبها صاحب المناسبة — و`timezone: 'Z'` في pool.js يقرأ `DATETIME` كـ`Date`
+ * بتوقيت غرينتش، فتتحوّل اللحظة. الصفّ لا يُعاد لأي عميل من هنا، فلا شكل عام
+ * يتغيّر.
+ */
 async function getEventForEdit(eventId) {
-  const event = await db.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
+  const event = await db.queryOne(
+    `SELECT *, DATE_FORMAT(publish_at, '%Y-%m-%d %H:%i:%s') AS publish_at_clock
+       FROM events WHERE id = ?`,
+    [eventId]
+  );
   if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+  event.publish_at = event.publish_at_clock;
+  delete event.publish_at_clock;
   return event;
 }
 
@@ -2343,7 +2506,7 @@ async function listRelatedEvents({ town = null, familyClan = null, excludeId = n
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 6, 1), 6);
 
   const conditions = [PUBLIC_EVENT_VISIBLE_SQL_EVENTS];
-  const params = [];
+  const params = [publishNowClock()];
 
   const placeConditions = [];
   if (town) {
@@ -2382,7 +2545,8 @@ async function listRelatedEvents({ town = null, familyClan = null, excludeId = n
 /** All approved events for sitemap generation — only id and lastmod. */
 async function listSitemapEvents() {
   const rows = await db.query(
-    `SELECT id, updated_at FROM events WHERE ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS} ORDER BY updated_at DESC`
+    `SELECT id, updated_at FROM events WHERE ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS} ORDER BY updated_at DESC`,
+    [publishNowClock()]
   );
   return rows.map(r => ({
     id: r.id,
@@ -2397,7 +2561,8 @@ async function townStats() {
        FROM events
       WHERE ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS}
       GROUP BY town
-      ORDER BY events_count DESC`
+      ORDER BY events_count DESC`,
+    [publishNowClock()]
   );
 }
 
@@ -2421,6 +2586,11 @@ module.exports = {
   EVENT_SPAN_START_SQL_E,
   PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
   PUBLIC_EVENT_VISIBLE_SQL_E,
+  EVENT_FEED_WINDOW_SQL_EVENTS,
+  publishNowClock,
+  publishGateOpen,
+  listDueScheduledPublish,
+  markAnnounced,
   escapeLike,
   honoreesForEvents,
   listAmendments,

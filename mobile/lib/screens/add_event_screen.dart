@@ -131,6 +131,55 @@ String formatEventDate(DateTime date) {
   return '${date.year}-$month-$day';
 }
 
+/// صيغة موعد النشر (تذكرة #167) — `YYYY-MM-DDTHH:mm`، نفس ما يرسله
+/// `<input type="datetime-local">` في الويب ونفس ما يحلّله الخادم (`new Date`).
+/// عام كي تشترك فيه الشاشتان، والوقت يُقرأ من حقول [date] كما هي: موعد النشر
+/// ساعة حائط لا لحظة بتوقيت جهاز.
+String formatPublishAt(DateTime date) {
+  final hour = date.hour.toString().padLeft(2, '0');
+  final minute = date.minute.toString().padLeft(2, '0');
+  return '${formatEventDate(date)}T$hour:$minute';
+}
+
+/// منتقي «موعد النشر» (تذكرة #167): تاريخ ثم وقت، ويعيد اللحظة المختارة أو
+/// `null` إن أُغلق أي منهما. عام كي تشترك فيه شاشتا النشر والتعديل بدل نسختين —
+/// كما تشترك فيهما `formatEventDate`. والبداية غداً بنفس الساعة إن لم يكن هناك
+/// موعد بعد، فموعدٌ في الماضي يرفضه الخادم بـ400.
+///
+/// و**تُقيَّد البداية داخل نطاق المنتقي**: مناسبة مجدولة حلّ موعدها (فصارت ظاهرة)
+/// تحمل `publish_at` ماضياً، و`showDatePicker` يرفض `initialDate` قبل `firstDate`
+/// — فتُقاد إلى اليوم بدل أن تسقط الشاشة. وكذلك ما تجاوز آخر نطاقه.
+Future<DateTime?> pickPublishAt(BuildContext context, {DateTime? initial}) async {
+  final now = DateTime.now();
+  final firstDate = DateTime(now.year, now.month, now.day);
+  final lastDate = DateTime(now.year + 3, 12, 31);
+  var start = initial ?? now.add(const Duration(days: 1));
+  if (start.isBefore(firstDate)) start = now;
+  if (start.isAfter(lastDate)) start = lastDate;
+
+  final pickedDate = await showDatePicker(
+    context: context,
+    initialDate: start,
+    firstDate: firstDate,
+    lastDate: lastDate,
+  );
+  if (pickedDate == null || !context.mounted) return null;
+
+  final pickedTime = await showTimePicker(
+    context: context,
+    initialTime: TimeOfDay.fromDateTime(start),
+  );
+  if (pickedTime == null) return null;
+
+  return DateTime(
+    pickedDate.year,
+    pickedDate.month,
+    pickedDate.day,
+    pickedTime.hour,
+    pickedTime.minute,
+  );
+}
+
 /// صف اسم/صفة واحد من أصحاب المناسبة — عرس له عريس (وربما عروس)، عزاء له
 /// متوفَّى، وهكذا. اسم واحد على الأقل مطلوب أياً كان النوع. عام كي تعيد
 /// شاشة تعديل المناسبة استعماله بدل نسخة ثانية.
@@ -328,6 +377,45 @@ class EventVisibilityField extends StatelessWidget {
   }
 }
 
+/// «موعد النشر» (تذكرة #167) — تاريخ ووقت اختياريان، افتراضه فارغ: بلا موعد
+/// يُنشر الإعلان فور اعتماده. منتقٍ واحد يفتح التاريخ ثم الوقت (كما يفعل حقل
+/// `datetime-local` في الويب)، فالحقل واحد لا اثنان. يُرسَل فقط إن مُلئ.
+class PublishAtField extends StatelessWidget {
+  const PublishAtField({
+    super.key,
+    required this.value,
+    required this.onPick,
+  });
+
+  final DateTime? value;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onPick,
+      borderRadius: BorderRadius.circular(10),
+      child: InputDecorator(
+        decoration: const InputDecoration(
+          labelText: 'موعد النشر (اختياري)',
+          helperText: 'اتركه فارغاً ليُنشر فور اعتماده. والموعد المستقبلي يُبقيه غائباً عن القوائم العامة حتى يحين، ويصل إشعاره حينها.',
+          helperMaxLines: 3,
+          suffixIcon: Icon(Icons.event_available_outlined),
+        ),
+        child: Text(
+          value == null
+              ? 'بلا جدولة'
+              : '${formatEventDate(value!)} — ${value!.hour.toString().padLeft(2, '0')}:${value!.minute.toString().padLeft(2, '0')}',
+          style: TextStyle(
+            color: value == null ? context.c.inkFaint : context.c.ink,
+            fontWeight: value == null ? FontWeight.w400 : FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// تقديم مناسبة جديدة. تدخل قائمة المراجعة — الاعتماد من لوحة الإدارة.
 ///
 /// النموذج كله يُبنى من `GET /api/occasion-types`: لا نوع ثابت، ولا تسمية
@@ -349,6 +437,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
   OccasionType? _type;
   // ظهور المناسبة (تذكرة #166): «عامة» افتراضاً — لا إخفاء بلا اختيار صريح.
   EventVisibility _visibility = EventVisibility.public;
+  // موعد النشر المجدول (تذكرة #167): فارغ افتراضاً — بلا موعد يُنشر فور
+  // الاعتماد، ولا يُرسَل مفتاحه إن لم يُملأ.
+  DateTime? _publishAt;
 
   final Map<String, TextEditingController> _controllers = {};
   final List<HonoreeRow> _honorees = [HonoreeRow()];
@@ -469,6 +560,15 @@ class _AddEventScreenState extends State<AddEventScreen> {
 
     setState(() => onPicked(picked));
     if (checkCollisionAfter) await _checkCollision();
+  }
+
+  /// موعد النشر (تذكرة #167): تاريخ ثم وقت في منتقٍ واحد. البداية غداً بنفس
+  /// الساعة إن لم يكن هناك موعد بعد — فموعدٌ في الماضي يرفضه الخادم بـ400،
+  /// والمنتقي يبدأ على قيمة لا تُرفض. وإن اختار الناشر لحظةً مضت (اليوم بساعة
+  /// مرّت) فالقرار للخادم ورسالته العربية تصل كما هي.
+  Future<void> _pickPublishAt() async {
+    final picked = await pickPublishAt(context, initial: _publishAt);
+    if (picked != null && mounted) setState(() => _publishAt = picked);
   }
 
   /// يحذّر من تعارض تاريخ في نفس البلدة قبل الإرسال — نفس سلوك الويب.
@@ -628,6 +728,9 @@ class _AddEventScreenState extends State<AddEventScreen> {
         // يعرف الحقل (كل نسخة منشورة اليوم).
         'visibility': _visibility.wireValue,
       };
+      // موعد النشر المجدول (تذكرة #167): يُرسَل فقط إن اختاره الناشر — غيابه
+      // «بلا جدولة» عند الخادم، ولا يُرسَل نصّ فارغ لا معنى له.
+      if (_publishAt != null) fields['publish_at'] = formatPublishAt(_publishAt!);
       for (final key in kEventTextFieldKeys) {
         if (!type.showsField(key)) continue;
         final value = _controllerFor(key).text.trim();
@@ -757,6 +860,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       _artistImage = null;
       _conflicts = const [];
       _visibility = EventVisibility.public;
+      _publishAt = null;
       _town = AppServices.of(context).places.catalog.towns.first;
       _selectedVillage = null;
       _villageNotListed = false;
@@ -1045,6 +1149,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
         EventVisibilityField(
           value: _visibility,
           onChanged: (value) => setState(() => _visibility = value),
+        ),
+        const SizedBox(height: 12),
+        PublishAtField(
+          value: _publishAt,
+          onPick: _pickPublishAt,
         ),
         const SizedBox(height: 24),
         ElevatedButton.icon(

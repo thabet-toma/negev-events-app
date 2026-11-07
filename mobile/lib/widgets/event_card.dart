@@ -507,7 +507,13 @@ class CardCaption extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               if (type != null) _TypeBadge(type: type!, color: toneColor),
-              if (!isSolemn && countdownText.isNotEmpty)
+              // «انتهت» (#167): نهاية أيام المناسبة مضت — يحسبها الخادم بامتداد
+              // الأيام كاملاً (`is_ended`)، فتحلّ محلّ العدّاد ولا يقول الكرت
+              // «مناسبة سابقة» و«انتهت» معاً. وتُعرض لكل نوع: خبرٌ لا زينة،
+              // بخلاف العدّاد الذي يُخفى على العزاء.
+              if (event.isEnded)
+                const _DateChip(text: 'انتهت', ended: true)
+              else if (!isSolemn && countdownText.isNotEmpty)
                 _DateChip(text: countdownText, tomorrow: countdownIsTomorrow),
             ],
           ),
@@ -720,23 +726,30 @@ class _CaptionActionButton extends StatelessWidget {
 /// شارة عدّاد/تاريخ. `tomorrow` يجعل «غداً» كبسولة حمراء (تذكرة #170) — لون
 /// واحد مشتقّ من النغمة نفسها المستعملة في الويب (`--danger`/`--danger-wash`)،
 /// لا شارة ثانية بنصّ آخر.
+///
+/// و«انتهت» (`ended`، تذكرة #167) بنبرة خافتة: نفس الشكل
+/// والحدود، واللون وحده يقول «مضت».
 class _DateChip extends StatelessWidget {
-  const _DateChip({required this.text, this.tomorrow = false});
+  const _DateChip({required this.text, this.tomorrow = false, this.ended = false});
 
   final String text;
   final bool tomorrow;
+  final bool ended;
 
   @override
   Widget build(BuildContext context) {
     if (text.isEmpty) return const SizedBox.shrink();
-    final ground = tomorrow ? context.c.dangerWash : context.c.successWash;
-    final ink = tomorrow ? context.c.danger : context.c.success;
+    final ground = ended
+        ? context.c.surfaceSunk
+        : (tomorrow ? context.c.dangerWash : context.c.successWash);
+    final border = ended ? context.c.line : (tomorrow ? context.c.danger : context.c.success);
+    final ink = ended ? context.c.inkFaint : (tomorrow ? context.c.danger : context.c.success);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3.5),
       decoration: BoxDecoration(
         color: ground,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: ink),
+        border: Border.all(color: border),
       ),
       child: Text(
         text,

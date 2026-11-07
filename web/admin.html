@@ -597,6 +597,14 @@
               <label class="ot-check"><input type="checkbox" id="otShowRsvpCount" checked> إظهار عدد الجايين</label>
               <span class="hint-text">يُفرَض مطفأً لكل نوع نغمته «وقورة» (عزاء) عند كل ترحيل — لا أزرار ولا عدّاد هناك.</span>
             </div>
+            <!-- نافذة البقاء في التغذية (#167): كم يوماً تبقى مناسبة منتهية ظاهرةً
+                 في «القادم» وكرتها تقول «انتهت». التغذية وحدها — الخريطة والتقويم
+                 والتذكيرات على حدّها القائم. صفر = تختفي في اليوم التالي. -->
+            <div class="form-group">
+              <label>نافذة البقاء في التغذية (أيام)</label>
+              <input type="number" id="otFeedLingerDays" value="0" min="0" max="30" step="1">
+              <span class="hint-text">عدد الأيام التي تبقى فيها المناسبة المنتهية ظاهرةً في «القادم» بالتغذية وحدها (٠–٣٠، والافتراضي ٠). الخريطة والتذكيرات لا تتأثر.</span>
+            </div>
 
             <div class="form-group occasion-type-legacy-box">
               <label class="ot-check"><input type="checkbox" id="otLegacySupported"> يظهر على نسخ التطبيق المنشورة حالياً (legacy_client_supported)</label>
