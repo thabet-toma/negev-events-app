@@ -17165,6 +17165,338 @@ async function run() {
     assert.ok(adr.includes("form-action 'self'"), 'and must record the one CSP directive this page gained');
   });
 
+  console.log('\n«مناسبة كبرى» — الإبراز حتى تاريخ، وسقف المحافظة، وترتيب التغذية (#171)');
+
+  /**
+   * قسم #171: محافظة ثانية وبلدة فيها وأدمن مقيَّد بها، ومناسبات مبرزة في
+   * محافظة النقب. كل صفّ يُنشأ هنا يُحذف في نهاية القسم.
+   *
+   * البحث الفريد (`featuredStamp`) هو ما يجعل التأكيدات مستقلة عن بقية صفوف
+   * قاعدة التطوير المشتركة: تغذية هذا القسم وحدها هي ما يُقرأ، فلا يعتمد
+   * «الأول» على مناسبة قديمة مبرزة من تشغيل سابق.
+   */
+  const featuredStamp = `كبرى${Date.now()}`;
+  const featuredCleanup = { eventIds: [], townIds: [], regionIds: [], userIds: [] };
+
+  const { insertId: featuredOtherRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 32.4, 35.1, 9, 97, 1)`,
+    [`محافظة إبراز ${featuredStamp}`]
+  );
+  featuredCleanup.regionIds.push(featuredOtherRegionId);
+
+  const featuredOtherTown = `بلدة إبراز ${featuredStamp}`;
+  const { insertId: featuredOtherTownId } = await db.execute(
+    `INSERT INTO towns (region_id, name, latitude, longitude, position, is_active)
+     VALUES (?, ?, 32.4, 35.1, 1, 1)`,
+    [featuredOtherRegionId, featuredOtherTown]
+  );
+  featuredCleanup.townIds.push(featuredOtherTownId);
+
+  // أدمن بلدة واحدة في المحافظة الثانية: نطاقه ضيّق فعلاً، فمناسبة النقب
+  // خارجه — وهو ما يثبت 404 لا 403.
+  const featuredOtherAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const { insertId: featuredOtherAdminId } = await db.execute(
+    `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+    [featuredOtherAdminPhone, 'أدمن محافظة الإبراز', bcrypt.hashSync('1234', config.bcryptRounds), featuredOtherTown]
+  );
+  featuredCleanup.userIds.push(featuredOtherAdminId);
+  await db.execute('INSERT INTO admin_towns (user_id, town) VALUES (?, ?)', [featuredOtherAdminId, featuredOtherTown]);
+  const featuredOtherAdminToken = signToken({
+    id: featuredOtherAdminId,
+    phone_number: featuredOtherAdminPhone,
+    full_name: 'أدمن محافظة الإبراز',
+    role: 'admin'
+  }, '1h');
+
+  /** ينشر مناسبة معتمدة (سوبر أدمن) باسم بحث فريد في المحافظة المطلوبة. */
+  async function publishFeaturedEvent({ dayOffset, town = 'حورة', label }) {
+    const created = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: weddingEventBody({
+        honorees: [{ name: `${featuredStamp} ${label}` }],
+        town,
+        event_date: addDaysToDate(schedulerToday, dayOffset),
+        location_name: `قاعة ${featuredStamp} ${label}`
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    assert.strictEqual(created.body.status, 'approved', 'a super_admin publish goes live immediately');
+    featuredCleanup.eventIds.push(created.body.eventId);
+    return created.body.eventId;
+  }
+
+  /** تغذية محافظة النقب، مقيَّدة بمناسبات هذا القسم وحدها (البحث الفريد). */
+  async function featuredFeed() {
+    const { status, body } = await api(
+      'GET',
+      `/api/events?upcoming=1&limit=100&search=${encodeURIComponent(featuredStamp)}`,
+      { region: defaultRegionId }
+    );
+    assert.strictEqual(status, 200);
+    return body;
+  }
+
+  const featuredIds = [];
+  let featuredFourthId = 0;
+  let featuredOtherRegionEventId = 0;
+  const featuredUntil = addDaysToDate(schedulerToday, 20);
+
+  await test('PATCH /api/admin/events/:id/featured يكتب featured_until، والمبرزة تتصدّر تغذية محافظتها بـis_featured منطقية', async () => {
+    featuredIds.push(await publishFeaturedEvent({ dayOffset: 5, label: 'الأولى' }));
+    featuredIds.push(await publishFeaturedEvent({ dayOffset: 6, label: 'الثانية' }));
+    featuredIds.push(await publishFeaturedEvent({ dayOffset: 7, label: 'الثالثة' }));
+
+    const before = await featuredFeed();
+    assert.deepStrictEqual(before.events.map(event => event.id), featuredIds, 'before featuring, the feed is date order');
+    assert.deepStrictEqual(
+      before.events.map(event => event.is_featured),
+      [false, false, false],
+      'and every row says is_featured: false'
+    );
+
+    const patched = await api('PATCH', `/api/admin/events/${featuredIds[2]}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: featuredUntil }
+    });
+    assert.strictEqual(patched.status, 200, patched.body.message);
+    assert.strictEqual(patched.body.event.featured_until, featuredUntil, 'the route answers with the stored date');
+    assert.strictEqual(patched.body.event.is_featured, true, 'and with the computed is_featured');
+
+    const stored = await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [featuredIds[2]]);
+    assert.strictEqual(stored.featured_until, featuredUntil, 'the DATE column stores the picked day as YYYY-MM-DD');
+
+    const after = await featuredFeed();
+    assert.strictEqual(after.events[0].id, featuredIds[2], 'the featured event tops its own governorate feed');
+    assert.strictEqual(after.events[0].is_featured, true, 'is_featured is boolean true on the featured row');
+    assert.strictEqual(typeof after.events[1].is_featured, 'boolean', 'and a boolean on every other row');
+    assert.strictEqual(after.events[1].is_featured, false, 'a plain row is is_featured: false');
+    assert.deepStrictEqual(
+      after.events.slice(1).map(event => event.id),
+      [featuredIds[0], featuredIds[1]],
+      'the rows around it keep their existing order'
+    );
+  });
+
+  await test('الرابعة النشِطة في المحافظة نفسها 409 عربية، والرابعة في محافظة أخرى تُقبل', async () => {
+    for (const id of featuredIds.slice(0, 2)) {
+      const res = await api('PATCH', `/api/admin/events/${id}/featured`, {
+        token: superAdminToken,
+        body: { featured_until: featuredUntil }
+      });
+      assert.strictEqual(res.status, 200, `featured ${id}: ${res.body.message}`);
+    }
+    const activeRows = await db.query(
+      `SELECT id FROM events
+        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
+          AND id IN (?, ?, ?)`,
+      [defaultRegionId, ...featuredIds]
+    );
+    assert.strictEqual(activeRows.length, 3, 'three active featured rows now sit in this governorate');
+
+    featuredFourthId = await publishFeaturedEvent({ dayOffset: 8, label: 'الرابعة' });
+    const refused = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: featuredUntil }
+    });
+    assert.strictEqual(refused.status, 409, 'a fourth active featured event in one governorate is refused');
+    assert.ok(/[\u0600-\u06FF]/.test(refused.body.message), `the refusal is Arabic: ${refused.body.message}`);
+    assert.ok(refused.body.message.includes('مناسبات'), 'and names what hit its ceiling');
+    assert.strictEqual(
+      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [featuredFourthId])).featured_until,
+      null,
+      'and nothing was written for the refused event'
+    );
+
+    // محافظة أخرى لا تتأثّر بسقف هذه: الإبراز فيها يمرّ.
+    featuredOtherRegionEventId = await publishFeaturedEvent({
+      dayOffset: 9, town: featuredOtherTown, label: 'محافظة أخرى'
+    });
+    const accepted = await api('PATCH', `/api/admin/events/${featuredOtherRegionEventId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: featuredUntil }
+    });
+    assert.strictEqual(accepted.status, 200, 'another governorate is not affected by this one\'s ceiling');
+
+    const regionAFeed = await featuredFeed();
+    assert.ok(
+      !regionAFeed.events.some(event => event.id === featuredOtherRegionEventId),
+      'and the featured event of another governorate never enters this one\'s feed'
+    );
+  });
+
+  await test('إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف', async () => {
+    // الملغى هو **الأقدم** (`featuredIds[0]`، وأول التغذية قبل الإلغاء)، لا
+    // الأخير: إلغاء الأخير يجعله آخراً في ترتيب التاريخ وحده، فيبقى الشرط
+    // صحيحاً في ثلاثة عوالم — الإلغاء يعمل، أو ترتيب الإبراز مفقود، أو الإلغاء
+    // لا يكتب شيئاً — فلا يقيس واحداً منها. أما الأقدم فلا يهبط خلف
+    // `featuredIds[1]` إلا إذا كُتب الإلغاء فعلاً **و** عمل ترتيب الإبراز معاً.
+    const cleared = await api('PATCH', `/api/admin/events/${featuredIds[0]}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: null }
+    });
+    assert.strictEqual(cleared.status, 200, cleared.body.message);
+    assert.strictEqual(cleared.body.event.featured_until, null, 'null clears the column');
+    assert.strictEqual(cleared.body.event.is_featured, false, 'and the computed flag with it');
+
+    const afterCancel = await featuredFeed();
+    const cancelledAt = afterCancel.events.findIndex(event => event.id === featuredIds[0]);
+    const stillFeaturedAt = afterCancel.events.findIndex(event => event.id === featuredIds[1]);
+    assert.ok(
+      cancelledAt > stillFeaturedAt,
+      `the cancelled leading event must fall behind the still-featured one — got ${cancelledAt} vs ${stillFeaturedAt}`
+    );
+
+    const freed = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: featuredUntil }
+    });
+    assert.strictEqual(freed.status, 200, 'the seat freed by the cancel accepts the fourth');
+  });
+
+  await test('تاريخ انتهى (أمس) لا يُبرز: is_featured false والصفّ لا يتصدّر', async () => {
+    const yesterday = addDaysToDate(schedulerToday, -1);
+    const expired = await api('PATCH', `/api/admin/events/${featuredIds[0]}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: yesterday }
+    });
+    assert.strictEqual(expired.status, 200, 'a past date is accepted — it simply means "not featured"');
+    assert.strictEqual(expired.body.event.is_featured, false, 'the computed flag is false on a past date');
+
+    const feed = await featuredFeed();
+    const row = feed.events.find(event => event.id === featuredIds[0]);
+    assert.ok(row, 'the event is still in the feed — featuring never hides anything');
+    assert.strictEqual(row.is_featured, false, 'the row says is_featured: false after its date passed');
+    assert.notStrictEqual(feed.events[0].id, featuredIds[0], 'and it no longer tops the feed');
+  });
+
+  await test('أدمن خارج نطاق المناسبة يُردّ 404 لا 403 ولا يُكتب شيء، وأدمن داخله يمرّ', async () => {
+    const target = featuredIds[1];
+    const before = await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [target]);
+    const refused = await api('PATCH', `/api/admin/events/${target}/featured`, {
+      token: featuredOtherAdminToken,
+      body: { featured_until: addDaysToDate(schedulerToday, 30) }
+    });
+    assert.strictEqual(refused.status, 404, 'an out-of-scope admin gets 404, never 403');
+    assert.ok(/[\u0600-\u06FF]/.test(refused.body.message), `the refusal is Arabic: ${refused.body.message}`);
+    assert.strictEqual(
+      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [target])).featured_until,
+      before.featured_until,
+      'and the row is untouched'
+    );
+
+    const own = await api('PATCH', `/api/admin/events/${featuredOtherRegionEventId}/featured`, {
+      token: featuredOtherAdminToken,
+      body: { featured_until: addDaysToDate(schedulerToday, 30) }
+    });
+    assert.strictEqual(own.status, 200, 'the same admin may feature an event inside its own town');
+
+    const normalUser = await createDirectUser('مستخدم مسار الإبراز');
+    featuredCleanup.userIds.push(normalUser.id);
+    const asUser = await api('PATCH', `/api/admin/events/${target}/featured`, {
+      token: normalUser.token,
+      body: { featured_until: addDaysToDate(schedulerToday, 30) }
+    });
+    assert.strictEqual(asUser.status, 403, 'a regular user never reaches an admin route');
+  });
+
+  await test('تاريخ الإبراز يُتحقَّق في validate.js: صيغة خاطئة 400، وغياب المفتاح 400 لا إلغاء صامت', async () => {
+    const target = featuredIds[1];
+    const bad = await api('PATCH', `/api/admin/events/${target}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: '2026-13-45' }
+    });
+    assert.strictEqual(bad.status, 400, 'a malformed date is refused');
+    assert.ok(bad.body.message.includes('YYYY-MM-DD'), `the shared validate.js date message: ${bad.body.message}`);
+
+    const missing = await api('PATCH', `/api/admin/events/${target}/featured`, {
+      token: superAdminToken,
+      body: {}
+    });
+    assert.strictEqual(missing.status, 400, 'an absent key is a bad date, never a silent cancel');
+    assert.strictEqual(
+      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [target])).featured_until,
+      featuredUntil,
+      'neither refusal touched the stored date'
+    );
+  });
+
+  await test('الترقيم لا ينكسر: COUNT(*) يعدّ الصفوف نفسها، والمبرزة تظهر مرة واحدة عبر الصفحات', async () => {
+    const all = await featuredFeed();
+    const first = await api(
+      'GET',
+      `/api/events?upcoming=1&limit=2&page=1&search=${encodeURIComponent(featuredStamp)}`,
+      { region: defaultRegionId }
+    );
+    assert.strictEqual(first.status, 200);
+    const second = await api(
+      'GET',
+      `/api/events?upcoming=1&limit=2&page=2&search=${encodeURIComponent(featuredStamp)}`,
+      { region: defaultRegionId }
+    );
+
+    const total = first.body.pagination.total;
+    assert.strictEqual(
+      total, all.events.length,
+      'COUNT(*) counts exactly the rows the WHERE clause selects — the featured ordering adds no filter'
+    );
+    assert.strictEqual(first.body.pagination.totalPages, Math.ceil(total / 2));
+    assert.strictEqual(first.body.events.length, 2);
+    assert.strictEqual(second.body.events.length, Math.min(2, total - 2));
+
+    const pagedIds = [...first.body.events, ...second.body.events].map(event => event.id);
+    assert.strictEqual(new Set(pagedIds).size, pagedIds.length, 'no row is repeated across pages');
+    assert.deepStrictEqual(pagedIds, all.events.slice(0, pagedIds.length).map(event => event.id), 'and the pages follow the ordered list exactly');
+    assert.strictEqual(first.body.events[0].is_featured, true, 'the featured row still leads page one');
+  });
+
+  await test('السقف يحرس الانتقال إلى نشِط وحده: تاريخ مستقبلي لصفّ غير مبرز 409، وتاريخ منقضٍ له 200', async () => {
+    // هذه المحافظة كاملة الآن بثلاثة نشِطة (f1، f2، f4)، و`featuredIds[0]` غير
+    // مبرز (تاريخه أمس من التأكيد السابق). السقف يجب أن يفرق بين الحالتين:
+    // تاريخ مستقبلي **يزيد** النشِط رابعاً فيُردّ، وتاريخ منقضٍ **لا يزيد**
+    // شيئاً فيمرّ — وإلا لتعذّر على الأدمن سحب إبرازٍ أو كتابة تاريخ ماضٍ في
+    // محافظة ممتلئة. فرضُ السقف على كل قيمة غير `null` يُسقط هذا التأكيد عند
+    // طلب التاريخ المنقضي بـ409.
+    const notFeaturedId = featuredIds[0];
+    const activeNow = await db.queryOne(
+      `SELECT COUNT(*) AS total FROM events
+        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
+          AND id IN (?, ?, ?, ?)`,
+      [defaultRegionId, ...featuredIds, featuredFourthId]
+    );
+    assert.strictEqual(Number(activeNow.total), 3, 'the governorate is full before this check');
+
+    const before = (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until;
+    const future = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: addDaysToDate(schedulerToday, 25) }
+    });
+    assert.strictEqual(future.status, 409, 'a future date on a non-featured row would be a fourth active one');
+    assert.strictEqual(
+      (await db.queryOne('SELECT featured_until FROM events WHERE id = ?', [notFeaturedId])).featured_until,
+      before,
+      'and nothing was written for the refused row'
+    );
+
+    const expiredDate = addDaysToDate(schedulerToday, -3);
+    const expired = await api('PATCH', `/api/admin/events/${notFeaturedId}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: expiredDate }
+    });
+    assert.strictEqual(expired.status, 200, 'a past date adds nothing to the active set, so the ceiling cannot refuse it');
+    assert.strictEqual(expired.body.event.featured_until, expiredDate, 'and the picked day is stored as given');
+    assert.strictEqual(expired.body.event.is_featured, false, 'while the computed flag stays false');
+  });
+
+  // تنظيف قسم الإبراز: المناسبات، ثم المستخدمون (وadmin_towns معهم)، ثم البلدة
+  // ثم المحافظة — بترتيب المفاتيح الأجنبية.
+  for (const id of featuredCleanup.eventIds) {
+    await api('DELETE', `/api/admin/events/${id}`, { token: superAdminToken });
+  }
+  for (const id of featuredCleanup.userIds) await db.execute('DELETE FROM users WHERE id = ?', [id]);
+  for (const id of featuredCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
+  for (const id of featuredCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
+
   // تنظيف هذا القسم: المناسبات الثلاث تسقط ومَعها أجوبتها بـON DELETE CASCADE.
   for (const id of guestRsvpEventIds) {
     await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);

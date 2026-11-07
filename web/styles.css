@@ -1179,6 +1179,42 @@ body {
   border-color: var(--danger);
 }
 
+/*
+ * «مناسبة كبرى» (تذكرة #171). الشارة ذهبية **أبداً** — وسامٌ من المنصّة لا وسمُ
+ * نوع — ولذلك تحمل متغيّرها الخاصّ `--featured-gold` ولا تقرأ `--card-gold`:
+ * بطاقة العزاء تعيد ربط `--card-gold` بأردوازي (`--mourn`) أدناه، فكان الوسام
+ * يلبس لون النوع هناك، وحبره الداكن فوق أرضية داكنة ينزل إلى تباين ≈ 2.4:1 —
+ * نصّ شبه غير مقروء. والقيمة هنا ثابتة فلا يبدّلها أي نوع، وحبر `#2b2000`
+ * عليها يبلغ ≈ 5.8:1.
+ */
+.card-featured-badge {
+  --featured-gold: #C59425;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3.5px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--featured-gold);
+  border: 1px solid var(--featured-gold);
+  color: #2b2000;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.1px;
+}
+.card-featured-badge i { font-size: 10.5px; }
+
+/*
+ * الكرت الكبير: المبرزة تُعرض ببطاقة الدعوة **كاملة** — الملصق كما صمّمه
+ * صاحبه لا قصاصة منه. `cover` كان يقصّ أعلى الملصق في الكرت بملء الشاشة
+ * (ارتفاعه محدود بالشاشة) فيضيع طرف الدعوة؛ `contain` يُظهرها كلها فوق أرضية
+ * الكرت، فما يبقى من فراغ جانبي يقرأه العين إطاراً لا فراغاً. وبعد انتهاء
+ * `featured_until` يعود الصفّ `is_featured: false` فتعود القاعدة العامة.
+ */
+.event-card.is-featured .card-media-img {
+  object-fit: contain;
+  object-position: center;
+}
+
 /* «قلب متحرّك حين أضغط ذكّرني» (القصة ٥٥): نبضة واحدة قصيرة على القلب بعد
    نجاح الإضافة. الصنف يضاف من `playHeartPop` في app.js بعد إعادة الرسم. */
 @keyframes heart-pop {

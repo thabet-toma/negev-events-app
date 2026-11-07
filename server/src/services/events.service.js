@@ -10,7 +10,7 @@ const albums = require('./albums.service');
 const people = require('./people.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
-const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN } = require('../constants');
+const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN, FEATURED_EVENTS_MAX_PER_REGION } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 const { nameKey, nameTokens, comparePersonNames } = require('../utils/arabicName');
@@ -182,6 +182,21 @@ const EVENT_FEED_WINDOW_SQL_EVENTS =
   '(DATEDIFF(CURDATE(), '
   + EVENT_SPAN_END_SQL_EVENTS
   + ') <= COALESCE((SELECT ot.feed_linger_days FROM occasion_types ot WHERE ot.id = events.occasion_type_id), 0))';
+
+/**
+ * «مناسبة كبرى» النشِطة (تذكرة #171): القطعة الواحدة التي تعرّف «مبرزة الآن».
+ * الإدارة تضبط `featured_until` (تاريخ ينتهي عنده الإبراز، أو `NULL` إلغاءً)،
+ * والنشاط حكمٌ على الصفّ وحده: العمود غير فارغ **ولم يمضِ تاريخه بعد**. تُقارَن
+ * بـ`CURDATE()` (يوم قاعدة البيانات) لا بساعة العميل — الإبراز «حتى هذا اليوم»
+ * كما كتبه الأدمن في القدس، وساعة الحائط لا منطقة لها في عمود DATE أصلاً.
+ *
+ * تُستعمل في موضعين: عمود `is_featured` في تغذية `listPublicEvents` (وعليه
+ * يُبنى ترتيبها)، وعدّاد السقف في `setEventFeatured`. **ولا تُعمَّم** على
+ * الخريطة ولا البحث ولا `related`/`sitemap` — التذكرة نصّت على التغذية وحدها،
+ * والإبراز كلامُ تغذيةٍ لا وسمٌ لكل قراءة.
+ */
+const EVENT_FEATURED_ACTIVE_SQL_EVENTS =
+  '(events.featured_until IS NOT NULL AND events.featured_until >= CURDATE())';
 
 /** Escapes LIKE wildcards so a user search term stays a literal substring. */
 function escapeLike(term) {
@@ -1111,6 +1126,17 @@ async function listPublicEvents({
   const { total } = await db.queryOne(`SELECT COUNT(*) AS total FROM events WHERE ${whereClause}`, params);
 
   const offset = (safePage - 1) * safeLimit;
+  // «مناسبة كبرى» (تذكرة #171): المبرزة النشِطة تتصدّر **تغذية محافظتها وحدها**،
+  // فالبادئة مشروطة بأن الطلب مقيَّد بمحافظة واحدة (`regionId !== null`). طلب
+  // «كل المحافظات» (`all_regions=1`، فيعود `regionId` هنا `null`) يخلط صفوف
+  // محافظات عدة، وإبرازُ صفٍّ فوقها جميعاً يجعل مناسبةً «كبرى» في محافظةٍ تتصدّر
+  // تغذية غير تغذيتها — وهو ما تنفيه التذكرة. والصفّ نفسه يبقى `is_featured`
+  // صادقاً في كل قراءة؛ الترتيب وحده هو ما يُقيَّد.
+  //
+  // وتوضع **قبل** الترتيب القائم لا مكانه: المبرزة تسبق كل ما كان يتصدّر،
+  // والبقية تبقى على ترتيبها حرفاً بحرف. ولا تمسّ `COUNT(*)` فوقها لأنها عمود
+  // ترتيب لا شرط — فالترقيم يُعدّ الصفوف نفسها التي تُعاد.
+  const featuredFirst = regionId !== null && regionId !== undefined ? 'is_featured DESC, ' : '';
   let orderClause;
   if (archive) {
     orderClause = 'events.event_date DESC, events.id DESC';
@@ -1124,6 +1150,7 @@ async function listPublicEvents({
       CASE WHEN span_end_order < CURDATE() THEN events.event_date END DESC,
       CASE WHEN span_end_order < CURDATE() THEN events.id END DESC`;
   }
+  orderClause = `${featuredFirst}${orderClause}`;
 
   // LIMIT/OFFSET as bound parameters, not string-concatenated — same
   // parameterization rule as every other value in this query. `village_name`
@@ -1132,7 +1159,8 @@ async function listPublicEvents({
   const rows = await db.query(
     `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
             (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order,
-            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_ended
+            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_ended,
+            (${EVENT_FEATURED_ACTIVE_SQL_EVENTS}) AS is_featured
        FROM events
        LEFT JOIN villages ON villages.id = events.village_id
       WHERE ${whereClause} ORDER BY ${orderClause} LIMIT ? OFFSET ?`,
@@ -1149,7 +1177,14 @@ async function listPublicEvents({
   const events = withRelations.map(event => {
     // «انتهت» (تذكرة #167): الحكم على امتداد أيام المناسبة كاملاً يُحسب في
     // القاعدة (`EVENT_SPAN_END_SQL_EVENTS`، لا عميل يحسبه) ويصل منطقياً لا 1/0.
-    const shaped = { ...event, reactions: reactionMap[event.id] || EMPTY_REACTIONS(), is_ended: Boolean(event.is_ended) };
+    // و«مناسبة كبرى» (تذكرة #171) كذلك: `is_featured` منطقي يُحسب بـ`CURDATE()`
+    // في القاعدة، فلا يقرّر عميلٌ أن الإبراز انتهى بساعته.
+    const shaped = {
+      ...event,
+      reactions: reactionMap[event.id] || EMPTY_REACTIONS(),
+      is_ended: Boolean(event.is_ended),
+      is_featured: Boolean(event.is_featured)
+    };
 
     // Hidden by type flag, not by name — the counter/preview never appears
     // for an occasion type whose admin turned it off (#20 step 4, decision د).
@@ -1175,6 +1210,60 @@ async function listPublicEvents({
       totalPages: Math.ceil(Number(total) / safeLimit)
     }
   };
+}
+
+/**
+ * «مناسبة كبرى» (تذكرة #171): يضبط الأدمن تاريخ انتهاء الإبراز على صفّ واحد،
+ * أو يلغيه بـ`null`. النطاق (404 خارج بلدات الأدمن) والحقّ الإداري يُفحصان في
+ * طبقة المسار قبل الوصول إلى هنا (`adminScope.assertEventInScope`)، والتحقق من
+ * شكل التاريخ في `middleware/validate.js` — هذه الدالة تحكم **السقف** وحده.
+ *
+ * السقف: الرابعة النشِطة في المحافظة نفسها تُردّ 409 عربية. العدّاد مقيَّد
+ * بـ`region_id` (فمحافظة أخرى لا تتأثّر) ويستثني الصفّ نفسه (فتمديد إبراز
+ * قائم أو إعادة كتابة تاريخه لا يُحسب صفّاً رابعاً)، ويعدّ **النشِطة وحدها**
+ * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) فلا يحجز مقعداً إبرازٌ انتهى تاريخه.
+ * والعدّ قبل الكتابة لا معها: `UPDATE` بلا معاملة يفوز فيه طلبان متزامنان
+ * بالقبول معاً، وهو سباق يخصّ أدمنين اثنين في اللحظة نفسها، لا مساراً عادياً.
+ *
+ * **والسقف يحرس الانتقال إلى «نشِط» لا الكتابة نفسها:** لا يُفرض إلا إذا كانت
+ * القيمة الجديدة تجعل الصفّ نشِطاً (`>= CURDATE()`). تاريخ منقضٍ — و`null` —
+ * لا يزيد النشِط في المحافظة أبداً، فلا يجوز أن يُردّ 409 مهما امتلأت: وإلا
+ * لتعذّر على الأدمن سحب إبرازٍ منتهٍ أو كتابة تاريخ ماضٍ في محافظة كاملة،
+ * وهي عملية **تنقص** ولا تضيف. و«نشِطة» للقيمة الجديدة تُحسب بساعة القاعدة
+ * (`SELECT (? >= CURDATE())`) لا بساعة Node، فالحكمان هنا وفي التغذية
+ * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) لا يفترقان عند منتصف الليل.
+ */
+async function setEventFeatured(event, featuredUntil) {
+  // `null` لا يمرّ بالفحص أصلاً، والقيمة غير الفارغة تسأل القاعدة أولاً:
+  // هل تجعل الصفّ نشِطاً؟ تاريخ ماضٍ جوابه «لا»، فيمرّ بلا عدّ ولا 409.
+  const becomesActive = featuredUntil !== null
+    && Number((await db.queryOne('SELECT (? >= CURDATE()) AS active', [featuredUntil])).active) === 1;
+
+  if (becomesActive) {
+    const { total } = await db.queryOne(
+      `SELECT COUNT(*) AS total FROM events
+        WHERE events.region_id = ? AND events.id <> ?
+          AND ${EVENT_FEATURED_ACTIVE_SQL_EVENTS}`,
+      [event.region_id, event.id]
+    );
+
+    if (Number(total) >= FEATURED_EVENTS_MAX_PER_REGION) {
+      throw ApiError.conflict(
+        `لا يمكن إبراز أكثر من ${FEATURED_EVENTS_MAX_PER_REGION} مناسبات في المحافظة الواحدة — ألغِ إبراز مناسبة قائمة أولاً`
+      );
+    }
+  }
+
+  await db.execute('UPDATE events SET featured_until = ? WHERE id = ?', [featuredUntil, event.id]);
+
+  // الصفّ يُقرأ ثانيةً بعد الكتابة كي يصل `is_featured` محسوباً بالقاعدة نفسها
+  // التي تحسبه في التغذية — لا بحساب JS ثانٍ يخالفها بعد منتصف الليل.
+  const updated = await db.queryOne(
+    `SELECT events.*, (${EVENT_FEATURED_ACTIVE_SQL_EVENTS}) AS is_featured
+       FROM events WHERE events.id = ?`,
+    [event.id]
+  );
+  return { ...withAbsoluteMedia(updated), is_featured: Boolean(updated.is_featured) };
 }
 
 /**
@@ -2640,6 +2729,7 @@ async function townStats() {
 
 module.exports = {
   listPublicEvents,
+  setEventFeatured,
   getEventDetails,
   listMapPoints,
   checkTownMismatch,

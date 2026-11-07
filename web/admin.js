@@ -895,6 +895,7 @@ function renderAdminEvents() {
         <div class="admin-card-top">
           <span class="admin-card-tags">
             <span class="status-tag ${statusClass}">${statusLabel}</span>
+            ${renderFeaturedAdminBadgeHtml(evt)}
             ${renderDuplicateBadgeHtml(evt)}
           </span>
           <span style="font-size: 0.78rem; color: var(--gold-main);">${escapeHtml(evt.town)}</span>
@@ -941,6 +942,10 @@ function renderAdminEvents() {
               </button>
             ` : ''}
 
+            <button class="admin-btn-ghost feature-event-btn" onclick="openFeatureEventModal(${evt.id})">
+              <i class="fa-solid fa-star"></i> ${isEventFeaturedNow(evt) ? 'تعديل الإبراز' : 'إبراز'}
+            </button>
+
             <button class="btn-approve" onclick="openEventEditForm(${evt.id})">
               <i class="fa-solid fa-pen"></i> تعديل
             </button>
@@ -954,6 +959,25 @@ function renderAdminEvents() {
       </div>
     `;
   }).join('');
+}
+
+/*
+ * «مناسبة كبرى» (تذكرة #171) — زرّ الإبراز وتاريخ انتهائه في اللوحة.
+ *
+ * الحالة النشِطة تُحسب من `featured_until` الذي يصل مع صفّ الطابور
+ * (`SELECT e.*` في admin.service.js)، بنفس شرط الخادم: غير فارغ ولم يمضِ.
+ * والمقارنة بيوم القدس لا بيوم الجهاز، كبقية تواريخ اللوحة (`getJerusalemToday`).
+ * ولا يحسب العميل السقف: الرابعة تُردّ 409 برسالة عربية من الخدمة تُعرض كما هي.
+ */
+function isEventFeaturedNow(evt) {
+  if (!evt || !evt.featured_until) return false;
+  return String(evt.featured_until).slice(0, 10) >= getJerusalemToday();
+}
+
+/** شارة ذهبية على بطاقة المبرزة في الطابور، بتاريخ انتهاء الإبراز. */
+function renderFeaturedAdminBadgeHtml(evt) {
+  if (!isEventFeaturedNow(evt)) return '';
+  return `<span class="status-tag featured">⭐ مناسبة كبرى حتى ${escapeHtml(String(evt.featured_until).slice(0, 10))}</span>`;
 }
 
 /**
@@ -1223,6 +1247,73 @@ async function promoteRequestedVillage(eventId) {
 
 // 3. Status Actions (Approve / Reject / Delete)
 let pendingRejectEventId = null;
+
+/*
+ * «مناسبة كبرى» (تذكرة #171): نافذة الإبراز — تاريخ انتهاء واحد أو إلغاء.
+ * `featured_until` وحده في الجسم، وقيمته `YYYY-MM-DD` أو `null` (عقد المسار).
+ */
+let pendingFeatureEventId = null;
+
+function openFeatureEventModal(id) {
+  const evt = allAdminEvents.find(e => Number(e.id) === Number(id));
+  pendingFeatureEventId = id;
+  const input = document.getElementById('featureEventUntilInput');
+  if (input) {
+    // `YYYY-MM-DD` كما يخزّنه العمود (`dateStrings: ['DATE']` في pool.js) — وهو
+    // الشكل الذي يقبله `<input type="date">` حرفاً بحرف.
+    input.value = evt && evt.featured_until ? String(evt.featured_until).slice(0, 10) : '';
+  }
+  // «إلغاء الإبراز» لا معنى له على مناسبة لا تحمل تاريخاً أصلاً.
+  const clearBtn = document.getElementById('clearFeatureEventBtn');
+  if (clearBtn) clearBtn.style.display = evt && evt.featured_until ? '' : 'none';
+  const modal = document.getElementById('featureEventModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeFeatureEventModal() {
+  pendingFeatureEventId = null;
+  const modal = document.getElementById('featureEventModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function submitEventFeatured(featuredUntil) {
+  if (!pendingFeatureEventId) return;
+  const id = pendingFeatureEventId;
+  closeFeatureEventModal();
+  try {
+    const res = await adminFetch(`/api/admin/events/${id}/featured`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ featured_until: featuredUntil })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showAdminNotice(data.message || 'تم حفظ الإبراز', 'مناسبة كبرى');
+      fetchAdminEvents();
+    } else {
+      // 409 السقف يصل برسالة عربية من الخدمة — تُعرض كما هي لا تُستبدل.
+      showAdminNotice(data.message || 'تعذّر حفظ الإبراز', 'خطأ');
+    }
+  } catch (e) {
+    showAdminNotice('تعذر الاتصال بالخادم', 'خطأ');
+  }
+}
+
+/** يرسل التاريخ المكتوب في الحقل — ولا يرسل فراغاً كأنه إلغاء. */
+function confirmFeatureEvent() {
+  const input = document.getElementById('featureEventUntilInput');
+  const value = input ? input.value.trim() : '';
+  if (!value) {
+    showAdminNotice('اختر تاريخ انتهاء الإبراز أولاً', 'تنبيه');
+    return;
+  }
+  submitEventFeatured(value);
+}
+
+/** `null` صريح: إلغاء الإبراز، كما ينصّ عقد المسار. */
+function clearEventFeatured() {
+  submitEventFeatured(null);
+}
 
 function showAdminNotice(message, title = 'تنبيه') {
   const modal = document.getElementById('adminNoticeModal');

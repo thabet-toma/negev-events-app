@@ -1527,6 +1527,32 @@
     </div>
   </div>
 
+  <!-- FEATURE EVENT MODAL — «مناسبة كبرى» (تذكرة #171): إبراز حتى تاريخ، أو إلغاؤه -->
+  <div id="featureEventModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-star"></i> إبراز المناسبة كمناسبة كبرى</h3>
+        <button type="button" class="close-modal-btn" onclick="closeFeatureEventModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <p class="modal-sub" style="margin-bottom:14px; font-size:0.9rem; line-height:1.6;">
+        المبرزة تتصدّر تغذية محافظتها وحدها حتى التاريخ المحدَّد، وتُعرض ببطاقة الدعوة كاملة وشارة ذهبية — بلا دفع. والحدّ الأقصى ٣ مناسبات مبرزة نشِطة في المحافظة الواحدة.
+      </p>
+      <div class="form-group">
+        <label for="featureEventUntilInput" style="display:block; margin-bottom:6px; font-size:0.85rem; font-weight:700;">تاريخ انتهاء الإبراز</label>
+        <input type="date" id="featureEventUntilInput" style="width:100%; background:var(--surface-sunk); border:1px solid var(--admin-card-border); color:var(--text-main); padding:10px; border-radius:8px; font-family:var(--font-tajawal);">
+      </div>
+      <div class="form-row" style="margin-top:16px; gap:10px;">
+        <button type="button" class="btn-approve" id="confirmFeatureEventBtn" onclick="confirmFeatureEvent()">
+          <i class="fa-solid fa-star"></i> إبراز
+        </button>
+        <button type="button" class="btn-reject" id="clearFeatureEventBtn" onclick="clearEventFeatured()">
+          <i class="fa-regular fa-star"></i> إلغاء الإبراز
+        </button>
+        <button type="button" class="admin-btn-ghost" onclick="closeFeatureEventModal()">إغلاق</button>
+      </div>
+    </div>
+  </div>
+
   <!-- DUPLICATE MODAL — حارس التكرار المحتمل (DUP-M3): مقارنة قبل الاعتماد/النشر -->
   <div id="duplicateModal" class="modal-overlay" style="display:none;">
     <div class="modal-card duplicate-card" role="dialog" aria-modal="true" aria-labelledby="duplicateModalTitle">
