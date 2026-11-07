@@ -17089,6 +17089,42 @@ async function run() {
     }
   });
 
+  await test('طلب الضيف يستهلك دلو /api المجهول المشترك، حتى لو أُرفق رمز صالح', async () => {
+    const headers = { 'X-Forwarded-For': '198.51.100.169' };
+    // مساران بمعرّف/اسم غير صالحين: يمرّان بالمحدِّدين دون قراءة قاعدة البيانات
+    // أو كتابة جواب. قياس الفرق لا يحتاج تغيير RATE_LIMIT_MAX لبقية الاختبارات.
+    async function remainingApiBudget() {
+      const res = await fetch(`${baseUrl}/api/__guest_rsvp_budget__`, { headers });
+      await res.text();
+      assert.strictEqual(res.status, 404);
+      assert.strictEqual(res.headers.get('ratelimit-limit'), String(config.rateLimit.max));
+      return Number(res.headers.get('ratelimit-remaining'));
+    }
+
+    const before = await remainingApiBudget();
+    let spent = 0;
+    for (const token of [null, guestRsvpOwner.token]) {
+      const res = await fetch(`${baseUrl}/e/not-an-id/rsvp`, {
+        method: 'POST',
+        headers: token ? { ...headers, Authorization: `Bearer ${token}` } : headers,
+        redirect: 'manual'
+      });
+      await res.text();
+      assert.strictEqual(res.status, 404, 'the malformed id is rejected after spending both budgets');
+      spent += 1;
+      assert.strictEqual(
+        res.headers.get('ratelimit-limit'), String(config.rateLimit.max),
+        'only the anonymous limiter emits RateLimit-*; the private limiter must not overwrite them'
+      );
+      assert.strictEqual(Number(res.headers.get('ratelimit-remaining')), before - spent);
+    }
+
+    assert.strictEqual(
+      await remainingApiBudget(), before - spent - 1,
+      'the next /api request must see the allowance already spent by both guest requests'
+    );
+  });
+
   await test('الطلب الحادي عشر من IP واحد في الساعة يعطي 429 بصفحة عربية', async () => {
     // عنوان لكل اختبار، عبر X-Forwarded-For، فلا تتقاطع هذه المحاولات العشر
     // مع بقية طلبات هذا الملف — ولا ينجح الفحص لو كان المفتاح غير الـIP.
@@ -17114,6 +17150,12 @@ async function run() {
       response: 'yes'
     }, { forwardedFor: limitedIp });
     assert.strictEqual(eleventh.status, 429, 'the eleventh request from one IP within the hour is refused');
+    assert.strictEqual(eleventh.headers.get('ratelimit-limit'), String(config.rateLimit.max));
+    assert.strictEqual(
+      eleventh.headers.get('ratelimit-remaining'), String(config.rateLimit.max - 11),
+      'even the request refused by the private limiter first spends the shared anonymous budget'
+    );
+    assert.ok(Number(eleventh.headers.get('retry-after')) > 0, 'the private refusal retains Retry-After');
     assert.ok(
       (eleventh.headers.get('content-type') || '').includes('text/html'),
       'the refusal is an HTML page, not the JSON body the /api bucket returns'

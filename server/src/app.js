@@ -20,6 +20,7 @@ const asyncHandler = require('./utils/asyncHandler');
 const { authenticatedUserId } = require('./utils/rateLimitIdentity');
 const { notFound, errorHandler } = require('./middleware/error');
 const { uploadsDir } = require('./middleware/upload');
+const { anonymousLimiter } = require('./middleware/rateLimit');
 
 // مجلد التوزيع يُنشأ عند الإقلاع حتى لا يفشل express.static على تنصيب جديد.
 const downloadsDir = path.join(__dirname, '..', 'downloads');
@@ -70,16 +71,6 @@ function createApp() {
   // bulk upload (two requests per photo) spends only its own allowance, and a
   // shared address cannot exhaust a single admin's. Exactly one of the two
   // applies per request, so exactly one sets the RateLimit-* headers.
-  const anonymousLimiter = rateLimit({
-    windowMs: config.rateLimit.windowMs,
-    max: config.rateLimit.max,
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: req => req.ip || 'unknown',
-    skip: req => authenticatedUserId(req) !== null,
-    message: { success: false, message: 'عدد الطلبات تجاوز الحد المسموح — يرجى المحاولة لاحقاً' }
-  });
-
   const userLimiter = rateLimit({
     windowMs: config.rateLimit.windowMs,
     max: config.rateLimit.userMax,
