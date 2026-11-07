@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -9,6 +10,7 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/models/event.dart';
+import 'package:negev_events/models/user.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/albums_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
@@ -836,6 +838,91 @@ void main() {
         expect(messaged, 1, reason: '«بارك» يفتح ورقة «اختر رسالة» لا غيرها');
       },
     );
+
+    for (final outcome in ['الأيقونة ممتلئة', 'مهتمين يزيد واحداً']) {
+      testWidgets('«جاي» من التغذية: $outcome بعد الردّ وPUT واحد (#170)', (tester) async {
+        SharedPreferences.setMockInitialValues({});
+        final reply = Completer<http.Response>();
+        final puts = <http.Request>[];
+        final row = {
+          ...actingEventJson(),
+          'followers_count': 20,
+          'is_reminded': false,
+          'my_rsvp': {'response': 'no', 'party_size': 1, 'source': 'account'},
+        };
+        final client = MockClient((request) async {
+          final path = request.url.path;
+          if (path == '/api/events/611/rsvp' && request.method == 'PUT') {
+            puts.add(request);
+            return reply.future;
+          }
+          Object body = {'success': true};
+          if (path == '/api/events') {
+            body = {
+              'success': true,
+              'events': [row],
+              'pagination': {'page': 1, 'totalPages': 1, 'total': 1, 'limit': 30},
+              'announcements': [],
+            };
+          } else if (path == '/api/events/611') {
+            fail('الكرت يقرأ الحالة من PUT نفسه بلا GET يزيد المشاهدات');
+          }
+          return http.Response(jsonEncode(body), 200,
+              headers: {'content-type': 'application/json; charset=utf-8'});
+        });
+        final api = NegevApi(ApiClient(client: client));
+        final auth = AuthStore(api);
+        await auth.applySession('test-token', const AppUser(
+          id: 7, phoneNumber: '0500000000', fullName: 'مستخدم اختبار', role: 'user',
+        ));
+        final services = AppServices(
+          api: api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(theme: AppTheme.light(), home: const EventsScreen()),
+        );
+        var savedSignals = 0;
+        services.savedChange.addListener(() => savedSignals++);
+        await tester.pumpWidget(services);
+        await tester.pumpAndSettle();
+        Event cardEvent() => tester.widget<EventCard>(find.byType(EventCard)).event;
+        expect(cardEvent().followersCount, 20);
+        expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+        expect(find.byIcon(Icons.check_circle), findsNothing);
+
+        await tester.tap(find.text('جاي'));
+        await tester.pump();
+        expect(puts, hasLength(1));
+        expect(find.byIcon(Icons.check_circle), findsNothing, reason: 'لا اختيار قبل نجاح الردّ');
+        expect(cardEvent().followersCount, 20);
+        row['followers_count'] = 21;
+        row['is_reminded'] = true;
+        row['my_rsvp'] = {'response': 'yes', 'party_size': 1, 'source': 'account'};
+        reply.complete(http.Response(jsonEncode({
+          'success': true, 'my_rsvp': row['my_rsvp'], 'rsvp_going_count': 1,
+          'is_reminded': true, 'followers_count': 21, 'interested_count': 21,
+        }), 200, headers: {'content-type': 'application/json; charset=utf-8'}));
+        await tester.pumpAndSettle();
+
+        // تأكيدان مستقلّان ليظهر فشل كلّ مانع على الرأس القديم، لا يحجب أحدهما الآخر.
+        if (outcome == 'الأيقونة ممتلئة') {
+          expect(find.byIcon(Icons.check_circle), findsOneWidget,
+              reason: 'myRsvp من الردّ يملأ أيقونة «جاي»');
+        } else {
+          expect(cardEvent().followersCount, 21,
+              reason: 'عدّاد «مهتمين» من الخادم، لا زيادة المستمع ثم زيادة محلية ثانية');
+        }
+        expect(cardEvent().myRsvp?.isGoing, isTrue);
+        expect(cardEvent().myRsvp?.partySize, 1);
+        expect(cardEvent().rsvpGoingCount, 1);
+        expect(cardEvent().isReminded, isTrue);
+        expect(cardEvent().followersCount, 21);
+        expect(puts, hasLength(1), reason: 'ضغطة الكرت PUT واحد فقط');
+        expect(jsonDecode(puts.single.body), {'response': 'yes', 'party_size': 1});
+        expect(puts.single.headers['Authorization'], 'Bearer test-token');
+        expect(savedSignals, 1, reason: 'إشارة الحفظ تُرسل مرّة واحدة');
+      });
+    }
 
     testWidgets(
       'a type with rsvp_enabled off carries no «جاي» — a live handler does not override the switch',

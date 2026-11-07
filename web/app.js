@@ -2983,7 +2983,8 @@ let messageSheetState = null;
  * (`openChatModal`) بنصّها في الحقل، فيبقى للمستخدم أن يعدّله أو يكتب غيره.
  */
 async function openMessageSheet(eventId, occasionTypeId) {
-  messageSheetState = { eventId, occasionTypeId: occasionTypeId || null, messages: [] };
+  const state = { eventId, occasionTypeId: occasionTypeId || null, messages: [] };
+  messageSheetState = state;
   const modal = document.getElementById('messageSheetModal');
   const list = document.getElementById('messageSheetList');
   const subtitle = document.getElementById('messageSheetSubtitle');
@@ -2995,7 +2996,8 @@ async function openMessageSheet(eventId, occasionTypeId) {
   modal.style.display = 'flex';
 
   const messages = await occasionTypeMessages(occasionTypeId);
-  messageSheetState.messages = messages;
+  if (messageSheetState !== state) return;
+  state.messages = messages;
   if (!messages.length) {
     // نوع بلا رسالة نشِطة: الورقة لا تكون جداراً — «اكتب رسالتك» وحدها باب.
     list.innerHTML = '<p class="message-sheet-empty">لا توجد رسائل جاهزة لهذا النوع بعد — اكتب رسالتك بنفسك.</p>';

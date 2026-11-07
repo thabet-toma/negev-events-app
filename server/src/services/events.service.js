@@ -482,7 +482,8 @@ async function attachRsvpCounters(events) {
 
 /**
  * The row every RSVP read starts from: the event's own status plus its type's
- * two flags, and whether the occasion's span has already ended. `is_expired`
+ * three flags — RSVP open, RSVP counter, follower counter — and whether the
+ * occasion's span has already ended. `is_expired`
  * is selected here once — by the same EVERY-SPAN rule the share page and the
  * archive reads use — because the guest face on `/e/:id` closes on it
  * (ADR-0015 §3: an ended occasion shows no form) while the account face never
@@ -490,7 +491,7 @@ async function attachRsvpCounters(events) {
  */
 async function rsvpContext(eventId) {
   return db.queryOne(
-    `SELECT e.id, e.status, ot.rsvp_enabled, ot.show_rsvp_count, ot.tone,
+    `SELECT e.id, e.status, ot.rsvp_enabled, ot.show_rsvp_count, ot.show_followers_count, ot.tone,
             (${EVENT_SPAN_END_SQL_E} < CURDATE()) AS is_expired
        FROM events e
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
@@ -557,9 +558,16 @@ async function setRsvp(eventId, userId, { response, partySize }) {
 
   if (response === 'yes') await setReminder(eventId, userId);
 
+  // حالة التذكير من المصدر نفسه الذي يبني التغذية، لا زيادة يخمّنها العميل.
+  const [reminderState] = await attachReminderState([{
+    id: eventId,
+    occasion_type: { show_followers_count: Boolean(context.show_followers_count) }
+  }], userId);
+  const { id, occasion_type, ...reminderFields } = reminderState;
   return {
     my_rsvp: await myRsvpFor(eventId, userId),
-    ...await rsvpCountersForEvent(eventId, context)
+    ...await rsvpCountersForEvent(eventId, context),
+    ...reminderFields
   };
 }
 

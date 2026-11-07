@@ -965,29 +965,32 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       // العدد 1 للجواب الأول. ومن أجاب سابقاً من صفحة المناسبة بعددٍ أكبر
       // يُحفظ عدده كما هو — ضغطةٌ على الكرت ليست أمراً بمحو مرافقيه من العدّاد.
       final knownPartySize = event.myRsvp?.isGoing == true ? event.myRsvp!.partySize : 1;
-      await runPositiveMoment(
-        () => services.api.setRsvp(event.id, going: true, partySize: knownPartySize),
-      );
-      if (!event.isReminded) {
+      late EventRsvpState rsvpState;
+      await runPositiveMoment(() async {
+        rsvpState = await services.api.setRsvp(
+          event.id, going: true, partySize: knownPartySize,
+        );
+      });
+      if (!event.isReminded && rsvpState.isReminded) {
         willAlarm = await services.reminders.onReminderAdded();
       }
       services.myListRevision.value++;
-      services.savedChange.value = (eventId: event.id, saved: true);
-      if (!mounted) return;
-      setState(() {
-        _events = _events
-            .map(
-              (e) => e.id == event.id
+      if (mounted) {
+        setState(() {
+          _events = _events
+              .map((e) => e.id == event.id
                   ? e.copyWithReminder(
-                      isReminded: true,
-                      followersCount: e.followersCount == null || event.isReminded
-                          ? e.followersCount
-                          : e.followersCount! + 1,
+                      isReminded: rsvpState.isReminded,
+                      followersCount: rsvpState.followersCount,
+                      rsvpState: rsvpState,
                     )
-                  : e,
-            )
-            .toList();
-      });
+                  : e)
+              .toList();
+        });
+      }
+      // بعد تطبيق حالة الخادم: مستمع التغذية يرى الحفظ نفسه فلا يزيد العدّاد ثانيةً.
+      services.savedChange.value = (eventId: event.id, saved: rsvpState.isReminded);
+      if (!mounted) return;
       if (!willAlarm) {
         showMessage(
           context,
