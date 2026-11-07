@@ -8,7 +8,9 @@ import '../main.dart';
 import '../models/event.dart';
 import '../models/live.dart';
 import '../models/notification.dart' as notif;
+import '../models/stats_ticker.dart';
 import '../state/audio_coordinator.dart';
+import '../state/home_ticker.dart';
 import '../state/rate_us.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
@@ -160,6 +162,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// حالة البث لكبسة الشريط وشارتها — `null` قبل أول ردّ أو عند فشله،
   /// والكبسة ظاهرة وقابلة للكبس في الحالتين.
   LiveChannel? _liveChannel;
+
+  /// التعميم الحيّ وشريط الإحصاءات (#172) يعيشان في `AppServices.homeTicker`
+  /// وحده — مشتركين بين الهيكل وهذه الشاشة، ومصدر العرض والإغلاق واحد. لا
+  /// لقطة محلية هنا: لقطة محلية كانت تسمح بشريطين لتعميم واحد.
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
 
@@ -254,6 +260,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _didInit = true;
       _loadFirstPage();
       _loadLiveChannel();
+      // شريط الإحصاءات والتعميم (#172): المخزن المشترك يحمّل مرّة واحدة، وإن
+      // سبقه الهيكل (وهو الأصل) لا يتضاعف النداء.
+      AppServices.of(context).homeTicker.ensureLoaded();
       // بعد أول إطار: بطاقة الدخول نداء ثانٍ لا يشترك في بناء التغذية، فلا
       // يؤخّر أول كرت ولا يمنع ظهوره إن تأخّر.
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowEntryCard());
@@ -1193,6 +1202,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                       _stories = services.api.stories();
                     });
                     _loadLiveChannel();
+                    // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
+                    // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
+                    services.homeTicker.refresh();
                     // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                     services.audio.defaultTrack(services.api, refresh: true).then((url) {
                       if (mounted) _defaultAudioUrl = url;
@@ -1352,6 +1364,11 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                 ],
               ),
             ),
+            // شريط الإحصائيات (#172): عدد القادم في كل محافظة والمجموع، أو
+            // التعميم الحيّ الذي يحلّ محلّه — من المخزن المشترك نفسه الذي يقرأه
+            // الهيكل ويغلقه. عنصر عادي في العمود — لا عائم — فوق شريط الستوريات
+            // كما في الويب (بعد شريط التعاميم هناك).
+            _HomeTicker(store: AppServices.of(context).homeTicker),
             // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
             // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته.
             _StoriesStrip(
@@ -2251,6 +2268,218 @@ class _AnnouncementInfoLine extends StatelessWidget {
 /// تُقتطع من ارتفاع الكرت لا أن تغطّيه: يبقى ٨٢ كما في النموذج
 /// (`docs/prototype/home-2026-10.html`، العرض «أ») ولا يكبر.
 const double _storiesStripHeight = 82;
+
+/// خلفية تعميم ثابتة مستقلة عن الوضع الفاتح/الداكن — **نفس**
+/// `_broadcastBannerColor` في `home_shell.dart` حرفياً (قرار #20 خطوة 15:
+/// تدرّج أغمق من `--warn` كي لا يهتزّ تباين النص الأبيض بين الوضعين). تعميمٌ
+/// هنا وآخر هناك يجب أن يُقرآ الشيء نفسه لا شكلين لمعنى واحد.
+const Color _homeBroadcastColor = Color(0xFF78350F);
+
+/// «حُدّث HH:MM» من لحظة حساب الخادم، بالساعة **المحلية للجهاز** وبخانتين
+/// دائماً (‎09:07‎ لا ‎9:7‎). `null` (حقل غائب أو غير مقروء تاريخاً) يعطي
+/// نصاً فارغاً، فلا يُكتب وقتٌ مخترع.
+String _statsUpdatedLabel(DateTime? updatedAt) {
+  if (updatedAt == null) return '';
+  final local = updatedAt.toLocal();
+  final hours = local.hour.toString().padLeft(2, '0');
+  final minutes = local.minute.toString().padLeft(2, '0');
+  return 'حُدّث $hours:$minutes';
+}
+
+/// شريط الإحصاءات في الرئيسية (تذكرة #172) — أو **التعميم الحيّ مكانه**.
+///
+/// الأولوية للتعميم: وجود تعميم حيّ يُخفي الشريط كاملاً، فلا يُعرض الاثنان
+/// معاً في موضع واحد (وهو ما يفعله الويب أيضاً: `renderStatsTicker` تقرأ قائمة
+/// التعاميم نفسها). و**لا رقم قبل حسم حالة التعاميم** (`broadcastsKnown`): رقمٌ
+/// يظهر ثم يختفي حين يصل تعميم ومضةٌ يحكم بها ترتيب الشبكة وحده.
+///
+/// الحالة من [HomeTickerStore] لا من لقطة محلية: الهيكل يستمع لإشارة Socket
+/// ويغلق الشريط من شريطه، وكلاهما يقرأ الحالة نفسها — فلا شريطان لتعميم واحد،
+/// وإغلاق أيّهما يعيد شريط الإحصاءات.
+///
+/// والغياب الكامل — لا تعميم ولا شريط، أو شريط بلا محافظات — يعطي
+/// `SizedBox.shrink()`: لا إطار فارغ ولا حشوة في التخطيط.
+///
+/// ولا حساب في هذا الصنف: الأعداد والمجموع ولحظة الحساب كما وصلت من الخادم
+/// (`StatsTicker` شرحُ العقد هناك)، والشرط «قادم» و«ظاهر» في الخدمة وحدها.
+class _HomeTicker extends StatelessWidget {
+  const _HomeTicker({required this.store});
+
+  final HomeTickerStore store;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) {
+        final live = store.broadcast;
+        if (live != null) return _broadcastBar(live);
+        if (!store.broadcastsKnown) return const SizedBox.shrink();
+        final ticker = store.stats;
+        if (ticker == null || ticker.regions.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return _statsBar(context, ticker);
+      },
+    );
+  }
+
+  /// التعميم الحيّ — سطرٌ ورسالة، وزرّ إغلاق واحد يشاركه معه شريط الهيكل:
+  /// الإغلاق من أيّهما يمرّ بـ`HomeTickerStore.dismissActive`، فتعود الإحصاءات
+  /// في الموضع نفسه (تذكرة #172، الجولة ٢). ومركز الإشعارات لا يُمَسّ.
+  Widget _broadcastBar(({int id, String title, String message}) live) {
+    return Container(
+      key: const Key('home_broadcast_ticker'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: _homeBroadcastColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.campaign, color: Colors.white, size: 17),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (live.title.isNotEmpty)
+                  Text(
+                    live.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                if (live.message.isNotEmpty)
+                  Text(
+                    live.message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('home_broadcast_ticker_dismiss'),
+            onPressed: store.dismissActive,
+            tooltip: 'إغلاق التعميم',
+            icon: const Icon(Icons.close, color: Colors.white, size: 16),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// صفّ المحافظات يُمرَّر أفقياً عند الحاجة (شريط لا كتلة): محافظة تُضاف من
+  /// اللوحة غداً لا تفيض على هاتف ضيّق، والمجموع و«حُدّث» ثابتان تحته.
+  Widget _statsBar(BuildContext context, StatsTicker ticker) {
+    return Container(
+      key: const Key('home_stats_ticker'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.calendar_month_rounded, size: 15, color: context.c.sky),
+              const SizedBox(width: 6),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final region in ticker.regions)
+                        Padding(
+                          // مسافة بين الرقاقات في اتجاه القراءة (RTL) — لا
+                          // اتجاه فيزيائي ثابت.
+                          padding: const EdgeInsetsDirectional.only(end: 6),
+                          child: _regionChip(context, region),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Row(
+            children: [
+              Text(
+                'المجموع ${ticker.total}',
+                key: const Key('home_stats_ticker_total'),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _statsUpdatedLabel(ticker.updatedAt),
+                key: const Key('home_stats_ticker_updated'),
+                style: TextStyle(fontSize: 11.5, color: context.c.inkSoft),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _regionChip(BuildContext context, StatsRegion region) {
+    return Container(
+      key: Key('home_stats_region_${region.regionId}'),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+      decoration: BoxDecoration(
+        color: context.c.skyWash,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            region.name,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: context.c.skyDeep,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '${region.upcomingCount}',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: context.c.skyDeep,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// شريط الستوريات الظاهر دائماً في رأس التغذية: كبسة البث أولاً — فعل مستقل يبقى
 /// وحده إن لم تصل ستوريات — ثم ستوريات التسويق أفقياً.

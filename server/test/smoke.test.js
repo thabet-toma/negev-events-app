@@ -26,7 +26,7 @@ const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
 const { authenticatedUserId } = require('../src/utils/rateLimitIdentity');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS, STATS_TICKER_CACHE_SECONDS } = require('../src/constants');
 
 // The eight towns (and their centres) exactly as they stood as constants
 // before towns moved into the `towns` table — what the seeded table must
@@ -47,6 +47,7 @@ const logger = require('../src/utils/logger');
 const realtime = require('../src/realtime');
 const shareCard = require('../src/services/shareCard.service');
 const newsService = require('../src/services/news.service');
+const statsService = require('../src/services/stats.service');
 const { PALETTES } = require('../src/utils/shareTheme');
 
 let baseUrl = '';
@@ -17587,6 +17588,288 @@ async function run() {
   for (const id of featuredCleanup.userIds) await db.execute('DELETE FROM users WHERE id = ?', [id]);
   for (const id of featuredCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
   for (const id of featuredCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
+
+  console.log('\nشريط الإحصائيات في الرئيسية — عدّ القادم لكل محافظة وكاشه (تذكرة #172)');
+
+  /**
+   * محافظة خاصة بهذا القسم وبلدة تحتها: العدّاد يُقرأ من الشريط بمعرّف
+   * المحافظة، فصفوف قسم آخر في «النقب» المشتركة لا تُفسد الرقم. وكل صفّ
+   * يُنشأ هنا يُحذف في نهاية القسم بترتيب المفاتيح الأجنبية.
+   */
+  const statsStamp = `إحصاء${Date.now()}`;
+  const statsRegionName = `محافظة ${statsStamp}`;
+  const statsTownName = `بلدة ${statsStamp}`;
+  const statsCleanup = { eventIds: [], townIds: [], regionIds: [] };
+
+  const { insertId: statsRegionId } = await db.execute(
+    `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+     VALUES (?, 31.2, 34.8, 9, 98, 1)`,
+    [statsRegionName]
+  );
+  statsCleanup.regionIds.push(statsRegionId);
+
+  const { insertId: statsTownId } = await db.execute(
+    `INSERT INTO towns (region_id, name, latitude, longitude, position, is_active)
+     VALUES (?, ?, 31.2, 34.8, 1, 1)`,
+    [statsRegionId, statsTownName]
+  );
+  statsCleanup.townIds.push(statsTownId);
+
+  // التواريخ من `CURDATE()` الذي يقرأه الخادم نفسه (انظر `schedulerToday`):
+  // «قادم» و«منتهٍ» هنا يجب أن يكونا كذلك بالنسبة للشرط الذي يُنفَّذ فعلاً.
+  const STATS_UPCOMING_DAY = addDaysToDate(schedulerToday, 12);
+  const STATS_ENDED_DAY = addDaysToDate(schedulerToday, -4);
+
+  /** ينشر مناسبة في محافظة القسم (سوبر أدمن: تنشر فوراً) ويعيد معرّفها. */
+  async function publishStatsEvent({ label, day = STATS_UPCOMING_DAY, overrides = {} }) {
+    const created = await api('POST', '/api/events', {
+      token: superAdminToken,
+      body: weddingEventBody({
+        honorees: [{ name: `${statsStamp} ${label}` }],
+        town: statsTownName,
+        event_date: day,
+        location_name: `قاعة ${statsStamp} ${label}`,
+        ...overrides
+      })
+    });
+    assert.strictEqual(created.status, 201, created.body.message);
+    statsCleanup.eventIds.push(created.body.eventId);
+    return created.body.eventId;
+  }
+
+  /**
+   * صفّ محافظة القسم في الشريط **بعد تفريغ الكاش**: هذا القسم يقيس العدّ
+   * الحقيقي، ونسخةٌ عمرها ثوانٍ من طلب سابق كانت ستُنجح تأكيدات «لم يتغيّر
+   * الرقم» لسبب آخر غير الذي تحمله أسماؤها.
+   */
+  async function statsRegionRow() {
+    statsService.clearTickerCache();
+    const { status, body } = await api('GET', '/api/stats/ticker');
+    assert.strictEqual(status, 200, body.message);
+    return (body.regions || []).find(region => region.region_id === statsRegionId) || null;
+  }
+
+  await test('GET /api/stats/ticker عام — كل صفّ { region_id, name, upcoming_count }، وtotal مجموع الصفوف، وupdated_at لحظة', async () => {
+    await publishStatsEvent({ label: 'الأولى' });
+    await publishStatsEvent({ label: 'الثانية' });
+
+    statsService.clearTickerCache();
+    const { status, body } = await api('GET', '/api/stats/ticker');
+    assert.strictEqual(status, 200, body.message);
+    assert.ok(Array.isArray(body.regions) && body.regions.length > 0, 'الشريط يعيد محافظات');
+    for (const region of body.regions) {
+      assert.deepStrictEqual(
+        Object.keys(region).sort(),
+        ['name', 'region_id', 'upcoming_count'],
+        `صفّ المحافظة لا يحمل إلا حقوله الثلاثة: ${JSON.stringify(region)}`
+      );
+      assert.strictEqual(typeof region.region_id, 'number', 'region_id رقم — يطابق GET /api/towns');
+      assert.strictEqual(typeof region.name, 'string', 'name اسم المحافظة كما في جدول regions');
+      assert.strictEqual(typeof region.upcoming_count, 'number', 'upcoming_count رقم لا نصّ');
+    }
+    assert.strictEqual(
+      body.total,
+      body.regions.reduce((sum, region) => sum + region.upcoming_count, 0),
+      'total مجموع الأعداد المعروضة نفسها — لا استعلام ثانٍ يخالفه'
+    );
+    assert.ok(!Number.isNaN(Date.parse(body.updated_at)), `updated_at لحظة مقروءة، وصل "${body.updated_at}"`);
+
+    const mine = body.regions.find(region => region.region_id === statsRegionId);
+    assert.ok(mine, 'المحافظة النشطة لهذا القسم لها صفّ في الشريط');
+    assert.strictEqual(mine.name, statsRegionName, 'وباسمها كما في القاعدة');
+    assert.strictEqual(mine.upcoming_count, 2, 'ومناسبتاها المعتمدتان القادمتان وحدهما');
+  });
+
+  await test('عدّ المحافظة يطابق القائمة العامة نفسها — المعلّقة والمجدولة لا تُعدّان', async () => {
+    // معلّقة: ينشرها مستخدم عادي فتبقى في الطابور، ولا تظهر في أي قائمة.
+    const pending = await api('POST', '/api/events', {
+      token: userToken,
+      body: weddingEventBody({
+        honorees: [{ name: `${statsStamp} المعلّقة` }],
+        town: statsTownName,
+        event_date: STATS_UPCOMING_DAY,
+        location_name: `قاعة ${statsStamp} المعلّقة`
+      })
+    });
+    assert.strictEqual(pending.status, 201, pending.body.message);
+    assert.strictEqual(pending.body.status, 'pending', 'المناسبة فعلت الطابور حقاً');
+    statsCleanup.eventIds.push(pending.body.eventId);
+
+    // مجدولة: معتمدة وقادمة، لكن النشر لم يبلغ موعده (#167).
+    const scheduledId = await publishStatsEvent({
+      label: 'المجدولة',
+      overrides: { publish_at: `${addDaysToDate(schedulerToday, 2)}T09:00` }
+    });
+    const scheduledRow = await db.queryOne('SELECT status, publish_at FROM events WHERE id = ?', [scheduledId]);
+    assert.strictEqual(scheduledRow.status, 'approved', 'المجدولة معتمدة — الغياب من الظهور لا من الحالة');
+
+    const feed = await api(
+      'GET',
+      `/api/events?upcoming=1&limit=100&search=${encodeURIComponent(statsStamp)}`,
+      { region: statsRegionId }
+    );
+    assert.strictEqual(feed.status, 200, feed.body.message);
+    const feedIds = feed.body.events.map(event => event.id);
+    assert.strictEqual(feedIds.length, 2, 'القائمة العامة تعرض المناسبتين المعتمدتين البالغتَي النشر وحدهما');
+    assert.ok(!feedIds.includes(pending.body.eventId), 'المعلّقة غائبة عن القائمة العامة');
+    assert.ok(!feedIds.includes(scheduledId), 'والمجدولة غائبة عن القائمة العامة');
+
+    const mine = await statsRegionRow();
+    assert.strictEqual(
+      mine.upcoming_count, feedIds.length,
+      'رقم الشريط هو عدد ما تعرضه القائمة العامة للمحافظة نفسها'
+    );
+  });
+
+  await test('مناسبة «بالرابط فقط» معتمدة وقادمة لا تُعدّ في الشريط', async () => {
+    const before = await statsRegionRow();
+    assert.strictEqual(before.upcoming_count, 2, 'نقطة البداية معروفة قبل الاختبار');
+
+    const hiddenId = await publishStatsEvent({ label: 'بالرابط', overrides: { visibility: 'link_only' } });
+    const stored = await db.queryOne('SELECT status, visibility FROM events WHERE id = ?', [hiddenId]);
+    assert.strictEqual(stored.status, 'approved', 'المناسبة معتمدة فعلاً — الاستثناء من الظهور وحده');
+    assert.strictEqual(stored.visibility, 'link_only', 'وظهورها «بالرابط فقط»');
+
+    const after = await statsRegionRow();
+    assert.strictEqual(
+      after.upcoming_count, before.upcoming_count,
+      'العدّ لم يزد: لو سقط شرط visibility من القطعة المشتركة لصار ٣ هنا'
+    );
+  });
+
+  await test('مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف', async () => {
+    const before = await statsRegionRow();
+
+    const endedId = await publishStatsEvent({ label: 'المنتهية', day: STATS_ENDED_DAY });
+    const archive = await api(
+      'GET',
+      `/api/events?archive=1&limit=100&search=${encodeURIComponent(statsStamp)}`,
+      { region: statsRegionId }
+    );
+    assert.strictEqual(archive.status, 200, archive.body.message);
+    assert.ok(
+      archive.body.events.some(event => event.id === endedId),
+      'الأرشيف يعرضها: الصفّ موجود ومعتمد، والفرق في حدّ «قادم» وحده'
+    );
+
+    const after = await statsRegionRow();
+    assert.strictEqual(
+      after.upcoming_count, before.upcoming_count,
+      'العدّ لم يزد: لو سقط EVENT_SPAN_END_SQL_EVENTS >= CURDATE() لصارت المنتهية «قادمة» هنا'
+    );
+  });
+
+  await test('الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها', async () => {
+    assert.strictEqual(STATS_TICKER_CACHE_SECONDS, 300, 'مدة الكاش المطلوبة في التذكرة بالثواني');
+
+    statsService.clearTickerCache();
+    // عدّاد على `db.query` وحده (لا `queryOne`) — وهو المدخل الوحيد الذي يقرأ
+    // به استعلام الشريط، فتسجيل الصفر هنا يعني «لم تصل القاعدة إطلاقاً». ولا
+    // يُعدّ إلا استعلام الشريط نفسه (`AS upcoming_count`): أي قراءة أخرى من
+    // مؤقّت خلفي أو طلب آخر لا تُفسد القياس.
+    const originalQuery = db.query;
+    let tickerQueries = 0;
+    db.query = (sql, params) => {
+      if (/AS upcoming_count/.test(sql)) tickerQueries += 1;
+      return originalQuery.call(db, sql, params);
+    };
+    let first;
+    let second;
+    try {
+      first = await api('GET', '/api/stats/ticker');
+      tickerQueries = 0;
+      // تأخير صغير بين الطلبين كي يكون تساوي `updated_at` دليلاً: كودٌ يختم
+      // اللحظة عند كل ردّ (لا عند التعبئة) يُنتج سلسلة أخرى بعد ٢٠مللي، فيسقط
+      // التأكيد. بلا التأخير قد يقع الطلبان في المللي ثانية نفسها فيمرّ الخطأ.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      second = await api('GET', '/api/stats/ticker');
+    } finally {
+      db.query = originalQuery;
+    }
+
+    assert.strictEqual(first.status, 200, first.body.message);
+    assert.strictEqual(second.status, 200, second.body.message);
+    assert.strictEqual(tickerQueries, 0, 'الطلب داخل المدّة لم يستعلم: الكاش نطاقه العملية لا الطلب');
+    assert.strictEqual(
+      second.body.updated_at, first.body.updated_at,
+      'updated_at يُختم لحظة التعبئة، فلا يتغيّر مع كل ردّ داخل المدّة'
+    );
+    assert.deepStrictEqual(second.body.regions, first.body.regions, 'ونفس الأعداد تُعاد كما حُسبت');
+  });
+
+  await test('الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب', async () => {
+    // ساعة الخدمة قابلة للاستبدال (`statsService.setTickerClock`): العبور هنا
+    // بـ`STATS_TICKER_CACHE_SECONDS` نفسها التي يقيسها الكاش، لا بتفريغٍ يدوي.
+    // لو صار الكاش أبدياً بقي هذا الاختبار أحمر: لا شيء في مساره يُفرغه.
+    let fakeNow = Date.now();
+    statsService.setTickerClock(() => fakeNow);
+
+    // عدّاد على `db.query` وحده (الاختبار السابق يشرح لماذا): الصفر داخل
+    // المدّة والواحد بعد عبورها هما الدليل على أن الطلب هو ما استعلم.
+    const originalQuery = db.query;
+    let tickerQueries = 0;
+    db.query = (sql, params) => {
+      if (/AS upcoming_count/.test(sql)) tickerQueries += 1;
+      return originalQuery.call(db, sql, params);
+    };
+
+    try {
+      // تفريغ واحد قبل القياس لبداية معروفة على صفوف هذا القسم — لا تفريغ
+      // بعدها: مسار الانتهاء نفسه يمرّ بالساعة وحدها.
+      statsService.clearTickerCache();
+      const cached = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(cached.status, 200, cached.body.message);
+      const cachedCount = cached.body.regions
+        .find(region => region.region_id === statsRegionId).upcoming_count;
+
+      await publishStatsEvent({ label: 'الثالثة' });
+
+      tickerQueries = 0;
+      const stillCached = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(stillCached.status, 200, stillCached.body.message);
+      assert.strictEqual(tickerQueries, 0, 'داخل المدّة لا استعلام: النسخة المحفوظة هي ما يُخدَم');
+      assert.strictEqual(
+        stillCached.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
+        cachedCount,
+        'النسخة المحفوظة هي ما يُخدَم داخل المدّة — لا قراءة جديدة ترى المناسبة الثالثة'
+      );
+      assert.strictEqual(
+        stillCached.body.updated_at, cached.body.updated_at,
+        'وحتى انتهاء المدّة يحمل الردّ لحظة التعبئة نفسها، لا لحظة السؤال'
+      );
+
+      // نهاية المدّة بالضبط كما يقيسها الكاش: الساعة تتقدّم مدّة الصلاحية
+      // كاملة + ثانية. لا مؤقّت في الخدمة ولا تفريغ — الطلب التالي بعد
+      // الانتهاء هو ما يعيد التعبئة.
+      fakeNow += STATS_TICKER_CACHE_SECONDS * 1000 + 1000;
+      const refreshed = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(refreshed.status, 200, refreshed.body.message);
+      assert.strictEqual(tickerQueries, 1, 'انتهاء المدّة وحده أعاد الاستعلام — لا شيء آخر جدّد');
+      assert.strictEqual(
+        refreshed.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
+        cachedCount + 1,
+        'وبعد انتهاء الصلاحية تُقرأ المناسبة الثالثة: الانتهاء هو ما جدّد'
+      );
+      assert.notStrictEqual(
+        refreshed.body.updated_at, stillCached.body.updated_at,
+        'ولحظة الحساب تتقدّم مع إعادة التعبئة — updated_at يُختم عند التعبئة ولا يُجمَّد أبدياً'
+      );
+    } finally {
+      db.query = originalQuery;
+      // الساعة الحقيقية تعود قبل التنظيف وما بعده من أقسام.
+      statsService.setTickerClock();
+    }
+  });
+
+  // تنظيف قسم الإحصائيات: المناسبات (ومعها إشعاراتها بـON DELETE CASCADE)، ثم
+  // البلدة، ثم المحافظة — بترتيب المفاتيح الأجنبية. والكاش يُفرَّغ في آخره كي
+  // لا يبقى فيه صفّ محافظة محذوفة.
+  for (const id of statsCleanup.eventIds) {
+    await api('DELETE', `/api/admin/events/${id}`, { token: superAdminToken });
+  }
+  for (const id of statsCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
+  for (const id of statsCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
+  statsService.clearTickerCache();
 
   // تنظيف هذا القسم: المناسبات الثلاث تسقط ومَعها أجوبتها بـON DELETE CASCADE.
   for (const id of guestRsvpEventIds) {

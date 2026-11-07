@@ -163,9 +163,18 @@ let myListEndedExpanded = false;
 // tickerTextExpanded مستقلّة عنها تماماً: عرض نصّ الصفّ الأساسي كاملاً بلا قصّ،
 // للمسجَّل دخوله وللمجهول معاً (مراجعة #85، FIX 1).
 let liveBroadcasts = [];
+// هل حُسمت حالة التعاميم الحيّة بعد؟ `false` قبل أول ردّ ناجح من
+// GET /api/broadcasts/live (وعند فشله). «لم تُعرف» ليست «لا تعميم»: عرض الأرقام
+// ثم إخفاؤها حين يصل تعميم ومضةٌ يحكم بها ترتيب الشبكة وحده (#172، الجولة ٢).
+let liveBroadcastsKnown = false;
 let tickerExpanded = false;
 let tickerTextExpanded = false;
 let tickerPrimaryBroadcastId = null;
+
+// شريط الإحصائيات (#172) — آخر ردّ من GET /api/stats/ticker كما وصل، أو null
+// قبل أول ردّ أو بعد فشله (فلا شريط أرقام كاذب). لا حساب في هذا الملف: العدّ
+// والكاش و«حُدّث» كلها على الخادم.
+let statsTickerData = null;
 
 // المصدر الحقيقي الوحيد لهذا التعداد هو تعليق عمود broadcasts.tone في
 // server/src/db/schema.sql — لا استيراد ممكن هنا (web/ بلا خطوة بناء)، فهذه
@@ -273,6 +282,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!initWelcome()) initInstallHint();
   fetchNotifications();
   fetchLiveBroadcasts();
+  // شريط الإحصائيات (#172) يُجلب معهما عند الإقلاع لا عند فتح تبويب: إن كان
+  // هناك تعميم حيّ غاب الشريط وحده (renderStatsTicker)، لا أنه لم يُطلب — وترتيب
+  // وصول الردّين لا يهمّ: الأرقام لا تُرسم قبل أن تُعرف حالة التعاميم.
+  fetchStatsTicker();
   fetchLiveStatus();
   initSupportEntry();
   initNotificationsPush();
@@ -682,6 +695,8 @@ async function fetchLiveBroadcasts() {
     const data = await res.json();
     if (data.success) {
       liveBroadcasts = data.broadcasts || [];
+      // ردّ ناجح — ولو فارغاً — هو ما يحسم الحالة: بعده فقط يجوز للشريط الظهور.
+      liveBroadcastsKnown = true;
       renderBroadcastTicker();
     }
   } catch (e) {
@@ -732,6 +747,8 @@ function renderBroadcastTicker() {
     tickerPrimaryBroadcastId = null;
     tickerExpanded = false;
     tickerTextExpanded = false;
+    // لا تعميم ظاهر ⇒ شريط الإحصائيات يعود إن كان له رقم (#172).
+    renderStatsTicker();
     return;
   }
 
@@ -796,6 +813,9 @@ function renderBroadcastTicker() {
       expandedList.innerHTML = '';
     }
   }
+
+  // تعميم ظاهر الآن ⇒ شريط الإحصائيات يغيب (#172): الاثنان لا يجتمعان.
+  renderStatsTicker();
 }
 
 /**
@@ -846,6 +866,84 @@ async function dismissBroadcastById(broadcastId) {
     }
   } else {
     rememberBroadcastDismissedLocally(broadcastId);
+  }
+}
+
+// شريط الإحصائيات (#172) — عدد المناسبات القادمة في كل محافظة، والمجموع،
+// و«حُدّث HH:MM». يُجلب من GET /api/stats/ticker مرّة عند فتح الصفحة، ويحلّ
+// التعميم الحيّ محلّه: الاثنان لا يظهران معاً (renderBroadcastTicker ينادي
+// renderStatsTicker عند كل تغيير لقائمة التعاميم، وهذه تقرأ القائمة نفسها).
+// وكل الأرقام تأتي من الخادم كما هي — لا جمع ولا تصفية هنا.
+
+/** «حُدّث 09:07» — بالساعة المحلية للزائر من لحظة حساب الخادم. */
+function formatStatsUpdatedAt(isoString) {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  const two = (value) => String(value).padStart(2, '0');
+  return `حُدّث ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+
+/**
+ * يرسم الشريط أو يخفيه. **يُخفى دائماً حين يوجد تعميم حيّ غير مُغلَق** — أي
+ * تعميم يراه الزائر على شريط التعاميم نفسه — وحين لا يوجد رقم بعد، وحين لم
+ * تُعرف حالة التعاميم بعد أصلاً (الردّ الأول لم يصل). ولا يستدعي
+ * renderBroadcastTicker بالمقابل: الاتجاه واحد، فالنداء المتبادل كان سيدور بلا
+ * نهاية عند كل رسم.
+ */
+function renderStatsTicker() {
+  const el = document.getElementById('statsTicker');
+  if (!el) return;
+
+  const hasVisibleBroadcast = liveBroadcasts.some(b => !isBroadcastDismissedLocally(b.id));
+  const regions = statsTickerData && Array.isArray(statsTickerData.regions) ? statsTickerData.regions : [];
+  // `!liveBroadcastsKnown` أولاً: قبل معرفة التعاميم لا رقم — لا «تعاميم فارغة»
+  // افتراضية. طلب التعاميم وطلب الإحصاء يطلقان معاً في الإقلاع، ووصول الإحصاء
+  // أولاً ثم تعميم حيّ كان يعرض رقماً ثم يخفيه (#172، الجولة ٢).
+  if (!liveBroadcastsKnown || hasVisibleBroadcast || !regions.length) {
+    el.hidden = true;
+    return;
+  }
+
+  const container = document.getElementById('statsTickerRegions');
+  if (container) {
+    container.innerHTML = '';
+    regions.forEach(region => {
+      const chip = document.createElement('span');
+      chip.className = 'stats-region';
+
+      const name = document.createElement('span');
+      name.className = 'stats-region-name';
+      name.textContent = region.name || '';
+
+      const count = document.createElement('span');
+      count.className = 'stats-region-count';
+      count.textContent = String(region.upcoming_count);
+
+      chip.appendChild(name);
+      chip.appendChild(count);
+      container.appendChild(chip);
+    });
+  }
+
+  const total = document.getElementById('statsTickerTotal');
+  if (total) total.textContent = `المجموع ${String(statsTickerData.total)}`;
+
+  const updated = document.getElementById('statsTickerUpdated');
+  if (updated) updated.textContent = formatStatsUpdatedAt(statsTickerData.updated_at);
+
+  el.hidden = false;
+}
+
+async function fetchStatsTicker() {
+  try {
+    const res = await apiFetch('/api/stats/ticker');
+    const data = await res.json();
+    if (data.success && Array.isArray(data.regions)) {
+      statsTickerData = { regions: data.regions, total: data.total, updated_at: data.updated_at };
+      renderStatsTicker();
+    }
+  } catch (e) {
+    console.error('Stats ticker error:', e);
   }
 }
 

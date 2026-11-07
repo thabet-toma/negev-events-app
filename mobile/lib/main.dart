@@ -14,6 +14,7 @@ import 'state/analytics.dart';
 import 'state/audio_coordinator.dart';
 import 'state/auth_store.dart';
 import 'state/deep_link_handler.dart';
+import 'state/home_ticker.dart';
 import 'state/places_store.dart';
 import 'state/realtime.dart';
 import 'state/region_store.dart';
@@ -147,6 +148,7 @@ class AppServices extends InheritedWidget {
     AudioCoordinator? audio,
     PlacesStore? places,
     RegionStore? regions,
+    HomeTickerStore? homeTicker,
     ValueNotifier<int>? tabRequest,
     ValueNotifier<int>? myListRevision,
     ValueNotifier<int>? myListNowCount,
@@ -156,6 +158,7 @@ class AppServices extends InheritedWidget {
         reminders = reminders ?? ReminderScheduler(api: api, auth: auth),
         audio = audio ?? AudioCoordinator(),
         places = places ?? PlacesStore(api),
+        homeTicker = homeTicker ?? HomeTickerStore(api: api),
         tabRequest = tabRequest ?? ValueNotifier<int>(_noTabRequest),
         myListRevision = myListRevision ?? ValueNotifier<int>(0),
         myListNowCount = myListNowCount ?? ValueNotifier<int>(0),
@@ -185,6 +188,12 @@ class AppServices extends InheritedWidget {
   final ReminderScheduler reminders;
   final AudioCoordinator audio;
   final PlacesStore places;
+
+  /// حالة شريط الرئيسية الواحدة (#172) — الإحصاء والتعميم الحيّ الذي يحلّ
+  /// محلّه. يعيش هنا لا في `HomeShell` كي تقرأه التغذية أيضاً: الهيكل يستمع
+  /// لإشارة Socket ويغلق شريطه، والتغذية ترسم الشريط نفسه، فمصدر العرض
+  /// والإغلاق واحد.
+  final HomeTickerStore homeTicker;
 
   /// محافظة الاكتشاف المختارة — يقرؤها المنتقي في «حسابي» ويسمعها `HomeShell`
   /// كي يُعيد بناء الأسطح التي تحمل بيانات المحافظة السابقة (تغذية/خريطة/
@@ -254,6 +263,7 @@ class AppServices extends InheritedWidget {
       reminders != oldWidget.reminders ||
       audio != oldWidget.audio ||
       places != oldWidget.places ||
+      homeTicker != oldWidget.homeTicker ||
       regions != oldWidget.regions ||
       tabRequest != oldWidget.tabRequest ||
       myListRevision != oldWidget.myListRevision ||

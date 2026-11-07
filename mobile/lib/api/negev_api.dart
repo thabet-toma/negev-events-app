@@ -13,6 +13,7 @@ import '../models/nokoot.dart';
 import '../models/notification.dart';
 import '../models/reminder_schedule.dart';
 import '../models/service.dart';
+import '../models/stats_ticker.dart';
 import '../models/user.dart';
 import 'api_client.dart';
 
@@ -416,6 +417,41 @@ class NegevApi {
   Future<LiveChannel> liveChannel() async {
     final data = await _client.get('/api/live');
     return LiveChannel.fromJson(data);
+  }
+
+  /// شريط الإحصائيات في الرئيسية (#172) — `GET /api/stats/ticker`، مسار عام
+  /// بلا مصادقة: الشريط أول ما يراه زائر لم يسجّل دخوله.
+  Future<StatsTicker> statsTicker() async {
+    final data = await _client.get('/api/stats/ticker');
+    return StatsTicker.fromJson(data);
+  }
+
+  /// التعاميم الحيّة التي يحلّ أحدها محلّ شريط الإحصاءات (#172) — القائمة من
+  /// `GET /api/broadcasts/live` بترتيب الخادم (الأحدث أولاً)، ومعرّف كل صفّ.
+  ///
+  /// `auth: true` كما يفعل الويب حرفياً (`fetchLiveBroadcasts` في app.js):
+  /// المسار `optionalAuthenticate` على الخادم، فالزائر يرى العام، والمسجَّل
+  /// دخوله يرى معه تعميم بلدته — وهو تعميم حيّ له أيضاً، فلا يمرّ خلف الشريط.
+  ///
+  /// صفّ بلا معرّف رقمي أو بلا نصّ يُتجاهل: بلا معرّف لا إغلاق ولا استبعاد
+  /// لاحق، والشريط سطرُ نصّ لا نموذج إشعار كامل (التفاصيل في مركز الإشعارات).
+  Future<List<({int id, String title, String message})>> liveBroadcasts() async {
+    final data = await _client.get('/api/broadcasts/live', auth: true);
+    final list = data['broadcasts'];
+    if (list is! List) return const [];
+    final result = <({int id, String title, String message})>[];
+    for (final rawBroadcast in list) {
+      if (rawBroadcast is! Map) continue;
+      final broadcast = Map<String, dynamic>.from(rawBroadcast);
+      final rawId = broadcast['id'];
+      final id = rawId is int ? rawId : int.tryParse('$rawId');
+      if (id == null) continue;
+      final title = '${broadcast['title'] ?? ''}'.trim();
+      final message = '${broadcast['message'] ?? ''}'.trim();
+      if (title.isEmpty && message.isEmpty) continue;
+      result.add((id: id, title: title, message: message));
+    }
+    return result;
   }
 
   /// صفحة البث كاملة — GET /api/live/hub. `auth: true` للمسجَّل وحده كي يصل

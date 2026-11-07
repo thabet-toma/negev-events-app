@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 77 | 23912 |
-| `web` | 7 | 19076 |
-| `mobile/lib` | 64 | 28138 |
+| `server/src` | 79 | 24086 |
+| `web` | 7 | 19160 |
+| `mobile/lib` | 66 | 28570 |
 
 ### توزيع `server/src`
 
@@ -22,14 +22,14 @@
 |---|---|---|
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 136 |
-| `constants.js` | 1 | 329 |
+| `constants.js` | 1 | 338 |
 | `db/` | 4 | 2786 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 775 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 23 | 5804 |
-| `services/` | 25 | 12530 |
+| `routes/` | 24 | 5834 |
+| `services/` | 26 | 12665 |
 | `utils/` | 12 | 865 |
 
 ### ملفات `web/*.js`
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8109 |
 | `api.js` | 137 |
-| `app.js` | 10098 |
+| `app.js` | 10182 |
 | `config.js` | 32 |
 | `occasionForm.js` | 352 |
 | `serve.js` | 149 |
@@ -50,12 +50,12 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 1656 |
+| `api/` | 2 | 1690 |
 | `config.dart` | 1 | 69 |
-| `main.dart` | 1 | 264 |
-| `models/` | 10 | 2412 |
-| `screens/` | 19 | 18092 |
-| `state/` | 17 | 1722 |
+| `main.dart` | 1 | 273 |
+| `models/` | 11 | 2467 |
+| `screens/` | 19 | 18340 |
+| `state/` | 18 | 1808 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
 
@@ -63,17 +63,17 @@
 
 | المهمة | ابدأ من |
 |---|---|
-| إضافة نقطة API | `server/src/routes/index.js:55` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
+| إضافة نقطة API | `server/src/routes/index.js:56` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
 | تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2541` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:145` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
-| واجهة الويب | `web/app.js:302` · `web/admin.js` · `web/api.js:60` |
-| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:20` · `mobile/lib/screens/` · `mobile/lib/models/` |
+| واجهة الويب | `web/app.js:315` · `web/admin.js` · `web/api.js:60` |
+| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:21` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 202
+## ٣. نقاط API — 203
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -258,6 +258,7 @@
 | POST | `/api/services/providers` | `authenticate` | `server/src/routes/services.routes.js:96` |
 | GET | `/api/services/providers/:id` | — | `server/src/routes/services.routes.js:89` |
 | GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:268` |
+| GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:29` |
 | GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:36` |
 | POST | `/api/stories/:id/click` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:68` |
 | POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:77` |
@@ -308,7 +309,7 @@
 | `event_reminders` | `admin.service.js`, `events.service.js`, `notifications.service.js`, `stories.service.js` |
 | `event_rsvps` | `events.service.js` |
 | `event_videos` | `albums.service.js` |
-| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `shareCard.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
+| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `shareCard.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
 | `live_episodes` | `liveHub.service.js` |
 | `live_poll_votes` | `liveHub.service.js` |
 | `nokoot_ledger` | `nokoot.service.js` |
@@ -324,7 +325,7 @@
 | `privacy_requests` | `auth.service.js`, `privacy.service.js` |
 | `push_subscriptions` | `push.service.js` |
 | `reactions` | `admin.service.js`, `events.service.js`, `occasionTypes.service.js` |
-| `regions` | `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `events.service.js`, `notifications.service.js`, `push.service.js`, `stories.service.js`, `towns.service.js` |
+| `regions` | `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `events.service.js`, `notifications.service.js`, `push.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js` |
 | `service_categories` | `services.service.js` |
 | `service_category_attributes` | `services.service.js` |
 | `service_provider_towns` | `services.service.js`, `towns.service.js` |
@@ -333,7 +334,7 @@
 | `story_clicks` | `stories.service.js` |
 | `story_reports` | `stories.service.js` |
 | `story_views` | `stories.service.js` |
-| `towns` | `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `news.service.js`, `services.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
+| `towns` | `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `news.service.js`, `services.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
 | `users` | `activity.service.js`, `admin.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `notifications.service.js`, `people.service.js`, `privacy.service.js`, `push.service.js`, `stories.service.js` |
 | `villages` | `analytics.service.js`, `events.service.js`, `services.service.js`, `towns.service.js`, `villages.service.js` |
 
