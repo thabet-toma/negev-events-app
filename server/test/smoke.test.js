@@ -17326,7 +17326,12 @@ async function run() {
   });
 
   await test('إلغاء الإبراز بـnull يعيد الصفّ لمكانه ويُفرّغ مقعد السقف', async () => {
-    const cleared = await api('PATCH', `/api/admin/events/${featuredIds[2]}/featured`, {
+    // الملغى هو **الأقدم** (`featuredIds[0]`، وأول التغذية قبل الإلغاء)، لا
+    // الأخير: إلغاء الأخير يجعله آخراً في ترتيب التاريخ وحده، فيبقى الشرط
+    // صحيحاً في ثلاثة عوالم — الإلغاء يعمل، أو ترتيب الإبراز مفقود، أو الإلغاء
+    // لا يكتب شيئاً — فلا يقيس واحداً منها. أما الأقدم فلا يهبط خلف
+    // `featuredIds[1]` إلا إذا كُتب الإلغاء فعلاً **و** عمل ترتيب الإبراز معاً.
+    const cleared = await api('PATCH', `/api/admin/events/${featuredIds[0]}/featured`, {
       token: superAdminToken,
       body: { featured_until: null }
     });
@@ -17335,9 +17340,11 @@ async function run() {
     assert.strictEqual(cleared.body.event.is_featured, false, 'and the computed flag with it');
 
     const afterCancel = await featuredFeed();
+    const cancelledAt = afterCancel.events.findIndex(event => event.id === featuredIds[0]);
+    const stillFeaturedAt = afterCancel.events.findIndex(event => event.id === featuredIds[1]);
     assert.ok(
-      afterCancel.events.findIndex(event => event.id === featuredIds[2]) > afterCancel.events.findIndex(event => event.id === featuredIds[0]),
-      'the cancelled event falls back behind the still-featured ones'
+      cancelledAt > stillFeaturedAt,
+      `the cancelled leading event must fall behind the still-featured one — got ${cancelledAt} vs ${stillFeaturedAt}`
     );
 
     const freed = await api('PATCH', `/api/admin/events/${featuredFourthId}/featured`, {

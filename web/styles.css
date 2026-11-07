@@ -1180,18 +1180,22 @@ body {
 }
 
 /*
- * «مناسبة كبرى» (تذكرة #171). الشارة ذهبية بنصّها لا بلون النوع: وسامٌ من
- * المنصّة، ولونه الذهبي يقول ذلك بلا كلمة. وتأخذ أرضية ذهبية مصمتة لأنها
- * تُقرأ على لوح المعلومات الفاتح دائماً — لا فوق ملصق متغيّر اللون.
+ * «مناسبة كبرى» (تذكرة #171). الشارة ذهبية **أبداً** — وسامٌ من المنصّة لا وسمُ
+ * نوع — ولذلك تحمل متغيّرها الخاصّ `--featured-gold` ولا تقرأ `--card-gold`:
+ * بطاقة العزاء تعيد ربط `--card-gold` بأردوازي (`--mourn`) أدناه، فكان الوسام
+ * يلبس لون النوع هناك، وحبره الداكن فوق أرضية داكنة ينزل إلى تباين ≈ 2.4:1 —
+ * نصّ شبه غير مقروء. والقيمة هنا ثابتة فلا يبدّلها أي نوع، وحبر `#2b2000`
+ * عليها يبلغ ≈ 5.8:1.
  */
 .card-featured-badge {
+  --featured-gold: #C59425;
   display: inline-flex;
   align-items: center;
   gap: 5px;
   padding: 3.5px 11px;
   border-radius: var(--radius-pill);
-  background: var(--card-gold);
-  border: 1px solid var(--card-gold);
+  background: var(--featured-gold);
+  border: 1px solid var(--featured-gold);
   color: #2b2000;
   font-size: 11.5px;
   font-weight: 800;

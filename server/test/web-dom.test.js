@@ -5229,9 +5229,24 @@ async function run() {
       /\.card-media-img\s*\{[^}]*object-fit:\s*cover/.test(STYLES_CSS),
       'the base card image stays cover — the featured card alone is the uncropped invitation'
     );
+    // الوسام ذهبي بمتغيّره الخاصّ، **لا** بـ`--card-gold`: بطاقة العزاء تعيد
+    // ربط ذاك بأردوازي (`--mourn`)، فكان الوسام يلبس لون النوع على العزاء،
+    // وحبره الداكن فوق أرضية داكنة بتباين ≈ 2.4:1 — نصّ شبه غير مقروء.
     assert.ok(
-      /\.card-featured-badge\s*\{[^}]*background:\s*var\(--card-gold\)/.test(STYLES_CSS),
-      'the featured badge must be filled with the brand gold, not the occasion tone'
+      /\.card-featured-badge\s*\{[^}]*--featured-gold:\s*#C59425/.test(STYLES_CSS),
+      'the featured badge must define its own gold — no occasion type may rebind it'
+    );
+    assert.ok(
+      /\.card-featured-badge\s*\{[^}]*background:\s*var\(--featured-gold\)/.test(STYLES_CSS),
+      'and be filled with that fixed gold'
+    );
+    assert.ok(
+      !/\.card-featured-badge\s*\{[^}]*var\(--card-gold\)/.test(STYLES_CSS),
+      'the badge must never read --card-gold — the mourning card rebinds it to slate'
+    );
+    assert.ok(
+      /\.card-featured-badge\s*\{[^}]*color:\s*#2b2000/.test(STYLES_CSS),
+      'dark ink on the fixed gold keeps the label readable (≈5.8:1)'
     );
   });
 
