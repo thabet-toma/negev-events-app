@@ -17488,6 +17488,55 @@ async function run() {
     assert.strictEqual(expired.body.event.is_featured, false, 'while the computed flag stays false');
   });
 
+  await test('طلبان متزامنان لإبراز مناسبتين مختلفتين بمقعد حرّ واحد: أحدهما 200 والآخر 409، والنشِطة لا تتجاوز السقف', async () => {
+    // العيب المسمّى في تذكرة #171: العدّ ثم `UPDATE` كانا معاملتين منفصلتين،
+    // فطلبان متزامنان على مناسبتين مختلفتين في المحافظة نفسها يقرآن العدد
+    // نفسه (2 هنا) فيمرّان معاً — فتصير المحافظة بأربع نشِطة والسقف ثلاثة.
+    // القفل على صفّ المحافظة هو ما يجعل الفحص والكتابة وحدة واحدة، فينتظر
+    // الثاني إفراج الأول ثم يعدّ فيرى المقعد محجوزاً ويُردّ 409.
+    //
+    // المقعد الحرّ الواحد يُصنع بإلغاء `featuredIds[1]`: النشِط الباقي بعد
+    // الإلغاء `featuredIds[2]` و`featuredFourthId` (اثنان)، فيبقى مقعد واحد.
+    const seatFreed = await api('PATCH', `/api/admin/events/${featuredIds[1]}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: null }
+    });
+    assert.strictEqual(seatFreed.status, 200, seatFreed.body.message);
+
+    const racers = [
+      await publishFeaturedEvent({ dayOffset: 10, label: 'المتسابقة الأولى' }),
+      await publishFeaturedEvent({ dayOffset: 11, label: 'المتسابقة الثانية' })
+    ];
+
+    const activeQuery = `SELECT id FROM events
+        WHERE region_id = ? AND featured_until IS NOT NULL AND featured_until >= CURDATE()
+          AND id IN (?, ?, ?, ?, ?, ?)`;
+    const activeParams = [defaultRegionId, ...featuredIds, featuredFourthId, ...racers];
+
+    const before = await db.query(activeQuery, activeParams);
+    assert.strictEqual(before.length, 2, 'مقعد واحد حرّ في المحافظة قبل السباق');
+
+    // الطلبان يُطلقان معاً (لا واحداً بعد الآخر): هذا هو التوازي الذي كان
+    // الاختبار السابق — طلباً بعد طلب — لا يستطيع كشفه.
+    const [first, second] = await Promise.all(racers.map(id => api('PATCH', `/api/admin/events/${id}/featured`, {
+      token: superAdminToken,
+      body: { featured_until: featuredUntil }
+    })));
+
+    assert.deepStrictEqual(
+      [first.status, second.status].sort((a, b) => a - b),
+      [200, 409],
+      `واحد فقط يأخذ المقعد الحرّ والآخر 409: ${first.status} / ${second.status}`
+    );
+    assert.ok(/[\u0600-\u06FF]/.test((first.status === 409 ? first : second).body.message), 'ورفض السباق عربي كالقائم');
+
+    const activeRows = await db.query(activeQuery, activeParams);
+    assert.ok(
+      activeRows.length <= 3,
+      `السباق لا يتجاوز سقف المحافظة: ${activeRows.length} نشِطة — ${JSON.stringify(activeRows)}`
+    );
+  });
+
   // تنظيف قسم الإبراز: المناسبات، ثم المستخدمون (وadmin_towns معهم)، ثم البلدة
   // ثم المحافظة — بترتيب المفاتيح الأجنبية.
   for (const id of featuredCleanup.eventIds) {

@@ -1222,8 +1222,13 @@ async function listPublicEvents({
  * بـ`region_id` (فمحافظة أخرى لا تتأثّر) ويستثني الصفّ نفسه (فتمديد إبراز
  * قائم أو إعادة كتابة تاريخه لا يُحسب صفّاً رابعاً)، ويعدّ **النشِطة وحدها**
  * (`EVENT_FEATURED_ACTIVE_SQL_EVENTS`) فلا يحجز مقعداً إبرازٌ انتهى تاريخه.
- * والعدّ قبل الكتابة لا معها: `UPDATE` بلا معاملة يفوز فيه طلبان متزامنان
- * بالقبول معاً، وهو سباق يخصّ أدمنين اثنين في اللحظة نفسها، لا مساراً عادياً.
+ *
+ * **والعدّ والكتابة معاملة واحدة مسلسَلة على المحافظة:** قفل صفّ المحافظة
+ * (`SELECT … FOR UPDATE`، وهو القفل نفسه الذي تُقفل به
+ * `notifications.service.js` المحافظةَ قبل قراءة حصّتها) يجعل الطلب الثاني
+ * ينتظر إفراج الأول، فيعدّ بعده ويرى المقعد محجوزاً فيُردّ 409. وبدونه كان
+ * طلبان على مناسبتين مختلفتين يقرآن العدد نفسه ثم يكتبان معاً فتصير المحافظة
+ * بأربع نشِطة.
  *
  * **والسقف يحرس الانتقال إلى «نشِط» لا الكتابة نفسها:** لا يُفرض إلا إذا كانت
  * القيمة الجديدة تجعل الصفّ نشِطاً (`>= CURDATE()`). تاريخ منقضٍ — و`null` —
@@ -1239,22 +1244,34 @@ async function setEventFeatured(event, featuredUntil) {
   const becomesActive = featuredUntil !== null
     && Number((await db.queryOne('SELECT (? >= CURDATE()) AS active', [featuredUntil])).active) === 1;
 
-  if (becomesActive) {
-    const { total } = await db.queryOne(
-      `SELECT COUNT(*) AS total FROM events
-        WHERE events.region_id = ? AND events.id <> ?
-          AND ${EVENT_FEATURED_ACTIVE_SQL_EVENTS}`,
-      [event.region_id, event.id]
-    );
+  await db.transaction(async connection => {
+    if (becomesActive) {
+      // صفّ المحافظة هو القفل المشترك لسقفها: قفل صفّ المناسبة وحده لا يرتّب
+      // مناسبتين مختلفتين في محافظة واحدة، فطلبان متزامنان يقرآن العدد نفسه
+      // ثم يكتبان معاً، فتصير المحافظة بأربع نشِطة والسقف ثلاثة.
+      await connection.execute('SELECT id FROM regions WHERE id = ? FOR UPDATE', [event.region_id]);
 
-    if (Number(total) >= FEATURED_EVENTS_MAX_PER_REGION) {
-      throw ApiError.conflict(
-        `لا يمكن إبراز أكثر من ${FEATURED_EVENTS_MAX_PER_REGION} مناسبات في المحافظة الواحدة — ألغِ إبراز مناسبة قائمة أولاً`
+      // العدّ بعد القفل لا قبله: لقطة المعاملة تُنشأ عند أول قراءة عادية فيها،
+      // وهي هنا بعد انتظار القفل — أما `FOR UPDATE` فقراءة حالّة لا تُنشئها —
+      // فيرى الطلب الثاني ما التزم به الأول ولا يحسب المقعد الحرّ نفسه.
+      const [countRows] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM events
+          WHERE events.region_id = ? AND events.id <> ?
+            AND ${EVENT_FEATURED_ACTIVE_SQL_EVENTS}`,
+        [event.region_id, event.id]
       );
-    }
-  }
 
-  await db.execute('UPDATE events SET featured_until = ? WHERE id = ?', [featuredUntil, event.id]);
+      if (Number(countRows[0].total) >= FEATURED_EVENTS_MAX_PER_REGION) {
+        throw ApiError.conflict(
+          `لا يمكن إبراز أكثر من ${FEATURED_EVENTS_MAX_PER_REGION} مناسبات في المحافظة الواحدة — ألغِ إبراز مناسبة قائمة أولاً`
+        );
+      }
+    }
+
+    // الكتابة داخل المعاملة نفسها: الإفراج عن القفل قبل `UPDATE` يعيد فتح
+    // النافذة التي أُقفلت، فالفحص بلا كتابة ذرّية معه لا يمنع شيئاً.
+    await connection.execute('UPDATE events SET featured_until = ? WHERE id = ?', [featuredUntil, event.id]);
+  });
 
   // الصفّ يُقرأ ثانيةً بعد الكتابة كي يصل `is_featured` محسوباً بالقاعدة نفسها
   // التي تحسبه في التغذية — لا بحساب JS ثانٍ يخالفها بعد منتصف الليل.
