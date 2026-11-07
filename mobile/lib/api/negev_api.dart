@@ -13,6 +13,7 @@ import '../models/nokoot.dart';
 import '../models/notification.dart';
 import '../models/reminder_schedule.dart';
 import '../models/service.dart';
+import '../models/stats_ticker.dart';
 import '../models/user.dart';
 import 'api_client.dart';
 
@@ -416,6 +417,37 @@ class NegevApi {
   Future<LiveChannel> liveChannel() async {
     final data = await _client.get('/api/live');
     return LiveChannel.fromJson(data);
+  }
+
+  /// شريط الإحصائيات في الرئيسية (#172) — `GET /api/stats/ticker`، مسار عام
+  /// بلا مصادقة: الشريط أول ما يراه زائر لم يسجّل دخوله.
+  Future<StatsTicker> statsTicker() async {
+    final data = await _client.get('/api/stats/ticker');
+    return StatsTicker.fromJson(data);
+  }
+
+  /// التعميم الحيّ الذي يحلّ محلّ الشريط (#172) — الأحدث من
+  /// `GET /api/broadcasts/live` بنصّه، أو `null` حين لا تعميم حيّ.
+  ///
+  /// `auth: true` كما يفعل الويب حرفياً (`fetchLiveBroadcasts` في app.js):
+  /// المسار `optionalAuthenticate` على الخادم، فالزائر يرى العام، والمسجَّل
+  /// دخوله يرى معه تعميم بلدته — وهو تعميم حيّ له أيضاً، فلا يمرّ خلف الشريط.
+  ///
+  /// يجمع نصّ الصفّ الأول فقط وقتيماً: الشاشة تعرض تعميماً واحداً، و«+N» وقائمة
+  /// التعاميم الكاملة في مركز الإشعارات لا هنا.
+  Future<({String title, String message})?> liveBroadcast() async {
+    final data = await _client.get('/api/broadcasts/live', auth: true);
+    final list = data['broadcasts'];
+    if (list is! List) return null;
+    for (final rawBroadcast in list) {
+      if (rawBroadcast is! Map) continue;
+      final broadcast = Map<String, dynamic>.from(rawBroadcast);
+      final title = '${broadcast['title'] ?? ''}'.trim();
+      final message = '${broadcast['message'] ?? ''}'.trim();
+      if (title.isEmpty && message.isEmpty) continue;
+      return (title: title, message: message);
+    }
+    return null;
   }
 
   /// صفحة البث كاملة — GET /api/live/hub. `auth: true` للمسجَّل وحده كي يصل

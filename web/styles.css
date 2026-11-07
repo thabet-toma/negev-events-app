@@ -247,6 +247,69 @@ body {
 .broadcast-ticker.tone-info .ticker-expanded-item,
 .broadcast-ticker.tone-solemn .ticker-expanded-item { border-top-color: var(--line-soft); }
 
+/* شريط الإحصائيات (#172) — تحت شريط التعاميم مباشرةً (مكانه في index.html
+   بعده)، بهدوء التعاميم نفسه: لا حركة ولا زحف. يغيب كاملاً حين يوجد تعميم
+   حيّ (renderStatsTicker في app.js)، فالاثنان لا يجتمعان أبداً. والخلفية
+   `--surface` لا نغمة تعميم: قراءة لا تنبيه. */
+.stats-ticker {
+  position: relative;
+  z-index: 89;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 14px;
+  padding: 7px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+/* `display: flex` أعلاه يتغلّب على `[hidden]` الافتراضي في المتصفّح — القاعدة
+   الصريحة هذه هي ما يُبقي الإخفاء يعمل برمجياً (كما في `.ticker-expanded-list`). */
+.stats-ticker[hidden] { display: none; }
+
+.stats-ticker-main { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+
+.stats-ticker-icon { flex-shrink: 0; color: var(--sky-deep); font-size: 0.95rem; }
+
+/* المحافظات صفّ واحد يمرّر أفقياً عند الحاجة: شريط لا كتلة، ومحافظة تُضاف
+   من اللوحة غداً لا تفيض على الشاشة ولا تكسر الصفّ. */
+.stats-ticker-regions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stats-ticker-regions::-webkit-scrollbar { display: none; }
+
+.stats-region {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--sky-wash);
+  color: var(--sky-deep);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.stats-region-count { font-weight: 800; }
+
+.stats-ticker-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.stats-ticker-total { font-weight: 800; color: var(--ink); }
+.stats-ticker-updated { opacity: 0.8; font-size: 0.72rem; }
+
 /* نبض لطيف حصراً لنغمة «عاجل» — الوقور والعادي بلا أي حركة إطلاقاً، ويلغيه
    تقليل الحركة عبر القاعدة الشاملة *{animation-duration} أسفل الملف. */
 .ticker-urgent-pulse { animation: tickerUrgentPulse 2.2s ease-in-out infinite; }
@@ -2736,6 +2799,12 @@ body {
   }
 
   .broadcast-ticker {
+    max-width: 820px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .stats-ticker {
     max-width: 820px;
     margin-left: auto;
     margin-right: auto;

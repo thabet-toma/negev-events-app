@@ -356,6 +356,25 @@
     <div id="tickerExpandedList" class="ticker-expanded-list" hidden></div>
   </div>
 
+  <!-- شريط الإحصائيات في الرئيسية (#172): عدد المناسبات القادمة في كل محافظة،
+       والمجموع، و«حُدّث HH:MM». يُملأ من GET /api/stats/ticker عند فتح الصفحة
+       (fetchStatsTicker في app.js)، والحساب كله على الخادم — لا رقم يُبنى هنا.
+
+       **وهو وشريط التعاميم لا يجتمعان:** حين يوجد تعميم حيّ يعرض الشريط هو
+       ويغيب هذا (renderStatsTicker يقرأ نفس قائمة liveBroadcasts ويخفيه)، فما
+       يراه الزائر واحدٌ لا اثنان. والمجموع مجموع أعداد المحافظات المعروضة
+       نفسها، و«حُدّث» لحظة حساب الخادم لا لحظة فتح الصفحة. -->
+  <div id="statsTicker" class="stats-ticker" hidden>
+    <div class="stats-ticker-main">
+      <i class="fa-solid fa-calendar-days stats-ticker-icon" aria-hidden="true"></i>
+      <div id="statsTickerRegions" class="stats-ticker-regions" role="group" aria-label="المناسبات القادمة لكل محافظة"></div>
+    </div>
+    <div class="stats-ticker-meta">
+      <span id="statsTickerTotal" class="stats-ticker-total"></span>
+      <span id="statsTickerUpdated" class="stats-ticker-updated"></span>
+    </div>
+  </div>
+
   <!-- STORIES & LIVE SNAPS BAR (قصص وسنابات الأفراح) -->
   <section class="stories-section">
     <div class="stories-slider" id="storiesContainer">
