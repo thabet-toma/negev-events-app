@@ -32,6 +32,11 @@
  * وكاش واحد لكل المحافظات لا مفتاح لكل محافظة: الاستعلام قراءة واحدة تجمع
  * الجميع، ومفتاحٌ لكل محافظة كان سيعني استعلاماً لكلٍّ على حدة عند أول طلب
  * بعد انتهاء الصلاحية — أي أن الكاش كان سيضاعف العمل لا يوفّره.
+ *
+ * **والساعة قابلة للاستبدال (`setTickerClock`):** صلاحية الكاش تُقاس بساعة
+ * الخدمة هذه لا بـ`Date.now` مباشرةً، فيستطيع الاختبار أن يعبر
+ * `STATS_TICKER_CACHE_SECONDS` نفسها ويثبت أن **انتهاء المدّة** هو ما يعيد
+ * التعبئة — لا تفريغ يدوي للكاش يمرّ حتى لو صار الكاش أبدياً.
  */
 
 const db = require('../db/pool');
@@ -60,6 +65,22 @@ function publicEventVisibleParam() {
 let cache = null;
 
 /**
+ * ساعة الخدمة: `Date.now` في الإنتاج، ويستبدلها الاختبار وحدها
+ * (`setTickerClock`) ليقيس الانتهاء الحقيقي للكاش بلا انتظار خمس دقائق.
+ * ساعة لا مدّة: المدّة تبقى `STATS_TICKER_CACHE_SECONDS` كما نصّت التذكرة،
+ * والاختبار يعبرها هي نفسها.
+ */
+let clock = () => Date.now();
+
+/**
+ * يستبدل ساعة الخدمة — للاختبارات وحدها (كما `clearTickerCache`)، وبلا وسيطة
+ * يعيدها إلى `Date.now`. لا مسار إنتاجي يغيّرها.
+ */
+function setTickerClock(replacement) {
+  clock = replacement || (() => Date.now());
+}
+
+/**
  * `{ regions, total, updated_at }` — المحافظات **النشطة** بترتيب عرضها (الموقوفة
  * ليست مكاناً في أي منتقٍ ولا في أي قائمة، فلا رقم لها هنا)، ولكلٍّ عدد
  * مناسباتها القادمة الظاهرة، ثم المجموع.
@@ -70,7 +91,7 @@ let cache = null;
  * اكتشاف، والاسم للمعروض وحده.
  */
 async function ticker() {
-  const now = Date.now();
+  const now = clock();
   if (cache && now - cache.filledAt < STATS_TICKER_CACHE_SECONDS * 1000) {
     return cache.payload;
   }
@@ -98,7 +119,7 @@ async function ticker() {
 
   // لحظة واحدة للاثنين: ختمُ `updated_at` هو نفسه ما تُقاس به صلاحية الكاش،
   // فلا يفترق «متى حُسب الرقم» عن «متى بُني الحفظ».
-  const filledAt = Date.now();
+  const filledAt = clock();
   const payload = {
     regions,
     total: regions.reduce((sum, region) => sum + region.upcoming_count, 0),
@@ -114,6 +135,9 @@ async function ticker() {
  * تفريغ الكاش — للاختبارات وحدها (كما `news.service.clearCache`): لا مسار
  * عمومي يفعل هذا، ولا سبب إنتاجي له. الاختبار يحتاجه كي يقيس العدّ على صفوفه
  * لا على نسخة بُنيت قبلها، وكي يُثبت أن الكاش هو ما يمنع قراءة جديدة.
+ *
+ * **ولا يُستعمل لقياس «ماذا يحدث بعد انتهاء الصلاحية»:** ذلك يُقاس بالساعة
+ * (`setTickerClock`) وحدها، وإلا بقي الاختبار أخضر ولو صار الكاش أبدياً.
  */
 function clearTickerCache() {
   cache = null;
@@ -121,5 +145,6 @@ function clearTickerCache() {
 
 module.exports = {
   ticker,
-  clearTickerCache
+  clearTickerCache,
+  setTickerClock
 };

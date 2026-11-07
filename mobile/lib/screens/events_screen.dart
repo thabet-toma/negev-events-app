@@ -10,6 +10,7 @@ import '../models/live.dart';
 import '../models/notification.dart' as notif;
 import '../models/stats_ticker.dart';
 import '../state/audio_coordinator.dart';
+import '../state/home_ticker.dart';
 import '../state/rate_us.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
@@ -162,13 +163,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   /// والكبسة ظاهرة وقابلة للكبس في الحالتين.
   LiveChannel? _liveChannel;
 
-  /// شريط الإحصائيات (#172): آخر ردّ من `GET /api/stats/ticker`، و`null` قبل
-  /// أول ردّ أو عند فشله — فلا شريط أرقام كاذب.
-  StatsTicker? _statsTicker;
-
-  /// التعميم الحيّ الذي **يحلّ محلّ الشريط** (#172): الأحدث من
-  /// `GET /api/broadcasts/live`، و`null` حين لا تعميم — فيظهر الشريط مكانه.
-  ({String title, String message})? _liveBroadcast;
+  /// التعميم الحيّ وشريط الإحصاءات (#172) يعيشان في `AppServices.homeTicker`
+  /// وحده — مشتركين بين الهيكل وهذه الشاشة، ومصدر العرض والإغلاق واحد. لا
+  /// لقطة محلية هنا: لقطة محلية كانت تسمح بشريطين لتعميم واحد.
   Future<List<OccasionType>>? _types;
   Future<List<Village>>? _villages;
 
@@ -263,8 +260,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
       _didInit = true;
       _loadFirstPage();
       _loadLiveChannel();
-      // شريط الإحصائيات (#172) نداءان خفيفان لا يشتركان في بناء التغذية.
-      _loadHomeTicker();
+      // شريط الإحصاءات والتعميم (#172): المخزن المشترك يحمّل مرّة واحدة، وإن
+      // سبقه الهيكل (وهو الأصل) لا يتضاعف النداء.
+      AppServices.of(context).homeTicker.ensureLoaded();
       // بعد أول إطار: بطاقة الدخول نداء ثانٍ لا يشترك في بناء التغذية، فلا
       // يؤخّر أول كرت ولا يمنع ظهوره إن تأخّر.
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowEntryCard());
@@ -317,26 +315,6 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     try {
       final channel = await AppServices.of(context).api.liveChannel();
       if (mounted) setState(() => _liveChannel = channel);
-    } catch (_) {}
-  }
-
-  /// شريط الإحصائيات والتعميم الذي يحلّ محلّه (#172) — نداءان عامّان.
-  ///
-  /// **التعميم يُطلب أولاً عمداً:** لو طُلب الشريط أولاً لظهر رقمٌ ثم اختفى حين
-  /// يصل التعميم بعده، وهي ومضة لا معنى لها. بهذا الترتيب لا يُرسم الشريط إلا
-  /// وقد عُرف أهناك تعميم حيّ — وشريطٌ واحد يراه العضو، لا اثنان.
-  ///
-  /// والفشل صامت في النداءين وكلٌّ على حدة: رقمُ إحصاءٍ أو تعميمٌ لا يجوز أن
-  /// يُسقط التغذية كلها، ولا أن يُخفي أحدهما فشل الآخر.
-  Future<void> _loadHomeTicker() async {
-    final api = AppServices.of(context).api;
-    try {
-      final broadcast = await api.liveBroadcast();
-      if (mounted) setState(() => _liveBroadcast = broadcast);
-    } catch (_) {}
-    try {
-      final ticker = await api.statsTicker();
-      if (mounted) setState(() => _statsTicker = ticker);
     } catch (_) {}
   }
 
@@ -1223,7 +1201,7 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                     _loadLiveChannel();
                     // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
                     // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
-                    _loadHomeTicker();
+                    services.homeTicker.refresh();
                     // السحب للتحديث يلتقط أيضاً مقطعاً افتراضياً رفعه الأدمن للتوّ.
                     services.audio.defaultTrack(services.api, refresh: true).then((url) {
                       if (mounted) _defaultAudioUrl = url;
@@ -1384,9 +1362,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
               ),
             ),
             // شريط الإحصائيات (#172): عدد القادم في كل محافظة والمجموع، أو
-            // التعميم الحيّ الذي يحلّ محلّه. عنصر عادي في العمود — لا عائم —
-            // فوق شريط الستوريات كما في الويب (بعد شريط التعاميم هناك).
-            _HomeTicker(stats: _statsTicker, broadcast: _liveBroadcast),
+            // التعميم الحيّ الذي يحلّ محلّه — من المخزن المشترك نفسه الذي يقرأه
+            // الهيكل ويغلقه. عنصر عادي في العمود — لا عائم — فوق شريط الستوريات
+            // كما في الويب (بعد شريط التعاميم هناك).
+            _HomeTicker(store: AppServices.of(context).homeTicker),
             // شريط الستوريات ظاهر هنا دائماً لا داخل لوح الفلاتر: كبسة البث
             // أوّله ثم ستوريات التسويق، ثم تبدأ الكروت تحته.
             _StoriesStrip(
@@ -2304,39 +2283,53 @@ String _statsUpdatedLabel(DateTime? updatedAt) {
   return 'حُدّث $hours:$minutes';
 }
 
-/// شريط الإحصائيات في الرئيسية (تذكرة #172) — أو **التعميم الحيّ مكانه**.
+/// شريط الإحصاءات في الرئيسية (تذكرة #172) — أو **التعميم الحيّ مكانه**.
 ///
 /// الأولوية للتعميم: وجود تعميم حيّ يُخفي الشريط كاملاً، فلا يُعرض الاثنان
 /// معاً في موضع واحد (وهو ما يفعله الويب أيضاً: `renderStatsTicker` تقرأ قائمة
-/// التعاميم نفسها). والغياب الكامل — لا تعميم ولا شريط، أو شريط بلا محافظات —
-/// يعطي `SizedBox.shrink()`: لا إطار فارغ ولا حشوة في التخطيط.
+/// التعاميم نفسها). و**لا رقم قبل حسم حالة التعاميم** (`broadcastsKnown`): رقمٌ
+/// يظهر ثم يختفي حين يصل تعميم ومضةٌ يحكم بها ترتيب الشبكة وحده.
+///
+/// الحالة من [HomeTickerStore] لا من لقطة محلية: الهيكل يستمع لإشارة Socket
+/// ويغلق الشريط من شريطه، وكلاهما يقرأ الحالة نفسها — فلا شريطان لتعميم واحد،
+/// وإغلاق أيّهما يعيد شريط الإحصاءات.
+///
+/// والغياب الكامل — لا تعميم ولا شريط، أو شريط بلا محافظات — يعطي
+/// `SizedBox.shrink()`: لا إطار فارغ ولا حشوة في التخطيط.
 ///
 /// ولا حساب في هذا الصنف: الأعداد والمجموع ولحظة الحساب كما وصلت من الخادم
 /// (`StatsTicker` شرحُ العقد هناك)، والشرط «قادم» و«ظاهر» في الخدمة وحدها.
 class _HomeTicker extends StatelessWidget {
-  const _HomeTicker({this.stats, this.broadcast});
+  const _HomeTicker({required this.store});
 
-  final StatsTicker? stats;
-  final ({String title, String message})? broadcast;
+  final HomeTickerStore store;
 
   @override
   Widget build(BuildContext context) {
-    final live = broadcast;
-    if (live != null) return _broadcastBar(live);
-    final ticker = stats;
-    if (ticker == null || ticker.regions.isEmpty) return const SizedBox.shrink();
-    return _statsBar(context, ticker);
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) {
+        final live = store.broadcast;
+        if (live != null) return _broadcastBar(live);
+        if (!store.broadcastsKnown) return const SizedBox.shrink();
+        final ticker = store.stats;
+        if (ticker == null || ticker.regions.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return _statsBar(context, ticker);
+      },
+    );
   }
 
-  /// التعميم الحيّ — سطرٌ ورسالة، بلا زرّ: للشريط في الويب زرّ إغلاق، وللتطبيق
-  /// شريطُ التعميم الخاصّ بالهيكل من إشارة Socket؛ وهذا وجهٌ ثالث للقراءة
-  /// يستبدل الشريط عدّ الأرقام حين ينشره الأدمن، لا مركز إشعارات ثانياً.
-  Widget _broadcastBar(({String title, String message}) live) {
+  /// التعميم الحيّ — سطرٌ ورسالة، وزرّ إغلاق واحد يشاركه معه شريط الهيكل:
+  /// الإغلاق من أيّهما يمرّ بـ`HomeTickerStore.dismissActive`، فتعود الإحصاءات
+  /// في الموضع نفسه (تذكرة #172، الجولة ٢). ومركز الإشعارات لا يُمَسّ.
+  Widget _broadcastBar(({int id, String title, String message}) live) {
     return Container(
       key: const Key('home_broadcast_ticker'),
       width: double.infinity,
       margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
       decoration: BoxDecoration(
         color: _homeBroadcastColor,
         borderRadius: BorderRadius.circular(12),
@@ -2373,6 +2366,15 @@ class _HomeTicker extends StatelessWidget {
                   ),
               ],
             ),
+          ),
+          IconButton(
+            key: const Key('home_broadcast_ticker_dismiss'),
+            onPressed: store.dismissActive,
+            tooltip: 'إغلاق التعميم',
+            icon: const Icon(Icons.close, color: Colors.white, size: 16),
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
         ],
       ),

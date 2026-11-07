@@ -163,6 +163,10 @@ let myListEndedExpanded = false;
 // tickerTextExpanded مستقلّة عنها تماماً: عرض نصّ الصفّ الأساسي كاملاً بلا قصّ،
 // للمسجَّل دخوله وللمجهول معاً (مراجعة #85، FIX 1).
 let liveBroadcasts = [];
+// هل حُسمت حالة التعاميم الحيّة بعد؟ `false` قبل أول ردّ ناجح من
+// GET /api/broadcasts/live (وعند فشله). «لم تُعرف» ليست «لا تعميم»: عرض الأرقام
+// ثم إخفاؤها حين يصل تعميم ومضةٌ يحكم بها ترتيب الشبكة وحده (#172، الجولة ٢).
+let liveBroadcastsKnown = false;
 let tickerExpanded = false;
 let tickerTextExpanded = false;
 let tickerPrimaryBroadcastId = null;
@@ -279,7 +283,8 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchNotifications();
   fetchLiveBroadcasts();
   // شريط الإحصائيات (#172) يُجلب معهما عند الإقلاع لا عند فتح تبويب: إن كان
-  // هناك تعميم حيّ غاب الشريط وحده (renderStatsTicker)، لا أنه لم يُطلب.
+  // هناك تعميم حيّ غاب الشريط وحده (renderStatsTicker)، لا أنه لم يُطلب — وترتيب
+  // وصول الردّين لا يهمّ: الأرقام لا تُرسم قبل أن تُعرف حالة التعاميم.
   fetchStatsTicker();
   fetchLiveStatus();
   initSupportEntry();
@@ -690,6 +695,8 @@ async function fetchLiveBroadcasts() {
     const data = await res.json();
     if (data.success) {
       liveBroadcasts = data.broadcasts || [];
+      // ردّ ناجح — ولو فارغاً — هو ما يحسم الحالة: بعده فقط يجوز للشريط الظهور.
+      liveBroadcastsKnown = true;
       renderBroadcastTicker();
     }
   } catch (e) {
@@ -878,9 +885,10 @@ function formatStatsUpdatedAt(isoString) {
 
 /**
  * يرسم الشريط أو يخفيه. **يُخفى دائماً حين يوجد تعميم حيّ غير مُغلَق** — أي
- * تعميم يراه الزائر على شريط التعاميم نفسه — وحين لا يوجد رقم بعد. ولا
- * يستدعي renderBroadcastTicker بالمقابل: الاتجاه واحد، فالنداء المتبادل كان
- * سيدور بلا نهاية عند كل رسم.
+ * تعميم يراه الزائر على شريط التعاميم نفسه — وحين لا يوجد رقم بعد، وحين لم
+ * تُعرف حالة التعاميم بعد أصلاً (الردّ الأول لم يصل). ولا يستدعي
+ * renderBroadcastTicker بالمقابل: الاتجاه واحد، فالنداء المتبادل كان سيدور بلا
+ * نهاية عند كل رسم.
  */
 function renderStatsTicker() {
   const el = document.getElementById('statsTicker');
@@ -888,7 +896,10 @@ function renderStatsTicker() {
 
   const hasVisibleBroadcast = liveBroadcasts.some(b => !isBroadcastDismissedLocally(b.id));
   const regions = statsTickerData && Array.isArray(statsTickerData.regions) ? statsTickerData.regions : [];
-  if (hasVisibleBroadcast || !regions.length) {
+  // `!liveBroadcastsKnown` أولاً: قبل معرفة التعاميم لا رقم — لا «تعاميم فارغة»
+  // افتراضية. طلب التعاميم وطلب الإحصاء يطلقان معاً في الإقلاع، ووصول الإحصاء
+  // أولاً ثم تعميم حيّ كان يعرض رقماً ثم يخفيه (#172، الجولة ٢).
+  if (!liveBroadcastsKnown || hasVisibleBroadcast || !regions.length) {
     el.hidden = true;
     return;
   }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../main.dart';
+import '../state/home_ticker.dart';
 import '../state/region_onboarding.dart';
 import '../state/update_checker.dart';
 import '../state/welcome.dart';
@@ -43,8 +44,8 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
   StreamSubscription<Map<String, dynamic>>? _broadcastSub;
+  HomeTickerStore? _homeTicker;
   ValueNotifier<int>? _tabRequest;
-  String? _banner;
   bool _updateChecked = false;
 
   /// إشارة «اصعد إلى أوّل القائمة» إلى التغذية — يقرؤها `EventsScreen` وحده.
@@ -60,11 +61,18 @@ class _HomeShellState extends State<HomeShell> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final services = AppServices.of(context);
-    _broadcastSub ??=
-        services.realtime.onBroadcast.listen((data) {
-      if (!mounted) return;
-      setState(() => _banner = '${data['message'] ?? data['title'] ?? ''}');
-    });
+    // التعميم الحيّ يُقرأ من مصدره الواحد (`HomeTickerStore`): إشارة Socket
+    // تُعيد الجلب لا تُركّب نصاً من الحمولة (الحمولة بلا معرّف، والويب يفعل
+    // الشيء نفسه)، وشريط التغذية يرسم من الحالة نفسها — فلا شريطان لتعميم
+    // واحد، وإغلاق أيّهما يعيد شريط الإحصاءات.
+    if (_broadcastSub == null) {
+      final ticker = services.homeTicker;
+      _homeTicker = ticker;
+      ticker.addListener(_handleHomeTickerChange);
+      ticker.ensureLoaded();
+      _broadcastSub =
+          services.realtime.onBroadcast.listen((_) => ticker.refresh());
+    }
 
     // طلب تبديل تبويب من خارج الشريط (زرّ «عرض» في رسالة الإضافة): قيمة على
     // `AppServices` لا استدعاء مباشر، كي لا يستورد كرت التغذية هذا الملف.
@@ -141,9 +149,16 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
+  /// الحالة المشتركة تغيّرت — شريط الهيكل يظهر/يغيب معها. شريط التغذية يسمعها
+  /// بنفسه (`ListenableBuilder` في `_HomeTicker`)، فلا إعادة بناء لهذه الشاشة.
+  void _handleHomeTickerChange() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _broadcastSub?.cancel();
+    _homeTicker?.removeListener(_handleHomeTickerChange);
     _tabRequest?.removeListener(_handleTabRequest);
     _feedTopRequest.dispose();
     super.dispose();
@@ -220,6 +235,13 @@ class _HomeShellState extends State<HomeShell> {
 
   /// الهيكل نفسه — لا يعرف المحافظة ولا مفاتيحها، فيبقى `build` مسؤولاً عنها.
   Widget _shell(List<Widget> screens) {
+    final store = AppServices.of(context).homeTicker;
+    // شريط التعميم في الهيكل للوجهات الأخرى وحدها: على «المناسبات» يرسمه شريط
+    // التغذية نفسه من الحالة المشتركة نفسها (`_HomeTicker`)، فلا يظهر التعميم
+    // مرّتين في الشاشة الواحدة.
+    final broadcast =
+        _index == AppServices.feedTabIndex ? null : store.broadcast;
+
     // `IndexedStack` يُبقي التغذية حيّة خلف التبويبات الأخرى — تُخبَر
     // صراحةً متى لم تعد المختارة كي تُسكت صوتها.
     return Scaffold(
@@ -233,10 +255,14 @@ class _HomeShellState extends State<HomeShell> {
             // ترويسة الهيكل فوق الوجهات الثلاث كلها: نسخة واحدة من الشعار لا
             // ثلاث، وهي خارج `IndexedStack` فلا تُبنى مع كل تبديل وجهة.
             _brandBar(),
-            if (_banner != null && _banner!.isNotEmpty) _BroadcastBanner(
-              message: _banner!,
-              onDismiss: () => setState(() => _banner = null),
-            ),
+            if (broadcast != null)
+              _BroadcastBanner(
+                key: const Key('shell_broadcast_banner'),
+                message: broadcast.message.isNotEmpty
+                    ? broadcast.message
+                    : broadcast.title,
+                onDismiss: store.dismissActive,
+              ),
             Expanded(
               child: IndexedStack(index: _index, children: screens),
             ),
@@ -377,7 +403,11 @@ class _HomeShellState extends State<HomeShell> {
 const _broadcastBannerColor = Color(0xFF78350F);
 
 class _BroadcastBanner extends StatelessWidget {
-  const _BroadcastBanner({required this.message, required this.onDismiss});
+  const _BroadcastBanner({
+    super.key,
+    required this.message,
+    required this.onDismiss,
+  });
 
   final String message;
   final VoidCallback onDismiss;

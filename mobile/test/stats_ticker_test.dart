@@ -8,8 +8,12 @@ import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
 import 'package:negev_events/screens/events_screen.dart';
+import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
+import 'package:negev_events/state/region_onboarding.dart';
+import 'package:negev_events/state/welcome.dart';
+import 'package:negev_events/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// شريط الإحصائيات في الرئيسية (تذكرة #172): عدد المناسبات القادمة في كل
@@ -48,6 +52,7 @@ Map<String, dynamic> _statsBody({
 NegevApi _api({
   required Map<String, dynamic> stats,
   List<Map<String, dynamic>> broadcasts = const [],
+  List<Map<String, dynamic>> events = const [],
   List<Uri>? requests,
   bool statsFails = false,
 }) {
@@ -69,8 +74,13 @@ NegevApi _api({
     } else if (path.endsWith('/api/events')) {
       body = {
         'success': true,
-        'events': <Map<String, dynamic>>[],
-        'pagination': {'page': 1, 'limit': 30, 'total': 0, 'totalPages': 0},
+        'events': events,
+        'pagination': {
+          'page': 1,
+          'limit': 30,
+          'total': events.length,
+          'totalPages': events.isEmpty ? 0 : 1,
+        },
         'announcements': <Map<String, dynamic>>[],
       };
     } else if (path.endsWith('/api/stories/entry-card')) {
@@ -196,6 +206,83 @@ void main() {
     );
   });
 
+  testWidgets('داخل HomeShell: شريط تعميم واحد مشترك، وإغلاقه يعيد شريط الإحصاءات',
+      (tester) async {
+    // نافذة أعلى من الافتراضية: الهيكل يحمل ترويسة وكبستين وشريط تنقّل،
+    // والكرت لا يفيض في ارتفاع هاتف فعلي.
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    SharedPreferences.setMockInitialValues({
+      regionOnboardedKey: true,
+      welcomeSeenKey: true,
+    });
+
+    final api = _api(
+      stats: _statsBody(),
+      broadcasts: [
+        {
+          'id': 9,
+          'title': 'تعميم المنصة',
+          'message': 'غداً صيانة مسائية',
+          'tone': 'info',
+        },
+      ],
+    );
+    await tester.pumpWidget(
+      AppServices(
+        api: api,
+        auth: AuthStore(api),
+        realtime: RealtimeService(),
+        child: MaterialApp(
+          theme: AppTheme.light(),
+          home: const Directionality(
+            textDirection: TextDirection.rtl,
+            child: HomeShell(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+
+    // على «المناسبات»: شريط التغذية هو الوحيد — الحالة مشتركة مع الهيكل،
+    // فلا يضيف الهيكل شريطاً ثانياً حين تكون وجهة التغذية هي المختارة.
+    expect(find.byKey(const Key('home_broadcast_ticker')), findsOneWidget);
+    expect(find.byKey(const Key('shell_broadcast_banner')), findsNothing,
+        reason: 'شريط التعميم واحد: التغذية ترسمه من الحالة المشتركة نفسها');
+    expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
+        reason: 'التعميم الحيّ حلّ محلّ شريط الإحصاءات');
+    expect(find.text('المجموع 16'), findsNothing,
+        reason: 'ولا أرقام الإحصاء تُرسم تحته');
+
+    // على وجهة أخرى: شريط الهيكل يقف مكانه — تبادلٌ لا اجتماع.
+    final navBar = find.byType(NavigationBar);
+    await tester.tap(find.descendant(of: navBar, matching: find.text('خدماتنا')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('shell_broadcast_banner')), findsOneWidget,
+        reason: 'على غير وجهة التغذية يرسم الهيكل التعميم من الحالة نفسها');
+    expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing,
+        reason: 'وشريط التغذية تحت الوجهة غير المختارة ليس شريطاً ثانياً معروضاً');
+
+    // عودة إلى «المناسبات»: الإغلاق من الشريط الجديد نفسه (بلا زرّ في الشاشة
+    // وحدها ولا في الهيكل وحده — الحالة واحدة).
+    await tester.tap(find.descendant(of: navBar, matching: find.text('المناسبات')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('home_broadcast_ticker_dismiss')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing,
+        reason: 'التعميم أُغلق من الحالة المشتركة');
+    expect(find.byKey(const Key('home_stats_ticker')), findsOneWidget,
+        reason: 'وشريط الإحصاءات عاد فوراً: الإغلاق واحد للهيكل والتغذية');
+    expect(find.text('المجموع 16'), findsOneWidget);
+  });
+
   testWidgets('بلا تعميم حيّ: الشريط ظاهر وشريط التعميم غائب',
       (tester) async {
     await _pumpFeed(tester, _api(stats: _statsBody(), broadcasts: const []));
@@ -220,13 +307,29 @@ void main() {
 
   testWidgets('فشل مسار الإحصاء صامت: لا شريط، والتغذية تُبنى كما هي',
       (tester) async {
-    await _pumpFeed(tester, _api(stats: _statsBody(), statsFails: true));
+    await _pumpFeed(
+      tester,
+      _api(
+        stats: _statsBody(),
+        statsFails: true,
+        // شاهدٌ من محتوى التغذية نفسه: كرت المناسبة وعنوانه. `EventsScreen`
+        // جذرٌ زرعه الاختبار فيسقط لو أُفرغت التغذية — لا يُثبت أن الكرت بُني.
+        events: const [
+          {
+            'id': 77,
+            'groom_name': 'اسم 77',
+            'town': 'رهط',
+            'event_date': '2026-09-20',
+          },
+        ],
+      ),
+    );
 
     expect(find.byKey(const Key('home_stats_ticker')), findsNothing,
         reason: 'ردّ فاشل ⇒ لا أرقام كاذبة');
     expect(find.byKey(const Key('home_broadcast_ticker')), findsNothing);
-    expect(find.byType(EventsScreen), findsOneWidget,
-        reason: 'الشاشة باقية: فشل شريط إحصاء لا يُسقط التغذية');
+    expect(find.text('اسم 77'), findsOneWidget,
+        reason: 'كرت التغذية بُني رغم فشل شريط الإحصاء — ولو أُفرغت التغذية لسقط هذا');
   });
 
   testWidgets('updated_at غائب لا يكتب وقتاً مخترعاً — الشريط يبقى بأرقامه',

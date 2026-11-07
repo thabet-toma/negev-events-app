@@ -17707,31 +17707,67 @@ async function run() {
   });
 
   await test('الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب', async () => {
-    const cached = await statsRegionRow();
+    // ساعة الخدمة قابلة للاستبدال (`statsService.setTickerClock`): العبور هنا
+    // بـ`STATS_TICKER_CACHE_SECONDS` نفسها التي يقيسها الكاش، لا بتفريغٍ يدوي.
+    // لو صار الكاش أبدياً بقي هذا الاختبار أحمر: لا شيء في مساره يُفرغه.
+    let fakeNow = Date.now();
+    statsService.setTickerClock(() => fakeNow);
 
-    await publishStatsEvent({ label: 'الثالثة' });
-    const stillCached = await api('GET', '/api/stats/ticker');
-    assert.strictEqual(stillCached.status, 200, stillCached.body.message);
-    assert.strictEqual(
-      stillCached.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
-      cached.upcoming_count,
-      'النسخة المحفوظة هي ما يُخدَم داخل المدّة — لا قراءة جديدة ترى المناسبة الجديدة'
-    );
+    // عدّاد على `db.query` وحده (الاختبار السابق يشرح لماذا): الصفر داخل
+    // المدّة والواحد بعد عبورها هما الدليل على أن الطلب هو ما استعلم.
+    const originalQuery = db.query;
+    let tickerQueries = 0;
+    db.query = (sql, params) => {
+      if (/AS upcoming_count/.test(sql)) tickerQueries += 1;
+      return originalQuery.call(db, sql, params);
+    };
 
-    // ما تفعله نهاية الـ300 ثانية بالضبط: لا مؤقّت في الخدمة، بل الطلب التالي
-    // بعد انتهاء الصلاحية يعيد التعبئة. تفريغ الكاش هنا هو الطريق الوحيد إلى
-    // تلك اللحظة بلا انتظار خمس دقائق.
-    statsService.clearTickerCache();
-    const refreshed = await api('GET', '/api/stats/ticker');
-    assert.strictEqual(
-      refreshed.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
-      cached.upcoming_count + 1,
-      'وبعد انتهاء الصلاحية يُقرأ الرقم الجديد'
-    );
-    assert.notStrictEqual(
-      refreshed.body.updated_at, stillCached.body.updated_at,
-      'ولحظة الحساب تتقدّم مع إعادة التعبئة — updated_at ليس ثابتاً أبدياً'
-    );
+    try {
+      // تفريغ واحد قبل القياس لبداية معروفة على صفوف هذا القسم — لا تفريغ
+      // بعدها: مسار الانتهاء نفسه يمرّ بالساعة وحدها.
+      statsService.clearTickerCache();
+      const cached = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(cached.status, 200, cached.body.message);
+      const cachedCount = cached.body.regions
+        .find(region => region.region_id === statsRegionId).upcoming_count;
+
+      await publishStatsEvent({ label: 'الثالثة' });
+
+      tickerQueries = 0;
+      const stillCached = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(stillCached.status, 200, stillCached.body.message);
+      assert.strictEqual(tickerQueries, 0, 'داخل المدّة لا استعلام: النسخة المحفوظة هي ما يُخدَم');
+      assert.strictEqual(
+        stillCached.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
+        cachedCount,
+        'النسخة المحفوظة هي ما يُخدَم داخل المدّة — لا قراءة جديدة ترى المناسبة الثالثة'
+      );
+      assert.strictEqual(
+        stillCached.body.updated_at, cached.body.updated_at,
+        'وحتى انتهاء المدّة يحمل الردّ لحظة التعبئة نفسها، لا لحظة السؤال'
+      );
+
+      // نهاية المدّة بالضبط كما يقيسها الكاش: الساعة تتقدّم مدّة الصلاحية
+      // كاملة + ثانية. لا مؤقّت في الخدمة ولا تفريغ — الطلب التالي بعد
+      // الانتهاء هو ما يعيد التعبئة.
+      fakeNow += STATS_TICKER_CACHE_SECONDS * 1000 + 1000;
+      const refreshed = await api('GET', '/api/stats/ticker');
+      assert.strictEqual(refreshed.status, 200, refreshed.body.message);
+      assert.strictEqual(tickerQueries, 1, 'انتهاء المدّة وحده أعاد الاستعلام — لا شيء آخر جدّد');
+      assert.strictEqual(
+        refreshed.body.regions.find(region => region.region_id === statsRegionId).upcoming_count,
+        cachedCount + 1,
+        'وبعد انتهاء الصلاحية تُقرأ المناسبة الثالثة: الانتهاء هو ما جدّد'
+      );
+      assert.notStrictEqual(
+        refreshed.body.updated_at, stillCached.body.updated_at,
+        'ولحظة الحساب تتقدّم مع إعادة التعبئة — updated_at يُختم عند التعبئة ولا يُجمَّد أبدياً'
+      );
+    } finally {
+      db.query = originalQuery;
+      // الساعة الحقيقية تعود قبل التنظيف وما بعده من أقسام.
+      statsService.setTickerClock();
+    }
   });
 
   // تنظيف قسم الإحصائيات: المناسبات (ومعها إشعاراتها بـON DELETE CASCADE)، ثم

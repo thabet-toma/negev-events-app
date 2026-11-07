@@ -7359,12 +7359,12 @@ async function run() {
   }
 
   await test('الشريط يحمل صفّ المحافظة وعددها كما وصلا، والمجموع، و«حُدّث HH:MM» بالساعة المحلية', async () => {
-    const dom = buildEnv();
+    const { dom } = await buildBothTickersEnv({ broadcasts: [] });
     const restoreClock = installStatsLocalClock(dom.window, { utcIso: STATS_UPDATED_ISO, hours: 9, minutes: 7 });
-    const { fetchStub } = buildStatsFetchStub();
-    dom.window.fetch = fetchStub;
 
     try {
+      // التعاميم أولاً: «لا تعميم» وحدها تسمح بالشريط، والأرقام لا تُرسم قبلها.
+      await dom.window.fetchLiveBroadcasts();
       await dom.window.fetchStatsTicker();
     } finally {
       restoreClock();
@@ -7396,10 +7396,12 @@ async function run() {
 
   await test('بلا رقم بعد لا شريط إطلاقاً — لا أصفار كاذبة قبل وصول الخادم', async () => {
     const { dom } = await buildBothTickersEnv({ broadcasts: [] });
+    // «لا تعميم» محسومة هنا، فالمخفيّ بعده غيابُ رقم لا انتظارُ تعاميم.
+    await dom.window.fetchLiveBroadcasts();
 
     assert.strictEqual(
       dom.window.document.getElementById('statsTicker').hidden, true,
-      'لا تعميم ولا رقم بعد: الشريط مخفيّ حتى يصل العدّ'
+      'لا رقم بعد: الشريط مخفيّ حتى يصل العدّ'
     );
 
     await dom.window.fetchStatsTicker();
@@ -7409,37 +7411,61 @@ async function run() {
     );
   });
 
-  await test('شريط واحد فقط: التعميم الحيّ يغيب معه الشريط ولو وصل الرقم بعده أو قبله', async () => {
-    // (أ) الرقم أولاً ثم التعميم — الحالة التي يُخفي فيها التعميم شريطاً ظاهراً.
-    const first = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
-    await first.dom.window.fetchStatsTicker();
+  await test('شريط واحد فقط: الرقم لا يظهر قبل حسم التعاميم، والتعميم الحيّ يحلّ محلّه بعدها', async () => {
+    // (أ) الرقم يصل أولاً، والتعاميم لم تُعرف بعد ⇒ لا ومضة: الشريط يبقى
+    // مخفياً. ثم يصل جواب «لا تعميم» فيظهر الرقم — لا لأنه وصل، بل لأن الحالة
+    // حُسمت. هذا هو الفرق بين «لم تُعرف» و«لا تعميم» (#172، الجولة ٢).
+    const numberFirst = await buildBothTickersEnv({ broadcasts: [] });
+    await numberFirst.dom.window.fetchStatsTicker();
     assert.strictEqual(
-      first.dom.window.document.getElementById('statsTicker').hidden, false,
-      'قبل وصول التعميم الشريط ظاهر — نقطة بداية موجبة، وإلا كان «اختفاؤه» بلا معنى'
+      numberFirst.dom.window.document.getElementById('statsTicker').hidden, true,
+      'رقم وصل قبل معرفة التعاميم ⇒ لا شريط: عرضه ثم إخفاءه ومضة لا معنى لها'
     );
 
-    await first.dom.window.fetchLiveBroadcasts();
+    await numberFirst.dom.window.fetchLiveBroadcasts();
     assert.strictEqual(
-      first.dom.window.document.getElementById('broadcastTicker').hidden, false,
+      numberFirst.dom.window.document.getElementById('broadcastTicker').hidden, true,
+      'وردّ التعاميم فارغ: لا تعميم حيّ'
+    );
+    assert.strictEqual(
+      numberFirst.dom.window.document.getElementById('statsTicker').hidden, false,
+      'وبعد «لا تعميم» ظهر الرقم بالأرقام التي وصلت سابقاً — النافذة كانت انتظاراً لا إخفاءً دائماً'
+    );
+    assert.strictEqual(
+      numberFirst.dom.window.document.getElementById('statsTickerTotal').textContent, 'المجموع 16',
+      'والأرقام نفسها هي ما عُرض بعد الحسم، لا نسخة ثانية من الشبكة'
+    );
+
+    // (ب) تعميم حيّ يصل بعد الرقم: الرقم لم يظهر في النافذة ابتداءً، والتعميم
+    // وحده يُعرض — لا رقمان ثم تعميم، ولا شريطان معاً.
+    const broadcastAfter = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
+    await broadcastAfter.dom.window.fetchStatsTicker();
+    assert.strictEqual(
+      broadcastAfter.dom.window.document.getElementById('statsTicker').hidden, true,
+      'الرقم لم يظهر في نافذة انتظار التعاميم'
+    );
+
+    await broadcastAfter.dom.window.fetchLiveBroadcasts();
+    assert.strictEqual(
+      broadcastAfter.dom.window.document.getElementById('broadcastTicker').hidden, false,
       'التعميم الحيّ ظاهر على شريطه'
     );
     assert.strictEqual(
-      first.dom.window.document.getElementById('statsTicker').hidden, true,
+      broadcastAfter.dom.window.document.getElementById('statsTicker').hidden, true,
       'والشريط غاب: التعميم حلّ محلّه لا شاركه'
     );
 
-    // (ب) التعاميم أولاً (فارغة) ثم الرقم — لا شيء يخفي الشريط هنا.
-    const second = await buildBothTickersEnv({ broadcasts: [] });
-    await second.dom.window.fetchLiveBroadcasts();
-    await second.dom.window.fetchStatsTicker();
-
+    // (ج) التعاميم أولاً (واحد حيّ) ثم الرقم: لا شريطين ولا رقم تحته.
+    const broadcastFirst = await buildBothTickersEnv({ broadcasts: [TICKER_INFO] });
+    await broadcastFirst.dom.window.fetchLiveBroadcasts();
+    await broadcastFirst.dom.window.fetchStatsTicker();
     assert.strictEqual(
-      second.dom.window.document.getElementById('broadcastTicker').hidden, true,
-      'لا تعميم حيّ ⇒ شريط التعاميم مخفيّ'
+      broadcastFirst.dom.window.document.getElementById('broadcastTicker').hidden, false,
+      'التعميم معروض'
     );
     assert.strictEqual(
-      second.dom.window.document.getElementById('statsTicker').hidden, false,
-      'وما بقي معروضاً هو الشريط — الإخفاء مشروط بالتعميم لا دائم'
+      broadcastFirst.dom.window.document.getElementById('statsTicker').hidden, true,
+      'والرقم لا يُعرض معه — شريط واحد في الموضع نفسه'
     );
   });
 
@@ -7488,6 +7514,18 @@ async function run() {
     await flushBoot();
 
     assert.strictEqual(bootCalls, 1, 'نداء واحد مع الإقلاع (fetchStatsTicker في DOMContentLoaded) — لا نداء ثانٍ ولا صفر');
+
+    // والاسم يُختبر فعلاً: نفتح تبويباً آخر ثم نعود إلى «المناسبات»، وهي اللحظة
+    // التي كان يمكن أن يطلب فيها الشريط نفسه ثانيةً. لا طلب جديد — لا عند
+    // المغادرة ولا عند العودة.
+    dom.window.switchTab('tabMyList');
+    dom.window.switchTab('tabHome');
+    await delay(30);
+
+    assert.strictEqual(
+      bootCalls, 1,
+      'فتح تبويب ثم العودة إلى الرئيسية لم يطلب الشريط مرّة أخرى'
+    );
   });
 
   await test('قاعدة CSS تُبقي [hidden] غالباً على display:flex — وإلا ظهر الشريط رغم إخفائه', async () => {
