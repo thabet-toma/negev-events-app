@@ -411,9 +411,9 @@ CREATE TABLE IF NOT EXISTS event_reminders (
 -- ADR-0015). Two faces share the table and are told apart by `source`:
 --   account     a signed-in user answers from the app or web/ (تذكرة #168).
 --               UNIQUE (event_id, user_id) makes the second answer an UPDATE.
---   share_page  a guest with no account answers the form on /e/:id (another
---               ticket — not built yet). UNIQUE (event_id, guest_phone) is what
---               makes re-submitting the same phone an UPDATE, not a second row.
+--   share_page  a guest with no account answers the form on /e/:id (تذكرة #169),
+--               which POSTs to `/e/:id/rsvp`. UNIQUE (event_id, guest_phone) is
+--               what makes re-submitting the same phone an UPDATE, not a second row.
 -- `guest_phone` is the guest face's duplicate key and its abuse control, and it
 -- never leaves the server: no response of any route selects it.
 -- `invite_id` is deliberately a plain nullable column with NO foreign key: the

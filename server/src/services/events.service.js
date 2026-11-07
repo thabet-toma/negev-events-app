@@ -387,14 +387,17 @@ async function clearEndedReminders(userId) {
   return affectedRows;
 }
 
-// --- تأكيد الحضور بحساب: «جاي / مش جاي» (تذكرة #168، ADR-0015) ---------
+// --- تأكيد الحضور: «جاي / مش جاي» بحساب (تذكرة #168) وبلا حساب على صفحة
+// المشاركة (تذكرة #169) — ADR-0015 ---------------------------------------
 //
-// This is the *account* face of the RSVP table alone. The guest face on
-// `/e/:id` (name + party size + mandatory phone, no account) belongs to
-// another ticket: `event_rsvps` already carries its `guest_name`,
-// `guest_phone`, `source = 'share_page'` and `invite_id` columns, but no route
-// here ever writes or reads them apart from `guest_name`'s use as the name in
-// «مين جاي» — the rest is left for that ticket.
+// One table, two faces. The account face below (`setRsvp`/`removeRsvp`/
+// `listEventRsvps`) keys on `(event_id, user_id)`; the share-page face
+// (`guestRsvpOpen`/`guestRsvpContext`/`setGuestRsvp`) keys on
+// `(event_id, guest_phone)` with `source = 'share_page'` and `user_id` NULL.
+// Neither door writes the other's rows, and **no query here selects
+// `guest_phone`**: the phone is the guest face's duplicate key and abuse
+// control only — it never leaves the server, not even to the event's owner
+// (ADR-0015 §2).
 
 /**
  * Whether an occasion type shows its public «كم جاي» counter. Read off the
@@ -464,11 +467,16 @@ async function attachRsvpCounters(events) {
 
 /**
  * The row every RSVP read starts from: the event's own status plus its type's
- * two flags. `null` for an id no event carries.
+ * two flags, and whether the occasion's span has already ended. `is_expired`
+ * is selected here once — by the same EVERY-SPAN rule the share page and the
+ * archive reads use — because the guest face on `/e/:id` closes on it
+ * (ADR-0015 §3: an ended occasion shows no form) while the account face never
+ * did and still does not. `null` for an id no event carries.
  */
 async function rsvpContext(eventId) {
   return db.queryOne(
-    `SELECT e.id, e.status, ot.rsvp_enabled, ot.show_rsvp_count, ot.tone
+    `SELECT e.id, e.status, ot.rsvp_enabled, ot.show_rsvp_count, ot.tone,
+            (${EVENT_SPAN_END_SQL_E} < CURDATE()) AS is_expired
        FROM events e
        LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
       WHERE e.id = ?`,
@@ -566,7 +574,7 @@ async function removeRsvp(eventId, userId) {
  * `users.full_name` للحساب ومن `guest_name` للضيف، ولا يُطلب الاسم من العميل
  * لهذا الغرض.
  *
- * Over the two faces (account and, later, share_page) the totals count both, so
+ * Over the two faces (account and share_page) the totals count both, so
  * the owner's number is the same number the public counter shows.
  */
 async function listEventRsvps(eventId, user) {
@@ -613,6 +621,63 @@ async function listEventRsvps(eventId, user) {
       total_rows: rsvps.length
     }
   };
+}
+
+/**
+ * هل تُعرض بوابة جواب الضيف على هذه المناسبة الآن؟ القاعدة **الواحدة** التي
+ * تقرأها الصفحة (`GET /e/:id` ترسم النموذج أو لا) والمسار (`POST /e/:id/rsvp`
+ * يردّ الـ404 الموحّدة) — نسخة ثانية منها تعني يوماً نموذجاً ظاهراً فوق باب
+ * مغلق.
+ *
+ * ثلاثة شروط، كلها من ADR-0015 §3 وطلب #169: المناسبة معتمدة، ونوعها
+ * `rsvp_enabled` مفتوحاً، ومداها لم ينتهِ بعد (`is_expired`). وتقبل الصيغتين
+ * اللتين يملكهما المستدعي: صفّ `rsvpContext` الخام (‏0/1) وكائن
+ * `getShareEvent` (‏`is_expired` منطقي) — ولذلك يُنتقى `status` هناك أيضاً.
+ */
+function guestRsvpOpen(row) {
+  if (!row) return false;
+  if (row.status !== 'approved') return false;
+  if (!Number(row.rsvp_enabled || 0)) return false;
+  return !row.is_expired;
+}
+
+/**
+ * صفّ الأهلية أو `null`. لا يرمي: الصفحة تسأل «نموذج أو لا» لا «أي خطأ»،
+ * والـ404 الموحّدة للصفحة (‏HTML) لا لهذا النداء — والمسار وحده يترجم `null`
+ * إلى تلك الصفحة.
+ */
+async function guestRsvpContext(eventId) {
+  const context = await rsvpContext(eventId);
+  return guestRsvpOpen(context) ? context : null;
+}
+
+/**
+ * جواب ضيف بلا حساب من نموذج `/e/:id` — upsert على `(event_id, guest_phone)`
+ * بـ`source = 'share_page'`: الإرسال الثاني بالهاتف نفسه يُحدّث الاسم والعدد
+ * والجواب في الصفّ القائم ولا يُضيف صفاً ثانياً (المفتاح الفريد هو ما يفرض
+ * ذلك، لا فحصٌ يسبق الكتابة). و`party_size` يبقى معنىً واحداً في الوجهين:
+ * إجمالي الحاضرين بمن فيهم صاحب الجواب.
+ *
+ * **الأهلية تُفحص هنا أيضاً لا في المسار وحده:** منادٍ مستقبلي يتجاوز المسار
+ * لا يكتب جواباً على نوع مطفأ أو مناسبة منتهية، والرفض 404 لا 403 كي لا
+ * يؤكَّد وجود المناسبة لمن لا يملكها — نفس باب `assertEventAcceptsRsvp`.
+ *
+ * **`guest_phone` لا يغادر هذا الملف:** الصفّ يُكتب، والقيمة المُعادة عدّاداتٌ
+ * وحدها (`rsvpCountersForEvent`) — لا هاتف ولا اسم.
+ */
+async function setGuestRsvp(eventId, { name, phone, response, partySize }) {
+  const context = await guestRsvpContext(eventId);
+  if (!context) throw ApiError.notFound('هذه المناسبة لا تقبل تأكيد الحضور');
+
+  await db.execute(
+    `INSERT INTO event_rsvps (event_id, user_id, guest_name, guest_phone, response, party_size, source)
+     VALUES (?, NULL, ?, ?, ?, ?, 'share_page')
+     ON DUPLICATE KEY UPDATE guest_name = VALUES(guest_name), response = VALUES(response),
+       party_size = VALUES(party_size), source = 'share_page'`,
+    [eventId, name, phone, response, partySize]
+  );
+
+  return { ...await rsvpCountersForEvent(eventId, context) };
 }
 
 /**
@@ -2450,17 +2515,24 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * cache key `shareCard.service.js` renders the OG card under, so an edited
  * event gets a new card automatically — no explicit cache-invalidation call
  * anywhere else in the codebase.
+ *
+ * `status` and `rsvp_enabled` are selected for one reader only: the guest RSVP
+ * form on this page (ticket #169, ADR-0015 §3). `status` is fixed by the
+ * WHERE clause, but `guestRsvpOpen` reads the same two keys off both this
+ * object and a raw `rsvpContext` row — selecting it here is what lets one
+ * predicate serve the page and the POST instead of a second copy of the rule.
  */
 async function getShareEvent(eventId) {
   const row = await db.queryOne(
     `SELECT events.id, events.title, events.family_clan, events.poster_url, events.town,
             events.event_date, events.event_end_date, events.location_name,
-            events.visibility, events.updated_at,
+            events.visibility, events.status, events.updated_at,
             occasion_types.name AS occasion_type_name,
             occasion_types.tone AS occasion_type_tone,
             occasion_types.icon AS occasion_type_icon,
             occasion_types.color AS occasion_type_colour,
             occasion_types.default_poster_url AS occasion_type_poster_url,
+            occasion_types.rsvp_enabled AS rsvp_enabled,
             (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_expired
        FROM events
        LEFT JOIN occasion_types ON occasion_types.id = events.occasion_type_id
@@ -2606,6 +2678,9 @@ module.exports = {
   setRsvp,
   removeRsvp,
   listEventRsvps,
+  guestRsvpOpen,
+  guestRsvpContext,
+  setGuestRsvp,
   myListBucket,
   listMyReminders,
   listLiveAnnouncements,

@@ -7620,11 +7620,15 @@ async function run() {
   await test('The Content-Security-Policy header is present on the share route, with a font source and still no script source', async () => {
     const { headers } = await rawGet(`/e/${shareEventId}`);
     const csp = headers.get('content-security-policy');
+    // `form-action 'self'` أُضيفت في تذكرة #169 لنموذج جواب الضيف على هذه الصفحة
+    // وحدها (ADR-0015) — والنصّ الدقيق محفوظ هنا عمداً، فأي توجيه يُضاف إلى
+    // الصفحة يمرّ من هذا السطر.
     assert.strictEqual(
       csp,
-      "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'"
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'"
     );
     assert.ok(csp.includes("font-src 'self'"), 'expected a font-src directive for the page\'s own Cairo woff2 files');
+    assert.ok(csp.includes("form-action 'self'"), 'expected the guest answer form to be allowed to post back to this same origin');
     assert.ok(!csp.includes('script-src'), 'expected no script-src to ever be added to this route');
   });
 
@@ -16824,6 +16828,349 @@ async function run() {
     await db.execute('DELETE FROM events WHERE id = ?', [id]);
   }
   await db.execute('DELETE FROM users WHERE id = ?', [scheduledListener.id]);
+  console.log('\nتأكيد الحضور بلا حساب على صفحة المشاركة (تذكرة #169، ADR-0015)');
+
+  /**
+   * إرسال النموذج كما يرسله متصفّح بلا JavaScript: `x-www-form-urlencoded`
+   * بلا رمز وبلا ترويسة تطبيق. و`X-Forwarded-For` اختياري، لعزل اختبار الحدّ
+   * عن بقية هذا الملف — التطبيق `trust proxy: 1` فيقرأ `req.ip` منها كما
+   * يقرأها خلف nginx الإنتاج.
+   */
+  async function postGuestRsvp(formPath, fields, { forwardedFor } = {}) {
+    const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    if (forwardedFor) headers['X-Forwarded-For'] = forwardedFor;
+    const res = await fetch(`${baseUrl}${formPath}`, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams(fields).toString()
+    });
+    return {
+      status: res.status,
+      redirected: res.redirected,
+      url: res.url,
+      headers: res.headers,
+      text: await res.text()
+    };
+  }
+
+  // ثلاثة صفوف تغطّي شروط الظهور الثلاثة: معتمدة قادمة (البوابة مفتوحة)،
+  // ومعتمدة انتهت (مغلقة بالزمن)، وعزاء معتمد (مغلق بالنوع — `rsvp_enabled`
+  // مطفأ على النغمة الجليلة).
+  const guestRsvpOwner = await createDirectUser('مالك مناسبة جواب الضيف');
+  const GUEST_RSVP_DAY = addDaysToDate(schedulerToday, 40);
+  const GUEST_RSVP_NAME = 'ضيف صفحة المشاركة';
+  const GUEST_RSVP_UPDATED_NAME = 'ضيف صفحة المشاركة — الاسم المحدَّث';
+  // يُكتب الهاتف مرة بمسافات وشُرَط، والسؤال هل يُخزَّن مطبَّعاً. والرقم عشوائي
+  // كي لا يطابق رقم هاتف حقيقي على صفّ آخر في قاعدة التطوير الدائمة.
+  const GUEST_RSVP_PHONE = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const GUEST_RSVP_PHONE_TYPED =
+    `${GUEST_RSVP_PHONE.slice(0, 3)}-${GUEST_RSVP_PHONE.slice(3, 6)} ${GUEST_RSVP_PHONE.slice(6)}`;
+  const guestRsvpEventIds = [];
+  let guestRsvpEventId = 0;
+  let guestRsvpExpiredId = 0;
+  let guestRsvpFuneralId = 0;
+
+  await test('Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد', async () => {
+    const wedding = await api('POST', '/api/events', {
+      token: guestRsvpOwner.token,
+      body: weddingEventBody({
+        honorees: [{ name: 'عريس جواب الضيف' }], town: 'حورة', event_date: GUEST_RSVP_DAY
+      })
+    });
+    assert.strictEqual(wedding.status, 201, wedding.body.message);
+    guestRsvpEventId = wedding.body.eventId;
+    guestRsvpEventIds.push(guestRsvpEventId);
+    const approved = await api('PATCH', `/api/admin/events/${guestRsvpEventId}/status`, {
+      token: adminToken, body: { status: 'approved' }
+    });
+    assert.strictEqual(approved.status, 200, approved.body.message);
+
+    const ended = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({ honorees: [{ name: 'عريس جواب انتهى' }], town: 'حورة', event_date: '2020-01-01' })
+    });
+    assert.strictEqual(ended.status, 201, ended.body.message);
+    assert.strictEqual(ended.body.status, 'approved', 'an admin publish is approved on the spot, past date or not');
+    guestRsvpExpiredId = ended.body.eventId;
+    guestRsvpEventIds.push(guestRsvpExpiredId);
+
+    const funeral = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى جواب الضيف' }],
+        town: 'حورة',
+        location_name: 'ديوان الاختبار',
+        event_date: GUEST_RSVP_DAY,
+        event_end_date: GUEST_RSVP_DAY
+      }
+    });
+    assert.strictEqual(funeral.status, 201, funeral.body.message);
+    assert.strictEqual(funeral.body.status, 'approved');
+    guestRsvpFuneralId = funeral.body.eventId;
+    guestRsvpEventIds.push(guestRsvpFuneralId);
+  });
+
+  await test('الصفحة تحمل النموذج ولا <script>، والـCSP تحمل form-action \'self\' لهذه الصفحة وحدها', async () => {
+    const { status, headers, text } = await rawGet(`/e/${guestRsvpEventId}`);
+    assert.strictEqual(status, 200);
+    assert.ok(
+      text.includes(`<form class="rsvp" method="post" action="/e/${guestRsvpEventId}/rsvp">`),
+      'expected the guest answer form, posting back to this page\'s own path'
+    );
+    for (const field of ['guest_name', 'party_size', 'guest_phone', 'response']) {
+      assert.ok(text.includes(`name="${field}"`), `expected the form to carry a ${field} field`);
+    }
+    assert.ok(text.includes('value="yes"') && text.includes('value="no"'), 'expected two submit buttons carrying the two answers');
+    assert.ok(!/<script/i.test(text), 'the share page must never emit a script tag');
+    assert.ok(
+      (headers.get('content-security-policy') || '').includes("form-action 'self'"),
+      'the guest form needs form-action self to be allowed to submit to its own origin'
+    );
+
+    // والتوجيه على هذه الصفحة وحدها: صفحة الـ404 المشتركة (تُخرجها أربعة
+    // راوترات) لا نموذج فيها، فتبقى على نصّ الـCSP القديم حرفياً.
+    const notFound = await rawGet('/e/999999999');
+    assert.strictEqual(
+      notFound.headers.get('content-security-policy'),
+      "default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'",
+      'form-action must not leak onto the pages that have no form'
+    );
+  });
+
+  await test('إرسال صحيح يعيد التوجيه بالشارة، ويُنشئ صفّاً بالهاتف المطبَّع', async () => {
+    const res = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: GUEST_RSVP_NAME,
+      party_size: '3',
+      guest_phone: GUEST_RSVP_PHONE_TYPED,
+      response: 'yes'
+    });
+
+    assert.ok(res.redirected, 'a form submission must redirect (PRG), not answer the POST with a page');
+    assert.ok(
+      res.url.endsWith(`/e/${guestRsvpEventId}?rsvp=ok`),
+      `expected the redirect to land on the page's own badge flag, got: ${res.url}`
+    );
+    assert.ok(res.text.includes('وصلنا جوابك'), 'expected the «وصلنا جوابك» badge on the page the redirect lands on');
+
+    const rows = await db.query(
+      'SELECT guest_name, guest_phone, response, party_size, source, user_id FROM event_rsvps WHERE event_id = ?',
+      [guestRsvpEventId]
+    );
+    assert.strictEqual(rows.length, 1, 'one guest answer, one row');
+    assert.strictEqual(rows[0].guest_phone, GUEST_RSVP_PHONE, 'the phone must be stored normalised — spaces and dashes removed');
+    assert.strictEqual(rows[0].guest_name, GUEST_RSVP_NAME);
+    assert.strictEqual(rows[0].response, 'yes');
+    assert.strictEqual(Number(rows[0].party_size), 3);
+    assert.strictEqual(rows[0].source, 'share_page');
+    assert.strictEqual(rows[0].user_id, null, 'a guest answer has no account behind it');
+
+    const detail = await api('GET', `/api/events/${guestRsvpEventId}`);
+    assert.strictEqual(detail.status, 200);
+    assert.strictEqual(
+      Number(detail.body.event.rsvp_going_count), 3,
+      'the guest answer counts in «كم جاي» by its party size, not as one row'
+    );
+  });
+
+  await test('الإرسال الثاني بالهاتف نفسه يُحدّث الصفّ ولا يُضيف ثانياً', async () => {
+    const res = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: GUEST_RSVP_UPDATED_NAME,
+      party_size: '5',
+      guest_phone: GUEST_RSVP_PHONE,
+      response: 'no'
+    });
+    assert.ok(res.redirected && res.url.endsWith('?rsvp=ok'), `expected the same PRG confirmation, got: ${res.url}`);
+
+    const rows = await db.query(
+      'SELECT guest_name, guest_phone, response, party_size FROM event_rsvps WHERE event_id = ?',
+      [guestRsvpEventId]
+    );
+    assert.strictEqual(rows.length, 1, 'the phone is the duplicate key: a second submission updates, never inserts');
+    assert.strictEqual(rows[0].guest_name, GUEST_RSVP_UPDATED_NAME, 'the stored name follows the later submission');
+    assert.strictEqual(rows[0].response, 'no', 'so does the answer itself');
+    assert.strictEqual(Number(rows[0].party_size), 5);
+
+    const detail = await api('GET', `/api/events/${guestRsvpEventId}`);
+    assert.strictEqual(
+      Number(detail.body.event.rsvp_going_count), 0,
+      '«مش جاي» adds nothing to the counter, and it replaced the earlier «جاي» — 5, not 3 + 5'
+    );
+  });
+
+  await test('هاتف فارغ يعطي رسالة عربية بلا صفّ', async () => {
+    const res = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: 'ضيف بلا هاتف',
+      party_size: '2',
+      guest_phone: '',
+      response: 'yes'
+    });
+    assert.ok(res.redirected, 'even a rejected form returns through the PRG hop');
+    assert.ok(res.url.endsWith('?rsvp=phone'), `expected the phone error code, got: ${res.url}`);
+    assert.ok(res.text.includes('رقم الهاتف مطلوب'), 'expected an Arabic message naming the phone, not a JSON body');
+
+    const rows = await db.query(
+      'SELECT id FROM event_rsvps WHERE event_id = ? AND guest_name = ?',
+      [guestRsvpEventId, 'ضيف بلا هاتف']
+    );
+    assert.strictEqual(rows.length, 0, 'a rejected answer must leave no row behind');
+  });
+
+  await test('عدد 21 يعطي رسالة عربية بلا صفّ', async () => {
+    const res = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: 'ضيف بعدد كبير',
+      party_size: '21',
+      guest_phone: '0509998877',
+      response: 'yes'
+    });
+    assert.ok(res.redirected);
+    assert.ok(res.url.endsWith('?rsvp=party'), `expected the party-size error code, got: ${res.url}`);
+    assert.ok(res.text.includes('بين 1 و20'), 'expected the Arabic ceiling, with the number the server actually enforces');
+
+    const rejected = await db.query(
+      'SELECT id FROM event_rsvps WHERE event_id = ? AND guest_phone = ?',
+      [guestRsvpEventId, '0509998877']
+    );
+    assert.strictEqual(rejected.length, 0, 'a party size above the ceiling must not be written');
+    const untouched = await db.query('SELECT id FROM event_rsvps WHERE event_id = ?', [guestRsvpEventId]);
+    assert.strictEqual(untouched.length, 1, 'and the previously stored answer stays exactly as it was');
+  });
+
+  await test('الهاتف لا يظهر في أي ردّ /api ولا في /e/', async () => {
+    const detail = await api('GET', `/api/events/${guestRsvpEventId}`);
+    assert.ok(!JSON.stringify(detail.body).includes(GUEST_RSVP_PHONE), 'the event detail must not carry a guest phone');
+
+    const feed = await api(
+      'GET', `/api/events?limit=100&all_regions=1&date_from=${GUEST_RSVP_DAY}&date_to=${GUEST_RSVP_DAY}`
+    );
+    assert.ok(!JSON.stringify(feed.body).includes(GUEST_RSVP_PHONE), 'nor the public feed');
+
+    // صاحب المناسبة نفسه: يرى الاسم والعدد والجواب، ولا يرى الهاتف — ADR-0015 §2.
+    const owner = await api('GET', `/api/events/${guestRsvpEventId}/rsvps`, { token: guestRsvpOwner.token });
+    assert.strictEqual(owner.status, 200, owner.body.message);
+    assert.ok(
+      owner.body.rsvps.some(rsvp => rsvp.name === GUEST_RSVP_UPDATED_NAME),
+      'the guest answer appears in «مين جاي» by its stored name'
+    );
+    assert.ok(!JSON.stringify(owner.body).includes(GUEST_RSVP_PHONE), 'but never by its phone — not even to the event owner');
+    assert.ok(!JSON.stringify(owner.body).includes('guest_phone'), 'and not even the column name may travel');
+
+    const page = await rawGet(`/e/${guestRsvpEventId}`);
+    assert.ok(!page.text.includes(GUEST_RSVP_PHONE), 'the share page must not print a guest phone either');
+    const afterSubmit = await rawGet(`/e/${guestRsvpEventId}?rsvp=ok`);
+    assert.ok(!afterSubmit.text.includes(GUEST_RSVP_PHONE), 'and neither does the page the PRG lands on');
+  });
+
+  await test('نوع مطفأ أو مناسبة منتهية: لا نموذج، والـPOST يعطي 404 الموحّدة', async () => {
+    const notFound = await rawGet('/e/999999999');
+    const closedPages = [
+      { id: guestRsvpFuneralId, why: 'نوع العزاء rsvp_enabled مطفأ' },
+      { id: guestRsvpExpiredId, why: 'مناسبة معتمدة انتهى مداها' }
+    ];
+
+    for (const { id, why } of closedPages) {
+      const page = await rawGet(`/e/${id}`);
+      assert.strictEqual(page.status, 200, `a closed event is still a real page (200) — ${why}`);
+      assert.ok(!page.text.includes('<form'), `no form when the door is closed — ${why}`);
+      assert.ok(!page.text.includes('name="guest_phone"'), `and nothing that asks for a phone — ${why}`);
+
+      const post = await postGuestRsvp(`/e/${id}/rsvp`, {
+        guest_name: 'ضيف على مناسبة مغلقة',
+        party_size: '2',
+        guest_phone: '0507654321',
+        response: 'yes'
+      });
+      assert.strictEqual(post.status, 404, `the POST answers the same 404 with the door closed — ${why}`);
+      assert.ok(!post.redirected, `a refused POST does not hop to the badge page — ${why}`);
+      assert.strictEqual(post.text, notFound.text, `the 404 body is the page's own unified one — ${why}`);
+
+      const rows = await db.query('SELECT id FROM event_rsvps WHERE event_id = ?', [id]);
+      assert.strictEqual(rows.length, 0, `and nothing was written — ${why}`);
+    }
+  });
+
+  await test('الطلب الحادي عشر من IP واحد في الساعة يعطي 429 بصفحة عربية', async () => {
+    // عنوان لكل اختبار، عبر X-Forwarded-For، فلا تتقاطع هذه المحاولات العشر
+    // مع بقية طلبات هذا الملف — ولا ينجح الفحص لو كان المفتاح غير الـIP.
+    const limitedIp = '198.51.100.7';
+    const otherIp = '203.0.113.9';
+
+    // الهاتف فاسد عمداً: المحدِّد يعمل قبل التحقّق، فالطلبات العشرة تُحسب ولا
+    // يُكتب صفّ واحد منها.
+    for (let i = 0; i < 10; i += 1) {
+      const res = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+        guest_name: `ضيف الحدّ ${i}`,
+        party_size: '1',
+        guest_phone: 'x',
+        response: 'yes'
+      }, { forwardedFor: limitedIp });
+      assert.notStrictEqual(res.status, 429, `request ${i + 1} of 10 from one IP must still be let through`);
+    }
+
+    const eleventh = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: 'ضيف الحدّ الحادي عشر',
+      party_size: '1',
+      guest_phone: '0501111111',
+      response: 'yes'
+    }, { forwardedFor: limitedIp });
+    assert.strictEqual(eleventh.status, 429, 'the eleventh request from one IP within the hour is refused');
+    assert.ok(
+      (eleventh.headers.get('content-type') || '').includes('text/html'),
+      'the refusal is an HTML page, not the JSON body the /api bucket returns'
+    );
+    assert.ok(eleventh.text.includes('طلبات كثيرة'), 'expected the Arabic rate-limit page');
+    assert.ok(!eleventh.text.includes('"success"'), 'and never the JSON error shape');
+
+    // IP آخر لم يستهلك شيئاً: الحدّ لكل IP، لا للعالم كله.
+    const elsewhere = await postGuestRsvp(`/e/${guestRsvpEventId}/rsvp`, {
+      guest_name: 'ضيف من عنوان آخر',
+      party_size: '1',
+      guest_phone: 'x',
+      response: 'yes'
+    }, { forwardedFor: otherIp });
+    assert.notStrictEqual(elsewhere.status, 429, 'a different IP must keep its own untouched allowance');
+
+    const rows = await db.query(
+      "SELECT id FROM event_rsvps WHERE event_id = ? AND (guest_phone IN ('0501111111', '0507654321') OR guest_name LIKE 'ضيف الحدّ%')",
+      [guestRsvpEventId]
+    );
+    assert.strictEqual(rows.length, 0, 'no refused request may leave a row behind');
+  });
+
+  await test('نصّا الخصوصية وADR-0006 محدَّثان بجمع اسم الضيف وهاتفه والإشارة إلى ADR-0015', async () => {
+    const notice = await api('GET', '/api/privacy/notice');
+    assert.strictEqual(notice.status, 200);
+    const noticeText = notice.body.notice.text;
+    assert.ok(
+      noticeText.includes('اسمه وعدد الحاضرين ورقم هاتفه'),
+      'the served privacy notice must state what the guest form collects'
+    );
+    assert.ok(
+      noticeText.includes('رقم الهاتف فلا يراه صاحب المناسبة نفسه'),
+      'and who does not see that number'
+    );
+
+    const privacyHtml = await fsp.readFile(path.join(__dirname, '..', '..', 'web', 'privacy.html'), 'utf8');
+    assert.ok(
+      privacyHtml.includes('اسمه وعدد الحاضرين ورقم هاتفه'),
+      'web/privacy.html must state the same collection — both notices, not one'
+    );
+    assert.ok(privacyHtml.includes('رقم الهاتف فلا يراه صاحب المناسبة نفسه'));
+
+    const adr = await fsp.readFile(
+      path.join(__dirname, '..', '..', 'docs', 'adr', '0006-server-renders-the-share-page.md'),
+      'utf8'
+    );
+    assert.ok(adr.includes('0015-guest-rsvp-on-the-share-page'), 'قسم «النتائج» في ADR-0006 يجب أن يشير إلى ADR-0015');
+    assert.ok(adr.includes("form-action 'self'"), 'and must record the one CSP directive this page gained');
+  });
+
+  // تنظيف هذا القسم: المناسبات الثلاث تسقط ومَعها أجوبتها بـON DELETE CASCADE.
+  for (const id of guestRsvpEventIds) {
+    await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
+    await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  }
+  await db.execute('DELETE FROM users WHERE id = ?', [guestRsvpOwner.id]);
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
