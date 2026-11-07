@@ -48,6 +48,7 @@ const shareCard = require('../services/shareCard.service');
 const logger = require('../utils/logger');
 const { RSVP_GUEST_RATE_LIMIT, RSVP_PARTY_SIZE_MAX } = require('../constants');
 const { parseId, cleanString, requirePhone, parsePartySize } = require('../middleware/validate');
+const { anonymousLimiter } = require('../middleware/rateLimit');
 const { absoluteMediaUrl } = require('../utils/mediaUrl');
 const { PALETTES, LIVE_RED, toneOf, safeHexColour, resolvePosterUrl } = require('../utils/shareTheme');
 const { buildMarkParts, partsToSvgPaths } = require('../utils/brandMark');
@@ -1078,20 +1079,31 @@ function sendGuestRsvpLimited(res, eventId) {
       : renderGuestRsvpLimitedPage({ backHref: config.publicUrl, backLabel: 'العودة إلى الموقع' }));
 }
 
+/** الدلو المجهول المشترك أولاً، بردّ HTML لهذه البوابة وحدها لا لبقية المسارات. */
+function limitAnonymousGuestRsvp(req, res, next) {
+  res.locals.onAnonymousRateLimitExceeded = () => sendGuestRsvpLimited(res, shareIdOrNull(req.params.id));
+  return anonymousLimiter(req, res, next);
+}
+
 /**
  * محدِّد معدّل بوابة الضيف وحدها (تذكرة #169، ADR-0015 §2):
  * `RSVP_GUEST_RATE_LIMIT` من `constants.js` — عشرة في الساعة لكل IP، فوق الدلو
- * المجهول العام لا بدلاً منه (ذلك على `/api`، وهذه البوابة تحت `/e/`).
+ * المجهول العام المشترك مع `/api`، ويُركَّب بعده على POST جواب الضيف وحده.
  * والتجاوز **429 بصفحة عربية HTML** لا JSON: من يراها ضيفٌ في متصفّحه بعد
  * ضغط «جاي»، لا عميل JSON.
  */
 const guestRsvpLimiter = rateLimit({
   windowMs: RSVP_GUEST_RATE_LIMIT.windowMs,
   max: RSVP_GUEST_RATE_LIMIT.max,
-  standardHeaders: true,
+  // العام وحده يصدر RateLimit-*؛ لا يستبدلها هذا الدلو بسقف/نافذة مختلفين.
+  standardHeaders: false,
   legacyHeaders: false,
   keyGenerator: req => `rsvp-guest:${req.ip || 'unknown'}`,
-  handler: (req, res) => sendGuestRsvpLimited(res, shareIdOrNull(req.params.id))
+  handler: (req, res) => {
+    // تعطيل الترويسات القياسية يعطّل Retry-After التلقائي أيضاً؛ نحفظه للـ429.
+    res.set('Retry-After', String(Math.max(0, Math.ceil((req.rateLimit.resetTime.getTime() - Date.now()) / 1000))));
+    sendGuestRsvpLimited(res, shareIdOrNull(req.params.id));
+  }
 });
 
 /**
@@ -1145,7 +1157,7 @@ function readGuestAnswer(body) {
  * الـ404 الموحّدة للصفحة نفسها ولو كان الجسم فارغاً — وإلا صار المسار مسباراً
  * يفرّق بين مناسبة مفتوحة ومغلقة بما يردّه عن حقل ناقص.
  */
-eventRouter.post('/:id/rsvp', guestRsvpLimiter, asyncHandler(async (req, res) => {
+eventRouter.post('/:id/rsvp', limitAnonymousGuestRsvp, guestRsvpLimiter, asyncHandler(async (req, res) => {
   const eventId = shareIdOrNull(req.params.id);
   if (!eventId) {
     sendNotFound(res);
