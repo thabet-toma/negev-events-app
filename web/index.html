@@ -337,6 +337,15 @@
       </div>
     </div>
 
+    <!-- «الأكثر تفاعلاً هذا الأسبوع» على سطح الهاتف/PWA (تذكرة #177): نسخة
+         الدرج من القسم نفسه — هناك التغذية شريحة `fixed` بملء الشاشة تحجب ما
+         فوقها، فلا يُرى القسم في التدفق إطلاقاً (كما في كاروسيل البانرات
+         #173). تُرسم من نداء `loadTrending()` الواحد نفسه: لا طلب ثانٍ. -->
+    <section class="trending-section trending-drawer-section" id="drawerTrendingSection" hidden aria-labelledby="drawerTrendingTitle">
+      <h2 class="trending-title" id="drawerTrendingTitle">الأكثر تفاعلاً هذا الأسبوع</h2>
+      <div class="trending-row" id="drawerTrendingRow"></div>
+    </section>
+
     <!-- Search input inside Drawer -->
     <div class="drawer-search-box">
       <i class="fa-solid fa-magnifying-glass"></i>
@@ -513,6 +522,15 @@
            بلا ستوريات كاروسيل — لا هيكل فارغاً في الصفحة. -->
       <section class="story-carousel-section" id="storyCarouselSection" hidden>
         <div class="story-carousel" id="storyCarousel"></div>
+      </section>
+
+      <!-- «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): عنصر مستقل بين كاروسيل
+           البانرات و#eventsContainer — لا داخل أحدهما، لأن اختبارات web-dom
+           تقرأ أبناء #eventsContainer كأنهم كروت مناسبات. يبقى مخفياً حتى يصل
+           ردّ فيه مناسبة واحدة على الأقل، فلا مساحة محجوزة حين لا نتيجة. -->
+      <section class="trending-section" id="trendingSection" hidden aria-labelledby="trendingTitle">
+        <h2 class="trending-title" id="trendingTitle">الأكثر تفاعلاً هذا الأسبوع</h2>
+        <div class="trending-row" id="trendingRow"></div>
       </section>
 
       <!-- Events List Feed — هياكل تحميل بدل الدوّارة (#85 خطوة 53) -->

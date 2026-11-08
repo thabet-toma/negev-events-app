@@ -10,7 +10,7 @@ const albums = require('./albums.service');
 const people = require('./people.service');
 const cloudinary = require('./cloudinary.service');
 const logger = require('../utils/logger');
-const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, VILLAGES_TOWN, FEATURED_EVENTS_MAX_PER_REGION } = require('../constants');
+const { REACTION_TYPES, CONGRATULATION_REPORT_THRESHOLD, DUPLICATE_DATE_WINDOW_DAYS, TRENDING_WINDOW_DAYS, VILLAGES_TOWN, FEATURED_EVENTS_MAX_PER_REGION } = require('../constants');
 const { withAbsoluteMedia, absoluteMediaUrl } = require('../utils/mediaUrl');
 const { haversineDistanceKm } = require('../utils/geo');
 const { nameKey, nameTokens, comparePersonNames } = require('../utils/arabicName');
@@ -21,6 +21,13 @@ const EMPTY_REACTIONS = () => REACTION_TYPES.reduce((acc, type) => ({ ...acc, [t
 /** Default and hard-ceiling page sizes for `GET /api/events` (#20 step 4, decision ب). */
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
+
+/**
+ * أعلى عدد مناسبات يعيده قسم «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — ستة،
+ * صفاً واحداً في كل شريط. والحدّ في الاستعلام لا في رسم البطاقات: السابع لا
+ * يُقرأ من القاعدة أصلاً، فلا يصل عميلاً ثم يُخفى فيه.
+ */
+const TRENDING_EVENTS_LIMIT = 6;
 
 /**
  * Columns the public list actually needs — a card's fields plus whatever the
@@ -1507,6 +1514,127 @@ async function listCalendarDays({ month, regionId = null, legacyOnly = false } =
   );
 
   return { days: rows.map(row => ({ date: row.date, count: Number(row.count) })) };
+}
+
+/**
+ * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — أعلى `TRENDING_EVENTS_LIMIT`
+ * مناسبات بمجموع إشاراتها **داخل نافذة `TRENDING_WINDOW_DAYS` وحدها**، للويب
+ * والتطبيق معاً عبر `GET /api/events/trending`.
+ *
+ * **الإشارات أربع**، وكل واحدة تُعدّ بتوقيتها لا بتاريخ المناسبة:
+ * `reactions.created_at`، و`congratulations.created_at` المعتمدة وحدها
+ * (`status = 'approved'`)، و`event_reminders.created_at`، و`event_rsvps.updated_at`
+ * بشرط `response = 'yes'` — آخر جواب هو لحظة الإشارة، فتغيير الجواب إلى «جاي»
+ * اليوم إشارة اليوم. والصفّ الذي لا إشارة واحدة له في النافذة **لا يظهر**:
+ * `HAVING signal_score > 0` على اسم العمود المحسوب، لا بتكرار التعبير في
+ * `WHERE`. «الأكثر تفاعلاً» بقائمة صفرية ليست نتيجة، وهي ما يجعل اختفاء القسم
+ * حين لا نتيجة صادقاً على الخادم أيضاً.
+ *
+ * **والترتيب حتمي:** `signal_score DESC` ثم `events.event_date ASC` ثم
+ * `events.id ASC` — فالتعادل لا يعتمد على ترتيب القاعدة.
+ *
+ * **والبوابة** `PUBLIC_EVENT_VISIBLE_SQL_EVENTS` بساعة `publishNowClock()` في
+ * موضعها: غير المعتمدة و«بالرابط فقط» والمجدولة غائبة كما في كل قائمة عامة.
+ * **والعزاء مستبعد** بالعلم `tone` لا بالاسم: `NOT EXISTS (… ot.tone =
+ * 'solemn')`، ولا شرط «قادم» ولا نافذة بقاء — التذكرة لم تنصّ عليهما.
+ *
+ * **وتُشكَّل الصفوف بمسار `listPublicEvents` نفسه حرفياً** (`LIST_COLUMNS`،
+ * `villages.name AS village_name`، `span_end_order` و`is_ended` و`is_featured`،
+ * ثم `withAbsoluteMedia` ثم `attachHonoreesAndTypes` ثم التبريكات باحترام
+ * `show_congratulations_count` ثم `attachReminderState(events, null)` ثم
+ * `attachRsvpCounters`) — فيرسم العميلان كرت التغذية نفسه لا شكلاً جديداً.
+ * و`signal_score` مفتاح ترتيبٍ داخلي يُنزع قبل الإعادة، فلا يدخل شكل الكرت.
+ *
+ * `regionId` محافظة واحدة، و`null` «بلا تقييد» — كما في `listPublicEvents`،
+ * والمسار هو من يقرّره (ترويسة/حساب/افتراضية أو `?region_id=` صريح).
+ */
+async function listTrendingEvents({ regionId = null, legacyOnly = false } = {}) {
+  // ترتيب `params` مقصود ولا يجوز تغييره: معاملات `SELECT` تُستهلك أولاً عند
+  // التنفيذ، فأربع نسخ النافذة (`TRENDING_WINDOW_DAYS`) تسبق معاملات `WHERE`
+  // (ساعة البوابة، ثم المحافظة، ثم الأنواع). من يضيف شرطاً هنا يضيف قيمته في
+  // موضعه من هذا الترتيب لا في آخره.
+  const params = [TRENDING_WINDOW_DAYS, TRENDING_WINDOW_DAYS, TRENDING_WINDOW_DAYS, TRENDING_WINDOW_DAYS];
+  const conditions = [
+    PUBLIC_EVENT_VISIBLE_SQL_EVENTS,
+    // العزاء بالعلم لا بالاسم: أي نوع نغمته `solemn` يخرج من القسم، ولو
+    // أضاف سوبر أدمن نوعاً حزيناً جديداً غداً بلا سطر كود.
+    `NOT EXISTS (
+       SELECT 1 FROM occasion_types ot
+        WHERE ot.id = events.occasion_type_id AND ot.tone = 'solemn'
+     )`
+  ];
+  params.push(publishNowClock());
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('events.region_id = ?');
+    params.push(regionId);
+  }
+
+  const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds: null });
+  if (typeFilterIds && !typeFilterIds.length) {
+    return { events: [], window_days: TRENDING_WINDOW_DAYS };
+  }
+  if (typeFilterIds) {
+    conditions.push(`events.occasion_type_id IN (${typeFilterIds.map(() => '?').join(',')})`);
+    params.push(...typeFilterIds);
+  }
+
+  const rows = await db.query(
+    `SELECT ${LIST_COLUMNS}, villages.name AS village_name,
+            (${EVENT_SPAN_END_SQL_EVENTS}) AS span_end_order,
+            (${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()) AS is_ended,
+            (${EVENT_FEATURED_ACTIVE_SQL_EVENTS}) AS is_featured,
+            ((SELECT COUNT(*) FROM reactions r
+               WHERE r.event_id = events.id
+                 AND r.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY))
+           + (SELECT COUNT(*) FROM congratulations c
+               WHERE c.event_id = events.id AND c.status = 'approved'
+                 AND c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY))
+           + (SELECT COUNT(*) FROM event_reminders er
+               WHERE er.event_id = events.id
+                 AND er.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY))
+           + (SELECT COUNT(*) FROM event_rsvps rs
+               WHERE rs.event_id = events.id AND rs.response = 'yes'
+                 AND rs.updated_at >= DATE_SUB(NOW(), INTERVAL ? DAY))) AS signal_score
+       FROM events
+       LEFT JOIN villages ON villages.id = events.village_id
+      WHERE ${conditions.join(' AND ')}
+     HAVING signal_score > 0
+      ORDER BY signal_score DESC, events.event_date ASC, events.id ASC
+      LIMIT ?`,
+    [...params, TRENDING_EVENTS_LIMIT]
+  );
+
+  const eventIds = rows.map(e => e.id);
+  const [reactionMap, congratsMap, withRelations] = await Promise.all([
+    reactionsForEvents(eventIds),
+    congratulationsForEvents(eventIds),
+    attachHonoreesAndTypes(rows.map(withAbsoluteMedia))
+  ]);
+
+  const events = withRelations.map(event => {
+    const shaped = {
+      ...event,
+      reactions: reactionMap[event.id] || EMPTY_REACTIONS(),
+      is_ended: Boolean(event.is_ended),
+      is_featured: Boolean(event.is_featured)
+    };
+
+    if (event.occasion_type?.show_congratulations_count !== false) {
+      const congrats = congratsMap[event.id] || { congratulations_count: 0, latest_congratulation: null };
+      shaped.congratulations_count = congrats.congratulations_count;
+      shaped.latest_congratulation = congrats.latest_congratulation;
+    }
+
+    // مفتاح الترتيب لا حقل كرت: شكل الصفّ هو شكل كرت التغذية نفسه (تذكرة #177).
+    delete shaped.signal_score;
+    return shaped;
+  });
+
+  const withReminderState = await attachReminderState(events, null);
+  const withRsvpCounters = await attachRsvpCounters(withReminderState);
+
+  return { events: withRsvpCounters, window_days: TRENDING_WINDOW_DAYS };
 }
 
 /**
@@ -3064,6 +3192,7 @@ module.exports = {
   getEventDetails,
   listMapPoints,
   listCalendarDays,
+  listTrendingEvents,
   checkTownMismatch,
   createEvent,
   familyClanFor,

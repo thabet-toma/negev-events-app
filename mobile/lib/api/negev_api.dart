@@ -159,6 +159,31 @@ class NegevApi {
         .toList();
   }
 
+  /// «الأكثر تفاعلاً هذا الأسبوع» — `GET /api/events/trending` (تذكرة #177)،
+  /// عام بلا رمز.
+  ///
+  /// الخادم وحده يحسب كل شيء: مجموع الإشارات الأربع داخل نافذة
+  /// `TRENDING_WINDOW_DAYS`، وبوابة الظهور العام، واستبعاد العزاء، والحدّ
+  /// (ستّة)، والترتيب الحتمي. والصفوف تعود بشكل كرت التغذية نفسه
+  /// (`Event.fromJson` واحد لا نموذج ثانٍ)، فالترشيح أو الترتيب هنا تكرار.
+  ///
+  /// [allRegions] «كل المحافظات» (`all_regions=1`) لهذا النداء وحده — بلا
+  /// العلَم يُقيَّد الطلب بمحافظة الاكتشاف التي يرفقها `ApiClient` من نفسه في
+  /// ترويسة `X-Region`. و`events` غير مصفوفة تعني «لا نتيجة» لا خطأ، فتعود
+  /// قائمة فارغة فيختفي القسم.
+  Future<List<Event>> trendingEvents({bool allRegions = false}) async {
+    final data = await _client.get(
+      '/api/events/trending',
+      query: allRegions ? {'all_regions': '1'} : null,
+    );
+    final raw = data['events'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(Event.fromJson)
+        .toList();
+  }
+
   /// كتالوج الأماكن كاملاً بطلب واحد إلى GET /api/towns: البلدات النشِطة
   /// (بلا «الكل»)، ومراكزها، والقرى، والمحافظات النشطة، والموقوفة («قريباً»).
   /// البلدات صارت بيانات وقت تشغيل يديرها السوبر أدمن، فلا تُقرأ من

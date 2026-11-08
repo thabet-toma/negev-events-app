@@ -26,7 +26,7 @@ const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
 const { authenticatedUserId } = require('../src/utils/rateLimitIdentity');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS, STATS_TICKER_CACHE_SECONDS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TRENDING_WINDOW_DAYS, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS, STATS_TICKER_CACHE_SECONDS } = require('../src/constants');
 
 // The eight towns (and their centres) exactly as they stood as constants
 // before towns moved into the `towns` table — what the seeded table must
@@ -599,6 +599,287 @@ async function run() {
       );
     }
     await db.execute('DELETE FROM regions WHERE id IN (?, ?)', [calendarRegionId, calendarOtherRegionId]);
+  }
+
+  console.log('\nTrending — الأكثر تفاعلاً هذا الأسبوع (تذكرة #177)');
+
+  /**
+   * كل تأكيد هنا في محافظةٍ مؤقّتة خاصة به، فلا يزاحمه صفّ من البذرة ولا من
+   * قسم آخر، وتأكيدُه رقمٌ مطلق لا «أكبر من صفر». والصفوف خام لأن المطلوب
+   * إشارات بتواريخها لا يضبطها مسار عام: تفاعلات وتبريكات وتذكيرات وأجوبة
+   * حضور تُدرَج مباشرةً، ثم تُزاح واحدة منها ثلاثين يوماً إلى الوراء لاختبار
+   * النافذة. والتنظيف بمعرّفات المناسبات ثم بالمحافظات المؤقّتة — كلتاهما
+   * أُنشئت هنا.
+   */
+  const trendingRegionIds = [];
+  const trendingEventIds = [];
+  // حساب بمحافظة معلومة لاختبار محافظة الحساب — يُنشأ داخل `try` ويُحذف في
+  // `finally` مع حسابات التذكيرات (لا `congratsCleanupPhones`).
+  let trendingRegionUser = null;
+  const engagementType = await db.queryOne("SELECT id FROM occasion_types WHERE name = 'خطوبة'");
+
+  const insertTrendingRegion = async suffix => {
+    const { insertId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 31.9, 35.0, 9, 98, 1)`,
+      [`محافظة الأكثر تفاعلاً ${suffix} ${Date.now()}`]
+    );
+    trendingRegionIds.push(insertId);
+    return insertId;
+  };
+
+  /** صفّ مناسبة معتمدة عامة بلا أصحاب — قراءة التفاعل لا تطلب أكثر من ذلك. */
+  const insertTrendingEvent = async ({
+    date, regionId, typeId = weddingType.id, status = 'approved', visibility = 'public',
+    publishAt = null, title = 'مناسبة الأكثر تفاعلاً'
+  }) => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events
+         (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name,
+          event_date, status, visibility, publish_at)
+       VALUES (?, ?, ?, ?, 'رهط', ?, 'ديوان الأكثر تفاعلاً', ?, ?, ?, ?)`,
+      [title, 'عريس الأكثر تفاعلاً', 'عائلة الأكثر تفاعلاً', typeId, regionId, date, status, visibility, publishAt]
+    );
+    trendingEventIds.push(insertId);
+    return insertId;
+  };
+
+  const addTrendingReactions = async (eventId, count) => {
+    for (let i = 0; i < count; i += 1) {
+      await db.execute("INSERT INTO reactions (event_id, reaction_type) VALUES (?, 'coffee')", [eventId]);
+    }
+  };
+  const addTrendingCongratulations = async (eventId, count, status = 'approved') => {
+    for (let i = 0; i < count; i += 1) {
+      await db.execute(
+        'INSERT INTO congratulations (event_id, sender_name, message, status) VALUES (?, ?, ?, ?)',
+        [eventId, 'مبارك الأكثر تفاعلاً', 'مبارك لكم', status]
+      );
+    }
+  };
+  // «ذكّرني» مفتاحه الفريد (user, event)، فكل إشارة حسابٌ مختلف. والصفوف
+  // تُدرَج مباشرةً بـ`createDirectUser` (إعلان دالة مرفوع أسفل الملف) لا بـ
+  // `registerTestUser`: الدلو المشترك لـ`authLimiter` (٢٠ طلباً لكل نافذة)
+  // مستنفد أصلاً في هذه المرحلة، فتسجيلٌ حقيقي واحد هنا يردّ 429 ويُسقط كل
+  // تسجيل بعده. وتُحذف صفوفهم في `finally` أدناه لأنهم ليسوا في
+  // `congratsCleanupPhones`.
+  const trendingReminderUsers = [];
+  const reminderUserFor = async index => {
+    if (!trendingReminderUsers[index]) {
+      trendingReminderUsers[index] = await createDirectUser(`متفاعل الأكثر ${index + 1}`);
+    }
+    return trendingReminderUsers[index];
+  };
+  const addTrendingReminders = async (eventId, count) => {
+    for (let i = 0; i < count; i += 1) {
+      const user = await reminderUserFor(i);
+      await db.execute('INSERT INTO event_reminders (user_id, event_id) VALUES (?, ?)', [user.id, eventId]);
+    }
+  };
+  // الأجوبة بلا حساب: مفتاحها الفريد (event, guest_phone)، فلا تمرّ بحسابٍ
+  // ولا تلمس مستخدمي المجموعة.
+  const addTrendingRsvps = async (eventId, count) => {
+    for (let i = 0; i < count; i += 1) {
+      await db.execute(
+        `INSERT INTO event_rsvps (event_id, guest_name, guest_phone, response, party_size, source)
+         VALUES (?, 'ضيف الأكثر تفاعلاً', ?, 'yes', 1, 'share_page')`,
+        [eventId, `9705${eventId}${i}`]
+      );
+    }
+  };
+
+  try {
+    // ---- 1. الترتيب بالمحسوب: أربع مناسبات، وكل نوع إشارة فيهنّ — إسقاط أي
+    // نوع من المجموع يغيّر الترتيب، فالتأكيد يسقط للسبب الذي يحمله اسمه.
+    const orderRegionId = await insertTrendingRegion('ترتيب');
+    const orderA = await insertTrendingEvent({ date: '2093-07-30', regionId: orderRegionId });
+    const orderB = await insertTrendingEvent({ date: '2093-07-01', regionId: orderRegionId });
+    const orderC = await insertTrendingEvent({ date: '2093-07-20', regionId: orderRegionId });
+    const orderD = await insertTrendingEvent({ date: '2093-07-10', regionId: orderRegionId });
+    await addTrendingReactions(orderA, 4);
+    await addTrendingCongratulations(orderA, 4); // 8
+    await addTrendingReminders(orderB, 3);
+    await addTrendingRsvps(orderB, 3); // 6
+    await addTrendingReactions(orderC, 2);
+    await addTrendingCongratulations(orderC, 2); // 4
+    await addTrendingReminders(orderD, 1);
+    await addTrendingRsvps(orderD, 1); // 2
+
+    await test('GET /api/events/trending orders by the summed signals, and every one of the four kinds counts (تذكرة #177)', async () => {
+      const { status, body } = await api('GET', `/api/events/trending?region_id=${orderRegionId}`);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.success, true);
+      assert.strictEqual(body.window_days, TRENDING_WINDOW_DAYS, 'the window travels with the answer so the client needs no copy of it');
+      assert.deepStrictEqual(
+        body.events.map(event => event.id), [orderA, orderB, orderC, orderD],
+        '8 (4 reactions + 4 congratulations)، ثم 6 (3 reminders + 3 «جاي»)، ثم 4 (2 + 2)، ثم 2 — لا ترتيب التواريخ ولا ترتيب المعرّفات'
+      );
+      // والصفّ شكل كرت التغذية نفسه لا شكلاً جديداً (تذكرة #177).
+      const row = body.events[0];
+      assert.ok(Array.isArray(row.honorees) && row.reactions && 'is_ended' in row && 'is_featured' in row,
+        'the row carries the feed card\'s own shape');
+      assert.ok(!('signal_score' in row), 'the internal ordering key never leaks to the client');
+    });
+
+    // ---- 2. النافذة: إشارة أقدم من سبعة أيام ليست إشارة.
+    const windowRegionId = await insertTrendingRegion('نافذة');
+    const windowOld = await insertTrendingEvent({ date: '2093-07-05', regionId: windowRegionId });
+    await addTrendingReactions(windowOld, 5);
+    const windowFresh = await insertTrendingEvent({ date: '2093-07-06', regionId: windowRegionId });
+    await addTrendingReactions(windowFresh, 1);
+    const oldReactions = await db.query('SELECT id FROM reactions WHERE event_id = ?', [windowOld]);
+    for (const reaction of oldReactions) {
+      await db.execute(
+        'UPDATE reactions SET created_at = DATE_SUB(NOW(), INTERVAL 30 DAY) WHERE id = ?',
+        [reaction.id]
+      );
+    }
+    await test('GET /api/events/trending counts a signal by its own timestamp: five reactions older than the window leave their event out, today\'s one brings its event in (تذكرة #177)', async () => {
+      const { status, body } = await api('GET', `/api/events/trending?region_id=${windowRegionId}`);
+      assert.strictEqual(status, 200);
+      const stillThere = await db.queryOne('SELECT COUNT(*) AS total FROM reactions WHERE event_id = ?', [windowOld]);
+      assert.strictEqual(Number(stillThere.total), 5, 'set up: the five old reactions still exist, they are merely outside the window');
+      assert.deepStrictEqual(
+        body.events.map(event => event.id), [windowFresh],
+        'the backdated event has no signal inside the window, so it is not a trending row at all'
+      );
+    });
+
+    // ---- 3. الاستبعاد: العزاء و«بالرابط فقط» وغير المعتمدة والمجدولة.
+    const exclusionRegionId = await insertTrendingRegion('استبعاد');
+    const solemnEvent = await insertTrendingEvent({ date: '2093-07-07', regionId: exclusionRegionId, typeId: funeralType.id });
+    const linkOnlyEvent = await insertTrendingEvent({ date: '2093-07-07', regionId: exclusionRegionId, visibility: 'link_only' });
+    const pendingEvent = await insertTrendingEvent({ date: '2093-07-07', regionId: exclusionRegionId, status: 'pending' });
+    const scheduledEvent = await insertTrendingEvent({
+      date: '2093-07-07', regionId: exclusionRegionId, publishAt: '2093-01-01 00:00:00'
+    });
+    const controlEvent = await insertTrendingEvent({ date: '2093-07-07', regionId: exclusionRegionId });
+    for (const eventId of [solemnEvent, linkOnlyEvent, pendingEvent, scheduledEvent]) {
+      await addTrendingReactions(eventId, 5);
+    }
+    await addTrendingReactions(controlEvent, 1);
+
+    await test('GET /api/events/trending honours the public gate and keeps funerals out by tone: a funeral loud with reactions, link_only, pending and a scheduled event all stay out even when they beat the only visible row (تذكرة #177)', async () => {
+      const { status, body } = await api('GET', `/api/events/trending?region_id=${exclusionRegionId}`);
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(
+        body.events.map(event => event.id), [controlEvent],
+        'the five-signal rows are all excluded, so the one-signal visible row is the whole answer'
+      );
+    });
+
+    // ---- 4. المحافظة: صريحة، ومجهولة تُردّ 400 عربية.
+    const regionOtherId = await insertTrendingRegion('جارة');
+    const regionOtherEvent = await insertTrendingEvent({ date: '2093-07-08', regionId: regionOtherId });
+    // عشر إشارات لا واحدة: هذا الصفّ هو «المحافظة الثانية» في تأكيد
+    // `all_regions=1` أدناه، فيلزم أن يتصدّر كل صفوف القاعدة وقتها (أعلاها
+    // ثمانٍ في محافظة الترتيب) حتى لا يعتمد ظهوره على حضّ الحظّ في الستّة.
+    await addTrendingReactions(regionOtherEvent, 10);
+
+    await test('GET /api/events/trending?region_id= narrows to that governorate, and a malformed one is an Arabic 400 (تذكرة #177)', async () => {
+      const mine = await api('GET', `/api/events/trending?region_id=${orderRegionId}`);
+      const mineIds = mine.body.events.map(event => event.id);
+      assert.ok(mineIds.includes(orderA), 'set up: the chosen governorate has its rows');
+      assert.ok(!mineIds.includes(regionOtherEvent), 'the neighbour governorate\'s row never appears');
+
+      const other = await api('GET', `/api/events/trending?region_id=${regionOtherId}`);
+      assert.deepStrictEqual(other.body.events.map(event => event.id), [regionOtherEvent],
+        'the neighbour sees its own row alone');
+
+      const refused = await api('GET', `/api/events/trending?region_id=${encodeURIComponent('غير-رقم')}`);
+      assert.strictEqual(refused.status, 400, 'a region id that cannot be a region is refused, not silently ignored');
+      assert.ok(/المحافظة/.test(refused.body.message || ''), `expected the Arabic label in the message, got: ${refused.body.message}`);
+    });
+
+    // ---- 5. محافظة الحساب: المسار `optionalAuthenticate` كالتغذية، فطلبٌ
+    // موثَّق بلا `X-Region` ولا `?region_id=` يقرأ `users.region_id`
+    // (`middleware/region.js`)، و`all_regions=1` يوسّعه لهذا الطلب وحده.
+    trendingRegionUser = await createDirectUser('مستخدم محافظة الأكثر تفاعلاً');
+    await db.execute('UPDATE users SET region_id = ? WHERE id = ?', [orderRegionId, trendingRegionUser.id]);
+
+    await test('GET /api/events/trending with no header and no region_id takes the account\'s governorate, and all_regions=1 widens it (تذكرة #177)', async () => {
+      const scoped = await api('GET', '/api/events/trending', { token: trendingRegionUser.token });
+      assert.strictEqual(scoped.status, 200, scoped.body.message);
+      const scopedIds = scoped.body.events.map(event => event.id);
+      assert.ok(
+        scopedIds.includes(orderA),
+        'the account\'s own governorate is what an unheadered, unscoped request sees'
+      );
+      assert.ok(!scopedIds.includes(regionOtherEvent), 'and another governorate\'s row stays out of it');
+
+      const widened = await api('GET', '/api/events/trending?all_regions=1', { token: trendingRegionUser.token });
+      assert.strictEqual(widened.status, 200, widened.body.message);
+      assert.ok(
+        widened.body.events.some(event => event.id === regionOtherEvent),
+        'all_regions=1 drops the governorate restriction for this request alone'
+      );
+    });
+
+    // ---- 6. الحدّ: سبعة بصمة إشارات ← ستة أقصى، والسابع الأضعف غائب.
+    // `limitEventIds[0]` صاحب إشارة واحدة، والأخير سبع — فالأعلى ستّاً هي
+    // العناصر ١..٦ بترتيب معاكس (٧ ثم ٦ … ثم ٢)، والصفر وحده هو الغائب.
+    const limitRegionId = await insertTrendingRegion('حدّ');
+    const limitEventIds = [];
+    for (let score = 1; score <= 7; score += 1) {
+      const eventId = await insertTrendingEvent({ date: `2093-08-0${score}`, regionId: limitRegionId });
+      limitEventIds.push(eventId);
+      await addTrendingReactions(eventId, score);
+    }
+
+    await test('GET /api/events/trending returns at most six rows, and the seventh weakest is the one left out (تذكرة #177)', async () => {
+      const { status, body } = await api('GET', `/api/events/trending?region_id=${limitRegionId}`);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(body.events.length, 6, 'seven events with signals, six rows at most');
+      assert.deepStrictEqual(
+        body.events.map(event => event.id), limitEventIds.slice(1).reverse(),
+        'the six highest scores, descending (7…2) — the one-score event is the one that did not fit'
+      );
+      assert.ok(
+        !body.events.some(event => event.id === limitEventIds[0]),
+        'and the weakest event of the seven is the one left out, not a stronger row'
+      );
+    });
+
+    // ---- 7. legacyOnly: عميل بلا `X-App-Version` لا يرى إلا نوعه المدعوم.
+    const legacyRegionId = await insertTrendingRegion('قديم');
+    const legacyWedding = await insertTrendingEvent({ date: '2093-07-09', regionId: legacyRegionId });
+    const legacyEngagement = await insertTrendingEvent({
+      date: '2093-07-09', regionId: legacyRegionId, typeId: engagementType.id
+    });
+    await addTrendingReactions(legacyWedding, 1);
+    await addTrendingReactions(legacyEngagement, 2);
+
+    await test('GET /api/events/trending honours X-App-Version like the feed: a legacy client never sees a type it cannot render (تذكرة #177)', async () => {
+      const modern = await api('GET', `/api/events/trending?region_id=${legacyRegionId}`);
+      assert.deepStrictEqual(modern.body.events.map(event => event.id), [legacyEngagement, legacyWedding],
+        'set up: a modern client sees both types, ordered by signal count');
+
+      const legacy = await api('GET', `/api/events/trending?region_id=${legacyRegionId}`, { legacy: true });
+      assert.strictEqual(legacy.status, 200);
+      assert.deepStrictEqual(
+        legacy.body.events.map(event => event.id), [legacyWedding],
+        'the engagement is outside the legacy client\'s supported set, so it is not offered to it'
+      );
+    });
+  } finally {
+    if (trendingEventIds.length) {
+      await db.execute(
+        `DELETE FROM events WHERE id IN (${trendingEventIds.map(() => '?').join(', ')})`, trendingEventIds
+      );
+    }
+    // حسابات هذا القسم أُنشئت هنا وحدها، فلا يُنظّفها `congratsCleanupPhones`.
+    const trendingUserIds = trendingReminderUsers.filter(Boolean).map(user => user.id);
+    if (trendingRegionUser) trendingUserIds.push(trendingRegionUser.id);
+    if (trendingUserIds.length) {
+      await db.execute(
+        `DELETE FROM users WHERE id IN (${trendingUserIds.map(() => '?').join(', ')})`, trendingUserIds
+      );
+    }
+    if (trendingRegionIds.length) {
+      await db.execute(
+        `DELETE FROM regions WHERE id IN (${trendingRegionIds.map(() => '?').join(', ')})`, trendingRegionIds
+      );
+    }
   }
 
   console.log('\nAuth');

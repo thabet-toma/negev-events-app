@@ -334,6 +334,11 @@ function buildFetchStub() {
     if (requestPath === '/api/events/calendar') {
       return jsonResponse({ success: true, days: [] });
     }
+    // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — فارغ افتراضياً: اختبارات
+    // القسم هي التي تصنع ردّه، فلا يحمل قسمٌ في اختبار آخر بطاقاتٍ من العدم.
+    if (requestPath === '/api/events/trending') {
+      return jsonResponse({ success: true, events: [], window_days: 7 });
+    }
     if (requestPath === '/api/stories') return jsonResponse({ success: true, stories: [] });
     if (requestPath === '/api/notifications') return jsonResponse({ success: true, notifications: [] });
     // «قائمتي» تُجلب عند الإقلاع لجلسة محفوظة (initMyList) — فارغة بلا جلسة.
@@ -2701,6 +2706,215 @@ async function run() {
     assert.ok(
       stub.calls.some(call => call.path === '/api/stories/12/click' && call.method === 'POST'),
       'the drawer carousel CTA records the carousel story click'
+    );
+  });
+
+  console.log('\n«الأكثر تفاعلاً هذا الأسبوع» — القسم واختفاؤه (تذكرة #177)');
+
+  /**
+   * الشريط أسفل كاروسيل البانرات وفوق التغذية، وشقيقٌ لـ`#eventsContainer` لا
+   * ابنٌ له (اختبارات أخرى تقرأ أبناءه كأنهم كروت مناسبات). وردّه بشكل كرت
+   * التغذية نفسه، فالعميل لا يعرف نموذجاً ثانياً.
+   */
+  const TRENDING_TYPE_FIXTURE = {
+    id: 1, name: 'عرس', icon: '💍', color: '#8f6a20', tone: 'festive',
+    show_congratulations_count: 1, show_followers_count: 1, reactions: ['coffee']
+  };
+
+  const trendingCardEvents = () => ([
+    {
+      id: 1201, title: 'مناسبة أولى', groom_name: 'سالم', family_clan: 'آل سالم', town: 'رهط',
+      event_date: '2026-12-01', honorees: [{ name: 'سالم النباري', role: 'العريس' }],
+      occasion_type: TRENDING_TYPE_FIXTURE, reactions: {}, is_ended: false, is_featured: false
+    },
+    {
+      id: 1202, title: 'مناسبة ثانية', groom_name: 'خالد', family_clan: 'آل خالد', town: 'حورة',
+      event_date: '2026-12-03', honorees: [{ name: 'هند أبو خالد', role: 'العروس' }],
+      occasion_type: { ...TRENDING_TYPE_FIXTURE, id: 3, name: 'خطوبة' }, reactions: {}, is_ended: false, is_featured: false
+    }
+  ]);
+
+  /** buildEnv يتحكّم في ردّ `/api/events/trending` وحده، وكل شيء آخر على `buildFetchStub`. */
+  const buildTrendingEnv = trendingResponse => buildEnv({
+    onBeforeEval: (w) => {
+      const base = buildFetchStub();
+      w.fetch = async (url, opts = {}) => (
+        String(url).split('?')[0] === '/api/events/trending'
+          ? trendingResponse(url, opts)
+          : base(url, opts)
+      );
+    }
+  });
+
+  const TRENDING_SECOND_REGION = {
+    id: 2, name: 'طولكرم', latitude: 32.31, longitude: 35.03, map_zoom: 10, position: 2, towns: ['طولكرم']
+  };
+  // المحافظة المزروعة نفسها (`constants.SEED_REGION`) لا نسخةٌ منها مكتوبة
+  // هنا، وهي مستوردةٌ في هذا القسم لأن استيراد أعلى الملف لا يشملها.
+  const { SEED_REGION: TRENDING_SEED_REGION } = require('../src/constants');
+  const TRENDING_TOWNS_FIXTURE = {
+    success: true,
+    towns: TOWNS,
+    town_coordinates: TOWN_COORDINATES,
+    villages: [],
+    regions: [{ id: 1, ...TRENDING_SEED_REGION, position: 1, towns: TOWNS }, TRENDING_SECOND_REGION],
+    regions_soon: [],
+    stats: []
+  };
+
+  await test('a trending reply draws its cards above the feed, in the server order, and a card opens the event page (تذكرة #177)', async () => {
+    const dom = buildTrendingEnv(() => jsonResponse({ success: true, events: trendingCardEvents(), window_days: 7 }));
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+
+    const doc = win.document;
+    const section = doc.getElementById('trendingSection');
+    assert.ok(section, 'expected #trendingSection in web/index.html');
+    assert.strictEqual(section.hidden, false, 'two trending events must show the section');
+    assert.strictEqual(
+      section.querySelector('.trending-title').textContent.trim(), 'الأكثر تفاعلاً هذا الأسبوع',
+      'the heading is the one the ticket names'
+    );
+    assert.strictEqual(section.closest('#eventsContainer'), null, 'the strip is a sibling of the feed, never a child of it');
+    assert.ok(
+      section.compareDocumentPosition(doc.getElementById('eventsContainer')) & win.Node.DOCUMENT_POSITION_FOLLOWING,
+      'the strip precedes the feed in document order — it is the top of the feed'
+    );
+
+    const cards = [...doc.querySelectorAll('#trendingRow .trending-card')];
+    assert.deepStrictEqual(cards.map(card => card.dataset.eventId), ['1201', '1202'], 'the server order is kept as it came');
+    assert.ok(cards[0].textContent.includes('عرس سالم النباري'), 'the card headline is the feed card\'s own headline');
+    assert.ok(cards[0].textContent.includes('رهط'), 'and the place line comes from the same helper');
+
+    cards[0].click();
+    const page = doc.getElementById('eventPage');
+    await waitFor(() => !page.hidden);
+    assert.strictEqual(page.hidden, false, 'tapping a trending card opens the event page');
+  });
+
+  await test('the phone drawer gets the same cards from the same reply, and is emptied and hidden with the feed copy (تذكرة #177)', async () => {
+    let reply = { success: true, events: trendingCardEvents(), window_days: 7 };
+    let calls = 0;
+    const dom = buildTrendingEnv(() => { calls += 1; return jsonResponse(reply); });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+
+    const doc = win.document;
+    const drawerSection = doc.getElementById('drawerTrendingSection');
+    const drawerRow = doc.getElementById('drawerTrendingRow');
+    assert.ok(
+      drawerSection && drawerRow,
+      'the phone drawer owns its own copy — under 768px the in-flow one is display:none behind the fixed feed'
+    );
+    assert.ok(drawerSection.closest('#topChromeDrawer'), 'and that copy lives in the top drawer, outside the fixed feed layer');
+    assert.strictEqual(drawerSection.hidden, false, 'a reply with events shows the drawer copy too');
+    assert.deepStrictEqual(
+      [...drawerRow.querySelectorAll('.trending-card')].map(card => card.dataset.eventId),
+      ['1201', '1202'],
+      'the drawer holds the very same cards, in the same server order'
+    );
+
+    const callsBeforeEmpty = calls;
+    reply = { success: true, events: [], window_days: 7 };
+    await win.loadTrending();
+    assert.strictEqual(calls, callsBeforeEmpty + 1, 'one request per call feeds both copies — the drawer one is never a second fetch');
+    assert.strictEqual(drawerSection.hidden, true, 'an empty reply hides the drawer copy with the feed copy');
+    assert.strictEqual(drawerRow.children.length, 0, 'and empties its row with it');
+  });
+
+  await test('an empty trending reply leaves the section hidden and the row empty — and the previous reply cannot outlive the new request (تذكرة #177)', async () => {
+    let reply = { success: true, events: trendingCardEvents(), window_days: 7 };
+    const dom = buildTrendingEnv(() => jsonResponse(reply));
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+
+    reply = { success: true, events: [], window_days: 7 };
+    const pending = win.loadTrending();
+    // الإفراغ قبل الطلب لا بعده: لا تبقى بطاقات الردّ السابق لحظة انتظار الجديد.
+    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true,
+      'the section hides before the new request answers');
+    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and its row is emptied with it');
+    await pending;
+
+    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true, 'an empty list is no section at all');
+    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and the row stays empty');
+  });
+
+  await test('a late reply from the previous governorate never paints over the newer one (تذكرة #177)', async () => {
+    const [staleEvent, freshEvent] = trendingCardEvents();
+    let releaseStale = null;
+    // طلب الإقلاع يُعلَّق حتى يصل طلبٌ أحدث ويُرسم — ردٌّ متأخر حقيقي، لا وهمي.
+    const staleGate = new Promise(resolve => { releaseStale = resolve; });
+    let calls = 0;
+    const dom = buildTrendingEnv(() => {
+      calls += 1;
+      return calls === 1
+        ? staleGate.then(() => jsonResponse({ success: true, events: [staleEvent], window_days: 7 }))
+        : jsonResponse({ success: true, events: [freshEvent], window_days: 7 });
+    });
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => calls === 1);
+
+    const drawnIds = () => [...win.document.querySelectorAll('#trendingRow .trending-card')]
+      .map(card => card.dataset.eventId);
+
+    await win.loadTrending();
+    assert.deepStrictEqual(drawnIds(), ['1202'], 'the newer reply is what the row shows');
+
+    releaseStale();
+    await delay(30);
+    assert.deepStrictEqual(
+      drawnIds(), ['1202'],
+      'the older reply lands after the newer one and must not repaint the row with its own event'
+    );
+  });
+
+  await test('a failing trending request hides the section silently instead of throwing (تذكرة #177)', async () => {
+    let reply = jsonResponse({ success: true, events: trendingCardEvents(), window_days: 7 });
+    const dom = buildTrendingEnv(() => reply);
+    const win = dom.window;
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#trendingRow .trending-card').length === 2);
+
+    reply = jsonResponse({ success: false, message: 'حدث خطأ' }, { status: 500 });
+    await win.loadTrending(); // must resolve, not reject
+
+    assert.strictEqual(win.document.getElementById('trendingSection').hidden, true, 'a failed request is «no result», not an error box');
+    assert.strictEqual(win.document.getElementById('trendingRow').children.length, 0, 'and the row is left empty');
+  });
+
+  await test('choosing another governorate carries region_id=2 into the next trending request (تذكرة #177)', async () => {
+    const trendingCalls = [];
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => {
+          const requestPath = String(url).split('?')[0];
+          if (requestPath === '/api/towns') return jsonResponse(TRENDING_TOWNS_FIXTURE);
+          if (requestPath === '/api/events/trending') {
+            trendingCalls.push(String(url));
+            return jsonResponse({ success: true, events: [], window_days: 7 });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+    const win = dom.window;
+    await flushBoot();
+    await win.initRegionPicker();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+
+    const regionIdOf = url => new URLSearchParams(url.split('?')[1] || '').get('region_id');
+    await win.selectRegion(2);
+    await waitFor(() => trendingCalls.some(url => regionIdOf(url) === '2'));
+
+    assert.ok(
+      trendingCalls.some(url => regionIdOf(url) === '2'),
+      'the strip follows the chosen governorate like the feed under it'
     );
   });
 
@@ -8152,7 +8366,10 @@ async function run() {
         dismissCalled = true;
         return jsonResponse({ success: true });
       }
-      if (requestPath.startsWith('/api/events/')) {
+      // `/api/events/trending` مسارُ قائمةٍ عام (تذكرة #177) لا مناسبة؛ يُجلب
+      // عند الإقلاع قبل النقر، وعدّه «فتحَ مناسبة» يجعل هذا التأكيد يسقط
+      // لسببٍ لا يخصّ التعميم إطلاقاً.
+      if (requestPath.startsWith('/api/events/') && requestPath !== '/api/events/trending') {
         eventGetCalled = true;
         return jsonResponse({ success: false });
       }

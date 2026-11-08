@@ -305,6 +305,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initFeedAudio();
   refreshSessionFromServer();
   fetchEvents();
+  // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — أول جلب للتغذية هو موضعه:
+  // القسم يقرأ محافظة الاكتشاف نفسها، ولا يُجلب في أي مكان آخر إلا تبديلُ
+  // المحافظة والتوسيع (`reloadDiscoverySurfacesForRegion`).
+  loadTrending();
   fetchStories();
   renderStickerCanvas();
   recordAnalyticsEvent('app_opened');
@@ -4947,6 +4951,98 @@ function expandFeedToAllRegions() {
   reloadDiscoverySurfacesForRegion();
 }
 
+/*
+ * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — أعلى ستّ مناسبات بمجموع
+ * إشاراتها في نافذة السبعة أيام. الخادم وحده يحسب المجموع والترتيب والحدّ
+ * (`GET /api/events/trending`)، والعميل يرسم `events` كما وصلت. البطاقة نفسها
+ * بطاقة التغذية المضغوطة: نفس العنوان ونفس سطر التاريخ/المكان ونفس الفتح
+ * (`openEventPage`)، فلا شكل بيانات ثانٍ بين القسم والتغذية.
+ */
+let trendingRequestSeq = 0;
+
+/**
+ * نسختا الشريط اللتان تُرسمان من ردٍّ واحد: نسخة التغذية في التدفق
+ * (`#trendingSection`)، ونسخة الدرج العلوي لسطح الهاتف/PWA
+ * (`#drawerTrendingSection`) — وهناك التغذية طبقة `fixed` بملء الشاشة تحجب ما
+ * فوقها فلا يُرى القسم في التدفق إطلاقاً، على سابقة كاروسيل البانرات (#173).
+ * ولا طلب ثانٍ: النداء الواحد يملأ الاثنتين أو يُخفيهما معاً.
+ */
+function trendingTargets() {
+  return [
+    { sectionId: 'trendingSection', rowId: 'trendingRow' },
+    { sectionId: 'drawerTrendingSection', rowId: 'drawerTrendingRow' }
+  ]
+    .map(({ sectionId, rowId }) => ({
+      section: document.getElementById(sectionId),
+      row: document.getElementById(rowId)
+    }))
+    .filter(target => target.section && target.row);
+}
+
+/**
+ * يُفرغ الصفوف **ويخفي الأقسام قبل الطلب** لا بعده (درس #175): لا تبقى بطاقات
+ * محافظة سابقة معروضة فوق تغذية محافظة جديدة أثناء انتظار الردّ — في النسختين
+ * معاً. وردٌّ متأخر (`seq` مختلف) يُهمَل فلا يستطيع ردّ محافظةٍ قديمة أن يرسم
+ * فوق الجديدة، وقائمة فارغة أو غير مصفوفة تُبقي القسمين مخفيين، وفشل الشبكة
+ * يُخفيهما بلا رسالة — «لا نتيجة» هي الحالة الطبيعية لهذا القسم لا خطأ يُعرض.
+ */
+async function loadTrending() {
+  const seq = ++trendingRequestSeq;
+  const targets = trendingTargets();
+  if (!targets.length) return;
+
+  targets.forEach(({ section, row }) => {
+    row.innerHTML = '';
+    section.hidden = true;
+  });
+
+  const params = new URLSearchParams();
+  if (selectedRegionId !== null && selectedRegionId !== undefined && !feedAllRegions) {
+    params.set('region_id', String(selectedRegionId));
+  }
+  const query = params.toString();
+
+  let data = null;
+  try {
+    const res = await apiFetch(`/api/events/trending${query ? `?${query}` : ''}`, { allRegions: feedAllRegions });
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+
+  // محافظة أخرى اختيرت بينما هذا الطلب في الطريق: ردّه لا يخصّ ما يُعرض الآن.
+  if (seq !== trendingRequestSeq) return;
+
+  const events = data && Array.isArray(data.events) ? data.events : [];
+  if (!events.length) return;
+
+  const html = events.map(renderTrendingCardHtml).join('');
+  targets.forEach(({ section, row }) => {
+    row.innerHTML = html;
+    section.hidden = false;
+  });
+}
+
+/** بطاقة الشريط الواحدة — العنوان وسطر «التاريخ — البلدة» من مُهيّئات الكرت القائم. */
+function renderTrendingCardHtml(evt) {
+  const headline = eventCardHeadline(evt);
+  const place = eventPlaceName(evt);
+  const meta = [formatEventDayLong(evt), place].filter(Boolean).join(' — ');
+  const poster = evt.poster_url ? cardImageUrl(evt.poster_url) : '';
+  // `alt=""` مقصود: الصورة مصغّرة زخرفية بجانب عنوان البطاقة نفسه، فوصفها
+  // بصوت عالٍ يكرّر ما يقرؤه قارئ الشاشة من الزرّ.
+  const shot = poster
+    ? `<img class="trending-card-img" src="${escapeHtml(poster)}" alt="" loading="lazy">`
+    : '<span class="trending-card-img trending-card-img-empty" aria-hidden="true"><i class="fa-solid fa-champagne-glasses"></i></span>';
+
+  return `
+    <button type="button" class="trending-card" data-event-id="${evt.id}" onclick="openEventPage(${evt.id})">
+      ${shot}
+      <span class="trending-card-title card-clamp-1-line">${escapeHtml(headline)}</span>
+      <span class="trending-card-meta card-clamp-1-line">${escapeHtml(meta)}</span>
+    </button>`;
+}
+
 /**
  * تصفير حالة التغذية قبل جلب المنطقة الجديدة: الصفحة الأولى، واللقطة
  * والرقاقة المرتبطة بها، وبصمتا الفلتر المطبَّقة والمرسومة (البصمة القديمة
@@ -4970,6 +5066,11 @@ function resetFeedForRegionChange() {
 function reloadDiscoverySurfacesForRegion() {
   // شريط الستوريات ظاهر دائماً أعلى التغذية.
   fetchStories();
+
+  // «الأكثر تفاعلاً» (تذكرة #177) أسفل الكاروسيل وفوق التغذية، فمحافظته تتبع
+  // المحافظة الجديدة كبقية الأسطح — وإلا بقي الشريط يعرض بطاقات محافظة غير
+  // المحافظة المعروضة تحته.
+  loadTrending();
 
   // الخريطة إن كانت قد فُتحت — initLeafletMap نفسها تزيل الدبابيس القديمة
   // وتعيد التمركز على محافظة الاكتشاف الجديدة (تذكرة #124).
