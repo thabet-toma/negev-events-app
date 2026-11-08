@@ -7,21 +7,27 @@ import 'package:http/testing.dart';
 import 'package:negev_events/api/api_client.dart';
 import 'package:negev_events/api/negev_api.dart';
 import 'package:negev_events/main.dart';
+import 'package:negev_events/screens/agenda_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
+import 'package:negev_events/screens/my_list_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/state/region_onboarding.dart';
+import 'package:negev_events/state/region_store.dart';
 import 'package:negev_events/state/welcome.dart';
 import 'package:negev_events/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// شعار «اعراسنا» في ترويسة الهيكل — تذكرة #157.
+/// شعار «اعراسنا» في ترويسة الهيكل — تذكرة #157 — والترويسة الغنية حوله —
+/// تذكرة #174.
 ///
 /// ما يُثبَت هنا: الشعار أصلٌ مولَّد (`assets/brand/mark-full.png`، طبقة `full`
 /// بمقاسها المنطقي ٧٢px) ونسخة واحدة فوق الوجهات الثلاث؛ والنقر عليه من وجهة
 /// ثانية يعيد إلى «المناسبات»؛ وعلى «المناسبات» نفسها يصعد بالقائمة إلى أولها
-/// **بلا فلتر يتغيّر ولا تغذية تُجلب**.
+/// **بلا فلتر يتغيّر ولا تغذية تُجلب**. وحوله في الترويسة نفسها: «أهلاً، الاسم»
+/// للمسجَّل وحده، وكبسولة المحافظة التي تحمل اسمها من الخادم وتفتح ورقة
+/// المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة — والشريط السفلي ثلاث وجهات.
 ///
 /// ولا شيء من هذا يمسّ «تفاصيل مناسبة» و«حسابي»: الشعار في الهيكل تحتها،
 /// والشاشات المدفوعة تغطّيها بخلفيتها و«رجوع + عنوان» كما هي.
@@ -57,7 +63,19 @@ NegevApi _shellApi({List<Uri>? requests}) {
       return ok({
         'success': true,
         'towns': ['الكل', 'رهط', 'حورة'],
-        'regions': <Map<String, dynamic>>[],
+        // محافظةٌ من الخادم وحده — الترويسة الغنية (#174) تحمل اسمها ولا
+        // تكتبه، وورقة المحافظة ترسم حباتها من هذه القائمة نفسها.
+        'regions': [
+          {
+            'id': 1,
+            'name': 'النقب',
+            'latitude': 31.2858,
+            'longitude': 34.8431,
+            'map_zoom': 9,
+            'position': 1,
+            'towns': ['رهط', 'حورة'],
+          },
+        ],
         'villages': <Map<String, dynamic>>[],
         'town_coordinates': <String, dynamic>{},
         'stats': <Map<String, dynamic>>[],
@@ -83,6 +101,13 @@ NegevApi _shellApi({List<Uri>? requests}) {
 /// الهيكل كما يُبنى في `main.dart`: `AppServices` فوق `MaterialApp` (مسارُ
 /// التفاصيل المدفوع يحتاجها من خارج التغذية)، وورقة أول تشغيل مُعلَنة الطرح.
 ///
+/// و[navigatorKey] هو مفتاح `main.dart` نفسه: قلب «قائمتي» في الترويسة الغنية
+/// يفتح شاشته من هناك (`AppServices.openMyList`) كما يفتحها التطبيق الحقيقي،
+/// فبلا هذا المفتاح لا يصل الدفع إلى متنقّل الاختبار.
+///
+/// و[auth] جلسةٌ جاهزة (مسجَّلة أو زائرة) حين يهمّ الاختبار حال الحساب؛
+/// والافتراضي مخزنٌ لم يُحمَّل بعد = زائر.
+///
 /// ونافذة أعلى من الافتراضية (٨٠٠×٦٠٠): الترويسة شريطٌ حقيقي فوق التغذية،
 /// فالكرت لا يفيض في ارتفاع هاتف فعلي. هذا ارتفاع نافذة الاختبار، لا تخطيط
 /// الشاشة. و[statusBarPadding] يحاكي شريط الحالة على جهاز حقيقي — الافتراضي
@@ -91,6 +116,7 @@ Future<void> _pumpShell(
   WidgetTester tester,
   NegevApi api, {
   double statusBarPadding = 0,
+  AuthStore? auth,
 }) async {
   tester.view.physicalSize = const Size(800, 2000);
   tester.view.devicePixelRatio = 1.0;
@@ -104,9 +130,10 @@ Future<void> _pumpShell(
   await tester.pumpWidget(
     AppServices(
       api: api,
-      auth: AuthStore(api),
+      auth: auth ?? AuthStore(api),
       realtime: RealtimeService(),
       child: MaterialApp(
+        navigatorKey: navigatorKey,
         theme: AppTheme.light(),
         // الحشوة تُحقن فوق الـ`Navigator` كي تقرأها الشاشات كما تقرأ حشوة
         // الجهاز، ويُنسخ باقي `MediaQueryData` (المقاس ونسبة الكثافة) كما هو.
@@ -391,5 +418,224 @@ void main() {
         );
       },
     );
+  });
+
+  group('الترويسة الغنية حول الشعار (#174)', () {
+    /// جلسة مسجَّلة محفوظة كما يحفظها `AuthStore` نفسه — تُقرأ في `load()`
+    /// قبل بناء الهيكل، فتظهر التحية عند أول إطار لا بعد نداء شبكة.
+    Future<AuthStore> signedInAuth(NegevApi api) async {
+      SharedPreferences.setMockInitialValues({
+        'negev_token': 'test-token-rich-header',
+        'negev_user': jsonEncode({
+          'id': 501,
+          'phone_number': '0521234567',
+          'full_name': 'سالم أبو معمر',
+          'role': 'user',
+        }),
+      });
+      final auth = AuthStore(api);
+      await auth.load();
+      return auth;
+    }
+
+    testWidgets('الزائر لا يرى «أهلاً، …» — والمسجَّل يراه باسمه الأول', (tester) async {
+      // الزائر: المخزن محمَّل بلا جلسة، كما يفتح الزائر التطبيق فعلاً.
+      SharedPreferences.setMockInitialValues({});
+      final guestApi = _shellApi();
+      final guestAuth = AuthStore(guestApi);
+      await guestAuth.load();
+      await _pumpShell(tester, guestApi, auth: guestAuth);
+      await tester.pumpAndSettle();
+
+      expect(guestAuth.isSignedIn, isFalse, reason: 'الاختبار يبدأ زائراً فعلاً');
+      expect(
+        find.byKey(const Key('shell_header_greeting')),
+        findsNothing,
+        reason: 'التحية للمسجَّل وحده',
+      );
+
+      // والمسجَّل: الاسم الأول من `full_name` في الحساب نفسه.
+      final signedApi = _shellApi();
+      final signedAuth = await signedInAuth(signedApi);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await _pumpShell(tester, signedApi, auth: signedAuth);
+      await tester.pumpAndSettle();
+
+      expect(signedAuth.isSignedIn, isTrue);
+      expect(
+        find.byKey(const Key('shell_header_greeting')),
+        findsOneWidget,
+        reason: 'المسجَّل يرى التحية',
+      );
+      expect(
+        find.text('أهلاً، سالم'),
+        findsOneWidget,
+        reason: 'الاسم الأول من الحساب لا نصّاً مكتوباً',
+      );
+    });
+
+    testWidgets('حساب محفوظ بلا رمز دخول: زائر — لا تحية، والكبسولة والقلب باقيان', (tester) async {
+      // `AuthStore.load()` يقرأ `negev_user` مستقلاً عن `negev_token`، فبقاء
+      // الاسم وحده لا يصنع جلسة. التحية تتبع `isSignedIn` لا الاسم، وهذا هو
+      // السبب الذي كان يمرّ بلا اختبار: الاسم موجود فيُعرض «أهلاً، …» لزائر.
+      SharedPreferences.setMockInitialValues({
+        'negev_user': jsonEncode({
+          'id': 502,
+          'phone_number': '0527654321',
+          'full_name': 'نورة أبو سالم',
+          'role': 'user',
+        }),
+      });
+      final api = _shellApi();
+      final auth = AuthStore(api);
+      await auth.load();
+      await _pumpShell(tester, api, auth: auth);
+      await tester.pumpAndSettle();
+
+      expect(
+        auth.user,
+        isNotNull,
+        reason: 'الاسم المحفوظ قُرئ فعلاً — الاختبار يسقط لسببه لا لفراغ المخزن',
+      );
+      expect(auth.token, isNull);
+      expect(
+        auth.isSignedIn,
+        isFalse,
+        reason: 'بلا رمز لا جلسة، ولو بقي الاسم محفوظاً',
+      );
+      expect(
+        find.byKey(const Key('shell_header_greeting')),
+        findsNothing,
+        reason: 'التحية للمسجَّل وحده، لا لاسمٍ محفوظ بلا رمز',
+      );
+      expect(find.text('أهلاً، نورة'), findsNothing);
+
+      // والزائر يبقى له ما للتذكرة: الكبسولة والقلب ليسا للمسجَّل وحده.
+      expect(find.byKey(const Key('shell_header_region')), findsOneWidget);
+      expect(find.byKey(const Key('shell_header_my_list')), findsOneWidget);
+    });
+
+    testWidgets('كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة القائمة', (tester) async {
+      // تخزينٌ فارغ يبدأ منه الاختبار، فالتأكيد أدناه يقيس كتابة هذا الاختيار
+      // لا بقايا اختبار سبقه.
+      SharedPreferences.setMockInitialValues({});
+      await _pumpShell(tester, _shellApi());
+      await tester.pumpAndSettle();
+
+      final capsule = find.byKey(const Key('shell_header_region'));
+      expect(capsule, findsOneWidget, reason: 'الكبسولة في ترويسة الهيكل');
+      expect(
+        find.descendant(of: capsule, matching: find.text('النقب')),
+        findsOneWidget,
+        reason: 'اسم المحافظة من GET /api/towns لا مكتوباً في العميل',
+      );
+
+      await tester.tap(capsule);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('من أي منطقة أنت؟'),
+        findsOneWidget,
+        reason: 'الورقة القائمة نفسها (#126) لا نسخة ثانية',
+      );
+
+      // والاختيار يمشي في مسار الورقة القائم نفسه: يدوي ← محافظة ← حفظ.
+      await tester.tap(find.byKey(const Key('region_onboarding_manual')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('region_onboarding_region_1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('region_onboarding_save')));
+      await tester.pumpAndSettle();
+
+      // التفضيل محفوظ فعلاً على الجهاز: يُقرأ بمفتاح التخزين الذي يكتبه
+      // `RegionStore` نفسه (`storageKey`، لا نصّاً مكتوباً هنا) — فالذاكرة
+      // وحدها لا تُثبت «كُتب على الجهاز».
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(RegionStore.storageKey),
+        '1',
+        reason: 'اختيار الورقة يكتب المحافظة على الجهاز',
+      );
+      // والورقة أُغلقت فعلاً: عنوانها غائب، والترويسة تحته ظاهرة. (كان التأكيد
+      // السابق يجد الترويسة وهي تحت الورقة أصلاً، فلا يسقط إن بقيت الورقة.)
+      expect(
+        find.text('من أي منطقة أنت؟'),
+        findsNothing,
+        reason: 'الورقة أُغلقت بعد الاختيار، فلا تبقى مفتوحة فوق الترويسة',
+      );
+      expect(
+        find.byKey(const Key('shell_header_region')),
+        findsOneWidget,
+        reason: 'والترويسة باقية ظاهرة بعد إغلاقها',
+      );
+
+      // رسالة الاختيار (SnackBar) تعيش ٣ ثوانٍ — تُنتهى هنا كي لا يبقى مؤقّتها
+      // معلَّقاً بعد انتهاء الاختبار.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة، والشريط يبقى ثلاث وجهات', (tester) async {
+      await _pumpShell(tester, _shellApi());
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).destinations.length,
+        3,
+        reason: 'الشريط السفلي ثلاث وجهات كما كان',
+      );
+
+      await tester.tap(find.byKey(const Key('shell_header_my_list')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byType(MyListScreen),
+        findsOneWidget,
+        reason: 'قلب الترويسة يفتح «قائمتي» القائمة',
+      );
+
+      navigatorKey.currentState!.pop();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('shell_header_agenda')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byType(AgendaScreen),
+        findsOneWidget,
+        reason: 'زرّ الأجندة يفتح «أجندة المناسبات» القائمة (إلى أن تكتمل #175)',
+      );
+
+      navigatorKey.currentState!.pop();
+      await tester.pumpAndSettle();
+
+      // والترويسة الغنية فوق الوجهات الثلاث كلها، لا على «المناسبات» وحدها.
+      final navBar = find.byType(NavigationBar);
+      await tester.tap(
+        find.descendant(of: navBar, matching: find.text('خدماتنا')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        tester.widget<NavigationBar>(navBar).selectedIndex,
+        1,
+        reason: 'الاختبار يبدأ من وجهة ثانية فعلاً',
+      );
+      expect(
+        find.byKey(const Key('shell_header_region')),
+        findsOneWidget,
+        reason: 'كبسولة المحافظة فوق «خدماتنا» أيضاً',
+      );
+      expect(
+        find.byKey(const Key('shell_header_my_list')),
+        findsOneWidget,
+        reason: 'قلب «قائمتي» فوق «خدماتنا» أيضاً',
+      );
+      expect(
+        find.byKey(const Key('shell_header_agenda')),
+        findsOneWidget,
+        reason: 'زرّ الأجندة فوق «خدماتنا» أيضاً',
+      );
+    });
   });
 }

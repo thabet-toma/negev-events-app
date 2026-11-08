@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../state/home_ticker.dart';
 import '../state/region_onboarding.dart';
+import '../state/region_store.dart';
 import '../state/update_checker.dart';
 import '../state/welcome.dart';
 import '../theme.dart';
@@ -12,6 +13,7 @@ import '../widgets/region_onboarding_sheet.dart';
 import '../widgets/update_dialog.dart';
 import '../widgets/welcome_sheet.dart';
 import 'add_event_screen.dart';
+import 'agenda_screen.dart';
 import 'events_screen.dart';
 import 'services_hub_screen.dart';
 import 'services_screen.dart';
@@ -21,6 +23,9 @@ import 'services_screen.dart';
 ///
 /// وفوق الثلاث ترويسةُ الهيكل بشعار «اعراسنا» (`_brandBar`): نسخة واحدة من
 /// الأصل المولَّد، تكبس فتُعيد إلى «المناسبات» وتصعد بقائمتها إلى أولها (#157).
+/// وبجانبه ترويسةٌ غنية (تذكرة #174): «أهلاً، الاسم» للمسجَّل وحده، وكبسولة
+/// المحافظة التي تفتح ورقة المحافظة القائمة، وقلب «قائمتي»، وزرّ الأجندة —
+/// والشريط السفلي يبقى ثلاث وجهات.
 /// والشاشات المدفوعة («تفاصيل مناسبة»، «حسابي»، الألبومات…) تغطّيها كلها، فلا
 /// شعار فوقها ولا ترويسة ثانية — تبقى «رجوع + عنوان» كما هي.
 ///
@@ -301,14 +306,123 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 
+  /// كبسولة المحافظة — تفتح ورقة المحافظة القائمة نفسها (تذكرة #126) التي
+  /// يفتحها «حسابي»، فاختيار المحافظة بلا نسخة ثانية من الورقة ولا من منطقها.
+  Future<void> _openRegionSheet() => showRegionOnboardingSheet(context);
+
+  /// زرّ الأجندة — «أجندة المناسبات» القائمة (`AgendaScreen`) إلى أن تكتمل
+  /// تذكرة تقويم الشهر (#175). لا شاشة ثانية ولا نداء جديد.
+  void _openAgenda() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const AgendaScreen()),
+    );
+  }
+
+  /// اسم المحافظة الفعّالة كما يعرضها المنتقي (`effectiveRegionId`): الاختيار
+  /// الصريح، وإلا محافظة الحساب، وإلا الأولى — من كتالوج الخادم نفسه. و«منطقتك»
+  /// قبل وصول `GET /api/towns`، كصياغة منتقي التغذية في الويب.
+  String _effectiveRegionName(RegionStore regions) {
+    final id = regions.effectiveRegionId;
+    for (final region in regions.activeRegions) {
+      if (region.id == id) return region.name;
+    }
+    return 'منطقتك';
+  }
+
+  /// عمود الهوية وسط الترويسة: «أهلاً، الاسم» للمسجَّل وحده فوق كبسولة
+  /// المحافظة، ويُعاد بناؤه مع تغيّر الحساب أو المحافظة أو كتالوج البلدات
+  /// (اسم المحافظة يصل معه) معاً.
+  ///
+  /// والتحية تتبع **حالة الدخول** (`isSignedIn`) لا الاسم وحده: `AuthStore.load()`
+  /// يقرأ `negev_user` مستقلاً عن `negev_token`، فحسابٌ محفوظ بلا رمز زائرٌ لا
+  /// مسجَّل — والتحية له لا للزائر. والكبسولة والقلب لكل زائر بحسب التذكرة، فلا
+  /// يُشترطان بحالة الدخول.
+  Widget _headerIdentity(AppServices services) {
+    final rawName = (services.auth.user?.fullName ?? '').trim();
+    final firstName = services.auth.isSignedIn && rawName.isNotEmpty
+        ? rawName.split(RegExp(r'\s+')).first
+        : '';
+    final regionName = _effectiveRegionName(services.regions);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (firstName.isNotEmpty) ...[
+          Text(
+            'أهلاً، $firstName',
+            key: const Key('shell_header_greeting'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+        _regionCapsule(regionName),
+      ],
+    );
+  }
+
+  /// كبسولة المحافظة — اسمها من الخادم وحده، ونقرها يفتح الورقة القائمة.
+  Widget _regionCapsule(String regionName) {
+    final radius = BorderRadius.circular(999);
+    return Material(
+      color: context.c.surfaceSunk,
+      borderRadius: radius,
+      child: InkWell(
+        key: const Key('shell_header_region'),
+        onTap: _openRegionSheet,
+        borderRadius: radius,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: context.c.line),
+            borderRadius: radius,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.location_on_outlined, size: 14, color: context.c.sky),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  regionName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.expand_more, size: 16, color: context.c.inkSoft),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// ترويسة الهيكل: شعار «اعراسنا» على جهة البداية (يمين في RTL) فوق الوجهات
-  /// الثلاث. الأصل المولَّد `mobile/assets/brand/mark-full.png` — طبقة `full`
-  /// (بالكلمة) بمقاسها المنطقي ٧٢px، وهو حدّ القاعدة نفسه؛ و`2.0x`/`3.0x`
-  /// يلتقطهما `Image.asset` تلقائياً. لا رسم بكود Flutter ولا تنزيل من الشبكة،
-  /// فلا نسخة ثانية للعلامة في العميل.
+  /// الثلاث، وبجانبه الترويسة الغنية (تذكرة #174): «أهلاً، الاسم» وكبسولة
+  /// المحافظة، وقلب «قائمتي» وزرّ الأجندة على طرفها الآخر. الأصل المولَّد
+  /// `mobile/assets/brand/mark-full.png` — طبقة `full` (بالكلمة) بمقاسها
+  /// المنطقي ٧٢px، وهو حدّ القاعدة نفسه؛ و`2.0x`/`3.0x` يلتقطهما `Image.asset`
+  /// تلقائياً. لا رسم بكود Flutter ولا تنزيل من الشبكة، فلا نسخة ثانية للعلامة
+  /// في العميل.
+  ///
+  /// وفعل الشعار لم يتغيّر (#157): كبسة واحدة تعيد إلى «المناسبات» وتصعد
+  /// بالقائمة إلى أولها بلا فلتر يتغيّر ولا تغذية تُجلب.
   ///
   /// بلا `SafeArea` هنا: منطقة الأمان تُستهلك مرّة واحدة حول عمود الهيكل كلّه.
   Widget _brandBar() {
+    final services = AppServices.of(context);
     return Material(
       color: context.c.surface,
       child: Container(
@@ -318,26 +432,61 @@ class _HomeShellState extends State<HomeShell> {
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: context.c.line)),
         ),
-        child: Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: InkWell(
-            key: const Key('shell_brand_logo'),
-            onTap: _goToFeedFromBrand,
-            borderRadius: BorderRadius.circular(16),
-            child: ClipRRect(
+        child: Row(
+          children: [
+            InkWell(
+              key: const Key('shell_brand_logo'),
+              onTap: _goToFeedFromBrand,
               borderRadius: BorderRadius.circular(16),
-              child: Image.asset(
-                'assets/brand/mark-full.png',
-                width: 72,
-                height: 72,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
-                // الكلمة مرسومة في العلامة نفسها؛ هذا اسمٌ للقارئ الآلي
-                // وحده بدل أن يقرأ مسار الملف.
-                semanticLabel: 'أعراسنا — العودة إلى المناسبات',
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.asset(
+                  'assets/brand/mark-full.png',
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                  // الكلمة مرسومة في العلامة نفسها؛ هذا اسمٌ للقارئ الآلي
+                  // وحده بدل أن يقرأ مسار الملف.
+                  semanticLabel: 'أعراسنا — العودة إلى المناسبات',
+                ),
               ),
             ),
-          ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ListenableBuilder(
+                // `places` معهما: كتالوج المحافظات يصل من `GET /api/towns`
+                // إليها وحدها (`RegionStore` يقرأ منه ولا يسمعه)، فبلا سماعه
+                // تبقى الكبسولة على «منطقتك» بعد وصول الاسم.
+                listenable: Listenable.merge([
+                  services.auth,
+                  services.regions,
+                  services.places,
+                ]),
+                builder: (context, _) => _headerIdentity(services),
+              ),
+            ),
+            const SizedBox(width: 4),
+            // قلب «قائمتي» — الشاشة القائمة نفسها التي يفتحها «حسابي» (شاشة
+            // مدفوعة لا وجهة في الشريط السفلي)، بلا نسخة ثانية.
+            IconButton(
+              key: const Key('shell_header_my_list'),
+              onPressed: services.openMyList,
+              tooltip: 'قائمتي',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.favorite_border, color: context.c.inkSoft),
+            ),
+            IconButton(
+              key: const Key('shell_header_agenda'),
+              onPressed: _openAgenda,
+              tooltip: 'أجندة المناسبات',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                Icons.calendar_month_outlined,
+                color: context.c.inkSoft,
+              ),
+            ),
+          ],
         ),
       ),
     );

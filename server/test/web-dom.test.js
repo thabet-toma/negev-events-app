@@ -3544,7 +3544,11 @@ async function run() {
       ['floatingSoundBtn', 'toggleSoundMuted()'],
       ['floatingAuthBtn', "switchTab('tabAccount')"]
     ];
-    const buttons = [...bar.querySelectorAll('button')];
+    // الشريط نفسه صار يحمل صفّاً غنياً ثانياً (#174) بأزراره الثلاثة (كبسولة
+    // المحافظة والقلب والأجندة). تُعدّ هنا أزرار صفّ الشريط القائم وحده — وهو
+    // موضع هذه الثمانية — وأزرار الصفّ الغني تُعدّ وتُتحقّق في اختبارها أدناه،
+    // فلا يُضعف التقليص شيئاً: الثمانية ما زالت كلها مطلوبة بأسمائها.
+    const buttons = [...bar.querySelectorAll('.floating-top-inner button')];
     assert.strictEqual(buttons.length, expected.length, 'no floating-bar button may be removed to win the space');
     for (const [id, handler] of expected) {
       const button = id ? bar.querySelector(`#${id}`) : buttons.find(b => (b.getAttribute('onclick') || '').includes(handler));
@@ -14540,6 +14544,371 @@ async function run() {
     await delay(80);
 
     assert.deepStrictEqual(feedCardIds(win), [920], 'the stale first-region response must not replace the second region\'s cards');
+  });
+
+  console.log('\nالترويسة الغنية — التحية وكبسولة المحافظة والقلب وزرّ الأجندة (#174)');
+
+  /**
+   * بيئة الترويسة الغنية: صفحة الويب بمحافظتين نشطتين من GET /api/towns (نفس
+   * نسخة المنتقي القائمة)، و[loggedIn] جلسةٌ محفوظة كالتي يفتحها الزائر
+   * المسجَّل فعلاً (`negev_user` في localStorage).
+   */
+  function buildRichHeaderEnv({ loggedIn = false, savedUserWithoutToken = false } = {}) {
+    return buildEnv({
+      loggedIn,
+      onBeforeEval: (w) => {
+        // قد تبقى بيانات حساب من كتابةٍ محلية نجحت قبل أن تفشل كتابة الرمز؛ ليست
+        // تلك جلسةً. تُزرع قبل eval كي يقرأها app.js كما يقرأ التخزين الحقيقي.
+        if (savedUserWithoutToken) {
+          w.localStorage.setItem('negev_user', JSON.stringify({
+            id: 502, full_name: 'حساب متبقٍ', role: 'user', phone_number: '0520000000'
+          }));
+        }
+        const base = buildFetchStub();
+        w.fetch = async (url, opts = {}) => (String(url).split('?')[0] === '/api/towns'
+          ? jsonResponse(TOWNS_TWO_REGIONS_FIXTURE)
+          : base(url, opts));
+      }
+    });
+  }
+
+  /** ينتظر وصول المحافظات ورسم حبات المنتقي والورقة معاً، ثم يثبّت الاختيار. */
+  async function settleRegionPicker(win) {
+    await flushBoot();
+    await waitFor(() => win.document.querySelectorAll('#regionPickerChips .region-chip').length === 2);
+    await win.initRegionPicker();
+  }
+
+  await test('«أهلاً، الاسم» للمسجَّل وحده، والزائر لا يراه (#174)', async () => {
+    const guest = buildRichHeaderEnv();
+    await settleRegionPicker(guest.window);
+    const guestGreeting = guest.window.document.getElementById('headerGreeting');
+    assert.ok(guestGreeting, 'expected #headerGreeting in web/index.html — the rich header ships with it');
+    assert.strictEqual(guestGreeting.hidden, true, 'a visitor sees no greeting');
+    assert.strictEqual(guest.window.document.getElementById('headerGreetingName').textContent, '', 'and no account name is written into it');
+
+    const signed = buildRichHeaderEnv({ loggedIn: true });
+    await settleRegionPicker(signed.window);
+    const signedGreeting = signed.window.document.getElementById('headerGreeting');
+    assert.strictEqual(signedGreeting.hidden, false, 'the signed-in account sees the greeting');
+    assert.strictEqual(
+      signedGreeting.textContent.trim(),
+      'أهلاً، مستخدم',
+      'with the first name read from the stored account, not a name typed into the page'
+    );
+  });
+
+  await test('negev_user بلا negev_token لا يحيّي في موضعي الترويسة، والجلسة المكتملة تحيّي فيهما (#174)', async () => {
+    const stale = buildRichHeaderEnv({ savedUserWithoutToken: true });
+    await settleRegionPicker(stale.window);
+    const staleDocument = stale.window.document;
+    for (const id of ['headerGreeting', 'floatingHeaderGreeting']) {
+      assert.strictEqual(staleDocument.getElementById(id).hidden, true,
+        `${id} stays hidden when localStorage has negev_user but no negev_token`);
+    }
+
+    const signed = buildRichHeaderEnv({ loggedIn: true });
+    await settleRegionPicker(signed.window);
+    const signedDocument = signed.window.document;
+    for (const id of ['headerGreeting', 'floatingHeaderGreeting']) {
+      assert.strictEqual(signedDocument.getElementById(id).hidden, false,
+        `${id} appears only when the saved account has its session token`);
+    }
+    assert.strictEqual(signedDocument.getElementById('headerGreetingName').textContent, 'مستخدم',
+      'the first name remains derived from full_name on the saved account');
+  });
+
+  await test('كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة، والاختيار فيها يمشي في selectRegion القائم', async () => {
+    const dom = buildRichHeaderEnv();
+    const win = dom.window;
+    await settleRegionPicker(win);
+    const { document } = win;
+
+    const capsule = document.getElementById('headerRegionCapsule');
+    assert.ok(capsule, 'expected the governorate capsule in the rich header');
+    assert.strictEqual(
+      document.getElementById('headerRegionName').textContent.trim(),
+      SEED_REGION.name,
+      'the capsule shows the active governorate name that GET /api/towns returned'
+    );
+    assert.strictEqual(document.getElementById('regionSheetModal').style.display, 'none', 'the sheet ships closed');
+    assert.deepStrictEqual(
+      [...document.querySelectorAll('#regionSheetChips .region-chip')].map(chip => chip.dataset.regionId),
+      ['1', '2'],
+      'the closed sheet is already filled from the same list — opening it is a display change, not a second list'
+    );
+
+    capsule.click();
+    assert.strictEqual(document.getElementById('regionSheetModal').style.display, 'flex', 'the capsule opens the governorate sheet');
+    const sheetChips = [...document.querySelectorAll('#regionSheetChips .region-chip')];
+    assert.strictEqual(sheetChips[0].getAttribute('aria-pressed'), 'true', 'with the active governorate marked, exactly as the feed picker marks it');
+
+    sheetChips[1].click();
+    await waitFor(() => document.getElementById('headerRegionName').textContent.trim() === SECOND_REGION.name);
+    assert.strictEqual(document.getElementById('regionSheetModal').style.display, 'none', 'choosing a governorate closes the sheet');
+    assert.strictEqual(win.localStorage.getItem('negev_region'), '2', 'and saves it through the existing selectRegion path');
+    assert.strictEqual(
+      document.querySelector('#regionPickerChips .region-chip.active').getAttribute('data-region-id'),
+      '2',
+      'the feed picker behind the sheet agrees with the choice'
+    );
+  });
+
+  await test('بلا محافظات من الخادم: الكبسولة تقول «منطقتك» والورقة تشرح الفراغ بدل بطاقة فارغة', async () => {
+    const dom = buildEnv(); // /api/towns هنا بلا `regions` — انقطاع أو خادم لم يرسلها
+    const win = dom.window;
+    await flushBoot();
+    await win.initRegionPicker();
+    const { document } = win;
+
+    assert.strictEqual(
+      document.getElementById('headerRegionName').textContent.trim(),
+      'منطقتك',
+      'no governorate name is invented when the server sends none'
+    );
+
+    document.getElementById('headerRegionCapsule').click();
+    assert.strictEqual(document.getElementById('regionSheetModal').style.display, 'flex', 'the sheet still opens');
+    assert.strictEqual(document.querySelectorAll('#regionSheetChips .region-chip').length, 0, 'with no chips to choose');
+    assert.strictEqual(document.getElementById('regionSheetEmpty').hidden, false, 'and a short Arabic explanation instead of a blank card');
+  });
+
+  await test('القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات', () => {
+    const dom = buildRichHeaderEnv();
+    const { document } = dom.window;
+
+    const navButtons = [...document.querySelectorAll('.bottom-navbar .nav-btn')];
+    assert.strictEqual(navButtons.length, 3, 'the bottom bar stays three destinations — the rich header adds none');
+    assert.deepStrictEqual(
+      navButtons.map(btn => btn.textContent.trim()),
+      ['المناسبات', 'خدماتنا', 'خدمات الأعراس'],
+      'and they are the very same three'
+    );
+
+    const heart = document.getElementById('headerMyListBtn');
+    const calendar = document.getElementById('headerCalendarBtn');
+    assert.ok(heart, 'expected the «قائمتي» heart in the rich header');
+    assert.ok(calendar, 'expected the month calendar button in the rich header');
+
+    heart.click();
+    assert.strictEqual(
+      document.getElementById('tabMyList').classList.contains('active-tab'),
+      true,
+      'the heart opens «قائمتي» through the existing tab, not a new destination'
+    );
+    assert.strictEqual(
+      document.getElementById('navBtnHome').classList.contains('active'),
+      false,
+      '«قائمتي» still adds no active bottom-bar destination'
+    );
+
+    calendar.click();
+    assert.strictEqual(document.getElementById('agendaModal').style.display, 'flex', 'the calendar opens the agenda «أجندة المناسبات» already opens');
+    assert.ok(document.getElementById('agendaMonthDisplay').textContent.trim().length > 0, 'and that existing agenda renders its month');
+  });
+
+  /*
+   * jsdom lays nothing out, so what a browser hides by the `hidden` attribute on a
+   * `display`-set element is invisible here. The greeting is hidden for guests by
+   * an explicit rule, not by the browser default — assert that rule is present
+   * rather than trusting the attribute alone (the same class of bug
+   * `.auth-pill-btn[hidden]` exists for).
+   */
+  await test('قاعدة CSS تُخفي التحية عن الزائر صراحةً، والكبسولة تقصّ الاسم الطويل', () => {
+    const rules = readCssRules(STYLES_CSS);
+    const ruleBody = (selector) => {
+      const matches = rules.filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === selector);
+      assert.ok(matches.length >= 1, `expected a base rule for ${selector}`);
+      return matches[0].body;
+    };
+
+    assert.match(ruleBody('.header-greeting[hidden]'), /display:\s*none/, 'the guest greeting must be hidden by rule, not only by the attribute');
+    assert.match(ruleBody('#headerRegionName'), /text-overflow:\s*ellipsis/, 'a long governorate name is clipped instead of breaking the row');
+    assert.match(ruleBody('.header-region-capsule'), /border-radius:\s*var\(--radius-pill\)/, 'the capsule is a pill like the feed picker chips');
+    assert.match(ruleBody('.header-icon-btn'), /flex-shrink:\s*0/, 'the heart and calendar never shrink away from the row');
+  });
+
+  /*
+   * البند المانع الأول في جولة التصحيح: الصفّ الغني كان كله داخل `.app-header`،
+   * والكتلة نفسها التي تُظهر الشريط العائم على الهاتف وفي PWA المثبَّت
+   * (`@media (max-width: 768px), (display-mode: standalone)`) هي التي تخفي
+   * `.app-header` — فمستخدم الهاتف، وهو الاستخدام الغالب، لم يرَ تحيةً ولا
+   * كبسولةً ولا قلباً. jsdom بلا محرّك تخطيط، فلا تُقاس الرؤية: يُقرأ أن للصفّ
+   * موضعاً ثانياً داخل الشريط الظاهر، وأن الكتلة التي تخفي الترويسة تُظهره،
+   * وأن قواعده تبقيه هدفاً 44px ملفوفاً لا مكدوساً.
+   */
+  await test('الهاتف وPWA المثبَّت: الصفّ الغني له موضعٌ ثانٍ داخل الشريط العائم الظاهر هناك', () => {
+    const dom = buildRichHeaderEnv();
+    const { document } = dom.window;
+
+    const bar = document.getElementById('floatingTopBar');
+    assert.ok(bar, 'expected the floating top bar in web/index.html');
+    const row = bar.querySelector('.floating-rich-row');
+    assert.ok(row, 'the phone/PWA chrome must carry the rich header row — a row inside the hidden .app-header shows nobody on a phone');
+    assert.strictEqual(
+      document.querySelectorAll('#floatingTopBar > .floating-rich-row').length,
+      1,
+      'exactly one rich row in the floating bar: it is a second mount point, not a stack of copies'
+    );
+
+    // لكل عقدة معرّف فريد: الموضع الثاني لا ينسخ معرّفات الموضع الأول.
+    for (const id of ['floatingHeaderGreeting', 'floatingHeaderGreetingName', 'floatingRegionCapsule', 'floatingRegionName', 'floatingMyListBtn', 'floatingCalendarBtn']) {
+      assert.strictEqual(document.querySelectorAll(`#${id}`).length, 1, `#${id} must be exactly one node`);
+      assert.strictEqual(document.querySelector(`.header-rich-row #${id}`), null, `#${id} must not repeat an id from the desktop row`);
+    }
+
+    // والوظائف نفسها: لا نسخة ثانية من الورقة ولا من التبويب ولا من الأجندة.
+    const capsule = document.getElementById('floatingRegionCapsule');
+    const heart = document.getElementById('floatingMyListBtn');
+    const calendar = document.getElementById('floatingCalendarBtn');
+    assert.ok((capsule.getAttribute('onclick') || '').includes('openRegionSheet()'), 'the phone capsule opens the very same governorate sheet');
+    assert.ok((heart.getAttribute('onclick') || '').includes("switchTab('tabMyList')"), 'the phone heart opens the existing «قائمتي» tab');
+    assert.ok((calendar.getAttribute('onclick') || '').includes('openAgendaModal()'), 'and the phone calendar opens the existing agenda');
+    assert.strictEqual(document.querySelectorAll('.floating-rich-row button').length, 3, 'three controls, no more — the eight bar controls stay in their own row');
+
+    // والفعل نفسه من النقر، لا من السمة وحدها.
+    heart.click();
+    assert.strictEqual(
+      document.getElementById('tabMyList').classList.contains('active-tab'),
+      true,
+      'the phone heart actually opens «قائمتي»'
+    );
+    calendar.click();
+    assert.strictEqual(document.getElementById('agendaModal').style.display, 'flex', 'and the phone calendar actually opens the agenda');
+
+    const rules = readCssRules(STYLES_CSS);
+    const ruleBody = (selector) => {
+      const matches = rules.filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === selector);
+      assert.ok(matches.length >= 1, `expected a base rule for ${selector}`);
+      return matches[0].body;
+    };
+
+    assert.match(ruleBody('.floating-rich-row'), /pointer-events:\s*auto/, 'the bar is pointer-events:none, so the row must opt back in or its three controls are dead');
+    assert.match(ruleBody('.floating-rich-row'), /flex-wrap:\s*nowrap/, 'the rich row stays one 44px row instead of adding unreserved height at 360px');
+    assert.match(ruleBody('.floating-rich-identity'), /flex-wrap:\s*nowrap/, 'only the identity text may shrink; its capsule and actions may not make a second rich row');
+    assert.match(ruleBody('.floating-greeting[hidden]'), /display:\s*none/, 'the guest greeting is hidden by rule here too, not only by the attribute');
+    const capsuleRule = ruleBody('.floating-region-capsule');
+    assert.match(capsuleRule, /(?:min-)?height:\s*44px/, 'the capsule keeps the bar’s 44px touch target');
+    assert.ok(!/min-(?:width|height):\s*0/.test(capsuleRule), 'and does not opt out of the general 44px base');
+    assert.match(ruleBody('#floatingRegionName'), /text-overflow:\s*ellipsis/, 'a long governorate name is clipped instead of widening the row');
+
+    // الكتلة نفسها التي تخفي الترويسة العريضة تُظهر الشريط وتصفّ صفوفه عمودياً.
+    const phoneBlock = STYLES_CSS_RAW.match(/@media \(max-width: 768px\), \(display-mode: standalone\)[\s\S]{0,600}\.floating-top-bar\s*\{([^}]*)\}/);
+    assert.ok(phoneBlock, 'web/styles.css must keep the phone/standalone block that shows .floating-top-bar');
+    assert.match(phoneBlock[1], /display:\s*flex/, 'that block must show the floating bar — the only chrome a phone has');
+    assert.match(phoneBlock[1], /flex-direction:\s*column/, 'and stack the bar’s rows, so the rich row gets its own row beside the eight 44px controls');
+    assert.ok(
+      !rules.some((rule) => rule.selectors.some((selector) => selector.includes('.floating-rich-row')) && /display:\s*none/.test(rule.body)),
+      'no rule may hide the rich row where the floating bar is the visible header'
+    );
+  });
+
+  await test('حجز بطاقة التغذية يساوي علوّ الشريط العائم المعلن في كل عتبة (#174)', () => {
+    const rules = readCssRules(STYLES_CSS);
+    const ruleBodies = (selector) => rules
+      .filter((rule) => rule.selectors.length === 1 && rule.selectors[0] === selector)
+      .map((rule) => rule.body);
+    const px = (body, property) => {
+      const match = body.match(new RegExp(`${property}:\\s*(\\d+)px`));
+      assert.ok(match, `expected ${property} in ${body}`);
+      return Number(match[1]);
+    };
+    const paddingPair = (body) => {
+      const match = body.match(/padding:\s*(\d+)px\s+(\d+)px/);
+      assert.ok(match, `expected vertical/horizontal padding in ${body}`);
+      return Number(match[1]);
+    };
+
+    const [actionsWide, actionsNarrow] = ruleBodies('.floating-actions-box');
+    const [richRow] = ruleBodies('.floating-rich-row');
+    const [capsule] = ruleBodies('.floating-region-capsule');
+    const [topBar] = ruleBodies('.floating-top-bar');
+    const [topInnerNarrow] = ruleBodies('.floating-top-inner').slice(-1);
+    assert.ok(actionsWide && actionsNarrow && richRow && capsule && topBar && topInnerNarrow,
+      'the declared floating-bar rows and their breakpoints must remain explicit');
+
+    const topMatch = topBar.match(/top:\s*max\((\d+)px/);
+    assert.ok(topMatch, 'the floating bar keeps its explicit 10px top offset');
+    const top = Number(topMatch[1]);
+    const control = px(capsule, 'height');
+    const richGap = px(richRow, 'margin-top');
+    const border = px(actionsWide, 'border');
+    const wideActionRow = control + (2 * paddingPair(actionsWide)) + (2 * border);
+    const narrowActionRow = control + (2 * paddingPair(actionsNarrow)) + (2 * border);
+    const narrowRowGap = px(topInnerNarrow, 'row-gap');
+    const narrowActionGap = px(actionsNarrow, 'gap');
+    const wrappedActionRows = (2 * control) + narrowActionGap + (2 * paddingPair(actionsNarrow)) + (2 * border);
+
+    // 768/standalone: 10 + (54 existing controls) + 4 + (44 rich) + 8 clearance.
+    // ≤680: 10 + 44 + 4 + 50 + 4 + 44 + 8; ≤354 turns the actions into two rows.
+    const requiredPadding = [
+      top + wideActionRow + richGap + control + 8,
+      top + control + narrowRowGap + narrowActionRow + richGap + control + 8,
+      top + control + narrowRowGap + wrappedActionRows + richGap + control + 10
+    ];
+    // للحافة قاعدة أساسيّة رابعة بحشوة موحّدة (`padding: 14px`، تُغلب لاحقاً
+    // بحجز العتبة لأنه `!important`)، فتُعدّ هنا حجوزات الإطار عند العتبات وحدها:
+    // قاعدة تعلن `padding-top: max(<رقم>px…)`. وما عداها ليس حجزاً علوياً.
+    const bezelRules = ruleBodies('.events-feed > .event-card .card-bezel')
+      .filter((body) => /padding-top:\s*max\(\d+px/.test(body));
+    assert.strictEqual(bezelRules.length, 3, 'one bezel reservation is declared for each responsive threshold');
+    const actualPadding = bezelRules.map((body) => {
+      const match = body.match(/padding-top:\s*max\((\d+)px/);
+      assert.ok(match, `expected a numeric padding-top reservation in ${body}`);
+      return Number(match[1]);
+    });
+    actualPadding.forEach((value, index) => {
+      assert.ok(value >= requiredPadding[index],
+        `threshold ${index + 1} reserves ${value}px, below its declared ${requiredPadding[index]}px floating-bar height`);
+    });
+    assert.match(richRow, /flex-wrap:\s*nowrap/, 'the rich controls declare exactly one row; a fourth row needs a new reservation');
+  });
+
+  /*
+   * والمنطق واحد لا نسخة ثانية: `updateAuthUI` و`renderRegionPicker` تكتبان في
+   * العقدتين معاً — كما تكتب حبات المنتقي في `regionPicker` و`drawerRegionPicker`.
+   * يُثبت ذلك بنفس البيئة المسجَّلة/الزائرة المستعملة أعلاه، ثم باختيار محافظة
+   * من كبسولة الهاتف نفسها.
+   */
+  await test('التحية والكبسولة تُكتبان في موضعَي الصفّ الغني معاً، واختيار كبسولة الهاتف يمشي في selectRegion نفسه', async () => {
+    const signed = buildRichHeaderEnv({ loggedIn: true });
+    await settleRegionPicker(signed.window);
+    const sDoc = signed.window.document;
+
+    assert.strictEqual(sDoc.getElementById('floatingHeaderGreeting').hidden, false, 'the phone row greets the signed-in account too');
+    assert.strictEqual(sDoc.getElementById('floatingHeaderGreetingName').textContent, 'مستخدم', 'with the same first name as the wide row');
+    assert.strictEqual(sDoc.getElementById('headerGreetingName').textContent, 'مستخدم', 'written from the one account name, not typed twice');
+    assert.strictEqual(
+      sDoc.getElementById('floatingRegionName').textContent.trim(),
+      SEED_REGION.name,
+      'and the governorate name from GET /api/towns, not a name written in the page'
+    );
+
+    // ورقة المحافظة نفسها من كبسولة الهاتف، والاختيار يحدّث الموضعين.
+    sDoc.getElementById('floatingRegionCapsule').click();
+    assert.strictEqual(sDoc.getElementById('regionSheetModal').style.display, 'flex', 'the phone capsule opens the same governorate sheet');
+    const sheetChips = [...sDoc.querySelectorAll('#regionSheetChips .region-chip')];
+    assert.strictEqual(sheetChips.length, 2, 'the sheet is filled from the same list — opening it is a display change');
+    sheetChips[1].click();
+    await waitFor(() => sDoc.getElementById('floatingRegionName').textContent.trim() === SECOND_REGION.name);
+    assert.strictEqual(
+      sDoc.getElementById('headerRegionName').textContent.trim(),
+      SECOND_REGION.name,
+      'both capsules follow the one selectRegion path'
+    );
+    assert.strictEqual(sDoc.getElementById('regionSheetModal').style.display, 'none', 'and the sheet closes on the choice');
+
+    // والزائر: لا تحية في أيّ من الموضعين، والكبسولة باقية — فهي للمحافظة لا للحساب.
+    const guest = buildRichHeaderEnv();
+    await settleRegionPicker(guest.window);
+    const gDoc = guest.window.document;
+    assert.strictEqual(gDoc.getElementById('floatingHeaderGreeting').hidden, true, 'a visitor sees no greeting on the phone either');
+    assert.strictEqual(gDoc.getElementById('floatingHeaderGreetingName').textContent, '', 'and no account name is written into it');
+    assert.strictEqual(
+      gDoc.getElementById('floatingRegionName').textContent.trim(),
+      SEED_REGION.name,
+      'the capsule stays for the visitor on the phone too'
+    );
   });
 
   console.log('\nشريط التوسّع — خبر داخليّ داخل التغذية يتبع المحافظة المختارة (#127)');
