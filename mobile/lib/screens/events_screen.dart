@@ -191,6 +191,15 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   List<Event> _events = const [];
   List<Announcement> _announcements = const [];
   Pagination? _pagination;
+
+  /// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) كما وصلت من الخادم — بلا
+  /// ترشيح ولا ترتيب هنا: النافذة والبوابة والعزاء والحدّ والترتيب كلها في
+  /// `listTrendingEvents`. فارغة = لا شريط في الشجرة أصلاً (لا مساحة محجوزة).
+  List<Event> _trending = const [];
+
+  /// تسلسل نداءات الشريط: ردٌّ متأخر لمحافظة أو وضع سابق يُهمَل، ولا يرسم
+  /// بطاقاتٍ فوق ما يخصّ الشاشة الآن.
+  int _trendingSeq = 0;
   bool _initialLoading = true;
   bool _loadingMore = false;
   Object? _error;
@@ -276,6 +285,10 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
     if (!_didInit) {
       _didInit = true;
       _loadFirstPage();
+      // «الأكثر تفاعلاً» (تذكرة #177) مع أول تحميل — قسمٌ واحد لا ينتظر أي
+      // سطح آخر، ولا مستمع `RegionStore` جديد: التغذية لا تسمعه اليوم،
+      // وسماعُ القسم وحده يجعله يخالفها.
+      _loadTrending();
       _loadLiveChannel();
       // شريط الإحصاءات والتعميم (#172): المخزن المشترك يحمّل مرّة واحدة، وإن
       // سبقه الهيكل (وهو الأصل) لا يتضاعف النداء.
@@ -600,6 +613,26 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
         _initialLoading = false;
       });
     }
+  }
+
+  /// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — نداء واحد يرسم الشريط أو
+  /// يُخفيه. **تُفرَّغ القائمة قبل الطلب** لا بعده (درس #175): لا تبقى بطاقات
+  /// محافظة سابقة معروضة تحت تغذية محافظة جديدة أثناء انتظار الردّ. وردٌّ
+  /// متأخر (`seq` مختلف) يُهمَل، وفشلُ الشبكة يتركها فارغة فيختفي الشريط بلا
+  /// رسالة — القسم لا يعرض خطأً، و«لا نتيجة» حالته الطبيعية.
+  Future<void> _loadTrending() async {
+    final seq = ++_trendingSeq;
+    if (_trending.isNotEmpty) setState(() => _trending = const []);
+
+    List<Event> events;
+    try {
+      events = await AppServices.of(context).api.trendingEvents(allRegions: _allRegions);
+    } catch (_) {
+      events = const [];
+    }
+
+    if (!mounted || seq != _trendingSeq) return;
+    setState(() => _trending = events);
   }
 
   /// يلتقط ما هو معروض الآن قبل أي تغيير فلتر فعلي — القائمة وموضعها والفلتر
@@ -1024,6 +1057,9 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
   void _expandToAllRegions() {
     setState(() => _allRegions = true);
     _loadFirstPage();
+    // الشريط فوق الكروت يقرأ المحافظة نفسها: توسيعٌ بلا إعادة جلبه يتركه
+    // يعرض محافظةً واحدة فوق تغذيةٍ فيها كل المحافظات.
+    _loadTrending();
   }
 
   Future<void> _openEvent(int eventId) async {
@@ -1317,12 +1353,24 @@ class _EventsScreenState extends State<EventsScreen> with RouteAware {
                   onOpen: (index) => _openStoryList(carouselStories, index),
                   onCta: (story) => openStoryTarget(context, story),
                 ),
+              // «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177): تحت الكاروسيل وفوق
+              // الكروت. بلا نتيجة لا عنصر في الشجرة إطلاقاً — لا عنوان بلا
+              // بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
+              if (_trending.isNotEmpty)
+                _TrendingStrip(
+                  events: _trending,
+                  onOpen: (eventId) => _openEvent(eventId),
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
                     final services = AppServices.of(context);
                     _loadStories();
                     _loadLiveChannel();
+                    // «الأكثر تفاعلاً» (تذكرة #177) مع السحب كبقية أسطح
+                    // الاكتشاف: نافذته سبعة أيام تتحرّك مع الساعة، فسحبٌ لا
+                    // يجددها يُبقي الشريط على أرقام الأمس.
+                    _loadTrending();
                     // السحب للتحديث يقرأ الشريط والتعميم من جديد كذلك — رقمُ
                     // الشريط يُبطل كل خمس دقائق على الخادم، لا عند كل سحب.
                     services.homeTicker.refresh();
@@ -2812,6 +2860,135 @@ class _StoryCarousel extends StatelessWidget {
       ),
     );
   }
+}
+
+/// «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — شريط أفقي مضغوط بين كاروسيل
+/// البانرات والتغذية: عنوان، ثم بطاقة صغيرة لكل مناسبة (صورة، سطر عنوان، سطر
+/// تاريخ/بلدة). خام وكثيف عمداً — هو مدخلٌ سريع إلى المناسبة لا كرت تغذية
+/// ثانٍ، والبيانات نفسها تأتي بشكل كرت التغذية (`Event.fromJson`).
+///
+/// **ولا يظهر حين لا نتيجة**: الشرط `_trending.isNotEmpty` في `build` الشاشة،
+/// فلا عنوان بلا بطاقات ولا مساحة محجوزة تُزيح الكرت الأول.
+class _TrendingStrip extends StatelessWidget {
+  const _TrendingStrip({required this.events, required this.onOpen});
+
+  final List<Event> events;
+
+  /// فتح صفحة المناسبة — الفعل نفسه الذي يفعله كرت التغذية (`_openEvent`).
+  final void Function(int eventId) onOpen;
+
+  /// ارتفاع محدود للشريط: صورة ٦٤ + سطران + حشو صغير. و`ListView` أفقي يمرّ
+  /// ببطاقاته على الشاشات الضيّقة بدل أن يضغطها.
+  static const double _stripHeight = 126;
+  static const double _cardWidth = 132;
+  static const double _imageHeight = 64;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.c;
+    return Column(
+      key: const Key('trending_strip'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 6),
+          child: Text(
+            'الأكثر تفاعلاً هذا الأسبوع',
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: _stripHeight,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: events.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final event = events[index];
+              // سطر التاريخ/البلدة بنفس مُهيّئات الكرت (`arabicEventDate`،
+              // واسم القرية تحت البند الجامع) — نصّ واحد لكل مناسبة في الشاشة.
+              final meta = [
+                arabicEventDate(event.eventDate),
+                event.villageDisplayName ?? event.town,
+              ].where((part) => part.isNotEmpty).join(' — ');
+
+              return SizedBox(
+                width: _cardWidth,
+                child: Material(
+                  color: c.surface,
+                  clipBehavior: Clip.antiAlias,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: c.line),
+                  ),
+                  child: InkWell(
+                    key: Key('trending_card_${event.id}'),
+                    onTap: () => onOpen(event.id),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          height: _imageHeight,
+                          width: double.infinity,
+                          child: event.posterUrl == null
+                              ? _placeholder(c)
+                              : Image.network(
+                                  event.posterUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => _placeholder(c),
+                                ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 8, 0),
+                          child: Text(
+                            event.cardHeadline,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              height: 1.35,
+                              fontWeight: FontWeight.w800,
+                              color: c.ink,
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsetsDirectional.fromSTEB(8, 2, 8, 0),
+                          child: Text(
+                            meta,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              height: 1.35,
+                              fontWeight: FontWeight.w600,
+                              color: c.inkSoft,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// بديل الصورة الغائبة أو الفاشلة — نفس رمز الفرح الذي يستعمله الكرت بلا ملصق.
+  Widget _placeholder(NegevPalette c) => Container(
+        color: c.surfaceSunk,
+        alignment: Alignment.center,
+        child: Icon(Icons.celebration_outlined, size: 22, color: c.inkFaint),
+      );
 }
 
 /// صفحة إعلانٍ بين الكروت (تذكرة #173): ستوري موضع `feed` في صفحة كاملة من

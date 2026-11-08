@@ -14,6 +14,7 @@ import 'package:negev_events/models/event.dart';
 import 'package:negev_events/models/user.dart';
 import 'package:negev_events/screens/add_event_screen.dart';
 import 'package:negev_events/screens/albums_screen.dart';
+import 'package:negev_events/screens/event_details_screen.dart';
 import 'package:negev_events/screens/events_screen.dart';
 import 'package:negev_events/screens/home_shell.dart';
 import 'package:negev_events/screens/story_viewer_screen.dart';
@@ -31,11 +32,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// يحمل بلدة وقرية ومحافظة من الخادم (لا من أي قائمة في العميل)، و`/api/events`
 /// يعيد قائمة فارغة ما لم يُمرَّر جسم مختلف صراحةً: [eventsBody] لردّ ثابت أو
 /// [eventsBodyFor] لردّ يتبع استعلام الطلب. [requests] يلتقط كل طلب.
+///
+/// [trendingBody]/[trendingBodyFor] هما الردّ نفسه لـ`/api/events/trending`
+/// (تذكرة #177)، وافتراضهما `{success: true, events: []}` — أي «لا نتيجة»،
+/// فلا يحمل اختبارٌ شريطاً لم يطلبه.
 NegevApi feedScreenApi({
   Object? eventsBody,
   List<Uri>? requests,
   Object? Function(Uri url)? eventsBodyFor,
   Object? storiesBody,
+  Object? trendingBody,
+  Object? Function(Uri url)? trendingBodyFor,
 }) {
   final client = MockClient((request) async {
     requests?.add(request.url);
@@ -44,6 +51,17 @@ NegevApi feedScreenApi({
         jsonEncode(
           storiesBody ??
               {'success': true, 'stories': <Map<String, dynamic>>[]},
+        ),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (request.url.path.endsWith('/api/events/trending')) {
+      return http.Response(
+        jsonEncode(
+          trendingBodyFor?.call(request.url) ??
+              trendingBody ??
+              {'success': true, 'events': <Map<String, dynamic>>[]},
         ),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
@@ -2265,6 +2283,83 @@ void main() {
         expect(find.byKey(const Key('feed_ad_after_10')), findsOneWidget,
             reason: 'الإعلان التالي بعد الكرت العاشر — الصفحة ١١ مع فاصل 5');
         expect(find.text('إعلان ثانٍ'), findsOneWidget, reason: 'التناوب بين ستوريات feed مستمر');
+      },
+    );
+  });
+
+  group('«الأكثر تفاعلاً هذا الأسبوع» — الشريط واختفاؤه (تذكرة #177)', () {
+    /// الردّ كما يعيده `GET /api/events/trending`: صفوف بشكل كرت التغذية نفسه
+    /// (`Event.fromJson` واحد)، فلا شكل ثانٍ في الاختبار ولا في العميل.
+    Map<String, dynamic> trendingReply({List<int> ids = const [701, 702, 703]}) => {
+          'success': true,
+          'window_days': 7,
+          'events': [
+            for (final id in ids)
+              {
+                'id': id,
+                'title': 'مناسبة الأكثر تفاعلاً $id',
+                'groom_name': 'سالم',
+                'family_clan': 'آل سالم',
+                'town': 'رهط',
+                'event_date': '2026-12-0${id - 700}',
+              },
+          ],
+        };
+
+    testWidgets(
+      'ثلاث مناسبات في الرد ترسم ثلاثة كروت في الشريط، بترتيب الخادم نفسه',
+      (tester) async {
+        final api = feedScreenApi(trendingBody: trendingReply());
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('trending_strip')), findsOneWidget,
+            reason: 'ردّ فيه مناسبات يظهر الشريط');
+        expect(find.text('الأكثر تفاعلاً هذا الأسبوع'), findsOneWidget,
+            reason: 'العنوان الذي تسمّيه التذكرة');
+        for (final id in [701, 702, 703]) {
+          expect(find.byKey(Key('trending_card_$id')), findsOneWidget,
+              reason: 'كرت لكل مناسبة في الردّ');
+        }
+
+        // الشريط RTL: البطاقة الأولى في الردّ هي أيمن الثلاث — فالموضع الأفقي
+        // نفسه هو دليل «بترتيب الخادم»، لا ترتيبٌ يعيد العميل حسابه.
+        final x0 = tester.getTopLeft(find.byKey(const Key('trending_card_701'))).dx;
+        final x1 = tester.getTopLeft(find.byKey(const Key('trending_card_702'))).dx;
+        final x2 = tester.getTopLeft(find.byKey(const Key('trending_card_703'))).dx;
+        expect(x0 > x1 && x1 > x2, isTrue,
+            reason: 'الترتيب 701 ثم 702 ثم 703 من اليمين إلى اليسار كما وصل');
+      },
+    );
+
+    testWidgets(
+      'ردّ فارغ لا يترك شريطاً: لا Key ولا عنوان ولا مساحة محجوزة',
+      (tester) async {
+        // الافتراضي في العميل الوهمي: `{success: true, events: []}`.
+        final api = feedScreenApi();
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('trending_strip')), findsNothing,
+            reason: 'لا نتيجة = القسم غير موجود في الشجرة أصلاً');
+        expect(find.text('الأكثر تفاعلاً هذا الأسبوع'), findsNothing,
+            reason: 'ولا عنوان بلا بطاقات تحته');
+      },
+    );
+
+    testWidgets(
+      'النقر على كرت في الشريط يفتح صفحة تفاصيل المناسبة',
+      (tester) async {
+        final api = feedScreenApi(trendingBody: trendingReply(ids: [701]));
+        await pumpFeedScreen(tester, api);
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('trending_card_701')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.byType(EventDetailsScreen), findsOneWidget,
+            reason: 'الكرت يفتح التفاصيل بالمسار نفسه الذي يفتحه كرت التغذية');
       },
     );
   });

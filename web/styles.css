@@ -4187,6 +4187,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
      يمرّ ويختفي فوقها، فبانرٌ ثابت قبلها يفسد الالتقاط. يبقى الكاروسيل متاحاً
      لسطح الهاتف/PWA داخل الدرج العلوي، بجوار شريط الستوريات. */
   #tabHome > .story-carousel-section,
+  /* «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) بالسابقة نفسها: التغذية هنا
+     طبقة `fixed` بملء الشاشة (`#eventsContainer` أعلاه)، فالشريط في التدفق
+     يبقى تحتها ولا يُرى إطلاقاً. نسخته المتاحة على الهاتف هي
+     `#drawerTrendingSection` داخل الدرج العلوي، تُرسم من الردّ نفسه ولا تطلب
+     شيئاً ثانياً. */
+  #tabHome > .trending-section,
   #tabHome > .stories-section {
     display: none !important; /* Managed through sliding top drawer on mobile */
   }
@@ -6537,4 +6543,95 @@ body.news-screen-open { overflow: hidden; }
   .account-quick-card { font-size: 0.78rem; padding: 12px 6px; }
   .nav-publish-capsules { gap: 6px; }
   .nav-capsule { padding: 8px 12px; font-size: 0.78rem; }
+}
+
+/*
+ * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — شريط أفقي مضغوط فوق التغذية،
+ * تحت كاروسيل البانرات. بطاقة صغيرة: صورة، سطر عنوان، وسطر تاريخ/بلدة.
+ * العرض الأقصى كعرض شريط الستوريات (650px) كي يبقى وسط الصفحة على العريضة،
+ * والقسم مخفيّ بـ`hidden` ما دامت لا نتيجة في محافظته. والبطاقة نفسها زرٌّ
+ * هدفه أكبر من 44px في البعدين، وحدود التركيز ظاهرة للوحة المفاتيح.
+ */
+.trending-section {
+  max-width: 650px;
+  margin: 6px auto 10px auto;
+  padding: 0 16px;
+}
+.trending-section[hidden] { display: none; }
+
+.trending-title {
+  margin: 0 0 8px 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.trending-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 8px 2px;
+  scrollbar-width: none;
+}
+.trending-row::-webkit-scrollbar { display: none; }
+
+.trending-card {
+  flex: 0 0 auto;
+  width: 132px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 0 10px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-family: var(--font-main);
+  text-align: start;
+  cursor: pointer;
+  overflow: hidden;
+}
+.trending-card:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+
+.trending-card-img {
+  display: block;
+  width: 100%;
+  height: 86px;
+  object-fit: cover;
+  background: var(--surface-sunk);
+}
+.trending-card-img-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 1.4rem;
+}
+
+.trending-card-title {
+  padding: 0 10px;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.trending-card-meta {
+  padding: 0 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/*
+ * نسخة الدرج من الشريط (تذكرة #177) — سطح الهاتف/PWA الذي تحجب فيه التغذيةُ
+ * الثابتة ما فوقها. البنية نفسها (`.trending-section` و`.trending-row`
+ * و`.trending-card`)، والهامش هنا يناسب الدرج بدل توسيطه في التغذية. محدِّد
+ * مركَّب من صنفين قائمين، فلا يكرّر محدِّداً ولا يغلبه.
+ */
+.trending-section.trending-drawer-section {
+  max-width: none;
+  margin: 4px -16px 8px -16px;
+  padding: 0 16px;
 }

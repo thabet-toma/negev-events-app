@@ -127,6 +127,15 @@ const CONGRATULATION_REPORT_THRESHOLD = 3;
 const DUPLICATE_DATE_WINDOW_DAYS = 1;
 
 /**
+ * نافذة «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177، وجدول ثوابت المواصفة #156):
+ * سبعة أيام تُقاس بها إشارات المناسبة الأربع — تفاعل، تبريكة معتمدة، تذكير،
+ * وجواب حضور «جاي» — كلٌّ بتوقيته لا بتاريخ المناسبة، ولا يظهر صفّ بلا إشارة
+ * واحدة داخلها. والرقم هنا وحده: `events.service.listTrendingEvents` تمرّره
+ * معاملاً مربوطاً (`DATE_SUB(NOW(), INTERVAL ? DAY)`) ولا تكتب سبعة بيدها.
+ */
+const TRENDING_WINDOW_DAYS = 7;
+
+/**
  * سقف المناسبات المبرزة **النشِطة** في المحافظة الواحدة (تذكرة #171). الرابعة
  * تُردّ 409 عربية، والمحافظة الأخرى لا تتأثّر — العدّاد يُقطع بـ`region_id`
  * دائماً. و«النشِطة» = `featured_until IS NOT NULL AND featured_until >=
@@ -367,6 +376,7 @@ module.exports = {
   MAX_EVENT_DAYS,
   CONGRATULATION_REPORT_THRESHOLD,
   DUPLICATE_DATE_WINDOW_DAYS,
+  TRENDING_WINDOW_DAYS,
   FEATURED_EVENTS_MAX_PER_REGION,
   RSVP_PARTY_SIZE_MAX,
   OCCASION_MESSAGE_BODY_MAX,

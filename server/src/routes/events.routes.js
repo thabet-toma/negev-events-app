@@ -174,6 +174,47 @@ router.get('/towns', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * «الأكثر تفاعلاً هذا الأسبوع» (تذكرة #177) — عام (`optionalAuthenticate`:
+ * المجهول يرى الشيء نفسه، والمسجَّل تصل محافظةُ حسابه كما في `/events`)
+ * ويغذّي قسم الويب وقسم التطبيق معاً. يعيد `{ events, window_days }`: أعلى
+ * **ستّ**
+ * مناسبات بمجموع إشاراتها الأربع (تفاعل، تبريكة معتمدة، تذكير، جواب «جاي»)
+ * داخل نافذة `TRENDING_WINDOW_DAYS` (٧) وحدها، وصفٌّ بلا إشارة في النافذة
+ * لا يظهر أصلاً (`HAVING signal_score > 0`)، فالقسم يختفي حين لا نتيجة بلا
+ * حالة خاصة في أي عميل. والبوابة في الخدمة `PUBLIC_EVENT_VISIBLE_SQL_EVENTS`
+ * بساعة `publishNowClock()`: غير المعتمدة و«بالرابط فقط» والمجدولة غائبة،
+ * **والعزاء مستبعد بالعلم `tone` لا بالاسم**، ولا شرط «قادم» ولا نافذة بقاء.
+ *
+ * **قبل `/events/calendar` عمداً** وأمام `/events/:id` (ترتيب التسجيل هو الذي
+ * يحكم في Express): بغير ذلك التقط `:id` كلمة `trending` فردّ عليها `parseId`
+ * بخطأ 400 عن معرّف مناسبة.
+ *
+ * **و`region_id` مزدوج المصدر عمداً:** الويب والتطبيق يمرّرانه صراحةً من
+ * المنتقي (`?region_id=`، و`optionalId` يردّ 400 عربية على غير الرقمي)، وهو
+ * **فلتر القارئ** كما في التقويم؛ ومن لا يمرّره (أو يمرّر `all_regions=1`)
+ * يأخذ محافظة الاكتشاف من `regionIdForRequest` — ترويسة `X-Region`، أو محافظة
+ * الحساب، أو الافتراضية — فتعمل النسخ المنشورة بلا تغيير، والعلَم يوسّع
+ * لهذا الطلب وحده.
+ *
+ * **و`optionalAuthenticate` هنا كما في `/events` و`/map/events`:** بلاها لا
+ * يجد `regionIdForRequest` صفَّ `req.user` أصلاً، فيسقط طلبٌ موثَّق بلا ترويسة
+ * إلى المحافظة الافتراضية بدل محافظة حسابه — وهو ما ينافيه هذا التعليق نفسه.
+ * ولا شيء في الاستجابة يتغيّر لغيره: لا رمز ولا حالة صفّ.
+ */
+router.get('/events/trending', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const explicitRegionId = optionalId(req.query.region_id, 'المحافظة');
+  const allRegions = parseFlag(req.query.all_regions);
+  const regionId = explicitRegionId !== null
+    ? explicitRegionId
+    : await regionIdForRequest(req, { allRegions });
+
+  res.json({
+    success: true,
+    ...(await events.listTrendingEvents({ regionId, legacyOnly: isLegacyClient(req) }))
+  });
+}));
+
+/**
  * تقويم الشهر (تذكرة #175) — عام، بلا مصادقة: `?month=YYYY-MM` إلزامي
  * و`?region_id=` اختياري. يعيد `{ days: [{ date, count }] }` لما فيه مناسبة
  * وحدها، بلا صفوف صفرية.
