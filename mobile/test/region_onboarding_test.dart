@@ -579,7 +579,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
     });
 
-    testWidgets('بعد الإنجاز: «حسابي» وحدها تعيد الورقة، والاختيار اليدوي يُحفظ',
+    testWidgets(
+        'بعد الإنجاز: لا تُفتح تلقائياً، و«حسابي» تعيدها (وكبسولة ترويسة الهيكل بابٌ آخر)، والاختيار اليدوي يُحفظ',
         (tester) async {
       SharedPreferences.setMockInitialValues({regionOnboardedKey: true});
       final services = _services(_TownsServer());

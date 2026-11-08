@@ -4634,9 +4634,48 @@ function renderRegionPicker() {
     chips.innerHTML = chipsHtml;
   });
 
+  // ورقة المحافظة في الترويسة الغنية (تذكرة #174): حباتٌ من نفس المصدر ونفس
+  // الدالة، فلا نسخة ثانية من قائمة المحافظات ولا من حالاتها. وقبل وصول
+  // القائمة أو عند فشلها تُقال الرسالة القصيرة في الورقة بدل بطاقة فارغة.
+  const sheetChips = document.getElementById('regionSheetChips');
+  if (sheetChips) sheetChips.innerHTML = chipsHtml;
+  const sheetEmpty = document.getElementById('regionSheetEmpty');
+  if (sheetEmpty) sheetEmpty.hidden = Boolean(chipsHtml);
+
+  // كبسولة المحافظة تحمل اسم المحافظة الفعّالة من الخادم وحده — في موضعَيها:
+  // الترويسة العريضة (سطح المكتب) والصفّ الغني في الشريط العائم (الهاتف/PWA)،
+  // وهي النسخة التي يراها مستخدم الهاتف فعلاً. ولا تُخفى قبل وصول
+  // `GET /api/towns`: تعرض «منطقتك» — وهي الصياغة نفسها التي يستعملها منتقي
+  // التغذية عند غياب الاسم (activeRegionName) — وورقتها تشرح سبب الفراغ بدل
+  // طرفٍ ميت.
+  const capsuleText = activeRegionName() || 'منطقتك';
+  ['headerRegionName', 'floatingRegionName'].forEach((id) => {
+    const capsuleName = document.getElementById(id);
+    if (capsuleName) capsuleName.textContent = capsuleText;
+  });
+
   // شريط التوسّع يتبع الحبة المختارة، فيُرسم معها في كل مسار يغيّرها: الإقلاع،
   // وتبديل المحافظة (#127)، وتبنّي محافظة الحساب بعد GET /api/auth/me.
   renderRegionBanner();
+}
+
+/**
+ * ورقة المحافظة — بابها كبسولة الترويسة الغنية (تذكرة #174).
+ *
+ * الورقة ليست منتقياً ثانياً: حباتها تُرسم في `renderRegionPicker` نفسها،
+ * والاختيار فيها يمشي في `selectRegion` القائم (يحفظ المحافظة، ويعيد جلب
+ * التغذية والأسطح الظاهرة، ويغلق الورقة). ولذلك تُعاد رسم الحبات عند الفتح:
+ * قائمة المحافظات تصل بعد الإقلاع، فتفتح الورقة على ما وصل فعلاً.
+ */
+function openRegionSheet() {
+  renderRegionPicker();
+  const modal = document.getElementById('regionSheetModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeRegionSheet() {
+  const modal = document.getElementById('regionSheetModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // شريط التوسّع (#127) — خبر داخليّ تحت منتقي المحافظة وفوق رقاقات الفلترة، لا
@@ -4755,6 +4794,10 @@ async function selectRegion(regionId) {
   // الموقوفة تُعرض «قريباً» ولا تُختار (تذكرة #127): معرّفاتها في
   // regionsSoonList لا في regionsList، فلا يجدها البحث هنا ولا تُحفظ ولا تُجلب.
   if (!region) return;
+
+  // ورقة المحافظة تُغلق باختيارها مهما كان — حتى لو كانت الحبة المختارة هي
+  // نفسها، فالنقر عليها في الورقة إغلاقٌ لا إعادة اختيار (تذكرة #174).
+  closeRegionSheet();
 
   // لا خروج مبكر إلا حين تكون الحبة هي الفعّالة **والمحفوظة** فعلاً: المحافظة
   // الافتراضية أو محافظة الحساب تُرسم مختارة بلا قيمة في negev_region، والضغط
@@ -11247,7 +11290,8 @@ async function unsubscribeFromPush() {
 /**
  * زرّ «حسابي» في الترويسة والشريط العائم (للهاتف): رمز شخص ونصّ واحد لا
  * يتبدّلان مع الجلسة — النقر (في index.html) يفتح وجهة «حسابي» للزائر
- * وللمسجَّل معاً، والدخول والخروج داخلها. الاسم الأول يظهر في title وحده.
+ * وللمسجَّل معاً، والدخول والخروج داخلها. الاسم الأول يظهر في title، وفي
+ * «أهلاً، الاسم» بالترويسة الغنية (تذكرة #174) للمسجَّل وحده.
  * «لوحة الإدارة» زرّ منفصل يظهر لدوري admin وsuper_admin وحدهما — الدور من
  * استجابة الخادم، لا رقم هاتف ثابت.
  */
@@ -11255,7 +11299,7 @@ function updateAuthUI() {
   updateNotificationsBadge();
   updatePushControlUI();
 
-  const loggedIn = !!currentUser;
+  const loggedIn = !!(currentUser && authToken);
   const firstName = loggedIn ? String(currentUser.full_name || '').split(' ')[0] : '';
   const title = loggedIn && firstName ? `${firstName} — حسابي` : 'حسابي';
 
@@ -11263,6 +11307,17 @@ function updateAuthUI() {
   const btn = document.getElementById('userAuthBtn');
   if (label) label.textContent = 'حسابي';
   if (btn) btn.title = title;
+
+  // «أهلاً، الاسم» في الترويسة الغنية (تذكرة #174): المسجَّل وحده يراه،
+  // والاسم الأول هو نفسه الذي في `title` — لا نسخة ثانية من منطق التسمية.
+  // وموضعان: الترويسة العريضة (سطح المكتب) والصفّ الغني في الشريط العائم
+  // (الهاتف/PWA)، فالكتابة في العقدتين معاً كما في منتقي المحافظة.
+  [['headerGreeting', 'headerGreetingName'], ['floatingHeaderGreeting', 'floatingHeaderGreetingName']].forEach(([wrapId, nameId]) => {
+    const greeting = document.getElementById(wrapId);
+    const greetingName = document.getElementById(nameId);
+    if (greetingName) greetingName.textContent = firstName;
+    if (greeting) greeting.hidden = !(loggedIn && firstName);
+  });
 
   const floatingLabel = document.getElementById('floatingAuthLabel');
   const floatingBtn = document.getElementById('floatingAuthBtn');

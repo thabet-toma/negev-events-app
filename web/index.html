@@ -192,6 +192,31 @@
         </a>
       </div>
     </div>
+    <!-- الترويسة الغنية (تذكرة #174) — صفٌّ ثانٍ تحت الشعار وأدواته: «أهلاً،
+         الاسم» للمسجَّل وحده (updateAuthUI)، وكبسولة المحافظة التي تحمل اسمها
+         من الخادم وتفتح ورقة المحافظة (openRegionSheet)، وقلب «قائمتي» يفتح
+         تبويبها القائم، وزرّ الأجندة يفتح أجندة المناسبات القائمة إلى أن تكتمل
+         تذكرة التقويم (#175). والشريط السفلي لم يتغيّر: ثلاث وجهات.
+         وللصفّ نفسه موضعٌ ثانٍ داخل الشريط العائم أدناه (`floating…`)، لأن
+         هذه الترويسة مخفية على الهاتف وفي التطبيق المثبَّت — والمنطق واحد. -->
+    <div class="header-rich-row">
+      <div class="header-rich-identity">
+        <p class="header-greeting" id="headerGreeting" hidden>أهلاً، <span id="headerGreetingName"></span></p>
+        <button type="button" id="headerRegionCapsule" class="header-region-capsule" onclick="openRegionSheet()" title="تبديل المحافظة" aria-haspopup="dialog">
+          <i class="fa-solid fa-location-dot" aria-hidden="true"></i>
+          <span id="headerRegionName">منطقتك</span>
+          <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="header-rich-actions">
+        <button type="button" id="headerMyListBtn" class="header-icon-btn" onclick="switchTab('tabMyList')" title="قائمتي" aria-label="قائمتي">
+          <i class="fa-solid fa-heart" aria-hidden="true"></i>
+        </button>
+        <button type="button" id="headerCalendarBtn" class="header-icon-btn" onclick="openAgendaModal()" title="أجندة المناسبات" aria-label="أجندة المناسبات">
+          <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
   </header>
 
   <!-- Floating Frosted Top Bar for Mobile & PWA (نمط تطبيق الموبايل) -->
@@ -246,6 +271,32 @@
         </button>
       </div>
       <!-- End: Actions Pill -->
+    </div>
+    <!-- الترويسة الغنية على الهاتف وفي التطبيق المثبَّت (تذكرة #174) — موضعٌ
+         ثانٍ للصفّ الغني نفسه: `styles.css` تخفي الترويسة العريضة في هذين
+         الوضعين وتُظهر هذا الشريط، فبلا هذا الموضع لا يرى مستخدم الهاتف —
+         وهو الاستخدام الغالب — تحيةً ولا كبسولةً ولا قلباً. والمعرّفات كلها
+         فريدة (`floating…`)، والمنطق واحد يكتب في الموضعين: `updateAuthUI`
+         للتحية، و`renderRegionPicker` لاسم المحافظة — كما تكتب حبات المنتقي
+         في `regionPicker` و`drawerRegionPicker` معاً. والكبسولة تفتح ورقة
+         المحافظة نفسها، والقلب «قائمتي» القائمة، وزرّ الأجندة الأجندة القائمة. -->
+    <div class="floating-rich-row">
+      <div class="floating-rich-identity">
+        <p class="floating-greeting" id="floatingHeaderGreeting" hidden>أهلاً، <span id="floatingHeaderGreetingName"></span></p>
+        <button type="button" id="floatingRegionCapsule" class="floating-region-capsule" onclick="openRegionSheet()" title="تبديل المحافظة" aria-haspopup="dialog">
+          <i class="fa-solid fa-location-dot" aria-hidden="true"></i>
+          <span id="floatingRegionName">منطقتك</span>
+          <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="floating-rich-actions">
+        <button type="button" id="floatingMyListBtn" class="floating-icon-btn" onclick="switchTab('tabMyList')" title="قائمتي" aria-label="قائمتي">
+          <i class="fa-solid fa-heart" aria-hidden="true"></i>
+        </button>
+        <button type="button" id="floatingCalendarBtn" class="floating-icon-btn" onclick="openAgendaModal()" title="أجندة المناسبات" aria-label="أجندة المناسبات">
+          <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1828,6 +1879,24 @@
       <div id="supportModalOkActions" class="support-modal-actions" hidden>
         <button type="button" class="submit-btn" onclick="closeSupportModal()">حسناً</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ورقة المحافظة (تذكرة #174) — كبسولة الترويسة تفتحها. حباتها من
+       `renderRegionPicker` نفسها التي يرسم بها المنتقي أعلى التغذية والدرج،
+       واختيار حبة فيها يمشي في `selectRegion` القائم (حفظ + جلب تغذية
+       المحافظة الجديدة) ثم يغلق الورقة — لا نسخة ثانية من المنطق. -->
+  <div id="regionSheetModal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="regionSheetTitle" onclick="if (event.target === this) closeRegionSheet()">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="regionSheetTitle"><i class="fa-solid fa-map-location-dot" style="color:var(--sky);"></i> اختر محافظتك</h3>
+          <span class="modal-sub">مناسبات منطقتك وخدماتها تُعرض بالمحافظة المختارة</span>
+        </div>
+        <button type="button" class="close-modal-btn" onclick="closeRegionSheet()" aria-label="إغلاق"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <div class="region-picker-chips" id="regionSheetChips" role="group" aria-label="المحافظات"></div>
+      <p class="region-sheet-empty" id="regionSheetEmpty" hidden>تعذّر جلب المحافظات — تحقّق من اتصالك ثم أعد المحاولة.</p>
     </div>
   </div>
 

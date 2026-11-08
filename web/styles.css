@@ -394,6 +394,115 @@ body {
 
 .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
+/* الترويسة الغنية (تذكرة #174) — صفٌّ ثانٍ تحت الشعار وأدواته: «أهلاً، الاسم»
+   للمسجَّل وحده، وكبسولة المحافظة، وقلب «قائمتي»، وزرّ الأجندة. والكبسولة تقصّ
+   الاسم الطويل بنقاط بدل أن تكسر الصفّ أو تدفع الأزرار. ولا سطر هنا للشريط
+   السفلي: وجهاته الثلاث لم تُمسّ.
+
+   وأهداف اللمس 44×44 — لا 38px: القاعدة العامة أعلى الملف
+   (`button { min-height: 44px; min-width: 44px }`) هي التي تحكم فعلاً، و`38px`
+   المكتوب في `.header-icon-btn` أدناه لا يُصغّرها (‏`.theme-toggle-btn` القائم
+   و`38px` فيه كذلك). فلا هدف لمس هنا تحت 44px، والصفّ نفسه يلفّ بدل أن يضغطها.
+
+   وللصفّ موضعٌ ثانٍ للهاتف والتطبيق المثبَّت في الشريط العائم
+   (`.floating-rich-row`، انظر كتلته هناك): الترويسة العريضة مخفية في هذين
+   الوضعين، والمنطق واحد يكتب في الموضعين. */
+.header-rich-row {
+  max-width: 650px;
+  margin: 10px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.header-greeting {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+/* كما في .auth-pill-btn[hidden]: لا سمة `hidden` وحدها تكفي متى ضبطنا display،
+   فتحية الزائر تُخفى بهذه القاعدة الصريحة لا بالمتصفّح وحده. */
+.header-greeting[hidden] { display: none; }
+
+/* الزائر يرى الكبسولة وحدها على جهة البداية، والمسجَّل يراها بجانب تحيته؛
+   وقلب «قائمتي» وزرّ الأجندة على الطرف الآخر من الصفّ دائماً. */
+.header-rich-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.header-rich-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+  min-width: 0;
+}
+
+/* ولا `min-width: 0` على الكبسولة: هي القاعدة التي تستطيع تجاوز
+   `button { min-width: 44px }` العام، فتُترك له؛ والاسم وحده ينكمش ويُقصّ. */
+.header-region-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  background: var(--surface-sunk);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 7px 12px;
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.header-region-capsule i { color: var(--sky); font-size: 0.8rem; }
+.header-region-capsule:hover { border-color: var(--sky); color: var(--sky-deep); }
+.header-region-capsule:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
+#headerRegionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ورقة المحافظة (تذكرة #174): الحبات بلون المنتقي نفسه، وسطرٌ واحد يشرح
+   الفشل قبل وصول `GET /api/towns` بدل بطاقة فارغة بلا تفسير. */
+.region-sheet-empty {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+.region-sheet-empty[hidden] { display: none; }
+#regionSheetChips:empty { display: none; }
+
+.header-icon-btn {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--surface-sunk);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  transition: all 0.2s ease;
+}
+.header-icon-btn:hover { border-color: var(--sky); color: var(--sky); }
+.header-icon-btn:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+
 /* التدرّج الأصلي (c084fc→8b5cf6→ec4899) يرسب مع نص أبيض عند كل نقطة — أُبدل
    بتدرّج بنفسجي أغمق يعبر 4.5:1 (#20 خطوة 11، جدول التباين). */
 .ai-magic-btn {
@@ -3273,6 +3382,90 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 .floating-brand-btn:active { transform: scale(0.92); }
 .floating-brand-btn:focus-visible { outline: 2px solid var(--sky-bright); outline-offset: 2px; }
 
+/* الترويسة الغنية على الهاتف وفي PWA المثبَّت (#174) — موضعها الثاني: الترويسة
+   العريضة مخفية هناك (كتلة 768px/standalone أدناه) وهذا الشريط ترويستها الظاهرة،
+   فالصفّ الغني يُرسم هنا: تحية المسجَّل، وكبسولة المحافظة، وقلب «قائمتي»، وزرّ
+   الأجندة. والشريط `display: none` على سطح المكتب، فالصفّ لا يظهر هناك، والصفّ
+   العريض في `.app-header` يبقى كما هو. والمنطق واحد يكتب في الموضعين
+   (`updateAuthUI` و`renderRegionPicker`)، لا نسخة ثانية منه.
+
+   و`:pointer-events: auto` شرطٌ لا زينة: الشريط نفسه `pointer-events: none`
+   كي لا يحجب التغذية تحته، فبلاها تصير الكبسولة والقلب والأجندة أطرافاً ميتة.
+
+   والازدحام: أزرار الشريط القائم تبقى في صفّها (صفّان تحت 680px)، وهذا الصفّ
+   الغني ثالثٌ تحته. على 360px (حاوية 336px = ٣٦٠ ناقص هامشَي 12px) القلب
+   والأجندة هدفان 44px + فاصل 4px بينهما = 92px، ويبقى للهوية 236px بعد فاصل
+   الصفّ 8px. لذلك لا يلتفّ الصفّ الغني: التحية واسم المحافظة ينكمشان بنقاط
+   داخل عرض الهوية، بينما تبقى الكبسولة والأزرار أهداف لمس كاملة. */
+.floating-rich-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+  width: 100%;
+  margin-top: 4px;
+  pointer-events: auto;
+}
+
+.floating-rich-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* التحية على الحبّة الداكنة، بيضاء بظلّ خفيف تُقرأ به فوق صورة الكرت. */
+.floating-greeting {
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 0;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* كما في .floating-icon-btn[hidden]: أي `display` صريح يغلب `[hidden]` الافتراضي. */
+.floating-greeting[hidden] { display: none; }
+
+/* كبسولة المحافظة — حبّة داكنة كزرّ «حسابي» وبنفس حدّ اللمس 44px؛ والاسم يقصّ
+   بنقاط بدل أن يدفع القلب والأجندة خارج الصفّ. حدّها الأدنى 64px يجمع الأيقونتين
+   وحشوتهما، وهو فوق حدّ اللمس العام؛ ثم ينكمش اسم المحافظة وحده
+   (`#floatingRegionName`) داخلها. */
+.floating-region-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 1;
+  min-width: 64px;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius-pill);
+  background: rgba(12, 27, 42, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.floating-region-capsule:active { transform: scale(0.94); }
+.floating-region-capsule i { color: var(--sky-bright); font-size: 0.78rem; flex-shrink: 0; }
+
+#floatingRegionName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.floating-rich-actions { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
 /* تسمية الرقاقة تُقصّ بنقاط بدل أن تدفع الشريط خارج الشاشة أفقياً، وتختفي
    كلياً على الشاشات الضيّقة (الأيقونة والنقطة الملوّنة تبقيان تدلّان على
    فلتر نشِط). */
@@ -3282,13 +3475,14 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
  * ترتيب الشريط الضيّق (#164). أهداف 44px × تسعة عناصر تفاعلية لا تتّسع في
  * صفّ واحد داخل حاوية 336px (٣٦٠px ناقص هامشَي 12px) — والحساب لا يحتاج
  * محرّك تخطيط: صفّ الأفعال وحده 44px × سبعة + فواصل + حشوة ≈ 330px. فيصير
- * الشريط صفّين تحت 680px:
+ * الشريط القائم صفّين تحت 680px:
  *   الصفّ الأول: فلتر البحث و«حسابي» (عنصران، لا يُقصّان).
  *   الصفّ الثاني: صندوق الأفعال بعرض كامل — العلامة وستة أزرار 44px.
- * وصندوق الأفعال نفسه `flex-wrap: wrap`، فيلفّ ما لا يتّسع على 320px بدل
- * أن يخرج أو يُقصّ. فوق 680px تتّسع الحاوية لصفّ واحد فيه الرقاقة بتسميتها
- * و«حسابي» وصندوق الأفعال كاملاً؛ الحدّ مرتفع لأن أهداف 44px أوسع من
- * الصفّ القديم (34px) الذي كان يكفيه 460px.
+ * ثم يليه صفّ الترويسة الغني الثابت الارتفاع (44px)؛ فلا يصف هذا التعليق
+ * الترويسة العائمة كلها بصفّين. وصندوق الأفعال نفسه `flex-wrap: wrap`، فيلفّ
+ * ما لا يتّسع على 320px بدل أن يخرج أو يُقصّ. فوق 680px تتّسع الحاوية لصفّ
+ * واحد قائم فيه الرقاقة بتسميتها و«حسابي» وصندوق الأفعال كاملاً؛ الحدّ مرتفع
+ * لأن أهداف 44px أوسع من الصفّ القديم (34px) الذي كان يكفيه 460px.
  * هذه قيم CSS محسوبة، لا قياس محرّك: الفحص البصري يبقى على المتصفّح.
  */
 @media (max-width: 680px) {
@@ -3910,6 +4104,9 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
   .floating-top-bar {
     display: flex;
+    /* عمودٌ لا صفّ: الشريط القائم (فلتر/حسابي/الأفعال) أوّلاً، والصفّ الغني
+       (#174) صفٌّ ثانٍ تحته بعرضه الكامل — بدل أن يزاحم أهداف 44px أفقياً. */
+    flex-direction: column;
   }
 
   .app-main {
@@ -3968,10 +4165,11 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   /* الحافة `position: absolute; inset: 0` فلا يحميها `padding-bottom` الكرت:
      بـ8px كان صفّ أزرار الكرت تحت الشريط السفلي (‏~68px) وكبستَي النشر
      فوقه (‏52px: 44 + فسحة 8) — مخفيّاً عن القارئ. 127 = 68 + 52 + فسحة 7.
-     وأعلى الشريط صفّ واحد هنا: 10 علوّ + 54 صندوق الأفعال (44 زرّاً + 8
-     حشوة + 2 حدّ) + فسحة 8 = 72؛ 56 كان يكفي أزرار 34px القديمة. */
+     وفوق 680px علوّ الشريط = 10 علوّ + 54 صفّ الأدوات (44 زرّاً + 8 حشوة
+     + 2 حدّ) + 4 هامش الصفّ الغني + 44 صفّه = 112px؛ الحجز 120px يضيف
+     فسحة 8px فوق محتوى البطاقة. */
   .events-feed > .event-card .card-bezel {
-    padding-top: max(72px, calc(72px + env(safe-area-inset-top, 0px))) !important;
+    padding-top: max(120px, calc(120px + env(safe-area-inset-top, 0px))) !important;
     padding-bottom: calc(127px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
@@ -3995,21 +4193,22 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   }
 }
 
-/* الشريط العائم صار صفّين تحت 680px (#164): 10px علوّ + 44 صفّ البحث
-   و«حسابي» + 4 فسحة + 50 صندوق الأفعال (44 زرّاً + 4 حشوة + 2 حدّ) + فسحة
-   8 = 116px، فلا يغطّي الصفّ الثاني أعلى محتوى الكرت. */
+/* تحت 680px علوّ الشريط = 10px علوّ + 44 صفّ البحث و«حسابي» + 4 فسحة
+   + 50 صندوق الأفعال (44 زرّاً + 4 حشوة + 2 حدّ) + 4 هامش الصفّ الغني
+   + 44 صفّه = 156px؛ الحجز 164px يضيف فسحة 8px فوق محتوى الكرت. */
 @media (max-width: 680px) {
   .events-feed > .event-card .card-bezel {
-    padding-top: max(116px, calc(116px + env(safe-area-inset-top, 0px))) !important;
+    padding-top: max(164px, calc(164px + env(safe-area-inset-top, 0px))) !important;
   }
 }
 
 /* حتى 354px لا يبقى لصفّ الأفعال فسحة (330 = 330 بالضبط)، فأي كسر بكسري
-   يلفّه سطرين ويرفع الشريط إلى 10 + 44 + 4 + 96 = 154px؛ 164 تبقيه فوق
-   المحتوى. من 355px توجد فسحة، فيكفي حجز 116px. */
+   يلفّه سطرين: علوّ الشريط = 10 + 44 + 4 + 96 + 4 هامش الصفّ الغني + 44
+   صفّه = 202px؛ الحجز 212px يضيف فسحة 10px فوق المحتوى. من 355px يعود
+   صندوق الأفعال صفّاً واحداً، فيكفي حجز عتبة 680px. */
 @media (max-width: 354px) {
   .events-feed > .event-card .card-bezel {
-    padding-top: max(164px, calc(164px + env(safe-area-inset-top, 0px))) !important;
+    padding-top: max(212px, calc(212px + env(safe-area-inset-top, 0px))) !important;
   }
 }
 
