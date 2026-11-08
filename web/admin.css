@@ -22,6 +22,8 @@
   --danger:        #b91c1c;
   --danger-wash:   #fee2e2;
 
+  /* حبرُ كل تعبئة مشبَعة (سماوي، نجاح، تحذير، خطر) — أبيض في الفاتح وداكن في
+     الداكن، لأن هذه التعبئات نفسها تصير فاتحة هناك (#179). */
   --on-sky:        #ffffff;
 
   --shadow:        0 1px 2px rgba(12,27,42,.06), 0 6px 20px rgba(12,27,42,.08);
@@ -173,7 +175,7 @@ body {
   border: none;
   padding: 14px;
   border-radius: var(--radius-md);
-  color: #ffffff;
+  color: var(--on-sky);
   font-weight: 900;
   font-family: var(--font-tajawal);
   font-size: 0.98rem;
@@ -255,7 +257,7 @@ body {
   gap: 8px;
   transition: all 0.2s;
 }
-.preview-app-btn:hover { background: var(--success-green); color: #ffffff; }
+.preview-app-btn:hover { background: var(--success-green); color: var(--on-sky); }
 
 .logout-btn {
   background: var(--danger-wash);
@@ -272,7 +274,7 @@ body {
   gap: 8px;
   transition: all 0.2s;
 }
-.logout-btn:hover { background: var(--danger-red); color: #ffffff; }
+.logout-btn:hover { background: var(--danger-red); color: var(--on-sky); }
 
 /* Main Container */
 .admin-main-container { max-width: 1200px; margin: 28px auto; padding: 0 18px; }
@@ -324,7 +326,7 @@ body {
   transition: all 0.2s;
 }
 
-.admin-tab-btn.active { background: var(--gold-main); color: #ffffff; border-color: var(--gold-main); font-weight: 900; }
+.admin-tab-btn.active { background: var(--gold-main); color: var(--on-sky); border-color: var(--gold-main); font-weight: 900; }
 
 .admin-tab-pane { display: none; }
 .admin-tab-pane.active-pane { display: block; animation: fadeIn 0.25s ease-in-out; }
@@ -337,7 +339,7 @@ body {
 .filter-chip { background: var(--admin-card); border: 1px solid var(--admin-card-border); color: var(--text-dim); padding: 7px 16px; border-radius: 20px; font-size: 0.82rem; font-family: var(--font-tajawal); font-weight: 600; cursor: pointer; }
 .filter-chip.active { background: var(--sky-wash); color: var(--gold-main); border-color: var(--gold-main); font-weight: 800; }
 
-.badge-pill { background: var(--warn-yellow); color: #ffffff; padding: 1px 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 900; margin-inline-end: 4px; }
+.badge-pill { background: var(--warn-yellow); color: var(--on-sky); padding: 1px 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 900; margin-inline-end: 4px; }
 
 /* بلا `outline: none`: لا بديل مرئي لهذا الحقل، فالقاعدة العامة أعلاه هي
    حلقة التركيز الوحيدة (#164). */
@@ -402,7 +404,7 @@ body {
 
 .admin-card-actions { display: flex; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--admin-card-border); }
 
-.btn-approve { flex: 1; background: var(--success-green); color: #ffffff; border: none; padding: 9px; border-radius: var(--radius-sm); font-family: var(--font-tajawal); font-weight: 800; font-size: 0.84rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.btn-approve { flex: 1; background: var(--success-green); color: var(--on-sky); border: none; padding: 9px; border-radius: var(--radius-sm); font-family: var(--font-tajawal); font-weight: 800; font-size: 0.84rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
 
 .btn-reject { background: var(--danger-wash); color: var(--danger-red); border: 1px solid var(--danger-red); padding: 9px 14px; border-radius: var(--radius-sm); font-family: var(--font-tajawal); font-size: 0.84rem; font-weight: 700; cursor: pointer; }
 
@@ -544,7 +546,7 @@ body {
 .archive-photo { position: relative; margin: 0; aspect-ratio: 1 / 1; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-sunk); }
 .archive-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .archive-photo-delete { position: absolute; inset-block-start: 6px; inset-inline-end: 6px; width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(12, 27, 42, 0.65); color: #ffffff; cursor: pointer; }
-.archive-photo-delete:hover { background: var(--danger-red); }
+.archive-photo-delete:hover { background: var(--danger-red); color: var(--on-sky); }
 .archive-photos-empty { grid-column: 1 / -1; text-align: center; padding: 24px 0; }
 
 /* Occasion Types (#20 خطوة 16) */

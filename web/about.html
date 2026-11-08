@@ -17,6 +17,10 @@
   <meta property="og:image:width" content="512">
   <meta property="og:image:height" content="512">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <!-- الوضع الداكن (#179): الاختيار المحفوظ في الموقع يصل هذه الصفحة أيضاً،
+       فيُطبَّق قبل أول نمط (وقبل خطّ الويب نفسه) بدل أن تبقى فاتحة على جهاز
+       فاتح. -->
+  <script src="theme-boot.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
@@ -29,8 +33,11 @@
       --accent: #a8802f;
       --line: #e6dfd0;
     }
+    /* غياب الاختيار = اتّباع الجهاز، و`data-theme="dark"` يغلبه — نفس كتلتَي
+       الوضع الداكن في web/styles.css. القيمتان مكرَّرتان لازماً: لا وسيلة في
+       CSS لدمج استعلام وسائط مع محدِّد سمة في قاعدة واحدة. */
     @media (prefers-color-scheme: dark) {
-      :root {
+      :root:not([data-theme="light"]) {
         --bg: #0f1722;
         --card: #172233;
         --text: #e8ecf1;
@@ -38,6 +45,14 @@
         --accent: #d4af5f;
         --line: #26344a;
       }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1722;
+      --card: #172233;
+      --text: #e8ecf1;
+      --muted: #a3adbb;
+      --accent: #d4af5f;
+      --line: #26344a;
     }
     * { box-sizing: border-box; }
     body {

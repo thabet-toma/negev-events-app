@@ -29,8 +29,14 @@
  * معاً — قسمٌ جديد في `index.html`، وكتلةُ أنماطٍ في `styles.css`، ونداءُ
  * `loadTrending` في `app.js` — فبلا رفع الرقم يخدم الكاشُ صفحةً بلا القسم أو
  * صفحةً جديدة بلا كوده.
+ *
+ * و`179.1` للوضع الداكن (تذكرة #179) مع `app.js` الذي تغيّر قبلها في #178
+ * بلا رفع: `theme-boot.js` جديد يُحمَّل قبل الأنماط في `index.html`، و`app.js`
+ * بنى منطق زرّ التبديل عليه، و`styles.css` صار داكنُه مقروءاً — فبلا رفع الرقم
+ * يخدم الكاشُ `app.js` قديماً (ينادي منطق مظهر لم يُحمَّل) أو صفحةً بلا
+ * `theme-boot.js` (وميض فاتح لمن اختار الداكن). والرفع الواحد يغطّي التغييرين.
  */
-const CACHE_VERSION = '177.1';
+const CACHE_VERSION = '179.1';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 
@@ -51,7 +57,11 @@ const SHELL_ESSENTIAL_PATHS = [
   '/config.js',
   // نموذج المناسبة المحلي: app.js يستدعي `isoLocalDay` منه (web/index.html،
   // وسكربت الصفحة يُحمَّل قبله)، فإسقاطه من الهيكل يترك صفحة بلا نموذج نشر.
-  '/occasionForm.js'
+  '/occasionForm.js',
+  // الوضع الداكن (#179): يُحمَّل في <head> قبل الأنماط، وapp.js ينادي
+  // `window.NegevTheme` عنده. إسقاطه من الهيكل يترك الصفحة بلا مظهر محفوظ
+  // (وميض فاتح) أو بلا زرّ يعمل عند الانقطاع.
+  '/theme-boot.js'
 ];
 
 /**
@@ -67,7 +77,7 @@ const SHELL_OPTIONAL_PATHS = [
 ];
 
 /** مسارات الهيكل وقت التشغيل: ملفات الصفحة نفسها وأيقوناتها المحلية. */
-const SHELL_PATH_PATTERN = /^\/(?:index\.html|styles\.css|app\.js|api\.js|config\.js|occasionForm\.js)$/;
+const SHELL_PATH_PATTERN = /^\/(?:index\.html|styles\.css|app\.js|api\.js|config\.js|occasionForm\.js|theme-boot\.js)$/;
 
 function isShellAsset(pathname) {
   return SHELL_PATH_PATTERN.test(pathname) || pathname.startsWith('/icons/');
