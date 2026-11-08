@@ -657,8 +657,15 @@ function installPushFakes(window, options = {}) {
  * editing app.js. `loggedIn` seeds localStorage before evaluation, because
  * app.js reads negev_user/negev_token into module state at load time, the
  * same way a real page load would.
+ *
+ * `apiBase` sets config.js's `apiBase` in the evaluated source itself: api.js
+ * reads it once into its top-level `const API_BASE`, so patching
+ * `window.NEGEV_CONFIG` after evaluation cannot reach that binding — and a
+ * test that needs the page and the API on two different origins has no other
+ * seam. `url` moves `window.location` independently, which is what makes the
+ * two origins actually differ.
  */
-function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/', welcomeSeen = true } = {}) {
+function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/', welcomeSeen = true, apiBase = '' } = {}) {
   const virtualConsole = new VirtualConsole(); // swallow jsdom's own "not implemented" noise; real throws still propagate
   const dom = new JSDOM(HTML_WITHOUT_SCRIPTS, {
     url,
@@ -708,7 +715,12 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
     onBeforeEval(window);
   }
 
-  window.eval(COMBINED_SCRIPT);
+  // config.js's `apiBase` is read once into api.js's top-level `const API_BASE`
+  // (shareOrigin(), initSocket()), so a test that needs the page and the API on
+  // two different origins must set it in the source being evaluated — patching
+  // `window.NEGEV_CONFIG` afterwards cannot reach that binding.
+  const script = apiBase ? COMBINED_SCRIPT.replace("apiBase: ''", `apiBase: '${apiBase}'`) : COMBINED_SCRIPT;
+  window.eval(script);
 
   return dom;
 }
@@ -12602,7 +12614,7 @@ async function run() {
     assert.strictEqual(patches[0].extra_days[0].time, 'بعد العصر');
   });
 
-  await test('the event page renders one row per extra day with its name and long Arabic date, keeping order and escaping markup', () => {
+  await test('«برنامج المناسبة» يجمع محطات اليوم الواحد تحت تاريخ واحد مرتّبةً بالوقت، ويضع كل تاريخ في مجموعته', () => {
     const dom = buildEnv();
     const win = dom.window;
     const { document } = win;
@@ -12612,32 +12624,155 @@ async function run() {
       occasion_type: WEDDING_TYPE
     };
 
+    // ترتيب الخادم نفسه — `eventDaysForEvents`: التاريخ ثم الوقت ثم `position`.
+    // و`position` ههنا **معكوس** بالنسبة إلى الوقت (٢ ثم ١) عمداً: عميلٌ يرتّب
+    // بالـ`position` يقلب المحطتين فيسقط هذا التأكيد.
     win.renderEventPage({
       ...base,
       extra_days: [
-        { name: 'الحنّة', day_date: '2026-10-08', place: 'ديوان آل فلان', day_time: 'بعد العصر', position: 1 },
-        { name: 'الغداء', day_date: '2026-10-09', place: null, day_time: null, position: 2 }
+        { name: 'الحنّة', day_date: '2026-10-08', place: 'ديوان آل فلان', day_time: '17:00', position: 2 },
+        { name: 'العشاء', day_date: '2026-10-08', place: 'قاعة الأفراح', day_time: '20:00', position: 1 },
+        { name: 'الغداء', day_date: '2026-10-09', place: null, day_time: null, position: 0 }
       ]
     });
 
-    const body = document.getElementById('eventPageBody');
-    const dayRows = [...body.querySelectorAll('.event-page-info-row')].filter(r => r.querySelector('.fa-calendar-check'));
-    assert.strictEqual(dayRows.length, 2, 'one row per stored day');
-    const firstText = dayRows[0].textContent.replace(/\s+/g, ' ');
-    assert.ok(firstText.includes('الحنّة'), 'the day name is the row label');
-    assert.ok(firstText.includes(win.formatEventDayLong({ event_date: '2026-10-08' })), 'the long Arabic date is the value');
-    assert.ok(firstText.includes('بعد العصر') && firstText.includes('ديوان آل فلان'), 'time and place are appended when present');
-    assert.ok(dayRows[0].textContent.includes('الحنّة'), "the first row must be the server's first day");
-    assert.ok(dayRows[1].textContent.includes('الغداء'), "the second row must be the server's second day — its own order, untouched");
+    const program = document.querySelector('#eventPageBody .event-page-program');
+    assert.ok(program, 'expected the event programme section');
+    assert.ok(
+      program.textContent.includes('برنامج المناسبة'),
+      `the section must be titled «برنامج المناسبة», got: ${program.textContent.slice(0, 80)}`
+    );
 
+    const groups = [...program.querySelectorAll('.event-page-program-group')];
+    assert.strictEqual(groups.length, 2, 'two dates → two date groups, never one row per station');
+
+    const firstDate = groups[0].querySelector('.event-page-program-date').textContent.trim();
+    assert.strictEqual(
+      firstDate,
+      win.formatEventDayLong({ event_date: '2026-10-08' }),
+      'the group heading is its own long Arabic date'
+    );
+    const firstStops = [...groups[0].querySelectorAll('.event-page-program-stop')].map(stop => stop.textContent.trim());
+    assert.strictEqual(firstStops.length, 2, 'both stations of that date sit under the same heading');
+    assert.deepStrictEqual(
+      firstStops.map(stop => stop.split(' — ')[0]),
+      ['الحنّة', 'العشاء'],
+      "the stations keep the server's order (by time) inside their date"
+    );
+    assert.strictEqual(firstStops[0], 'الحنّة — 17:00 — ديوان آل فلان', 'name, then time, then place when written');
+
+    const secondStops = [...groups[1].querySelectorAll('.event-page-program-stop')].map(stop => stop.textContent.trim());
+    assert.deepStrictEqual(secondStops, ['الغداء'], 'the next date carries only its own station, with no invented time or place');
+
+    // اسم محطة يحمل وسماً يبقى نصّاً — لا يُفسَّر HTML.
     win.renderEventPage({
       ...base,
       id: 72,
       extra_days: [{ name: 'الحنّة <b>كبيرة</b>', day_date: '2026-10-08', place: null, day_time: null, position: 1 }]
     });
-    const hostileRow = [...document.querySelectorAll('#eventPageBody .event-page-info-row')].find(r => r.querySelector('.fa-calendar-check'));
-    assert.ok(hostileRow.textContent.includes('الحنّة <b>كبيرة</b>'), 'the day name must still be shown, as literal text');
-    assert.strictEqual(hostileRow.querySelector('b'), null, 'a day name must never be parsed as markup');
+    const hostileStop = document.querySelector('#eventPageBody .event-page-program-stop');
+    assert.ok(hostileStop.textContent.includes('الحنّة <b>كبيرة</b>'), 'the day name must still be shown, as literal text');
+    assert.strictEqual(hostileStop.querySelector('b'), null, 'a day name must never be parsed as markup');
+  });
+
+  await test('«أضف إلى تقويم الهاتف» رابط تنزيل إلى /api/events/<id>/calendar.ics على أصل الـAPI لا أصل الصفحة', () => {
+    // أصلان مختلفان عمداً (تصحيح جولة #176): البيئة الافتراضية أصلها واحد
+    // (`http://localhost/` و`apiBase` فارغ)، فاستبدالُ أصل الـAPI بأصل الصفحة
+    // كان يمرّ بلا أن يسقط شيء. هنا الصفحة على مضيف ثابت والـAPI على آخر.
+    const dom = buildEnv({ url: 'https://web.example.test/', apiBase: 'https://api.example.test' });
+    const win = dom.window;
+    const { document } = win;
+
+    // الحالة نفسها كما يطلبها الشرط: إعداد الـAPI على أصل، والصفحة على آخر.
+    assert.strictEqual(win.NEGEV_CONFIG.apiBase, 'https://api.example.test', 'NEGEV_CONFIG.apiBase is the API origin');
+    assert.strictEqual(win.location.origin, 'https://web.example.test', 'window.location is the page origin');
+
+    win.renderEventPage({
+      id: 902, title: 'عرس', town: TOWNS[0], event_date: '2026-10-10', location_name: 'ديوان',
+      occasion_type: WEDDING_TYPE, extra_days: []
+    });
+
+    const link = [...document.querySelectorAll('#eventPageBody a')]
+      .find(anchor => anchor.textContent.includes('أضف إلى تقويم الهاتف'));
+    assert.ok(link, 'expected a calendar download link on the event page');
+
+    const href = link.getAttribute('href') || '';
+    assert.ok(
+      href.startsWith('https://api.example.test/'),
+      `the link must be absolute on the API origin, got: ${href}`
+    );
+    assert.ok(
+      !href.includes('web.example.test'),
+      `the page origin is the static host and 404s on /api, got: ${href}`
+    );
+    assert.strictEqual(
+      new URL(href).pathname,
+      '/api/events/902/calendar.ics',
+      `the link must hit the public calendar route, got: ${href}`
+    );
+  });
+
+  await test('«أضف إلى تقويم الهاتف» يغيب عن غير المؤهّل: معلّقة، أو «بالرابط فقط»، أو مجدولة لم يبلغ موعدها (تذكرة #176)', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+
+    const base = {
+      id: 904, title: 'عرس', town: TOWNS[0], event_date: '2026-10-10', location_name: 'ديوان',
+      occasion_type: WEDDING_TYPE, extra_days: [], status: 'approved', visibility: 'public'
+    };
+    const calendarButton = () => [...document.querySelectorAll('#eventPageBody a')]
+      .find(anchor => (anchor.getAttribute('href') || '').includes('/calendar.ics'));
+
+    win.renderEventPage(base);
+    assert.ok(calendarButton(), 'معتمدة عامة غير مجدولة ⇒ الزرّ موجود');
+
+    win.renderEventPage({ ...base, status: 'pending' });
+    assert.strictEqual(calendarButton(), undefined, 'المعلّقة 404 على المسار، فلا زرّ يوعد بما لا يُنزَّل');
+
+    win.renderEventPage({ ...base, visibility: 'link_only' });
+    assert.strictEqual(calendarButton(), undefined, '«بالرابط فقط» 404 على المسار، فلا زرّ');
+
+    win.renderEventPage({ ...base, publish_at: '2093-01-01T00:00:00.000Z' });
+    assert.strictEqual(calendarButton(), undefined, 'مجدولة لم يبلغ موعدها ⇒ 404، فلا زرّ');
+
+    win.renderEventPage({ ...base, publish_at: '2020-01-01T00:00:00.000Z' });
+    assert.ok(calendarButton(), 'مجدولة بلغ موعدها ⇒ الملف يُخدَم، فيعود الزرّ');
+  });
+
+  await test('زرّ الملاحة بجانب سطر المكان: href بالإحداثيات حين توجد، وباسم المكان حين تغيب', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+
+    const base = {
+      id: 903, title: 'عرس', town: TOWNS[0], event_date: '2026-10-10',
+      location_name: 'ديوان آل فلان', occasion_type: WEDDING_TYPE, extra_days: []
+    };
+
+    win.renderEventPage({ ...base, latitude: 31.2345, longitude: 34.8765 });
+    const withPin = document.querySelector('#eventPageBody .event-page-nav-link');
+    assert.ok(withPin, 'expected a navigation link next to the place row');
+    assert.strictEqual(withPin.getAttribute('target'), '_blank');
+    assert.ok(
+      withPin.getAttribute('href').includes('31.2345,34.8765'),
+      `a pinned event navigates to its coordinates, got: ${withPin.getAttribute('href')}`
+    );
+    assert.strictEqual(
+      withPin.closest('.event-page-info-row').querySelector('.event-page-info-label').textContent,
+      WEDDING_TYPE.fields.find(field => field.field_key === 'location_name').label,
+      'the link lives in the place row itself'
+    );
+
+    win.renderEventPage({ ...base, id: 904 });
+    const withoutPin = document.querySelector('#eventPageBody .event-page-nav-link');
+    assert.ok(withoutPin, 'the navigation link must survive an event with no coordinates');
+    const fallbackHref = decodeURIComponent(withoutPin.getAttribute('href'));
+    assert.ok(
+      fallbackHref.includes('ديوان آل فلان') && fallbackHref.includes(TOWNS[0]),
+      `no pin → the place name and town are the query, got: ${fallbackHref}`
+    );
+    assert.ok(!fallbackHref.includes('undefined') && !fallbackHref.includes('null'), 'the fallback never reads a missing coordinate');
   });
 
   await test('the admin direct-add form gets its own styled «أضف يوماً» button for a type with extra_days', async () => {

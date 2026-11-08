@@ -937,7 +937,18 @@ async function honoreesForEvents(eventIds) {
   return map;
 }
 
-/** Groups extra days by event id, ordered by date then position: { [eventId]: [{ name, day_date, place, day_time, position }] }. */
+/**
+ * Groups extra days by event id — «برنامج المناسبة» — ordered by date, then by
+ * time, then by the row's own position (تذكرة #176): two stations on the same
+ * date of a multi-day occasion (حنّة الظهر ثم حنّة المساء، أو مهرجان يومين في
+ * قاعة واحدة) read in the order they actually happen, not in the order the form
+ * happened to build them. `position` stays the last tie-break so two stations
+ * with the same (or no) written time keep the publisher's own order.
+ *
+ * `day_time` is free text (`VARCHAR`), so the comparison is lexicographic on
+ * whatever the publisher typed; a station with no written time comes first
+ * (MySQL's own ASC order puts NULL before any value).
+ */
 async function eventDaysForEvents(eventIds) {
   if (!eventIds.length) return {};
 
@@ -945,7 +956,7 @@ async function eventDaysForEvents(eventIds) {
   const rows = await db.query(
     `SELECT event_id, name, day_date, place, day_time, position FROM event_days
       WHERE event_id IN (${placeholders})
-      ORDER BY event_id ASC, day_date ASC, position ASC`,
+      ORDER BY event_id ASC, day_date ASC, day_time ASC, position ASC`,
     eventIds
   );
 
@@ -1840,16 +1851,34 @@ async function getEventForEdit(eventId) {
 
 /**
  * The extra-days list in a comparable shape: ordered by day, then by the
- * row's own position, and reduced to the four fields that describe the day.
- * Both sides of an edit's comparison go through here, so a client that sends
- * the same days in a different date order is still seen as unchanged — only
- * the content counts, not the order the form happened to build.
+ * written time, then by the row's own position — **the same order
+ * `eventDaysForEvents` reads them in** (تذكرة #176) — and reduced to the four
+ * fields that describe the day. Both sides of an edit's comparison go through
+ * here, so a client that sends the same days in a different date order is
+ * still seen as unchanged — only the content counts, not the order the form
+ * happened to build.
+ *
+ * Ordering by `position` alone was a save regression: two stations on one date
+ * (العشاء 20:00 written first, الحنّة 17:00 second) read back as الحنّة ثم
+ * العشاء, and the editor resends them in that read order with fresh positions
+ * 0..N — a `position`-only sort then compared [العشاء, الحنّة] with
+ * [الحنّة, العشاء], called an unchanged list changed, deleted and re-inserted
+ * its rows and logged an amendment. Sorting on the read order instead makes
+ * GET → resave byte-stable: identical content always sorts to the same list.
+ *
+ * `day_time` is free text (`VARCHAR`), so the comparison is lexicographic on
+ * whatever the publisher typed, and a station with no written time comes first
+ * — matching MySQL's own `ASC` order, which puts NULL before any value.
  */
 function normaliseEventDays(days) {
   return [...days]
-    .sort((a, b) => (a.day_date === b.day_date
-      ? (a.position ?? 0) - (b.position ?? 0)
-      : (a.day_date < b.day_date ? -1 : 1)))
+    .sort((a, b) => {
+      if (a.day_date !== b.day_date) return a.day_date < b.day_date ? -1 : 1;
+      const timeA = a.day_time ?? '';
+      const timeB = b.day_time ?? '';
+      if (timeA !== timeB) return timeA < timeB ? -1 : 1;
+      return (a.position ?? 0) - (b.position ?? 0);
+    })
     .map(day => ({ name: day.name, day_date: day.day_date, place: day.place, day_time: day.day_time }));
 }
 
@@ -2041,11 +2070,14 @@ async function updateEvent(eventId, existing, { changes = {}, honorees = null, e
 
     // The stored days are read here, before any replacement: they are the
     // only source of truth for whether this edit changes the schedule at all.
+    // The order matches the display order of «برنامج المناسبة» (date, then
+    // time, then position — تذكرة #176); `normaliseEventDays` below re-sorts
+    // both sides on content, so the comparison never depends on it.
     let extraDaysEdit = null;
     if (extraDays !== null) {
       const [currentRows] = await connection.execute(
         `SELECT name, day_date, place, day_time, position FROM event_days
-          WHERE event_id = ? ORDER BY day_date ASC, position ASC`,
+          WHERE event_id = ? ORDER BY day_date ASC, day_time ASC, position ASC`,
         [eventId]
       );
       const oldDays = normaliseEventDays(currentRows);
@@ -2747,6 +2779,204 @@ async function getShareEvent(eventId) {
   };
 }
 
+/** منطقة التقويم كما تُعلَن في الملف — ساعة القدس التي يكتب بها أهل المناسبة. */
+const CALENDAR_TIME_ZONE = 'Asia/Jerusalem';
+
+/**
+ * Domain half of `UID`: a fixed label, not `PUBLIC_URL`/the request host —
+ * the UID must survive a deploy to another origin, or the same event lands in
+ * the user's calendar twice.
+ */
+const CALENDAR_UID_DOMAIN = 'negev-events';
+
+/**
+ * Escapes one ICS text value (RFC 5545 §3.3.11): the backslash itself first,
+ * then `;` `,` and a line break become `\;` `\,` `\n`. A CN/SUMMARY a
+ * publisher typed must never be able to start a new property or a new
+ * component.
+ */
+function escapeIcsText(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+/**
+ * Folds one content line at 75 octets (RFC 5545 §3.1), counting UTF-8 bytes so
+ * neither a property nor an Arabic letter is split down the middle; every
+ * continuation line begins with a single space, which counts towards its own
+ * 75, hence the 74-byte budget after the first chunk. Folding a value's middle
+ * is exactly what a calendar client un-folds back, so the text survives run
+ * through `fold` → `unfold` unchanged.
+ */
+function foldIcsLine(line) {
+  const chunks = [];
+  let current = '';
+  let bytes = 0;
+  for (const char of line) {
+    const size = Buffer.byteLength(char, 'utf8');
+    const budget = chunks.length === 0 ? 75 : 74;
+    if (bytes + size > budget) {
+      chunks.push(current);
+      current = '';
+      bytes = 0;
+    }
+    current += char;
+    bytes += size;
+  }
+  chunks.push(current);
+  return chunks.join('\r\n ');
+}
+
+/** `'YYYY-MM-DD'` (mysql2 returns DATE as this string) → `'YYYYMMDD'`, no time zone involved. */
+function icsDate(dateString) {
+  return String(dateString).slice(0, 10).replace(/-/g, '');
+}
+
+/** The day after `'YYYY-MM-DD'`, in the same `'YYYYMMDD'` shape — `DTEND` is exclusive. */
+function icsDayAfter(dateString) {
+  const [year, month, day] = String(dateString).slice(0, 10).split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return `${next.getUTCFullYear()}${String(next.getUTCMonth() + 1).padStart(2, '0')}${String(next.getUTCDate()).padStart(2, '0')}`;
+}
+
+/** `DTSTAMP` — the instant the file was generated, UTC as the property requires (`…Z`). */
+function icsStamp(now = new Date()) {
+  return `${now.toISOString().replace(/[-:]/g, '').split('.')[0]}Z`;
+}
+
+/** اسم القرية تحت البند الجامع، وإلا البلدة — نفس `eventPlaceName` في العميلين. */
+function calendarPlaceName(row) {
+  if (row.town === VILLAGES_TOWN) {
+    if (row.village_name) return row.village_name;
+    if (row.village_id === null && row.requested_village_name) return row.requested_village_name;
+  }
+  return row.town;
+}
+
+/**
+ * `DESCRIPTION` — نصوص الوقت التي كتبها الناشر، بترتيب صفحة المناسبة نفسها:
+ * أوقات محطات «برنامج المناسبة» (`event_days.day_time`) ثم سطر «موعد العشاء»
+ * (`events.dinner_time`). نصوص حرّة («بعد العصر»، «7:30 مساءً») تُنقل كما هي:
+ * لا تحويل إلى ساعة رقمية ولا اختلاق ساعة لـ`DTSTART` (المدخل يومٌ كامل)،
+ * لكن إسقاطها مرفوض — الملف يوصف بالعنوان والتاريخ والمكان والوقت. سطر بلا
+ * وقت مكتوب لا يُكتب، وبلا أوقات أصلاً يعود النصّ فارغاً فلا `DESCRIPTION`
+ * إطلاقاً.
+ */
+function calendarDescription(eventDays, dinnerTime) {
+  const lines = eventDays
+    .filter(day => day.day_time && String(day.day_time).trim())
+    .map(day => `${day.name}: ${String(day.day_time).trim()}`);
+  const dinner = dinnerTime && String(dinnerTime).trim();
+  if (dinner) lines.push(`موعد العشاء: ${dinner}`);
+  return lines.join('\n');
+}
+
+/**
+ * «أضف إلى تقويم الهاتف» (تذكرة #176) — ملف iCalendar (RFC 5545) لصفحة
+ * المناسبة، يُقدَّم من `GET /api/events/:id/calendar.ics` بلا مصادقة.
+ *
+ * **بوابته هي بوابة الظهور العامة وحدها** (`PUBLIC_EVENT_VISIBLE_SQL_EVENTS`):
+ * معتمدة **وعامة**، ومجدولةٌ بلغ موعدُها (أو غير مجدولة أصلاً). فالمعلّقة
+ * والمردودة و«بالرابط فقط» والمجدولة التي لم يبلغ موعدها بعد وغير الموجودة
+ * كلها 404 بجسم واحد، فلا يفرّق الردّ بين «غير موجودة» و«لم تُعتمد بعد» — كصفحة
+ * المشاركة في هذا الجزء بعينه.
+ * **وهو أضيق منها في موضعين عمداً:** `/e/:id` تفتح «بالرابط فقط» لأنها طريقها
+ * الوحيد (ADR-0006)، وتفتح المعتمدة المجدولة قبل موعدها؛ وهذا الملف ليس طريقاً
+ * إليهما فلا يرث استثناءيهما.
+ * ولا يُقيَّد بالمناسبة القادمة: تقويم عرسٍ مضى ما زال ملفاً صحيحاً يفتحه صاحب
+ * رابطه.
+ *
+ * **وبياناته هي بيانات صفحة المناسبة** لا استعلاماً موازياً: نفس صفّ
+ * `events`، ونفس `attachHonoreesAndTypes` الذي يبني منه `getEventDetails`
+ * `honorees` و`extra_days` و`occasion_type`. والعنوان هو عنوان الصفحة نفسه
+ * (`eventCardHeadline` في `web/app.js`، ونظيره `cardHeadline` في
+ * `mobile/lib/models/event.dart`): «النوع + أسماء أصحاب المناسبة»، و`groom_name`
+ * للصفوف القديمة بلا `honorees`، وبلا اسم إطلاقاً العنوان الحرّ ثم اسم النوع.
+ * والمكان هو سطر المكان فيها: اسم القرية تحت البند الجامع وإلا البلدة، ثم
+ * `location_name`.
+ *
+ * **الوقت:** لا عمود ساعة على المناسبة — `dinner_time` و`day_time` نصّان حرّان
+ * يكتبهما الناشر («7:30 مساءً»، «بعد العصر»)، فلا يُختلق منهما `DTSTART` ساعةً.
+ * المدخل **يومٌ كامل** (`DTSTART;VALUE=DATE`، و`DTEND` اليوم التالي لآخر يوم)،
+ * و«آخر يوم» هو `event_end_date` حين يكون بعد البداية، و`X-WR-TIMEZONE` يعلن
+ * منطقة القدس التي يُفتح بها التقويم. **ونصوص الوقت لا تُسقَط:** تُسرد في
+ * `DESCRIPTION` (وقت كل يوم كتب له وقت في «برنامج المناسبة»، ثم «موعد العشاء:
+ * …») — ملفٌّ يقول العنوان والتاريخ والمكان ويسكت عن الساعة التي كتبها صاحب
+ * المناسبة لا يطابق صفحته.
+ *
+ * Returns `{ filename, body }` — الاسم من معرّف رقمي وحده (لا شيء يكتبه مستخدم
+ * يدخل `Content-Disposition`)، و`UID` مشتقّ من المعرّف وحده فيبقى ثابتاً مهما
+ * تغيّر عنوان الخادم، فلا يُنشئ التقويم حدثاً ثانياً لصاحب رابط قديم.
+ */
+async function getEventCalendar(eventId) {
+  // `events.occasion_type_id` منتقىً هنا لأن `attachHonoreesAndTypes` يبني منه
+  // `occasion_type` (تحتاج أيضاً `events.id`، وهو منتقى): بلا هذا العمود يعود
+  // النوع فارغاً ويُبنى `SUMMARY` من الأصحاب وحدهم بلا اسم النوع («سالم» لا
+  // «عرس سالم»). و`groom_name` لأن عنوان الصفحة يسقط إليه حين لا `honorees`،
+  // و`dinner_time` لأن `DESCRIPTION` يحمل الوقت. والأعمدة الأخرى في القائمة هي
+  // كل ما يقرأه التوليد أدناه.
+  // معرّف المناسبة أول `params`، فساعة الإعلان ثانيتهما (موضع `?` الوحيد في
+  // شرط الظهور).
+  const row = await db.queryOne(
+    `SELECT events.id, events.occasion_type_id, events.title, events.groom_name,
+            events.town, events.village_id, events.requested_village_name,
+            events.location_name, events.dinner_time,
+            events.event_date, events.event_end_date,
+            villages.name AS village_name
+       FROM events
+       LEFT JOIN villages ON villages.id = events.village_id
+      WHERE events.id = ? AND ${PUBLIC_EVENT_VISIBLE_SQL_EVENTS}`,
+    [eventId, publishNowClock()]
+  );
+  if (!row) throw ApiError.notFound('المناسبة غير موجودة');
+
+  const [withRelations] = await attachHonoreesAndTypes([row]);
+  const typeName = withRelations.occasion_type ? withRelations.occasion_type.name : '';
+  // أسماء أصحاب المناسبة، و`groom_name` للصفوف القديمة بلا `honorees` — نفس
+  // `eventHonoreeNames` في الويب. بلا هذا السقوط يخرج `SUMMARY` بالعنوان الحرّ
+  // وحده («اللد») بينما الصفحة تقول «عرس سالم».
+  const honoreeNames = withRelations.honorees
+    .map(honoree => String(honoree.name || '').trim())
+    .filter(Boolean);
+  if (!honoreeNames.length && row.groom_name && String(row.groom_name).trim()) {
+    honoreeNames.push(String(row.groom_name).trim());
+  }
+  const joinedNames = honoreeNames.join(' و ');
+  // «النوع + الأسماء» دائماً حين يوجد اسم؛ وإلا العنوان الحرّ ثم اسم النوع —
+  // و«مناسبة» آخر ملاذ كي لا يخرج `SUMMARY` فارغاً.
+  const summary = joinedNames
+    ? (typeName ? `${typeName} ${joinedNames}` : joinedNames)
+    : (row.title || typeName || 'مناسبة');
+  const place = [calendarPlaceName(row), row.location_name].filter(Boolean).join(' — ');
+  const description = calendarDescription(withRelations.extra_days, row.dinner_time);
+  const lastDay = row.event_end_date && row.event_end_date > row.event_date ? row.event_end_date : row.event_date;
+
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Negev Events//Occasion Calendar//AR',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    `X-WR-TIMEZONE:${CALENDAR_TIME_ZONE}`,
+    'BEGIN:VEVENT',
+    `UID:event-${eventId}@${CALENDAR_UID_DOMAIN}`,
+    `DTSTAMP:${icsStamp()}`,
+    `DTSTART;VALUE=DATE:${icsDate(row.event_date)}`,
+    `DTEND;VALUE=DATE:${icsDayAfter(lastDay)}`,
+    `SUMMARY:${escapeIcsText(summary)}`,
+    ...(place ? [`LOCATION:${escapeIcsText(place)}`] : []),
+    ...(description ? [`DESCRIPTION:${escapeIcsText(description)}`] : []),
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ];
+
+  // CRLF after every line, the last one included (RFC 5545 §3.1).
+  return { filename: `event-${eventId}.ics`, body: `${lines.map(foldIcsLine).join('\r\n')}\r\n` };
+}
+
 /**
  * «مناسبات أخرى» أسفل صفحة المشاركة (/e/:id): مناسبات معتمدة أخرى في نفس
  * البلدة أو لنفس العائلة، القادمة أولاً ثم الأحدث، بلا المناسبة نفسها.
@@ -2885,6 +3115,7 @@ module.exports = {
   reportCongratulation,
   townStats,
   getShareEvent,
+  getEventCalendar,
   listRelatedEvents,
   listSitemapEvents
 };

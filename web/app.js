@@ -2601,6 +2601,29 @@ function jerusalemTodayKey(now = new Date()) {
   }).format(now);
 }
 
+/**
+ * ساعة حائط القدس الآن بصيغة 'YYYY-MM-DDTHH:MM:SS' — الشكل نفسه الذي يصل به
+ * `publish_at` من الخادم (عمود `DATETIME` يقرأه `pool.js` بتوقيت غرينتش كما
+ * كتبه صاحب المناسبة، فيصل ISO ينتهي بـ`Z`). تُقارَن نصّاً: «مجدولة لم يبلغ
+ * موعدها» هي التي ساعة حائطها أكبر من الآن — نفس `publishNowClock()` في شرط
+ * الظهور على الخادم. لا `new Date(publish_at) <= new Date()`: تلك مقارنة لحظة
+ * بلحظة، وساعة الحائط الملفوفة بغلاف غرينتش تُزيحها ساعتان أو ثلاث.
+ */
+function jerusalemWallClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: JERUSALEM_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(now);
+  const value = type => (parts.find(part => part.type === type) || {}).value || '00';
+  return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}:${value('minute')}:${value('second')}`;
+}
+
 /** يوم المناسبة مفتاحاً 'YYYY-MM-DD' — الجزء التاريخي وحده من `event_date`. */
 function eventDayKey(evt) {
   return String(evt && evt.event_date ? evt.event_date : '').split('T')[0];
@@ -2661,6 +2684,40 @@ function eventNavUrls(evt) {
     wazeUrl: `https://waze.com/ul?q=${q}&navigate=yes`,
     mapsUrl: `https://www.google.com/maps/search/?api=1&query=${q}`
   };
+}
+
+/**
+ * «أضف إلى تقويم الهاتف» (تذكرة #176) — ملف iCalendar من
+ * `GET /api/events/:id/calendar.ics` على **أصل الخادم** (`shareOrigin()`، أي
+ * `API_BASE`) لا على أصل الصفحة: الويب يُنشر على استضافة ثابتة مستقلة عن
+ * الخادم (ADR-0001)، فرابط نسبي هنا يسقط على الاستضافة الثابتة ويردّ 404.
+ * والتنزيل نفسه من `Content-Disposition` في الاستجابة، فلا `download` هنا.
+ */
+function eventCalendarUrl(evt) {
+  return `${shareOrigin()}/api/events/${encodeURIComponent(evt.id)}/calendar.ics`;
+}
+
+/**
+ * هل تُعرض «أضف إلى تقويم الهاتف» لهذه المناسبة؟ نفس شرط بوابة المسار على
+ * الخادم (`PUBLIC_EVENT_VISIBLE_SQL_EVENTS`): معتمدة، وعامة، ومجدولةٌ بلغ
+ * موعدُها — وإلا ردّ `calendar.ics` 404 والزرّ وعدٌ لا يُنفَّذ. الصفحة تُفتح
+ * «بالرابط فقط» والمعلّقة والمجدولة (المالك يفتحها بمعرّفها)، فوجود الزرّ فيها
+ * بلا هذا الشرط رابطٌ ميّت.
+ *
+ * `null`/الغائب يعني «الخادم لم يرسل المفتاح» — وصفوف التغذية لا تحمله، وهي
+ * معتمدة عامة غير مجدولة بحكم استعلامها أصلاً — فغيابُه لا يمنع، وقيمةٌ مرسلة
+ * مخالفة هي التي تمنع. نفس قاعدة زرّ التذكير في هذه الصفحة
+ * (`!evt.status || evt.status === 'approved'`) وقاعدة `canFollow` في الموبايل.
+ */
+function eventCalendarEligible(evt) {
+  if (!evt) return false;
+  if (evt.status && evt.status !== 'approved') return false;
+  if (evt.visibility && evt.visibility !== 'public') return false;
+  if (!evt.publish_at) return true;
+  const stored = new Date(evt.publish_at);
+  // قيمة لا تُقرأ تاريخاً لا تُخفي الزرّ: المفتاح غير صالح، لا «مجدولة».
+  if (Number.isNaN(stored.getTime())) return true;
+  return stored.toISOString().slice(0, 19) <= jerusalemWallClock();
 }
 
 /** مشغّل مقطع المناسبة (خاصّ أو افتراضي) — فارغ لنوع لا صوت له. أزراره وموجاته تتبع syncAudioUi. */
@@ -3098,8 +3155,48 @@ function recordNokootFromEventPage() {
   quickRecordNokoot(names[0] || eventPageEvent.groom_name || '', String(eventPageEvent.event_date || '').split('T')[0], eventPageEvent.town || '');
 }
 
-/** سطر «تسمية: قيمة» بأيقونته — فارغ إن لم تكن قيمة، كـ_InfoRow في الموبايل. */
-function eventPageInfoRowHtml(icon, label, value) {
+/**
+ * «برنامج المناسبة» (تذكرة #176): محطات المناسبة مجمّعة تحت تاريخها — تاريخٌ
+ * واحد عنواناً لمجموعته، وتحته محطاته. الترتيب هو ترتيب الخادم نفسه (تاريخاً
+ * ثم وقتاً ثم `position`، `eventDaysForEvents` في الخدمة) بلا إعادة ترتيب هنا:
+ * منطق الترتيب واحد في الخادم، والعميل يرسم ما وصله. والتجميع بخريطة تُحفظ
+ * بترتيب أول ظهور، فما جاء ليومٍ واحد متتالياً — وهو ما يضمنه الخادم — يصير
+ * مجموعةً واحدة بلا فرض ترتيب ثانٍ.
+ *
+ * «الوقت» و«المكان» يظهران فقط حين كُتبا؛ ولا اسم محطّة هو تاريخها — كل محطة
+ * سطرٌ باسمها هي، لا سطر تاريخها. وبلا محطات لا يُرسم القسم أصلاً.
+ */
+function eventProgramHtml(evt) {
+  if (!typeShowsField(evt, 'extra_days') || !Array.isArray(evt.extra_days) || !evt.extra_days.length) return '';
+
+  const byDate = new Map();
+  for (const day of evt.extra_days) {
+    const key = String(day.day_date || '');
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key).push(day);
+  }
+
+  const groupsHtml = [...byDate.entries()].map(([date, days]) => `
+    <div class="event-page-program-group">
+      <div class="event-page-program-date">${escapeHtml(date ? formatEventDayLong({ event_date: date }) : '')}</div>
+      ${days.map(day => {
+        const parts = [day.name];
+        if (day.day_time) parts.push(day.day_time);
+        if (day.place) parts.push(day.place);
+        return `<div class="event-page-program-stop">${escapeHtml(parts.filter(Boolean).join(' — '))}</div>`;
+      }).join('')}
+    </div>`).join('');
+
+  return `
+    <section class="event-page-program">
+      <div class="event-page-program-head"><i class="fa-regular fa-calendar-check" aria-hidden="true"></i> برنامج المناسبة</div>
+      ${groupsHtml}
+    </section>`;
+}
+
+/** سطر «تسمية: قيمة» بأيقونته — فارغ إن لم تكن قيمة، كـ_InfoRow في الموبايل.
+ *  `trailingHtml` اختياري يُلحق بآخر السطر (زرّ الملاحة بجانب المكان). */
+function eventPageInfoRowHtml(icon, label, value, trailingHtml = '') {
   if (value === null || value === undefined || String(value).trim() === '') return '';
   return `
     <div class="event-page-info-row">
@@ -3107,7 +3204,7 @@ function eventPageInfoRowHtml(icon, label, value) {
       <div>
         <div class="event-page-info-label">${escapeHtml(label)}</div>
         <div class="event-page-info-value">${escapeHtml(String(value))}</div>
-      </div>
+      </div>${trailingHtml || ''}
     </div>`;
 }
 
@@ -3446,11 +3543,19 @@ function renderEventPage(evt) {
     </div>` : '';
 
   const placeValue = [eventPlaceName(evt), evt.location_name].filter(Boolean).join(' — ');
+  const nav = eventNavUrls(evt);
+  // زرّ الملاحة بجانب سطر القاعة/المكان (تذكرة #176): خرائط Google بالإحداثيات
+  // حين توجد، وباسم المكان والبلدة حين تغيب — فهو لا يغيب عن مناسبة بلا دبّوس،
+  // بخلاف زرّ Waze القديم في صفّ الأزرار أدناه.
+  const navLinkHtml = `
+    <a class="event-page-nav-link" href="${escapeHtml(nav.mapsUrl)}" target="_blank" rel="noopener" onclick="recordEventPageLocationClicked()">
+      <i class="fa-solid fa-diamond-turn-right" aria-hidden="true"></i> الملاحة
+    </a>`;
   const infoRows = [
     honoreeRows,
     eventPageInfoRowHtml('fa-solid fa-people-group', typeFieldLabel(evt, 'family_clan', 'العائلة'), evt.family_clan),
     artistHtml,
-    eventPageInfoRowHtml('fa-solid fa-location-dot', typeFieldLabel(evt, 'location_name', 'المكان'), placeValue),
+    eventPageInfoRowHtml('fa-solid fa-location-dot', typeFieldLabel(evt, 'location_name', 'المكان'), placeValue, navLinkHtml),
     typeShowsField(evt, 'secondary_location_name')
       ? eventPageInfoRowHtml('fa-solid fa-location-dot', typeFieldLabel(evt, 'secondary_location_name', 'مكان آخر'), evt.secondary_location_name) : '',
     eventPageInfoRowHtml('fa-regular fa-calendar', typeFieldLabel(evt, 'event_date', 'التاريخ'), formatEventDayLong(evt)),
@@ -3459,22 +3564,13 @@ function renderEventPage(evt) {
     typeShowsField(evt, 'youth_party_date')
       ? eventPageInfoRowHtml('fa-solid fa-fire', typeFieldLabel(evt, 'youth_party_date', 'سهرة الشباب والدحة'),
         evt.youth_party_date ? formatEventDayLong({ event_date: evt.youth_party_date }) : '') : '',
-    // الأيام الإضافية بترتيب الخادم نفسه (day_date) — سطر لكل يوم، والتاريخ
-    // الطويل ثم « — الوقت» و« — المكان» عند وجودهما.
-    typeShowsField(evt, 'extra_days') && Array.isArray(evt.extra_days)
-      ? evt.extra_days.map(day => {
-          let value = formatEventDayLong({ event_date: day.day_date });
-          if (day.day_time) value += ` — ${day.day_time}`;
-          if (day.place) value += ` — ${day.place}`;
-          return eventPageInfoRowHtml('fa-regular fa-calendar-check', day.name, value);
-        }).join('')
-      : '',
+    eventProgramHtml(evt),
     typeShowsField(evt, 'dinner_time')
       ? eventPageInfoRowHtml('fa-regular fa-clock', typeFieldLabel(evt, 'dinner_time', 'طعام العشاء'), evt.dinner_time) : ''
   ].join('');
 
   const subtitle = eventCardSubtitle(evt);
-  const { wazeUrl, mapsUrl } = eventNavUrls(evt);
+  const { wazeUrl, mapsUrl } = nav;
   const phoneDigits = evt.host_phone ? String(evt.host_phone).replace(/[^\d]/g, '') : '';
   const contactHtml = phoneDigits ? `
       <a href="tel:${phoneDigits}" class="event-page-btn" onclick="recordEventPageContactClicked()">
@@ -3524,6 +3620,10 @@ function renderEventPage(evt) {
         </a>
       </div>
       ${contactHtml ? `<div class="event-page-btn-row">${contactHtml}</div>` : ''}
+      ${eventCalendarEligible(evt) ? `
+      <a href="${escapeHtml(eventCalendarUrl(evt))}" class="event-page-btn event-page-share-btn">
+        <i class="fa-regular fa-calendar-plus" aria-hidden="true"></i> أضف إلى تقويم الهاتف
+      </a>` : ''}
       <button type="button" class="event-page-btn event-page-share-btn" onclick="shareEvent(eventPageEvent)">
         <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> ${escapeHtml(shareButtonLabel(evt))}
       </button>

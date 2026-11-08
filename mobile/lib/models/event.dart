@@ -1,4 +1,14 @@
+import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
+
 import 'album.dart';
+
+/// منطقة الخادم — نفس `_jerusalemZone` في `widgets/event_card.dart` ونفس
+/// `_serverZone` في `state/reminder_alarms.dart`: كل ما يحسبه الخادم محسوب على
+/// القدس، فساعة الحائط التي تُقارَن بها مواعيده تُقرأ عليها لا على منطقة الجهاز.
+const String _jerusalemZone = 'Asia/Jerusalem';
+
+bool _jerusalemLoaded = false;
 
 /// ظهور المناسبة (تذكرة #166، والقرار في #141): «عامة» الافتراض، أو «بالرابط
 /// فقط» — تُفتح برابطها (`/e/:id`) وبمعرّفها ولا تدخل أي قائمة عامة، ولا
@@ -293,6 +303,24 @@ class Event {
       return null;
     }
     return custom;
+  }
+
+  /// هل يُعرض «أضف إلى تقويم الهاتف» لهذه المناسبة؟ نفس شرط بوابة
+  /// `GET /api/events/:id/calendar.ics` على الخادم (`PUBLIC_EVENT_VISIBLE_SQL_EVENTS`):
+  /// معتمدة، وعامة، ومجدولةٌ بلغ موعدُها — وإلا ردّ المسار 404 والزرّ وعدٌ لا
+  /// يُنفَّذ. الشاشة تفتح «بالرابط فقط» والمعلّقة (المالك يفتحها بمعرّفها)،
+  /// فوجود الزرّ فيها بلا هذا الشرط رابطٌ ميّت.
+  ///
+  /// `null` يعني «الخادم لم يرسل المفتاح» — صفوف التغذية لا تحمل `status` ولا
+  /// `publish_at`، وهي معتمدة عامة غير مجدولة بحكم استعلامها أصلاً — فغيابه لا
+  /// يمنع، وقيمةٌ مرسلة مخالفة هي التي تمنع. نفس قاعدة زرّ المتابعة في شاشة
+  /// التفاصيل (`event.status == null || event.status == 'approved'`).
+  bool get canDownloadCalendar {
+    if (status != null && status != 'approved') return false;
+    if (visibility != EventVisibility.public) return false;
+    final scheduledAt = publishAt;
+    if (scheduledAt == null) return true;
+    return !scheduledAt.toUtc().isAfter(_jerusalemWallClockNow());
   }
 
   factory Event.fromJson(Map<String, dynamic> json) {
@@ -1128,4 +1156,25 @@ DateTime? _toPublishWallClock(dynamic value) {
   if (text.isEmpty) return null;
   final parsed = DateTime.tryParse(text);
   return parsed?.toUtc();
+}
+
+/// ساعة حائط القدس الآن كـ`DateTime.utc` — **ساعة الحائط لا اللحظة**، كي تُقارَن
+/// بـ`publishAt` الذي هو ساعة حائط صاحب المناسبة في غلاف UTC (انظر
+/// `_toPublishWallClock` أعلاه). مقارنةُ لحظةٍ بلحظة تُزيح الموعد ساعتين أو ثلاثاً
+/// — مقدار فرق منطقة القدس عن غرينتش — فيظهر الزرّ قبل موعده أو بعده.
+DateTime _jerusalemWallClockNow([DateTime? now]) {
+  if (!_jerusalemLoaded) {
+    tzdata.initializeTimeZones();
+    _jerusalemLoaded = true;
+  }
+  final local =
+      tz.TZDateTime.from(now ?? DateTime.now(), tz.getLocation(_jerusalemZone));
+  return DateTime.utc(
+    local.year,
+    local.month,
+    local.day,
+    local.hour,
+    local.minute,
+    local.second,
+  );
 }

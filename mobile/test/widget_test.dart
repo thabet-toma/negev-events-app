@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -3715,7 +3716,7 @@ void main() {
     }
 
     testWidgets(
-      'تفاصيل المناسبة: صفوف الأيام تظهر بعد سهرة الشباب بترتيبها، بالتاريخ ثم الوقت ثم المكان',
+      'تفاصيل المناسبة: «برنامج المناسبة» بعد سهرة الشباب، ومحطاته تحت تاريخها بالوقت ثم المكان',
       (tester) async {
         tester.view.physicalSize = const Size(800, 3000);
         tester.view.devicePixelRatio = 1.0;
@@ -3748,14 +3749,19 @@ void main() {
         });
 
         final youthY = tester.getTopLeft(find.text('2026-09-18')).dy;
+        final programY = tester.getTopLeft(find.text('برنامج المناسبة')).dy;
         final hennaY = tester.getTopLeft(find.textContaining('الحنّة')).dy;
         final lunchY = tester.getTopLeft(find.textContaining('الغداء')).dy;
-        expect(youthY, lessThan(hennaY));
+        expect(youthY, lessThan(programY));
+        expect(programY, lessThan(hennaY));
         expect(hennaY, lessThan(lunchY));
 
-        // التاريخ بصيغة صفّ التاريخ نفسه، ثم الوقت ثم المكان كلٌّ حين يوجد.
-        expect(find.text('2026-09-20 — بعد العصر — الديوان'), findsOneWidget);
+        // تاريخ المحطة عنواناً لمجموعته (سطراً واحداً)، وتحته المحطة باسمها ثم
+        // وقتها ثم مكانها — لا التاريخ مكرَّراً في سطر كل محطة.
+        expect(find.text('2026-09-20'), findsOneWidget);
+        expect(find.text('الحنّة — بعد العصر — الديوان'), findsOneWidget);
         expect(find.text('2026-09-22'), findsOneWidget);
+        expect(find.text('الغداء'), findsOneWidget);
       },
     );
   });
@@ -4106,5 +4112,332 @@ void main() {
       expect(find.text('جاي'), findsWidgets);
       expect(find.text('مش جاي'), findsOneWidget);
     });
+  });
+
+  group('صفحة المناسبة: برنامج المناسبة والتقويم والملاحة (تذكرة #176)', () {
+    /// نوع عرس يُظهر `extra_days` — هو ما يجعل قسم البرنامج يُرسم أصلاً.
+    Map<String, dynamic> programTypeJson() => {
+      'id': 1,
+      'name': 'عرس',
+      'icon': '💍',
+      'color': '#0369a1',
+      'position': 1,
+      'is_active': true,
+      'creates_collision': false,
+      'warns_others': false,
+      'premoderate_messages': false,
+      'show_congratulations_count': false,
+      'show_followers_count': false,
+      'show_views_count': false,
+      'congratulations_label': 'تبريكات',
+      'default_badge_title': null,
+      'default_poster_url': null,
+      'legacy_client_supported': true,
+      'tone': 'festive',
+      'reactions': <String>[],
+      'fields': [
+        {
+          'field_key': 'honorees',
+          'label': 'أصحاب المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 1,
+        },
+        {
+          'field_key': 'event_date',
+          'label': 'تاريخ المناسبة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 2,
+        },
+        {
+          'field_key': 'location_name',
+          'label': 'موقع القاعة',
+          'is_visible': true,
+          'is_required': true,
+          'position': 3,
+        },
+        {
+          'field_key': 'extra_days',
+          'label': 'أيام إضافية',
+          'is_visible': true,
+          'is_required': false,
+          'position': 4,
+        },
+      ],
+    };
+
+    /// جسم المناسبة كما يصل من `GET /api/events/:id`.
+    ///
+    /// و`extra_days` بترتيب الخادم نفسه (`eventDaysForEvents`: التاريخ ثم
+    /// الوقت ثم `position`) — و`position` هنا **معكوس** بالنسبة إلى الوقت (٢ ثم
+    /// ١) عمداً: عميلٌ يرتّب بالـ`position` يقلب المحطتين فيسقط التأكيد.
+    Map<String, dynamic> programEventBody({
+      int id = 40,
+      double? latitude,
+      double? longitude,
+    }) => {
+      'id': id,
+      'title': 'عرس محمد',
+      'groom_name': 'محمد',
+      'family_clan': 'آل فلان',
+      'town': 'رهط',
+      'location_name': 'ديوان آل فلان',
+      'event_date': '2026-10-10',
+      'latitude': ?latitude,
+      'longitude': ?longitude,
+      'occasion_type': programTypeJson(),
+      'honorees': [
+        {'name': 'محمد', 'role': null, 'position': 1},
+      ],
+      'extra_days': [
+        {
+          'name': 'الحنّة',
+          'day_date': '2026-10-08',
+          'place': 'ديوان آل فلان',
+          'day_time': '17:00',
+          'position': 2,
+        },
+        {
+          'name': 'العشاء',
+          'day_date': '2026-10-08',
+          'place': 'قاعة الأفراح',
+          'day_time': '20:00',
+          'position': 1,
+        },
+        {
+          'name': 'الغداء',
+          'day_date': '2026-10-09',
+          'place': null,
+          'day_time': null,
+          'position': 0,
+        },
+      ],
+    };
+
+    Future<void> pumpProgramDetails(
+      WidgetTester tester,
+      Map<String, dynamic> eventBody, {
+      Key? key,
+    }) async {
+      final client = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'success': true, 'event': eventBody}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = NegevApi(ApiClient(client: client));
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: AuthStore(api),
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: Directionality(
+              textDirection: TextDirection.rtl,
+              child: EventDetailsScreen(key: key, eventId: 40),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    testWidgets(
+      '«برنامج المناسبة» يجمع محطات اليوم الواحد تحت تاريخ واحد مرتّبةً بالوقت، وكل تاريخ في مجموعته',
+      (tester) async {
+        await pumpProgramDetails(tester, programEventBody());
+
+        expect(
+          find.text('برنامج المناسبة'),
+          findsOneWidget,
+          reason: 'عنوان القسم «برنامج المناسبة» لا «أيام إضافية»',
+        );
+
+        final firstStop = find.text('الحنّة — 17:00 — ديوان آل فلان');
+        final secondStop = find.text('العشاء — 20:00 — قاعة الأفراح');
+        final nextDayStop = find.text('الغداء');
+        expect(firstStop, findsOneWidget);
+        expect(secondStop, findsOneWidget);
+        expect(nextDayStop, findsOneWidget);
+
+        expect(
+          tester.getTopLeft(firstStop).dy,
+          lessThan(tester.getTopLeft(secondStop).dy),
+          reason: 'محطتا اليوم نفسه بترتيب الوقت — والـposition المعكوس في '
+              'الجسم لا يقلبهما',
+        );
+        expect(
+          tester.getTopLeft(secondStop).dy,
+          lessThan(tester.getTopLeft(nextDayStop).dy),
+          reason: 'يوم آخر تحت تاريخه، بعد محطات اليوم الأول',
+        );
+
+        expect(
+          find.text('2026-10-08'),
+          findsOneWidget,
+          reason: 'تاريخ المجموعة يُكتب مرة واحدة، لا مرة لكل محطة',
+        );
+        expect(find.text('2026-10-09'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '«أضف إلى تقويم الهاتف» يفتح /api/events/<id>/calendar.ics من عنوان الخادم الوحيد',
+      (tester) async {
+        final launched = <MethodCall>[];
+        const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(launcherChannel, (call) async {
+          launched.add(call);
+          return true;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(launcherChannel, null);
+        });
+
+        await pumpProgramDetails(tester, programEventBody());
+
+        final button = find.text('أضف إلى تقويم الهاتف');
+        expect(button, findsOneWidget);
+        await tester.ensureVisible(button);
+        await tester.pump();
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+
+        final launch = launched.singleWhere((call) => call.method == 'launch');
+        final url = (launch.arguments as Map)['url'] as String;
+        expect(url, '${AppConfig.apiBase}/api/events/40/calendar.ics');
+        expect(Uri.parse(url).path, '/api/events/40/calendar.ics');
+      },
+    );
+
+    testWidgets(
+      '«أضف إلى تقويم الهاتف» يغيب عن غير المؤهّل: معلّقة، أو «بالرابط فقط»، أو مجدولة لم يبلغ موعدها',
+      (tester) async {
+        final button = find.text('أضف إلى تقويم الهاتف');
+
+        // غير المعتمدة (404 على المسار) — لا زرّ يوعد بما لا يُنزَّل. ومفتاح
+        // جديد لكل دفع: بلا مفتاح يُعاد استعمال State الشاشة فلا يُعاد الجلب
+        // ويبقى الجسم الأول.
+        await pumpProgramDetails(
+          tester,
+          {...programEventBody(), 'status': 'pending'},
+          key: UniqueKey(),
+        );
+        expect(
+          button,
+          findsNothing,
+          reason: 'مناسبة معلّقة يردّ مسار التقويم عليها 404',
+        );
+
+        await pumpProgramDetails(
+          tester,
+          {...programEventBody(), 'visibility': 'link_only'},
+          key: UniqueKey(),
+        );
+        expect(
+          button,
+          findsNothing,
+          reason: '«بالرابط فقط» ليست عامة، والمسار يردّ عليها 404',
+        );
+
+        // مجدولة: موعد النشر ساعة حائط مستقبلية ⇒ الملف ليس عاماً بعد.
+        await pumpProgramDetails(
+          tester,
+          {...programEventBody(), 'publish_at': '2093-01-01T00:00:00.000Z'},
+          key: UniqueKey(),
+        );
+        expect(
+          button,
+          findsNothing,
+          reason: 'مجدولة لم يبلغ موعدها لا تُنزَّل',
+        );
+
+        // ومجدولة بلغ موعدها تعود: البوابة تفتح بالزمن نفسه.
+        await pumpProgramDetails(
+          tester,
+          {...programEventBody(), 'publish_at': '2020-01-01T00:00:00.000Z'},
+          key: UniqueKey(),
+        );
+        expect(
+          button,
+          findsOneWidget,
+          reason: 'بلغ موعد النشر ⇒ الملف يُخدَم، فيعود الزرّ',
+        );
+      },
+    );
+
+    testWidgets(
+      '«الملاحة» تفتح الخرائط بالإحداثيات حين توجد',
+      (tester) async {
+        final launched = <MethodCall>[];
+        const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(launcherChannel, (call) async {
+          launched.add(call);
+          return true;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(launcherChannel, null);
+        });
+
+        await pumpProgramDetails(
+          tester,
+          programEventBody(latitude: 31.2345, longitude: 34.8765),
+        );
+
+        final navButton = find.text('الملاحة');
+        expect(navButton, findsOneWidget, reason: 'زرّ الملاحة بجانب سطر المكان');
+        await tester.ensureVisible(navButton);
+        await tester.pump();
+        await tester.tap(navButton);
+        await tester.pumpAndSettle();
+
+        final launch = launched.singleWhere((call) => call.method == 'launch');
+        final url = (launch.arguments as Map)['url'] as String;
+        expect(url, contains('31.2345,34.8765'));
+      },
+    );
+
+    testWidgets(
+      '«الملاحة» تبقى وتفتح الخرائط باسم المكان حين تغيب الإحداثيات',
+      (tester) async {
+        final launched = <MethodCall>[];
+        const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(launcherChannel, (call) async {
+          launched.add(call);
+          return true;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(launcherChannel, null);
+        });
+
+        await pumpProgramDetails(tester, programEventBody());
+
+        final navButton = find.text('الملاحة');
+        expect(
+          navButton,
+          findsOneWidget,
+          reason: 'زرّ الملاحة لا يغيب عن مناسبة بلا دبّوس',
+        );
+        await tester.ensureVisible(navButton);
+        await tester.pump();
+        await tester.tap(navButton);
+        await tester.pumpAndSettle();
+
+        final launch = launched.singleWhere((call) => call.method == 'launch');
+        final url = Uri.parse((launch.arguments as Map)['url'] as String);
+        expect(url.toString(), contains(Uri.encodeComponent('ديوان آل فلان رهط')));
+        expect(url.toString(), isNot(contains('null')));
+      },
+    );
   });
 }

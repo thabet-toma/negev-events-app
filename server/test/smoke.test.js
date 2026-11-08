@@ -331,15 +331,16 @@ async function run() {
   /** صفّ مناسبة خام في محافظة التقويم — أصغر مجموعة أعمدة تكفي قراءةَ التقويم. */
   const insertCalendarEvent = async ({
     date, endDate = null, typeId = weddingType.id, status = 'approved',
-    visibility = 'public', publishAt = null, regionId = calendarRegionId
+    visibility = 'public', publishAt = null, regionId = calendarRegionId,
+    title = 'مناسبة التقويم', groomName = 'عريس التقويم', dinnerTime = ''
   }) => {
     const { insertId } = await db.execute(
       `INSERT INTO events
          (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name,
-          event_date, event_end_date, status, visibility, publish_at)
-       VALUES (?, ?, ?, ?, 'رهط', ?, 'ديوان التقويم', ?, ?, ?, ?, ?)`,
+          dinner_time, event_date, event_end_date, status, visibility, publish_at)
+       VALUES (?, ?, ?, ?, 'رهط', ?, 'ديوان التقويم', ?, ?, ?, ?, ?, ?)`,
       [
-        'مناسبة التقويم', 'عريس التقويم', 'عائلة التقويم', typeId, regionId,
+        title, groomName, 'عائلة التقويم', typeId, regionId, dinnerTime,
         date, endDate, status, visibility, publishAt
       ]
     );
@@ -455,6 +456,141 @@ async function run() {
         dayEleven.body.events.map(event => event.id), [calendarMultiDayId],
         'a middle day of the span lists the multi-day event alone — even though its event_date is elsewhere'
       );
+    });
+
+    console.log('\nAdd to phone calendar — GET /api/events/:id/calendar.ics (تذكرة #176)');
+
+    /**
+     * مناسبة معتمدة عامة داخل المحافظة المؤقتة نفسها، بأصحاب مناسبة ونوع حقيقيين:
+     * `SUMMARY` يجب أن يكون عنوان صفحة المناسبة نفسه («النوع + أصحابها» كما يبنيه
+     * `buildDefaultTitle` عند النشر) لا العنوان الحرّ وحده — وهذا لا يُقاس بصفٍّ
+     * بلا أصحاب. والصفّ الخام هنا لأن التاريخ في 2093 والمسار العام لا ينشر ماضياً
+     * قريباً؛ والتنظيف بمعرّفات `calendarEventIds` مع بقية القسم.
+     */
+    const calendarIcsEventId = await insertCalendarEvent({ date: '2093-05-14', endDate: '2093-05-15' });
+    await db.execute(
+      'INSERT INTO event_honorees (event_id, name, role, position) VALUES (?, ?, ?, ?)',
+      [calendarIcsEventId, 'سالم الاختبار', 'العريس', 0]
+    );
+
+    await test('GET /api/events/:id/calendar.ics serves a valid iCalendar file for an approved public event (تذكرة #176)', async () => {
+      const res = await fetch(`${baseUrl}/api/events/${calendarIcsEventId}/calendar.ics`);
+      const body = await res.text();
+
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('content-type'), 'text/calendar; charset=utf-8');
+      assert.ok(
+        (res.headers.get('content-disposition') || '').startsWith(`attachment; filename="event-${calendarIcsEventId}.ics"`),
+        `expected an attachment filename built from the id alone, got: ${res.headers.get('content-disposition')}`
+      );
+      assert.ok(body.startsWith('BEGIN:VCALENDAR\r\n'), 'the file opens with the calendar component');
+      assert.ok(body.endsWith('END:VCALENDAR\r\n'), 'and closes with it, CRLF included');
+      assert.ok(
+        body.includes('\r\nSUMMARY:عرس سالم الاختبار\r\n'),
+        `SUMMARY must be the event page's own headline («النوع + أصحابها»), got:\n${body}`
+      );
+      assert.ok(body.includes('\r\nDTSTART;VALUE=DATE:20930514\r\n'), 'DTSTART is the event\'s first day');
+      assert.ok(
+        body.includes('\r\nDTEND;VALUE=DATE:20930516\r\n'),
+        'DTEND is the day after the last day (exclusive), so a 14–15 event lasts both days'
+      );
+      assert.ok(
+        body.includes('\r\nLOCATION:رهط — ديوان التقويم\r\n'),
+        'LOCATION is the place line of the page: the town, then the hall'
+      );
+      assert.ok(body.includes('\r\nX-WR-TIMEZONE:Asia/Jerusalem\r\n'), 'the calendar declares Asia/Jerusalem');
+      assert.ok(body.includes(`\r\nUID:event-${calendarIcsEventId}@negev-events\r\n`), 'the UID is stable for this event id');
+      assert.ok(/\r\nDTSTAMP:\d{8}T\d{6}Z\r\n/.test(body), 'DTSTAMP is present and in UTC');
+      assert.ok(!/(^|[^\r])\n/.test(body), 'every line ends with CRLF — no bare LF anywhere');
+    });
+
+    /**
+     * تصحيح جولة #176: `SUMMARY` كان يسقط إلى العنوان الحرّ حين لا `honorees`،
+     * بينما صفحة المناسبة تقول «عرس سالم» من `groom_name`
+     * (`eventCardHeadline` في `web/app.js`، ونظيره في الموبايل). الصفّان هنا
+     * عنوانهما الحرّ اسم بلدة وحده — وهو بالضبط ما كان يخرج في الملف.
+     */
+    await test('calendar.ics SUMMARY is the event page\'s own headline — groom_name when there are no honorees (تذكرة #176)', async () => {
+      const groomOnlyId = await insertCalendarEvent({ date: '2093-05-19', title: 'اللد', groomName: 'سالم' });
+      const groomOnly = await (await fetch(`${baseUrl}/api/events/${groomOnlyId}/calendar.ics`)).text();
+      assert.ok(
+        groomOnly.includes('\r\nSUMMARY:عرس سالم\r\n'),
+        `SUMMARY must be the page headline built from groom_name, got:\n${groomOnly}`
+      );
+      assert.ok(!groomOnly.includes('SUMMARY:اللد'), 'the free title is not the headline while a groom name exists');
+
+      // وبلا اسم إطلاقاً يعود العنوان الحرّ كما في الصفحة.
+      const namelessId = await insertCalendarEvent({ date: '2093-05-19', title: 'اللد', groomName: '' });
+      const nameless = await (await fetch(`${baseUrl}/api/events/${namelessId}/calendar.ics`)).text();
+      assert.ok(
+        nameless.includes('\r\nSUMMARY:اللد\r\n'),
+        `with no honoree and no groom name the free title is the headline, got:\n${nameless}`
+      );
+    });
+
+    /**
+     * تصحيح جولة #176: الوقت لم يكن يُكتب في أي خاصية. معيار التذكرة «العنوان
+     * والتاريخ والوقت والمكان كما في صفحة المناسبة»، ونصوص الوقت حرّة
+     * («7:30 مساءً»، «بعد العصر») فلا تُحوَّل إلى ساعة رقمية — لكن إسقاطها
+     * مرفوض: تُسرد في `DESCRIPTION` بترتيب الصفحة (البرنامج ثم سطر العشاء)،
+     * والمدخل يبقى يوماً كاملاً (`DTSTART;VALUE=DATE`).
+     */
+    await test('calendar.ics carries the page\'s time texts in DESCRIPTION, and invents none when nothing was written (تذكرة #176)', async () => {
+      const timedId = await insertCalendarEvent({ date: '2093-05-21', dinnerTime: '7:30 مساءً' });
+      await db.execute(
+        `INSERT INTO event_days (event_id, name, day_date, place, day_time, position)
+         VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+        [
+          timedId, 'الحنّة', '2093-05-20', 'ديوان التقويم', '17:00', 1,
+          timedId, 'العشاء', '2093-05-21', 'قاعة التقويم', '20:00', 0
+        ]
+      );
+
+      const body = await (await fetch(`${baseUrl}/api/events/${timedId}/calendar.ics`)).text();
+      // الطيّ (RFC 5545 §3.1) يُفَكّ قبل القراءة: نصّ الوصف قد يُقسم على سطرين.
+      const unfolded = body.replace(/\r\n[ \t]/g, '');
+      assert.ok(
+        unfolded.includes('DESCRIPTION:الحنّة: 17:00\\nالعشاء: 20:00\\nموعد العشاء: 7:30 مساءً'),
+        `DESCRIPTION must list the program times then the dinner time, in page order, got:\n${body}`
+      );
+      assert.ok(
+        body.includes('\r\nDTSTART;VALUE=DATE:20930521\r\n'),
+        'the entry stays an all-day one: a free-text time is never turned into a DTSTART clock'
+      );
+
+      // ولا وصف مختلق: مناسبة بلا وقت مكتوب لا `DESCRIPTION` لها إطلاقاً.
+      const plainId = await insertCalendarEvent({ date: '2093-05-22' });
+      const plain = await (await fetch(`${baseUrl}/api/events/${plainId}/calendar.ics`)).text();
+      assert.ok(
+        !plain.includes('\r\nDESCRIPTION:'),
+        `no DESCRIPTION when neither a day time nor a dinner time was written, got:\n${plain}`
+      );
+    });
+
+    await test('calendar.ics is 404 for a pending, rejected, link_only, scheduled or missing event — the public visibility gate itself (تذكرة #176)', async () => {
+      const refused = [
+        ['pending', await insertCalendarEvent({ date: '2093-05-14', status: 'pending' })],
+        ['rejected', await insertCalendarEvent({ date: '2093-05-14', status: 'rejected' })],
+        ['link_only', await insertCalendarEvent({ date: '2093-05-14', visibility: 'link_only' })],
+        ['scheduled', await insertCalendarEvent({ date: '2093-05-14', publishAt: '2093-01-01 00:00:00' })],
+        ['missing', 999999999]
+      ];
+
+      for (const [label, eventId] of refused) {
+        const res = await fetch(`${baseUrl}/api/events/${eventId}/calendar.ics`);
+        const body = await res.text();
+        assert.strictEqual(res.status, 404, `${label} must not be downloadable`);
+        assert.ok(!body.includes('BEGIN:VCALENDAR'), `${label} must not leak a calendar body`);
+      }
+    });
+
+    await test('the share page /e/:id never mentions calendar.ics (ADR-0006, تذكرة #176)', async () => {
+      const res = await fetch(`${baseUrl}/e/${calendarIcsEventId}`);
+      const html = await res.text();
+
+      assert.strictEqual(res.status, 200, 'the approved event still has its share page');
+      assert.ok(!html.includes('calendar.ics'), 'no calendar link is rendered on the share page');
+      assert.ok(!html.includes('تقويم الهاتف'), 'nor is the calendar offered by name there');
     });
   } finally {
     if (calendarEventIds.length) {
@@ -1287,6 +1423,63 @@ async function run() {
     assert.strictEqual(cleared.status, 200);
     days = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
     assert.strictEqual(days.length, 0, 'an empty array must clear every day');
+
+    await api('DELETE', `/api/admin/events/${id}`, { token: adminToken });
+  });
+
+  /**
+   * تصحيح جولة #176 — انحدار الحفظ: التطبيع (مقارنة قبل/بعد في `updateEvent`)
+   * كان يرتّب بالتاريخ ثم `position`، بينما القراءة (والبرنامج على الصفحتين)
+   * بالتاريخ ثم الوقت ثم `position`. فمحطتان في يوم واحد بوقتين مختلفين —
+   * العشاء 20:00 مكتوباً أولاً ثم الحنّة 17:00 — تُقرآن «الحنّة ثم العشاء»،
+   * ويعيد المحرّر إرسالهما بهذا الترتيب بمواضع 0..N جديدة، فتظنّ الخدمة الترتيب
+   * تغيّر: تحذف الصفوف وتعيد إدراجها وتسجّل تعديلاً (وقد تُشعر المتابعين).
+   * الحالة هنا هي الدورة كاملة: GET ثم حفظ الملفّ نفسه ⇒ لا صفّ تعديل، والترتيب
+   * بعد الحفظ كما قبله.
+   */
+  await test('Saving the days back exactly as GET returned them is a no-op — two stations on one date at different times (تذكرة #176)', async () => {
+    const { body: created } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: weddingEventBody({
+        honorees: [{ name: 'صاحب ترتيب الأيام' }],
+        extra_days: [
+          { name: 'العشاء', date: '2027-09-10', place: 'قاعة الأفراح', time: '20:00' },
+          { name: 'الحنّة', date: '2027-09-10', place: 'ديوان آل فلان', time: '17:00' }
+        ]
+      })
+    });
+    const id = created.eventId;
+    assert.strictEqual(created.status, 'approved');
+
+    const read = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
+    assert.deepStrictEqual(
+      read.map(day => day.name), ['الحنّة', 'العشاء'],
+      'the read order is by written time, not by the order the form happened to store'
+    );
+
+    const resaved = await api('PATCH', `/api/events/${id}`, {
+      token: adminToken,
+      body: {
+        extra_days: read.map(day => ({
+          name: day.name, date: day.day_date, place: day.place, time: day.day_time
+        }))
+      }
+    });
+    assert.strictEqual(resaved.status, 200);
+
+    const amendments = await db.query(
+      "SELECT id FROM event_amendments WHERE event_id = ? AND field = 'extra_days'", [id]
+    );
+    assert.deepStrictEqual(
+      amendments, [],
+      'saving the same days back in read order must not log an extra_days amendment'
+    );
+    const after = (await api('GET', `/api/events/${id}`)).body.event.extra_days;
+    assert.deepStrictEqual(
+      after.map(day => `${day.name}|${day.day_time}|${day.place}`),
+      read.map(day => `${day.name}|${day.day_time}|${day.place}`),
+      'the order after saving is the order before saving'
+    );
 
     await api('DELETE', `/api/admin/events/${id}`, { token: adminToken });
   });

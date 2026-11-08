@@ -210,6 +210,28 @@ router.get('/events/:id', optionalAuthenticate, asyncHandler(async (req, res) =>
   res.json({ success: true, event });
 }));
 
+/**
+ * «أضف إلى تقويم الهاتف» (تذكرة #176) — ملف iCalendar لصفحة المناسبة، **عام
+ * بلا مصادقة** (رابط تنزيل عادي في الويب وفي التطبيق). التوليد كله في
+ * `events.getEventCalendar` — هنا ترويسات الاستجابة وحدها، ولا حرف من محتوى
+ * الملف يُبنى في طبقة المسارات.
+ *
+ * والبوابة في الخدمة لا هنا: معتمدة **وعامة**، ومجدولةٌ بلغ موعدُها (أو غير
+ * مجدولة)، وإلا 404 واحدة للمعلّقة و«بالرابط فقط» والمجدولة التي لم يبلغ موعدها
+ * وغير الموجودة. و`filename` من المعرّف الرقمي وحده؛
+ * لا شيء يكتبه مستخدم يدخل `Content-Disposition`، فلا حقن ترويسات.
+ *
+ * ولا علاقة له بـ`/e/:id` (ADR-0006): رابط التقويم لا يُدرج في صفحة المشاركة
+ * ولا يُربط منها — هي صفحة معاينة اجتماعية، لا صفحة مناسبة.
+ */
+router.get('/events/:id/calendar.ics', asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const { filename, body } = await events.getEventCalendar(eventId);
+  res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(body);
+}));
+
 // --- Event submission ---------------------------------------------
 
 /**
