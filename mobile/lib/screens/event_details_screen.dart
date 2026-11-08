@@ -24,6 +24,24 @@ import 'albums_screen.dart';
 const double _detailsPosterHeight = 250;
 const double _detailsPosterHeightSolemn = 194;
 
+/// رابط خرائط Google للمناسبة (تذكرة #176) — **بالإحداثيات إن وُجدت، وباسم
+/// المكان والبلدة إن غابت**، على قاعدة `eventNavUrls` في الويب (`web/app.js`)
+/// نفسها، بلا اسم المحافظة الذي يلحقه الويب: التطبيق يحمل `region_id` لا اسمه.
+/// فزرّ الملاحة يعمل لمناسبة بلا دبّوس، بخلاف زرّ Waze الذي يحتاج نقطة.
+/// النصّ يُرمَّز بـ`Uri.encodeComponent` فلا تكسر مسافةٌ أو «—» عنوانَ البحث.
+String eventMapsUrl(Event event) {
+  final latitude = event.latitude;
+  final longitude = event.longitude;
+  if (latitude != null && longitude != null) {
+    return 'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude';
+  }
+  final query = [event.locationName, event.townDisplay]
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty)
+      .join(' ');
+  return 'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(query)}';
+}
+
 /// تفاصيل مناسبة: البوستر، المعلومات، الشيلة، التفاعلات، التبريكات — كلها
 /// مقادة بإعداد نوع المناسبة (`occasion_type`)، لا نص فرح ثابت.
 class EventDetailsScreen extends StatefulWidget {
@@ -152,6 +170,32 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     );
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (mounted) showMessage(context, 'تعذّر فتح التطبيق', isError: true);
+    }
+  }
+
+  /// زرّ الملاحة العام (تذكرة #176) — خرائط Google بجانب سطر القاعة/المكان،
+  /// **بالإحداثيات إن وُجدت وباسم المكان إن غابت** ([eventMapsUrl])، فلا يغيب
+  /// عن مناسبة بلا دبّوس. زرّ Waze أعلاه باقٍ كما هو: يحتاج نقطة، ويعطي
+  /// الملاحة المنعطفة التي لا يعطيها بحثُ الخرائط.
+  Future<void> _openMaps(Event event) async {
+    recordAnalyticsEvent(
+      AppServices.of(context).api,
+      'location_clicked',
+      contentTown: event.town,
+    );
+    final uri = Uri.parse(eventMapsUrl(event));
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) showMessage(context, 'تعذّر فتح الخرائط', isError: true);
+    }
+  }
+
+  /// «أضف إلى تقويم الهاتف» (تذكرة #176) — ملف iCalendar من الخادم نفسه
+  /// (`NegevApi.eventCalendarUrl`)، فيُفتح في المتصفّح أو تطبيق التقويم. لا
+  /// `http` مباشر ولا عنوان مكرَّر هنا.
+  Future<void> _openCalendar() async {
+    final uri = AppServices.of(context).api.eventCalendarUrl(widget.eventId);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) showMessage(context, 'تعذّر فتح التقويم', isError: true);
     }
   }
 
@@ -352,6 +396,8 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
                   },
                   onReact: _react,
                   onNavigate: () => _openNavigation(event),
+                  onOpenMaps: () => _openMaps(event),
+                  onOpenCalendar: _openCalendar,
                   onCallHost: () => _callHost(event.hostPhone!, town: event.town),
                   onCongratulate: () => _openCongratulateSheet(event),
                   onShare: () => _share(event),
@@ -373,6 +419,8 @@ class _EventDetailsBody extends StatelessWidget {
     required this.onToggleAudio,
     required this.onReact,
     required this.onNavigate,
+    required this.onOpenMaps,
+    required this.onOpenCalendar,
     required this.onCallHost,
     required this.onCongratulate,
     required this.onRemindTap,
@@ -391,6 +439,10 @@ class _EventDetailsBody extends StatelessWidget {
   final VoidCallback onToggleAudio;
   final ValueChanged<String> onReact;
   final VoidCallback onNavigate;
+  /// زرّ الملاحة بجانب سطر المكان — خرائط Google (تذكرة #176).
+  final VoidCallback onOpenMaps;
+  /// «أضف إلى تقويم الهاتف» — ملف iCalendar من الخادم (تذكرة #176).
+  final VoidCallback onOpenCalendar;
   final VoidCallback onCallHost;
   final VoidCallback onCongratulate;
   final VoidCallback onRemindTap;
@@ -516,6 +568,16 @@ class _EventDetailsBody extends StatelessWidget {
                 icon: Icons.location_on_outlined,
                 label: type?.labelFor('location_name') ?? 'المكان',
                 value: '${event.townDisplay} — ${event.locationName}',
+                action: TextButton.icon(
+                  onPressed: onOpenMaps,
+                  icon: const Icon(Icons.map_outlined, size: 16),
+                  label: const Text('الملاحة'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    foregroundColor: context.c.sky,
+                  ),
+                ),
               ),
               if (showSecondaryLocation && event.secondaryLocationName != null)
                 _InfoRow(
@@ -540,21 +602,11 @@ class _EventDetailsBody extends StatelessWidget {
                   label: type?.labelFor('youth_party_date') ?? 'سهرة الشباب',
                   value: event.youthPartyDate!,
                 ),
-              // الأيام الإضافية بترتيب وصولها (مرتّبة بالتاريخ خادمياً) — كل
-              // يومٍ سطرٌ باسمه، وتاريخه بصيغة صفّ التاريخ نفسه، ثم الوقت
-              // والمكان كلٌّ منهما حين يوجد.
+              // «برنامج المناسبة» (تذكرة #176): المحطات مجمّعة تحت تاريخها
+              // بترتيب الخادم نفسه (تاريخاً ثم وقتاً ثم `position`)، لا سطراً
+              // مستقلاً لكل يوم بتاريخه مكرَّراً.
               if (showExtraDays && event.extraDays.isNotEmpty)
-                ...event.extraDays.map(
-                  (day) => _InfoRow(
-                    icon: Icons.event_available,
-                    label: day.name,
-                    value: [
-                      day.dayDate,
-                      if (day.dayTime != null && day.dayTime!.isNotEmpty) day.dayTime!,
-                      if (day.place != null && day.place!.isNotEmpty) day.place!,
-                    ].join(' — '),
-                  ),
-                ),
+                _EventProgram(days: event.extraDays),
               if (showDinnerTime && event.dinnerTime.isNotEmpty)
                 _InfoRow(
                   icon: Icons.access_time,
@@ -590,6 +642,21 @@ class _EventDetailsBody extends StatelessWidget {
                   ],
                 ],
               ),
+              const SizedBox(height: 10),
+              // «أضف إلى تقويم الهاتف» (تذكرة #176) — رابط تنزيل ملف iCalendar
+              // من الخادم، يُفتح في المتصفّح/تطبيق التقويم الخارجي. ولا يُعرض
+              // إلا لمناسبة مؤهّلة بنفس شرط بوابة المسار
+              // (`Event.canDownloadCalendar`): المسار يردّ 404 لغير المعتمدة
+              // وغير العامة والمجدولة التي لم يبلغ موعدها.
+              if (event.canDownloadCalendar)
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onOpenCalendar,
+                    icon: const Icon(Icons.calendar_month_outlined),
+                    label: const Text('أضف إلى تقويم الهاتف'),
+                  ),
+                ),
               const SizedBox(height: 10),
               // زرّ المشاركة — تفاصيل المناسبة وحدها (لا كرت القائمة، ثمانية
               // عناصر عليه أصلاً). الكلمة من نبرة النوع (`tone`) حصراً، لا اسمه.
@@ -1086,11 +1153,16 @@ class _InfoRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.action,
   });
 
   final IconData icon;
   final String label;
   final String value;
+
+  /// زرّ صغير بآخر السطر — الملاحة بجانب المكان (تذكرة #176). `null` = لا زرّ،
+  /// فباقي السطور كما كانت حرفاً بحرف.
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -1119,6 +1191,80 @@ class _InfoRow extends StatelessWidget {
                 height: 1.45,
               ),
             ),
+          ),
+          ?action,
+        ],
+      ),
+    );
+  }
+}
+
+/// «برنامج المناسبة» (تذكرة #176): محطات المناسبة مجمّعة تحت تاريخها — تاريخٌ
+/// واحد سطراً لمجموعته، وتحته كل محطة باسمها ثم وقتها ثم مكانها عند وجودهما.
+/// **بلا إعادة ترتيب هنا:** الترتيب هو ترتيب `extra_days` الواصل من الخادم
+/// (تاريخاً ثم وقتاً ثم `position`، `eventDaysForEvents`)، والتجميع بخريطة
+/// تُحفظ بترتيب أول ظهور فلا يفرض ترتيباً ثانياً.
+class _EventProgram extends StatelessWidget {
+  const _EventProgram({required this.days});
+
+  final List<EventDay> days;
+
+  @override
+  Widget build(BuildContext context) {
+    final byDate = <String, List<EventDay>>{};
+    for (final day in days) {
+      byDate.putIfAbsent(day.dayDate, () => <EventDay>[]).add(day);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.event_available, size: 17, color: context.c.sky),
+              const SizedBox(width: 9),
+              Text(
+                'برنامج المناسبة',
+                style: TextStyle(color: context.c.inkFaint, fontSize: 14),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...byDate.entries.expand(
+            (entry) => [
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 26, bottom: 3),
+                child: Text(
+                  entry.key,
+                  style: TextStyle(
+                    color: context.c.sky,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              ...entry.value.map(
+                (day) => Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 26, bottom: 3),
+                  child: Text(
+                    [
+                      day.name,
+                      if (day.dayTime != null && day.dayTime!.isNotEmpty)
+                        day.dayTime!,
+                      if (day.place != null && day.place!.isNotEmpty) day.place!,
+                    ].join(' — '),
+                    style: TextStyle(
+                      color: context.c.ink,
+                      fontSize: 14.5,
+                      height: 1.45,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

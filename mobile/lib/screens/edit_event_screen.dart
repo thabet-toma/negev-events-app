@@ -21,6 +21,7 @@ import 'add_event_screen.dart'
         EventVisibilityField,
         DateField,
         collectEventDays,
+        eventProgramLabel,
         kEventTextFieldKeys,
         kEventFieldHints,
         formatEventDate,
@@ -691,7 +692,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
           if (type?.showsField('extra_days') ?? false) ...[
             const SizedBox(height: 12),
             EventDaysEditor(
-              label: type?.labelFor('extra_days') ?? 'أيام إضافية',
+              label: eventProgramLabel,
               rows: _days,
               onChanged: () => setState(() {}),
               pickDate: _pickDate,

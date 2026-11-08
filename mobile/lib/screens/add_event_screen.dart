@@ -193,6 +193,12 @@ class HonoreeRow {
   }
 }
 
+/// اسم حقل الأيام في شاشتَي النشر والتعديل: «برنامج المناسبة» (تذكرة #176).
+/// ثابت هنا لا في `occasion_type_fields.label` لأن التسمية الجديدة تخصّ الحقل
+/// نفسه في كل الأنواع لا نوعاً دون نوع — والتسمية المخزَّنة «أيام إضافية»
+/// تسمية بنية لا معنى. شاشة التعديل تستورده من هنا بدل نسخة ثانية.
+const String eventProgramLabel = 'برنامج المناسبة';
+
 /// صف يوم واحد من الأيام الإضافية («الحنّة»، «الغداء»، …) — الاسم والمكان
 /// والوقت حقول نصّية، والتاريخ يملؤه منتقي التاريخ. عام كي تعيد شاشة تعديل
 /// المناسبة استعماله بدل نسخة ثانية.
@@ -686,7 +692,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
       return '${type.labelFor('youth_party_date') ?? 'سهرة الشباب'} مطلوب';
     }
     if (type.isRequiredField('extra_days') && collectEventDays(_days).isEmpty) {
-      return '${type.labelFor('extra_days') ?? 'أيام إضافية'} مطلوب';
+      return '$eventProgramLabel مطلوب';
     }
 
     return null;
@@ -1111,7 +1117,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
         if (type.showsField('extra_days')) ...[
           const SizedBox(height: 12),
           EventDaysEditor(
-            label: type.labelFor('extra_days') ?? 'أيام إضافية',
+            label: eventProgramLabel,
             rows: _days,
             onChanged: () => setState(() {}),
             pickDate: _pickDate,

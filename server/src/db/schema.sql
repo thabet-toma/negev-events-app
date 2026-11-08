@@ -362,7 +362,8 @@ CREATE TABLE IF NOT EXISTS event_honorees (
 -- «العرس» Saturday — each with its own optional place and time. An addition,
 -- not a replacement: event_date, event_end_date and youth_party_date keep the
 -- meaning they always had. A child table like event_honorees, so one event may
--- carry any number of days, read back ordered by date then position.
+-- carry any number of days, read back ordered by date, then time, then position
+-- (#176).
 CREATE TABLE IF NOT EXISTS event_days (
   id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
   event_id   INT UNSIGNED NOT NULL,

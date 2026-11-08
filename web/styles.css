@@ -5210,6 +5210,42 @@ body.event-page-open { overflow: hidden; }
 .event-page-info-label { font-size: 0.76rem; color: var(--ink-faint); }
 .event-page-info-value { font-size: 0.97rem; font-weight: 600; color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
 
+/* زرّ الملاحة بجانب سطر المكان (تذكرة #176) — رابط لا زرّ: يفتح خرائط Google
+   في تبويب جديد، بالإحداثيات أو باسم المكان. `margin-inline-start:auto` يدفعه
+   إلى آخر السطر (يساراً في RTL) فلا يزاحم نصّ المكان. */
+.event-page-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--tone, var(--sky));
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  flex: none;
+}
+
+.event-page-nav-link:hover { border-color: var(--tone, var(--sky)); }
+
+/* «برنامج المناسبة» (تذكرة #176): تاريخٌ عنواناً لمجموعة محطاته، وتحته كل
+   محطة سطراً — لا يتكرّر التاريخ على كل محطة. */
+.event-page-program { display: flex; flex-direction: column; gap: 10px; }
+.event-page-program-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+}
+
+.event-page-program-group { display: flex; flex-direction: column; gap: 3px; }
+.event-page-program-date { font-size: 0.8rem; font-weight: 700; color: var(--tone, var(--sky)); }
+.event-page-program-stop { font-size: 0.95rem; font-weight: 600; color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
+
 .event-page-artist-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex: none; }
 
 .event-page .nav-buttons-row { margin-bottom: 0; }

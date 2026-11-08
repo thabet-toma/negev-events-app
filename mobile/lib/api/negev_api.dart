@@ -404,6 +404,12 @@ class NegevApi {
     return Event.fromJson(event);
   }
 
+  /// «أضف إلى تقويم الهاتف» (تذكرة #176) — `GET /api/events/:id/calendar.ics`
+  /// من عنوان الخادم الوحيد هنا (`ApiClient.buildUrl`، أي `config.dart`)، لا
+  /// عنواناً مكرَّراً في الشاشة: الصفحة تفتحه بـ`url_launcher` فيلزمه عنوان
+  /// مطلق. بناء عنوان فقط — لا نداء شبكة ولا JSON.
+  Uri eventCalendarUrl(int eventId) => _client.buildUrl('/api/events/$eventId/calendar.ics');
+
   Future<List<MapPoint>> mapPoints() async {
     final data = await _client.get('/api/map/events');
     final list = data['points'];

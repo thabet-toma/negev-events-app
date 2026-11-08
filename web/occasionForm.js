@@ -86,6 +86,14 @@ function appendHonoreesToFormData(formData, honorees) {
 // أيام المناسبة الإضافية ٠..N (مثال: عرس من ثلاثة أيام: «الحنّة» ثم «الغداء») —
 // مُدخل ديناميكي مشترك بين نموذج النشر العام ونافذة تعديل مناسبتي؛ الاسم
 // والتاريخ إلزاميان على الخادم، والمكان والوقت اختياريان.
+//
+// اسم الحقل نفسه صار «برنامج المناسبة» (تذكرة #176) في نموذج النشر: هذا ما
+// صار يعنيه الحقل عند الناس — محطات المناسبة تحت تواريخها — والتسمية القديمة
+// «أيام إضافية» تسمية بنية لا معنى. وهو ثابت هنا لا في `occasion_type_fields`
+// لأن التسمية الجديدة تخصّ الحقل نفسه في كل الأنواع (لا نوعاً دون نوع)، وتغيير
+// صفوف الأنواع كان سيترك أنواعاً منشأة سابقاً على الاسم القديم.
+const EVENT_PROGRAM_LABEL = 'برنامج المناسبة';
+
 /** يضيف صفّاً جديداً (اسم + تاريخ + مكان/وقت اختياريان) إلى قائمة أيام المناسبة. */
 function addEventDayRow(containerId, day = {}) {
   const container = document.getElementById(containerId);
@@ -142,7 +150,9 @@ function firstMissingRequiredField(type, valueGetters) {
     if (!field.is_required || field.field_key === 'honorees' || field.field_key === 'town' || field.field_key === 'event_date') continue;
     const getter = valueGetters[field.field_key];
     const value = getter ? getter() : null;
-    if (!value) return field.label;
+    // الرسالة تحمل اسم الحقل كما يراه المستخدم في النموذج: «برنامج المناسبة»
+    // لا الاسم المخزَّن في `occasion_type_fields` («أيام إضافية»).
+    if (!value) return field.field_key === 'extra_days' ? EVENT_PROGRAM_LABEL : field.label;
   }
   return null;
 }
@@ -300,7 +310,7 @@ function renderDefaultOccasionFieldHtml(field, ctx, { label, req }) {
     case 'extra_days':
       return `
         <div class="form-group">
-          <label>${label}${req}</label>
+          <label>${EVENT_PROGRAM_LABEL}${req}</label>
           <div id="${p}ExtraDaysList"></div>
           ${ctx.renderExtraDayAddButton(`${p}ExtraDaysList`)}
         </div>`;
