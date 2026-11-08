@@ -603,7 +603,7 @@ void main() {
       expect(
         find.byType(AgendaScreen),
         findsOneWidget,
-        reason: 'زرّ الأجندة يفتح «أجندة المناسبات» القائمة (إلى أن تكتمل #175)',
+        reason: 'زرّ الأجندة يفتح «أجندة المناسبات» (تقويم الشهر الذي جدّدته #175)',
       );
 
       navigatorKey.currentState!.pop();

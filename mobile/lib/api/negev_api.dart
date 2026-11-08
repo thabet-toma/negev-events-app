@@ -36,6 +36,10 @@ class NegevApi {
   /// وحده، فيتجاوز الخادم تقييد المحافظة عليه ويعيد صفوف المحافظات كلها.
   /// **`api.client.regionId` لا يُمسّ**: تلك ترويسة مشتركة لكل النداءات،
   /// والعلَم للطلبات التي تطلبه صراحةً لا لكل العميل.
+  ///
+  /// [regionHeader] محافظة **هذا النداء** وحدها (قائمة مناسبات اليوم في
+  /// «الأجندة»، تذكرة #175) — تُرسَل `X-Region` بدل المحافظة العامة، ويغلبها
+  /// [allRegions] لأن العلَم نفسه توسيعٌ صريح.
   Future<EventsPage> listEvents({
     Object? town,
     Iterable<String>? towns,
@@ -48,6 +52,7 @@ class NegevApi {
     bool allRegions = false,
     String? dateFrom,
     String? dateTo,
+    String? regionHeader,
     int page = 1,
     int limit = 30,
   }) async {
@@ -101,7 +106,11 @@ class NegevApi {
     if (dateFrom != null) query['date_from'] = dateFrom;
     if (dateTo != null) query['date_to'] = dateTo;
 
-    final data = await _client.get('/api/events', query: query);
+    final data = await _client.get(
+      '/api/events',
+      query: query,
+      regionHeader: allRegions ? null : regionHeader,
+    );
     final list = data['events'];
     final events = list is List
         ? list.whereType<Map<String, dynamic>>().map(Event.fromJson).toList()
@@ -121,6 +130,33 @@ class NegevApi {
         : <Announcement>[];
 
     return EventsPage(events: events, pagination: pagination, announcements: announcements);
+  }
+
+  /// أيام الشهر التي فيها مناسبات — `GET /api/events/calendar` (تذكرة #175)،
+  /// عام بلا رمز.
+  ///
+  /// [month] صيغة `YYYY-MM`، و[regionId] فلتر المحافظة في التقويم وحده
+  /// (`null` = كل المحافظات). والخادم هو من يحسب الأيام: امتداد المناسبة كاملاً
+  /// (`EVENT_SPAN_*` — event_end_date وأيام event_days) وبوابة الظهور العام، فلا
+  /// تكرار لهذا الحساب في العميل — حسبانُه هنا على `eventDate` وحده كان يعدّ
+  /// المناسبةَ متعددة الأيام يوماً واحداً ويعدّ `link_only` وهي غائبة.
+  ///
+  /// يعيد الأيام التي فيها مناسبة وحدها مرتّبةً تصاعدياً (الخادم لا يرسل
+  /// صفوفاً صفرية)، فلا حاجة إلى تصفية أو ترتيب هنا.
+  Future<List<CalendarDay>> calendarDays({
+    required String month,
+    int? regionId,
+  }) async {
+    final query = <String, String>{'month': month};
+    if (regionId != null) query['region_id'] = '$regionId';
+    final data = await _client.get('/api/events/calendar', query: query);
+    final raw = data['days'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(CalendarDay.fromJson)
+        .where((day) => day.date.isNotEmpty && day.count > 0)
+        .toList();
   }
 
   /// كتالوج الأماكن كاملاً بطلب واحد إلى GET /api/towns: البلدات النشِطة
@@ -1388,6 +1424,24 @@ class EventsPage {
     required this.pagination,
     required this.announcements,
   });
+}
+
+/// يوم واحد في تقويم الشهر — `{ date: 'YYYY-MM-DD', count }` من
+/// `GET /api/events/calendar` (تذكرة #175). `count` هو عدد المناسبات التي
+/// يقع هذا اليوم داخل امتدادها، محسوباً على الخادم لا في العميل.
+class CalendarDay {
+  final String date;
+  final int count;
+
+  const CalendarDay({required this.date, required this.count});
+
+  factory CalendarDay.fromJson(Map<String, dynamic> json) {
+    final rawCount = json['count'];
+    return CalendarDay(
+      date: json['date'] is String ? json['date'] as String : '',
+      count: rawCount is num ? rawCount.toInt() : (int.tryParse('$rawCount') ?? 0),
+    );
+  }
 }
 
 /// مركز بلدة واحد — من `town_coordinates` في GET /api/towns.

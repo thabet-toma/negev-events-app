@@ -93,7 +93,8 @@ const EVENT_SPAN_START_SQL_E =
  * وأخرى ولا بين جلسة وأخرى.
  *
  * **تُستعمل** في كل قراءة قائمة يراها الجمهور بلا حساب: التغذية
- * (`listPublicEvents`)، والخريطة (`listMapPoints`)، والإعلانات الحية
+ * (`listPublicEvents`)، والخريطة (`listMapPoints`)، وتقويم الشهر
+ * (`listCalendarDays`)، والإعلانات الحية
  * (`listLiveAnnouncements`)، و«مناسبات أخرى» (`listRelatedEvents`)، وخريطة
  * الموقع (`listSitemapEvents`)، وعدّ المناسبات لكل بلدة (`townStats`) ولكل
  * محافظة (`listDiscoveryRegions` في `towns.service.js`)، ومناسبات الشخص
@@ -162,10 +163,12 @@ function publishNowClock() {
  * البقاء الخاصة بنوعها: مناسبة «نجاح» تنتهي اليوم تبقى في «القادم» سبعة أيام
  * وكرتها يقول «انتهت»، والعرس (صفر) يخرج غداً كما كان.
  *
- * **ولا تُعمَّم:** الخريطة (`listMapPoints`) والتقويم و«قائمتي» والتذكيرات
+ * **ولا تُعمَّم:** الخريطة (`listMapPoints`) و«قائمتي» والتذكيرات
  * و`related`/`sitemap` كلها على حدّها القائم (`span_end >= CURDATE()`)، لأن
- * «انتهت» كلامُ تغذيةٍ لا خريطةٍ. وهي شرط واحد يُضاف إلى `conditions` في
- * `listPublicEvents` مكان الحدّ القديم، لا في كل استعلام.
+ * «انتهت» كلامُ تغذيةٍ لا خريطةٍ. **والتقويم (`listCalendarDays`) ليس منها:**
+ * لا يقيّد بالقادم أصلاً — بوابة الظهور العام وحدها — ويعدّ الشهر كاملاً بما
+ * فيه أيام مضت. وهي شرط واحد يُضاف إلى `conditions` في `listPublicEvents`
+ * مكان الحدّ القديم، لا في كل استعلام.
  *
  * `DATEDIFF(CURDATE(), span_end) <= linger` هي `span_end >= CURDATE() - linger`
  * نفسها (و`linger = 0` يعطي الحدّ القديم حرفياً: «لم ينتهِ بعد»)، مكتوبةً بهذا
@@ -1088,7 +1091,7 @@ async function listPublicEvents({
     conditions.push(`${EVENT_SPAN_END_SQL_EVENTS} < CURDATE()`);
   } else if (upcoming) {
     // حدّ «القادم» هنا **وحده** صار نافذة بقاء النوع (تذكرة #167)؛ الخريطة
-    // والتقويم والتذكيرات على `span_end >= CURDATE()` كما هي.
+    // والتذكيرات على `span_end >= CURDATE()` كما هي.
     conditions.push(EVENT_FEED_WINDOW_SQL_EVENTS);
   }
 
@@ -1420,6 +1423,79 @@ async function listMapPoints({
     ...withAbsoluteMedia(row),
     waze_url: `https://waze.com/ul?ll=${row.latitude},${row.longitude}&navigate=yes`
   }));
+}
+
+/**
+ * تقويم الشهر (تذكرة #175): عدد المناسبات في كل يوم من أيام شهر، للويب
+ * والتطبيق.
+ *
+ * **الأيام هي امتداد المناسبة كاملة** — `EVENT_SPAN_START_SQL_E`/
+ * `EVENT_SPAN_END_SQL_E`، لا `event_date` وحده. عرس بدأ الخميس وينتهي السبت
+ * يُعدّ في الأيام الثلاثة، وسهرة شباب أو يوم حنّة خارج `event_date` يجعل
+ * المناسبة ظاهرة في يومه هو أيضاً. وهما حرفياً المصدر الذي يبني به
+ * `listPublicEvents` شرط `date_from`/`date_to`: اليوم الذي يقول التقويم إن فيه
+ * ثلاث مناسبات يعيد `GET /api/events?date_from=D&date_to=D` ثلاثتها — لا اثنتين
+ * — فلا يفتح المستخدم يوماً من التقويم فيجد قائمةً تناقض عدّه (العدّ في العميل
+ * على `event_date` وحده هو بالضبط ما ينتج هذا التناقض).
+ *
+ * **وبوابة الظهور العام وحدها** (`PUBLIC_EVENT_VISIBLE_SQL_E`): «بالرابط فقط»
+ * وغير المعتمدة والمجدولة غائبة، فلا يعلن التقويم مناسبةً لا تعرضها القائمة.
+ * و`legacyOnly` على أنواع المناسبات كالتغذية والخريطة (`resolveTypeFilterIds`):
+ * عميل بلا `X-App-Version` لا يرى إلا النوع الأول، فلا يُعَدّ له ما لا يستطيع
+ * رسمه.
+ *
+ * **والعدّ استعلام واحد**: الأيام تُبنى تكراريّاً (`month_days`) بين أول الشهر
+ * و`LAST_DAY` منه، والامتداد يُحسب **مرّة لكل مناسبة** في `spans` ثم يُنضَم
+ * إلى الأيام، والعدّ `COUNT(*)` على اليوم. لا التقاط صفوف إلى JS ثم بسط
+ * امتداداتها هناك، حيث يسهل أن تخطئ بداية الشهر ونهايته أو يعود تاريخ منزاح
+ * بمنطقة زمنية. و`DATE_FORMAT` يُخرج اليوم نصاً `YYYY-MM-DD` (نفس اصطلاح
+ * `span_start` في «قائمتي») لا كائن `Date`.
+ *
+ * ويعود **ما فيه مناسبة وحدها**: الأيام الصفرية لا تُرسَل أصلاً، مرتبةً تصاعدياً.
+ * `regionId` (اختياري) محافظة واحدة يختارها القارئ في التقويم، و`null` «بلا
+ * تقييد» — فهو فلتر التطبيق والويب لا تقييد الاكتشاف، ويتلقّاه المسار من
+ * `?region_id=` صراحةً لا من ترويسة `X-Region` (تلك تخصّ التغذية والخريطة).
+ */
+async function listCalendarDays({ month, regionId = null, legacyOnly = false } = {}) {
+  const monthStart = `${month}-01`;
+  const conditions = [PUBLIC_EVENT_VISIBLE_SQL_E];
+  const spanParams = [publishNowClock()];
+
+  if (regionId !== null && regionId !== undefined) {
+    conditions.push('e.region_id = ?');
+    spanParams.push(regionId);
+  }
+
+  const typeFilterIds = await resolveTypeFilterIds({ legacyOnly, occasionTypeIds: null });
+  if (typeFilterIds && !typeFilterIds.length) return { days: [] };
+  if (typeFilterIds) {
+    conditions.push(`e.occasion_type_id IN (${typeFilterIds.map(() => '?').join(',')})`);
+    spanParams.push(...typeFilterIds);
+  }
+
+  const rows = await db.query(
+    `WITH RECURSIVE month_days (day) AS (
+       SELECT CAST(? AS DATE)
+       UNION ALL
+       SELECT DATE_ADD(month_days.day, INTERVAL 1 DAY)
+         FROM month_days
+        WHERE month_days.day < LAST_DAY(CAST(? AS DATE))
+     ),
+     spans AS (
+       SELECT ${EVENT_SPAN_START_SQL_E} AS span_start,
+              ${EVENT_SPAN_END_SQL_E} AS span_end
+         FROM events e
+        WHERE ${conditions.join(' AND ')}
+     )
+     SELECT DATE_FORMAT(month_days.day, '%Y-%m-%d') AS date, COUNT(*) AS count
+       FROM month_days
+       JOIN spans ON spans.span_start <= month_days.day AND spans.span_end >= month_days.day
+      GROUP BY month_days.day
+      ORDER BY month_days.day`,
+    [monthStart, monthStart, ...spanParams]
+  );
+
+  return { days: rows.map(row => ({ date: row.date, count: Number(row.count) })) };
 }
 
 /**
@@ -2757,6 +2833,7 @@ module.exports = {
   setEventFeatured,
   getEventDetails,
   listMapPoints,
+  listCalendarDays,
   checkTownMismatch,
   createEvent,
   familyClanFor,

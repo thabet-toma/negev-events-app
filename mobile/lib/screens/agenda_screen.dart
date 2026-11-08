@@ -1,7 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
-import '../api/negev_api.dart' show Village;
 import '../main.dart';
 import '../models/event.dart';
 import '../theme.dart';
@@ -34,8 +33,17 @@ const List<String> _arWeekdaysShort = [
   'سبت',
 ];
 
-/// أجندة وتقويم المناسبات — عرض شهري للأيام التي تحوي مناسبات وأعراس
-/// مع إمكانية الفلترة حسب القرى والتجمعات.
+/// أجندة وتقويم المناسبات — عرض شهري للأيام التي تحوي مناسبات، بفلتر المحافظة
+/// (تذكرة #175).
+///
+/// **العدّ من الخادم وحده:** `GET /api/events/calendar` هو من يحسب أي يوم تقع
+/// فيه المناسبة — على امتدادها كاملاً (`event_end_date` وأيام `event_days`)
+/// وبوابة الظهور العام. الحساب هنا في العميل على `eventDate` وحده كان يعدّ
+/// المناسبة متعددة الأيام يوماً واحداً، ويعدّ `link_only` وهي غائبة عن كل قائمة.
+///
+/// **ومناسبات اليوم المختار** من `GET /api/events` القائم بـ`date_from`/
+/// `date_to` متساويين — نفس تقاطع الامتداد الذي يعدّ به التقويم، فما يعدّه
+/// التقويم هو ما يعرضه اليوم تحته، وليس مصفوفة محلية ثانية.
 class AgendaScreen extends StatefulWidget {
   const AgendaScreen({super.key});
 
@@ -47,78 +55,175 @@ class _AgendaScreenState extends State<AgendaScreen> {
   DateTime _currentMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
   DateTime _selectedDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
-  List<Village> _villages = const [];
-  int? _selectedVillageId;
+  /// فلتر المحافظة **داخل التقويم وحده** — `null` = كل المحافظات. لا يغيّر
+  /// محافظة الاكتشاف المحفوظة (`RegionStore`)، فذاك اختيار الأسطح العامة.
+  int? _regionId;
 
-  List<Event> _events = const [];
-  bool _loading = true;
-  Object? _error;
+  /// `YYYY-MM-DD` → عدد المناسبات في ذلك اليوم، كما يعيده مسار التقويم.
+  Map<String, int> _dayCounts = const {};
+  /// هوية الشهر/المحافظة التي تملك `_dayCounts` الحالي؛ بلا هوية لا تُرسم نقاطه.
+  String? _countsIdentity;
+  List<Event> _dayEvents = const [];
+  /// عدّ الخادم ليوم القائمة (`pagination.total`) — لا طول ما وصل: الحمل قد
+  /// يتوقف عند سقف الصفحات، فيبقى العدّ المعلن صحيحاً ولو كانت القائمة ناقصة.
+  int _dayTotal = 0;
+  bool _dayTruncated = false;
+  bool _dayLoading = true;
+  /// فشل عدّ الشهر — مستقلّ عن فشل اليوم عمداً: لا يمسح أحدهما الآخر، وفشل
+  /// التقويم لا يحجب قائمة يومٍ حُمِّلت بنجاح.
+  Object? _monthError;
+  /// فشل جلب مناسبات اليوم المختار وحده.
+  Object? _dayError;
+  bool _bootstrapped = false;
+
+  /// حجم الصفحة في `GET /api/events` — سقف الخادم نفسه.
+  static const int _dayPageSize = 100;
+  /// سقف احتياطي للصفحات: عشرون صفحة = ألفا مناسبة في يوم واحد، ولا يوم
+  /// بلغه، ووجوده يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
+  static const int _dayMaxPages = 20;
 
   @override
-  void initState() {
-    super.initState();
-    _loadVillages();
-    _loadEvents();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootstrapped) return;
+    _bootstrapped = true;
+    // كتالوج الأماكن مشترك في الجلسة، ووصوله هو ما يملأ حبات المحافظات —
+    // لا اسم محافظة مكتوب في هذا الملف.
+    AppServices.of(context).places.load();
+    _loadMonth();
+    _loadDay();
   }
 
-  Future<void> _loadVillages() async {
-    try {
-      final list = await AppServices.of(context).api.listVillages();
-      if (mounted) setState(() => _villages = list);
-    } catch (_) {}
-  }
+  static String _monthKey(DateTime month) =>
+      '${month.year}-${month.month.toString().padLeft(2, '0')}';
 
-  Future<void> _loadEvents() async {
+  static String _dayKey(DateTime date) =>
+      '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  static String _calendarIdentity(DateTime month, int? regionId) =>
+      '${_monthKey(month)}|${regionId ?? 'null'}';
+
+  Future<void> _loadMonth() async {
+    final api = AppServices.of(context).api;
+    final monthKey = _monthKey(_currentMonth);
+    // هوية الطلب — الشهر **والمحافظة** — تُلتقط قبل النداء وتُقارَن بعد وصول
+    // الجواب وقبل أي كتابة حالة: تبديل المحافظة أ ثم ب قد يستقبل جواب أ أخيراً
+    // فتناقض أعدادُه الاختيار. الحارس بالقيمة، لا بترتيب الطلبات.
+    final regionId = _regionId;
+    final countsIdentity = _calendarIdentity(_currentMonth, regionId);
     setState(() {
-      _loading = true;
-      _error = null;
+      _monthError = null;
+      // عدّ هوية سابقة لا يصلح بديلاً أثناء جلب هذه الهوية أو بعد فشلها.
+      if (_countsIdentity != countsIdentity) {
+        _dayCounts = const {};
+        _countsIdentity = null;
+      }
     });
 
     try {
-      final now = DateTime.now();
-      final isPastMonth = _currentMonth.year < now.year ||
-          (_currentMonth.year == now.year && _currentMonth.month < now.month);
-
-      final result = await AppServices.of(context).api.listEvents(
-            villageId: _selectedVillageId,
-            limit: 100,
-            archive: isPastMonth,
-          );
-
+      final days = await api.calendarDays(month: monthKey, regionId: regionId);
       if (!mounted) return;
+      if (_calendarIdentity(_currentMonth, _regionId) != countsIdentity) return;
       setState(() {
-        _events = result.events;
-        _loading = false;
+        _dayCounts = {for (final day in days) day.date: day.count};
+        _countsIdentity = countsIdentity;
       });
     } catch (err) {
+      // مسار الفشل محروس كذلك: خطأ طلبٍ قديم لا يكتب خطأ الشهر لجلبةٍ أحدث.
       if (!mounted) return;
+      if (_calendarIdentity(_currentMonth, _regionId) != countsIdentity) return;
+      setState(() => _monthError = err);
+    }
+  }
+
+  Future<void> _loadDay() async {
+    final api = AppServices.of(context).api;
+    final dateKey = _dayKey(_selectedDate);
+    // هوية الطلب هنا اليوم **والمحافظة** معاً: تبديل المحافظة يعيد طلب اليوم
+    // نفسه، فحارس اليوم وحده يُبقي قائمة المحافظة السابقة تحته.
+    final regionId = _regionId;
+    setState(() {
+      _dayLoading = true;
+      _dayError = null;
+      // القائمة تُمحى في **بداية** كل طلب: بقاء عناصر يومٍ سابق تحت عنوان
+      // اليوم الجديد يعرض مناسبات يوم آخر كأنها له، وفشل الطلب يجب أن يعرض
+      // خطأه وحده لا قائمةً قديمة ولا «لا توجد مناسبات».
+      _dayEvents = const [];
+      // يُصفَّر مع كل طلب: القيمة القديمة تعدّ يوماً آخر، ولا تصلح بديلاً عن
+      // عدّ الشهر حتى يصل.
+      _dayTotal = 0;
+      _dayTruncated = false;
+    });
+
+    try {
+      // نفس شرط التقويم من المسار القائم: `date_from`/`date_to` على يوم واحد.
+      // و«كل المحافظات» علَم المسار، والمحافظة المختارة ترويسةً لهذا النداء
+      // وحده — لا للمحافظة المحفوظة في `RegionStore`.
+      //
+      // **والصفحات كلها**، لا الأولى: صفحة واحدة سقفها مئة، ويوم فيه ١٠١
+      // مناسبة كان يعرض ١٠٠ ويعلن عدّاً لا يمكن الوصول إلى ما بعده.
+      final events = <Event>[];
+      var total = 0;
+      var page = 1;
+      var lastPage = 1;
+      while (true) {
+        final result = await api.listEvents(
+          dateFrom: dateKey,
+          dateTo: dateKey,
+          limit: _dayPageSize,
+          page: page,
+          allRegions: regionId == null,
+          regionHeader: regionId == null ? null : '$regionId',
+        );
+        events.addAll(result.events);
+        total = result.pagination.total;
+        lastPage = result.pagination.totalPages < 1 ? 1 : result.pagination.totalPages;
+        if (page >= lastPage) break; // آخر صفحة: الحمل تمّ
+        if (result.events.isEmpty) break; // صفحة فارغة قبل النهاية
+        if (page >= _dayMaxPages) break; // سقف احتياطي
+        page += 1;
+      }
+
+      if (!mounted) return;
+      if (_dayKey(_selectedDate) != dateKey || _regionId != regionId) return;
       setState(() {
-        _error = err;
-        _loading = false;
+        _dayEvents = events;
+        _dayTotal = total;
+        _dayTruncated = events.length < total;
+        _dayLoading = false;
+      });
+    } catch (err) {
+      // خطأ طلبٍ قديم لا يكتب خطأ اليوم ولا يطفئ مؤشّر طلبٍ أحدث.
+      if (!mounted) return;
+      if (_dayKey(_selectedDate) != dateKey || _regionId != regionId) return;
+      setState(() {
+        _dayError = err;
+        _dayLoading = false;
       });
     }
   }
 
-  void _onVillageSelected(int? villageId) {
-    if (_selectedVillageId == villageId) return;
-    setState(() => _selectedVillageId = villageId);
-    _loadEvents();
+  void _onRegionSelected(int? regionId) {
+    if (_regionId == regionId) return;
+    setState(() => _regionId = regionId);
+    _loadMonth();
+    _loadDay();
+  }
+
+  void _onDaySelected(DateTime dayDate) {
+    if (_dayKey(_selectedDate) == _dayKey(dayDate)) return;
+    setState(() => _selectedDate = dayDate);
+    _loadDay();
   }
 
   void _prevMonth() {
-    setState(() {
-      _currentMonth = DateTime(_currentMonth.year, _currentMonth.month - 1, 1);
-      _selectedDate = DateTime(_currentMonth.year, _currentMonth.month, 1);
-    });
-    _loadEvents();
+    setState(() => _currentMonth = DateTime(_currentMonth.year, _currentMonth.month - 1, 1));
+    _loadMonth();
   }
 
   void _nextMonth() {
-    setState(() {
-      _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 1);
-      _selectedDate = DateTime(_currentMonth.year, _currentMonth.month, 1);
-    });
-    _loadEvents();
+    setState(() => _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 1));
+    _loadMonth();
   }
 
   void _goToToday() {
@@ -127,37 +232,24 @@ class _AgendaScreenState extends State<AgendaScreen> {
       _currentMonth = DateTime(now.year, now.month, 1);
       _selectedDate = DateTime(now.year, now.month, now.day);
     });
-    _loadEvents();
-  }
-
-  bool _isEventOnDate(Event event, DateTime date) {
-    final startDate = DateTime.tryParse(event.eventDate);
-    if (startDate == null) return false;
-
-    final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final target = DateTime(date.year, date.month, date.day);
-
-    if (event.eventEndDate != null) {
-      final endDate = DateTime.tryParse(event.eventEndDate!);
-      if (endDate != null) {
-        final end = DateTime(endDate.year, endDate.month, endDate.day);
-        return (target.isAfter(start) || target.isAtSameMomentAs(start)) &&
-            (target.isBefore(end) || target.isAtSameMomentAs(end));
-      }
-    }
-
-    return start.isAtSameMomentAs(target);
-  }
-
-  List<Event> _eventsForDate(DateTime date) {
-    return _events.where((e) => _isEventOnDate(e, date)).toList();
+    _loadMonth();
+    _loadDay();
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedDayEvents = _eventsForDate(_selectedDate);
-    final selectedDateStr =
-        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final services = AppServices.of(context);
+    // العدّ من عدّ الشهر الذي حسبه الخادم، لا من طول القائمة: القائمة قد
+    // تتوقف عند سقف الصفحات، وطولُها حينها لا يساوي عدّ اليوم.
+    final countsMatchCurrentIdentity =
+        _countsIdentity == _calendarIdentity(_currentMonth, _regionId);
+    final selectedDayCount = countsMatchCurrentIdentity
+        ? (_dayCounts[_dayKey(_selectedDate)] ?? _dayTotal)
+        : _dayTotal;
+    // الشارة لا تكذب: يومٌ فشل جلبُه لا يُنسب إليه عدّ — لا عدّ شهر ولا عدّ
+    // صفحة سابقة — فيُعرض «—» بدل رقم.
+    final hasDayError = _dayError != null;
+    final selectedDateStr = _dayKey(_selectedDate);
 
     return Scaffold(
       appBar: AppBar(
@@ -172,14 +264,22 @@ class _AgendaScreenState extends State<AgendaScreen> {
       ),
       body: Column(
         children: [
-          // 1. فلتر القرى والتجمعات
-          _buildVillagesFilter(),
+          // 1. فلتر المحافظة (من كتالوج الخادم المشترك)
+          AnimatedBuilder(
+            // كتالوج البلدات يُخطر `places` عند وصوله، واختيار المحافظة يُخطر
+            // `regions` — فالحبات تُرسم عند وصول أيهما.
+            animation: Listenable.merge([services.regions, services.places]),
+            builder: (context, _) => _buildRegionFilter(),
+          ),
           const Divider(height: 1),
 
-          // 2. محتوى التقويم والمناسبات
+          // 2. محتوى التقويم ومناسبات اليوم المختار
           Expanded(
             child: RefreshIndicator(
-              onRefresh: _loadEvents,
+              onRefresh: () async {
+                await _loadMonth();
+                await _loadDay();
+              },
               child: ListView(
                 children: [
                   // شريط التنقل بين الأشهر
@@ -187,6 +287,24 @@ class _AgendaScreenState extends State<AgendaScreen> {
 
                   // شبكة التقويم
                   _buildCalendarGrid(),
+
+                  // فشل عدّ الشهر لا يحجب اليوم: سقطت النقاط وحدها، وهذا سطر
+                  // صغير يعلن أن العدّ لم يُحدَّث بدل إخفاء قائمة اليوم تحته.
+                  if (_monthError != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.cloud_off_outlined, size: 14, color: context.c.inkSoft),
+                          const SizedBox(width: 6),
+                          Text(
+                            'تعذّر تحديث عدّ الشهر',
+                            style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+                          ),
+                        ],
+                      ),
+                    ),
 
                   const Divider(height: 24),
 
@@ -210,17 +328,17 @@ class _AgendaScreenState extends State<AgendaScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                           decoration: BoxDecoration(
-                            color: selectedDayEvents.isEmpty
+                            color: hasDayError || selectedDayCount == 0
                                 ? context.c.surfaceSunk
                                 : context.c.skyWash,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            '${selectedDayEvents.length} مناسبة',
+                            hasDayError ? '—' : '$selectedDayCount مناسبة',
                             style: TextStyle(
                               fontSize: 12.5,
                               fontWeight: FontWeight.bold,
-                              color: selectedDayEvents.isEmpty
+                              color: hasDayError || selectedDayCount == 0
                                   ? context.c.inkSoft
                                   : context.c.sky,
                             ),
@@ -232,23 +350,36 @@ class _AgendaScreenState extends State<AgendaScreen> {
 
                   const SizedBox(height: 12),
 
-                  // قائمة مناسبات اليوم المحدد
-                  if (_loading)
+                  // قائمة مناسبات اليوم المحدد — من المسار القائم
+                  if (_dayLoading)
                     const Padding(
                       padding: EdgeInsets.all(32),
                       child: Center(child: CircularProgressIndicator()),
                     )
-                  else if (_error != null)
+                  else if (_dayError != null)
                     Padding(
                       padding: const EdgeInsets.all(32),
                       child: Center(
-                        child: Text('حدث خطأ أثناء تحميل المناسبات: $_error'),
+                        child: Text('تعذّر تحميل مناسبات هذا اليوم: $_dayError'),
                       ),
                     )
-                  else if (selectedDayEvents.isEmpty)
+                  else if (_dayEvents.isEmpty)
                     _buildEmptyDayState()
                   else
-                    ...selectedDayEvents.map(_buildEventItem),
+                    ..._dayEvents.map(_buildEventItem),
+
+                  // سطر واحد حين تُعرض قائمة ناقصة: الشارة تعدّ اليوم كله
+                  // والقائمة أقلّ، فبلا هذا السطر يبدو الفرق عطلاً لا حدّاً.
+                  if (!_dayLoading && _dayError == null && _dayTruncated)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      child: Center(
+                        child: Text(
+                          'تُعرض أول ${_dayEvents.length} من $_dayTotal مناسبة',
+                          style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+                        ),
+                      ),
+                    ),
 
                   const SizedBox(height: 32),
                 ],
@@ -260,49 +391,42 @@ class _AgendaScreenState extends State<AgendaScreen> {
     );
   }
 
-  Widget _buildVillagesFilter() {
+  Widget _buildRegionFilter() {
+    final regions = AppServices.of(context).regions.activeRegions;
     return SizedBox(
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         children: [
-          ChoiceChip(
-            label: const Text('جميع القرى'),
-            selected: _selectedVillageId == null,
-            onSelected: (_) => _onVillageSelected(null),
-            showCheckmark: false,
-            backgroundColor: context.c.surface,
-            selectedColor: context.c.sky,
-            labelStyle: TextStyle(
-              fontSize: 12.5,
-              color: _selectedVillageId == null ? context.c.onSky : context.c.inkSoft,
-              fontWeight: _selectedVillageId == null ? FontWeight.bold : FontWeight.normal,
-            ),
-            side: BorderSide(color: context.c.line),
-          ),
-          ..._villages.map((v) {
-            final isSelected = _selectedVillageId == v.id;
+          _buildRegionChip(null, 'كل المحافظات'),
+          ...regions.map((region) {
             return Padding(
               padding: const EdgeInsetsDirectional.only(start: 6),
-              child: ChoiceChip(
-                label: Text(v.name),
-                selected: isSelected,
-                onSelected: (_) => _onVillageSelected(v.id),
-                showCheckmark: false,
-                backgroundColor: context.c.surface,
-                selectedColor: context.c.sky,
-                labelStyle: TextStyle(
-                  fontSize: 12.5,
-                  color: isSelected ? context.c.onSky : context.c.inkSoft,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                ),
-                side: BorderSide(color: context.c.line),
-              ),
+              child: _buildRegionChip(region.id, region.name),
             );
           }),
         ],
       ),
+    );
+  }
+
+  Widget _buildRegionChip(int? regionId, String label) {
+    final isSelected = _regionId == regionId;
+    return ChoiceChip(
+      key: ValueKey<String>('agenda_region_${regionId ?? 'all'}'),
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (_) => _onRegionSelected(regionId),
+      showCheckmark: false,
+      backgroundColor: context.c.surface,
+      selectedColor: context.c.sky,
+      labelStyle: TextStyle(
+        fontSize: 12.5,
+        color: isSelected ? context.c.onSky : context.c.inkSoft,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+      ),
+      side: BorderSide(color: context.c.line),
     );
   }
 
@@ -344,9 +468,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
     // في Dart: 7 هو الأحد. نريد الأحد أن يكون العمود 0
     final offset = firstDayWeekday % 7;
     final totalCells = offset + daysInMonth;
-
-    final now = DateTime.now();
-    final isCurrentMonth = now.year == _currentMonth.year && now.month == _currentMonth.month;
+    final todayKey = _dayKey(DateTime.now());
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -391,27 +513,25 @@ class _AgendaScreenState extends State<AgendaScreen> {
 
               final dayNum = index - offset + 1;
               final dayDate = DateTime(_currentMonth.year, _currentMonth.month, dayNum);
-              final isToday = isCurrentMonth && now.day == dayNum;
-              final isSelected = _selectedDate.year == dayDate.year &&
-                  _selectedDate.month == dayDate.month &&
-                  _selectedDate.day == dayDate.day;
-
-              final eventsOnDay = _eventsForDate(dayDate);
-              final hasEvents = eventsOnDay.isNotEmpty;
+              final dayKey = _dayKey(dayDate);
+              final isToday = dayKey == todayKey;
+              final isSelected = _dayKey(_selectedDate) == dayKey;
+              final count = _dayCounts[dayKey] ?? 0;
 
               return InkWell(
-                onTap: () => setState(() => _selectedDate = dayDate),
+                onTap: () => _onDaySelected(dayDate),
                 borderRadius: BorderRadius.circular(10),
                 child: Container(
+                  key: ValueKey<String>('agenda_day_$dayKey'),
                   decoration: BoxDecoration(
                     color: isSelected
                         ? context.c.sky
                         : (isToday ? context.c.surfaceSunk : Colors.transparent),
                     borderRadius: BorderRadius.circular(10),
+                    // اليوم الحالي مبروز بإطار سمكي وإن لم يكن مختاراً.
                     border: Border.all(
-                      color: isSelected
-                          ? context.c.sky
-                          : (isToday ? context.c.line : Colors.transparent),
+                      color: isSelected || isToday ? context.c.sky : Colors.transparent,
+                      width: isToday && !isSelected ? 2 : 1,
                     ),
                   ),
                   child: Stack(
@@ -421,32 +541,23 @@ class _AgendaScreenState extends State<AgendaScreen> {
                         '$dayNum',
                         style: TextStyle(
                           fontSize: 14,
-                          fontWeight: isSelected || isToday
-                              ? FontWeight.bold
-                              : FontWeight.normal,
+                          fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
                           color: isSelected
                               ? context.c.onSky
                               : (isToday ? context.c.gold : context.c.ink),
                         ),
                       ),
-                      if (hasEvents)
+                      if (count > 0)
                         Positioned(
-                          bottom: 4,
+                          bottom: 5,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            key: ValueKey<String>('agenda_dot_$dayKey'),
+                            width: 7,
+                            height: 7,
                             decoration: BoxDecoration(
-                              color: isSelected ? context.c.gold : context.c.gold,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                            child: Text(
-                              '${eventsOnDay.length}',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black,
-                              ),
+                              // نقطة ذهبية لمناسبة واحدة، وحمراء لاثنتين فأكثر.
+                              color: count >= 2 ? context.c.danger : context.c.gold,
+                              shape: BoxShape.circle,
                             ),
                           ),
                         ),

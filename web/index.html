@@ -1911,6 +1911,16 @@
         <button class="close-modal-btn" onclick="closeAgendaModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
 
+      <!-- فلتر المحافظة (تذكرة #175): خياراته من `GET /api/towns` كما يجلبها
+           منتقي المحافظة القائم (`populateAgendaRegionFilter` في app.js) — لا
+           اسم محافظة مكتوب هنا — واختياره يعيد جلب عدّ الشهر بـ`region_id`. -->
+      <div class="agenda-filter-row">
+        <label for="agendaRegionFilter" class="agenda-filter-label">
+          <i class="fa-solid fa-map-location-dot" aria-hidden="true"></i> المحافظة
+        </label>
+        <select id="agendaRegionFilter" class="agenda-region-select" onchange="onAgendaRegionChange(this.value)"></select>
+      </div>
+
       <!-- Month navigation -->
       <div class="agenda-month-nav">
         <button class="agenda-nav-btn" onclick="changeAgendaMonth(-1)" title="الشهر السابق">

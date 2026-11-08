@@ -329,6 +329,11 @@ function buildFetchStub() {
     if (requestPath === '/api/events') {
       return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
     }
+    // تقويم الشهر (تذكرة #175) — أيامه تُصنَّع في اختبارات التقويم وحدها؛
+    // هنا شهر فارغ كي لا يحمل تقويمٌ يُفتح في اختبار آخر أياماً من العدم.
+    if (requestPath === '/api/events/calendar') {
+      return jsonResponse({ success: true, days: [] });
+    }
     if (requestPath === '/api/stories') return jsonResponse({ success: true, stories: [] });
     if (requestPath === '/api/notifications') return jsonResponse({ success: true, notifications: [] });
     // «قائمتي» تُجلب عند الإقلاع لجلسة محفوظة (initMyList) — فارغة بلا جلسة.
@@ -8388,7 +8393,8 @@ async function run() {
       }
     });
     const win = dom.window;
-    // The feed load is what fills the agenda — wait for its card, as a user would.
+    // لا شيء يملأ الأجندة من التغذية منذ #175 — انتظار كرت التغذية هو انتظار
+    // انتهاء نداءات الإقلاع وحدها، قبل أن تُقاد الأجندة يدوياً من الاختبار.
     await waitFor(() => win.document.getElementById(`eventCard-${AGENDA_EVENT.id}`));
     const navigated = [];
     win.navigateToEvent = async (id) => { navigated.push(id); };
@@ -8396,7 +8402,11 @@ async function run() {
     win.addEventListener('error', (e) => pageErrors.push(e.message));
 
     win.document.getElementById('agendaModal').style.display = 'flex';
-    win.renderAgendaSelectedDayEvents(AGENDA_EVENT.event_date);
+    // `renderAgendaSelectedDayEvents` صار يعرض ما يعيده `?date_from=&date_to=`
+    // (#175) لا ما في `allEvents`، والاختيار يمرّ بالدالة التي يمرّ بها نقر
+    // المستخدم — فهي من تضبط اليوم المختار الذي يحرس الجوابَ المتأخّر.
+    win.selectAgendaDate(AGENDA_EVENT.event_date);
+    await waitFor(() => win.document.querySelector('#agendaEventsList .agenda-event-item'));
     const item = win.document.querySelector('#agendaEventsList .agenda-event-item');
     assert.ok(item, 'expected the day list to render the event');
     item.click();
@@ -8404,6 +8414,626 @@ async function run() {
     assert.deepStrictEqual(pageErrors, [], 'the agenda item handler must not call an undefined function');
     assert.deepStrictEqual(navigated, [AGENDA_EVENT.id]);
     assert.strictEqual(win.document.getElementById('agendaModal').style.display, 'none');
+  });
+
+  // ---- تقويم الشهر (تذكرة #175) --------------------------------------------
+  // العدّ من `GET /api/events/calendar` وحده، والنقر على يوم من `GET /api/events`
+  // القائم بـ`date_from`/`date_to`. المساران مصنَّعان بعقدهما الموثَّق نفسه،
+  // والأيام تُشتقّ من الشهر الحالي (لا شهر مكتوب) كما يفعل تقويم الصفحة نفسه.
+  const agendaMonthKey = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const agendaDayKey = day => `${agendaMonthKey()}-${String(day).padStart(2, '0')}`;
+
+  /**
+   * بيئة الصفحة بمسارَي التقويم مصنَّعين: `calendarDays` لعدّ الشهر، و`feedEvents`
+   * (أو `feedByDate` — مناسبات كل يوم على حدة) لردّ `GET /api/events`.
+   *
+   * و`calendarResponder`/`feedResponder` يتجاوزان ما فوقهما حين يكون الترتيب
+   * نفسه هو المُختبَر: كلاهما دالة تُستدعى بـ`URLSearchParams` وخيارات الطلب
+   * (`headers` منها — ترويسة `X-Region` هي ما يميّز محافظةً عن «كل المحافظات»)
+   * وتعيد وعداً يُحلّ متى شاء الاختبار — فجوابُ طلبٍ سابق يصل **بعد** جواب
+   * طلبٍ أحدث.
+   * وردّ `/api/events` يحترم `page`/`limit` كالخادم (`pagination.total` للكل
+   * و`totalPages` صفحاتِه)، فيومٌ يملأ صفحتين يُقاس بعدّه لا بما افترضه الاختبار.
+   */
+  function buildAgendaEnv({
+    calendarDays, calendarResponder, feedEvents = [], feedByDate = null, feedResponder, regions, onRequest
+  } = {}) {
+    const base = buildFetchStub();
+    return buildEnv({
+      onBeforeEval: (w) => {
+        w.fetch = async (url, opts) => {
+          const text = String(url);
+          const requestPath = text.split('?')[0];
+          const params = new URL(text, 'http://localhost/').searchParams;
+          if (onRequest) onRequest(text, opts);
+          if (requestPath === '/api/towns' && regions) {
+            return jsonResponse({
+              success: true, towns: TOWNS, town_coordinates: TOWN_COORDINATES, villages: [], regions
+            });
+          }
+          if (requestPath === '/api/events/calendar') {
+            if (calendarResponder) return calendarResponder(params, opts);
+            return jsonResponse({ success: true, days: calendarDays });
+          }
+          if (requestPath === '/api/events') {
+            if (feedResponder) return feedResponder(params, opts);
+            const events = feedByDate ? (feedByDate[params.get('date_from')] || []) : feedEvents;
+            const page = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
+            const limit = Math.max(1, Number.parseInt(params.get('limit'), 10) || 30);
+            return jsonResponse({
+              success: true,
+              events: events.slice((page - 1) * limit, page * limit),
+              pagination: { page, limit, total: events.length, totalPages: Math.ceil(events.length / limit) },
+              announcements: []
+            });
+          }
+          return base(url, opts);
+        };
+      }
+    });
+  }
+
+  await test('the agenda counts the month from GET /api/events/calendar, never from the events the feed already loaded (#175)', async () => {
+    const FROM_CALENDAR = agendaDayKey(10);
+    const FROM_FEED_ONLY = agendaDayKey(11);
+    const dom = buildAgendaEnv({
+      calendarDays: [{ date: FROM_CALENDAR, count: 1 }],
+      feedEvents: [{ id: 900, title: 'من التغذية فقط', town: 'رهط', event_date: FROM_FEED_ONLY, occasion_type: WEDDING_TYPE }]
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${FROM_CALENDAR}"]`));
+
+    const countedCell = win.document.querySelector(`[data-date="${FROM_CALENDAR}"]`);
+    assert.ok(
+      countedCell.querySelector('.agenda-day-dot'),
+      'the day the calendar endpoint counted carries a dot'
+    );
+
+    const feedOnlyCell = win.document.querySelector(`[data-date="${FROM_FEED_ONLY}"]`);
+    assert.ok(feedOnlyCell, 'the feed\'s day is still a cell of this month');
+    assert.strictEqual(
+      feedOnlyCell.querySelector('.agenda-day-dot'), null,
+      'a feed event the calendar did not count gets no dot — the local allEvents array is not the source'
+    );
+  });
+
+  await test('the agenda dot is gold for one event and red for two or more, and today is emphasised (#175)', async () => {
+    const ONE = agendaDayKey(4);
+    const MANY = agendaDayKey(5);
+    const now = new Date();
+    const TODAY = `${agendaMonthKey()}-${String(now.getDate()).padStart(2, '0')}`;
+    const dom = buildAgendaEnv({ calendarDays: [{ date: ONE, count: 1 }, { date: MANY, count: 3 }] });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${MANY}"]`));
+
+    const oneDot = win.document.querySelector(`[data-date="${ONE}"] .agenda-day-dot`);
+    assert.ok(oneDot.classList.contains('agenda-day-dot-single'), 'one event is the gold dot');
+    assert.ok(!oneDot.classList.contains('agenda-day-dot-many'), 'and it is not the red one');
+
+    const manyDot = win.document.querySelector(`[data-date="${MANY}"] .agenda-day-dot`);
+    assert.ok(manyDot.classList.contains('agenda-day-dot-many'), 'two or more is the red dot');
+    assert.ok(!manyDot.classList.contains('agenda-day-dot-single'), 'and it is not the gold one');
+
+    assert.ok(
+      win.document.querySelector(`[data-date="${TODAY}"]`).classList.contains('today'),
+      'today is marked on its own cell'
+    );
+    assert.strictEqual(
+      win.document.querySelectorAll('.agenda-day-cell.today').length, 1,
+      'exactly one cell is today'
+    );
+
+    // واللونان صريحان في الأنماط: الصنفان لا يشتركان في قاعدة لون واحدة.
+    const rules = readCssRules(STYLES_CSS_RAW);
+    const ruleBody = selector => {
+      const rule = rules.find(item => item.selectors.includes(selector));
+      return rule ? rule.body : '';
+    };
+    assert.match(ruleBody('.agenda-day-dot-single'), /background-color:\s*var\(--gold\)/, 'the single-day dot is gold');
+    assert.match(ruleBody('.agenda-day-dot-many'), /background-color:\s*var\(--danger\)/, 'the many-days dot is red');
+  });
+
+  await test('the agenda governorate filter comes from GET /api/towns and refetches the month with region_id (#175)', async () => {
+    const requests = [];
+    const dayHeaders = [];
+    const dom = buildAgendaEnv({
+      calendarDays: [],
+      regions: [
+        { id: 7, name: 'النقب', is_active: true },
+        { id: 8, name: 'المثلث', is_active: true, towns: ['الطيرة'] }
+      ],
+      onRequest: (text, opts) => {
+        requests.push(text);
+        if (String(text).split('?')[0] === '/api/events') dayHeaders.push((opts && opts.headers) || {});
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    await win.loadTownCoordinates();
+    win.openAgendaModal();
+
+    const select = win.document.getElementById('agendaRegionFilter');
+    assert.deepStrictEqual(
+      [...select.options].map(option => option.textContent),
+      ['كل المحافظات', 'النقب', 'المثلث'],
+      'the filter lists "all" plus the active governorates the server sent — no governorate name is written in the page'
+    );
+
+    requests.length = 0;
+    win.onAgendaRegionChange('7');
+    await waitFor(() => requests.some(url => url.includes('/api/events/calendar') && url.includes('region_id=7')));
+    assert.ok(
+      requests.some(url => url.includes('/api/events/calendar') && url.includes('region_id=7')),
+      'choosing a governorate refetches the month with that region_id'
+    );
+    await waitFor(() => dayHeaders.some(headers => headers['X-Region'] === '7'));
+    assert.ok(
+      dayHeaders.some(headers => headers['X-Region'] === '7'),
+      'and the day list is scoped to the same governorate — one filter, both readings'
+    );
+
+    requests.length = 0;
+    win.onAgendaRegionChange('');
+    await waitFor(() => requests.some(url => url.includes('/api/events/calendar')));
+    assert.ok(
+      !requests.find(url => url.includes('/api/events/calendar')).includes('region_id='),
+      '"كل المحافظات" refetches with no region_id at all'
+    );
+  });
+
+  await test('clicking an agenda day lists that day\'s events from the existing feed route (?date_from=&date_to=) (#175)', async () => {
+    const DAY = agendaDayKey(12);
+    const otherDay = agendaDayKey(13);
+    const requests = [];
+    const dom = buildAgendaEnv({
+      calendarDays: [{ date: DAY, count: 2 }, { date: otherDay, count: 9 }],
+      feedByDate: {
+        [DAY]: [
+          { id: 501, title: 'عرس اليوم المختار', town: 'رهط', occasion_type: WEDDING_TYPE },
+          { id: 502, title: 'عزاء اليوم المختار', town: 'حورة', occasion_type: FUNERAL_TYPE }
+        ],
+        [otherDay]: [{ id: 503, title: 'مناسبة يوم آخر', town: 'رهط', occasion_type: WEDDING_TYPE }]
+      },
+      onRequest: text => requests.push(text)
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${DAY}"]`));
+    requests.length = 0;
+
+    win.selectAgendaDate(DAY);
+    await waitFor(() => win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length === 2);
+
+    const dayRequest = requests.find(url => url.includes('/api/events?') && url.includes('date_from='));
+    assert.ok(dayRequest, 'the day list is fetched from the feed route, not filtered out of a local array');
+    assert.ok(dayRequest.includes(`date_from=${DAY}`), 'the range starts on the clicked day');
+    assert.ok(dayRequest.includes(`date_to=${DAY}`), 'and ends on it — one day, not the whole month');
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '2 مناسبة',
+      'the badge counts what that request returned'
+    );
+    assert.deepStrictEqual(
+      [...win.document.querySelectorAll('#agendaEventsList .agenda-event-title')].map(node => node.textContent),
+      ['عرس اليوم المختار', 'عزاء اليوم المختار'],
+      'the list holds that day\'s events and nothing else'
+    );
+  });
+
+  await test('a month count landing after a newer governorate\'s is dropped — the request identity is the month AND the governorate (#175)', async () => {
+    const STALE = agendaDayKey(6);
+    const CURRENT = agendaDayKey(7);
+    const pending = [];
+    const dom = buildAgendaEnv({
+      calendarResponder: (params) => {
+        const region = params.get('region_id');
+        if (region === '7') {
+          return new Promise(resolve => {
+            pending.push(() => resolve(jsonResponse({ success: true, days: [{ date: STALE, count: 2 }] })));
+          });
+        }
+        if (region === '8') {
+          return jsonResponse({ success: true, days: [{ date: CURRENT, count: 2 }] });
+        }
+        return jsonResponse({ success: true, days: [] });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${agendaDayKey(1)}"]`));
+
+    win.onAgendaRegionChange('7');
+    await waitFor(() => pending.length === 1);
+    win.onAgendaRegionChange('8');
+    await waitFor(() => win.document.querySelector(`[data-date="${CURRENT}"] .agenda-day-dot`));
+    assert.strictEqual(
+      win.document.querySelector(`[data-date="${STALE}"] .agenda-day-dot`), null,
+      'before the late answer, only the governorate chosen last has a dot'
+    );
+
+    pending[0]();
+    await delay(50);
+
+    assert.ok(
+      win.document.querySelector(`[data-date="${CURRENT}"] .agenda-day-dot`),
+      'the newer governorate\'s dot stays after the older answer lands last'
+    );
+    assert.strictEqual(
+      win.document.querySelector(`[data-date="${STALE}"] .agenda-day-dot`), null,
+      'the late answer of the previous governorate must not repaint the grid — the month alone is not the identity'
+    );
+  });
+
+  await test('a day list landing after a newer day\'s is dropped — the request identity is the day AND the governorate (#175)', async () => {
+    const FIRST = agendaDayKey(9);
+    const SECOND = agendaDayKey(14);
+    const pending = [];
+    const dom = buildAgendaEnv({
+      calendarDays: [{ date: FIRST, count: 1 }, { date: SECOND, count: 2 }],
+      feedResponder: (params) => {
+        const from = params.get('date_from');
+        if (from === FIRST) {
+          return new Promise(resolve => {
+            pending.push(() => resolve(jsonResponse({
+              success: true,
+              events: [{ id: 601, title: 'مناسبة اليوم الأول', town: 'رهط', occasion_type: WEDDING_TYPE }],
+              pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+              announcements: []
+            })));
+          });
+        }
+        if (from === SECOND) {
+          return jsonResponse({
+            success: true,
+            events: [
+              { id: 602, title: 'مناسبة اليوم الثاني', town: 'رهط', occasion_type: WEDDING_TYPE },
+              { id: 603, title: 'مناسبة اليوم الثاني الأخرى', town: 'حورة', occasion_type: FUNERAL_TYPE }
+            ],
+            pagination: { page: 1, limit: 100, total: 2, totalPages: 1 },
+            announcements: []
+          });
+        }
+        return jsonResponse({
+          success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: []
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${FIRST}"]`));
+
+    win.selectAgendaDate(FIRST);
+    await waitFor(() => pending.length === 1);
+    win.selectAgendaDate(SECOND);
+    await waitFor(() => win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length === 2);
+
+    pending[0]();
+    await delay(50);
+
+    assert.deepStrictEqual(
+      [...win.document.querySelectorAll('#agendaEventsList .agenda-event-title')].map(node => node.textContent),
+      ['مناسبة اليوم الثاني', 'مناسبة اليوم الثاني الأخرى'],
+      'the list still belongs to the day selected last'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '2 مناسبة',
+      'and so does the badge — the late answer rewrites neither'
+    );
+  });
+
+  await test('an empty second page preserves pagination.total and declares the partial day list (#175)', async () => {
+    const DAY = agendaDayKey(16);
+    const TOTAL = 150;
+    const requests = [];
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: 700 + index,
+      title: `مناسبة رقم ${index + 1}`,
+      town: 'رهط',
+      occasion_type: WEDDING_TYPE
+    }));
+    const dom = buildAgendaEnv({
+      calendarDays: [{ date: DAY, count: TOTAL }],
+      feedResponder: params => {
+        if (params.get('date_from') !== DAY) {
+          return jsonResponse({ success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: [] });
+        }
+        const page = Number.parseInt(params.get('page'), 10) || 1;
+        // حُذفت خمسون مناسبة بين الصفحتين: الشارة تبقى بعدّ الخادم الأصلي،
+        // والقائمة تعلن أن الصفحة الثانية الفارغة جعلتها ناقصة.
+        return jsonResponse({
+          success: true,
+          events: page === 1 ? firstPage : [],
+          pagination: { page, limit: 100, total: TOTAL, totalPages: 2 },
+          announcements: []
+        });
+      },
+      onRequest: text => requests.push(text)
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${DAY}"]`));
+    requests.length = 0;
+
+    win.selectAgendaDate(DAY);
+    await waitFor(() => win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length === 100);
+
+    assert.strictEqual(
+      win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length, 100,
+      'the empty second page leaves only the first 100 loaded events'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '150 مناسبة',
+      'the badge is pagination.total, never the incomplete events.length'
+    );
+    assert.ok(
+      win.document.getElementById('agendaEventsList').textContent.includes('تُعرض أول 100 من 150 مناسبة'),
+      'the partial list is declared instead of looking complete'
+    );
+    assert.ok(
+      requests.some(url => url.includes('/api/events?') && url.includes('limit=100') && url.includes('page=1')),
+      'the first page is asked for with the server cap'
+    );
+    assert.ok(
+      requests.some(url => url.includes('/api/events?') && url.includes('page=2')),
+      'page 2 is actually requested before its empty response ends the loop'
+    );
+  });
+
+  await test('switching governorates clears the old dots before the new month response arrives (#175)', async () => {
+    const OLD = agendaDayKey(17);
+    const NEW = agendaDayKey(18);
+    let resolveRegionEight;
+    const dom = buildAgendaEnv({
+      calendarResponder: params => {
+        const region = params.get('region_id');
+        if (region === '7') return jsonResponse({ success: true, days: [{ date: OLD, count: 1 }] });
+        if (region === '8') {
+          return new Promise(resolve => { resolveRegionEight = () => resolve(jsonResponse({ success: true, days: [{ date: NEW, count: 2 }] })); });
+        }
+        return jsonResponse({ success: true, days: [] });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${OLD}"]`));
+    win.onAgendaRegionChange('7');
+    await waitFor(() => win.document.querySelector(`[data-date="${OLD}"] .agenda-day-dot`));
+
+    win.onAgendaRegionChange('8');
+    await waitFor(() => Boolean(resolveRegionEight));
+    assert.strictEqual(
+      win.document.querySelector(`[data-date="${OLD}"] .agenda-day-dot`), null,
+      'while governorate 8 is loading, a dot from governorate 7 is gone'
+    );
+
+    resolveRegionEight();
+    await waitFor(() => win.document.querySelector(`[data-date="${NEW}"] .agenda-day-dot`));
+  });
+
+  await test('choosing a new day replaces prior events with an Arabic loading row until its response arrives (#175)', async () => {
+    const FIRST = agendaDayKey(19);
+    const SECOND = agendaDayKey(20);
+    let resolveSecond;
+    const dom = buildAgendaEnv({
+      calendarDays: [],
+      feedResponder: params => {
+        const day = params.get('date_from');
+        if (day === FIRST) {
+          return jsonResponse({
+            success: true, events: [{ id: 901, title: 'مناسبة اليوم الأول', town: 'رهط', occasion_type: WEDDING_TYPE }],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 }, announcements: []
+          });
+        }
+        if (day === SECOND) {
+          return new Promise(resolve => {
+            resolveSecond = () => resolve(jsonResponse({
+              success: true, events: [{ id: 902, title: 'مناسبة اليوم الثاني', town: 'حورة', occasion_type: FUNERAL_TYPE }],
+              pagination: { page: 1, limit: 100, total: 1, totalPages: 1 }, announcements: []
+            }));
+          });
+        }
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: [] });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${FIRST}"]`));
+    win.selectAgendaDate(FIRST);
+    await waitFor(() => win.document.querySelector('#agendaEventsList .agenda-event-item'));
+
+    win.selectAgendaDate(SECOND);
+    await waitFor(() => Boolean(resolveSecond));
+    assert.strictEqual(win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length, 0,
+      'no prior-day event stays clickable while the new day loads');
+    assert.ok(win.document.getElementById('agendaEventsList').textContent.includes('جارٍ تحميل مناسبات اليوم…'),
+      'the explicit Arabic loading row replaces the prior list');
+
+    resolveSecond();
+    await waitFor(() => win.document.getElementById('agendaEventsList').textContent.includes('مناسبة اليوم الثاني'));
+  });
+
+  await test('a failed day fetch shows an Arabic error, not an invented empty day (#175)', async () => {
+    const DAY = agendaDayKey(21);
+    const dom = buildAgendaEnv({
+      calendarDays: [],
+      feedResponder: params => {
+        if (params.get('date_from') === DAY) return Promise.reject(new Error('network failed'));
+        return jsonResponse({ success: true, events: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 0 }, announcements: [] });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    win.openAgendaModal();
+    await waitFor(() => win.document.querySelector(`[data-date="${DAY}"]`));
+    win.selectAgendaDate(DAY);
+    await waitFor(() => win.document.getElementById('agendaEventsList').textContent.includes('تعذّر تحميل مناسبات هذا اليوم'));
+
+    assert.strictEqual(win.document.getElementById('agendaDayCountBadge').textContent, '—',
+      'the badge does not claim an unknown count is zero');
+    assert.ok(!win.document.getElementById('agendaEventsList').textContent.includes('لا توجد مناسبات مسجلة في هذا اليوم'),
+      'a failure is not rendered as the known empty state');
+    assert.strictEqual(win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length, 0,
+      'no stale or partial event remains clickable after failure');
+  });
+
+  await test('a day list answering for "all governorates" cannot outlive the governorate chosen after it — the day alone is not the identity (#175)', async () => {
+    const pending = [];
+    const dom = buildAgendaEnv({
+      calendarDays: [],
+      feedResponder: (params, opts) => {
+        // تغذية الصفحة عند الإقلاع تطلب `/api/events` بلا `date_from` — تُجاب
+        // فارغةً فوراً كي لا تلتبس بطلبات الأجندة (هي أيضاً بلا ترويسة محافظة).
+        if (!params.get('date_from')) {
+          return jsonResponse({
+            success: true, events: [], pagination: { page: 1, limit: 30, total: 0, totalPages: 0 }, announcements: []
+          });
+        }
+        const region = (opts && opts.headers ? opts.headers['X-Region'] : null) || null;
+        if (region === '7') {
+          return jsonResponse({
+            success: true,
+            events: [{ id: 803, title: 'مناسبة المحافظة السابعة', town: 'حورة', occasion_type: FUNERAL_TYPE }],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+            announcements: []
+          });
+        }
+        // «كل المحافظات» (بلا ترويسة `X-Region`): الجواب يُحلّ متى شاء الاختبار.
+        return new Promise(resolve => {
+          pending.push(() => resolve(jsonResponse({
+            success: true,
+            events: [
+              { id: 801, title: 'مناسبة كل المحافظات', town: 'رهط', occasion_type: WEDDING_TYPE },
+              { id: 802, title: 'مناسبة كل المحافظات الأخرى', town: 'رهط', occasion_type: WEDDING_TYPE }
+            ],
+            pagination: { page: 1, limit: 100, total: 2, totalPages: 1 },
+            announcements: []
+          })));
+        });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+
+    // فتح الأجندة يطلب مناسبات اليوم المختار لكل المحافظات — ويُعلَّق جوابه.
+    win.openAgendaModal();
+    await waitFor(() => pending.length === 1);
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '…',
+      'the all-governorates answer has not arrived yet'
+    );
+
+    // ثم تُختار المحافظة ٧: اليوم نفسه يُعاد طلبه بترويسة المحافظة ويصل فوراً.
+    win.onAgendaRegionChange('7');
+    await waitFor(() => win.document.querySelectorAll('#agendaEventsList .agenda-event-item').length === 1);
+    assert.deepStrictEqual(
+      [...win.document.querySelectorAll('#agendaEventsList .agenda-event-title')].map(node => node.textContent),
+      ['مناسبة المحافظة السابعة'],
+      'the list is the governorate\'s own answer'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '1 مناسبة',
+      'and the badge counts it'
+    );
+
+    // جواب «كل المحافظات» يصل أخيراً: اليوم لم يتغيّر، فالمحافظة وحدها هي
+    // الفرق بين الطلبين — وهي ما يجب أن يسقط الجواب المتأخّر لأجله.
+    pending[0]();
+    await delay(50);
+
+    assert.deepStrictEqual(
+      [...win.document.querySelectorAll('#agendaEventsList .agenda-event-title')].map(node => node.textContent),
+      ['مناسبة المحافظة السابعة'],
+      'the late all-governorates answer must not replace the governorate\'s list — the day alone is not the request identity'
+    );
+    assert.strictEqual(
+      win.document.getElementById('agendaDayCountBadge').textContent, '1 مناسبة',
+      'nor its badge'
+    );
+  });
+
+  /*
+   * تبديل شهر الأجندة كان يفيض: `setMonth` على تاريخ اليوم تحمل يوم الشهر معها،
+   * فمن 31 يناير + شهر = 3 مارس (شباط يُتخطّى)، ومن 31 آذار − شهر = 31 شباط
+   * فنياً ⇒ 3 آذار أيضاً (prev لا يتحرّك). الإصلاح يبني الشهر من يومه الأول.
+   *
+   * ولا تُضبط `agendaCurrentDate` بالكتابة على `win`: هي `let` داخل eval تقييم
+   * app.js، فبيئتها مغلقة وتُقرأ من إغلاقاتها وحدها — `win.agendaCurrentDate = …`
+   * تُنشئ خاصيةً على window لا تقرأها الدالة (مُثبت بالتشغيل). المدخل الحقيقي
+   * الوحيد هو `Date` نفسها: تُثبَّت **قبل** التقييم (تاريخ الإقلاع) ثم تُحرَّك
+   * قبل `openAgendaModal` التي تعيد بناء الحالة من الساعة. الحالة ثابتة بلا
+   * اعتماد على ساعة التشغيل.
+   */
+  function installAgendaCalendarClock(win, { year, monthIndex, day }) {
+    const RealDate = win.Date;
+    let fixedMs = new RealDate(year, monthIndex, day, 12).getTime();
+    // تعيد لحظةً ثابتة لـ`new Date()` وحدها، وتترك `new Date(y, m, d)` تُنشئ
+    // كما في المتصفح — أداة `installFixedLocalClock` أعلاه تُعيد الشهر واليوم
+    // المثبتين من كل نسخة، فتكسر الإصلاح نفسه الذي يُختبر هنا.
+    function FakeDate(...args) {
+      return args.length === 0 ? new RealDate(fixedMs) : new RealDate(...args);
+    }
+    FakeDate.prototype = RealDate.prototype;
+    FakeDate.now = () => fixedMs;
+    FakeDate.parse = RealDate.parse;
+    FakeDate.UTC = RealDate.UTC;
+    win.Date = FakeDate;
+    return { set(y, m, d) { fixedMs = new RealDate(y, m, d, 12).getTime(); } };
+  }
+
+  await test('agenda month stepping builds from day 1: 31 January ⇒ February 2027, and 31 March ⇒ February again (#175)', async () => {
+    let clock;
+    const dom = buildEnv({
+      onBeforeEval: (w) => {
+        clock = installAgendaCalendarClock(w, { year: 2027, monthIndex: 0, day: 31 });
+      }
+    });
+    await flushBoot();
+    const win = dom.window;
+    const { document } = win;
+    const monthText = () => document.getElementById('agendaMonthDisplay').textContent.trim();
+
+    // 31 يناير 2027: شهر واحد للأمام فبراير، لا 3 مارس.
+    win.changeAgendaMonth(1);
+    assert.strictEqual(monthText(), 'فبراير 2027', 'from 31 January one month forward is February 2027, not 3 March');
+    await waitFor(() => document.querySelector('#agendaDaysGrid [data-date^="2027-02"]'));
+    assert.ok(
+      document.querySelector('#agendaDaysGrid [data-date^="2027-02"]'),
+      'and the month grid actually rendered is February 2027\'s'
+    );
+
+    // 31 آذار 2027: شهر واحد للخلف فبراير، ولا يبقى على آذار.
+    clock.set(2027, 2, 31);
+    win.openAgendaModal();
+    assert.strictEqual(monthText(), 'مارس 2027', 'the pinned clock opens March 2027 first — that is the month the step moves away from');
+    win.changeAgendaMonth(-1);
+    assert.strictEqual(monthText(), 'فبراير 2027', 'from 31 March one month back is February 2027, not March again (31 February overflowing forward)');
+    await waitFor(() => document.querySelector('#agendaDaysGrid [data-date^="2027-02"]'));
+    assert.ok(
+      document.querySelector('#agendaDaysGrid [data-date^="2027-02"]'),
+      'and the previous-month grid is February 2027\'s'
+    );
   });
 
   await test('iOS install hint is not shown unbidden if already dismissed (FIX 3, story 17)', async () => {
