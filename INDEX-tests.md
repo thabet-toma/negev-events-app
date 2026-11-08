@@ -3,7 +3,7 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: كل حالة `await test(` في ملفَي الاختبار، مرتّبة بالملف ثم السطر.
 
-## حالات الاختبار — 1256
+## حالات الاختبار — 1267
 
 `npm test` يشغّل `web-dom` ثم `smoke`؛ `smoke` يحتاج MySQL حيّة، وكل حالة معرَّفة داخل ملفها.
 
@@ -780,488 +780,499 @@
 | `مناسبة انتهى امتدادها لا تُعدّ «قادمة» — وهي معتمدة ويجدها زائر في الأرشيف` | `server/test/smoke.test.js:18607` |
 | `الطلب الثاني خلال الكاش لا يستعلم شيئاً، وupdated_at لحظة التعبئة نفسها` | `server/test/smoke.test.js:18629` |
 | `الكاش هو ما يجمّد الرقم: مناسبة قادمة ثالثة لا تُحتسب حتى تنتهي مدّته، ثم تُحتسب` | `server/test/smoke.test.js:18667` |
-| `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:938` |
-| `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:970` |
-| `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:990` |
-| `نموذج النشر يحمل خيار الظهور، وافتراضه «عام» (#166)` | `server/test/web-dom.test.js:1013` |
-| `اختيار «بالرابط فقط» يسافر مع طلب النشر (#166)` | `server/test/web-dom.test.js:1028` |
-| `نافذة التعديل تعرض ظهور المناسبة وتُرسله مع الحفظ (#166)` | `server/test/web-dom.test.js:1054` |
-| `نموذج النشر يحمل «موعد النشر»، ويُرسَل في جسم النشر عند تعبئته ويغيب عند فراغه (#167)` | `server/test/web-dom.test.js:1104` |
-| `نافذة التعديل تعرض «موعد النشر» المخزَّن وتُرسله كما هو (#167)` | `server/test/web-dom.test.js:1153` |
-| `after the shared field-renderer refactor, the public form still has its own map, crop entry point, and honoree-button styling` | `server/test/web-dom.test.js:1207` |
-| `shared (non-overridden) fields still render correctly on the public form: town select and event-date input` | `server/test/web-dom.test.js:1235` |
-| `#addEventDate defaults to the LOCAL day, not the UTC day (public publish form)` | `server/test/web-dom.test.js:1265` |
-| `groupUploads wraps the poster field in .upload-section on the public form` | `server/test/web-dom.test.js:1302` |
-| `choosing a poster reveals the crop editor and steps the plain upload box aside` | `server/test/web-dom.test.js:1344` |
-| `the crop rectangle initialises around the whole image` | `server/test/web-dom.test.js:1359` |
-| `dragging a corner handle changes the crop rectangle's stored bounds` | `server/test/web-dom.test.js:1374` |
-| `confirming a crop sends the cropped Blob under "poster", with an explicit .jpg filename` | `server/test/web-dom.test.js:1398` |
-| `"استخدام الصورة كاملة" still submits a Blob, and the working canvas never exceeds 1600px on its longest edge` | `server/test/web-dom.test.js:1439` |
-| `both live buttons are visible with no hidden attribute, even with a channel set and live = null, and no story-strip bubble exists` | `server/test/web-dom.test.js:1486` |
-| `every story with an http(s) target gets a CTA — not only ads — and a javascript: link gets none` | `server/test/web-dom.test.js:1522` |
-| `ألبومات الأعراس: one box searches albums/photos/people, an album opens its photos, and a photo can be tagged` | `server/test/web-dom.test.js:1559` |
-| `share a no-event honoree album: the line names its town from the album, and so does the analytics event` | `server/test/web-dom.test.js:1771` |
-| `share an event album: the event town is what the line and the analytics event carry` | `server/test/web-dom.test.js:1786` |
-| `share an album with neither town nor event: the title alone, with no dangling dash` | `server/test/web-dom.test.js:1800` |
-| `فيديوهات الألبوم في الموقع: بطاقة لكل فيديو بوسم منصّتها، و«فتح» خارجي، و«مشاركة» ترسل صفحتنا /v/:id` | `server/test/web-dom.test.js:1822` |
-| `ألبوم بلا فيديوهات: #albumDetailVideos مخفي، والانتقال إليه لا يترك بطاقات الألبوم السابق` | `server/test/web-dom.test.js:1912` |
-| `the event page gets an additive album strip — escaped titles, cover and count — and nothing when empty` | `server/test/web-dom.test.js:1960` |
-| `ألبوم بلا صور وفيديوهان: البطاقة وشريط المناسبة ورأس التفاصيل تكتب «2 فيديو»، والصور تبقى أولاً` | `server/test/web-dom.test.js:1988` |
-| `the «مباشر» badge shows on both buttons only while live.active, and turns itself off at until` | `server/test/web-dom.test.js:2074` |
-| `embed_url → an in-page iframe with referrerpolicy and allowfullscreen, plus «افتح في يوتيوب»; closing removes it` | `server/test/web-dom.test.js:2106` |
-| `no embed_url with a live → «ادخل البث» to <share_url>/go and no iframe; no live → «لا يوجد بث الآن» + «قناتنا»` | `server/test/web-dom.test.js:2130` |
-| `the section shows topic, episode question and yesterday's result, hides each when empty, and escapes all of them` | `server/test/web-dom.test.js:2154` |
-| `a vote without a token opens the login modal and sends no request` | `server/test/web-dom.test.js:2187` |
-| `after voting the bars show percentages and a count, and live_poll_<id> updates them — never before voting` | `server/test/web-dom.test.js:2203` |
-| `a 409 «already voted» shows the message and re-reads the hub to show the results` | `server/test/web-dom.test.js:2262` |
-| `GET /api/live/hub carries the token only when one exists; GET /api/live never does` | `server/test/web-dom.test.js:2286` |
-| `a live_status signal re-fetches GET /api/live (and the hub while the section is open)` | `server/test/web-dom.test.js:2306` |
-| `a live_started item in the notification center opens the live section` | `server/test/web-dom.test.js:2332` |
-| `?live=1 (the Web Push click target) opens the live section on load` | `server/test/web-dom.test.js:2355` |
-| `the share button shares share_url through the same path as an event share` | `server/test/web-dom.test.js:2362` |
-| `on a desktop the share button opens our own dialog — never navigator.share, and nothing is copied by itself` | `server/test/web-dom.test.js:2384` |
-| `on a phone the native share sheet is still used; with no navigator.share at all our dialog opens instead of a silent copy` | `server/test/web-dom.test.js:2426` |
-| `the share dialog is the last overlay in the page, so it opens above the congratulations room and the event page` | `server/test/web-dom.test.js:2444` |
-| `no TikTok LIVE identifier is left in web/index.html, app.js or styles.css — the story platform key is the one allowed mention` | `server/test/web-dom.test.js:2450` |
-| `the strip holds bar stories only, and the carousel holds carousel stories only` | `server/test/web-dom.test.js:2522` |
-| `the carousel sits inside the home tab and above the feed container, so it is the top of the feed` | `server/test/web-dom.test.js:2537` |
-| `a feed ad is inserted after card 8 and card 16, rotating between the feed stories` | `server/test/web-dom.test.js:2551` |
-| `no ad appears before the eighth card: seven cards render none, and the eighth earns the first` | `server/test/web-dom.test.js:2571` |
-| `the interval is the server's: feed_ad_interval 5 moves the first ad to after the fifth card` | `server/test/web-dom.test.js:2585` |
-| `the feed ad opens the feed story list for the view, and its CTA posts the click — not the bar list` | `server/test/web-dom.test.js:2601` |
-| `the carousel banner opens the carousel list, and its CTA posts that story's click` | `server/test/web-dom.test.js:2643` |
-| `the drawer carousel holds carousel banners alone, opens that list, and records its CTA click` | `server/test/web-dom.test.js:2673` |
-| `a trending reply draws its cards above the feed, in the server order, and a card opens the event page (تذكرة #177)` | `server/test/web-dom.test.js:2765` |
-| `the phone drawer gets the same cards from the same reply, and is emptied and hidden with the feed copy (تذكرة #177)` | `server/test/web-dom.test.js:2796` |
-| `an empty trending reply leaves the section hidden and the row empty — and the previous reply cannot outlive the new request (تذكرة #177)` | `server/test/web-dom.test.js:2827` |
-| `a late reply from the previous governorate never paints over the newer one (تذكرة #177)` | `server/test/web-dom.test.js:2846` |
-| `a failing trending request hides the section silently instead of throwing (تذكرة #177)` | `server/test/web-dom.test.js:2876` |
-| `choosing another governorate carries region_id=2 into the next trending request (تذكرة #177)` | `server/test/web-dom.test.js:2890` |
-| `a no-event album card names the honoree and his town, and draws no empty line where the event line sits` | `server/test/web-dom.test.js:2923` |
-| `a no-event album header names the honoree and his town, with no date line and no dangling separator` | `server/test/web-dom.test.js:2970` |
-| `an event album keeps its event title, town and date on the card and in the header (regression)` | `server/test/web-dom.test.js:3015` |
-| `selecting two towns sends both in one ?town= parameter` | `server/test/web-dom.test.js:3102` |
-| `selecting a village sends ?village_id=, separate from ?town=` | `server/test/web-dom.test.js:3115` |
-| `a town and a village picked together travel in their own separate parameters` | `server/test/web-dom.test.js:3127` |
-| `selecting two kinds sends both in one ?occasion_type_id= parameter, alongside a place filter` | `server/test/web-dom.test.js:3140` |
-| `nothing selected sends no place/kind parameters at all` | `server/test/web-dom.test.js:3158` |
-| `the place chip label shows one name, or "name +N" once more than one place is selected` | `server/test/web-dom.test.js:3168` |
-| `a selected id that cannot be resolved is still reported as selected, never silently dropped to "nothing selected"` | `server/test/web-dom.test.js:3193` |
-| `ticking a 21st option in one kind is rejected in the sheet, in Arabic, and never reaches the request` | `server/test/web-dom.test.js:3225` |
-| `"مسح الفلاتر" clears every filter, resets both chip labels, and re-fetches with no filter params` | `server/test/web-dom.test.js:3251` |
-| `date filter ranges match the mobile client: the week runs to Saturday, Thursday–Saturday is the coming wedding nights` | `server/test/web-dom.test.js:3274` |
-| `the date chip sends date_from/date_to, a picked day needs a day, and «مسح الفلاتر» drops the range` | `server/test/web-dom.test.js:3292` |
-| `«مسح الفلاتر» is always visible, not only once something is selected` | `server/test/web-dom.test.js:3329` |
-| `the selection is restored from localStorage on load, and reflected in the chip label` | `server/test/web-dom.test.js:3340` |
-| `a restored village selection resolves its real name once towns/villages have loaded` | `server/test/web-dom.test.js:3356` |
-| `a corrupt or missing localStorage filter value does not break the page` | `server/test/web-dom.test.js:3370` |
-| `two identical searches send one request and leave the very same cards in place` | `server/test/web-dom.test.js:3445` |
-| `opening and closing the filter drawer without changing anything keeps the cards and sends no request` | `server/test/web-dom.test.js:3460` |
-| `an actual filter change shows the floating «رجوع لنتائجك السابقة» pill` | `server/test/web-dom.test.js:3476` |
-| `pressing the pill restores the previous card ids in their order with no new request, then hides` | `server/test/web-dom.test.js:3500` |
-| `pressing the pill restores the filter UI its list was fetched with, so nothing re-fetches afterwards` | `server/test/web-dom.test.js:3521` |
-| `a real filter change draws its results from the top, with an explicit scroll reset` | `server/test/web-dom.test.js:3567` |
-| `tapping the header brand closes #eventPage and keeps the chosen filter, with no refetch` | `server/test/web-dom.test.js:3626` |
-| `the in-page brand closes #eventPage — the header one is covered by it` | `server/test/web-dom.test.js:3652` |
-| `the phone/PWA header — not just the hidden wide one — carries the brand` | `server/test/web-dom.test.js:3675` |
-| `the floating bar keeps every control at a 44px target and re-flows to two rows instead of shrinking` | `server/test/web-dom.test.js:3710` |
-| `on the feed itself, the header brand scrolls back to the top of the list` | `server/test/web-dom.test.js:3799` |
-| `from another destination, the header brand lands on the feed` | `server/test/web-dom.test.js:3813` |
-| `skeleton placeholders appear synchronously while fetchEvents is still in flight` | `server/test/web-dom.test.js:3827` |
-| `the fade-in class is applied on the very first render only, never on a later refetch` | `server/test/web-dom.test.js:3851` |
-| `the event page renders the youth-party line when youth_party_date is present` | `server/test/web-dom.test.js:3919` |
-| `an event card omits the youth-party line entirely when youth_party_date is empty` | `server/test/web-dom.test.js:3930` |
-| `an event card renders the dinner-time line when dinner_time carries a value` | `server/test/web-dom.test.js:3970` |
-| `an event card omits the dinner-time line entirely when dinner_time is empty — no invented 8:00` | `server/test/web-dom.test.js:3977` |
-| `the share button exists on every card and its word follows the occasion type's tone` | `server/test/web-dom.test.js:3986` |
-| `a card with a poster emits the four nested layers, media covers from top, no blur, and badges sit in caption` | `server/test/web-dom.test.js:4000` |
-| `a card with NO poster builds the short caption plus the icon, not a tall empty box` | `server/test/web-dom.test.js:4037` |
-| `frame colour source: type with colour sets inline --tone, type without colour emits no inline --tone` | `server/test/web-dom.test.js:4059` |
-| `the feed is its own scroll container and its tree holds only cards` | `server/test/web-dom.test.js:4089` |
-| `a mourning card never emits a countdown badge, whether or not it has a poster` | `server/test/web-dom.test.js:4131` |
-| `a mourning card shows a plain, visible date on its face — never a countdown, never hidden behind "التفاصيل"` | `server/test/web-dom.test.js:4149` |
-| `«التفاصيل» opens the event page like the phone — labelled rows, artist, nav buttons — and «رجوع» returns to the feed untouched` | `server/test/web-dom.test.js:4164` |
-| `tapping the card photo opens the same page, and the browser Back button closes it instead of leaving the site` | `server/test/web-dom.test.js:4214` |
-| `every info line clamps its text to one line, structurally` | `server/test/web-dom.test.js:4236` |
-| `the card headline is the type and the honoree, never a place-only title, and «التفاصيل» leads the actions` | `server/test/web-dom.test.js:4259` |
-| `an announcement card names the honoree and the type, not the town its `title` carries` | `server/test/web-dom.test.js:4351` |
-| `the announcement card has one «التفاصيل» action that opens the event, and no «ذكّرني»/«التبريكات»/«المشاركة» or audio` | `server/test/web-dom.test.js:4379` |
-| `the same card without opts keeps its four actions and its audio hook — the feed card is untouched` | `server/test/web-dom.test.js:4413` |
-| `the merged feed renders both a personal notification and a broadcast entry, both marked unread` | `server/test/web-dom.test.js:4480` |
-| `clicking the broadcast card calls PATCH /api/broadcasts/:id/dismiss, never /api/notifications/:id/read — even though the ids collide` | `server/test/web-dom.test.js:4498` |
-| `the badge reaches zero once every entry — personal and broadcast alike — has been acted on` | `server/test/web-dom.test.js:4512` |
-| `a clicked notification stays in the list as read — no red dot, no «جديد» — instead of disappearing` | `server/test/web-dom.test.js:4530` |
-| `«جعل الكل مقروء» posts read-all once, keeps every entry, clears every red mark and hides itself` | `server/test/web-dom.test.js:4550` |
-| `opening the service-category form renders an icon picker under the free-text field` | `server/test/web-dom.test.js:4591` |
-| `clicking a suggested icon fills the input the form submits` | `server/test/web-dom.test.js:4603` |
-| `the occasion-type form got the same treatment, not just the service one` | `server/test/web-dom.test.js:4616` |
-| `service-category form has attributes editor container and addCategoryAttributeRow adds rows` | `server/test/web-dom.test.js:4638` |
-| `provider form has price type, estimate description, and dynamic attributes container` | `server/test/web-dom.test.js:4651` |
-| `the event edit form carries a map and a file input, not hand-typed coordinates` | `server/test/web-dom.test.js:4668` |
-| `opening the map on an event with coordinates fills the fields the form submits` | `server/test/web-dom.test.js:4683` |
-| `an event with no coordinates opens with nothing selected, and clearing says so` | `server/test/web-dom.test.js:4700` |
-| `a chosen poster is sent as multipart under the field name the server reads` | `server/test/web-dom.test.js:4710` |
-| `the event edit form takes the audio as a file, not a typed URL` | `server/test/web-dom.test.js:4732` |
-| `a chosen audio file is sent as multipart under "audio", alone or with a poster` | `server/test/web-dom.test.js:4741` |
-| `removing the current audio empties the value the diff compares, and hides the player` | `server/test/web-dom.test.js:4752` |
-| `the village form carries a map container, and coordinates stay required` | `server/test/web-dom.test.js:4778` |
-| `opening the map on a village with coordinates fills the fields the form submits` | `server/test/web-dom.test.js:4788` |
-| `a simulated pin placement (click or drag) writes vilLat/vilLng — the same function the map's own click/drag handlers call` | `server/test/web-dom.test.js:4798` |
-| `typing a full, valid pair of coordinates by hand moves the pin and recentres the map` | `server/test/web-dom.test.js:4816` |
-| `typing a partial or non-numeric coordinate by hand is ignored — no thrown error, no pin jumping to a nonsense location` | `server/test/web-dom.test.js:4841` |
-| `the event and village pickers are genuinely distinct registry entries, not a shared global` | `server/test/web-dom.test.js:4873` |
-| `initDirectAddForm() builds a type picker and the first active type's own fields — no hardcoded wedding form` | `server/test/web-dom.test.js:4915` |
-| `#dirEventDate defaults to the LOCAL day too (admin direct-add form)` | `server/test/web-dom.test.js:4941` |
-| `switching to a mourning type relabels the honorees field and drops fields it does not define` | `server/test/web-dom.test.js:4963` |
-| `the admin honoree-add button keeps the panel's own styling, not the public site's` | `server/test/web-dom.test.js:4977` |
-| `the panel keeps its own two-column layout for town+village — not the shared renderer's stacked default` | `server/test/web-dom.test.js:4996` |
-| `the panel gets no .upload-section wrapper — groupUploads stays false there` | `server/test/web-dom.test.js:5017` |
-| `a required field left empty is rejected client-side with that type's own label` | `server/test/web-dom.test.js:5026` |
-| `a successful publish sends occasion_type_id and honorees[], never the old hardcoded groom_name form` | `server/test/web-dom.test.js:5048` |
-| `a pending card with possible_duplicates shows a danger badge when one is certain, an amber one when all are likely, and none otherwise` | `server/test/web-dom.test.js:5117` |
-| `clicking the badge opens the comparison with one card per duplicate and the approve-context buttons` | `server/test/web-dom.test.js:5142` |
-| `server text in a duplicate is escaped, never injected as markup` | `server/test/web-dom.test.js:5165` |
-| `a 409 POSSIBLE_DUPLICATE on approve opens #duplicateModal with the server message instead of the generic error notice` | `server/test/web-dom.test.js:5178` |
-| `«اعتماد رغم ذلك» re-sends the approval with confirm_duplicate: true and closes the modal` | `server/test/web-dom.test.js:5195` |
-| `«إلغاء» on the approve modal sends nothing and leaves the card there to decide on later` | `server/test/web-dom.test.js:5209` |
-| `«رفض كمكررة» closes the comparison and opens the reject modal with the reason prefilled` | `server/test/web-dom.test.js:5225` |
-| `the panel marks a featured event with a gold tag carrying its expiry date, and offers «إبراز» on the others` | `server/test/web-dom.test.js:5274` |
-| `the feature modal opens with the stored expiry date, and «إلغاء الإبراز» is offered only where a date exists` | `server/test/web-dom.test.js:5300` |
-| `«إبراز» PATCHes the chosen date, «إلغاء الإبراز» PATCHes null — both through the admin API` | `server/test/web-dom.test.js:5331` |
-| `«فتح المناسبة» opens the existing event's edit form when the panel has it, and a notice (not an error) when it does not` | `server/test/web-dom.test.js:5348` |
-| `a 409 POSSIBLE_DUPLICATE on an edit opens the same #duplicateModal in edit context, and «حفظ رغم ذلك» re-sends that edit with confirm_duplicate` | `server/test/web-dom.test.js:5422` |
-| `«إلغاء» on an edit duplicate leaves the form and its values untouched and sends nothing more` | `server/test/web-dom.test.js:5450` |
-| `a 409 POSSIBLE_DUPLICATE on direct add opens the modal in direct-add context and keeps the form intact on cancel` | `server/test/web-dom.test.js:5494` |
-| `«نشر رغم ذلك» re-sends the same direct-add FormData with confirm_duplicate=1` | `server/test/web-dom.test.js:5515` |
-| `a direct add the server queues as pending shows the server's message, not the «published directly» celebration` | `server/test/web-dom.test.js:5531` |
-| `the activity log labels event_duplicate_override with its own verb, shows the ids, and offers a filter for it` | `server/test/web-dom.test.js:5543` |
-| `the admin list draws the whole poster over a fill, not a crop of it` | `server/test/web-dom.test.js:5568` |
-| `and its stylesheet contains the poster rather than cropping it` | `server/test/web-dom.test.js:5584` |
-| `the feed card has no blur and no card-level fixed ratio, its media reserves the poster ratio, object-fit is cover from top center, and snapping is declared` | `server/test/web-dom.test.js:5610` |
-| `a featured card carries the gold «مناسبة كبرى» badge, and a card without is_featured carries none` | `server/test/web-dom.test.js:5684` |
-| `the badge is the first chip of the card, ahead of the occasion-type chip` | `server/test/web-dom.test.js:5701` |
-| `the featured card shows the whole invitation (contain) and its badge is gold` | `server/test/web-dom.test.js:5710` |
-| `the feed keeps the server's order and never re-sorts featured cards on the client` | `server/test/web-dom.test.js:5740` |
-| `the empty feed is a door: add your event, wedding services, your albums, and expanding beyond the governorate — each lands on its destination (#161)` | `server/test/web-dom.test.js:5777` |
-| `«وسّع إلى كل المحافظات» يجعل الجلب التالي يحمل all_regions=1 — وإلا فالزرّ يعيد التغذية نفسها (#161)` | `server/test/web-dom.test.js:5842` |
-| `a Cloudinary card poster is asked for at card width, and a local poster is left exactly as it is (#161)` | `server/test/web-dom.test.js:5879` |
-| `the users tab filters by phone number and by name, over the already-fetched list` | `server/test/web-dom.test.js:5926` |
-| `the users tab offers «حذف الحساب» to a super_admin on every row except a super_admin row, and never to a plain admin` | `server/test/web-dom.test.js:5951` |
-| `deleting a user asks for two explicit confirmations, sends DELETE /api/admin/users/:id through adminFetch, then reloads the list and reports success` | `server/test/web-dom.test.js:5973` |
-| `backing out of either confirmation sends no request at all` | `server/test/web-dom.test.js:6021` |
-| `the counts panel shows Arabic labels, never raw English event keys, and flags exactly the two failure events` | `server/test/web-dom.test.js:6054` |
-| `every known event renders as its own row, and one with zero recorded occurrences renders as 0, not blank or omitted` | `server/test/web-dom.test.js:6072` |
-| `a retired/unknown event_name the server still has real rows for renders with its raw key and an Arabic "unknown" marker, instead of vanishing` | `server/test/web-dom.test.js:6104` |
-| `the retention notice states the real retention window read from analytics.service.js, not an independent literal` | `server/test/web-dom.test.js:6150` |
-| `a 403 on the counts endpoint (a non-super-admin somehow landing here) renders the server's Arabic message, not a blank panel or a thrown error` | `server/test/web-dom.test.js:6161` |
-| `picking a user from the users list renders that user's paginated log with Arabic event labels` | `server/test/web-dom.test.js:6177` |
-| `a multi-page user log renders prev/next controls, and clicking "next" requests page=2` | `server/test/web-dom.test.js:6203` |
-| `rejecting an event sends a reason in the request body` | `server/test/web-dom.test.js:6246` |
-| `a broadcast carries a tone and a duration` | `server/test/web-dom.test.js:6283` |
-| `a broadcast with duration "none" sends duration: "none" and the composer describes it as centre-only` | `server/test/web-dom.test.js:6314` |
-| `super admin gets «كل المناطق» plus one «كل بلدات <المحافظة>» target per governorate, and no regions hides the picker (تذكرة #128)` | `server/test/web-dom.test.js:6344` |
-| `town admin sees only their own assigned towns among the broadcast targets` | `server/test/web-dom.test.js:6411` |
-| `admin with zero assigned towns is stopped before sending (controls disabled and notice shown)` | `server/test/web-dom.test.js:6448` |
-| `settings tab is reachable only for super admin, saves number, and can clear it` | `server/test/web-dom.test.js:6475` |
-| `invalid WhatsApp number displays the server's Arabic error without client format check` | `server/test/web-dom.test.js:6543` |
-| `town dropdowns are filled from GET /api/towns with 'الكل' filtered out` | `server/test/web-dom.test.js:6573` |
-| `panel behaves sanely when GET /api/towns fails (uses fallback array)` | `server/test/web-dom.test.js:6597` |
-| `picking "القرى والتجمعات" in direct add form keeps the selection without resetting to default town` | `server/test/web-dom.test.js:6619` |
-| `a token expiring in under 15 minutes triggers the warning, and one expiring in hours does not` | `server/test/web-dom.test.js:6638` |
-| `the warning appears ONCE, not on every tick` | `server/test/web-dom.test.js:6660` |
-| `an expired session does NOT tear the dashboard down` | `server/test/web-dom.test.js:6680` |
-| `re-entering the expired-session path does not wipe a PIN already being typed` | `server/test/web-dom.test.js:6703` |
-| `a successful re-login swaps the stored token and leaves the dashboard mounted` | `server/test/web-dom.test.js:6720` |
-| `the PIN is not in localStorage or sessionStorage after a successful re-login` | `server/test/web-dom.test.js:6751` |
-| `a draft is saved from the direct-add form and offered back after re-login` | `server/test/web-dom.test.js:6782` |
-| `declining the restore deletes the draft so it is not offered again` | `server/test/web-dom.test.js:6813` |
-| `a draft that had a file field says so in Arabic on restore` | `server/test/web-dom.test.js:6837` |
-| `logging out clears the drafts` | `server/test/web-dom.test.js:6859` |
-| `the page links a real manifest and a real apple-touch-icon` | `server/test/web-dom.test.js:6885` |
-| `the manifest is valid JSON, standalone, and names icons that exist on disk` | `server/test/web-dom.test.js:6897` |
-| `the header carries a drawn mark, not an emoji` | `server/test/web-dom.test.js:6912` |
-| `the inlined header/install-hint/admin mark paths match the current mark geometry` | `server/test/web-dom.test.js:6932` |
-| `the rename to «أعراسنا» reached the document title, the iOS web-app title, and the header` | `server/test/web-dom.test.js:6945` |
-| `the manifest short_name is «أعراسنا» alone, and name carries both names` | `server/test/web-dom.test.js:6961` |
-| `the smallest Android mipmap (mdpi, 48×48) really is 48×48 and mixes mark- and ground-coloured pixels` | `server/test/web-dom.test.js:6971` |
-| `every safe-zone render keeps mark-coloured pixels inside the circular safe zone (radius 40% of the image width)` | `server/test/web-dom.test.js:6988` |
-| `detail 'icon' is the full mark minus the word — nothing else drops or moves out of order` | `server/test/web-dom.test.js:7011` |
-| `nothing is clipped by the circular mask at safe-zone scale` | `server/test/web-dom.test.js:7018` |
-| `the two rings interlock: right over left, then a left-ring sector back over the right` | `server/test/web-dom.test.js:7049` |
-| `the shaping parity gate — static vector path matches Cairo ctx.fillText Arabic shaping` | `server/test/web-dom.test.js:7055` |
-| `detail 'icon' and detail 'full' render different bytes at the same size` | `server/test/web-dom.test.js:7119` |
-| `the generated favicon SVG is well-formed, carries both brand colours, and matches the geometry the raster uses` | `server/test/web-dom.test.js:7125` |
-| `an iPhone visitor who has not installed is shown how` | `server/test/web-dom.test.js:7150` |
-| `everyone else is left alone` | `server/test/web-dom.test.js:7163` |
-| `an iPhone that already installed the app is not told to install it` | `server/test/web-dom.test.js:7174` |
-| `and it is actually wired into page load, not merely defined` | `server/test/web-dom.test.js:7186` |
-| `nothing that ships hidden is un-hidden by a class that forces a display` | `server/test/web-dom.test.js:7209` |
-| `dismissing the hint keeps it dismissed on the next visit` | `server/test/web-dom.test.js:7239` |
-| `شاشة الترحيب تظهر لزائر جديد: مخفية في الملف، بثلاث بطاقات و«تخطّي»` | `server/test/web-dom.test.js:7262` |
-| `«تخطّي» يكتب negev_welcome_seen فلا تعود الشاشة في زيارة تالية` | `server/test/web-dom.test.js:7284` |
-| `and the welcome is wired into page load, not merely defined` | `server/test/web-dom.test.js:7310` |
-| `first visit on iPhone: the welcome comes first, and the install hint waits its turn` | `server/test/web-dom.test.js:7324` |
-| `الويب لا يعرض «قيّمنا» إطلاقاً — التقييم في التطبيق وحده` | `server/test/web-dom.test.js:7348` |
-| `the ticker renders from GET /api/broadcasts/live on load, with no socket involved` | `server/test/web-dom.test.js:7395` |
-| `zero live broadcasts leaves the ticker hidden` | `server/test/web-dom.test.js:7409` |
-| `with two live broadcasts, the ticker shows the newest and an indicator that opens the rest` | `server/test/web-dom.test.js:7420` |
-| `signed in, the same indicator re-fetches the notifications centre before opening it, instead of expanding the ticker` | `server/test/web-dom.test.js:7441` |
-| `a solemn broadcast gets its own class and never the animated (urgent-pulse) class` | `server/test/web-dom.test.js:7463` |
-| `an urgent broadcast gets the pulse class, for contrast with solemn` | `server/test/web-dom.test.js:7476` |
-| `dismissing while signed in calls PATCH /api/broadcasts/:id/dismiss, and the ticker clears` | `server/test/web-dom.test.js:7487` |
-| `dismissing while anonymous writes to localStorage, calls no PATCH, and the broadcast does not come back on the next render` | `server/test/web-dom.test.js:7502` |
-| `a town_broadcast socket signal triggers a re-fetch and never renders text from the payload itself` | `server/test/web-dom.test.js:7534` |
-| `the support entry opens a wa.me link built from the exact stored number, unmodified — via the in-app modal, not confirm()` | `server/test/web-dom.test.js:7580` |
-| `FIX 5: the disclosure is the page's own modal, not a browser confirm() — declining it opens nothing` | `server/test/web-dom.test.js:7613` |
-| `a null support number leaves the entry visible but disabled, and tapping it explains why in the same modal, never a browser alert()` | `server/test/web-dom.test.js:7646` |
-| `FIX 1: a single long broadcast — no "+N" to fall back on — is still reachable in full, for an anonymous AND a signed-in visitor` | `server/test/web-dom.test.js:7677` |
-| `FIX 2b: a broadcast dismissed while anonymous does not reappear after signing in on the SAME device` | `server/test/web-dom.test.js:7723` |
-| `الشريط يحمل صفّ المحافظة وعددها كما وصلا، والمجموع، و«حُدّث HH:MM» بالساعة المحلية` | `server/test/web-dom.test.js:7848` |
-| `بلا رقم بعد لا شريط إطلاقاً — لا أصفار كاذبة قبل وصول الخادم` | `server/test/web-dom.test.js:7884` |
-| `شريط واحد فقط: الرقم لا يظهر قبل حسم التعاميم، والتعميم الحيّ يحلّ محلّه بعدها` | `server/test/web-dom.test.js:7901` |
-| `إغلاق التعميم يعيد الشريط، والتعميم المُغلَق سابقاً لا يمنعه` | `server/test/web-dom.test.js:7959` |
-| `الشريط يُطلب مرّة واحدة عند فتح الصفحة، لا عند فتح تبويب` | `server/test/web-dom.test.js:7990` |
-| `قاعدة CSS تُبقي [hidden] غالباً على display:flex — وإلا ظهر الشريط رغم إخفائه` | `server/test/web-dom.test.js:8018` |
-| `loading the page does NOT request notification permission` | `server/test/web-dom.test.js:8032` |
-| `tapping a personal notification with an event_id marks it read AND navigates to that event` | `server/test/web-dom.test.js:8063` |
-| `adding a reminder requests notification permission, and removing one does not` | `server/test/web-dom.test.js:8135` |
-| `a null VAPID public key means no prompt, no subscribe call, and no visible error` | `server/test/web-dom.test.js:8186` |
-| `a successful subscribe POSTs the exact { endpoint, keys: { p256dh, auth } } shape` | `server/test/web-dom.test.js:8232` |
-| `the off control calls DELETE /api/notifications/subscribe and the displayed state changes` | `server/test/web-dom.test.js:8275` |
-| `tapping a broadcast marks it read through the broadcast endpoint and navigates nowhere` | `server/test/web-dom.test.js:8340` |
-| `a browser with no serviceWorker/PushManager degrades silently and the page still works` | `server/test/web-dom.test.js:8394` |
-| `iOS Safari not installed shows Arabic line and does not prompt` | `server/test/web-dom.test.js:8423` |
-| `after turning notifications off, adding a reminder does not re-subscribe (FIX 4, story 18)` | `server/test/web-dom.test.js:8460` |
-| `the deep-linked event survives the feed load instead of being wiped by it (FIX 5, story 14)` | `server/test/web-dom.test.js:8527` |
-| `navigateToEvent opens the event page without any animated scroll of the feed (FIX 7, story 54)` | `server/test/web-dom.test.js:8597` |
-| `clicking an event in the agenda day list closes the agenda and navigates to that event, with no ReferenceError` | `server/test/web-dom.test.js:8613` |
-| `the agenda counts the month from GET /api/events/calendar, never from the events the feed already loaded (#175)` | `server/test/web-dom.test.js:8708` |
-| `the agenda dot is gold for one event and red for two or more, and today is emphasised (#175)` | `server/test/web-dom.test.js:8735` |
-| `the agenda governorate filter comes from GET /api/towns and refetches the month with region_id (#175)` | `server/test/web-dom.test.js:8774` |
-| `clicking an agenda day lists that day's events from the existing feed route (?date_from=&date_to=) (#175)` | `server/test/web-dom.test.js:8823` |
-| `a month count landing after a newer governorate's is dropped — the request identity is the month AND the governorate (#175)` | `server/test/web-dom.test.js:8863` |
-| `a day list landing after a newer day's is dropped — the request identity is the day AND the governorate (#175)` | `server/test/web-dom.test.js:8909` |
-| `an empty second page preserves pagination.total and declares the partial day list (#175)` | `server/test/web-dom.test.js:8968` |
-| `switching governorates clears the old dots before the new month response arrives (#175)` | `server/test/web-dom.test.js:9028` |
-| `choosing a new day replaces prior events with an Arabic loading row until its response arrives (#175)` | `server/test/web-dom.test.js:9061` |
-| `a failed day fetch shows an Arabic error, not an invented empty day (#175)` | `server/test/web-dom.test.js:9105` |
-| `a day list answering for "all governorates" cannot outlive the governorate chosen after it — the day alone is not the identity (#175)` | `server/test/web-dom.test.js:9130` |
-| `agenda month stepping builds from day 1: 31 January ⇒ February 2027, and 31 March ⇒ February again (#175)` | `server/test/web-dom.test.js:9234` |
-| `iOS install hint is not shown unbidden if already dismissed (FIX 3, story 17)` | `server/test/web-dom.test.js:9268` |
-| `event card countdown accurately reflects today, tomorrow, and future days without timezone drift` | `server/test/web-dom.test.js:9300` |
-| `«غداً» is computed in Jerusalem time — a device in another zone cannot shift the day` | `server/test/web-dom.test.js:9341` |
-| `كرت التغذية يحمل «انتهت» حين يقول الخادم إن أيام المناسبة مضت، ولا يحملها لمناسبة قائمة (#167)` | `server/test/web-dom.test.js:9362` |
-| `services tab has filter chips, search input, filter modals, and renders luxury service cards` | `server/test/web-dom.test.js:9378` |
-| `العرض المختصر: صفّ لكل مزوّد (صورة، اسم، فئة وبلدة، شارة سعر، «اتصال» و«تفاصيل»)، و«اتصال» يغيب حين لا يوجد رقم` | `server/test/web-dom.test.js:9479` |
-| `العميل: غياب providers_display أو قيمته غير المعروفة يعني الصفوف المختصرة (حسم الخادم في smoke)` | `server/test/web-dom.test.js:9529` |
-| `صفّ البلدات لا يدّعي «جميع البلدات» من أربع بلدات (تذكرة #127)` | `server/test/web-dom.test.js:9547` |
-| `«تفاصيل» في الصفّ المختصر تفتح نافذة المزوّد من GET /api/services/providers/:id بحزمة السعر والمواصفات` | `server/test/web-dom.test.js:9567` |
-| `providers_display = cards يعيد الكروت الكبيرة، وتغيير الشكل بعد الرسم يعيده من الذاكرة بلا طلب مزوّدين جديد` | `server/test/web-dom.test.js:9613` |
-| `تنسيق الصفّ المختصر: لا نص أصغر من 15px ولا زرّ أقصر من 44px` | `server/test/web-dom.test.js:9645` |
-| `a 401 on an auth:true site call runs handleSessionExpired once — token cleared, auth modal open, one notice for two parallel 401s` | `server/test/web-dom.test.js:9692` |
-| `a 401 on a call WITHOUT auth:true (or on the admin token) leaves the site session alone` | `server/test/web-dom.test.js:9716` |
-| `a 401 on the publish POST keeps the filled form and retries the same submission right after logging in again` | `server/test/web-dom.test.js:9730` |
-| `the header and floating account buttons always read «حسابي» with a person icon, open #tabAccount instead of a login form or a logout, and leave the logout inside «حسابي» alone` | `server/test/web-dom.test.js:9773` |
-| `choosing «قريتي غير موجودة» reveals a name field and the publish POST carries requested_village_name with no village_id` | `server/test/web-dom.test.js:9855` |
-| `the card shows a typed (unlisted) village name in place of «القرى والتجمعات», escaped` | `server/test/web-dom.test.js:9932` |
-| `effective audio: the platform default plays for a type that shows audio_url, and a type that hides it gets no audio at all` | `server/test/web-dom.test.js:9948` |
-| `feed audio is isolated per card like a story: moving on stops the old track — even a shared default one — and starts the next from zero` | `server/test/web-dom.test.js:9988` |
-| `«قوّي مناسبتك» opens the edit form of that very event; the daily digest goes to the feed` | `server/test/web-dom.test.js:10041` |
-| `leaving the feed for another tab and coming back returns to the same card, not the first` | `server/test/web-dom.test.js:10077` |
-| `the «new events» switch reads the server, saves a change, and snaps back if the save fails` | `server/test/web-dom.test.js:10097` |
-| `admin activity log reads as a sentence — who, did what, to which event — with «افتح» only while the event exists` | `server/test/web-dom.test.js:10134` |
-| `admin event card names its publisher, and admin.html?event=<id> opens that event for editing` | `server/test/web-dom.test.js:10164` |
-| `admin events: search survives an event with no groom, and phone/poster values stay text` | `server/test/web-dom.test.js:10184` |
-| `the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer` | `server/test/web-dom.test.js:10210` |
-| `admin moderation card: a typed village shows as «قرية مقترحة», and only super_admin gets «اعتمدها قرية»` | `server/test/web-dom.test.js:10226` |
-| `every element id the live admin.js code reads for actually exists in admin.html` | `server/test/web-dom.test.js:10245` |
-| `getLiveShareUrl() returns <origin>/live for the default empty apiBase` | `server/test/web-dom.test.js:10259` |
-| `getLiveShareUrl() follows NEGEV_CONFIG.apiBase when it is set to a non-empty absolute origin` | `server/test/web-dom.test.js:10264` |
-| `duration presets compute a future "until", and "حتى منتصف الليل" lands exactly on the next local midnight` | `server/test/web-dom.test.js:10270` |
-| `clicking a duration preset writes the hidden "until" field and the readable preview text` | `server/test/web-dom.test.js:10294` |
-| `status strip: active live shows the badge, topic and remaining time; a saved channel with no live shows the channel-only line; nothing saved shows the unset line` | `server/test/web-dom.test.js:10308` |
-| `an expired live (until in the past) renders as "no live", never as an active one` | `server/test/web-dom.test.js:10332` |
-| `«إنهاء البث الآن» clears title and until together, in a single PUT request body` | `server/test/web-dom.test.js:10348` |
-| `a topic containing markup is inserted into the status strip as text, never as HTML` | `server/test/web-dom.test.js:10379` |
-| `each duration button in admin.html is wired to a preset key computeLiveDurationUntil actually resolves` | `server/test/web-dom.test.js:10395` |
-| `an expired live is not handed back to the form: its topic and until are cleared, and «إنهاء البث الآن» is disabled` | `server/test/web-dom.test.js:10414` |
-| `a still-running live IS restored into the form untouched` | `server/test/web-dom.test.js:10442` |
-| `when GET /api/live fails, the strip stops claiming that no channel is configured` | `server/test/web-dom.test.js:10459` |
-| `the live section and the episodes section say nothing about TikTok anywhere — text, placeholders or titles` | `server/test/web-dom.test.js:10497` |
-| `saving the live form PUTs exactly live_channel_url, live_title, live_until and live_stream_url through adminFetch` | `server/test/web-dom.test.js:10509` |
-| `the stream-url hint follows embed_url from GET /api/live: inside the app when set, outside when null, hidden when nothing is configured` | `server/test/web-dom.test.js:10541` |
-| `the episode form defaults its date to today in Asia/Jerusalem, and the episodes list loads through adminFetch` | `server/test/web-dom.test.js:10564` |
-| `«إضافة خيار» stops at 4 options and the per-option delete stops at 2` | `server/test/web-dom.test.js:10581` |
-| `an episode with votes locks its option inputs and add/remove buttons, with the note; one without votes does not` | `server/test/web-dom.test.js:10612` |
-| `saving an episode PUTs to /api/admin/live/episodes/:date via adminFetch; an empty poll is sent as no poll; a 409 message is shown as-is` | `server/test/web-dom.test.js:10645` |
-| `deleting an episode asks confirm() first and sends DELETE through adminFetch only when confirmed` | `server/test/web-dom.test.js:10685` |
-| `«الحلقات السابقة» is the last section of the live page: escaped titles, image or placeholder, and «شاهد هنا» / «افتح على يوتيوب» / «شارك»` | `server/test/web-dom.test.js:10739` |
-| `«الحلقات السابقة» stays hidden when past_episodes is empty` | `server/test/web-dom.test.js:10791` |
-| `«أرشيف العرس» appears in the event details only when archive_photos is non-empty, and opens a full-screen viewer` | `server/test/web-dom.test.js:10804` |
-| `the map popup Waze button still records its town when the town name has an apostrophe` | `server/test/web-dom.test.js:10875` |
-| `the host call/WhatsApp buttons work for a town with an apostrophe, and a hostile host_phone stays text` | `server/test/web-dom.test.js:10904` |
-| `admin: «عرض السجل» opens the log of the exact device id — a crafted id is data, never code` | `server/test/web-dom.test.js:10934` |
-| `no inline handler in web/app.js or web/admin.js embeds escapeHtml() inside a quoted JS string` | `server/test/web-dom.test.js:10962` |
-| `uploadToCloudinary POSTs exactly the signed fields plus the file to upload_url, with no token, and throws an Arabic message on refusal` | `server/test/web-dom.test.js:10969` |
-| `the episode form prefills and sends video_url; a saved episode lists its video, thumbnail and share link` | `server/test/web-dom.test.js:10996` |
-| `saving the live shows live_episode_notice as a warning, or «حُفظ البث كحلقة اليوم» with an optional share-image upload` | `server/test/web-dom.test.js:11041` |
-| `the occasion-type form prefills and sends archive_gallery` | `server/test/web-dom.test.js:11082` |
-| `لوحة الأنواع تحمل حقل feed_linger_days ويُحفظ عبر المسار القائم (#167)` | `server/test/web-dom.test.js:11110` |
-| `an ended event of an archive type gets «صور الأرشيف» (super_admin); the modal lists photos, deletes after confirm, and uploads with per-file status` | `server/test/web-dom.test.js:11143` |
-| `ستوريو التسويق: super_admin sees the tab, previews a link, publishes, and deletes with its asset` | `server/test/web-dom.test.js:11219` |
-| `ستوريو التسويق: موضع الظهور يُرسَل كما اختير ويُعاد إلى bar بعد النشر (#173)` | `server/test/web-dom.test.js:11289` |
-| `بطاقة الدخول: the pinned story is preselected, and saving sends its id or an explicit empty string` | `server/test/web-dom.test.js:11333` |
-| `ستوريو التسويق is hidden from a town admin — the tab is absent, not disabled` | `server/test/web-dom.test.js:11387` |
-| `تبويب «الأشخاص» is hidden from a town admin and shown to a super admin — merging is super-only (#107)` | `server/test/web-dom.test.js:11395` |
-| `اقتراحات الدمج in the people tab are rendered, escaped, and only preselect — they never merge (#107)` | `server/test/web-dom.test.js:11410` |
-| `دمج الأشخاص: the merge POST carries JSON and the selected source, and success clears the selection (#107)` | `server/test/web-dom.test.js:11458` |
-| `ألبومات الإدارة: pick an archive-gallery event, open its album, edit a caption, and moderate a tag/report` | `server/test/web-dom.test.js:11502` |
-| `ألبومات الإدارة: زرّ الحذف في الرأس يرسل معرّف الألبوم الحقيقي، ويغلق اللوحة ويعيد جلب الألبومات` | `server/test/web-dom.test.js:11659` |
-| `ألبومات الإدارة: رقاقة «بلا مناسبة» تجلب ألبومات العريس وتعرض بطاقتها، و«فتح» يفتح تفاصيلها` | `server/test/web-dom.test.js:11726` |
-| `فيديوهات اللوحة: حالة عربية، «إخفاء» يرسل PATCH، «حذف» بعد تأكيد يرسل DELETE، والإضافة ترسل { url, title }` | `server/test/web-dom.test.js:11788` |
-| `ألبومات الإدارة: الوسم يسمّي أصحاب المناسبة والبلدة مرة واحدة، والبحث يرشّح بالكتابة` | `server/test/web-dom.test.js:11900` |
-| `ألبومات الإدارة: رفع 45 صورة يوقّع 3 دفعات (max_batch = 20) ويُدخل صفاً لكل صورة` | `server/test/web-dom.test.js:12055` |
-| `ألبومات الإدارة: إدخال يردّ 429 برسالة انتظار — الصفّ يقول «أعد المحاولة بعد 2 دقيقة» والصفوف التالية تُحاول` | `server/test/web-dom.test.js:12091` |
-| `ألبومات الإدارة: فشل التوقيع بـ 429 يوقف الطابور ويحمل الصفوف الباقية رسالة الانتظار بلا طلب ثانٍ` | `server/test/web-dom.test.js:12120` |
-| `the «البلدات والمحافظات» tab button is hidden for a plain admin and shown for super_admin` | `server/test/web-dom.test.js:12189` |
-| `the towns table renders per region from GET /api/admin/towns; the locked row has only the reorder buttons` | `server/test/web-dom.test.js:12203` |
-| `▼ on the first town PUTs /api/admin/towns/order with the full swapped id list, then refreshes the shared towns list` | `server/test/web-dom.test.js:12231` |
-| `submitting the new-town form POSTs name, latitude, longitude and region_id` | `server/test/web-dom.test.js:12251` |
-| `the event edit town select offers «النقب — بلا بلدة محدّدة» and keeps an unknown current town selected` | `server/test/web-dom.test.js:12275` |
-| `the admin → towns grid offers the region as «النقب (بلا بلدة محدّدة)» and «عرض المناسبات بلا بلدة» filters the events list to that exact town` | `server/test/web-dom.test.js:12294` |
-| `the village form carries a mandatory governorate picker and every create sends region_id (تذكرة #128)` | `server/test/web-dom.test.js:12357` |
-| `the villages table shows only the chosen governorate's villages, names that governorate, and follows the picker (تذكرة #128)` | `server/test/web-dom.test.js:12388` |
-| `the «إضافة محافظة» button opens a form that POSTs the governorate to /api/admin/regions (تذكرة #128)` | `server/test/web-dom.test.js:12412` |
-| `the broadcast target offers «كل بلدات <المحافظة>» from GET /api/towns and sends the governorate name for the server to expand (تذكرة #128)` | `server/test/web-dom.test.js:12440` |
-| `the analytics tab renders the per-governorate breakdown from overview.by_region, with the «غير محدَّد» row, leaving the summary KPIs as they were (تذكرة #128)` | `server/test/web-dom.test.js:12479` |
-| `the publish town select offers the region as «النقب — بلا بلدة محدّدة», valued with the bare region name` | `server/test/web-dom.test.js:12556` |
-| `choosing the region centres the map on it with no pin, and publish sends town=النقب with no latitude/longitude` | `server/test/web-dom.test.js:12572` |
-| `the edit modal keeps an event's current town selected even when it is not among the options, and saves it back unchanged` | `server/test/web-dom.test.js:12612` |
-| `the place filter offers the region «(بلا بلدة محدّدة)» and selecting it sends ?town=النقب` | `server/test/web-dom.test.js:12644` |
-| `a region-level event's card shows the bare region name, and the empty feed names the first region` | `server/test/web-dom.test.js:12654` |
-| `the collision alert shows the town and date as text — markup in them is never parsed` | `server/test/web-dom.test.js:12666` |
-| `switching to «القرى والتجمعات» drops the previous town's automatic pin, but never a pin the user placed` | `server/test/web-dom.test.js:12690` |
-| `the publish form renders an extra-days list and «أضف يوماً» button for a type that defines one, and nothing for a type without it` | `server/test/web-dom.test.js:12731` |
-| `submitting the publish form sends extra_days[i][…] bracket keys, and a fully blank row is dropped` | `server/test/web-dom.test.js:12751` |
-| `the edit modal fills its days from evt.extra_days and PATCHes them back as an array` | `server/test/web-dom.test.js:12790` |
-| `«برنامج المناسبة» يجمع محطات اليوم الواحد تحت تاريخ واحد مرتّبةً بالوقت، ويضع كل تاريخ في مجموعته` | `server/test/web-dom.test.js:12834` |
-| `«أضف إلى تقويم الهاتف» رابط تنزيل إلى /api/events/<id>/calendar.ics على أصل الـAPI لا أصل الصفحة` | `server/test/web-dom.test.js:12895` |
-| `«أضف إلى تقويم الهاتف» يغيب عن غير المؤهّل: معلّقة، أو «بالرابط فقط»، أو مجدولة لم يبلغ موعدها (تذكرة #176)` | `server/test/web-dom.test.js:12932` |
-| `زرّ الملاحة بجانب سطر المكان: href بالإحداثيات حين توجد، وباسم المكان حين تغيب` | `server/test/web-dom.test.js:12960` |
-| `the admin direct-add form gets its own styled «أضف يوماً» button for a type with extra_days` | `server/test/web-dom.test.js:12995` |
-| `admin direct add sends extra_days[i][…] for a filled day row and drops a blank one` | `server/test/web-dom.test.js:13048` |
-| `a direct-add draft restores its saved extra-day row` | `server/test/web-dom.test.js:13089` |
-| `the admin edit form shows the event's extra days as editable rows` | `server/test/web-dom.test.js:13119` |
-| `renaming an extra day sends extra_days but never raises the critical-amendment warning` | `server/test/web-dom.test.js:13132` |
-| `changing an extra day's date sends extra_days and raises the critical-amendment warning` | `server/test/web-dom.test.js:13150` |
-| `swapping two extra days' dates raises the critical-amendment warning even though the date list is unchanged` | `server/test/web-dom.test.js:13166` |
-| `leaving the extra days untouched sends no extra_days key at all` | `server/test/web-dom.test.js:13194` |
-| `the days section is hidden for a type that does not show extra_days, and the key is never sent` | `server/test/web-dom.test.js:13213` |
-| `buildEventEditFormData JSON-stringifies extra_days exactly like honorees` | `server/test/web-dom.test.js:13234` |
-| `admin.css styles the direct-add honoree and extra-day rows, which had no rule before` | `server/test/web-dom.test.js:13243` |
-| `the occasion-type editor round-trips every server field key, so saving a type deletes none` | `server/test/web-dom.test.js:13256` |
-| `the reminder button reads «أضف لقائمتي» when unsaved, and «في قائمتي» + is-saved when saved, with the heart as its state marker` | `server/test/web-dom.test.js:13324` |
-| `renderMyList draws the six server buckets in order, collapses «انتهت سابقاً», and picks row actions by bucket` | `server/test/web-dom.test.js:13353` |
-| `a date change shows «تغيّر الموعد» with old→new in its title, and null renders nothing` | `server/test/web-dom.test.js:13405` |
-| `the «انتهت» chip filters client-side, and each chip has its own empty state` | `server/test/web-dom.test.js:13438` |
-| `the bottom nav holds three destinations — المناسبات · خدماتنا · خدمات الأعراس — and «حسابي», a header button rather than a bar slot, lights nothing down there` | `server/test/web-dom.test.js:13470` |
-| `«خدماتنا» is a public page with the three Ktra platform capsules in order, the news one opening the reader in-place` | `server/test/web-dom.test.js:13567` |
-| `«خدماتنا» carries the five calculators as one visible panel at a time, with the Hijri ±1 day warning in plain sight` | `server/test/web-dom.test.js:13658` |
-| `the wedding budget sums its items, and refuses an empty name, a negative amount and text` | `server/test/web-dom.test.js:13700` |
-| `the expense split names who pays whom, exactly, and refuses a single person and a zero total` | `server/test/web-dom.test.js:13757` |
-| `the split settlement never invents or loses an agora, across a fixed pseudo-random run` | `server/test/web-dom.test.js:13817` |
-| `the guest estimator multiplies families and tables, treats empty as zero, and refuses text` | `server/test/web-dom.test.js:13875` |
-| `the countdown counts local calendar days — 45 ahead, today, 3 past — and rejects a non-existent date` | `server/test/web-dom.test.js:13921` |
-| `the Hijri calculator matches four Umm al-Qura reference dates exactly and shows the ±1 day note` | `server/test/web-dom.test.js:13972` |
-| `no calculator reaches /api — every one of the five computes on the device` | `server/test/web-dom.test.js:14008` |
-| `the add-service window names its purpose, and no outside button borrows that wording` | `server/test/web-dom.test.js:14065` |
-| `«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape` | `server/test/web-dom.test.js:14089` |
-| `the empty governorate offers «أخبار محلية عامة», and choosing it refetches with general=1 and shows the «عامة» tag` | `server/test/web-dom.test.js:14169` |
-| `tapping a news card opens its detail inside the layer — body paragraphs, source line, «افتح على كترا» — and back restores the list` | `server/test/web-dom.test.js:14221` |
-| `a failing /api/news shows the Arabic error with «إعادة المحاولة», and the retry refetches` | `server/test/web-dom.test.js:14302` |
-| `resumePendingIntent with { type: 'remind' } POSTs /api/events/:id/remind after sign-in` | `server/test/web-dom.test.js:14346` |
-| `«نظّف المنتهية» confirms first, then DELETEs /api/my-reminders?scope=ended with the token` | `server/test/web-dom.test.js:14379` |
-| `removing an event from «قائمتي» clears is_reminded on the feed entry, so its card offers adding it again` | `server/test/web-dom.test.js:14412` |
-| `clearEndedMyList: a refused clear toasts nothing and moves nothing; a successful one un-saves the cleared feed event` | `server/test/web-dom.test.js:14474` |
-| `the «تراجع» undo of a failed re-add alerts and still reloads the list` | `server/test/web-dom.test.js:14556` |
-| `the event page offers no save button for an event that is not approved` | `server/test/web-dom.test.js:14614` |
-| `account avatar: a stored avatar_url shows the photo and hides the icon fallback` | `server/test/web-dom.test.js:14676` |
-| `account avatar: avatar_url = null hides the photo and brings the icon back` | `server/test/web-dom.test.js:14691` |
-| `account profile: save sends full_name + clan_town and adopts the server answer` | `server/test/web-dom.test.js:14705` |
-| `account phone: save sends the number with the PIN and keeps only the fresh token` | `server/test/web-dom.test.js:14747` |
-| `account phone: a 400 wrong PIN keeps the session and the open form, and shows the server message` | `server/test/web-dom.test.js:14788` |
-| `account avatar upload: multipart body with the `image` field and no Content-Type header` | `server/test/web-dom.test.js:14818` |
-| `«أنا في الصورة»: an account without a photo opens the sheet, keeps sending disabled and posts nothing` | `server/test/web-dom.test.js:14871` |
-| `«أنا في الصورة»: photo + confirmed number send both descriptions with confirm_phone` | `server/test/web-dom.test.js:14909` |
-| `«أنا في الصورة»: a 400 shows its server message inside the sheet and leaves it open` | `server/test/web-dom.test.js:14957` |
-| `طابور الوسوم: three tabs carry the server counts and switch the queue status` | `server/test/web-dom.test.js:14986` |
-| `apiFetch sends X-Region only for a numeric negev_region — no saved value means no header at all` | `server/test/web-dom.test.js:15041` |
-| `adminFetch never sends X-Region, even when the browser has one saved` | `server/test/web-dom.test.js:15063` |
-| `the region picker is drawn above the feed chips from GET /api/towns (regions), with each region's state` | `server/test/web-dom.test.js:15081` |
-| `a saved region is selected again when the page opens, and the drawer copy shows the same state` | `server/test/web-dom.test.js:15108` |
-| `choosing another region saves it, empties the previous list, and refetches page 1 with the new X-Region` | `server/test/web-dom.test.js:15131` |
-| `publishing under «القرى والتجمعات» requires a region and sends region_id` | `server/test/web-dom.test.js:15174` |
-| `the edit modal shows the event's region and sends region_id only when the user changes it` | `server/test/web-dom.test.js:15223` |
-| `the very first feed request carries X-Region of the saved region, not the first one` | `server/test/web-dom.test.js:15263` |
-| `اختيار محافظة بعد «وسّع إلى كل المحافظات» يُلغي all_regions من الطلب التالي (#161)` | `server/test/web-dom.test.js:15287` |
-| `a signed-in visitor with no stored choice is shown the account region the server actually uses` | `server/test/web-dom.test.js:15341` |
-| `clicking the drawn default region stores it explicitly and refetches` | `server/test/web-dom.test.js:15370` |
-| `the place filter offers only the active region's towns, and an open sheet is rebuilt on a region change` | `server/test/web-dom.test.js:15393` |
-| `editing still saves when GET /api/towns returned no regions — the region is only required when a list exists` | `server/test/web-dom.test.js:15412` |
-| `the map opens on the active region's centre and re-centres when the region changes` | `server/test/web-dom.test.js:15450` |
-| `a slow answer from the previous region cannot land on the new region's feed` | `server/test/web-dom.test.js:15488` |
-| `«أهلاً، الاسم» للمسجَّل وحده، والزائر لا يراه (#174)` | `server/test/web-dom.test.js:15564` |
-| `negev_user بلا negev_token لا يحيّي في موضعي الترويسة، والجلسة المكتملة تحيّي فيهما (#174)` | `server/test/web-dom.test.js:15583` |
-| `كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة، والاختيار فيها يمشي في selectRegion القائم` | `server/test/web-dom.test.js:15603` |
-| `بلا محافظات من الخادم: الكبسولة تقول «منطقتك» والورقة تشرح الفراغ بدل بطاقة فارغة` | `server/test/web-dom.test.js:15639` |
-| `القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات` | `server/test/web-dom.test.js:15658` |
-| `قاعدة CSS تُخفي التحية عن الزائر صراحةً، والكبسولة تقصّ الاسم الطويل` | `server/test/web-dom.test.js:15699` |
-| `الهاتف وPWA المثبَّت: الصفّ الغني له موضعٌ ثانٍ داخل الشريط العائم الظاهر هناك` | `server/test/web-dom.test.js:15722` |
-| `حجز بطاقة التغذية يساوي علوّ الشريط العائم المعلن في كل عتبة (#174)` | `server/test/web-dom.test.js:15788` |
-| `التحية والكبسولة تُكتبان في موضعَي الصفّ الغني معاً، واختيار كبسولة الهاتف يمشي في selectRegion نفسه` | `server/test/web-dom.test.js:15855` |
-| `المحافظة الأصلية (النقب) بلا شريط: الشريط خبر توسّع لا تحيّة، ولا ورقة قديمة ولا مفتاحها` | `server/test/web-dom.test.js:15958` |
-| `التبديل إلى محافظة طولكرم: شريط داخل الصفحة بنصّ الخادم وعدد بلداتها — لا طبقة ولا حوار` | `server/test/web-dom.test.js:15975` |
-| `تبديل ثانٍ إلى اللد والرملة ويافا: الشريط يتبع كل تبديل بنصّ المحافظة الجديدة وعدد بلداتها (٣)` | `server/test/web-dom.test.js:16018` |
-| `محافظة بصفر مناسبات: عدد البلدات وسطر «كن أول»، ولا «0 مناسبة» في أي نصّ` | `server/test/web-dom.test.js:16042` |
-| `محافظة فيها مناسبة معتمدة: رقم المناسبات لا عدد البلدات` | `server/test/web-dom.test.js:16061` |
-| `صيغ العدد العربية: بلدة، بلدتان، بلدات، بلدة — وكذلك المناسبات` | `server/test/web-dom.test.js:16077` |
-| `× يُخفي الشريط ويسجّل الإخفاء لهذه المحافظة وحدها — ويبقى بعد إعادة التحميل` | `server/test/web-dom.test.js:16095` |
-| `اسم المحافظة يمرّ عبر escapeHtml — لا HTML من الخادم في العنوان أو السطر` | `server/test/web-dom.test.js:16134` |
-| `تبديل المحافظة لا يطلب /api/towns مرة أخرى — الأرقام من استجابة الإقلاع نفسها` | `server/test/web-dom.test.js:16152` |
-| `الموقوفة لا تُختار ولا شريط لها، ومحافظة بلا عدّادين من الخادم لا شريط لها` | `server/test/web-dom.test.js:16173` |
-| `ناشر النقب يرى في نموذج النشر بلدات النقب وحدها ثم «النقب — بلا بلدة محدّدة»` | `server/test/web-dom.test.js:16269` |
-| `ناشر طولكرم يرى «القرى والتجمعات» في آخر بلداته — ولا بلدة نقبية واحدة` | `server/test/web-dom.test.js:16285` |
-| `تبديل حبة المحافظة يعيد بناء بلدات نموذج النشر المفتوح على المحافظة الجديدة` | `server/test/web-dom.test.js:16332` |
-| `نافذة التعديل تعرض بلدات محافظة المناسبة وتُبقي بلدةً خارجها مختارة` | `server/test/web-dom.test.js:16348` |
-| `النشر المباشر: محافظة الأدمن افتراضاً، وتبديل المحافظة يعيد بناء بلداتها وحدها` | `server/test/web-dom.test.js:16374` |
-| `لوحة التعديل: منتقي البلدة يُبنى من محافظة المناسبة ويُبقي بلدة خارجها مختارة` | `server/test/web-dom.test.js:16415` |
-| `نموذج تعديل مناسبة قروية في طولكرم يعرض قرى طولكرم وحدها في منتقي القرية` | `server/test/web-dom.test.js:16472` |
-| `تبديل محافظة نموذج التعديل إلى النقب يعيد بناء قرى منتقي القرية من النقب` | `server/test/web-dom.test.js:16489` |
-| `صفوف قرى بلا region_id (خادم أقدم أو قائمة احتياطية) تُعرض كاملة في منتقي التعديل` | `server/test/web-dom.test.js:16514` |
-| `قرية المناسبة الحالية خارج قرى محافظتها تبقى خياراً مختاراً في منتقي التعديل` | `server/test/web-dom.test.js:16528` |
-| `مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً` | `server/test/web-dom.test.js:16542` |
-| `web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover` | `server/test/web-dom.test.js:16570` |
-| `Chart.js is pinned to one explicit version, the same in index.html and admin.html` | `server/test/web-dom.test.js:16588` |
-| `styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers` | `server/test/web-dom.test.js:16613` |
-| `admin.css carries the same 44px button base and general :focus-visible — the panel loads no other stylesheet` | `server/test/web-dom.test.js:16693` |
-| `sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL` | `server/test/web-dom.test.js:16734` |
-| `sw.js covers every local script index.html loads — in the precache list AND the runtime pattern` | `server/test/web-dom.test.js:16774` |
-| `sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone` | `server/test/web-dom.test.js:16802` |
-| `sw.js serves shell files from the cache and still opens the shell offline` | `server/test/web-dom.test.js:16822` |
-| `sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone` | `server/test/web-dom.test.js:16850` |
-| `sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole` | `server/test/web-dom.test.js:16877` |
-| `sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime` | `server/test/web-dom.test.js:16943` |
-| `صفحة المناسبة تعرض «جاي» و«مش جاي» والعدد 1..20 والعدّاد وحالة الجواب` | `server/test/web-dom.test.js:17009` |
-| `لا أزرار حضور ولا عدّاد: لنوع solemn، ولا لنوع rsvp_enabled مطفأ، ولا حين يخفي النوع العدّاد` | `server/test/web-dom.test.js:17039` |
-| `«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم` | `server/test/web-dom.test.js:17067` |
-| `«مش جاي» يُرسل party_size = 1، و«سحب جوابي» يستعمل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17131` |
-| `«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع` | `server/test/web-dom.test.js:17187` |
-| `زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها` | `server/test/web-dom.test.js:17211` |
-| `فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض` | `server/test/web-dom.test.js:17228` |
-| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:17302` |
-| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:17343` |
-| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:17395` |
-| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:17463` |
-| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:17488` |
-| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:17518` |
-| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:17546` |
+| `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:955` |
+| `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:987` |
+| `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:1007` |
+| `نموذج النشر يحمل خيار الظهور، وافتراضه «عام» (#166)` | `server/test/web-dom.test.js:1030` |
+| `اختيار «بالرابط فقط» يسافر مع طلب النشر (#166)` | `server/test/web-dom.test.js:1045` |
+| `نافذة التعديل تعرض ظهور المناسبة وتُرسله مع الحفظ (#166)` | `server/test/web-dom.test.js:1071` |
+| `نموذج النشر يحمل «موعد النشر»، ويُرسَل في جسم النشر عند تعبئته ويغيب عند فراغه (#167)` | `server/test/web-dom.test.js:1121` |
+| `نافذة التعديل تعرض «موعد النشر» المخزَّن وتُرسله كما هو (#167)` | `server/test/web-dom.test.js:1170` |
+| `after the shared field-renderer refactor, the public form still has its own map, crop entry point, and honoree-button styling` | `server/test/web-dom.test.js:1224` |
+| `shared (non-overridden) fields still render correctly on the public form: town select and event-date input` | `server/test/web-dom.test.js:1252` |
+| `#addEventDate defaults to the LOCAL day, not the UTC day (public publish form)` | `server/test/web-dom.test.js:1282` |
+| `groupUploads wraps the poster field in .upload-section on the public form` | `server/test/web-dom.test.js:1319` |
+| `choosing a poster reveals the crop editor and steps the plain upload box aside` | `server/test/web-dom.test.js:1361` |
+| `the crop rectangle starts as the largest 4:5 rectangle centred on the image` | `server/test/web-dom.test.js:1376` |
+| `dragging a corner keeps the 4:5 ratio, with the dominant pointer axis leading` | `server/test/web-dom.test.js:1395` |
+| `dragging from the middle moves the rectangle without resizing it — even on a photo below the floor` | `server/test/web-dom.test.js:1447` |
+| `reopening the editor after «استخدام الصورة كاملة» starts again from the centred 4:5 crop` | `server/test/web-dom.test.js:1493` |
+| `a photo smaller than the 1600px cap is never upscaled — 300×200 exports as a 160×200 4:5 crop` | `server/test/web-dom.test.js:1522` |
+| `the default crop exports a 480×600 4:5 poster — smaller than its 480×640 source` | `server/test/web-dom.test.js:1546` |
+| `confirming a crop sends the cropped Blob under "poster", with an explicit .jpg filename` | `server/test/web-dom.test.js:1570` |
+| `submitting without pressing «تأكيد القص» still uploads the processed 4:5 JPEG, not the raw photo` | `server/test/web-dom.test.js:1611` |
+| `the raw file is sent only when the photo cannot be decoded at all` | `server/test/web-dom.test.js:1652` |
+| `a delayed decode failure from an old selection never uploads the newer file raw` | `server/test/web-dom.test.js:1699` |
+| `a delayed export from an old selection cannot replace the newer selection’s blob or preview` | `server/test/web-dom.test.js:1737` |
+| `a delayed whole-image export cannot replace the 4:5 crop after reopening the editor` | `server/test/web-dom.test.js:1767` |
+| `two submit calls while the crop export is pending both prevent default and make one publish POST` | `server/test/web-dom.test.js:1797` |
+| `a rejected publish fetch records publish_failed with the town, resolves without rejection and re-enables submit` | `server/test/web-dom.test.js:1829` |
+| `"استخدام الصورة كاملة" still submits a Blob, and the working canvas never exceeds 1600px on its longest edge` | `server/test/web-dom.test.js:1881` |
+| `both live buttons are visible with no hidden attribute, even with a channel set and live = null, and no story-strip bubble exists` | `server/test/web-dom.test.js:1928` |
+| `every story with an http(s) target gets a CTA — not only ads — and a javascript: link gets none` | `server/test/web-dom.test.js:1964` |
+| `ألبومات الأعراس: one box searches albums/photos/people, an album opens its photos, and a photo can be tagged` | `server/test/web-dom.test.js:2001` |
+| `share a no-event honoree album: the line names its town from the album, and so does the analytics event` | `server/test/web-dom.test.js:2213` |
+| `share an event album: the event town is what the line and the analytics event carry` | `server/test/web-dom.test.js:2228` |
+| `share an album with neither town nor event: the title alone, with no dangling dash` | `server/test/web-dom.test.js:2242` |
+| `فيديوهات الألبوم في الموقع: بطاقة لكل فيديو بوسم منصّتها، و«فتح» خارجي، و«مشاركة» ترسل صفحتنا /v/:id` | `server/test/web-dom.test.js:2264` |
+| `ألبوم بلا فيديوهات: #albumDetailVideos مخفي، والانتقال إليه لا يترك بطاقات الألبوم السابق` | `server/test/web-dom.test.js:2354` |
+| `the event page gets an additive album strip — escaped titles, cover and count — and nothing when empty` | `server/test/web-dom.test.js:2402` |
+| `ألبوم بلا صور وفيديوهان: البطاقة وشريط المناسبة ورأس التفاصيل تكتب «2 فيديو»، والصور تبقى أولاً` | `server/test/web-dom.test.js:2430` |
+| `the «مباشر» badge shows on both buttons only while live.active, and turns itself off at until` | `server/test/web-dom.test.js:2516` |
+| `embed_url → an in-page iframe with referrerpolicy and allowfullscreen, plus «افتح في يوتيوب»; closing removes it` | `server/test/web-dom.test.js:2548` |
+| `no embed_url with a live → «ادخل البث» to <share_url>/go and no iframe; no live → «لا يوجد بث الآن» + «قناتنا»` | `server/test/web-dom.test.js:2572` |
+| `the section shows topic, episode question and yesterday's result, hides each when empty, and escapes all of them` | `server/test/web-dom.test.js:2596` |
+| `a vote without a token opens the login modal and sends no request` | `server/test/web-dom.test.js:2629` |
+| `after voting the bars show percentages and a count, and live_poll_<id> updates them — never before voting` | `server/test/web-dom.test.js:2645` |
+| `a 409 «already voted» shows the message and re-reads the hub to show the results` | `server/test/web-dom.test.js:2704` |
+| `GET /api/live/hub carries the token only when one exists; GET /api/live never does` | `server/test/web-dom.test.js:2728` |
+| `a live_status signal re-fetches GET /api/live (and the hub while the section is open)` | `server/test/web-dom.test.js:2748` |
+| `a live_started item in the notification center opens the live section` | `server/test/web-dom.test.js:2774` |
+| `?live=1 (the Web Push click target) opens the live section on load` | `server/test/web-dom.test.js:2797` |
+| `the share button shares share_url through the same path as an event share` | `server/test/web-dom.test.js:2804` |
+| `on a desktop the share button opens our own dialog — never navigator.share, and nothing is copied by itself` | `server/test/web-dom.test.js:2826` |
+| `on a phone the native share sheet is still used; with no navigator.share at all our dialog opens instead of a silent copy` | `server/test/web-dom.test.js:2868` |
+| `the share dialog is the last overlay in the page, so it opens above the congratulations room and the event page` | `server/test/web-dom.test.js:2886` |
+| `no TikTok LIVE identifier is left in web/index.html, app.js or styles.css — the story platform key is the one allowed mention` | `server/test/web-dom.test.js:2892` |
+| `the strip holds bar stories only, and the carousel holds carousel stories only` | `server/test/web-dom.test.js:2964` |
+| `the carousel sits inside the home tab and above the feed container, so it is the top of the feed` | `server/test/web-dom.test.js:2979` |
+| `a feed ad is inserted after card 8 and card 16, rotating between the feed stories` | `server/test/web-dom.test.js:2993` |
+| `no ad appears before the eighth card: seven cards render none, and the eighth earns the first` | `server/test/web-dom.test.js:3013` |
+| `the interval is the server's: feed_ad_interval 5 moves the first ad to after the fifth card` | `server/test/web-dom.test.js:3027` |
+| `the feed ad opens the feed story list for the view, and its CTA posts the click — not the bar list` | `server/test/web-dom.test.js:3043` |
+| `the carousel banner opens the carousel list, and its CTA posts that story's click` | `server/test/web-dom.test.js:3085` |
+| `the drawer carousel holds carousel banners alone, opens that list, and records its CTA click` | `server/test/web-dom.test.js:3115` |
+| `a trending reply draws its cards above the feed, in the server order, and a card opens the event page (تذكرة #177)` | `server/test/web-dom.test.js:3207` |
+| `the phone drawer gets the same cards from the same reply, and is emptied and hidden with the feed copy (تذكرة #177)` | `server/test/web-dom.test.js:3238` |
+| `an empty trending reply leaves the section hidden and the row empty — and the previous reply cannot outlive the new request (تذكرة #177)` | `server/test/web-dom.test.js:3269` |
+| `a late reply from the previous governorate never paints over the newer one (تذكرة #177)` | `server/test/web-dom.test.js:3288` |
+| `a failing trending request hides the section silently instead of throwing (تذكرة #177)` | `server/test/web-dom.test.js:3318` |
+| `choosing another governorate carries region_id=2 into the next trending request (تذكرة #177)` | `server/test/web-dom.test.js:3332` |
+| `a no-event album card names the honoree and his town, and draws no empty line where the event line sits` | `server/test/web-dom.test.js:3365` |
+| `a no-event album header names the honoree and his town, with no date line and no dangling separator` | `server/test/web-dom.test.js:3412` |
+| `an event album keeps its event title, town and date on the card and in the header (regression)` | `server/test/web-dom.test.js:3457` |
+| `selecting two towns sends both in one ?town= parameter` | `server/test/web-dom.test.js:3544` |
+| `selecting a village sends ?village_id=, separate from ?town=` | `server/test/web-dom.test.js:3557` |
+| `a town and a village picked together travel in their own separate parameters` | `server/test/web-dom.test.js:3569` |
+| `selecting two kinds sends both in one ?occasion_type_id= parameter, alongside a place filter` | `server/test/web-dom.test.js:3582` |
+| `nothing selected sends no place/kind parameters at all` | `server/test/web-dom.test.js:3600` |
+| `the place chip label shows one name, or "name +N" once more than one place is selected` | `server/test/web-dom.test.js:3610` |
+| `a selected id that cannot be resolved is still reported as selected, never silently dropped to "nothing selected"` | `server/test/web-dom.test.js:3635` |
+| `ticking a 21st option in one kind is rejected in the sheet, in Arabic, and never reaches the request` | `server/test/web-dom.test.js:3667` |
+| `"مسح الفلاتر" clears every filter, resets both chip labels, and re-fetches with no filter params` | `server/test/web-dom.test.js:3693` |
+| `date filter ranges match the mobile client: the week runs to Saturday, Thursday–Saturday is the coming wedding nights` | `server/test/web-dom.test.js:3716` |
+| `the date chip sends date_from/date_to, a picked day needs a day, and «مسح الفلاتر» drops the range` | `server/test/web-dom.test.js:3734` |
+| `«مسح الفلاتر» is always visible, not only once something is selected` | `server/test/web-dom.test.js:3771` |
+| `the selection is restored from localStorage on load, and reflected in the chip label` | `server/test/web-dom.test.js:3782` |
+| `a restored village selection resolves its real name once towns/villages have loaded` | `server/test/web-dom.test.js:3798` |
+| `a corrupt or missing localStorage filter value does not break the page` | `server/test/web-dom.test.js:3812` |
+| `two identical searches send one request and leave the very same cards in place` | `server/test/web-dom.test.js:3887` |
+| `opening and closing the filter drawer without changing anything keeps the cards and sends no request` | `server/test/web-dom.test.js:3902` |
+| `an actual filter change shows the floating «رجوع لنتائجك السابقة» pill` | `server/test/web-dom.test.js:3918` |
+| `pressing the pill restores the previous card ids in their order with no new request, then hides` | `server/test/web-dom.test.js:3942` |
+| `pressing the pill restores the filter UI its list was fetched with, so nothing re-fetches afterwards` | `server/test/web-dom.test.js:3963` |
+| `a real filter change draws its results from the top, with an explicit scroll reset` | `server/test/web-dom.test.js:4009` |
+| `tapping the header brand closes #eventPage and keeps the chosen filter, with no refetch` | `server/test/web-dom.test.js:4068` |
+| `the in-page brand closes #eventPage — the header one is covered by it` | `server/test/web-dom.test.js:4094` |
+| `the phone/PWA header — not just the hidden wide one — carries the brand` | `server/test/web-dom.test.js:4117` |
+| `the floating bar keeps every control at a 44px target and re-flows to two rows instead of shrinking` | `server/test/web-dom.test.js:4152` |
+| `on the feed itself, the header brand scrolls back to the top of the list` | `server/test/web-dom.test.js:4241` |
+| `from another destination, the header brand lands on the feed` | `server/test/web-dom.test.js:4255` |
+| `skeleton placeholders appear synchronously while fetchEvents is still in flight` | `server/test/web-dom.test.js:4269` |
+| `the fade-in class is applied on the very first render only, never on a later refetch` | `server/test/web-dom.test.js:4293` |
+| `the event page renders the youth-party line when youth_party_date is present` | `server/test/web-dom.test.js:4361` |
+| `an event card omits the youth-party line entirely when youth_party_date is empty` | `server/test/web-dom.test.js:4372` |
+| `an event card renders the dinner-time line when dinner_time carries a value` | `server/test/web-dom.test.js:4412` |
+| `an event card omits the dinner-time line entirely when dinner_time is empty — no invented 8:00` | `server/test/web-dom.test.js:4419` |
+| `the share button exists on every card and its word follows the occasion type's tone` | `server/test/web-dom.test.js:4428` |
+| `a card with a poster emits the four nested layers, media covers from top, no blur, and badges sit in caption` | `server/test/web-dom.test.js:4442` |
+| `a card with NO poster builds the short caption plus the icon, not a tall empty box` | `server/test/web-dom.test.js:4479` |
+| `frame colour source: type with colour sets inline --tone, type without colour emits no inline --tone` | `server/test/web-dom.test.js:4501` |
+| `the feed is its own scroll container and its tree holds only cards` | `server/test/web-dom.test.js:4531` |
+| `a mourning card never emits a countdown badge, whether or not it has a poster` | `server/test/web-dom.test.js:4573` |
+| `a mourning card shows a plain, visible date on its face — never a countdown, never hidden behind "التفاصيل"` | `server/test/web-dom.test.js:4591` |
+| `«التفاصيل» opens the event page like the phone — labelled rows, artist, nav buttons — and «رجوع» returns to the feed untouched` | `server/test/web-dom.test.js:4606` |
+| `tapping the card photo opens the same page, and the browser Back button closes it instead of leaving the site` | `server/test/web-dom.test.js:4656` |
+| `every info line clamps its text to one line, structurally` | `server/test/web-dom.test.js:4678` |
+| `the card headline is the type and the honoree, never a place-only title, and «التفاصيل» leads the actions` | `server/test/web-dom.test.js:4701` |
+| `an announcement card names the honoree and the type, not the town its `title` carries` | `server/test/web-dom.test.js:4793` |
+| `the announcement card has one «التفاصيل» action that opens the event, and no «ذكّرني»/«التبريكات»/«المشاركة» or audio` | `server/test/web-dom.test.js:4821` |
+| `the same card without opts keeps its four actions and its audio hook — the feed card is untouched` | `server/test/web-dom.test.js:4855` |
+| `the merged feed renders both a personal notification and a broadcast entry, both marked unread` | `server/test/web-dom.test.js:4922` |
+| `clicking the broadcast card calls PATCH /api/broadcasts/:id/dismiss, never /api/notifications/:id/read — even though the ids collide` | `server/test/web-dom.test.js:4940` |
+| `the badge reaches zero once every entry — personal and broadcast alike — has been acted on` | `server/test/web-dom.test.js:4954` |
+| `a clicked notification stays in the list as read — no red dot, no «جديد» — instead of disappearing` | `server/test/web-dom.test.js:4972` |
+| `«جعل الكل مقروء» posts read-all once, keeps every entry, clears every red mark and hides itself` | `server/test/web-dom.test.js:4992` |
+| `opening the service-category form renders an icon picker under the free-text field` | `server/test/web-dom.test.js:5033` |
+| `clicking a suggested icon fills the input the form submits` | `server/test/web-dom.test.js:5045` |
+| `the occasion-type form got the same treatment, not just the service one` | `server/test/web-dom.test.js:5058` |
+| `service-category form has attributes editor container and addCategoryAttributeRow adds rows` | `server/test/web-dom.test.js:5080` |
+| `provider form has price type, estimate description, and dynamic attributes container` | `server/test/web-dom.test.js:5093` |
+| `the event edit form carries a map and a file input, not hand-typed coordinates` | `server/test/web-dom.test.js:5110` |
+| `opening the map on an event with coordinates fills the fields the form submits` | `server/test/web-dom.test.js:5125` |
+| `an event with no coordinates opens with nothing selected, and clearing says so` | `server/test/web-dom.test.js:5142` |
+| `a chosen poster is sent as multipart under the field name the server reads` | `server/test/web-dom.test.js:5152` |
+| `the event edit form takes the audio as a file, not a typed URL` | `server/test/web-dom.test.js:5174` |
+| `a chosen audio file is sent as multipart under "audio", alone or with a poster` | `server/test/web-dom.test.js:5183` |
+| `removing the current audio empties the value the diff compares, and hides the player` | `server/test/web-dom.test.js:5194` |
+| `the village form carries a map container, and coordinates stay required` | `server/test/web-dom.test.js:5220` |
+| `opening the map on a village with coordinates fills the fields the form submits` | `server/test/web-dom.test.js:5230` |
+| `a simulated pin placement (click or drag) writes vilLat/vilLng — the same function the map's own click/drag handlers call` | `server/test/web-dom.test.js:5240` |
+| `typing a full, valid pair of coordinates by hand moves the pin and recentres the map` | `server/test/web-dom.test.js:5258` |
+| `typing a partial or non-numeric coordinate by hand is ignored — no thrown error, no pin jumping to a nonsense location` | `server/test/web-dom.test.js:5283` |
+| `the event and village pickers are genuinely distinct registry entries, not a shared global` | `server/test/web-dom.test.js:5315` |
+| `initDirectAddForm() builds a type picker and the first active type's own fields — no hardcoded wedding form` | `server/test/web-dom.test.js:5357` |
+| `#dirEventDate defaults to the LOCAL day too (admin direct-add form)` | `server/test/web-dom.test.js:5383` |
+| `switching to a mourning type relabels the honorees field and drops fields it does not define` | `server/test/web-dom.test.js:5405` |
+| `the admin honoree-add button keeps the panel's own styling, not the public site's` | `server/test/web-dom.test.js:5419` |
+| `the panel keeps its own two-column layout for town+village — not the shared renderer's stacked default` | `server/test/web-dom.test.js:5438` |
+| `the panel gets no .upload-section wrapper — groupUploads stays false there` | `server/test/web-dom.test.js:5459` |
+| `a required field left empty is rejected client-side with that type's own label` | `server/test/web-dom.test.js:5468` |
+| `a successful publish sends occasion_type_id and honorees[], never the old hardcoded groom_name form` | `server/test/web-dom.test.js:5490` |
+| `a pending card with possible_duplicates shows a danger badge when one is certain, an amber one when all are likely, and none otherwise` | `server/test/web-dom.test.js:5559` |
+| `clicking the badge opens the comparison with one card per duplicate and the approve-context buttons` | `server/test/web-dom.test.js:5584` |
+| `server text in a duplicate is escaped, never injected as markup` | `server/test/web-dom.test.js:5607` |
+| `a 409 POSSIBLE_DUPLICATE on approve opens #duplicateModal with the server message instead of the generic error notice` | `server/test/web-dom.test.js:5620` |
+| `«اعتماد رغم ذلك» re-sends the approval with confirm_duplicate: true and closes the modal` | `server/test/web-dom.test.js:5637` |
+| `«إلغاء» on the approve modal sends nothing and leaves the card there to decide on later` | `server/test/web-dom.test.js:5651` |
+| `«رفض كمكررة» closes the comparison and opens the reject modal with the reason prefilled` | `server/test/web-dom.test.js:5667` |
+| `the panel marks a featured event with a gold tag carrying its expiry date, and offers «إبراز» on the others` | `server/test/web-dom.test.js:5716` |
+| `the feature modal opens with the stored expiry date, and «إلغاء الإبراز» is offered only where a date exists` | `server/test/web-dom.test.js:5742` |
+| `«إبراز» PATCHes the chosen date, «إلغاء الإبراز» PATCHes null — both through the admin API` | `server/test/web-dom.test.js:5773` |
+| `«فتح المناسبة» opens the existing event's edit form when the panel has it, and a notice (not an error) when it does not` | `server/test/web-dom.test.js:5790` |
+| `a 409 POSSIBLE_DUPLICATE on an edit opens the same #duplicateModal in edit context, and «حفظ رغم ذلك» re-sends that edit with confirm_duplicate` | `server/test/web-dom.test.js:5864` |
+| `«إلغاء» on an edit duplicate leaves the form and its values untouched and sends nothing more` | `server/test/web-dom.test.js:5892` |
+| `a 409 POSSIBLE_DUPLICATE on direct add opens the modal in direct-add context and keeps the form intact on cancel` | `server/test/web-dom.test.js:5936` |
+| `«نشر رغم ذلك» re-sends the same direct-add FormData with confirm_duplicate=1` | `server/test/web-dom.test.js:5957` |
+| `a direct add the server queues as pending shows the server's message, not the «published directly» celebration` | `server/test/web-dom.test.js:5973` |
+| `the activity log labels event_duplicate_override with its own verb, shows the ids, and offers a filter for it` | `server/test/web-dom.test.js:5985` |
+| `the admin list draws the whole poster over a fill, not a crop of it` | `server/test/web-dom.test.js:6010` |
+| `and its stylesheet contains the poster rather than cropping it` | `server/test/web-dom.test.js:6026` |
+| `the feed card has no blur and no card-level fixed ratio, its media reserves the poster ratio, object-fit is cover from top center, and snapping is declared` | `server/test/web-dom.test.js:6052` |
+| `a featured card carries the gold «مناسبة كبرى» badge, and a card without is_featured carries none` | `server/test/web-dom.test.js:6126` |
+| `the badge is the first chip of the card, ahead of the occasion-type chip` | `server/test/web-dom.test.js:6143` |
+| `the featured card shows the whole invitation (contain) and its badge is gold` | `server/test/web-dom.test.js:6152` |
+| `the feed keeps the server's order and never re-sorts featured cards on the client` | `server/test/web-dom.test.js:6182` |
+| `the empty feed is a door: add your event, wedding services, your albums, and expanding beyond the governorate — each lands on its destination (#161)` | `server/test/web-dom.test.js:6219` |
+| `«وسّع إلى كل المحافظات» يجعل الجلب التالي يحمل all_regions=1 — وإلا فالزرّ يعيد التغذية نفسها (#161)` | `server/test/web-dom.test.js:6284` |
+| `a Cloudinary card poster is asked for at card width, and a local poster is left exactly as it is (#161)` | `server/test/web-dom.test.js:6321` |
+| `the users tab filters by phone number and by name, over the already-fetched list` | `server/test/web-dom.test.js:6368` |
+| `the users tab offers «حذف الحساب» to a super_admin on every row except a super_admin row, and never to a plain admin` | `server/test/web-dom.test.js:6393` |
+| `deleting a user asks for two explicit confirmations, sends DELETE /api/admin/users/:id through adminFetch, then reloads the list and reports success` | `server/test/web-dom.test.js:6415` |
+| `backing out of either confirmation sends no request at all` | `server/test/web-dom.test.js:6463` |
+| `the counts panel shows Arabic labels, never raw English event keys, and flags exactly the two failure events` | `server/test/web-dom.test.js:6496` |
+| `every known event renders as its own row, and one with zero recorded occurrences renders as 0, not blank or omitted` | `server/test/web-dom.test.js:6514` |
+| `a retired/unknown event_name the server still has real rows for renders with its raw key and an Arabic "unknown" marker, instead of vanishing` | `server/test/web-dom.test.js:6546` |
+| `the retention notice states the real retention window read from analytics.service.js, not an independent literal` | `server/test/web-dom.test.js:6592` |
+| `a 403 on the counts endpoint (a non-super-admin somehow landing here) renders the server's Arabic message, not a blank panel or a thrown error` | `server/test/web-dom.test.js:6603` |
+| `picking a user from the users list renders that user's paginated log with Arabic event labels` | `server/test/web-dom.test.js:6619` |
+| `a multi-page user log renders prev/next controls, and clicking "next" requests page=2` | `server/test/web-dom.test.js:6645` |
+| `rejecting an event sends a reason in the request body` | `server/test/web-dom.test.js:6688` |
+| `a broadcast carries a tone and a duration` | `server/test/web-dom.test.js:6725` |
+| `a broadcast with duration "none" sends duration: "none" and the composer describes it as centre-only` | `server/test/web-dom.test.js:6756` |
+| `super admin gets «كل المناطق» plus one «كل بلدات <المحافظة>» target per governorate, and no regions hides the picker (تذكرة #128)` | `server/test/web-dom.test.js:6786` |
+| `town admin sees only their own assigned towns among the broadcast targets` | `server/test/web-dom.test.js:6853` |
+| `admin with zero assigned towns is stopped before sending (controls disabled and notice shown)` | `server/test/web-dom.test.js:6890` |
+| `settings tab is reachable only for super admin, saves number, and can clear it` | `server/test/web-dom.test.js:6917` |
+| `invalid WhatsApp number displays the server's Arabic error without client format check` | `server/test/web-dom.test.js:6985` |
+| `town dropdowns are filled from GET /api/towns with 'الكل' filtered out` | `server/test/web-dom.test.js:7015` |
+| `panel behaves sanely when GET /api/towns fails (uses fallback array)` | `server/test/web-dom.test.js:7039` |
+| `picking "القرى والتجمعات" in direct add form keeps the selection without resetting to default town` | `server/test/web-dom.test.js:7061` |
+| `a token expiring in under 15 minutes triggers the warning, and one expiring in hours does not` | `server/test/web-dom.test.js:7080` |
+| `the warning appears ONCE, not on every tick` | `server/test/web-dom.test.js:7102` |
+| `an expired session does NOT tear the dashboard down` | `server/test/web-dom.test.js:7122` |
+| `re-entering the expired-session path does not wipe a PIN already being typed` | `server/test/web-dom.test.js:7145` |
+| `a successful re-login swaps the stored token and leaves the dashboard mounted` | `server/test/web-dom.test.js:7162` |
+| `the PIN is not in localStorage or sessionStorage after a successful re-login` | `server/test/web-dom.test.js:7193` |
+| `a draft is saved from the direct-add form and offered back after re-login` | `server/test/web-dom.test.js:7224` |
+| `declining the restore deletes the draft so it is not offered again` | `server/test/web-dom.test.js:7255` |
+| `a draft that had a file field says so in Arabic on restore` | `server/test/web-dom.test.js:7279` |
+| `logging out clears the drafts` | `server/test/web-dom.test.js:7301` |
+| `the page links a real manifest and a real apple-touch-icon` | `server/test/web-dom.test.js:7327` |
+| `the manifest is valid JSON, standalone, and names icons that exist on disk` | `server/test/web-dom.test.js:7339` |
+| `the header carries a drawn mark, not an emoji` | `server/test/web-dom.test.js:7354` |
+| `the inlined header/install-hint/admin mark paths match the current mark geometry` | `server/test/web-dom.test.js:7374` |
+| `the rename to «أعراسنا» reached the document title, the iOS web-app title, and the header` | `server/test/web-dom.test.js:7387` |
+| `the manifest short_name is «أعراسنا» alone, and name carries both names` | `server/test/web-dom.test.js:7403` |
+| `the smallest Android mipmap (mdpi, 48×48) really is 48×48 and mixes mark- and ground-coloured pixels` | `server/test/web-dom.test.js:7413` |
+| `every safe-zone render keeps mark-coloured pixels inside the circular safe zone (radius 40% of the image width)` | `server/test/web-dom.test.js:7430` |
+| `detail 'icon' is the full mark minus the word — nothing else drops or moves out of order` | `server/test/web-dom.test.js:7453` |
+| `nothing is clipped by the circular mask at safe-zone scale` | `server/test/web-dom.test.js:7460` |
+| `the two rings interlock: right over left, then a left-ring sector back over the right` | `server/test/web-dom.test.js:7491` |
+| `the shaping parity gate — static vector path matches Cairo ctx.fillText Arabic shaping` | `server/test/web-dom.test.js:7497` |
+| `detail 'icon' and detail 'full' render different bytes at the same size` | `server/test/web-dom.test.js:7561` |
+| `the generated favicon SVG is well-formed, carries both brand colours, and matches the geometry the raster uses` | `server/test/web-dom.test.js:7567` |
+| `an iPhone visitor who has not installed is shown how` | `server/test/web-dom.test.js:7592` |
+| `everyone else is left alone` | `server/test/web-dom.test.js:7605` |
+| `an iPhone that already installed the app is not told to install it` | `server/test/web-dom.test.js:7616` |
+| `and it is actually wired into page load, not merely defined` | `server/test/web-dom.test.js:7628` |
+| `nothing that ships hidden is un-hidden by a class that forces a display` | `server/test/web-dom.test.js:7651` |
+| `dismissing the hint keeps it dismissed on the next visit` | `server/test/web-dom.test.js:7681` |
+| `شاشة الترحيب تظهر لزائر جديد: مخفية في الملف، بثلاث بطاقات و«تخطّي»` | `server/test/web-dom.test.js:7704` |
+| `«تخطّي» يكتب negev_welcome_seen فلا تعود الشاشة في زيارة تالية` | `server/test/web-dom.test.js:7726` |
+| `and the welcome is wired into page load, not merely defined` | `server/test/web-dom.test.js:7752` |
+| `first visit on iPhone: the welcome comes first, and the install hint waits its turn` | `server/test/web-dom.test.js:7766` |
+| `الويب لا يعرض «قيّمنا» إطلاقاً — التقييم في التطبيق وحده` | `server/test/web-dom.test.js:7790` |
+| `the ticker renders from GET /api/broadcasts/live on load, with no socket involved` | `server/test/web-dom.test.js:7837` |
+| `zero live broadcasts leaves the ticker hidden` | `server/test/web-dom.test.js:7851` |
+| `with two live broadcasts, the ticker shows the newest and an indicator that opens the rest` | `server/test/web-dom.test.js:7862` |
+| `signed in, the same indicator re-fetches the notifications centre before opening it, instead of expanding the ticker` | `server/test/web-dom.test.js:7883` |
+| `a solemn broadcast gets its own class and never the animated (urgent-pulse) class` | `server/test/web-dom.test.js:7905` |
+| `an urgent broadcast gets the pulse class, for contrast with solemn` | `server/test/web-dom.test.js:7918` |
+| `dismissing while signed in calls PATCH /api/broadcasts/:id/dismiss, and the ticker clears` | `server/test/web-dom.test.js:7929` |
+| `dismissing while anonymous writes to localStorage, calls no PATCH, and the broadcast does not come back on the next render` | `server/test/web-dom.test.js:7944` |
+| `a town_broadcast socket signal triggers a re-fetch and never renders text from the payload itself` | `server/test/web-dom.test.js:7976` |
+| `the support entry opens a wa.me link built from the exact stored number, unmodified — via the in-app modal, not confirm()` | `server/test/web-dom.test.js:8022` |
+| `FIX 5: the disclosure is the page's own modal, not a browser confirm() — declining it opens nothing` | `server/test/web-dom.test.js:8055` |
+| `a null support number leaves the entry visible but disabled, and tapping it explains why in the same modal, never a browser alert()` | `server/test/web-dom.test.js:8088` |
+| `FIX 1: a single long broadcast — no "+N" to fall back on — is still reachable in full, for an anonymous AND a signed-in visitor` | `server/test/web-dom.test.js:8119` |
+| `FIX 2b: a broadcast dismissed while anonymous does not reappear after signing in on the SAME device` | `server/test/web-dom.test.js:8165` |
+| `الشريط يحمل صفّ المحافظة وعددها كما وصلا، والمجموع، و«حُدّث HH:MM» بالساعة المحلية` | `server/test/web-dom.test.js:8290` |
+| `بلا رقم بعد لا شريط إطلاقاً — لا أصفار كاذبة قبل وصول الخادم` | `server/test/web-dom.test.js:8326` |
+| `شريط واحد فقط: الرقم لا يظهر قبل حسم التعاميم، والتعميم الحيّ يحلّ محلّه بعدها` | `server/test/web-dom.test.js:8343` |
+| `إغلاق التعميم يعيد الشريط، والتعميم المُغلَق سابقاً لا يمنعه` | `server/test/web-dom.test.js:8401` |
+| `الشريط يُطلب مرّة واحدة عند فتح الصفحة، لا عند فتح تبويب` | `server/test/web-dom.test.js:8432` |
+| `قاعدة CSS تُبقي [hidden] غالباً على display:flex — وإلا ظهر الشريط رغم إخفائه` | `server/test/web-dom.test.js:8460` |
+| `loading the page does NOT request notification permission` | `server/test/web-dom.test.js:8474` |
+| `tapping a personal notification with an event_id marks it read AND navigates to that event` | `server/test/web-dom.test.js:8505` |
+| `adding a reminder requests notification permission, and removing one does not` | `server/test/web-dom.test.js:8577` |
+| `a null VAPID public key means no prompt, no subscribe call, and no visible error` | `server/test/web-dom.test.js:8628` |
+| `a successful subscribe POSTs the exact { endpoint, keys: { p256dh, auth } } shape` | `server/test/web-dom.test.js:8674` |
+| `the off control calls DELETE /api/notifications/subscribe and the displayed state changes` | `server/test/web-dom.test.js:8717` |
+| `tapping a broadcast marks it read through the broadcast endpoint and navigates nowhere` | `server/test/web-dom.test.js:8782` |
+| `a browser with no serviceWorker/PushManager degrades silently and the page still works` | `server/test/web-dom.test.js:8836` |
+| `iOS Safari not installed shows Arabic line and does not prompt` | `server/test/web-dom.test.js:8865` |
+| `after turning notifications off, adding a reminder does not re-subscribe (FIX 4, story 18)` | `server/test/web-dom.test.js:8902` |
+| `the deep-linked event survives the feed load instead of being wiped by it (FIX 5, story 14)` | `server/test/web-dom.test.js:8969` |
+| `navigateToEvent opens the event page without any animated scroll of the feed (FIX 7, story 54)` | `server/test/web-dom.test.js:9039` |
+| `clicking an event in the agenda day list closes the agenda and navigates to that event, with no ReferenceError` | `server/test/web-dom.test.js:9055` |
+| `the agenda counts the month from GET /api/events/calendar, never from the events the feed already loaded (#175)` | `server/test/web-dom.test.js:9150` |
+| `the agenda dot is gold for one event and red for two or more, and today is emphasised (#175)` | `server/test/web-dom.test.js:9177` |
+| `the agenda governorate filter comes from GET /api/towns and refetches the month with region_id (#175)` | `server/test/web-dom.test.js:9216` |
+| `clicking an agenda day lists that day's events from the existing feed route (?date_from=&date_to=) (#175)` | `server/test/web-dom.test.js:9265` |
+| `a month count landing after a newer governorate's is dropped — the request identity is the month AND the governorate (#175)` | `server/test/web-dom.test.js:9305` |
+| `a day list landing after a newer day's is dropped — the request identity is the day AND the governorate (#175)` | `server/test/web-dom.test.js:9351` |
+| `an empty second page preserves pagination.total and declares the partial day list (#175)` | `server/test/web-dom.test.js:9410` |
+| `switching governorates clears the old dots before the new month response arrives (#175)` | `server/test/web-dom.test.js:9470` |
+| `choosing a new day replaces prior events with an Arabic loading row until its response arrives (#175)` | `server/test/web-dom.test.js:9503` |
+| `a failed day fetch shows an Arabic error, not an invented empty day (#175)` | `server/test/web-dom.test.js:9547` |
+| `a day list answering for "all governorates" cannot outlive the governorate chosen after it — the day alone is not the identity (#175)` | `server/test/web-dom.test.js:9572` |
+| `agenda month stepping builds from day 1: 31 January ⇒ February 2027, and 31 March ⇒ February again (#175)` | `server/test/web-dom.test.js:9676` |
+| `iOS install hint is not shown unbidden if already dismissed (FIX 3, story 17)` | `server/test/web-dom.test.js:9710` |
+| `event card countdown accurately reflects today, tomorrow, and future days without timezone drift` | `server/test/web-dom.test.js:9742` |
+| `«غداً» is computed in Jerusalem time — a device in another zone cannot shift the day` | `server/test/web-dom.test.js:9783` |
+| `كرت التغذية يحمل «انتهت» حين يقول الخادم إن أيام المناسبة مضت، ولا يحملها لمناسبة قائمة (#167)` | `server/test/web-dom.test.js:9804` |
+| `services tab has filter chips, search input, filter modals, and renders luxury service cards` | `server/test/web-dom.test.js:9820` |
+| `العرض المختصر: صفّ لكل مزوّد (صورة، اسم، فئة وبلدة، شارة سعر، «اتصال» و«تفاصيل»)، و«اتصال» يغيب حين لا يوجد رقم` | `server/test/web-dom.test.js:9921` |
+| `العميل: غياب providers_display أو قيمته غير المعروفة يعني الصفوف المختصرة (حسم الخادم في smoke)` | `server/test/web-dom.test.js:9971` |
+| `صفّ البلدات لا يدّعي «جميع البلدات» من أربع بلدات (تذكرة #127)` | `server/test/web-dom.test.js:9989` |
+| `«تفاصيل» في الصفّ المختصر تفتح نافذة المزوّد من GET /api/services/providers/:id بحزمة السعر والمواصفات` | `server/test/web-dom.test.js:10009` |
+| `providers_display = cards يعيد الكروت الكبيرة، وتغيير الشكل بعد الرسم يعيده من الذاكرة بلا طلب مزوّدين جديد` | `server/test/web-dom.test.js:10055` |
+| `تنسيق الصفّ المختصر: لا نص أصغر من 15px ولا زرّ أقصر من 44px` | `server/test/web-dom.test.js:10087` |
+| `a 401 on an auth:true site call runs handleSessionExpired once — token cleared, auth modal open, one notice for two parallel 401s` | `server/test/web-dom.test.js:10134` |
+| `a 401 on a call WITHOUT auth:true (or on the admin token) leaves the site session alone` | `server/test/web-dom.test.js:10158` |
+| `a 401 on the publish POST keeps the filled form and retries the same submission right after logging in again` | `server/test/web-dom.test.js:10172` |
+| `the header and floating account buttons always read «حسابي» with a person icon, open #tabAccount instead of a login form or a logout, and leave the logout inside «حسابي» alone` | `server/test/web-dom.test.js:10215` |
+| `choosing «قريتي غير موجودة» reveals a name field and the publish POST carries requested_village_name with no village_id` | `server/test/web-dom.test.js:10297` |
+| `the card shows a typed (unlisted) village name in place of «القرى والتجمعات», escaped` | `server/test/web-dom.test.js:10374` |
+| `effective audio: the platform default plays for a type that shows audio_url, and a type that hides it gets no audio at all` | `server/test/web-dom.test.js:10390` |
+| `feed audio is isolated per card like a story: moving on stops the old track — even a shared default one — and starts the next from zero` | `server/test/web-dom.test.js:10430` |
+| `«قوّي مناسبتك» opens the edit form of that very event; the daily digest goes to the feed` | `server/test/web-dom.test.js:10483` |
+| `leaving the feed for another tab and coming back returns to the same card, not the first` | `server/test/web-dom.test.js:10519` |
+| `the «new events» switch reads the server, saves a change, and snaps back if the save fails` | `server/test/web-dom.test.js:10539` |
+| `admin activity log reads as a sentence — who, did what, to which event — with «افتح» only while the event exists` | `server/test/web-dom.test.js:10576` |
+| `admin event card names its publisher, and admin.html?event=<id> opens that event for editing` | `server/test/web-dom.test.js:10606` |
+| `admin events: search survives an event with no groom, and phone/poster values stay text` | `server/test/web-dom.test.js:10626` |
+| `the global sound toggle lives in the header AND the floating bar, and muting is remembered per viewer` | `server/test/web-dom.test.js:10652` |
+| `admin moderation card: a typed village shows as «قرية مقترحة», and only super_admin gets «اعتمدها قرية»` | `server/test/web-dom.test.js:10668` |
+| `every element id the live admin.js code reads for actually exists in admin.html` | `server/test/web-dom.test.js:10687` |
+| `getLiveShareUrl() returns <origin>/live for the default empty apiBase` | `server/test/web-dom.test.js:10701` |
+| `getLiveShareUrl() follows NEGEV_CONFIG.apiBase when it is set to a non-empty absolute origin` | `server/test/web-dom.test.js:10706` |
+| `duration presets compute a future "until", and "حتى منتصف الليل" lands exactly on the next local midnight` | `server/test/web-dom.test.js:10712` |
+| `clicking a duration preset writes the hidden "until" field and the readable preview text` | `server/test/web-dom.test.js:10736` |
+| `status strip: active live shows the badge, topic and remaining time; a saved channel with no live shows the channel-only line; nothing saved shows the unset line` | `server/test/web-dom.test.js:10750` |
+| `an expired live (until in the past) renders as "no live", never as an active one` | `server/test/web-dom.test.js:10774` |
+| `«إنهاء البث الآن» clears title and until together, in a single PUT request body` | `server/test/web-dom.test.js:10790` |
+| `a topic containing markup is inserted into the status strip as text, never as HTML` | `server/test/web-dom.test.js:10821` |
+| `each duration button in admin.html is wired to a preset key computeLiveDurationUntil actually resolves` | `server/test/web-dom.test.js:10837` |
+| `an expired live is not handed back to the form: its topic and until are cleared, and «إنهاء البث الآن» is disabled` | `server/test/web-dom.test.js:10856` |
+| `a still-running live IS restored into the form untouched` | `server/test/web-dom.test.js:10884` |
+| `when GET /api/live fails, the strip stops claiming that no channel is configured` | `server/test/web-dom.test.js:10901` |
+| `the live section and the episodes section say nothing about TikTok anywhere — text, placeholders or titles` | `server/test/web-dom.test.js:10939` |
+| `saving the live form PUTs exactly live_channel_url, live_title, live_until and live_stream_url through adminFetch` | `server/test/web-dom.test.js:10951` |
+| `the stream-url hint follows embed_url from GET /api/live: inside the app when set, outside when null, hidden when nothing is configured` | `server/test/web-dom.test.js:10983` |
+| `the episode form defaults its date to today in Asia/Jerusalem, and the episodes list loads through adminFetch` | `server/test/web-dom.test.js:11006` |
+| `«إضافة خيار» stops at 4 options and the per-option delete stops at 2` | `server/test/web-dom.test.js:11023` |
+| `an episode with votes locks its option inputs and add/remove buttons, with the note; one without votes does not` | `server/test/web-dom.test.js:11054` |
+| `saving an episode PUTs to /api/admin/live/episodes/:date via adminFetch; an empty poll is sent as no poll; a 409 message is shown as-is` | `server/test/web-dom.test.js:11087` |
+| `deleting an episode asks confirm() first and sends DELETE through adminFetch only when confirmed` | `server/test/web-dom.test.js:11127` |
+| `«الحلقات السابقة» is the last section of the live page: escaped titles, image or placeholder, and «شاهد هنا» / «افتح على يوتيوب» / «شارك»` | `server/test/web-dom.test.js:11181` |
+| `«الحلقات السابقة» stays hidden when past_episodes is empty` | `server/test/web-dom.test.js:11233` |
+| `«أرشيف العرس» appears in the event details only when archive_photos is non-empty, and opens a full-screen viewer` | `server/test/web-dom.test.js:11246` |
+| `the map popup Waze button still records its town when the town name has an apostrophe` | `server/test/web-dom.test.js:11317` |
+| `the host call/WhatsApp buttons work for a town with an apostrophe, and a hostile host_phone stays text` | `server/test/web-dom.test.js:11346` |
+| `admin: «عرض السجل» opens the log of the exact device id — a crafted id is data, never code` | `server/test/web-dom.test.js:11376` |
+| `no inline handler in web/app.js or web/admin.js embeds escapeHtml() inside a quoted JS string` | `server/test/web-dom.test.js:11404` |
+| `uploadToCloudinary POSTs exactly the signed fields plus the file to upload_url, with no token, and throws an Arabic message on refusal` | `server/test/web-dom.test.js:11411` |
+| `the episode form prefills and sends video_url; a saved episode lists its video, thumbnail and share link` | `server/test/web-dom.test.js:11438` |
+| `saving the live shows live_episode_notice as a warning, or «حُفظ البث كحلقة اليوم» with an optional share-image upload` | `server/test/web-dom.test.js:11483` |
+| `the occasion-type form prefills and sends archive_gallery` | `server/test/web-dom.test.js:11524` |
+| `لوحة الأنواع تحمل حقل feed_linger_days ويُحفظ عبر المسار القائم (#167)` | `server/test/web-dom.test.js:11552` |
+| `an ended event of an archive type gets «صور الأرشيف» (super_admin); the modal lists photos, deletes after confirm, and uploads with per-file status` | `server/test/web-dom.test.js:11585` |
+| `ستوريو التسويق: super_admin sees the tab, previews a link, publishes, and deletes with its asset` | `server/test/web-dom.test.js:11661` |
+| `ستوريو التسويق: موضع الظهور يُرسَل كما اختير ويُعاد إلى bar بعد النشر (#173)` | `server/test/web-dom.test.js:11731` |
+| `بطاقة الدخول: the pinned story is preselected, and saving sends its id or an explicit empty string` | `server/test/web-dom.test.js:11775` |
+| `ستوريو التسويق is hidden from a town admin — the tab is absent, not disabled` | `server/test/web-dom.test.js:11829` |
+| `تبويب «الأشخاص» is hidden from a town admin and shown to a super admin — merging is super-only (#107)` | `server/test/web-dom.test.js:11837` |
+| `اقتراحات الدمج in the people tab are rendered, escaped, and only preselect — they never merge (#107)` | `server/test/web-dom.test.js:11852` |
+| `دمج الأشخاص: the merge POST carries JSON and the selected source, and success clears the selection (#107)` | `server/test/web-dom.test.js:11900` |
+| `ألبومات الإدارة: pick an archive-gallery event, open its album, edit a caption, and moderate a tag/report` | `server/test/web-dom.test.js:11944` |
+| `ألبومات الإدارة: زرّ الحذف في الرأس يرسل معرّف الألبوم الحقيقي، ويغلق اللوحة ويعيد جلب الألبومات` | `server/test/web-dom.test.js:12101` |
+| `ألبومات الإدارة: رقاقة «بلا مناسبة» تجلب ألبومات العريس وتعرض بطاقتها، و«فتح» يفتح تفاصيلها` | `server/test/web-dom.test.js:12168` |
+| `فيديوهات اللوحة: حالة عربية، «إخفاء» يرسل PATCH، «حذف» بعد تأكيد يرسل DELETE، والإضافة ترسل { url, title }` | `server/test/web-dom.test.js:12230` |
+| `ألبومات الإدارة: الوسم يسمّي أصحاب المناسبة والبلدة مرة واحدة، والبحث يرشّح بالكتابة` | `server/test/web-dom.test.js:12342` |
+| `ألبومات الإدارة: رفع 45 صورة يوقّع 3 دفعات (max_batch = 20) ويُدخل صفاً لكل صورة` | `server/test/web-dom.test.js:12497` |
+| `ألبومات الإدارة: إدخال يردّ 429 برسالة انتظار — الصفّ يقول «أعد المحاولة بعد 2 دقيقة» والصفوف التالية تُحاول` | `server/test/web-dom.test.js:12533` |
+| `ألبومات الإدارة: فشل التوقيع بـ 429 يوقف الطابور ويحمل الصفوف الباقية رسالة الانتظار بلا طلب ثانٍ` | `server/test/web-dom.test.js:12562` |
+| `the «البلدات والمحافظات» tab button is hidden for a plain admin and shown for super_admin` | `server/test/web-dom.test.js:12631` |
+| `the towns table renders per region from GET /api/admin/towns; the locked row has only the reorder buttons` | `server/test/web-dom.test.js:12645` |
+| `▼ on the first town PUTs /api/admin/towns/order with the full swapped id list, then refreshes the shared towns list` | `server/test/web-dom.test.js:12673` |
+| `submitting the new-town form POSTs name, latitude, longitude and region_id` | `server/test/web-dom.test.js:12693` |
+| `the event edit town select offers «النقب — بلا بلدة محدّدة» and keeps an unknown current town selected` | `server/test/web-dom.test.js:12717` |
+| `the admin → towns grid offers the region as «النقب (بلا بلدة محدّدة)» and «عرض المناسبات بلا بلدة» filters the events list to that exact town` | `server/test/web-dom.test.js:12736` |
+| `the village form carries a mandatory governorate picker and every create sends region_id (تذكرة #128)` | `server/test/web-dom.test.js:12799` |
+| `the villages table shows only the chosen governorate's villages, names that governorate, and follows the picker (تذكرة #128)` | `server/test/web-dom.test.js:12830` |
+| `the «إضافة محافظة» button opens a form that POSTs the governorate to /api/admin/regions (تذكرة #128)` | `server/test/web-dom.test.js:12854` |
+| `the broadcast target offers «كل بلدات <المحافظة>» from GET /api/towns and sends the governorate name for the server to expand (تذكرة #128)` | `server/test/web-dom.test.js:12882` |
+| `the analytics tab renders the per-governorate breakdown from overview.by_region, with the «غير محدَّد» row, leaving the summary KPIs as they were (تذكرة #128)` | `server/test/web-dom.test.js:12921` |
+| `the publish town select offers the region as «النقب — بلا بلدة محدّدة», valued with the bare region name` | `server/test/web-dom.test.js:12998` |
+| `choosing the region centres the map on it with no pin, and publish sends town=النقب with no latitude/longitude` | `server/test/web-dom.test.js:13014` |
+| `the edit modal keeps an event's current town selected even when it is not among the options, and saves it back unchanged` | `server/test/web-dom.test.js:13054` |
+| `the place filter offers the region «(بلا بلدة محدّدة)» and selecting it sends ?town=النقب` | `server/test/web-dom.test.js:13086` |
+| `a region-level event's card shows the bare region name, and the empty feed names the first region` | `server/test/web-dom.test.js:13096` |
+| `the collision alert shows the town and date as text — markup in them is never parsed` | `server/test/web-dom.test.js:13108` |
+| `switching to «القرى والتجمعات» drops the previous town's automatic pin, but never a pin the user placed` | `server/test/web-dom.test.js:13132` |
+| `the publish form renders an extra-days list and «أضف يوماً» button for a type that defines one, and nothing for a type without it` | `server/test/web-dom.test.js:13173` |
+| `submitting the publish form sends extra_days[i][…] bracket keys, and a fully blank row is dropped` | `server/test/web-dom.test.js:13193` |
+| `the edit modal fills its days from evt.extra_days and PATCHes them back as an array` | `server/test/web-dom.test.js:13232` |
+| `«برنامج المناسبة» يجمع محطات اليوم الواحد تحت تاريخ واحد مرتّبةً بالوقت، ويضع كل تاريخ في مجموعته` | `server/test/web-dom.test.js:13276` |
+| `«أضف إلى تقويم الهاتف» رابط تنزيل إلى /api/events/<id>/calendar.ics على أصل الـAPI لا أصل الصفحة` | `server/test/web-dom.test.js:13337` |
+| `«أضف إلى تقويم الهاتف» يغيب عن غير المؤهّل: معلّقة، أو «بالرابط فقط»، أو مجدولة لم يبلغ موعدها (تذكرة #176)` | `server/test/web-dom.test.js:13374` |
+| `زرّ الملاحة بجانب سطر المكان: href بالإحداثيات حين توجد، وباسم المكان حين تغيب` | `server/test/web-dom.test.js:13402` |
+| `the admin direct-add form gets its own styled «أضف يوماً» button for a type with extra_days` | `server/test/web-dom.test.js:13437` |
+| `admin direct add sends extra_days[i][…] for a filled day row and drops a blank one` | `server/test/web-dom.test.js:13490` |
+| `a direct-add draft restores its saved extra-day row` | `server/test/web-dom.test.js:13531` |
+| `the admin edit form shows the event's extra days as editable rows` | `server/test/web-dom.test.js:13561` |
+| `renaming an extra day sends extra_days but never raises the critical-amendment warning` | `server/test/web-dom.test.js:13574` |
+| `changing an extra day's date sends extra_days and raises the critical-amendment warning` | `server/test/web-dom.test.js:13592` |
+| `swapping two extra days' dates raises the critical-amendment warning even though the date list is unchanged` | `server/test/web-dom.test.js:13608` |
+| `leaving the extra days untouched sends no extra_days key at all` | `server/test/web-dom.test.js:13636` |
+| `the days section is hidden for a type that does not show extra_days, and the key is never sent` | `server/test/web-dom.test.js:13655` |
+| `buildEventEditFormData JSON-stringifies extra_days exactly like honorees` | `server/test/web-dom.test.js:13676` |
+| `admin.css styles the direct-add honoree and extra-day rows, which had no rule before` | `server/test/web-dom.test.js:13685` |
+| `the occasion-type editor round-trips every server field key, so saving a type deletes none` | `server/test/web-dom.test.js:13698` |
+| `the reminder button reads «أضف لقائمتي» when unsaved, and «في قائمتي» + is-saved when saved, with the heart as its state marker` | `server/test/web-dom.test.js:13766` |
+| `renderMyList draws the six server buckets in order, collapses «انتهت سابقاً», and picks row actions by bucket` | `server/test/web-dom.test.js:13795` |
+| `a date change shows «تغيّر الموعد» with old→new in its title, and null renders nothing` | `server/test/web-dom.test.js:13847` |
+| `the «انتهت» chip filters client-side, and each chip has its own empty state` | `server/test/web-dom.test.js:13880` |
+| `the bottom nav holds three destinations — المناسبات · خدماتنا · خدمات الأعراس — and «حسابي», a header button rather than a bar slot, lights nothing down there` | `server/test/web-dom.test.js:13912` |
+| `«خدماتنا» is a public page with the three Ktra platform capsules in order, the news one opening the reader in-place` | `server/test/web-dom.test.js:14009` |
+| `«خدماتنا» carries the five calculators as one visible panel at a time, with the Hijri ±1 day warning in plain sight` | `server/test/web-dom.test.js:14100` |
+| `the wedding budget sums its items, and refuses an empty name, a negative amount and text` | `server/test/web-dom.test.js:14142` |
+| `the expense split names who pays whom, exactly, and refuses a single person and a zero total` | `server/test/web-dom.test.js:14199` |
+| `the split settlement never invents or loses an agora, across a fixed pseudo-random run` | `server/test/web-dom.test.js:14259` |
+| `the guest estimator multiplies families and tables, treats empty as zero, and refuses text` | `server/test/web-dom.test.js:14317` |
+| `the countdown counts local calendar days — 45 ahead, today, 3 past — and rejects a non-existent date` | `server/test/web-dom.test.js:14363` |
+| `the Hijri calculator matches four Umm al-Qura reference dates exactly and shows the ±1 day note` | `server/test/web-dom.test.js:14414` |
+| `no calculator reaches /api — every one of the five computes on the device` | `server/test/web-dom.test.js:14450` |
+| `the add-service window names its purpose, and no outside button borrows that wording` | `server/test/web-dom.test.js:14507` |
+| `«آخر الأخبار» renders /api/news cards (breaking, category, relative time), then closes with Escape` | `server/test/web-dom.test.js:14531` |
+| `the empty governorate offers «أخبار محلية عامة», and choosing it refetches with general=1 and shows the «عامة» tag` | `server/test/web-dom.test.js:14611` |
+| `tapping a news card opens its detail inside the layer — body paragraphs, source line, «افتح على كترا» — and back restores the list` | `server/test/web-dom.test.js:14663` |
+| `a failing /api/news shows the Arabic error with «إعادة المحاولة», and the retry refetches` | `server/test/web-dom.test.js:14744` |
+| `resumePendingIntent with { type: 'remind' } POSTs /api/events/:id/remind after sign-in` | `server/test/web-dom.test.js:14788` |
+| `«نظّف المنتهية» confirms first, then DELETEs /api/my-reminders?scope=ended with the token` | `server/test/web-dom.test.js:14821` |
+| `removing an event from «قائمتي» clears is_reminded on the feed entry, so its card offers adding it again` | `server/test/web-dom.test.js:14854` |
+| `clearEndedMyList: a refused clear toasts nothing and moves nothing; a successful one un-saves the cleared feed event` | `server/test/web-dom.test.js:14916` |
+| `the «تراجع» undo of a failed re-add alerts and still reloads the list` | `server/test/web-dom.test.js:14998` |
+| `the event page offers no save button for an event that is not approved` | `server/test/web-dom.test.js:15056` |
+| `account avatar: a stored avatar_url shows the photo and hides the icon fallback` | `server/test/web-dom.test.js:15118` |
+| `account avatar: avatar_url = null hides the photo and brings the icon back` | `server/test/web-dom.test.js:15133` |
+| `account profile: save sends full_name + clan_town and adopts the server answer` | `server/test/web-dom.test.js:15147` |
+| `account phone: save sends the number with the PIN and keeps only the fresh token` | `server/test/web-dom.test.js:15189` |
+| `account phone: a 400 wrong PIN keeps the session and the open form, and shows the server message` | `server/test/web-dom.test.js:15230` |
+| `account avatar upload: multipart body with the `image` field and no Content-Type header` | `server/test/web-dom.test.js:15260` |
+| `«أنا في الصورة»: an account without a photo opens the sheet, keeps sending disabled and posts nothing` | `server/test/web-dom.test.js:15313` |
+| `«أنا في الصورة»: photo + confirmed number send both descriptions with confirm_phone` | `server/test/web-dom.test.js:15351` |
+| `«أنا في الصورة»: a 400 shows its server message inside the sheet and leaves it open` | `server/test/web-dom.test.js:15399` |
+| `طابور الوسوم: three tabs carry the server counts and switch the queue status` | `server/test/web-dom.test.js:15428` |
+| `apiFetch sends X-Region only for a numeric negev_region — no saved value means no header at all` | `server/test/web-dom.test.js:15483` |
+| `adminFetch never sends X-Region, even when the browser has one saved` | `server/test/web-dom.test.js:15505` |
+| `the region picker is drawn above the feed chips from GET /api/towns (regions), with each region's state` | `server/test/web-dom.test.js:15523` |
+| `a saved region is selected again when the page opens, and the drawer copy shows the same state` | `server/test/web-dom.test.js:15550` |
+| `choosing another region saves it, empties the previous list, and refetches page 1 with the new X-Region` | `server/test/web-dom.test.js:15573` |
+| `publishing under «القرى والتجمعات» requires a region and sends region_id` | `server/test/web-dom.test.js:15616` |
+| `the edit modal shows the event's region and sends region_id only when the user changes it` | `server/test/web-dom.test.js:15665` |
+| `the very first feed request carries X-Region of the saved region, not the first one` | `server/test/web-dom.test.js:15705` |
+| `اختيار محافظة بعد «وسّع إلى كل المحافظات» يُلغي all_regions من الطلب التالي (#161)` | `server/test/web-dom.test.js:15729` |
+| `a signed-in visitor with no stored choice is shown the account region the server actually uses` | `server/test/web-dom.test.js:15783` |
+| `clicking the drawn default region stores it explicitly and refetches` | `server/test/web-dom.test.js:15812` |
+| `the place filter offers only the active region's towns, and an open sheet is rebuilt on a region change` | `server/test/web-dom.test.js:15835` |
+| `editing still saves when GET /api/towns returned no regions — the region is only required when a list exists` | `server/test/web-dom.test.js:15854` |
+| `the map opens on the active region's centre and re-centres when the region changes` | `server/test/web-dom.test.js:15892` |
+| `a slow answer from the previous region cannot land on the new region's feed` | `server/test/web-dom.test.js:15930` |
+| `«أهلاً، الاسم» للمسجَّل وحده، والزائر لا يراه (#174)` | `server/test/web-dom.test.js:16006` |
+| `negev_user بلا negev_token لا يحيّي في موضعي الترويسة، والجلسة المكتملة تحيّي فيهما (#174)` | `server/test/web-dom.test.js:16025` |
+| `كبسولة المحافظة تحمل اسمها من الخادم وتفتح ورقة المحافظة، والاختيار فيها يمشي في selectRegion القائم` | `server/test/web-dom.test.js:16045` |
+| `بلا محافظات من الخادم: الكبسولة تقول «منطقتك» والورقة تشرح الفراغ بدل بطاقة فارغة` | `server/test/web-dom.test.js:16081` |
+| `القلب يفتح «قائمتي» وزرّ الأجندة يفتح الأجندة القائمة، والشريط السفلي يبقى ثلاث وجهات` | `server/test/web-dom.test.js:16100` |
+| `قاعدة CSS تُخفي التحية عن الزائر صراحةً، والكبسولة تقصّ الاسم الطويل` | `server/test/web-dom.test.js:16141` |
+| `الهاتف وPWA المثبَّت: الصفّ الغني له موضعٌ ثانٍ داخل الشريط العائم الظاهر هناك` | `server/test/web-dom.test.js:16164` |
+| `حجز بطاقة التغذية يساوي علوّ الشريط العائم المعلن في كل عتبة (#174)` | `server/test/web-dom.test.js:16230` |
+| `التحية والكبسولة تُكتبان في موضعَي الصفّ الغني معاً، واختيار كبسولة الهاتف يمشي في selectRegion نفسه` | `server/test/web-dom.test.js:16297` |
+| `المحافظة الأصلية (النقب) بلا شريط: الشريط خبر توسّع لا تحيّة، ولا ورقة قديمة ولا مفتاحها` | `server/test/web-dom.test.js:16400` |
+| `التبديل إلى محافظة طولكرم: شريط داخل الصفحة بنصّ الخادم وعدد بلداتها — لا طبقة ولا حوار` | `server/test/web-dom.test.js:16417` |
+| `تبديل ثانٍ إلى اللد والرملة ويافا: الشريط يتبع كل تبديل بنصّ المحافظة الجديدة وعدد بلداتها (٣)` | `server/test/web-dom.test.js:16460` |
+| `محافظة بصفر مناسبات: عدد البلدات وسطر «كن أول»، ولا «0 مناسبة» في أي نصّ` | `server/test/web-dom.test.js:16484` |
+| `محافظة فيها مناسبة معتمدة: رقم المناسبات لا عدد البلدات` | `server/test/web-dom.test.js:16503` |
+| `صيغ العدد العربية: بلدة، بلدتان، بلدات، بلدة — وكذلك المناسبات` | `server/test/web-dom.test.js:16519` |
+| `× يُخفي الشريط ويسجّل الإخفاء لهذه المحافظة وحدها — ويبقى بعد إعادة التحميل` | `server/test/web-dom.test.js:16537` |
+| `اسم المحافظة يمرّ عبر escapeHtml — لا HTML من الخادم في العنوان أو السطر` | `server/test/web-dom.test.js:16576` |
+| `تبديل المحافظة لا يطلب /api/towns مرة أخرى — الأرقام من استجابة الإقلاع نفسها` | `server/test/web-dom.test.js:16594` |
+| `الموقوفة لا تُختار ولا شريط لها، ومحافظة بلا عدّادين من الخادم لا شريط لها` | `server/test/web-dom.test.js:16615` |
+| `ناشر النقب يرى في نموذج النشر بلدات النقب وحدها ثم «النقب — بلا بلدة محدّدة»` | `server/test/web-dom.test.js:16711` |
+| `ناشر طولكرم يرى «القرى والتجمعات» في آخر بلداته — ولا بلدة نقبية واحدة` | `server/test/web-dom.test.js:16727` |
+| `تبديل حبة المحافظة يعيد بناء بلدات نموذج النشر المفتوح على المحافظة الجديدة` | `server/test/web-dom.test.js:16774` |
+| `نافذة التعديل تعرض بلدات محافظة المناسبة وتُبقي بلدةً خارجها مختارة` | `server/test/web-dom.test.js:16790` |
+| `النشر المباشر: محافظة الأدمن افتراضاً، وتبديل المحافظة يعيد بناء بلداتها وحدها` | `server/test/web-dom.test.js:16816` |
+| `لوحة التعديل: منتقي البلدة يُبنى من محافظة المناسبة ويُبقي بلدة خارجها مختارة` | `server/test/web-dom.test.js:16857` |
+| `نموذج تعديل مناسبة قروية في طولكرم يعرض قرى طولكرم وحدها في منتقي القرية` | `server/test/web-dom.test.js:16914` |
+| `تبديل محافظة نموذج التعديل إلى النقب يعيد بناء قرى منتقي القرية من النقب` | `server/test/web-dom.test.js:16931` |
+| `صفوف قرى بلا region_id (خادم أقدم أو قائمة احتياطية) تُعرض كاملة في منتقي التعديل` | `server/test/web-dom.test.js:16956` |
+| `قرية المناسبة الحالية خارج قرى محافظتها تبقى خياراً مختاراً في منتقي التعديل` | `server/test/web-dom.test.js:16970` |
+| `مسودّة النشر المباشر: محافظة لم تبق نشطة تعود إلى الافتراضية ولا تترك منتقي البلدة فارغاً` | `server/test/web-dom.test.js:16984` |
+| `web/index.html keeps pinch-zoom enabled (no maximum-scale, no user-scalable) and keeps viewport-fit=cover` | `server/test/web-dom.test.js:17012` |
+| `Chart.js is pinned to one explicit version, the same in index.html and admin.html` | `server/test/web-dom.test.js:17030` |
+| `styles.css: one general :focus-visible rule, and a 44px button base no button rule lowers` | `server/test/web-dom.test.js:17055` |
+| `admin.css carries the same 44px button base and general :focus-visible — the panel loads no other stylesheet` | `server/test/web-dom.test.js:17135` |
+| `sw.js precaches the shell files only — never an /api endpoint, never admin.html, never a CDN URL` | `server/test/web-dom.test.js:17176` |
+| `sw.js covers every local script index.html loads — in the precache list AND the runtime pattern` | `server/test/web-dom.test.js:17216` |
+| `sw.js leaves /api responses, non-GET requests and cross-origin requests completely alone` | `server/test/web-dom.test.js:17244` |
+| `sw.js serves shell files from the cache and still opens the shell offline` | `server/test/web-dom.test.js:17264` |
+| `sw.js activate drops every previous shell cache (the version bump) and leaves other caches alone` | `server/test/web-dom.test.js:17292` |
+| `sw.js fails install when an essential shell file cannot be downloaded — the previous cache survives whole` | `server/test/web-dom.test.js:17319` |
+| `sw.js keeps install alive when only an icon fails to download — and the icon is filled in at runtime` | `server/test/web-dom.test.js:17385` |
+| `صفحة المناسبة تعرض «جاي» و«مش جاي» والعدد 1..20 والعدّاد وحالة الجواب` | `server/test/web-dom.test.js:17451` |
+| `لا أزرار حضور ولا عدّاد: لنوع solemn، ولا لنوع rsvp_enabled مطفأ، ولا حين يخفي النوع العدّاد` | `server/test/web-dom.test.js:17481` |
+| `«جاي» يرسل PUT /api/events/:id/rsvp بإجمالي الحاضرين المختار، ويحدّث الحالة والعدّاد من ردّ الخادم` | `server/test/web-dom.test.js:17509` |
+| `«مش جاي» يُرسل party_size = 1، و«سحب جوابي» يستعمل DELETE على المسار نفسه` | `server/test/web-dom.test.js:17573` |
+| `«مين جاي» يرسم الأسماء والعدد والجواب والمصدر والمجاميع` | `server/test/web-dom.test.js:17629` |
+| `زرّ «مين جاي» يرسمه «مناسباتي» لمناسبة نوعها مفتوح، ويغيب عن غيرها` | `server/test/web-dom.test.js:17653` |
+| `فتح «مين جاي» يقرأ GET /api/events/:id/rsvps بالرمز، ويُظهر رسالة الخادم عند الرفض` | `server/test/web-dom.test.js:17670` |
+| `كرت العرس يحمل الأفعال الثلاثة، والعزاء «عزّي» وحده بلا عدّاد، ونوع بلا rsvp_enabled بلا «جاي»` | `server/test/web-dom.test.js:17744` |
+| `«جاي» من الكرت يسجّل الجواب بعدد 1 ويُفعّل «ذكّرني» ظاهراً` | `server/test/web-dom.test.js:17785` |
+| `«بارك» يفتح ورقة «اختر رسالة» برسائل النوع، واختيار رسالة يفتح التبريك بنصّها قابلاً للتعديل` | `server/test/web-dom.test.js:17837` |
+| `إغلاق ورقة الرسائل أثناء جلب الأنواع لا يرمي ولا يكتب إلى الورقة المغلقة` | `server/test/web-dom.test.js:17905` |
+| `ردّ ورقة رسائل قديمة لا يستبدل حالة ورقة جديدة أو محتواها` | `server/test/web-dom.test.js:17930` |
+| `ورقة الرسائل لا تُكتب من الكود: نوع بلا رسائل نشِطة يفتح باب الكتابة وحده` | `server/test/web-dom.test.js:17960` |
+| `عدّادات صفحة المناسبة: مهتمين وتبريكات حين يرسلهما الخادم، ويغيبان حين يطفئهما النوع أو تكون النغمة وقورة` | `server/test/web-dom.test.js:17988` |

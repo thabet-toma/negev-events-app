@@ -475,22 +475,39 @@ function buildFakeCanvasContext() {
  */
 function installPosterCropFakes(window) {
   window.__FAKE_IMAGE_SIZE = { width: 480, height: 640 };
+  window.__PENDING_POSTER_IMAGE_EVENTS = [];
+  window.__PENDING_POSTER_EXPORTS = [];
 
   window.URL.createObjectURL = () => 'blob:fake-poster-url';
   window.URL.revokeObjectURL = () => {};
 
   window.Image = function FakeImage() {
     const size = window.__FAKE_IMAGE_SIZE;
+    const shouldError = Boolean(window.__FAKE_IMAGE_ERROR);
     const img = { naturalWidth: size.width, naturalHeight: size.height, onload: null, onerror: null };
     Object.defineProperty(img, 'src', {
-      set() { setTimeout(() => { if (img.onload) img.onload(); }, 0); }
+      set() {
+        const settle = () => {
+          // __FAKE_IMAGE_ERROR simulates a photo the browser cannot decode —
+          // the one case app.js may upload raw instead of through the editor.
+          if (shouldError) { if (img.onerror) img.onerror(); }
+          else if (img.onload) img.onload();
+        };
+        if (window.__DEFER_POSTER_IMAGE) window.__PENDING_POSTER_IMAGE_EVENTS.push(settle);
+        else setTimeout(settle, 0);
+      }
     });
     return img;
   };
 
   window.HTMLCanvasElement.prototype.toBlob = function toBlob(callback, type) {
+    // The exported canvas's own pixel size — the only way, under jsdom's fake
+    // 2D context, to prove the crop never upscales (see the 4:5 crop tests).
+    window.__LAST_EXPORT_SIZE = { width: this.width, height: this.height };
     const blob = new window.Blob(['fake-cropped-bytes'], { type: type || 'image/png' });
-    setTimeout(() => callback(blob), 0);
+    const settle = () => callback(blob);
+    if (window.__DEFER_POSTER_EXPORT) window.__PENDING_POSTER_EXPORTS.push(settle);
+    else setTimeout(settle, 0);
   };
 }
 
@@ -1356,7 +1373,7 @@ async function run() {
     assert.strictEqual(document.getElementById('posterCropPreview').hidden, true, 'no preview yet — nothing has been confirmed');
   });
 
-  await test('the crop rectangle initialises around the whole image', async () => {
+  await test('the crop rectangle starts as the largest 4:5 rectangle centred on the image', async () => {
     const dom = buildEnv({ loggedIn: true });
     const { document } = dom.window;
 
@@ -1364,14 +1381,18 @@ async function run() {
     await waitFor(() => document.getElementById('addPosterFile') !== null);
     await choosePosterFile(dom, { width: 480, height: 640 });
 
+    // 480×640 is narrower than the card's 4:5 poster ratio (#178), so the
+    // rectangle spans the full 480px width and 600 of the 640px height,
+    // centred — 20px above and below. The default upload is already the card
+    // crop; «استخدام الصورة كاملة» stays the whole-image way out.
     const box = document.getElementById('posterCropBox');
-    assert.strictEqual(box.style.left, '0%', 'the crop box must start flush with the image\'s left edge');
-    assert.strictEqual(box.style.top, '0%', 'the crop box must start flush with the image\'s top edge');
-    assert.strictEqual(box.style.width, '100%', 'nothing is cropped away until the publisher drags a handle');
-    assert.strictEqual(box.style.height, '100%');
+    assert.strictEqual(box.style.left, '0%', 'the 4:5 rectangle must start flush with the image\'s left edge');
+    assert.strictEqual(box.style.top, '3.125%', 'a 600px-high rectangle on a 640px canvas leaves 20px above it — 3.125%');
+    assert.strictEqual(box.style.width, '100%', 'a photo narrower than 4:5 fills the rectangle across its full width');
+    assert.strictEqual(box.style.height, '93.75%', 'the rectangle must cover 600 of the 640px height — the 4:5 card ratio');
   });
 
-  await test('dragging a corner handle changes the crop rectangle\'s stored bounds', async () => {
+  await test('dragging a corner keeps the 4:5 ratio, with the dominant pointer axis leading', async () => {
     const dom = buildEnv({ loggedIn: true });
     const win = dom.window;
     const { document } = win;
@@ -1379,20 +1400,171 @@ async function run() {
     await openPublishTabAfterBrowsingHome(dom);
     await waitFor(() => document.getElementById('addPosterFile') !== null);
     // 480×640 keeps displayScale at 1 (below POSTER_CROP_MAX_EDITOR_WIDTH), so
-    // client-pixel deltas map onto working-canvas pixels one-to-one — this
-    // test's own arithmetic below can stay a direct mirror of app.js's.
+    // client-pixel deltas map onto working-canvas pixels one-to-one.
     await choosePosterFile(dom, { width: 480, height: 640 });
 
-    const handle = document.querySelector('#posterCropBox .poster-crop-handle[data-corner="br"]');
-    handle.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 480, clientY: 640, bubbles: true }));
-    document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 380, clientY: 500, bubbles: true }));
-    document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 380, clientY: 500, bubbles: true }));
-
+    const canvas = document.getElementById('posterCropCanvas');
     const box = document.getElementById('posterCropBox');
-    assert.strictEqual(box.style.left, '0%', 'dragging the bottom-right corner must not move the fixed top-left one');
-    assert.strictEqual(box.style.top, '0%');
-    assert.strictEqual(box.style.width, `${(380 / 480) * 100}%`, 'shrinking by 100 client px on a 1:1 scale should shrink the rect by exactly that');
-    assert.strictEqual(box.style.height, `${(500 / 640) * 100}%`);
+    const handle = document.querySelector('#posterCropBox .poster-crop-handle[data-corner="br"]');
+
+    /** The rectangle's own pixels, read back from the percentage styles. */
+    function rectFromStyle() {
+      return {
+        w: (parseFloat(box.style.width) / 100) * canvas.width,
+        h: (parseFloat(box.style.height) / 100) * canvas.height
+      };
+    }
+    const near = (actual, expected, message) => assert.ok(
+      Math.abs(actual - expected) < 1e-6,
+      `${message} (expected ≈${expected}, got ${actual})`
+    );
+
+    // Horizontal pointer axis leads: 80px in, the width is 400 and the height
+    // follows from the ratio (400 ÷ 0.8 = 500) — both edges shrink.
+    handle.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 480, clientY: 620, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 400, clientY: 620, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 400, clientY: 620, bubbles: true }));
+
+    let rect = rectFromStyle();
+    near(rect.w, 400, 'a horizontal drag must drive the width');
+    near(rect.h, 500, 'the height must follow from the 4:5 ratio, not stay at the photo\'s 600');
+    assert.ok(Math.abs(rect.w / rect.h - 4 / 5) < 1e-9, `the crop rectangle must stay 4:5, got ${rect.w}×${rect.h}`);
+    assert.strictEqual(box.style.top, '3.125%', 'the bottom-right drag keeps the top-left corner pinned');
+
+    // Vertical pointer axis leads: only Y moves, and the width still shrinks
+    // with it — from the 500px height a 80px drag leaves 420, so the width is
+    // 420 × 0.8 = 336. This is the axis a width-only implementation leaves dead.
+    handle.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 480, clientY: 620, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 480, clientY: 540, bubbles: true }));
+    document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 480, clientY: 540, bubbles: true }));
+
+    rect = rectFromStyle();
+    near(rect.h, 420, 'a vertical drag must drive the height');
+    near(rect.w, 336, 'the width must follow from the 4:5 ratio, not stay at the previous 400');
+    assert.ok(Math.abs(rect.w / rect.h - 4 / 5) < 1e-9, `the ratio must hold on the vertical axis too, got ${rect.w}×${rect.h}`);
+  });
+
+  await test('dragging from the middle moves the rectangle without resizing it — even on a photo below the floor', async () => {
+    /** Pointer drag whose target is the box itself — the "move" corner, not a handle. */
+    function dragBox(win, document, box, dx, dy) {
+      box.dispatchEvent(new win.PointerEvent('pointerdown', { clientX: 40, clientY: 20, bubbles: true }));
+      document.dispatchEvent(new win.PointerEvent('pointermove', { clientX: 40 + dx, clientY: 20 + dy, bubbles: true }));
+      document.dispatchEvent(new win.PointerEvent('pointerup', { clientX: 40 + dx, clientY: 20 + dy, bubbles: true }));
+    }
+
+    // 100×40 starts as a 32×40 4:5 crop. The old clamp raised every edge to the
+    // 40px floor inside the move path, so the first move inflated it to 40×40.
+    const small = buildEnv({ loggedIn: true });
+    const smallWin = small.window;
+    const smallDoc = smallWin.document;
+    await openPublishTabAfterBrowsingHome(small);
+    await waitFor(() => smallDoc.getElementById('addPosterFile') !== null);
+    await choosePosterFile(small, { width: 100, height: 40 });
+
+    const box = smallDoc.getElementById('posterCropBox');
+    assert.strictEqual(box.style.width, '32%', 'the 4:5 crop of a 100×40 photo is 32×40 — setup for the move below');
+    assert.strictEqual(box.style.height, '100%');
+    assert.strictEqual(box.style.left, '34%', 'the 32px-wide rectangle is centred in the 100px canvas');
+
+    dragBox(smallWin, smallDoc, box, 10, 10);
+
+    assert.strictEqual(box.style.width, '32%', 'a move must not raise the width to the 40px floor');
+    assert.strictEqual(box.style.height, '100%', 'a move must not change the height either');
+    assert.strictEqual(box.style.left, '44%', 'the rectangle follows the pointer horizontally (34 + 10)');
+
+    // 20×25 is below the floor on both edges: the rectangle already fills the
+    // canvas, so a move may not grow it past the canvas at all.
+    const tiny = buildEnv({ loggedIn: true });
+    const tinyWin = tiny.window;
+    const tinyDoc = tinyWin.document;
+    await openPublishTabAfterBrowsingHome(tiny);
+    await waitFor(() => tinyDoc.getElementById('addPosterFile') !== null);
+    await choosePosterFile(tiny, { width: 20, height: 25 });
+
+    const tinyBox = tinyDoc.getElementById('posterCropBox');
+    dragBox(tinyWin, tinyDoc, tinyBox, 30, 30);
+
+    assert.strictEqual(tinyBox.style.width, '100%', 'a move must not push a 20px-wide crop past its canvas');
+    assert.strictEqual(tinyBox.style.height, '100%');
+    assert.strictEqual(tinyBox.style.left, '0%', 'a full-canvas rectangle cannot move horizontally');
+    assert.strictEqual(tinyBox.style.top, '0%');
+  });
+
+  await test('reopening the editor after «استخدام الصورة كاملة» starts again from the centred 4:5 crop', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.usePosterWholeImage();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('usePosterWholeImage before reopening');
+
+    win.reopenPosterCropEditor();
+    const box = document.getElementById('posterCropBox');
+    assert.strictEqual(document.getElementById('posterCropEditor').hidden, false, 'reopening must bring the editor back');
+    assert.strictEqual(box.style.top, '3.125%', 'reopening must restore the centred 4:5 rectangle, not leave the whole-image one');
+    assert.strictEqual(box.style.width, '100%');
+    assert.strictEqual(box.style.height, '93.75%');
+
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('confirm after reopening');
+
+    const size = win.__LAST_EXPORT_SIZE;
+    assert.strictEqual(size.width, 480);
+    assert.strictEqual(size.height, 600, 'a reopened editor must never export the whole-image 480×640 rectangle');
+  });
+
+  await test('a photo smaller than the 1600px cap is never upscaled — 300×200 exports as a 160×200 4:5 crop', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 300, height: 200 });
+
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('small poster crop export');
+
+    const size = win.__LAST_EXPORT_SIZE;
+    assert.ok(size, 'expected the export canvas to reach toBlob');
+    assert.strictEqual(size.width, 160, '300×200 is wider than 4:5, so the 4:5 rectangle is 160px wide');
+    assert.strictEqual(size.height, 200, 'the rectangle keeps the photo\'s own 200px height');
+    assert.ok(
+      size.width <= 300 && size.height <= 200,
+      `the export must never exceed the source photo, got ${size.width}x${size.height}`
+    );
+    assert.strictEqual(size.width / size.height, 4 / 5, 'even a small photo exports as the 4:5 card poster');
+  });
+
+  await test('the default crop exports a 480×600 4:5 poster — smaller than its 480×640 source', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    assertNoUnhandledRejections('default 4:5 poster export');
+
+    const size = win.__LAST_EXPORT_SIZE;
+    assert.ok(size, 'expected the export canvas to reach toBlob');
+    assert.strictEqual(size.width, 480, 'a 480px-wide photo keeps its full width in the 4:5 rectangle');
+    assert.strictEqual(size.height, 600, 'the 4:5 rectangle is 600px tall on a 480px-wide photo');
+    assert.strictEqual(size.width / size.height, 4 / 5, 'the exported poster is the event card\'s 4:5 ratio');
+    assert.ok(
+      size.width * size.height < 480 * 640,
+      'the uploaded default crop must be smaller than the photo it came from'
+    );
   });
 
   await test('confirming a crop sends the cropped Blob under "poster", with an explicit .jpg filename', async () => {
@@ -1434,6 +1606,276 @@ async function run() {
       `expected an explicit filename ending in .jpg, got "${posterEntry.name}" — a nameless Blob would silently save with no extension`
     );
     assert.strictEqual(posterEntry.type, 'image/jpeg', 'expected the export MIME to be image/jpeg, as passed to canvas.toBlob');
+  });
+
+  await test('submitting without pressing «تأكيد القص» still uploads the processed 4:5 JPEG, not the raw photo', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    // Deliberately no confirmPosterCrop(): the publisher goes straight to
+    // «إرسال». The poster must still leave the client as the 4:5 JPEG the
+    // editor shows — never as the untouched 480×640 PNG the input holds.
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit without confirming a crop');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry in the submitted FormData');
+    assert.ok(
+      posterEntry.name.endsWith('.jpg'),
+      `the upload must be the client-processed JPEG, got "${posterEntry.name}" — the raw "invitation.png" means no crop or compression ran`
+    );
+    assert.strictEqual(posterEntry.type, 'image/jpeg', 'the raw photo is image/png — the submit path must export JPEG');
+
+    const size = win.__LAST_EXPORT_SIZE;
+    assert.ok(size, 'expected the submit to export through the crop canvas');
+    assert.strictEqual(size.width, 480);
+    assert.strictEqual(size.height, 600, 'submitting without a confirm must export the 4:5 rectangle, not the 640px source height');
+  });
+
+  await test('the raw file is sent only when the photo cannot be decoded at all', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    // A file the browser cannot decode: the editor never opens, and that — not
+    // a publisher skipping «تأكيد القص» — is the one case the raw bytes may go.
+    win.__FAKE_IMAGE_ERROR = true;
+    const input = document.getElementById('addPosterFile');
+    const file = new win.File(['fake-bytes'], 'invitation.png', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await delay(20);
+    win.__FAKE_IMAGE_ERROR = false;
+
+    assert.strictEqual(
+      document.getElementById('posterCropEditor').hidden, true,
+      'a photo that fails to decode never opens the crop editor'
+    );
+
+    fillRequiredPublishFields(document);
+
+    let capturedRequest = null;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        capturedRequest = opts;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assertNoUnhandledRejections('handleEventSubmit after a failed decode');
+
+    assert.ok(capturedRequest, 'expected the publish POST to actually fire');
+    const posterEntry = capturedRequest.body.get('poster');
+    assert.ok(posterEntry, 'expected a "poster" entry');
+    assert.strictEqual(
+      posterEntry.name, 'invitation.png',
+      'decode failure is the only case the raw file may be uploaded as-is'
+    );
+    assert.strictEqual(posterEntry.type, 'image/png');
+  });
+
+  await test('a delayed decode failure from an old selection never uploads the newer file raw', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+
+    const input = document.getElementById('addPosterFile');
+    const choose = (name) => {
+      const file = new win.File(['fake-bytes'], name, { type: 'image/png' });
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      input.dispatchEvent(new win.Event('change', { bubbles: true }));
+    };
+
+    win.__DEFER_POSTER_IMAGE = true;
+    win.__FAKE_IMAGE_ERROR = true;
+    choose('broken-a.png');
+    win.__FAKE_IMAGE_ERROR = false;
+    choose('healthy-b.png');
+    assert.strictEqual(win.__PENDING_POSTER_IMAGE_EVENTS.length, 2, 'both choices must still be waiting');
+
+    win.__PENDING_POSTER_IMAGE_EVENTS.shift()();
+    fillRequiredPublishFields(document);
+
+    let postCount = 0;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') postCount += 1;
+      return jsonResponse({ success: true, status: 'approved' });
+    };
+
+    await win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(postCount, 0, 'the newer file is still decoding, so an old failure must not authorise its raw bytes');
+
+    win.__PENDING_POSTER_IMAGE_EVENTS.shift()();
+    await waitFor(() => document.getElementById('posterCropEditor').hidden === false);
+  });
+
+  await test('a delayed export from an old selection cannot replace the newer selection’s blob or preview', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    let objectUrl = 0;
+    win.URL.createObjectURL = () => `blob:poster-${++objectUrl}`;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.__DEFER_POSTER_EXPORT = true;
+    const staleExport = win.exportPosterCrop({ x: 0, y: 0, w: 480, h: 640 });
+    assert.strictEqual(win.__PENDING_POSTER_EXPORTS.length, 1, 'the first export must be held back');
+
+    win.__DEFER_POSTER_EXPORT = false;
+    await choosePosterFile(dom, { width: 500, height: 500 });
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    const newerPreview = document.getElementById('posterCropPreviewImg').src;
+
+    win.__PENDING_POSTER_EXPORTS.shift()();
+    assert.strictEqual(await staleExport, null, 'an export superseded by a new selection must resolve without a usable blob');
+    assert.strictEqual(
+      document.getElementById('posterCropPreviewImg').src,
+      newerPreview,
+      'the old callback must not overwrite the preview that belongs to the newer selection'
+    );
+  });
+
+  await test('a delayed whole-image export cannot replace the 4:5 crop after reopening the editor', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    let objectUrl = 0;
+    win.URL.createObjectURL = () => `blob:poster-${++objectUrl}`;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+
+    win.__DEFER_POSTER_EXPORT = true;
+    win.usePosterWholeImage();
+    assert.strictEqual(win.__PENDING_POSTER_EXPORTS.length, 1, 'the whole-image export must be held back');
+
+    win.reopenPosterCropEditor();
+    win.__DEFER_POSTER_EXPORT = false;
+    win.confirmPosterCrop();
+    await waitFor(() => document.getElementById('posterCropPreview').hidden === false);
+    const cropPreview = document.getElementById('posterCropPreviewImg').src;
+
+    win.__PENDING_POSTER_EXPORTS.shift()();
+    await delay(0);
+    assert.strictEqual(
+      document.getElementById('posterCropPreviewImg').src,
+      cropPreview,
+      'the old whole-image callback must not replace the reopened editor’s 4:5 crop'
+    );
+  });
+
+  await test('two submit calls while the crop export is pending both prevent default and make one publish POST', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    await choosePosterFile(dom, { width: 480, height: 640 });
+    fillRequiredPublishFields(document);
+
+    win.__DEFER_POSTER_EXPORT = true;
+    let postCount = 0;
+    win.fetch = async (url, opts = {}) => {
+      if (String(url).includes('/api/events') && opts.method === 'POST') {
+        postCount += 1;
+        return jsonResponse({ success: true, status: 'approved' });
+      }
+      return jsonResponse({ success: true, events: [], pagination: { page: 1, totalPages: 1 }, announcements: [] });
+    };
+
+    const prevented = [0, 0];
+    const first = win.handleEventSubmit({ preventDefault() { prevented[0] += 1; } });
+    const second = win.handleEventSubmit({ preventDefault() { prevented[1] += 1; } });
+    const preventedBeforeAwait = [...prevented];
+    assert.strictEqual(win.__PENDING_POSTER_EXPORTS.length, 1, 'only the first submit may start an export');
+
+    win.__PENDING_POSTER_EXPORTS.shift()();
+    await Promise.all([first, second]);
+    assert.strictEqual(postCount, 1, 'two rapid submit calls must result in one publish POST');
+    assert.deepStrictEqual(preventedBeforeAwait, [1, 1], 'both submit events must prevent default synchronously, including the guarded second call');
+  });
+
+  await test('a rejected publish fetch records publish_failed with the town, resolves without rejection and re-enables submit', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+
+    await openPublishTabAfterBrowsingHome(dom);
+    await waitFor(() => document.getElementById('addPosterFile') !== null);
+    fillRequiredPublishFields(document);
+    const town = document.getElementById('addTown').value;
+    const btn = document.getElementById('submitEventBtn');
+    const analytics = [];
+    const alerts = [];
+    win.alert = message => alerts.push(message);
+    let rejectPublish;
+    let postCount = 0;
+    win.fetch = async (url, opts = {}) => {
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/analytics/events' && opts.method === 'POST') {
+        analytics.push(JSON.parse(opts.body));
+        return jsonResponse({ success: true });
+      }
+      if (parsed.pathname === '/api/events' && opts.method === 'POST') {
+        postCount += 1;
+        return new Promise((resolve, reject) => { rejectPublish = reject; });
+      }
+      return jsonResponse({ success: true });
+    };
+
+    const submission = win.handleEventSubmit({ preventDefault() {} });
+    assert.strictEqual(postCount, 1, 'the valid form must reach the publish POST');
+    assert.strictEqual(btn.disabled, true, 'submit stays disabled while the network request is pending');
+    // Observe the returned promise too: an inline onsubmit handler will not
+    // await it, so any rejection here would be unhandled in the browser.
+    const settled = Promise.allSettled([submission]);
+    rejectPublish(new Error('simulated publish network failure'));
+    const [result] = await settled;
+    await delay(0);
+    assertNoUnhandledRejections('rejected publish fetch');
+
+    assert.deepStrictEqual({
+      rejection: result.status === 'rejected' ? String(result.reason) : null,
+      failures: analytics.filter(event => event.event_name === 'publish_failed').map(event => event.content_town),
+      disabled: btn.disabled
+    }, {
+      rejection: null,
+      failures: [town],
+      disabled: false
+    }, 'network failure must resolve, record publish_failed for the submitted town and unlock submit');
+    assert.ok(alerts.includes('تعذر الاتصال بالخادم'), 'the network failure must still show the existing Arabic notice');
+    assert.ok(btn.innerHTML.includes('fa-paper-plane'), 'finally restores the normal submit button, not its spinner');
   });
 
   await test('"استخدام الصورة كاملة" still submits a Blob, and the working canvas never exceeds 1600px on its longest edge', async () => {
