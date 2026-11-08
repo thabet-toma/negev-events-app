@@ -302,6 +302,169 @@ async function run() {
     assert.strictEqual(status, 400);
   });
 
+  console.log('\nCalendar — تقويم الشهر (تذكرة #175)');
+
+  /**
+   * شهرٌ بعيد (2093-05) ومحافظتان مؤقّتتان: كل ما يقع فيهما هو ما يزرعه هذا
+   * القسم، فلا يزاحمه صفّ من البذرة ولا من قسم آخر — والتأكيد على أرقام مطلقة
+   * صحيح لا «أكبر من صفر». والصفوف الخام تُدرَج مباشرةً (لا عبر مسار النشر)
+   * لأن المطلوب أزواج حالة/ظهور لا يسمح بها النشر: `pending`، `rejected`،
+   * `link_only`، ومجدولة.
+   *
+   * والتنظيف بمعرّفات الصفوف ثم بالمحافظتين المؤقّتتين — كلتاهما أُنشئت هنا،
+   * فلا يمسّ حذفُهما صفّاً آخر، وحذفُ مناسبات أقسام أخرى بمحافظةٍ عامة هو ما
+   * يجب ألّا يحدث.
+   */
+  const calendarMonth = '2093-05';
+  const insertCalendarRegion = async suffix => {
+    const { insertId } = await db.execute(
+      `INSERT INTO regions (name, latitude, longitude, map_zoom, position, is_active)
+       VALUES (?, 31.9, 35.0, 9, 97, 1)`,
+      [`محافظة تقويم ${suffix} ${Date.now()}`]
+    );
+    return insertId;
+  };
+  const calendarRegionId = await insertCalendarRegion('أ');
+  const calendarOtherRegionId = await insertCalendarRegion('ب');
+  const calendarEventIds = [];
+
+  /** صفّ مناسبة خام في محافظة التقويم — أصغر مجموعة أعمدة تكفي قراءةَ التقويم. */
+  const insertCalendarEvent = async ({
+    date, endDate = null, typeId = weddingType.id, status = 'approved',
+    visibility = 'public', publishAt = null, regionId = calendarRegionId
+  }) => {
+    const { insertId } = await db.execute(
+      `INSERT INTO events
+         (title, groom_name, family_clan, occasion_type_id, town, region_id, location_name,
+          event_date, event_end_date, status, visibility, publish_at)
+       VALUES (?, ?, ?, ?, 'رهط', ?, 'ديوان التقويم', ?, ?, ?, ?, ?)`,
+      [
+        'مناسبة التقويم', 'عريس التقويم', 'عائلة التقويم', typeId, regionId,
+        date, endDate, status, visibility, publishAt
+      ]
+    );
+    calendarEventIds.push(insertId);
+    return insertId;
+  };
+
+  try {
+    // مناسبة ثلاثة أيام (10–12) ويوم حنّة قبلها (09): امتداد EVENT_SPAN_* كاملاً.
+    const calendarMultiDayId = await insertCalendarEvent({ date: '2093-05-10', endDate: '2093-05-12' });
+    await db.execute(
+      'INSERT INTO event_days (event_id, name, day_date) VALUES (?, ?, ?)',
+      [calendarMultiDayId, 'الحنّة', '2093-05-09']
+    );
+
+    // ثانية في اليوم العاشر نفسه، ثم أربع صور لما يجب ألّا يُعدّ،
+    // وسادسة في اليوم السادس عشر بنوع لا يراه العميل القديم.
+    await insertCalendarEvent({ date: '2093-05-10' });
+    await insertCalendarEvent({ date: '2093-05-10', visibility: 'link_only' });
+    await insertCalendarEvent({ date: '2093-05-10', status: 'pending' });
+    await insertCalendarEvent({ date: '2093-05-10', status: 'rejected' });
+    await insertCalendarEvent({ date: '2093-05-10', publishAt: '2093-01-01 00:00:00' });
+    await insertCalendarEvent({ date: '2093-05-16', typeId: funeralType.id });
+    // والمحافظة الثانية على **اليوم العاشر نفسه** — فلتر المحافظة يضيّق على
+    // عدّ اليوم لا على وجود اليوم في الشهر: بلا `region_id` يصير عدّ العاشر
+    // ٣ (٢ + ١)، وبالمحافظة الأولى ٢، وبالثانية ١. ومعها مناسبة في يوم لا
+    // تشاركه المحافظة الأولى (٢٠)، فيُثبَت إقصاء المحافظة الثانية **بيومٍ
+    // غائب** أيضاً لا بعددٍ وحده.
+    await insertCalendarEvent({ date: '2093-05-10', regionId: calendarOtherRegionId });
+    await insertCalendarEvent({ date: '2093-05-20', regionId: calendarOtherRegionId });
+
+    await test('GET /api/events/calendar counts a multi-day event on every day it covers, and leaves out link_only, unapproved and scheduled ones (تذكرة #175)', async () => {
+      const { status, body } = await api('GET', `/api/events/calendar?month=${calendarMonth}&region_id=${calendarRegionId}`);
+      assert.strictEqual(status, 200);
+      assert.deepStrictEqual(
+        body.days,
+        [
+          { date: '2093-05-09', count: 1 },
+          { date: '2093-05-10', count: 2 },
+          { date: '2093-05-11', count: 1 },
+          { date: '2093-05-12', count: 1 },
+          { date: '2093-05-16', count: 1 }
+        ],
+        'كل يوم من امتداد المناسبة يُعدّ مرّة (وإن لم يكن event_date)، والأيام الصفرية لا تُرسَل، و«بالرابط فقط» وغير المعتمدة والمجدولة لا تُعدّ'
+      );
+    });
+
+    await test('GET /api/events/calendar honours X-App-Version like the feed: a legacy client never counts a type it cannot render (تذكرة #175)', async () => {
+      const { status, body } = await api(
+        'GET', `/api/events/calendar?month=${calendarMonth}&region_id=${calendarRegionId}`, { legacy: true }
+      );
+      assert.strictEqual(status, 200);
+      assert.ok(
+        !body.days.some(day => day.date === '2093-05-16'),
+        'a type outside the legacy client\'s supported set is not counted for it'
+      );
+      assert.strictEqual(
+        body.days.find(day => day.date === '2093-05-10').count, 2,
+        'and the supported days are counted exactly as for a modern client'
+      );
+    });
+
+    await test('GET /api/events/calendar?region_id= narrows to that governorate, and its absence counts every governorate (تذكرة #175)', async () => {
+      const other = await api('GET', `/api/events/calendar?month=${calendarMonth}&region_id=${calendarOtherRegionId}`);
+      assert.deepStrictEqual(
+        other.body.days,
+        [{ date: '2093-05-10', count: 1 }, { date: '2093-05-20', count: 1 }],
+        'the other governorate sees its own rows alone: one on the shared day, one on a day of its own'
+      );
+
+      const unscoped = await api('GET', `/api/events/calendar?month=${calendarMonth}`);
+      const unscopedCounts = Object.fromEntries(unscoped.body.days.map(day => [day.date, day.count]));
+      assert.ok(unscopedCounts['2093-05-20'] >= 1, 'unfiltered, the other governorate\'s own day is there');
+      assert.ok(
+        unscopedCounts['2093-05-10'] >= 3,
+        `unfiltered, the shared day counts both governorates' rows: 2 + 1, got ${unscopedCounts['2093-05-10']}`
+      );
+
+      const scoped = await api('GET', `/api/events/calendar?month=${calendarMonth}&region_id=${calendarRegionId}`);
+      assert.strictEqual(
+        scoped.body.days.find(day => day.date === '2093-05-10').count, 2,
+        'the same day narrows to this governorate\'s two — region_id filters the day, not the month'
+      );
+      assert.ok(
+        !scoped.body.days.some(day => day.date === '2093-05-20'),
+        'and the other governorate\'s own day is left out entirely'
+      );
+    });
+
+    await test('GET /api/events/calendar rejects a malformed month with an Arabic 400, and answers a month with nothing in it with an empty list (تذكرة #175)', async () => {
+      for (const month of ['2093-5', '2093-13', '', '2093-05x']) {
+        const { status, body } = await api('GET', `/api/events/calendar?month=${encodeURIComponent(month)}`);
+        assert.strictEqual(status, 400, `month=${month || '(empty)'} must be refused`);
+        assert.ok(/الشهر/.test(body.message || ''), `expected an Arabic month message, got: ${body.message}`);
+      }
+
+      const empty = await api('GET', `/api/events/calendar?month=2093-06&region_id=${calendarRegionId}`);
+      assert.strictEqual(empty.status, 200);
+      assert.deepStrictEqual(empty.body.days, [], 'a month with no events has no days at all — never zero-count rows');
+    });
+
+    await test('A day the calendar counts is exactly what `?date_from=&date_to=` returns for it — one condition, two readings (تذكرة #175)', async () => {
+      const counted = (await api('GET', `/api/events/calendar?month=${calendarMonth}&region_id=${calendarRegionId}`))
+        .body.days.find(day => day.date === '2093-05-10').count;
+
+      const dayTen = await api('GET', '/api/events?date_from=2093-05-10&date_to=2093-05-10&limit=100', { region: calendarRegionId });
+      assert.strictEqual(dayTen.status, 200);
+      assert.strictEqual(dayTen.body.events.length, counted, 'the day list holds as many events as the calendar day says');
+      assert.ok(dayTen.body.events.some(event => event.id === calendarMultiDayId), 'the multi-day event is on that day');
+
+      const dayEleven = await api('GET', '/api/events?date_from=2093-05-11&date_to=2093-05-11&limit=100', { region: calendarRegionId });
+      assert.deepStrictEqual(
+        dayEleven.body.events.map(event => event.id), [calendarMultiDayId],
+        'a middle day of the span lists the multi-day event alone — even though its event_date is elsewhere'
+      );
+    });
+  } finally {
+    if (calendarEventIds.length) {
+      await db.execute(
+        `DELETE FROM events WHERE id IN (${calendarEventIds.map(() => '?').join(', ')})`, calendarEventIds
+      );
+    }
+    await db.execute('DELETE FROM regions WHERE id IN (?, ?)', [calendarRegionId, calendarOtherRegionId]);
+  }
+
   console.log('\nAuth');
   await test('POST /api/auth/register creates an account', async () => {
     const { status, body } = await api('POST', '/api/auth/register', {

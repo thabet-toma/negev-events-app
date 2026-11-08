@@ -6592,9 +6592,21 @@ function refreshEventsFeed() {
   showToast('🔄 تم تحديث المناسبات');
 }
 
-// Agenda Calendar state & functions
+// Agenda Calendar state & functions (تذكرة #175)
 let agendaCurrentDate = new Date();
 let agendaSelectedDate = new Date();
+// عدّ الأيام يأتي من `GET /api/events/calendar` وحده، لا من `allEvents` المحلية:
+// الخادم هو من يعرف امتداد المناسبة كاملاً (`EVENT_SPAN_*` — event_end_date
+// ويوم الحنّة وسهرة الشباب) وبوابة الظهور العام. العدّ في العميل على
+// `event_date` وحده كان يعدّ المناسبة ثلاثة أيام واحداً، ويعدّ `link_only`
+// وهي غائبة عن كل قائمة.
+let agendaDayCounts = {};
+// هوية العدّ الذي في الذاكرة: لا يصلح عدّ شهر/محافظة تحت شهر أو محافظة أخرى.
+let agendaDayCountsIdentity = null;
+// فلتر المحافظة **داخل التقويم وحده** — `null` = كل المحافظات. لا يغيّر
+// المحافظة المكتشفة المحفوظة (`negev_region`) ولا ترويسة `X-Region` التي
+// تحملها التغذية والخريطة: التقويم يقرأ فلتره من اختيار المستخدم هنا.
+let agendaRegionId = null;
 const AR_MONTHS_NAMES = [
   'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
   'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
@@ -6606,6 +6618,40 @@ function openAgendaModal() {
   if (modal) modal.style.display = 'flex';
   agendaCurrentDate = new Date();
   agendaSelectedDate = new Date();
+  populateAgendaRegionFilter();
+  // أول فتح قد يسبق وصول GET /api/towns — يُعاد ملء الفلتر حين تصل المحافظات،
+  // بلا انتظار النقرة عليه (وبلا خطأ إن انقطعت الشبكة: يبقى «كل المحافظات»).
+  if (!regionsList.length) {
+    loadTownCoordinates().then(() => populateAgendaRegionFilter()).catch(() => {});
+  }
+  renderAgendaCalendar();
+}
+
+/**
+ * يملأ فلتر المحافظة من `GET /api/towns` — `activeRegionsList()` القائمة نفسها
+ * التي يرسم بها منتقي المحافظة، فلا اسم محافظة مكتوب في هذا الملف.
+ *
+ * واختيار لم تبقَ محافظته نشطة يعود إلى «كل المحافظات»: قائمة لا تحمل القيمة
+ * الحالية تُظهر أول خيار كأنه المختار، فيصمت الفلتر عن أنه لم يعد يعني شيئاً.
+ */
+function populateAgendaRegionFilter() {
+  const select = document.getElementById('agendaRegionFilter');
+  if (!select) return;
+  const regions = activeRegionsList();
+  if (agendaRegionId !== null && !regions.some(region => region.id === agendaRegionId)) {
+    agendaRegionId = null;
+  }
+  select.innerHTML = [
+    '<option value="">كل المحافظات</option>',
+    ...regions.map(region => `<option value="${region.id}">${escapeHtml(region.name)}</option>`)
+  ].join('');
+  select.value = agendaRegionId === null ? '' : String(agendaRegionId);
+}
+
+/** تبديل فلتر المحافظة داخل التقويم: يُعاد عدّ الشهر وقائمة اليوم معاً. */
+function onAgendaRegionChange(value) {
+  const regionId = Number.parseInt(value, 10);
+  agendaRegionId = Number.isInteger(regionId) && regionId > 0 ? regionId : null;
   renderAgendaCalendar();
 }
 
@@ -6615,33 +6661,46 @@ function closeAgendaModal() {
 }
 
 function changeAgendaMonth(delta) {
-  agendaCurrentDate.setMonth(agendaCurrentDate.getMonth() + delta);
+  agendaCurrentDate = new Date(agendaCurrentDate.getFullYear(), agendaCurrentDate.getMonth() + delta, 1);
   renderAgendaCalendar();
 }
 
-function renderAgendaCalendar() {
-  const year = agendaCurrentDate.getFullYear();
-  const month = agendaCurrentDate.getMonth();
-  const monthDisplay = document.getElementById('agendaMonthDisplay');
-  if (monthDisplay) {
-    monthDisplay.textContent = `${AR_MONTHS_NAMES[month]} ${year}`;
+/**
+ * عدّ أيام الشهر من مسار التقويم العام — `{ days: [{ date, count }] }`.
+ * `region: false` عمداً: فلتر المحافظة هنا هو `region_id` الصريح وحده، والمسار
+ * لا يقرأ ترويسة `X-Region` (تلك تقييد التغذية والخريطة)، فلا تُرسَل معه.
+ *
+ * والمحافظة تُمرَّر **وسيطاً** لا تُقرأ من المتغيّر العام: هوية الطلب تُلتقط
+ * قبل النداء، فجوابُ نقرٍ متأخّر يُقارَن بهويته لا بهوية ما هو مختار الآن.
+ */
+async function fetchAgendaDayCounts(monthKey, regionId) {
+  const query = [`month=${encodeURIComponent(monthKey)}`];
+  if (regionId !== null) query.push(`region_id=${encodeURIComponent(regionId)}`);
+  try {
+    const res = await apiFetch(`/api/events/calendar?${query.join('&')}`, { region: false });
+    const data = await res.json();
+    const counts = {};
+    if (data && data.success && Array.isArray(data.days)) {
+      data.days.forEach(day => { counts[day.date] = Number(day.count) || 0; });
+    }
+    return counts;
+  } catch (e) {
+    // انقطاع أو ردّ غير متوقَّع: تقويم بلا نقاط أصدق من تقويم يخمّن.
+    console.error('Agenda calendar error:', e);
+    return {};
   }
+}
 
+/** يرسم شبكة الشهر من `agendaDayCounts` وحدها (بلا شبكة) — فالنقر لا يعيد الجلب. */
+function renderAgendaGrid() {
   const grid = document.getElementById('agendaDaysGrid');
   if (!grid) return;
 
-  const firstDay = new Date(year, month, 1);
-  const startingDay = firstDay.getDay(); // 0 = Sunday
+  const year = agendaCurrentDate.getFullYear();
+  const month = agendaCurrentDate.getMonth();
+  const startingDay = new Date(year, month, 1).getDay(); // 0 = الأحد
   const totalDays = new Date(year, month + 1, 0).getDate();
   const prevMonthTotalDays = new Date(year, month, 0).getDate();
-
-  const eventDateCounts = {};
-  allEvents.forEach(evt => {
-    if (evt.event_date) {
-      eventDateCounts[evt.event_date] = (eventDateCounts[evt.event_date] || 0) + 1;
-    }
-  });
-
   const todayStr = isoLocalDay(new Date());
   const selectedDateStr = isoLocalDay(agendaSelectedDate);
 
@@ -6658,12 +6717,17 @@ function renderAgendaCalendar() {
     const fullDateStr = `${year}-${monthStr}-${dayStr}`;
     const isToday = fullDateStr === todayStr;
     const isSelected = fullDateStr === selectedDateStr;
-    const hasEvents = Boolean(eventDateCounts[fullDateStr]);
+    const count = agendaDayCounts[fullDateStr] || 0;
+    // نقطة ذهبية لمناسبة واحدة وحمراء لاثنتين فأكثر — صنفان صريحان لكل لون،
+    // لا نقطة واحدة بلون واحد كما كان الحال قبل التذكرة.
+    const dotClass = count >= 2
+      ? 'agenda-day-dot agenda-day-dot-many'
+      : (count === 1 ? 'agenda-day-dot agenda-day-dot-single' : '');
 
     html += `
-      <div class="agenda-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" onclick="selectAgendaDate('${fullDateStr}')">
+      <div class="agenda-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" data-date="${fullDateStr}" onclick="selectAgendaDate('${fullDateStr}')">
         <span>${d}</span>
-        ${hasEvents ? '<span class="agenda-day-dot"></span>' : ''}
+        ${dotClass ? `<span class="${dotClass}"></span>` : ''}
       </div>
     `;
   }
@@ -6675,33 +6739,163 @@ function renderAgendaCalendar() {
   }
 
   grid.innerHTML = html;
-  renderAgendaSelectedDayEvents(selectedDateStr);
+}
+
+function agendaCalendarIdentity(monthKey, regionId) {
+  return `${monthKey}|${regionId === null ? 'null' : regionId}`;
+}
+
+async function renderAgendaCalendar() {
+  const year = agendaCurrentDate.getFullYear();
+  const month = agendaCurrentDate.getMonth();
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+  // هوية الطلب — الشهر **والمحافظة** — تُلتقط قبل النداء وتُقارَن بعد وصول
+  // الجواب وقبل أي كتابة حالة. تبديل المحافظة أ ثم ب قد يستقبل جواب أ أخيراً،
+  // فتُقبل أعدادُ أ وتناقض الاختيار. الحارس بالقيمة، لا بترتيب الطلبات ولا
+  // بإلغائها: كل ما يغيّر الطلب داخل الهوية.
+  const regionId = agendaRegionId;
+  const countsIdentity = agendaCalendarIdentity(monthKey, regionId);
+
+  const monthDisplay = document.getElementById('agendaMonthDisplay');
+  if (monthDisplay) {
+    monthDisplay.textContent = `${AR_MONTHS_NAMES[month]} ${year}`;
+  }
+
+  const grid = document.getElementById('agendaDaysGrid');
+  if (!grid) return;
+
+  // لا تظهر نقاطُ هوية سابقة أثناء جلب الهوية الجديدة: الحارس أدناه يحمي من
+  // جوابٍ متأخّر، لكنه لا يمسح ما رُسم من الطلب السابق قبل أن يصل الجواب الجديد.
+  if (agendaDayCountsIdentity !== null && agendaDayCountsIdentity !== countsIdentity) {
+    agendaDayCounts = {};
+    agendaDayCountsIdentity = null;
+    renderAgendaGrid();
+  }
+
+  // إلى متغيّر محلي عمداً: الكتابة على `agendaDayCounts` قبل الحارس تجعل كل
+  // جوابٍ متأخّر يكتب العدّ الذي سيُرسم بعده، فيصير الحارس بلا أثر.
+  const counts = await fetchAgendaDayCounts(monthKey, regionId);
+  if (agendaCurrentDate.getFullYear() !== year || agendaCurrentDate.getMonth() !== month
+    || agendaRegionId !== regionId) return;
+
+  agendaDayCounts = counts;
+  agendaDayCountsIdentity = countsIdentity;
+  renderAgendaGrid();
+  renderAgendaSelectedDayEvents(isoLocalDay(agendaSelectedDate));
+}
+
+// حجم الصفحة في `GET /api/events` — سقف الخادم نفسه (DEFAULT/MAX في
+// `events.service.js`)، فلا صفحة أكبر منه ولا حدّ أضيق يخفي ما بعده.
+const AGENDA_DAY_PAGE_SIZE = 100;
+// توقّف احتياطي للحلقة: عشرون صفحة = ألفا مناسبة في يوم واحد، ولا يوم بلغه،
+// ووجود السقف يمنع حلقةً لا تنقضي لو أعاد الخادم صفحاتٍ لا تنتهي.
+const AGENDA_DAY_MAX_PAGES = 20;
+
+/**
+ * مناسبات يومٍ بعينه من `GET /api/events` القائم (`date_from` و`date_to`
+ * متساويان): الخادم يطابق بالتقاطع على الامتداد نفسه الذي يعدّ به التقويم،
+ * فما يعدّه التقويم يومَ D هو ما يعود هنا يومَ D — لا مصفوفة محلية ثانية.
+ *
+ * **والصفحات كلها تُحمَّل** حتى `pagination.totalPages`: الصفحة الواحدة سقفها
+ * مئة، ويومٌ فيه ١٠١ مناسبة كان يعرض ١٠٠ ويعلن رقماً لا يمكن الوصول إلى ما
+ * بعده. والعدّ المعلن `pagination.total` من الخادم لا طول ما وصل.
+ *
+ * والمحافظة تمرّ كما يراها المستخدم في التقويم: محافظةً محدّدة في ترويسة
+ * `X-Region` (‏`region: false` كي لا تعلو عليها المحافظة المحفوظة)، أو
+ * `all_regions=1` حين يكون الفلتر «كل المحافظات». وهي وسيط هنا كذلك، فحارس
+ * اليوم في المستدعي يُقارن هوية الطلب لا الاختيار اللاحق.
+ *
+ * تعيد `{ events, total, truncated, failed }`؛ `truncated` تعني أن ما وصل أقل
+ * من عدّ الخادم (سقف الصفحات أو صفحة فارغة)، و`failed` يفصل فشل الجلب عن يوم
+ * فارغ حقيقي كي لا تعلن الواجهة صفراً لا تعرفه.
+ */
+async function fetchAgendaDayEvents(dateStr, regionId) {
+  const options = regionId === null
+    ? { allRegions: true }
+    : { region: false, headers: { 'X-Region': String(regionId) } };
+  const events = [];
+  let total = 0;
+  let page = 1;
+  let lastPage = 1;
+
+  while (true) {
+    const query = `date_from=${encodeURIComponent(dateStr)}&date_to=${encodeURIComponent(dateStr)}`
+      + `&limit=${AGENDA_DAY_PAGE_SIZE}&page=${page}`;
+    let data;
+    try {
+      const res = await apiFetch(`/api/events?${query}`, options);
+      data = await res.json();
+    } catch (e) {
+      // انقطاع أو ردّ غير متوقَّع: قائمةٌ جزئية تعدّ نصف اليوم أسوأ من لا شيء،
+      // فترجع القائمة فارغة كما كانت قبل الترقيم.
+      console.error('Agenda day events error:', e);
+      return { events: [], total: 0, truncated: false, failed: true };
+    }
+    if (!data || !data.success || !Array.isArray(data.events)) {
+      return { events: [], total: 0, truncated: false, failed: true };
+    }
+
+    events.push(...data.events);
+    const pagination = data.pagination || {};
+    total = Number(pagination.total) || events.length;
+    lastPage = Math.max(1, Number(pagination.totalPages) || 1);
+
+    if (page >= lastPage) break; // آخر صفحة: الحلقة تمّت
+    if (!data.events.length) break; // صفحة فارغة قبل النهاية: توقّف احتياطي
+    if (page >= AGENDA_DAY_MAX_PAGES) break; // سقف الصفحات
+    page += 1;
+  }
+
+  return { events, total, truncated: events.length < total, failed: false };
 }
 
 function selectAgendaDate(dateStr) {
   agendaSelectedDate = new Date(dateStr + 'T00:00:00');
-  renderAgendaCalendar();
+  // تمييز اليوم فوراً بلا إعادة جلب عدّ الشهر — الجلب لِما تحته وحده.
+  renderAgendaGrid();
+  renderAgendaSelectedDayEvents(dateStr);
 }
 
-function renderAgendaSelectedDayEvents(dateStr) {
+async function renderAgendaSelectedDayEvents(dateStr) {
   const labelEl = document.getElementById('agendaSelectedDateLabel');
   const countBadge = document.getElementById('agendaDayCountBadge');
   const listEl = document.getElementById('agendaEventsList');
   if (!listEl) return;
 
-  const eventsOnDate = allEvents.filter(e => e.event_date === dateStr);
   const d = new Date(dateStr + 'T00:00:00');
   const formattedDate = `${d.getDate()} ${AR_MONTHS_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+  // هوية الطلب هنا اليوم **والمحافظة** معاً: تبديل المحافظة يعيد طلب اليوم
+  // نفسه، فحارس اليوم وحده يُبقي قائمة المحافظة السابقة تحت العنوان الجديد.
+  const regionId = agendaRegionId;
 
   if (labelEl) labelEl.textContent = `مناسبات ${formattedDate}`;
-  if (countBadge) countBadge.textContent = `${eventsOnDate.length} مناسبة`;
+  if (countBadge) countBadge.textContent = '…';
+  // امسح عناصر اليوم السابق قبل أي انتظار: لا تبقى مناسبة قابلة للنقر تحت
+  // عنوان يوم جديد على اتصال بطيء.
+  listEl.innerHTML = '<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">جارٍ تحميل مناسبات اليوم…</p>';
 
-  if (!eventsOnDate.length) {
+  const { events, total, truncated, failed } = await fetchAgendaDayEvents(dateStr, regionId);
+  // اختير يوم آخر أو محافظة أخرى أثناء الجلب: لا تُرسم شارةُ ولا قائمةُ طلبٍ
+  // قديم — ولا حتى مسار «لا توجد مناسبات» وهو كتابةُ حالة كذلك.
+  if (isoLocalDay(agendaSelectedDate) !== dateStr || agendaRegionId !== regionId) return;
+
+  if (failed) {
+    // ليس صفراً: لا نعرف عدد اليوم ولا إن كانت القائمة فارغة فعلاً.
+    if (countBadge) countBadge.textContent = '—';
+    listEl.innerHTML = '<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">تعذّر تحميل مناسبات هذا اليوم — تحقّق من الاتصال وحاول مرة أخرى</p>';
+    return;
+  }
+
+  // الشارة `total` من الخادم لا طول ما وصل: توقّفُ الحلقة قبل النهاية لا
+  // يجعل اليوم يعلن عدداً أقل مما عدّه تقويمه.
+  if (countBadge) countBadge.textContent = `${total} مناسبة`;
+
+  if (!events.length) {
     listEl.innerHTML = `<p class="empty-state" style="padding:14px; text-align:center; font-size:0.88rem; color:var(--ink-soft);">لا توجد مناسبات مسجلة في هذا اليوم</p>`;
     return;
   }
 
-  listEl.innerHTML = eventsOnDate.map(evt => `
+  listEl.innerHTML = events.map(evt => `
     <div class="agenda-event-item" onclick="closeAgendaModal(); navigateToEvent(${evt.id});">
       <div>
         <div class="agenda-event-title">${escapeHtml(evt.title || evt.groom_name)}</div>
@@ -6712,7 +6906,11 @@ function renderAgendaSelectedDayEvents(dateStr) {
       </div>
       <i class="fa-solid fa-chevron-left" style="color:var(--ink-faint);"></i>
     </div>
-  `).join('');
+  `).join('') + (truncated
+    // سطر واحد حين تُعرض قائمة ناقصة: الشارة تعدّ اليوم كله والقائمة أقلّ،
+    // فبلا هذا السطر يبدو الفرق عطلاً لا حدّاً.
+    ? `<p style="padding:10px 14px; text-align:center; font-size:0.82rem; color:var(--ink-soft);">تُعرض أول ${events.length} من ${total} مناسبة</p>`
+    : '');
 }
 
 // 12. Occasion Type Picker & Dynamic Publish Form (#20 step 9)

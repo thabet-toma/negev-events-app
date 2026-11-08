@@ -20,7 +20,7 @@ const cloudinary = require('../services/cloudinary.service');
 const { authenticate, optionalAuthenticate, ADMIN_ROLES } = require('../middleware/auth');
 const { regionIdForRequest } = require('../middleware/region');
 const {
-  cleanString, requireDate, optionalDate, parseCoordinate, parseId, optionalId, parseHonorees,
+  cleanString, requireDate, optionalDate, requireMonth, parseCoordinate, parseId, optionalId, parseHonorees,
   parseEventDays, parseCsvList, parseFlag, parseEventVisibility, parsePartySize,
   parsePublishAt, samePublishMinute, MAX_HONOREES
 } = require('../middleware/validate');
@@ -170,6 +170,31 @@ router.get('/towns', asyncHandler(async (req, res) => {
     regions_soon: discovery.soon,
     villages: await villages.listActive(),
     stats: await events.townStats()
+  });
+}));
+
+/**
+ * تقويم الشهر (تذكرة #175) — عام، بلا مصادقة: `?month=YYYY-MM` إلزامي
+ * و`?region_id=` اختياري. يعيد `{ days: [{ date, count }] }` لما فيه مناسبة
+ * وحدها، بلا صفوف صفرية.
+ *
+ * **قبل `/events/:id` عمداً** (ترتيب التسجيل هو الذي يحكم في Express): وإلا
+ * التقط `:id` كلمة `calendar` فردّ عليها `parseId` بخطأ 400 عن معرّف مناسبة.
+ *
+ * و`region_id` يُقرأ من الاستعلام صراحةً، لا من `regionIdForRequest`: تقويم
+ * الشهر يفلتره القارئ بنفسه (بينها «كل المحافظات»)، فلا يُقيَّد بمحافظة
+ * الاكتشاف المحفوظة التي تحملها ترويسة `X-Region` وحدها التغذية والخريطة.
+ *
+ * و`legacyOnly` كالتغذية والخريطة: عميل بلا `X-App-Version` لا يرى إلا نوع
+ * المناسبة الأول، فلا يُعَدّ له نوع لا يستطيع رسمه.
+ */
+router.get('/events/calendar', asyncHandler(async (req, res) => {
+  const month = requireMonth(req.query.month);
+  const regionId = optionalId(req.query.region_id, 'المحافظة');
+
+  res.json({
+    success: true,
+    ...(await events.listCalendarDays({ month, regionId, legacyOnly: isLegacyClient(req) }))
   });
 }));
 

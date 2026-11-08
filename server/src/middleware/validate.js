@@ -5,6 +5,8 @@ const { MAX_EVENT_DAYS, EVENT_VISIBILITIES, RSVP_PARTY_SIZE_MAX } = require('../
 const { zonedTimeToUtc } = require('../utils/jerusalemTime');
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+/** `YYYY-MM` — شهر كامل، بالشكل الذي يطلبه تقويم الشهر وحده (تذكرة #175). */
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 const PHONE_PATTERN = /^0\d{8,9}$/;
 
 /** Trims a value and enforces a maximum length; returns null when empty. */
@@ -40,6 +42,22 @@ function optionalDate(value) {
   const cleaned = cleanString(value, 10);
   if (!cleaned) return null;
   return isValidDate(cleaned) ? cleaned : null;
+}
+
+/**
+ * شهر بصيغة `YYYY-MM` صارمة — `GET /api/events/calendar?month=` (تذكرة #175).
+ *
+ * **لا يُقصّ الطول قبل الفحص** (بخلاف `cleanString(value, 7)`): القصّ يجعل
+ * `2093-10abc` يُمرَّر منقوصاً إلى `2093-10`، فيُجيب الطلب شهراً لم يطلبه أحد.
+ * والنمط نفسه يفرض الطول (٤ أرقام + شرطة + شهرين) ومدى الشهر `01`..`12`،
+ * فالقيمة الغائبة أو الفارغة أو `2093-5` أو `2093-13` تُرفض 400 عربية.
+ */
+function requireMonth(value, label = 'الشهر') {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (!MONTH_PATTERN.test(text)) {
+    throw ApiError.badRequest(`${label} غير صالح — الصيغة المطلوبة YYYY-MM`);
+  }
+  return text;
 }
 
 /**
@@ -430,6 +448,7 @@ module.exports = {
   isValidDate,
   requireDate,
   optionalDate,
+  requireMonth,
   optionalDateTime,
   parsePublishAt,
   samePublishMinute,

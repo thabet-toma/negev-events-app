@@ -310,8 +310,7 @@ class _HomeShellState extends State<HomeShell> {
   /// يفتحها «حسابي»، فاختيار المحافظة بلا نسخة ثانية من الورقة ولا من منطقها.
   Future<void> _openRegionSheet() => showRegionOnboardingSheet(context);
 
-  /// زرّ الأجندة — «أجندة المناسبات» القائمة (`AgendaScreen`) إلى أن تكتمل
-  /// تذكرة تقويم الشهر (#175). لا شاشة ثانية ولا نداء جديد.
+  /// زرّ الأجندة يفتح `AgendaScreen`، تقويم الشهر بعد تذكرة #175.
   void _openAgenda() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const AgendaScreen()),

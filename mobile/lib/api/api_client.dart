@@ -98,12 +98,15 @@ class ApiClient {
   /// لا تُقارَن على الخادم، فرقم ثابت كافٍ (events.routes.js: isLegacyClient).
   static const String _appVersionHeader = '1';
 
-  Map<String, String> _headers({bool auth = false, bool json = false}) {
+  Map<String, String> _headers({bool auth = false, bool json = false, String? regionHeader}) {
     final headers = <String, String>{
       'Accept': 'application/json',
       'X-App-Version': _appVersionHeader,
     };
-    final region = regionId;
+    // ترويسة نداءٍ بعينه تغلب المحافظة العامة: قائمة مناسبات اليوم في «الأجندة»
+    // تمضي بمحافظة التقويم نفسها (أو «كل المحافظات» علماً)، فلا يجوز أن يضيّقها
+    // الاختيار المحفوظ في `regionId` وهو اختيار سطح الاكتشاف لا هذا الفلتر.
+    final region = regionHeader ?? regionId;
     if (region != null && region.isNotEmpty) headers['X-Region'] = region;
     if (json) headers['Content-Type'] = 'application/json; charset=utf-8';
     if (auth && token != null && token!.isNotEmpty) {
@@ -112,13 +115,19 @@ class ApiClient {
     return headers;
   }
 
+  /// [regionHeader] — محافظة **هذا النداء** وحدها، بدل `regionId` العام:
+  /// تستعمله قائمة مناسبات اليوم في «الأجندة» بمحافظة التقويم. وتقويم الشهر نفسه
+  /// (`calendarDays`) لا يمرّره: محافظته تُرسَل `region_id` في الاستعلام، وترويسة
+  /// المحافظة المحفوظة تخرج معه ويُهملها الخادم لهذا المسار عمداً.
+  /// غيابه يعني الترويسة العامة كما كانت حرفاً بحرف.
   Future<Map<String, dynamic>> get(
     String path, {
     Map<String, String>? query,
     bool auth = false,
+    String? regionHeader,
   }) async {
     return _send(
-      () => _client.get(_uri(path, query), headers: _headers(auth: auth)),
+      () => _client.get(_uri(path, query), headers: _headers(auth: auth, regionHeader: regionHeader)),
       auth: auth,
     );
   }
