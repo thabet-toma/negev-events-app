@@ -13,7 +13,7 @@
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
 | `server/src` | 79 | 24705 |
-| `web` | 7 | 19891 |
+| `web` | 8 | 19991 |
 | `mobile/lib` | 66 | 29733 |
 
 ### توزيع `server/src`
@@ -38,11 +38,12 @@
 |---|---|
 | `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 10877 |
+| `app.js` | 10875 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
-| `sw.js` | 213 |
+| `sw.js` | 223 |
+| `theme-boot.js` | 92 |
 
 `web/` كله HTML وCSS بلا خطوة بناء؛ `web/serve.js` خادم الملفات الثابتة المحلي وحده.
 
@@ -68,7 +69,7 @@
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:145` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
-| واجهة الويب | `web/app.js:335` · `web/admin.js` · `web/api.js:60` |
+| واجهة الويب | `web/app.js:339` · `web/admin.js` · `web/api.js:60` |
 | تطبيق الموبايل | `mobile/lib/api/negev_api.dart:21` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.

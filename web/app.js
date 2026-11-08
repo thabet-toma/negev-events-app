@@ -62,7 +62,8 @@ let posterCropDecodeFailed = false;
 let eventSubmitInFlight = false;
 const POSTER_CROP_MAX_DIMENSION = 1600; // longest edge cap on the exported crop
 const POSTER_CROP_MIN_SIZE = 40; // smallest crop rectangle edge, in working-canvas pixels
-// width ÷ height — the event card's 4:5 poster ratio (web/styles.css:1419, ticket #178)
+// width ÷ height — the event card's 4:5 poster ratio (the `aspect-ratio` of
+// `.event-card .card-media` in web/styles.css, ticket #178)
 const POSTER_CROP_ASPECT = 4 / 5;
 const POSTER_CROP_MAX_EDITOR_WIDTH = 560; // fits a phone screen without CSS-scaling the canvas unpredictably
 
@@ -328,31 +329,28 @@ document.addEventListener('DOMContentLoaded', () => {
   if (nokootDateInput) nokootDateInput.value = today;
 });
 
-// -1. Light/dark theme — data-theme on <html>, persisted in localStorage.
-// Absence of a saved choice means "follow the system" (#20 step 11): styles.css
-// already reacts to prefers-color-scheme on its own, so with nothing stored we
-// simply never set data-theme and let that media query decide.
+// -1. Light/dark theme (#20 step 11, #179). Reading the saved choice and
+// putting data-theme on <html> belongs to `web/theme-boot.js`, which every page
+// loads in <head> BEFORE its styles — that is what keeps a saved dark choice
+// from flashing light on the first paint. This file owns the button alone:
+// flip, persist, icon; it builds on the bootstrap instead of repeating it.
+// Absence of a saved choice means "follow the system": theme-boot.js sets no
+// attribute then, and the prefers-color-scheme media query decides.
 function initTheme() {
-  const saved = localStorage.getItem('negev_theme');
-  if (saved === 'dark' || saved === 'light') {
-    document.documentElement.setAttribute('data-theme', saved);
-  }
+  window.NegevTheme.apply();
   updateThemeToggleIcon();
+  // A system-preference change repaints the page by itself (the media query);
+  // only the icon needs recomputing, and theme-boot.js is what announces it.
+  document.addEventListener('negev:themechange', updateThemeToggleIcon);
 }
 
 function toggleTheme() {
-  const isDark = currentThemeIsDark();
-  const next = isDark ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('negev_theme', next);
+  window.NegevTheme.toggle();
   updateThemeToggleIcon();
 }
 
 function currentThemeIsDark() {
-  const attr = document.documentElement.getAttribute('data-theme');
-  if (attr === 'dark') return true;
-  if (attr === 'light') return false;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return window.NegevTheme.isDark();
 }
 
 function updateThemeToggleIcon() {

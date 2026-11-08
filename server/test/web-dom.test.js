@@ -177,6 +177,7 @@ const STYLES_CSS_RAW = fs.readFileSync(path.join(WEB_DIR, 'styles.css'), 'utf8')
 const CONFIG_JS = fs.readFileSync(path.join(WEB_DIR, 'config.js'), 'utf8');
 const API_JS = fs.readFileSync(path.join(WEB_DIR, 'api.js'), 'utf8');
 const OCCASION_FORM_JS = fs.readFileSync(path.join(WEB_DIR, 'occasionForm.js'), 'utf8');
+const THEME_BOOT_JS = fs.readFileSync(path.join(WEB_DIR, 'theme-boot.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(WEB_DIR, 'app.js'), 'utf8');
 const SW_JS = fs.readFileSync(path.join(WEB_DIR, 'sw.js'), 'utf8');
 
@@ -194,8 +195,14 @@ const SW_JS = fs.readFileSync(path.join(WEB_DIR, 'sw.js'), 'utf8');
 // occasionForm.js and app.js concatenated as ONE script — exactly the scope a
 // browser would give them — sidesteps that without changing a single byte of
 // any of them.
+//
+// theme-boot.js (#179) goes FIRST, in the same position it holds in the real
+// <head>: app.js reads `window.NegevTheme` as soon as its DOMContentLoaded
+// handler runs, and the saved theme must already be on <html> by then. Its
+// `'use strict'` lives inside its own IIFE, so the concatenation stays sloppy
+// mode — exactly what separate <script> tags give a browser.
 const HTML_WITHOUT_SCRIPTS = INDEX_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
-const COMBINED_SCRIPT = [CONFIG_JS, API_JS, OCCASION_FORM_JS, APP_JS].join('\n;\n');
+const COMBINED_SCRIPT = [THEME_BOOT_JS, CONFIG_JS, API_JS, OCCASION_FORM_JS, APP_JS].join('\n;\n');
 
 // ---------------------------------------------------------------------------
 // Fixtures — shaped exactly like GET /api/occasion-types
@@ -208,7 +215,10 @@ const COMBINED_SCRIPT = [CONFIG_JS, API_JS, OCCASION_FORM_JS, APP_JS].join('\n;\
 const ADMIN_HTML_RAW = fs.readFileSync(path.join(WEB_DIR, 'admin.html'), 'utf8');
 const ADMIN_JS = fs.readFileSync(path.join(WEB_DIR, 'admin.js'), 'utf8');
 const ADMIN_HTML_WITHOUT_SCRIPTS = ADMIN_HTML_RAW.replace(/<script[\s\S]*?<\/script>/gi, '');
-const ADMIN_COMBINED_SCRIPT = [CONFIG_JS, API_JS, OCCASION_FORM_JS, ADMIN_JS].join('\n;\n');
+// theme-boot.js is prepended here too: admin.html loads it in <head> before
+// admin.css, and the panel must honour the choice saved on the public site
+// (#179). admin.js itself never reads `window.NegevTheme`.
+const ADMIN_COMBINED_SCRIPT = [THEME_BOOT_JS, CONFIG_JS, API_JS, OCCASION_FORM_JS, ADMIN_JS].join('\n;\n');
 
 // The two stylesheets are read as text, not parsed: jsdom implements no layout
 // and loads no external CSS here, so there is nothing to compute a style from.
@@ -673,12 +683,35 @@ function installPushFakes(window, options = {}) {
 }
 
 /**
+ * One `matchMedia` fake for every env in this file. It answers honestly for the
+ * ONE query that changes what the page does — `prefers-color-scheme: dark` —
+ * and `false` for the rest (`display-mode: standalone`, `hover`/`pointer`),
+ * which is what a desktop browser in light mode reports. Before #179 it was a
+ * flat `matches: false`, so no test could represent a dark device at all.
+ */
+function buildMatchMedia(query, colorScheme) {
+  return {
+    matches: colorScheme === 'dark' && /prefers-color-scheme:\s*dark/.test(query),
+    media: query,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {}
+  };
+}
+
+/**
  * Builds one fresh jsdom document with web/'s three scripts evaluated into
  * it, real CDN globals (L, Chart, io) and browser-only APIs (fetch,
  * matchMedia, canvas 2D, rAF) stubbed at the seam beforehand — never by
  * editing app.js. `loggedIn` seeds localStorage before evaluation, because
  * app.js reads negev_user/negev_token into module state at load time, the
  * same way a real page load would.
+ *
+ * `savedTheme` seeds `negev_theme` before evaluation (any string — a corrupt
+ * one included), which is how a real returning visitor arrives: the choice is
+ * already in storage when the first script runs. `colorScheme` is the device
+ * preference the matchMedia fake reports.
  *
  * `apiBase` sets config.js's `apiBase` in the evaluated source itself: api.js
  * reads it once into its top-level `const API_BASE`, so patching
@@ -687,7 +720,16 @@ function installPushFakes(window, options = {}) {
  * seam. `url` moves `window.location` independently, which is what makes the
  * two origins actually differ.
  */
-function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://localhost/', welcomeSeen = true, apiBase = '' } = {}) {
+function buildEnv({
+  loggedIn = false,
+  userAgent,
+  onBeforeEval,
+  url = 'http://localhost/',
+  welcomeSeen = true,
+  apiBase = '',
+  colorScheme = 'light',
+  savedTheme = null
+} = {}) {
   const virtualConsole = new VirtualConsole(); // swallow jsdom's own "not implemented" noise; real throws still propagate
   const dom = new JSDOM(HTML_WITHOUT_SCRIPTS, {
     url,
@@ -710,6 +752,12 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
     window.localStorage.setItem('negev_welcome_seen', 'seen');
   }
 
+  // الاختيار المحفوظ يسبق تحميل أي سكربت في الزيارة الحقيقية (#179)، فيُزرع
+  // هنا قبل التقييم — وإلا قرأ theme-boot.js تخزيناً فارغاً.
+  if (savedTheme !== null) {
+    window.localStorage.setItem('negev_theme', savedTheme);
+  }
+
   // The install hint is the one thing here that branches on the device, and it
   // branches on the user agent. jsdom has no constructor option for this —
   // its `userAgent` option belongs to the resource loader and never reaches
@@ -723,9 +771,7 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
   window.io = () => ({ on() {}, off() {}, emit() {} });
   window.L = buildFakeLeaflet();
   window.Chart = function FakeChart() { return { destroy() {}, update() {} }; };
-  window.matchMedia = () => ({
-    matches: false, addListener() {}, addEventListener() {}, removeListener() {}, removeEventListener() {}
-  });
+  window.matchMedia = (query) => buildMatchMedia(query, colorScheme);
   window.alert = () => {};
   window.confirm = () => true;
   window.requestAnimationFrame = cb => setTimeout(cb, 16);
@@ -751,8 +797,12 @@ function buildEnv({ loggedIn = false, userAgent, onBeforeEval, url = 'http://loc
  * The same seam for web/admin.html. Deliberately thinner than buildEnv(): the
  * admin panel talks to nothing until a token exists, so an unauthenticated load
  * is enough to drive a form open by hand, which is all these tests do.
+ *
+ * `savedTheme` seeds `negev_theme` before evaluation, exactly as buildEnv()'s
+ * does: the panel reads the same key and must honour the choice made on the
+ * public site (#179).
  */
-function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url = 'http://localhost/admin.html' } = {}) {
+function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url = 'http://localhost/admin.html', savedTheme = null } = {}) {
   const virtualConsole = new VirtualConsole();
   const dom = new JSDOM(ADMIN_HTML_WITHOUT_SCRIPTS, {
     url,
@@ -764,6 +814,10 @@ function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url
   if (loggedIn) {
     window.localStorage.setItem('negev_admin_token', 'test-admin-token');
     window.localStorage.setItem('negev_admin_role', role);
+  }
+
+  if (savedTheme !== null) {
+    window.localStorage.setItem('negev_theme', savedTheme);
   }
 
   const defaultFetch = buildFetchStub();
@@ -779,9 +833,7 @@ function buildAdminEnv({ loggedIn = false, role = 'super_admin', towns = [], url
   };
   window.alert = () => {};
   window.confirm = () => true;
-  window.matchMedia = () => ({
-    matches: false, addListener() {}, addEventListener() {}, removeListener() {}, removeEventListener() {}
-  });
+  window.matchMedia = (query) => buildMatchMedia(query, 'light');
   window.Chart = function FakeChart() { return { destroy() {}, update() {} }; };
   window.L = buildFakeLeaflet();
   window.HTMLCanvasElement.prototype.getContext = () => buildFakeCanvasContext();
@@ -17192,7 +17244,8 @@ async function run() {
         '/icons/icon.svg',
         '/index.html',
         '/occasionForm.js',
-        '/styles.css'
+        '/styles.css',
+        '/theme-boot.js'
       ],
       'expected exactly the page, its local scripts/styles and its own icons'
     );
@@ -18007,6 +18060,163 @@ async function run() {
       { isMourning: true }
     );
     assert.strictEqual(solemn, '', 'a funeral carries no counter, whatever the fields say');
+  });
+
+  console.log('\nالوضع الداكن — الجهاز افتراضاً، والمفتاح يغلبه ويُحفظ (تذكرة #179)');
+
+  /**
+   * أرضية الصفحة في الوضعين كما تعرّفها styles.css نفسها. تُقرأ من الملف لا
+   * تُكتب هنا مرتين: لو تغيّرت `--ground` الداكنة في الأنماط وبقيت نسخة
+   * theme-boot.js قديمة، سقط اختبار `theme-color` أدناه.
+   */
+  const DARK_GROUND = /:root\[data-theme="dark"\]\s*\{[^}]*?--ground:\s*(#[0-9a-f]{6})/i.exec(STYLES_CSS)[1];
+  const LIGHT_GROUND = /^:root\s*\{[^}]*?--ground:\s*(#[0-9a-f]{6})/im.exec(STYLES_CSS)[1];
+
+  await test('بلا اختيار محفوظ وجهاز داكن: لا data-theme على <html> والأيقونة شمس', async () => {
+    const dom = buildEnv({ colorScheme: 'dark' });
+    await flushBoot();
+    const doc = dom.window.document;
+
+    assert.strictEqual(
+      doc.documentElement.hasAttribute('data-theme'),
+      false,
+      'nothing stored must leave <html> bare, so the prefers-color-scheme block in styles.css decides'
+    );
+    assert.strictEqual(
+      doc.querySelector('#themeToggleBtn i').className,
+      'fa-solid fa-sun',
+      'the icon reports the mode in effect (dark) — a moon would tell the visitor the page is light'
+    );
+  });
+
+  await test('اختيار محفوظ dark يُطبَّق على <html> لحظة تحميل السكربت — قبل أول رسم', () => {
+    // بلا await: هذه لحظة تقييم السكربت في <head>، قبل أن يصل حدث
+    // DOMContentLoaded الذي ينادي initTheme — وهو بالضبط ما يمنع وميض الفاتح.
+    const dom = buildEnv({ savedTheme: 'dark' });
+    assert.strictEqual(
+      dom.window.document.documentElement.getAttribute('data-theme'),
+      'dark',
+      'theme-boot.js must put the saved choice on <html> while the head is parsed, not on DOMContentLoaded'
+    );
+    // لا تأكيد هنا على القيمة المخزَّنة: `buildEnv({ savedTheme })` زرعها قبل
+    // التقييم، فأي تأكيد عليها يمرّ ولو لم يقرأ السكربت شيئاً. أنّ زرّ التبديل
+    // يكتب `negev_theme` نفسه يغطّيه اختبار toggleTheme أدناه فعلياً.
+  });
+
+  await test('toggleTheme يقلب المظهر ويكتبه في localStorage ويحدّث الأيقونة', async () => {
+    const dom = buildEnv();
+    await flushBoot();
+    const win = dom.window;
+    const doc = win.document;
+    const icon = () => doc.querySelector('#themeToggleBtn i').className;
+
+    assert.strictEqual(doc.documentElement.hasAttribute('data-theme'), false, 'a first visit starts with no stored choice');
+    assert.strictEqual(icon(), 'fa-solid fa-moon', 'a light device shows the moon');
+
+    win.toggleTheme();
+    assert.strictEqual(doc.documentElement.getAttribute('data-theme'), 'dark', 'the first press flips to dark');
+    assert.strictEqual(win.localStorage.getItem('negev_theme'), 'dark', 'and the choice is stored under negev_theme');
+    assert.strictEqual(icon(), 'fa-solid fa-sun', 'the icon follows the new mode');
+
+    win.toggleTheme();
+    assert.strictEqual(doc.documentElement.getAttribute('data-theme'), 'light', 'the second press flips back');
+    assert.strictEqual(win.localStorage.getItem('negev_theme'), 'light', 'and overwrites the stored value');
+    assert.strictEqual(icon(), 'fa-solid fa-moon', 'the icon follows again');
+  });
+
+  await test('قيمة محفوظة فاسدة تُتجاهَل: لا data-theme، والنظام يحكم', async () => {
+    const dom = buildEnv({ savedTheme: 'purple', colorScheme: 'dark' });
+    const doc = dom.window.document;
+
+    assert.strictEqual(
+      doc.documentElement.hasAttribute('data-theme'),
+      false,
+      'only dark/light may reach <html>; any other stored string is ignored so the device decides'
+    );
+
+    await flushBoot();
+    assert.strictEqual(
+      doc.querySelector('#themeToggleBtn i').className,
+      'fa-solid fa-sun',
+      'the dark device still decides, so the icon is the sun'
+    );
+
+    dom.window.toggleTheme();
+    assert.strictEqual(
+      dom.window.localStorage.getItem('negev_theme'),
+      'light',
+      'the first real flip replaces the corrupt value with a valid one'
+    );
+  });
+
+  await test('theme-color يتبع المظهر الظاهر، وقيمتاه هما --ground في styles.css', () => {
+    const dom = buildEnv({ savedTheme: 'dark' });
+    const meta = dom.window.document.querySelector('meta[name="theme-color"]');
+    assert.ok(meta, 'index.html must keep the theme-color meta this test pins');
+
+    assert.strictEqual(meta.getAttribute('content'), DARK_GROUND, 'a dark page paints the browser bar with the dark ground');
+
+    dom.window.toggleTheme();
+    assert.strictEqual(meta.getAttribute('content'), LIGHT_GROUND, 'and switching back restores the light ground');
+
+    assert.ok(
+      INDEX_HTML_RAW.includes(`<meta name="theme-color" content="${LIGHT_GROUND}">`),
+      'the static value in index.html must stay the light ground — it is what a browser without JS shows'
+    );
+  });
+
+  await test('الصفحات الخمس تحمّل theme-boot.js في <head> قبل أول نمط', () => {
+    for (const page of ['index.html', 'admin.html', 'about.html', 'privacy.html', 'delete-account.html']) {
+      const html = fs.readFileSync(path.join(WEB_DIR, page), 'utf8');
+      const head = html.slice(0, html.indexOf('</head>'));
+      assert.ok(head.length > 0, `${page} must keep a <head>`);
+
+      const bootAt = head.search(/<script[^>]+src="theme-boot\.js/);
+      assert.ok(bootAt >= 0, `${page} must load theme-boot.js in <head> — otherwise a saved dark choice flashes light first`);
+
+      const styleAt = head.search(/<link[^>]+rel="stylesheet"|<style[\s>]/);
+      assert.ok(styleAt >= 0, `${page} must still carry its styles`);
+      assert.ok(
+        bootAt < styleAt,
+        `${page} loads its first stylesheet before theme-boot.js — the saved theme would not be on <html> yet`
+      );
+    }
+  });
+
+  await test('لوحة الإدارة تحترم الاختيار المحفوظ عبر theme-boot نفسه', () => {
+    const dom = buildAdminEnv({ savedTheme: 'dark' });
+    assert.strictEqual(
+      dom.window.document.documentElement.getAttribute('data-theme'),
+      'dark',
+      'admin.html + theme-boot.js must apply the saved choice, or the dark rules in admin.css are unreachable'
+    );
+    assert.match(ADMIN_CSS, /:root\[data-theme="dark"\]\s*\{/, 'admin.css must keep the dark palette block that attribute selects');
+
+    const plain = buildAdminEnv();
+    assert.strictEqual(
+      plain.window.document.documentElement.hasAttribute('data-theme'),
+      false,
+      'and with nothing stored the panel follows the device too'
+    );
+  });
+
+  await test('لا متغيّر CSS مستعمل وغير معرَّف في styles.css ولا admin.css', () => {
+    // `--tone`/`--tone-ink` يكتبهما app.js على العنصر نفسه من لون نوع المناسبة
+    // (`style="--tone:…"`)، ولكل استعمال بديل في `var(--tone, …)` — فهما خارج
+    // اللوحتين بحق. ما عداهما يجب أن يوجد تعريفه في الملف نفسه (#179).
+    const RUNTIME_SET = new Set(['--tone', '--tone-ink']);
+
+    for (const [name, css] of [['styles.css', STYLES_CSS], ['admin.css', ADMIN_CSS]]) {
+      const source = css.replace(/\/\*[\s\S]*?\*\//g, '');
+      const defined = new Set([...source.matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1]));
+      const used = new Set([...source.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]));
+      const missing = [...used].filter((variable) => !defined.has(variable) && !RUNTIME_SET.has(variable));
+      assert.deepStrictEqual(
+        missing,
+        [],
+        `${name} uses variables it never defines — every declaration on one of them is dropped in silence`
+      );
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -85,6 +85,12 @@
   <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 
+  <!-- الوضع الداكن (#179): يقرأ الاختيار المحفوظ ويضعه على <html> **قبل أي نمط**،
+       فلا يُرسم الفاتح لحظةً لمن اختار الداكن. ويضبط معه `theme-color` (وسمٌ
+       أعلاه) — لون شريط المتصفّح — على أرضية الوضع الظاهر. الملف مشترك مع
+       اللوحة وصفحات السياسات، و`app.js` يبني عليه منطق زرّ التبديل وحده. -->
+  <script src="theme-boot.js?v=2.8.5"></script>
+
   <!-- Google Fonts — Cairo هو خط الهوية (#20 خطوة 11)؛ Tajawal/Amiri تبقى لاستوديو الملصقات (canvas) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

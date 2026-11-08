@@ -25,9 +25,17 @@
   --card-gold:     #C59425;
   --card-gold-soft: rgba(197, 148, 37, 0.4);
 
+  /* خلفية مساحة الوسيط: تحت الملصق الغائب وخلف الصورة المحتواة (letterbox).
+     قيمتها الداكنة في كتلتَي الوضع الداكن أدناه — كانت #FFFDF8 مكتوبة في أربع
+     قواعد فتبقى بيجاً فاتحاً على سطح داكن (#179). */
+  --media-placeholder-ground: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+
   --mourn:         #475569;
   --mourn-wash:    #eef1f5;
 
+  /* حبرُ كل تعبئة مشبَعة — السماوي والنجاح والتحذير والخطر: أبيض في الفاتح
+     وداكن في الداكن، لأن هذه التعبئات نفسها تصير فاتحة هناك. فلا يُكتب `#fff`
+     على أيٍّ منها (#179). */
   --on-sky:        #ffffff;
 
   /* حالات النظام — خارج لوحة المناسبة نفسها (موافقة/انتظار/رفض) */
@@ -47,6 +55,19 @@
   --key-inner:       rgba(0,0,0,.10);
   --key-cast:        rgba(12,27,42,.28);
 
+  /* اسمان استُعملا في كتلة بطاقات الخدمات بلا تعريف (#179): لون العلامة
+     الفعّال، وسطح غائر داخل البطاقة. كلاهما مشتقّ من رمز معرَّف، فيتبع الوضع
+     الداكن تلقائياً ولا يحتاج قيمة ثانية في كتلته. */
+  --primary:         var(--sky);
+  --ground-card:     var(--surface-sunk);
+
+  /* توافق قديم — `index.html` لا يزال يشير إلى `--gold-primary` مباشرة في
+     ثلاثة مواضع. كان في كتلة `:root` ثانية أسفل كتلتَي الوضع الداكن، ونُقل هنا
+     فبقي لـ`:root` تعريف واحد (#179). و`--text-secondary` لا مستعمل له في
+     `web/` فحُذف. وحلّ `var()` يقع عند الاستخدام لا عند التعريف، فلا يهمّ أن
+     تُعرَّف القيمة قبل `--sky` أو بعده. */
+  --gold-primary:    var(--sky);
+
   --radius-sm: 10px; --radius-md: 16px; --radius-lg: 22px; --radius-pill: 999px;
   --font-main: "Cairo", "Segoe UI", system-ui, sans-serif;
 }
@@ -59,6 +80,7 @@
     --ink: #eaf2f8; --ink-soft: #9fb6c9; --ink-faint: #7f95a6;
     --sky: #38bdf8; --sky-deep: #7dd3fc; --sky-bright: #0ea5e9; --sky-wash: #0d2b3e;
     --gold: #e3bd6a; --gold-wash: #2a2113;
+    --card-ground: #12212f; --media-placeholder-ground: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
     --mourn: #94a3b8; --mourn-wash: #1a232e;
     --on-sky: #06202e;
     --success: #4ade80; --success-wash: #0f2b1c;
@@ -78,6 +100,7 @@
   --ink: #eaf2f8; --ink-soft: #9fb6c9; --ink-faint: #7f95a6;
   --sky: #38bdf8; --sky-deep: #7dd3fc; --sky-bright: #0ea5e9; --sky-wash: #0d2b3e;
   --gold: #e3bd6a; --gold-wash: #2a2113;
+  --card-ground: #12212f; --media-placeholder-ground: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
   --mourn: #94a3b8; --mourn-wash: #1a232e;
   --on-sky: #06202e;
   --success: #4ade80; --success-wash: #0f2b1c;
@@ -90,9 +113,6 @@
   --key-inner:       rgba(0,0,0,.5);
   --key-cast:        rgba(0,0,0,.6);
 }
-
-/* توافق قديم — بعض قوالب app.js لا تزال تشير لهذين الاسمين مباشرة */
-:root { --text-secondary: var(--ink-soft); --gold-primary: var(--sky); }
 
 * {
   box-sizing: border-box;
@@ -1278,6 +1298,12 @@ body {
   }
 }
 
+/*
+ * `--tone` و`--tone-ink` لا تُعرَّفان هنا عمداً: يكتبهما app.js على العنصر
+ * نفسه من لون نوع المناسبة (`style="--tone:…"`)، ولكل استعمال بديل في
+ * `var(--tone, …)` — فغياب اللون في بيانات النوع لا يكسر شيئاً. لذلك لا
+ * تظهران في `:root` ولا في كتلتَي الوضع الداكن (#179).
+ */
 .event-card {
   --card-base-ground: color-mix(in srgb, var(--tone, var(--card-gold)) 12%, var(--card-ground));
   --card-bezel-ground: color-mix(in srgb, var(--tone, var(--card-gold)) 8%, var(--card-ground));
@@ -1886,7 +1912,7 @@ body {
   gap: 8px;
   transition: all 0.2s;
 }
-.record-nokoot-btn:hover { background: var(--success); color: #ffffff; }
+.record-nokoot-btn:hover { background: var(--success); color: var(--on-sky); }
 
 /* Interactive Map View */
 .map-view-card {
@@ -3123,7 +3149,7 @@ body {
 
   .events-feed > .event-card .card-media-img {
     object-fit: contain !important;
-    background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+    background: var(--media-placeholder-ground);
   }
 
   .events-feed > .event-card .card-caption {
@@ -3570,7 +3596,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   top: -2px;
   left: -2px;
   background: var(--danger);
-  color: #fff;
+  color: var(--on-sky);
   border-radius: var(--radius-pill);
   padding: 1px 5px;
   font-size: 0.65rem;
@@ -3784,7 +3810,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   height: 60px;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--sky) 0%, var(--sky-deep) 100%);
-  color: #fff;
+  color: var(--on-sky);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4053,7 +4079,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
 .agenda-day-cell.selected {
   background: var(--sky);
-  color: #ffffff;
+  color: var(--on-sky);
 }
 
 .agenda-day-cell.today {
@@ -4223,11 +4249,12 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
     padding-bottom: calc(127px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
-  /* الخلفية الذهبية الفاخرة للبوسترات في الموبايل والـ PWA */
+  /* خلفية مساحة الملصق في الموبايل والـ PWA — من متغيّر الوضع الظاهر، وإلا
+     بقيت بيجاً فاتحاً تحت صورة محتواة على سطح داكن (#179). */
   .events-feed > .event-card .card-media,
   .events-feed > .event-card .card-media-img {
     object-fit: contain !important;
-    background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%) !important;
+    background: var(--media-placeholder-ground) !important;
   }
 
   .events-feed > .event-card.tone-mourning .card-media,
@@ -4330,14 +4357,10 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   max-height: 500px !important;
   cursor: pointer;
   overflow: hidden;
-  background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+  background: var(--media-placeholder-ground);
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-[data-theme="dark"] .service-card .card-media {
-  background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
 }
 
 .service-card .card-media-img {
@@ -4384,6 +4407,10 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
   border-radius: 999px;
   font-size: 0.8rem;
   font-weight: 700;
+  /* حبرها أبيض ثابت في الوضعين عمداً: أرضيتها لون فئة من بيانات اللوحة
+     (`service_categories.color`، وافتراضه #0369a1) يكتبه app.js inline، لا رمز
+     مظهر. فربطها بـ`--on-sky` يُظلم الحبرُ على فئة داكنة يختارها الأدمن (#179).
+     و`var(--tone, var(--primary))` هنا احتياطٌ لا يصل الشاشة لأن الـinline يغلبه. */
   color: #fff;
   background: var(--tone, var(--primary));
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
@@ -4574,7 +4601,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
 .service-contact-btn {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-sky);
 }
 
 .service-contact-btn:hover {
@@ -4682,7 +4709,7 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 
 .service-btn-call {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-sky);
   border: none;
   border-radius: 10px;
   padding: 10px;
@@ -4835,21 +4862,9 @@ body:has(#tabHome.active-tab) .support-fab:not([hidden]) {
 }
 
 .service-row-img-placeholder {
-  background: radial-gradient(circle at center, #FFFDF8 0%, #FBF1D9 55%, #F3DFAD 100%);
+  background: var(--media-placeholder-ground);
   color: var(--card-gold);
   font-size: 34px;
-}
-
-[data-theme="dark"] .service-row-img-placeholder {
-  background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
-}
-
-/* الاختيار الغائب يتبع النظام (styles.css:55)، فالوضع الداكن بلا data-theme
-   يحتاج القاعدة نفسها وإلا بقي مربّع الصورة بيجَ فاتحاً في صفحة داكنة. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .service-row-img-placeholder {
-    background: radial-gradient(circle at center, #1E293B 0%, #0F172A 100%);
-  }
 }
 
 .service-row-body {
@@ -5517,7 +5532,7 @@ body.event-page-open { overflow: hidden; }
 .my-list-icon-btn:hover { border-color: var(--sky); color: var(--sky-deep); }
 .my-list-bell-btn.is-muted { color: var(--ink-faint); }
 .my-list-nokoot-btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid var(--success); border-radius: var(--radius-pill); background: var(--success-wash); color: var(--success); font-family: var(--font-main); font-size: 0.74rem; font-weight: 800; white-space: nowrap; cursor: pointer; }
-.my-list-nokoot-btn:hover { background: var(--success); color: #ffffff; }
+.my-list-nokoot-btn:hover { background: var(--success); color: var(--on-sky); }
 
 .my-list-empty p { margin-bottom: 0; }
 .my-list-empty .gold-action-btn { margin-top: 14px; }
@@ -6397,7 +6412,7 @@ body.news-screen-open { overflow: hidden; }
   padding: 2px 10px;
   border-radius: var(--radius-pill);
   background: var(--danger);
-  color: #ffffff;
+  color: var(--on-sky);
   font-size: 0.72rem;
   font-weight: 900;
 }
