@@ -95,13 +95,52 @@ const kVillageNotListedOption = Village(
 const kRequestedVillageNameMaxLength = 100;
 
 /// أقصى ضلع لصورة البوستر بعد القصّ — نفس السقف الذي تستعمله `web/app.js`
-/// (`POSTER_CROP_MAX_DIMENSION`). القصّ اختياري بالكامل: الخادم لا يتغيّر،
-/// ولا إحداثيات قصّ تُخزَّن، والبايتات المقصوصة هي ما يُرفع لا أكثر.
+/// (`POSTER_CROP_MAX_DIMENSION`). الخادم لا يتغيّر، ولا إحداثيات قصّ تُخزَّن،
+/// والبايتات المقصوصة هي ما يُرفع لا أكثر.
+///
+/// **والقصّ يُطلَب مقفولاً على ٤:٥ منذ #178** — نسبة كرت المناسبة نفسها
+/// (`web/styles.css:1419`)، فما يُرفع هو ما سيظهر في الكرت. (قيد iOS المعروف
+/// في تعليق `cropPosterImage` أدناه.) والطريق إلى الصورة كاملة هو الرجوع من
+/// شاشة القصّ: `resolveCroppedPoster` أدناه يُبقي الصورة الملتقطة حينها.
 const kPosterCropMaxDimension = 1600;
+
+/// نداء شاشة القصّ الحقيقي — دالة عامة كي يقودها اختبار عبر قناة المنصّة
+/// (`plugins.hunghd.vn/image_cropper`) بلا شاشة أصلية. نمرّر نسبة كرت المناسبة
+/// ٤:٥ (#178) ونطلب قفلها بإعدادات المنصّتين، ونمرّر الضغط JPEG بجودة 90 وسقف
+/// 1600 — كلها في طبقة Dart على المنصّتين.
+///
+/// **قيد iOS معروف ومقصود التصريح به:** حزمة `image_cropper` 12.2.1 تضبط
+/// `aspectRatioLockDimensionSwapEnabled = YES` بنفسها بعد إعداداتنا
+/// (`FLTImageCropperPlugin.m:84`) حين تُمرَّر نسبة، فيسمح TOCropViewController
+/// بتبديل البُعدين للصورة الأفقية (٥:٤) رغم `aspectRatioLockEnabled`. ولهذا
+/// لا يُوصف القفل هنا بأنه مضمون على iOS — أندرويد (uCrop) يقفل ٤:٥ فعلاً.
+Future<CroppedFile?> cropPosterImage(XFile picked) {
+  return ImageCropper().cropImage(
+    sourcePath: picked.path,
+    maxWidth: kPosterCropMaxDimension,
+    maxHeight: kPosterCropMaxDimension,
+    aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 5),
+    compressFormat: ImageCompressFormat.jpg,
+    compressQuality: 90,
+    uiSettings: [
+      AndroidUiSettings(
+        toolbarTitle: 'قص صورة البوستر',
+        lockAspectRatio: true,
+      ),
+      IOSUiSettings(
+        title: 'قص صورة البوستر',
+        aspectRatioLockEnabled: true,
+        resetAspectRatioEnabled: false,
+        doneButtonTitle: 'تم',
+        cancelButtonTitle: 'إلغاء',
+      ),
+    ],
+  );
+}
 
 /// إلغاء المستخدم لشاشة القصّ (بلا لمسها، أو بالرجوع منها) هو طريقه لرفع
 /// الصورة كما هي — لا يجوز أن يخسر اختياره بسبب ذلك. عام كي يبقى قابلاً
-/// للاختبار دون فتح شاشة قصّ حقيقية (قناة منصّة لا تعمل في `flutter test`).
+/// للاختبار بلا شاشة قصّ أصلية.
 XFile resolveCroppedPoster(XFile picked, CroppedFile? cropped) {
   return cropped == null ? picked : XFile(cropped.path);
 }
@@ -602,28 +641,11 @@ class _AddEventScreenState extends State<AddEventScreen> {
     );
     if (picked == null) return;
 
-    // القصّ حرّ الأبعاد عمداً — لا aspectRatio هنا، والدعوات غالباً طولية
-    // فتربيعها يتلف نصف الدعوة (نفس قرار الويب في posterCropState).
-    final cropped = await ImageCropper().cropImage(
-      sourcePath: picked.path,
-      maxWidth: kPosterCropMaxDimension,
-      maxHeight: kPosterCropMaxDimension,
-      compressFormat: ImageCompressFormat.jpg,
-      compressQuality: 90,
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: 'قص صورة البوستر',
-          lockAspectRatio: false,
-        ),
-        IOSUiSettings(
-          title: 'قص صورة البوستر',
-          aspectRatioLockEnabled: false,
-          resetAspectRatioEnabled: true,
-          doneButtonTitle: 'تم',
-          cancelButtonTitle: 'إلغاء',
-        ),
-      ],
-    );
+    // القصّ نطلبه مقفولاً على ٤:٥ بقرار #178 (نسبة كرت المناسبة): ما يُرفع هو
+    // ما سيظهر في الكرت. (قيد iOS المعروف في تعليق cropPosterImage.) ومن أراد
+    // الصورة كاملة يرجعه زرّ الرجوع من شاشة القصّ — resolveCroppedPoster يُبقي
+    // الاختيار الأصلي حينها.
+    final cropped = await cropPosterImage(picked);
 
     if (!mounted) return;
     setState(() => _poster = resolveCroppedPoster(picked, cropped));

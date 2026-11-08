@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -893,6 +894,61 @@ void main() {
 
       expect(result.path, '/tmp/original.jpg');
     });
+
+    /// #178: نطلب من شاشة القصّ نسبة كرت المناسبة ٤:٥. هذا الاختبار يقود
+    /// **النداء الحقيقي** — `cropPosterImage` ← `ImageCropper().cropImage` —
+    /// عبر قناة المنصّة التي يستعملها plugin نفسه، ويقرأ الوسائط التي تصلها
+    /// فعلاً (`image_cropper_platform_interface` 8.0.0،
+    /// `method_channel_image_cropper.dart`). لا شاشة أصلية ولا محاكاة للإعدادات.
+    ///
+    /// يثبت ما تمرّره طبقة Dart وحدها؛ **لا** يثبت قفلاً مضموناً على iOS:
+    /// الحزمة 12.2.1 تضبط `aspectRatioLockDimensionSwapEnabled = YES` بنفسها
+    /// بعد إعداداتنا (`FLTImageCropperPlugin.m:84`)، فقد يبدّل المستخدم البُعدين
+    /// هناك. لكن أي تغيير في نسبة الشاشة أو سقفها أو جودتها يُسقطه.
+    testWidgets(
+      'نداء القصّ الحقيقي يمرّر ٤:٥ وإعدادات القفل وسقف 1600 وجودة 90 من طبقة Dart (وiOS قد يبدّل البُعدين في الحزمة)',
+      (tester) async {
+        final dir = Directory.systemTemp.createTempSync('poster_crop_test');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        final source = File('${dir.path}${Platform.pathSeparator}invitation.png')
+          ..writeAsBytesSync(const [0, 1, 2, 3]);
+
+        final calls = <MethodCall>[];
+        const channel = MethodChannel('plugins.hunghd.vn/image_cropper');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(channel, null);
+        });
+
+        // null هي «رجوع المستخدم من الشاشة» — تُترجَم خارجاً إلى إبقاء الاختيار.
+        final result = await tester.runAsync(
+          () => cropPosterImage(XFile(source.path)),
+        );
+        expect(result, isNull);
+
+        final call = calls.singleWhere((c) => c.method == 'cropImage');
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        expect(args['source_path'], source.path);
+        expect(args['ratio_x'], 4, reason: 'نسبة الكرت ٤:٥ (#178)');
+        expect(args['ratio_y'], 5, reason: 'نسبة الكرت ٤:٥ (#178)');
+        expect(args['max_width'], 1600);
+        expect(args['max_height'], 1600);
+        expect(args['compress_format'], 'jpg');
+        expect(args['compress_quality'], 90);
+        expect(args['android.lock_aspect_ratio'], isTrue,
+            reason: 'uCrop على أندرويد يقفل النسبة');
+        expect(args['ios.aspect_ratio_lock_enabled'], isTrue,
+            reason: 'نمرّر قفل iOS من طبقة Dart — ولهذا حدّ معروف: الحزمة تُفعّل '
+                'aspectRatioLockDimensionSwapEnabled بعد إعداداتنا (FLTImageCropperPlugin.m:84)');
+        expect(args['ios.reset_aspect_ratio_enabled'], isFalse,
+            reason: 'إعداد Dart الصريح؛ والحزمة تضبطه NO بنفسها حين تُمرَّر نسبة');
+      },
+    );
   });
 
   group('تحذير عدم توافق البلدة بعد النشر (issue #20 خطوة ١٤)', () {

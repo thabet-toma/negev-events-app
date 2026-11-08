@@ -47,14 +47,23 @@ let occasionTypesCache = null;
 let selectedOccasionType = null;
 let myEventsCache = [];
 
-// Poster crop editor (Facebook-style) — the rectangle answers "what IS this
-// image", not "how is it framed on any given surface"; display CSS elsewhere
-// is untouched. Free aspect ratio, no rotation/zoom. All geometry lives in
-// the working canvas's own pixel space, downscaled once on load so a 4000px
-// phone photo never freezes the page.
+// Poster crop editor (Facebook-style) — the rectangle is how this image is
+// framed on the event card, locked to that card's 4:5 poster ratio (#178);
+// display CSS elsewhere is untouched. No rotation/zoom; «استخدام الصورة كاملة»
+// stays the path to the uncropped picture. All geometry lives in the working
+// canvas's own pixel space, downscaled once on load so a 4000px phone photo
+// never freezes the page.
 let posterCropState = null;
+// تزيد مع كل اختيار/إلغاء للغلاف كي لا تكتب نتيجة فكّ قديمة على الاختيار الحالي.
+let posterCropSelectionGeneration = 0;
+// فشل فكّ الصورة هو السبب الوحيد الذي يسمح برفع الملف الخام بلا معالجة (#178)
+let posterCropDecodeFailed = false;
+// حجز متزامن يحرس الإرسال قبل أي انتظار لتصدير القماش أو لطلب الشبكة.
+let eventSubmitInFlight = false;
 const POSTER_CROP_MAX_DIMENSION = 1600; // longest edge cap on the exported crop
 const POSTER_CROP_MIN_SIZE = 40; // smallest crop rectangle edge, in working-canvas pixels
+// width ÷ height — the event card's 4:5 poster ratio (web/styles.css:1419, ticket #178)
+const POSTER_CROP_ASPECT = 4 / 5;
 const POSTER_CROP_MAX_EDITOR_WIDTH = 560; // fits a phone screen without CSS-scaling the canvas unpredictably
 
 // Services directory tab (#31) — فئات مسطَّحة، قائمة أبجدية، بلا تقييمات
@@ -7220,7 +7229,7 @@ const PUBLISH_FORM_FIELD_CTX = {
               <div class="poster-crop-handle" data-corner="br"></div>
             </div>
           </div>
-          <p class="poster-crop-hint">اسحب زوايا المربع لتحديد الجزء الذي تريد إظهاره، أو اسحب من الوسط لتحريكه. المربع المنقّط توضيحي فقط لما ستعرضه بطاقة المشاركة، ولا يفرض عليك شيئاً.</p>
+          <p class="poster-crop-hint">المستطيل هو ما سيظهر في كرت المناسبة بنسبة ٤:٥ — اسحب زواياه لتحديد الجزء الظاهر، أو اسحب من الوسط لتحريكه. المربّع المنقّط توضيحي لما تستخدمه بطاقة المشاركة، وزرّ «استخدام الصورة كاملة» يرفع الصورة بلا قصّ.</p>
           <div class="poster-crop-actions">
             <button type="button" class="submit-btn" onclick="confirmPosterCrop()">تأكيد القص</button>
             <button type="button" class="record-nokoot-btn" onclick="usePosterWholeImage()">استخدام الصورة كاملة</button>
@@ -7385,8 +7394,9 @@ function handleAddVillageChange() {
 // 12b. Poster crop editor (Facebook-style) — only the poster field, never
 // artist_image or audio. The client crops; the cropped bytes are what gets
 // uploaded — the server is untouched, no crop coordinates are stored. The
-// rectangle starts around the whole image, so a publisher who never touches
-// it uploads their picture with no re-encoding beyond the 1600px cap below.
+// rectangle starts as the largest 4:5 rectangle centred in the working canvas
+// (#178: the event card's poster ratio), so confirming it as-is uploads exactly
+// the card crop; «استخدام الصورة كاملة» below is the uncropped way out.
 
 /** يُستدعى بعد كل بناء لمربّع الرفع (renderOccasionForm) — العنصر جديد دائماً. */
 function initPosterCropField() {
@@ -7402,9 +7412,14 @@ function handlePosterFileChosen(e) {
   resetPosterCropState({ clearInput: false });
   if (!file) return;
 
+  const selectionGeneration = posterCropSelectionGeneration;
   const objectUrl = URL.createObjectURL(file);
   const image = new Image();
   image.onload = () => {
+    if (selectionGeneration !== posterCropSelectionGeneration) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
     const scale = Math.min(1, POSTER_CROP_MAX_DIMENSION / longestEdge);
     const workingWidth = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -7417,9 +7432,10 @@ function handlePosterFileChosen(e) {
       workingWidth,
       workingHeight,
       displayScale,
-      rect: { x: 0, y: 0, w: workingWidth, h: workingHeight },
+      rect: initialPosterCropRect(workingWidth, workingHeight),
       drag: null,
-      blob: null
+      blob: null,
+      editGeneration: 0
     };
 
     const canvas = document.getElementById('posterCropCanvas');
@@ -7434,9 +7450,38 @@ function handlePosterFileChosen(e) {
     showPosterCropEditor();
   };
   image.onerror = () => {
+    if (selectionGeneration !== posterCropSelectionGeneration) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    posterCropDecodeFailed = true;
     URL.revokeObjectURL(objectUrl);
   };
   image.src = objectUrl;
+}
+
+/**
+ * أكبر مستطيل ٤:٥ متمركز في قماشة العمل، بأعداد صحيحة بالبكسل ولا يتجاوز
+ * القماشة. صورة ٤:٥ أصلاً يغطّيها الحساب تماماً، بلا حالة خاصة.
+ */
+function initialPosterCropRect(width, height) {
+  let w;
+  let h;
+  if (width / height > POSTER_CROP_ASPECT) {
+    h = height;
+    w = Math.round(h * POSTER_CROP_ASPECT);
+  } else {
+    w = width;
+    h = Math.round(w / POSTER_CROP_ASPECT);
+  }
+  w = Math.min(w, width);
+  h = Math.min(h, height);
+  return {
+    x: Math.floor((width - w) / 2),
+    y: Math.floor((height - h) / 2),
+    w,
+    h
+  };
 }
 
 /** المربّع المنقّط — أكبر مربّع مركَزي يسع الصورة، توضيحي فقط ولا يُقيَّد به شيء. */
@@ -7488,7 +7533,12 @@ function startPosterCropDrag(e) {
   e.preventDefault();
 }
 
-/** حساب بالفرق (delta) عن نقطة بدء السحب — لا يعتمد على موضع العنصر في الصفحة، فيعمل بلا تخطيط حقيقي أيضاً. */
+/**
+ * حساب بالفرق (delta) عن نقطة بدء السحب — لا يعتمد على موضع العنصر في الصفحة،
+ * فيعمل بلا تخطيط حقيقي أيضاً. سحب الزاوية يحفظ ٤:٥ (تذكرة #178): المحور
+ * الغالب بالمؤشّر يقود والبعد الآخر يُشتق من النسبة، والزاوية المقابلة مربوطة.
+ * السحب من داخل المستطيل نقلٌ حرّ لا يغيّر أبعاده.
+ */
 function movePosterCropDrag(e) {
   const state = posterCropState;
   if (!state || !state.drag) return;
@@ -7497,19 +7547,12 @@ function movePosterCropDrag(e) {
   const dy = (e.clientY - state.drag.startClientY) / state.displayScale;
   const start = state.drag.startRect;
   const corner = state.drag.corner;
-  let { x, y, w, h } = start;
 
-  if (corner === 'move') {
-    x = start.x + dx;
-    y = start.y + dy;
-  } else {
-    if (corner.includes('l')) { x = start.x + dx; w = start.w - dx; }
-    if (corner.includes('r')) { w = start.w + dx; }
-    if (corner.includes('t')) { y = start.y + dy; h = start.h - dy; }
-    if (corner.includes('b')) { h = start.h + dy; }
-  }
-
-  state.rect = clampPosterCropRect({ x, y, w, h }, state);
+  state.rect = corner === 'move'
+    ? clampPosterCropPosition({ x: start.x + dx, y: start.y + dy, w: start.w, h: start.h }, state)
+    : resizePosterCropRect(state, corner, dx, dy);
+  state.editGeneration += 1;
+  state.blob = null;
   renderPosterCropBox();
 }
 
@@ -7520,13 +7563,52 @@ function endPosterCropDrag() {
   document.removeEventListener('pointercancel', endPosterCropDrag);
 }
 
-function clampPosterCropRect(rect, state) {
-  let { x, y, w, h } = rect;
-  w = Math.max(POSTER_CROP_MIN_SIZE, Math.min(w, state.workingWidth));
-  h = Math.max(POSTER_CROP_MIN_SIZE, Math.min(h, state.workingHeight));
-  x = Math.max(0, Math.min(x, state.workingWidth - w));
-  y = Math.max(0, Math.min(y, state.workingHeight - h));
-  return { x, y, w, h };
+/** النقل من داخل المستطيل يحرّك الموضع وحده — الأبعاد تبقى كما هي حرفياً، فلا يغيّر النقل نسبة ٤:٥. */
+function clampPosterCropPosition(rect, state) {
+  const { x, y, w, h } = rect;
+  return {
+    x: Math.max(0, Math.min(x, state.workingWidth - w)),
+    y: Math.max(0, Math.min(y, state.workingHeight - h)),
+    w,
+    h
+  };
+}
+
+/**
+ * سحب الزاوية بنسبة الكرت: المحور الغالب بحركة المؤشّر (بالبكسل داخل القماشة)
+ * يضبط ضلعه، والبعد الآخر يُشتق من النسبة، والزاوية المقابلة تبقى مكانها.
+ * الحدّ الأدنى والبقاء داخل القماشة يُفرضان **بعد** تثبيت النسبة — لو قُصّت
+ * الأضلاع الخام أولاً لخرج مستطيل ٣:٤ أو ٢:٣ عند الحافة.
+ */
+function resizePosterCropRect(state, corner, dx, dy) {
+  const start = state.drag.startRect;
+  const left = corner.includes('l');
+  const top = corner.includes('t');
+
+  // الزاوية المقابلة مربوطة، والمساحة المتاحة هي امتدادها داخل القماشة.
+  const anchorX = left ? start.x + start.w : start.x;
+  const anchorY = top ? start.y + start.h : start.y;
+  const roomW = left ? anchorX : state.workingWidth - anchorX;
+  const roomH = top ? anchorY : state.workingHeight - anchorY;
+  const maxW = Math.max(1, Math.min(roomW, roomH * POSTER_CROP_ASPECT));
+
+  // المحور الغالب هو الذي يقود، والبعد الآخر يتبع النسبة.
+  const byWidth = start.w + (left ? -dx : dx);
+  const byHeight = (start.h + (top ? -dy : dy)) * POSTER_CROP_ASPECT;
+  const driven = Math.abs(dx) >= Math.abs(dy) ? byWidth : byHeight;
+
+  // بعد تثبيت النسبة: سقف القماشة، ثم الحدّ الأدنى ما لم يكن السقف أصغر منه.
+  let w = Math.min(driven, maxW);
+  w = Math.max(w, Math.min(POSTER_CROP_MIN_SIZE, maxW));
+  w = Math.floor(w);
+  const h = Math.round(w / POSTER_CROP_ASPECT);
+
+  return {
+    x: left ? anchorX - w : anchorX,
+    y: top ? anchorY - h : anchorY,
+    w,
+    h
+  };
 }
 
 function showPosterCropEditor() {
@@ -7545,15 +7627,22 @@ function usePosterWholeImage() {
   const state = posterCropState;
   if (!state) return;
   state.rect = { x: 0, y: 0, w: state.workingWidth, h: state.workingHeight };
+  state.editGeneration += 1;
+  state.blob = null;
   renderPosterCropBox();
   exportPosterCrop(state.rect);
 }
 
-/** يرسم المستطيل المحدَّد فقط من المصدر (أصلاً محدود ‎1600px‎ بالفعل) إلى قماشة جديدة ويصدّرها JPEG. */
+/**
+ * يرسم المستطيل المحدَّد فقط من المصدر (أصلاً محدود ‎1600px‎ بالفعل) إلى قماشة
+ * جديدة ويصدّرها JPEG بجودة ٠٫٩ — ويُعيد وعداً بالبلوب كي ينتظره الإرسال حين
+ * لم يؤكّد الناشر قصّه بعد (#178).
+ */
 function exportPosterCrop(rect) {
   const state = posterCropState;
   const source = document.getElementById('posterCropCanvas');
-  if (!state || !source) return;
+  if (!state || !source) return Promise.resolve(null);
+  const editGeneration = state.editGeneration;
 
   const outWidth = Math.max(1, Math.round(rect.w));
   const outHeight = Math.max(1, Math.round(rect.h));
@@ -7562,11 +7651,17 @@ function exportPosterCrop(rect) {
   outCanvas.height = outHeight;
   outCanvas.getContext('2d').drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, outWidth, outHeight);
 
-  outCanvas.toBlob(blob => {
-    if (!blob || !posterCropState) return;
-    posterCropState.blob = blob;
-    showPosterCropPreview(blob);
-  }, 'image/jpeg', 0.9);
+  return new Promise(resolve => {
+    outCanvas.toBlob(blob => {
+      if (!blob || posterCropState !== state || state.editGeneration !== editGeneration) {
+        resolve(null);
+        return;
+      }
+      state.blob = blob;
+      showPosterCropPreview(blob);
+      resolve(blob);
+    }, 'image/jpeg', 0.9);
+  });
 }
 
 function showPosterCropPreview(blob) {
@@ -7582,7 +7677,16 @@ function showPosterCropPreview(blob) {
 }
 
 function reopenPosterCropEditor() {
-  if (!posterCropState) return;
+  const state = posterCropState;
+  if (!state) return;
+  // كل فتح للمحرّر يبدأ من أكبر ٤:٥ متمركز (#178): «استخدام الصورة كاملة»
+  // يترك المستطيل بحجم الصورة، فإعادة فتحه لا يجوز أن تصدّر قصّاً بغير نسبة
+  // الكرت. والبلوب السابق يُسقَط كي لا يُرفع ما صدّره مسارٌ سبق بدل المستطيل
+  // المعروض الآن.
+  state.rect = initialPosterCropRect(state.workingWidth, state.workingHeight);
+  state.editGeneration += 1;
+  state.blob = null;
+  renderPosterCropBox();
   document.getElementById('posterUploadBox').hidden = true;
   document.getElementById('posterCropEditor').hidden = false;
   document.getElementById('posterCropPreview').hidden = true;
@@ -7594,11 +7698,13 @@ function choosePosterAgain() {
 }
 
 function resetPosterCropState({ clearInput } = {}) {
+  posterCropSelectionGeneration += 1;
   if (posterCropState) {
     if (posterCropState.objectUrl) URL.revokeObjectURL(posterCropState.objectUrl);
     if (posterCropState.previewUrl) URL.revokeObjectURL(posterCropState.previewUrl);
   }
   posterCropState = null;
+  posterCropDecodeFailed = false;
 
   const uploadBox = document.getElementById('posterUploadBox');
   const editor = document.getElementById('posterCropEditor');
@@ -8904,204 +9010,225 @@ async function checkDateCollisionLive() {
 
 async function handleEventSubmit(e) {
   e.preventDefault();
-  if (!requireAuth({ type: 'publish' })) return;
-
-  const type = selectedOccasionType;
-  if (!type) {
-    alert('يرجى اختيار نوع المناسبة أولاً');
-    return;
-  }
-
-  const fieldsByKey = {};
-  for (const f of type.fields) fieldsByKey[f.field_key] = f;
-  const labelOf = key => (fieldsByKey[key] && fieldsByKey[key].label) || key;
-
-  // أيام المناسبة الإضافية تُقرأ مرّة واحدة هنا (لا عند كل حقل)، وتُستعمل في
-  // فحص الإجبارية وفي إرفاق FormData معاً — الحقل اختياري على الأنواع اليوم.
-  const extraDays = fieldsByKey.extra_days ? collectEventDays('addExtraDaysList') : [];
-
-  const honorees = collectHonorees('addHonoreesList');
-  if (!honorees.length) {
-    alert(`${labelOf('honorees')} مطلوب`);
-    return;
-  }
-
-  const town = document.getElementById('addTown').value;
-
-  // قاعدة تكامل الخادم نفسها: قرية إلزامية تحت "القرى والتجمعات" فقط، ومُرسَلة
-  // فقط عندها — بلدة أخرى لا تُرسِل village_id إطلاقاً (خريطة #21، تذكرة #23).
-  // «قريتي غير موجودة» يُرسِل requested_village_name بدلها، لا الاثنين معاً.
-  // والمحافظة إلزامية تحت هذا البند وحده (تذكرة #124) — الخادم يقبل region_id
-  // اختيارياً (#120)، والعميل هو من يُلزم بها كي لا تُنسب مناسبة قروية إلى
-  // المحافظة الافتراضية بلا أن يختارها ناشرها.
-  let villageId = null;
-  let requestedVillageName = '';
-  let regionId = null;
-  if (town === VILLAGES_TOWN) {
-    const choice = readVillageChoice('add');
-    villageId = choice.villageId;
-    requestedVillageName = choice.requestedName;
-    if (!villageId && !requestedVillageName) {
-      alert('اختر القرية من القائمة أو اكتب اسم قريتك');
-      return;
-    }
-    const regionSelect = document.getElementById('addRegion');
-    regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
-    // تُلزَم فقط إن كانت قائمة المحافظات **النشطة** قد وصلت فعلاً (تذكرة #127)؛
-    // تعذّر GET /api/towns، أو كون كلها موقوفة، يترك الحقل بلا خيارات فلا
-    // يُحوَّل إلى منع نشر — الخادم يشتقّ الافتراضية.
-    if (!regionId && activeRegionsList().length) {
-      alert('اختر المحافظة التي تنتمي إليها القرية');
-      return;
-    }
-  }
-
-  const eventDate = document.getElementById('addEventDate').value;
-  if (!eventDate) {
-    alert(`${labelOf('event_date')} مطلوب`);
-    return;
-  }
-
-  // نفس تحقّق الإجبارية الذي يطبّقه الخادم من إعداد النوع نفسه — قبل الإرسال
-  // لا بعده، برسالة تحمل تسمية الحقل في هذا النوع تحديداً.
-  const textFieldGetters = {
-    title: () => document.getElementById('addTitle')?.value.trim(),
-    family_clan: () => document.getElementById('addFamily')?.value.trim(),
-    location_name: () => document.getElementById('addLocationName')?.value.trim(),
-    secondary_location_name: () => document.getElementById('addSecondaryLocationName')?.value.trim(),
-    event_end_date: () => document.getElementById('addEventEndDate')?.value,
-    youth_party_date: () => document.getElementById('addYouthDate')?.value,
-    extra_days: () => (extraDays.length ? '1' : ''),
-    dinner_time: () => document.getElementById('addDinnerTime')?.value.trim(),
-    host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
-    audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
-    poster_url: () => document.getElementById('addPosterFile')?.files[0],
-    audio_url: () => document.getElementById('addAudioFile')?.files[0],
-    artist_name: () => document.getElementById('addArtistName')?.value.trim(),
-    artist_image_url: () => document.getElementById('addArtistImageFile')?.files[0]
-  };
-
-  const missingFieldLabel = firstMissingRequiredField(type, textFieldGetters);
-  if (missingFieldLabel) {
-    alert(`${missingFieldLabel} مطلوب`);
-    return;
-  }
-
+  if (eventSubmitInFlight) return;
+  eventSubmitInFlight = true;
   const btn = document.getElementById('submitEventBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
-
-  const formData = new FormData();
-  formData.append('occasion_type_id', type.id);
-  appendHonoreesToFormData(formData, honorees);
-  if (fieldsByKey.extra_days) appendEventDaysToFormData(formData, extraDays);
-  formData.append('town', town);
-  if (villageId) formData.append('village_id', villageId);
-  else if (requestedVillageName) formData.append('requested_village_name', requestedVillageName);
-  if (regionId) formData.append('region_id', regionId);
-  formData.append('event_date', eventDate);
-
-  // ظهور المناسبة (#166): «عام» افتراضاً — نفس افتراض الخادم، فلا يتغيّر شيء
-  // في طلب لا يجد الحقل (صفحة قديمة من كاش) ولا في نشر عميل لا يعرفه أصلاً.
-  const visibilitySelect = document.getElementById('addVisibility');
-  formData.append('visibility', (visibilitySelect && visibilitySelect.value) || 'public');
-
-  // موعد النشر المجدول (#167): يُرسَل فقط إن مُلئ — وغيابه «بلا جدولة»، نفس ما
-  // يرسله كل عميل منشور اليوم. والخادم يرفض الماضي بـ400 عربية.
-  const publishAtInput = document.getElementById('addPublishAt');
-  if (publishAtInput && publishAtInput.value) formData.append('publish_at', publishAtInput.value);
-
-  const latInput = document.getElementById('addLat');
-  const lngInput = document.getElementById('addLng');
-  if (latInput && latInput.value) formData.append('latitude', latInput.value);
-  if (lngInput && lngInput.value) formData.append('longitude', lngInput.value);
-
-  if (fieldsByKey.title) formData.append('title', document.getElementById('addTitle').value);
-  if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('addFamily').value);
-  if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('addLocationName').value);
-  if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('addSecondaryLocationName').value);
-  if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('addEventEndDate').value);
-  if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('addYouthDate').value);
-  if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('addDinnerTime').value);
-  if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('addHostPhone').value);
-  if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('addAudioTitle').value);
-  if (fieldsByKey.artist_name) formData.append('artist_name', document.getElementById('addArtistName').value);
-
-  if (fieldsByKey.poster_url) {
-    // القص اختياري: القيمة المقصوصة هي ما يُرفع إن وُجدت، والملف الخام كما
-    // هو إن لم يكتمل مسار القص لأي سبب (مثلاً فشل تحميل الصورة في المحرِّر) —
-    // اسم صريح ثالث لـ`append` لا غنى عنه، وإلا صار originalname الحرفي "blob"
-    // بلا امتداد (server/src/middleware/upload.js).
-    if (posterCropState && posterCropState.blob) {
-      formData.append('poster', posterCropState.blob, 'poster.jpg');
-    } else {
-      const posterFile = document.getElementById('addPosterFile').files[0];
-      if (posterFile) formData.append('poster', posterFile);
-    }
-  }
-  if (fieldsByKey.audio_url) {
-    const audioFile = document.getElementById('addAudioFile').files[0];
-    if (audioFile) formData.append('audio', audioFile);
-  }
-  if (fieldsByKey.artist_image_url) {
-    const artistImageFile = document.getElementById('addArtistImageFile').files[0];
-    if (artistImageFile) formData.append('artist_image', artistImageFile);
-  }
-
-  // بدء فعلي للنشر (تذكرة #44) — بعد كل التحقق المحلي أعلاه، لا عند فتح
-  // النموذج أو الضغط الأول على الزر بلا اكتمال الحقول.
-  recordAnalyticsEvent('publish_started', { contentTown: town });
-
   try {
-    const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
-    if (res.status === 401) {
-      // api.js مسح الجلسة وفتح نافذة الدخول؛ النموذج لا يُمسَح هنا عمداً،
-      // والإرسال يُعاد تلقائياً بعد الدخول (resumePendingIntent).
-      pendingIntent = { type: 'publish_retry' };
+    if (!requireAuth({ type: 'publish' })) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
+
+    const type = selectedOccasionType;
+    if (!type) {
+      alert('يرجى اختيار نوع المناسبة أولاً');
       return;
     }
-    const data = await res.json();
 
-    if (data.success) {
-      if (data.status === 'pending') {
-        alert('✅ تم إرسال طلب إعلان المناسبة بنجاح!\n\nطلبك الآن قيد مراجعة واعتماد الإدارة، وسيتم نشره على التطبيق بعد التحقق خلال دقائق.');
-      } else {
-        showToast('🎉 تم نشر المناسبة بنجاح!');
-      }
-      // تنبيه ليّن من الخادم — البلدة والإحداثيات كما اختارها المستخدم بالضبط،
-      // هذا إعلام لا رفض، والنشر أعلاه مضى فعلاً (#20 step 6, decision ٦).
-      if (data.location_warning) {
-        alert(`⚠️ ${data.location_warning.message}`);
-      }
-      document.getElementById('addEventForm').reset();
-      document.getElementById('collisionAlert').style.display = 'none';
-      updateVillagePickerVisibility();
-      clearPickerMarker();
-      resetPosterCropState({ clearInput: false });
-      const honoreesList = document.getElementById('addHonoreesList');
-      if (honoreesList) {
-        honoreesList.innerHTML = '';
-        addHonoreeRow('addHonoreesList');
-      }
-      const extraDaysList = document.getElementById('addExtraDaysList');
-      if (extraDaysList) extraDaysList.innerHTML = '';
-      fetchMyEvents();
-      switchTab('tabHome');
-      // مناسبة جديدة نُشرت للتوّ: تُجلب حتى لو لم تتغيّر بصمة الفلتر.
-      fetchEvents({ force: true });
-    } else {
-      alert(data.message || 'حدث خطأ أثناء النشر');
-      // فشل بسبب الصورة/الملف تحديداً (متعدّد multer، error.js) يُسجَّل باسمه
-      // الخاص لا كفشل نشر عام — الاثنان مفتاحان منفصلان في القائمة المغلقة.
-      recordAnalyticsEvent(
-        isMediaUploadErrorMessage(data.message) ? 'image_upload_failed' : 'publish_failed',
-        { contentTown: town }
-      );
+    const fieldsByKey = {};
+    for (const f of type.fields) fieldsByKey[f.field_key] = f;
+    const labelOf = key => (fieldsByKey[key] && fieldsByKey[key].label) || key;
+
+    // أيام المناسبة الإضافية تُقرأ مرّة واحدة هنا (لا عند كل حقل)، وتُستعمل في
+    // فحص الإجبارية وفي إرفاق FormData معاً — الحقل اختياري على الأنواع اليوم.
+    const extraDays = fieldsByKey.extra_days ? collectEventDays('addExtraDaysList') : [];
+
+    const honorees = collectHonorees('addHonoreesList');
+    if (!honorees.length) {
+      alert(`${labelOf('honorees')} مطلوب`);
+      return;
     }
-  } catch (err) {
-    alert('تعذر الاتصال بالخادم');
-    recordAnalyticsEvent('publish_failed', { contentTown: town });
+
+    const town = document.getElementById('addTown').value;
+
+    // قاعدة تكامل الخادم نفسها: قرية إلزامية تحت "القرى والتجمعات" فقط، ومُرسَلة
+    // فقط عندها — بلدة أخرى لا تُرسِل village_id إطلاقاً (خريطة #21، تذكرة #23).
+    // «قريتي غير موجودة» يُرسِل requested_village_name بدلها، لا الاثنين معاً.
+    // والمحافظة إلزامية تحت هذا البند وحده (تذكرة #124) — الخادم يقبل region_id
+    // اختيارياً (#120)، والعميل هو من يُلزم بها كي لا تُنسب مناسبة قروية إلى
+    // المحافظة الافتراضية بلا أن يختارها ناشرها.
+    let villageId = null;
+    let requestedVillageName = '';
+    let regionId = null;
+    if (town === VILLAGES_TOWN) {
+      const choice = readVillageChoice('add');
+      villageId = choice.villageId;
+      requestedVillageName = choice.requestedName;
+      if (!villageId && !requestedVillageName) {
+        alert('اختر القرية من القائمة أو اكتب اسم قريتك');
+        return;
+      }
+      const regionSelect = document.getElementById('addRegion');
+      regionId = regionSelect && regionSelect.value ? Number(regionSelect.value) : null;
+      // تُلزَم فقط إن كانت قائمة المحافظات **النشطة** قد وصلت فعلاً (تذكرة #127)؛
+      // تعذّر GET /api/towns، أو كون كلها موقوفة، يترك الحقل بلا خيارات فلا
+      // يُحوَّل إلى منع نشر — الخادم يشتقّ الافتراضية.
+      if (!regionId && activeRegionsList().length) {
+        alert('اختر المحافظة التي تنتمي إليها القرية');
+        return;
+      }
+    }
+
+    const eventDate = document.getElementById('addEventDate').value;
+    if (!eventDate) {
+      alert(`${labelOf('event_date')} مطلوب`);
+      return;
+    }
+
+    // نفس تحقّق الإجبارية الذي يطبّقه الخادم من إعداد النوع نفسه — قبل الإرسال
+    // لا بعده، برسالة تحمل تسمية الحقل في هذا النوع تحديداً.
+    const textFieldGetters = {
+      title: () => document.getElementById('addTitle')?.value.trim(),
+      family_clan: () => document.getElementById('addFamily')?.value.trim(),
+      location_name: () => document.getElementById('addLocationName')?.value.trim(),
+      secondary_location_name: () => document.getElementById('addSecondaryLocationName')?.value.trim(),
+      event_end_date: () => document.getElementById('addEventEndDate')?.value,
+      youth_party_date: () => document.getElementById('addYouthDate')?.value,
+      extra_days: () => (extraDays.length ? '1' : ''),
+      dinner_time: () => document.getElementById('addDinnerTime')?.value.trim(),
+      host_phone: () => document.getElementById('addHostPhone')?.value.trim(),
+      audio_title: () => document.getElementById('addAudioTitle')?.value.trim(),
+      poster_url: () => document.getElementById('addPosterFile')?.files[0],
+      audio_url: () => document.getElementById('addAudioFile')?.files[0],
+      artist_name: () => document.getElementById('addArtistName')?.value.trim(),
+      artist_image_url: () => document.getElementById('addArtistImageFile')?.files[0]
+    };
+
+    const missingFieldLabel = firstMissingRequiredField(type, textFieldGetters);
+    if (missingFieldLabel) {
+      alert(`${missingFieldLabel} مطلوب`);
+      return;
+    }
+
+    // كل غلاف يمرّ بمعالجة العميل قبل الرفع (#178): صورة اختارها الناشر ولم
+    // يؤكّد قصّها تُصدَّر الآن بالمستطيل المعروض (٤:٥ افتراضاً) بدل رفع الملف
+    // الخام. والملف الخام لا يبقى إلا حين يفشل فكّ الصورة فعلاً — أما صورة ما
+    // زالت تُفكّ فلا تُرفَع خامة ولا يُوقَف الناشر بلا سبب، بل يُطلب إعادة المحاولة.
+    const posterFileInput = fieldsByKey.poster_url ? document.getElementById('addPosterFile') : null;
+    const posterFile = posterFileInput && posterFileInput.files ? posterFileInput.files[0] : null;
+    let posterUpload = posterCropState && posterCropState.blob ? posterCropState.blob : null;
+    if (posterFile && !posterUpload) {
+      if (posterCropState) {
+        posterUpload = await exportPosterCrop(posterCropState.rect);
+        if (!posterUpload) {
+          alert('تعذّر تجهيز صورة الغلاف، يرجى إعادة اختيار الصورة');
+          return;
+        }
+      } else if (!posterCropDecodeFailed) {
+        alert('انتظر لحظة ريثما تجهز صورة الغلاف ثم أعد الإرسال');
+        return;
+      }
+    }
+
+    const formData = new FormData();
+    formData.append('occasion_type_id', type.id);
+    appendHonoreesToFormData(formData, honorees);
+    if (fieldsByKey.extra_days) appendEventDaysToFormData(formData, extraDays);
+    formData.append('town', town);
+    if (villageId) formData.append('village_id', villageId);
+    else if (requestedVillageName) formData.append('requested_village_name', requestedVillageName);
+    if (regionId) formData.append('region_id', regionId);
+    formData.append('event_date', eventDate);
+
+    // ظهور المناسبة (#166): «عام» افتراضاً — نفس افتراض الخادم، فلا يتغيّر شيء
+    // في طلب لا يجد الحقل (صفحة قديمة من كاش) ولا في نشر عميل لا يعرفه أصلاً.
+    const visibilitySelect = document.getElementById('addVisibility');
+    formData.append('visibility', (visibilitySelect && visibilitySelect.value) || 'public');
+
+    // موعد النشر المجدول (#167): يُرسَل فقط إن مُلئ — وغيابه «بلا جدولة»، نفس ما
+    // يرسله كل عميل منشور اليوم. والخادم يرفض الماضي بـ400 عربية.
+    const publishAtInput = document.getElementById('addPublishAt');
+    if (publishAtInput && publishAtInput.value) formData.append('publish_at', publishAtInput.value);
+
+    const latInput = document.getElementById('addLat');
+    const lngInput = document.getElementById('addLng');
+    if (latInput && latInput.value) formData.append('latitude', latInput.value);
+    if (lngInput && lngInput.value) formData.append('longitude', lngInput.value);
+
+    if (fieldsByKey.title) formData.append('title', document.getElementById('addTitle').value);
+    if (fieldsByKey.family_clan) formData.append('family_clan', document.getElementById('addFamily').value);
+    if (fieldsByKey.location_name) formData.append('location_name', document.getElementById('addLocationName').value);
+    if (fieldsByKey.secondary_location_name) formData.append('secondary_location_name', document.getElementById('addSecondaryLocationName').value);
+    if (fieldsByKey.event_end_date) formData.append('event_end_date', document.getElementById('addEventEndDate').value);
+    if (fieldsByKey.youth_party_date) formData.append('youth_party_date', document.getElementById('addYouthDate').value);
+    if (fieldsByKey.dinner_time) formData.append('dinner_time', document.getElementById('addDinnerTime').value);
+    if (fieldsByKey.host_phone) formData.append('host_phone', document.getElementById('addHostPhone').value);
+    if (fieldsByKey.audio_title) formData.append('audio_title', document.getElementById('addAudioTitle').value);
+    if (fieldsByKey.artist_name) formData.append('artist_name', document.getElementById('addArtistName').value);
+
+    if (fieldsByKey.poster_url && posterUpload) {
+      // اسم صريح ثالث لـ`append` لا غنى عنه، وإلا صار originalname الحرفي
+      // "blob" بلا امتداد (server/src/middleware/upload.js).
+      formData.append('poster', posterUpload, 'poster.jpg');
+    } else if (fieldsByKey.poster_url && posterFile && posterCropDecodeFailed) {
+      // فكّ الصورة فشل فعلاً (image.onerror) فلم يقم محرّر قصّ أصلاً — لا أن
+      // الناشر ترك القصّ عمداً، ولا أن الصورة ما زالت تُفكّ (يُوقَف قبل هنا).
+      formData.append('poster', posterFile);
+    }
+    if (fieldsByKey.audio_url) {
+      const audioFile = document.getElementById('addAudioFile').files[0];
+      if (audioFile) formData.append('audio', audioFile);
+    }
+    if (fieldsByKey.artist_image_url) {
+      const artistImageFile = document.getElementById('addArtistImageFile').files[0];
+      if (artistImageFile) formData.append('artist_image', artistImageFile);
+    }
+
+    // بدء فعلي للنشر (تذكرة #44) — بعد كل التحقق المحلي أعلاه، لا عند فتح
+    // النموذج أو الضغط الأول على الزر بلا اكتمال الحقول.
+    recordAnalyticsEvent('publish_started', { contentTown: town });
+
+    try {
+      const res = await apiFetch('/api/events', { method: 'POST', body: formData, auth: true });
+      if (res.status === 401) {
+        // api.js مسح الجلسة وفتح نافذة الدخول؛ النموذج لا يُمسَح هنا عمداً،
+        // والإرسال يُعاد تلقائياً بعد الدخول (resumePendingIntent).
+        pendingIntent = { type: 'publish_retry' };
+        return;
+      }
+      const data = await res.json();
+
+      if (data.success) {
+        if (data.status === 'pending') {
+          alert('✅ تم إرسال طلب إعلان المناسبة بنجاح!\n\nطلبك الآن قيد مراجعة واعتماد الإدارة، وسيتم نشره على التطبيق بعد التحقق خلال دقائق.');
+        } else {
+          showToast('🎉 تم نشر المناسبة بنجاح!');
+        }
+        // تنبيه ليّن من الخادم — البلدة والإحداثيات كما اختارها المستخدم بالضبط،
+        // هذا إعلام لا رفض، والنشر أعلاه مضى فعلاً (#20 step 6, decision ٦).
+        if (data.location_warning) {
+          alert(`⚠️ ${data.location_warning.message}`);
+        }
+        document.getElementById('addEventForm').reset();
+        document.getElementById('collisionAlert').style.display = 'none';
+        updateVillagePickerVisibility();
+        clearPickerMarker();
+        resetPosterCropState({ clearInput: false });
+        const honoreesList = document.getElementById('addHonoreesList');
+        if (honoreesList) {
+          honoreesList.innerHTML = '';
+          addHonoreeRow('addHonoreesList');
+        }
+        const extraDaysList = document.getElementById('addExtraDaysList');
+        if (extraDaysList) extraDaysList.innerHTML = '';
+        fetchMyEvents();
+        switchTab('tabHome');
+        // مناسبة جديدة نُشرت للتوّ: تُجلب حتى لو لم تتغيّر بصمة الفلتر.
+        fetchEvents({ force: true });
+      } else {
+        alert(data.message || 'حدث خطأ أثناء النشر');
+        // فشل بسبب الصورة/الملف تحديداً (متعدّد multer، error.js) يُسجَّل باسمه
+        // الخاص لا كفشل نشر عام — الاثنان مفتاحان منفصلان في القائمة المغلقة.
+        recordAnalyticsEvent(
+          isMediaUploadErrorMessage(data.message) ? 'image_upload_failed' : 'publish_failed',
+          { contentTown: town }
+        );
+      }
+    } catch (err) {
+      alert('تعذر الاتصال بالخادم');
+      recordAnalyticsEvent('publish_failed', { contentTown: town });
+    }
   } finally {
+    eventSubmitInFlight = false;
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> إرسال طلب إعلان المناسبة للإدارة للمراجعة';
   }
