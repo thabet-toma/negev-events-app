@@ -779,6 +779,14 @@
         <p id="myListUnderReview" class="my-list-notice" hidden></p>
 
         <div id="myListBody"></div>
+
+        <!-- «مزوّدون محفوظون» (تذكرة #185): قسم داخل «قائمتي» لا وجهة جديدة في
+             الشريط. يرسمه app.js#renderSavedProviders من GET /api/services/favorites
+             ويُخفى كاملاً حين لا محفوظات — لا عنوان لقسم فارغ. -->
+        <section id="myListSavedProviders" class="my-list-providers" hidden>
+          <h3 class="my-list-bucket-head"><i class="fa-solid fa-heart" aria-hidden="true"></i> مزوّدون محفوظون</h3>
+          <div id="myListSavedProvidersList"></div>
+        </section>
       </div>
 
     </section>
@@ -1975,6 +1983,14 @@
       </div>
       <img id="providerModalLogo" class="provider-modal-logo" alt="" hidden>
       <div id="providerModalBadges" class="provider-badges" hidden></div>
+      <!-- عدّادا المشاهدة والمفضّلة وزرّ الحفظ (تذكرة #185): العدّادان من الخادم
+           وحده، وزرّ واحد يبدّل PUT/DELETE وتُحدَّث أعدادُه من ردّه. -->
+      <div class="provider-modal-meta-row">
+        <div id="providerModalStats" class="provider-modal-stats" hidden></div>
+        <button type="button" id="providerFavoriteBtn" class="provider-favorite-btn" aria-pressed="false" onclick="toggleProviderFavorite()">
+          <i class="fa-regular fa-heart" aria-hidden="true"></i> <span>احفظ المزوّد</span>
+        </button>
+      </div>
       <img id="providerModalImage" class="provider-modal-img" alt="" hidden>
       <div id="providerModalPackage" class="service-package-banner" style="display:none; margin:12px 0;"></div>
       <div id="providerModalSpecs" class="service-specs-grid" style="display:none; margin-bottom:14px;"></div>

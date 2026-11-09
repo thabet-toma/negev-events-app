@@ -597,4 +597,79 @@ void main() {
       expect(find.text('مزيد من التفاصيل'), findsNothing);
     });
   });
+
+  group('عدّادا 👁/♥ في بطاقة القائمة (تذكرة #185)', () {
+    /// المزوّد الأول بعدّاديه كما يعيدهما الخادم في القائمة، والثاني بلا
+    /// الحقلين (كل APK قديم أو خادم لم يرسلهما) فيقع على الصفر لا على فراغ.
+    List<Map<String, dynamic>> countersFixture() => [
+          {
+            ..._providersFixture.first,
+            'views_count': 42,
+            'favorites_count': 7,
+          },
+          _providersFixture.last,
+        ];
+
+    testWidgets('الصفّ المختصر يعرض العدّادين من الخادم، والصفر يُعرض 0', (tester) async {
+      await pumpServices(
+        tester,
+        servicesApi(
+          settings: {'providers_display': 'compact'},
+          providers: countersFixture(),
+        ),
+      );
+
+      expect(
+        find.byKey(const Key('service_row_views_601')),
+        findsOneWidget,
+        reason: 'عدّاد المشاهدة في صفّ القائمة',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_row_views_601'))).data,
+        '42',
+        reason: 'الرقم هو views_count الذي أرسله الخادم لا عدّاً في العميل',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_row_favorites_601'))).data,
+        '7',
+        reason: 'والمفضّلة من favorites_count',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_row_views_602'))).data,
+        '0',
+        reason: 'مزوّد بلا العدّادين في الجسم يعرض صفراً لا فراغاً',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_row_favorites_602'))).data,
+        '0',
+      );
+    });
+
+    testWidgets('الكرت الكبير يعرض العدّادين نفسهما', (tester) async {
+      // نافذة أعرض من الهاتف كما في اختبارات `cards` القائمة: خطّ الاختبار
+      // يرسم كل محرف مربّعاً بعرض كامل فيفيض عنوان الحزمة عند عرض هاتف.
+      await pumpServices(
+        tester,
+        servicesApi(
+          settings: {'providers_display': 'cards'},
+          providers: countersFixture(),
+        ),
+        size: const Size(1000, 1600),
+      );
+
+      expect(
+        find.byKey(const Key('service_card_views_601')),
+        findsOneWidget,
+        reason: 'عدّاد المشاهدة في الكرت الكبير',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_card_views_601'))).data,
+        '42',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('service_card_favorites_601'))).data,
+        '7',
+      );
+    });
+  });
 }

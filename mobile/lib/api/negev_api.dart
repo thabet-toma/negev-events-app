@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/album.dart';
@@ -18,6 +20,28 @@ import '../models/service.dart';
 import '../models/stats_ticker.dart';
 import '../models/user.dart';
 import 'api_client.dart';
+
+/// مفتاح معرّف الزائر العشوائي في `shared_preferences` (تذكرة #185) — يُولَّد
+/// مرة واحدة ويبقى. و`X-Visitor-Id` وحدها تحمله إلى الخادم: لا عنوان IP في أي
+/// مفتاح ولا في أي عمود.
+const String negevVisitorIdKey = 'negev_visitor_id';
+
+final RegExp _visitorIdPattern = RegExp(r'^[A-Za-z0-9_-]{16,64}$');
+
+/// المعرّف المحفوظ، أو معرّف عشوائي جديد يُحفظ مرة واحدة (32 حرفاً hex).
+Future<String> providerVisitorId() async {
+  final prefs = await SharedPreferences.getInstance();
+  final saved = prefs.getString(negevVisitorIdKey);
+  if (saved != null && _visitorIdPattern.hasMatch(saved)) return saved;
+
+  final random = Random.secure();
+  final generated = List<String>.generate(
+    16,
+    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
+  await prefs.setString(negevVisitorIdKey, generated);
+  return generated;
+}
 
 /// كل نقاط الخادم في مكان واحد — نفس العقد الموثّق في README.
 class NegevApi {
@@ -346,6 +370,45 @@ class NegevApi {
       throw const ApiException('تعذّر قراءة بيانات مزوّد الخدمة');
     }
     return ServiceProviderDetail.fromJson(provider);
+  }
+
+  /// تسجيل مشاهدة صفحة المزوّد (تذكرة #185) — تُستدعى مرة عند فتح الصفحة لا
+  /// عند كل بناء. الرمز يُرفق إن كان المستخدم مسجَّلاً (فمفتاحه `u:<id>` في
+  /// الخادم)، و`X-Visitor-Id` يرافق الطلب دائماً. الخادم يحسم التكرار في
+  /// اليوم نفسه ويعيد `counted` والعدّاد، فلا حساب للعدّاد هنا.
+  Future<ProviderViewResult> recordProviderView(int providerId) async {
+    final visitorId = await providerVisitorId();
+    final data = await _client.post(
+      '/api/services/providers/$providerId/view',
+      auth: true,
+      headers: {'X-Visitor-Id': visitorId},
+    );
+    return ProviderViewResult.fromJson(data);
+  }
+
+  /// حفظ المزوّد أو إلغاء حفظه — PUT/DELETE متكرّران بلا خطأ (idempotent)،
+  /// والعدّاد من ردّ الخادم لا من زيادة محلية. يتطلّب تسجيل دخول.
+  Future<ProviderFavoriteResult> setProviderFavorite(
+    int providerId,
+    bool favorite,
+  ) async {
+    final path = '/api/services/providers/$providerId/favorite';
+    final data = favorite
+        ? await _client.put(path, auth: true)
+        : await _client.delete(path, auth: true);
+    return ProviderFavoriteResult.fromJson(data);
+  }
+
+  /// «مزوّدون محفوظون» لصاحب الحساب وحده — بشكل بطاقة القائمة نفسه وبلا رقم،
+  /// ومرتّبة من الخادم (أحدث حفظ أولاً). قائمة فارغة لا خطأ.
+  Future<List<ServiceProvider>> favoriteProviders() async {
+    final data = await _client.get('/api/services/favorites', auth: true);
+    final list = data['providers'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(ServiceProvider.fromJson)
+        .toList();
   }
 
   /// رابط واتساب المزوّد — يبنيه الخادم وحده برسالته العربية، **ولا يعيد

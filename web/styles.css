@@ -2942,6 +2942,46 @@ body {
 .provider-similar-name { font-weight: 800; font-size: 0.84rem; color: var(--ink); padding: 0 6px; }
 .provider-similar-town { font-size: 0.74rem; color: var(--ink-faint); padding: 0 6px; }
 
+/* ===== مشاهدات المزوّد ومفضّلته (تذكرة #185) =====
+   عدّاد 👁/♥ واحد في البطاقة والصفّ والنافذة، وزرّ الحفظ حالةٌ لا نصّان.
+   `.provider-modal-stats` ليست `display` مباشرةً: `hidden` الابتدائية في
+   index.html يجب أن تبقى سارية حتى يصل العدّادان من الخادم. */
+.service-row-stats,
+.service-card-stats,
+.provider-modal-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+.service-row-stats { font-size: 15px; gap: 10px; margin-top: 2px; }
+.service-card-stats { margin: 2px 0 10px; font-size: 0.85rem; }
+.provider-stat { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
+.provider-stat-icon { font-size: 1em; line-height: 1; }
+.provider-modal-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.provider-modal-stats { margin: 0; }
+.provider-favorite-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.provider-favorite-btn:hover { border-color: var(--card-gold); }
+.provider-favorite-btn.is-saved { background: var(--gold-wash); border-color: var(--card-gold); color: var(--gold); }
+.provider-favorite-btn:disabled { opacity: 0.6; cursor: wait; }
+.provider-modal-stats[hidden] { display: none; }
+.my-list-providers { margin-top: 8px; }
+
 /* ===== إرشاد التثبيت على iOS (#55) =====
    ورقة سفلية لا نافذة معترِضة: مستخدم الآيفون جاء ليرى مناسبة، لا ليُطالَب
    بتثبيت. تُصرَف بضغطة وتُحفظ مصروفة. */

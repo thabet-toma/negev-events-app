@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../models/event.dart';
 import '../models/my_list.dart';
+import '../models/service.dart';
 import '../state/auth_store.dart';
 import '../state/rate_us.dart';
 import '../theme.dart';
@@ -14,6 +15,7 @@ import '../widgets/event_card.dart' show arabicEventDate, occasionTypeColor;
 import '../widgets/rate_us_prompt.dart';
 import 'event_details_screen.dart';
 import 'nokoot_screen.dart' show showAddNokootSheet;
+import 'service_provider_details_screen.dart';
 
 /// ترتيب أقسام «قائمتي» — الدلاء الستّ التي يعيدها `myListBucket` على الخادم
 /// حصراً، مرتّبة كما يرتّبها هو: القادم أولاً ثم المنتهي حديثاً.
@@ -64,6 +66,10 @@ class _MyListScreenState extends State<MyListScreen> {
   Object? _error;
   bool _loading = true;
 
+  /// «مزوّدون محفوظون» (تذكرة #185) — قسم داخل «قائمتي» لا وجهة جديدة.
+  /// يختفي كاملاً حين لا محفوظات، وفشل جلبِه لا يُسقط قائمة المناسبات.
+  List<ServiceProvider> _savedProviders = const [];
+
   _MyListFilter _filter = _MyListFilter.all;
 
   /// «انتهت سابقاً» مطويّ افتراضياً — يُفتح بالضغط على عنوانه.
@@ -109,6 +115,7 @@ class _MyListScreenState extends State<MyListScreen> {
       services.myListNowCount.value = 0;
       setState(() {
         _data = null;
+        _savedProviders = const [];
         _error = null;
         _loading = true;
         _filter = _MyListFilter.all;
@@ -150,9 +157,18 @@ class _MyListScreenState extends State<MyListScreen> {
 
     try {
       final data = await services.api.myList();
+      // القسم يجلب بعد قائمة المناسبات؛ فشله يبقي ما رُسم آخر مرة ولا يمنع
+      // عرض المناسبات نفسها — فاصلٌ واحد لا يُسقط الشاشة كلها.
+      var savedProviders = _savedProviders;
+      try {
+        savedProviders = await services.api.favoriteProviders();
+      } catch (_) {
+        savedProviders = _savedProviders;
+      }
       if (!mounted) return;
       setState(() {
         _data = data;
+        _savedProviders = savedProviders;
         _loading = false;
         _error = null;
       });
@@ -375,6 +391,7 @@ class _MyListScreenState extends State<MyListScreen> {
           _buildChips(data),
           const SizedBox(height: 2),
           ..._buildSections(data),
+          if (_savedProviders.isNotEmpty) _buildSavedProviders(),
         ],
       ),
     );
@@ -780,6 +797,158 @@ class _MyListScreenState extends State<MyListScreen> {
       color: entry.notify ? context.c.sky : context.c.inkFaint,
       onPressed: () => _toggleNotify(entry),
     );
+  }
+
+  /// قسم «مزوّدون محفوظون» — بطاقات المزوّدين وحدها، بلا وجهة جديدة في الشريط.
+  /// لا يُبنى إطلاقاً حين لا محفوظات (الشرط في `_buildBody`)، فلا عنوان لقسم فارغ.
+  Widget _buildSavedProviders() {
+    return Column(
+      key: const Key('my_list_saved_providers'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+          child: Row(
+            children: [
+              Icon(Icons.favorite, size: 16, color: context.c.gold),
+              const SizedBox(width: 6),
+              Text(
+                'مزوّدون محفوظون',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '(${_savedProviders.length})',
+                style: TextStyle(fontSize: 13, color: context.c.inkFaint),
+              ),
+            ],
+          ),
+        ),
+        ..._savedProviders.map(_buildSavedProviderRow),
+      ],
+    );
+  }
+
+  Widget _buildSavedProviderRow(ServiceProvider provider) {
+    return InkWell(
+      key: Key('my_list_saved_provider_${provider.id}'),
+      onTap: () => _openProvider(provider),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+        child: Row(
+          children: [
+            _providerThumbnail(provider),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    provider.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 3,
+                    children: [
+                      if (provider.categoryName.isNotEmpty)
+                        Text(
+                          provider.categoryName,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: context.c.inkSoft,
+                          ),
+                        ),
+                      Text(
+                        '👁 ${provider.viewsCount}',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: context.c.inkFaint,
+                        ),
+                      ),
+                      Text(
+                        '♥ ${provider.favoritesCount}',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: context.c.inkFaint,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_left, size: 20, color: context.c.inkFaint),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _providerThumbnail(ServiceProvider provider) {
+    const double size = 52;
+    final url = provider.imageUrl?.trim() ?? '';
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: url.isEmpty
+          ? Container(
+              width: size,
+              height: size,
+              color: context.c.surfaceSunk,
+              child: Icon(
+                Icons.storefront_outlined,
+                size: 22,
+                color: context.c.inkFaint,
+              ),
+            )
+          : CachedNetworkImage(
+              imageUrl: url,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              memCacheWidth: 200,
+              placeholder: (_, _) => Container(
+                width: size,
+                height: size,
+                color: context.c.surfaceSunk,
+              ),
+              errorWidget: (_, _, _) => Container(
+                width: size,
+                height: size,
+                color: context.c.surfaceSunk,
+                child: Icon(
+                  Icons.storefront_outlined,
+                  size: 22,
+                  color: context.c.inkFaint,
+                ),
+              ),
+            ),
+    );
+  }
+
+  /// فتح صفحة المزوّد من «قائمتي» — والعودة تجلب المحفوظات من الخادم، فما
+  /// أُلغي حفظُه هناك يختفي هنا (والقسم كله يختفي إن لم يبقَ مزوّد).
+  Future<void> _openProvider(ServiceProvider provider) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ServiceProviderDetailsScreen(
+          providerId: provider.id,
+          initialName: provider.name,
+        ),
+      ),
+    );
+    if (mounted) await _load();
   }
 
   Widget _buildSignInPrompt() {

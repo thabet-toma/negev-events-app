@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -8,6 +10,7 @@ import '../models/service.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
+import '../widgets/congratulations.dart' show openSignInGate;
 
 /// أسماء أيام `hours` السبعة — الفهرس نفسه الذي يخزّنه الأدمن (0 = الأحد).
 const List<String> _providerDayNames = [
@@ -53,10 +56,36 @@ class _ServiceProviderDetailsScreenState
     extends State<ServiceProviderDetailsScreen> {
   Future<ServiceProviderDetail>? _provider;
 
+  /// مشاهدة واحدة عند فتح الصفحة (تذكرة #185) — لا في كل بناء. فشلها صامت:
+  /// عدّاد المشاهدات لا يجوز أن يكسر صفحة المزوّد.
+  bool _viewRecorded = false;
+
+  /// عدّاد المشاهدة بعد ردّ الخادم — قد يزيد واحداً عمّا وصل مع التفصيل،
+  /// فالواجهة تعرض ما ردّ به مسار المشاهدة لا قراءة أقدم منه.
+  int? _viewsCountOverride;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _provider ??= AppServices.of(context).api.serviceProviderDetails(widget.providerId);
+    final api = AppServices.of(context).api;
+    if (_provider == null) {
+      _provider = api.serviceProviderDetails(widget.providerId);
+      if (!_viewRecorded) {
+        _viewRecorded = true;
+        unawaited(
+          api.recordProviderView(widget.providerId).then(
+            (result) {
+              if (mounted) {
+                setState(() => _viewsCountOverride = result.viewsCount);
+              }
+            },
+            onError: (Object _) {
+              // فشل المشاهدة لا يغيّر الصفحة — العدّاد يبقى ما وصل مع التفصيل.
+            },
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _call(String phone) async {
@@ -114,6 +143,7 @@ class _ServiceProviderDetailsScreenState
             }),
             builder: (provider) => _ProviderBody(
               provider: provider,
+              viewsCount: _viewsCountOverride ?? provider.viewsCount,
               onCall: () => _call(provider.phone),
               onWhatsApp: () => _openWhatsApp(provider.id),
               onOpenSimilar: _openProvider,
@@ -125,18 +155,81 @@ class _ServiceProviderDetailsScreenState
   }
 }
 
-class _ProviderBody extends StatelessWidget {
+class _ProviderBody extends StatefulWidget {
   const _ProviderBody({
     required this.provider,
+    required this.viewsCount,
     required this.onCall,
     required this.onWhatsApp,
     required this.onOpenSimilar,
   });
 
   final ServiceProviderDetail provider;
+
+  /// عدّاد المشاهدة المعروض — التفصيل أولاً، ثم ردّ مسار المشاهدة إن سبقه.
+  final int viewsCount;
+
   final VoidCallback onCall;
   final VoidCallback onWhatsApp;
   final ValueChanged<ServiceProvider> onOpenSimilar;
+
+  @override
+  State<_ProviderBody> createState() => _ProviderBodyState();
+}
+
+/// جسم الصفحة حالةٌ محلية لزرّ الحفظ وحده (تذكرة #185): الحالة والعدّاد من
+/// ردّ الخادم، فلا زيادة محلية على العدّاد ولا زرّ يكذب قبل تأكيد الخادم.
+class _ProviderBodyState extends State<_ProviderBody> {
+  ServiceProviderDetail get provider => widget.provider;
+
+  late bool _isFavorite = provider.isFavorite;
+  late int _favoritesCount = provider.favoritesCount;
+  bool _savingFavorite = false;
+
+  @override
+  void didUpdateWidget(covariant _ProviderBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // صفحة أخرى في الموضع نفسه (إعادة محاولة جلبت مزوّداً آخر): الحالة
+    // المحلية تبدأ من بيانات المزوّد الجديد لا من مزوّد سابق.
+    if (oldWidget.provider.id != widget.provider.id) {
+      _isFavorite = widget.provider.isFavorite;
+      _favoritesCount = widget.provider.favoritesCount;
+    }
+  }
+
+  /// حفظ/إلغاء حفظ المزوّد — PUT/DELETE عبر `negev_api.dart` وحده. الزائر
+  /// يُحوَّل إلى بوابة الدخول القائمة، فيعود إلى الصفحة ويحفظ بعد الدخول.
+  Future<void> _toggleFavorite() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      openSignInGate(context, 'سجّل الدخول لحفظ المزوّد في قائمتك');
+      return;
+    }
+    if (_savingFavorite) return;
+
+    setState(() => _savingFavorite = true);
+    try {
+      final result = await services.api.setProviderFavorite(
+        provider.id,
+        !_isFavorite,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isFavorite = result.isFavorite;
+        _favoritesCount = result.favoritesCount;
+      });
+      showMessage(
+        context,
+        result.isFavorite
+            ? 'حُفظ المزوّد في «مزوّدون محفوظون»'
+            : 'أُزيل المزوّد من محفوظاتك',
+      );
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _savingFavorite = false);
+    }
+  }
 
   String _priceBadgeText() {
     switch (provider.priceType) {
@@ -150,6 +243,40 @@ class _ProviderBody extends StatelessWidget {
       default:
         return 'سعر تقديري';
     }
+  }
+
+  /// عدّاد واحد (👁/♥) — القيمة مُسنَدة إلى مفتاح يسهل على الاختبار قراءته
+  /// بعد ردّ الخادم، والنصّ نفسه هو ما يراه المستخدم.
+  Widget _stat({
+    required Key valueKey,
+    required String icon,
+    required String value,
+    required String label,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          icon,
+          style: TextStyle(fontSize: 14, color: context.c.inkFaint),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          key: valueKey,
+          style: TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.bold,
+            color: context.c.inkSoft,
+          ),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+        ),
+      ],
+    );
   }
 
   @override
@@ -217,6 +344,50 @@ class _ProviderBody extends StatelessWidget {
               Text(
                 provider.name,
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: context.c.ink),
+              ),
+              const SizedBox(height: 8),
+              // عدّادا الصفحة (تذكرة #185): 👁 المشاهدات و♥ المفضّلة — من
+              // الخادم وحده، والعدّاد الثاني يتغيّر بردّ زرّ الحفظ تحته.
+              Row(
+                key: const Key('provider_stats'),
+                children: [
+                  _stat(
+                    valueKey: const Key('provider_views_count'),
+                    icon: '👁',
+                    value: '${widget.viewsCount}',
+                    label: 'مشاهدة',
+                  ),
+                  const SizedBox(width: 14),
+                  _stat(
+                    valueKey: const Key('provider_favorites_count'),
+                    icon: '♥',
+                    value: '$_favoritesCount',
+                    label: 'من حفظوه',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const Key('provider_favorite_btn'),
+                  onPressed: _savingFavorite ? null : _toggleFavorite,
+                  icon: Icon(
+                    _isFavorite ? Icons.favorite : Icons.favorite_border,
+                    size: 18,
+                  ),
+                  label: Text(_isFavorite ? 'محفوظ' : 'احفظ المزوّد'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(44),
+                    foregroundColor: _isFavorite ? context.c.gold : context.c.sky,
+                    side: BorderSide(
+                      color: _isFavorite ? context.c.gold : context.c.line,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 10),
               // `ClipRRect` بدل `borderRadius` على `Border` غير موحّد اللون:
@@ -688,7 +859,7 @@ class _ProviderBody extends StatelessWidget {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           elevation: 0,
                         ),
-                        onPressed: onWhatsApp,
+                        onPressed: widget.onWhatsApp,
                         icon: const Icon(Icons.chat, size: 18),
                         label: const Text(
                           'واتساب مباشر',
@@ -706,7 +877,7 @@ class _ProviderBody extends StatelessWidget {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           elevation: 0,
                         ),
-                        onPressed: onCall,
+                        onPressed: widget.onCall,
                         icon: const Icon(Icons.phone_outlined, size: 18),
                         label: const Text(
                           'اتصال هاتفي',
@@ -733,7 +904,7 @@ class _ProviderBody extends StatelessWidget {
                       final candidate = provider.similar[index];
                       return InkWell(
                         key: Key('provider_similar_${candidate.id}'),
-                        onTap: () => onOpenSimilar(candidate),
+                        onTap: () => widget.onOpenSimilar(candidate),
                         borderRadius: BorderRadius.circular(10),
                         child: Container(
                           width: 116,

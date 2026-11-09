@@ -15,6 +15,12 @@ const townsService = require('../services/towns.service');
 
 const router = express.Router();
 
+/**
+ * شكل معرّف الزائر (تذكرة #185): 16..64 حرفاً من `[A-Za-z0-9_-]` يولّده
+ * العميل عشوائياً. ما لا يطابق يُعتبر غائباً — لا 400 ولا مفتاح مشوّه يُخزَّن.
+ */
+const VISITOR_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
 /** Parses a submitted `towns` array — non-empty, deduplicated; membership/containment checked by the service layer. */
 function parseTowns(raw) {
   let list = raw;
@@ -217,6 +223,9 @@ router.get('/services/categories', asyncHandler(async (req, res) => {
  * الطلب (تذكرة #122)، و`optionalAuthenticate` كي يرى المسجَّل محافظة حسابه بلا
  * ترويسة كما في `/api/events`. **والمزوّد المفرد** أدناه لا يتقيّد — صفحة
  * المزوّد تُفتح بالمعرّف من أي محافظة.
+ *
+ * و`req.user` (تذكرة #185) يمرّر `userId` إلى الخدمة فتحمل كل بطاقة
+ * `is_favorite` لهذا المستخدم؛ والزائر يحصل على `false`، فلا مفتاح غائب.
  */
 router.get('/services/providers', optionalAuthenticate, asyncHandler(async (req, res) => {
   const regionId = await regionIdForRequest(req);
@@ -225,15 +234,58 @@ router.get('/services/providers', optionalAuthenticate, asyncHandler(async (req,
     town: cleanString(req.query.town, 100),
     search: cleanString(req.query.search, 100),
     regionId,
+    userId: req.user ? req.user.id : null,
     page: req.query.page,
     limit: req.query.limit
   });
   res.json({ success: true, providers, pagination });
 }));
 
-router.get('/services/providers/:id', asyncHandler(async (req, res) => {
+/**
+ * تسجيل مشاهدة صفحة مزوّد — عامّ بـ`optionalAuthenticate`، **وبلا `req.ip`
+ * إطلاقاً**: المفتاح معرّف الحساب للمسجَّل أو ترويسة `X-Visitor-Id` العشوائية
+ * للزائر، ولا يُشتقّ من عنوان شبكة ولا يُخزَّن عنوان. بلا مفتاح تُردّ 200
+ * بالعدّاد كما هو و`counted: false` — لا خطأ على من لم يرسل معرّفاً.
+ */
+router.post('/services/providers/:id/view', optionalAuthenticate, asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
-  res.json({ success: true, provider: await services.getPublicProviderById(id) });
+  const rawVisitorId = req.get('X-Visitor-Id');
+  const visitorId = typeof rawVisitorId === 'string' && VISITOR_ID_PATTERN.test(rawVisitorId.trim())
+    ? rawVisitorId.trim()
+    : null;
+
+  const result = await services.recordProviderView(id, {
+    userId: req.user ? req.user.id : null,
+    visitorId
+  });
+  res.json({ success: true, counted: result.counted, views_count: result.views_count });
+}));
+
+/** «مزوّدون محفوظون» لصاحب الحساب وحده — لا محفوظات غيره، والحكم في الخدمة. */
+router.get('/services/favorites', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, providers: await services.listFavoriteProviders(req.user.id) });
+}));
+
+/** حفظ مزوّد — idempotent، والعدّاد من الخادم. */
+router.put('/services/providers/:id/favorite', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const result = await services.addProviderFavorite(id, req.user.id);
+  res.json({ success: true, is_favorite: result.is_favorite, favorites_count: result.favorites_count });
+}));
+
+/** إلغاء الحفظ — idempotent كذلك، والعدّاد من الخادم. */
+router.delete('/services/providers/:id/favorite', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const result = await services.removeProviderFavorite(id, req.user.id);
+  res.json({ success: true, is_favorite: result.is_favorite, favorites_count: result.favorites_count });
+}));
+
+router.get('/services/providers/:id', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  res.json({
+    success: true,
+    provider: await services.getPublicProviderById(id, { userId: req.user ? req.user.id : null })
+  });
 }));
 
 /**

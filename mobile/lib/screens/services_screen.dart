@@ -606,6 +606,40 @@ String _providerPriceBadgeText(ServiceProvider provider) =>
 Color _providerTone(BuildContext context, ServiceProvider provider) =>
     _parseColor(provider.categoryColor, context.c.gold);
 
+/// عدّاد واحد (👁 المشاهدات أو ♥ المفضّلة) في الصفّ المختصر والكرت الكبير
+/// (تذكرة #185): الرقم من `views_count`/`favorites_count` التي يعيدها الخادم
+/// مع بطاقة القائمة — لا عدّ ولا زيادة في العميل، والصفر يُعرض «0» لا فراغاً.
+/// والرقم وحده في `Text` مفتاحُه يقرأه الاختبار، على نمط `provider_views_count`
+/// في صفحة المزوّد. الشكل نفسه في «مزوّدون محفوظون» (`my_list_screen.dart`).
+Widget _providerStat({
+  required Key valueKey,
+  required String icon,
+  required int value,
+  required Color color,
+  double fontSize = 15,
+}) {
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        icon,
+        style: TextStyle(fontSize: fontSize, color: color, height: 1.1),
+      ),
+      const SizedBox(width: 4),
+      Text(
+        '$value',
+        key: valueKey,
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.w700,
+          color: color,
+          height: 1.1,
+        ),
+      ),
+    ],
+  );
+}
+
 /// ورقة التواصل الواحدة — يفتحها الصفّ المختصر والكرت الكبير معاً (تذكرة #158)،
 /// فلا نسخة ثانية من بناء رابط واتساب ولا من صيغة الرقم الدولي في الشاشة.
 ///
@@ -966,6 +1000,28 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // عدّادا 👁/♥ (تذكرة #185): القيمة التي جاءت مع بطاقة القائمة
+                // من الخادم، لا حساب محلي ولا رقم يخمّنه العميل.
+                Row(
+                  children: [
+                    _providerStat(
+                      valueKey: Key('service_card_views_${p.id}'),
+                      icon: '👁',
+                      value: p.viewsCount,
+                      color: context.c.inkFaint,
+                      fontSize: 13,
+                    ),
+                    const SizedBox(width: 14),
+                    _providerStat(
+                      valueKey: Key('service_card_favorites_${p.id}'),
+                      icon: '♥',
+                      value: p.favoritesCount,
+                      color: context.c.inkFaint,
+                      fontSize: 13,
                     ),
                   ],
                 ),
@@ -1340,6 +1396,20 @@ class _CompactServiceRow extends StatelessWidget {
                           ),
                         ),
                       ],
+                    ),
+                    // عدّادا 👁/♥ (تذكرة #185) داخل الـ`Wrap` نفسه فلا يضيف
+                    // سطراً جديداً حين يتّسع له السطر، و15px كبقية نصوص الصفّ.
+                    _providerStat(
+                      valueKey: Key('service_row_views_${p.id}'),
+                      icon: '👁',
+                      value: p.viewsCount,
+                      color: context.c.inkFaint,
+                    ),
+                    _providerStat(
+                      valueKey: Key('service_row_favorites_${p.id}'),
+                      icon: '♥',
+                      value: p.favoritesCount,
+                      color: context.c.inkFaint,
                     ),
                   ],
                 ),

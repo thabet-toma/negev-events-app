@@ -114,6 +114,9 @@ class ServiceProvider {
   final String status;
   final List<String> towns;
   final bool hasPhone;
+  final int viewsCount;
+  final int favoritesCount;
+  final bool isFavorite;
 
   const ServiceProvider({
     required this.id,
@@ -130,6 +133,9 @@ class ServiceProvider {
     this.status = 'approved',
     this.towns = const [],
     this.hasPhone = true,
+    this.viewsCount = 0,
+    this.favoritesCount = 0,
+    this.isFavorite = false,
   });
 
   String? get displayPriceBadge {
@@ -168,6 +174,9 @@ class ServiceProvider {
       status: '${json['status'] ?? 'approved'}',
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
       hasPhone: json['has_phone'] != false,
+      viewsCount: _toInt(json['views_count']),
+      favoritesCount: _toInt(json['favorites_count']),
+      isFavorite: json['is_favorite'] == true,
     );
   }
 }
@@ -340,6 +349,9 @@ class ServiceProviderDetail {
   final String status;
   final String? rejectionReason;
   final List<String> towns;
+  final int viewsCount;
+  final int favoritesCount;
+  final bool isFavorite;
 
   const ServiceProviderDetail({
     required this.id,
@@ -367,6 +379,9 @@ class ServiceProviderDetail {
     this.status = 'approved',
     this.rejectionReason,
     this.towns = const [],
+    this.viewsCount = 0,
+    this.favoritesCount = 0,
+    this.isFavorite = false,
   });
 
   /// الرقم اختياري: مزوّد بلا رقم يعيد الخادم `phone: null` فيصير هنا ''.
@@ -431,6 +446,42 @@ class ServiceProviderDetail {
       status: '${json['status'] ?? 'approved'}',
       rejectionReason: _nullableString(json['rejection_reason']),
       towns: rawTowns is List ? rawTowns.map((t) => '$t').toList() : const [],
+      viewsCount: _toInt(json['views_count']),
+      favoritesCount: _toInt(json['favorites_count']),
+      isFavorite: json['is_favorite'] == true,
     );
   }
+}
+
+/// ردّ PUT/DELETE `/api/services/providers/:id/favorite` — الحالة والعدّاد من
+/// الخادم وحده، فلا يخمّن العميل عدداً ولا يقلّد زيادة محلية.
+class ProviderFavoriteResult {
+  final bool isFavorite;
+  final int favoritesCount;
+
+  const ProviderFavoriteResult({
+    required this.isFavorite,
+    required this.favoritesCount,
+  });
+
+  factory ProviderFavoriteResult.fromJson(Map<String, dynamic> json) =>
+      ProviderFavoriteResult(
+        isFavorite: json['is_favorite'] == true,
+        favoritesCount: _toInt(json['favorites_count']),
+      );
+}
+
+/// ردّ POST `/api/services/providers/:id/view` — `counted` تقول أكان هذا أول
+/// مشاهدة للمفتاح في اليوم، و`viewsCount` العدّاد بعد الطلب.
+class ProviderViewResult {
+  final bool counted;
+  final int viewsCount;
+
+  const ProviderViewResult({required this.counted, required this.viewsCount});
+
+  factory ProviderViewResult.fromJson(Map<String, dynamic> json) =>
+      ProviderViewResult(
+        counted: json['counted'] == true,
+        viewsCount: _toInt(json['views_count']),
+      );
 }

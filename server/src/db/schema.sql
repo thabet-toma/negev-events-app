@@ -832,6 +832,10 @@ CREATE TABLE IF NOT EXISTS service_providers (
   hours               JSON         DEFAULT NULL,
   is_verified         TINYINT(1)   NOT NULL DEFAULT 0,
   is_featured         TINYINT(1)   NOT NULL DEFAULT 0,
+  -- عدّاد مشاهدات صفحة المزوّد (تذكرة #185): يزيد صفاً واحداً لكل مفتاح زائر
+  -- في اليوم. لا عمود IP ولا معرّف جهاز هنا — المفتاح معرّف حساب أو معرّف
+  -- زائر عشوائي يولّده العميل، والتفصيل في `service_provider_views`.
+  views_count         INT UNSIGNED NOT NULL DEFAULT 0,
   consent_at       TIMESTAMP    NOT NULL,
   consent_by       INT UNSIGNED DEFAULT NULL,
   consent_channel  VARCHAR(20)  NOT NULL,
@@ -905,6 +909,39 @@ CREATE TABLE IF NOT EXISTS service_provider_products (
   KEY idx_service_provider_products_provider (provider_id),
   CONSTRAINT fk_sppr_provider FOREIGN KEY (provider_id)
     REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- مشاهدات صفحة المزوّد (تذكرة #185): صفّ واحد لكل (مزوّد، مفتاح زائر، يوم).
+-- **لا عمود IP هنا ولا في أي مفتاح**: المفتاح `u:<user_id>` للمسجَّل أو
+-- `v:<معرّف عشوائي>` يولّده جهاز الزائر، و`view_date` من `CURDATE()` على
+-- الخادم. التكرار في اليوم نفسه يُتجاهَل (`INSERT IGNORE`)، والعدّاد في
+-- `service_providers.views_count` لا يزيد إلا مع صفّ جديد.
+CREATE TABLE IF NOT EXISTS service_provider_views (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  visitor_key VARCHAR(64) NOT NULL,
+  view_date   DATE        NOT NULL,
+  created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_provider_views_day (provider_id, visitor_key, view_date),
+  KEY idx_provider_views_provider (provider_id),
+  CONSTRAINT fk_spv_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- مفضّلة المستخدمين (تذكرة #185): صفّ واحد لكل (مزوّد، مستخدم)، والحذف
+-- متكرّر بلا خطأ. العدّاد يُحسب من هذا الجدول نفسه لا من عمود مرآة.
+CREATE TABLE IF NOT EXISTS provider_favorites (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  user_id     INT UNSIGNED NOT NULL,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_provider_favorites (provider_id, user_id),
+  CONSTRAINT fk_spf_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_spf_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Behavioural analytics (issue #44). The governing rule this table is built
