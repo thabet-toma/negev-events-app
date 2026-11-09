@@ -11,7 +11,7 @@ const { authenticate, optionalAuthenticate, requireAdmin, requireSuperAdmin } = 
 const { regionIdForRequest } = require('../middleware/region');
 const { serviceMedia } = require('../middleware/upload');
 const cloudinary = require('../services/cloudinary.service');
-const { cleanString, requireFields, parseId, parseAmount, isValidPhone } = require('../middleware/validate');
+const { cleanString, requireFields, parseId, parseAmount, isValidPhone, requireDate, optionalId } = require('../middleware/validate');
 const townsService = require('../services/towns.service');
 
 const router = express.Router();
@@ -458,6 +458,91 @@ router.get('/services/my-services', authenticate, asyncHandler(async (req, res) 
  */
 router.get('/services/my-providers', authenticate, asyncHandler(async (req, res) => {
   res.json({ success: true, providers: await services.listLinkedProviders(req.user.id) });
+}));
+
+// --- «اطلب عرض سعر» (تذكرة #188، ADR-0016) ---------------------------
+// مسارات الطلب والعرض والقرار كلها `authenticate`: هذه خمسة أوجه لعلاقة بين
+// حسابين، لا قراءة عامة. والصلاحية (من يملك الطلب؟ من مزوّده؟) تُشتقّ في
+// الخدمة داخل الاستعلام نفسه، فلا يمرّ الحكم عبر هذا الباب — و404 لا 403.
+
+/**
+ * إرسال طلب عرض سعر إلى مزوّد عام.
+ *
+ * `event_id` اختياري ويُتحقّق من ملكيته في الخدمة، و`wanted_date` تاريخ
+ * `YYYY-MM-DD` صارم عبر `requireDate` حين يُرسل — لا `optionalDate` الذي
+ * يُسقط الفاسد صامتاً (الموعد هو ما يبني عليه المزوّد عرضه). وعدد المعازيم
+ * يمرّ كما وصل والخدمة تحكمه عدداً صحيحاً، كـ`rating` في مسار التقييم.
+ *
+ * **ولا يُقصّ التاريخ قبل فحصه** (خلافاً لسائر النصوص): `cleanString(…, 10)`
+ * يحوّل `2027-06-011` و`2027-06-01T00:00:00Z` إلى `2027-06-01` صالح، فيُخزَّن
+ * تاريخ لم يرسله أحد ويصمت عن خطأ عميل — وهو الدرس المكتوب في `requireMonth`.
+ *
+ * **والردّ يفترق بحسب `channel`:** `201` حين كُتب صفّ (`app`) — عملٌ أُنشئ،
+ * و`200` حين عاد رابط واتساب بلا كتابة (`whatsapp`) — لا صفّ أُنشئ حتى يقال
+ * 201. والرسالة العربية تتبع القناة، والعميل لا يؤلّف نصّاً.
+ */
+router.post('/services/providers/:id/quote-requests', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const body = req.body || {};
+  const wantedDateRaw = body.wanted_date === undefined || body.wanted_date === null
+    ? ''
+    : String(body.wanted_date).trim();
+
+  const result = await services.createQuoteRequest(req.user.id, id, {
+    eventId: optionalId(body.event_id, 'معرّف المناسبة'),
+    wantedDate: wantedDateRaw ? requireDate(wantedDateRaw, 'التاريخ المرغوب') : null,
+    guestsCount: body.guests_count,
+    note: cleanString(body.note, 1000)
+  });
+
+  res.status(result.channel === 'app' ? 201 : 200).json({
+    success: true,
+    channel: result.channel,
+    quote: result.quote ?? null,
+    url: result.url ?? null,
+    message: result.channel === 'app'
+      ? 'وصل طلبك إلى المزوّد — سيصلك عرضه في «العروض المستلمة»'
+      : 'أكمل طلبك في واتساب برسالة جاهزة فيها تفاصيله'
+  });
+}));
+
+/**
+ * «الطلبات الواردة» لصاحب حساب مربوط — طلبات مزوّداته وحدهم، والشرط في
+ * استعلام الخدمة. حساب بلا ربط يستلم مصفوفة فارغة لا 404 (نمط «مزوّدي»).
+ */
+router.get('/services/incoming-quotes', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, quotes: await services.listIncomingQuotes(req.user.id) });
+}));
+
+/** عرض سعر (سعر إلزامي + ملاحظة) على طلب من طلبات مزوّديه — `409` لأي انتقال آخر. */
+router.put('/services/incoming-quotes/:qid/offer', authenticate, asyncHandler(async (req, res) => {
+  const quoteId = parseId(req.params.qid, 'معرّف طلب عرض السعر');
+  const body = req.body || {};
+  const quote = await services.sendQuoteOffer(req.user.id, quoteId, {
+    price: body.price,
+    note: cleanString(body.note, 1000)
+  });
+
+  res.json({ success: true, quote, message: 'تم إرسال عرضك إلى الزبون' });
+}));
+
+/** «العروض المستلمة» بثلاثة أقسام — قسم غير معروف 400، والقسم مُعامَل في SQL. */
+router.get('/services/my-quotes', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, quotes: await services.listMyQuotes(req.user.id, { tab: req.query.tab }) });
+}));
+
+/** قرار الزبون: `accept` | `decline` | `cancel` — والانتقالات المسموحة وحدها وإلا 409. */
+router.patch('/services/my-quotes/:qid', authenticate, asyncHandler(async (req, res) => {
+  const quoteId = parseId(req.params.qid, 'معرّف طلب عرض السعر');
+  const body = req.body || {};
+  const quote = await services.decideMyQuote(req.user.id, quoteId, body.action);
+  const messages = {
+    accept: 'قُبل عرض السعر — تواصل مع المزوّد لإتمام الاتفاق',
+    decline: 'رُفض عرض السعر',
+    cancel: 'أُلغي طلب عرض السعر'
+  };
+
+  res.json({ success: true, quote, message: messages[body.action] || 'تم تحديث طلب عرض السعر' });
 }));
 
 // --- Admin: service providers — `admin` role, scoped to their towns ---

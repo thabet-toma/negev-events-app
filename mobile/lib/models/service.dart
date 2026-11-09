@@ -623,3 +623,114 @@ class ProviderViewResult {
         viewsCount: _toInt(json['views_count']),
       );
 }
+
+/// طلب عرض سعر واحد (تذكرة #188، ADR-0016) — الشكل نفسه في «الطلبات الواردة»
+/// و«العروض المستلمة» (`shapeQuoteRow` في `services.service.js`)، فلا شكلا
+/// قراءة لصفّ واحد.
+///
+/// **ولا `user_id` ولا رقم هاتف:** [userName] اسم الطالب ويصل للحساب المربوط
+/// وحده، و[offerPrice]/[note] نصّان كما كتبهما صاحبهما (السعر لا يُحوَّل إلى رقم).
+/// و[status] إحدى الخمس: `awaiting_offer` | `offered` | `accepted` | `declined`
+/// | `cancelled`، و[canCancel] تعني أن «إلغاء الطلب» ما زال متاحاً.
+class ProviderQuote {
+  final int id;
+  final String status;
+  final int providerId;
+  final String providerName;
+  final String? providerCategoryName;
+
+  /// اسم الزبون — في «الطلبات الواردة» وحدها، ولا في «العروض المستلمة».
+  final String? userName;
+
+  final int? eventId;
+  final String? eventTitle;
+  final String? eventDate;
+  final String? wantedDate;
+  final int? guestsCount;
+  final String? note;
+  final String? offerPrice;
+  final String? offerNote;
+  final String? offeredAt;
+  final String? decidedAt;
+  final String? createdAt;
+
+  const ProviderQuote({
+    required this.id,
+    this.status = 'awaiting_offer',
+    this.providerId = 0,
+    this.providerName = '',
+    this.providerCategoryName,
+    this.userName,
+    this.eventId,
+    this.eventTitle,
+    this.eventDate,
+    this.wantedDate,
+    this.guestsCount,
+    this.note,
+    this.offerPrice,
+    this.offerNote,
+    this.offeredAt,
+    this.decidedAt,
+    this.createdAt,
+  });
+
+  factory ProviderQuote.fromJson(Map<String, dynamic> json) => ProviderQuote(
+        id: _toInt(json['id']),
+        status: '${json['status'] ?? 'awaiting_offer'}',
+        providerId: _toInt(json['provider_id']),
+        providerName: '${json['provider_name'] ?? ''}',
+        providerCategoryName: _nullableString(json['provider_category_name']),
+        userName: _nullableString(json['user_name']),
+        eventId: json['event_id'] == null ? null : _toInt(json['event_id']),
+        eventTitle: _nullableString(json['event_title']),
+        eventDate: _nullableString(json['event_date']),
+        wantedDate: _nullableString(json['wanted_date']),
+        guestsCount: json['guests_count'] == null ? null : _toInt(json['guests_count']),
+        note: _nullableString(json['note']),
+        offerPrice: _nullableString(json['offer_price']),
+        offerNote: _nullableString(json['offer_note']),
+        offeredAt: _nullableString(json['offered_at']),
+        decidedAt: _nullableString(json['decided_at']),
+        createdAt: _nullableString(json['created_at']),
+      );
+
+  /// «بانتظار عرض المزوّد» — المزوّد لم يردّ بعد، ولا قرار على الزبون.
+  bool get isAwaitingOffer => status == 'awaiting_offer';
+
+  /// «وصل عرض» — القرار على الزبون، ويُعرض في قسم «بانتظار ردك».
+  bool get isOffered => status == 'offered';
+
+  bool get isAccepted => status == 'accepted';
+
+  /// الإلغاء متاح من `awaiting_offer` و`offered` وحدهما (`cancel` قبل القرار).
+  bool get canCancel => isAwaitingOffer || isOffered;
+}
+
+/// ردّ `POST /api/services/providers/:id/quote-requests` — [channel] يقول أين
+/// ذهب الطلب: `app` صفٌّ كُتب لمزوّد مربوط ([quote] حاضرة ولا [url])،
+/// و`whatsapp` رابطٌ بناه الخادم بلا صفّ ([url] حاضر ولا [quote]).
+class QuoteRequestResult {
+  final String channel;
+  final ProviderQuote? quote;
+  final String? url;
+  final String? message;
+
+  const QuoteRequestResult({
+    required this.channel,
+    this.quote,
+    this.url,
+    this.message,
+  });
+
+  factory QuoteRequestResult.fromJson(Map<String, dynamic> json) {
+    final raw = json['quote'];
+    return QuoteRequestResult(
+      channel: '${json['channel'] ?? 'app'}',
+      quote: raw is Map<String, dynamic> ? ProviderQuote.fromJson(raw) : null,
+      url: _nullableString(json['url']),
+      message: _nullableString(json['message']),
+    );
+  }
+
+  bool get isWhatsApp => channel == 'whatsapp';
+}

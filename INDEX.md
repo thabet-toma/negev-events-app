@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 83 | 29168 |
-| `web` | 8 | 22338 |
-| `mobile/lib` | 69 | 34925 |
+| `server/src` | 83 | 29669 |
+| `web` | 8 | 22685 |
+| `mobile/lib` | 69 | 35796 |
 
 ### توزيع `server/src`
 
@@ -23,13 +23,13 @@
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 156 |
 | `constants.js` | 1 | 388 |
-| `db/` | 4 | 3071 |
+| `db/` | 4 | 3111 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 814 |
 | `privacyNotice.js` | 1 | 125 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 7039 |
-| `services/` | 29 | 16122 |
+| `routes/` | 25 | 7114 |
+| `services/` | 29 | 16508 |
 | `utils/` | 12 | 881 |
 
 ### ملفات `web/*.js`
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8596 |
 | `api.js` | 137 |
-| `app.js` | 12736 |
+| `app.js` | 13083 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2530 |
+| `api/` | 2 | 2615 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
-| `models/` | 12 | 3032 |
-| `screens/` | 21 | 23239 |
+| `models/` | 12 | 3130 |
+| `screens/` | 21 | 23927 |
 | `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -65,7 +65,7 @@
 | المهمة | ابدأ من |
 |---|---|
 | إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:81` — والخدمة `server/src/services/events.service.js` |
-| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2828` |
+| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2860` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 239
+## ٣. نقاط API — 244
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -147,28 +147,28 @@
 | POST | `/api/admin/photos/:id/tags` | `requireAdmin` | `server/src/routes/albums.routes.js:389` |
 | GET | `/api/admin/privacy-requests` | `requireSuperAdmin` | `server/src/routes/privacy.routes.js:113` |
 | PATCH | `/api/admin/privacy-requests/:id` | `requireSuperAdmin` | `server/src/routes/privacy.routes.js:118` |
-| DELETE | `/api/admin/provider-reviews/:rid` | `requireAdmin` | `server/src/routes/services.routes.js:823` |
+| DELETE | `/api/admin/provider-reviews/:rid` | `requireAdmin` | `server/src/routes/services.routes.js:908` |
 | POST | `/api/admin/regions` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:105` |
 | PATCH | `/api/admin/regions/:id` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:119` |
-| GET | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:833` |
-| POST | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:837` |
-| DELETE | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:868` |
-| PATCH | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:852` |
-| GET | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:473` |
-| POST | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:487` |
-| DELETE | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:642` |
-| GET | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:482` |
-| PATCH | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:544` |
-| PATCH | `/api/admin/service-providers/:id/link` | `requireAdmin` | `server/src/routes/services.routes.js:662` |
-| POST | `/api/admin/service-providers/:id/offers` | `requireAdmin` | `server/src/routes/services.routes.js:739` |
-| DELETE | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:769` |
-| PATCH | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:754` |
-| POST | `/api/admin/service-providers/:id/photos` | `requireAdmin` | `server/src/routes/services.routes.js:701` |
-| DELETE | `/api/admin/service-providers/:id/photos/:photoId` | `requireAdmin` | `server/src/routes/services.routes.js:729` |
-| POST | `/api/admin/service-providers/:id/products` | `requireAdmin` | `server/src/routes/services.routes.js:778` |
-| DELETE | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:808` |
-| PATCH | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:793` |
-| PATCH | `/api/admin/service-providers/:id/status` | `requireAdmin` | `server/src/routes/services.routes.js:631` |
+| GET | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:918` |
+| POST | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:922` |
+| DELETE | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:953` |
+| PATCH | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:937` |
+| GET | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:558` |
+| POST | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:572` |
+| DELETE | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:727` |
+| GET | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:567` |
+| PATCH | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:629` |
+| PATCH | `/api/admin/service-providers/:id/link` | `requireAdmin` | `server/src/routes/services.routes.js:747` |
+| POST | `/api/admin/service-providers/:id/offers` | `requireAdmin` | `server/src/routes/services.routes.js:824` |
+| DELETE | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:854` |
+| PATCH | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:839` |
+| POST | `/api/admin/service-providers/:id/photos` | `requireAdmin` | `server/src/routes/services.routes.js:786` |
+| DELETE | `/api/admin/service-providers/:id/photos/:photoId` | `requireAdmin` | `server/src/routes/services.routes.js:814` |
+| POST | `/api/admin/service-providers/:id/products` | `requireAdmin` | `server/src/routes/services.routes.js:863` |
+| DELETE | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:893` |
+| PATCH | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:878` |
+| PATCH | `/api/admin/service-providers/:id/status` | `requireAdmin` | `server/src/routes/services.routes.js:716` |
 | GET | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:187` |
 | PUT | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:191` |
 | DELETE | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:262` |
@@ -278,13 +278,18 @@
 | GET | `/api/search` | `optionalAuthenticate` | `server/src/routes/albums.routes.js:124` |
 | GET | `/api/services/categories` | — | `server/src/routes/services.routes.js:218` |
 | GET | `/api/services/favorites` | `authenticate` | `server/src/routes/services.routes.js:266` |
+| GET | `/api/services/incoming-quotes` | `authenticate` | `server/src/routes/services.routes.js:513` |
+| PUT | `/api/services/incoming-quotes/:qid/offer` | `authenticate` | `server/src/routes/services.routes.js:518` |
 | GET | `/api/services/my-providers` | `authenticate` | `server/src/routes/services.routes.js:459` |
+| GET | `/api/services/my-quotes` | `authenticate` | `server/src/routes/services.routes.js:530` |
+| PATCH | `/api/services/my-quotes/:qid` | `authenticate` | `server/src/routes/services.routes.js:535` |
 | GET | `/api/services/my-services` | `authenticate` | `server/src/routes/services.routes.js:448` |
 | GET | `/api/services/providers` | `optionalAuthenticate` | `server/src/routes/services.routes.js:231` |
 | POST | `/api/services/providers` | `authenticate` | `server/src/routes/services.routes.js:396` |
 | GET | `/api/services/providers/:id` | `optionalAuthenticate` | `server/src/routes/services.routes.js:284` |
 | DELETE | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:278` |
 | PUT | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:271` |
+| POST | `/api/services/providers/:id/quote-requests` | `authenticate` | `server/src/routes/services.routes.js:484` |
 | DELETE | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:334` |
 | PUT | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:307` |
 | GET | `/api/services/providers/:id/reviews` | `optionalAuthenticate` | `server/src/routes/services.routes.js:349` |
@@ -322,7 +327,7 @@
 | GET | `/v/:id` | — | `server/src/routes/share.routes.js:2159` |
 | GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:2186` |
 
-## ٤. جدول قاعدة البيانات ← الخدمة — 55 جدولاً
+## ٤. جدول قاعدة البيانات ← الخدمة — 56 جدولاً
 
 الجدول من `server/src/db/schema.sql`، والخدمات التي يظهر اسمها في كودها (بحث لفظي بحدود الكلمة).
 
@@ -348,11 +353,11 @@
 | `event_reminders` | `admin.service.js`, `events.service.js`, `notifications.service.js`, `stories.service.js` |
 | `event_rsvps` | `events.service.js` |
 | `event_videos` | `albums.service.js` |
-| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `eventCards.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `shareCard.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
+| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `eventCards.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `services.service.js`, `shareCard.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
 | `live_episodes` | `liveHub.service.js` |
 | `live_poll_votes` | `liveHub.service.js` |
 | `nokoot_ledger` | `nokoot.service.js` |
-| `notifications` | `activity.service.js`, `admin.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `notifications.service.js`, `push.service.js` |
+| `notifications` | `activity.service.js`, `admin.service.js`, `auth.service.js`, `broadcasts.service.js`, `events.service.js`, `notifications.service.js`, `push.service.js`, `services.service.js` |
 | `occasion_type_fields` | `notifications.service.js`, `occasionTypes.service.js` |
 | `occasion_type_messages` | `occasionTypes.service.js` |
 | `occasion_type_reactions` | `occasionTypes.service.js` |
@@ -366,6 +371,7 @@
 | `provider_review_reports` | `services.service.js` |
 | `provider_reviews` | `services.service.js` |
 | `push_subscriptions` | `push.service.js` |
+| `quote_requests` | `notifications.service.js`, `services.service.js` |
 | `reactions` | `admin.service.js`, `events.service.js`, `occasionTypes.service.js` |
 | `regions` | `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `events.service.js`, `notifications.service.js`, `push.service.js`, `services.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js` |
 | `service_categories` | `services.service.js` |

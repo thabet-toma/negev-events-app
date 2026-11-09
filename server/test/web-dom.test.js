@@ -20236,6 +20236,475 @@ async function run() {
     );
   });
 
+  // ==================================================================
+  // «اطلب عرض سعر»: الطلبات الواردة والعروض المستلمة (تذكرة #188)
+  // ==================================================================
+  console.log('\n«اطلب عرض سعر» (#188): قناتان، وطلبات واردة، وثلاثة أقسام للعروض');
+
+  /** مزوّد عام كما تخدمه `GET /api/services/providers/:id`. */
+  function quoteProviderFixture(overrides = {}) {
+    return {
+      id: 921,
+      name: 'مزوّد عروض الأسعار',
+      category_id: 9,
+      category_name: 'صالات أفراح',
+      category_icon: '🏛️',
+      category_color: '#8a6109',
+      has_phone: true,
+      phone: '0501234567',
+      image_url: null,
+      description: 'قاعة واسعة',
+      hours: null,
+      price: 100,
+      price_type: 'fixed',
+      price_estimate_desc: null,
+      attributes: {},
+      is_verified: false,
+      is_featured: false,
+      towns: ['رهط'],
+      views_count: 7,
+      favorites_count: 2,
+      rating_avg: null,
+      rating_count: 0,
+      rating_distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      is_favorite: false,
+      is_linked_provider: false,
+      my_review: null,
+      gallery: [],
+      offers: [],
+      products: [],
+      similar: [],
+      ...overrides
+    };
+  }
+
+  /** صفّ طلب عرض سعر كما يخدمه `shapeQuoteRow` في الخادم. */
+  function quoteRowFixture(overrides = {}) {
+    return {
+      id: 3101,
+      status: 'awaiting_offer',
+      provider_id: 921,
+      provider_name: 'مزوّد عروض الأسعار',
+      provider_category_name: 'صالات أفراح',
+      user_name: 'سالم',
+      event_id: null,
+      event_title: null,
+      event_date: null,
+      wanted_date: '2027-06-01',
+      guests_count: 250,
+      note: 'عرس في قاعة كبيرة',
+      offer_price: null,
+      offer_note: null,
+      offered_at: null,
+      decided_at: null,
+      created_at: '2026-11-10T10:00:00.000Z',
+      ...overrides
+    };
+  }
+
+  /**
+   * عميل وهمي لعروض الأسعار: `channel` يحدّده الاختبار، والطلبات الواردة
+   * مجموعةٌ تتغيّر بردّ العرض، و«العروض المستلمة» تصفّيها بنفس قاعدة الخادم
+   * (`awaiting` = `offered`، و`accepted` = `accepted`) فلا تُفلتر في العميل.
+   */
+  function instrumentQuotes(win, { requestChannel = 'app', incoming = [], myQuoteRows = [] } = {}) {
+    const calls = [];
+    const state = { incoming: [...incoming], myQuoteRows: [...myQuoteRows] };
+
+    win.fetch = async (url, options = {}) => {
+      const raw = String(url);
+      const requestPath = raw.split('?')[0];
+      const search = raw.includes('?') ? new URLSearchParams(raw.slice(raw.indexOf('?') + 1)) : new URLSearchParams();
+      const method = options.method || 'GET';
+      let sentBody = null;
+      try {
+        sentBody = options.body ? JSON.parse(options.body) : null;
+      } catch (e) {
+        sentBody = null;
+      }
+      calls.push({ path: requestPath, method, body: sentBody, tab: search.get('tab') });
+
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({
+          success: true,
+          settings: { support_whatsapp_number: null, default_event_audio_url: null, providers_display: 'compact' }
+        });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      if (requestPath === '/api/my-events') {
+        return jsonResponse({
+          success: true,
+          events: [{ id: 501, title: 'عرس سالم', event_date: '2027-06-15' }]
+        });
+      }
+      if (requestPath === '/api/services/providers/921' && method === 'GET') {
+        return jsonResponse({ success: true, provider: quoteProviderFixture() });
+      }
+      if (requestPath === '/api/services/providers/921/view' && method === 'POST') {
+        return jsonResponse({ success: true, counted: false, views_count: 7 });
+      }
+      if (requestPath === '/api/services/providers/921/reviews' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          reviews: [],
+          pagination: { page: 1, limit: 5, total: 0, totalPages: 0 }
+        });
+      }
+      if (requestPath === '/api/services/providers/921/quote-requests' && method === 'POST') {
+        if (requestChannel === 'whatsapp') {
+          return jsonResponse({
+            success: true,
+            channel: 'whatsapp',
+            quote: null,
+            url: 'https://wa.me/972501234567?text=%D8%B7%D9%84%D8%A8%20%D8%B9%D8%B1%D8%B6',
+            message: 'أكمل طلبك في واتساب برسالة جاهزة فيها تفاصيله'
+          });
+        }
+        return jsonResponse(
+          {
+            success: true,
+            channel: 'app',
+            quote: (() => {
+              const created = quoteRowFixture({
+                id: 3102,
+                event_id: sentBody && sentBody.event_id ? sentBody.event_id : null,
+                wanted_date: sentBody ? sentBody.wanted_date || null : null,
+                guests_count: sentBody && sentBody.guests_count ? sentBody.guests_count : null,
+                note: sentBody ? sentBody.note || null : null,
+                event_title: 'عرس سالم'
+              });
+              // الصفّ يُضاف إلى مصدر القائمة، فتظهر بطاقته من إعادة القراءة
+              // وحدها — لا من نصّ يبنيه العميل.
+              state.myQuoteRows = [created, ...state.myQuoteRows];
+              return created;
+            })(),
+            message: 'وصل طلبك إلى المزوّد — سيصلك عرضه في «العروض المستلمة»'
+          },
+          { status: 201 }
+        );
+      }
+      if (requestPath === '/api/services/incoming-quotes' && method === 'GET') {
+        return jsonResponse({ success: true, quotes: state.incoming });
+      }
+      const offerMatch = requestPath.match(/^\/api\/services\/incoming-quotes\/(\d+)\/offer$/);
+      if (offerMatch && method === 'PUT') {
+        const id = Number(offerMatch[1]);
+        state.incoming = state.incoming.map(row =>
+          row.id === id
+            ? {
+                ...row,
+                status: 'offered',
+                offer_price: sentBody.price,
+                offer_note: sentBody.note || null,
+                offered_at: '2026-11-11T09:00:00.000Z'
+              }
+            : row
+        );
+        return jsonResponse({
+          success: true,
+          quote: state.incoming.find(row => row.id === id),
+          message: 'تم إرسال عرضك إلى الزبون'
+        });
+      }
+      if (requestPath === '/api/services/my-quotes' && method === 'GET') {
+        const tab = search.get('tab') || 'all';
+        const quotes = tab === 'awaiting'
+          ? state.myQuoteRows.filter(row => row.status === 'offered')
+          : tab === 'accepted'
+            ? state.myQuoteRows.filter(row => row.status === 'accepted')
+            : state.myQuoteRows;
+        return jsonResponse({ success: true, quotes });
+      }
+      const decideMatch = requestPath.match(/^\/api\/services\/my-quotes\/(\d+)$/);
+      if (decideMatch && method === 'PATCH') {
+        const id = Number(decideMatch[1]);
+        const action = sentBody ? sentBody.action : '';
+        const nextStatus = action === 'accept' ? 'accepted' : action === 'decline' ? 'declined' : 'cancelled';
+        state.myQuoteRows = state.myQuoteRows.map(row =>
+          row.id === id ? { ...row, status: nextStatus, decided_at: '2026-11-12T09:00:00.000Z' } : row
+        );
+        return jsonResponse({
+          success: true,
+          quote: state.myQuoteRows.find(row => row.id === id),
+          message: 'تم تحديث طلب عرض السعر'
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    return { calls, state };
+  }
+
+  await test('«اطلب عرض سعر»: الزرّ يفتح النموذج، والجسم يحمل التاريخ والمعازيم والملاحظة والمناسبة', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentQuotes(win, {
+      // صفٌّ قديم في القائمة (معرّف مختلف) كي يكون لردّ القناة `app` أثرٌ مرسوم
+      // يُنتظر: بطاقة الطلب الجديد لا تظهر إلا بعد إعادة قراءة «العروض المستلمة».
+      myQuoteRows: [quoteRowFixture({ id: 3109, status: 'awaiting_offer' })]
+    });
+    await flushBoot();
+
+    await win.openProviderModal(921);
+    await waitFor(() => document.getElementById('providerModal').style.display === 'flex');
+
+    const quoteBtn = document.getElementById('providerQuoteBtn');
+    assert.ok(quoteBtn, 'الزرّ في نافذة المزوّد');
+    quoteBtn.click();
+
+    assert.strictEqual(
+      document.getElementById('providerQuoteModal').style.display,
+      'flex',
+      'والنموذج فُتح فوقها'
+    );
+    assert.strictEqual(
+      document.getElementById('providerQuoteProviderId').value,
+      '921',
+      'ويحمل معرّف المزوّد لا معرّفاً من العميل'
+    );
+
+    // المناسبة تأتي من `GET /api/my-events` — الانتظار على الخيار المرسوم.
+    await waitFor(() => document.querySelectorAll('#providerQuoteEventSelect option').length === 2);
+    const eventOptions = document.getElementById('providerQuoteEventSelect').options;
+    assert.strictEqual(eventOptions[1].value, '501', 'ومعيَّنة من مناسبات الحساب');
+    assert.ok(eventOptions[1].textContent.includes('عرس سالم'), 'وباسمها');
+
+    document.getElementById('providerQuoteDate').value = '2027-06-15';
+    document.getElementById('providerQuoteGuests').value = '250';
+    document.getElementById('providerQuoteNote').value = 'عرس في قاعة كبيرة';
+    document.getElementById('providerQuoteEventSelect').value = '501';
+    document.getElementById('providerQuoteForm').dispatchEvent(
+      new win.Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    // الانتظار على الحالة المرسومة (النموذج أُغلق) لا على سجلّ النداءات.
+    await waitFor(() => document.getElementById('providerQuoteModal').style.display === 'none');
+    const sent = calls.find(
+      call => call.method === 'POST' && call.path === '/api/services/providers/921/quote-requests'
+    );
+    assert.ok(sent, 'الطلب أُرسل إلى مسار المزوّد');
+    assert.strictEqual(sent.body.wanted_date, '2027-06-15', 'التاريخ كما اختاره');
+    assert.strictEqual(sent.body.guests_count, 250, 'وعدد المعازيم رقماً لا نصّاً');
+    assert.strictEqual(sent.body.note, 'عرس في قاعة كبيرة', 'والملاحظة كما كُتبت');
+    assert.strictEqual(sent.body.event_id, 501, 'ومعرّف المناسبة رقماً');
+
+    // الطلب في القناة `app` يُحدِّث «العروض المستلمة»: الانتظار على القسم المرسوم
+    // بعد الردّ لا على `calls` — النداء يُسجَّل متزامناً قبل أن تُحلّ الاستجابة.
+    await waitFor(() => document.getElementById('accountMyQuotesSection').hidden === false);
+    assert.ok(
+      document.querySelector('#accountMyQuotesList .quote-card[data-quote-id="3102"]'),
+      'والطلب الجديد يظهر في «العروض المستلمة» بعد الإرسال'
+    );
+    assert.strictEqual(
+      document.getElementById('providerModal').style.display,
+      'flex',
+      'ونافذة المزوّد تبقى مفتوحة تحت النموذج'
+    );
+  });
+
+  await test('المزوّد غير المربوط: تُفتح `url` التي بناها الخادم، ولا حقول مخترعة في الجسم', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const opened = [];
+    win.open = url => {
+      opened.push(url);
+      return null;
+    };
+    const { calls } = instrumentQuotes(win, { requestChannel: 'whatsapp' });
+    await flushBoot();
+
+    await win.openProviderModal(921);
+    await waitFor(() => document.getElementById('providerModal').style.display === 'flex');
+    document.getElementById('providerQuoteBtn').click();
+    assert.strictEqual(
+      document.getElementById('providerQuoteModal').style.display,
+      'flex',
+      'النموذج فُتح — أي حساب مسجَّل يطلب من غير المربوط أيضاً'
+    );
+
+    document.getElementById('providerQuoteForm').dispatchEvent(
+      new win.Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    await waitFor(() => document.getElementById('providerQuoteModal').style.display === 'none');
+    assert.strictEqual(opened.length, 1, 'رابط واحد فُتح');
+    assert.ok(opened[0].startsWith('https://wa.me/'), 'والرابط كما بناه الخادم');
+    assert.ok(opened[0].includes('text='), 'وفيه رسالته الجاهزة');
+
+    const sent = calls.find(
+      call => call.method === 'POST' && call.path === '/api/services/providers/921/quote-requests'
+    );
+    assert.ok(sent, 'والطلب أُرسل ليقرّر الخادم القناة');
+    assert.ok(!('event_id' in sent.body), 'ولا مناسبة حين لم تُنتقَ');
+    assert.ok(!('guests_count' in sent.body), 'ولا عدد معازيم حين لم يُكتب');
+    assert.ok(!('wanted_date' in sent.body), 'ولا تاريخ حين لم يُكتب');
+  });
+
+  await test('«الطلبات الواردة»: تفاصيل الطالب، والعرض يذهب بـPUT ويُعاد رسمه من الخادم', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentQuotes(win, {
+      incoming: [
+        quoteRowFixture({
+          id: 3101,
+          status: 'awaiting_offer',
+          user_name: 'سالم',
+          event_title: 'عرس سالم',
+          event_date: '2027-06-15',
+          note: 'عرس في قاعة كبيرة'
+        })
+      ]
+    });
+    await flushBoot();
+
+    win.loadAccountView();
+    await waitFor(() => document.getElementById('accountIncomingQuotesSection').hidden === false);
+
+    const card = document.querySelector('#accountIncomingQuotesList .quote-card[data-quote-id="3101"]');
+    assert.ok(card, 'بطاقة لكل طلب وارد');
+    assert.ok(card.textContent.includes('سالم'), 'باسم الطالب');
+    assert.ok(card.textContent.includes('عرس سالم'), 'وبالمناسبة');
+    assert.ok(card.textContent.includes('2027-06-01'), 'والتاريخ المرغوب');
+    assert.ok(card.textContent.includes('250'), 'وعدد المعازيم');
+    assert.ok(card.textContent.includes('عرس في قاعة كبيرة'), 'والملاحظة');
+
+    card.querySelector('.quote-offer-price').value = '1500 شيكل';
+    card.querySelector('.quote-offer-note').value = 'شامل الكراسي';
+    card.querySelector('.quote-offer-btn').click();
+
+    // الانتظار على الحالة المرسومة: ذهب نموذج العرض وحلّ سطر العرض.
+    await waitFor(
+      () => !document.querySelector('#accountIncomingQuotesList .quote-card[data-quote-id="3101"] .quote-offer-btn')
+    );
+    const sent = calls.find(
+      call => call.method === 'PUT' && call.path === '/api/services/incoming-quotes/3101/offer'
+    );
+    assert.ok(sent, 'العرض أُرسل على مسار الطلب نفسه');
+    assert.strictEqual(sent.body.price, '1500 شيكل', 'السعر نصّاً كما كتبه المزوّد');
+    assert.strictEqual(sent.body.note, 'شامل الكراسي', 'والملاحظة');
+    assert.ok(
+      document
+        .querySelector('#accountIncomingQuotesList .quote-card[data-quote-id="3101"]')
+        .textContent.includes('عرضك: 1500 شيكل'),
+      'وسطر العرض يُرسم من ردّ الخادم لا من نصّ محلي'
+    );
+  });
+
+  await test('«العروض المستلمة»: ثلاثة أقسام يفلترها الخادم، وأزرارها بحسب الحالة', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentQuotes(win, {
+      myQuoteRows: [
+        quoteRowFixture({ id: 3201, status: 'offered', offer_price: '1500 شيكل', offer_note: 'شامل الكراسي' }),
+        quoteRowFixture({ id: 3202, status: 'accepted', offer_price: '900 شيكل' }),
+        quoteRowFixture({ id: 3203, status: 'awaiting_offer' })
+      ]
+    });
+    await flushBoot();
+
+    win.loadAccountView();
+    await waitFor(() => document.getElementById('accountMyQuotesSection').hidden === false);
+    await waitFor(() => document.querySelectorAll('#accountMyQuotesList .quote-card').length === 3);
+
+    const first = calls.find(call => call.path === '/api/services/my-quotes');
+    assert.strictEqual(first.tab, 'all', 'القراءة الأولى على قسم «الكل»');
+    assert.strictEqual(
+      document.querySelector('.quote-tab[data-quote-tab="all"]').classList.contains('is-active'),
+      true,
+      'وتبويبه هو المبروز'
+    );
+    assert.ok(
+      document.getElementById('accountMyQuotesList').textContent.includes('بانتظار عرض المزوّد'),
+      'وحالة «لم يردّ المزوّد» تظهر على البطاقة'
+    );
+
+    const offeredCard = document.querySelector('#accountMyQuotesList .quote-card[data-quote-id="3201"]');
+    assert.ok(offeredCard.querySelector('.quote-accept'), 'للعرض الواصل قبول');
+    assert.ok(offeredCard.querySelector('.quote-decline'), 'ورفض');
+    assert.ok(offeredCard.querySelector('.quote-cancel'), 'وإلغاء');
+    assert.ok(offeredCard.textContent.includes('العرض: 1500 شيكل'), 'وسعره ظاهر');
+
+    const pendingCard = document.querySelector('#accountMyQuotesList .quote-card[data-quote-id="3203"]');
+    assert.strictEqual(pendingCard.querySelector('.quote-accept'), null, 'وما لم يصله عرض لا قرار فيه');
+    assert.ok(pendingCard.querySelector('.quote-cancel'), 'لكن يُلغى قبل القرار');
+
+    const acceptedCard = document.querySelector('#accountMyQuotesList .quote-card[data-quote-id="3202"]');
+    assert.strictEqual(acceptedCard.querySelector('.quote-action'), null, 'والمقبول بلا أزرار');
+
+    document.querySelector('.quote-tab[data-quote-tab="awaiting"]').click();
+    await waitFor(() => document.querySelectorAll('#accountMyQuotesList .quote-card').length === 1);
+    assert.ok(
+      calls.some(call => call.path === '/api/services/my-quotes' && call.tab === 'awaiting'),
+      'وقسم «بانتظار ردك» طُلب من الخادم بتبويبه'
+    );
+    assert.strictEqual(
+      document.querySelector('#accountMyQuotesList .quote-card').dataset.quoteId,
+      '3201',
+      'ويعرض المعروض وحده — لا الانتظار ولا المقبول'
+    );
+
+    document.querySelector('#accountMyQuotesList .quote-card[data-quote-id="3201"] .quote-accept').click();
+    await waitFor(() => calls.some(call => call.method === 'PATCH' && call.path === '/api/services/my-quotes/3201'));
+    const decided = calls.find(call => call.method === 'PATCH' && call.path === '/api/services/my-quotes/3201');
+    assert.strictEqual(decided.body.action, 'accept', 'والقرار يُرسل action=accept');
+
+    await waitFor(() => document.querySelectorAll('#accountMyQuotesList .quote-card').length === 0);
+    assert.ok(
+      document.getElementById('accountMyQuotesList').textContent.includes('لا طلبات في هذا القسم'),
+      'وفراغ القسم المختار رسالة لا اختفاء للقسم كله'
+    );
+    assert.strictEqual(
+      document.getElementById('accountMyQuotesSection').hidden,
+      false,
+      'والتبويبات باقية كي يُنتقل إلى غيره'
+    );
+
+    document.querySelector('.quote-tab[data-quote-tab="accepted"]').click();
+    await waitFor(() => document.querySelectorAll('#accountMyQuotesList .quote-card').length === 2);
+    assert.strictEqual(
+      document.querySelector('.quote-tab[data-quote-tab="accepted"]').classList.contains('is-active'),
+      true,
+      'وتبويب «مقبولة» صار مبروزاً'
+    );
+  });
+
+  await test('قسمَا الطلبات والعروض يختفيان كاملاً حين لا صفوف — ولا بطاقة قديمة تبقى', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    instrumentQuotes(win, {
+      incoming: [quoteRowFixture({ id: 3301 })],
+      myQuoteRows: [quoteRowFixture({ id: 3302, status: 'offered' })]
+    });
+    await flushBoot();
+
+    win.loadAccountView();
+    await waitFor(() => document.getElementById('accountIncomingQuotesSection').hidden === false);
+    await waitFor(() => document.getElementById('accountMyQuotesSection').hidden === false);
+    assert.ok(document.querySelector('#accountIncomingQuotesList .quote-card'), 'القسمان ظاهران بصفوفهما');
+
+    // لا طلبات ولا عروض بعدها: القسمان يختفيان ولا يبقى رسم قديم.
+    instrumentQuotes(win, { incoming: [], myQuoteRows: [] });
+    win.loadIncomingQuotes();
+    win.loadMyQuotes('all');
+    await waitFor(() => document.getElementById('accountIncomingQuotesSection').hidden === true);
+    await waitFor(() => document.getElementById('accountMyQuotesSection').hidden === true);
+    assert.strictEqual(
+      document.getElementById('accountIncomingQuotesList').children.length,
+      0,
+      'ولا بطاقة طلب تبقى من الرسم السابق'
+    );
+    assert.strictEqual(
+      document.getElementById('accountMyQuotesList').children.length,
+      0,
+      'ولا بطاقة عرض تبقى'
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

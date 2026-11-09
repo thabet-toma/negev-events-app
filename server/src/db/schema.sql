@@ -1000,6 +1000,52 @@ CREATE TABLE IF NOT EXISTS provider_review_reports (
     REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- طلبات عروض الأسعار (تذكرة #188، ADR-0016): الزبون يطلب عرضاً من مزوّد،
+-- والمزوّد المربوط بحساب يردّ بسعر وملاحظة، ثم يقبل الزبون أو يرفض أو يلغي.
+--
+-- **الخمس حالات هي الانتقالات المسموحة حصراً** (`services.service.js` وحدها تكتبها):
+-- `awaiting_offer` ← `offered` (عرض المزوّد) ← `accepted` | `declined` (قرار
+-- الزبون)، و`cancel` من `awaiting_offer` أو `offered` ← `cancelled`. وأي انتقال
+-- آخر 409، والحكم على الحالة **في قراءة مقفولة** (`SELECT … FOR UPDATE` على
+-- الصفّ في المعاملة نفسها) ثم تحديث لا يحمل شرط حالة — كي لا يعتمد الحكم على
+-- `affectedRows` الذي يعدّ الصفّ الموجود صفاً «متأثّراً» (`CLIENT_FOUND_ROWS`).
+--
+-- **ولا صفّ لمزوّد غير مربوط أبداً** (ADR-0016 §3): طلبه يعود رابط واتساب بلا
+-- كتابة، وعلى هذا الجدول وحده تُبنى «العروض المستلمة» — لا ما لا يمكن أن يأتي
+-- ردّه داخل التطبيق. و`user_id` مفتاح الفلترة داخل الاستعلام (`WHERE user_id = ?`)،
+-- و`provider_id` هو مفتاح نطاق الحساب المربوط (`JOIN service_providers … WHERE
+-- sp.linked_user_id = ?`)، فلا فلترة بعد الجلب.
+--
+-- و`offer_price` **نصّ** كما يكتبه المزوّد (`VARCHAR(100)`، قد يحمل «تبدأ من»
+-- أو عملة) — لا تحويل ولا عمود رقم، و`offered_at`/`decided_at` يكتبهما الخادم
+-- بـ`NOW()`. و`event_id` اختياري (`ON DELETE SET NULL`): حذف المناسبة لا يحذف
+-- طلب عرض السعر الذي بُنِي عليها.
+CREATE TABLE IF NOT EXISTS quote_requests (
+  id           INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  provider_id  INT UNSIGNED  NOT NULL,
+  user_id      INT UNSIGNED  NOT NULL,
+  event_id     INT UNSIGNED  DEFAULT NULL,
+  wanted_date  DATE          DEFAULT NULL,
+  guests_count INT UNSIGNED  DEFAULT NULL,
+  note         VARCHAR(1000) DEFAULT NULL,
+  status       ENUM('awaiting_offer', 'offered', 'accepted', 'declined', 'cancelled') NOT NULL DEFAULT 'awaiting_offer',
+  offer_price  VARCHAR(100)  DEFAULT NULL,
+  offer_note   VARCHAR(1000) DEFAULT NULL,
+  offered_at   DATETIME      DEFAULT NULL,
+  decided_at   DATETIME      DEFAULT NULL,
+  created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_quote_requests_provider (provider_id, status),
+  KEY idx_quote_requests_user (user_id, status),
+  CONSTRAINT fk_quote_requests_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_quote_requests_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_quote_requests_event FOREIGN KEY (event_id)
+    REFERENCES events(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Behavioural analytics (issue #44). The governing rule this table is built
 -- around: we record what a person DID in the app, never what they READ in
 -- it — a row saying "this named person opened this particular عزاء" reads as
