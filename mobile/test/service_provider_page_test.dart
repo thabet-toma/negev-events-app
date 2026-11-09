@@ -409,4 +409,378 @@ void main() {
       );
     });
   });
+
+  group('تقييمات المزوّد (#186)', () {
+    /// مزوّد مقيَّم كما يعيده `GET /api/services/providers/:id` بعد #186، ومعه
+    /// تقييم صاحبه في `my_review` — منه تعرف الشاشة أتعرض حذفاً أم كتابة.
+    Map<String, dynamic> ratedProvider() => richProvider()
+      ..['rating_avg'] = 4.5
+      ..['rating_count'] = 2
+      ..['rating_distribution'] = <String, dynamic>{'1': 0, '2': 0, '3': 1, '4': 0, '5': 1}
+      ..['my_review'] = <String, dynamic>{
+        'id': 501,
+        'rating': 4,
+        'body': 'تجربتي',
+        'status': 'visible',
+        'created_at': '2026-11-01T10:00:00.000Z',
+      };
+
+    List<Map<String, dynamic>> reviewFixtures() => [
+          {
+            'id': 501,
+            'rating': 4,
+            'body': 'تجربتي',
+            'user_name': 'أنا',
+            'created_at': '2026-11-01T10:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+          },
+          {
+            'id': 502,
+            'rating': 5,
+            'body': 'خدمة ممتازة',
+            'user_name': 'مريم',
+            'created_at': '2026-11-02T10:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+          },
+        ];
+
+    /// عميل وهمي للتقييمات: `/reviews` مرقّمة، وPUT/DELETE يعيدان ملخّصاً
+    /// محدَّثاً كما يفعل الخادم — فلا حساب محلي في الاختبار ولا في الشاشة.
+    NegevApi reviewApi(
+      Map<String, dynamic> provider,
+      List<http.Request> requests, {
+      List<Map<String, dynamic>>? reviews,
+    }) {
+      var ratingAvg = (provider['rating_avg'] as num?)?.toDouble() ?? 4.5;
+      var ratingCount = (provider['rating_count'] as num?)?.toInt() ?? 2;
+      final distribution =
+          Map<String, dynamic>.from(provider['rating_distribution'] as Map? ?? const {});
+      final list = [...(reviews ?? reviewFixtures())];
+
+      http.Response jsonResponse(Map<String, dynamic> body) => http.Response(
+            jsonEncode(body),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        final method = request.method;
+
+        if (path.endsWith('/api/auth/login')) {
+          return jsonResponse({
+            'success': true,
+            'token': 'test-token',
+            'user': {
+              'id': 1,
+              'phone_number': '0500000000',
+              'full_name': 'مستخدم اختبار',
+              'role': 'user',
+            },
+          });
+        }
+        if (path.endsWith('/view')) {
+          return jsonResponse({'success': true, 'counted': true, 'views_count': 13});
+        }
+        if (path.endsWith('/reviews') && method == 'GET') {
+          final page = int.tryParse(request.url.queryParameters['page'] ?? '1') ?? 1;
+          final limit = int.tryParse(request.url.queryParameters['limit'] ?? '5') ?? 5;
+          return jsonResponse({
+            'success': true,
+            'reviews': list.skip((page - 1) * limit).take(limit).toList(),
+            'pagination': {
+              'page': page,
+              'limit': limit,
+              'total': list.length,
+              'totalPages': (list.length / limit).ceil(),
+            },
+          });
+        }
+        if (path.endsWith('/review') && method == 'PUT') {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          ratingAvg = 4.3;
+          ratingCount = 3;
+          return jsonResponse({
+            'success': true,
+            'review': {
+              'id': 501,
+              'rating': body['rating'],
+              'body': body['body'],
+              'user_name': 'أنا',
+              'created_at': '2026-11-01T10:00:00.000Z',
+              'is_mine': true,
+              'can_delete': true,
+            },
+            'rating_avg': ratingAvg,
+            'rating_count': ratingCount,
+            'rating_distribution': distribution,
+          });
+        }
+        if (path.endsWith('/review') && method == 'DELETE') {
+          list.removeWhere((review) => review['id'] == 501);
+          ratingAvg = 4.0;
+          ratingCount = 1;
+          return jsonResponse({
+            'success': true,
+            'deleted': true,
+            'rating_avg': ratingAvg,
+            'rating_count': ratingCount,
+            'rating_distribution': distribution,
+          });
+        }
+        if (path.endsWith('/report') && method == 'POST') {
+          return jsonResponse({'success': true, 'reports_count': 1, 'status': 'visible'});
+        }
+        if (path.endsWith('/whatsapp')) {
+          return jsonResponse({
+            'success': true,
+            'url': 'https://wa.me/972501234567?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7',
+          });
+        }
+        if (path == '/api/services/providers/701') {
+          return jsonResponse({
+            'success': true,
+            'provider': {
+              ...provider,
+              'rating_avg': ratingAvg,
+              'rating_count': ratingCount,
+              'rating_distribution': distribution,
+            },
+          });
+        }
+        return jsonResponse({'success': true});
+      });
+      return NegevApi(ApiClient(client: client));
+    }
+
+    testWidgets('تعرض ★ المتوسط والعدد وتوزيع النجوم الخمسة والتعليقات', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, reviewApi(ratedProvider(), requests));
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_stat_value'))).data,
+        '4.5',
+        reason: 'المتوسط من الخادم في سطر الإحصاءات',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_avg'))).data,
+        '4.5',
+      );
+      expect(find.text('(2 تقييماً)'), findsOneWidget);
+
+      for (var stars = 1; stars <= 5; stars += 1) {
+        expect(
+          find.byKey(Key('provider_rating_dist_count_$stars')),
+          findsOneWidget,
+          reason: 'عمود لكل نجمة من 1 إلى 5',
+        );
+      }
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_dist_count_5'))).data,
+        '1',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_dist_count_3'))).data,
+        '1',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_dist_count_1'))).data,
+        '0',
+        reason: 'النجمة غير الموجودة صفر لا فراغ',
+      );
+
+      expect(find.byKey(const Key('provider_review_501')), findsOneWidget);
+      expect(find.byKey(const Key('provider_review_502')), findsOneWidget);
+      expect(find.text('خدمة ممتازة'), findsOneWidget);
+      // «تقييمي» يُعرف من my_review حتى والقائمة عامة بلا هوية كاتبة.
+      expect(find.byKey(const Key('provider_review_delete_501')), findsOneWidget);
+      expect(find.byKey(const Key('provider_review_report_501')), findsNothing);
+      expect(find.byKey(const Key('provider_review_report_502')), findsOneWidget);
+    });
+
+    testWidgets('مزوّد بلا تقييمات: لا نجمة ولا توزيع، ودعوة أول مقيِّم', (tester) async {
+      final provider = richProvider()
+        ..['rating_avg'] = null
+        ..['rating_count'] = 0
+        ..['rating_distribution'] = <String, dynamic>{'1': 0, '2': 0, '3': 0, '4': 0, '5': 0}
+        ..['my_review'] = null;
+      final requests = <http.Request>[];
+
+      await pumpProviderPage(tester, reviewApi(provider, requests, reviews: []));
+
+      expect(find.byKey(const Key('provider_rating_stat_value')), findsNothing);
+      expect(find.byKey(const Key('provider_rating_distribution')), findsNothing);
+      expect(find.byKey(const Key('provider_reviews_empty')), findsOneWidget);
+      expect(find.byKey(const Key('provider_write_review_btn')), findsOneWidget);
+    });
+
+    testWidgets('ورقة التقييم ترسل النجوم وconfirm_phone: true ثم تحدّث المتوسط', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, reviewApi(ratedProvider(), requests), signedIn: true);
+
+      final detailsRequest = requests.firstWhere(
+        (request) =>
+            request.method == 'GET' &&
+            request.url.path == '/api/services/providers/701',
+      );
+      expect(
+        detailsRequest.headers['Authorization'],
+        'Bearer test-token',
+        reason: 'التفصيل يُقرأ بالرمز كي يعود my_review لصاحبه',
+      );
+
+      await tester.tap(find.byKey(const Key('provider_write_review_btn')));
+      await settleFrames(tester);
+      expect(find.byKey(const Key('provider_review_stars')), findsOneWidget, reason: 'الورقة فُتحت');
+
+      await tester.tap(find.byKey(const Key('provider_review_star_4')));
+      await tester.enterText(find.byKey(const Key('provider_review_body')), 'تجربة ممتازة');
+      await tester.tap(find.byKey(const Key('provider_review_confirm_phone')));
+      await settleFrames(tester);
+      await tester.tap(find.byKey(const Key('provider_review_submit')));
+      await settleFrames(tester);
+
+      final puts = requests
+          .where((request) =>
+              request.method == 'PUT' &&
+              request.url.path.endsWith('/api/services/providers/701/review'))
+          .toList();
+      expect(puts, hasLength(1), reason: 'نداء كتابة واحد');
+      final body = jsonDecode(puts.single.body) as Map<String, dynamic>;
+      expect(body['rating'], 4, reason: 'النجمة المختارة');
+      expect(body['body'], 'تجربة ممتازة');
+      expect(body['confirm_phone'], true, reason: 'المربّع يُرسل الإقرار منطقياً');
+      expect(find.byKey(const Key('provider_review_stars')), findsNothing, reason: 'الورقة أُغلقت');
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_avg'))).data,
+        '4.3',
+        reason: 'المتوسط من ردّ الخادم',
+      );
+    });
+
+    testWidgets('حذف تقييمي من الورقة يرسل DELETE ويحدّث المتوسط والتعليقات', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, reviewApi(ratedProvider(), requests), signedIn: true);
+
+      await tester.tap(find.byKey(const Key('provider_write_review_btn')));
+      await settleFrames(tester);
+      expect(find.byKey(const Key('provider_review_delete')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('provider_review_delete')));
+      await settleFrames(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'احذف'));
+      await settleFrames(tester);
+
+      expect(
+        requests.where((request) =>
+            request.method == 'DELETE' &&
+            request.url.path.endsWith('/api/services/providers/701/review')),
+        hasLength(1),
+        reason: 'الحذف عبر مسار التقييم نفسه',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_rating_avg'))).data,
+        '4.0',
+      );
+      expect(find.byKey(const Key('provider_review_501')), findsNothing);
+      expect(find.byKey(const Key('provider_review_502')), findsOneWidget);
+    });
+
+    testWidgets('قائمة التعليقات مرقّمة و«المزيد» يضيف الصفحة التالية', (tester) async {
+      final requests = <http.Request>[];
+      final many = [
+        for (var index = 0; index < 6; index += 1)
+          {
+            'id': 600 + index,
+            'rating': 5,
+            'body': 'تعليق ${600 + index}',
+            'user_name': 'مستخدم ${600 + index}',
+            'created_at': '2026-11-01T10:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+          }
+      ];
+
+      await pumpProviderPage(
+        tester,
+        reviewApi(ratedProvider(), requests, reviews: many),
+      );
+
+      expect(find.byKey(const Key('provider_review_600')), findsOneWidget);
+      expect(find.byKey(const Key('provider_review_604')), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_review_605')),
+        findsNothing,
+        reason: 'الصفحة الثانية لم تُطلب بعد',
+      );
+      expect(find.byKey(const Key('provider_reviews_more')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('provider_reviews_more')));
+      await settleFrames(tester);
+
+      expect(find.byKey(const Key('provider_review_605')), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_reviews_more')),
+        findsNothing,
+        reason: 'لا مزيد بعد آخر صفحة',
+      );
+    });
+
+    testWidgets('تقييم مخفي: الملاحظة ظاهرة والحذف يبقى متاحاً لصاحبه', (tester) async {
+      final provider = ratedProvider()
+        ..['my_review'] = <String, dynamic>{
+          'id': 501,
+          'rating': 3,
+          'body': 'رأي قديم',
+          'status': 'hidden',
+          'created_at': '2026-11-01T10:00:00.000Z',
+        };
+      final requests = <http.Request>[];
+
+      await pumpProviderPage(
+        tester,
+        reviewApi(
+          provider,
+          requests,
+          reviews: reviewFixtures().where((review) => review['id'] != 501).toList(),
+        ),
+        signedIn: true,
+      );
+
+      expect(find.byKey(const Key('provider_review_hidden_note')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('provider_write_review_btn')));
+      await settleFrames(tester);
+      expect(find.byKey(const Key('provider_review_delete')), findsOneWidget);
+      expect(find.textContaining('مخفي بعد البلاغات'), findsWidgets);
+    });
+
+    testWidgets('«بلّغ» يرسل POST لبلاغ واحد على التقييم', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, reviewApi(ratedProvider(), requests));
+
+      await tester.tap(find.byKey(const Key('provider_review_report_502')));
+      await settleFrames(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(TextButton, 'بلّغ'),
+        ),
+      );
+      await settleFrames(tester);
+
+      expect(
+        requests.where((request) =>
+            request.method == 'POST' &&
+            request.url.path.endsWith('/reviews/502/report')),
+        hasLength(1),
+        reason: 'بلاغ واحد على التقييم نفسه',
+      );
+    });
+  });
 }

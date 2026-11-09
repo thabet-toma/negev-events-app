@@ -2023,10 +2023,77 @@
       <!-- الرقم لا يظهر إلا بعد ضغط هذا الزرّ — لا رقم ولا رابط تواصل مقدَّماً -->
       <div id="providerContactArea"></div>
 
+      <!-- التقييمات (#186): المتوسط والتوزيع والتعليقات المرقّمة. القسم لا يُخفى
+           بلا تقييمات — هو موضع زرّ «اكتب تقييمك» ودعوة أول مقيِّم. -->
+      <section id="providerReviewsSection" class="provider-section" hidden>
+        <div class="provider-reviews-head">
+          <h4 class="provider-section-title"><i class="fa-solid fa-star"></i> التقييمات</h4>
+          <button type="button" id="providerReviewWriteBtn" class="provider-review-write-btn" onclick="openProviderReviewForm()">
+            <i class="fa-solid fa-pen"></i> اكتب تقييمك
+          </button>
+          <button type="button" id="providerReviewDeleteMineBtn" class="provider-review-delete-mine" onclick="deleteProviderReview()" hidden>
+            حذف تقييمي
+          </button>
+        </div>
+        <p id="providerReviewHiddenNote" class="provider-review-hidden-note" hidden>
+          تقييمك مخفي بعد البلاغات — يمكنك تعديله أو حذفه.
+        </p>
+        <div id="providerRatingSummary" class="provider-rating-summary"></div>
+        <div id="providerRatingDistribution" class="provider-rating-distribution"></div>
+        <div id="providerReviewsList" class="provider-reviews-list"></div>
+        <p id="providerReviewsEmpty" class="provider-reviews-empty" hidden>لا تعليقات بعد — كن أول من يكتب.</p>
+        <div id="providerReviewsMoreWrap" hidden>
+          <button type="button" id="providerReviewsMoreBtn" class="provider-reviews-more" onclick="loadMoreProviderReviews()">
+            المزيد من التعليقات
+          </button>
+        </div>
+        <p id="providerReviewsError" class="provider-reviews-empty" hidden>تعذّر تحميل التعليقات — تحقّق من الاتصال.</p>
+        <button type="button" id="providerReviewsRetryBtn" class="provider-reviews-more" onclick="loadProviderReviews(currentProviderId)" hidden>
+          إعادة المحاولة
+        </button>
+      </section>
+
       <section id="providerSimilarSection" class="provider-section" hidden>
         <h4 class="provider-section-title"><i class="fa-solid fa-user-group"></i> مزوّدون مشابهون</h4>
         <div id="providerSimilarGrid" class="provider-similar"></div>
       </section>
+    </div>
+  </div>
+
+  <!-- MODAL 9ب: WRITE A PROVIDER REVIEW (تقييمات المزوّد — تذكرة #186)
+       نجمة 1..5 وإقرار الرقم: `confirm_phone: true` قيمة منطقية حصراً، ويُرسل
+       من الورقة نفسها. الحالة الأولية تُعبَّأ من تقييم صاحبه إن وُجد. -->
+  <div id="providerReviewModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3>اكتب تقييمك</h3>
+          <span class="modal-sub">رأيك يساعد غيرك على الاختيار</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeProviderReviewModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="providerReviewForm" onsubmit="submitProviderReview(event)">
+        <div class="form-group">
+          <label>تقييمك</label>
+          <div class="provider-review-stars" id="providerReviewStars" role="group" aria-label="عدد النجوم">
+            <input type="hidden" id="providerReviewRating" value="0">
+            <button type="button" class="provider-review-star" data-star="1" onclick="setProviderReviewStars(1)" aria-label="نجمة واحدة">★</button>
+            <button type="button" class="provider-review-star" data-star="2" onclick="setProviderReviewStars(2)" aria-label="نجمتان">★</button>
+            <button type="button" class="provider-review-star" data-star="3" onclick="setProviderReviewStars(3)" aria-label="ثلاث نجوم">★</button>
+            <button type="button" class="provider-review-star" data-star="4" onclick="setProviderReviewStars(4)" aria-label="أربع نجوم">★</button>
+            <button type="button" class="provider-review-star" data-star="5" onclick="setProviderReviewStars(5)" aria-label="خمس نجوم">★</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="providerReviewBody">تعليقك (اختياري)</label>
+          <textarea id="providerReviewBody" maxlength="1000" rows="4" placeholder="كيف كانت تجربتك مع المزوّد؟"></textarea>
+        </div>
+        <label class="provider-review-confirm">
+          <input type="checkbox" id="providerReviewConfirmPhone">
+          <span>أؤكّد أن رقمي شخصي</span>
+        </label>
+        <button type="submit" id="providerReviewSubmitBtn" class="submit-btn">نشر التقييم</button>
+      </form>
     </div>
   </div>
 

@@ -944,6 +944,52 @@ CREATE TABLE IF NOT EXISTS provider_favorites (
     REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- تقييمات المزوّدين (تذكرة #186): صفّ واحد لكل (مزوّد، مستخدم) — التقييم
+-- الثاني يعدّل الأول (`ON DUPLICATE KEY UPDATE`) ولا يضيف صفّاً ثانياً.
+-- `phone_confirmed_at` إقرار صاحبه أن الرقم شخصي (ADR-0014) يكتبه الخادم
+-- بـ`NOW()` ولا يأتي من العميل. و`status = 'visible'` هو النشر الفوري: لا
+-- طابور مراجعة مسبق، والإبلاغ وحده يخفي بعد العتبة.
+-- **`reply_body`/`reply_at` عمودان من المواصفة (#156) لردّ المزوّد المربوط
+-- (تذكرة الردّ اللاحقة): يُنشآن الآن ولا يقرأهما ولا يكتبهما هذا العمل — ليسا
+-- كوداً ميتاً بل موضع العقد التالي.**
+CREATE TABLE IF NOT EXISTS provider_reviews (
+  id                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id        INT UNSIGNED NOT NULL,
+  user_id            INT UNSIGNED NOT NULL,
+  rating             TINYINT UNSIGNED NOT NULL,
+  body               VARCHAR(1000) DEFAULT NULL,
+  phone_confirmed_at DATETIME     NOT NULL,
+  status             ENUM('visible', 'hidden') NOT NULL DEFAULT 'visible',
+  reply_body         VARCHAR(1000) DEFAULT NULL,
+  reply_at           DATETIME     DEFAULT NULL,
+  created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_provider_reviews (provider_id, user_id),
+  KEY idx_provider_reviews_status (provider_id, status),
+  CONSTRAINT fk_spr_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_spr_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- بلاغات التقييمات (تذكرة #186): صفّ واحد لكل (تقييم، مبلِّغ) — المفتاح الفريد
+-- هو ما يمنع شخصاً واحداً من تكرار بلاغه لبلوغ العتبة وحده، فلا حاجة إلى عمود
+-- عدّاد مرآة: العدّ يُقرأ من هذا الجدول.
+CREATE TABLE IF NOT EXISTS provider_review_reports (
+  id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  review_id  INT UNSIGNED NOT NULL,
+  user_id    INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_provider_review_reports (review_id, user_id),
+  KEY idx_provider_review_reports_review (review_id),
+  CONSTRAINT fk_sprr_review FOREIGN KEY (review_id)
+    REFERENCES provider_reviews(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sprr_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Behavioural analytics (issue #44). The governing rule this table is built
 -- around: we record what a person DID in the app, never what they READ in
 -- it — a row saying "this named person opened this particular عزاء" reads as
