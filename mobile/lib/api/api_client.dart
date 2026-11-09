@@ -99,7 +99,12 @@ class ApiClient {
   /// لا تُقارَن على الخادم، فرقم ثابت كافٍ (events.routes.js: isLegacyClient).
   static const String _appVersionHeader = '1';
 
-  Map<String, String> _headers({bool auth = false, bool json = false, String? regionHeader}) {
+  Map<String, String> _headers({
+    bool auth = false,
+    bool json = false,
+    String? regionHeader,
+    Map<String, String>? extraHeaders,
+  }) {
     final headers = <String, String>{
       'Accept': 'application/json',
       'X-App-Version': _appVersionHeader,
@@ -113,6 +118,9 @@ class ApiClient {
     if (auth && token != null && token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
+    // ترويسات نداءٍ واحد (مثل `X-Visitor-Id` في تسجيل مشاهدة المزوّد، #185):
+    // تُضاف بعد الافتراضية فتستطيع نداءً بعينه بلا تغيير سلوك البقية.
+    if (extraHeaders != null) headers.addAll(extraHeaders);
     return headers;
   }
 
@@ -137,11 +145,12 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? body,
     bool auth = false,
+    Map<String, String>? headers,
   }) async {
     return _send(
       () => _client.post(
         _uri(path),
-        headers: _headers(auth: auth, json: true),
+        headers: _headers(auth: auth, json: true, extraHeaders: headers),
         body: jsonEncode(body ?? const {}),
       ),
       auth: auth,

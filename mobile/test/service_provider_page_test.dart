@@ -11,6 +11,7 @@ import 'package:negev_events/screens/service_provider_details_screen.dart';
 import 'package:negev_events/state/auth_store.dart';
 import 'package:negev_events/state/realtime.dart';
 import 'package:negev_events/theme.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// مزوّد كامل كما يعيده `GET /api/services/providers/:id` بعد #184 — كل حقل
 /// هنا له قسم في الشاشة، وحذفه من جسم الاستجابة يجب أن يُخفي قسمه.
@@ -33,6 +34,9 @@ Map<String, dynamic> richProvider() => {
       ],
       'is_verified': true,
       'is_featured': true,
+      'views_count': 12,
+      'favorites_count': 4,
+      'is_favorite': false,
       'price': 4500,
       'price_type': 'starting_at',
       'price_estimate_desc': null,
@@ -69,19 +73,73 @@ Map<String, dynamic> richProvider() => {
 
 /// عميل وهمي: تفصيل المزوّد ومسار واتسابه، ويسجّل كل مسار طُلب — فالتأكيد على
 /// «الشاشة تسأل الخادم عن الرابط» يُبنى على الطلب نفسه لا على وجود زرّ.
-NegevApi providerApi(Map<String, dynamic> provider, List<String> calls) {
+NegevApi providerApi(
+  Map<String, dynamic> provider,
+  List<String> calls, {
+  bool initialFavorite = false,
+}) {
+  var favorite = initialFavorite;
+  var favoritesCount = (provider['favorites_count'] as num?)?.toInt() ?? 0;
   final client = MockClient((request) async {
     calls.add(request.url.path);
-    if (request.url.path.endsWith('/whatsapp')) {
+    final path = request.url.path;
+    if (path.endsWith('/api/auth/login')) {
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'token': 'test-token',
+          'user': {
+            'id': 1,
+            'phone_number': '0500000000',
+            'full_name': 'مستخدم اختبار',
+            'role': 'user',
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (path.endsWith('/view')) {
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'counted': true,
+          'views_count': ((provider['views_count'] as num?)?.toInt() ?? 0) + 1,
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (path.endsWith('/favorite')) {
+      favorite = request.method == 'PUT';
+      favoritesCount += favorite ? 1 : -1;
+      return http.Response(
+        jsonEncode({
+          'success': true,
+          'is_favorite': favorite,
+          'favorites_count': favoritesCount,
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    }
+    if (path.endsWith('/whatsapp')) {
       return http.Response(
         jsonEncode({'success': true, 'url': 'https://wa.me/972501234567?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7'}),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
     }
-    if (request.url.path.startsWith('/api/services/providers/')) {
+    if (path.startsWith('/api/services/providers/')) {
       return http.Response(
-        jsonEncode({'success': true, 'provider': provider}),
+        jsonEncode({
+          'success': true,
+          'provider': {
+            ...provider,
+            'is_favorite': favorite,
+            'favorites_count': favoritesCount,
+          },
+        }),
         200,
         headers: {'content-type': 'application/json; charset=utf-8'},
       );
@@ -104,7 +162,11 @@ Future<void> settleFrames(WidgetTester tester, [int count = 6]) async {
   }
 }
 
-Future<void> pumpProviderPage(WidgetTester tester, NegevApi api) async {
+Future<void> pumpProviderPage(
+  WidgetTester tester,
+  NegevApi api, {
+  bool signedIn = false,
+}) async {
   tester.view.physicalSize = const Size(900, 2400);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(() {
@@ -112,10 +174,13 @@ Future<void> pumpProviderPage(WidgetTester tester, NegevApi api) async {
     tester.view.resetDevicePixelRatio();
   });
 
+  final auth = AuthStore(api);
+  if (signedIn) await auth.signIn('0500000000', '1234');
+
   await tester.pumpWidget(
     AppServices(
       api: api,
-      auth: AuthStore(api),
+      auth: auth,
       realtime: RealtimeService(),
       child: MaterialApp(
         theme: AppTheme.light(),
@@ -130,6 +195,10 @@ Future<void> pumpProviderPage(WidgetTester tester, NegevApi api) async {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   group('صفحة المزوّد الغنية (#184)', () {
     testWidgets('تعرض كل الأقسام حين تحمل بياناتها: الشارتين والساعات والمعرض والعروض والمنتجات والمشابهين', (
       tester,
@@ -232,6 +301,112 @@ void main() {
         reason: 'النقر على المشابه يجلب المزوّد الآخر',
       );
       expect(find.byType(ServiceProviderDetailsScreen), findsWidgets);
+    });
+
+    testWidgets('فتح الصفحة يسجّل مشاهدة واحدة بـX-Visitor-Id محفوظ على الجهاز (#185)', (
+      tester,
+    ) async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        if (path.endsWith('/view')) {
+          return http.Response(
+            jsonEncode({'success': true, 'counted': true, 'views_count': 13}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (path.endsWith('/api/services/providers/701')) {
+          return http.Response(
+            jsonEncode({'success': true, 'provider': richProvider()}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        return http.Response(
+          jsonEncode({'success': true}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      await pumpProviderPage(tester, NegevApi(ApiClient(client: client)));
+
+      final views = requests
+          .where((request) => request.method == 'POST' && request.url.path.endsWith('/view'))
+          .toList();
+      expect(views, hasLength(1), reason: 'المشاهدة تُسجَّل مرة واحدة عند فتح الصفحة');
+      final visitorId = views.single.headers['X-Visitor-Id'];
+      expect(
+        visitorId,
+        matches(RegExp(r'^[A-Za-z0-9_-]{16,64}$')),
+        reason: 'معرّف الزائر بالشكل الذي يقبله الخادم',
+      );
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getString(negevVisitorIdKey),
+        visitorId,
+        reason: 'المعرّف نفسه محفوظ في الجهاز ولا يُولَّد كل فتح',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_views_count'))).data,
+        '13',
+        reason: 'العدّاد المعروض يتبع ردّ مسار المشاهدة لا قراءة أقدم منه',
+      );
+    });
+
+    testWidgets('زرّ الحفظ يبدّل «محفوظ»/«احفظ المزوّد» والعدّاد من ردّ الخادم (#185)', (
+      tester,
+    ) async {
+      final calls = <String>[];
+      final provider = richProvider()
+        ..['is_favorite'] = true
+        ..['favorites_count'] = 4;
+
+      await pumpProviderPage(
+        tester,
+        providerApi(provider, calls, initialFavorite: true),
+        signedIn: true,
+      );
+
+      final button = find.byKey(const Key('provider_favorite_btn'));
+      expect(button, findsOneWidget, reason: 'الصفحة رُسمت فعلاً');
+      expect(
+        find.descendant(of: button, matching: find.text('محفوظ')),
+        findsOneWidget,
+        reason: 'الحالة الأولية من is_favorite التي أعادها الخادم',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '4',
+      );
+
+      await tester.tap(button);
+      await settleFrames(tester);
+
+      expect(
+        find.descendant(of: button, matching: find.text('احفظ المزوّد')),
+        findsOneWidget,
+        reason: 'الإلغاء يقلب الزرّ إلى الدعوة للحفظ',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '3',
+        reason: 'والعدّاد ينقص بقيمة ردّ الخادم لا بزيادة محلية',
+      );
+
+      await tester.tap(button);
+      await settleFrames(tester);
+
+      expect(
+        find.descendant(of: button, matching: find.text('محفوظ')),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '4',
+      );
     });
   });
 }

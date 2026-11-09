@@ -10488,6 +10488,253 @@ async function run() {
     assert.ok(!featuredCard.includes('provider-badge-verified'), 'ولا «موثّق» لمن ليس موثّقاً');
   });
 
+  console.log('\nمشاهدات المزوّد ومفضّلته (تذكرة #185): العدّادان وزرّ الحفظ وقسم «مزوّدون محفوظون»');
+
+  /** مزوّد كامل بعدّاديه — كما يعيده الخادم في القائمة والتفصيل بعد #185. */
+  function favoriteProviderFixture(overrides = {}) {
+    return {
+      id: 801,
+      name: 'مزوّد المشاهدات',
+      category_id: 9,
+      category_name: 'صالات أفراح',
+      category_icon: '🏛️',
+      category_color: '#8a6109',
+      has_phone: true,
+      image_url: null,
+      price: 100,
+      price_type: 'fixed',
+      price_estimate_desc: null,
+      attributes: {},
+      is_verified: false,
+      is_featured: false,
+      towns: ['رهط'],
+      views_count: 12,
+      favorites_count: 3,
+      is_favorite: true,
+      ...overrides
+    };
+  }
+
+  /**
+   * عميل وهمي للعدّادين والحفظ والمشاهدة: الحالة تُعاد بترتيبها الحقيقي —
+   * PUT/DELETE يغيّران `is_favorite` والعدّاد، و`POST /view` يزيد المشاهدات
+   * مرة واحدة ثم يردّ `counted: false`. كل نداء يُسجَّل بترويساته.
+   */
+  function instrumentProviderCounters(win, { savedList = null } = {}) {
+    const calls = [];
+    let viewsCount = 12;
+    let favoritesCount = 3;
+    let isFavorite = true;
+    let viewed = false;
+
+    const provider = overrides => favoriteProviderFixture({
+      views_count: viewsCount,
+      favorites_count: favoritesCount,
+      is_favorite: isFavorite,
+      ...overrides
+    });
+
+    win.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      calls.push({ path: requestPath, method, headers: options.headers || {} });
+
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({
+          success: true,
+          settings: { support_whatsapp_number: null, default_event_audio_url: null, providers_display: 'compact' }
+        });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      if (requestPath === '/api/services/providers' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          providers: [provider()],
+          pagination: { page: 1, limit: 30, total: 1, totalPages: 1 }
+        });
+      }
+      if (requestPath === '/api/services/providers/801' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          provider: provider({ phone: '0501234567', description: 'قاعة واسعة' })
+        });
+      }
+      if (requestPath === '/api/services/providers/801/view' && method === 'POST') {
+        const counted = !viewed;
+        viewed = true;
+        if (counted) viewsCount += 1;
+        return jsonResponse({ success: true, counted, views_count: viewsCount });
+      }
+      if (requestPath === '/api/services/providers/801/favorite' && (method === 'PUT' || method === 'DELETE')) {
+        isFavorite = method === 'PUT';
+        favoritesCount = isFavorite ? favoritesCount + 1 : favoritesCount - 1;
+        return jsonResponse({ success: true, is_favorite: isFavorite, favorites_count: favoritesCount });
+      }
+      if (requestPath === '/api/services/favorites' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          providers: savedList === null ? [provider()] : savedList
+        });
+      }
+      if (requestPath === '/api/my-reminders' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          events: [],
+          counts: { all: 0, upcoming: 0, ended: 0 },
+          under_review_count: 0
+        });
+      }
+      return jsonResponse({ success: false });
+    };
+    return calls;
+  }
+
+  await test('بطاقة المزوّد ونافذته تعرضان 👁 المشاهدات و♥ المفضّلة من الخادم، والفتح يسجّل مشاهدة واحدة', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentProviderCounters(win);
+
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 1);
+
+    const rowViews = document.querySelector('#serviceRowStats-801 [data-stat="views"] .provider-stat-num');
+    const rowFavorites = document.querySelector('#serviceRowStats-801 [data-stat="favorites"] .provider-stat-num');
+    assert.ok(rowViews && rowFavorites, 'بطاقة القائمة تحمل عدّادَي 👁/♥');
+    assert.strictEqual(rowViews.textContent.trim(), '12');
+    assert.strictEqual(rowFavorites.textContent.trim(), '3');
+
+    await win.openProviderModal(801);
+    assert.strictEqual(document.getElementById('providerModal').style.display, 'flex', 'النافذة فُتحت فعلاً');
+    assert.strictEqual(
+      document.getElementById('providerFavoriteBtn').textContent.includes('محفوظ'), true,
+      'زرّ الحفظ يعكس is_favorite القادمة من الخادم'
+    );
+
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/801/view' && call.method === 'POST'));
+    await waitFor(() => {
+      const stat = document.querySelector('#providerModalStats [data-stat="views"] .provider-stat-num');
+      return stat && stat.textContent.trim() === '13';
+    });
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="views"] .provider-stat-num').textContent.trim(),
+      '13',
+      'عدّاد النافذة يزيد بردّ الخادم لا بحساب محلي'
+    );
+
+    // الفتح الثاني لا يعيد تسجيل مشاهدة — الحارس مرة لكل تحميل.
+    await win.openProviderModal(801);
+    assert.strictEqual(
+      calls.filter(call => call.path === '/api/services/providers/801/view' && call.method === 'POST').length,
+      1,
+      'المشاهدة تُسجَّل مرة واحدة في التحميل الواحد'
+    );
+  });
+
+  await test('زرّ الحفظ يبدّل DELETE/PUT ويأخذ العدّاد ونصّه من ردّ الخادم', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentProviderCounters(win);
+
+    await win.openProviderModal(801);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/801/view'));
+
+    assert.ok(document.getElementById('providerFavoriteBtn').textContent.includes('محفوظ'));
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="favorites"] .provider-stat-num').textContent.trim(),
+      '3'
+    );
+
+    document.getElementById('providerFavoriteBtn').click();
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/801/favorite' && call.method === 'DELETE'));
+    await waitFor(() => document.getElementById('providerFavoriteBtn').textContent.includes('احفظ المزوّد'));
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="favorites"] .provider-stat-num').textContent.trim(),
+      '2',
+      'الإلغاء ينقص العدّاد من ردّ الخادم'
+    );
+
+    document.getElementById('providerFavoriteBtn').click();
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/801/favorite' && call.method === 'PUT'));
+    await waitFor(() => document.getElementById('providerFavoriteBtn').textContent.includes('محفوظ'));
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="favorites"] .provider-stat-num').textContent.trim(),
+      '3',
+      'الحفظ يرفعه إلى قيمة الخادم'
+    );
+  });
+
+  await test('الزائر يرسل X-Visitor-Id عشوائياً محفوظاً في localStorage — مرة واحدة', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentProviderCounters(win);
+
+    assert.strictEqual(win.localStorage.getItem('negev_visitor_id'), null, 'لا معرّف قبل أول مشاهدة');
+    await win.openProviderModal(801);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/801/view' && call.method === 'POST'));
+
+    const viewCall = calls.find(call => call.path === '/api/services/providers/801/view');
+    const sentVisitorId = viewCall.headers['X-Visitor-Id'];
+    assert.ok(
+      typeof sentVisitorId === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(sentVisitorId),
+      `ترويسة زائر بالشكل الذي يقبله الخادم، وُجد: ${sentVisitorId}`
+    );
+    assert.strictEqual(win.localStorage.getItem('negev_visitor_id'), sentVisitorId, 'المعرّف يُحفظ على الجهاز');
+
+    // الفتح الثاني فعلاً — لا تأكيداً على عدّ لم يتغيّر: الحارس
+    // `providerViewsRecorded` في `web/app.js` هو ما يُسقط هذا السطر. بحذفه
+    // يُطلق الفتح الثاني طلب مشاهدة ثانياً فيصير العدّ ٢.
+    await win.openProviderModal(801);
+    await delay(20);
+    assert.strictEqual(
+      calls.filter(call => call.path === '/api/services/providers/801/view').length,
+      1,
+      'فتح النافذة للمزوّد نفسه ثانيةً في التحميل الواحد لا يرسل مشاهدة ثانية'
+    );
+    assert.strictEqual(
+      document.getElementById('providerModalName').textContent,
+      'مزوّد المشاهدات',
+      'النافذة رُسمت فعلاً (مرساة موجبة)'
+    );
+  });
+
+  await test('«قائمتي»: قسم «مزوّدون محفوظون» يعرض محفوظات صاحبه ويختفي حين لا محفوظات', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    instrumentProviderCounters(dom.window);
+    dom.window.switchTab('tabMyList');
+    await waitFor(() => {
+      const section = dom.window.document.getElementById('myListSavedProviders');
+      return section && section.hidden === false;
+    });
+    const section = dom.window.document.getElementById('myListSavedProviders');
+    assert.strictEqual(section.hidden, false, 'القسم ظاهر حين يوجد محفوظ');
+    const row = dom.window.document.querySelector('#myListSavedProvidersList .service-row');
+    assert.ok(row, 'بطاقة المزوّد رُسمت داخل القسم');
+    assert.ok(row.textContent.includes('مزوّد المشاهدات'), 'وباسم المزوّد لا باسم آخر');
+
+    const emptyDom = buildEnv({ loggedIn: true });
+    await flushBoot();
+    const emptyCalls = instrumentProviderCounters(emptyDom.window, { savedList: [] });
+    emptyDom.window.switchTab('tabMyList');
+    await waitFor(() => emptyCalls.some(call => call.path === '/api/services/favorites'));
+    // الردّ الفارغ يُعالَج بعد النداء بمهامٍ غير متزامنة — تُترك لحظة تُكمل
+    // قبل الحكم على القسم، وإلا نُفِي على حالة `hidden` الابتدائية لا على الرسم.
+    await delay(50);
+    assert.strictEqual(
+      emptyDom.window.document.getElementById('myListSavedProviders').hidden,
+      true,
+      'القسم يختفي كاملاً حين لا محفوظات — لا عنوان لقسم فارغ'
+    );
+    assert.strictEqual(
+      emptyDom.window.document.querySelectorAll('#myListSavedProvidersList .service-row').length,
+      0
+    );
+  });
+
   await test('اللوحة: مربّعا «موثّق»/«مميّز» يظهران للسوبر أدمن وحدهما، ومحرّر الساعات والمعرض يظهران لمزوّد محفوظ (#184)', async () => {
     const ADMIN_PROVIDER = {
       id: 701,

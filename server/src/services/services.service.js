@@ -227,10 +227,34 @@ async function townsForProviders(providerIds) {
 const PROVIDER_CARD_SELECT = `sp.id, sp.name, sp.category_id, sc.name AS category_name,
         sc.icon AS category_icon, sc.color AS category_color, sp.image_url, sp.price, sp.price_type,
         sp.price_estimate_desc, sp.attributes, sp.is_verified, sp.is_featured,
+        sp.views_count,
+        (SELECT COUNT(*) FROM provider_favorites pf WHERE pf.provider_id = sp.id) AS favorites_count,
         (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone`;
 
-/** صفّ بطاقة عامّة واحد: نفس مفاتيحه من القائمة ومن `similar` (تذكرة #184). */
-function shapeProviderCard(row, towns) {
+/**
+ * مفاتيح المزوّدين التي حفظها هذا المستخدم من بين صفوف معروفة — استعلام واحد
+ * لكل صفحة لا استعلام لكل بطاقة. `userId === null` (زائر) تعني «لا شيء محفوظ»
+ * بلا استعلام أصلاً.
+ */
+async function favoriteProviderIds(userId, providerIds) {
+  if (!userId || !providerIds.length) return new Set();
+  const placeholders = providerIds.map(() => '?').join(', ');
+  const rows = await db.query(
+    `SELECT provider_id FROM provider_favorites
+      WHERE user_id = ? AND provider_id IN (${placeholders})`,
+    [userId, ...providerIds]
+  );
+  return new Set(rows.map(row => row.provider_id));
+}
+
+/**
+ * صفّ بطاقة عامّة واحد: نفس مفاتيحه من القائمة ومن `similar` (تذكرة #184).
+ * وعدّادا المشاهدة والمفضّلة (تذكرة #185) جزء من البطاقة نفسها: `views_count`
+ * من عمود المزوّد، و`favorites_count` محسوب من `provider_favorites` في
+ * الاستعلام — لا عمود مرآة. `is_favorite` تعني «هذا المستخدم حفظه»؛ وهي
+ * `false` للزائر ولكل مزوّد لم يُحفظ، فلا مفتاح يغيب معناه.
+ */
+function shapeProviderCard(row, towns, { isFavorite = false } = {}) {
   return withAbsoluteMedia({
     id: row.id,
     name: row.name,
@@ -246,6 +270,9 @@ function shapeProviderCard(row, towns) {
     attributes: parseAttributes(row.attributes),
     is_verified: Boolean(row.is_verified),
     is_featured: Boolean(row.is_featured),
+    views_count: Number(row.views_count) || 0,
+    favorites_count: Number(row.favorites_count) || 0,
+    is_favorite: Boolean(isFavorite),
     towns: towns || []
   });
 }
@@ -284,8 +311,11 @@ const OFFER_PUBLIC_ORDER = `ORDER BY (ends_at IS NULL) ASC, ends_at ASC, created
  * `activeNames()` وهما بلدات `towns` وحدها، فلا يُسنَد مزوّد لاسم محافظة —
  * فلا فرع لاسم محافظة هنا. `null` = بلا تقييد، فتبقى اللوحة وصفحة المزوّد
  * بلا تغيير.
+ *
+ * و`userId` (تذكرة #185) للمسجَّل وحده: يضيف `is_favorite` لكل صفّ من
+ * `provider_favorites`؛ والزائر يحصل على `false` لا على غياب المفتاح.
  */
-async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE, regionId = null } = {}) {
+async function listPublicProviders({ categoryId, town, search, page = 1, limit = DEFAULT_PAGE_SIZE, regionId = null, userId = null } = {}) {
   const limitVal = safeLimit(limit);
   const pageVal = safePage(page);
 
@@ -336,7 +366,10 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
   );
 
   const townsMap = await townsForProviders(rows.map(row => row.id));
-  const providers = rows.map(row => shapeProviderCard(row, townsMap[row.id] || []));
+  const favoriteIds = await favoriteProviderIds(userId, rows.map(row => row.id));
+  const providers = rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], {
+    isFavorite: favoriteIds.has(row.id)
+  }));
 
   return {
     providers,
@@ -425,7 +458,7 @@ async function providerProducts(providerId) {
  * وليس المزوّد نفسه. الترتيب «مميّز» ثم الأحدث ثم الأكبر معرّفاً — ولا تقييمات
  * بعد، فالمميّز يحلّ محلّها. الشكل شكل بطاقة القائمة نفسها وبلا رقم فيها.
  */
-async function similarProviders(row) {
+async function similarProviders(row, { userId = null } = {}) {
   const towns = (await townsForProviders([row.id]))[row.id] || [];
   if (!towns.length) return [];
 
@@ -455,7 +488,10 @@ async function similarProviders(row) {
   );
 
   const townsMap = await townsForProviders(rows.map(candidate => candidate.id));
-  return rows.map(candidate => shapeProviderCard(candidate, townsMap[candidate.id] || []));
+  const favoriteIds = await favoriteProviderIds(userId, rows.map(candidate => candidate.id));
+  return rows.map(candidate => shapeProviderCard(candidate, townsMap[candidate.id] || [], {
+    isFavorite: favoriteIds.has(candidate.id)
+  }));
 }
 
 /** رقم دولي لرابط واتساب: أرقام وحدها، `0…` ⇒ `972…`، و`972…` كما هو، وغيرهما `null`. */
@@ -498,11 +534,12 @@ async function publicProviderWhatsapp(id) {
  * داخل `url` وحده. ويبقى في صفحة المزوّد المفردة، كما قرّر ADR-0016، لأن
  * `consent_at`/`consent_channel` هما حارسه ولا معنى لهما بلا هذا الموضع.
  */
-async function getPublicProviderById(id) {
+async function getPublicProviderById(id, { userId = null } = {}) {
   const row = await db.queryOne(
     `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
             sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
-            sp.logo_url, sp.cover_url, sp.hours, sp.is_verified, sp.is_featured,
+            sp.logo_url, sp.cover_url, sp.hours, sp.is_verified, sp.is_featured, sp.views_count,
+            (SELECT COUNT(*) FROM provider_favorites pf WHERE pf.provider_id = sp.id) AS favorites_count,
             (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
@@ -516,8 +553,12 @@ async function getPublicProviderById(id) {
     providerPhotos(id),
     providerOffers(id, { publicOnly: true }),
     providerProducts(id),
-    similarProviders(row)
+    similarProviders(row, { userId })
   ]);
+
+  // «هل حفظه هذا المستخدم؟» تُقرأ من الجدول لا من عمودٍ في الصفّ، و`userId`
+  // غائب للزائر فتعود `false` بلا استعلام إضافي.
+  const favoriteIds = await favoriteProviderIds(userId, [id]);
 
   return withAbsoluteMedia({
     id: row.id,
@@ -535,6 +576,9 @@ async function getPublicProviderById(id) {
     hours: parseHours(row.hours),
     is_verified: Boolean(row.is_verified),
     is_featured: Boolean(row.is_featured),
+    views_count: Number(row.views_count) || 0,
+    favorites_count: Number(row.favorites_count) || 0,
+    is_favorite: favoriteIds.has(id),
     price: row.price ?? null,
     price_type: row.price_type || 'estimated',
     price_estimate_desc: row.price_estimate_desc ?? null,
@@ -545,6 +589,128 @@ async function getPublicProviderById(id) {
     products,
     similar
   });
+}
+
+// ======================================================================
+// مشاهدات المزوّد ومفضّلته (تذكرة #185)
+// ======================================================================
+
+/**
+ * بوّابة المزوّد العام الوحيدة لهذا القسم: موجود ومعتمد ونشِط، وإلا 404
+ * كسائر القراءات العامة. تعيد صفّ العدّاد ليكون ردّ «لم تُحسب» صادقاً.
+ */
+async function assertPublicProvider(id) {
+  const row = await db.queryOne(
+    "SELECT id, views_count FROM service_providers WHERE id = ? AND is_active = 1 AND status = 'approved'",
+    [id]
+  );
+  if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
+  return row;
+}
+
+/**
+ * تسجيل مشاهدة صفحة مزوّد — **بلا IP في أي عمود أو مفتاح**.
+ *
+ * المفتاح: `u:<user_id>` للمسجَّل، أو `v:<visitor_id>` لزائر يرسل معرّفاً
+ * عشوائياً ولّده جهازه (التحقّق من شكله في طبقة المسار). بلا مفتاح لا تُحسب،
+ * والردّ 200 بـ`counted: false` لا خطأ.
+ *
+ * صفّ واحد لكل (مزوّد، مفتاح، `CURDATE()`): `INSERT IGNORE` على المفتاح الفريد
+ * يتجاهل التكرار، و`views_count` يزيد **مع الصفّ الجديد وحده**، والاثنان في
+ * معاملة واحدة. اليوم من الخادم لا من العميل، فلا ساعة جهاز تزوّر العدّاد.
+ */
+async function recordProviderView(id, { userId = null, visitorId = null } = {}) {
+  const provider = await assertPublicProvider(id);
+  const visitorKey = userId ? `u:${userId}` : (visitorId ? `v:${visitorId}` : null);
+
+  if (!visitorKey) {
+    return { counted: false, views_count: Number(provider.views_count) || 0 };
+  }
+
+  return db.transaction(async connection => {
+    const [inserted] = await connection.execute(
+      `INSERT IGNORE INTO service_provider_views (provider_id, visitor_key, view_date)
+       VALUES (?, ?, CURDATE())`,
+      [id, visitorKey]
+    );
+    const counted = inserted.affectedRows > 0;
+
+    if (counted) {
+      await connection.execute(
+        'UPDATE service_providers SET views_count = views_count + 1 WHERE id = ?',
+        [id]
+      );
+    }
+
+    const [[row]] = await connection.execute(
+      'SELECT views_count FROM service_providers WHERE id = ?',
+      [id]
+    );
+    return { counted, views_count: Number(row.views_count) || 0 };
+  });
+}
+
+/** عدّاد المفضّلة من الجدول نفسه — لا عمود مرآة يُكتب ويُنسى. */
+async function providerFavoritesCount(connection, providerId) {
+  const [[row]] = await connection.execute(
+    'SELECT COUNT(*) AS total FROM provider_favorites WHERE provider_id = ?',
+    [providerId]
+  );
+  return Number(row.total) || 0;
+}
+
+/**
+ * حفظ مزوّد في مفضّلة المستخدم — idempotent: `INSERT IGNORE` ثم العدّاد،
+ * فنداءان متتاليان يعيدان العدد نفسه ولا يضاعفانه. الحكم على الصفّ من
+ * `provider_favorites` وحدها، فلا يرى مستخدم مفضّلة غيره.
+ */
+async function addProviderFavorite(id, userId) {
+  await assertPublicProvider(id);
+  return db.transaction(async connection => {
+    await connection.execute(
+      'INSERT IGNORE INTO provider_favorites (provider_id, user_id) VALUES (?, ?)',
+      [id, userId]
+    );
+    return {
+      is_favorite: true,
+      favorites_count: await providerFavoritesCount(connection, id)
+    };
+  });
+}
+
+/** إلغاء الحفظ — idempotent أيضاً: حذف صفّ غير موجود لا خطأ، والعدّاد يتبع الجدول. */
+async function removeProviderFavorite(id, userId) {
+  await assertPublicProvider(id);
+  return db.transaction(async connection => {
+    await connection.execute(
+      'DELETE FROM provider_favorites WHERE provider_id = ? AND user_id = ?',
+      [id, userId]
+    );
+    return {
+      is_favorite: false,
+      favorites_count: await providerFavoritesCount(connection, id)
+    };
+  });
+}
+
+/**
+ * «مزوّدون محفوظون» في «قائمتي»: صفوف هذا المستخدم وحدها (`pf.user_id = ?`)،
+ * المعتمد النشِط وحده، أحدث حفظ أولاً، بشكل بطاقة القائمة نفسه وبلا رقم —
+ * `PROVIDER_CARD_SELECT` لا ينتقي `phone` أصلاً.
+ */
+async function listFavoriteProviders(userId) {
+  const rows = await db.query(
+    `SELECT ${PROVIDER_CARD_SELECT}
+       FROM provider_favorites f
+       JOIN service_providers sp ON sp.id = f.provider_id
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE f.user_id = ? AND sp.is_active = 1 AND sp.status = 'approved'
+      ORDER BY f.created_at DESC, f.id DESC`,
+    [userId]
+  );
+
+  const townsMap = await townsForProviders(rows.map(row => row.id));
+  return rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], { isFavorite: true }));
 }
 
 // ======================================================================
@@ -994,6 +1160,10 @@ module.exports = {
   getPublicProviderById,
   publicProviderWhatsapp,
   listMyServices,
+  recordProviderView,
+  addProviderFavorite,
+  removeProviderFavorite,
+  listFavoriteProviders,
 
   assertTownsWithinScope,
   assertProviderFlagsAllowed,

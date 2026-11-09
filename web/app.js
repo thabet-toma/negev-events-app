@@ -95,6 +95,16 @@ let currentProviderId = null;
 // مكان الخادم، والقيمة تُطبَّق بلا إعادة تحميل.
 let providersDisplayMode = null;
 
+// مشاهدات المزوّد ومفضّلته (تذكرة #185). `providerViewsRecorded` تضمن تسجيل
+// مشاهدة واحدة لكل مزوّد في هذا التحميل — لا في كل رسم: تعديل الفلتر أو تبديل
+// شكل العرض يعيد رسم البطاقات، ولا يجوز أن يعيد تسجيل مشاهدة.
+// و`negev_visitor_id` معرّف عشوائي يخزّنه الجهاز ويُرسَل في `X-Visitor-Id`
+// وحده؛ لا عنوان IP في أي مفتاح ولا في أي مستند.
+const VISITOR_ID_STORAGE_KEY = 'negev_visitor_id';
+const VISITOR_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+const providerViewsRecorded = new Set();
+let savedProvidersCache = [];
+
 // «خدماتنا» و«آخر خبر» — وجهة عامة بلا حساب (منصّات كترا)، وشاشة أخبار
 // المحافظة من مصدرها الخارجي عبر GET /api/news. لا رمز ولا محافظة محسوبة هنا:
 // apiFetch يرفق X-Region من المحفوظ، والخادم يعيد `region_name` فيعرضه الهيدر
@@ -3907,6 +3917,7 @@ function loadMyListView() {
   lockedView.style.display = 'none';
   unlockedView.style.display = 'block';
   loadMyList();
+  loadSavedProviders();
 }
 
 /**
@@ -3943,6 +3954,51 @@ async function loadMyList() {
     }
     updateMyListNavBadge();
   }
+}
+
+/**
+ * «مزوّدون محفوظون» في «قائمتي» (تذكرة #185): يقرأ GET /api/services/favorites
+ * لصاحب الحساب وحده. القسم يختفي كاملاً بلا محفوظات — لا عنوان لقسم فارغ —
+ * وفشل الجلب لا يُسقط «قائمتي»: يختفي القسم ويبقى ما سواه كما هو.
+ */
+async function loadSavedProviders() {
+  if (!currentUser || !authToken) {
+    savedProvidersCache = [];
+    renderSavedProviders();
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/services/favorites', { auth: true });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success || !Array.isArray(data.providers)) {
+      throw new Error('bad favorites response');
+    }
+    savedProvidersCache = data.providers;
+  } catch (e) {
+    savedProvidersCache = [];
+  }
+  renderSavedProviders();
+}
+
+/** بطاقات المزوّدين المحفوظين — شكل بطاقة القائمة نفسه، وبلا وجهة جديدة في الشريط. */
+function renderSavedProviders() {
+  const section = document.getElementById('myListSavedProviders');
+  const list = document.getElementById('myListSavedProvidersList');
+  if (!section || !list) return;
+  if (!savedProvidersCache.length) {
+    list.innerHTML = '';
+    section.hidden = true;
+    return;
+  }
+  list.innerHTML = savedProvidersCache
+    .map(provider => renderCompactServiceRowHtml(provider, {
+      // معرّفات مختلفة عن بطاقة تبويب الخدمات: الصفحتان تعيشان في DOM واحد،
+      // وتكرار `id` يجعل `getElementById` يصيب بطاقة التبويب الأخرى.
+      rowId: `myListProviderRow-${provider.id}`,
+      statsId: `myListProviderStats-${provider.id}`
+    }))
+    .join('');
+  section.hidden = false;
 }
 
 /** الصفوف الظاهرة تحت الرقاقة المختارة — فلترة عميل بحتة على bucket القادم من الخادم. */
@@ -6568,6 +6624,10 @@ function resumePendingIntent() {
   } else if (intent.type === 'my_list') {
     // بطاقة الدخول في تبويب «قائمتي» — يعود إليه بعد الدخول لا إلى التغذية.
     switchTab('tabMyList');
+  } else if (intent.type === 'provider_favorite') {
+    // «احفظ المزوّد» ضُغط قبل الدخول (تذكرة #185): تُفتح نافذة المزوّد نفسها
+    // بعد الدخول، فيكمل المستخدم الفعل الذي أراده بزرّه هو — لا حفظ صامت.
+    openProviderModal(intent.providerId);
   } else if (intent.type === 'rsvp') {
     // زرّ «جاي»/«مش جاي» ضُغط قبل الدخول — يُنفَّذ الجواب نفسه الآن بما اختاره
     // المستخدم من عدد (المنتقي ما زال في الصفحة تحت نافذة الدخول).
@@ -8391,6 +8451,157 @@ function providerPriceBadgeText(p) {
 }
 
 /**
+ * معرّف زائر عشوائي (تذكرة #185): يُولَّد مرة ويبقى في `localStorage` تحت
+ * `negev_visitor_id`. `crypto.randomUUID()` حيث يتوفّر، وإلا 32 حرفاً hex من
+ * `crypto.getRandomValues` أو `Math.random` في متصفّح قديم. الشكل يطابق ما
+ * يتحقّق منه الخادم (16..64 من `[A-Za-z0-9_-]`)، فلا يصل مفتاح مرفوض.
+ */
+function newProviderVisitorId() {
+  try {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+  } catch (e) {
+    // متصفّح يمنع crypto — البديل العشوائي أدناه يكفي لمعرّف غير سرّي.
+  }
+  let fallback = '';
+  while (fallback.length < 32) {
+    fallback += Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  }
+  return fallback.slice(0, 32);
+}
+
+/** المعرّف المحفوظ، أو يُولَّد ويُحفظ مرة واحدة. التخزين المعطَّل يعطي معرّفاً لهذه الجلسة. */
+function providerVisitorId() {
+  try {
+    const saved = localStorage.getItem(VISITOR_ID_STORAGE_KEY);
+    if (saved && VISITOR_ID_PATTERN.test(saved)) return saved;
+    const generated = newProviderVisitorId();
+    localStorage.setItem(VISITOR_ID_STORAGE_KEY, generated);
+    return generated;
+  } catch (e) {
+    return newProviderVisitorId();
+  }
+}
+
+/** عدّادا البطاقة (تذكرة #185): 👁 المشاهدات و♥ المفضّلة — الصفر يُعرض أيضاً. */
+function providerStatsHtml(p) {
+  return `
+    <span class="provider-stat" data-stat="views" title="عدد المشاهدات">
+      <span class="provider-stat-icon" aria-hidden="true">👁</span>
+      <span class="provider-stat-num">${Number(p && p.views_count) || 0}</span>
+    </span>
+    <span class="provider-stat" data-stat="favorites" title="عدد من حفظوه">
+      <span class="provider-stat-icon" aria-hidden="true">♥</span>
+      <span class="provider-stat-num">${Number(p && p.favorites_count) || 0}</span>
+    </span>`;
+}
+
+/**
+ * تسجيل مشاهدة صفحة مزوّد مرة واحدة لكل تحميل — تُستدعى لحظة فتح نافذة
+ * المزوّد، لا عند كل رسم للبطاقة. الخادم يمنع تكرار اليوم نفسه أساساً، وهذا
+ * الحارس يوفّر الطلب المكرّر في الجلسة الواحدة.
+ */
+async function recordProviderView(providerId) {
+  const id = Number(providerId);
+  if (!id || providerViewsRecorded.has(id)) return;
+  providerViewsRecorded.add(id);
+  try {
+    const res = await apiFetch(`/api/services/providers/${id}/view`, {
+      method: 'POST',
+      // الرمز يُرفق إن وُجد (المستخدم المسجَّل مفتاحه `u:<id>` في الخادم)،
+      // و`X-Visitor-Id` يرافق الطلب دائماً لأن الزائر هو من لا رمز له.
+      auth: true,
+      headers: { 'X-Visitor-Id': providerVisitorId() }
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) return;
+    applyProviderViewCount(id, data.views_count);
+  } catch (e) {
+    console.error('Provider view error:', e);
+  }
+}
+
+/** يحدّث عدّاد المشاهدة في الكاش والبطاقة والنافذة بما ردّ به الخادم. */
+function applyProviderViewCount(providerId, viewsCount) {
+  const count = Number(viewsCount) || 0;
+  const cached = providerDetailsCache[providerId];
+  if (cached) cached.views_count = count;
+  const row = serviceProvidersCache.find(item => Number(item.id) === Number(providerId));
+  if (row) row.views_count = count;
+  updateProviderStatsDom(providerId);
+}
+
+/** يعيد رسم عدّادي المزوّد حيث ظهر: صفّ القائمة، الكرت، ونافذته المفتوحة. */
+function updateProviderStatsDom(providerId) {
+  const provider = providerDetailsCache[providerId]
+    || serviceProvidersCache.find(item => Number(item.id) === Number(providerId));
+  if (!provider) return;
+  for (const id of [`serviceRowStats-${providerId}`, `serviceCardStats-${providerId}`, `myListProviderStats-${providerId}`]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = providerStatsHtml(provider);
+  }
+  if (Number(currentProviderId) === Number(providerId)) {
+    const modalStats = document.getElementById('providerModalStats');
+    if (modalStats) modalStats.innerHTML = providerStatsHtml(provider);
+  }
+}
+
+/** زرّ «احفظ المزوّد»/«محفوظ» — حالته من كائن المزوّد المخزَّن لا من نصّ الزرّ. */
+function updateProviderFavoriteButton(provider) {
+  const btn = document.getElementById('providerFavoriteBtn');
+  if (!btn) return;
+  const saved = Boolean(provider && provider.is_favorite);
+  btn.classList.toggle('is-saved', saved);
+  btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
+  btn.innerHTML = saved
+    ? '<i class="fa-solid fa-heart" aria-hidden="true"></i> <span>محفوظ</span>'
+    : '<i class="fa-regular fa-heart" aria-hidden="true"></i> <span>احفظ المزوّد</span>';
+}
+
+/**
+ * تبديل المفضّلة عبر PUT/DELETE، والعدّاد يُقرأ من ردّ الخادم وحده. الزائر
+ * يُحوَّل إلى الدخول بنيّة محفوظة، فيعود إلى نافذة المزوّد نفسها بعد الدخول.
+ */
+async function toggleProviderFavorite() {
+  const providerId = Number(currentProviderId);
+  const provider = providerDetailsCache[providerId];
+  if (!providerId || !provider) return;
+  if (!requireAuth({ type: 'provider_favorite', providerId })) return;
+
+  const wantFavorite = !provider.is_favorite;
+  const btn = document.getElementById('providerFavoriteBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/favorite`, {
+      method: wantFavorite ? 'PUT' : 'DELETE',
+      auth: true
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      alert((data && data.message) || 'تعذّر حفظ المزوّد — حاول مرة أخرى');
+      return;
+    }
+    provider.is_favorite = Boolean(data.is_favorite);
+    provider.favorites_count = Number(data.favorites_count) || 0;
+    updateProviderFavoriteButton(provider);
+    updateProviderStatsDom(providerId);
+    showToast(data.is_favorite ? 'حُفظ المزوّد في «مزوّدون محفوظون»' : 'أُزيل المزوّد من محفوظاتك');
+    // القسم في «قائمتي» يتبع الحالة الجديدة بلا إعادة تحميل الصفحة.
+    loadSavedProviders();
+  } catch (e) {
+    alert('تعذّر حفظ المزوّد — تحقّق من الاتصال');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/**
  * شارتا المزوّد (تذكرة #184): «موثّق» و«مميّز» يضعهما السوبر أدمن وحدهما من
  * اللوحة، وتصلان مع كل صفّ في القائمة (`is_verified`/`is_featured`). لا شارة
  * لغيابهما — لا شارة رمادية تقول «غير موثّق»، فالغياب هو الحالة الافتراضية.
@@ -8413,7 +8624,7 @@ function providerBadgesHtml(p) {
  * `GET /api/services/providers/:id` فتحمل حزمة السعر والمواصفات — والرقم
  * نفسه لا يُجلب إلا هناك، فلا رقم في القائمة أصلاً.
  */
-function renderCompactServiceRowHtml(p) {
+function renderCompactServiceRowHtml(p, { rowId = `serviceRow-${p.id}`, statsId = `serviceRowStats-${p.id}` } = {}) {
   const toneColor = p.category_color
     ? (p.category_color.startsWith('#') ? p.category_color : `#${p.category_color}`)
     : '#B8860B';
@@ -8438,7 +8649,7 @@ function renderCompactServiceRowHtml(p) {
   const badgesHtml = providerBadgesHtml(p);
 
   return `
-    <div class="service-row" id="serviceRow-${p.id}" style="--tone:${toneColor}">
+    <div class="service-row" id="${rowId}" style="--tone:${toneColor}">
       <div class="service-row-summary">
         ${mediaHtml}
         <div class="service-row-body">
@@ -8448,6 +8659,7 @@ function renderCompactServiceRowHtml(p) {
             <span class="service-row-category">${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}</span>
             <span class="service-row-town"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(townsText)}</span>
           </div>
+          <div class="service-row-stats" id="${statsId}">${providerStatsHtml(p)}</div>
           <span class="service-row-price">
             <i class="fa-solid fa-tag"></i> <span class="service-row-price-text">${p.price != null ? `${Number(p.price).toLocaleString('ar-EG')} ₪ · ` : ''}${priceBadgeText}</span>
           </span>
@@ -8552,6 +8764,7 @@ function renderSingleServiceCardHtml(p) {
               <i class="fa-solid fa-location-dot" style="color:var(--tone)"></i>
               <span>${escapeHtml(townsText)}</span>
             </div>
+            <div class="service-card-stats" id="serviceCardStats-${p.id}">${providerStatsHtml(p)}</div>
             ${p.description ? `<p class="service-card-desc">${escapeHtml(p.description)}</p>` : ''}
             ${packageBannerHtml}
 
@@ -8632,6 +8845,10 @@ function toggleServiceDetails(providerId, btnEl) {
   if (!panel) return;
   const isHidden = panel.style.display === 'none';
   panel.style.display = isHidden ? 'block' : 'none';
+
+  // فتح البطاقة الكبيرة (لا رسمها) مشاهدةٌ للمزوّد (تذكرة #185): مرة واحدة
+  // لكل تحميل بحارس recordProviderView، فلا يعدّها كل فتح/إغلاق.
+  if (isHidden) recordProviderView(providerId);
 
   const btn = btnEl || document.getElementById(`serviceMoreBtn-${providerId}`);
   if (btn) {
@@ -8887,6 +9104,15 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
       badgesEl.hidden = !badges;
     }
 
+    // عدّادا المشاهدة والمفضّلة (تذكرة #185)، وزرّ الحفظ حالته من `is_favorite`
+    // التي يرسلها الخادم لهذا المستخدم — زرّ واحد لا زرّان.
+    const statsEl = document.getElementById('providerModalStats');
+    if (statsEl) {
+      statsEl.innerHTML = providerStatsHtml(p);
+      statsEl.hidden = false;
+    }
+    updateProviderFavoriteButton(p);
+
     const img = document.getElementById('providerModalImage');
     if (p.cover_url || !p.image_url) {
       img.hidden = true;
@@ -8967,6 +9193,10 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
       : noProviderPhoneHtml();
 
     document.getElementById('providerModal').style.display = 'flex';
+
+    // مشاهدة واحدة لهذا المزوّد في هذا التحميل (تذكرة #185): تُسجَّل عند فتح
+    // النافذة لا عند كل رسم للبطاقة، والحارس في recordProviderView يمنع التكرار.
+    recordProviderView(providerId);
   } catch (e) {
     console.error('Provider fetch error:', e);
   }

@@ -30,7 +30,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// أن يجيب `/api/events` أيضاً. و`body` غير ثابت كي يبدّل اختبارٌ ما يعيده
 /// الخادم بين جلبين (الشارة تُقرأ من جلب تالٍ).
 class MyListBackend {
-  MyListBackend(this.body, {this.eventsBody, this.myEventsBody});
+  MyListBackend(
+    this.body, {
+    this.eventsBody,
+    this.myEventsBody,
+    this.savedProviders = const [],
+    this.providerDetail,
+    this.providerFavorite = true,
+    this.providerFavoritesCount = 4,
+  });
 
   /// جسم GET /api/my-reminders — ما عدا DELETE الذي يردّ بحذف ناجح.
   Map<String, dynamic> body;
@@ -40,6 +48,17 @@ class MyListBackend {
 
   /// جسم GET /api/my-events («مناسباتي») — قائمة فارغة افتراضاً.
   final Map<String, dynamic>? myEventsBody;
+
+  /// جسم GET /api/services/favorites (تذكرة #185) — فارغ افتراضاً.
+  final List<Map<String, dynamic>> savedProviders;
+
+  /// جسم GET /api/services/providers/901 — تفصيل المزوّد المحفوظ.
+  final Map<String, dynamic>? providerDetail;
+
+  /// حالة الحفظ والعدّاد في الخادم الوهمي: PUT/DELETE يغيّرانها كما يفعل
+  /// الخادم الحقيقي، فلا يكذب زرّ الحفظ على نفسه في الاختبار.
+  bool providerFavorite;
+  int providerFavoritesCount;
 
   final List<http.Request> requests = [];
 
@@ -78,6 +97,22 @@ class MyListBackend {
                 'message': 'تم حذف المناسبات المنتهية من قائمتك',
               }
             : body;
+      } else if (path.endsWith('/api/services/favorites')) {
+        response = {'success': true, 'providers': savedProviders};
+      } else if (path.endsWith('/api/services/providers/901/view')) {
+        response = {'success': true, 'counted': true, 'views_count': 13};
+      } else if (path.endsWith('/api/services/providers/901/favorite')) {
+        providerFavorite = request.method == 'PUT';
+        providerFavoritesCount += providerFavorite ? 1 : -1;
+        response = {
+          'success': true,
+          'is_favorite': providerFavorite,
+          'favorites_count': providerFavoritesCount,
+        };
+      } else if (path.endsWith('/api/services/providers/901')) {
+        response = providerDetail == null
+            ? {'success': false, 'message': 'مزوّد الخدمة غير موجود'}
+            : {'success': true, 'provider': providerDetail};
       } else if (path.endsWith('/api/reminders/schedule')) {
         response = {'success': true, 'schedule': <Map<String, dynamic>>[]};
       }
@@ -157,6 +192,51 @@ Map<String, dynamic> listBody(
       'ended': ended ?? events.length - up,
     },
     'under_review_count': underReview,
+  };
+}
+
+/// بطاقة مزوّد محفوظ كما يعيدها `GET /api/services/favorites` (تذكرة #185) —
+/// شكل بطاقة القائمة نفسه بعدّاديها وبلا رقم.
+Map<String, dynamic> savedProviderCard({
+  bool isFavorite = true,
+  int views = 12,
+  int favorites = 4,
+}) {
+  return {
+    'id': 901,
+    'name': 'مزوّد محفوظ',
+    'category_id': 3,
+    'category_name': 'صالات أفراح',
+    'category_icon': '🏛️',
+    'category_color': '#8a6109',
+    'has_phone': true,
+    'image_url': null,
+    'price': null,
+    'price_type': 'contact',
+    'price_estimate_desc': null,
+    'attributes': <String, dynamic>{},
+    'towns': ['رهط'],
+    'views_count': views,
+    'favorites_count': favorites,
+    'is_favorite': isFavorite,
+  };
+}
+
+/// تفصيل المزوّد نفسه كما يعيده `GET /api/services/providers/901`.
+Map<String, dynamic> savedProviderDetail() {
+  return {
+    ...savedProviderCard(),
+    'phone': '0501234567',
+    'description': 'قاعة واسعة',
+    'logo_url': null,
+    'cover_url': null,
+    'hours': <Map<String, dynamic>>[],
+    'is_verified': false,
+    'is_featured': false,
+    'gallery': <Map<String, dynamic>>[],
+    'offers': <Map<String, dynamic>>[],
+    'products': <Map<String, dynamic>>[],
+    'similar': <Map<String, dynamic>>[],
   };
 }
 
@@ -1120,6 +1200,122 @@ void main() {
         expect(find.text('أضف لقائمتي'), findsOneWidget);
       },
     );
+  });
+
+  group('(ل) «مزوّدون محفوظون» وزرّ الحفظ (تذكرة #185)', () {
+    testWidgets('القسم يعرض المحفوظ باسمه، ويختفي كاملاً حين لا محفوظات', (tester) async {
+      tester.view.physicalSize = const Size(420, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final backend = MyListBackend(
+        listBody([]),
+        savedProviders: [savedProviderCard()],
+      );
+      final api = backend.build();
+      final auth = await tester.runAsync(() => signedIn(api));
+      await pumpMyList(tester, api: api, auth: auth!);
+
+      expect(
+        find.byKey(const Key('my_list_saved_providers')),
+        findsOneWidget,
+        reason: 'القسم يُرسم حين يوجد محفوظ',
+      );
+      expect(find.text('مزوّدون محفوظون'), findsOneWidget);
+      expect(
+        find.byKey(const Key('my_list_saved_provider_901')),
+        findsOneWidget,
+        reason: 'بطاقة المزوّد نفسه داخل القسم',
+      );
+      expect(find.text('مزوّد محفوظ'), findsOneWidget);
+
+      final emptyBackend = MyListBackend(listBody([]));
+      final emptyApi = emptyBackend.build();
+      final emptyAuth = await tester.runAsync(() => signedIn(emptyApi));
+      // شجرة فارغة أولاً: `MyListScreen` بنوعه نفسه يُعاد استخدام `State` القديم
+      // لو بُدِّل الأب وحده، فلا يعيد الجلب ولا يرى محفوظاتٍ فارغة.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await pumpMyList(tester, api: emptyApi, auth: emptyAuth!);
+
+      expect(
+        find.byKey(const Key('my_list_saved_providers')),
+        findsNothing,
+        reason: 'بلا محفوظات لا قسم ولا عنوان فارغ',
+      );
+      expect(emptyBackend.requestsTo('/api/services/favorites'), isNotEmpty,
+          reason: 'القسم جلب محفوظات صاحبه فعلاً قبل أن يقرّر الاختفاء');
+    });
+
+    testWidgets('زرّ الحفظ في صفحة المزوّد يبدّل الحالة والعدّاد من ردّ الخادم', (tester) async {
+      tester.view.physicalSize = const Size(900, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final backend = MyListBackend(
+        listBody([]),
+        savedProviders: [savedProviderCard()],
+        providerDetail: savedProviderDetail(),
+      );
+      final api = backend.build();
+      final auth = await tester.runAsync(() => signedIn(api));
+      await pumpMyList(tester, api: api, auth: auth!);
+
+      await tester.tap(find.byKey(const Key('my_list_saved_provider_901')));
+      await tester.pumpAndSettle();
+
+      final button = find.byKey(const Key('provider_favorite_btn'));
+      expect(button, findsOneWidget, reason: 'صفحة المزوّد فُتحت من القسم');
+      expect(
+        find.descendant(of: button, matching: find.text('محفوظ')),
+        findsOneWidget,
+        reason: 'الحالة الأولية من is_favorite التي أعادها الخادم',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '4',
+      );
+
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+
+      expect(
+        backend.requestsTo('/api/services/providers/901/favorite')
+            .where((request) => request.method == 'DELETE')
+            .length,
+        1,
+        reason: 'الضغط على «محفوظ» يرسل DELETE لا PUT',
+      );
+      expect(
+        find.descendant(of: button, matching: find.text('احفظ المزوّد')),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '3',
+        reason: 'العدّاد ينقص بقيمة ردّ الخادم',
+      );
+
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+
+      expect(
+        backend.requestsTo('/api/services/providers/901/favorite')
+            .where((request) => request.method == 'PUT')
+            .length,
+        1,
+        reason: 'الضغط مرة أخرى يعيد الحفظ بـ PUT',
+      );
+      expect(
+        find.descendant(of: button, matching: find.text('محفوظ')),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('provider_favorites_count'))).data,
+        '4',
+        reason: 'العدّاد يعود إلى قيمة الخادم بعد الحفظ',
+      );
+    });
   });
 
   group('(ك) «جاي» في «مناسباتي» — زرّ لا يفعل شيئاً لا يُرسم', () {

@@ -123,7 +123,7 @@ function withDuplicateConfirmed(method, path, body, yes = true) {
   return { ...body, confirm_duplicate: yes };
 }
 
-async function api(method, path, { body, token, legacy = false, region } = {}) {
+async function api(method, path, { body, token, legacy = false, region, visitorId } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (!legacy) headers['X-App-Version'] = '2.0.0';
@@ -131,6 +131,8 @@ async function api(method, path, { body, token, legacy = false, region } = {}) {
   // to exercise the 400 path. Sent only when a test asks for it, so every
   // existing call keeps sending exactly the request it sent before.
   if (region !== undefined) headers['X-Region'] = String(region);
+  // معرّف الزائر العشوائي (#185) — يُرسَل فقط حين يطلبه اختبار المشاهدة.
+  if (visitorId !== undefined) headers['X-Visitor-Id'] = String(visitorId);
 
   const sent = withDuplicateConfirmed(method, path, body);
   const res = await fetch(`${baseUrl}${path}`, {
@@ -20569,6 +20571,336 @@ async function run() {
   await db.execute('DELETE FROM regions WHERE id = ?', [pageOtherRegionId]);
   // أدمن القسم الحيّ: `admin_towns` تسقط معه بـON DELETE CASCADE.
   await db.execute('DELETE FROM users WHERE id = ?', [pageScopedAdminId]);
+
+  // ==================================================================
+  // مشاهدات المزوّد والمفضّلة (تذكرة #185)
+  // ==================================================================
+  console.log('\nمشاهدات المزوّد والمفضّلة (#185): مفتاح بلا IP، ومفضّلة صاحبها وحده');
+
+  let favCategoryId = 0;
+  let favProviderId = 0;
+  let favPendingId = 0;
+  let favUserId = 0;
+  let favUserToken = '';
+  let favOtherId = 0;
+  let favOtherToken = '';
+  // سوبر أدمن حيّ **خاص بهذا القسم** (تذكرة #185): لا يُعاد استعمال
+  // `superAdminToken` هنا. السويت طويل، وشريحة المستخدم المسجَّل في
+  // `rateLimit.js` هي 3000 طلب لكل مستخدم كل ١٥ دقيقة — وقد استُنفدت لحساب
+  // `superAdminToken` قبل هذا القسم، فردّت أول تهيئة 429 لا 201. حساب جديد
+  // يعني شريحة جديدة، بلا تخفيف الحدّ ولا تعطيله ولا مساس بـ`rateLimit.js`.
+  let favSuperAdminId = 0;
+  let favSuperAdminToken = '';
+  const favSuperAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const favUserPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const favOtherPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  // مفتاحان عشوائيان بالشكل الذي يولّده العميل (16..64 من [A-Za-z0-9_-]).
+  const favVisitorOne = 'visitor_one_0123456789abcdef';
+  const favVisitorTwo = 'visitor-two-0123456789abcdef';
+  const favVisitorYesterday = 'visitor_yesterday_0123456789';
+
+  /** عدّاد المشاهدة المخزَّن — مصدر الحقيقة في كل تأكيد على «حُسبت/لم تُحسب». */
+  async function storedViewsCount(providerId) {
+    const row = await db.queryOne('SELECT views_count FROM service_providers WHERE id = ?', [providerId]);
+    return Number(row.views_count);
+  }
+
+  /**
+   * مستخدم عاديّ حيّ لهذا القسم — يُكتب في القاعدة مباشرةً بتوكن موقَّع، لا عبر
+   * `POST /api/auth/register`: بوابة المصادقة محدودة بـ`RATE_LIMIT_AUTH_MAX`
+   * (20 لكل IP كل ١٥ دقيقة) والسويت الطويل يستهلكها قبل هذا القسم، فيردّ 429
+   * بلا أن يكون في التهيئة عيب. والحساب يبقى صفّاً حقيقياً لأن مفضّلة المزوّد
+   * مفتاح أجنبي إلى `users(id)`.
+   */
+  async function createFavoriteUser(phone, fullName) {
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, 'user')`,
+      [phone, fullName, bcrypt.hashSync('1234', config.bcryptRounds)]
+    );
+    return {
+      id: insertId,
+      token: signToken({ id: insertId, phone_number: phone, full_name: fullName, role: 'user' }, '1h')
+    };
+  }
+
+  await test('Setup (#185): سوبر أدمن حيّ خاص بالقسم — شريحة طلبات جديدة لا تستهلكها بقية السويت', async () => {
+    const fullName = 'سوبر أدمن قسم المشاهدات';
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, 'super_admin')`,
+      [favSuperAdminPhone, fullName, bcrypt.hashSync('1234', config.bcryptRounds)]
+    );
+    favSuperAdminId = insertId;
+    favSuperAdminToken = signToken(
+      { id: insertId, phone_number: favSuperAdminPhone, full_name: fullName, role: 'super_admin' },
+      '1h'
+    );
+
+    // مرساة موجبة: التوكن يفتح مسار إدارة قبل أن يُبنى عليه أي تأكيد تالٍ.
+    const me = await api('GET', '/api/admin/me', { token: favSuperAdminToken });
+    assert.strictEqual(me.status, 200, me.body && me.body.message);
+    assert.strictEqual(me.body.role, 'super_admin');
+  });
+
+  await test('Setup (#185): فئة، ومزوّد معتمد، وآخر معلّق، ومستخدمان حقيقيان', async () => {
+    const category = await api('POST', '/api/admin/service-categories', {
+      token: favSuperAdminToken,
+      body: { name: `فئة المشاهدات ${Date.now()}`, icon: '❤️', color: '#B8860B' }
+    });
+    assert.strictEqual(category.status, 201, category.body && category.body.message);
+    favCategoryId = category.body.category.id;
+
+    const created = await api('POST', '/api/admin/service-providers', {
+      token: favSuperAdminToken,
+      body: { category_id: favCategoryId, name: 'مزوّد مشاهدة الاختبار', towns: [scopedTown] }
+    });
+    assert.strictEqual(created.status, 201, created.body && created.body.message);
+    favProviderId = created.body.providerId;
+
+    const pending = await api('POST', '/api/admin/service-providers', {
+      token: favSuperAdminToken,
+      body: { category_id: favCategoryId, name: 'مزوّد مشاهدة معلّق', towns: [scopedTown] }
+    });
+    assert.strictEqual(pending.status, 201, pending.body && pending.body.message);
+    favPendingId = pending.body.providerId;
+    const marked = await api('PATCH', `/api/admin/service-providers/${favPendingId}/status`, {
+      token: favSuperAdminToken,
+      body: { status: 'pending' }
+    });
+    assert.strictEqual(marked.status, 200, 'المزوّد المعلّق لازم كي يسقط تأكيد 404 على سببٍ حقيقي');
+
+    const first = await createFavoriteUser(favUserPhone, 'صاحب المفضّلة');
+    favUserId = first.id;
+    favUserToken = first.token;
+
+    const second = await createFavoriteUser(favOtherPhone, 'مستخدم آخر');
+    favOtherId = second.id;
+    favOtherToken = second.token;
+  });
+
+  await test('المشاهدة: مفتاح الزائر يُحسب مرة في اليوم، والتكرار لا يزيد العدّاد ولا يضيف صفاً', async () => {
+    const first = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: favVisitorOne
+    });
+    assert.strictEqual(first.status, 200, first.body && first.body.message);
+    assert.strictEqual(first.body.counted, true, 'أول مشاهدة من المفتاح تُحسب');
+    assert.strictEqual(first.body.views_count, 1, 'العدّاد يبدأ من صفر ويصير واحداً');
+
+    const second = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: favVisitorOne
+    });
+    assert.strictEqual(second.status, 200);
+    assert.strictEqual(second.body.counted, false, 'المشاهدة الثانية في اليوم نفسه لا تُحسب');
+    assert.strictEqual(second.body.views_count, 1, 'ولا يزيد العدّاد');
+
+    const rows = await db.query(
+      "SELECT DATE_FORMAT(view_date, '%Y-%m-%d') AS view_date FROM service_provider_views WHERE provider_id = ? AND visitor_key = ?",
+      [favProviderId, `v:${favVisitorOne}`]
+    );
+    assert.strictEqual(rows.length, 1, 'صفّ واحد لا اثنان لنفس (المزوّد، المفتاح، اليوم)');
+    const { today } = await db.queryOne("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS today");
+    assert.strictEqual(String(rows[0].view_date), String(today), 'اليوم من الخادم لا من العميل');
+    assert.strictEqual(await storedViewsCount(favProviderId), 1);
+  });
+
+  await test('المشاهدة: صفّ الأمس للمفتاح نفسه لا يمنع مشاهدة اليوم — والتاريخ هو الفاصل', async () => {
+    const before = await storedViewsCount(favProviderId);
+    await db.execute(
+      `INSERT INTO service_provider_views (provider_id, visitor_key, view_date)
+       VALUES (?, ?, CURDATE() - INTERVAL 1 DAY)`,
+      [favProviderId, `v:${favVisitorYesterday}`]
+    );
+
+    const todayView = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: favVisitorYesterday
+    });
+    assert.strictEqual(todayView.status, 200);
+    assert.strictEqual(todayView.body.counted, true, 'اليوم الجديد يُحسب ولو كان صفّ الأمس موجوداً');
+    assert.strictEqual(todayView.body.views_count, before + 1);
+
+    const rows = await db.query(
+      "SELECT DATE_FORMAT(view_date, '%Y-%m-%d') AS view_date FROM service_provider_views WHERE provider_id = ? AND visitor_key = ? ORDER BY view_date",
+      [favProviderId, `v:${favVisitorYesterday}`]
+    );
+    assert.strictEqual(rows.length, 2, 'صفّان: أمس واليوم');
+    assert.ok(String(rows[0].view_date) < String(rows[1].view_date), 'أحدهما أمس والآخر اليوم');
+  });
+
+  await test('المشاهدة: بلا X-Visitor-Id وبلا حساب لا تُحسب — 200 وcounted: false لا خطأ', async () => {
+    const before = await storedViewsCount(favProviderId);
+    const noKey = await api('POST', `/api/services/providers/${favProviderId}/view`);
+    assert.strictEqual(noKey.status, 200, 'غياب المفتاح ليس خطأ مستخدم');
+    assert.strictEqual(noKey.body.counted, false);
+    assert.strictEqual(noKey.body.views_count, before, 'العدّاد لا يتغيّر بلا مفتاح');
+
+    const badKey = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: 'too-short'
+    });
+    assert.strictEqual(badKey.status, 200, 'مفتاح لا يطابق الشكل يُعتبر غائباً لا 400');
+    assert.strictEqual(badKey.body.counted, false);
+    assert.strictEqual(badKey.body.views_count, before);
+
+    assert.strictEqual(await storedViewsCount(favProviderId), before, 'لا صفّ مشاهدة كُتب بلا مفتاح');
+  });
+
+  await test('المشاهدة: مفتاحان مختلفان في اليوم نفسه يُحسبان معاً', async () => {
+    const before = await storedViewsCount(favProviderId);
+    const one = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: favVisitorTwo
+    });
+    const two = await api('POST', `/api/services/providers/${favProviderId}/view`, {
+      visitorId: 'visitor_two_0123456789abcdef'
+    });
+    assert.strictEqual(one.body.counted, true, 'المفتاح الأول جديد');
+    assert.strictEqual(two.body.counted, true, 'والمفتاح الثاني جديد أيضاً');
+    assert.strictEqual(await storedViewsCount(favProviderId), before + 2);
+  });
+
+  await test('المشاهدة: الحساب المسجَّل مفتاحه u:<id> — مشاهدته الأولى تُحسب والثانية لا', async () => {
+    const before = await storedViewsCount(favProviderId);
+    const first = await api('POST', `/api/services/providers/${favProviderId}/view`, { token: favUserToken });
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(first.body.counted, true, 'حساب لم يشاهد اليوم يُحسب');
+    assert.strictEqual(first.body.views_count, before + 1);
+
+    const second = await api('POST', `/api/services/providers/${favProviderId}/view`, { token: favUserToken });
+    assert.strictEqual(second.body.counted, false, 'الحساب نفسه مرة ثانية في اليوم لا يُحسب');
+
+    const row = await db.queryOne(
+      'SELECT visitor_key FROM service_provider_views WHERE provider_id = ? AND visitor_key = ?',
+      [favProviderId, `u:${favUserId}`]
+    );
+    assert.ok(row, 'المفتاح المخزَّن معرّف الحساب لا شيء آخر');
+    assert.strictEqual(row.visitor_key, `u:${favUserId}`);
+  });
+
+  await test('الخصوصية: لا عمود IP في جداول المشاهدة والمفضّلة ولا في صفّ المزوّد', async () => {
+    const columns = await db.query(
+      `SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME IN ('service_provider_views', 'provider_favorites', 'service_providers')`
+    );
+    assert.ok(columns.length > 0, 'فحص الأعمدة لا يمرّ على جدول غير موجود بصمت');
+    const offenders = columns
+      .map(column => `${column.TABLE_NAME}.${column.COLUMN_NAME}`)
+      .filter(name => /(^|[._])ip($|[._])/.test(name.toLowerCase()));
+    assert.deepStrictEqual(offenders, [], `أعمدة IP ممنوعة، وُجد: ${offenders.join('، ')}`);
+
+    const keys = await db.query(
+      'SELECT visitor_key FROM service_provider_views WHERE provider_id = ?',
+      [favProviderId]
+    );
+    assert.ok(keys.length > 0, 'مفاتيح مشاهدة موجودة كي يسقط التأكيد لو كان أحدها عنواناً');
+    for (const row of keys) {
+      assert.ok(
+        /^(u:\d+|v:[A-Za-z0-9_-]{16,64})$/.test(row.visitor_key),
+        `المفتاح معرّف حساب أو معرّف زائر عشوائي فقط، وُجد: ${row.visitor_key}`
+      );
+    }
+  });
+
+  await test('المفضّلة: PUT ثم PUT لا يكرّر العدّاد، وDELETE يُنقصه ثم DELETE لا يُخطئ', async () => {
+    const saved = await api('PUT', `/api/services/providers/${favProviderId}/favorite`, { token: favUserToken });
+    assert.strictEqual(saved.status, 200, saved.body && saved.body.message);
+    assert.strictEqual(saved.body.is_favorite, true);
+    assert.strictEqual(saved.body.favorites_count, 1, 'أول حفظ يعدّ واحداً');
+
+    const again = await api('PUT', `/api/services/providers/${favProviderId}/favorite`, { token: favUserToken });
+    assert.strictEqual(again.status, 200, 'الحفظ المتكرّر لا خطأ');
+    assert.strictEqual(again.body.favorites_count, 1, 'ولا يزيد العدّاد');
+
+    const rows = await db.query(
+      'SELECT COUNT(*) AS total FROM provider_favorites WHERE provider_id = ? AND user_id = ?',
+      [favProviderId, favUserId]
+    );
+    assert.strictEqual(Number(rows[0].total), 1, 'صفّ واحد لكل (مزوّد، مستخدم)');
+
+    const removed = await api('DELETE', `/api/services/providers/${favProviderId}/favorite`, { token: favUserToken });
+    assert.strictEqual(removed.status, 200);
+    assert.strictEqual(removed.body.is_favorite, false);
+    assert.strictEqual(removed.body.favorites_count, 0, 'الإلغاء يُنقص العدّاد');
+
+    const removedAgain = await api('DELETE', `/api/services/providers/${favProviderId}/favorite`, { token: favUserToken });
+    assert.strictEqual(removedAgain.status, 200, 'الإلغاء المتكرّر لا خطأ');
+    assert.strictEqual(removedAgain.body.favorites_count, 0);
+  });
+
+  await test('المفضّلة: GET /api/services/favorites يعيد محفوظات صاحب الحساب وحده، وبلا رقم', async () => {
+    await api('PUT', `/api/services/providers/${favProviderId}/favorite`, { token: favUserToken });
+
+    const mine = await api('GET', '/api/services/favorites', { token: favUserToken });
+    assert.strictEqual(mine.status, 200);
+    const ownRow = mine.body.providers.find(provider => provider.id === favProviderId);
+    assert.ok(ownRow, 'محفوظات صاحبها تعود له');
+    assert.strictEqual(ownRow.is_favorite, true, 'وبطاقة القائمة نفسها تحمل is_favorite: true');
+    assert.ok(!('phone' in ownRow), 'المفضّلة لا تحمل رقم الهاتف');
+
+    const stranger = await api('GET', '/api/services/favorites', { token: favOtherToken });
+    assert.strictEqual(stranger.status, 200);
+    assert.ok(
+      !stranger.body.providers.some(provider => provider.id === favProviderId),
+      'مستخدم آخر لا يرى محفوظات غيره'
+    );
+  });
+
+  await test('404: مزوّد غير معتمد يُردّ 404 للمشاهدة والمفضّلة', async () => {
+    const view = await api('POST', `/api/services/providers/${favPendingId}/view`, {
+      visitorId: 'visitor_pending_0123456789'
+    });
+    assert.strictEqual(view.status, 404, 'المشاهدة على مزوّد غير معتمد 404 كسائر القراءات العامة');
+
+    const favorite = await api('PUT', `/api/services/providers/${favPendingId}/favorite`, { token: favUserToken });
+    assert.strictEqual(favorite.status, 404, 'والحفظ على مزوّد غير معتمد 404');
+    const unfavorite = await api('DELETE', `/api/services/providers/${favPendingId}/favorite`, { token: favUserToken });
+    assert.strictEqual(unfavorite.status, 404, 'والإلغاء كذلك');
+  });
+
+  await test('القائمة والتفصيل يحملان العدّادين، والزائر يستلم is_favorite: false صراحةً', async () => {
+    const list = await api('GET', `/api/services/providers?category_id=${favCategoryId}&limit=100`);
+    assert.strictEqual(list.status, 200);
+    const row = list.body.providers.find(provider => provider.id === favProviderId);
+    assert.ok(row, 'المزوّد في القائمة كي يسقط التأكيد لو غاب الحقل');
+    assert.strictEqual(typeof row.views_count, 'number', 'views_count في بطاقة القائمة');
+    assert.strictEqual(typeof row.favorites_count, 'number', 'وfavorites_count فيها');
+    assert.strictEqual(row.views_count, await storedViewsCount(favProviderId), 'عدّاد المشاهدة من عمود المزوّد');
+    assert.strictEqual(row.is_favorite, false, 'الزائر يستلم false لا مفتاحاً غائباً');
+
+    const detail = await api('GET', `/api/services/providers/${favProviderId}`);
+    assert.strictEqual(detail.status, 200);
+    assert.strictEqual(detail.body.provider.views_count, row.views_count);
+    assert.strictEqual(detail.body.provider.favorites_count, row.favorites_count);
+    assert.strictEqual(detail.body.provider.is_favorite, false, 'والزائر في التفصيل كذلك');
+
+    const mine = await api('GET', `/api/services/providers/${favProviderId}`, { token: favUserToken });
+    assert.strictEqual(mine.body.provider.is_favorite, true, 'وصاحب الحفظ يراه محفوظاً في التفصيل');
+  });
+
+  await test('نصّا الخصوصية يذكران معرّف الزائر العشوائي وأن المشاهدة بلا IP (#185)', async () => {
+    const notice = await api('GET', '/api/privacy/notice');
+    assert.strictEqual(notice.status, 200);
+    const noticeText = notice.body.notice.text;
+    assert.ok(
+      noticeText.includes('معرّف عشوائي يخزّنه جهازك'),
+      'الإشعار المخدوم من الخادم يذكر مصدر المفتاح صراحةً'
+    );
+    assert.ok(
+      noticeText.includes('ولا يُستخدم عنوان IP'),
+      'وينفي استخدام عنوان الشبكة للمشاهدة'
+    );
+
+    const privacyHtml = await fsp.readFile(path.join(__dirname, '..', '..', 'web', 'privacy.html'), 'utf8');
+    assert.ok(
+      privacyHtml.includes('معرّف عشوائي يخزّنه جهازك'),
+      'وصفحة الخصوصية الثابتة تقول الشيء نفسه — نصّان لا يتفرّقان'
+    );
+    assert.ok(privacyHtml.includes('لا بعنوان IP'));
+  });
+
+  // ---- تنظيف قسم #185 ----------------------------------------------
+  for (const id of [favProviderId, favPendingId]) {
+    await api('DELETE', `/api/admin/service-providers/${id}`, { token: favSuperAdminToken });
+  }
+  await api('DELETE', `/api/admin/service-categories/${favCategoryId}`, { token: favSuperAdminToken });
+  await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', [favUserId, favOtherId, favSuperAdminId]);
 
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);

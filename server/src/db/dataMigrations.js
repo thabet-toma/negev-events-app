@@ -2704,6 +2704,62 @@ const steps = [
         logger.info('[migrations] add-provider-pages-2026-11: service_provider_products table created.');
       }
     }
+  },
+  {
+    // مشاهدات المزوّد ومفضّلته (تذكرة #185): عمود العدّاد وجدولان.
+    // `schema.sql` يطبّق `CREATE TABLE IF NOT EXISTS` وحده، فعمودٌ جديد على
+    // جدول قائم لا يصل إلى قاعدة منصَّبة من قبل إلا من هنا. والخطوة آمنة
+    // التكرار بذاتها: العمود داخل `columnExists` وكل جدول داخل `tableExists`،
+    // وتعريفاهما في `schema.sql` حرفياً — نسختان لتعريف واحد لا تعريفان.
+    //
+    // **ولا عمود IP في أي منهما**، والتاريخ DATE من `CURDATE()` على الخادم:
+    // المفتاح معرّف حساب (`u:<id>`) أو معرّف زائر عشوائي يولّده العميل
+    // (`v:<...>`)، فلا يُخزَّن عنوان شبكة ولا يُشتقّ من واحد.
+    name: 'add-provider-views-favorites-2026-11',
+    async run(connection) {
+      if (!(await columnExists(connection, 'service_providers', 'views_count'))) {
+        await connection.query(
+          'ALTER TABLE service_providers ADD COLUMN views_count INT UNSIGNED NOT NULL DEFAULT 0 AFTER is_featured'
+        );
+        logger.info('[migrations] add-provider-views-favorites-2026-11: service_providers.views_count added.');
+      }
+
+      if (!(await tableExists(connection, 'service_provider_views'))) {
+        await connection.query(`
+          CREATE TABLE service_provider_views (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            visitor_key VARCHAR(64) NOT NULL,
+            view_date   DATE        NOT NULL,
+            created_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_provider_views_day (provider_id, visitor_key, view_date),
+            KEY idx_provider_views_provider (provider_id),
+            CONSTRAINT fk_spv_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-views-favorites-2026-11: service_provider_views table created.');
+      }
+
+      if (!(await tableExists(connection, 'provider_favorites'))) {
+        await connection.query(`
+          CREATE TABLE provider_favorites (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            user_id     INT UNSIGNED NOT NULL,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_provider_favorites (provider_id, user_id),
+            CONSTRAINT fk_spf_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE,
+            CONSTRAINT fk_spf_user FOREIGN KEY (user_id)
+              REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-views-favorites-2026-11: provider_favorites table created.');
+      }
+    }
   }
 ];
 
