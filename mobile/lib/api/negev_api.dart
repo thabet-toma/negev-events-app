@@ -12,6 +12,7 @@ import '../models/my_list.dart';
 import '../models/news.dart';
 import '../models/nokoot.dart';
 import '../models/notification.dart';
+import '../models/prices.dart';
 import '../models/reminder_schedule.dart';
 import '../models/service.dart';
 import '../models/stats_ticker.dart';
@@ -529,6 +530,14 @@ class NegevApi {
   Future<StatsTicker> statsTicker() async {
     final data = await _client.get('/api/stats/ticker');
     return StatsTicker.fromJson(data);
+  }
+
+  /// أسعار الذهب والعملات (#189) — `GET /api/prices`، مسار عام بلا مصادقة
+  /// ولا محافظة: سعر السوق واحد لكل زائر. الخادم يقرأ المصدرين ويحسب، ويكاش
+  /// ساعة؛ هذا العميل يقرأ ما وصل كما هو (انظر `models/prices.dart`).
+  Future<PricesSnapshot> prices() async {
+    final data = await _client.get('/api/prices');
+    return PricesSnapshot.fromJson(data);
   }
 
   /// التعاميم الحيّة التي يحلّ أحدها محلّ شريط الإحصاءات (#172) — القائمة من

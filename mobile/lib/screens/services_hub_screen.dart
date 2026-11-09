@@ -4,6 +4,7 @@ import '../theme.dart';
 import '../widgets/async_view.dart' show openExternalLink;
 import 'news_screen.dart';
 import 'services_calculators_screen.dart';
+import 'services_prices_screen.dart';
 
 /// منصتا كترا الأخريان — روابط خارجية تُفتح في المتصفّح بنفس مسار المشروع
 /// (`openExternalLink`)، لا `http` ولا `WebView` هنا.
@@ -117,9 +118,60 @@ class ServicesHubScreen extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           for (final calculator in ServicesCalculator.values) ...[
-            _CalculatorCard(calculator: calculator),
+            _HubToolCard(
+              key: Key('hub_calc_${calculator.name}'),
+              icon: calculator.icon,
+              title: calculator.label,
+              short: calculator.short,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ServicesCalculatorsScreen(initial: calculator),
+                ),
+              ),
+            ),
             if (calculator != ServicesCalculator.values.last)
               const SizedBox(height: 10),
+          ],
+          const SizedBox(height: 30),
+
+          // «أسعار الذهب والعملات» (تذكرة #189) — أداتان تقرآن GET /api/prices
+          // من مصدر السوق عبر الخادم، تحت الحاسبات المحلية وفوقهما عنوان يفصلهما:
+          // تلك تعمل بلا إنترنت، وهاتان تحتاجان الشبكة وتبيّنان تاريخ السعر.
+          Text(
+            'أسعار الذهب والعملات',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              height: 1.3,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'سعر الذهب وسعر صرف العملات الست من مصدرهما، وحاسبتان تعملان '
+            'بالسعر الواصل وتُظهران تاريخه.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.7,
+              color: context.c.inkSoft,
+            ),
+          ),
+          const SizedBox(height: 14),
+          for (final tool in PricesTool.values) ...[
+            _HubToolCard(
+              key: Key('hub_prices_${tool.name}'),
+              icon: tool.icon,
+              title: tool.label,
+              short: tool.short,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ServicesPricesScreen(initial: tool),
+                ),
+              ),
+            ),
+            if (tool != PricesTool.values.last) const SizedBox(height: 10),
           ],
         ],
       ),
@@ -127,12 +179,21 @@ class ServicesHubScreen extends StatelessWidget {
   }
 }
 
-/// بطاقة حاسبة داخل «خدماتنا»: أيقونتها واسمها وسطرها القصير، وتفتح شاشة
-/// الحاسبات على لوحة هذه الحاسبة.
-class _CalculatorCard extends StatelessWidget {
-  const _CalculatorCard({required this.calculator});
+/// بطاقة أداة داخل «خدماتنا»: أيقونتها واسمها وسطرها القصير، وتفتح شاشتها —
+/// للحاسبات المحلية (#190) ولأداتَي الأسعار (#189) بالشكل نفسه.
+class _HubToolCard extends StatelessWidget {
+  const _HubToolCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.short,
+    required this.onTap,
+  });
 
-  final ServicesCalculator calculator;
+  final IconData icon;
+  final String title;
+  final String short;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -140,18 +201,13 @@ class _CalculatorCard extends StatelessWidget {
     final radius = BorderRadius.circular(16);
     return Semantics(
       button: true,
-      label: '${calculator.label} — ${calculator.short}',
+      label: '$title — $short',
       child: Material(
         color: c.surface,
         borderRadius: radius,
         child: InkWell(
-          key: Key('hub_calc_${calculator.name}'),
           borderRadius: radius,
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => ServicesCalculatorsScreen(initial: calculator),
-            ),
-          ),
+          onTap: onTap,
           child: Container(
             padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
             decoration: BoxDecoration(
@@ -167,7 +223,7 @@ class _CalculatorCard extends StatelessWidget {
                     color: c.skyWash,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(calculator.icon, size: 19, color: c.sky),
+                  child: Icon(icon, size: 19, color: c.sky),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -176,7 +232,7 @@ class _CalculatorCard extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        calculator.label,
+                        title,
                         style: TextStyle(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w900,
@@ -185,7 +241,7 @@ class _CalculatorCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        calculator.short,
+                        short,
                         style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w600,

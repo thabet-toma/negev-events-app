@@ -36,6 +36,15 @@ class ApiError extends Error {
   static badGateway(message = 'تعذّر الوصول إلى الخدمة الخارجية الآن') {
     return new ApiError(502, message);
   }
+
+  /**
+   * خدمة خارجية لم تُجب بما يصلح **وليس لها نسخة محفوظة تُخدَم** (أسعار الذهب
+   * والعملات اليوم، تذكرة #189): 503 لا 500 — الخلل في وسيط خارجي لا في طلب
+   * العميل، والخدمة نفسها قائمة. تختلف عن 502 أعلاه في المعنى لا في الشكل.
+   */
+  static serviceUnavailable(message = 'الخدمة غير متاحة الآن — حاول بعد قليل') {
+    return new ApiError(503, message);
+  }
 }
 
 module.exports = ApiError;

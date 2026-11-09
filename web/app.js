@@ -117,6 +117,16 @@ const CALC_GREGORIAN_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبر
 const CALC_HIJRI_MONTHS = ['محرم', 'صفر', 'ربيع الأول', 'ربيع الآخر', 'جمادى الأولى', 'جمادى الآخرة', 'رجب', 'شعبان', 'رمضان', 'شوال', 'ذو القعدة', 'ذو الحجة'];
 const CALC_WEEKDAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
+// «أسعار الذهب والعملات» (#189) — حاسبة الذهب ومحوّل العملات في «خدماتنا»،
+// تحت كبسات المنصّات والحاسبات الخمس. بخلاف الحاسبات المحلية هاتان
+// تقرآن `GET /api/prices` مرّة عند أول فتح (والخادم يكاشه ساعة)، والحساب نفسه
+// هنا في الجهاز. `pricesSnapshot` آخر ردّ ناجح أو `null`؛ و`pricesLoading`
+// وعد الطلب الجاري أو `null`، فلا يُطلق فتحُ اللوحتين طلبين.
+const PRICES_TOOL_KEYS = ['gold', 'fx'];
+const PRICES_UNAVAILABLE_TEXT = 'تعذّر جلب أسعار الذهب والعملات الآن — تحقّق من اتصالك وحاول مرة أخرى.';
+let pricesSnapshot = null;
+let pricesLoading = null;
+
 
 // Read surface — tabs, pagination, archive, notifications, review queue (#20 step 10)
 let currentPage = 1;
@@ -5442,6 +5452,12 @@ function switchTab(tabId) {
   else if (tabId === 'tabAdd') {
     if (!publishFormReady) initPublishForm();
     fetchMyEvents();
+  } else if (tabId === 'tabOurServices') {
+    // التحقين هنا لا في `openOurServices` وحدها: الرابط العميق `?tab=ourServices`
+    // يصل `switchTab` مباشرةً (`initUrlNavigation`)، فلو بقي في الدالة الأخرى
+    // لفتح رابطُ المشاركة التبويبَ بلا أدوات. والتحقين لا يجلب شيئاً — الجلب
+    // عند أول فتح لأداة وحدها.
+    initPricesTools();
   } else if (tabId === 'tabServices') {
     if (!servicesInitialized) { servicesInitialized = true; initServicesTab(); }
   }
@@ -5452,7 +5468,11 @@ function openAddEventModal() {
   switchTab('tabAdd');
 }
 
-/** وجهة «خدماتنا» — صفحة ثابتة بلا نداء شبكة: بطاقاتها الثلاث وسوم في index.html. */
+/**
+ * وجهة «خدماتنا» — تُفعَّل عبر `switchTab` وحدها، وفيه تحقين قسم الأسعار
+ * (#189). جلب الأسعار نفسها لا يقع عند الفتح: أول فتح لأداة هو ما ينادي
+ * `/api/prices`، والطلب الثاني خلال ساعة يخدمه كاش الخادم.
+ */
 function openOurServices() {
   switchTab('tabOurServices');
 }
@@ -5460,8 +5480,9 @@ function openOurServices() {
 // 10b. حاسبات «خدماتنا» (تذكرة #190) — خمس حاسبات تعمل في الجهاز وحده:
 // ميزانية العرس، تقسيم المصاريف، عدد المعازيم، العدّ التنازلي، والتاريخ الهجري.
 // لا نداء /api ولا fetch هنا إطلاقاً، ولا حفظ: كل مدخل يبقى في الصفحة وحدها،
-// فيعمل الوجه كله بلا شبكة وبلا خادم. وكل حاسبة تتحقّق من مدخلاتها بنفسها
-// وتعود برسالة عربية واحدة في نتيجتها: نجاحاً أو خطأً — ولا NaN ولا Infinity.
+// فيعمل **هذا القسم** بلا شبكة وبلا خادم — وليس التبويب كله: قسم الأسعار تحته
+// (#189) يجلب من `/api/prices` عند فتح أداته. وكل حاسبة تتحقّق من مدخلاتها
+// بنفسها وتعود برسالة عربية واحدة في نتيجتها: نجاحاً أو خطأً — ولا NaN ولا Infinity.
 
 /** يحوّل الأرقام اللاتينية في نصّ إلى نظيراتها العربية الهندية. */
 function calcDigits(text) {
@@ -5578,17 +5599,19 @@ function readCalcInput(id) {
   return input ? input.value : '';
 }
 
-/** يفتح لوحة حاسبة واحدة ويطفئ البقية — الرقاقة النشِطة وحدها `aria-selected`. */
+/**
+ * يفتح لوحة حاسبة واحدة ويطفئ البقية — الرقاقة النشِطة وحدها `aria-selected`.
+ * والإطفاء يمسّ **كل** لوحات `#tabOurServices` (`hideToolPanels`)، فلوحة
+ * الأسعار المخفية لا تبقى ظاهرة تحت لوحة حاسبة.
+ */
 function openCalculator(key) {
   if (!CALCULATOR_KEYS.includes(key)) return;
-  CALCULATOR_KEYS.forEach(name => {
-    const suffix = name.charAt(0).toUpperCase() + name.slice(1);
-    const panel = document.getElementById(`calcPanel${suffix}`);
-    const tab = document.getElementById(`calcTab${suffix}`);
-    const selected = name === key;
-    if (panel) panel.hidden = !selected;
-    if (tab) tab.setAttribute('aria-selected', selected ? 'true' : 'false');
-  });
+  hideToolPanels();
+  const suffix = key.charAt(0).toUpperCase() + key.slice(1);
+  const panel = document.getElementById(`calcPanel${suffix}`);
+  const tab = document.getElementById(`calcTab${suffix}`);
+  if (panel) panel.hidden = false;
+  if (tab) tab.setAttribute('aria-selected', 'true');
   // حقل التاريخ يبدأ بيوم اليوم عند أول فتح — والحاسبة تقرأ ما فيه وحده.
   const dateInputId = key === 'countdown' ? 'calcCountdownDate' : (key === 'hijri' ? 'calcHijriDate' : '');
   if (dateInputId) {
@@ -5596,7 +5619,6 @@ function openCalculator(key) {
     if (dateInput && !dateInput.value) dateInput.value = isoLocalDay(new Date());
   }
 }
-
 /** صفّ بند جديد في ميزانية العرس — القالب ثابت، وقيمه تُقرأ وقت الحساب. */
 function addCalcBudgetRow() {
   const box = document.getElementById('calcBudgetRows');
@@ -5862,6 +5884,332 @@ function calculateHijri() {
   setCalcResult(
     result,
     `${CALC_WEEKDAYS[parsed.date.getDay()]} ${calcDigits(hijri.day)} ${CALC_HIJRI_MONTHS[hijri.month - 1]} ${calcDigits(hijri.year)}هـ — يوافق ${calcGregorianDate(parsed.date)}.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// «أسعار الذهب والعملات» (#189) — حاسبة الذهب ومحوّل العملات.
+//
+// بخلاف الحاسبات الخمس (#190) هاتان تقرآن `GET /api/prices` عند أول فتح (ولا
+// نداء ثانياً: الخادم يكاشه ساعة)، لكن الحساب كلّه هنا في الجهاز كما فيهن.
+// و**جسم الأداة وتاريخها يختفيان معاً حين لا تصل الأسعار** — لا حاسبة بسعر
+// مخترع ولا تاريخ فارغ، بل رسالة عربية واحدة تقول لماذا.
+//
+// القسم كله يُحقن في `#tabOurServices` من هذا الملف لا من `index.html`: وسم
+// التبويب هناك يبقى كما هو فلا يُعاد تحريره لمجموعة أدوات، والتخطيط بأصناف
+// `styles.css` القائمة نفسها (`calc-*`) فلا تخطيط جديد. والتحقين في `switchTab`
+// عند تفعيل الوجه، فيصل إليه الرابط العميق `?tab=ourServices` أيضاً.
+// ---------------------------------------------------------------------------
+
+/** لاحقة المعرّفات من مفتاح الأداة: gold ← Gold، fx ← Fx. */
+function pricesToolSuffix(key) {
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+/**
+ * يحقن قسم الأداتين بعد قسم «حاسبات تهمّك» — مرّة واحدة، وبلا أي تغيير إن كان
+ * موجوداً. تُستدعى من `switchTab('tabOurServices')` في كل زيارة للوجهة، ومنها
+ * الرابط العميق `?tab=ourServices`؛ ولا تجلب شيئاً بنفسها.
+ */
+function initPricesTools() {
+  const page = document.getElementById('tabOurServices');
+  if (!page || document.getElementById('pricesToolsSection')) return;
+
+  const section = document.createElement('section');
+  section.className = 'calc-section';
+  section.id = 'pricesToolsSection';
+  section.setAttribute('aria-labelledby', 'pricesSectionTitle');
+  section.innerHTML = `
+    <h3 class="calc-section-title" id="pricesSectionTitle">أسعار الذهب والعملات</h3>
+    <p class="calc-section-lead">سعر الذهب وسعر صرف العملات الست كما يعلنه مصدراهما، تُحسب بهما هنا في جهازك — ولا تُرسَل مدخلاتك إلى أحد.</p>
+    <div class="calc-tabs" role="tablist" aria-label="اختر الأداة">
+      <button type="button" class="prices-tab" id="pricesTabGold" role="tab" aria-selected="false" aria-controls="pricesPanelGold" onclick="openPricesTool('gold')">حاسبة الذهب</button>
+      <button type="button" class="prices-tab" id="pricesTabFx" role="tab" aria-selected="false" aria-controls="pricesPanelFx" onclick="openPricesTool('fx')">محوّل العملات</button>
+    </div>
+
+    <div class="calc-panel" id="pricesPanelGold" role="tabpanel" aria-labelledby="pricesTabGold" hidden>
+      <p class="calc-panel-lead">اكتب وزن الذهب بالغرام واختر عياره، وتظهر قيمة المعدن بلا مصنعية بسعر المصدر.</p>
+      <p class="calc-status" id="pricesGoldStatus" role="status" aria-live="polite"></p>
+      <div id="pricesGoldBody" hidden>
+        <div class="calc-grid">
+          <label class="calc-field"><span>الوزن (غرام)</span>
+            <input type="text" inputmode="decimal" class="calc-input" id="pricesGoldWeight" placeholder="مثال: ٢١">
+          </label>
+          <label class="calc-field"><span>العيار</span>
+            <select class="calc-input" id="pricesGoldKarat">
+              <option value="24">عيار ٢٤</option>
+              <option value="21">عيار ٢١</option>
+              <option value="18">عيار ١٨</option>
+            </select>
+          </label>
+        </div>
+        <div class="calc-actions">
+          <button type="button" class="calc-run" onclick="calculateGold()">احسب قيمة المعدن</button>
+        </div>
+        <div class="calc-result" id="pricesGoldResult" role="status" aria-live="polite"></div>
+        <p class="calc-panel-lead" id="pricesGoldSource"></p>
+      </div>
+    </div>
+
+    <div class="calc-panel" id="pricesPanelFx" role="tabpanel" aria-labelledby="pricesTabFx" hidden>
+      <p class="calc-panel-lead">حوّل بين الشيكل والعملات الست بسعر الصرف المعلن — اختر العملة والاتجاه.</p>
+      <p class="calc-status" id="pricesFxStatus" role="status" aria-live="polite"></p>
+      <div id="pricesFxBody" hidden>
+        <div class="calc-grid">
+          <label class="calc-field"><span>المبلغ</span>
+            <input type="text" inputmode="decimal" class="calc-input" id="pricesFxAmount" placeholder="مثال: ١٠٠٠">
+          </label>
+          <label class="calc-field"><span>العملة</span>
+            <select class="calc-input" id="pricesFxCurrency"></select>
+          </label>
+        </div>
+        <label class="calc-field"><span>اتجاه التحويل</span>
+          <select class="calc-input" id="pricesFxDirection">
+            <option value="to_foreign">من الشيكل إلى العملة</option>
+            <option value="to_ils">من العملة إلى الشيكل</option>
+          </select>
+        </label>
+        <div class="calc-actions">
+          <button type="button" class="calc-run" onclick="convertCurrency()">حوّل</button>
+        </div>
+        <div class="calc-result" id="pricesFxResult" role="status" aria-live="polite"></div>
+        <p class="calc-panel-lead" id="pricesFxSource"></p>
+      </div>
+    </div>`;
+
+  const calcSection = page.querySelector('.calc-section');
+  if (calcSection && calcSection.parentNode === page) {
+    calcSection.insertAdjacentElement('afterend', section);
+  } else {
+    page.appendChild(section);
+  }
+}
+
+/** يطفئ كل لوحات أدوات «خدماتنا» ورقاقاتها — حاسبةً كانت أو أداة أسعار. */
+function hideToolPanels() {
+  const page = document.getElementById('tabOurServices');
+  if (!page) return;
+  page.querySelectorAll('.calc-panel').forEach(panel => { panel.hidden = true; });
+  page.querySelectorAll('.calc-tab, .prices-tab').forEach(tab => {
+    tab.setAttribute('aria-selected', 'false');
+  });
+}
+
+function openPricesTool(key) {
+  if (!PRICES_TOOL_KEYS.includes(key)) return;
+  const suffix = pricesToolSuffix(key);
+  hideToolPanels();
+  const panel = document.getElementById(`pricesPanel${suffix}`);
+  const tab = document.getElementById(`pricesTab${suffix}`);
+  if (panel) panel.hidden = false;
+  if (tab) tab.setAttribute('aria-selected', 'true');
+  ensurePricesLoaded();
+}
+
+/**
+ * يجلب الأسعار مرّة، ويعيد الوعد الجاري إن كان هناك طلب في الطريق. الفشل لا
+ * يرمي هنا: الحالة `pricesSnapshot = null` ومعها رسالة عربية في اللوحة، وإعادة
+ * الفتح تعيد المحاولة بدل أن تُقفل الأداة أبدياً.
+ */
+function ensurePricesLoaded({ force = false } = {}) {
+  if (pricesSnapshot && !force) return Promise.resolve(pricesSnapshot);
+  if (pricesLoading) return pricesLoading;
+
+  const request = (async () => {
+    try {
+      const res = await apiFetch('/api/prices');
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.success !== true || !data.gold
+        || !Array.isArray(data.currencies) || !data.currencies.length) {
+        throw new Error('prices payload rejected');
+      }
+      pricesSnapshot = data;
+    } catch (e) {
+      pricesSnapshot = null;
+    } finally {
+      pricesLoading = null;
+      renderPricesState();
+    }
+    return pricesSnapshot;
+  })();
+
+  pricesLoading = request;
+  renderPricesState();
+  return request;
+}
+
+/** نصّ الحالة العربي: أثناء الجلب، أو عند تعذّره — والجسم مخفي في الحالين. */
+function renderPricesState() {
+  const hasPrices = Boolean(pricesSnapshot);
+  const message = hasPrices
+    ? ''
+    : (pricesLoading ? 'جارٍ جلب الأسعار…' : PRICES_UNAVAILABLE_TEXT);
+
+  PRICES_TOOL_KEYS.forEach(key => {
+    const suffix = pricesToolSuffix(key);
+    const status = document.getElementById(`prices${suffix}Status`);
+    const body = document.getElementById(`prices${suffix}Body`);
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle('is-error', !hasPrices && !pricesLoading);
+    }
+    if (body) body.hidden = !hasPrices;
+  });
+
+  if (hasPrices) fillPricesData();
+}
+
+/** تاريخ ميلادي مقروء من `YYYY-MM-DD` (بلا انزياح منطقة) — أو '' لغير المقروء. */
+function pricesDayText(day) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+  if (!match) return '';
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return calcGregorianDate(date);
+}
+
+/**
+ * تاريخ المصدر من ISO كما يرسله الخادم، بتقويم **UTC** الذي كُتبت به اللحظة —
+ * لا بتوقيت جهاز الزائر: جهاز في أقصى الشرق كان يعرض «١٠ نوفمبر» لسعر ٩ نوفمبر،
+ * والاختبار نفسه كان يتبع منطقة الجهاز. والتاريخ المعروض هنا تاريخ المصدر.
+ */
+function pricesTimestampText(timestamp) {
+  const date = new Date(timestamp || '');
+  if (Number.isNaN(date.getTime())) return '';
+  return calcGregorianDate(new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/**
+ * يملأ ما يعتمد على البيانات وحدها: قائمة العملات وتاريخ المصدر في الأداتين.
+ * الأسماء من الخادم تُكتب `textContent` لا قوالب HTML، فلا يصير اسم عملة وسماً.
+ */
+function fillPricesData() {
+  if (!pricesSnapshot) return;
+
+  const select = document.getElementById('pricesFxCurrency');
+  if (select) {
+    const previous = select.value;
+    select.textContent = '';
+    (pricesSnapshot.currencies || []).forEach(currency => {
+      const option = document.createElement('option');
+      option.value = String(currency.code || '');
+      option.textContent = String(currency.name_ar || currency.code || '');
+      select.appendChild(option);
+    });
+    if (previous && Array.from(select.options).some(option => option.value === previous)) {
+      select.value = previous;
+    }
+  }
+
+  const goldSource = document.getElementById('pricesGoldSource');
+  if (goldSource) {
+    const day = pricesTimestampText(pricesSnapshot.gold && pricesSnapshot.gold.source_time);
+    goldSource.textContent = day
+      ? `تاريخ سعر الذهب: ${day} — المصدر: gold-api.`
+      : 'المصدر: gold-api.';
+  }
+
+  const fxSource = document.getElementById('pricesFxSource');
+  if (fxSource) {
+    const day = pricesDayText(pricesSnapshot.fx_date);
+    fxSource.textContent = day
+      ? `تاريخ سعر الصرف: ${day} — المصدر: Frankfurter.`
+      : 'المصدر: Frankfurter.';
+  }
+}
+
+/** رقم عشري إلى نصّ عربي بفاصلة عشرية `٫` وفاصل آلاف `٬` (٠٫٠٦٢٥، ١٬٢٥٠٫٥٠). */
+function pricesNumber(value, digits) {
+  const rounded = Math.round(value * (10 ** digits)) / (10 ** digits);
+  const fixed = rounded.toFixed(digits);
+  const [whole, fraction] = fixed.split('.');
+  const grouped = calcGroupDigits(whole);
+  return calcDigits(fraction ? `${grouped}٫${fraction}` : grouped);
+}
+
+/** يقرأ الوزن بالغرام: موجب، أرقام لاتينية أو عربية، وكسر عشري مسموح. */
+function parsePricesWeight(raw) {
+  const text = calcLatinDigits(String(raw == null ? '' : raw).trim()).replace(/[٬,،\s]/g, '');
+  if (!text) return { error: 'اكتب الوزن بالغرام أولاً' };
+  if (text.startsWith('-')) return { error: 'الوزن لا يكون سالباً' };
+  if (!/^\d+(\.\d+)?$/.test(text)) return { error: 'الوزن بالأرقام فقط (مثل ٢١)' };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) return { error: 'اكتب وزناً أكبر من صفر' };
+  if (value > 100000) return { error: 'الوزن كبير جداً' };
+  return { grams: value };
+}
+
+/**
+ * حاسبة الذهب: الوزن × سعر غرام العيار من `/api/prices` — والحساب بالأغورة
+ * (الوزن بأجزاء الألف) كي لا يضيع أغورة في كسر عائم.
+ */
+function calculateGold() {
+  const result = document.getElementById('pricesGoldResult');
+  if (!result) return;
+
+  if (!pricesSnapshot || !pricesSnapshot.gold) {
+    setCalcResult(result, PRICES_UNAVAILABLE_TEXT, { error: true });
+    return;
+  }
+
+  const parsed = parsePricesWeight(readCalcInput('pricesGoldWeight'));
+  if (parsed.error) return setCalcResult(result, parsed.error, { error: true });
+
+  const select = document.getElementById('pricesGoldKarat');
+  const karat = select ? String(select.value) : '24';
+  const price = Number(pricesSnapshot.gold[`k${karat}`]);
+  if (!Number.isFinite(price) || price <= 0) {
+    setCalcResult(result, PRICES_UNAVAILABLE_TEXT, { error: true });
+    return;
+  }
+
+  const weightThousandths = Math.round(parsed.grams * 1000);
+  const priceAgorot = Math.round(price * 100);
+  const totalAgorot = Math.round((weightThousandths * priceAgorot) / 1000);
+  setCalcResult(
+    result,
+    `قيمة المعدن بلا مصنعية: ${calcMoney(totalAgorot)} — سعر غرام عيار ${calcDigits(karat)} نحو ${calcMoney(priceAgorot)}.`
+  );
+}
+
+/** محوّل العملات: شيكل ← عملة أو عملة ← شيكل بسعر `ils_per_unit` نفسه. */
+function convertCurrency() {
+  const result = document.getElementById('pricesFxResult');
+  if (!result) return;
+
+  if (!pricesSnapshot || !Array.isArray(pricesSnapshot.currencies) || !pricesSnapshot.currencies.length) {
+    setCalcResult(result, PRICES_UNAVAILABLE_TEXT, { error: true });
+    return;
+  }
+
+  const amount = parseCalcAmount(readCalcInput('pricesFxAmount'));
+  if (amount.error) return setCalcResult(result, amount.error, { error: true });
+
+  const select = document.getElementById('pricesFxCurrency');
+  const selected = select ? String(select.value) : '';
+  const currency = pricesSnapshot.currencies.find(item => String(item.code) === selected);
+  if (!currency || !(Number(currency.ils_per_unit) > 0)) {
+    setCalcResult(result, 'اختر عملة من القائمة أولاً.', { error: true });
+    return;
+  }
+
+  const rate = Number(currency.ils_per_unit);
+  const amountValue = amount.cents / 100;
+  const direction = document.getElementById('pricesFxDirection');
+  const name = String(currency.name_ar || currency.code);
+
+  if (direction && direction.value === 'to_ils') {
+    const ilsAgorot = Math.round(amountValue * rate * 100);
+    setCalcResult(
+      result,
+      `${pricesNumber(amountValue, 2)} ${name} = ${calcMoney(ilsAgorot)} بسعر ${pricesNumber(rate, 4)} ₪ للوحدة الواحدة.`
+    );
+    return;
+  }
+
+  const foreignValue = amountValue / rate;
+  setCalcResult(
+    result,
+    `${calcMoney(amount.cents)} = ${pricesNumber(foreignValue, 2)} ${name} بسعر ${pricesNumber(rate, 4)} ₪ للوحدة الواحدة.`
   );
 }
 
