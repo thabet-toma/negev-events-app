@@ -278,6 +278,37 @@ class ApiClient {
     return response.bodyBytes;
   }
 
+  /// بايتات ردّ **ثنائي** لمسار عام — التنزيل الوحيد اليوم: صورة المناسبة
+  /// `GET /e/:id/download.png` (تذكرة #182). لا JSON هنا: نجاحه صورة PNG،
+  /// وفشله JSON عربي كما في [_errorMessageOf]. والرمز لا يُرفق إطلاقاً —
+  /// المسار عام، وإرفاق الرمز فيه لا يزيد شيئاً — و`Accept` تطلب الصورة صراحةً
+  /// بدل ترويسة JSON الافتراضية في [_headers].
+  Future<Uint8List> getBytes(
+    String path, {
+    String fallbackMessage = 'تعذّر تنزيل الصورة — حاول مرة أخرى',
+  }) async {
+    final headers = _headers()..['Accept'] = 'image/png';
+    http.Response response;
+    try {
+      response = await _client
+          .get(_uri(path), headers: headers)
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      throw ApiException(
+        'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت ومن أن الخادم يعمل على ${AppConfig.apiBase}',
+      );
+    }
+
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        _errorMessageOf(response, fallbackMessage),
+        response.statusCode,
+      );
+    }
+
+    return response.bodyBytes;
+  }
+
   /// بناء طلب متعدد الأجزاء وإرساله — مشترك بين `postMultipart` و
   /// `postMultipartBytes` كي لا يتكرّر منطق الترويسات أو الحقول.
   Future<http.Response> _multipart(

@@ -436,6 +436,15 @@ class NegevApi {
   /// مطلق. بناء عنوان فقط — لا نداء شبكة ولا JSON.
   Uri eventCalendarUrl(int eventId) => _client.buildUrl('/api/events/$eventId/calendar.ics');
 
+  /// «نزّل الصورة» (تذكرة #182) — بايتات الصورة التي يرسمها الخادم على المسار
+  /// العام `GET /e/:id/download.png`: صورة المناسبة نفسها وفوق أسفلها شريط
+  /// «أعراسنا» (العلامة، «امسح الرمز وافتح المناسبة»، وQR لصفحة المناسبة).
+  ///
+  /// **بلا رمز دخول** (خلافاً لكل ما فوق): المسار عام، والرمز ليس له عمل فيه.
+  /// والقراءة بايتات لا JSON — المسار ناجحُه صورة PNG وفاشلُه JSON عربي.
+  Future<Uint8List> downloadEventImage(int eventId) =>
+      _client.getBytes('/e/$eventId/download.png');
+
   Future<List<MapPoint>> mapPoints() async {
     final data = await _client.get('/api/map/events');
     final list = data['points'];

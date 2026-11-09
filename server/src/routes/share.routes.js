@@ -265,16 +265,25 @@ ${items.join('\n')}
 }
 
 /**
- * Two buttons, always both shown — no platform sniffing, no `<script>` to do
- * it with anyway. The primary is unchanged (the existing download route,
+ * Two by default, and the event page adds a third for the picture
+ * (`imageUrl`), while the 404 page gets the two and the 429 page none — no
+ * platform sniffing, no `<script>` to do it with anyway. The primary is unchanged (the existing download route,
  * still recording `app_download_clicked`); the secondary is the honest
  * answer for an iPhone visitor who would otherwise be handed an APK their
  * device cannot open: the site itself, installable from the browser.
+ *
+ * `imageUrl` (تذكرة #182) adds the third action — «نزّل الصورة»، the event's
+ * own picture with the brand strip and the QR the server draws at
+ * `/e/:id/download.png`. It is passed by the event page only: the 404 page has
+ * no event and nothing to download, and the 429 page is not a place to offer a
+ * file. A plain `<a download>`, not a script: this page ships no `<script>` at
+ * all (see the CSP), and the filename itself arrives in `Content-Disposition`.
  */
-function actionButtons({ downloadUrl, siteRootUrl }) {
+function actionButtons({ downloadUrl, siteRootUrl, imageUrl = null }) {
   return `<div class="actions">
 <a class="cta" href="${escapeHtml(downloadUrl)}">حمّل التطبيق</a>
 <a class="cta-secondary" href="${escapeHtml(siteRootUrl)}">افتح في المتصفّح</a>
+${imageUrl ? `<a class="cta-image" href="${escapeHtml(imageUrl)}" download>نزّل الصورة</a>` : ''}
 </div>`;
 }
 
@@ -417,7 +426,7 @@ function pageStyle(palette) {
   .clan { font-size: 15px; color: ${palette.faint}; margin: 7px 0 0; }
   /* Place · occasion type — visible on every page, including an upcoming one:
      it is what tells a crawler (and a visitor) that this URL is the town's
-     عرس, not a bare poster with two buttons. */
+     عرس, not a bare poster with a download link. */
   .where { font-size: 15px; color: ${palette.faint}; margin: 7px 0 0; }
   /* Expired events only — an upcoming page prints no date anywhere. */
   .expired-date { font-size: 14px; font-weight: 700; color: ${palette.accent}; margin: 10px 0 0; }
@@ -442,6 +451,14 @@ function pageStyle(palette) {
     text-decoration: none; font-size: 15px; font-weight: 600;
     padding: 12px 20px; border-radius: 14px;
     border: 1px solid ${withAlphaCss(palette.faint, 0.4)};
+  }
+  /* «نزّل الصورة» (#182): الصورة بالشريط — زرّ ثالث، بإطار متقطّع كي لا يُقرأ
+     كزرّ تنزيل التطبيق الأساسي ولا كزرّ الموقع الثانوي. */
+  .cta-image {
+    display: block; background: transparent; color: ${palette.ink};
+    text-decoration: none; font-size: 15px; font-weight: 600;
+    padding: 12px 20px; border-radius: 14px;
+    border: 1px dashed ${withAlphaCss(palette.accent, 0.55)};
   }
   .reasons {
     list-style: none; margin: 20px 0 0; padding: 0;
@@ -575,7 +592,7 @@ function renderEventPage(event, {
   // nothing about this decision: the page still emits no <script> tag at all
   // (the CSP below is default-src 'none', and the smoke test asserts its
   // absence), and the venue must never appear in any tag a crawler reads. The
-  // page is a poster, two buttons, the guest's own plain-HTML answer form when
+  // page is a poster, two buttons (three when it has a picture to hand out), the guest's own plain-HTML answer form when
   // its type allows it (ticket #169, ADR-0015), and a short list of related
   // pages — not a search-engine event record.
   //
@@ -637,7 +654,7 @@ ${whereLine}
 ${expiredDate ? `<p class="expired-date">${escapeHtml(expiredDate)}</p>` : ''}
 <hr class="rule">
 <p class="lead">${lead}</p>
-${actionButtons({ downloadUrl, siteRootUrl })}
+${actionButtons({ downloadUrl, siteRootUrl, imageUrl: `${pageUrl}/download.png` })}
 ${rsvpForm}
 ${reasonsStrip()}
 ${relatedEventsSection(event, relatedEvents, siteRootUrl)}
@@ -1251,6 +1268,70 @@ eventRouter.get('/:id/card.jpg', asyncHandler(async (req, res) => {
     logger.error(`[share] card render failed for event ${event.id}: ${err.message}`);
     res.redirect(302, resolvePosterUrl(event));
   }
+}));
+
+/**
+ * `Content-Disposition` لصورة التنزيل (#182): اسم ASCII احتياطي لمن لا يقرأ
+ * `filename*`، والاسم العربي نفسه بصيغة RFC 5987 — والترويسة كلها ASCII، فلا
+ * حرف عربي خام في ترويسة HTTP. الاسم على شرف «أعراسنا» لا اسم المناسبة: لا
+ * بيانات شخصية في ملف يُرسَل في مجموعة واتساب.
+ */
+function downloadImageDisposition(eventId) {
+  const arabic = `اعراسنا-مناسبة-${eventId}.png`;
+  return `attachment; filename="aarasna-event-${eventId}.png"; filename*=UTF-8''${encodeURIComponent(arabic)}`;
+}
+
+/**
+ * «نزّل الصورة» (#182) — الصورة التي يحملها كل تنزيل وكل مشاركة، مرسومةً في
+ * الخادم: صورة المناسبة وفوق أسفلها «شريط أعراسنا» (العلامة، «امسح الرمز
+ * وافتح المناسبة»، وQR لصفحة المناسبة). الرسم كله في shareCard.service.js؛
+ * هنا البوابة واختيار المصدر وترويسات الملف.
+ *
+ * **المصدر بالترتيب:** بطاقة صاحب المناسبة الأساسية (`event_cards`) ← ملصق
+ * المناسبة (`events.poster_url`) ← البطاقة المولَّدة التي يرسمها `renderCard`
+ * (1200×1200). وسبب الترتيب أن البطاقة الأساسية اختيار صريح من صاحب المناسبة
+ * لما يُعرَض للزوّار، والملصق اختياره الأصلي، والمولَّدة بديل الخادم حين لا
+ * صورة له أصلاً. والصور البعيدة تُجلب عبر `shareCard.loadPosterBuffer` القائمة
+ * (مهلة ٥ ثوانٍ وقراءة محلية لما على القرص) لا بنداء `fetch` جديد هنا، وفشل
+ * جلبها يسقط إلى البطاقة المولَّدة فلا يفشل التنزيل.
+ *
+ * **البوابة نفسها التي تستعملها `/e/:id`**: `events.getShareEvent` وحدها —
+ * مناسبة غير معتمدة أو غير موجودة أو معرّف غير رقمي ⇒ **404 الموحّدة** (لا
+ * 403، ولا تفرقة بين الحالات).
+ *
+ * **الكاش:** ملف PNG واحد لكل (مناسبة، هوية المصدر، updated_at) في
+ * shareCard.CACHE_DIR — نفس نمط card.jpg — فإعادة الطلب لا تعيد الرسم. أما
+ * كاش المتصفّح فساعة واحدة لا سنة: الرابط ثابت ولا يحمل بصمة، وتعيين بطاقة
+ * أساسية جديدة أو تعديل الملصق يجب أن يصل لمن ينزّل الصورة بعد التعديل، بخلاف
+ * og:image الذي يجلبه الزاحف من جديد.
+ */
+eventRouter.get('/:id/download.png', asyncHandler(async (req, res) => {
+  const eventId = shareIdOrNull(req.params.id);
+  const event = eventId ? await events.getShareEvent(eventId) : null;
+  if (!event) {
+    sendNotFound(res);
+    return;
+  }
+
+  let source = { kind: 'generated', url: null };
+  try {
+    const primaryCard = await eventCards.primaryCardForEvent(event.id);
+    if (primaryCard) source = { kind: 'primary', url: primaryCard.image_url };
+  } catch (err) {
+    // تعذّرت قراءة `event_cards` وحدها — لا تُسقط الصورة: الملصق أو المولَّدة
+    // يبقيان مصدرين صالحين، والتنزيل يجب أن يخرج في كل الأحوال.
+    logger.error(`[share] primary card lookup failed for download image of event ${event.id}: ${err.message}`);
+  }
+  if (!source.url && event.poster_url) source = { kind: 'poster', url: event.poster_url };
+
+  const buffer = await shareCard.getOrRenderDownloadImage(event, source);
+
+  res
+    .status(200)
+    .set('Content-Type', 'image/png')
+    .set('Content-Disposition', downloadImageDisposition(event.id))
+    .set('Cache-Control', 'public, max-age=3600')
+    .send(buffer);
 }));
 
 /**

@@ -42,8 +42,13 @@
  * قديم (زرّ يفتح لا شيء) أو كودٌ جديد إلى صفحة بلا نافذة (نداء على عناصر
  * غائبة). **ولا ملف JS جديد**: الستوديو داخل `app.js`، فقائمة
  * `SHELL_ESSENTIAL_PATHS` و`SHELL_PATH_PATTERN` لم تتغيّرا.
+ *
+ * و`182.1` لزرّ «نزّل الصورة» (تذكرة #182): `app.js` وحده تغيّر — زرٌّ في صفحة
+ * المناسبة ينزّل `GET /e/:id/download.png` (الصورة نفسها وفوق أسفلها شريط
+ * أعراسنا بالـQR) — فبلا رفع الرقم يخدم الكاشُ `app.js` قديماً بلا الزرّ.
+ * ولا `styles.css` ولا `index.html` ولا ملف JS جديد، فقائمة الهيكل كما هي.
  */
-const CACHE_VERSION = '180.1';
+const CACHE_VERSION = '182.1';
 const CACHE_PREFIX = 'aarasna-shell-';
 const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 

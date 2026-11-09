@@ -4705,6 +4705,76 @@ async function run() {
     assert.strictEqual(feed.firstElementChild, firstCardBefore, 'closing the page never re-renders the feed — same cards, same position');
   });
 
+  /**
+   * «نزّل الصورة» (#182): الصورة التي يحملها كل تنزيل تُرسم في الخادم
+   * (‏`/e/:id/download.png` — الصورة بالشريط والـQR). الواجهة لا تنزّلها إلى
+   * ذاكرة الصفحة: زرّ واحد يفتح المسار، والمتصفّح يحفظ الملف من
+   * `Content-Disposition`. والرابط يُبنى من `API_BASE` (config.js → api.js)
+   * وحده، لا نصّ ثابت ثانٍ في app.js.
+   */
+  await test('«نزّل الصورة» في صفحة المناسبة يفتح /e/<id>/download.png بالمعرّف الصحيح وبلا fetch', async () => {
+    const { document, dom, events } = renderCardFixtures();
+    const page = document.getElementById('eventPage');
+    const fetched = [];
+    dom.window.fetch = async url => {
+      fetched.push(String(url));
+      return jsonResponse({ success: true, event: { ...events.find(e => e.id === 901), congratulations: [] } });
+    };
+
+    await dom.window.openEventPage(901);
+    assert.ok(await waitFor(() => !page.hidden && page.textContent.includes('نزّل الصورة')), 'expected the download action on the event page');
+
+    const button = [...page.querySelectorAll('#eventPageBody button')]
+      .find(b => b.textContent.includes('نزّل الصورة'));
+    assert.ok(button, 'a button, not a bare link — it is an action of this page');
+
+    const opened = [];
+    const proto = dom.window.HTMLAnchorElement.prototype;
+    const originalClick = proto.click;
+    proto.click = function captureDownload() {
+      opened.push({ href: this.getAttribute('href'), download: this.getAttribute('download') });
+    };
+    try {
+      button.click();
+    } finally {
+      proto.click = originalClick;
+    }
+
+    assert.strictEqual(opened.length, 1, 'one click must open exactly one download link');
+    const url = new URL(opened[0].href, dom.window.location.href);
+    assert.strictEqual(url.pathname, '/e/901/download.png', `expected the stripped download route for event 901, got ${opened[0].href}`);
+    assert.ok(opened[0].download.endsWith('.png'), 'the link carries a .png filename');
+    assert.ok(!fetched.some(u => u.includes('/download.png')), 'never fetched into the page — the browser downloads it from its own request');
+  });
+
+  await test('فشل إنشاء رابط التنزيل لا يُسقط الصفحة: توست عربي والمحتوى كما هو (#182)', async () => {
+    const { document, dom, events } = renderCardFixtures();
+    const page = document.getElementById('eventPage');
+    dom.window.fetch = async () => jsonResponse({ success: true, event: { ...events.find(e => e.id === 901), congratulations: [] } });
+
+    await dom.window.openEventPage(901);
+    assert.ok(await waitFor(() => !page.hidden && page.textContent.includes('نزّل الصورة')), 'set up: the page carries the download action');
+
+    const body = page.querySelector('#eventPageBody');
+    const before = body.innerHTML;
+    const button = [...body.querySelectorAll('button')].find(b => b.textContent.includes('نزّل الصورة'));
+
+    const proto = dom.window.HTMLAnchorElement.prototype;
+    const originalClick = proto.click;
+    proto.click = () => { throw new Error('download blocked by the environment'); };
+    try {
+      assert.doesNotThrow(() => button.click(), 'a failing download must never throw out of the page');
+    } finally {
+      proto.click = originalClick;
+    }
+
+    assert.ok(await waitFor(() => document.querySelector('.app-toast')), 'expected an Arabic toast instead of a silent dead button');
+    assert.ok(document.querySelector('.app-toast').textContent.includes('تعذّر تنزيل الصورة'), document.querySelector('.app-toast').textContent);
+    assert.strictEqual(page.hidden, false, 'the page stays open');
+    assert.strictEqual(body.innerHTML, before, 'the page content is untouched by the failure');
+    assertNoUnhandledRejections('download image failure');
+  });
+
   await test('tapping the card photo opens the same page, and the browser Back button closes it instead of leaving the site', async () => {
     const { document, dom, events } = renderCardFixtures();
     dom.window.fetch = async () => jsonResponse({ success: true, event: { ...events.find(e => e.id === 910), congratulations: [] } });

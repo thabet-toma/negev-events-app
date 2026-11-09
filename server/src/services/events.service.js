@@ -2853,10 +2853,10 @@ async function reportCongratulation(eventId, congratulationId, userId) {
  * تُفتح للعامة، والفرق الوحيد `noindex` في الوسم والترويسة (`share.routes.js`).
  * ولو مرّت بها القطعة لصارت 404، ولما بقي لصاحب المناسبة المخفيّة طريق.
  *
- * والاستعلام نفسه يخدم أيضاً `/e/:id/card.jpg` و`/e/:id/download`: تستدعي
- * `getShareEvent` ثلاث صفحات في `share.routes.js` — `GET /e/:id` و
- * `GET /e/:id/card.jpg` و`GET /e/:id/download` — فقاعدة هذه القراءة تسري على
- * الثلاث معاً.
+ * والاستعلام نفسه يخدم أيضاً `/e/:id/card.jpg` و`/e/:id/download` و
+ * `/e/:id/download.png`: تستدعي `getShareEvent` أربع صفحات في `share.routes.js` —
+ * `GET /e/:id` و`GET /e/:id/card.jpg` و`GET /e/:id/download` و
+ * `GET /e/:id/download.png` — فقاعدة هذه القراءة تسري على الأربع معاً.
  *
  * `is_expired` reuses the exact span rule
  * (`span_end < CURDATE()`, the EVENT_SPAN_* constants) every other
