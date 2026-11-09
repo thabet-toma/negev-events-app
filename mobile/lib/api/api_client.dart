@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -214,14 +215,97 @@ class ApiClient {
     List<http.MultipartFile> files = const [],
     bool auth = false,
   }) async {
-    return _send(() async {
-      final request = http.MultipartRequest('POST', _uri(path))
-        ..headers.addAll(_headers(auth: auth))
-        ..fields.addAll(fields)
-        ..files.addAll(files);
-      final streamed = await _client.send(request);
-      return http.Response.fromStream(streamed);
-    }, auth: auth);
+    return _send(
+      () => _multipart('POST', path, fields: fields, files: files, auth: auth),
+      auth: auth,
+    );
+  }
+
+  /// `PATCH` متعدد الأجزاء — للمسار الوحيد الذي يعدّل صفّاً **ويرفع ملفاً**
+  /// في الطلب نفسه: رفع ملصق البطاقة الجاهزة (`PATCH /api/events/:id` بحقل
+  /// `poster`، #181). `patch` القائم يبقى JSON كما هو؛ هذه دالة مستقلة كي لا
+  /// يتغيّر سلوك تعديل المناسبة العادي ولا يُفقد أي حقل مصفوفة في تحويله نصّاً.
+  Future<Map<String, dynamic>> patchMultipart(
+    String path, {
+    required Map<String, String> fields,
+    List<http.MultipartFile> files = const [],
+    bool auth = false,
+  }) async {
+    return _send(
+      () => _multipart('PATCH', path, fields: fields, files: files, auth: auth),
+      auth: auth,
+    );
+  }
+
+  /// إرسال متعدد الأجزاء يعيد **بايتات** الردّ لا JSON — للمسار الوحيد الذي
+  /// نجاحه صورة: `POST /api/events/:id/cards/preview` يعيد `image/png`
+  /// (ستوديو بطاقة الدعوة، #181). الباقي كما في [_send] حرفاً بحرف: الترويسات
+  /// وإبلاغ 401 هما نفسُهما، والخطأ يُقرأ من `message` العربية في جسم الردّ —
+  /// فالخادم يرسل JSON في 400/404/429 وحدها، وما عداها بايتات صورة.
+  ///
+  /// [fallbackMessage] نصّ العميل حين يعود خطأ بلا `message` (بوابة وسيطة مثلاً).
+  Future<Uint8List> postMultipartBytes(
+    String path, {
+    required Map<String, String> fields,
+    List<http.MultipartFile> files = const [],
+    bool auth = false,
+    String fallbackMessage = 'تعذّر تنفيذ الطلب — حاول مرة أخرى',
+  }) async {
+    // الرمز كما أُرفق بهذا الطلب تحديداً — لا كما يصير بعد انتظار الاستجابة.
+    final sentToken = auth && token != null && token!.isNotEmpty ? token : null;
+    http.Response response;
+    try {
+      response = await _multipart('POST', path, fields: fields, files: files, auth: auth)
+          .timeout(const Duration(seconds: 20));
+    } catch (error) {
+      if (error is ApiException) rethrow;
+      throw ApiException(
+        'تعذّر الاتصال بالخادم. تأكد من اتصالك بالإنترنت ومن أن الخادم يعمل على ${AppConfig.apiBase}',
+      );
+    }
+
+    if (response.statusCode == 401 && sentToken != null) {
+      onUnauthorized?.call(sentToken);
+    }
+
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        _errorMessageOf(response, fallbackMessage),
+        response.statusCode,
+      );
+    }
+
+    return response.bodyBytes;
+  }
+
+  /// بناء طلب متعدد الأجزاء وإرساله — مشترك بين `postMultipart` و
+  /// `postMultipartBytes` كي لا يتكرّر منطق الترويسات أو الحقول.
+  Future<http.Response> _multipart(
+    String method,
+    String path, {
+    required Map<String, String> fields,
+    required List<http.MultipartFile> files,
+    required bool auth,
+  }) async {
+    final request = http.MultipartRequest(method, _uri(path))
+      ..headers.addAll(_headers(auth: auth))
+      ..fields.addAll(fields)
+      ..files.addAll(files);
+    final streamed = await _client.send(request);
+    return http.Response.fromStream(streamed);
+  }
+
+  /// رسالة الخطأ العربية من جسم ردّ فاشل — `{success: false, message}` كما
+  /// يبنيها `middleware/error.js`، و[fallbackMessage] حين يغيب الجسم أصلاً.
+  String _errorMessageOf(http.Response response, String fallbackMessage) {
+    try {
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is Map && decoded['message'] is String) {
+        final message = decoded['message'] as String;
+        if (message.isNotEmpty) return message;
+      }
+    } catch (_) {}
+    return fallbackMessage;
   }
 
   Future<Map<String, dynamic>> _send(

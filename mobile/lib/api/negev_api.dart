@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -1068,9 +1069,15 @@ class NegevApi {
       final text = rawWarning['message'];
       if (text is String && text.isNotEmpty) locationWarning = text;
     }
+    final rawEventId = data['eventId'];
+    final int? eventId = rawEventId is int
+        ? rawEventId
+        : int.tryParse('${rawEventId ?? ''}');
     return EventSubmissionResult(
       message: message is String ? message : 'تم استلام طلب المناسبة بنجاح',
       locationWarning: locationWarning,
+      eventId: eventId,
+      status: '${data['status'] ?? ''}',
     );
   }
 
@@ -1104,6 +1111,34 @@ class NegevApi {
       auth: true,
       body: confirmDuplicate ? {...fields, 'confirm_duplicate': true} : fields,
     );
+    return _eventUpdateResult(data);
+  }
+
+  /// رفع ملصق «البطاقة الجاهزة» **وحده** — `PATCH /api/events/:id` متعدد
+  /// الأجزاء، بحقل `poster` الذي يتوقّعه `eventMedia` في الخادم
+  /// (`events.routes.js`). لا تُرسل معه حقول JSON: `honorees`/`extra_days`
+  /// مصفوفات في جسم JSON، وتحويلها إلى حقول نصّية يفقدها؛ ورفع الملصق تعديل
+  /// مستقلّ عن حفظ النموذج، فلا يمسّ `updateEvent` العادي ولا سلوكه.
+  ///
+  /// الصورة تُقصّ ٤:٥ في العميل قبل النداء (نفس `cropPosterImage`)، وتُرسل
+  /// `application/octet-stream` كبقية ملفات التطبيق؛ الخادم يفحص بايتاتها
+  /// (`verifyMedia`) قبل أن يخزّنها.
+  Future<EventUpdateResult> updateEventPoster(
+    int eventId, {
+    required http.MultipartFile poster,
+  }) async {
+    final data = await _client.patchMultipart(
+      '/api/events/$eventId',
+      fields: const {},
+      files: [poster],
+      auth: true,
+    );
+    return _eventUpdateResult(data);
+  }
+
+  /// بناء [EventUpdateResult] من ردّ PATCH واحد — تعديل الحقول ورفع الملصق
+  /// يقرآن الرسالة العربية نفسها، ولا يعيد العميل تصنيف `amendment`.
+  static EventUpdateResult _eventUpdateResult(Map<String, dynamic> data) {
     final message = data['message'];
     final rawWarning = data['location_warning'];
     String? locationWarning;
@@ -1126,6 +1161,141 @@ class NegevApi {
     return list is List
         ? list.whereType<Map<String, dynamic>>().map(Amendment.fromJson).toList()
         : <Amendment>[];
+  }
+
+  // --- ستوديو بطاقة الدعوة (#181، فوق مسارات #180) ---------------------
+
+  /// كتالوج الستوديو: القوالب والمقاسات والخطوط — `GET /api/card-templates`،
+  /// **عام بلا رمز**: يُعرض قبل تسجيل الدخول، ولا شيء فيه يخصّ مناسبة.
+  ///
+  /// [tone] (`solemn`/`festive`) يمرَّر استعلاماً فيقصّ الخادم النصف الآخر
+  /// قبل إرساله — نفس `templatesForTone` التي يفرضها في كل كتابة. والشاشة
+  /// تُرشّح بـ[CardStudioCatalog.templatesForTone] مرة ثانية بعد الوصول: النبرة
+  /// بوابة عرض لا اختصار شبكة، فطلبٌ بلا `?tone=` (أو خادم يتجاهله) لا يجوز
+  /// أن يُظهر قالب عزاء لمناسبة فرح ولا العكس.
+  Future<CardStudioCatalog> cardStudioCatalog({String? tone}) async {
+    final data = await _client.get(
+      '/api/card-templates',
+      query: tone == null ? null : {'tone': tone},
+    );
+    return CardStudioCatalog.fromJson(data);
+  }
+
+  /// بطاقات هذه المناسبة كما هي محفوظة، الأساسية أولاً — لصاحبها أو للإدارة
+  /// وحدهم: غير المالك يردّ الخادم عليه 404 (لا 403)، فالمسار `auth: true`.
+  /// والقائمة فارغة تعني «لم تُصمَّم بطاقة بعد» لا خطأً.
+  Future<List<EventCardItem>> eventCards(int eventId) async {
+    final data = await _client.get('/api/events/$eventId/cards', auth: true);
+    final list = data['cards'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(EventCardItem.fromJson)
+        .toList();
+  }
+
+  /// معاينة البطاقة — `POST /api/events/:id/cards/preview`، **بايتات PNG**
+  /// مصغّرة بلا تخزين على الخادم (لا صفّ ولا ملف)، فتصير `Image.memory`.
+  ///
+  /// [photoSource] واحد من `event` (ملصق المناسبة) أو `upload` (ملف [photo]
+  /// نفسه) أو `none`. ملفٌ مرفوع يجعل المصدر `upload` بقرار هذه الدالة لا
+  /// بقرار الشاشة: إرسال `event` مع صورة اختارها المستخدم الآن رسمٌ خاطئ.
+  ///
+  /// الأخطاء العربية (400 قالب/مقاس/لون، 429 «حاول بعد قليل») تصل كما هي في
+  /// `ApiException` من `ApiClient.postMultipartBytes` — لا تُستبدل هنا.
+  Future<Uint8List> previewEventCard(
+    int eventId, {
+    required String templateKey,
+    required String size,
+    required String fontKey,
+    required String color,
+    String photoSource = 'event',
+    http.MultipartFile? photo,
+  }) {
+    return _client.postMultipartBytes(
+      '/api/events/$eventId/cards/preview',
+      fields: _cardDesignFields(
+        templateKey: templateKey,
+        size: size,
+        fontKey: fontKey,
+        color: color,
+        photoSource: photoSource,
+        hasPhoto: photo != null,
+      ),
+      files: [?photo],
+      auth: true,
+      fallbackMessage: 'تعذّرت معاينة البطاقة — حاول مرة أخرى',
+    );
+  }
+
+  /// حفظ البطاقة — `POST /api/events/:id/cards`: يرسم الخادم بالمقاس الكامل
+  /// ويخزّن الصورة ويجعلها **الأساسية** للمناسبة (فتصير `og:image` لرابطها).
+  /// الرسالة العربية من الخادم تُعرض كما وصلت.
+  Future<CardSaveResult> saveEventCard(
+    int eventId, {
+    required String templateKey,
+    required String size,
+    required String fontKey,
+    required String color,
+    String photoSource = 'event',
+    http.MultipartFile? photo,
+  }) async {
+    final data = await _client.postMultipart(
+      '/api/events/$eventId/cards',
+      fields: _cardDesignFields(
+        templateKey: templateKey,
+        size: size,
+        fontKey: fontKey,
+        color: color,
+        photoSource: photoSource,
+        hasPhoto: photo != null,
+      ),
+      files: [?photo],
+      auth: true,
+    );
+    return CardSaveResult.fromJson(data);
+  }
+
+  /// تعيين بطاقة محفوظة أساسيةً — `PATCH /api/events/:id/cards/:cardId`.
+  /// بطاقة أساسية واحدة على الأكثر: الخادم يُصفّر البقية في المعاملة نفسها.
+  Future<CardSaveResult> setPrimaryEventCard(int eventId, int cardId) async {
+    final data = await _client.patch(
+      '/api/events/$eventId/cards/$cardId',
+      auth: true,
+    );
+    return CardSaveResult.fromJson(data);
+  }
+
+  /// حذف بطاقة محفوظة — `DELETE /api/events/:id/cards/:cardId`. حذف الأساسية
+  /// لا يُرقّي غيرها: تعود `og:image` إلى بطاقة الخادم المولَّدة، والرسالة
+  /// العربية من الخادم هي ما يُعرض.
+  Future<String> deleteEventCard(int eventId, int cardId) async {
+    final data = await _client.delete(
+      '/api/events/$eventId/cards/$cardId',
+      auth: true,
+    );
+    final message = data['message'];
+    return message is String && message.isNotEmpty ? message : 'حُذفت البطاقة';
+  }
+
+  /// حقول التصميم المشتركة بين المعاينة والحفظ — عقد واحد لا نسختان.
+  static Map<String, String> _cardDesignFields({
+    required String templateKey,
+    required String size,
+    required String fontKey,
+    required String color,
+    required String photoSource,
+    required bool hasPhoto,
+  }) {
+    return {
+      'template_key': templateKey,
+      'size': size,
+      'font_key': fontKey,
+      'color': color,
+      // الويب يفعل هذا حرفياً: ملفٌ مرفوع يعني `upload` مهما اختار المستخدم
+      // قبله، وإلا وصل الخادمَ مصدرٌ لا يطابق الملف المرفق.
+      'photo_source': hasPhoto ? 'upload' : photoSource,
+    };
   }
 
   // --- الحساب ------------------------------------------------------
@@ -1656,7 +1826,19 @@ class EventSubmissionResult {
   final String message;
   final String? locationWarning;
 
-  const EventSubmissionResult({required this.message, this.locationWarning});
+  /// معرّف الصفّ الذي أنشأه الخادم (يرجعه `POST /api/events` في 201) — يفتح
+  /// به ستوديو البطاقة **بعد** النشر فقط؛ `null` من خادم أقدم لا يزرع باباً.
+  final int? eventId;
+
+  /// حالة الصفّ بعد الإنشاء (`approved` أو `pending`) كما قال الخادم.
+  final String status;
+
+  const EventSubmissionResult({
+    required this.message,
+    this.locationWarning,
+    this.eventId,
+    this.status = '',
+  });
 }
 
 /// ردّ PATCH /api/events/:id — `amendment` و`status` من الخادم وحده، وتظهران
@@ -1703,6 +1885,257 @@ class AppRelease {
       minVersion: text(json['min_version']),
       apkUrl: text(json['apk_url']),
       releaseNotes: text(json['release_notes']) ?? '',
+    );
+  }
+}
+
+/// قالب بطاقة واحد كما يعيده `GET /api/card-templates` — مفتاحه واسمه العربي
+/// ونبرته، وألوانه وعائلاته التي يسمح بها الخادم (المتاحة فعلاً وحدها).
+class CardTemplate {
+  final String key;
+  final String name;
+
+  /// `solemn` لقالبي العزاء الهادئين، و`festive` لبقية العشرة.
+  final String tone;
+  final String tagline;
+  final String defaultFont;
+
+  /// مفاتيح الخطوط التي يسمح بها هذا القالب — لا كل الخطوط.
+  final List<String> fonts;
+  final List<CardTemplateColor> colors;
+
+  const CardTemplate({
+    required this.key,
+    required this.name,
+    required this.tone,
+    this.tagline = '',
+    this.defaultFont = '',
+    this.fonts = const [],
+    this.colors = const [],
+  });
+
+  factory CardTemplate.fromJson(Map<String, dynamic> json) {
+    final fonts = json['fonts'];
+    final colors = json['colors'];
+    return CardTemplate(
+      key: '${json['key'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      tone: '${json['tone'] ?? 'festive'}',
+      tagline: '${json['tagline'] ?? ''}',
+      defaultFont: '${json['default_font'] ?? ''}',
+      fonts: fonts is List ? fonts.map((font) => '$font').toList() : const [],
+      colors: colors is List
+          ? colors
+              .whereType<Map>()
+              .map((color) => CardTemplateColor.fromJson(Map<String, dynamic>.from(color)))
+              .toList()
+          : const [],
+    );
+  }
+
+  bool get isSolemn => tone == 'solemn';
+}
+
+/// لون من لوحة القالب. الخادم يرسله `{value, name}` — والقيمة هي ما يُعاد
+/// في `color` عند الرسم، فالاسم للعرض وحده.
+class CardTemplateColor {
+  final String value;
+  final String name;
+
+  const CardTemplateColor({required this.value, this.name = ''});
+
+  factory CardTemplateColor.fromJson(Map<String, dynamic> json) {
+    // `label` احتياطاً: العقد الموثَّق يسمّي الحقل label وبعض الردود name.
+    final name = json['name'] ?? json['label'] ?? '';
+    return CardTemplateColor(value: '${json['value'] ?? ''}', name: '$name');
+  }
+}
+
+/// مقاس بطاقة من الأربعة (ستوري/عمودي/مربّع/A4) بأبعاد الرسم وأبعاد المعاينة
+/// — الأخيرة من الخادم لا محسوبة في العميل.
+class CardSize {
+  final String key;
+  final String name;
+  final int width;
+  final int height;
+  final int previewWidth;
+  final int previewHeight;
+
+  const CardSize({
+    required this.key,
+    required this.name,
+    required this.width,
+    required this.height,
+    this.previewWidth = 0,
+    this.previewHeight = 0,
+  });
+
+  factory CardSize.fromJson(Map<String, dynamic> json) {
+    int toInt(Object? value) {
+      if (value is num) return value.toInt();
+      return int.tryParse('${value ?? ''}') ?? 0;
+    }
+
+    final preview = json['preview'];
+    final previewMap = preview is Map ? Map<String, dynamic>.from(preview) : const <String, dynamic>{};
+    return CardSize(
+      key: '${json['key'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      width: toInt(json['width']),
+      height: toInt(json['height']),
+      previewWidth: toInt(previewMap['width']),
+      previewHeight: toInt(previewMap['height']),
+    );
+  }
+
+  /// نسبة المعاينة للعرض على الشاشة — من أبعاد المعاينة، وأبعاد الرسم حين
+  /// يغيب `preview` (خادم أقدم)، و`null` إن كانت الأبعاد ناقصة فلا نسبة.
+  double? get aspectRatio {
+    if (previewWidth > 0 && previewHeight > 0) {
+      return previewWidth / previewHeight;
+    }
+    if (width > 0 && height > 0) return width / height;
+    return null;
+  }
+}
+
+/// عائلة خط مسجَّلة على الخادم — المتاحة فعلاً وحدها تصل هنا.
+class CardFont {
+  final String key;
+  final String name;
+  final String note;
+
+  const CardFont({required this.key, required this.name, this.note = ''});
+
+  factory CardFont.fromJson(Map<String, dynamic> json) => CardFont(
+        key: '${json['key'] ?? ''}',
+        name: '${json['name'] ?? ''}',
+        note: '${json['note'] ?? ''}',
+      );
+}
+
+/// كتالوج الستوديو كاملاً — انظر [NegevApi.cardStudioCatalog].
+class CardStudioCatalog {
+  final List<CardTemplate> templates;
+  final List<CardSize> sizes;
+  final List<CardFont> fonts;
+  final int previewMaxWidth;
+
+  const CardStudioCatalog({
+    this.templates = const [],
+    this.sizes = const [],
+    this.fonts = const [],
+    this.previewMaxWidth = 0,
+  });
+
+  factory CardStudioCatalog.fromJson(Map<String, dynamic> json) {
+    final templates = json['templates'];
+    final sizes = json['sizes'];
+    final fonts = json['fonts'];
+    final maxWidth = json['preview_max_width'];
+    return CardStudioCatalog(
+      templates: templates is List
+          ? templates
+              .whereType<Map>()
+              .map((item) => CardTemplate.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const [],
+      sizes: sizes is List
+          ? sizes
+              .whereType<Map>()
+              .map((item) => CardSize.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const [],
+      fonts: fonts is List
+          ? fonts
+              .whereType<Map>()
+              .map((item) => CardFont.fromJson(Map<String, dynamic>.from(item)))
+              .toList()
+          : const [],
+      previewMaxWidth: maxWidth is num ? maxWidth.toInt() : int.tryParse('${maxWidth ?? ''}') ?? 0,
+    );
+  }
+
+  /// قوالب نبرة واحدة — **هذا هو ترشيح العزاء** في العميل، ومطابقه على الخادم
+  /// `templatesForTone`: مناسبة `solemn` لا ترى إلا `solemn`، وغيرها لا تراها
+  /// إطلاقاً. القيمة غير المعروفة تُقرأ `festive` كافتراض الخادم نفسه.
+  List<CardTemplate> templatesForTone(String tone) {
+    final wanted = tone == 'solemn' ? 'solemn' : 'festive';
+    return templates.where((template) => template.tone == wanted).toList();
+  }
+
+  CardTemplate? templateByKey(String key) {
+    for (final template in templates) {
+      if (template.key == key) return template;
+    }
+    return null;
+  }
+
+  CardSize? sizeByKey(String key) {
+    for (final size in sizes) {
+      if (size.key == key) return size;
+    }
+    return null;
+  }
+
+  CardFont? fontByKey(String key) {
+    for (final font in fonts) {
+      if (font.key == key) return font;
+    }
+    return null;
+  }
+}
+
+/// بطاقة محفوظة لمناسبة — صفّ `event_cards` كما يعيده الخادم، و`image_url`
+/// مطلقة دائماً (`image_url` بالمقاس الكامل في قائمة البطاقات).
+class EventCardItem {
+  final int id;
+  final String templateKey;
+  final String fontKey;
+  final String color;
+  final String size;
+  final String imageUrl;
+  final bool isPrimary;
+
+  const EventCardItem({
+    required this.id,
+    this.templateKey = '',
+    this.fontKey = '',
+    this.color = '',
+    this.size = '',
+    this.imageUrl = '',
+    this.isPrimary = false,
+  });
+
+  factory EventCardItem.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    return EventCardItem(
+      id: id is int ? id : int.tryParse('${id ?? ''}') ?? 0,
+      templateKey: '${json['template_key'] ?? ''}',
+      fontKey: '${json['font_key'] ?? ''}',
+      color: '${json['color'] ?? ''}',
+      size: '${json['size'] ?? ''}',
+      imageUrl: '${json['image_url'] ?? ''}',
+      isPrimary: json['is_primary'] == true || json['is_primary'] == 1,
+    );
+  }
+}
+
+/// ردّ حفظ البطاقة وتعيينها أساسيةً — الرسالة العربية من الخادم والصفّ بعده.
+class CardSaveResult {
+  final String message;
+  final EventCardItem? card;
+
+  const CardSaveResult({required this.message, this.card});
+
+  factory CardSaveResult.fromJson(Map<String, dynamic> json) {
+    final message = json['message'];
+    final card = json['card'];
+    return CardSaveResult(
+      message: message is String && message.isNotEmpty
+          ? message
+          : 'حُفظت البطاقة وجُعلت البطاقة الأساسية للمناسبة',
+      card: card is Map ? EventCardItem.fromJson(Map<String, dynamic>.from(card)) : null,
     );
   }
 }

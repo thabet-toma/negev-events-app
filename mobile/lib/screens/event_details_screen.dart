@@ -18,6 +18,7 @@ import '../widgets/congratulations.dart';
 import '../widgets/event_card.dart';
 import '../widgets/rate_us_prompt.dart';
 import 'albums_screen.dart';
+import 'card_studio_screen.dart';
 
 /// ارتفاع بوستر التفاصيل — عادي مقابل نبرة `solemn`، بنفس نسبة كرت القائمة
 /// (#20 خطوة ١٥).
@@ -343,6 +344,33 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
     }
   }
 
+  /// «بطاقة الدعوة» (#181) — ستوديو بطاقة المناسبة لصاحبها أو للإدارة.
+  /// النبرة من صفّ المناسبة المحمَّل نفسه (`occasion_types.tone`)، والستوديو
+  /// يرشّح القوالب بها. وتظهر بعدها بطاقة أساسية جديدة، فتُعاد الصفحة هادئةً
+  /// كما تفعل التبريكة الجديدة.
+  Future<void> _openCardStudio() async {
+    Event? event;
+    try {
+      event = await _event;
+    } catch (_) {
+      // فشل تحميل المناسبة معروض في الجسم بزرّ «إعادة المحاولة» — لا ستوديو
+      // لصفٍّ لم يُقرأ بعد، ولا استثناء يفلت من معالج الضغط.
+      return;
+    }
+    if (!mounted || event == null) return;
+    final loaded = event;
+    await Navigator.of(context).push(
+      MaterialPageRoute<EventCardItem?>(
+        builder: (_) => CardStudioScreen(
+          eventId: widget.eventId,
+          tone: loaded.occasionType?.tone ?? 'festive',
+          eventTitle: loaded.displayTitle,
+        ),
+      ),
+    );
+    if (mounted) _reloadQuietly();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -366,6 +394,23 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
                   eventId: widget.eventId,
                   onChanged: _reloadQuietly,
                 ),
+              );
+            },
+          ),
+          // «بطاقة الدعوة» (#181) — للمالك أو الإدارة وحدهما، والعلَم من
+          // استجابة الخادم لا من استنتاج في العميل: `_queue` طابور المراجعة
+          // نفسه (مسار المالك/الإدارة، و**403** لغيرهما — `assertCanManageEvent`
+          // لا 404 — فيُلتقط الخطأ ويعود `null`)، فإن لم يصل فلا باب إطلاقاً.
+          // نفس قاعدة الشاشة المكتوبة أعلى `_queue`.
+          FutureBuilder<List<Congratulation>?>(
+            future: _queue,
+            builder: (context, snapshot) {
+              if (snapshot.data == null) return const SizedBox.shrink();
+              return IconButton(
+                key: const Key('event_card_studio_button'),
+                tooltip: 'بطاقة الدعوة',
+                icon: const Icon(Icons.auto_awesome_outlined),
+                onPressed: _openCardStudio,
               );
             },
           ),

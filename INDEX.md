@@ -14,7 +14,7 @@
 |---|---|---|
 | `server/src` | 82 | 26438 |
 | `web` | 8 | 20438 |
-| `mobile/lib` | 66 | 29733 |
+| `mobile/lib` | 67 | 31355 |
 
 ### توزيع `server/src`
 
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 1793 |
+| `api/` | 2 | 2261 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
 | `models/` | 11 | 2528 |
-| `screens/` | 19 | 19339 |
+| `screens/` | 20 | 20493 |
 | `state/` | 18 | 1808 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -70,7 +70,7 @@
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
 | واجهة الويب | `web/app.js:339` · `web/admin.js` · `web/api.js:60` |
-| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:21` · `mobile/lib/screens/` · `mobile/lib/models/` |
+| تطبيق الموبايل | `mobile/lib/api/negev_api.dart:22` · `mobile/lib/screens/` · `mobile/lib/models/` |
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
