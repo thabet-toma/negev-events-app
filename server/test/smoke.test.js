@@ -21695,6 +21695,605 @@ async function run() {
     await db.execute('DELETE FROM users WHERE id = ?', [id]);
   }
 
+  // عروض الأسعار: الطلبات الواردة والعروض المستلمة (تذكرة #188، ADR-0016)
+  // ==================================================================
+  console.log('\nعروض الأسعار (#188): غير المربوط رابط واتساب بلا صفّ، والمربوط 404 لغيره، والانتقالات وحدها');
+
+  let qteCategoryId = 0;
+  let qteLinkedProviderId = 0;
+  let qteFreeProviderId = 0;
+  let qteSecondProviderId = 0;
+  let qteSuperAdminId = 0;
+  let qteSuperAdminToken = '';
+  let qteOwnerId = 0;
+  let qteOwnerToken = '';
+  let qteSecondOwnerId = 0;
+  let qteSecondOwnerToken = '';
+  let qteRequesterId = 0;
+  let qteRequesterToken = '';
+  let qteStrangerId = 0;
+  let qteStrangerToken = '';
+  let qteEventId = 0;
+  let qteForeignEventId = 0;
+  let qteQuoteId = 0;
+  let qteSecondProviderQuoteId = 0;
+  let qteDeclinedQuoteId = 0;
+  let qteFreePhone = '';
+
+  /**
+   * مناسبة يملكها حسابٌ بعينه — تُكتب في القاعدة مباشرةً. هذا القسم لا يختبر
+   * النشر (له أقسامه)، بل شرط الملكية وحده: `events.created_by` هو ما يقرؤه
+   * `createQuoteRequest` داخل استعلامه.
+   */
+  async function createQuoteEvent(createdBy, title) {
+    const region = await db.queryOne('SELECT id FROM regions ORDER BY id ASC LIMIT 1');
+    const { insertId } = await db.execute(
+      `INSERT INTO events (title, groom_name, family_clan, region_id, town, location_name, event_date, status, created_by)
+       VALUES (?, 'صاحب المناسبة', 'عائلة الاختبار', ?, 'بئر السبع', 'قاعة قسم عروض الأسعار', '2027-05-01', 'approved', ?)`,
+      [title, region.id, createdBy]
+    );
+    return insertId;
+  }
+
+  /** صفّ الطلب كما هو في القاعدة — مصدر الحقيقة، لا شكل الاستجابة. */
+  async function storedQuote(quoteId) {
+    return db.queryOne(
+      `SELECT id, provider_id, user_id, event_id, status, offer_price, offer_note, offered_at, decided_at
+         FROM quote_requests WHERE id = ?`,
+      [quoteId]
+    );
+  }
+
+  await test('Setup (#188): سوبر أدمن وفئة، ومزوّد مربوط وآخر غير مربوط، وثلاثة حسابات ومناسبتان', async () => {
+    // الحسابات تُكتب في القاعدة مباشرةً بتوكن موقَّع (`createLinkUser` نفسها،
+    // لا `POST /api/auth/register`): شريحة `authLimiter` استُنفدت في السويت
+    // الطويل، وسوبر أدمن جديد يعني شريحة `rateLimit` جديدة — كأقسام #185–#187.
+    const superAdmin = await createLinkUser(
+      `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+      'سوبر أدمن قسم عروض الأسعار',
+      'super_admin'
+    );
+    qteSuperAdminId = superAdmin.id;
+    qteSuperAdminToken = superAdmin.token;
+
+    // مرساة موجبة: التوكن يفتح مسار إدارة فعلاً قبل أي ربط.
+    const me = await api('GET', '/api/admin/me', { token: qteSuperAdminToken });
+    assert.strictEqual(me.status, 200, me.body && me.body.message);
+
+    const owner = await createLinkUser(
+      `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+      'صاحب المزوّد المربوط'
+    );
+    qteOwnerId = owner.id;
+    qteOwnerToken = owner.token;
+
+    // حساب مربوط ثانٍ — مزوّدٌ آخر: به يُثبت أن «الطلبات الواردة» لا تخلط
+    // طلبات مزوّدَي حسابين مربوطين.
+    const secondOwner = await createLinkUser(
+      `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+      'صاحب المزوّد الثاني'
+    );
+    qteSecondOwnerId = secondOwner.id;
+    qteSecondOwnerToken = secondOwner.token;
+
+    const requester = await createLinkUser(
+      `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+      'طالب عرض السعر'
+    );
+    qteRequesterId = requester.id;
+    qteRequesterToken = requester.token;
+
+    const stranger = await createLinkUser(
+      `05${Math.floor(10000000 + Math.random() * 89999999)}`,
+      'حساب خارج الربط'
+    );
+    qteStrangerId = stranger.id;
+    qteStrangerToken = stranger.token;
+
+    const category = await api('POST', '/api/admin/service-categories', {
+      token: qteSuperAdminToken,
+      body: { name: `فئة عروض الأسعار ${Date.now()}`, icon: '🧾', color: '#0ea5e9' }
+    });
+    assert.strictEqual(category.status, 201, category.body && category.body.message);
+    qteCategoryId = category.body.category.id;
+
+    // المزوّد المربوط: رقمٌ مسجَّل أيضاً، لكن القناة تحدّدها `linked_user_id` لا الرقم.
+    const linked = await api('POST', '/api/admin/service-providers', {
+      token: qteSuperAdminToken,
+      body: {
+        category_id: qteCategoryId,
+        name: 'مزوّد قسم عروض الأسعار',
+        phone: '0501234567',
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(linked.status, 201, linked.body && linked.body.message);
+    qteLinkedProviderId = linked.body.providerId;
+
+    const link = await api('PATCH', `/api/admin/service-providers/${qteLinkedProviderId}/link`, {
+      token: qteSuperAdminToken,
+      body: { user_id: qteOwnerId }
+    });
+    assert.strictEqual(link.status, 200, link.body && link.body.message);
+    assert.strictEqual(link.body.provider.linked_account.id, qteOwnerId, 'المزوّد مربوط بصاحب القسم');
+
+    const secondLinked = await api('POST', '/api/admin/service-providers', {
+      token: qteSuperAdminToken,
+      body: {
+        category_id: qteCategoryId,
+        name: 'مزوّد القسم الثاني',
+        phone: '0502223344',
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(secondLinked.status, 201, secondLinked.body && secondLinked.body.message);
+    qteSecondProviderId = secondLinked.body.providerId;
+
+    const secondLink = await api('PATCH', `/api/admin/service-providers/${qteSecondProviderId}/link`, {
+      token: qteSuperAdminToken,
+      body: { user_id: qteSecondOwnerId }
+    });
+    assert.strictEqual(secondLink.status, 200, secondLink.body && secondLink.body.message);
+
+    qteFreePhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const free = await api('POST', '/api/admin/service-providers', {
+      token: qteSuperAdminToken,
+      body: {
+        category_id: qteCategoryId,
+        name: 'مزوّد غير مربوط',
+        phone: qteFreePhone,
+        towns: [scopedTown]
+      }
+    });
+    assert.strictEqual(free.status, 201, free.body && free.body.message);
+    qteFreeProviderId = free.body.providerId;
+
+    const freeRow = await db.queryOne(
+      'SELECT linked_user_id FROM service_providers WHERE id = ?',
+      [qteFreeProviderId]
+    );
+    assert.strictEqual(freeRow.linked_user_id, null, 'والمزوّد الثالث بلا ربط');
+
+    qteEventId = await createQuoteEvent(qteRequesterId, 'مناسبة طالب عرض السعر');
+    qteForeignEventId = await createQuoteEvent(qteStrangerId, 'مناسبة ليست للطالب');
+  });
+
+  await test('مزوّد غير مربوط: channel=whatsapp ورابط برسالة في الخادم، ولا صفّ في القاعدة', async () => {
+    const before = await db.query('SELECT id FROM quote_requests');
+
+    const res = await api('POST', `/api/services/providers/${qteFreeProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { wanted_date: '2027-06-01', guests_count: 250, note: 'عرس في قاعة كبيرة' }
+    });
+    assert.strictEqual(res.status, 200, res.body && res.body.message);
+    assert.strictEqual(res.body.channel, 'whatsapp', 'قناة واتساب للمزوّد غير المربوط');
+    assert.strictEqual(res.body.quote, null, 'ولا صفّ يعود في الردّ');
+
+    const url = new URL(res.body.url);
+    assert.strictEqual(
+      url.origin + url.pathname,
+      `https://wa.me/972${qteFreePhone.slice(1)}`,
+      'الرقم يظهر داخل الرابط وحده — والرابط يبنيه الخادم'
+    );
+    const message = url.searchParams.get('text');
+    assert.ok(message.includes('2027-06-01'), 'الرسالة تحمل التاريخ المرغوب');
+    assert.ok(message.includes('250'), 'وعدد المعازيم');
+    assert.ok(message.includes('قاعة كبيرة'), 'والملاحظة كما كتبها الطالب');
+
+    const after = await db.query('SELECT id FROM quote_requests');
+    assert.strictEqual(after.length, before.length, 'ولا صفّ كُتب للمزوّد غير المربوط');
+
+    const anonymous = await api('POST', `/api/services/providers/${qteFreeProviderId}/quote-requests`, {
+      body: { note: 'بلا حساب' }
+    });
+    assert.strictEqual(anonymous.status, 401, 'والمسار مشدود بـauthenticate');
+  });
+
+  await test('مزوّد مربوط: صفّ awaiting_offer وإشعار للحساب المربوط وحده', async () => {
+    const res = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: {
+        wanted_date: '2027-07-15',
+        guests_count: 300,
+        note: 'نحتاج كراسي وضيافة',
+        event_id: qteEventId
+      }
+    });
+    assert.strictEqual(res.status, 201, res.body && res.body.message);
+    assert.strictEqual(res.body.channel, 'app', 'قناة التطبيق للمزوّد المربوط');
+    qteQuoteId = res.body.quote.id;
+    assert.strictEqual(res.body.quote.status, 'awaiting_offer', 'يبدأ بانتظار عرض المزوّد');
+    assert.strictEqual(res.body.quote.event_id, qteEventId, 'ومناسبة الطالب مرفقة');
+
+    const stored = await storedQuote(qteQuoteId);
+    assert.strictEqual(stored.status, 'awaiting_offer');
+    assert.strictEqual(Number(stored.user_id), qteRequesterId, 'والطالب هو صاحب الصفّ');
+    assert.strictEqual(Number(stored.provider_id), qteLinkedProviderId);
+
+    // مقيَّد بالمستخدم الذي أُنشئ للتوّ — لا مسحٌ لسطرٍ قديم على القاعدة المشتركة.
+    const notes = await db.query(
+      "SELECT user_id, body FROM notifications WHERE type = 'quote_request' AND user_id = ?",
+      [qteOwnerId]
+    );
+    assert.strictEqual(notes.length, 1, 'إشعار طلب واحد');
+    assert.strictEqual(Number(notes[0].user_id), qteOwnerId, 'وللحساب المربوط وحده لا لغيره');
+    assert.ok(notes[0].body.includes('نحتاج كراسي وضيافة'), 'ويحمل ملاحظة الطالب');
+  });
+
+  await test('event_id لمناسبة لا يملكها الطالب أو لا وجود لها ← 404 بلا صفّ', async () => {
+    const before = await db.query('SELECT id FROM quote_requests');
+
+    const foreign = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { event_id: qteForeignEventId, note: 'مناسبة غيري' }
+    });
+    assert.strictEqual(foreign.status, 404, '404 لا 403 كي لا يُكشف وجود مناسبة ليست له');
+
+    const missing = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { event_id: 999999999 }
+    });
+    assert.strictEqual(missing.status, 404, 'ومناسبة غير موجودة كذلك');
+
+    const after = await db.query('SELECT id FROM quote_requests');
+    assert.strictEqual(after.length, before.length, 'ولا صفّ من محاولتي الرفض');
+  });
+
+  await test('«الطلبات الواردة»: مزوّدات الحساب وحده، وبلا user_id ولا هاتف، وغيره 404', async () => {
+    // طلبٌ على مزوّد الحساب المربوط *الثاني*: به يُثبت أن القائمة لا تخلط
+    // طلبات مزوّدَي حسابين مربوطين — لا أن الحساب «له ربط» فقط.
+    const otherProviderQuote = await api(
+      'POST',
+      `/api/services/providers/${qteSecondProviderId}/quote-requests`,
+      { token: qteRequesterToken, body: { note: 'طلب مزوّد الحساب الثاني' } }
+    );
+    assert.strictEqual(otherProviderQuote.status, 201, otherProviderQuote.body && otherProviderQuote.body.message);
+    qteSecondProviderQuoteId = otherProviderQuote.body.quote.id;
+
+    const incoming = await api('GET', '/api/services/incoming-quotes', { token: qteOwnerToken });
+    assert.strictEqual(incoming.status, 200, incoming.body && incoming.body.message);
+    assert.strictEqual(incoming.body.quotes.length, 1, 'طلب واحد لمزوّد هذا الحساب');
+    assert.strictEqual(
+      Number(incoming.body.quotes[0].provider_id),
+      qteLinkedProviderId,
+      'ولا طلب مزوّد الحساب الآخر يظهر هنا'
+    );
+    const quote = incoming.body.quotes[0];
+    assert.strictEqual(quote.id, qteQuoteId);
+    assert.strictEqual(quote.user_name, 'طالب عرض السعر', 'واسم الطالب ليختاره المزوّد');
+    assert.strictEqual(quote.event_title, 'مناسبة طالب عرض السعر', 'ومناسبة الطالب');
+    assert.strictEqual(quote.guests_count, 300);
+    assert.strictEqual(quote.wanted_date, '2027-07-15');
+    assert.ok(!('user_id' in quote), 'ولا user_id في أي استجابة');
+    assert.ok(!('phone' in quote), 'ولا رقم هاتف');
+
+    const secondIncoming = await api('GET', '/api/services/incoming-quotes', {
+      token: qteSecondOwnerToken
+    });
+    assert.strictEqual(secondIncoming.body.quotes.length, 1, 'وللحساب الثاني طلبه هو وحده');
+    assert.strictEqual(Number(secondIncoming.body.quotes[0].provider_id), qteSecondProviderId);
+    assert.strictEqual(Number(secondIncoming.body.quotes[0].id), qteSecondProviderQuoteId);
+
+    const stranger = await api('GET', '/api/services/incoming-quotes', { token: qteStrangerToken });
+    assert.deepStrictEqual(stranger.body.quotes, [], 'حساب غير مربوط لا يرى طلبات أحد');
+
+    const requesterIncoming = await api('GET', '/api/services/incoming-quotes', {
+      token: qteRequesterToken
+    });
+    assert.deepStrictEqual(requesterIncoming.body.quotes, [], 'والطالب نفسه ليس مزوّداً فلا يرى طلبات غيره');
+
+    const anonymous = await api('GET', '/api/services/incoming-quotes');
+    assert.strictEqual(anonymous.status, 401, 'والمسار مشدود بـauthenticate');
+
+    const deniedOffer = await api('PUT', `/api/services/incoming-quotes/${qteQuoteId}/offer`, {
+      token: qteStrangerToken,
+      body: { price: '1000 شيكل' }
+    });
+    assert.strictEqual(deniedOffer.status, 404, 'وغيره 404 على العرض لا 403');
+    assert.strictEqual((await storedQuote(qteQuoteId)).status, 'awaiting_offer', 'ولا صفّ تغيّر');
+
+    const deniedDecide = await api('PATCH', `/api/services/my-quotes/${qteQuoteId}`, {
+      token: qteOwnerToken,
+      body: { action: 'cancel' }
+    });
+    assert.strictEqual(deniedDecide.status, 404, 'وصاحب المزوّد لا يملك قرار الطالب — 404 أيضاً');
+  });
+
+  await test('العرض: سعر إلزامي، ومن awaiting_offer إلى offered، و409 على أي عرض ثانٍ', async () => {
+    const noPrice = await api('PUT', `/api/services/incoming-quotes/${qteQuoteId}/offer`, {
+      token: qteOwnerToken,
+      body: { note: 'بلا سعر' }
+    });
+    assert.strictEqual(noPrice.status, 400, 'السعر إلزامي');
+    assert.strictEqual((await storedQuote(qteQuoteId)).status, 'awaiting_offer', 'ولا انتقال بلا سعر');
+
+    const offer = await api('PUT', `/api/services/incoming-quotes/${qteQuoteId}/offer`, {
+      token: qteOwnerToken,
+      body: { price: '1500 شيكل', note: 'شامل الكراسي والضيافة' }
+    });
+    assert.strictEqual(offer.status, 200, offer.body && offer.body.message);
+    assert.strictEqual(offer.body.quote.status, 'offered', 'الانتقال المسموح الأول');
+    assert.strictEqual(offer.body.quote.offer_price, '1500 شيكل', 'والسعر نصّاً كما كتبه المزوّد');
+    assert.ok(offer.body.quote.offered_at, 'ووقت العرض يُكتب');
+
+    const stored = await storedQuote(qteQuoteId);
+    assert.strictEqual(stored.status, 'offered');
+    assert.strictEqual(stored.offer_note, 'شامل الكراسي والضيافة');
+
+    const again = await api('PUT', `/api/services/incoming-quotes/${qteQuoteId}/offer`, {
+      token: qteOwnerToken,
+      body: { price: '2000 شيكل' }
+    });
+    assert.strictEqual(again.status, 409, 'عرض ثانٍ على الطلب نفسه مرفوض');
+    assert.ok(
+      typeof again.body.message === 'string' && again.body.message.includes('وصل عرض'),
+      'بجملة عربية تسمّي الحالة'
+    );
+    assert.strictEqual((await storedQuote(qteQuoteId)).offer_price, '1500 شيكل', 'ولا يُستبدل العرض الأول');
+
+    // كل تأكيد إشعار مقيَّد بالمستخدم الذي أُنشئ للتوّ: لا يُمسح سطرٌ قديم على
+    // القاعدة المشتركة، ولا يُعدّ صفٌّ ليس من هذا التشغيل.
+    const notes = await db.query(
+      "SELECT user_id, body FROM notifications WHERE type = 'quote_offer' AND user_id = ?",
+      [qteRequesterId]
+    );
+    assert.strictEqual(notes.length, 1, 'إشعار عرض واحد');
+    assert.strictEqual(Number(notes[0].user_id), qteRequesterId, 'وللطالب وحده');
+    assert.ok(notes[0].body.includes('1500 شيكل'), 'ويحمل السعر');
+  });
+
+  await test('«العروض المستلمة»: الأقسام الثلاثة، والفلترة والشرط داخل الخادم', async () => {
+    const all = await api('GET', '/api/services/my-quotes?tab=all', { token: qteRequesterToken });
+    assert.strictEqual(all.status, 200, all.body && all.body.message);
+    assert.strictEqual(all.body.quotes.length, 2, 'طلبا هذا الحساب وحدهما (مزوّدان مختلفان)');
+    const mine = all.body.quotes.find(candidate => candidate.id === qteQuoteId);
+    assert.ok(mine, 'ومنها الطلب الذي وصل عرضه');
+    assert.strictEqual(mine.provider_name, 'مزوّد قسم عروض الأسعار');
+    const untouched = all.body.quotes.find(candidate => candidate.id === qteSecondProviderQuoteId);
+    assert.ok(untouched, 'والثاني لم يصله عرض بعد');
+    assert.strictEqual(untouched.status, 'awaiting_offer');
+    assert.ok(!('user_id' in mine), 'ولا user_id');
+    assert.ok(!('phone' in mine), 'ولا هاتف');
+
+    const awaiting = await api('GET', '/api/services/my-quotes?tab=awaiting', {
+      token: qteRequesterToken
+    });
+    assert.strictEqual(awaiting.body.quotes.length, 1, '«بانتظار ردك» = offered وحده بعد وصول العرض');
+    assert.strictEqual(awaiting.body.quotes[0].id, qteQuoteId);
+    assert.strictEqual(awaiting.body.quotes[0].status, 'offered');
+
+    const acceptedTab = await api('GET', '/api/services/my-quotes?tab=accepted', {
+      token: qteRequesterToken
+    });
+    assert.deepStrictEqual(acceptedTab.body.quotes, [], 'وقسم «مقبولة» فارغ قبل القبول');
+
+    const unknown = await api('GET', '/api/services/my-quotes?tab=whatever', {
+      token: qteRequesterToken
+    });
+    assert.strictEqual(unknown.status, 400, 'قسم غير معروف 400 ولا هبوط صامت إلى «الكل»');
+
+    const repeated = await api('GET', '/api/services/my-quotes?tab=all&tab=awaiting', {
+      token: qteRequesterToken
+    });
+    assert.strictEqual(repeated.status, 400, 'والقيمة المكرّرة مصفوفةٌ من Express فتُرفض أيضاً');
+
+    const stranger = await api('GET', '/api/services/my-quotes?tab=all', {
+      token: qteStrangerToken
+    });
+    assert.deepStrictEqual(stranger.body.quotes, [], 'ولا يرى غيره طلبات ليست له');
+
+    const anonymous = await api('GET', '/api/services/my-quotes?tab=all');
+    assert.strictEqual(anonymous.status, 401, 'والمسار مشدود بـauthenticate');
+  });
+
+  await test('إلغاء قبل القرار: من awaiting_offer إلى cancelled، ثم 409 على كل قرار بعده', async () => {
+    const created = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { note: 'طلب سيُلغى قبل أي عرض' }
+    });
+    assert.strictEqual(created.status, 201, created.body && created.body.message);
+    const cancelTargetId = created.body.quote.id;
+
+    const canceled = await api('PATCH', `/api/services/my-quotes/${cancelTargetId}`, {
+      token: qteRequesterToken,
+      body: { action: 'cancel' }
+    });
+    assert.strictEqual(canceled.status, 200, canceled.body && canceled.body.message);
+    assert.strictEqual(canceled.body.quote.status, 'cancelled', 'الإلغاء المسموح قبل القرار');
+    assert.ok(canceled.body.quote.decided_at, 'ووقت القرار يُكتب');
+
+    for (const action of ['accept', 'decline', 'cancel']) {
+      const denied = await api('PATCH', `/api/services/my-quotes/${cancelTargetId}`, {
+        token: qteRequesterToken,
+        body: { action }
+      });
+      assert.strictEqual(denied.status, 409, `«${action}» بعد الإلغاء 409`);
+      assert.ok(
+        typeof denied.body.message === 'string' && denied.body.message.includes('ملغى'),
+        'بجملة عربية تسمّي الحالة الحالية'
+      );
+    }
+
+    const offerAfterCancel = await api('PUT', `/api/services/incoming-quotes/${cancelTargetId}/offer`, {
+      token: qteOwnerToken,
+      body: { price: '900 شيكل' }
+    });
+    assert.strictEqual(offerAfterCancel.status, 409, 'ولا عرض على طلب ملغى');
+
+    // والإلغاء مسموح من `offered` أيضاً: «قبل القرار» لا «قبل العرض» وحده.
+    const offeredTarget = await api(
+      'POST',
+      `/api/services/providers/${qteLinkedProviderId}/quote-requests`,
+      { token: qteRequesterToken, body: { note: 'طلب سيُلغى بعد العرض' } }
+    );
+    const offeredTargetId = offeredTarget.body.quote.id;
+    const offeredFirst = await api('PUT', `/api/services/incoming-quotes/${offeredTargetId}/offer`, {
+      token: qteOwnerToken,
+      body: { price: '800 شيكل' }
+    });
+    assert.strictEqual(offeredFirst.status, 200, offeredFirst.body && offeredFirst.body.message);
+
+    const canceledAfterOffer = await api('PATCH', `/api/services/my-quotes/${offeredTargetId}`, {
+      token: qteRequesterToken,
+      body: { action: 'cancel' }
+    });
+    assert.strictEqual(canceledAfterOffer.status, 200, canceledAfterOffer.body && canceledAfterOffer.body.message);
+    assert.strictEqual(canceledAfterOffer.body.quote.status, 'cancelled', 'الإلغاء مسموح من offered أيضاً');
+    assert.ok(canceledAfterOffer.body.quote.decided_at, 'ويُسجَّل وقته');
+    assert.strictEqual((await storedQuote(offeredTargetId)).status, 'cancelled');
+
+    // قبول من awaiting_offer ممنوع: لا قرار قبل عرض المزوّد.
+    const fresh = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { note: 'قبول قبل العرض' }
+    });
+    const earlyAccept = await api('PATCH', `/api/services/my-quotes/${fresh.body.quote.id}`, {
+      token: qteRequesterToken,
+      body: { action: 'accept' }
+    });
+    assert.strictEqual(earlyAccept.status, 409, 'accept من awaiting_offer ممنوع');
+    assert.ok(earlyAccept.body.message.includes('بانتظار عرض المزوّد'), 'ويسمّي الحالة');
+    const earlyDecline = await api('PATCH', `/api/services/my-quotes/${fresh.body.quote.id}`, {
+      token: qteRequesterToken,
+      body: { action: 'decline' }
+    });
+    assert.strictEqual(earlyDecline.status, 409, 'وdecline كذلك');
+    assert.strictEqual((await storedQuote(fresh.body.quote.id)).status, 'awaiting_offer');
+  });
+
+  await test('القبول: offered ← accepted وإشعار quote_accepted للحساب المربوط وحده، ثم 409', async () => {
+    const accepted = await api('PATCH', `/api/services/my-quotes/${qteQuoteId}`, {
+      token: qteRequesterToken,
+      body: { action: 'accept' }
+    });
+    assert.strictEqual(accepted.status, 200, accepted.body && accepted.body.message);
+    assert.strictEqual(accepted.body.quote.status, 'accepted', 'الانتقال المسموح الثاني');
+    assert.ok(accepted.body.quote.decided_at, 'ووقت القرار');
+
+    const stored = await storedQuote(qteQuoteId);
+    assert.strictEqual(stored.status, 'accepted');
+
+    const notes = await db.query(
+      "SELECT user_id, body FROM notifications WHERE type = 'quote_accepted' AND user_id = ?",
+      [qteOwnerId]
+    );
+    assert.strictEqual(notes.length, 1, 'إشعار قبول واحد');
+    assert.strictEqual(Number(notes[0].user_id), qteOwnerId, 'وللحساب المربوط وحده');
+    assert.ok(notes[0].body.includes('طالب عرض السعر'), 'ويسمّي من قبل العرض');
+
+    const acceptedTab = await api('GET', '/api/services/my-quotes?tab=accepted', {
+      token: qteRequesterToken
+    });
+    assert.strictEqual(acceptedTab.body.quotes.length, 1, 'وصار في قسم «مقبولة»');
+    assert.strictEqual(acceptedTab.body.quotes[0].id, qteQuoteId);
+    const awaitingTab = await api('GET', '/api/services/my-quotes?tab=awaiting', {
+      token: qteRequesterToken
+    });
+    assert.deepStrictEqual(awaitingTab.body.quotes, [], 'وخرج من «بانتظار ردك»');
+
+    for (const action of ['accept', 'decline', 'cancel']) {
+      const denied = await api('PATCH', `/api/services/my-quotes/${qteQuoteId}`, {
+        token: qteRequesterToken,
+        body: { action }
+      });
+      assert.strictEqual(denied.status, 409, `«${action}» بعد القبول 409`);
+      assert.ok(denied.body.message.includes('مقبول'), 'بجملة عربية تسمّي الحالة');
+    }
+    assert.strictEqual((await storedQuote(qteQuoteId)).status, 'accepted');
+
+    const anonymous = await api('PATCH', `/api/services/my-quotes/${qteQuoteId}`, {
+      body: { action: 'accept' }
+    });
+    assert.strictEqual(anonymous.status, 401, 'والمسار مشدود بـauthenticate');
+
+    const unknownAction = await api('PATCH', `/api/services/my-quotes/${qteQuoteId}`, {
+      token: qteRequesterToken,
+      body: { action: 'subscribe' }
+    });
+    assert.strictEqual(unknownAction.status, 400, 'وإجراء غير معروف 400 عربية');
+  });
+
+  await test('الرفض: offered ← declined، ثم 409 على أي انتقال بعده', async () => {
+    const created = await api('POST', `/api/services/providers/${qteLinkedProviderId}/quote-requests`, {
+      token: qteRequesterToken,
+      body: { note: 'طلب سيُرفض بعد العرض' }
+    });
+    assert.strictEqual(created.status, 201, created.body && created.body.message);
+    qteDeclinedQuoteId = created.body.quote.id;
+
+    const strangerOffer = await api('PUT', `/api/services/incoming-quotes/${qteDeclinedQuoteId}/offer`, {
+      token: qteStrangerToken,
+      body: { price: '700 شيكل' }
+    });
+    assert.strictEqual(strangerOffer.status, 404, 'ولا يعرض عليه حسابٌ آخر — 404');
+
+    const offered = await api('PUT', `/api/services/incoming-quotes/${qteDeclinedQuoteId}/offer`, {
+      token: qteOwnerToken,
+      body: { price: '700 شيكل' }
+    });
+    assert.strictEqual(offered.status, 200, offered.body && offered.body.message);
+
+    const declined = await api('PATCH', `/api/services/my-quotes/${qteDeclinedQuoteId}`, {
+      token: qteRequesterToken,
+      body: { action: 'decline' }
+    });
+    assert.strictEqual(declined.status, 200, declined.body && declined.body.message);
+    assert.strictEqual(declined.body.quote.status, 'declined', 'الانتقال المسموح الثالث');
+    assert.strictEqual((await storedQuote(qteDeclinedQuoteId)).status, 'declined');
+
+    for (const action of ['accept', 'decline', 'cancel']) {
+      const denied = await api('PATCH', `/api/services/my-quotes/${qteDeclinedQuoteId}`, {
+        token: qteRequesterToken,
+        body: { action }
+      });
+      assert.strictEqual(denied.status, 409, `«${action}» بعد الرفض 409`);
+      assert.ok(denied.body.message.includes('مرفوض'), 'بجملة عربية تسمّي الحالة');
+    }
+
+    // الأطراف ثلاثة: صاحب كل مزوّد مربوط (يصله `quote_request` و`quote_accepted`)
+    // والطالب (يصله `quote_offer`). والسؤال الذي يمكن أن يسقط هو: هل وصل شيءٌ
+    // إلى من ليس طرفاً؟ فيُسأل عن الغريب **بنفسه** لا بترشيح النتيجة إلى الأطراف.
+    const strangerAlerts = await db.query(
+      `SELECT id, type FROM notifications
+        WHERE type IN ('quote_request', 'quote_offer', 'quote_accepted') AND user_id = ?`,
+      [qteStrangerId]
+    );
+    assert.deepStrictEqual(strangerAlerts, [], 'ولا شيء للحساب الغريب — الإشعارات لأصحابها وحدهم');
+
+    const scopedRows = await db.query(
+      `SELECT user_id, type FROM notifications
+        WHERE type IN ('quote_request', 'quote_offer', 'quote_accepted')
+          AND user_id IN (?, ?, ?)`,
+      [qteOwnerId, qteSecondOwnerId, qteRequesterId]
+    );
+    assert.ok(
+      scopedRows.some(row => row.type === 'quote_request' && Number(row.user_id) === qteSecondOwnerId),
+      'وصاحب المزوّد الثاني وصله طلب مزوّده هو'
+    );
+    assert.ok(
+      scopedRows.some(row => row.type === 'quote_accepted' && Number(row.user_id) === qteOwnerId),
+      'وصاحب العرض المقبول وصله القبول'
+    );
+  });
+
+  // ---- تنظيف قسم #188 ----------------------------------------------
+  // حذف المزوّدين يُسقط طلباتهم بالقيد الأجنبي (ON DELETE CASCADE).
+  for (const id of [qteLinkedProviderId, qteSecondProviderId, qteFreeProviderId]) {
+    await api('DELETE', `/api/admin/service-providers/${id}`, { token: qteSuperAdminToken });
+  }
+  await api('DELETE', `/api/admin/service-categories/${qteCategoryId}`, { token: qteSuperAdminToken });
+  for (const id of [qteEventId, qteForeignEventId]) {
+    await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  }
+  for (const id of [qteOwnerId, qteSecondOwnerId, qteRequesterId, qteStrangerId, qteSuperAdminId]) {
+    await db.execute('DELETE FROM users WHERE id = ?', [id]);
+  }
+  assert.deepStrictEqual(
+    await db.query('SELECT id FROM quote_requests WHERE user_id = ?', [qteRequesterId]),
+    [],
+    'ولا طلب يبقى بعد حذف المزوّد'
+  );
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

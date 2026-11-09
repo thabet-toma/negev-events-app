@@ -3118,6 +3118,113 @@ body {
 .provider-review-confirm { display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; font-size: 0.86rem; color: var(--ink-soft); }
 .provider-review-confirm input { width: 20px; height: 20px; }
 
+/* ===== «اطلب عرض سعر»: الطلبات الواردة والعروض المستلمة (تذكرة #188) =====
+   الشكل واحد في القسمين: بطاقة لكل طلب، رأسها الاسم والحالة، وتحتها سطور
+   التفاصيل التي لا يُرسم فارغها. أزرار القرار 44px كسائر أهداف اللمس،
+   وأزرار التبويبات الثلاثة تُرى معاً حتى والقسم المختار فارغ. */
+.provider-quote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.provider-quote-btn:hover { border-color: var(--sky); color: var(--sky); }
+.provider-quote-btn i { color: var(--sky); }
+/* الزران فوق بعضهما على اليسار، والعدّادان على اليمين — لا ثلاثة أعمدة
+   تتصارع في صفّ `space-between`. */
+.provider-modal-meta-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+
+.quote-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.quote-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 12px 14px;
+}
+.quote-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.quote-card-head strong { font-size: 0.95rem; color: var(--ink); }
+.quote-status {
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.quote-status-awaiting_offer { color: var(--ink-soft); }
+.quote-status-offered { color: var(--sky); border-color: var(--sky); }
+.quote-status-accepted { color: var(--success); border-color: var(--success); }
+.quote-status-declined { color: var(--danger); border-color: var(--danger); }
+.quote-status-cancelled { color: var(--ink-faint); }
+.quote-line { margin: 2px 0; font-size: 0.85rem; color: var(--ink-soft); }
+.quote-offer-line { margin: 8px 0 0; font-size: 0.88rem; color: var(--ink); }
+.quote-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quote-action {
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.quote-action:hover { border-color: var(--card-gold); }
+.quote-accept { color: var(--success); border-color: var(--success); }
+.quote-decline, .quote-cancel { color: var(--danger); border-color: var(--danger); }
+.quote-offer-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quote-offer-form input {
+  flex: 1 1 160px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.85rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+.quote-offer-btn {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--sky);
+  color: var(--on-sky);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.quote-offer-btn:disabled { opacity: 0.6; cursor: wait; }
+.quote-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quote-tab {
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.quote-tab.is-active { background: var(--sky); border-color: var(--sky); color: var(--on-sky); }
+.quote-empty { margin: 12px 0 0; font-size: 0.85rem; color: var(--ink-faint); }
+
 /* ===== إرشاد التثبيت على iOS (#55) =====
    ورقة سفلية لا نافذة معترِضة: مستخدم الآيفون جاء ليرى مناسبة، لا ليُطالَب
    بتثبيت. تُصرَف بضغطة وتُحفظ مصروفة. */

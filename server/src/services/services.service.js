@@ -4,6 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const adminScope = require('./adminScope.service');
 const townsService = require('./towns.service');
+const notifications = require('./notifications.service');
 const { absoluteMediaUrl, withAbsoluteMedia } = require('../utils/mediaUrl');
 const { PROVIDER_REVIEW_REPORT_THRESHOLD } = require('../constants');
 
@@ -697,10 +698,19 @@ async function getPublicProviderById(id, { userId = null } = {}) {
 /**
  * بوّابة المزوّد العام الوحيدة لهذا القسم: موجود ومعتمد ونشِط، وإلا 404
  * كسائر القراءات العامة. تعيد صفّ العدّاد ليكون ردّ «لم تُحسب» صادقاً.
+ *
+ * **وتحمل `name` و`phone` و`linked_user_id` منذ تذكرة #188** لأن «اطلب عرض سعر»
+ * هو المستدعي الثالث: يحتاج اسم المزوّد ورقمه ليبني رسالة واتساب حين لا يكون
+ * مربوطاً، ويحتاج `linked_user_id` ليقرّر أتُكتب للمزوّد طلبٌ في القاعدة أم
+ * يعود رابطٌ بلا كتابة (ADR-0016 §3). ولا شيء من هذه الثلاثة يغادر الخدمة:
+ * رقم المزوّد **لا يخرج في أي مفتاح** — يظهر داخل رابط واتساب وحده، والحساب
+ * المربوط يُختزل إلى منطقيّ في الاستجابات (`can_reply` و`is_linked_provider`).
  */
 async function assertPublicProvider(id) {
   const row = await db.queryOne(
-    "SELECT id, views_count FROM service_providers WHERE id = ? AND is_active = 1 AND status = 'approved'",
+    `SELECT id, name, phone, linked_user_id, views_count
+       FROM service_providers
+      WHERE id = ? AND is_active = 1 AND status = 'approved'`,
     [id]
   );
   if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
@@ -848,6 +858,398 @@ async function listLinkedProviders(userId) {
     isFavorite: false,
     rating: ratings.get(row.id) || null
   }));
+}
+
+// ======================================================================
+// «اطلب عرض سعر» (تذكرة #188، ADR-0016)
+// ======================================================================
+// كل SQL هنا وحده. **والصلاحية شرطٌ داخل الاستعلام لا فلترةً بعد الجلب:**
+// المزوّد المربوط يُشتقّ من `JOIN service_providers sp … WHERE sp.linked_user_id = ?`
+// وطلبُ الزبون من `WHERE q.user_id = ?` — فحسابٌ لا يملك الصفّ يعدّل صفر صفّ
+// ويُردّ **404 لا 403**. ولا دور جديد في `users.role`: ما يراه الحساب المربوط
+// يحدّده الربط هنا وحده (ADR-0016 §2).
+//
+// **والانتقالات الخمس هي المسموح حصراً**، والحكم على الحالة الحالية داخل
+// معاملة بقفل صفّ (`SELECT … FOR UPDATE`): `awaiting_offer` ← `offered` (عرض
+// المزوّد) ← `accepted` | `declined` (قرار الزبون)، و`cancel` من
+// `awaiting_offer` أو `offered` ← `cancelled`. أي انتقال آخر **409** بجملة
+// عربية. ولا يُعتمد على `affectedRows` للتمييز بين 404 و409: mysql2 يفتح
+// الاتصال بـ`CLIENT_FOUND_ROWS`، فالتحديث الذي يجد الصفّ بلا تغيير يعدّه 1 —
+// فالقفل يجعل «الحالة المقروءة» و«التحديث بعدها» لحظةً واحدة بلا سباق.
+
+/** حدود الحقول كما في تعريف الجدول نفسه. */
+const QUOTE_NOTE_MAX = 1000;
+const QUOTE_PRICE_MAX = 100;
+
+/**
+ * سقف عدد المعازيم في طلب واحد: حارسُ عمود `INT UNSIGNED` لا سقفُ حفل —
+ * الرقم يخرج في رسالة المزوّد، وقيمةٌ فاسدة أو سالبة أو عشرة أرقام ليست طلباً
+ * بل خطأ عميل، فتُرفض 400.
+ */
+const QUOTE_GUESTS_MAX = 100000;
+
+/** تسميات الحالات الخمس بالعربية — تُقرأ في رسائل 409 وحدها. */
+const QUOTE_STATUS_LABELS = {
+  awaiting_offer: 'بانتظار عرض المزوّد',
+  offered: 'وصل عرض',
+  accepted: 'مقبول',
+  declined: 'مرفوض',
+  cancelled: 'ملغى'
+};
+
+function quoteStatusLabel(status) {
+  return QUOTE_STATUS_LABELS[status] || 'غير معروفة';
+}
+
+/** الأعمدة والأوصال المشتركة لقراءة صفّ طلب — شكلٌ واحد للمزوّد والزبون. */
+const QUOTE_ROW_COLUMNS = `q.id, q.provider_id, q.event_id, q.wanted_date, q.guests_count, q.note,
+         q.status, q.offer_price, q.offer_note, q.offered_at, q.decided_at, q.created_at,
+         sp.name AS provider_name, sc.name AS provider_category_name,
+         e.title AS event_title, e.event_date AS event_date`;
+
+const QUOTE_ROW_JOINS = `FROM quote_requests q
+       JOIN service_providers sp ON sp.id = q.provider_id
+       JOIN service_categories sc ON sc.id = sp.category_id
+       LEFT JOIN events e ON e.id = q.event_id`;
+
+/**
+ * شكل طلب عرض سعر واحد كما يخرج لأي من طرفيه — **ولا `user_id` ولا رقم هاتف
+ * في أي استجابة**: اسم الطالب يصل للحساب المربوط وحده (استعلام «الطلبات
+ * الواردة» هو الوحيد الذي ينتقي `u.full_name`)، والرقم ليس عموداً في الجدول
+ * أصلاً. و`wanted_date` نصّ `YYYY-MM-DD` من `dateStrings` في `pool.js`.
+ */
+function shapeQuoteRow(row) {
+  return {
+    id: row.id,
+    status: row.status,
+    provider_id: row.provider_id,
+    provider_name: row.provider_name ?? null,
+    provider_category_name: row.provider_category_name ?? null,
+    user_name: row.user_name ?? null,
+    event_id: row.event_id ?? null,
+    event_title: row.event_title ?? null,
+    event_date: row.event_date ?? null,
+    wanted_date: row.wanted_date ?? null,
+    guests_count: row.guests_count === null || row.guests_count === undefined
+      ? null
+      : Number(row.guests_count),
+    note: row.note ?? null,
+    offer_price: row.offer_price ?? null,
+    offer_note: row.offer_note ?? null,
+    offered_at: row.offered_at ?? null,
+    decided_at: row.decided_at ?? null,
+    created_at: row.created_at
+  };
+}
+
+/**
+ * عدد المعازيم: الغياب بأشكاله الثلاثة يعني «لم يُذكر»، والقيمة المرسَلة غير
+ * الصالحة **تُرفض 400** ولا تهبط صامتةً إلى `NULL`: المزوّد يبني عرضه على هذا
+ * الرقم، وإسقاطه يجعل الطلب يبدو كأن الزبون لم يكتبه (نفس منطق `parsePartySize`).
+ */
+function parseQuoteGuestsCount(raw) {
+  if (raw === undefined || raw === null) return null;
+  const text = String(raw).trim();
+  if (!text) return null;
+  const value = Number(text);
+  if (!Number.isInteger(value) || value < 1 || value > QUOTE_GUESTS_MAX) {
+    throw ApiError.badRequest(`عدد المعازيم يجب أن يكون عدداً صحيحاً بين 1 و${QUOTE_GUESTS_MAX}`);
+  }
+  return value;
+}
+
+/**
+ * سعر العرض **كما يكتبه المزوّد** — نصّ لا رقم: «1500»، أو «تبدأ من 1200 شيكل»،
+ * أو «حسب العدد». لا تحويل ولا تقريب، وحدّه طول عمود
+ * `quote_requests.offer_price`؛ وما يتجاوزه يُرفض 400 ولا يُقصّ (سعر مقصوص
+ * سعرٌ آخر). الملاحظة وحدها تُقصّ على طول عمودها كسائر النصوص الحرة.
+ */
+function parseQuotePrice(raw) {
+  const text = typeof raw === 'string' || typeof raw === 'number' ? String(raw).trim() : '';
+  if (!text) throw ApiError.badRequest('اكتب سعر العرض أولاً');
+  if (text.length > QUOTE_PRICE_MAX) {
+    throw ApiError.badRequest(`سعر العرض أطول من ${QUOTE_PRICE_MAX} حرف`);
+  }
+  return text;
+}
+
+/**
+ * رسالة واتساب «اطلب عرض سعر» لمزوّد غير مربوط — **يبنيها الخادم وحده**
+ * (ADR-0016، التبعات): العميل لا يؤلّف نصّاً ولا يجمع تفاصيل، وإلا اختلفت
+ * الرسالة بين الويب والتطبيق. تذكر المنصة والمزوّد وما كتبه الزبون فقط.
+ */
+function quoteRequestWhatsappMessage(providerName, { eventTitle = null, wantedDate = null, guestsCount = null, note = null } = {}) {
+  const lines = [`مرحباً ${providerName}، أرغب بطلب عرض سعر عبر منصة «أعراسنا».`];
+  if (eventTitle) lines.push(`المناسبة: ${eventTitle}`);
+  if (wantedDate) lines.push(`التاريخ المرغوب: ${wantedDate}`);
+  if (guestsCount) lines.push(`عدد المعازيم: ${guestsCount}`);
+  if (note) lines.push(`ملاحظة: ${note}`);
+  lines.push('أرجو إفادتي بالسعر والتفاصيل، وشكراً.');
+  return lines.join('\n');
+}
+
+/**
+ * إرسال طلب عرض سعر إلى مزوّد عام (تذكرة #188).
+ *
+ * البوّابة أولاً (`assertPublicProvider` — 404 لمزوّد غير معتمد أو معطَّل أو
+ * غير موجود)، ثم ملكية المناسبة المرفقة: `event_id` إن أُرسل يجب أن يكون
+ * `events.created_by = ?` — والشرط في الاستعلام نفسه، وغيرُ المملوكة **404**
+ * ككل ما لا يملكه الحساب (`adminScope.service.js` هو النمط)، لا 403.
+ *
+ * **ثم يتفرّع المساران (ADR-0016 §3):**
+ * - **مزوّد مربوط بحساب:** صفّ `awaiting_offer` وإشعار `quote_request` للحساب
+ *   المربوط **وحده** (`linked_user_id` لا `created_by` — من اقترح المزوّد ليس
+ *   بالضرورة صاحبه). والردّ `{ channel: 'app', quote }`.
+ * - **مزوّد غير مربوط:** **لا صفّ في القاعدة** (البديل المرفوض 5: طلبٌ يبقى
+ *   «بانتظار ردك» إلى الأبد لا يردّ عليه أحد)، والردّ `{ channel: 'whatsapp',
+ *   url }` برسالة بناها الخادم. ومزوّد بلا رقم تواصل ← 404 كما في مسار
+ *   `/whatsapp` القائم، ولا رابط يُخترع.
+ *
+ * والصفّ والإشعار في **معاملة واحدة**: طلبٌ في القاعدة بلا إشعار يبقى صامتاً
+ * إلى الأبد، وإشعارٌ بلا طلب يفتح على لا شيء.
+ */
+async function createQuoteRequest(userId, providerId, { eventId = null, wantedDate = null, guestsCount = null, note = null } = {}) {
+  const provider = await assertPublicProvider(providerId);
+
+  let event = null;
+  if (eventId !== null && eventId !== undefined) {
+    event = await db.queryOne(
+      'SELECT id, title FROM events WHERE id = ? AND created_by = ?',
+      [eventId, userId]
+    );
+    if (!event) throw ApiError.notFound('المناسبة غير موجودة');
+  }
+
+  const guests = parseQuoteGuestsCount(guestsCount);
+  const cleanNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, QUOTE_NOTE_MAX) : null;
+
+  if (provider.linked_user_id === null || provider.linked_user_id === undefined) {
+    const number = normaliseWhatsappNumber(provider.phone);
+    if (!number) throw ApiError.notFound('لا يوجد رقم تواصل مسجَّل لهذا المزوّد');
+    return {
+      channel: 'whatsapp',
+      url: `https://wa.me/${number}?text=${encodeURIComponent(
+        quoteRequestWhatsappMessage(provider.name, {
+          eventTitle: event ? event.title : null,
+          wantedDate,
+          guestsCount: guests,
+          note: cleanNote
+        })
+      )}`
+    };
+  }
+
+  return db.transaction(async connection => {
+    const [inserted] = await connection.execute(
+      `INSERT INTO quote_requests (provider_id, user_id, event_id, wanted_date, guests_count, note)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [providerId, userId, event ? event.id : null, wantedDate ?? null, guests, cleanNote]
+    );
+    const quoteId = inserted.insertId;
+
+    const [[requester]] = await connection.execute('SELECT full_name FROM users WHERE id = ?', [userId]);
+    const details = [
+      event ? `المناسبة: ${event.title}` : null,
+      wantedDate ? `التاريخ المرغوب: ${wantedDate}` : null,
+      guests ? `عدد المعازيم: ${guests}` : null,
+      cleanNote ? `ملاحظة: ${cleanNote}` : null
+    ].filter(Boolean).join(' · ');
+
+    await notifications.create({
+      userId: provider.linked_user_id,
+      type: notifications.TYPES.QUOTE_REQUEST,
+      title: 'طلب عرض سعر جديد',
+      body: `${requester ? requester.full_name : 'مستخدم'} يطلب عرض سعر من «${provider.name}»${details ? ` — ${details}` : ''}`,
+      dedupeKey: `quote_request_${quoteId}`
+    }, connection);
+
+    const [rows] = await connection.execute(
+      `SELECT ${QUOTE_ROW_COLUMNS} ${QUOTE_ROW_JOINS} WHERE q.id = ?`,
+      [quoteId]
+    );
+    return { channel: 'app', quote: shapeQuoteRow(rows[0]) };
+  });
+}
+
+/**
+ * «الطلبات الواردة» لصاحب مزوّد مربوط (تذكرة #188، ADR-0016 §3): طلبات
+ * مزوّداته وحدهم، و**الشرط داخل الاستعلام** (`JOIN service_providers sp …
+ * WHERE sp.linked_user_id = ?`) لا فلترةً بعد الجلب. ومعها اسم الطالب
+ * (`u.full_name` — لا رقم هاتف ولا `user_id`) والمناسبة والتاريخ والملاحظة
+ * والعرض والحالة. حساب بلا ربط يستلم مصفوفة فارغة لا 404، فيختفي القسم في
+ * العميل كاملاً (نمط «مزوّدي» نفسه).
+ */
+async function listIncomingQuotes(userId) {
+  const rows = await db.query(
+    `SELECT ${QUOTE_ROW_COLUMNS}, u.full_name AS user_name
+       ${QUOTE_ROW_JOINS}
+       JOIN users u ON u.id = q.user_id
+      WHERE sp.linked_user_id = ?
+      ORDER BY q.created_at DESC, q.id DESC`,
+    [userId]
+  );
+  return rows.map(shapeQuoteRow);
+}
+
+/**
+ * «العروض المستلمة» للزبون (تذكرة #188): طلباته هو وحدها
+ * (`WHERE q.user_id = ?` داخل الاستعلام)، بأقسامها الثلاثة.
+ *   - `all`      ← الكل.
+ *   - `awaiting` ← **`offered`**: وصل عرضٌ وينتظر قراره. ليس `awaiting_offer`
+ *                  (ذاك حالة «لم يردّ المزوّد بعد»، ولا قرار على الزبون فيها).
+ *   - `accepted` ← `accepted` وحده.
+ *
+ * والقسم يُعامل **مُعامَلاً** في الشرط (`? = 'all' OR q.status = ?`) ولا يُدمج
+ * نصّه في الاستعلام؛ وأي قسم آخر **400** عربية ولا هبوط صامت إلى `all` (هبوطٌ
+ * كهذا يعرض «الكل» في تبويب لم يُطلب، ويُخفي خطأ عميل). والقيمة المكرّرة
+ * (`?tab=a&tab=b`) تصل مصفوفةً من Express و`?tab[a]=b` كائناً، فتُرفض 400 هي
+ * أيضاً بدل أن تصير «الكل» صامتة.
+ */
+const QUOTE_TAB_STATUS = { awaiting: 'offered', accepted: 'accepted' };
+
+async function listMyQuotes(userId, { tab = 'all' } = {}) {
+  // Express يقرأ `?tab=a&tab=b` مصفوفةً و`?tab[a]=b` كائناً — كلاهما ليس قسماً،
+  // وكلاهما يجب أن يُرفض 400 لا أن يهبط صامتاً إلى «الكل».
+  if (tab !== undefined && typeof tab !== 'string') {
+    throw ApiError.badRequest('قسم العروض غير معروف');
+  }
+  const cleanTab = typeof tab === 'string' && tab.trim() ? tab.trim() : 'all';
+  if (cleanTab !== 'all' && !Object.hasOwn(QUOTE_TAB_STATUS, cleanTab)) {
+    throw ApiError.badRequest('قسم العروض غير معروف');
+  }
+  const status = QUOTE_TAB_STATUS[cleanTab] ?? 'offered';
+
+  const rows = await db.query(
+    `SELECT ${QUOTE_ROW_COLUMNS} ${QUOTE_ROW_JOINS}
+      WHERE q.user_id = ? AND (? = 'all' OR q.status = ?)
+      ORDER BY q.created_at DESC, q.id DESC`,
+    [userId, cleanTab, status]
+  );
+  return rows.map(shapeQuoteRow);
+}
+
+/**
+ * عرض سعر من الحساب المربوط على طلب أحد مزوّديه (تذكرة #188).
+ *
+ * السعر إلزامي (`price` نصّاً بسقف عموده، والملاحظة تُقصّ على حدّها)، والنطاق
+ * داخل الاستعلام (`sp.linked_user_id = ?`): طلبُ مزوّد آخر **404** لا 403.
+ * والانتقال **من `awaiting_offer` إلى `offered` وحده**؛ أي حالة أخرى (عرضٌ
+ * أُرسل من قبل، أو صفّ حُسم) ← **409** بجملة عربية، ويُقرأ داخل قفل الصفّ كي
+ * لا يمرّ عرضان متزامنان.
+ *
+ * ويكتب `offered_at` بـ`NOW()` ويُشعر الطالب `quote_offer` — بـ`q.user_id`
+ * المقروء من الصفّ لا من حقل يمرّره المستدعي.
+ */
+async function sendQuoteOffer(userId, quoteId, { price, note } = {}) {
+  const offerPrice = parseQuotePrice(price);
+  const offerNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, QUOTE_NOTE_MAX) : null;
+
+  return db.transaction(async connection => {
+    const [rows] = await connection.execute(
+      `SELECT q.id, q.status, q.user_id, sp.name AS provider_name
+         FROM quote_requests q
+         JOIN service_providers sp ON sp.id = q.provider_id
+        WHERE q.id = ? AND sp.linked_user_id = ?
+        FOR UPDATE`,
+      [quoteId, userId]
+    );
+    if (!rows.length) throw ApiError.notFound('الطلب غير موجود');
+    const current = rows[0];
+    if (current.status !== 'awaiting_offer') {
+      throw ApiError.conflict(`لا يمكن إرسال عرض على طلب حالته «${quoteStatusLabel(current.status)}»`);
+    }
+
+    await connection.execute(
+      `UPDATE quote_requests
+          SET status = 'offered', offer_price = ?, offer_note = ?, offered_at = NOW(), updated_at = NOW()
+        WHERE id = ?`,
+      [offerPrice, offerNote, quoteId]
+    );
+
+    await notifications.create({
+      userId: current.user_id,
+      type: notifications.TYPES.QUOTE_OFFER,
+      title: 'وصل عرض سعر',
+      body: `أرسل «${current.provider_name}» عرض سعر: ${offerPrice}${offerNote ? ` — ${offerNote}` : ''}`,
+      dedupeKey: `quote_offer_${quoteId}`
+    }, connection);
+
+    const [updated] = await connection.execute(
+      `SELECT ${QUOTE_ROW_COLUMNS} ${QUOTE_ROW_JOINS} WHERE q.id = ?`,
+      [quoteId]
+    );
+    return shapeQuoteRow(updated[0]);
+  });
+}
+
+/**
+ * قرار الزبون على طلبه (تذكرة #188): `accept` و`decline` من `offered`،
+ * و`cancel` من `awaiting_offer` أو `offered` — وهو «cancel قبل القرار» في
+ * معيار القبول. و`decided_at` يُكتب في الحالات الثلاث.
+ *
+ * والملكية شرطٌ في قراءة الصفّ نفسها (`WHERE id = ? AND user_id = ?`) وفي
+ * التحديث بعده: طلبٌ ليس للحساب **404**، وانتقالٌ غير مسموح **409** بجملة
+ * عربية تسمّي الحالة (`لا يمكن قبول طلب عرض سعر حالته «ملغى»`).
+ *
+ * و`accept` وحده يُشعر الحساب المربوط بمزوّد الطلب `quote_accepted`؛ والربط
+ * يُقرأ من `service_providers` داخل الاستعلام، فإن فُكّ الربط بين الطلب
+ * والقرار لا يُكتب إشعار لأحد — ولا صفّ بلا مستقبل.
+ */
+const QUOTE_DECISIONS = {
+  accept: { from: ['offered'], to: 'accepted', label: 'قبول' },
+  decline: { from: ['offered'], to: 'declined', label: 'رفض' },
+  cancel: { from: ['awaiting_offer', 'offered'], to: 'cancelled', label: 'إلغاء' }
+};
+
+async function decideMyQuote(userId, quoteId, action) {
+  const decision = Object.hasOwn(QUOTE_DECISIONS, String(action)) ? QUOTE_DECISIONS[action] : null;
+  if (!decision) throw ApiError.badRequest('إجراء غير معروف على طلب عرض السعر');
+
+  return db.transaction(async connection => {
+    const [rows] = await connection.execute(
+      'SELECT id, status, provider_id FROM quote_requests WHERE id = ? AND user_id = ? FOR UPDATE',
+      [quoteId, userId]
+    );
+    if (!rows.length) throw ApiError.notFound('الطلب غير موجود');
+    const current = rows[0];
+    if (!decision.from.includes(current.status)) {
+      throw ApiError.conflict(
+        `لا يمكن ${decision.label} طلب عرض سعر حالته «${quoteStatusLabel(current.status)}»`
+      );
+    }
+
+    await connection.execute(
+      'UPDATE quote_requests SET status = ?, decided_at = NOW(), updated_at = NOW() WHERE id = ? AND user_id = ?',
+      [decision.to, quoteId, userId]
+    );
+
+    if (action === 'accept') {
+      const [[provider]] = await connection.execute(
+        'SELECT name, linked_user_id FROM service_providers WHERE id = ?',
+        [current.provider_id]
+      );
+      if (provider && provider.linked_user_id) {
+        const [[requester]] = await connection.execute('SELECT full_name FROM users WHERE id = ?', [userId]);
+        const [[offered]] = await connection.execute(
+          'SELECT offer_price FROM quote_requests WHERE id = ?',
+          [quoteId]
+        );
+        await notifications.create({
+          userId: provider.linked_user_id,
+          type: notifications.TYPES.QUOTE_ACCEPTED,
+          title: 'قُبل عرضك',
+          body: `${requester ? requester.full_name : 'زبون'} قَبل عرضك على «${provider.name}»${offered && offered.offer_price ? `: ${offered.offer_price}` : ''}`,
+          dedupeKey: `quote_accepted_${quoteId}`
+        }, connection);
+      }
+    }
+
+    const [updated] = await connection.execute(
+      `SELECT ${QUOTE_ROW_COLUMNS} ${QUOTE_ROW_JOINS} WHERE q.id = ?`,
+      [quoteId]
+    );
+    return shapeQuoteRow(updated[0]);
+  });
 }
 
 // ======================================================================
@@ -1661,6 +2063,11 @@ module.exports = {
   publicProviderWhatsapp,
   listMyServices,
   listLinkedProviders,
+  createQuoteRequest,
+  listIncomingQuotes,
+  sendQuoteOffer,
+  listMyQuotes,
+  decideMyQuote,
   recordProviderView,
   addProviderFavorite,
   removeProviderFavorite,

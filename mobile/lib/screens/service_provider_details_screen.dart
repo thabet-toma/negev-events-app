@@ -273,6 +273,58 @@ class _ProviderBodyState extends State<_ProviderBody> {
     }
   }
 
+  /// «اطلب عرض سعر» (تذكرة #188، ADR-0016): الزائر يُحوَّل إلى بوابة الدخول
+  /// القائمة، والورقة تُرسل عبر `negev_api.dart` وحده. والردّ يفترق بحسب
+  /// `channel` — `app` طلبٌ كُتب لمزوّد مربوط، و`whatsapp` رابطٌ بناه الخادم
+  /// بلا صفّ فيُفتح كما وصل: الشاشة لا تؤلّف رسالة ولا تعرف رقم المزوّد.
+  Future<void> _openQuoteSheet() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      openSignInGate(context, 'سجّل الدخول لطلب عرض سعر من المزوّد');
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _QuoteSheet(
+        providerName: provider.name,
+        onSubmit: _submitQuote,
+      ),
+    );
+  }
+
+  Future<void> _submitQuote({
+    String? wantedDate,
+    int? guestsCount,
+    String? note,
+  }) async {
+    final services = AppServices.of(context);
+    final result = await services.api.requestProviderQuote(
+      provider.id,
+      wantedDate: wantedDate,
+      guestsCount: guestsCount,
+      note: note,
+    );
+    if (!mounted) return;
+
+    if (result.isWhatsApp) {
+      final url = result.url;
+      if (url != null && url.isNotEmpty) {
+        if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
+          if (mounted) showMessage(context, 'تعذّر فتح تطبيق واتساب', isError: true);
+        }
+      }
+      if (mounted) {
+        showMessage(context, result.message ?? 'أكمل طلبك في واتساب برسالة جاهزة');
+      }
+      return;
+    }
+
+    showMessage(context, result.message ?? 'وصل طلبك إلى المزوّد');
+  }
+
   /// صفحة تعليقات — `append` يضيف الصفحة التالية، وإلا فمن الأولى من جديد.
   /// فشلها صامت: التعليقات قسمٌ لا يجوز أن يكسر صفحة المزوّد.
   Future<void> _loadReviews({bool append = false}) async {
@@ -845,6 +897,24 @@ class _ProviderBodyState extends State<_ProviderBody> {
                     side: BorderSide(
                       color: _isFavorite ? context.c.gold : context.c.line,
                     ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const Key('provider_quote_btn'),
+                  onPressed: _openQuoteSheet,
+                  icon: const Icon(Icons.request_quote_outlined, size: 18),
+                  label: const Text('اطلب عرض سعر'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(44),
+                    foregroundColor: context.c.sky,
+                    side: BorderSide(color: context.c.line),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
@@ -1905,6 +1975,157 @@ class _ReplySheetState extends State<_ReplySheet> {
               key: const Key('provider_reply_submit'),
               onPressed: _busy ? null : _submit,
               child: const Text('حفظ الردّ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ورقة «اطلب عرض سعر» (تذكرة #188، ADR-0016): التاريخ المرغوب وعدد المعازيم
+/// وملاحظة — ولا اختيار مناسبة في التطبيق (حقل `event_id` اختياري في الخادم،
+/// وإرسال معرّف مناسبة لا يملكه الطالب يردّ 404؛ فلا يُخترع منتقٍ بلا مسار
+/// يجلب مناسبات صاحب الحساب في هذه الشاشة). التاريخ نصّ `YYYY-MM-DD` يُفحص
+/// هنا وفي الخادم (`requireDate`)، والفراغ يعني «لم يُذكر».
+class _QuoteSheet extends StatefulWidget {
+  const _QuoteSheet({required this.providerName, required this.onSubmit});
+
+  final String providerName;
+  final Future<void> Function({
+    String? wantedDate,
+    int? guestsCount,
+    String? note,
+  }) onSubmit;
+
+  @override
+  State<_QuoteSheet> createState() => _QuoteSheetState();
+}
+
+class _QuoteSheetState extends State<_QuoteSheet> {
+  static final _datePattern = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+
+  final _dateController = TextEditingController();
+  final _guestsController = TextEditingController();
+  final _noteController = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _dateController.dispose();
+    _guestsController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final dateText = _dateController.text.trim();
+    if (dateText.isNotEmpty && !_datePattern.hasMatch(dateText)) {
+      showMessage(context, 'التاريخ بصيغة YYYY-MM-DD', isError: true);
+      return;
+    }
+
+    final guestsText = _guestsController.text.trim();
+    int? guests;
+    if (guestsText.isNotEmpty) {
+      guests = int.tryParse(guestsText);
+      if (guests == null || guests < 1) {
+        showMessage(context, 'عدد المعازيم عددٌ صحيح أكبر من صفر', isError: true);
+        return;
+      }
+    }
+
+    final note = _noteController.text.trim();
+    setState(() => _busy = true);
+    try {
+      await widget.onSubmit(
+        wantedDate: dateText.isEmpty ? null : dateText,
+        guestsCount: guests,
+        note: note.isEmpty ? null : note,
+      );
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) {
+        showMessage(
+          context,
+          error is ApiException ? error.message : '$error',
+          isError: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 8,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'اطلب عرض سعر',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'أرسل تفاصيل مناسبتك إلى «${widget.providerName}» ليصلك عرضه.',
+              style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('quote_request_date'),
+              controller: _dateController,
+              enabled: !_busy,
+              keyboardType: TextInputType.datetime,
+              decoration: const InputDecoration(
+                labelText: 'التاريخ المرغوب (اختياري)',
+                hintText: 'YYYY-MM-DD',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('quote_request_guests'),
+              controller: _guestsController,
+              enabled: !_busy,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'عدد المعازيم (اختياري)',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('quote_request_note'),
+              controller: _noteController,
+              enabled: !_busy,
+              maxLines: 3,
+              maxLength: 1000,
+              decoration: const InputDecoration(
+                labelText: 'ملاحظة (اختياري)',
+                hintText: 'مثال: عرس في قاعة، ويشمل الكراسي والضيافة',
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 6),
+            ElevatedButton(
+              key: const Key('quote_request_submit'),
+              onPressed: _busy ? null : _submit,
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(44),
+              ),
+              child: const Text('إرسال الطلب'),
             ),
           ],
         ),

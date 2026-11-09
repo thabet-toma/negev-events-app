@@ -113,6 +113,16 @@ async function clearAll(userId) {
  *   event_new_digest     | event_new_digest_<YYYY-MM-DD>_<region_id|all> | no — one row per user per day PER GOVERNORATE of the event, updated in place (`all` only when the event's governorate is unknown)
  *   event_updated        | event_updated_<event_id>_<YYYY-MM-DD> | no — one per follower per event per day, updated in place
  *   event_nudge          | event_nudge_<event_id>_<1|2>        | no — the owner's own event, twice at most
+ *   quote_request        | quote_request_<quote_id>            | no — one row per request, to the linked account only
+ *   quote_offer          | quote_offer_<quote_id>              | no — the offer can be sent once (`awaiting_offer` ⇒ `offered`)
+ *   quote_accepted       | quote_accepted_<quote_id>           | no — the decision is taken once (409 on any repeat)
+ *
+ * The three `quote_*` kinds belong to ADR-0016's light link: a request reaches
+ * the provider's linked account, its offer reaches the user who asked, and the
+ * accepted decision reaches the linked account. Each is a fresh row about one
+ * `quote_requests` row, so its dedupe key carries that quote's id — a repeated
+ * write (a double click that slipped past the 409 state guard) still lands once,
+ * and the key can never collide between two different requests.
  *
  * Only a NON-exempt `event_soon` row ever competes for DAILY_SCHEDULED_CAP
  * (story 10) — every admin-triggered kind above is written the moment its
@@ -135,7 +145,10 @@ const TYPES = {
   EVENT_NEW_DIGEST: 'event_new_digest',
   EVENT_UPDATED: 'event_updated',
   EVENT_NUDGE: 'event_nudge',
-  LIVE_STARTED: 'live_started'
+  LIVE_STARTED: 'live_started',
+  QUOTE_REQUEST: 'quote_request',
+  QUOTE_OFFER: 'quote_offer',
+  QUOTE_ACCEPTED: 'quote_accepted'
 };
 
 /** Story 10: at most this many *scheduled* notifications reach one user per day. */

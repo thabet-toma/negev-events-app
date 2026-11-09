@@ -6376,11 +6376,21 @@ function loadAccountView() {
     // «مزوّدي» (تذكرة #187): الحساب المربوط وحده له قسم هنا، والجلب لا يُسقط
     // «حسابي» إن فشل — يختفي القسم ويبقى ما سواه.
     loadMyProviders();
+    // «الطلبات الواردة» و«العروض المستلمة» (تذكرة #188): كلاهما يختفي كاملاً
+    // حين لا صفوف — لا عنوان لقسم فارغ ولا قسم يُقال لحسابٍ لا يملكه.
+    loadIncomingQuotes();
+    loadMyQuotes('all');
   } else {
     guestView.style.display = 'block';
     loggedInView.style.display = 'none';
     myProvidersCache = [];
     renderMyProviders();
+    incomingQuotesCache = [];
+    renderIncomingQuotes();
+    myQuotesState.quotes = [];
+    myQuotesState.hasAny = false;
+    myQuotesState.tab = 'all';
+    renderMyQuotes();
   }
 }
 
@@ -6429,6 +6439,247 @@ function renderMyProviders() {
     }))
     .join('');
   section.hidden = false;
+}
+
+// --- «الطلبات الواردة» و«العروض المستلمة» (تذكرة #188، ADR-0016) -------
+// قسمان في «حسابي»: الأول لصاحب مزوّد مربوط يردّ بعرضه، والثاني للزبون يقرّر.
+// الاختيار بين الطلبات والعروض يجري في الخادم وحده (اسم طالبٍ لا يخرج إلا
+// لمن يملك الصفّ)، وهنا رسمٌ للأشكال الثلاثة: `shapeQuoteRow` واحد للجميع.
+
+/**
+ * تسميات الحالات الخمس — نسخة العرض في هذا الملف وحده (`status` هو ما يخرج من
+ * الخادم، وتسميته العربية للعميل). ونصّ 409 العربي في الخادم له نسخته هناك،
+ * فحالة جديدة تُضاف في الموضعين: هذا للبطاقة، وذاك لرسالة الرفض.
+ */
+const QUOTE_STATUS_LABELS = {
+  awaiting_offer: 'بانتظار عرض المزوّد',
+  offered: 'وصل عرض',
+  accepted: 'مقبول',
+  declined: 'مرفوض',
+  cancelled: 'ملغى'
+};
+
+function quoteStatusLabel(status) {
+  return QUOTE_STATUS_LABELS[status] || 'غير معروفة';
+}
+
+/** سطور التفاصيل المشتركة بين البطاقتين — الفارغ منها لا يُرسم. */
+function quoteDetailLinesHtml(quote) {
+  return [
+    quote.event_title ? `المناسبة: ${quote.event_title}` : null,
+    quote.event_date ? `تاريخ المناسبة: ${quote.event_date}` : null,
+    quote.wanted_date ? `التاريخ المرغوب: ${quote.wanted_date}` : null,
+    quote.guests_count ? `عدد المعازيم: ${quote.guests_count}` : null,
+    quote.note ? `ملاحظة: ${quote.note}` : null
+  ].filter(Boolean).map(line => `<p class="quote-line">${escapeHtml(line)}</p>`).join('');
+}
+
+/** رأس البطاقة: الاسم على اليمين والحالة على اليسار — حالة كل طلب ظاهرة. */
+function quoteCardHeadHtml(name, status) {
+  return `
+    <div class="quote-card-head">
+      <strong>${escapeHtml(name)}</strong>
+      <span class="quote-status quote-status-${escapeHtml(status)}">${escapeHtml(quoteStatusLabel(status))}</span>
+    </div>`;
+}
+
+let incomingQuotesCache = [];
+
+/**
+ * «الطلبات الواردة» — `GET /api/services/incoming-quotes` لصاحب الحساب المربوط
+ * وحده. حساب بلا ربط يستلم مصفوفة فارغة فيختفي القسم كاملاً، وفشل الجلب يخفيه
+ * ولا يُسقط «حسابي» (نفس نمط «مزوّدي»).
+ */
+async function loadIncomingQuotes() {
+  if (!currentUser || !authToken) {
+    incomingQuotesCache = [];
+    renderIncomingQuotes();
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/services/incoming-quotes', { auth: true });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success || !Array.isArray(data.quotes)) {
+      throw new Error('bad incoming-quotes response');
+    }
+    incomingQuotesCache = data.quotes;
+  } catch (e) {
+    incomingQuotesCache = [];
+  }
+  renderIncomingQuotes();
+}
+
+function renderIncomingQuotes() {
+  const section = document.getElementById('accountIncomingQuotesSection');
+  const list = document.getElementById('accountIncomingQuotesList');
+  if (!section || !list) return;
+  if (!incomingQuotesCache.length) {
+    list.innerHTML = '';
+    section.hidden = true;
+    return;
+  }
+  list.innerHTML = incomingQuotesCache.map(quote => `
+    <article class="quote-card" data-quote-id="${Number(quote.id)}" data-quote-status="${escapeHtml(quote.status)}">
+      ${quoteCardHeadHtml(quote.user_name || 'زبون', quote.status)}
+      ${quoteDetailLinesHtml(quote)}
+      ${quote.offer_price
+        ? `<p class="quote-offer-line">عرضك: <strong>${escapeHtml(quote.offer_price)}</strong>${quote.offer_note ? ` — ${escapeHtml(quote.offer_note)}` : ''}</p>`
+        : ''}
+      ${quote.status === 'awaiting_offer' ? `
+        <div class="quote-offer-form">
+          <input type="text" class="quote-offer-price" maxlength="100" placeholder="السعر كما تكتبه (مثال: 1500 شيكل)">
+          <input type="text" class="quote-offer-note" maxlength="1000" placeholder="ملاحظة على العرض (اختياري)">
+          <button type="button" class="quote-offer-btn" onclick="submitQuoteOffer(${Number(quote.id)})">أرسل العرض</button>
+        </div>` : ''}
+    </article>`).join('');
+  section.hidden = false;
+}
+
+/**
+ * إرسال العرض — `PUT .../incoming-quotes/:qid/offer` بسعر إلزامي وملاحظة
+ * اختيارية. السعر نصّ كما كتبه المزوّد (لا تحويل ولا تقريب)، والخادم يرفض
+ * أي انتقال غير `awaiting_offer ← offered` بـ409 ويُعاد الرسم من الخادم.
+ */
+async function submitQuoteOffer(quoteId) {
+  const card = document.querySelector(`#accountIncomingQuotesList .quote-card[data-quote-id="${Number(quoteId)}"]`);
+  if (!card) return;
+  const priceInput = card.querySelector('.quote-offer-price');
+  const noteInput = card.querySelector('.quote-offer-note');
+  const price = priceInput ? priceInput.value.trim() : '';
+  if (!price) {
+    showToast('اكتب سعر العرض أولاً');
+    return;
+  }
+
+  const button = card.querySelector('.quote-offer-btn');
+  if (button) button.disabled = true;
+  try {
+    const res = await apiFetch(`/api/services/incoming-quotes/${Number(quoteId)}/offer`, {
+      method: 'PUT',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ price, note: noteInput ? noteInput.value.trim() : '' })
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      showToast((data && data.message) || 'تعذّر إرسال العرض — حاول مرة أخرى');
+      return;
+    }
+    await loadIncomingQuotes();
+    showToast((data && data.message) || 'تم إرسال عرضك إلى الزبون');
+  } catch (e) {
+    showToast('تعذّر إرسال العرض — تحقّق من الاتصال');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+/**
+ * «العروض المستلمة» — ثلاثة أقسام يفلترها الخادم (`?tab=all|awaiting|accepted`)،
+ * فلا يُفلتر شيء بعد الجلب. و«كل» وحدها تقول هل للمستخدم طلبات أصلاً: قسمٌ
+ * فارغ مختار لا يُخفي التبويبات ولا يُخفي القسم كله.
+ */
+const myQuotesState = { tab: 'all', quotes: [], hasAny: false };
+
+async function loadMyQuotes(tab = myQuotesState.tab) {
+  const chosen = ['all', 'awaiting', 'accepted'].includes(tab) ? tab : 'all';
+  myQuotesState.tab = chosen;
+  if (!currentUser || !authToken) {
+    myQuotesState.quotes = [];
+    myQuotesState.hasAny = false;
+    renderMyQuotes();
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/services/my-quotes?tab=${encodeURIComponent(chosen)}`, { auth: true });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success || !Array.isArray(data.quotes)) {
+      throw new Error('bad my-quotes response');
+    }
+    myQuotesState.quotes = data.quotes;
+    if (chosen === 'all') myQuotesState.hasAny = data.quotes.length > 0;
+  } catch (e) {
+    myQuotesState.quotes = [];
+    if (chosen === 'all') myQuotesState.hasAny = false;
+  }
+  renderMyQuotes();
+}
+
+function setMyQuotesTab(tab) {
+  loadMyQuotes(tab);
+}
+
+function renderMyQuotes() {
+  const section = document.getElementById('accountMyQuotesSection');
+  const list = document.getElementById('accountMyQuotesList');
+  if (!section || !list) return;
+
+  section.querySelectorAll('.quote-tab').forEach(tab => {
+    const active = tab.dataset.quoteTab === myQuotesState.tab;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+
+  if (!myQuotesState.hasAny) {
+    list.innerHTML = '';
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (!myQuotesState.quotes.length) {
+    list.innerHTML = '<p class="quote-empty">لا طلبات في هذا القسم.</p>';
+    return;
+  }
+  list.innerHTML = myQuotesState.quotes.map(myQuoteCardHtml).join('');
+}
+
+/** بطاقة «عرض مستلم» — أزرارها بحسب الحالة، والانتقالات الممنوعة لا تُعرض. */
+function myQuoteCardHtml(quote) {
+  const status = quote.status;
+  const actions = [];
+  if (status === 'offered') {
+    actions.push(`<button type="button" class="quote-action quote-accept" onclick="decideQuote(${Number(quote.id)}, 'accept')">قبول العرض</button>`);
+    actions.push(`<button type="button" class="quote-action quote-decline" onclick="decideQuote(${Number(quote.id)}, 'decline')">رفض العرض</button>`);
+  }
+  if (status === 'awaiting_offer' || status === 'offered') {
+    actions.push(`<button type="button" class="quote-action quote-cancel" onclick="decideQuote(${Number(quote.id)}, 'cancel')">إلغاء الطلب</button>`);
+  }
+
+  return `
+    <article class="quote-card" data-quote-id="${Number(quote.id)}" data-quote-status="${escapeHtml(status)}">
+      ${quoteCardHeadHtml(quote.provider_name || 'مزوّد خدمة', status)}
+      ${quote.provider_category_name ? `<p class="quote-line">${escapeHtml(quote.provider_category_name)}</p>` : ''}
+      ${quoteDetailLinesHtml(quote)}
+      ${quote.offer_price
+        ? `<p class="quote-offer-line">العرض: <strong>${escapeHtml(quote.offer_price)}</strong>${quote.offer_note ? ` — ${escapeHtml(quote.offer_note)}` : ''}</p>`
+        : ''}
+      ${actions.length ? `<div class="quote-actions">${actions.join('')}</div>` : ''}
+    </article>`;
+}
+
+/**
+ * قرار الزبون — `PATCH .../my-quotes/:qid` بـ`accept` | `decline` | `cancel`.
+ * الخادم وحده يحكم الانتقال (409 لغيره) ويُشعر الحساب المربوط عند القبول،
+ * فتُقرأ القائمة من جديد بدل تعديل الصفّ في الذاكرة.
+ */
+async function decideQuote(quoteId, action) {
+  try {
+    const res = await apiFetch(`/api/services/my-quotes/${Number(quoteId)}`, {
+      method: 'PATCH',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      showToast((data && data.message) || 'تعذّر تحديث الطلب — حاول مرة أخرى');
+      return;
+    }
+    await loadMyQuotes(myQuotesState.tab);
+    showToast((data && data.message) || 'تم تحديث الطلب');
+  } catch (e) {
+    showToast('تعذّر تحديث الطلب — تحقّق من الاتصال');
+  }
 }
 
 /**
@@ -6689,6 +6940,10 @@ function resumePendingIntent() {
     // لا ورقة الكتابة — الفعل الذي أراده المستخدم هو ما يعود إليه.
     Promise.resolve(openProviderModal(intent.providerId))
       .then(() => reportProviderReview(intent.reviewId));
+  } else if (intent.type === 'provider_quote') {
+    // «اطلب عرض سعر» ضُغط قبل الدخول (تذكرة #188): تُفتح نافذة المزوّد ثم
+    // نموذج الطلب فوقها بعد جهوز بياناتها — الفعل نفسه يُستأنف لا عرضُ نافذة.
+    Promise.resolve(openProviderModal(intent.providerId)).then(() => openQuoteRequestForm());
   } else if (intent.type === 'rsvp') {
     // زرّ «جاي»/«مش جاي» ضُغط قبل الدخول — يُنفَّذ الجواب نفسه الآن بما اختاره
     // المستخدم من عدد (المنتقي ما زال في الصفحة تحت نافذة الدخول).
@@ -9557,6 +9812,128 @@ async function submitProviderReply(event) {
   }
 }
 
+/**
+ * نموذج «اطلب عرض سعر» (تذكرة #188، ADR-0016): يُفتح من نافذة المزوّد، ونيّة
+ * الزائر تُحفظ (`provider_quote`) وتُستأنف بعد الدخول كما تُستأنف نيّتا
+ * `provider_favorite`/`provider_review`. والمناسبة اختيارية وتُنتقى من
+ * `GET /api/my-events` — مناسبات صاحب الحساب وحدها، ولا رقم مناسبتها يُكتب
+ * بيد أحد.
+ */
+function openQuoteRequestForm() {
+  const providerId = Number(currentProviderId);
+  if (!providerId) return;
+  if (!requireAuth({ type: 'provider_quote', providerId })) return;
+
+  const modal = document.getElementById('providerQuoteModal');
+  const form = document.getElementById('providerQuoteForm');
+  if (!modal || !form) return;
+
+  const provider = providerDetailsCache[providerId] || null;
+  const providerInput = document.getElementById('providerQuoteProviderId');
+  const sub = document.getElementById('providerQuoteModalSub');
+  form.reset();
+  if (providerInput) providerInput.value = String(providerId);
+  if (sub) {
+    sub.textContent = provider
+      ? `أرسل تفاصيل مناسبتك إلى «${provider.name}» ليصلك عرضه`
+      : 'أرسل تفاصيل مناسبتك ليصلك عرض المزوّد';
+  }
+  modal.style.display = 'flex';
+  loadQuoteRequestEvents();
+}
+
+function closeProviderQuoteModal() {
+  const modal = document.getElementById('providerQuoteModal');
+  if (modal) modal.style.display = 'none';
+}
+
+/** يملأ منتقي «مناسبتي» من `GET /api/my-events` — وفشله لا يمنع الطلب نفسه. */
+async function loadQuoteRequestEvents() {
+  const select = document.getElementById('providerQuoteEventSelect');
+  if (!select) return;
+  select.innerHTML = '<option value="">بلا مناسبة محدّدة</option>';
+  if (!currentUser || !authToken) return;
+  try {
+    const res = await apiFetch('/api/my-events', { auth: true });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success || !Array.isArray(data.events)) return;
+    select.innerHTML = '<option value="">بلا مناسبة محدّدة</option>'
+      + data.events.map(event => {
+        const label = event.event_date ? `${event.title || 'مناسبة'} — ${event.event_date}` : (event.title || 'مناسبة');
+        return `<option value="${Number(event.id)}">${escapeHtml(label)}</option>`;
+      }).join('');
+  } catch (e) { /* المنتقي يبقى على «بلا مناسبة» — الطلب يُرسل بلا مناسبة */ }
+}
+
+/**
+ * إرسال الطلب — `POST /api/services/providers/:id/quote-requests`.
+ *
+ * **والردّ يفترق بحسب `channel`:** `app` يعني أن صفّاً كُتب للمزوّد المربوط
+ * فيُغلق النموذج ويُحدَّث «العروض المستلمة»، و`whatsapp` يعني أن الخادم بنى
+ * رسالة جاهزة ولا صفّ — فتُفتح `url` وحدها (`window.open`)، والعميل لا يبني
+ * نصّاً ولا يعرف رقم المزوّد.
+ */
+async function submitQuoteRequest(event) {
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+
+  const modal = document.getElementById('providerQuoteModal');
+  const providerInput = document.getElementById('providerQuoteProviderId');
+  const providerId = Number(currentProviderId) || Number(providerInput && providerInput.value) || 0;
+  if (!providerId) return;
+
+  const dateInput = document.getElementById('providerQuoteDate');
+  const guestsInput = document.getElementById('providerQuoteGuests');
+  const noteInput = document.getElementById('providerQuoteNote');
+  const eventSelect = document.getElementById('providerQuoteEventSelect');
+
+  const body = { note: noteInput ? noteInput.value.trim() : '' };
+  const wantedDate = dateInput ? dateInput.value.trim() : '';
+  if (wantedDate) body.wanted_date = wantedDate;
+
+  const guestsRaw = guestsInput ? guestsInput.value.trim() : '';
+  if (guestsRaw) {
+    const guests = Number(guestsRaw);
+    if (!Number.isInteger(guests) || guests < 1 || guests > 100000) {
+      showToast('عدد المعازيم يجب أن يكون عدداً صحيحاً بين 1 و100000');
+      return;
+    }
+    body.guests_count = guests;
+  }
+
+  const eventId = eventSelect ? Number(eventSelect.value) : 0;
+  if (eventId > 0) body.event_id = eventId;
+
+  const submitBtn = document.getElementById('providerQuoteSubmitBtn');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/quote-requests`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      showToast((data && data.message) || 'تعذّر إرسال الطلب — حاول مرة أخرى');
+      return;
+    }
+
+    if (modal) modal.style.display = 'none';
+    if (data.channel === 'whatsapp') {
+      if (data.url) window.open(data.url, '_blank');
+      showToast(data.message || 'أكمل طلبك في واتساب برسالة جاهزة');
+    } else {
+      // الطلب صار في القاعدة: يظهر في «العروض المستلمة» بانتظار عرض المزوّد.
+      loadMyQuotes('all');
+      showToast(data.message || 'وصل طلبك إلى المزوّد');
+    }
+  } catch (e) {
+    showToast('تعذّر إرسال الطلب — تحقّق من الاتصال');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
 /** يطبّق متوسطاً وعدّاً وتوزيعاً وصلت من ردّ كتابة على الكاش والبطاقة والنافذة. */
 function applyProviderRatingSummary(providerId, summary) {
   const provider = providerDetailsCache[providerId];
@@ -9787,8 +10164,10 @@ function revealProviderPhone() {
 
 function closeProviderModal() {
   document.getElementById('providerModal').style.display = 'none';
-  // ورقة التقييم ابنة النافذة في التسلسل: إغلاق الأصل لا يترك ورقة معلّقة.
+  // ورقة التقييم وورقة طلب عرض السعر ابنتان للنافذة في التسلسل: إغلاق الأصل
+  // لا يترك ورقة معلّقة.
   closeProviderReviewModal();
+  closeProviderQuoteModal();
   currentProviderId = null;
   currentProviderPhone = '';
 }

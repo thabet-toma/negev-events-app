@@ -2850,6 +2850,46 @@ const steps = [
         logger.info('[migrations] add-provider-linked-account-2026-11: fk_service_providers_linked_user created.');
       }
     }
+  },
+  {
+    // طلبات عروض الأسعار (تذكرة #188، ADR-0016): جدول واحد بالتعريف نفسه الذي
+    // في `schema.sql` حرفياً — نسختان لتعريف واحد لا تعريفان، و`schema.sql`
+    // يطبّق `CREATE TABLE IF NOT EXISTS` وحده فمنصَّبة سابقاً لا تراه إلا من هنا.
+    // والخطوة آمنة التكرار بذاتها: الجدول داخل `tableExists`، وقيوده الأجنبية
+    // الثلاثة تُنشأ مع الجدول نفسه فلا `ADD CONSTRAINT` ثانٍ يسقط في التشغيل التالي.
+    name: 'add-quote-requests-2026-11',
+    async run(connection) {
+      if (!(await tableExists(connection, 'quote_requests'))) {
+        await connection.query(`
+          CREATE TABLE quote_requests (
+            id           INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+            provider_id  INT UNSIGNED  NOT NULL,
+            user_id      INT UNSIGNED  NOT NULL,
+            event_id     INT UNSIGNED  DEFAULT NULL,
+            wanted_date  DATE          DEFAULT NULL,
+            guests_count INT UNSIGNED  DEFAULT NULL,
+            note         VARCHAR(1000) DEFAULT NULL,
+            status       ENUM('awaiting_offer', 'offered', 'accepted', 'declined', 'cancelled') NOT NULL DEFAULT 'awaiting_offer',
+            offer_price  VARCHAR(100)  DEFAULT NULL,
+            offer_note   VARCHAR(1000) DEFAULT NULL,
+            offered_at   DATETIME      DEFAULT NULL,
+            decided_at   DATETIME      DEFAULT NULL,
+            created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_quote_requests_provider (provider_id, status),
+            KEY idx_quote_requests_user (user_id, status),
+            CONSTRAINT fk_quote_requests_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE,
+            CONSTRAINT fk_quote_requests_user FOREIGN KEY (user_id)
+              REFERENCES users(id) ON DELETE CASCADE,
+            CONSTRAINT fk_quote_requests_event FOREIGN KEY (event_id)
+              REFERENCES events(id) ON DELETE SET NULL
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-quote-requests-2026-11: quote_requests table created.');
+      }
+    }
   }
 ];
 

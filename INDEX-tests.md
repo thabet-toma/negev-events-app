@@ -3,7 +3,7 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: كل حالة `await test(` في ملفَي الاختبار، مرتّبة بالملف ثم السطر.
 
-## حالات الاختبار — 1401
+## حالات الاختبار — 1416
 
 `npm test` يشغّل `web-dom` ثم `smoke`؛ `smoke` يحتاج MySQL حيّة، وكل حالة معرَّفة داخل ملفها.
 
@@ -869,6 +869,16 @@
 | `نصّ الردّ إلزامي غير فارغ وبسقف 1000 — وإلا 400` | `server/test/smoke.test.js:21585` |
 | `فكّ الربط: يُسجَّل، ويفقد الحساب الردّ و«مزوّدي»، ويبقى الردّ المنشور` | `server/test/smoke.test.js:21631` |
 | `حذف الحساب يفكّ الربط ولا يحذف المزوّد` | `server/test/smoke.test.js:21665` |
+| `Setup (#188): سوبر أدمن وفئة، ومزوّد مربوط وآخر غير مربوط، وثلاثة حسابات ومناسبتان` | `server/test/smoke.test.js:21747` |
+| `مزوّد غير مربوط: channel=whatsapp ورابط برسالة في الخادم، ولا صفّ في القاعدة` | `server/test/smoke.test.js:21861` |
+| `مزوّد مربوط: صفّ awaiting_offer وإشعار للحساب المربوط وحده` | `server/test/smoke.test.js:21892` |
+| `event_id لمناسبة لا يملكها الطالب أو لا وجود لها ← 404 بلا صفّ` | `server/test/smoke.test.js:21923` |
+| `«الطلبات الواردة»: مزوّدات الحساب وحده، وبلا user_id ولا هاتف، وغيره 404` | `server/test/smoke.test.js:21942` |
+| `العرض: سعر إلزامي، ومن awaiting_offer إلى offered، و409 على أي عرض ثانٍ` | `server/test/smoke.test.js:22002` |
+| `«العروض المستلمة»: الأقسام الثلاثة، والفلترة والشرط داخل الخادم` | `server/test/smoke.test.js:22045` |
+| `إلغاء قبل القرار: من awaiting_offer إلى cancelled، ثم 409 على كل قرار بعده` | `server/test/smoke.test.js:22089` |
+| `القبول: offered ← accepted وإشعار quote_accepted للحساب المربوط وحده، ثم 409` | `server/test/smoke.test.js:22164` |
+| `الرفض: offered ← declined، ثم 409 على أي انتقال بعده` | `server/test/smoke.test.js:22216` |
 | `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:1007` |
 | `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:1039` |
 | `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:1059` |
@@ -1410,3 +1420,8 @@
 | `«عدّل الردّ» يفتح الورقة على النصّ القائم — تعديل لا كتابة من الصفر` | `server/test/web-dom.test.js:20159` |
 | `«حسابي»: قسم «مزوّدي» من الخادم، وبطاقته تفتح نافذة المزوّد` | `server/test/web-dom.test.js:20184` |
 | `«حسابي»: القسم يختفي كاملاً حين لا مزوّد مربوط — ويُفرَّغ لا يُترك قديماً` | `server/test/web-dom.test.js:20217` |
+| `«اطلب عرض سعر»: الزرّ يفتح النموذج، والجسم يحمل التاريخ والمعازيم والملاحظة والمناسبة` | `server/test/web-dom.test.js:20438` |
+| `المزوّد غير المربوط: تُفتح `url` التي بناها الخادم، ولا حقول مخترعة في الجسم` | `server/test/web-dom.test.js:20506` |
+| `«الطلبات الواردة»: تفاصيل الطالب، والعرض يذهب بـPUT ويُعاد رسمه من الخادم` | `server/test/web-dom.test.js:20545` |
+| `«العروض المستلمة»: ثلاثة أقسام يفلترها الخادم، وأزرارها بحسب الحالة` | `server/test/web-dom.test.js:20596` |
+| `قسمَا الطلبات والعروض يختفيان كاملاً حين لا صفوف — ولا بطاقة قديمة تبقى` | `server/test/web-dom.test.js:20675` |

@@ -546,6 +546,80 @@ class NegevApi {
     return url;
   }
 
+  // --- «اطلب عرض سعر» (تذكرة #188، ADR-0016) ---------------------------
+
+  /// إرسال طلب عرض سعر إلى مزوّد عام. الردّ يقول القناة: [QuoteRequestResult]
+  /// بـ`app` (صفّ كُتب لمزوّد مربوط + إشعار لحسابه) أو `whatsapp` (رابط برسالة
+  /// بناها الخادم، **بلا صفّ**). والرسالة تُفتح في الشاشة كما وصلت — التطبيق
+  /// لا يؤلّف نصّاً ولا يعرف رقم المزوّد.
+  Future<QuoteRequestResult> requestProviderQuote(
+    int providerId, {
+    int? eventId,
+    String? wantedDate,
+    int? guestsCount,
+    String? note,
+  }) async {
+    final data = await _client.post(
+      '/api/services/providers/$providerId/quote-requests',
+      auth: true,
+      body: {
+        'event_id': ?eventId,
+        if (wantedDate != null && wantedDate.isNotEmpty) 'wanted_date': wantedDate,
+        'guests_count': ?guestsCount,
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return QuoteRequestResult.fromJson(data);
+  }
+
+  /// «الطلبات الواردة» لصاحب مزوّد مربوط — طلبات مزوّداته وحدهم يحكمها الخادم
+  /// داخل الاستعلام. حساب بلا ربط يستلم قائمة فارغة لا خطأ، فيختفي القسم.
+  Future<List<ProviderQuote>> incomingQuotes() async {
+    final data = await _client.get('/api/services/incoming-quotes', auth: true);
+    return _quoteList(data['quotes']);
+  }
+
+  /// عرض سعر (سعر إلزامي + ملاحظة اختيارية) على طلب من طلبات مزوّدي الحساب.
+  /// الخادم يردّ 409 على أي انتقال غير `awaiting_offer ← offered`، ويصل هنا
+  /// استثناء برسالته العربية.
+  Future<ProviderQuote> sendQuoteOffer(
+    int quoteId, {
+    required String price,
+    String? note,
+  }) async {
+    final data = await _client.put(
+      '/api/services/incoming-quotes/$quoteId/offer',
+      auth: true,
+      body: {
+        'price': price,
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return _quoteFrom(data);
+  }
+
+  /// «العروض المستلمة» للزبون — [tab] أحد `all` | `awaiting` (عرضٌ بانتظار
+  /// قراره) | `accepted`. الفلترة في الخادم وحده، فلا يُفلتر شيء هنا.
+  Future<List<ProviderQuote>> myQuotes({String tab = 'all'}) async {
+    final data = await _client.get(
+      '/api/services/my-quotes',
+      auth: true,
+      query: {'tab': tab},
+    );
+    return _quoteList(data['quotes']);
+  }
+
+  /// قرار الزبون على طلبه: `accept` | `decline` | `cancel`. الانتقالات
+  /// المسموحة وحدها، وما عداها 409 من الخادم برسالته العربية.
+  Future<ProviderQuote> decideQuote(int quoteId, String action) async {
+    final data = await _client.patch(
+      '/api/services/my-quotes/$quoteId',
+      auth: true,
+      body: {'action': action},
+    );
+    return _quoteFrom(data);
+  }
+
   /// تقديم عرض مزوّد خدمة جديد (قيد المراجعة) — يتطلّب تسجيل دخول.
   Future<int> submitProviderOffer({
     required int categoryId,
@@ -1864,6 +1938,25 @@ class NegevApi {
       },
     );
   }
+}
+
+/// قائمة طلبات عرض سعر من مفتاح `quotes` — الغياب قائمة فارغة لا خطأ، كما في
+/// `providers`/`reviews` (القسم يختفي في الشاشة بدل أن يُسقط الصفحة).
+List<ProviderQuote> _quoteList(dynamic raw) {
+  if (raw is! List) return const [];
+  return raw
+      .whereType<Map<String, dynamic>>()
+      .map(ProviderQuote.fromJson)
+      .toList();
+}
+
+/// صفّ طلب واحد من ردّ كتابة (`quote`) — وغيابه خطأ حقيقي لا صفّ فارغ.
+ProviderQuote _quoteFrom(Map<String, dynamic> data) {
+  final raw = data['quote'];
+  if (raw is! Map<String, dynamic>) {
+    throw const ApiException('تعذّر قراءة طلب عرض السعر');
+  }
+  return ProviderQuote.fromJson(raw);
 }
 
 /// صفحة مناسبات — من GET /api/events. الترقيم والإعلانات تصلان مع نفس الاستدعاء.

@@ -224,6 +224,10 @@ class AccountScreen extends StatelessWidget {
                     // «مزوّدي» (تذكرة #187): لا يُرى إطلاقاً بلا ربط — الشرط
                     // داخل الودجة نفسها (`SizedBox.shrink`).
                     const _MyProvidersSection(),
+                    // «الطلبات الواردة» و«العروض المستلمة» (تذكرة #188): نفس
+                    // القاعدة — قسمٌ بلا صفوف لا يُبنى، ولا عنوان لقسم فارغ.
+                    const _IncomingQuotesSection(),
+                    const _MyQuotesSection(),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const MyEventsScreen()),
@@ -518,6 +522,512 @@ class _MyProvidersSectionState extends State<_MyProvidersSection> {
         ),
       ),
     );
+  }
+}
+
+/// «الطلبات الواردة» (تذكرة #188، ADR-0016 §3): طلبات عروض الأسعار التي وصلت
+/// مزوّدات هذا الحساب المربوط، من `GET /api/services/incoming-quotes` — والخادم
+/// يفلترها بحسب الربط وحده، فحسابٌ غير مربوط يستلم قائمة فارغة. القسم لا يُبنى
+/// إطلاقاً بلا صفوف (لا عنوان لقسم فارغ)، وفشل الجلب يخفيه ولا يُسقط «حسابي».
+/// وفي البطاقة نموذج عرض (سعر + ملاحظة) يُرسله `PUT .../incoming-quotes/:qid/offer`.
+class _IncomingQuotesSection extends StatefulWidget {
+  const _IncomingQuotesSection();
+
+  @override
+  State<_IncomingQuotesSection> createState() => _IncomingQuotesSectionState();
+}
+
+class _IncomingQuotesSectionState extends State<_IncomingQuotesSection> {
+  List<ProviderQuote> _quotes = const [];
+  bool _requested = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_requested) return;
+    _requested = true;
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) return;
+    try {
+      final list = await services.api.incomingQuotes();
+      if (!mounted) return;
+      setState(() => _quotes = list);
+    } catch (_) {
+      if (mounted) setState(() => _quotes = const []);
+    }
+  }
+
+  Future<void> _sendOffer(ProviderQuote quote, String price, String note) async {
+    final api = AppServices.of(context).api;
+    await api.sendQuoteOffer(
+      quote.id,
+      price: price,
+      note: note.isEmpty ? null : note,
+    );
+    if (!mounted) return;
+    showMessage(context, 'تم إرسال عرضك إلى الزبون');
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_quotes.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        key: const Key('account_incoming_quotes'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.inbox_outlined, size: 16, color: context.c.gold),
+              const SizedBox(width: 6),
+              Text(
+                'الطلبات الواردة',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '(${_quotes.length})',
+                style: TextStyle(fontSize: 13, color: context.c.inkFaint),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'زبائن مزوّداتك يطلبون عرض سعر — أرسل سعرك وملاحظتك.',
+            style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+          ),
+          for (final quote in _quotes) _quoteCard(quote),
+        ],
+      ),
+    );
+  }
+
+  Widget _quoteCard(ProviderQuote quote) {
+    return Container(
+      key: Key('incoming_quote_${quote.id}'),
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  quote.userName ?? 'زبون',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              Text(
+                _quoteStatusLabel(quote.status),
+                style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+              ),
+            ],
+          ),
+          for (final line in _quoteDetailLines(quote))
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                line,
+                style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+              ),
+            ),
+          if (quote.offerPrice != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'عرضك: ${quote.offerPrice}'
+                '${quote.offerNote == null ? '' : ' — ${quote.offerNote}'}',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+            ),
+          if (quote.isAwaitingOffer) _offerForm(quote),
+        ],
+      ),
+    );
+  }
+
+  Widget _offerForm(ProviderQuote quote) {
+    return _QuoteOfferForm(
+      key: ValueKey('quote_offer_form_${quote.id}'),
+      quoteId: quote.id,
+      onSubmit: (price, note) => _sendOffer(quote, price, note),
+    );
+  }
+}
+
+/// نموذج العرض داخل بطاقة طلب — حقول محلية والحفظ عبر الأب.
+class _QuoteOfferForm extends StatefulWidget {
+  const _QuoteOfferForm({
+    super.key,
+    required this.quoteId,
+    required this.onSubmit,
+  });
+
+  final int quoteId;
+  final Future<void> Function(String price, String note) onSubmit;
+
+  @override
+  State<_QuoteOfferForm> createState() => _QuoteOfferFormState();
+}
+
+class _QuoteOfferFormState extends State<_QuoteOfferForm> {
+  final _priceController = TextEditingController();
+  final _noteController = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final price = _priceController.text.trim();
+    if (price.isEmpty) {
+      showMessage(context, 'اكتب سعر العرض أولاً', isError: true);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await widget.onSubmit(price, _noteController.text.trim());
+    } catch (error) {
+      if (mounted) {
+        showMessage(
+          context,
+          error is ApiException ? error.message : '$error',
+          isError: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: Key('quote_offer_price_${widget.quoteId}'),
+            controller: _priceController,
+            maxLength: 100,
+            decoration: const InputDecoration(
+              labelText: 'سعر العرض',
+              hintText: 'مثال: 1500 شيكل',
+              counterText: '',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: Key('quote_offer_note_${widget.quoteId}'),
+            controller: _noteController,
+            maxLength: 1000,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'ملاحظة (اختياري)',
+              counterText: '',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            key: Key('quote_offer_btn_${widget.quoteId}'),
+            onPressed: _busy ? null : _submit,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(44),
+              foregroundColor: context.c.sky,
+            ),
+            child: const Text('أرسل العرض'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// «العروض المستلمة» (تذكرة #188): ثلاثة أقسام يفلترها الخادم
+/// (`?tab=all|awaiting|accepted`)، وإلا فُعلت الفلترة في العميل — و«بانتظار
+/// ردك» تعني `offered` لا `awaiting_offer`. القسم يختفي كاملاً حين لا طلبات
+/// أصلاً، ويبقى بتبويباته حين يكون القسم المختار وحده فارغاً.
+class _MyQuotesSection extends StatefulWidget {
+  const _MyQuotesSection();
+
+  @override
+  State<_MyQuotesSection> createState() => _MyQuotesSectionState();
+}
+
+class _MyQuotesSectionState extends State<_MyQuotesSection> {
+  static const _tabs = <String, String>{
+    'all': 'الكل',
+    'awaiting': 'بانتظار ردك',
+    'accepted': 'مقبولة',
+  };
+
+  String _tab = 'all';
+  List<ProviderQuote> _quotes = const [];
+  bool _hasAny = false;
+  bool _requested = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_requested) return;
+    _requested = true;
+    unawaited(_load('all'));
+  }
+
+  Future<void> _load(String tab) async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) return;
+    try {
+      final list = await services.api.myQuotes(tab: tab);
+      if (!mounted) return;
+      setState(() {
+        _tab = tab;
+        _quotes = list;
+        // «الكل» وحدها تقول هل هناك طلبات أصلاً: قسمٌ فارغ مختار لا يُخفي التبويبات.
+        if (tab == 'all') _hasAny = list.isNotEmpty;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _tab = tab;
+        _quotes = const [];
+      });
+    }
+  }
+
+  Future<void> _decide(ProviderQuote quote, String action) async {
+    final api = AppServices.of(context).api;
+    try {
+      await api.decideQuote(quote.id, action);
+      if (!mounted) return;
+      showMessage(context, _decisionMessage(action));
+      await _load(_tab);
+    } catch (error) {
+      if (mounted) {
+        showMessage(
+          context,
+          error is ApiException ? error.message : '$error',
+          isError: true,
+        );
+      }
+    }
+  }
+
+  String _decisionMessage(String action) {
+    switch (action) {
+      case 'accept':
+        return 'قُبل عرض السعر';
+      case 'decline':
+        return 'رُفض عرض السعر';
+      default:
+        return 'أُلغي طلب عرض السعر';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_hasAny) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        key: const Key('account_my_quotes'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.request_quote_outlined, size: 16, color: context.c.gold),
+              const SizedBox(width: 6),
+              Text(
+                'العروض المستلمة',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final entry in _tabs.entries)
+                ChoiceChip(
+                  key: Key('my_quotes_tab_${entry.key}'),
+                  label: Text(entry.value),
+                  selected: _tab == entry.key,
+                  onSelected: (_) => unawaited(_load(entry.key)),
+                ),
+            ],
+          ),
+          if (_quotes.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                'لا طلبات في هذا القسم.',
+                style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+              ),
+            ),
+          for (final quote in _quotes) _quoteCard(quote),
+        ],
+      ),
+    );
+  }
+
+  Widget _quoteCard(ProviderQuote quote) {
+    return Container(
+      key: Key('my_quote_${quote.id}'),
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.c.surface,
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  quote.providerName.isEmpty ? 'مزوّد خدمة' : quote.providerName,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              Text(
+                _quoteStatusLabel(quote.status),
+                style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+              ),
+            ],
+          ),
+          if (quote.providerCategoryName != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                quote.providerCategoryName!,
+                style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+              ),
+            ),
+          for (final line in _quoteDetailLines(quote))
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                line,
+                style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+              ),
+            ),
+          if (quote.offerPrice != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'العرض: ${quote.offerPrice}'
+                '${quote.offerNote == null ? '' : ' — ${quote.offerNote}'}',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+            ),
+          // `canCancel` = «بانتظار عرض» أو «وصل عرض» — لا أزرار بعد القرار.
+          if (quote.canCancel)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (quote.isOffered)
+                    OutlinedButton(
+                      key: Key('my_quote_accept_${quote.id}'),
+                      onPressed: () => _decide(quote, 'accept'),
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                      child: const Text('قبول العرض'),
+                    ),
+                  if (quote.isOffered)
+                    OutlinedButton(
+                      key: Key('my_quote_decline_${quote.id}'),
+                      onPressed: () => _decide(quote, 'decline'),
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                      child: const Text('رفض العرض'),
+                    ),
+                  OutlinedButton(
+                    key: Key('my_quote_cancel_${quote.id}'),
+                    onPressed: () => _decide(quote, 'cancel'),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                    child: const Text('إلغاء الطلب'),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// سطور تفاصيل الطلب المشتركة بين بطاقتي «الوارد» و«المستلم» — الفارغ لا يُرسم.
+List<String> _quoteDetailLines(ProviderQuote quote) => [
+      if (quote.eventTitle != null) 'المناسبة: ${quote.eventTitle}',
+      if (quote.eventDate != null) 'تاريخ المناسبة: ${quote.eventDate}',
+      if (quote.wantedDate != null) 'التاريخ المرغوب: ${quote.wantedDate}',
+      if (quote.guestsCount != null) 'عدد المعازيم: ${quote.guestsCount}',
+      if (quote.note != null) 'ملاحظة: ${quote.note}',
+    ];
+
+/// تسمية حالة الطلب الخمس — نصوص العرض وحدها، والحكم على الانتقالات في الخادم.
+String _quoteStatusLabel(String status) {
+  switch (status) {
+    case 'awaiting_offer':
+      return 'بانتظار عرض المزوّد';
+    case 'offered':
+      return 'وصل عرض';
+    case 'accepted':
+      return 'مقبول';
+    case 'declined':
+      return 'مرفوض';
+    case 'cancelled':
+      return 'ملغى';
+    default:
+      return 'غير معروفة';
   }
 }
 
