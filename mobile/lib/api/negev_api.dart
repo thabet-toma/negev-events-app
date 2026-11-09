@@ -347,6 +347,18 @@ class NegevApi {
     return ServiceProviderDetail.fromJson(provider);
   }
 
+  /// رابط واتساب المزوّد — يبنيه الخادم وحده برسالته العربية، **ولا يعيد
+  /// الرقم**؛ الشاشة تفتح `url` كما وصل ولا تركّب `wa.me` بنفسها (تذكرة #184).
+  /// مزوّد بلا رقم يردّ 404 فيصل هنا استثناء برسالته العربية.
+  Future<String> providerWhatsapp(int id) async {
+    final data = await _client.get('/api/services/providers/$id/whatsapp');
+    final url = data['url'];
+    if (url is! String || url.isEmpty) {
+      throw const ApiException('لا يوجد رقم واتساب مسجَّل لهذا المزوّد');
+    }
+    return url;
+  }
+
   /// تقديم عرض مزوّد خدمة جديد (قيد المراجعة) — يتطلّب تسجيل دخول.
   Future<int> submitProviderOffer({
     required int categoryId,

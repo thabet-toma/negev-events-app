@@ -2,16 +2,34 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/api_client.dart';
 import '../main.dart';
 import '../models/service.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart';
 import '../widgets/auth_action_button.dart';
 
+/// أسماء أيام `hours` السبعة — الفهرس نفسه الذي يخزّنه الأدمن (0 = الأحد).
+const List<String> _providerDayNames = [
+  'الأحد',
+  'الاثنين',
+  'الثلاثاء',
+  'الأربعاء',
+  'الخميس',
+  'الجمعة',
+  'السبت',
+];
+
 /// صفحة مزوّد خدمة واحد — الوصف والصورة ظاهران فوراً، **والرقم لا يظهر نصّاً
 /// إطلاقاً**؛ يُكشف فقط عبر فعل تواصل صريح (زرّ «اتصال» يفتح تطبيق الهاتف
 /// مباشرة)، نفس نمط اتصال المضيف في `event_details_screen.dart`. لا نجوم
 /// ولا تقييمات — غياب مقصود (#25).
+///
+/// **وصارت غنية (#184):** الغلاف والشعار، وشارتا «موثّق»/«مميّز»، وجدول ساعات
+/// أسبوعي، ومعرض أعمال، وعروض سارية، ومنتجات، ومزوّدون مشابهون يفتح كلٌّ
+/// منهم صفحته. **كل قسم فارغ يُخفى**، وزرّ واتساب يستدعي
+/// `GET /api/services/providers/:id/whatsapp` ويفتح الرابط الذي يبنيه الخادم
+/// — لا يبني الشاشة رابطاً ولا تعرف صيغة الرقم الدولي.
 class ServiceProviderDetailsScreen extends StatefulWidget {
   const ServiceProviderDetailsScreen({
     super.key,
@@ -48,18 +66,33 @@ class _ServiceProviderDetailsScreenState
     }
   }
 
-  Future<void> _openWhatsApp(String phone, String providerName, String categoryName) async {
-    var clean = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    if (clean.startsWith('05')) {
-      clean = '972${clean.substring(1)}';
-    } else if (clean.startsWith('+')) {
-      clean = clean.substring(1);
+  /// رابط واتساب من الخادم — الرسالة والرقم الدولي هناك، والشاشة تفتح `url`.
+  Future<void> _openWhatsApp(int providerId) async {
+    try {
+      final url = await AppServices.of(context).api.providerWhatsapp(providerId);
+      if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
+        if (mounted) showMessage(context, 'تعذّر فتح تطبيق واتساب', isError: true);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      showMessage(
+        context,
+        error is ApiException ? error.message : 'تعذّر فتح تطبيق واتساب',
+        isError: true,
+      );
     }
-    final msg = Uri.encodeComponent('مرحباً $providerName، استفسار بخصوص خدمتك ($categoryName) عبر تطبيق أعراسنا:');
-    final url = Uri.parse('https://wa.me/$clean?text=$msg');
-    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      if (mounted) showMessage(context, 'تعذّر فتح تطبيق واتساب', isError: true);
-    }
+  }
+
+  /// مزوّد مشابه يُفتح فوق الصفحة الحالية — لا استبدال، فالرجوع يعود إليها.
+  Future<void> _openProvider(ServiceProvider candidate) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ServiceProviderDetailsScreen(
+          providerId: candidate.id,
+          initialName: candidate.name,
+        ),
+      ),
+    );
   }
 
   @override
@@ -74,14 +107,16 @@ class _ServiceProviderDetailsScreenState
         builder: (context, snapshot) {
           return AsyncView<ServiceProviderDetail>(
             snapshot: snapshot,
-            onRetry: () => setState(
-              () => _provider =
-                  AppServices.of(context).api.serviceProviderDetails(widget.providerId),
-            ),
+            onRetry: () => setState(() {
+              _provider = AppServices.of(context)
+                  .api
+                  .serviceProviderDetails(widget.providerId);
+            }),
             builder: (provider) => _ProviderBody(
               provider: provider,
               onCall: () => _call(provider.phone),
-              onWhatsApp: () => _openWhatsApp(provider.phone, provider.name, provider.categoryName),
+              onWhatsApp: () => _openWhatsApp(provider.id),
+              onOpenSimilar: _openProvider,
             ),
           );
         },
@@ -95,11 +130,13 @@ class _ProviderBody extends StatelessWidget {
     required this.provider,
     required this.onCall,
     required this.onWhatsApp,
+    required this.onOpenSimilar,
   });
 
   final ServiceProviderDetail provider;
   final VoidCallback onCall;
   final VoidCallback onWhatsApp;
+  final ValueChanged<ServiceProvider> onOpenSimilar;
 
   String _priceBadgeText() {
     switch (provider.priceType) {
@@ -117,48 +154,37 @@ class _ProviderBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasImage = provider.imageUrl != null && provider.imageUrl!.isNotEmpty;
-
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
-        if (hasImage)
-          CachedNetworkImage(
-            imageUrl: provider.imageUrl!,
-            height: 240,
-            width: double.infinity,
-            fit: BoxFit.cover,
-            placeholder: (_, _) => Container(
-              height: 240,
-              color: context.c.surfaceSunk,
-              child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-            ),
-            errorWidget: (_, _, _) => Container(
-              height: 240,
-              color: context.c.surfaceSunk,
-              child: Icon(Icons.image_not_supported_outlined, color: context.c.inkFaint, size: 38),
-            ),
-          )
-        else
-          Container(
-            height: 180,
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: RadialGradient(
-                colors: [Color(0xFFFFFDF8), Color(0xFFFBF1D9), Color(0xFFF3DFAD)],
-              ),
-            ),
-            child: Center(
-              child: provider.categoryIcon.isNotEmpty
-                  ? Text(provider.categoryIcon, style: const TextStyle(fontSize: 48))
-                  : Icon(Icons.handyman_outlined, size: 48, color: context.c.gold),
-            ),
-          ),
+        _ProviderHeader(provider: provider),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (provider.logoUrl != null) ...[
+                ClipOval(
+                  child: CachedNetworkImage(
+                    key: const Key('provider_logo'),
+                    imageUrl: provider.logoUrl!,
+                    width: 64,
+                    height: 64,
+                    fit: BoxFit.cover,
+                    errorWidget: (_, _, _) => Container(
+                      width: 64,
+                      height: 64,
+                      color: context.c.surfaceSunk,
+                      child: Icon(Icons.storefront_outlined, size: 22, color: context.c.inkFaint),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (provider.isVerified || provider.isFeatured) ...[
+                _ProviderBadges(provider: provider),
+                const SizedBox(height: 10),
+              ],
               Row(
                 children: [
                   Container(
@@ -319,6 +345,236 @@ class _ProviderBody extends StatelessWidget {
                 ),
               ],
 
+              // ساعات العمل (#184) — جدول أسبوعي، ويُخفى كاملاً بلا ساعات.
+              if (provider.hours.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _SectionTitle(title: 'ساعات العمل', icon: Icons.schedule_outlined),
+                const SizedBox(height: 8),
+                Column(
+                  key: const Key('provider_hours_section'),
+                  children: (List<ServiceProviderHours>.from(provider.hours)
+                        ..sort((left, right) => left.day.compareTo(right.day)))
+                      .map((hours) => Padding(
+                            key: Key('provider_hours_row_${hours.day}'),
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  hours.day >= 0 && hours.day < _providerDayNames.length
+                                      ? _providerDayNames[hours.day]
+                                      : '${hours.day}',
+                                  style: TextStyle(fontSize: 13.5, color: context.c.inkSoft),
+                                ),
+                                Text(
+                                  hours.closed ? 'مغلق' : '${hours.from} — ${hours.to}',
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: hours.closed ? context.c.inkFaint : context.c.ink,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ))
+                      .toList(),
+                ),
+              ],
+
+              // معرض الأعمال (#184): شبكة ثلاثية، وتعليق تحت الصورة إن وُجد.
+              if (provider.gallery.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _SectionTitle(title: 'معرض الأعمال', icon: Icons.photo_library_outlined),
+                const SizedBox(height: 8),
+                GridView.count(
+                  key: const Key('provider_gallery_section'),
+                  crossAxisCount: 3,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
+                  childAspectRatio: 0.95,
+                  children: provider.gallery
+                      .map((photo) => Column(
+                            key: Key('provider_gallery_photo_${photo.id}'),
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: CachedNetworkImage(
+                                    imageUrl: photo.imageUrl,
+                                    fit: BoxFit.cover,
+                                    errorWidget: (_, _, _) => Container(
+                                      color: context.c.surfaceSunk,
+                                      child: Icon(Icons.image_not_supported_outlined,
+                                          size: 22, color: context.c.inkFaint),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (photo.caption != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 3),
+                                  child: Text(
+                                    photo.caption!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+                                  ),
+                                ),
+                            ],
+                          ))
+                      .toList(),
+                ),
+              ],
+
+              // العروض السارية (#184) — الخادم لا يرسل المنتهي ولا المطفأ.
+              if (provider.offers.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _SectionTitle(title: 'عروض سارية', icon: Icons.local_offer_outlined),
+                const SizedBox(height: 8),
+                Column(
+                  key: const Key('provider_offers_section'),
+                  children: provider.offers
+                      .map((offer) => Container(
+                            key: Key('provider_offer_${offer.id}'),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(11),
+                            decoration: BoxDecoration(
+                              color: context.c.surfaceSunk,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: context.c.line),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  offer.title,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: context.c.ink,
+                                  ),
+                                ),
+                                if (offer.description != null) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    offer.description!,
+                                    style: TextStyle(fontSize: 12.5, color: context.c.inkSoft, height: 1.5),
+                                  ),
+                                ],
+                                const SizedBox(height: 5),
+                                Row(
+                                  children: [
+                                    if (offer.price != null) ...[
+                                      Icon(Icons.sell_outlined, size: 14, color: context.c.gold),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        '${offer.price} ₪',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                          color: context.c.gold,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                    ],
+                                    if (offer.endsAt != null) ...[
+                                      Icon(Icons.schedule, size: 13, color: context.c.inkFaint),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'ينتهي ${offer.endsAt}',
+                                        style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ))
+                      .toList(),
+                ),
+              ],
+
+              // المنتجات (#184) بسعر «تبدأ من».
+              if (provider.products.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                _SectionTitle(title: 'منتجاتنا', icon: Icons.inventory_2_outlined),
+                const SizedBox(height: 8),
+                Column(
+                  key: const Key('provider_products_section'),
+                  children: provider.products
+                      .map((product) => Padding(
+                            key: Key('provider_product_${product.id}'),
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (product.imageUrl != null)
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: CachedNetworkImage(
+                                      imageUrl: product.imageUrl!,
+                                      width: 54,
+                                      height: 54,
+                                      fit: BoxFit.cover,
+                                      errorWidget: (_, _, _) => Container(
+                                        width: 54,
+                                        height: 54,
+                                        color: context.c.surfaceSunk,
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  Container(
+                                    width: 54,
+                                    height: 54,
+                                    decoration: BoxDecoration(
+                                      color: context.c.surfaceSunk,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(Icons.inventory_2_outlined,
+                                        size: 22, color: context.c.inkFaint),
+                                  ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        product.name,
+                                        style: TextStyle(
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: context.c.ink,
+                                        ),
+                                      ),
+                                      if (product.description != null)
+                                        Text(
+                                          product.description!,
+                                          style: TextStyle(
+                                              fontSize: 12, color: context.c.inkSoft, height: 1.45),
+                                        ),
+                                      if (product.price != null)
+                                        Text(
+                                          'تبدأ من ${product.price} ₪',
+                                          style: TextStyle(
+                                            fontSize: 12.5,
+                                            fontWeight: FontWeight.bold,
+                                            color: context.c.gold,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ))
+                      .toList(),
+                ),
+              ],
+
               // Flexible Capacity Notice
               const SizedBox(height: 16),
               // نفس سبب `ClipRRect` أعلاه: حدود بألوان مختلفة مع زوايا مستديرة.
@@ -420,47 +676,263 @@ class _ProviderBody extends StatelessWidget {
                   style: TextStyle(fontSize: 13, color: context.c.inkFaint),
                 )
               else
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF25D366),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        elevation: 0,
-                      ),
-                      onPressed: onWhatsApp,
-                      icon: const Icon(Icons.chat, size: 18),
-                      label: const Text(
-                        'واتساب مباشر',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: context.c.sky,
-                        foregroundColor: context.c.onSky,
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        elevation: 0,
-                      ),
-                      onPressed: onCall,
-                      icon: const Icon(Icons.phone_outlined, size: 18),
-                      label: const Text(
-                        'اتصال هاتفي',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        key: const Key('provider_whatsapp_btn'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF25D366),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          elevation: 0,
+                        ),
+                        onPressed: onWhatsApp,
+                        icon: const Icon(Icons.chat, size: 18),
+                        label: const Text(
+                          'واتساب مباشر',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
                       ),
                     ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: context.c.sky,
+                          foregroundColor: context.c.onSky,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          elevation: 0,
+                        ),
+                        onPressed: onCall,
+                        icon: const Icon(Icons.phone_outlined, size: 18),
+                        label: const Text(
+                          'اتصال هاتفي',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+              // مزوّدون مشابهون (#184) — حتى ستة، والنقر يفتح صفحة المزوّد.
+              if (provider.similar.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                _SectionTitle(title: 'مزوّدون مشابهون', icon: Icons.people_outline),
+                const SizedBox(height: 8),
+                SizedBox(
+                  key: const Key('provider_similar_section'),
+                  height: 132,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: provider.similar.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final candidate = provider.similar[index];
+                      return InkWell(
+                        key: Key('provider_similar_${candidate.id}'),
+                        onTap: () => onOpenSimilar(candidate),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          width: 116,
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: context.c.line),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: candidate.imageUrl != null
+                                    ? ClipRRect(
+                                        borderRadius: BorderRadius.circular(7),
+                                        child: CachedNetworkImage(
+                                          imageUrl: candidate.imageUrl!,
+                                          fit: BoxFit.cover,
+                                          errorWidget: (_, _, _) => Container(
+                                            color: context.c.surfaceSunk,
+                                          ),
+                                        ),
+                                      )
+                                    : Container(
+                                        decoration: BoxDecoration(
+                                          color: context.c.surfaceSunk,
+                                          borderRadius: BorderRadius.circular(7),
+                                        ),
+                                        child: Center(
+                                          child: Text(
+                                            candidate.categoryIcon.isNotEmpty
+                                                ? candidate.categoryIcon
+                                                : '🛠️',
+                                            style: const TextStyle(fontSize: 22),
+                                          ),
+                                        ),
+                                      ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                candidate.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: context.c.ink,
+                                ),
+                              ),
+                              Text(
+                                candidate.towns.isNotEmpty
+                                    ? candidate.towns.take(2).join('، ')
+                                    : 'مناطق الخدمة غير محدَّدة',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 10, color: context.c.inkFaint),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                ],
-              ),
+                ),
+              ],
             ],
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// غلاف الصفحة (#184): الغلاف إن وُجد، وإلا صورة المزوّد، وإلا التدرّج وأيقونة
+/// الفئة. الشعار يُرسم في جسم الصفحة تحته (لا بموضع متراكب يغطّي ما بعده).
+class _ProviderHeader extends StatelessWidget {
+  const _ProviderHeader({required this.provider});
+
+  final ServiceProviderDetail provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final banner = provider.coverUrl ?? provider.imageUrl;
+
+    if (banner == null || banner.isEmpty) {
+      return Container(
+        height: 180,
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            colors: [Color(0xFFFFFDF8), Color(0xFFFBF1D9), Color(0xFFF3DFAD)],
+          ),
+        ),
+        child: Center(
+          child: provider.categoryIcon.isNotEmpty
+              ? Text(provider.categoryIcon, style: const TextStyle(fontSize: 48))
+              : Icon(Icons.handyman_outlined, size: 48, color: context.c.gold),
+        ),
+      );
+    }
+
+    return CachedNetworkImage(
+      key: const Key('provider_cover'),
+      imageUrl: banner,
+      height: 220,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      placeholder: (_, _) => Container(
+        height: 220,
+        color: context.c.surfaceSunk,
+        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      ),
+      errorWidget: (_, _, _) => Container(
+        height: 220,
+        color: context.c.surfaceSunk,
+        child: Icon(Icons.image_not_supported_outlined, color: context.c.inkFaint, size: 38),
+      ),
+    );
+  }
+}
+
+/// شارتا «موثّق» و«مميّز» — تظهران بما يرسله الخادم وحده.
+class _ProviderBadges extends StatelessWidget {
+  const _ProviderBadges({required this.provider});
+
+  final ServiceProviderDetail provider;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      key: const Key('provider_badges'),
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        if (provider.isVerified)
+          _badge(
+            context,
+            key: const Key('provider_badge_verified'),
+            label: 'موثّق',
+            icon: Icons.verified_outlined,
+            color: const Color(0xFF166534),
+            background: const Color(0x2216A34A),
+          ),
+        if (provider.isFeatured)
+          _badge(
+            context,
+            key: const Key('provider_badge_featured'),
+            label: 'مميّز',
+            icon: Icons.star_outline,
+            color: const Color(0xFF8A6109),
+            background: const Color(0x22B8860B),
+          ),
+      ],
+    );
+  }
+
+  Widget _badge(
+    BuildContext context, {
+    required Key key,
+    required String label,
+    required IconData icon,
+    required Color color,
+    required Color background,
+  }) {
+    return Container(
+      key: key,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(999)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// عنوان قسم داخل الصفحة — واحد لكل أقسامها (#184)، فلا ثلاثة أنماط عنوان.
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle({required this.title, required this.icon});
+
+  final String title;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 17, color: context.c.gold),
+        const SizedBox(width: 7),
+        Text(
+          title,
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: context.c.ink),
         ),
       ],
     );

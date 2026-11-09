@@ -1041,6 +1041,110 @@ body {
 }
 
 /* ============================================================
+   صفحة المزوّد الغنية (#184): محرّر الساعات والمعرض والعروض والمنتجات
+   ============================================================ */
+.prov-hours-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.prov-hours-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: 8px;
+  background: var(--surface-sunk);
+}
+
+.prov-hours-day {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-main);
+  min-width: 64px;
+}
+
+.prov-hours-row input[type="time"] {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  background: var(--admin-card);
+  color: var(--text-main);
+  border: 1px solid var(--admin-card-border);
+  border-radius: 6px;
+}
+
+.prov-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.prov-gallery-item {
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: 8px;
+  background: var(--surface-sunk);
+}
+
+.prov-gallery-item img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+}
+
+.prov-gallery-item figcaption {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  margin: 4px 0 6px;
+  min-height: 14px;
+}
+
+.prov-collection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--admin-card-border);
+  border-radius: 8px;
+  background: var(--surface-sunk);
+}
+
+.prov-collection-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.prov-collection-meta {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+.prov-collection-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.prov-offers-list,
+.prov-products-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ============================================================
    Activity log (التتبّع والتحليلات — سجل النشاط)
    ============================================================ */
 .activity-filter-select {

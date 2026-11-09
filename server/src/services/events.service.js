@@ -2119,6 +2119,10 @@ function classifyAmendment(changedColumns) {
  * and only when no row anywhere still holds that URL — the edit forms accept
  * a typed URL, so an admin may have pasted it onto another event. Best-effort,
  * like every other destroy: called after the row write has succeeded.
+ *
+ * وصفحة المزوّد (تذكرة #184) أضافت مواضع صور أخرى للمزوّد نفسه: الشعار
+ * والغلاف وصور المعرض وصورة المنتج — وهي في القائمة نفسها، فلا تُحذف صورةً
+ * ما دام صفٌّ آخر يحملها.
  */
 async function releaseReplacedImage(oldUrl, newUrl) {
   if (!oldUrl || oldUrl === newUrl) return;
@@ -2126,11 +2130,13 @@ async function releaseReplacedImage(oldUrl, newUrl) {
   if (!publicId) return;
   const inUse = await db.queryOne(
     `SELECT 1 AS used FROM events WHERE poster_url = ? OR artist_image_url = ?
-     UNION ALL SELECT 1 FROM service_providers WHERE image_url = ?
+     UNION ALL SELECT 1 FROM service_providers WHERE image_url = ? OR logo_url = ? OR cover_url = ?
      UNION ALL SELECT 1 FROM occasion_types WHERE default_poster_url = ?
      UNION ALL SELECT 1 FROM event_cards WHERE image_url = ?
+     UNION ALL SELECT 1 FROM service_provider_photos WHERE image_url = ?
+     UNION ALL SELECT 1 FROM service_provider_products WHERE image_url = ?
      LIMIT 1`,
-    [oldUrl, oldUrl, oldUrl, oldUrl, oldUrl]
+    [oldUrl, oldUrl, oldUrl, oldUrl, oldUrl, oldUrl, oldUrl, oldUrl, oldUrl]
   );
   if (inUse) return;
   logger.info('cloudinary.release', { publicId });

@@ -824,6 +824,14 @@ CREATE TABLE IF NOT EXISTS service_providers (
   status              ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved',
   rejection_reason    VARCHAR(255) DEFAULT NULL,
   is_active           TINYINT(1)   NOT NULL DEFAULT 1,
+  -- صفحة المزوّد الغنية (تذكرة #184): صورتان، وساعات العمل، وشارتان.
+  -- `hours` مصفوفة 0..6 كما يكتبها الأدمن (`{ day, closed?, from?, to? }`)،
+  -- والتحقّق الصارم في طبقة المسار وحده — لا تخمين في الخدمة.
+  logo_url            VARCHAR(500) DEFAULT NULL,
+  cover_url           VARCHAR(500) DEFAULT NULL,
+  hours               JSON         DEFAULT NULL,
+  is_verified         TINYINT(1)   NOT NULL DEFAULT 0,
+  is_featured         TINYINT(1)   NOT NULL DEFAULT 0,
   consent_at       TIMESTAMP    NOT NULL,
   consent_by       INT UNSIGNED DEFAULT NULL,
   consent_channel  VARCHAR(20)  NOT NULL,
@@ -848,6 +856,54 @@ CREATE TABLE IF NOT EXISTS service_provider_towns (
   PRIMARY KEY (id),
   UNIQUE KEY uq_service_provider_towns (provider_id, town),
   CONSTRAINT fk_spt_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- معرض المزوّد (تذكرة #184): صور أعماله، لكلٍّ تعليق اختياري وموضع في الشبكة.
+CREATE TABLE IF NOT EXISTS service_provider_photos (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  image_url   VARCHAR(500) NOT NULL,
+  caption     VARCHAR(200) DEFAULT NULL,
+  position    INT          NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_service_provider_photos_provider (provider_id),
+  CONSTRAINT fk_spp_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- عروض المزوّد (تذكرة #184): تخفيض بمدّة. المنتهي والمطفأ لا يخرج للعامة —
+-- الشرط في استعلام القراءة العامة في `services.service.js` وحده.
+CREATE TABLE IF NOT EXISTS service_provider_offers (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  title       VARCHAR(160) NOT NULL,
+  description VARCHAR(500) DEFAULT NULL,
+  price       DECIMAL(10,2) DEFAULT NULL,
+  ends_at     DATETIME     DEFAULT NULL,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_service_provider_offers_provider (provider_id),
+  CONSTRAINT fk_spo_provider FOREIGN KEY (provider_id)
+    REFERENCES service_providers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- منتجات المزوّد (تذكرة #184): سعر «تبدأ من». و`image_url` نسبي أو Cloudinary
+-- ويخرج مطلقاً عبر `withAbsoluteMedia` عند القراءة.
+CREATE TABLE IF NOT EXISTS service_provider_products (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  provider_id INT UNSIGNED NOT NULL,
+  name        VARCHAR(160) NOT NULL,
+  description VARCHAR(500) DEFAULT NULL,
+  price       DECIMAL(10,2) DEFAULT NULL,
+  image_url   VARCHAR(500) DEFAULT NULL,
+  position    INT          NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_service_provider_products_provider (provider_id),
+  CONSTRAINT fk_sppr_provider FOREIGN KEY (provider_id)
     REFERENCES service_providers(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

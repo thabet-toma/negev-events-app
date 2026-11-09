@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const fsp = require('fs/promises');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
@@ -61,6 +62,150 @@ function parseProviderAttributes(raw) {
   }
 }
 
+// ======================================================================
+// صفحة المزوّد الغنية (تذكرة #184) — تحقّق صارم هنا، ولا تخمين في الخدمة.
+// ======================================================================
+
+const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * ساعات العمل: مصفوفة 0..6 من `{ day, closed?, from?, to? }`. `day` رقم صحيح
+ * بين 0 و6 بلا تكرار، و`from`/`to` نصّ `HH:MM` لكل يوم مفتوح. قيمة فراغ
+ * (`''` أو `null` أو `[]`) تمسح الساعات كلها. أي شكل آخر 400 برسالة عربية —
+ * لا تصحيح ولا إكمال، لأن الشكل المخزَّن هو ما تعرضه الواجهات حرفياً.
+ */
+function parseHours(raw) {
+  if (raw === null || raw === '') return null;
+
+  let list = raw;
+  if (typeof raw === 'string') {
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      throw ApiError.badRequest('صيغة ساعات العمل غير صالحة');
+    }
+  }
+  if (!Array.isArray(list) || list.length > 7) {
+    throw ApiError.badRequest('ساعات العمل مصفوفة من سبعة أيام على الأكثر');
+  }
+
+  const seen = new Set();
+  const days = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw ApiError.badRequest('صيغة ساعات العمل غير صالحة');
+    }
+    const day = Number(item.day);
+    if (!Number.isInteger(day) || day < 0 || day > 6) {
+      throw ApiError.badRequest('يوم ساعات العمل يجب أن يكون رقماً بين 0 و6');
+    }
+    if (seen.has(day)) throw ApiError.badRequest('يوم مكرّر في ساعات العمل');
+    seen.add(day);
+
+    const closed = item.closed === true || item.closed === 'true' || item.closed === 1 || item.closed === '1';
+    if (closed) {
+      days.push({ day, closed: true });
+      continue;
+    }
+    const from = typeof item.from === 'string' ? item.from.trim() : '';
+    const to = typeof item.to === 'string' ? item.to.trim() : '';
+    if (!TIME_OF_DAY.test(from) || !TIME_OF_DAY.test(to)) {
+      throw ApiError.badRequest('وقت ساعات العمل يجب أن يكون بصيغة HH:MM');
+    }
+    days.push({ day, closed: false, from, to });
+  }
+
+  return days.length ? days.sort((left, right) => left.day - right.day) : null;
+}
+
+/**
+ * تاريخ انتهاء العرض: `YYYY-MM-DD` أو `YYYY-MM-DD HH:MM` (أو بصيغة
+ * `datetime-local`). تاريخ بلا وقت يعني نهاية يومه — لا يُترك NULL بالخطأ.
+ * والفراغ يمسح التاريخ.
+ */
+function parseOfferEndsAt(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+  const text = String(raw).trim().replace('T', ' ');
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})(?:[ ](\d{2}:\d{2}))?$/);
+  if (!match) throw ApiError.badRequest('تاريخ انتهاء العرض غير صالح');
+  return `${match[1]} ${match[2] || '23:59'}:00`;
+}
+
+function parseOptionalPrice(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+  return parseAmount(raw);
+}
+
+/** حقول العرض: `title` إلزامي في الإنشاء، و`PATCH` يمسّ ما أُرسل وحده. */
+function parseOfferFields(body, { partial }) {
+  const payload = {};
+  if (body.title !== undefined) {
+    const title = cleanString(body.title, 160);
+    if (!title) throw ApiError.badRequest('عنوان العرض مطلوب');
+    payload.title = title;
+  } else if (!partial) {
+    throw ApiError.badRequest('عنوان العرض مطلوب');
+  }
+  if (body.description !== undefined) payload.description = cleanString(body.description, 500);
+  if (body.price !== undefined) payload.price = parseOptionalPrice(body.price);
+  if (body.ends_at !== undefined) payload.ends_at = parseOfferEndsAt(body.ends_at);
+  if (body.is_active !== undefined) {
+    payload.is_active = body.is_active === true || body.is_active === 'true' || body.is_active === 1 || body.is_active === '1';
+  }
+  return payload;
+}
+
+/** حقول المنتج: `name` إلزامي في الإنشاء. */
+function parseProductFields(body, { partial }) {
+  const payload = {};
+  if (body.name !== undefined) {
+    const name = cleanString(body.name, 160);
+    if (!name) throw ApiError.badRequest('اسم المنتج مطلوب');
+    payload.name = name;
+  } else if (!partial) {
+    throw ApiError.badRequest('اسم المنتج مطلوب');
+  }
+  if (body.description !== undefined) payload.description = cleanString(body.description, 500);
+  if (body.price !== undefined) payload.price = parseOptionalPrice(body.price);
+  if (body.image_url !== undefined) payload.image_url = cleanString(body.image_url, 500);
+  if (body.position !== undefined) {
+    const position = Number.parseInt(body.position, 10);
+    payload.position = Number.isInteger(position) ? position : 0;
+  }
+  return payload;
+}
+
+/** حقل ملف واحد من طلب `serviceMedia` (يأتي `fields` لا `single`). */
+function uploadedServiceFile(req, field) {
+  return (req.files && req.files[field] && req.files[field][0]) || (field === 'image' ? req.file : null) || null;
+}
+
+/**
+ * كل ملفات الطلب التي كتبها multer. **تُحذف في `finally`** فور انتهاء الطلب —
+ * ولو رُفض بعد التحقّق أو بعد فحص النطاق — إلا ما صار هو رابط الصفّ نفسه
+ * (`/uploads/…` حين تغيب مفاتيح Cloudinary أو يفشل رفعها).
+ */
+function serviceUploads(req) {
+  return ['image', 'logo', 'cover', 'photo']
+    .map(field => uploadedServiceFile(req, field))
+    .filter(Boolean);
+}
+
+/** يرفع الملف إلى Cloudinary أو يحفظه محلياً، ويسجّل ما بقي منه رابطَ الصفّ. */
+async function storeServiceImage(file, kept) {
+  const url = await cloudinary.storeUploadedImage(file, 'services');
+  if (url === `/uploads/${file.filename}`) kept.add(file.filename);
+  return url;
+}
+
+async function discardServiceUploads(files, kept) {
+  await Promise.all(
+    files
+      .filter(file => !kept.has(file.filename))
+      .map(file => fsp.unlink(file.path).catch(() => {}))
+  );
+}
+
 // --- Public directory (no auth — story 18) ----------------------------
 
 router.get('/services/categories', asyncHandler(async (req, res) => {
@@ -89,6 +234,16 @@ router.get('/services/providers', optionalAuthenticate, asyncHandler(async (req,
 router.get('/services/providers/:id', asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
   res.json({ success: true, provider: await services.getPublicProviderById(id) });
+}));
+
+/**
+ * رابط واتساب المزوّد (تذكرة #184): عامّ كمسار التفصيل نفسه. الرقم لا يخرج في
+ * أي مفتاح من الاستجابة — يظهر داخل `url` وحده، والرسالة العربية تُبنى في
+ * الخدمة لا في العميل. بلا رقم أو لمزوّد غير معتمد/غير موجود ← 404.
+ */
+router.get('/services/providers/:id/whatsapp', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  res.json({ success: true, url: await services.publicProviderWhatsapp(id) });
 }));
 
 // --- User submissions (authenticated) --------------------------------
@@ -221,53 +376,98 @@ router.post('/admin/service-providers', serviceMedia, asyncHandler(async (req, r
   res.status(201).json({ success: true, providerId, message: 'تمت إضافة مزوّد الخدمة بنجاح' });
 }));
 
+/**
+ * تعديل مزوّد. يقبل معه — تذكرة #184 — شعاراً وغلافاً (`logo`/`cover`) وساعات
+ * العمل وشارتَي «موثّق»/«مميّز». **الملفات داخل `try/finally`**: أي رفض بعد
+ * أن كتب multer ملفاً (403 للأعلام، 400 للساعات، 404 للنطاق) يحذف المؤقّت،
+ * وما بقي منه هو رابط الصفّ وحده لا يُحذف. وتعذّر Cloudinary لا يُسقط الطلب —
+ * يعود الملف إلى `/uploads/` كما كان.
+ */
 router.patch('/admin/service-providers/:id', serviceMedia, asyncHandler(async (req, res) => {
   const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
-  // Confirms the provider exists AND is in scope before writing anything —
-  // out-of-scope is a 404, never a 403 (a 403 would confirm the row exists
-  // to an admin who cannot see it).
-  const existing = await services.getProviderForAdmin(req.user, id);
+  const uploads = serviceUploads(req);
+  const kept = new Set();
 
-  const body = req.body || {};
-  const payload = {};
+  try {
+    // Confirms the provider exists AND is in scope before writing anything —
+    // out-of-scope is a 404, never a 403 (a 403 would confirm the row exists
+    // to an admin who cannot see it).
+    const existing = await services.getProviderForAdmin(req.user, id);
 
-  if (body.category_id !== undefined) payload.category_id = parseId(body.category_id, 'الفئة');
-  if (body.name !== undefined) {
-    const name = cleanString(body.name, 150);
-    if (!name) throw ApiError.badRequest('اسم مزوّد الخدمة مطلوب');
-    payload.name = name;
+    const body = req.body || {};
+    const payload = {};
+
+    if (body.category_id !== undefined) payload.category_id = parseId(body.category_id, 'الفئة');
+    if (body.name !== undefined) {
+      const name = cleanString(body.name, 150);
+      if (!name) throw ApiError.badRequest('اسم مزوّد الخدمة مطلوب');
+      payload.name = name;
+    }
+    // An empty string clears the number; an absent key leaves it untouched.
+    if (body.phone !== undefined) payload.phone = parseOptionalPhone(body.phone);
+    if (body.description !== undefined) payload.description = cleanString(body.description, 2000);
+
+    const imageFile = uploadedServiceFile(req, 'image');
+    if (imageFile) {
+      payload.image_url = `/uploads/${imageFile.filename}`;
+    } else if (body.image_url !== undefined) {
+      payload.image_url = cleanString(body.image_url, 500);
+    }
+
+    if (body.price !== undefined) {
+      payload.price = (body.price === null || String(body.price).trim() === '') ? null : parseAmount(body.price);
+    }
+    if (body.price_type !== undefined) payload.price_type = parsePriceType(body.price_type);
+    if (body.price_estimate_desc !== undefined) payload.price_estimate_desc = cleanString(body.price_estimate_desc, 255);
+    if (body.attributes !== undefined) payload.attributes = parseProviderAttributes(body.attributes);
+    if (body.is_active !== undefined) {
+      payload.is_active = body.is_active === 'true' || body.is_active === true || body.is_active === 1;
+    }
+
+    if (body.hours !== undefined) payload.hours = parseHours(body.hours);
+
+    // الشارتان صلاحية لا نطاق: وجود أيٍّ منهما من أدمن غير سوبر يُرفض 403 في
+    // الخدمة (`updateProvider`) — لا هنا — فلا يمرّ الحكم عبر هذا الباب وحده.
+    if (body.is_verified !== undefined) {
+      payload.is_verified = body.is_verified === 'true' || body.is_verified === true || body.is_verified === 1 || body.is_verified === '1';
+    }
+    if (body.is_featured !== undefined) {
+      payload.is_featured = body.is_featured === 'true' || body.is_featured === true || body.is_featured === 1 || body.is_featured === '1';
+    }
+
+    if (body.towns !== undefined) {
+      const towns = parseTowns(body.towns);
+      await services.assertTownsWithinScope(req.user, towns);
+      payload.towns = towns;
+    }
+
+    // قبل أي رفع: الطلب المحكوم عليه بالرفض لا يُنتج ملفاً على Cloudinary ولا
+    // في `/uploads/`. والصورة تُرفع بعده فقط، والحكم نفسه يُعاد في الخدمة.
+    services.assertProviderFlagsAllowed(req.user, payload);
+
+    const logoFile = uploadedServiceFile(req, 'logo');
+    if (logoFile) payload.logo_url = await storeServiceImage(logoFile, kept);
+    else if (body.logo_url !== undefined) payload.logo_url = cleanString(body.logo_url, 500);
+
+    const coverFile = uploadedServiceFile(req, 'cover');
+    if (coverFile) payload.cover_url = await storeServiceImage(coverFile, kept);
+    else if (body.cover_url !== undefined) payload.cover_url = cleanString(body.cover_url, 500);
+
+    if (imageFile) payload.image_url = await storeServiceImage(imageFile, kept);
+
+    await services.updateProvider(id, payload, req.user);
+    if (payload.image_url !== undefined) await events.releaseReplacedImage(existing.image_url, payload.image_url);
+    if (payload.logo_url !== undefined) await events.releaseReplacedImage(existing.logo_url, payload.logo_url);
+    if (payload.cover_url !== undefined) await events.releaseReplacedImage(existing.cover_url, payload.cover_url);
+
+    res.json({
+      success: true,
+      provider: await services.getProviderForAdmin(req.user, id),
+      message: 'تم تحديث مزوّد الخدمة بنجاح'
+    });
+  } finally {
+    await discardServiceUploads(uploads, kept);
   }
-  // An empty string clears the number; an absent key leaves it untouched.
-  if (body.phone !== undefined) payload.phone = parseOptionalPhone(body.phone);
-  if (body.description !== undefined) payload.description = cleanString(body.description, 2000);
-
-  const imageFile = req.files?.image?.[0] || req.file;
-  if (imageFile) {
-    payload.image_url = `/uploads/${imageFile.filename}`;
-  } else if (body.image_url !== undefined) {
-    payload.image_url = cleanString(body.image_url, 500);
-  }
-
-  if (body.price !== undefined) {
-    payload.price = (body.price === null || String(body.price).trim() === '') ? null : parseAmount(body.price);
-  }
-  if (body.price_type !== undefined) payload.price_type = parsePriceType(body.price_type);
-  if (body.price_estimate_desc !== undefined) payload.price_estimate_desc = cleanString(body.price_estimate_desc, 255);
-  if (body.attributes !== undefined) payload.attributes = parseProviderAttributes(body.attributes);
-  if (body.is_active !== undefined) {
-    payload.is_active = body.is_active === 'true' || body.is_active === true || body.is_active === 1;
-  }
-
-  if (body.towns !== undefined) {
-    const towns = parseTowns(body.towns);
-    await services.assertTownsWithinScope(req.user, towns);
-    payload.towns = towns;
-  }
-
-  if (imageFile) payload.image_url = await cloudinary.storeUploadedImage(imageFile, 'services');
-  await services.updateProvider(id, payload);
-  if (payload.image_url !== undefined) await events.releaseReplacedImage(existing.image_url, payload.image_url);
-  res.json({ success: true, provider: await services.getProviderForAdmin(req.user, id), message: 'تم تحديث مزوّد الخدمة بنجاح' });
 }));
 
 router.patch('/admin/service-providers/:id/status', asyncHandler(async (req, res) => {
@@ -286,6 +486,129 @@ router.delete('/admin/service-providers/:id', asyncHandler(async (req, res) => {
   await services.getProviderForAdmin(req.user, id);
   await services.deleteProvider(id);
   res.json({ success: true, message: 'تم حذف مزوّد الخدمة بنجاح' });
+}));
+
+// --- معرض المزوّد وعروضه ومنتجاته (تذكرة #184) -----------------------
+// كل مسار هنا يبدأ بـ`getProviderForAdmin`: أدمن خارج بلدات المزوّد يُردّ 404
+// على كل مسار إداري جديد (وليس 403، فلا يتأكّد وجود صفّ لا يراه)، والحكم
+// داخل الخدمة لا في الراوتر. والملفات تخرج عبر `withAbsoluteMedia` من
+// الخدمة نفسها.
+
+router.post('/admin/service-providers/:id/photos', serviceMedia, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const uploads = serviceUploads(req);
+  const kept = new Set();
+
+  try {
+    await services.getProviderForAdmin(req.user, id);
+
+    // صورة واحدة في الطلب — `photo` هو الحقل المقصود، و`image` مقبول للتوافق
+    // مع ما يرسله العميل القديم (حقل الرفع الوحيد في `serviceMedia` قبله).
+    const file = uploadedServiceFile(req, 'photo') || uploadedServiceFile(req, 'image');
+    if (!file) throw ApiError.badRequest('اختر صورة لإضافتها إلى المعرض');
+
+    const caption = cleanString((req.body || {}).caption, 200);
+    const imageUrl = await storeServiceImage(file, kept);
+    const photo = await services.addProviderPhoto(id, { image_url: imageUrl, caption });
+
+    res.status(201).json({
+      success: true,
+      photo,
+      provider: await services.getProviderForAdmin(req.user, id),
+      message: 'تمت إضافة الصورة إلى المعرض'
+    });
+  } finally {
+    await discardServiceUploads(uploads, kept);
+  }
+}));
+
+router.delete('/admin/service-providers/:id/photos/:photoId', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const photoId = parseId(req.params.photoId, 'معرّف الصورة');
+  await services.getProviderForAdmin(req.user, id);
+
+  const deleted = await services.deleteProviderPhoto(id, photoId);
+  await events.releaseReplacedImage(deleted.image_url, null);
+  res.json({ success: true, message: 'تم حذف الصورة من المعرض' });
+}));
+
+router.post('/admin/service-providers/:id/offers', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  await services.getProviderForAdmin(req.user, id);
+
+  const payload = parseOfferFields(req.body || {}, { partial: false });
+  const offerId = await services.createProviderOffer(id, payload);
+
+  res.status(201).json({
+    success: true,
+    offerId,
+    provider: await services.getProviderForAdmin(req.user, id),
+    message: 'تمت إضافة العرض بنجاح'
+  });
+}));
+
+router.patch('/admin/service-providers/:id/offers/:offerId', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const offerId = parseId(req.params.offerId, 'معرّف العرض');
+  await services.getProviderForAdmin(req.user, id);
+
+  const payload = parseOfferFields(req.body || {}, { partial: true });
+  await services.updateProviderOffer(id, offerId, payload);
+
+  res.json({
+    success: true,
+    provider: await services.getProviderForAdmin(req.user, id),
+    message: 'تم تحديث العرض بنجاح'
+  });
+}));
+
+router.delete('/admin/service-providers/:id/offers/:offerId', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const offerId = parseId(req.params.offerId, 'معرّف العرض');
+  await services.getProviderForAdmin(req.user, id);
+
+  await services.deleteProviderOffer(id, offerId);
+  res.json({ success: true, message: 'تم حذف العرض بنجاح' });
+}));
+
+router.post('/admin/service-providers/:id/products', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  await services.getProviderForAdmin(req.user, id);
+
+  const payload = parseProductFields(req.body || {}, { partial: false });
+  const productId = await services.createProviderProduct(id, payload);
+
+  res.status(201).json({
+    success: true,
+    productId,
+    provider: await services.getProviderForAdmin(req.user, id),
+    message: 'تمت إضافة المنتج بنجاح'
+  });
+}));
+
+router.patch('/admin/service-providers/:id/products/:productId', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const productId = parseId(req.params.productId, 'معرّف المنتج');
+  await services.getProviderForAdmin(req.user, id);
+
+  const payload = parseProductFields(req.body || {}, { partial: true });
+  await services.updateProviderProduct(id, productId, payload);
+
+  res.json({
+    success: true,
+    provider: await services.getProviderForAdmin(req.user, id),
+    message: 'تم تحديث المنتج بنجاح'
+  });
+}));
+
+router.delete('/admin/service-providers/:id/products/:productId', asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const productId = parseId(req.params.productId, 'معرّف المنتج');
+  await services.getProviderForAdmin(req.user, id);
+
+  const deleted = await services.deleteProviderProduct(id, productId);
+  if (deleted && deleted.image_url) await events.releaseReplacedImage(deleted.image_url, null);
+  res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
 }));
 
 // --- Super-admin: service categories (story 34) ------------------------

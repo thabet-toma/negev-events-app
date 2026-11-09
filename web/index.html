@@ -1966,13 +1966,48 @@
         </div>
         <button class="close-modal-btn" onclick="closeProviderModal()"><i class="fa-solid fa-xmark"></i></button>
       </div>
+      <!-- الغلاف والشعار (#184): كلٌّ منهما يظهر حين يسجّله الأدمن وحده -->
+      <div id="providerModalCoverWrap" class="provider-cover-wrap" hidden>
+        <img id="providerModalCover" class="provider-cover-img" alt="">
+      </div>
+      <img id="providerModalLogo" class="provider-modal-logo" alt="" hidden>
+      <div id="providerModalBadges" class="provider-badges" hidden></div>
       <img id="providerModalImage" class="provider-modal-img" alt="" hidden>
       <div id="providerModalPackage" class="service-package-banner" style="display:none; margin:12px 0;"></div>
       <div id="providerModalSpecs" class="service-specs-grid" style="display:none; margin-bottom:14px;"></div>
       <p id="providerModalDescription" class="provider-modal-desc"></p>
       <p id="providerModalTowns" class="provider-modal-towns"></p>
+
+      <!-- كل قسم يُخفى فارغاً (#184) — لا عنوان لقسم بلا محتوى -->
+      <section id="providerHoursSection" class="provider-section" hidden>
+        <h4 class="provider-section-title"><i class="fa-regular fa-clock"></i> ساعات العمل</h4>
+        <table class="provider-hours-table">
+          <tbody id="providerHoursRows"></tbody>
+        </table>
+      </section>
+
+      <section id="providerGallerySection" class="provider-section" hidden>
+        <h4 class="provider-section-title"><i class="fa-regular fa-images"></i> معرض الأعمال</h4>
+        <div id="providerGalleryGrid" class="provider-gallery"></div>
+      </section>
+
+      <section id="providerOffersSection" class="provider-section" hidden>
+        <h4 class="provider-section-title"><i class="fa-solid fa-percent"></i> عروض سارية</h4>
+        <div id="providerOffersList" class="provider-offers"></div>
+      </section>
+
+      <section id="providerProductsSection" class="provider-section" hidden>
+        <h4 class="provider-section-title"><i class="fa-solid fa-box-open"></i> منتجات وأسعار تبدأ من</h4>
+        <div id="providerProductsList" class="provider-products"></div>
+      </section>
+
       <!-- الرقم لا يظهر إلا بعد ضغط هذا الزرّ — لا رقم ولا رابط تواصل مقدَّماً -->
       <div id="providerContactArea"></div>
+
+      <section id="providerSimilarSection" class="provider-section" hidden>
+        <h4 class="provider-section-title"><i class="fa-solid fa-user-group"></i> مزوّدون مشابهون</h4>
+        <div id="providerSimilarGrid" class="provider-similar"></div>
+      </section>
     </div>
   </div>
 

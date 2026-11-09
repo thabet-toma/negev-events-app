@@ -22,6 +22,10 @@ let adminPhotoReportsStatus = 'open';
 let allServiceProviders = [];
 let allPublicCategories = [];
 let editingProviderId = null;
+// صفحة المزوّد الغنية (#184): المزوّد المعروض في نموذج التعديل الآن، ومجموعاته
+// الثلاث كما وصلت من الخادم — تُعاد من كل استجابة تحرير، فلا نسخة محلية تُدار.
+let currentProviderPageId = null;
+let currentProviderCollections = { gallery: [], offers: [], products: [] };
 let allVillages = [];
 let editingVillageId = null;
 // محافظة القرى المعروضة الآن (تذكرة #128) — القائمة تعرض قرى محافظة واحدة فقط.
@@ -5901,6 +5905,28 @@ function openProviderForm(id) {
 
   renderProviderTownsPicker(scopedTowns, provider ? provider.towns : []);
 
+  // صفحة المزوّد الغنية (#184): الحقول التي تحتاج صفّاً قائماً تُفتح للتعديل
+  // وحده، والشارتان لسوبر أدمن وحده — واللوحة تعرف الدور من `currentAdminRole`.
+  currentProviderPageId = provider ? provider.id : null;
+  const pageFieldsReady = Boolean(provider);
+  const hint = document.getElementById('provPageFieldsHint');
+  if (hint) hint.style.display = pageFieldsReady ? 'none' : 'block';
+  ['provLogoFile', 'provCoverFile'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.disabled = !pageFieldsReady;
+  });
+  const flagsWrapper = document.getElementById('provFlagsWrapper');
+  if (flagsWrapper) flagsWrapper.style.display = pageFieldsReady && isSuperAdminRole() ? 'flex' : 'none';
+  const collectionsPanel = document.getElementById('providerCollectionsPanel');
+  if (collectionsPanel) collectionsPanel.style.display = pageFieldsReady ? 'block' : 'none';
+
+  renderProviderHoursEditor(provider ? provider.hours : null);
+  renderProviderPagePreviews(provider);
+  resetProviderOfferForm();
+  resetProviderProductForm();
+  renderProviderCollections(provider || null);
+  if (pageFieldsReady) refreshProviderCollections();
+
   wrapper.style.display = 'block';
   wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -5925,6 +5951,364 @@ function clearAdminProviderImage() {
   if (wrapper) wrapper.style.display = 'none';
   const preview = document.getElementById('provImagePreview');
   if (preview) preview.src = '';
+}
+
+// ======================================================================
+// صفحة المزوّد الغنية في اللوحة (تذكرة #184)
+//
+// الشعار والغلاف والساعات والمعرض والعروض والمنتجات. كل النداءات عبر
+// `adminFetch`، وكلها على المزوّد المعروض الآن (`currentProviderPageId`) —
+// وكل استجابة تحرير تحمل المزوّد كاملاً فتأتي المجموعات منها، لا من نسخة
+// محلية تُدار بالتوازي. والشارتان «موثّق»/«مميّز» لا تظهران إلا لسوبر أدمن.
+// ======================================================================
+
+const PROVIDER_HOURS_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+/** محرّر الساعات: سبعة صفوف ثابتة، لكل يوم «مغلق» ووقتان — بلا إضافة أو حذف يوم. */
+function renderProviderHoursEditor(hours) {
+  const container = document.getElementById('provHoursRows');
+  if (!container) return;
+
+  const byDay = {};
+  (Array.isArray(hours) ? hours : []).forEach(row => {
+    const day = Number(row && row.day);
+    if (Number.isInteger(day) && day >= 0 && day <= 6) byDay[day] = row;
+  });
+
+  container.innerHTML = PROVIDER_HOURS_DAYS.map((name, day) => {
+    const row = byDay[day] || {};
+    const closed = row.closed === true || !row.from || !row.to;
+    return `
+      <div class="prov-hours-row" data-day="${day}">
+        <span class="prov-hours-day">${escapeHtml(name)}</span>
+        <label class="ot-check"><input type="checkbox" class="prov-hours-closed" ${closed ? 'checked' : ''} onchange="syncProviderHoursRow(this)"> مغلق</label>
+        <input type="time" class="prov-hours-from" value="${escapeHtml(row.from || '')}" title="من" ${closed ? 'disabled' : ''}>
+        <input type="time" class="prov-hours-to" value="${escapeHtml(row.to || '')}" title="إلى" ${closed ? 'disabled' : ''}>
+      </div>
+    `;
+  }).join('');
+}
+
+/** «مغلق» يعطّل وقتي اليوم ولا يمسحهما — إعادة الفتح تُعيد ما كُتب. */
+function syncProviderHoursRow(checkbox) {
+  const row = checkbox.closest('.prov-hours-row');
+  if (!row) return;
+  row.querySelectorAll('input[type="time"]').forEach(input => { input.disabled = checkbox.checked; });
+}
+
+/**
+ * أسبوع العمل كما سيُرسل: `[{ day, closed, from, to }]`، أو `null` حين تكون
+ * الأيام السبعة مغلقة (لا ساعات مسجّلة أصلاً). ويوم مفتوح بلا وقتيه يُرفض
+ * هنا برسالة عربية قبل النداء — والخادم يرفضه 400 أيضاً.
+ */
+function collectProviderHours() {
+  const rows = Array.from(document.querySelectorAll('#provHoursRows .prov-hours-row'));
+  if (!rows.length) return null;
+
+  const days = rows.map(row => {
+    const day = Number(row.dataset.day);
+    const closed = row.querySelector('.prov-hours-closed').checked;
+    if (closed) return { day, closed: true };
+    const from = row.querySelector('.prov-hours-from').value;
+    const to = row.querySelector('.prov-hours-to').value;
+    if (!from || !to) {
+      throw new Error('ساعات العمل: اختر وقت البداية والنهاية لكل يوم مفتوح، أو علّمه مغلقاً');
+    }
+    return { day, closed: false, from, to };
+  });
+
+  return days.every(day => day.closed) ? null : days;
+}
+
+/** معاينة ملف شعار/غلاف — قراءة محلية قبل الرفع، ولا شيء يُرسل هنا. */
+function previewProviderPageImage(input, previewId, wrapperId) {
+  const file = input && input.files ? input.files[0] : null;
+  const preview = document.getElementById(previewId);
+  const wrapper = document.getElementById(wrapperId);
+  if (!file || !preview || !wrapper) return;
+  const reader = new FileReader();
+  reader.onload = event => {
+    preview.src = event.target.result;
+    wrapper.style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+function previewProviderLogo(input) {
+  previewProviderPageImage(input, 'provLogoPreview', 'provLogoPreviewWrapper');
+}
+
+function previewProviderCover(input) {
+  previewProviderPageImage(input, 'provCoverPreview', 'provCoverPreviewWrapper');
+}
+
+/** معاينتا الشعار والغلاف من روابط المزوّد المخزَّنة (أو مخفيتان بلا صورة). */
+function renderProviderPagePreviews(provider) {
+  const logoPreview = document.getElementById('provLogoPreview');
+  const logoWrapper = document.getElementById('provLogoPreviewWrapper');
+  if (logoPreview && logoWrapper) {
+    logoPreview.src = (provider && provider.logo_url) || '';
+    logoWrapper.style.display = provider && provider.logo_url ? 'block' : 'none';
+  }
+  const coverPreview = document.getElementById('provCoverPreview');
+  const coverWrapper = document.getElementById('provCoverPreviewWrapper');
+  if (coverPreview && coverWrapper) {
+    coverPreview.src = (provider && provider.cover_url) || '';
+    coverWrapper.style.display = provider && provider.cover_url ? 'block' : 'none';
+  }
+  const logoFile = document.getElementById('provLogoFile');
+  const coverFile = document.getElementById('provCoverFile');
+  if (logoFile) logoFile.value = '';
+  if (coverFile) coverFile.value = '';
+}
+
+/** يعيد الرسم من استجابة الخادم كاملة (‏`provider` في كل استجابة تحرير). */
+function applyProviderPageState(provider) {
+  if (!provider) return;
+  renderProviderHoursEditor(provider.hours);
+  const verified = document.getElementById('provIsVerified');
+  const featured = document.getElementById('provIsFeatured');
+  if (verified) verified.checked = Boolean(provider.is_verified);
+  if (featured) featured.checked = Boolean(provider.is_featured);
+  renderProviderPagePreviews(provider);
+  renderProviderCollections(provider);
+}
+
+/** يحفظ المجموعات الثلاث من ردّ الخادم ويعيد رسمها. */
+function renderProviderCollections(provider) {
+  currentProviderCollections = {
+    gallery: Array.isArray(provider && provider.gallery) ? provider.gallery : [],
+    offers: Array.isArray(provider && provider.offers) ? provider.offers : [],
+    products: Array.isArray(provider && provider.products) ? provider.products : []
+  };
+  renderProviderGalleryGrid();
+  renderProviderOffersList();
+  renderProviderProductsList();
+}
+
+function renderProviderGalleryGrid() {
+  const grid = document.getElementById('provGalleryGrid');
+  if (!grid) return;
+  if (!currentProviderCollections.gallery.length) {
+    grid.innerHTML = '<span class="hint-text">لا صور في المعرض بعد.</span>';
+    return;
+  }
+  grid.innerHTML = currentProviderCollections.gallery.map(photo => `
+    <figure class="prov-gallery-item">
+      <img src="${escapeHtml(photo.image_url)}" alt="${escapeHtml(photo.caption || 'صورة من المعرض')}">
+      <figcaption>${escapeHtml(photo.caption || '')}</figcaption>
+      <button type="button" class="btn-delete" onclick="deleteProviderGalleryPhoto(${photo.id})"><i class="fa-solid fa-trash"></i> حذف</button>
+    </figure>
+  `).join('');
+}
+
+function renderProviderOffersList() {
+  const list = document.getElementById('provOffersList');
+  if (!list) return;
+  if (!currentProviderCollections.offers.length) {
+    list.innerHTML = '<span class="hint-text">لا عروض بعد.</span>';
+    return;
+  }
+  list.innerHTML = currentProviderCollections.offers.map(offer => `
+    <div class="prov-collection-row">
+      <div class="prov-collection-main">
+        <strong>${escapeHtml(offer.title)}</strong>
+        <span class="prov-collection-meta">
+          ${offer.price != null ? `${Number(offer.price).toLocaleString('ar-EG')} ₪` : 'بلا سعر'}
+          ${offer.ends_at ? ` · ينتهي ${escapeHtml(offer.ends_at)}` : ' · بلا تاريخ انتهاء'}
+          ${offer.is_active ? ' · نشِط' : ' · مطفأ'}
+        </span>
+      </div>
+      <div class="prov-collection-actions">
+        <button type="button" class="btn-approve" onclick="editProviderOffer(${offer.id})" title="تعديل"><i class="fa-solid fa-pen"></i></button>
+        <button type="button" class="btn-delete" onclick="deleteProviderOffer(${offer.id})" title="حذف"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderProviderProductsList() {
+  const list = document.getElementById('provProductsList');
+  if (!list) return;
+  if (!currentProviderCollections.products.length) {
+    list.innerHTML = '<span class="hint-text">لا منتجات بعد.</span>';
+    return;
+  }
+  list.innerHTML = currentProviderCollections.products.map(product => `
+    <div class="prov-collection-row">
+      <div class="prov-collection-main">
+        <strong>${escapeHtml(product.name)}</strong>
+        <span class="prov-collection-meta">
+          ${product.price != null ? `تبدأ من ${Number(product.price).toLocaleString('ar-EG')} ₪` : 'بلا سعر'}
+        </span>
+      </div>
+      <div class="prov-collection-actions">
+        <button type="button" class="btn-approve" onclick="editProviderProduct(${product.id})" title="تعديل"><i class="fa-solid fa-pen"></i></button>
+        <button type="button" class="btn-delete" onclick="deleteProviderProduct(${product.id})" title="حذف"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+}
+
+/** جلب المزوّد كاملاً (بالمجموعات) — بعد حذف لا يعيد الخادم صفّ المزوّد. */
+async function refreshProviderCollections() {
+  if (!currentProviderPageId) return;
+  try {
+    const res = await adminFetch(`/api/admin/service-providers/${currentProviderPageId}`);
+    const data = await res.json();
+    if (data.success) applyProviderPageState(data.provider);
+  } catch (e) {
+    console.error('Provider collections error:', e);
+  }
+}
+
+function providerPagePath(suffix = '') {
+  return `/api/admin/service-providers/${currentProviderPageId}${suffix}`;
+}
+
+/** نداء تحرير واحد: يعيد الرسم من `provider` في الردّ، أو من جلب جديد عند الحذف. */
+async function submitProviderPageChange(path, options) {
+  const res = await adminFetch(path, options);
+  const data = await res.json();
+  if (!data.success) {
+    alert(data.message || 'تعذّر تنفيذ الطلب');
+    return null;
+  }
+  if (data.provider) applyProviderPageState(data.provider);
+  else await refreshProviderCollections();
+  return data;
+}
+
+async function addProviderGalleryPhoto() {
+  if (!currentProviderPageId) return;
+  const fileInput = document.getElementById('provGalleryFile');
+  const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+  if (!file) {
+    alert('اختر صورة لإضافتها إلى المعرض');
+    return;
+  }
+  const caption = (document.getElementById('provGalleryCaption').value || '').trim();
+
+  const fd = new FormData();
+  fd.append('photo', file);
+  if (caption) fd.append('caption', caption);
+
+  const data = await submitProviderPageChange(providerPagePath('/photos'), { method: 'POST', body: fd });
+  if (data) {
+    if (fileInput) fileInput.value = '';
+    const captionInput = document.getElementById('provGalleryCaption');
+    if (captionInput) captionInput.value = '';
+  }
+}
+
+async function deleteProviderGalleryPhoto(photoId) {
+  if (!currentProviderPageId || !confirm('حذف هذه الصورة من المعرض؟')) return;
+  await submitProviderPageChange(providerPagePath(`/photos/${photoId}`), { method: 'DELETE' });
+}
+
+function resetProviderOfferForm() {
+  const fields = ['provOfferId', 'provOfferTitle', 'provOfferPrice', 'provOfferEndsAt', 'provOfferDesc'];
+  fields.forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.value = '';
+  });
+  const active = document.getElementById('provOfferActive');
+  if (active) active.checked = true;
+}
+
+async function saveProviderOffer() {
+  if (!currentProviderPageId) return;
+  const offerId = document.getElementById('provOfferId').value;
+  const title = (document.getElementById('provOfferTitle').value || '').trim();
+  if (!title) {
+    alert('عنوان العرض مطلوب');
+    return;
+  }
+
+  const body = {
+    title,
+    description: (document.getElementById('provOfferDesc').value || '').trim(),
+    price: (document.getElementById('provOfferPrice').value || '').trim() || null,
+    ends_at: (document.getElementById('provOfferEndsAt').value || '').trim() || null,
+    is_active: document.getElementById('provOfferActive').checked
+  };
+
+  const data = await submitProviderPageChange(
+    providerPagePath(offerId ? `/offers/${offerId}` : '/offers'),
+    {
+      method: offerId ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }
+  );
+  if (data) resetProviderOfferForm();
+}
+
+function editProviderOffer(offerId) {
+  const offer = currentProviderCollections.offers.find(row => row.id === offerId);
+  if (!offer) return;
+  document.getElementById('provOfferId').value = offer.id;
+  document.getElementById('provOfferTitle').value = offer.title || '';
+  document.getElementById('provOfferPrice').value = offer.price != null ? offer.price : '';
+  // `ends_at` يصل `YYYY-MM-DD HH:MM` — وحقل `datetime-local` يريد `T` بينهما.
+  document.getElementById('provOfferEndsAt').value = offer.ends_at ? offer.ends_at.replace(' ', 'T') : '';
+  document.getElementById('provOfferDesc').value = offer.description || '';
+  document.getElementById('provOfferActive').checked = Boolean(offer.is_active);
+}
+
+async function deleteProviderOffer(offerId) {
+  if (!currentProviderPageId || !confirm('حذف هذا العرض نهائياً؟')) return;
+  await submitProviderPageChange(providerPagePath(`/offers/${offerId}`), { method: 'DELETE' });
+}
+
+function resetProviderProductForm() {
+  const fields = ['provProductId', 'provProductName', 'provProductPrice', 'provProductImage', 'provProductDesc'];
+  fields.forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.value = '';
+  });
+}
+
+async function saveProviderProduct() {
+  if (!currentProviderPageId) return;
+  const productId = document.getElementById('provProductId').value;
+  const name = (document.getElementById('provProductName').value || '').trim();
+  if (!name) {
+    alert('اسم المنتج مطلوب');
+    return;
+  }
+
+  const body = {
+    name,
+    description: (document.getElementById('provProductDesc').value || '').trim(),
+    price: (document.getElementById('provProductPrice').value || '').trim() || null,
+    image_url: (document.getElementById('provProductImage').value || '').trim()
+  };
+
+  const data = await submitProviderPageChange(
+    providerPagePath(productId ? `/products/${productId}` : '/products'),
+    {
+      method: productId ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }
+  );
+  if (data) resetProviderProductForm();
+}
+
+function editProviderProduct(productId) {
+  const product = currentProviderCollections.products.find(row => row.id === productId);
+  if (!product) return;
+  document.getElementById('provProductId').value = product.id;
+  document.getElementById('provProductName').value = product.name || '';
+  document.getElementById('provProductPrice').value = product.price != null ? product.price : '';
+  document.getElementById('provProductImage').value = product.image_url || '';
+  document.getElementById('provProductDesc').value = product.description || '';
+}
+
+async function deleteProviderProduct(productId) {
+  if (!currentProviderPageId || !confirm('حذف هذا المنتج نهائياً؟')) return;
+  await submitProviderPageChange(providerPagePath(`/products/${productId}`), { method: 'DELETE' });
 }
 
 function renderProviderDynamicAttributes(categoryId, existingAttributes) {
@@ -5967,9 +6351,13 @@ function renderProviderDynamicAttributes(categoryId, existingAttributes) {
 
 function closeProviderForm() {
   editingProviderId = null;
+  currentProviderPageId = null;
+  currentProviderCollections = { gallery: [], offers: [], products: [] };
   clearAdminProviderImage();
   const wrapper = document.getElementById('providerFormWrapper');
   if (wrapper) wrapper.style.display = 'none';
+  const collectionsPanel = document.getElementById('providerCollectionsPanel');
+  if (collectionsPanel) collectionsPanel.style.display = 'none';
   const form = document.getElementById('providerForm');
   if (form) form.reset();
 }
@@ -6035,37 +6423,61 @@ async function handleProviderSubmit(e) {
   const imageFileInput = document.getElementById('provImageFile');
   const imageFile = imageFileInput && imageFileInput.files ? imageFileInput.files[0] : null;
 
+  // حقول الصفحة الغنية (#184) تُرسل في التعديل وحده: للصفّ القائم معرّف
+  // والمعرض والعروض تحته. وحقل واحد متعدد الأجزاء لكل الحالات — يقرأه
+  // `serviceMedia` على الخادم كما يقرأ JSON سواء.
+  const logoFileInput = document.getElementById('provLogoFile');
+  const logoFile = id && logoFileInput && logoFileInput.files ? logoFileInput.files[0] : null;
+  const coverFileInput = document.getElementById('provCoverFile');
+  const coverFile = id && coverFileInput && coverFileInput.files ? coverFileInput.files[0] : null;
+
+  let hours = null;
+  if (id) {
+    try {
+      hours = collectProviderHours();
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+  }
+
   const btn = document.getElementById('provSubmitBtn');
   btn.disabled = true;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
 
   try {
-    let fetchOptions;
-    if (imageFile) {
-      const fd = new FormData();
-      fd.append('category_id', String(payload.category_id));
-      fd.append('name', payload.name);
-      fd.append('phone', payload.phone);
-      if (payload.price !== null) fd.append('price', String(payload.price));
-      fd.append('price_type', payload.price_type);
-      if (payload.price_estimate_desc) fd.append('price_estimate_desc', payload.price_estimate_desc);
-      fd.append('attributes', JSON.stringify(payload.attributes));
-      fd.append('description', payload.description);
-      fd.append('is_active', String(payload.is_active));
-      fd.append('towns', JSON.stringify(payload.towns));
-      fd.append('image', imageFile);
+    const fd = new FormData();
+    fd.append('category_id', String(payload.category_id));
+    fd.append('name', payload.name);
+    fd.append('phone', payload.phone);
+    // `''` تمسح القيمة على الخادم كما كان يمسحها `null` في جسم JSON — لا
+    // يتحوّل حقل فارغ إلى «لم أرسل شيئاً» بلا قصد.
+    fd.append('price', payload.price !== null ? String(payload.price) : '');
+    fd.append('price_type', payload.price_type);
+    fd.append('price_estimate_desc', payload.price_estimate_desc || '');
+    fd.append('attributes', JSON.stringify(payload.attributes));
+    fd.append('description', payload.description);
+    fd.append('image_url', payload.image_url);
+    fd.append('is_active', String(payload.is_active));
+    fd.append('towns', JSON.stringify(payload.towns));
+    if (imageFile) fd.append('image', imageFile);
 
-      fetchOptions = {
-        method: id ? 'PATCH' : 'POST',
-        body: fd
-      };
-    } else {
-      fetchOptions = {
-        method: id ? 'PATCH' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      };
+    if (id) {
+      // '' تعني «امسح الساعات» على الخادم — فالفراغ قرار صريح لا غياب حقل.
+      fd.append('hours', hours ? JSON.stringify(hours) : '');
+      // الشارتان لا تُرسلان إطلاقاً من أدمن غير سوبر — والخادم يردّ 403 لو
+      // وصلهما من غيره، فغيابهما هنا يعني «لم أطلب تغييرهما».
+      if (isSuperAdminRole()) {
+        const verified = document.getElementById('provIsVerified');
+        const featured = document.getElementById('provIsFeatured');
+        if (verified) fd.append('is_verified', String(verified.checked));
+        if (featured) fd.append('is_featured', String(featured.checked));
+      }
+      if (logoFile) fd.append('logo', logoFile);
+      if (coverFile) fd.append('cover', coverFile);
     }
+
+    const fetchOptions = { method: id ? 'PATCH' : 'POST', body: fd };
 
     const res = await adminFetch(id ? `/api/admin/service-providers/${id}` : '/api/admin/service-providers', fetchOptions);
     const data = await res.json();
