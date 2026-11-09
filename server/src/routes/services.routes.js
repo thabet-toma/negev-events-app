@@ -6,6 +6,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const services = require('../services/services.service');
 const events = require('../services/events.service');
+const activity = require('../services/activity.service');
 const { authenticate, optionalAuthenticate, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const { regionIdForRequest } = require('../middleware/region');
 const { serviceMedia } = require('../middleware/upload');
@@ -369,6 +370,27 @@ router.post('/services/providers/:id/reviews/:rid/report', authenticate, asyncHa
   });
 }));
 
+/**
+ * ردّ الحساب المربوط على تقييم (تذكرة #187، ADR-0016 §2-3).
+ *
+ * **المسار على التقييم وحده لا على المزوّد** (`/services/reviews/:rid/reply`):
+ * الحساب يعرف رقم التقييم لا رقم المزوّد، والمزوّد يُشتقّ من الصفّ. والصلاحية
+ * شرطٌ داخل استعلام الخدمة نفسه (`sp.linked_user_id = ?`)، فلا يمرّ الحكم عبر
+ * هذا الباب ولا يُفلتر شيء بعد الجلب. **و404 لا 403** لحسابٍ آخر — لا يُكشف
+ * وجود تقييم لا يملكه. ونصّ الردّ إلزامي غير فارغ بسقف 1000 (400 عربية).
+ */
+router.put('/services/reviews/:rid/reply', authenticate, asyncHandler(async (req, res) => {
+  const reviewId = parseId(req.params.rid, 'معرّف التقييم');
+  const body = req.body || {};
+  const review = await services.replyToProviderReview(req.user.id, reviewId, body.reply_body);
+
+  res.json({
+    success: true,
+    review,
+    message: 'تم حفظ ردّك على التقييم'
+  });
+}));
+
 // --- User submissions (authenticated) --------------------------------
 
 router.post('/services/providers', authenticate, serviceMedia, asyncHandler(async (req, res) => {
@@ -426,6 +448,16 @@ router.post('/services/providers', authenticate, serviceMedia, asyncHandler(asyn
 router.get('/services/my-services', authenticate, asyncHandler(async (req, res) => {
   const list = await services.listMyServices(req.user.id);
   res.json({ success: true, services: list });
+}));
+
+/**
+ * «مزوّدي» في «حسابي» (تذكرة #187، ADR-0016 §3): مزوّدو هذا الحساب المربوط
+ * وحدهم، ببطاقة القائمة نفسها (`shapeProviderCard`) وبلا رقم. حساب بلا ربط
+ * يستلم مصفوفة فارغة لا 404 — فالقسم يختفي كاملاً في العميل، ولا يقال لمن لا
+ * مزوّد له إنّ هناك قسماً لم يُفتح.
+ */
+router.get('/services/my-providers', authenticate, asyncHandler(async (req, res) => {
+  res.json({ success: true, providers: await services.listLinkedProviders(req.user.id) });
 }));
 
 // --- Admin: service providers — `admin` role, scoped to their towns ---
@@ -612,6 +644,52 @@ router.delete('/admin/service-providers/:id', asyncHandler(async (req, res) => {
   await services.getProviderForAdmin(req.user, id);
   await services.deleteProvider(id);
   res.json({ success: true, message: 'تم حذف مزوّد الخدمة بنجاح' });
+}));
+
+/**
+ * ربط مزوّد بحساب مستخدم أو فكّه (تذكرة #187، ADR-0016 §1).
+ *
+ * خلف `requireAdmin` القائم للبادئة أعلاه، **والسوبر أدمن وحده يمرّر**: غيره
+ * يُردّ 404 من داخل هذا المعالِج — لا `requireSuperAdmin` — على نمط
+ * `PATCH /admin/users/:id/role` في `admin.routes.js`، فلا يتأكّد وجود المزوّد
+ * لمن لا يملك الربط. والخدمة تفرضه أيضاً فلا يمرّ الحكم عبر بابٍ واحد.
+ *
+ * الجسم `{ user_id: <رقم> | null }`: `null` يفكّ الربط (وكذلك `''` من نموذج
+ * HTML، فالشكلان يعنيان «بلا حساب» في العميلين)، وغياب المفتاح 400 لا فكٌّ
+ * صامت. والحدث يُسجَّل في `activity_log` طرفيه — والفكّ يسجّل الحساب الذي
+ * فُكّ لا `null`، فالسجل يقول ما جرى فعلاً.
+ */
+router.patch('/admin/service-providers/:id/link', asyncHandler(async (req, res) => {
+  if (req.user.role !== 'super_admin') {
+    throw ApiError.notFound('مزوّد الخدمة غير موجود');
+  }
+
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const body = req.body || {};
+  if (!('user_id' in body)) {
+    throw ApiError.badRequest('معرّف الحساب مطلوب — أرسل رقم الحساب أو null لفكّ الربط');
+  }
+
+  const raw = body.user_id;
+  const userId = (raw === null || raw === undefined || raw === '') ? null : parseId(raw, 'معرّف الحساب');
+  const result = await services.linkProviderAccount(req.user, id, userId);
+
+  await activity.record({
+    actorId: req.user.id,
+    action: userId === null ? 'provider_account_unlinked' : 'provider_account_linked',
+    details: {
+      provider_id: id,
+      user_id: userId === null ? result.previous_user_id : userId
+    }
+  });
+
+  res.json({
+    success: true,
+    provider: result.provider,
+    message: userId === null
+      ? 'تم فكّ ربط مزوّد الخدمة بالحساب'
+      : 'تم ربط مزوّد الخدمة بالحساب — صار صاحبه يردّ على تقييماته'
+  });
 }));
 
 // --- معرض المزوّد وعروضه ومنتجاته (تذكرة #184) -----------------------

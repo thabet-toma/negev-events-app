@@ -19,7 +19,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// إلى الشاشة والجلسة بعده. **`image_picker` نفسه غير مُختبَر** — قناة منصّة
 /// لا تُخدم في `flutter test`، ومنطق التقاط الصورة يبقى يدوياً على جهاز.
 class _AccountServer {
-  _AccountServer({this.avatarUrl, this.wrongPin = false});
+  _AccountServer({
+    this.avatarUrl,
+    this.wrongPin = false,
+    this.providers = const [],
+  });
 
   /// الرابط الذي يحمله `avatar_url` في `GET /api/auth/me` — null لمستخدم بلا صورة.
   final String? avatarUrl;
@@ -27,6 +31,10 @@ class _AccountServer {
   /// يردّ 400 «رمز الدخول غير صحيح» على تغيير الرقم — الحالة التي يجب ألا
   /// تُخرج المستخدم من جلسته ولا تُغلق الحوار.
   final bool wrongPin;
+
+  /// مزوّدات «مزوّدي» (تذكرة #187) كما يعيدها `GET /api/services/my-providers`.
+  /// القائمة الفارغة تعني حساباً بلا ربط — والقسم كله لا يُبنى حينها.
+  final List<Map<String, dynamic>> providers;
 
   /// كل طلب وصل، بالترتيب — عليه تُقرأ الأجسام المُرسَلة.
   final requests = <http.Request>[];
@@ -79,6 +87,17 @@ class _AccountServer {
         });
       }
       return _json({'success': true, 'user': user});
+    }
+    // «مزوّدي» (تذكرة #187): القائمة من الخادم وحده، وصفحة المزوّد نفسها
+    // تُفتح بالنقر على البطاقة — فيُخدم مسارها بتفصيل صالح.
+    if (path.endsWith('/api/services/my-providers')) {
+      return _json({'success': true, 'providers': providers});
+    }
+    if (path.endsWith('/api/services/providers/701') && request.method == 'GET') {
+      return _json({
+        'success': true,
+        'provider': providers.isEmpty ? <String, dynamic>{} : providers.first,
+      });
     }
     return _json({'success': true});
   }
@@ -246,5 +265,101 @@ void main() {
       reason: 'اسم فارغ لا يحتاج ردّ الخادم',
     );
     expect(session.auth.user!.fullName, 'سالم أبو محمد');
+  });
+
+  // --- «مزوّدي» (تذكرة #187) ------------------------------------------
+  // القسم لا يُبنى إطلاقاً بلا ربط، وبطاقته تفتح صفحة المزوّد نفسها حيث الردّ
+  // على التقييمات. الخادم هو مصدر القائمة وحده — لا نسخة في العميل.
+
+  Map<String, dynamic> linkedProviderCard() => {
+        'id': 701,
+        'name': 'مزوّد الردّ',
+        'category_id': 9,
+        'category_name': 'صالات أفراح',
+        'category_icon': '🏛️',
+        'category_color': '#8a6109',
+        'has_phone': true,
+        'image_url': null,
+        'price': 100,
+        'price_type': 'fixed',
+        'price_estimate_desc': null,
+        'attributes': <String, dynamic>{},
+        'is_verified': false,
+        'is_featured': false,
+        'status': 'approved',
+        'towns': <dynamic>['رهط'],
+        'views_count': 3,
+        'favorites_count': 0,
+        'rating_avg': 4.5,
+        'rating_count': 2,
+        'rating_distribution': {'1': 0, '2': 0, '3': 1, '4': 0, '5': 1},
+        'is_favorite': false,
+        'is_linked_provider': true,
+      };
+
+  testWidgets('«مزوّدي» يعرض مزوّد الحساب المربوط، وبطاقته تفتح صفحة المزوّد',
+      (tester) async {
+    // «حسابي» قائمة كسولة: القسم يقع تحت البطاقة والوصول السريع، فشاشة
+    // الاختبار الافتراضية لا تبنيه أصلاً. ارتفاع يكفي لوصوله — لا أكثر.
+    tester.view.physicalSize = const Size(1000, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final server = _AccountServer(providers: [linkedProviderCard()]);
+    final session = await _signedIn(server);
+    await _pumpAccount(tester, session.api, session.auth);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(
+      find.byKey(const Key('account_my_providers')),
+      findsOneWidget,
+      reason: 'القسم مبنيّ لأن للحساب مزوّداً مربوطاً',
+    );
+    expect(find.text('مزوّد الردّ'), findsOneWidget, reason: 'باسمه من الخادم');
+    expect(
+      server.requests.where((request) => request.url.path.endsWith('/api/services/my-providers')),
+      hasLength(1),
+      reason: 'طلب واحد عند أول بناء — لا مع كل إعادة رسم',
+    );
+
+    await tester.tap(find.byKey(const Key('account_my_provider_701')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(
+      server.requests.any((request) =>
+          request.method == 'GET' &&
+          request.url.path.endsWith('/api/services/providers/701')),
+      isTrue,
+      reason: 'البطاقة تفتح صفحة المزوّد حيث الردود',
+    );
+  });
+
+  testWidgets('«مزوّدي» لا يظهر لحساب بلا مزوّد مربوط', (tester) async {
+    tester.view.physicalSize = const Size(1000, 3000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final server = _AccountServer(providers: const []);
+    final session = await _signedIn(server);
+    await _pumpAccount(tester, session.api, session.auth);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(
+      server.requests.where((request) => request.url.path.endsWith('/api/services/my-providers')),
+      hasLength(1),
+      reason: 'الطلب يجري — الغياب من ردّ الخادم لا من إسقاط العميل',
+    );
+    expect(
+      find.byKey(const Key('account_my_providers')),
+      findsNothing,
+      reason: 'لا عنوان لقسم فارغ',
+    );
   });
 }

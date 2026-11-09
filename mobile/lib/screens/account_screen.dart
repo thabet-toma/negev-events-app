@@ -8,6 +8,7 @@ import '../api/api_client.dart';
 import '../api/negev_api.dart';
 import '../config.dart';
 import '../main.dart';
+import '../models/service.dart';
 import '../models/user.dart';
 import '../theme.dart';
 import '../widgets/async_view.dart'
@@ -19,6 +20,7 @@ import 'map_screen.dart';
 import 'my_events_screen.dart';
 import 'my_list_screen.dart';
 import 'nokoot_screen.dart';
+import 'service_provider_details_screen.dart';
 
 /// شاشة الحساب: بيانات المستخدم أو دعوة لتسجيل الدخول.
 class AccountScreen extends StatelessWidget {
@@ -219,6 +221,9 @@ class AccountScreen extends StatelessWidget {
                     _QuickLinks(isActive: isActive),
                     const SizedBox(height: 18),
                     const _RegionSection(),
+                    // «مزوّدي» (تذكرة #187): لا يُرى إطلاقاً بلا ربط — الشرط
+                    // داخل الودجة نفسها (`SizedBox.shrink`).
+                    const _MyProvidersSection(),
                     OutlinedButton.icon(
                       onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const MyEventsScreen()),
@@ -380,6 +385,138 @@ class _QuickLinksState extends State<_QuickLinks> {
           ],
         );
       },
+    );
+  }
+}
+
+/// «مزوّدي» (تذكرة #187، ADR-0016 §3): مزوّدات الخدمة المرتبطة بهذا الحساب،
+/// من `GET /api/services/my-providers` — بلا دور جديد ولا تحرير ملف. القسم لا
+/// يُبنى إطلاقاً بلا ربط (لا عنوان لقسم فارغ)، وفشل الجلب يخفيه ولا يُسقط
+/// «حسابي». كل بطاقة تفتح صفحة المزوّد نفسها، حيث يردّ صاحب الحساب على
+/// تقييماته — والردّ نفسه محكوم في الخادم داخل الاستعلام (404 لغيره).
+class _MyProvidersSection extends StatefulWidget {
+  const _MyProvidersSection();
+
+  @override
+  State<_MyProvidersSection> createState() => _MyProvidersSectionState();
+}
+
+class _MyProvidersSectionState extends State<_MyProvidersSection> {
+  List<ServiceProvider> _providers = const [];
+  bool _requested = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_requested) return;
+    _requested = true;
+    unawaited(_load());
+  }
+
+  /// طلب واحد عند أول بناء — والفشل صامت كسائر أقسام الحساب.
+  Future<void> _load() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) return;
+    try {
+      final list = await services.api.myProviders();
+      if (!mounted) return;
+      setState(() => _providers = list);
+    } catch (_) {
+      if (mounted) setState(() => _providers = const []);
+    }
+  }
+
+  void _openProvider(ServiceProvider provider) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ServiceProviderDetailsScreen(providerId: provider.id),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_providers.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        key: const Key('account_my_providers'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.storefront_outlined, size: 16, color: context.c.gold),
+              const SizedBox(width: 6),
+              Text(
+                'مزوّدي',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                  color: context.c.ink,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '(${_providers.length})',
+                style: TextStyle(fontSize: 13, color: context.c.inkFaint),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'مزوّدات الخدمة المرتبطة بحسابك — افتح المزوّد لتقرأ تقييماته وتردّ عليها.',
+            style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+          ),
+          for (final provider in _providers) _row(provider),
+        ],
+      ),
+    );
+  }
+
+  Widget _row(ServiceProvider provider) {
+    final subtitle = [
+      if (provider.categoryName.isNotEmpty) provider.categoryName,
+      if (provider.towns.isNotEmpty) provider.towns.take(2).join('، '),
+    ].join(' · ');
+    return InkWell(
+      key: Key('account_my_provider_${provider.id}'),
+      onTap: () => _openProvider(provider),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.storefront, size: 20, color: context.c.inkFaint),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    provider.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.bold,
+                      color: context.c.ink,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: context.c.inkSoft),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_left, size: 20, color: context.c.inkFaint),
+          ],
+        ),
+      ),
     );
   }
 }

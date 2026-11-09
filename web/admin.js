@@ -5917,6 +5917,8 @@ function openProviderForm(id) {
   });
   const flagsWrapper = document.getElementById('provFlagsWrapper');
   if (flagsWrapper) flagsWrapper.style.display = pageFieldsReady && isSuperAdminRole() ? 'flex' : 'none';
+  // الربط بحساب مستخدم (تذكرة #187): حقل السوبر أدمن وحده، ولصفٍّ قائم وحده.
+  prepareProviderLinkField(provider);
   const collectionsPanel = document.getElementById('providerCollectionsPanel');
   if (collectionsPanel) collectionsPanel.style.display = pageFieldsReady ? 'block' : 'none';
 
@@ -6495,6 +6497,122 @@ async function handleProviderSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-check"></i> حفظ المزوّد';
+  }
+}
+
+// ======================================================================
+// الحساب المربوط (تذكرة #187، ADR-0016)
+// ======================================================================
+// `PATCH /api/admin/service-providers/:id/link` مسارٌ مستقل عن نموذج المزوّد:
+// الربط قرار ثقة لا حقل تحرير، ولا يُكتب مع باقي الحقول كي لا يمسّ «حفظ
+// المزوّد» ربطاً لم يُطلب تغييره. والمنتقي من `GET /admin/users` (سوبر أدمن
+// وحده، وهو وحده يفتح هذا النموذج)، وحسابات الإدارة لا تُعرض لأن الخادم
+// يرفضها 400 — ADR يمنع دوراً رابعاً ويعرّف المربوط بحساب `user`.
+
+let providerLinkUsers = [];
+
+/**
+ * يملأ حقل «الحساب المربوط» ويعرض الربط الحالي بنصّ صريح. القائمة تُجلب
+ * أثناء الفتح، والربط الحالي يبقى خياراً مختاراً ولو قبل وصول القائمة — فلا
+ * يُكتب «بلا حساب» عن ربطٍ قائم إن فشل الجلب.
+ */
+async function prepareProviderLinkField(provider) {
+  const wrapper = document.getElementById('provLinkedAccountWrapper');
+  if (!wrapper) return;
+
+  // صفٌّ قائم وسوبر أدمن: الربط كتابةٌ على معرّف مزوّد، فلا معنى له قبل الحفظ.
+  if (!isSuperAdminRole() || !provider) {
+    wrapper.style.display = 'none';
+    return;
+  }
+  wrapper.style.display = 'block';
+
+  const current = provider.linked_account || null;
+  const currentLabel = document.getElementById('provLinkedAccountCurrent');
+  if (currentLabel) {
+    currentLabel.textContent = current
+      ? `المربوط الآن: ${current.full_name || 'حساب مستخدم'} (#${Number(current.id)})`
+      : 'لا حساب مربوط — الربط يمنح صاحب الحساب الردّ على تقييمات هذا المزوّد وحده.';
+  }
+
+  const select = document.getElementById('provLinkedAccount');
+  if (select) {
+    select.innerHTML = providerLinkOptions(current ? Number(current.id) : null, current);
+    select.value = current ? String(current.id) : '';
+  }
+
+  try {
+    const res = await adminFetch('/api/admin/users');
+    const data = await res.json();
+    if (!data.success || !Array.isArray(data.users)) return;
+    providerLinkUsers = data.users;
+    const field = document.getElementById('provLinkedAccount');
+    if (!field) return;
+    const selected = field.value ? Number(field.value) : (current ? Number(current.id) : null);
+    field.innerHTML = providerLinkOptions(selected, current);
+    field.value = selected ? String(selected) : '';
+  } catch (e) {
+    // فشل قائمة الحسابات لا يمسح الربط الحالي: خياره يبقى في المنتقي وحده.
+  }
+}
+
+/** «بلا حساب» أولاً، ثم حسابات `user` وحدها، والربط الحالي إن غاب عن القائمة. */
+function providerLinkOptions(selectedId, current) {
+  const rows = (providerLinkUsers || []).filter(user => user.role === 'user');
+  const seen = new Set(rows.map(user => Number(user.id)));
+  const options = ['<option value="">بلا حساب</option>'];
+
+  for (const user of rows) {
+    const phone = user.phone_number ? ` — ${user.phone_number}` : '';
+    options.push(
+      `<option value="${Number(user.id)}">${escapeHtml(`${user.full_name || 'مستخدم'}${phone}`)}</option>`
+    );
+  }
+
+  if (selectedId && !seen.has(Number(selectedId))) {
+    const label = current && current.full_name ? current.full_name : `حساب #${Number(selectedId)}`;
+    options.push(`<option value="${Number(selectedId)}">${escapeHtml(label)}</option>`);
+  }
+  return options.join('');
+}
+
+/** حفظ الربط أو فكّه — `user_id: null` يفكّ، وما عدا ذلك رقم حساب. */
+async function handleProviderLinkSubmit() {
+  const id = Number(document.getElementById('provId').value) || 0;
+  if (!id) {
+    alert('احفظ المزوّد أولاً ثم اربطه بحساب');
+    return;
+  }
+
+  const select = document.getElementById('provLinkedAccount');
+  const raw = select ? select.value : '';
+  const userId = raw === '' ? null : Number(raw);
+
+  const btn = document.getElementById('provLinkedAccountSaveBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await adminFetch(`/api/admin/service-providers/${id}/link`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert(data.message || 'تعذّر حفظ الربط');
+      return;
+    }
+
+    // الصفّ المخزَّن في اللوحة يحمل الربط الجديد كي يظهر عند إعادة الفتح
+    // بلا إعادة جلب القائمة كلها.
+    const cached = allServiceProviders.find(provider => Number(provider.id) === id);
+    const updated = data.provider || null;
+    if (cached && updated) cached.linked_account = updated.linked_account || null;
+    alert(data.message || 'تم حفظ الربط');
+    prepareProviderLinkField(updated || cached || null);
+  } catch (err) {
+    alert('تعذر الاتصال بالخادم');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

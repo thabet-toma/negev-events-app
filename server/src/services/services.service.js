@@ -619,6 +619,7 @@ async function getPublicProviderById(id, { userId = null } = {}) {
     `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
             sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
             sp.logo_url, sp.cover_url, sp.hours, sp.is_verified, sp.is_featured, sp.views_count,
+            sp.linked_user_id,
             (SELECT COUNT(*) FROM provider_favorites pf WHERE pf.provider_id = sp.id) AS favorites_count,
             (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone
        FROM service_providers sp
@@ -669,6 +670,13 @@ async function getPublicProviderById(id, { userId = null } = {}) {
     // تقييم صاحب الطلب وحده (لا تقييمات الآخرين): يصل من `optionalAuthenticate`
     // كي تعرف الواجهة أتعرض «حذف تقييمي» أم «اكتب تقييمك»، والزائر يستلم null.
     my_review: myReview,
+    // «هل هذا الحساب هو المزوّد المربوط لهذا الصفّ؟» (تذكرة #187) —
+    // `optionalAuthenticate` يجعل `userId` حاضراً للمسجَّل فتعرض الواجهة زرّ
+    // «ردّ على التقييم» في مكانه وحده. **و`linked_user_id` نفسه لا يخرج أبداً**:
+    // منطقيّ واحد يكفي، والزائر يستلم `false` لا مفتاحاً غائباً.
+    is_linked_provider: Boolean(
+      userId && row.linked_user_id && Number(row.linked_user_id) === Number(userId)
+    ),
     is_favorite: favoriteIds.has(id),
     price: row.price ?? null,
     price_type: row.price_type || 'estimated',
@@ -811,6 +819,37 @@ async function listFavoriteProviders(userId) {
   }));
 }
 
+/**
+ * «مزوّدي» في «حسابي» (تذكرة #187، ADR-0016 §3): مزوّدو هذا الحساب المربوط
+ * وحدهم (`sp.linked_user_id = ?` داخل الاستعلام)، بشكل بطاقة القائمة نفسه
+ * (`shapeProviderCard`) وبلا رقم — `PROVIDER_CARD_SELECT` لا ينتقي `phone`
+ * أصلاً. والشرط العامّان (معتمد ونشِط) هما شرط بطاقة الدليل: مزوّد غير معروض
+ * للعامة لا يُعرض هنا، وصفحته العامة 404 على أي حال.
+ *
+ * **ولا `linked_user_id` في الاستجابة:** الفلترة داخل الاستعلام، والمفتاح
+ * الوحيد الذي يعود للعميل هو شكل البطاقة.
+ */
+async function listLinkedProviders(userId) {
+  const rows = await db.query(
+    `SELECT ${PROVIDER_CARD_SELECT}
+       FROM service_providers sp
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE sp.linked_user_id = ? AND sp.is_active = 1 AND sp.status = 'approved'
+      ORDER BY sp.name ASC, sp.id ASC`,
+    [userId]
+  );
+
+  const providerIds = rows.map(row => row.id);
+  const [townsMap, ratings] = await Promise.all([
+    townsForProviders(providerIds),
+    providerRatings(providerIds)
+  ]);
+  return rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], {
+    isFavorite: false,
+    rating: ratings.get(row.id) || null
+  }));
+}
+
 // ======================================================================
 // تقييمات المزوّد (تذكرة #186)
 // ======================================================================
@@ -824,9 +863,18 @@ const REVIEW_BODY_MAX = 1000;
  * شكل تقييم واحد كما يخرج للعميل: الاسم من `users.full_name` لا من نصّ يرسله
  * العميل، **ولا رقم هاتف ولا `user_id`** — التمييز الوحيد «تقييمي/غير تقييمي»
  * في `is_mine`/`can_delete`. والزائر يستلم `false` لا مفتاحاً غائباً.
+ *
+ * **وردّ المزوّد المربوط (تذكرة #187):** `reply_body`/`reply_at` يخرجان لكل
+ * قارئ — الردّ جزء من التقييم العام كالتقييم نفسه. و`can_reply` تعني «هذا
+ * الحساب هو المزوّد المربوط لهذا الصفّ»، وتُحسب من `sp.linked_user_id` الذي
+ * يجلبه استعلام القراءة؛ **ولا يخرج `linked_user_id` نفسه في أي استجابة**،
+ * ولا يُستنتج من `can_reply: false` شيء عن هوية المزوّد.
  */
 function shapeReviewRow(row, userId) {
   const isMine = userId != null && Number(row.user_id) === Number(userId);
+  const canReply = userId != null
+    && row.linked_user_id != null
+    && Number(row.linked_user_id) === Number(userId);
   return {
     id: row.id,
     rating: Number(row.rating),
@@ -835,10 +883,15 @@ function shapeReviewRow(row, userId) {
     // `status` يخرج أيضاً في القائمة (`visible` وحدها هناك)، والأهم في ردّ
     // الكتابة: صاحب تقييم أخفَته البلاغات يرى أن تعديله لم يُعِد نشره.
     status: row.status || 'visible',
+    // ردّ الحساب المربوط بمزوّد التقييم: ردّ واحد يُستبدل بالتعديل، ووقته
+    // يتجدّد مع كل كتابة (`reply_at`).
+    reply_body: row.reply_body ?? null,
+    reply_at: row.reply_at ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at ?? null,
     is_mine: isMine,
-    can_delete: isMine
+    can_delete: isMine,
+    can_reply: canReply
   };
 }
 
@@ -846,24 +899,23 @@ function shapeReviewRow(row, userId) {
  * تقييم صاحب الطلب وحده للمزوّد — يُلحق بصفحة المزوّد العامة (المسار
  * `optionalAuthenticate`)، فيعرف المسجَّل أيعرض «حذف تقييمي» أم «اكتب تقييمك».
  * التقييم المخفي بعد بلاغات يصل بحالته أيضاً: صاحبه يعرف أنه لم يُحذف.
+ *
+ * ويحمل ردّ المزوّد إن وُجد (تذكرة #187) — `my_review` الصفّ نفسه فلا شكلان
+ * لتقييم واحد؛ والربط يُقرأ من `service_providers` داخل الاستعلام نفسه.
  */
 async function myProviderReview(providerId, userId) {
   if (!userId) return null;
   const row = await db.queryOne(
-    `SELECT id, rating, body, status, created_at, updated_at
-       FROM provider_reviews
-      WHERE provider_id = ? AND user_id = ?`,
+    `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
+            r.reply_body, r.reply_at, sp.linked_user_id, u.full_name AS user_name
+       FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
+       JOIN users u ON u.id = r.user_id
+      WHERE r.provider_id = ? AND r.user_id = ?`,
     [providerId, userId]
   );
   if (!row) return null;
-  return {
-    id: row.id,
-    rating: Number(row.rating),
-    body: row.body ?? null,
-    status: row.status,
-    created_at: row.created_at,
-    updated_at: row.updated_at ?? null
-  };
+  return shapeReviewRow(row, userId);
 }
 
 /**
@@ -898,8 +950,9 @@ async function upsertProviderReview(userId, providerId, { rating, body, confirmP
 
   const row = await db.queryOne(
     `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
-            u.full_name AS user_name
+            r.reply_body, r.reply_at, sp.linked_user_id, u.full_name AS user_name
        FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
        JOIN users u ON u.id = r.user_id
       WHERE r.provider_id = ? AND r.user_id = ?`,
     [providerId, userId]
@@ -938,6 +991,11 @@ async function deleteProviderReview(userId, providerId) {
 /**
  * صفحة تقييمات المزوّد: `visible` وحدها، الأحدث أولاً، والاسم من الحساب.
  * الترقيم بـ`safePage`/`safeLimit` القائمتين — لا سقف يكتبه العميل.
+ *
+ * و`sp.linked_user_id` في الاستعلام (وليس فلترةً بعد الجلب) هو ما يجعل
+ * `can_reply` صحيحة للحساب المربوط وحده، ويحمل `reply_body`/`reply_at` الردّ
+ * القائم. العمود نفسه لا يخرج في الاستجابة — `shapeReviewRow` يحوّله إلى
+ * منطقي واحد.
  */
 async function listProviderReviews(providerId, { page = 1, limit = DEFAULT_PAGE_SIZE, userId = null } = {}) {
   await assertPublicProvider(providerId);
@@ -950,8 +1008,10 @@ async function listProviderReviews(providerId, { page = 1, limit = DEFAULT_PAGE_
   );
   const rows = await db.query(
     `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
+            r.reply_body, r.reply_at, sp.linked_user_id,
             u.full_name AS user_name
        FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
        JOIN users u ON u.id = r.user_id
       WHERE r.provider_id = ? AND r.status = 'visible'
       ORDER BY r.created_at DESC, r.id DESC
@@ -968,6 +1028,66 @@ async function listProviderReviews(providerId, { page = 1, limit = DEFAULT_PAGE_
       totalPages: Math.ceil(Number(total) / limitVal)
     }
   };
+}
+
+/**
+ * ردّ الحساب المربوط على تقييم أحد مزوّديه (تذكرة #187، ADR-0016 §2).
+ *
+ * **الشرط داخل الاستعلام نفسه، لا فلترة بعد الجلب:** `JOIN service_providers
+ * sp ON sp.id = r.provider_id` و`WHERE … sp.linked_user_id = ?` — فحسابٌ آخر
+ * يعدّل صفر صفّ، و`affectedRows = 0` تُترجم إلى **404 لا 403** كي لا يتأكّد
+ * وجود تقييم لا يملكه (`adminScope.service.js` هو النمط). ولا دور جديد في
+ * `users.role`: الصلاحية تُشتقّ من الربط هنا وحده، ولا تفتح تحرير ملف المزوّد.
+ *
+ * **وردّ واحد لكل تقييم:** التعديل يستبدل `reply_body` ويجدّد `reply_at`، ولا
+ * يضيف صفّاً ثانياً — الكتابة الثانية تعديلٌ لا ردّان.
+ *
+ * وإذا وصل `affectedRows` صفراً فإن الصفّ قد يكون قائماً بمحتواه نفسه في
+ * الثانية نفسها (`reply_at = NOW()` لم يتغيّر) — فتُميَّز الحالتان باستعلام
+ * محروس بالشرط ذاته، لا بـ`SELECT` بمعرّف مجرَّد: الحساب الآخر يبقى 404.
+ *
+ * **ولا شرط `status` ولا شرط اعتماد المزوّد هنا، بقرار:** الحجب بالبلاغات
+ * يصادر *نصّ الزبون* من العرض العام، لا يسحب من المزوّد حقّ الردّ عليه، والردّ
+ * على صفّ مخفي لا يخرج في القائمة العامة (يراه كاتبه وحده في `my_review`).
+ * وحالة المزوّد (`pending` أو معطَّل) حالةُ عرضٍ في الدليل لا ملكية، وADR-0016
+ * §3 يعطي صاحب الحساب «ردّاً واحداً على كل تقييم لمزوّده» بلا تحفّظ حالته.
+ * ولا يفتح أيٌّ منهما باباً: القائمة العامة لا تعرض إلا `visible` لمزوّد معتمد
+ * نشِط.
+ */
+async function replyToProviderReview(userId, reviewId, replyBody) {
+  const text = typeof replyBody === 'string' ? replyBody.trim() : '';
+  if (!text) throw ApiError.badRequest('اكتب نصّ الردّ أولاً');
+  if (text.length > REVIEW_BODY_MAX) {
+    throw ApiError.badRequest(`نصّ الردّ أطول من ${REVIEW_BODY_MAX} حرف`);
+  }
+
+  const guardedSelect = `SELECT r.id
+       FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
+      WHERE r.id = ? AND sp.linked_user_id = ?`;
+
+  const { affectedRows } = await db.execute(
+    `UPDATE provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
+        SET r.reply_body = ?, r.reply_at = NOW()
+      WHERE r.id = ? AND sp.linked_user_id = ?`,
+    [text, reviewId, userId]
+  );
+  if (!affectedRows && !(await db.queryOne(guardedSelect, [reviewId, userId]))) {
+    throw ApiError.notFound('التقييم غير موجود');
+  }
+
+  const row = await db.queryOne(
+    `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
+            r.reply_body, r.reply_at, sp.linked_user_id, u.full_name AS user_name
+       FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
+       JOIN users u ON u.id = r.user_id
+      WHERE r.id = ? AND sp.linked_user_id = ?`,
+    [reviewId, userId]
+  );
+  if (!row) throw ApiError.notFound('التقييم غير موجود');
+  return shapeReviewRow(row, userId);
 }
 
 /**
@@ -1075,21 +1195,46 @@ async function providerScopeClause(user) {
 }
 
 /**
- * شكل صفّ المزوّد في اللوحة: الأعلام منطقية، و`hours` مصفوفة، وكل وسيط مطلق —
- * والمجموعات الثلاث تُلحق في التفصيل وحده (`getProviderForAdmin`)، لا في قائمة
- * الصفحة (تذكرة #184).
+ * الحساب المربوط كما يخرج للوحة (تذكرة #187): كائنٌ باسمه لا رقمٌ عارٍ،
+ * **و`linked_user_id` لا يخرج في أي استجابة** — لا عامة ولا إدارية. اللوحة
+ * تحتاج المعرّف لتضع عليه المنتقي (`openProviderForm`) و`full_name` لتُظهر
+ * الربط الحالي بوضوح؛ وغير المربوط يستلم `null` لا مفتاحاً غائباً.
  */
-async function shapeAdminProvider(row) {
-  const townsMap = await townsForProviders([row.id]);
+function linkedAccountFromRow(row) {
+  if (!row.linked_user_id) return null;
+  return { id: row.linked_user_id, full_name: row.linked_account_name ?? null };
+}
+
+/**
+ * شكل صفّ مزوّد واحد في اللوحة — **موضع واحد** لصفّ القائمة وصفّ التفصيل
+ * (تذكرة #184 ثم #187)، فلا شكلان لصفّ واحد. الأعلام منطقية، و`hours` مصفوفة،
+ * وكل وسيط مطلق، و«الحساب المربوط» كائنٌ باسمه لا رقمٌ عارٍ.
+ */
+function shapeAdminProviderRow(row, towns) {
+  const shaped = { ...row };
+  const linkedAccount = linkedAccountFromRow(shaped);
+  delete shaped.linked_user_id;
+  delete shaped.linked_account_name;
   return withAbsoluteMedia({
-    ...row,
+    ...shaped,
     is_active: Boolean(row.is_active),
     is_verified: Boolean(row.is_verified),
     is_featured: Boolean(row.is_featured),
     hours: parseHours(row.hours),
     attributes: parseAttributes(row.attributes),
-    towns: townsMap[row.id] || []
+    towns: towns || [],
+    linked_account: linkedAccount
   });
+}
+
+/**
+ * شكل صفّ المزوّد في اللوحة: يفكّ بلداته ثم يشكّل الصفّ بالمُشكِّل الواحد.
+ * والمجموعات الثلاث تُلحق في التفصيل وحده (`getProviderForAdmin`)، لا في
+ * قائمة الصفحة (تذكرة #184).
+ */
+async function shapeAdminProvider(row) {
+  const townsMap = await townsForProviders([row.id]);
+  return shapeAdminProviderRow(row, townsMap[row.id] || []);
 }
 
 /** Providers serving at least one of `user`'s towns — fail-closed for a scopeless admin. */
@@ -1119,9 +1264,11 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
 
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
-    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color
+    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            lu.full_name AS linked_account_name
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
+       LEFT JOIN users lu ON lu.id = sp.linked_user_id
       WHERE ${whereClause}
       ORDER BY sp.name ASC
       LIMIT ? OFFSET ?`,
@@ -1129,15 +1276,7 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
   );
 
   const townsMap = await townsForProviders(rows.map(row => row.id));
-  const providers = rows.map(row => withAbsoluteMedia({
-    ...row,
-    is_active: Boolean(row.is_active),
-    is_verified: Boolean(row.is_verified),
-    is_featured: Boolean(row.is_featured),
-    hours: parseHours(row.hours),
-    attributes: parseAttributes(row.attributes),
-    towns: townsMap[row.id] || []
-  }));
+  const providers = rows.map(row => shapeAdminProviderRow(row, townsMap[row.id] || []));
 
   return {
     providers,
@@ -1161,9 +1300,11 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
 async function getProviderForAdmin(user, id) {
   const { clause: scopeClause, params: scopeParams } = await providerScopeClause(user);
   const row = await db.queryOne(
-    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color
+    `SELECT sp.*, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            lu.full_name AS linked_account_name
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
+       LEFT JOIN users lu ON lu.id = sp.linked_user_id
       WHERE sp.id = ?${scopeClause}`,
     [id, ...scopeParams]
   );
@@ -1176,6 +1317,49 @@ async function getProviderForAdmin(user, id) {
     providerProducts(id)
   ]);
   return { ...provider, gallery, offers, products };
+}
+
+/**
+ * ربط مزوّد بحساب مستخدم أو فكّه (تذكرة #187، ADR-0016 §1).
+ *
+ * **السوبر أدمن وحده:** غير السوبر يُردّ **404 لا 403**، والحكم هنا لا في
+ * `requireSuperAdmin` على المسار — على نمط `PATCH /admin/users/:id/role` —
+ * فلا يتأكّد وجود مزوّد لِمَن لا يملك الربط أصلاً. والمساس صفّ المزوّد وحده:
+ * **لا `users.role` يتغيّر ولا ملف مزوّد يُحرَّر للحساب المربوط.**
+ *
+ * الحساب الهدف **حساب مستخدم عاديّ** (`role = 'user'`) لأن ADR يمنع دوراً
+ * رابعاً ويعرّف المربوط بحساب `user`: حساب إدارة أو حساب غير موجود ← 400
+ * برسالة عربية. و`null` يفكّ الربط، وحذف الحساب يفكّه أيضاً بالقيد الأجنبي
+ * (`ON DELETE SET NULL`) — لا كود خاص لهذه الحالة.
+ *
+ * وتُعاد `previous_user_id` و`target_user_id` للمسار كي يسجّل في `activity_log`
+ * ما جرى فعلاً (وليس ما طُلب): الفكّ يسجّل الحساب الذي فُكّ.
+ */
+async function linkProviderAccount(actor, providerId, userId) {
+  if (!actor || actor.role !== 'super_admin') {
+    throw ApiError.notFound('مزوّد الخدمة غير موجود');
+  }
+
+  const provider = await db.queryOne(
+    'SELECT id, linked_user_id FROM service_providers WHERE id = ?',
+    [providerId]
+  );
+  if (!provider) throw ApiError.notFound('مزوّد الخدمة غير موجود');
+
+  if (userId !== null) {
+    const target = await db.queryOne('SELECT id, role FROM users WHERE id = ?', [userId]);
+    if (!target || target.role !== 'user') {
+      throw ApiError.badRequest('حساب المزوّد حساب مستخدم عاديّ — لا يُربط مزوّد بحساب إدارة');
+    }
+  }
+
+  await db.execute('UPDATE service_providers SET linked_user_id = ? WHERE id = ?', [userId, providerId]);
+
+  return {
+    provider: await getProviderForAdmin(actor, providerId),
+    previous_user_id: provider.linked_user_id ?? null,
+    target_user_id: userId
+  };
 }
 
 /**
@@ -1476,6 +1660,7 @@ module.exports = {
   getPublicProviderById,
   publicProviderWhatsapp,
   listMyServices,
+  listLinkedProviders,
   recordProviderView,
   addProviderFavorite,
   removeProviderFavorite,
@@ -1484,6 +1669,7 @@ module.exports = {
   upsertProviderReview,
   deleteProviderReview,
   listProviderReviews,
+  replyToProviderReview,
   reportProviderReview,
   deleteProviderReviewAsAdmin,
 
@@ -1491,6 +1677,7 @@ module.exports = {
   assertProviderFlagsAllowed,
   listProvidersForAdmin,
   getProviderForAdmin,
+  linkProviderAccount,
   createProvider,
   updateProvider,
   updateProviderStatus,

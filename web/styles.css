@@ -3065,6 +3065,27 @@ body {
 }
 .provider-review-delete { color: #b91c1c; }
 .provider-review-report { color: var(--ink-faint); }
+/* ردّ المزوّد المربوط (تذكرة #187): اقتباس تحت التقييم، بحدّ ذهبي على جهة
+   البداية وخلفية غائرة — الشكل يقول «كلام المزوّد» والتسمية تقوله بالكلمة
+   أيضاً، فلا يحمل اللون وحده المعنى. */
+.provider-review-reply {
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-inline-start: 4px solid var(--gold);
+  border-radius: 10px;
+  background: var(--surface-sunk);
+}
+.provider-review-reply-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--card-gold);
+}
+.provider-review-reply-body { margin: 4px 0 0; font-size: 0.84rem; line-height: 1.7; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
+.provider-review-reply-date { display: block; margin-top: 4px; font-size: 0.72rem; color: var(--ink-faint); }
+.provider-review-reply-btn { color: var(--card-gold); }
 .provider-reviews-empty { color: var(--ink-faint); font-size: 0.84rem; margin: 6px 0; }
 .provider-reviews-more {
   display: block;

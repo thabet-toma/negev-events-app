@@ -6373,10 +6373,62 @@ function loadAccountView() {
     updateMyListNavBadge();
 
     fetchMyEvents();
+    // «مزوّدي» (تذكرة #187): الحساب المربوط وحده له قسم هنا، والجلب لا يُسقط
+    // «حسابي» إن فشل — يختفي القسم ويبقى ما سواه.
+    loadMyProviders();
   } else {
     guestView.style.display = 'block';
     loggedInView.style.display = 'none';
+    myProvidersCache = [];
+    renderMyProviders();
   }
+}
+
+/**
+ * «مزوّدي» في «حسابي» (تذكرة #187): يقرأ `GET /api/services/my-providers`
+ * لصاحب الحساب وحده — مزوّدات الربط، بشكل بطاقة الدليل نفسه. القسم يختفي
+ * كاملاً بلا ربط (لا عنوان لقسم فارغ)، وفشل الجلب يخفيه ولا يُسقط «حسابي».
+ */
+let myProvidersCache = [];
+
+async function loadMyProviders() {
+  if (!currentUser || !authToken) {
+    myProvidersCache = [];
+    renderMyProviders();
+    return;
+  }
+  try {
+    const res = await apiFetch('/api/services/my-providers', { auth: true });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success || !Array.isArray(data.providers)) {
+      throw new Error('bad my-providers response');
+    }
+    myProvidersCache = data.providers;
+  } catch (e) {
+    myProvidersCache = [];
+  }
+  renderMyProviders();
+}
+
+/** بطاقات «مزوّدي» — «تفاصيل» فيها يفتح نافذة المزوّد حيث الردّ على التقييمات. */
+function renderMyProviders() {
+  const section = document.getElementById('accountMyProvidersSection');
+  const list = document.getElementById('accountMyProvidersList');
+  if (!section || !list) return;
+  if (!myProvidersCache.length) {
+    list.innerHTML = '';
+    section.hidden = true;
+    return;
+  }
+  list.innerHTML = myProvidersCache
+    .map(provider => renderCompactServiceRowHtml(provider, {
+      // معرّفات مختلفة عن بطاقة تبويب الخدمات: الصفحتان تعيشان في DOM واحد،
+      // وتكرار `id` يجعل `getElementById` يصيب بطاقة التبويب الأخرى.
+      rowId: `accountProviderRow-${provider.id}`,
+      statsId: `accountProviderStats-${provider.id}`
+    }))
+    .join('');
+  section.hidden = false;
 }
 
 /**
@@ -9127,6 +9179,24 @@ function providerReviewHtml(review) {
   const reportBtn = !review.is_mine
     ? `<button type="button" class="provider-review-action provider-review-report" onclick="reportProviderReview(${Number(review.id)})">بلّغ</button>`
     : '';
+
+  // ردّ المزوّد المربوط (تذكرة #187): اقتباس واضح تحت التقييم — صاحبه يعرف
+  // أنه قراءة من المزوّد لا تعليق زائر ثالث — ووقته معه. الزرّ للحساب المربوط
+  // وحده (`can_reply`)، ونصّه «عدّل الردّ» حين يكون هناك ردّ قائم.
+  const replyText = review.reply_body ? String(review.reply_body).trim() : '';
+  const replyDate = formatProviderReviewDate(review.reply_at);
+  const replyHtml = replyText
+    ? `
+      <blockquote class="provider-review-reply">
+        <span class="provider-review-reply-label"><i class="fa-solid fa-reply" aria-hidden="true"></i> ردّ المزوّد</span>
+        <p class="provider-review-reply-body">${escapeHtml(replyText)}</p>
+        ${replyDate ? `<span class="provider-review-reply-date">${escapeHtml(replyDate)}</span>` : ''}
+      </blockquote>`
+    : '';
+  const replyBtn = review.can_reply
+    ? `<button type="button" class="provider-review-action provider-review-reply-btn" onclick="openProviderReplyForm(${Number(review.id)})">${replyText ? 'عدّل الردّ' : 'ردّ على التقييم'}</button>`
+    : '';
+
   return `
     <article class="provider-review" data-review-id="${Number(review.id)}">
       <div class="provider-review-head">
@@ -9134,9 +9204,10 @@ function providerReviewHtml(review) {
         <span class="provider-review-stars-text" aria-label="${Number(review.rating)} من 5" dir="ltr">${providerReviewStarsHtml(review.rating)}</span>
       </div>
       ${body}
+      ${replyHtml}
       <div class="provider-review-foot">
         ${date ? `<span class="provider-review-date">${escapeHtml(date)}</span>` : '<span></span>'}
-        <span class="provider-review-actions">${deleteBtn}${reportBtn}</span>
+        <span class="provider-review-actions">${replyBtn}${deleteBtn}${reportBtn}</span>
       </div>
     </article>`;
 }
@@ -9400,6 +9471,89 @@ async function reportProviderReview(reviewId) {
     }
   } catch (e) {
     alert('تعذّر إرسال البلاغ — تحقّق من الاتصال');
+  }
+}
+
+/**
+ * ورقة ردّ المزوّد المربوط على تقييم (تذكرة #187): تُعبَّأ من ردّه القائم إن
+ * وُجد (تعديل لا ردّ ثانٍ)، والصفّ يُقرأ من القائمة المعروضة أو من `my_review`
+ * — تقييم صاحبه في صفحة لاحقة لا صفّ له هنا.
+ */
+function openProviderReplyForm(reviewId) {
+  const id = Number(reviewId) || 0;
+  if (!id) return;
+
+  const provider = providerDetailsCache[currentProviderId] || null;
+  const fromList = providerReviewsState.reviews.find(review => Number(review.id) === id) || null;
+  const fromMine = provider && provider.my_review && Number(provider.my_review.id) === id
+    ? provider.my_review
+    : null;
+  const review = fromList || fromMine;
+
+  const modal = document.getElementById('providerReplyModal');
+  const idInput = document.getElementById('providerReplyReviewId');
+  const bodyInput = document.getElementById('providerReplyBody');
+  if (!modal || !idInput || !bodyInput) return;
+
+  idInput.value = String(id);
+  bodyInput.value = review && review.reply_body ? String(review.reply_body) : '';
+  modal.style.display = 'flex';
+  bodyInput.focus();
+}
+
+function closeProviderReplyModal() {
+  const modal = document.getElementById('providerReplyModal');
+  if (modal) modal.style.display = 'none';
+}
+
+/**
+ * حفظ الردّ — `PUT /api/services/reviews/:rid/reply`. المسار على التقييم وحده
+ * (لا يحتاج رقم المزوّد)، والخادم يتحقّق أن الحساب مربوط بمزوّد هذا التقييم
+ * داخل الاستعلام: أي حساب آخر يعود 404 لا 403. والفراغ لا يُرسل أصلاً —
+ * والخادم يرفضه 400 على أي حال.
+ */
+async function submitProviderReply(event) {
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+
+  const reviewId = Number(document.getElementById('providerReplyReviewId').value) || 0;
+  const replyBody = document.getElementById('providerReplyBody').value.trim();
+  if (!reviewId) return;
+  if (!replyBody) {
+    showToast('اكتب نصّ الردّ أولاً');
+    return;
+  }
+
+  const submitBtn = document.getElementById('providerReplySubmitBtn');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/services/reviews/${reviewId}/reply`, {
+      method: 'PUT',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reply_body: replyBody })
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      alert((data && data.message) || 'تعذّر حفظ الردّ — حاول مرة أخرى');
+      return;
+    }
+
+    // `my_review` الصفّ نفسه إن كان هذا التقييم تقييم صاحبه المربوط أيضاً.
+    const providerId = Number(currentProviderId);
+    const cached = providerDetailsCache[providerId];
+    const updated = data.review || null;
+    if (cached && cached.my_review && updated && Number(cached.my_review.id) === Number(updated.id)) {
+      cached.my_review.reply_body = updated.reply_body;
+      cached.my_review.reply_at = updated.reply_at;
+    }
+
+    closeProviderReplyModal();
+    await loadProviderReviews(providerId);
+    showToast('حُفظ ردّك على التقييم');
+  } catch (e) {
+    alert('تعذّر حفظ الردّ — تحقّق من الاتصال');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 }
 

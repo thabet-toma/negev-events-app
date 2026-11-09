@@ -970,6 +970,21 @@
           </div>
         </div>
 
+        <!-- مزوّدي (تذكرة #187): يظهر لهذا الحساب وحده حين يكون مربوطاً بمزوّد
+             خدمة واحد أو أكثر. البطاقة هي بطاقة الدليل نفسها، والنقر يفتح
+             نافذة المزوّد حيث يكتب ردّه على تقييماته. القسم يختفي كاملاً بلا
+             ربط — لا عنوان لقسم فارغ. -->
+        <div class="chart-card-box" id="accountMyProvidersSection" hidden>
+          <div class="chart-header">
+            <h4><i class="fa-solid fa-store"></i> مزوّدي</h4>
+            <button type="button" class="map-refresh-btn" onclick="loadMyProviders()">
+              <i class="fa-solid fa-rotate"></i> تحديث
+            </button>
+          </div>
+          <p class="account-photos-hint">مزوّدات الخدمة المرتبطة بحسابك — تفتح كل بطاقة صفحة المزوّد، ومنها تردّ على تقييماته.</p>
+          <div id="accountMyProvidersList"></div>
+        </div>
+
         <!-- الخصوصية وحسابي -->
         <div class="chart-card-box" id="accountPrivacySection">
           <div class="chart-header">
@@ -2093,6 +2108,30 @@
           <span>أؤكّد أن رقمي شخصي</span>
         </label>
         <button type="submit" id="providerReviewSubmitBtn" class="submit-btn">نشر التقييم</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 9ج: PROVIDER REPLY TO A REVIEW (ردّ المزوّد المربوط — تذكرة #187)
+       ردّ واحد لكل تقييم يستبدل بالتعديل. الزرّ يظهر للحساب المربوط وحده
+       (`can_reply` من الصفّ)، والخادم يحكم ثانيةً بـ404 لغيره داخل الاستعلام. -->
+  <div id="providerReplyModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3>ردّك على التقييم</h3>
+          <span class="modal-sub">يظهر تحت التقييم لكل من يفتح صفحة المزوّد</span>
+        </div>
+        <button class="close-modal-btn" onclick="closeProviderReplyModal()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="providerReplyForm" onsubmit="submitProviderReply(event)">
+        <input type="hidden" id="providerReplyReviewId" value="">
+        <div class="form-group">
+          <label for="providerReplyBody">نصّ الردّ</label>
+          <textarea id="providerReplyBody" maxlength="1000" rows="4" placeholder="مثال: شكراً لك — يسعدنا أن تجربتك كانت جيدة" required></textarea>
+          <span class="hint-text">حتى 1000 حرف. ردّ واحد لكل تقييم، والحفظ يستبدل الردّ السابق.</span>
+        </div>
+        <button type="submit" id="providerReplySubmitBtn" class="submit-btn">حفظ الردّ</button>
       </form>
     </div>
   </div>

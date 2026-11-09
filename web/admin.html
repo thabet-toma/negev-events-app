@@ -774,6 +774,24 @@
 
             <label class="ot-check"><input type="checkbox" id="provIsActive" checked> نشِط (يظهر في الدليل العام)</label>
 
+            <!-- الربط بحساب مستخدم (تذكرة #187، ADR-0016): السوبر أدمن وحده
+                 يراه، ولا يُرسل مع نموذج المزوّد — زرّه يرسل `PATCH …/link`
+                 وحده كي لا يمسّ حفظُ المزوّد ربطاً لم يُطلب تغييره. والحساب
+                 المربوط حساب مستخدم عاديّ: الخادم يرفض حساب الإدارة 400. -->
+            <div class="form-group" id="provLinkedAccountWrapper" style="display:none; background:var(--surface-sunk); padding:12px; border-radius:10px; border:1px solid var(--admin-card-border);">
+              <label><i class="fa-solid fa-link"></i> الحساب المربوط</label>
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <select id="provLinkedAccount" style="flex:1; min-width:220px;"></select>
+                <button type="button" id="provLinkedAccountSaveBtn" class="admin-btn-primary" style="flex:none; width:auto; padding-inline:18px;" onclick="handleProviderLinkSubmit()">
+                  <i class="fa-solid fa-link"></i> حفظ الربط
+                </button>
+              </div>
+              <span class="hint-text" id="provLinkedAccountCurrent">لا حساب مربوط.</span>
+              <span class="hint-text">
+                <i class="fa-solid fa-circle-info"></i> الحساب المربوط يبقى حساب مستخدم عاديّاً — لا دور جديد — يردّ على تقييمات هذا المزوّد وحده، ولا يحرّر ملفّه. وحذف الحساب يفكّ الربط ولا يحذف المزوّد.
+              </span>
+            </div>
+
             <div class="form-row" style="margin-top:18px;">
               <button type="submit" class="admin-btn-primary" id="provSubmitBtn" style="flex:1;">
                 <i class="fa-solid fa-check"></i> حفظ المزوّد

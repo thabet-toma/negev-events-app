@@ -3,7 +3,7 @@
 > **مولَّد من `server/scripts/build-index.js` — لا تحرّره بيدك؛ شغّل `npm run index:build`.**
 > ملحق `INDEX.md`: كل حالة `await test(` في ملفَي الاختبار، مرتّبة بالملف ثم السطر.
 
-## حالات الاختبار — 1384
+## حالات الاختبار — 1401
 
 `npm test` يشغّل `web-dom` ثم `smoke`؛ `smoke` يحتاج MySQL حيّة، وكل حالة معرَّفة داخل ملفها.
 
@@ -857,6 +857,18 @@
 | `بلاغ واحد لكل مستخدم: التكرار لا يرفع العدّاد، والثالث يُخفي ويُخرجه من المتوسط` | `server/test/smoke.test.js:21140` |
 | `حذف الأدمن داخل النطاق يعمل — السوبر أدمن يحذف التقييم المخفي فيختفي صفّه` | `server/test/smoke.test.js:21190` |
 | `حذف تقييمي: صاحبه وحده، idempotent — وغيره لا يمسّه` | `server/test/smoke.test.js:21201` |
+| `Setup (#187): سوبر أدمن حيّ، وأدمن خارج النطاق، وثلاثة مستخدمين، وفئة ومزوّدان` | `server/test/smoke.test.js:21302` |
+| `أدمن البلدة يُردّ 404 على الربط والفكّ ولا يُكتب شيء` | `server/test/smoke.test.js:21357` |
+| `حساب إدارة أو حساب غير موجود ← 400 عربية، ولا ربط` | `server/test/smoke.test.js:21379` |
+| `السوبر أدمن يربط: 200، والعمود يُكتب، والحدث في activity_log` | `server/test/smoke.test.js:21399` |
+| `الربط لا يغيّر users.role — ولا قيمة provider في القاعدة` | `server/test/smoke.test.js:21426` |
+| `«مزوّدي»: بطاقة صاحب الربط وحده، وبلا رقم، ولا linked_user_id في أي استجابة` | `server/test/smoke.test.js:21444` |
+| `لا ردّ قبل الكتابة، والحساب المربوط يردّ فيظهر في القراءة العامة` | `server/test/smoke.test.js:21472` |
+| `ردّ واحد لكل تقييم: التعديل يستبدل ويكتب وقتاً جديداً` | `server/test/smoke.test.js:21514` |
+| `حساب آخر يُردّ 404 — ولو كان كاتب التقييم أو مربوطاً بمزوّد آخر` | `server/test/smoke.test.js:21552` |
+| `نصّ الردّ إلزامي غير فارغ وبسقف 1000 — وإلا 400` | `server/test/smoke.test.js:21585` |
+| `فكّ الربط: يُسجَّل، ويفقد الحساب الردّ و«مزوّدي»، ويبقى الردّ المنشور` | `server/test/smoke.test.js:21631` |
+| `حذف الحساب يفكّ الربط ولا يحذف المزوّد` | `server/test/smoke.test.js:21665` |
 | `web/index.html + config.js + api.js + app.js load together in a jsdom document with no source change` | `server/test/web-dom.test.js:1007` |
 | `switchTab('tabAdd') actually builds the publish form — dynamicFormFields stops being empty` | `server/test/web-dom.test.js:1039` |
 | `the publish form carries a «سهرة الشباب» field for a type that defines one` | `server/test/web-dom.test.js:1059` |
@@ -1393,3 +1405,8 @@
 | `«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل` | `server/test/web-dom.test.js:19837` |
 | `فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار` | `server/test/web-dom.test.js:19863` |
 | `429 في المعاينة والحفظ: «حاول بعد قليل» (#180)` | `server/test/web-dom.test.js:19884` |
+| `نافذة المزوّد: الردّ اقتباس تحت التقييم، وزرّه للحساب المربوط وحده` | `server/test/web-dom.test.js:20055` |
+| `الردّ يُكتب بـPUT على مسار التقييم نفسه، ويظهر اقتباساً بعد الإعادة` | `server/test/web-dom.test.js:20107` |
+| `«عدّل الردّ» يفتح الورقة على النصّ القائم — تعديل لا كتابة من الصفر` | `server/test/web-dom.test.js:20159` |
+| `«حسابي»: قسم «مزوّدي» من الخادم، وبطاقته تفتح نافذة المزوّد` | `server/test/web-dom.test.js:20184` |
+| `«حسابي»: القسم يختفي كاملاً حين لا مزوّد مربوط — ويُفرَّغ لا يُترك قديماً` | `server/test/web-dom.test.js:20217` |

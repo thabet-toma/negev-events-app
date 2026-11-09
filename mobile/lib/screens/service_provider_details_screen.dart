@@ -514,10 +514,16 @@ class _ProviderBodyState extends State<_ProviderBody> {
   }
 
   /// تعليق واحد: الاسم من الخادم، والنجوم، والنصّ، ثم حذف صاحبه أو بلاغ غيره.
+  ///
+  /// **وردّ المزوّد المربوط (تذكرة #187):** اقتباس تحت التعليق — بحدّ ذهبي
+  /// وتسمية مكتوبة، فلا يحمل اللون وحده المعنى — وزرّ الردّ لهذا الحساب وحده
+  /// (`canReply`)، ونصّه «عدّل الردّ» حين يكون هناك ردّ قائم.
   Widget _reviewTile(ProviderReview review) {
     final mine = review.isMine ||
         review.canDelete ||
         (_myReview != null && _myReview!.id == review.id);
+    final replyText = (review.replyBody ?? '').trim();
+    final replyDate = _reviewDateLabel(review.replyAt);
     return Container(
       key: Key('provider_review_${review.id}'),
       margin: const EdgeInsets.only(bottom: 8),
@@ -559,6 +565,52 @@ class _ProviderBodyState extends State<_ProviderBody> {
               style: TextStyle(fontSize: 12.5, color: context.c.inkSoft, height: 1.5),
             ),
           ],
+          if (replyText.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              key: Key('provider_review_reply_${review.id}'),
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              decoration: BoxDecoration(
+                color: context.c.surfaceSunk,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: context.c.gold),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.reply, size: 14, color: context.c.gold),
+                      const SizedBox(width: 6),
+                      Text(
+                        'ردّ المزوّد',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w800,
+                          color: context.c.gold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    replyText,
+                    key: Key('provider_review_reply_body_${review.id}'),
+                    style: TextStyle(fontSize: 12.5, color: context.c.ink, height: 1.5),
+                  ),
+                  if (replyDate.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      replyDate,
+                      key: Key('provider_review_reply_date_${review.id}'),
+                      style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
           Row(
             children: [
               Expanded(
@@ -567,6 +619,12 @@ class _ProviderBodyState extends State<_ProviderBody> {
                   style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
                 ),
               ),
+              if (review.canReply)
+                TextButton(
+                  key: Key('provider_review_reply_btn_${review.id}'),
+                  onPressed: () => _openReplySheet(review),
+                  child: Text(replyText.isEmpty ? 'ردّ على التقييم' : 'عدّل الردّ'),
+                ),
               if (mine)
                 TextButton(
                   key: Key('provider_review_delete_${review.id}'),
@@ -584,6 +642,42 @@ class _ProviderBodyState extends State<_ProviderBody> {
         ],
       ),
     );
+  }
+
+  /// ورقة ردّ المزوّد المربوط: نصّ واحد (≤1000) يُرسل بـ`PUT …/reply`، والحفظ
+  /// يستبدل الردّ القائم. الصلاحية في الخادم داخل الاستعلام، والزرّ لا يظهر
+  /// إلا لمن `canReply` — ومع ذلك يُرسل الخادم 404 لغيره.
+  Future<void> _openReplySheet(ProviderReview review) async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      openSignInGate(context, 'سجّل الدخول للردّ على التقييم');
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _ReplySheet(
+        initialReply: review.replyBody,
+        onSubmit: (text) => _saveReply(review, text),
+      ),
+    );
+  }
+
+  Future<void> _saveReply(ProviderReview review, String text) async {
+    final updated = await AppServices.of(context).api.replyToProviderReview(
+          review.id,
+          replyBody: text,
+        );
+    if (!mounted) return;
+    setState(() {
+      final index = _reviews.indexWhere((entry) => entry.id == review.id);
+      if (index >= 0) _reviews[index] = updated;
+      // `my_review` الصفّ نفسه إن كان هذا التقييم تقييم صاحبه المربوط أيضاً.
+      if (_myReview != null && _myReview!.id == review.id) _myReview = updated;
+    });
+    if (mounted) showMessage(context, 'حُفظ ردّك على التقييم');
   }
 
   String _priceBadgeText() {
@@ -1715,6 +1809,103 @@ class _ReviewSheetState extends State<_ReviewSheet> {
                 child: const Text('حذف تقييمي'),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ورقة «ردّك على التقييم» (تذكرة #187): نصّ واحد ≤1000 حرف، والحفظ يستبدل
+/// الردّ القائم. تُعبَّأ من الردّ المخزَّن كي يكون التعديل تعديلاً لا كتابةً
+/// من الصفر. والفراغ لا يُرسل: الخادم يرفضه 400 على أي حال.
+class _ReplySheet extends StatefulWidget {
+  const _ReplySheet({
+    required this.initialReply,
+    required this.onSubmit,
+  });
+
+  final String? initialReply;
+  final Future<void> Function(String replyBody) onSubmit;
+
+  @override
+  State<_ReplySheet> createState() => _ReplySheetState();
+}
+
+class _ReplySheetState extends State<_ReplySheet> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialReply ?? '');
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) {
+      showMessage(context, 'اكتب نصّ الردّ أولاً', isError: true);
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await widget.onSubmit(text);
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasReply = (widget.initialReply ?? '').trim().isNotEmpty;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 8,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              hasReply ? 'عدّل ردّك على التقييم' : 'ردّك على التقييم',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'ردّ واحد لكل تقييم — يظهر تحت التقييم لكل من يفتح صفحتك.',
+              style: TextStyle(fontSize: 11.5, color: context.c.inkFaint),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              key: const Key('provider_reply_body'),
+              controller: _controller,
+              maxLines: 4,
+              maxLength: 1000,
+              enabled: !_busy,
+              decoration: const InputDecoration(
+                hintText: 'مثال: شكراً لك — يسعدنا أن تجربتك كانت جيدة',
+              ),
+            ),
+            const SizedBox(height: 6),
+            ElevatedButton(
+              key: const Key('provider_reply_submit'),
+              onPressed: _busy ? null : _submit,
+              child: const Text('حفظ الردّ'),
+            ),
           ],
         ),
       ),

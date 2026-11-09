@@ -19,7 +19,11 @@ const ACTIONS = [
   'event_deleted',
   'event_owner_changed',
   'village_promoted',
-  'event_duplicate_override'
+  'event_duplicate_override',
+  // ربط مزوّد الخدمة بحساب مستخدم وفكّه (تذكرة #187، ADR-0016 §1): قرار ثقة
+  // يمنح طرفاً ثالثاً صلاحية الردّ على تقييمات المزوّد — يُسجَّل طرفاه.
+  'provider_account_linked',
+  'provider_account_unlinked'
 ];
 
 const DEFAULT_PAGE_SIZE = 30;
@@ -29,16 +33,34 @@ const MAX_PAGE_SIZE = 100;
  * يسجّل فعلاً واحداً مع لقطة عنوان المناسبة وبلدتها ونوعها وقت الفعل —
  * تُقرأ من الصف نفسه، فسطر الحذف يُكتب قبل الحذف. لا يرمي أبداً: السجل
  * شاهد على الفعل لا شرط له، ففشله يُسجَّل في السجل التقني ويمضي الطلب.
+ *
+ * **وليس كل فعل على مناسبة** (تذكرة #187): ربط المزوّد بحساب لا مناسبة له،
+ * فبلا `eventId` يُكتب الصفّ مباشرةً وأعمدة المناسبة تبقى `NULL` بدل
+ * `INSERT … SELECT FROM events WHERE e.id = NULL` التي لا تُدرج شيئاً.
+ * و`details` تقبل كائناً فتُخزَّن JSON — شكلها يقرأه من يفتح السجل لا نصٌّ
+ * مفكوك الأوصاف (`"[object Object]"`).
  */
-async function record({ actorId = null, action, eventId, details = null }) {
+async function record({ actorId = null, action, eventId = null, details = null }) {
+  const detailsText = details === null || details === undefined
+    ? null
+    : (typeof details === 'object' ? JSON.stringify(details) : String(details)).slice(0, 500);
+
   try {
+    if (eventId === null || eventId === undefined) {
+      await db.execute(
+        'INSERT INTO activity_log (actor_user_id, action, details) VALUES (?, ?, ?)',
+        [actorId, action, detailsText]
+      );
+      return;
+    }
+
     await db.execute(
       `INSERT INTO activity_log (actor_user_id, action, event_id, event_title, event_town, occasion_type_name, details)
        SELECT ?, ?, e.id, e.title, e.town, ot.name, ?
          FROM events e
          LEFT JOIN occasion_types ot ON ot.id = e.occasion_type_id
         WHERE e.id = ?`,
-      [actorId, action, details ? String(details).slice(0, 500) : null, eventId]
+      [actorId, action, detailsText, eventId]
     );
   } catch (err) {
     logger.error(`[activity] failed to record ${action} for event ${eventId}:`, err.message);
