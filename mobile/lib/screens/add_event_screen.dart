@@ -18,6 +18,7 @@ import '../widgets/auth_action_button.dart';
 import '../widgets/location_picker_map.dart';
 import '../widgets/possible_duplicate_dialog.dart';
 import 'account_screen.dart';
+import 'card_studio_screen.dart';
 
 /// رسالة النشر النهائية — التحذير (إن وُجد) يُلحَق بنص الخادم كما هو، بلا
 /// إعادة صياغة. دالة عامة صِرفة لتبقى قابلة للاختبار دون تركيب الشاشة كاملة.
@@ -143,6 +144,20 @@ Future<CroppedFile?> cropPosterImage(XFile picked) {
 /// للاختبار بلا شاشة قصّ أصلية.
 XFile resolveCroppedPoster(XFile picked, CroppedFile? cropped) {
   return cropped == null ? picked : XFile(cropped.path);
+}
+
+/// التقاط صورة الملصق من المعرض وقصّها ٤:٥ — نفس مسار زرّ الملصق القائم
+/// (`_pickPoster`)، مشتركاً بين شاشة النشر ولوحة النجاح بعدها وشاشة التعديل،
+/// كي لا يتفرّق منطق المنتقي والقصّ في ثلاث نسخ. `null` = أغلق المستخدم
+/// المنتقي بلا اختيار.
+Future<XFile?> pickPosterImage() async {
+  final picked = await ImagePicker().pickImage(
+    source: ImageSource.gallery,
+    imageQuality: 85,
+  );
+  if (picked == null) return null;
+  final cropped = await cropPosterImage(picked);
+  return resolveCroppedPoster(picked, cropped);
 }
 
 /// القرى المعروضة في منتقي القرية تحت البند الجامع (٢٠٢٦-١٠): **قرى المحافظة
@@ -519,6 +534,18 @@ class _AddEventScreenState extends State<AddEventScreen> {
   List<Event> _conflicts = const [];
   bool _checkingCollision = false;
 
+  /// مناسبة أُنشئت للتوّ — `eventId` من 201. بابا البطاقة يظهران **بعد**
+  /// النجاح وحده؛ قبلها لا معرّف يُرسَم له فلا يُزرع زرّ ميت.
+  int? _publishedEventId;
+  String _publishedTone = 'festive';
+  String? _publishedTitle;
+  bool _publishedApproved = false;
+  bool _uploadingReadyCard = false;
+
+  /// يرفع الصفحة إلى لوحة النجاح بعد الإرسال (المستخدم كان عند زرّ الإرسال
+  /// في أسفل القائمة) — ويُحرَّر في `dispose` القائم.
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -569,6 +596,7 @@ class _AddEventScreenState extends State<AddEventScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     for (final controller in _controllers.values) {
       controller.dispose();
     }
@@ -635,20 +663,13 @@ class _AddEventScreenState extends State<AddEventScreen> {
   }
 
   Future<void> _pickPoster() async {
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-    );
-    if (picked == null) return;
-
     // القصّ نطلبه مقفولاً على ٤:٥ بقرار #178 (نسبة كرت المناسبة): ما يُرفع هو
     // ما سيظهر في الكرت. (قيد iOS المعروف في تعليق cropPosterImage.) ومن أراد
     // الصورة كاملة يرجعه زرّ الرجوع من شاشة القصّ — resolveCroppedPoster يُبقي
     // الاختيار الأصلي حينها.
-    final cropped = await cropPosterImage(picked);
-
-    if (!mounted) return;
-    setState(() => _poster = resolveCroppedPoster(picked, cropped));
+    final picked = await pickPosterImage();
+    if (!mounted || picked == null) return;
+    setState(() => _poster = picked);
   }
 
   Future<void> _pickAudio() async {
@@ -831,7 +852,24 @@ class _AddEventScreenState extends State<AddEventScreen> {
       // التحذير ليّن وغير حاجب — المناسبة حُفظت فعلاً بالبلدة التي اختارها
       // المستخدم، ونصّه يصل كما أرسله الخادم دون إعادة صياغة.
       showMessage(context, composeEventSubmitMessage(result));
+      // نلتقط اسم المناسبة قبل التصفير: عنوان الستوديو عرضٌ فقط.
+      final publishedTitle =
+          (_honorees.isEmpty ? '' : _honorees.first.nameController.text.trim());
       _reset();
+      if (result.eventId != null) {
+        setState(() {
+          _publishedEventId = result.eventId;
+          _publishedTone = type.tone;
+          _publishedTitle = publishedTitle.isEmpty ? null : publishedTitle;
+          _publishedApproved = result.status == 'approved';
+        });
+        // المستخدم عند زرّ الإرسال في أسفل القائمة — نصعد إلى لوحة النجاح
+        // بعد الإطار الذي بُنيت فيه، لا قبل وجودها.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scrollController.hasClients) return;
+          _scrollController.jumpTo(0);
+        });
+      }
     } on PossibleDuplicateException catch (duplicate) {
       // لم يُنشأ أي صف: ليس فشل نشر، فلا يُسجَّل `publish_failed`. النموذج يبقى
       // ممتلئاً في الحالتين، و`finally` يفكّ حالة الإرسال قبل إعادة المحاولة.
@@ -862,6 +900,108 @@ class _AddEventScreenState extends State<AddEventScreen> {
     if (publishAnyway && mounted) {
       await _submit(type, confirmDuplicate: true);
     }
+  }
+
+  /// يفتح ستوديو البطاقة للمناسبة التي أُنشئت للتوّ — النبرة من نوعها الذي
+  /// أُنشئت به، لا من `_type` الحالي الذي قد يكون تغيّر بعد التصفير.
+  Future<void> _openPublishedCardStudio() async {
+    final eventId = _publishedEventId;
+    if (eventId == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<EventCardItem?>(
+        builder: (_) => CardStudioScreen(
+          eventId: eventId,
+          tone: _publishedTone,
+          eventTitle: _publishedTitle,
+        ),
+      ),
+    );
+  }
+
+  /// «ارفع بطاقتك الجاهزة» بعد النشر — ترفع الملصق وحده إلى الصفّ الجديد عبر
+  /// `PATCH /api/events/:id` (حقل `poster`)، لا مسار نشر ثانٍ ولا إعادة إرسال
+  /// النموذج. الفشل يظهر بنصّ الخادم العربي داخل الشاشة.
+  Future<void> _uploadPublishedReadyCard() async {
+    final eventId = _publishedEventId;
+    if (eventId == null || _uploadingReadyCard) return;
+    setState(() => _uploadingReadyCard = true);
+    try {
+      final picked = await pickPosterImage();
+      if (picked == null || !mounted) return;
+      final api = AppServices.of(context).api;
+      final file = http.MultipartFile.fromBytes(
+        'poster',
+        await picked.readAsBytes(),
+        filename: picked.name,
+      );
+      await api.updateEventPoster(eventId, poster: file);
+      if (!mounted) return;
+      showMessage(context, 'حُدّثت البطاقة الجاهزة — صارت ملصق المناسبة');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploadingReadyCard = false);
+    }
+  }
+
+  /// لوحة ما بعد النشر: «صمّم بطاقة» وبجانبها «ارفع بطاقتك الجاهزة» — البابان
+  /// لا يُرسمان قبل `eventId`، فالمناسبة قبل الإنشاء لا معرّف لها.
+  Widget _publishedCardPanel(OccasionType type) {
+    return Container(
+      key: const Key('add_event_published_panel'),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: context.c.successWash,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: context.c.success),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _publishedApproved
+                ? 'نُشرت المناسبة — بطاقة الدعوة جاهزة'
+                : 'تم استلام المناسبة — بطاقة الدعوة جاهزة',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: context.c.ink,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const Key('add_event_card_studio_button'),
+                onPressed: _openPublishedCardStudio,
+                icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+                label: const Text('صمّم بطاقة'),
+              ),
+              if (type.showsField('poster_url'))
+                OutlinedButton.icon(
+                  key: const Key('add_event_published_ready_card_button'),
+                  onPressed:
+                      _uploadingReadyCard ? null : _uploadPublishedReadyCard,
+                  icon: const Icon(Icons.upload_file, size: 18),
+                  label: Text(
+                    _uploadingReadyCard
+                        ? 'جارٍ الرفع…'
+                        : 'ارفع بطاقتك الجاهزة',
+                  ),
+                ),
+            ],
+          ),
+          TextButton(
+            key: const Key('add_event_publish_another_button'),
+            onPressed: () => setState(() => _publishedEventId = null),
+            child: const Text('نشر مناسبة أخرى'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _reset() {
@@ -929,8 +1069,10 @@ class _AddEventScreenState extends State<AddEventScreen> {
     final type = _type!;
 
     return ListView(
+      controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
       children: [
+        if (_publishedEventId != null) _publishedCardPanel(type),
         const _Note(
           text:
               'المناسبة تدخل قائمة المراجعة، ويتم نشرها بعد اعتماد الإدارة.',
@@ -1160,6 +1302,20 @@ class _AddEventScreenState extends State<AddEventScreen> {
             value: _poster?.name,
             onPick: _pickPoster,
             onClear: () => setState(() => _poster = null),
+          ),
+          // باب «ارفع بطاقتك الجاهزة» (#181) — **نفس** رفع الملصق القائم
+          // (`_pickPoster`: منتقي الصور ثم قصّ ٤:٥)، لا مسار ثانٍ ولا حقل
+          // جديد: البطاقة الجاهزة تصير بوستر المناسبة نفسه. أما التصميم
+          // فالمناسبة هنا لم تُنشأ بعد فلا معرّف يُرسَم له؛ باباه يظهران في
+          // لوحة ما بعد النشر أدناه (`_publishedCardPanel`)، وفي شاشة التعديل.
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton.icon(
+              key: const Key('add_event_ready_card_button'),
+              onPressed: _pickPoster,
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: const Text('ارفع بطاقتك الجاهزة'),
+            ),
           ),
         ],
         if (type.showsField('audio_url')) ...[
@@ -1426,27 +1582,33 @@ class _FilePickTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: context.c.line),
       ),
-      child: ListTile(
-        leading: Icon(icon, color: context.c.sky),
-        title: Text(label, style: const TextStyle(fontSize: 14.5)),
-        subtitle: Text(
-          value ?? 'لم يُختر ملف',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+      // `Material` شفاف **داخل** الحاوية الملوّنة: بدونه يرى `ListTile`
+      // الـ`DecoratedBox` ذا الخلفية بينه وبين `Material` الأب في debug
+      // (تحذير «ink splashes may be invisible»)، وقد كان يُبتلع في الاختبار.
+      child: Material(
+        type: MaterialType.transparency,
+        child: ListTile(
+          leading: Icon(icon, color: context.c.sky),
+          title: Text(label, style: const TextStyle(fontSize: 14.5)),
+          subtitle: Text(
+            value ?? 'لم يُختر ملف',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+          ),
+          trailing: value == null
+              ? IconButton(
+                  icon: Icon(Icons.upload_file, color: context.c.sky),
+                  onPressed: onPick,
+                  tooltip: 'اختيار',
+                )
+              : IconButton(
+                  icon: Icon(Icons.close, color: context.c.inkFaint),
+                  onPressed: onClear,
+                  tooltip: 'إزالة',
+                ),
+          onTap: value == null ? onPick : null,
         ),
-        trailing: value == null
-            ? IconButton(
-                icon: Icon(Icons.upload_file, color: context.c.sky),
-                onPressed: onPick,
-                tooltip: 'اختيار',
-              )
-            : IconButton(
-                icon: Icon(Icons.close, color: context.c.inkFaint),
-                onPressed: onClear,
-                tooltip: 'إزالة',
-              ),
-        onTap: value == null ? onPick : null,
       ),
     );
   }

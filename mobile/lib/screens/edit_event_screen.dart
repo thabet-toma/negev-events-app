@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../api/api_client.dart';
 import '../api/negev_api.dart';
@@ -30,7 +31,9 @@ import 'add_event_screen.dart'
         PublishAtField,
         kVillagesTown,
         kVillageNotListedOption,
-        kRequestedVillageNameMaxLength;
+        kRequestedVillageNameMaxLength,
+        pickPosterImage;
+import 'card_studio_screen.dart';
 import 'my_events_screen.dart' show eventStatusLabel, eventStatusColor;
 
 /// الحقول التي يصنّفها الخادم دائماً حرِجة (events.service.js
@@ -105,8 +108,9 @@ String composeEventUpdateMessage(EventUpdateResult result) {
 /// تعديل مناسبة يملكها المستخدم (أو أي مناسبة للإدارة).
 ///
 /// نفس الحقول الديناميكية من إعداد نوع المناسبة التي يستعملها النشر — لا فرع
-/// واحد على اسم النوع هنا. `PATCH /api/events/:id` بلا رفع ملفات إطلاقاً:
-/// poster_url وaudio_url يُعرضان للقراءة فقط.
+/// واحد على اسم النوع هنا. حفظ الحقول `JSON` كما كان؛ و**رفع ملصق البطاقة
+/// الجاهزة وحده** يمرّ بـ`PATCH /api/events/:id` متعدد الأجزاء (حقل `poster`)
+/// من بابها المستقلّ، فلا يتغيّر سلوك التعديل العادي. الصوت يبقى للقراءة فقط.
 class EditEventScreen extends StatefulWidget {
   const EditEventScreen({super.key, required this.event});
 
@@ -153,6 +157,12 @@ class _EditEventScreenState extends State<EditEventScreen> {
   bool _saving = false;
   String? _status;
 
+  /// الملصق المعروض — يبدأ من الصفّ ويتغيّر بعد رفع البطاقة الجاهزة، بدل
+  /// قراءة `widget.event.posterUrl` الثابتة.
+  late String? _posterUrl;
+  bool _posterUploaded = false;
+  bool _uploadingReadyCard = false;
+
   late Map<String, String> _originalText;
   late String _originalTown;
   int? _originalVillageId;
@@ -171,6 +181,7 @@ class _EditEventScreenState extends State<EditEventScreen> {
     super.initState();
     _type = widget.event.occasionType;
     _status = widget.event.status;
+    _posterUrl = widget.event.posterUrl;
     _loadFromEvent(widget.event);
   }
 
@@ -706,7 +717,11 @@ class _EditEventScreenState extends State<EditEventScreen> {
             _ReadOnlyMediaTile(
               icon: Icons.image_outlined,
               label: type?.labelFor('poster_url') ?? 'بوستر الدعوة',
-              value: widget.event.posterUrl,
+              value: _posterUrl,
+              subtitle:
+                  (_posterUrl == null || _posterUrl!.isEmpty) && !_posterUploaded
+                      ? 'لا يوجد — ارفع بطاقتك الجاهزة من الزرّ أدناه'
+                      : 'بطاقة مرفوعة — يمكنك استبدالها من «ارفع بطاقتك الجاهزة»',
             ),
           if (type?.showsField('audio_url') ?? false) ...[
             const SizedBox(height: 10),
@@ -717,6 +732,14 @@ class _EditEventScreenState extends State<EditEventScreen> {
             ),
             ..._textFieldWidget(type, 'audio_title'),
           ],
+          // بابا بطاقة الدعوة (#181) — «صمّم بطاقة» يفتح الستوديو، وبجانبه
+          // «ارفع بطاقتك الجاهزة» يرفع الملصق إلى المناسبة نفسها (PATCH
+          // متعدد الأجزاء، حقل `poster`). موضعهما بعد حقلي الملصق والصوت لا
+          // تحت «أزرار ملصق»: الملصق هنا بطاقة قراءة/عرض، لا أزرار. التصميم
+          // ظاهر لكل الأنواع لأن البطاقة تُرسم من صفّ المناسبة؛ ورفع الملصق
+          // يظهر فقط حين يُظهر النوع حقل poster_url. النشر لا يحملهما قبل
+          // الإنشاء لأن المناسبة لا معرّف لها بعد.
+          _cardDoors(type),
           const SizedBox(height: 12),
           EventVisibilityField(
             value: _visibility,
@@ -832,6 +855,87 @@ class _EditEventScreenState extends State<EditEventScreen> {
     ];
   }
 
+  /// بابا بطاقة الدعوة (#181) جنباً إلى جنب: «صمّم بطاقة» يفتح الستوديو لنبرة
+  /// نوع المناسبة (من `tone` وحده، وما عدا `solemn` يُقرأ `festive`)، وبجانبه
+  /// «ارفع بطاقتك الجاهزة» يرفع الملصق إلى الصفّ نفسه. `Wrap` لا `Row` لأن
+  /// النصّين طويلان على الهواتف الضيقة، فيلتفّان بدل الفيض.
+  Widget _cardDoors(OccasionType? type) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            key: const Key('edit_event_card_studio_button'),
+            onPressed: _openCardStudio,
+            icon: const Icon(Icons.auto_awesome_outlined, size: 18),
+            label: const Text('صمّم بطاقة'),
+          ),
+          if (type?.showsField('poster_url') ?? false)
+            OutlinedButton.icon(
+              key: const Key('edit_event_ready_card_button'),
+              onPressed: _uploadingReadyCard ? null : _uploadReadyCard,
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: Text(
+                _uploadingReadyCard ? 'جارٍ الرفع…' : 'ارفع بطاقتك الجاهزة',
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// «ارفع بطاقتك الجاهزة» — يلتقط الملصق ويقصّه ٤:٥ بالمُساعد المشترك نفسه
+  /// (`pickPosterImage`)، ثم يرفعه **وحده** بـ`PATCH /api/events/:id` متعدد
+  /// الأجزاء (حقل `poster`). حفظ النموذج يبقى JSON ولا يمرّ من هنا.
+  Future<void> _uploadReadyCard() async {
+    if (_uploadingReadyCard) return;
+    setState(() => _uploadingReadyCard = true);
+    try {
+      final picked = await pickPosterImage();
+      if (picked == null || !mounted) return;
+      final api = AppServices.of(context).api;
+      final file = http.MultipartFile.fromBytes(
+        'poster',
+        await picked.readAsBytes(),
+        filename: picked.name,
+      );
+      await api.updateEventPoster(widget.event.id, poster: file);
+      // الردّ لا يحمل `poster_url`؛ نعيد جلب الصفّ ليُعرض الملصق الجديد فعلاً.
+      // فشل الجلب وحده لا يُلغي نجاح الرفع، فتبقى الرسالة ناجحة و`_posterUploaded`
+      // يعلّم أن ملصقاً صار موجوداً حتى لو تعذّر تحديث الرابط.
+      String? refreshed;
+      try {
+        refreshed = (await api.eventDetails(widget.event.id)).posterUrl;
+      } catch (_) {}
+      if (!mounted) return;
+      setState(() {
+        _posterUrl = refreshed ?? _posterUrl;
+        _posterUploaded = true;
+      });
+      showMessage(context, 'حُدّثت البطاقة الجاهزة — صارت ملصق المناسبة');
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploadingReadyCard = false);
+    }
+  }
+
+  Future<void> _openCardStudio() async {
+    // نتيجة المسار (آخر بطاقة حُفظت) لا تُستهلك هنا: البطاقة تُحفظ على
+    // الخادم وتصير `og:image` للمناسبة، والحقول المحلية لا تتغيّر.
+    await Navigator.of(context).push(
+      MaterialPageRoute<EventCardItem?>(
+        builder: (_) => CardStudioScreen(
+          eventId: widget.event.id,
+          tone: _type?.tone ?? 'festive',
+          eventTitle: widget.event.displayTitle,
+        ),
+      ),
+    );
+  }
+
   Widget _honoreesEditor(OccasionType? type) {
     final label = type?.labelFor('honorees') ?? 'أصحاب المناسبة';
 
@@ -932,11 +1036,20 @@ class _EditEventScreenState extends State<EditEventScreen> {
 }
 
 class _ReadOnlyMediaTile extends StatelessWidget {
-  const _ReadOnlyMediaTile({required this.icon, required this.label, required this.value});
+  const _ReadOnlyMediaTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.subtitle,
+  });
 
   final IconData icon;
   final String label;
   final String? value;
+
+  /// نصّ الحالة حين يختلف عن الافتراضي — الملصق بعده صار قابلاً للاستبدال من
+  /// الباب المجاور، فلا يوصف بـ«غير قابل للتعديل».
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -947,14 +1060,23 @@ class _ReadOnlyMediaTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: context.c.line),
       ),
-      child: ListTile(
-        leading: Icon(icon, color: context.c.inkFaint),
-        title: Text(label, style: const TextStyle(fontSize: 14.5)),
-        subtitle: Text(
-          value == null || value!.isEmpty ? 'لا يوجد' : 'غير قابل للتعديل من هذه الشاشة',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+      // `Material` شفاف داخل الحاوية الملوّنة — نفس إصلاح `_FilePickTile`:
+      // بدونه يرى `ListTile` الـ`DecoratedBox` بينه وبين `Material` الأب في
+      // debug ويحذّر أن خلفيته/رذاذ الحبر قد تختفي.
+      child: Material(
+        type: MaterialType.transparency,
+        child: ListTile(
+          leading: Icon(icon, color: context.c.inkFaint),
+          title: Text(label, style: const TextStyle(fontSize: 14.5)),
+          subtitle: Text(
+            subtitle ??
+                (value == null || value!.isEmpty
+                    ? 'لا يوجد'
+                    : 'غير قابل للتعديل من هذه الشاشة'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: context.c.inkFaint),
+          ),
         ),
       ),
     );
