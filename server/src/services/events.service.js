@@ -1934,7 +1934,8 @@ function classifyAmendment(changedColumns) {
 
 /**
  * Deletes from Cloudinary an image a row just stopped using (a replaced
- * poster, artist image or service image). Only one storeUploadedImage made,
+ * poster, artist image or service image, or an `event_cards` image whose row
+ * was deleted — تذكرة #180). Only one storeUploadedImage/uploadBuffer made,
  * and only when no row anywhere still holds that URL — the edit forms accept
  * a typed URL, so an admin may have pasted it onto another event. Best-effort,
  * like every other destroy: called after the row write has succeeded.
@@ -1947,8 +1948,9 @@ async function releaseReplacedImage(oldUrl, newUrl) {
     `SELECT 1 AS used FROM events WHERE poster_url = ? OR artist_image_url = ?
      UNION ALL SELECT 1 FROM service_providers WHERE image_url = ?
      UNION ALL SELECT 1 FROM occasion_types WHERE default_poster_url = ?
+     UNION ALL SELECT 1 FROM event_cards WHERE image_url = ?
      LIMIT 1`,
-    [oldUrl, oldUrl, oldUrl, oldUrl]
+    [oldUrl, oldUrl, oldUrl, oldUrl, oldUrl]
   );
   if (inUse) return;
   logger.info('cloudinary.release', { publicId });
@@ -3216,6 +3218,7 @@ module.exports = {
   markAnnounced,
   escapeLike,
   honoreesForEvents,
+  eventDaysForEvents,
   listAmendments,
   listMyEvents,
   findCollisions,

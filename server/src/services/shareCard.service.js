@@ -1187,5 +1187,13 @@ module.exports = {
   getOrRenderVideoCard,
   // The story studio draws the same brand mark on a 1080×1920 card; exporting
   // the one drawing function is cheaper than a second copy of the geometry.
-  drawBrandMark
+  drawBrandMark,
+  // The card studio (#180, cardStudio.service.js) frames the event's own
+  // poster and wraps Arabic names exactly as this module does — two helpers,
+  // one implementation. `loadPosterBuffer` is what keeps local `/uploads/…`
+  // media off the network, and `wrapLines` measures under the context's
+  // current font, so it serves every family the studio registers, not Cairo
+  // alone.
+  loadPosterBuffer,
+  wrapLines
 };

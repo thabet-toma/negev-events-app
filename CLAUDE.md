@@ -116,6 +116,7 @@
 | الحلقات السابقة وصورة مشاركة الحلقة | كل بثّ نشِط برابط **فيديو واحد** يُحفظ حلقةً لليوم تلقائياً (`liveHub.recordBroadcast` من `PUT /api/admin/settings`)، و`past_episodes` في `GET /api/live/hub`؛ صفحة الحلقة `/live/e/:id` وبطاقتها في `share.routes.js` + `renderEpisodeCard` في `shareCard.service.js`. لماذا رابط الفيديو لا رابط القناة: ADR-0008 |
 | «قائمتي» (المحفوظات) | ليست جدولاً جديداً: هي وجه «ذكّرني» (`event_reminders`، وعمود `notify` للكتم) — `listMyReminders` و`myListBucket` في `events.service.js` (الأقسام يحسبها الخادم، لا العميل)، ومسارات `/remind` و`/my-reminders` في `events.routes.js`؛ الويب `loadMyList`/`renderMyList` في `web/app.js`، والموبايل `mobile/lib/screens/my_list_screen.dart` + `models/my_list.dart`. **لم تعد وجهة في الشريط السفلي**: الشريط ثلاث وجهات (المناسبات، خدماتنا، خدمات الأعراس)، و«حسابي» يُفتح من زرّه في الترويسة وحده، والوصول إليها في الويب من بطاقة داخل «حسابي» — وهي والخريطة والنقوط بطاقات وصول سريع هناك |
 | «خدماتنا» و«آخر خبر» | وجهة عامة بلا حساب بثلاث بطاقات منصّات كترا؛ «آخر خبر» قارئ أخبار المحافظة من مصدرها الخارجي: `server/src/routes/news.routes.js` (مساران عامّان) + `server/src/services/news.service.js` (النداء والتطبيع والكاش، بلا SQL)، وخريطة اسم المحافظة ← مفتاح المنطقة في `NEWS_AREA_BY_REGION_NAME` بـ`constants.js`؛ الويب `openOurServices`/`openNewsScreen` في `web/app.js` |
+| بطاقة الدعوة (ستوديو القوالب) | `server/src/services/cardStudio.service.js` — وحدة الرسم الجديدة: ١٢ قالباً (`CARD_TEMPLATES`) بأربعة مقاسات (`CARD_SIZES`) وخمس عائلات عربية OFL في `server/src/assets/fonts/` مسجَّلة عبر `GlobalFonts` في الوحدة نفسها؛ و`server/src/services/eventCards.service.js` — قراءة صفّ المناسبة (بأسماء `event_honorees` وبرنامج `event_days` عبر `eventDaysForEvents`) وجدول `event_cards` وبوابة «أساسية واحدة على الأكثر»؛ و`server/src/routes/cards.routes.js` — `GET /api/card-templates` (عام) و`…/events/:id/cards` (معاينة PNG مصغّرة بلا تخزين، حفظ، تعيين أساسية، حذف) كلها بحارس `assertCanManageEvent` المستوردة من `events.routes.js` (ورفضها هنا **404**)؛ و`og:image` في `/e/:id` يقرأ `primaryCardForEvent`؛ والويب `openCardStudio`/`previewCardStudio`/`saveCardStudio` في `web/app.js` مع نافذة `#cardStudioModal` في `web/index.html` |
 | ألبومات الأعراس والوسم والبحث | `server/src/routes/albums.routes.js` + `server/src/services/albums.service.js`؛ الجداول `event_albums` + `event_photos` + `photo_tags` + `photo_reports`؛ العلَم `occasion_types.archive_gallery`؛ الرفع إلى Cloudinary عبر `cloudinary.service.js` (توقيع وتحقّق بلا مكتبة)؛ `archivePhotos.routes.js` وجه توافق للمسارات القديمة. **وللألبوم وجهان (ADR-0012):** مناسبة، أو باسم العريس بلا مناسبة — `event_id` NULL و`person_id` (FK `people`) و`town`، يُنشأ من `POST /api/admin/albums`؛ وبوابات المناسبة الخمس لألبوم المناسبة وحده. **لا سقف لعدد صور الألبوم** (قرار المالك 2026-10) — ADR-0009/0012؛ **وفيديوهاته** رابطٌ خارجي في `event_videos` (`POST /api/admin/albums/:id/videos` و`PATCH/DELETE /api/admin/videos/:id`) وصفحةُ مشاركته `/v/:id` — ADR-0013 |
 | بطاقة الدخول عند فتح التطبيق | ستوري واحد مثبَّت: `stories.service.entryCard` + `GET /api/stories/entry-card` (عام)، والتثبيت إعداد `entry_promo_story_id` (سوبر أدمن، وقيمة فارغة = أول قصة نشِطة تلقائياً) ومنتقيه في تبويب الستوريات بـ`web/admin.js`؛ والموبايل يعرضها تحت شريط الستوريات ثلاث ثوانٍ (`events_screen.dart`) |
 | وظيفة مجدولة (يومية/دورية) | `server/src/jobs/` — عمداً خارج `services/`: هذه الطبقة وحدها تُستثنى من قاعدة «`realtime.emit` من طبقة المسارات» لأنها هي نفسها طبقة التنسيق، بلا طلب HTTP فوقها |
@@ -217,6 +218,20 @@
 أُزيلت). المسموح: رفع مباشر، أو لصق رابط صورة من `fbcdn.net`/`fbsbx.com`، أو ألبومات
 **صفحتنا** عبر Graph API إذا سمح التوكن بـ`pages_read_engagement`. القائمة البيضاء في
 `utils/remoteImage.js` هي ما يمنع SSRF.
+
+**بطاقة الدعوة (`event_cards`، تذكرة #180).** صاحب المناسبة يصمّم بطاقته من واحد من
+**اثني عشر قالباً** في `cardStudio.service.js` (وحدة رسم مستقلة بجانب `shareCard`، على
+`@napi-rs/canvas` نفسه): لكل قالب مفتاح واسم عربي ونبرة (`festive`/`solemn`)، وأربعة مقاسات
+(`story` 1080×1920، `portrait` 1080×1350، `square` 1080×1080، `a4` 2480×3508)، وخمس عائلات
+عربية OFL في `server/src/assets/fonts/` (Cairo قائم، وAmiri وTajawal وReem Kufi وNoto Naskh
+Arabic مع ملف ترخيص لكلٍّ منها). **نبرة النوع تحكم القوالب**: مناسبة `solemn` لا ترى إلا
+قالبي العزاء الهادئين، وغيرها لا تريهما — في العرض وفي التحقق معاً، فلا تُرسم دعوة فرح بإطار
+عزاء ولا العكس. البطاقة تُعبَّأ من صفّ المناسبة كما يقرأه `shareCard` (الأصحاب، النوع،
+العائلة، التاريخ والوقت، البلدة والمكان) ومن «برنامج المناسبة» عبر `eventDaysForEvents` نفسها.
+وبوابة الصفّ واحدة: **بطاقة أساسية واحدة على الأكثر لكل مناسبة** — كل كتابة تُصفّر البقية في
+المعاملة نفسها، وحذف الأساسية لا يُرقّي غيرها بل يعيد `og:image` إلى بطاقة الخادم المولَّدة.
+والصورة تُخزَّن على Cloudinary (مجلد `negev-events/event-cards/…`) أو على `/uploads/` حين
+تغيب مفاتيحه أو يفشل الرفع، ولا تفشل البطاقة بسبب خدمة صور خارجية.
 
 **البحث لا يزال عاماً وليس ما تبقّى من الخطوة.** `GET /api/events` صار قادماً-أولاً
 (آخر أيام المناسبة `>= CURDATE()`)، مرقّماً (`?page=` `?limit=`، افتراضي

@@ -12,8 +12,8 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 79 | 24705 |
-| `web` | 8 | 19991 |
+| `server/src` | 82 | 26438 |
+| `web` | 8 | 20438 |
 | `mobile/lib` | 66 | 29733 |
 
 ### توزيع `server/src`
@@ -21,16 +21,16 @@
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
 | `app.js` | 1 | 136 |
-| `config/` | 1 | 136 |
+| `config/` | 1 | 143 |
 | `constants.js` | 1 | 369 |
 | `db/` | 4 | 2800 |
 | `jobs/` | 1 | 351 |
-| `middleware/` | 6 | 793 |
+| `middleware/` | 6 | 799 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 24 | 5941 |
-| `services/` | 26 | 13114 |
-| `utils/` | 12 | 865 |
+| `routes/` | 25 | 6290 |
+| `services/` | 28 | 14480 |
+| `utils/` | 12 | 870 |
 
 ### ملفات `web/*.js`
 
@@ -38,11 +38,11 @@
 |---|---|
 | `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 10875 |
+| `app.js` | 11315 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
-| `sw.js` | 223 |
+| `sw.js` | 230 |
 | `theme-boot.js` | 92 |
 
 `web/` كله HTML وCSS بلا خطوة بناء؛ `web/serve.js` خادم الملفات الثابتة المحلي وحده.
@@ -64,9 +64,9 @@
 
 | المهمة | ابدأ من |
 |---|---|
-| إضافة نقطة API | `server/src/routes/index.js:56` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
+| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
 | تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2563` |
-| رفع صورة أو وسيط | `server/src/middleware/upload.js:145` · `server/src/services/cloudinary.service.js:194` |
+| رفع صورة أو وسيط | `server/src/middleware/upload.js:152` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
 | واجهة الويب | `web/app.js:339` · `web/admin.js` · `web/api.js:60` |
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 206
+## ٣. نقاط API — 212
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -82,7 +82,7 @@
 
 | METHOD | path | guards | file:line |
 |---|---|---|---|
-| GET | `/a/:id` | — | `server/src/routes/share.routes.js:1825` |
+| GET | `/a/:id` | — | `server/src/routes/share.routes.js:1857` |
 | DELETE | `/api/account` | `authenticate` | `server/src/routes/auth.routes.js:209` |
 | GET | `/api/admin/admins` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:380` |
 | PUT | `/api/admin/admins/:id/towns` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:384` |
@@ -199,6 +199,7 @@
 | POST | `/api/auth/register` | — | `server/src/routes/auth.routes.js:32` |
 | PATCH | `/api/broadcasts/:id/dismiss` | `authenticate` | `server/src/routes/broadcasts.routes.js:32` |
 | GET | `/api/broadcasts/live` | `optionalAuthenticate` | `server/src/routes/broadcasts.routes.js:28` |
+| GET | `/api/card-templates` | — | `server/src/routes/cards.routes.js:168` |
 | POST | `/api/check-collision` | — | `server/src/routes/events.routes.js:1034` |
 | GET | `/api/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:80` |
 | POST | `/api/events` | `authenticate` | `server/src/routes/events.routes.js:307` |
@@ -206,6 +207,11 @@
 | PATCH | `/api/events/:id` | `authenticate` | `server/src/routes/events.routes.js:570` |
 | GET | `/api/events/:id/amendments` | `authenticate` | `server/src/routes/events.routes.js:1024` |
 | GET | `/api/events/:id/calendar.ics` | — | `server/src/routes/events.routes.js:268` |
+| GET | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:176` |
+| POST | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:239` |
+| DELETE | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:328` |
+| PATCH | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:312` |
+| POST | `/api/events/:id/cards/preview` | `authenticate` | `server/src/routes/cards.routes.js:194` |
 | POST | `/api/events/:id/congratulate` | `authenticate` | `server/src/routes/events.routes.js:1089` |
 | GET | `/api/events/:id/congratulations` | `authenticate` | `server/src/routes/events.routes.js:1117` |
 | DELETE | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1175` |
@@ -270,26 +276,26 @@
 | GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:64` |
 | GET | `/api/towns` | — | `server/src/routes/events.routes.js:146` |
 | GET | `/api/videos/:id` | — | `server/src/routes/albums.routes.js:97` |
-| GET | `/e/:id` | — | `server/src/routes/share.routes.js:961` |
-| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1203` |
-| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1231` |
-| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1160` |
-| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:930` |
-| GET | `/live` | — | `server/src/routes/share.routes.js:1480` |
-| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1544` |
-| GET | `/live/download` | — | `server/src/routes/share.routes.js:1602` |
-| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1735` |
-| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1762` |
-| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:1796` |
-| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:1787` |
-| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1625` |
-| GET | `/live/go` | — | `server/src/routes/share.routes.js:1583` |
-| GET | `/p/:id` | — | `server/src/routes/share.routes.js:1801` |
-| GET | `/person/:id` | — | `server/src/routes/share.routes.js:1856` |
-| GET | `/v/:id` | — | `server/src/routes/share.routes.js:1918` |
-| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:1945` |
+| GET | `/e/:id` | — | `server/src/routes/share.routes.js:973` |
+| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1235` |
+| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1263` |
+| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1192` |
+| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:942` |
+| GET | `/live` | — | `server/src/routes/share.routes.js:1512` |
+| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1576` |
+| GET | `/live/download` | — | `server/src/routes/share.routes.js:1634` |
+| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1767` |
+| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1794` |
+| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:1828` |
+| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:1819` |
+| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1657` |
+| GET | `/live/go` | — | `server/src/routes/share.routes.js:1615` |
+| GET | `/p/:id` | — | `server/src/routes/share.routes.js:1833` |
+| GET | `/person/:id` | — | `server/src/routes/share.routes.js:1888` |
+| GET | `/v/:id` | — | `server/src/routes/share.routes.js:1950` |
+| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:1977` |
 
-## ٤. جدول قاعدة البيانات ← الخدمة — 46 جدولاً
+## ٤. جدول قاعدة البيانات ← الخدمة — 47 جدولاً
 
 الجدول من `server/src/db/schema.sql`، والخدمات التي يظهر اسمها في كودها (بحث لفظي بحدود الكلمة).
 
@@ -307,13 +313,14 @@
 | `event_albums` | `adminScope.service.js`, `albums.service.js`, `people.service.js` |
 | `event_amendments` | `admin.service.js`, `events.service.js` |
 | `event_announcements` | `admin.service.js`, `events.service.js` |
+| `event_cards` | `cardStudio.service.js`, `eventCards.service.js`, `events.service.js` |
 | `event_days` | `events.service.js` |
 | `event_honorees` | `albums.service.js`, `events.service.js`, `facebook.service.js`, `people.service.js` |
 | `event_photos` | `adminScope.service.js`, `albums.service.js` |
 | `event_reminders` | `admin.service.js`, `events.service.js`, `notifications.service.js`, `stories.service.js` |
 | `event_rsvps` | `events.service.js` |
 | `event_videos` | `albums.service.js` |
-| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `shareCard.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
+| `events` | `activity.service.js`, `admin.service.js`, `adminScope.service.js`, `albums.service.js`, `analytics.service.js`, `auth.service.js`, `cloudinary.service.js`, `eventCards.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `people.service.js`, `shareCard.service.js`, `stats.service.js`, `stories.service.js`, `towns.service.js`, `villages.service.js` |
 | `live_episodes` | `liveHub.service.js` |
 | `live_poll_votes` | `liveHub.service.js` |
 | `nokoot_ledger` | `nokoot.service.js` |
@@ -321,7 +328,7 @@
 | `occasion_type_fields` | `notifications.service.js`, `occasionTypes.service.js` |
 | `occasion_type_messages` | `occasionTypes.service.js` |
 | `occasion_type_reactions` | `occasionTypes.service.js` |
-| `occasion_types` | `activity.service.js`, `albums.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `shareCard.service.js` |
+| `occasion_types` | `activity.service.js`, `albums.service.js`, `cardStudio.service.js`, `eventCards.service.js`, `events.service.js`, `facebook.service.js`, `notifications.service.js`, `occasionTypes.service.js`, `shareCard.service.js` |
 | `people` | `admin.service.js`, `albums.service.js`, `auth.service.js`, `events.service.js`, `people.service.js`, `shareCard.service.js` |
 | `people_merges` | `people.service.js` |
 | `photo_reports` | `albums.service.js` |

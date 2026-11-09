@@ -45,6 +45,10 @@ const liveHub = require('../services/liveHub.service');
 const analytics = require('../services/analytics.service');
 const albums = require('../services/albums.service');
 const shareCard = require('../services/shareCard.service');
+// بطاقة الدعوة (#180): `primaryCardForEvent` تقرأ `event_cards`، و`CARD_SIZES`
+// هي مصدر الأبعاد المعلنة مع `og:image` حين تكون البطاقة الأساسية للمناسبة.
+const eventCards = require('../services/eventCards.service');
+const { CARD_SIZES } = require('../services/cardStudio.service');
 const logger = require('../utils/logger');
 const { RSVP_GUEST_RATE_LIMIT, RSVP_PARTY_SIZE_MAX } = require('../constants');
 const { parseId, cleanString, requirePhone, parsePartySize } = require('../middleware/validate');
@@ -526,7 +530,15 @@ function pageStyle(palette) {
  * below) — that is the one case where the size is unknown again, and the
  * tags are omitted for exactly the same reason as before.
  */
-function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl, relatedEvents = [], noindex = false, rsvp = null }) {
+function renderEventPage(event, {
+  pageUrl, imageUrl, imageDimensions, ogImageUrl = null, ogImageDimensions = undefined,
+  downloadUrl, siteRootUrl, relatedEvents = [], noindex = false, rsvp = null
+}) {
+  // og:image قد يختلف عن صورة الصفحة (#180): البطاقة الأساسية لصاحب المناسبة
+  // إن وُجدت، وإلا `imageUrl` نفسه (بطاقة الخادم أو الملصق عند فشل التوليد).
+  // الأبعاد المعلنة تتبع الصورة المعلنة لا صورة الجسم.
+  const declaredImage = ogImageUrl || imageUrl;
+  const declaredDimensions = ogImageDimensions === undefined ? imageDimensions : ogImageDimensions;
   const palette = PALETTES[toneOf(event)];
   const headline = buildHeadline(event);
   const names = event.honorees.map(h => h.name).filter(Boolean).join(' و ') || event.title;
@@ -599,9 +611,9 @@ function renderEventPage(event, { pageUrl, imageUrl, imageDimensions, downloadUr
 <link rel="canonical" href="${escapeHtml(pageUrl)}">
 <meta property="og:title" content="${escapeHtml(pageTitle)}">
 <meta property="og:description" content="${escapeHtml(metaDescription)}">
-<meta property="og:image" content="${escapeHtml(imageUrl)}">
-${imageDimensions ? `<meta property="og:image:width" content="${imageDimensions.width}">
-<meta property="og:image:height" content="${imageDimensions.height}">` : ''}
+<meta property="og:image" content="${escapeHtml(declaredImage)}">
+${declaredDimensions ? `<meta property="og:image:width" content="${declaredDimensions.width}">
+<meta property="og:image:height" content="${declaredDimensions.height}">` : ''}
 <meta property="og:url" content="${escapeHtml(pageUrl)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="${palette.wordmark}">
@@ -1013,6 +1025,25 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
     imageDimensions = null;
   }
 
+  // og:image اختيار صاحب المناسبة (#180): إن كانت له بطاقة أساسية في
+  // `event_cards` فهي وحدها ما يُعلَن للزوّار، بمقاسها الحقيقي المعلن. والغياب
+  // (أو حذف الأساسية) يعيد بطاقة الخادم المولَّدة أعلاه كما هي — وهذا نصّ
+  // معيار القبول. وما يتغيّر هنا **وسما og:image وأبعاده** فقط: `<img
+  // class="poster">` في جسم الصفحة يبقى الملصق، ونصّ الصفحة نفسه لا يُمَسّ
+  // (ADR-0006).
+  let ogImageUrl = imageUrl;
+  let ogImageDimensions = imageDimensions;
+  try {
+    const primaryCard = await eventCards.primaryCardForEvent(event.id);
+    if (primaryCard) {
+      ogImageUrl = primaryCard.image_url;
+      const cardSize = CARD_SIZES.find(size => size.key === primaryCard.size);
+      ogImageDimensions = cardSize ? { width: cardSize.width, height: cardSize.height } : null;
+    }
+  } catch (err) {
+    logger.error(`[share] primary card lookup failed for event ${event.id}: ${err.message}`);
+  }
+
   // «بالرابط فقط» (تذكرة #166): الصفحة تُفتح كما تُفتح العامة — هي الطريق إلى
   // المناسبة لمن وصله رابطها — ولا فرق إلا في إشارة الفهرسة، ترويسةً ووسماً.
   const noindex = event.visibility === 'link_only';
@@ -1031,7 +1062,8 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
     .set('Content-Type', 'text/html; charset=utf-8');
   if (noindex) response.set('X-Robots-Tag', 'noindex, nofollow');
   response.send(renderEventPage(event, {
-    pageUrl, imageUrl, imageDimensions, downloadUrl, siteRootUrl: config.publicUrl, relatedEvents, noindex, rsvp: guestRsvp
+    pageUrl, imageUrl, imageDimensions, ogImageUrl, ogImageDimensions,
+    downloadUrl, siteRootUrl: config.publicUrl, relatedEvents, noindex, rsvp: guestRsvp
   }));
 }));
 

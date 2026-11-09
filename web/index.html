@@ -1760,6 +1760,86 @@
     </div>
   </div>
 
+  <!-- ستوديو بطاقة الدعوة (#180) — يصمّم صاحبُ المناسبة بطاقته من قالب،
+       ويعاينها حقيقةً من POST /api/events/:id/cards/preview (PNG مصغّر يُعرض
+       blob)، ثم يحفظها فتصير البطاقة الأساسية فتظهر `og:image` لرابط `/e/:id`.
+       الحالة كلها في app.js: القوالب والمقاسات والخطوط تأتي من
+       GET /api/card-templates، والبطاقات المحفوظة من GET …/cards.
+       النصوص عربية RTL، وألوان هذا الستوديو من متغيّرات styles.css وحدها
+       (الوضع الداكن #179) — لا لون مثبَّت على أرضية متغيّرة. -->
+  <div id="cardStudioModal" class="modal-overlay" style="display:none;">
+    <div class="modal-card card-studio-card" role="dialog" aria-modal="true" aria-labelledby="cardStudioTitle">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <h3 id="cardStudioTitle"><i class="fa-solid fa-wand-magic-sparkles"></i> صمّم بطاقة الدعوة</h3>
+          <span id="cardStudioSubtitle" class="modal-sub"></span>
+        </div>
+        <button class="close-modal-btn" onclick="closeCardStudio()" aria-label="إغلاق"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <div class="card-studio-layout">
+        <section class="card-studio-preview-panel">
+          <div class="card-studio-preview-frame">
+            <img id="cardStudioPreviewImg" class="card-studio-preview-img" alt="معاينة البطاقة" hidden>
+            <p id="cardStudioPreviewEmpty" class="card-studio-preview-empty">اختر القالب والمقاس، ثم اضغط «معاينة» لترى البطاقة قبل حفظها</p>
+          </div>
+          <p id="cardStudioPreviewStatus" class="card-studio-status" hidden></p>
+          <div class="card-studio-actions">
+            <button type="button" id="cardStudioPreviewBtn" class="event-page-btn" onclick="previewCardStudio()">
+              <i class="fa-solid fa-eye"></i> معاينة
+            </button>
+            <button type="button" id="cardStudioSaveBtn" class="submit-btn card-studio-save-btn" onclick="saveCardStudio()">
+              <i class="fa-solid fa-floppy-disk"></i> حفظ البطاقة
+            </button>
+          </div>
+          <p id="cardStudioResult" class="card-studio-result" hidden></p>
+        </section>
+
+        <section class="card-studio-controls">
+          <div class="card-studio-group">
+            <label class="card-studio-label" id="cardStudioTemplatesLabel">القالب</label>
+            <div id="cardStudioTemplates" class="card-studio-templates" role="radiogroup" aria-labelledby="cardStudioTemplatesLabel"></div>
+          </div>
+
+          <div class="card-studio-group">
+            <label class="card-studio-label" id="cardStudioSizesLabel">المقاس</label>
+            <div id="cardStudioSizes" class="card-studio-chips" role="radiogroup" aria-labelledby="cardStudioSizesLabel"></div>
+          </div>
+
+          <div class="card-studio-group">
+            <label class="card-studio-label" for="cardStudioFont">الخط</label>
+            <select id="cardStudioFont" class="card-studio-select"></select>
+          </div>
+
+          <div class="card-studio-group">
+            <label class="card-studio-label" id="cardStudioColorsLabel">اللون</label>
+            <div id="cardStudioColors" class="card-studio-chips" role="radiogroup" aria-labelledby="cardStudioColorsLabel"></div>
+          </div>
+
+          <div class="card-studio-group">
+            <label class="card-studio-label" for="cardStudioPhoto">الصورة</label>
+            <select id="cardStudioPhoto" class="card-studio-select" onchange="handleCardStudioPhotoChange()">
+              <option value="event">صورة المناسبة</option>
+              <option value="none">بلا صورة</option>
+              <option value="upload">أرفع صورة من جهازي</option>
+            </select>
+            <input type="file" id="cardStudioPhotoFile" accept="image/*" class="card-studio-file" hidden onchange="handleCardStudioPhotoFile(this)">
+            <p id="cardStudioPhotoNote" class="card-studio-note"></p>
+          </div>
+        </section>
+      </div>
+
+      <section class="card-studio-saved">
+        <h4 class="card-studio-saved-title"><i class="fa-solid fa-images"></i> بطاقات هذه المناسبة</h4>
+        <div id="cardStudioCardsList" class="card-studio-cards-list"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- رفع «بطاقتك الجاهزة»: لا مسار خادم جديد — نفس رفع الملصق القائم
+       (PATCH /api/events/:id بحقل `poster`، عبر eventMedia في upload.js). -->
+  <input type="file" id="readyCardUploadInput" accept="image/*" hidden onchange="handleReadyCardUpload(this)">
+
   <!-- MODAL 8: STORY VIEWER (#20 step 18) -->
   <div id="storyViewerOverlay" class="story-viewer-overlay" style="display:none;">
     <div class="story-viewer-stage">

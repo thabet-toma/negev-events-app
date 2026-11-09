@@ -18219,6 +18219,292 @@ async function run() {
     }
   });
 
+  console.log('\nستوديو بطاقة الدعوة (#180) — القالب والمقاس والحفظ في الويب');
+
+  /**
+   * مناسبة يملكها الحساب (تصل من GET /api/my-events)، وكتالوج مصغّر (قالبان
+   * احتفاليان وقالب عزاء واحد) — التصغير مقصود: ما يُقاس هنا هو الفلترة
+   * بالنبرة ونداءات الشبكة لا عدد القوالب الحقيقي (الخادم يعيد ١٢).
+   */
+  const CARD_STUDIO_EVENT = {
+    id: 4242,
+    title: 'عرس البطاقة',
+    groom_name: 'عريس البطاقة',
+    town: TOWNS[0],
+    region_id: 1,
+    event_date: '2026-12-31',
+    location_name: 'ديوان الاختبار',
+    poster_url: 'https://example.test/poster.jpg',
+    status: 'approved',
+    occasion_type: WEDDING_TYPE
+  };
+  const CARD_STUDIO_FUNERAL_EVENT = {
+    ...CARD_STUDIO_EVENT,
+    id: 4243,
+    title: 'عزاء البطاقة',
+    groom_name: 'المرحوم',
+    poster_url: null,
+    occasion_type: FUNERAL_TYPE
+  };
+  const CARD_CATALOG_FIXTURE = {
+    success: true,
+    templates: [
+      {
+        key: 'wedding_night', name: 'ليل الفرح', tone: 'festive', tagline: 'ليل كحلي',
+        default_font: 'cairo', fonts: ['cairo', 'amiri'],
+        colors: [{ value: '#d9b25f', name: 'ذهبي' }, { value: '#e8d9b0', name: 'عاجي' }]
+      },
+      {
+        key: 'gold_frame', name: 'إطار ذهبي', tone: 'festive', tagline: 'كلاسيكي',
+        default_font: 'amiri', fonts: ['amiri'],
+        colors: [{ value: '#a87c2b', name: 'ذهب داكن' }]
+      },
+      {
+        key: 'condolence_quiet', name: 'عزاء هادئ', tone: 'solemn', tagline: 'وقار بلا زخرفة',
+        default_font: 'noto_naskh', fonts: ['noto_naskh', 'amiri'],
+        colors: [{ value: '#3f5548', name: 'أخضر داكن' }]
+      }
+    ],
+    sizes: [
+      { key: 'story', name: 'ستوري', width: 1080, height: 1920, preview: { width: 480, height: 853 } },
+      { key: 'portrait', name: 'عمودي', width: 1080, height: 1350, preview: { width: 480, height: 600 } },
+      { key: 'square', name: 'مربّع', width: 1080, height: 1080, preview: { width: 480, height: 480 } },
+      { key: 'a4', name: 'A4 للطباعة', width: 2480, height: 3508, preview: { width: 480, height: 679 } }
+    ],
+    fonts: [
+      { key: 'cairo', name: 'القاهرة' },
+      { key: 'amiri', name: 'أميري' },
+      { key: 'tajawal', name: 'تجوال' },
+      { key: 'reem_kufi', name: 'ريم كوفي' },
+      { key: 'noto_naskh', name: 'نسخ نوتو' }
+    ]
+  };
+
+  /**
+   * مزيف fetch للستوديو: يجيب الكتالوج وقائمة البطاقات، ويسجّل كل نداء
+   * (path/method/body) كي يُقاس ما أُرسل فعلاً. `preview`/`save` يُمرَّران
+   * لتغيير الردّ في اختبارات الفشل والحدّ.
+   */
+  function buildCardStudioFetch({ events = [CARD_STUDIO_EVENT], cards = [], preview, save } = {}) {
+    const calls = [];
+    const base = buildFetchStub();
+    const fetchFn = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      const method = options.method || 'GET';
+      calls.push({ path: requestPath, method, body: options.body, headers: options.headers || {} });
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events });
+      if (requestPath === '/api/card-templates') return jsonResponse(CARD_CATALOG_FIXTURE);
+      if (/^\/api\/events\/\d+\/cards$/.test(requestPath) && method === 'GET') {
+        return jsonResponse({ success: true, cards });
+      }
+      if (/^\/api\/events\/\d+\/cards\/preview$/.test(requestPath)) {
+        return (preview || (() => pngPreviewResponse()))(options);
+      }
+      if (/^\/api\/events\/\d+\/cards$/.test(requestPath) && method === 'POST') {
+        return (save || (() => jsonResponse({
+          success: true,
+          message: 'حُفظت البطاقة وجُعلت البطاقة الأساسية للمناسبة',
+          card: {
+            id: 901, event_id: 4242, template_key: 'wedding_night', font_key: 'cairo', color: '#d9b25f',
+            size: 'story', image_url: 'https://cdn.example.test/card-story.png', is_primary: true
+          }
+        }, { status: 201 })))();
+      }
+      return base(url, options);
+    };
+    return { fetchFn, calls };
+  }
+
+  /** ردّ معاينة: PNG وهمي — ما يعنيه app.js أنه blob يُعرض، لا محتواه. */
+  function pngPreviewResponse() {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => (String(name).toLowerCase() === 'content-type' ? 'image/png' : null) },
+      json: async () => ({}),
+      blob: async () => ({ kind: 'png-blob' })
+    };
+  }
+
+  await test('«مناسبتي» وصفحة المناسبة تحملان «صمّم بطاقة» و«ارفع بطاقتك الجاهزة» لصاحبها', async () => {
+    const { fetchFn } = buildCardStudioFetch();
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await waitFor(() => document.querySelector('#myEventsList button[onclick^="openCardStudio"]') !== null);
+    assertNoUnhandledRejections('«مناسبتي» / زرّ صمّم بطاقة');
+
+    const designBtn = document.querySelector('#myEventsList button[onclick^="openCardStudio"]');
+    const uploadBtn = document.querySelector('#myEventsList button[onclick^="triggerReadyCardUpload"]');
+    assert.ok(designBtn, 'كرت «مناسبتي» يحمل زرّ التصميم');
+    assert.ok(designBtn.textContent.includes('صمّم بطاقة'), `نصّ الزرّ: ${designBtn.textContent}`);
+    assert.ok(uploadBtn && uploadBtn.textContent.includes('ارفع بطاقتك الجاهزة'), 'وبجانبه زرّ الرفع');
+
+    // وصفحة المناسبة نفسها (لصاحبها): الزران معاً، وليس لغير المالك.
+    win.renderEventPage(CARD_STUDIO_EVENT);
+    const pageHtml = document.getElementById('eventPageBody').innerHTML;
+    assert.ok(pageHtml.includes('صمّم بطاقة'), 'صفحة المناسبة تحمل زرّ التصميم لصاحبها');
+    assert.ok(pageHtml.includes('ارفع بطاقتك الجاهزة'), 'وبجانبه زرّ رفع البطاقة الجاهزة');
+
+    win.renderEventPage({ ...CARD_STUDIO_EVENT, id: 999999 });
+    assert.ok(
+      !document.getElementById('eventPageBody').innerHTML.includes('صمّم بطاقة'),
+      'مناسبة ليست من مناسبات الحساب لا تعرض الزرّين'
+    );
+  });
+
+  await test('فتح الستوديو يجلب الكتالوج ويعرض قوالب النبرة الاحتفالية وحدها', async () => {
+    const { fetchFn, calls } = buildCardStudioFetch();
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_EVENT.id);
+    await waitFor(() => win.document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+    assertNoUnhandledRejections('فتح الستوديو');
+
+    assert.strictEqual(win.document.getElementById('cardStudioModal').style.display, 'flex');
+    assert.ok(calls.some(call => call.path === '/api/card-templates'), 'الكتالوج يُجلب من الخادم');
+    const tiles = [...win.document.querySelectorAll('#cardStudioTemplates .card-studio-template')];
+    assert.deepStrictEqual(
+      tiles.map(tile => tile.dataset.template),
+      ['wedding_night', 'gold_frame'],
+      'مناسبة العرس ترى القوالب الاحتفالية فقط'
+    );
+    assert.strictEqual(tiles[0].classList.contains('is-selected'), true, 'أول قالب مختار ابتدائياً');
+    assert.strictEqual(win.document.querySelectorAll('#cardStudioSizes .card-studio-chip').length, 4, 'المقاسات الأربعة');
+    assert.strictEqual(win.document.querySelectorAll('#cardStudioColors .card-studio-colour').length, 2, 'لوحة ألوان القالب');
+  });
+
+  await test('مناسبة العزاء ترى قالب العزاء وحده (#180)', async () => {
+    const { fetchFn } = buildCardStudioFetch({ events: [CARD_STUDIO_FUNERAL_EVENT] });
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_FUNERAL_EVENT.id);
+    await waitFor(() => win.document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+
+    const templates = [...win.document.querySelectorAll('#cardStudioTemplates .card-studio-template')]
+      .map(tile => tile.dataset.template);
+    assert.deepStrictEqual(templates, ['condolence_quiet'], 'العزاء لا يرى إلا النبرة الهادئة');
+  });
+
+  await test('«معاينة» ترسل القالب والمقاس المختارين وتعرض الـblob العائد', async () => {
+    const { fetchFn, calls } = buildCardStudioFetch();
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    win.fetch = fetchFn;
+
+    let capturedBlob = null;
+    win.URL.createObjectURL = (blob) => { capturedBlob = blob; return 'blob:card-preview'; };
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_EVENT.id);
+    await waitFor(() => document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+
+    // القالب الثاني والمقاس «مربّع» — النداء يجب أن يحمل ما اختاره المستخدم.
+    document.querySelectorAll('#cardStudioTemplates .card-studio-template')[1].click();
+    document.querySelector('#cardStudioSizes [data-size="square"]').click();
+    await win.previewCardStudio();
+    assertNoUnhandledRejections('معاينة البطاقة');
+
+    const previewCall = calls.find(call => call.path.endsWith('/cards/preview'));
+    assert.ok(previewCall, 'نداء المعاينة لم يُرسل');
+    assert.strictEqual(previewCall.method, 'POST');
+    assert.strictEqual(previewCall.headers.Authorization, 'Bearer test-token-web-dom', 'المعاينة تحمل رمز الجلسة');
+    assert.strictEqual(previewCall.body.get('template_key'), 'gold_frame');
+    assert.strictEqual(previewCall.body.get('size'), 'square');
+    assert.strictEqual(previewCall.body.get('font_key'), 'amiri');
+    assert.strictEqual(previewCall.body.get('color'), '#a87c2b');
+    assert.strictEqual(previewCall.body.get('photo_source'), 'event', 'صورة المناسبة هي المصدر الافتراضي');
+
+    assert.deepStrictEqual(capturedBlob, { kind: 'png-blob' }, 'الصورة المعروضة هي الـblob الذي أعاده الخادم');
+    const img = document.getElementById('cardStudioPreviewImg');
+    assert.strictEqual(img.hidden, false);
+    assert.strictEqual(img.getAttribute('src'), 'blob:card-preview');
+    assert.strictEqual(document.getElementById('cardStudioPreviewEmpty').hidden, true);
+  });
+
+  await test('«حفظ البطاقة» يرسل POST ويعرض رابط المقاس الكامل', async () => {
+    const { fetchFn, calls } = buildCardStudioFetch();
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_EVENT.id);
+    await waitFor(() => document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+
+    await win.saveCardStudio();
+    assertNoUnhandledRejections('حفظ البطاقة');
+
+    const saveCall = calls.find(call => call.method === 'POST' && /\/cards$/.test(call.path));
+    assert.ok(saveCall, 'نداء الحفظ لم يُرسل');
+    assert.strictEqual(saveCall.body.get('template_key'), 'wedding_night');
+
+    const result = document.getElementById('cardStudioResult');
+    assert.strictEqual(result.hidden, false);
+    assert.ok(result.textContent.includes('حُفظت البطاقة'), `نصّ النتيجة: ${result.textContent}`);
+    const link = result.querySelector('a');
+    assert.ok(link, 'النتيجة تحمل رابط البطاقة المحفوظة');
+    assert.strictEqual(link.getAttribute('href'), 'https://cdn.example.test/card-story.png');
+  });
+
+  await test('فشل الشبكة في المعاينة يظهر رسالة عربية بلا انهيار', async () => {
+    const { fetchFn } = buildCardStudioFetch({
+      preview: () => { throw new Error('offline'); }
+    });
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_EVENT.id);
+    await waitFor(() => win.document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+
+    await win.previewCardStudio();
+    assertNoUnhandledRejections('فشل شبكة المعاينة');
+
+    const status = win.document.getElementById('cardStudioPreviewStatus');
+    assert.strictEqual(status.hidden, false);
+    assert.ok(status.textContent.includes('تعذّر الاتصال بالخادم'), `الرسالة: ${status.textContent}`);
+    assert.strictEqual(win.document.getElementById('cardStudioPreviewImg').hidden, true, 'لا صورة وهمية عند الفشل');
+  });
+
+  await test('429 في المعاينة والحفظ: «حاول بعد قليل» (#180)', async () => {
+    // جسم الردّ **بلا رسالة عربية صالحة** — عمداً: لو حمل نصّ الخادم
+    // «حاول بعد قليل» لنجح التأكيد ولو أُزيل فرع 429 من العميل، فلا يسقط
+    // للسبب الذي يحمله اسمه. الرسالة المفحوصة هنا يكتبها app.js نفسه.
+    const tooMany = () => jsonResponse({ success: false, message: 'Too many requests' }, { status: 429 });
+    const { fetchFn } = buildCardStudioFetch({ preview: tooMany, save: tooMany });
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    win.fetch = fetchFn;
+
+    await win.fetchMyEvents();
+    await win.openCardStudio(CARD_STUDIO_EVENT.id);
+    await waitFor(() => document.querySelectorAll('#cardStudioTemplates .card-studio-template').length > 0);
+
+    await win.previewCardStudio();
+    const previewStatus = document.getElementById('cardStudioPreviewStatus');
+    assert.strictEqual(previewStatus.hidden, false);
+    assert.ok(previewStatus.textContent.includes('حاول بعد قليل'), `رسالة الحدّ: ${previewStatus.textContent}`);
+
+    await win.saveCardStudio();
+    const saveStatus = document.getElementById('cardStudioResult');
+    assert.strictEqual(saveStatus.hidden, false);
+    assert.ok(saveStatus.textContent.includes('حاول بعد قليل'), `رسالة حدّ الحفظ: ${saveStatus.textContent}`);
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

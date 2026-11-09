@@ -18,6 +18,12 @@ process.env.RATE_LIMIT_MAX = process.env.RATE_LIMIT_MAX || '3000';
 // A distinct authenticated budget makes the two buckets observable: an
 // anonymous caller must keep seeing RATE_LIMIT_MAX (3000), never this one.
 process.env.RATE_LIMIT_USER_MAX = process.env.RATE_LIMIT_USER_MAX || '6000';
+// ستوديو بطاقة الدعوة (#180): دلو المعاينة لكل مستخدم مُصغَّر هنا كي يُختبر
+// الحدّ (429) في طلبات قليلة لا في واحد وعشرين، لكنه يتّسع لكل معاينات صاحب
+// المناسبة في القسم (٧: العزاء ٢، وغياب الاختيار ٣، وملف مرفوض ١، وبذرة رفع
+// صورة ١) — حالات الرفض تُحسَب من الدلو نفسه. اختبار 429 ينشئ مستخدماً جديداً
+// فلا يرث أي رصيد مستهلك. القيمة الافتراضية في الإنتاج (config.js) لا تتغيّر.
+process.env.CARD_PREVIEW_RATE_MAX = process.env.CARD_PREVIEW_RATE_MAX || '12';
 const config = require('../src/config');
 const db = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
@@ -18737,6 +18743,493 @@ async function run() {
   for (const id of statsCleanup.townIds) await db.execute('DELETE FROM towns WHERE id = ?', [id]);
   for (const id of statsCleanup.regionIds) await db.execute('DELETE FROM regions WHERE id = ?', [id]);
   statsService.clearTickerCache();
+
+  // =====================================================================
+  // ستوديو بطاقة الدعوة (#180) — القوالب والمعاينة والحفظ في الخادم
+  // =====================================================================
+  console.log('\nستوديو بطاقة الدعوة — القوالب والمعاينة والحفظ (#180)');
+
+  /**
+   * حساب بصفّ مباشر في القاعدة ورمز موقَّع محلياً — نفس نمط `createDirectUser`
+   * في قسم الإشعارات: ميزانية `authLimiter` (٢٠ في النافذة) مستهلكة قبل هنا.
+   */
+  async function createCardUser(fullName) {
+    const phoneNumber = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'user')`,
+      [phoneNumber, fullName, 'x', 'رهط']
+    );
+    return {
+      id: insertId,
+      phone: phoneNumber,
+      token: signToken({ id: insertId, phone_number: phoneNumber, full_name: fullName, role: 'user' }, '1h')
+    };
+  }
+
+  const { uploadsDir: uploadsDirForCards } = require('../src/middleware/upload');
+
+  /**
+   * أبعاد PNG من ترويسة IHDR نفسها (بايتات ١٦–٢٣)، لا من ترويسة Content-Type:
+   * هذا ما يثبت أن المعاد بايتات PNG فعلية بالمقاس المعلن.
+   */
+  function pngDimensions(buffer) {
+    assert.ok(Buffer.isBuffer(buffer) && buffer.length > 24, 'expected a real PNG buffer');
+    assert.deepStrictEqual(
+      [...buffer.slice(0, 8)],
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      'expected the PNG signature'
+    );
+    assert.strictEqual(buffer.slice(12, 16).toString('latin1'), 'IHDR', 'expected the IHDR chunk first');
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+
+  /** POST متعدّد الأجزاء: يقرأ PNG لما يعود `image/png`، وJSON لغيرها. */
+  async function postCardForm(urlPath, { token, fields = {}, file = null } = {}) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.append(key, value);
+    // ملف حقيقي لحقل `photo` — نفس ما يرسله الويب في `photo_source: 'upload'`.
+    if (file) form.append('photo', new Blob([file], { type: 'image/png' }), 'photo.png');
+    const headers = { 'X-App-Version': '2.0.0' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${baseUrl}${urlPath}`, { method: 'POST', headers, body: form });
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.startsWith('image/png')) {
+      return { status: res.status, contentType, buffer: Buffer.from(await res.arrayBuffer()) };
+    }
+    return { status: res.status, contentType, body: await res.json().catch(() => ({})) };
+  }
+
+  /** DELETE للبطاقة بنفس رمز المستخدم — `fetch` مباشر لأن الردّ JSON لا HTML. */
+  async function deleteCardRequest(eventId, cardId, token) {
+    const res = await fetch(`${baseUrl}/api/events/${eventId}/cards/${cardId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}`, 'X-App-Version': '2.0.0' }
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
+  /**
+   * أبعاد الصورة المحفوظة كما كتبها الخادم على القرص (`/uploads/…`)، أو null
+   * حين خُزّنت على Cloudinary: ذاك حساب خارجي ولا يُنبش من الاختبار. مسار
+   * الاختبار بلا مفاتيح Cloudinary عادةً، والرابط المطلق يُفحص في كل حال.
+   */
+  async function storedCardPng(imageUrl) {
+    const text = String(imageUrl);
+    if (!text.includes('/uploads/')) return null;
+    const fileName = path.basename(text);
+    assert.ok(fileName.endsWith('.png'), `expected a stored PNG, got ${imageUrl}`);
+    return pngDimensions(await fsp.readFile(path.join(uploadsDirForCards, fileName)));
+  }
+
+  const cardOwner = await createCardUser('مالك بطاقة الدعوة');
+  const cardStranger = await createCardUser('غريب بطاقة الدعوة');
+  let cardEventId = 0;
+  let cardFuneralEventId = 0;
+
+  await test('Set up: مناسبة عرس ومناسبة عزاء معتمدتان لصاحب البطاقة', async () => {
+    const wedding = await api('POST', '/api/events', {
+      token: cardOwner.token,
+      body: weddingEventBody({ honorees: [{ name: 'عريس بطاقة الاختبار' }], town: 'رهط', event_date: '2026-12-31' })
+    });
+    assert.strictEqual(wedding.status, 201, wedding.body.message);
+    cardEventId = wedding.body.eventId;
+    assert.strictEqual(wedding.body.status, 'pending', 'نشر المستخدم العادي يدخل الطابور أولاً');
+
+    const approveWedding = await api('PATCH', `/api/admin/events/${cardEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approveWedding.status, 200, approveWedding.body.message);
+
+    const funeral = await api('POST', '/api/events', {
+      token: cardOwner.token,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'المرحوم بطاقة الاختبار' }],
+        town: 'رهط',
+        location_name: 'بيت العزاء',
+        // «تاريخ الانتهاء» **إجباري في نوع عزا وحده** — قُرئ من القاعدة
+        // (`occasion_type_fields`: is_visible = 1 و is_required = 1) لا من
+        // التخمين: أنواع `festive` كلها تُخفيه، وعزا يفرضه. وغيابه هنا كان
+        // يُسقط التهيئة بـ400 «تاريخ الانتهاء مطلوب»، فتسقط معها كل حالات
+        // البطاقة التالية (ومعرّف مناسبة العزاء يبقى 0).
+        event_date: '2026-12-30',
+        event_end_date: '2026-12-31'
+      }
+    });
+    assert.strictEqual(funeral.status, 201, funeral.body.message);
+    cardFuneralEventId = funeral.body.eventId;
+    // الحارس الذي كان يسقط صامتاً: معرّف الصفر يجعل كل طلبات البطاقة التالية
+    // تذهب إلى `/api/events/0/…` فتردّ 400 «معرّف المناسبة غير صالح» بدل أن
+    // تكشف سبب الفشل الحقيقي (غياب حقل إجباري في النشر).
+    assert.ok(Number.isInteger(cardFuneralEventId) && cardFuneralEventId > 0, 'مناسبة العزاء لم تُنشأ — لا معرّف لها');
+    const approveFuneral = await api('PATCH', `/api/admin/events/${cardFuneralEventId}/status`, {
+      token: adminToken,
+      body: { status: 'approved' }
+    });
+    assert.strictEqual(approveFuneral.status, 200, approveFuneral.body.message);
+  });
+
+  await test('GET /api/card-templates عام: ١٢ قالباً وأربعة مقاسات وخمس عائلات خطوط', async () => {
+    const { status, body } = await api('GET', '/api/card-templates');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.templates.length, 12, 'المطلوب اثنا عشر قالباً');
+    assert.strictEqual(new Set(body.templates.map(template => template.key)).size, 12, 'لكل قالب مفتاح فريد');
+    body.templates.forEach(template => {
+      assert.ok(template.name && template.name.length > 1, `قالب بلا اسم عربي: ${template.key}`);
+      assert.ok(template.tone === 'festive' || template.tone === 'solemn', `نبرة غير معروفة في ${template.key}`);
+      assert.ok(Array.isArray(template.colors) && template.colors.length > 0, `قالب بلا لوحة ألوان: ${template.key}`);
+      assert.ok(template.fonts.length > 0, `قالب بلا خط مسموح: ${template.key}`);
+    });
+    assert.ok(
+      body.templates.filter(template => template.tone === 'solemn').length >= 1,
+      'قالب عزاء رسمي هادئ واحد على الأقل'
+    );
+    assert.deepStrictEqual(
+      body.sizes.map(size => [size.key, size.width, size.height]),
+      [['story', 1080, 1920], ['portrait', 1080, 1350], ['square', 1080, 1080], ['a4', 2480, 3508]],
+      'المقاسات الأربعة بأبعادها الحقيقية'
+    );
+    assert.ok(body.fonts.length >= 4, `خمس عائلات متوقعة، وصل ${body.fonts.length}`);
+    const fontKeys = body.fonts.map(font => font.key);
+    ['cairo', 'amiri', 'tajawal', 'reem_kufi', 'noto_naskh'].forEach(key => {
+      assert.ok(fontKeys.includes(key), `العائلة ${key} غير مسجَّلة في العارض`);
+    });
+  });
+
+  await test('المعاينة تعيد image/png بالمقاس المصغّر الصحيح للمقاسات الأربعة', async () => {
+    const expected = { story: [480, 853], portrait: [480, 600], square: [480, 480], a4: [480, 679] };
+    for (const [sizeKey, [width, height]] of Object.entries(expected)) {
+      const preview = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+        token: superAdminToken,
+        fields: {
+          template_key: sizeKey === 'a4' ? 'gold_frame' : 'wedding_night',
+          size: sizeKey,
+          font_key: sizeKey === 'a4' ? 'amiri' : 'cairo',
+          color: sizeKey === 'a4' ? '#a87c2b' : '#d9b25f',
+          photo_source: 'none'
+        }
+      });
+      assert.strictEqual(preview.status, 200, `فشلت معاينة ${sizeKey}`);
+      assert.ok(preview.contentType.startsWith('image/png'), `متوقَّع image/png، وصل ${preview.contentType}`);
+      assert.deepStrictEqual(
+        pngDimensions(preview.buffer),
+        { width, height },
+        `أبعاد معاينة ${sizeKey} غير صحيحة`
+      );
+    }
+  });
+
+  await test('الحفظ يعيد رابطاً بالمقاس الكامل لكل مقاس، وكل بطاقة أساسية وحدها', async () => {
+    const specs = [
+      ['story', 'wedding_night', 'cairo', '#d9b25f', 1080, 1920],
+      ['portrait', 'sky_arc', 'tajawal', '#7dd3fc', 1080, 1350],
+      ['square', 'invitation', 'amiri', '#0f3f63', 1080, 1080],
+      ['a4', 'gold_frame', 'amiri', '#a87c2b', 2480, 3508]
+    ];
+    for (const [sizeKey, templateKey, fontKey, color, width, height] of specs) {
+      const saved = await postCardForm(`/api/events/${cardEventId}/cards`, {
+        token: cardOwner.token,
+        fields: { template_key: templateKey, size: sizeKey, font_key: fontKey, color, photo_source: 'none' }
+      });
+      assert.strictEqual(saved.status, 201, saved.body.message);
+      assert.strictEqual(saved.body.success, true);
+      assert.ok(/^https?:\/\//.test(saved.body.card.image_url), 'الرابط يجب أن يخرج مطلقاً (ADR-0002)');
+      assert.strictEqual(saved.body.card.is_primary, true, 'كل حفظ يجعل بطاقته هي الأساسية');
+      assert.strictEqual(saved.body.card.size, sizeKey);
+      const stored = await storedCardPng(saved.body.card.image_url);
+      if (stored) {
+        assert.deepStrictEqual(stored, { width, height }, `حجم صورة ${sizeKey} المحفوظة`);
+      } else {
+        assert.ok(
+          saved.body.card.image_url.includes('/image/upload/'),
+          `رابط غير محلي وغير Cloudinary: ${saved.body.card.image_url}`
+        );
+      }
+    }
+
+    const primaries = await db.queryOne(
+      'SELECT COUNT(*) AS total FROM event_cards WHERE event_id = ? AND is_primary = 1',
+      [cardEventId]
+    );
+    assert.strictEqual(Number(primaries.total), 1, 'بطاقة أساسية واحدة على الأكثر لكل مناسبة');
+    const all = await db.queryOne('SELECT COUNT(*) AS total FROM event_cards WHERE event_id = ?', [cardEventId]);
+    assert.strictEqual(Number(all.total), 4, 'الأربع محفوظة كلها — الأساسية منها واحدة');
+  });
+
+  await test('غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة', async () => {
+    const list = await api('GET', `/api/events/${cardEventId}/cards`, { token: cardStranger.token });
+    assert.strictEqual(list.status, 404);
+
+    const preview = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+      token: cardStranger.token,
+      fields: { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' }
+    });
+    assert.strictEqual(preview.status, 404);
+
+    const save = await postCardForm(`/api/events/${cardEventId}/cards`, {
+      token: cardStranger.token,
+      fields: { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' }
+    });
+    assert.strictEqual(save.status, 404);
+
+    const anonymous = await api('GET', `/api/events/${cardEventId}/cards`);
+    assert.strictEqual(anonymous.status, 401, 'بلا رمز يُردّ 401 لا 404');
+
+    // PATCH/DELETE: نفس الحارس نفسه على المسارين، لا على القائمة والحفظ وحدهما.
+    const ownerCards = await api('GET', `/api/events/${cardEventId}/cards`, { token: cardOwner.token });
+    const someoneElses = ownerCards.body.cards.find(card => card.is_primary);
+    assert.ok(someoneElses, 'متوقَّعة بطاقة أساسية لاختبار 404 على PATCH/DELETE');
+
+    const patchAsStranger = await api('PATCH', `/api/events/${cardEventId}/cards/${someoneElses.id}`, {
+      token: cardStranger.token,
+      body: {}
+    });
+    assert.strictEqual(patchAsStranger.status, 404, 'تعيين الأساسية لغير المالك 404 لا 200');
+    const deleteAsStranger = await deleteCardRequest(cardEventId, someoneElses.id, cardStranger.token);
+    assert.strictEqual(deleteAsStranger.status, 404, 'حذف بطاقة غير المالك 404 لا 200');
+
+    // ولم يتغيّر شيء: لا صفّ سقط ولا أساسية تبدّلت.
+    const afterStranger = await api('GET', `/api/events/${cardEventId}/cards`, { token: cardOwner.token });
+    assert.strictEqual(afterStranger.body.cards.length, ownerCards.body.cards.length, 'محاولتا الغريب لم تحذفا صفاً');
+    assert.strictEqual(
+      afterStranger.body.cards.filter(card => card.is_primary).map(card => card.id).join(','),
+      String(someoneElses.id),
+      'ولم تغيّر الأساسية'
+    );
+  });
+
+  await test('اختيار بلا لون أو قالب أو مقاس يُردّ 400 عربية لا 500', async () => {
+    const base = { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' };
+    for (const missing of ['color', 'template_key', 'size']) {
+      const fields = { ...base };
+      delete fields[missing];
+      const res = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+        token: cardOwner.token,
+        fields
+      });
+      assert.strictEqual(res.status, 400, `غياب ${missing} يجب أن يكون 400 لا ${res.status} (500 يعني TypeError)`);
+      assert.ok(
+        /[\u0600-\u06FF]/.test(String(res.body.message || '')),
+        `رسالة عربية لغياب ${missing}: ${res.body.message}`
+      );
+      if (missing === 'color') {
+        // نصّ الحارس نفسه، لا كلمة منه: تغييره يعني تغيير رسالة المستخدم.
+        assert.strictEqual(res.body.message, 'اختر لوناً من لوحة القالب', `رسالة اللون الغائب: ${res.body.message}`);
+      }
+    }
+  });
+
+  await test('طلب مرفوض بملف لا يترك صورة يتيمة في uploads', async () => {
+    // بايتات PNG حقيقية من المعاينة نفسها: `verifyMedia` يقرأ الترويسة ويقبلها،
+    // فيصل الطلب إلى `parseCardChoice` الذي يرفض القالب المجهول بعد كتابة الملف.
+    const seed = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+      token: cardOwner.token,
+      fields: { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' }
+    });
+    assert.strictEqual(seed.status, 200, 'متوقَّعة معاينة سليمة لتوليد بايتات PNG');
+
+    const photosBefore = new Set(
+      (await fsp.readdir(uploadsDirForCards)).filter(name => name.startsWith('photo-'))
+    );
+    const rejected = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+      token: cardOwner.token,
+      fields: { template_key: 'no_such_template', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'upload' },
+      file: seed.buffer
+    });
+    assert.strictEqual(rejected.status, 400, rejected.body && rejected.body.message);
+
+    // 404 بعد multer: غير المالك يمرّ بالحارس قبل التحقق فيبقى الملف مؤقتاً
+    // حتى `finally` — نفس المسار، ورمز مختلف.
+    const rejectedForbidden = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+      token: cardStranger.token,
+      fields: { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'upload' },
+      file: seed.buffer
+    });
+    assert.strictEqual(rejectedForbidden.status, 404, 'غير المالك 404 بعد أن كتب multer الملف');
+
+    // ومسار الحفظ نفسه: رفض 400 قبل الرسم لا يترك ملفاً بلا صفّ.
+    const rejectedSave = await postCardForm(`/api/events/${cardEventId}/cards`, {
+      token: cardOwner.token,
+      fields: { template_key: 'no_such_template', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'upload' },
+      file: seed.buffer
+    });
+    assert.strictEqual(rejectedSave.status, 400, rejectedSave.body && rejectedSave.body.message);
+
+    const leaked = (await fsp.readdir(uploadsDirForCards))
+      .filter(name => name.startsWith('photo-') && !photosBefore.has(name));
+    assert.deepStrictEqual(leaked, [], `ملف multer بقي على القرص بعد 400/404: ${leaked.join(', ')}`);
+  });
+
+  await test('العزاء لا يرى إلا قوالب النبرة الهادئة — ولو أُرسل قالب فرح رُدّ 400', async () => {
+    const solemnCatalog = await api('GET', '/api/card-templates?tone=solemn');
+    assert.strictEqual(solemnCatalog.status, 200);
+    assert.ok(
+      solemnCatalog.body.templates.every(template => template.tone === 'solemn'),
+      'كل قالب في ?tone=solemn نبرته solemn'
+    );
+    assert.ok(
+      solemnCatalog.body.templates.length >= 1,
+      'قالب عزاء هادئ واحد على الأقل — والمواصفة تطلب واحداً'
+    );
+
+    const festiveOnFuneral = await postCardForm(`/api/events/${cardFuneralEventId}/cards/preview`, {
+      token: cardOwner.token,
+      fields: { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' }
+    });
+    assert.strictEqual(festiveOnFuneral.status, 400);
+    // النصّ نفسه لا كلمة منه: هو رسالة `parseCardChoice` لفرع النبرة الوقورة
+    // في cards.routes.js، وتغييره يعني تغيير رسالة المستخدم — فيسقط الاختبار.
+    assert.strictEqual(
+      festiveOnFuneral.body.message,
+      'مناسبة العزاء لا ترسم إلا بقوالب العزاء الهادئة',
+      `رسالة الرفض العربية، وصلت: ${festiveOnFuneral.body.message}`
+    );
+
+    const solemnCard = await postCardForm(`/api/events/${cardFuneralEventId}/cards/preview`, {
+      token: cardOwner.token,
+      fields: { template_key: 'condolence_quiet', size: 'portrait', font_key: 'noto_naskh', color: '#3f5548', photo_source: 'none' }
+    });
+    assert.strictEqual(solemnCard.status, 200);
+    assert.deepStrictEqual(pngDimensions(solemnCard.buffer), { width: 480, height: 600 });
+
+    // ونبرة الوقار منعت بطاقة الفرح، لا أن الخادم يعرضها: القائمة نفسها.
+    const cards = await api('GET', `/api/events/${cardFuneralEventId}/cards`, { token: cardOwner.token });
+    assert.strictEqual(cards.body.cards.length, 0, 'لا بطاقة محفوظة للعزاء بعد');
+  });
+
+  await test('البطاقة الأساسية تصير og:image، وحذفها يعيد البطاقة المولَّدة', async () => {
+    const cards = await api('GET', `/api/events/${cardEventId}/cards`, { token: cardOwner.token });
+    const primary = cards.body.cards.find(card => card.is_primary);
+    assert.ok(primary, 'متوقَّعة بطاقة أساسية محفوظة');
+
+    const pageWithCard = await rawGet(`/e/${cardEventId}`);
+    assert.strictEqual(pageWithCard.status, 200);
+    const ogImage = /<meta property="og:image" content="([^"]+)"/.exec(pageWithCard.text);
+    assert.ok(ogImage, 'صفحة المشاركة تحمل og:image');
+    assert.ok(
+      ogImage[1].includes(path.basename(primary.image_url)),
+      `og:image يجب أن يكون البطاقة الأساسية، وصل: ${ogImage[1]}`
+    );
+    const ogWidth = /<meta property="og:image:width" content="(\d+)"/.exec(pageWithCard.text);
+    const ogHeight = /<meta property="og:image:height" content="(\d+)"/.exec(pageWithCard.text);
+    assert.ok(ogWidth && ogHeight, 'أبعاد og:image معلنة مع البطاقة الأساسية');
+    assert.strictEqual(`${ogWidth[1]}x${ogHeight[1]}`, '2480x3508', 'A4 هي الأساسية هنا');
+
+    const removed = await deleteCardRequest(cardEventId, primary.id, cardOwner.token);
+    assert.strictEqual(removed.status, 200, removed.body.message);
+    assert.strictEqual(removed.body.success, true);
+
+    const pageWithoutCard = await rawGet(`/e/${cardEventId}`);
+    const ogAfter = /<meta property="og:image" content="([^"]+)"/.exec(pageWithoutCard.text);
+    assert.ok(ogAfter, 'الصفحة تبقى تحمل og:image بعد الحذف');
+    assert.ok(
+      ogAfter[1].endsWith(`/e/${cardEventId}/card.jpg`),
+      `حذف الأساسية يعيد بطاقة الخادم المولَّدة، وصل: ${ogAfter[1]}`
+    );
+    const widthAfter = /<meta property="og:image:width" content="(\d+)"/.exec(pageWithoutCard.text);
+    assert.strictEqual(widthAfter[1], String(shareCard.WIDTH), 'أبعاد البطاقة المولَّدة معلنة كما كانت');
+
+    // ولا أساسية أخرى ترقّت مكانها: القرار «بلا أساسية» لا «بديل صامت».
+    const remaining = await db.queryOne(
+      'SELECT COUNT(*) AS total FROM event_cards WHERE event_id = ? AND is_primary = 1',
+      [cardEventId]
+    );
+    assert.strictEqual(Number(remaining.total), 0, 'الحذف لا يُرقّي بطاقة أخرى');
+  });
+
+  await test('PATCH يجعل البطاقة المطلوبة أساسية وحدها', async () => {
+    const cards = await api('GET', `/api/events/${cardEventId}/cards`, { token: cardOwner.token });
+    const target = cards.body.cards[cards.body.cards.length - 1];
+    assert.ok(target, 'متوقَّعة بطاقة محفوظة');
+    const patched = await api('PATCH', `/api/events/${cardEventId}/cards/${target.id}`, {
+      token: cardOwner.token,
+      body: {}
+    });
+    assert.strictEqual(patched.status, 200, patched.body.message);
+    assert.strictEqual(patched.body.card.is_primary, true);
+
+    const primaries = await db.query(
+      'SELECT id FROM event_cards WHERE event_id = ? AND is_primary = 1',
+      [cardEventId]
+    );
+    assert.deepStrictEqual(primaries.map(row => row.id), [target.id], 'واحدة فقط، وهي المطلوبة');
+
+    const page = await rawGet(`/e/${cardEventId}`);
+    const ogImage = /<meta property="og:image" content="([^"]+)"/.exec(page.text);
+    assert.ok(ogImage[1].includes(path.basename(patched.body.card.image_url)), 'og:image يتبع الأساسية الجديدة');
+  });
+
+  await test('photo_source: upload يحفظ صورة المصدر ويُبقي photo_url حيّة', async () => {
+    const seed = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+      token: cardOwner.token,
+      fields: { template_key: 'wedding_night', size: 'story', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' }
+    });
+    assert.strictEqual(seed.status, 200, 'متوقَّعة بايتات PNG من المعاينة');
+
+    const saved = await postCardForm(`/api/events/${cardEventId}/cards`, {
+      token: cardOwner.token,
+      fields: { template_key: 'wedding_night', size: 'story', font_key: 'cairo', color: '#d9b25f', photo_source: 'upload' },
+      file: seed.buffer
+    });
+    assert.strictEqual(saved.status, 201, saved.body && saved.body.message);
+    const photoUrl = saved.body.card.photo_url;
+    assert.ok(typeof photoUrl === 'string' && photoUrl.length, 'photo_url مطلوبة لصورة رُفعت مع البطاقة');
+    assert.ok(/^https?:\/\//.test(photoUrl), `photo_url تخرج مطلقة (ADR-0002)، وصلت: ${photoUrl}`);
+
+    const localFiles = [];
+    if (photoUrl.includes('/uploads/')) {
+      const photoPath = path.join(uploadsDirForCards, path.basename(photoUrl));
+      // القراءة نفسها هي التأكيد: لو حُذف الملف بعد الطلب لرمت ENOENT.
+      const bytes = await fsp.readFile(photoPath);
+      assert.deepStrictEqual(
+        [...bytes.slice(0, 8)],
+        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+        'ملف photo_url موجود فعلاً وبايتاته PNG'
+      );
+      localFiles.push(photoPath);
+    } else {
+      assert.ok(photoUrl.includes('/image/upload/'), `رابط غير محلي وغير Cloudinary: ${photoUrl}`);
+    }
+    if (String(saved.body.card.image_url).includes('/uploads/')) {
+      localFiles.push(path.join(uploadsDirForCards, path.basename(saved.body.card.image_url)));
+    }
+
+    // تنظيف الحالة: الصفّ عبر الواجهة (حذف بطاقة يملكها صاحبها)، ثم ملفّيها
+    // المحليين — الحذف لا يمسّ ملفات `/uploads/` لأن `releaseReplacedImage`
+    // تعمل على Cloudinary وحدها، فلا يُترك أثر في تشغيل تالٍ.
+    const removed = await deleteCardRequest(cardEventId, saved.body.card.id, cardOwner.token);
+    assert.strictEqual(removed.status, 200, removed.body.message);
+    for (const file of localFiles) await fsp.unlink(file).catch(() => {});
+  });
+
+  await test('معاينة متكررة تتجاوز الحدّ ⇒ 429 برسالة عربية', async () => {
+    const limited = await createCardUser('مستخدم حدّ معاينة البطاقة');
+    const fields = { template_key: 'wedding_night', size: 'square', font_key: 'cairo', color: '#d9b25f', photo_source: 'none' };
+    const max = config.rateLimit.cardPreviewMax;
+    let lastResponse = null;
+    for (let attempt = 0; attempt <= max; attempt += 1) {
+      lastResponse = await postCardForm(`/api/events/${cardEventId}/cards/preview`, {
+        token: limited.token,
+        fields
+      });
+      if (attempt < max) {
+        assert.strictEqual(lastResponse.status, 404, 'غير المالك يبقى 404 قبل بلوغ الحدّ');
+      }
+    }
+    assert.strictEqual(lastResponse.status, 429, `متوقَّع 429 بعد ${max} طلبات`);
+    assert.ok(
+      String(lastResponse.body.message || '').includes('حاول بعد قليل'),
+      `رسالة الحدّ عربية، وصلت: ${lastResponse.body.message}`
+    );
+
+    await db.execute('DELETE FROM users WHERE id = ?', [limited.id]);
+  });
+
+  // تنظيف القسم: بطاقات المناسبتين تسقط مع مناسبتهما بـON DELETE CASCADE.
+  await db.execute('DELETE FROM events WHERE id IN (?, ?)', [cardEventId, cardFuneralEventId]);
+  await db.execute('DELETE FROM users WHERE id IN (?, ?)', [cardOwner.id, cardStranger.id]);
 
   // تنظيف هذا القسم: المناسبات الثلاث تسقط ومَعها أجوبتها بـON DELETE CASCADE.
   for (const id of guestRsvpEventIds) {

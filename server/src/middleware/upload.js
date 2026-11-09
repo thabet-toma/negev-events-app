@@ -55,7 +55,7 @@ const upload = multer({
 });
 
 /** What each event field is actually allowed to hold, whatever the client claims. */
-const FIELD_KIND = { poster: 'image', artist_image: 'image', audio: 'audio', image: 'image' };
+const FIELD_KIND = { poster: 'image', artist_image: 'image', audio: 'audio', image: 'image', photo: 'image' };
 
 /**
  * The real type, read from the file's own leading bytes. Returns null for
@@ -142,4 +142,11 @@ const serviceMedia = [
 /** Accepts one profile photo — the signed-in user's own avatar, field `image`. */
 const avatarMedia = [upload.single('image'), verifyMedia];
 
-module.exports = { upload, eventMedia, serviceMedia, avatarMedia, verifyMedia, uploadsDir };
+/**
+ * ستوديو بطاقة الدعوة (#180): صورة اختيارية واحدة يرسمها القالب (حقل
+ * `photo`) — صورة رفعها صاحب المناسبة. المعاينة تحذف الملف بعد الرسم، والحفظ
+ * يمرّره إلى `storeUploadedImage`، وكلاهما عبر الراوتر لا هنا.
+ */
+const cardPhotoMedia = [upload.single('photo'), verifyMedia];
+
+module.exports = { upload, eventMedia, serviceMedia, avatarMedia, cardPhotoMedia, verifyMedia, uploadsDir };

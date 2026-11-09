@@ -1059,6 +1059,40 @@ CREATE TABLE IF NOT EXISTS event_videos (
   CONSTRAINT fk_event_videos_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- «بطاقة الدعوة» التي يصمّمها صاحب المناسبة (المواصفة #156، المرحلة ٣ —
+-- تذكرة #180). الصفّ يحفظ **اختيارات التصميم** لا الصورة وحدها: القالب
+-- (`template_key`) والخط (`font_key`) واللون (`color`) والمقاس (`size`) هي ما
+-- يُعاد به الرسم لاحقاً، و`image_url` هو الناتج المخزَّن (Cloudinary أو
+-- `/uploads/…`). القالب والخط والمقاس قوائم مغلقة في الكود
+-- (`cardStudio.service.js`) — لا FK هنا، كما أن `occasion_type_fields.field_key`
+-- ليس FK إلى `OCCASION_FIELDS`.
+--
+-- `photo_url` هي الصورة التي رُسمت **على** البطاقة (ملصق المناسبة أو صورة
+-- رفعها صاحبها)، وNULL تعني «بطاقة نصّية بلا صورة» — وهي حالة مشروعة لا خطأ.
+--
+-- **بطاقة أساسية واحدة على الأكثر لكل مناسبة** قاعدة يفرضها الكود
+-- (`eventCards.service.js` يمسح البقية في المعاملة نفسها) لا القاعدة: MySQL 8
+-- لا يعرف فهرساً فريداً جزئياً، و`is_primary` عمود منطقي لا مفتاح فريد.
+CREATE TABLE IF NOT EXISTS event_cards (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  event_id     INT UNSIGNED NOT NULL,
+  template_key VARCHAR(40)  NOT NULL,
+  font_key     VARCHAR(40)  NOT NULL,
+  color        VARCHAR(20)  NOT NULL,
+  size         ENUM('story','portrait','square','a4') NOT NULL,
+  photo_url    TEXT         DEFAULT NULL,
+  image_url    TEXT         NOT NULL,
+  is_primary   TINYINT(1)   NOT NULL DEFAULT 0,
+  created_by   INT UNSIGNED DEFAULT NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  -- القائمة والبطاقة الأساسية كلتاهما تقرأ بـ(event_id) ثم تفرز/تقطعه،
+  -- فيقع الاختيار على الفهرس نفسه بلا مسح لبطاقات مناسبة أخرى.
+  KEY idx_event_cards_event (event_id, is_primary),
+  CONSTRAINT fk_event_cards_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_cards_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- The user tags HIMSELF (user_id = requested_by, name comes from the
 -- account, never from the request body) and an admin approves it. An admin
 -- may also add a name for someone without an account (user_id NULL). The
