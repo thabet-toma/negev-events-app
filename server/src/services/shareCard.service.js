@@ -46,6 +46,10 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+// مكتبة QR الوحيدة (#182): JavaScript خالص، بلا تبعيات وبلا native — ترسم
+// وحداتها بنفسها على القماش القائم (لا SDK ولا مكتبة ثانية). `qrcode(0, …)`
+// يختار أصغر إصدار يتّسع للنصّ، فرمز رابط قصير يبقى صغيراً كثيف الوحدات.
+const qrcode = require('qrcode-generator');
 
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -162,12 +166,12 @@ function videoCacheKey({ id, title, thumbUrl, albumTitle, town }) {
  * is what gets served), so a failure to clean up is logged and swallowed
  * rather than allowed to fail the render it is tidying up after.
  */
-async function evictStale(prefix, currentKey) {
+async function evictStale(prefix, currentKey, extension = '.jpg') {
   try {
     const entries = await fsp.readdir(CACHE_DIR);
     await Promise.all(
       entries
-        .filter(name => name.startsWith(prefix) && name !== `${currentKey}.jpg`)
+        .filter(name => name.startsWith(prefix) && name !== `${currentKey}${extension}`)
         .map(name => fsp.unlink(path.join(CACHE_DIR, name)).catch(() => {}))
     );
   } catch (err) {
@@ -1173,6 +1177,250 @@ async function getOrRenderVideoCard({ id, title, thumbUrl, albumTitle, town }) {
   return buffer;
 }
 
+// ---------------------------------------------------------------------------
+// «نزّل الصورة» (#182): الصورة كما هي، وتحتها شريط أعراسنا
+// ---------------------------------------------------------------------------
+
+/**
+ * الصورة التي يحملها كل تنزيل وكل مشاركة (تذكرة #182): صورة المناسبة نفسها —
+ * بطاقتها الأساسية إن صمّمها صاحبها، وإلا ملصقها، وإلا البطاقة المولَّدة أعلاه
+ * — وفوق أسفلها شريط واحد ثابت: العلامة، «امسح الرمز وافتح المناسبة»، ورمز QR
+ * لصفحة المناسبة المطلقة (`${config.publicUrl}/e/:id`) كي يفتحها أي هاتف يمسح
+ * الصورة. لا توسّع ولا قصّ للمصدر: عرض الناتج = عرض المصدر، وارتفاعه = ارتفاع
+ * المصدر + ارتفاع الشريط، فالملصق الذي صمّمته العائلة يبقى كما هو.
+ *
+ * الشريط بارتفاع ثابت مهما كان مقاس المصدر (طلب التذكرة: «~١٨٠px على عرض
+ * الصورة»): التكوين نفسه في بطاقة ١٢٠٠×١٢٠٠، وملصق ١٠٨٠×٢٣٤٠، وبطاقة A4 —
+ * والقياس داخل الشريط يتكيّف مع عرض الصورة (انظر drawDownloadStrip).
+ */
+const STRIP_HEIGHT = 180;
+
+/**
+ * نسخة تصميم الشريط — تُضاف إلى مفتاح الكاش كما تفعل CARD_DESIGN_VERSION
+ * بالبطاقة، فتعديل التكوين (أو نصّ الدعوة) يُبطل كل صور التنزيل المخزَّنة
+ * وحدها بلا مساس بكاش card.jpg.
+ */
+const STRIP_DESIGN_VERSION = 2; // 2: quiet zone صار أربع وحدات (تذكرة #182)
+
+/** نصّ الدعوة الوحيد على الشريط — بخط Cairo نفسه المسجَّل أعلى هذا الملف. */
+const STRIP_TEXT = 'امسح الرمز وافتح المناسبة';
+
+/** هامش الشريط وجانبه الأيسر للرمز (يبقى ثابتاً في كل المقاسات). */
+const STRIP_PADDING = 22;
+/**
+ * أقصى ضلع للوحة الرمز — ١٦٤ من ١٨٠: الشريط بارتفاع ثابت، والرمز يأخذ أكبر
+ * مساحة ممكنة فيه لأن الصورة تُعرض على هاتف مصغَّرةً عمّا رُسمت عليه. ولا
+ * يُسمح للوحة بأن تلامس حافتي الشريط، فالهامش ٨px أعلى وأسفل.
+ */
+const QR_BOX = 164;
+/** هامش QR الأبيض (quiet zone) بوحدات الرمز — أربع وحدات كما يفرض معيار QR، لا زخرفة. */
+const QR_QUIET_MODULES = 4;
+
+/**
+ * هندسة وحدات رمز QR لنصّ ما، بلا رسم: `qrcode-generator` يعطي المصفوفة
+ * (`isDark(row, col)`) والمقاس، وهذا يحسب كيف تُرسم على الشريط. حدود الوحدة
+ * تُقرَّب إلى بكسلات صحيحة (`edge`) بدل تثبيت مقاس وحدة صحيح: حين يكون ١٦٤px
+ * على ٣٣ وحدة مثلًا، وحدةٌ صحيحة ٤px تُهدر ٣٢px من اللوحة، والوحدات المقروءة
+ * على حدود بكسل تبقى حادّة (لا تنعيم) وأكبر للقارئ. تُصدَّر لأن اختبار الدخان
+ * يعيد بناء المصفوفة من الرابط المطلق نفسه ويقارن بكسلات الصورة بها، فلا يكفي
+ * «الشريط غير فارغ» دليلاً على وجود QR صالح.
+ */
+function qrBlocksFor(text) {
+  const qr = qrcode(0, 'M');
+  qr.addData(String(text));
+  qr.make();
+
+  const moduleCount = qr.getModuleCount();
+  const modulesPerSide = moduleCount + QR_QUIET_MODULES * 2;
+  const panelSize = QR_BOX;
+  /** حدّ الوحدة `index` بكسل صحيح من أعلى/يسار اللوحة — بلا تنعيم. */
+  const edge = index => Math.round((index * panelSize) / modulesPerSide);
+  const x = STRIP_PADDING;
+  const y = Math.round((STRIP_HEIGHT - panelSize) / 2);
+
+  return {
+    moduleCount,
+    modulesPerSide,
+    quiet: QR_QUIET_MODULES,
+    panelSize,
+    x,
+    y,
+    moduleRect(row, col) {
+      const left = x + edge(col + QR_QUIET_MODULES);
+      const right = x + edge(col + QR_QUIET_MODULES + 1);
+      const above = y + edge(row + QR_QUIET_MODULES);
+      const below = y + edge(row + QR_QUIET_MODULES + 1);
+      return { x: left, y: above, width: right - left, height: below - above };
+    },
+    isDark: (row, col) => qr.isDark(row, col)
+  };
+}
+
+/**
+ * يرسم الشريط أسفل الصورة داخل القماش النهائي. `top` هو ارتفاع المصدر، أي
+ * أول صفّ من الشريط.
+ *
+ * **الترتيب RTL مقصود، لا مقلوباً عن العادة:** العلامة في أقصى اليمين — بداية
+ * القراءة بالعربية — ثم الجملة يسارها، وينتهي السطر عند رمز QR في أقصى اليسار.
+ * فالعين تقرأ «امسح الرمز…» ثم تجد الرمز الذي تنفّذه الجملة على يساره مباشرة،
+ * بدل أن يُدفع الرمز إلى اليمين فيقطع تدفّق السطر ويسبق العلامة. وهو أيضًا
+ * مكمّل لتكوين بطاقة المشاركة أعلاه: العلامة على الحافة نفسها في الاثنين.
+ */
+function drawDownloadStrip(ctx, { event, width, top }) {
+  const tone = toneOf(event);
+  const palette = PALETTES[tone];
+  const qr = qrBlocksFor(`${config.publicUrl}/e/${event.id}`);
+
+  // 1) خلفية الشريط، وخطّ فاصل بتدرّج لون النوع — نفس اصطلاح renderCard حين
+  //    يفصل شريط النصّ عن الصورة.
+  ctx.save();
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, top, width, STRIP_HEIGHT);
+  const rule = ctx.createLinearGradient(0, 0, width, 0);
+  rule.addColorStop(0, withAlpha(palette.accent, 0.95));
+  rule.addColorStop(1, withAlpha(palette.accent, 0.25));
+  ctx.fillStyle = rule;
+  ctx.fillRect(0, top, width, 3);
+  ctx.restore();
+
+  // 2) رمز QR: لوحة بيضاء أولاً — ماسحات QR تحتاج أرضية فاتحة، والشريط داكن —
+  //    ثم الوحدات السوداء بحدود بكسلات صحيحة من qrBlocksFor (بلا تحجيم لاحق،
+  //    فلا تنعيم على حدود الوحدات). `moduleRect` يعطي إحداثياته من أعلى الشريط.
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.roundRect(qr.x, top + qr.y, qr.panelSize, qr.panelSize, 10);
+  ctx.fill();
+  ctx.fillStyle = '#000000';
+  for (let row = 0; row < qr.moduleCount; row += 1) {
+    for (let col = 0; col < qr.moduleCount; col += 1) {
+      if (!qr.isDark(row, col)) continue;
+      const box = qr.moduleRect(row, col);
+      ctx.fillRect(box.x, top + box.y, box.width, box.height);
+    }
+  }
+  ctx.restore();
+
+  // 3) العلامة على اليمين — الطبقة 'icon' بلا الكلمة، لأن الكلمة تُكتب نصّاً
+  //    بجانبها (نفس قاعدة buildMarkParts في CLAUDE.md)، فلا تتكرّر مرتين.
+  const markSize = 96;
+  const markX = width - STRIP_PADDING - markSize;
+  drawBrandMark(ctx, markX, top + Math.round((STRIP_HEIGHT - markSize) / 2), markSize);
+
+  // 4) النصّ بين العلامة والرمز، بمقاس يصغر قليلاً على الصور الضيقة (ملصق
+  //    ٦٠٠px مثلاً) كي لا يدهس أيّهما؛ والمقطع نفسه يمنع أي تجاوز احتياطاً.
+  const textRight = markX - 16;
+  const textLeft = qr.x + qr.panelSize + 14;
+  const available = Math.max(40, textRight - textLeft);
+  const fontOf = (size, bold) => `${bold ? '700' : ''} ${size}px "${bold ? BOLD_FAMILY : REGULAR_FAMILY}"`;
+
+  let lineSize = 25;
+  let titleSize = 32;
+  ctx.font = fontOf(lineSize, false);
+  while (lineSize > 14 && ctx.measureText(STRIP_TEXT).width > available) {
+    lineSize -= 1;
+    titleSize = Math.max(16, Math.round(lineSize * 1.24));
+    ctx.font = fontOf(lineSize, false);
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(textLeft, top + 6, available, STRIP_HEIGHT - 12);
+  ctx.clip();
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = fontOf(titleSize, true);
+  ctx.fillStyle = withAlpha(palette.accent, 0.98);
+  ctx.fillText(palette.wordmark, textRight, top + 64);
+  ctx.font = fontOf(lineSize, false);
+  ctx.fillStyle = palette.ink;
+  ctx.fillText(STRIP_TEXT, textRight, top + 112);
+  ctx.restore();
+}
+
+/** يرسم الصورة بالمقاس الأصلي ثم الشريط تحتها، ويعيد PNG. */
+async function renderDownloadStrip(event, sourceImage) {
+  const width = sourceImage.width;
+  const height = sourceImage.height;
+  const canvas = createCanvas(width, height + STRIP_HEIGHT);
+  const ctx = canvas.getContext('2d');
+
+  // بلا قصّ ولا تحجيم: الصورة كلها كما وصلت، فالناتج أعرض/أطول بمقدار ما كان
+  // المصدر بالضبط، ويزيد عنه بالشريط وحده.
+  ctx.drawImage(sourceImage, 0, 0, width, height);
+  drawDownloadStrip(ctx, { event, width, top: height });
+
+  return canvas.toBuffer('image/png');
+}
+
+/**
+ * مفتاح كاش صور التنزيل: هوية المصدر تصميمياً (الأساسية/الملصق/المولَّدة **و**
+ * رابط الصورة نفسه) مع `updated_at` للمناسبة — فتعيين بطاقة أساسية جديدة أو
+ * تعديل ملصق أو تحرير بيانات المناسبة يعطي مفتاحاً جديداً تلقائياً، ولا يخدم
+ * الملفُ القديم صورةً تغيّرت. والرابط قد يكون طويلاً، فيُختصر بـsha1 في
+ * اسم الملف كما يفعل كاش الحلقات أدناه.
+ */
+function downloadCacheKey(event, sourceKey) {
+  const updatedAtMs = event.updated_at ? new Date(event.updated_at).getTime() : 0;
+  const sourceHash = crypto.createHash('sha1').update(String(sourceKey)).digest('hex').slice(0, 16);
+  return `download-${event.id}-${updatedAtMs}-${sourceHash}-v${STRIP_DESIGN_VERSION}`;
+}
+
+/**
+ * يقرأ المصدر الذي اختارته طبقة المسارات (`{ kind, url }`) ويفكّ ترميزه.
+ * فشل الجلب أو فكّ الترميز **لا يُفشل التنزيل**: يسقط إلى البطاقة المولَّدة
+ * (`renderCard`) التي لا تحتاج شبكة — نفس ترتيب المصادر، مع ضمان أن الصورة
+ * تخرج دائمًا.
+ */
+async function resolveDownloadSource(event, source) {
+  if (source && source.url) {
+    const buffer = await loadPosterBuffer(jpegVariant(source.url));
+    if (buffer) {
+      try {
+        return await loadImage(buffer);
+      } catch (err) {
+        logger.warn(`[shareCard] failed to decode download source for event ${event.id}: ${err.message}`);
+      }
+    }
+    // مصدر معلن تعذّر جلبُه — يُسجَّل كي يُرى في السجل، والصورة تخرج بالمولَّدة.
+    logger.warn(`[shareCard] download source ${source.kind} unavailable for event ${event.id}, drawing the generated card`);
+  }
+  return loadImage(await renderCard(event));
+}
+
+/**
+ * Render-once-reuse لصورة التنزيل — نفس نمط getOrRenderCard تماماً: أول طلب
+ * يرسم ويكتب إلى CACHE_DIR، والباقي يقرأ. ملفاتها تبدأ بـ`download-<id>-` و
+ * امتدادها `.png`، فلا تتقاطع مع كاش card.jpg (الذي يبدأ بـ`<id>-` ويُقرأ في
+ * اختباراته باسم واحد بالضبط).
+ *
+ * **الكاش يُقرأ قبل جلب المصدر، لا بعده:** مفتاحه هوية المصدر **المعلنة**
+ * (الأساسية/الملصق والمولَّدة) لا بايتاته، فإصابة الكاش لا تفتح شبكة ولا تقرأ
+ * قرصاً. ولو فشل مصدر معلن عند الرسم الأول، يُخزَّن الناتج (بطاقة مولَّدة)
+ * تحت المفتاح المعلن نفسه — كما يفعل `getOrRenderCard` حين يسقط ملصقٌ مفقود،
+ * فلا تُعاد محاولة جلب فاشلة في كل طلب. وتبديل المصدر أو تعديل المناسبة يغيّر
+ * `updated_at` أو الهوية، فيكون المفتاح ملفاً جديداً وتُزيل `evictStale`
+ * القديم.
+ */
+async function getOrRenderDownloadImage(event, source) {
+  const declaredKey = source && source.url ? `${source.kind}:${source.url}` : 'generated';
+  const key = downloadCacheKey(event, declaredKey);
+  const file = path.join(CACHE_DIR, `${key}.png`);
+
+  try {
+    return await fsp.readFile(file);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+
+  const image = await resolveDownloadSource(event, source);
+  const buffer = await renderDownloadStrip(event, image);
+  await fsp.writeFile(file, buffer);
+  await evictStale(`download-${event.id}-`, key, '.png');
+  return buffer;
+}
+
 module.exports = {
   WIDTH,
   HEIGHT,
@@ -1185,6 +1433,14 @@ module.exports = {
   getOrRenderEpisodeCard,
   renderVideoCard,
   getOrRenderVideoCard,
+  // «نزّل الصورة» (#182): الشريط ورمزه. `STRIP_HEIGHT` تُصدَّر كي يثبت اختبار
+  // الدخان أن الارتفاع = ارتفاع المصدر + الشريط، و`qrBlocksFor` كي يعيد بناء
+  // مصفوفة الوحدات من الرابط المطلق ويقارنها ببكسلات الصورة.
+  STRIP_HEIGHT,
+  STRIP_TEXT,
+  qrBlocksFor,
+  renderDownloadStrip,
+  getOrRenderDownloadImage,
   // The story studio draws the same brand mark on a 1080×1920 card; exporting
   // the one drawing function is cheaper than a second copy of the geometry.
   drawBrandMark,

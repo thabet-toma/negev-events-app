@@ -8252,6 +8252,27 @@ async function run() {
   }
 
   /**
+   * يفكّ PNG إلى بكسلاته عبر محرّك الرسم نفسه الذي يرسم الخادم به — لقراءة
+   * منطقة رمز QR على «شريط أعراسنا» (تذكرة #182). الأبعاد تُقرأ من الصورة لا
+   * من الترويسة، تماماً كفكرة IHDR أدناه.
+   */
+  async function decodePngPixels(buffer) {
+    assert.ok(buffer[0] === 0x89 && buffer[1] === 0x50, 'expected a PNG file signature');
+    const image = await loadImage(buffer);
+    const canvas = createCanvas(image.width, image.height);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0);
+    return {
+      width: image.width,
+      height: image.height,
+      pixelAt(x, y) {
+        const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+        return { r, g, b };
+      }
+    };
+  }
+
+  /**
    * A small hand-rolled PNG decoder, in the same spirit as
    * server/scripts/build-share-fallbacks.js's hand-rolled encoder: reads
    * IHDR for the real dimensions (never trust a Content-Type header alone —
@@ -8424,6 +8445,121 @@ async function run() {
     );
   });
 
+  /**
+   * «نزّل الصورة» (#182) — الصورة بالشريط. الأبعاد من IHDR نفسها لا من
+   * الترويسة، و`pngDimensions` تُستدعى هنا قبل تعريفها في القسم الأخير من هذه
+   * الدالة نفسها (رفع الدوال في JS يسمح بذلك)، فلا نسخة ثانية من قراءة PNG.
+   *
+   * مناسبة مستقلة هنا، ولا تُستعمل `shareEventId` أعلاه: نوع «عرس» يحمل
+   * `default_poster_url` (يُكتب في `events.poster_url` عند النشر،
+   * events.service.js)، فمصدر تلك المناسبة ملصقٌ خارجي مقاسه ليس ١٢٠٠×١٢٠٠.
+   * «عزا» لا يحمل ملصقاً افتراضياً، فالمصدر هنا هو البطاقة المولَّدة وحدها.
+   */
+  let downloadStripEventId = 0;
+  await test('Set up: مناسبة عزا معتمدة بلا ملصق (نوعها لا يحمل default_poster_url) لفحوص صورة التنزيل', async () => {
+    const { status, body } = await api('POST', '/api/events', {
+      token: adminToken,
+      body: {
+        occasion_type_id: funeralType.id,
+        honorees: [{ name: 'متوفَّى فحص شريط التنزيل' }],
+        town: 'رهط',
+        location_name: 'ديوان الاختبار',
+        event_date: '2027-09-17',
+        event_end_date: '2027-09-18'
+      }
+    });
+    assert.strictEqual(status, 201, body.message);
+    assert.strictEqual(body.status, 'approved');
+    downloadStripEventId = body.eventId;
+  });
+
+  await test('GET /e/:id/download.png: PNG بعرض المصدر وارتفاعه + ارتفاع الشريط، بترويسة تنزيل', async () => {
+    const { status, headers, buffer } = await rawGetBinary(`/e/${downloadStripEventId}/download.png`);
+    assert.strictEqual(status, 200);
+    assert.strictEqual(headers.get('content-type'), 'image/png');
+    assert.ok(
+      (headers.get('content-disposition') || '').startsWith('attachment;'),
+      'expected Content-Disposition: attachment so a browser saves the file instead of navigating to it'
+    );
+    assert.ok(headers.get('content-disposition').includes('filename*=UTF-8'), 'expected the Arabic filename in RFC 5987 form');
+    assert.ok((headers.get('cache-control') || '').includes('max-age='), 'expected a Cache-Control header');
+
+    const size = pngDimensions(buffer);
+    // لا ملصق لهذه المناسبة ولا بطاقة أساسية: المصدر هو البطاقة المولَّدة
+    // 1200×1200 نفسها التي يخدمها card.jpg — لا مقاس آخر مخترَع.
+    assert.strictEqual(size.width, shareCard.WIDTH, 'عرض الناتج = عرض المصدر');
+    assert.strictEqual(
+      size.height,
+      shareCard.HEIGHT + shareCard.STRIP_HEIGHT,
+      'ارتفاع الناتج = ارتفاع المصدر + الشريط، والشريط أسفل الصورة لا فوقها'
+    );
+  });
+
+  await test('رمز QR على الشريط يطابق مصفوفة الوحدات لرابط الصفحة المطلق — وحدةً بوحدة', async () => {
+    const { status, buffer } = await rawGetBinary(`/e/${downloadStripEventId}/download.png`);
+    assert.strictEqual(status, 200);
+
+    const image = await decodePngPixels(buffer);
+    const stripTop = image.height - shareCard.STRIP_HEIGHT;
+    const qr = shareCard.qrBlocksFor(`${config.publicUrl}/e/${downloadStripEventId}`);
+    assert.ok(qr.moduleCount >= 21, `expected a real QR matrix, got ${qr.moduleCount} modules`);
+
+    // كل وحدة تُقاس في مركزها: أسود يعني وحدة داكنة في المصفوفة، وأبيض يعني
+    // فاتحة. هذا يثبت أن الرمز المرسوم هو رفع الرابط المطلق نفسه لا زخرفة،
+    // وأن الأرضية البيضاء والوحدات الحادّة سليمة.
+    let mismatched = 0;
+    for (let row = 0; row < qr.moduleCount; row += 1) {
+      for (let col = 0; col < qr.moduleCount; col += 1) {
+        const box = qr.moduleRect(row, col);
+        const sample = image.pixelAt(
+          box.x + Math.floor(box.width / 2),
+          stripTop + box.y + Math.floor(box.height / 2)
+        );
+        const isDarkPixel = (sample.r + sample.g + sample.b) / 3 < 100;
+        if (isDarkPixel !== qr.isDark(row, col)) mismatched += 1;
+      }
+    }
+    assert.strictEqual(
+      mismatched,
+      0,
+      `expected every drawn QR module to match the matrix built from ${config.publicUrl}/e/${downloadStripEventId}, ${mismatched} mismatched`
+    );
+  });
+
+  await test('صورة التنزيل الثانية تُخدَم من كاش الخادم ولا تُعاد رسمها', async () => {
+    const entries = await fsp.readdir(shareCard.CACHE_DIR);
+    const files = entries.filter(name => name.startsWith(`download-${downloadStripEventId}-`));
+    assert.strictEqual(files.length, 1, `expected exactly one cached download image, found: ${files.join(', ')}`);
+
+    const file = path.join(shareCard.CACHE_DIR, files[0]);
+    const before = await fsp.stat(file);
+    const { status, buffer } = await rawGetBinary(`/e/${downloadStripEventId}/download.png`);
+    const after = await fsp.stat(file);
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(after.mtimeMs, before.mtimeMs, 'the cached PNG must not be rewritten by the second request');
+    assert.ok(buffer.length > 0, 'expected non-empty bytes from the cache hit');
+  });
+
+  await test('مصدر التنزيل يتبع الملصق حين لا بطاقة أساسية: العرض والارتفاع مقاس الملصق نفسه', async () => {
+    const created = await apiUpload('/api/events', {
+      token: adminToken,
+      fields: uploadFields({ 'honorees[0][name]': 'عريس تنزيل بملصق', event_date: '2027-09-16' }),
+      files: [{ field: 'poster', buffer: buildRealisticPoster(), type: 'image/jpeg', name: 'download-poster.jpg' }]
+    });
+    assert.strictEqual(created.status, 201);
+
+    const { status, buffer } = await rawGetBinary(`/e/${created.body.eventId}/download.png`);
+    assert.strictEqual(status, 200);
+    const size = pngDimensions(buffer);
+    // الملصق المرسوم في buildRealisticPoster مقاسه 1080×2340 — لو اختار
+    // المسار البطاقةَ المولَّدة لخرج 1200×1200 + الشريط وفشل هذا السطر.
+    assert.strictEqual(size.width, 1080, 'عرض الناتج = عرض الملصق بلا قصّ ولا تحجيم');
+    assert.strictEqual(size.height, 2340 + shareCard.STRIP_HEIGHT, 'ارتفاع الناتج = ارتفاع الملصق + الشريط');
+
+    await api('DELETE', `/api/admin/events/${created.body.eventId}`, { token: adminToken });
+  });
+
   await test('THE SIZE GUARD: a card built from a real (non-trivial) poster still stays under the WhatsApp preview limit', async () => {
     const created = await apiUpload('/api/events', {
       token: adminToken,
@@ -8528,6 +8664,17 @@ async function run() {
     assert.ok(primaryMatch[1].includes('/download'), 'expected the primary button to still point at the download-recording route');
   });
 
+  await test('صفحة /e/:id تحمل زرّ «نزّل الصورة» إلى /e/:id/download.png — لا إلى صورة أخرى (#182)', async () => {
+    const { text } = await rawGet(`/e/${shareEventId}`);
+    const match = text.match(/class="cta-image" href="([^"]*)"[^>]*>([^<]*)</);
+    assert.ok(match, 'expected a third action on the share page for downloading the picture');
+    assert.ok(
+      match[1].endsWith(`/e/${shareEventId}/download.png`),
+      `the button must point at this event's stripped download route, got: ${match[1]}`
+    );
+    assert.strictEqual(match[2].trim(), 'نزّل الصورة');
+  });
+
   await test('The three-reason strip is present', async () => {
     const { text } = await rawGet(`/e/${shareEventId}`);
     assert.ok(text.includes('class="reasons"'), 'expected the reasons strip container');
@@ -8620,6 +8767,25 @@ async function run() {
     assert.strictEqual(pending.status, 404, 'same as the page: a pending event has no card either');
     assert.strictEqual(missing.status, 404);
     assert.strictEqual(malformed.status, 404);
+  });
+
+  await test('GET /e/:id/download.png على مناسبة معلّقة أو معرّف مفقود/غير رقمي ⇒ 404 الموحّدة نفسها، لا صورة ولا 403', async () => {
+    const pageNotFound = await rawGet(`/e/${pendingShareEventId}`);
+    assert.strictEqual(pageNotFound.status, 404, 'set up: the page gate refuses a pending event');
+
+    const pending = await rawGetBinary(`/e/${pendingShareEventId}/download.png`);
+    const missing = await rawGetBinary('/e/999999999/download.png');
+    const malformed = await rawGetBinary('/e/not-a-number/download.png');
+
+    for (const [label, res] of [['pending', pending], ['missing', missing], ['malformed', malformed]]) {
+      assert.strictEqual(res.status, 404, `${label} must be refused like an unapproved event — 404, never 403`);
+      assert.ok(
+        !(res.headers.get('content-type') || '').startsWith('image/'),
+        `${label} must not be answered with an image`
+      );
+      // البوابة نفسها التي تستعملها الصفحة: نفس جسم الـ404 حرفاً بحرف.
+      assert.strictEqual(res.buffer.toString('utf8'), pageNotFound.text, `${label} must serve the page's own 404 body`);
+    }
   });
 
   let expiredShareEventId = 0;
@@ -8718,8 +8884,8 @@ async function run() {
   });
 
   await db.execute(
-    'DELETE FROM events WHERE id IN (?, ?, ?, ?)',
-    [shareEventId, pendingShareEventId, expiredShareEventId, solemnShareEventId]
+    'DELETE FROM events WHERE id IN (?, ?, ?, ?, ?)',
+    [shareEventId, downloadStripEventId, pendingShareEventId, expiredShareEventId, solemnShareEventId]
   );
 
   console.log('\nAnalytics (behavioural events, issue #44)');
@@ -18956,6 +19122,19 @@ async function run() {
     assert.strictEqual(Number(primaries.total), 1, 'بطاقة أساسية واحدة على الأكثر لكل مناسبة');
     const all = await db.queryOne('SELECT COUNT(*) AS total FROM event_cards WHERE event_id = ?', [cardEventId]);
     assert.strictEqual(Number(all.total), 4, 'الأربع محفوظة كلها — الأساسية منها واحدة');
+  });
+
+  await test('download.png يفضّل البطاقة الأساسية على الملصق: مقاس الناتج = مقاس البطاقة المحفوظة + الشريط (#182)', async () => {
+    // آخر بطاقة حُفظت في الاختبار السابق هي A4 (2480×3508) وهي الأساسية الآن
+    // — وأي مصدر آخر (البطاقة المولَّدة 1200×1200) يعطي عرضاً مختلفاً بوضوح،
+    // فالسطران يثبتان ترتيب المصادر لا مجرّد وجود صورة.
+    const { status, buffer } = await rawGetBinary(`/e/${cardEventId}/download.png`);
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(
+      pngDimensions(buffer),
+      { width: 2480, height: 3508 + shareCard.STRIP_HEIGHT },
+      'المصدر هو بطاقة صاحب المناسبة الأساسية، والشريط يُضاف أسفلها'
+    );
   });
 
   await test('غير المالك يُردّ بـ404 في القائمة والحفظ والمعاينة', async () => {

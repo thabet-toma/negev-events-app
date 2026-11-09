@@ -3651,6 +3651,9 @@ function renderEventPage(evt) {
       <button type="button" class="event-page-btn event-page-share-btn" onclick="shareEvent(eventPageEvent)">
         <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> ${escapeHtml(shareButtonLabel(evt))}
       </button>
+      <button type="button" class="event-page-btn" onclick="downloadEventImage(${evt.id})">
+        <i class="fa-solid fa-download" aria-hidden="true"></i> نزّل الصورة
+      </button>
       ${cardStudioHtml}
       <div class="event-page-btn-row">
         ${!evt.status || evt.status === 'approved' ? renderReminderButtonHtml(evt) : ''}
@@ -11289,6 +11292,36 @@ async function shareEvent(evt) {
   recordAnalyticsEvent('share_clicked', { contentTown: evt.town });
 
   await shareLink({ title: evt.title, line, url, copiedMessage: '📋 تم نسخ رابط المناسبة' });
+}
+
+/**
+ * «نزّل الصورة» في صفحة المناسبة (تذكرة #182) — الصورة التي رسمها الخادم على
+ * `GET /e/:id/download.png`: صورة المناسبة كما هي، وتحتها شريط «أعراسنا»
+ * (العلامة، «امسح الرمز وافتح المناسبة»، ورمز QR لصفحة المناسبة).
+ *
+ * الرابط من `api.js`/`config.js` وحده (`apiUrl` تُبنى من `API_BASE`) ولا `fetch`
+ * هنا إطلاقاً: المتصفّح يتولّى التنزيل من ترويسة `Content-Disposition` التي
+ * يرسلها الخادم، فالملفّ لا يُحمَّل إلى ذاكرة الصفحة ولا يُعاد بناؤه فيها.
+ *
+ * و`try/catch` ليس تجميلاً: منع المتصفّح/الوكيل إنشاء رابط تنزيل يرمي هنا،
+ * وبدون التقاطه يصعد الخطأ فيُقرأ الزرّ ميتاً. بدله توست عربي — **الزرّ لا
+ * يفشل بصمت**، نفس قاعدة زرّ المشاركة أعلاه، والصفحة تبقى كما هي.
+ */
+function downloadEventImage(eventId) {
+  try {
+    const id = Number(eventId);
+    const link = document.createElement('a');
+    link.href = apiUrl(`/e/${id}/download.png`);
+    // الاسم الاحتياطي حين يتجاهل المتصفّح `download` (أصل مختلف): الاسم العربي
+    // نفسه يأتي في `filename*` من الخادم، وهذا لا يُغيَّر.
+    link.download = `أعراسنا-مناسبة-${id}.png`;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (e) {
+    showToast('تعذّر تنزيل الصورة — حاول مرة أخرى');
+  }
 }
 
 /**

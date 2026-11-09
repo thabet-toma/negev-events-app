@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 82 | 26438 |
-| `web` | 8 | 20438 |
-| `mobile/lib` | 67 | 31355 |
+| `server/src` | 82 | 26747 |
+| `web` | 8 | 20475 |
+| `mobile/lib` | 67 | 31463 |
 
 ### توزيع `server/src`
 
@@ -28,8 +28,8 @@
 | `middleware/` | 6 | 799 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 6290 |
-| `services/` | 28 | 14480 |
+| `routes/` | 25 | 6366 |
+| `services/` | 28 | 14713 |
 | `utils/` | 12 | 870 |
 
 ### ملفات `web/*.js`
@@ -38,11 +38,11 @@
 |---|---|
 | `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 11315 |
+| `app.js` | 11347 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
-| `sw.js` | 230 |
+| `sw.js` | 235 |
 | `theme-boot.js` | 92 |
 
 `web/` كله HTML وCSS بلا خطوة بناء؛ `web/serve.js` خادم الملفات الثابتة المحلي وحده.
@@ -51,12 +51,12 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2261 |
+| `api/` | 2 | 2297 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
 | `models/` | 11 | 2528 |
-| `screens/` | 20 | 20493 |
-| `state/` | 18 | 1808 |
+| `screens/` | 20 | 20514 |
+| `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
 
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 212
+## ٣. نقاط API — 213
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -82,7 +82,7 @@
 
 | METHOD | path | guards | file:line |
 |---|---|---|---|
-| GET | `/a/:id` | — | `server/src/routes/share.routes.js:1857` |
+| GET | `/a/:id` | — | `server/src/routes/share.routes.js:1938` |
 | DELETE | `/api/account` | `authenticate` | `server/src/routes/auth.routes.js:209` |
 | GET | `/api/admin/admins` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:380` |
 | PUT | `/api/admin/admins/:id/towns` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:384` |
@@ -276,24 +276,25 @@
 | GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:64` |
 | GET | `/api/towns` | — | `server/src/routes/events.routes.js:146` |
 | GET | `/api/videos/:id` | — | `server/src/routes/albums.routes.js:97` |
-| GET | `/e/:id` | — | `server/src/routes/share.routes.js:973` |
-| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1235` |
-| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1263` |
-| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1192` |
-| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:942` |
-| GET | `/live` | — | `server/src/routes/share.routes.js:1512` |
-| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1576` |
-| GET | `/live/download` | — | `server/src/routes/share.routes.js:1634` |
-| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1767` |
-| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1794` |
-| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:1828` |
-| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:1819` |
-| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1657` |
-| GET | `/live/go` | — | `server/src/routes/share.routes.js:1615` |
-| GET | `/p/:id` | — | `server/src/routes/share.routes.js:1833` |
-| GET | `/person/:id` | — | `server/src/routes/share.routes.js:1888` |
-| GET | `/v/:id` | — | `server/src/routes/share.routes.js:1950` |
-| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:1977` |
+| GET | `/e/:id` | — | `server/src/routes/share.routes.js:990` |
+| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1252` |
+| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1344` |
+| GET | `/e/:id/download.png` | — | `server/src/routes/share.routes.js:1308` |
+| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1209` |
+| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:959` |
+| GET | `/live` | — | `server/src/routes/share.routes.js:1593` |
+| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1657` |
+| GET | `/live/download` | — | `server/src/routes/share.routes.js:1715` |
+| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1848` |
+| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1875` |
+| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:1909` |
+| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:1900` |
+| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1738` |
+| GET | `/live/go` | — | `server/src/routes/share.routes.js:1696` |
+| GET | `/p/:id` | — | `server/src/routes/share.routes.js:1914` |
+| GET | `/person/:id` | — | `server/src/routes/share.routes.js:1969` |
+| GET | `/v/:id` | — | `server/src/routes/share.routes.js:2031` |
+| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:2058` |
 
 ## ٤. جدول قاعدة البيانات ← الخدمة — 47 جدولاً
 

@@ -205,6 +205,11 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
   /// صيغة الرسالة والرابط وحدث التحليل تعيش في مكان واحد لا مكانين.
   Future<void> _share(Event event) => shareEvent(context, event);
 
+  /// «نزّل الصورة» (تذكرة #182) — الصورة التي يرسمها الخادم بالشريط والـQR،
+  /// تُنزَّل وتُشارَك مع رابط المناسبة. التعريف كله في [shareEventImage]؛ هنا
+  /// نداء واحد لا منطق.
+  Future<void> _downloadImage(Event event) => shareEventImage(context, event);
+
   Future<void> _callHost(String phone, {String? town}) async {
     recordAnalyticsEvent(
       AppServices.of(context).api,
@@ -446,6 +451,7 @@ class _EventDetailsScreenState extends State<EventDetailsScreen> {
                   onCallHost: () => _callHost(event.hostPhone!, town: event.town),
                   onCongratulate: () => _openCongratulateSheet(event),
                   onShare: () => _share(event),
+                  onDownloadImage: () => _downloadImage(event),
                 ),
               );
             },
@@ -473,6 +479,7 @@ class _EventDetailsBody extends StatelessWidget {
     required this.onRsvpWithdraw,
     required this.onReport,
     required this.onShare,
+    required this.onDownloadImage,
   });
 
   final Event event;
@@ -497,6 +504,8 @@ class _EventDetailsBody extends StatelessWidget {
   final VoidCallback onRsvpWithdraw;
   final ValueChanged<int> onReport;
   final VoidCallback onShare;
+  /// «نزّل الصورة» (تذكرة #182) — صورة المناسبة بالشريط والـQR من الخادم.
+  final VoidCallback onDownloadImage;
 
   @override
   Widget build(BuildContext context) {
@@ -711,6 +720,19 @@ class _EventDetailsBody extends StatelessWidget {
                   onPressed: onShare,
                   icon: const Icon(Icons.ios_share_outlined),
                   label: Text(isSolemn ? 'أرسل النعي' : 'شارك المناسبة'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              // «نزّل الصورة» (تذكرة #182): الصورة التي يرسمها الخادم — صورة
+              // المناسبة كما هي وتحتها شريط «أعراسنا» بالعلامة والـQR — تُنزَّل
+              // وتُشارَك مع الرابط. المسار عام وبلا رمز (`NegevApi`).
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const Key('event_download_image_button'),
+                  onPressed: onDownloadImage,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('نزّل الصورة'),
                 ),
               ),
               const SizedBox(height: 10),
