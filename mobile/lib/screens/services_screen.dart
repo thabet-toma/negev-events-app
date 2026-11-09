@@ -611,12 +611,16 @@ Color _providerTone(BuildContext context, ServiceProvider provider) =>
 /// مع بطاقة القائمة — لا عدّ ولا زيادة في العميل، والصفر يُعرض «0» لا فراغاً.
 /// والرقم وحده في `Text` مفتاحُه يقرأه الاختبار، على نمط `provider_views_count`
 /// في صفحة المزوّد. الشكل نفسه في «مزوّدون محفوظون» (`my_list_screen.dart`).
+///
+/// و`valueText` (تذكرة #186) للعدّاد الذي ليس عدداً صحيحاً: ★ «4.5 (12)» —
+/// المتوسط والعدد في نصّ واحد. بقية العدّادات تبقى `value` كما هي.
 Widget _providerStat({
   required Key valueKey,
   required String icon,
   required int value,
   required Color color,
   double fontSize = 15,
+  String? valueText,
 }) {
   return Row(
     mainAxisSize: MainAxisSize.min,
@@ -627,7 +631,7 @@ Widget _providerStat({
       ),
       const SizedBox(width: 4),
       Text(
-        '$value',
+        valueText ?? '$value',
         key: valueKey,
         style: TextStyle(
           fontSize: fontSize,
@@ -1023,6 +1027,19 @@ class _LuxuryServiceCardState extends State<_LuxuryServiceCard> {
                       color: context.c.inkFaint,
                       fontSize: 13,
                     ),
+                    // ★ المتوسط (العدد) — تذكرة #186. لا نجمة بلا تقييمات.
+                    if (p.ratingCount > 0 && p.ratingAvg != null) ...[
+                      const SizedBox(width: 14),
+                      _providerStat(
+                        valueKey: Key('service_card_rating_${p.id}'),
+                        icon: '★',
+                        value: p.ratingCount,
+                        valueText:
+                            '${p.ratingAvg!.toStringAsFixed(1)} (${p.ratingCount})',
+                        color: context.c.inkFaint,
+                        fontSize: 13,
+                      ),
+                    ],
                   ],
                 ),
 
@@ -1411,6 +1428,16 @@ class _CompactServiceRow extends StatelessWidget {
                       value: p.favoritesCount,
                       color: context.c.inkFaint,
                     ),
+                    // ★ المتوسط (العدد) — تذكرة #186، بلا نجمة لمن لا تقييمات.
+                    if (p.ratingCount > 0 && p.ratingAvg != null)
+                      _providerStat(
+                        valueKey: Key('service_row_rating_${p.id}'),
+                        icon: '★',
+                        value: p.ratingCount,
+                        valueText:
+                            '${p.ratingAvg!.toStringAsFixed(1)} (${p.ratingCount})',
+                        color: context.c.inkFaint,
+                      ),
                   ],
                 ),
                 const SizedBox(height: 6),

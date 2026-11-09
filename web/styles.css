@@ -2982,6 +2982,121 @@ body {
 .provider-modal-stats[hidden] { display: none; }
 .my-list-providers { margin-top: 8px; }
 
+/* ===== تقييمات المزوّد (تذكرة #186) =====
+   نجمة المتوسط تُعرض في عدّاد البطاقة وحده حين يوجد تقييم، والتوزيع خمسة أعمدة
+   بارتفاع نسبيّ إلى أكثر النجوم تكراراً. التعليقات صفوف، وحذف صاحبه أو بلاغ
+   غيره فعلٌ نصّي صغير لا زرّ يزاحم المحتوى. */
+.provider-stat-rating { color: var(--gold); }
+.provider-stat-count { color: var(--ink-faint); font-weight: 700; }
+.provider-reviews-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.provider-reviews-head .provider-section-title { margin-bottom: 0; }
+.provider-review-write-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.provider-review-write-btn:hover { border-color: var(--card-gold); }
+.provider-review-delete-mine {
+  border: none;
+  background: none;
+  min-height: 44px;
+  padding: 8px 6px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #b91c1c;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.provider-review-hidden-note { color: #b45309; font-size: 0.82rem; margin: 0 0 8px; }
+.provider-review-hidden-note:not([hidden]) { display: block; }
+.provider-rating-empty { color: var(--ink-faint); font-size: 0.86rem; margin: 4px 0 10px; }
+.provider-rating-hero { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+.provider-rating-hero-star { color: var(--gold); font-size: 1.3rem; }
+.provider-rating-hero-avg { font-size: 1.7rem; font-weight: 900; color: var(--ink); }
+.provider-rating-hero-count { color: var(--ink-faint); font-size: 0.85rem; }
+.provider-rating-dist { display: flex; align-items: stretch; gap: 8px; height: 118px; margin: 8px 0 14px; }
+.provider-rating-dist-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.provider-rating-dist-count { font-size: 0.72rem; color: var(--ink-faint); font-weight: 700; }
+.provider-rating-dist-track {
+  flex: 1;
+  width: 100%;
+  max-width: 34px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface-sunk);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.provider-rating-dist-bar {
+  width: 100%;
+  background: linear-gradient(180deg, var(--card-gold), var(--gold));
+  border-radius: 8px 8px 0 0;
+}
+.provider-rating-dist-label { font-size: 0.72rem; color: var(--ink-faint); }
+.provider-reviews-list { display: flex; flex-direction: column; gap: 8px; }
+.provider-review { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--surface); }
+.provider-review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.provider-review-author { font-weight: 800; font-size: 0.9rem; color: var(--ink); }
+.provider-review-stars-text { color: var(--gold); letter-spacing: 2px; font-size: 0.95rem; }
+.provider-review-body { color: var(--ink-soft); font-size: 0.86rem; line-height: 1.7; margin: 6px 0; white-space: pre-line; overflow-wrap: anywhere; }
+.provider-review-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.76rem; color: var(--ink-faint); }
+.provider-review-actions { display: inline-flex; gap: 12px; }
+.provider-review-action {
+  border: none;
+  background: none;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.provider-review-delete { color: #b91c1c; }
+.provider-review-report { color: var(--ink-faint); }
+.provider-reviews-empty { color: var(--ink-faint); font-size: 0.84rem; margin: 6px 0; }
+.provider-reviews-more {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.provider-reviews-more:hover { border-color: var(--card-gold); }
+/* `display: block` أعلاه تغلب `[hidden]` الافتراضية — هذا السطر يعيدها، وإلا
+   بقي زرّ إعادة المحاولة ظاهراً دائماً. نفس درس `.install-hint` في هذا الملف. */
+.provider-reviews-more[hidden] { display: none; }
+.provider-review-stars { display: flex; gap: 6px; direction: ltr; }
+.provider-review-star {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 30px;
+  line-height: 1;
+  color: var(--line);
+  cursor: pointer;
+}
+.provider-review-star.is-on { color: var(--gold); }
+.provider-review-confirm { display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; font-size: 0.86rem; color: var(--ink-soft); }
+.provider-review-confirm input { width: 20px; height: 20px; }
+
 /* ===== إرشاد التثبيت على iOS (#55) =====
    ورقة سفلية لا نافذة معترِضة: مستخدم الآيفون جاء ليرى مناسبة، لا ليُطالَب
    بتثبيت. تُصرَف بضغطة وتُحفظ مصروفة. */

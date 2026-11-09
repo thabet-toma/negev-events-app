@@ -363,8 +363,14 @@ class NegevApi {
   }
 
   /// مزوّد واحد كاملاً — الموضع الوحيد الذي يحمل `phone` والوصف.
+  ///
+  /// **وبالرمز حين يوجد حساب** (`auth: true` يرفقه وحده)، كي يعيد الخادم
+  /// `my_review` — تقييم صاحب الطلب وحده — فتعرف الشاشة أتعرض «حذف تقييمي»
+  /// أم «اكتب تقييمك» (تذكرة #186). المسار `optionalAuthenticate`، والزائر
+  /// يستلم `my_review: null` ويكمل بلا حساب. نفس نمط [eventDetails] مع
+  /// `my_rsvp`: قراءةٌ عامة تُثريها الجلسة إن وُجدت ولا تتطلّبها.
   Future<ServiceProviderDetail> serviceProviderDetails(int id) async {
-    final data = await _client.get('/api/services/providers/$id');
+    final data = await _client.get('/api/services/providers/$id', auth: true);
     final provider = data['provider'];
     if (provider is! Map<String, dynamic>) {
       throw const ApiException('تعذّر قراءة بيانات مزوّد الخدمة');
@@ -409,6 +415,88 @@ class NegevApi {
         .whereType<Map<String, dynamic>>()
         .map(ServiceProvider.fromJson)
         .toList();
+  }
+
+  // --- تقييمات المزوّد (تذكرة #186) -----------------------------------
+
+  /// صفحة تقييمات مزوّد — **عامة بلا `auth: true`**: القراءة لا تتطلّب حساباً،
+  /// و`my_review` يأتي من [serviceProviderDetails] بالرمز كي تبقى القائمة
+  /// واحدة للجميع بلا هوية كاتبة.
+  Future<ProviderReviewsPage> providerReviews(
+    int providerId, {
+    int page = 1,
+    int limit = 5,
+  }) async {
+    final data = await _client.get(
+      '/api/services/providers/$providerId/reviews',
+      query: {'page': '$page', 'limit': '$limit'},
+    );
+    final list = data['reviews'];
+    final reviews = list is List
+        ? list.whereType<Map<String, dynamic>>().map(ProviderReview.fromJson).toList()
+        : <ProviderReview>[];
+    final rawPagination = data['pagination'];
+    final pagination = rawPagination is Map<String, dynamic>
+        ? ServiceProvidersPagination.fromJson(rawPagination)
+        : ServiceProvidersPagination(
+            page: page, limit: limit, total: reviews.length, totalPages: 1);
+    return ProviderReviewsPage(reviews: reviews, pagination: pagination);
+  }
+
+  /// نشر تقييم أو تعديله — upsert على الخادم، والرمز مطلوب. `confirmPhone`
+  /// إقرار صاحب الحساب أن رقمه شخصي، ويُرسل منطقياً في `confirm_phone`.
+  /// يعيد التقييم المحفوظ وملخّص المتوسط/العدد/التوزيع معاً.
+  Future<({ProviderReview review, ProviderReviewSummary summary})>
+      submitProviderReview(
+    int providerId, {
+    required int rating,
+    String? body,
+    required bool confirmPhone,
+  }) async {
+    final data = await _client.put(
+      '/api/services/providers/$providerId/review',
+      auth: true,
+      body: {
+        'rating': rating,
+        if (body != null && body.trim().isNotEmpty) 'body': body.trim(),
+        'confirm_phone': confirmPhone,
+      },
+    );
+    final raw = data['review'];
+    if (raw is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة تقييمك بعد الحفظ');
+    }
+    return (
+      review: ProviderReview.fromJson(raw),
+      summary: ProviderReviewSummary.fromJson(data),
+    );
+  }
+
+  /// حذف تقييم صاحبه — idempotent في الخادم. يعيد `null` حين لا صفّ حُذف
+  /// (`deleted: false`): الخادم لا يحسب ملخّصاً لمزوّد لم يُحذف منه شيء، فلا
+  /// تُبنى أرقام على ردٍّ لا يخصّ تقييماً قائماً.
+  Future<ProviderReviewSummary?> deleteProviderReview(int providerId) async {
+    final data = await _client.delete(
+      '/api/services/providers/$providerId/review',
+      auth: true,
+    );
+    if (data['deleted'] != true) return null;
+    return ProviderReviewSummary.fromJson(data);
+  }
+
+  /// بلاغ عن تقييم غيره — صفّ واحد لكل مستخدم، والثالث يُخفيه في الخادم.
+  Future<({int reportsCount, String status})> reportProviderReview(
+    int providerId,
+    int reviewId,
+  ) async {
+    final data = await _client.post(
+      '/api/services/providers/$providerId/reviews/$reviewId/report',
+      auth: true,
+    );
+    return (
+      reportsCount: int.tryParse('${data['reports_count'] ?? ''}') ?? 0,
+      status: '${data['status'] ?? 'visible'}',
+    );
   }
 
   /// رابط واتساب المزوّد — يبنيه الخادم وحده برسالته العربية، **ولا يعيد

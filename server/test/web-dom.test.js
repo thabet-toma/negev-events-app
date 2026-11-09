@@ -10735,6 +10735,365 @@ async function run() {
     );
   });
 
+  console.log('\nتقييمات المزوّد (تذكرة #186): ★ المتوسط في البطاقة، والتوزيع والتعليقات، وكتابة بحسم الرقم');
+
+  /** مزوّد بتقييمات — كما يعيده الخادم في القائمة والتفصيل بعد #186. */
+  function ratedProviderFixture(overrides = {}) {
+    return {
+      id: 901,
+      name: 'مزوّد التقييمات',
+      category_id: 9,
+      category_name: 'صالات أفراح',
+      category_icon: '🏛️',
+      category_color: '#8a6109',
+      has_phone: true,
+      image_url: null,
+      price: 100,
+      price_type: 'fixed',
+      price_estimate_desc: null,
+      attributes: {},
+      is_verified: false,
+      is_featured: false,
+      towns: ['رهط'],
+      views_count: 7,
+      favorites_count: 2,
+      rating_avg: 4.5,
+      rating_count: 2,
+      rating_distribution: { 1: 0, 2: 0, 3: 1, 4: 0, 5: 1 },
+      is_favorite: false,
+      ...overrides
+    };
+  }
+
+  /** تقييم واحد — هوية كاتبه لا تخرج، و`is_mine`/`can_delete` وحدهما. */
+  function reviewFixture(overrides = {}) {
+    return {
+      id: 1001,
+      rating: 5,
+      body: 'خدمة ممتازة',
+      user_name: 'مريم',
+      created_at: '2026-11-01T10:00:00.000Z',
+      updated_at: '2026-11-01T10:00:00.000Z',
+      is_mine: false,
+      can_delete: false,
+      ...overrides
+    };
+  }
+
+  /**
+   * عميل وهمي للتقييمات: الحالة تُعاد بترتيبها الحقيقي — PUT/DELETE يغيّران
+   * الملخّص، و`/reviews` مرقّمة (خمسة لكل صفحة). كل نداء يُسجَّل بجسمه
+   * وترويساته كي يُفحص `confirm_phone` في الطلب نفسه لا في الشاشة.
+   */
+  function instrumentProviderReviews(win, { myReview = null } = {}) {
+    const calls = [];
+    let ratingAvg = 4.5;
+    let ratingCount = 2;
+    let distribution = { 1: 0, 2: 0, 3: 1, 4: 0, 5: 1 };
+
+    const reviews = [
+      reviewFixture({ id: 1001, rating: 4, body: 'تجربتي', user_name: 'أنا', is_mine: true, can_delete: true }),
+      reviewFixture({ id: 1002, rating: 5, body: 'خدمة ممتازة', user_name: 'مريم' }),
+      reviewFixture({ id: 1003, rating: 4, body: 'سريعون', user_name: 'سالم' }),
+      reviewFixture({ id: 1004, rating: 3, body: 'جيد', user_name: 'هند' }),
+      reviewFixture({ id: 1005, rating: 2, body: 'متوسط', user_name: 'عمر' }),
+      reviewFixture({ id: 1006, rating: 5, body: 'ممتاز', user_name: 'ليلى' })
+    ];
+    // التقييم المخفي لا يخرج في `visible` — يُسقط من القائمة كما يفعل الخادم.
+    if (myReview && myReview.status === 'hidden') {
+      const index = reviews.findIndex(review => review.id === myReview.id);
+      if (index >= 0) reviews.splice(index, 1);
+    }
+
+    const providerBody = () => ratedProviderFixture({
+      rating_avg: ratingAvg,
+      rating_count: ratingCount,
+      rating_distribution: distribution,
+      phone: '0501234567',
+      description: 'قاعة واسعة',
+      my_review: myReview
+    });
+
+    win.fetch = async (url, options = {}) => {
+      const raw = String(url);
+      const requestPath = raw.split('?')[0];
+      const query = raw.includes('?') ? raw.slice(raw.indexOf('?')) : '';
+      const method = options.method || 'GET';
+      let sentBody = null;
+      try {
+        sentBody = options.body ? JSON.parse(options.body) : null;
+      } catch (e) {
+        sentBody = null;
+      }
+      calls.push({ path: requestPath, method, headers: options.headers || {}, body: sentBody, query });
+
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({
+          success: true,
+          settings: { support_whatsapp_number: null, default_event_audio_url: null, providers_display: 'compact' }
+        });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      if (requestPath === '/api/services/providers' && method === 'GET') {
+        return jsonResponse({
+          success: true,
+          providers: [
+            providerBody(),
+            ratedProviderFixture({
+              id: 902,
+              name: 'مزوّد بلا تقييمات',
+              rating_avg: null,
+              rating_count: 0,
+              rating_distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+            })
+          ],
+          pagination: { page: 1, limit: 30, total: 2, totalPages: 1 }
+        });
+      }
+      if (requestPath === '/api/services/providers/901' && method === 'GET') {
+        return jsonResponse({ success: true, provider: providerBody() });
+      }
+      if (requestPath === '/api/services/providers/901/view' && method === 'POST') {
+        return jsonResponse({ success: true, counted: true, views_count: 8 });
+      }
+      if (requestPath === '/api/services/providers/901/reviews' && method === 'GET') {
+        const page = Number(new URLSearchParams(query).get('page') || '1');
+        const limit = 5;
+        return jsonResponse({
+          success: true,
+          reviews: reviews.slice((page - 1) * limit, page * limit),
+          pagination: {
+            page,
+            limit,
+            total: reviews.length,
+            totalPages: Math.ceil(reviews.length / limit)
+          }
+        });
+      }
+      if (requestPath === '/api/services/providers/901/review' && method === 'PUT') {
+        ratingAvg = 4.3;
+        ratingCount = 3;
+        distribution = { 1: 0, 2: 0, 3: 1, 4: 1, 5: 1 };
+        return jsonResponse({
+          success: true,
+          review: reviewFixture({
+            id: 1001,
+            rating: sentBody.rating,
+            body: sentBody.body || null,
+            user_name: 'أنا',
+            is_mine: true,
+            can_delete: true
+          }),
+          rating_avg: ratingAvg,
+          rating_count: ratingCount,
+          rating_distribution: distribution
+        });
+      }
+      if (requestPath === '/api/services/providers/901/review' && method === 'DELETE') {
+        const index = reviews.findIndex(review => review.id === 1001);
+        if (index >= 0) reviews.splice(index, 1);
+        ratingAvg = 4;
+        ratingCount = 5;
+        distribution = { 1: 0, 2: 1, 3: 1, 4: 1, 5: 2 };
+        return jsonResponse({
+          success: true,
+          deleted: true,
+          rating_avg: ratingAvg,
+          rating_count: ratingCount,
+          rating_distribution: distribution,
+          message: 'حُذف تقييمك'
+        });
+      }
+      if (requestPath === '/api/services/providers/901/reviews/1002/report' && method === 'POST') {
+        return jsonResponse({ success: true, reports_count: 1, status: 'visible' });
+      }
+      return jsonResponse({ success: false });
+    };
+    return { calls };
+  }
+
+  await test('بطاقة القائمة تحمل ★ المتوسط (العدد)، ومزوّد بلا تقييمات بلا نجمة', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    instrumentProviderReviews(win);
+
+    await win.initSupportEntry();
+    await win.initServicesTab();
+    await waitFor(() => document.querySelectorAll('#servicesListContainer .service-row').length === 2);
+
+    const rating = document.querySelector('#serviceRowStats-901 [data-stat="rating"]');
+    assert.ok(rating, 'المزوّد المقيَّم تحمل بطاقته نجمة');
+    assert.strictEqual(rating.querySelector('.provider-stat-num').textContent.trim(), '4.5', 'المتوسط');
+    assert.strictEqual(rating.querySelector('.provider-stat-count').textContent.trim(), '(2)', 'والعدد بين قوسين');
+    assert.strictEqual(
+      document.querySelector('#serviceRowStats-902 [data-stat="rating"]'),
+      null,
+      'بلا تقييمات لا نجمة — الصفر المضلّل ممنوع'
+    );
+  });
+
+  await test('نافذة المزوّد: التوزيع خمسة أعمدة والتعليقات مرقّمة و«المزيد» يضيف الصفحة التالية', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReviews(win);
+
+    await win.openProviderModal(901);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/reviews'));
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length === 5);
+
+    const summary = document.getElementById('providerRatingSummary');
+    assert.ok(summary.textContent.includes('4.5'), 'المتوسط في النافذة');
+    assert.ok(summary.textContent.includes('(2'), 'والعدد معه');
+
+    const columns = document.querySelectorAll('#providerRatingDistribution .provider-rating-dist-col');
+    assert.strictEqual(columns.length, 5, 'توزيع خمسة أعمدة لخمس نجوم');
+    assert.strictEqual(
+      document.querySelector('#providerRatingDistribution [data-stars="5"] .provider-rating-dist-count').textContent.trim(),
+      '1',
+      'نجمة خامسة واحدة'
+    );
+    assert.strictEqual(
+      document.querySelector('#providerRatingDistribution [data-stars="1"] .provider-rating-dist-count').textContent.trim(),
+      '0',
+      'وغير الموجودة صفر لا فراغ'
+    );
+
+    assert.strictEqual(document.getElementById('providerReviewsMoreWrap').hidden, false, 'الصفحة الثانية متاحة');
+    document.getElementById('providerReviewsMoreBtn').click();
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length === 6);
+    assert.strictEqual(document.getElementById('providerReviewsMoreWrap').hidden, true, 'لا مزيد بعد آخر صفحة');
+
+    const mine = document.querySelector('#providerReviewsList .provider-review[data-review-id="1001"]');
+    assert.ok(mine.textContent.includes('تجربتي'), 'تعليق صاحبه ظاهر');
+    assert.ok(mine.querySelector('.provider-review-delete'), 'ولصاحبه زرّ «حذف تقييمي»');
+    const other = document.querySelector('#providerReviewsList .provider-review[data-review-id="1002"]');
+    assert.ok(other.querySelector('.provider-review-report'), 'وغير صاحبه يبلّغ عنه');
+  });
+
+  await test('كتابة تقييم: نجوم 1..5 ونصّ، وconfirm_phone: true منطقي في الجسم', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReviews(win);
+
+    await win.openProviderModal(901);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/reviews'));
+
+    document.getElementById('providerReviewWriteBtn').click();
+    assert.strictEqual(document.getElementById('providerReviewModal').style.display, 'flex', 'ورقة الكتابة فُتحت');
+
+    document.querySelector('#providerReviewStars [data-star="4"]').click();
+    assert.strictEqual(document.getElementById('providerReviewRating').value, '4', 'النجمة المختارة تُحفظ في القيمة');
+    document.getElementById('providerReviewBody').value = 'تجربة تستحق أربع نجوم';
+    document.getElementById('providerReviewConfirmPhone').checked = true;
+    document.getElementById('providerReviewForm').dispatchEvent(
+      new win.Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/review' && call.method === 'PUT'));
+    const sent = calls.find(call => call.path === '/api/services/providers/901/review' && call.method === 'PUT');
+    assert.strictEqual(sent.body.rating, 4, 'النجوم تُرسل رقماً');
+    assert.strictEqual(sent.body.body, 'تجربة تستحق أربع نجوم', 'والنصّ كما كُتب');
+    assert.strictEqual(sent.body.confirm_phone, true, 'المربّع يُرسل confirm_phone: true — منطقي لا نصّ');
+
+    await waitFor(() => document.getElementById('providerReviewModal').style.display === 'none');
+    await waitFor(() => {
+      const stat = document.querySelector('#providerModalStats [data-stat="rating"] .provider-stat-num');
+      return stat && stat.textContent.trim() === '4.3';
+    });
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="rating"] .provider-stat-count').textContent.trim(),
+      '(3)',
+      'والعدد من ردّ الخادم لا من حساب محلي'
+    );
+  });
+
+  await test('حذف تقييمي: DELETE للمسار نفسه والمتوسط يتبع ردّ الخادم', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReviews(win);
+    win.confirm = () => true;
+
+    await win.openProviderModal(901);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/reviews'));
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length > 0);
+
+    const deleteBtn = document.querySelector('#providerReviewsList .provider-review[data-review-id="1001"] .provider-review-delete');
+    assert.ok(deleteBtn, 'زرّ الحذف ظاهر لصاحبه');
+    deleteBtn.click();
+
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/review' && call.method === 'DELETE'));
+    // `waitFor` وحدها لا تُسقط شيئاً (قيمتها المنطقية تُهمَل) — كل تأكيد حقيقي
+    // هنا صريح: طلب DELETE واحد، والمتوسط الجديد في DOM من ردّ الخادم، والتعليق
+    // المحذوف خرج، وتعليق الصفحة الثانية (1006) دخل بعد إعادة القراءة.
+    assert.strictEqual(
+      calls.filter(call => call.path === '/api/services/providers/901/review' && call.method === 'DELETE').length,
+      1,
+      'الحذف أُرسل مرة واحدة'
+    );
+    await waitFor(() => {
+      const stat = document.querySelector('#providerModalStats [data-stat="rating"] .provider-stat-num');
+      return stat && stat.textContent.trim() === '4.0';
+    });
+    assert.strictEqual(
+      document.querySelector('#providerModalStats [data-stat="rating"] .provider-stat-num').textContent.trim(),
+      '4.0',
+      'المتوسط من ردّ الحذف لا من حساب محلي'
+    );
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review[data-review-id="1001"]').length === 0);
+    assert.strictEqual(
+      document.querySelectorAll('#providerReviewsList .provider-review[data-review-id="1001"]').length,
+      0,
+      'تعليق صاحبه خرج من القائمة'
+    );
+    assert.strictEqual(
+      document.querySelectorAll('#providerReviewsList .provider-review[data-review-id="1006"]').length,
+      1,
+      'وتعليق الصفحة الثانية صار ظاهراً (إعادة قراءة القائمة بعد الحذف)'
+    );
+  });
+
+  await test('صاحب تقييم مخفي: «عدّل تقييمك» وملاحظة الإخفاء وحذفه من الرأس', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReviews(win, {
+      myReview: {
+        id: 1001,
+        rating: 3,
+        body: 'رأي قديم',
+        status: 'hidden',
+        created_at: '2026-11-01T10:00:00.000Z'
+      }
+    });
+
+    await win.openProviderModal(901);
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/901/reviews'));
+
+    assert.strictEqual(
+      document.getElementById('providerReviewHiddenNote').hidden,
+      false,
+      'الإخفاء يُقال لصاحبه صراحةً'
+    );
+    assert.strictEqual(
+      document.getElementById('providerReviewDeleteMineBtn').hidden,
+      false,
+      'وزرّ حذفه يظهر في الرأس حين لا صفّ له في القائمة'
+    );
+    assert.ok(
+      document.getElementById('providerReviewWriteBtn').textContent.includes('عدّل'),
+      'ونصّ الزرّ صار «عدّل تقييمك»'
+    );
+    assert.strictEqual(
+      document.querySelectorAll('#providerReviewsList .provider-review[data-review-id="1001"]').length,
+      0,
+      'والمخفي لا يخرج في القائمة العامة'
+    );
+  });
+
   await test('اللوحة: مربّعا «موثّق»/«مميّز» يظهران للسوبر أدمن وحدهما، ومحرّر الساعات والمعرض يظهران لمزوّد محفوظ (#184)', async () => {
     const ADMIN_PROVIDER = {
       id: 701,

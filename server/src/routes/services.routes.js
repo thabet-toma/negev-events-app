@@ -298,6 +298,77 @@ router.get('/services/providers/:id/whatsapp', asyncHandler(async (req, res) => 
   res.json({ success: true, url: await services.publicProviderWhatsapp(id) });
 }));
 
+// --- تقييمات المزوّد (تذكرة #186) ------------------------------------
+// `rating` يمرّ رقماً كما وصل والخدمة تحكمه (عدد صحيح 1..5)، و`confirm_phone`
+// يحوّله المسار إلى منطقي حصراً كما في `albums.routes.js` — فلا `"true"` نصّاً.
+
+/** نشر تقييم أو تعديله — upsert صاحبه، ويُنشَر فوراً بلا مراجعة مسبقة. */
+router.put('/services/providers/:id/review', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const body = req.body || {};
+  const rawRating = body.rating;
+  // النصّ الرقمي يُقبل (`"4"` من نموذج HTML)، وغير الرقم يمرّ كما هو فيرفضه
+  // فحص `Number.isInteger` في الخدمة — `true` مثلاً ليس نجمة.
+  const rating = typeof rawRating === 'string' && rawRating.trim() !== ''
+    ? Number(rawRating)
+    : rawRating;
+
+  const result = await services.upsertProviderReview(req.user.id, id, {
+    rating,
+    body: cleanString(body.body, 1000),
+    confirmPhone: body.confirm_phone === true
+  });
+
+  res.json({
+    success: true,
+    review: result.review,
+    rating_avg: result.rating_avg,
+    rating_count: result.rating_count,
+    rating_distribution: result.rating_distribution,
+    message: 'تم حفظ تقييمك — شكراً لك'
+  });
+}));
+
+/** حذف تقييم صاحبه وحده — والحذف المتكرّر بلا خطأ (idempotent). */
+router.delete('/services/providers/:id/review', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const result = await services.deleteProviderReview(req.user.id, id);
+
+  res.json({
+    success: true,
+    deleted: result.deleted,
+    rating_avg: result.rating_avg,
+    rating_count: result.rating_count,
+    rating_distribution: result.rating_distribution,
+    message: result.deleted ? 'حُذف تقييمك' : 'لا تقييم لك على هذا المزوّد'
+  });
+}));
+
+/** تقييمات المزوّد — عامة ومرقّمة، و`optionalAuthenticate` كي تعرف `is_mine`. */
+router.get('/services/providers/:id/reviews', optionalAuthenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const { reviews, pagination } = await services.listProviderReviews(id, {
+    page: req.query.page,
+    limit: req.query.limit,
+    userId: req.user ? req.user.id : null
+  });
+  res.json({ success: true, reviews, pagination });
+}));
+
+/** بلاغ عن تقييم — صفّ واحد لكل مستخدم، والثالث يُخفيه. */
+router.post('/services/providers/:id/reviews/:rid/report', authenticate, asyncHandler(async (req, res) => {
+  const id = parseId(req.params.id, 'معرّف مزوّد الخدمة');
+  const reviewId = parseId(req.params.rid, 'معرّف التقييم');
+  const result = await services.reportProviderReview(req.user.id, id, reviewId);
+
+  res.json({
+    success: true,
+    reports_count: result.reports_count,
+    status: result.status,
+    message: 'تم إبلاغ الإدارة عن التقييم'
+  });
+}));
+
 // --- User submissions (authenticated) --------------------------------
 
 router.post('/services/providers', authenticate, serviceMedia, asyncHandler(async (req, res) => {
@@ -363,6 +434,9 @@ router.get('/services/my-services', authenticate, asyncHandler(async (req, res) 
 // protect these paths just because they share the `/admin` prefix.
 
 router.use('/admin/service-providers', requireAdmin);
+// حارس منفصل للبادئة الجديدة: `router.use` على بادئة لا يحمي بادئة أخرى
+// تشترك معها في `/admin` — نفس تحذير `occasionTypes.routes.js`.
+router.use('/admin/provider-reviews', requireAdmin);
 
 router.get('/admin/service-providers', asyncHandler(async (req, res) => {
   const { providers, pagination } = await services.listProvidersForAdmin(req.user, {
@@ -661,6 +735,17 @@ router.delete('/admin/service-providers/:id/products/:productId', asyncHandler(a
   const deleted = await services.deleteProviderProduct(id, productId);
   if (deleted && deleted.image_url) await events.releaseReplacedImage(deleted.image_url, null);
   res.json({ success: true, message: 'تم حذف المنتج بنجاح' });
+}));
+
+/**
+ * حذف تقييم من اللوحة (تذكرة #186) — النطاق **داخل الخدمة** عبر
+ * `providerScopeClause`: أدمن خارج بلدات المزوّد أو تقييم غير موجود ← 404 لا
+ * 403، فلا يتأكّد وجود صفّ لا يراه.
+ */
+router.delete('/admin/provider-reviews/:rid', asyncHandler(async (req, res) => {
+  const reviewId = parseId(req.params.rid, 'معرّف التقييم');
+  await services.deleteProviderReviewAsAdmin(req.user, reviewId);
+  res.json({ success: true, message: 'تم حذف التقييم بنجاح' });
 }));
 
 // --- Super-admin: service categories (story 34) ------------------------

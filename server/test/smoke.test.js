@@ -20902,6 +20902,343 @@ async function run() {
   await api('DELETE', `/api/admin/service-categories/${favCategoryId}`, { token: favSuperAdminToken });
   await db.execute('DELETE FROM users WHERE id IN (?, ?, ?)', [favUserId, favOtherId, favSuperAdminId]);
 
+  // ==================================================================
+  // تقييمات المزوّد (تذكرة #186)
+  // ==================================================================
+  console.log('\nتقييمات المزوّد (#186): upsert، وإخفاء بالعتبة، و404 خارج النطاق');
+
+  let revCategoryId = 0;
+  let revProviderId = 0;
+  let revUserId = 0;
+  let revUserToken = '';
+  let revSecondId = 0;
+  let revSecondToken = '';
+  let revThirdId = 0;
+  let revThirdToken = '';
+  let revFourthId = 0;
+  let revFourthToken = '';
+  let revReviewId = 0;
+  let revAdminId = 0;
+  let revAdminToken = '';
+  // سوبر أدمن حيّ خاص بالقسم — نفس سبب #185: شريحة المستخدم المسجَّل في
+  // `rateLimit.js` (3000/١٥د) استُنفدت على `superAdminToken` قبل هذا الموضع،
+  // فردّ أول طلب 429. حساب جديد = شريحة جديدة، بلا مساس بالحدّ ولا تعطيله.
+  let revSuperAdminId = 0;
+  let revSuperAdminToken = '';
+  const revSuperAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const revUserPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const revSecondPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const revThirdPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const revFourthPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const revAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+
+  /**
+   * حساب حيّ لهذا القسم — يُكتب في القاعدة مباشرةً بتوكن موقَّع، لا عبر
+   * `POST /api/auth/register`: `authLimiter` (20 لكل IP) استُنفد في السويت
+   * الطويل، والحساب يبقى صفّاً حقيقياً لأنّ التقييم مفتاح أجنبي إلى `users(id)`.
+   */
+  async function createReviewUser(phone, fullName, role = 'user') {
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, ?)`,
+      [phone, fullName, bcrypt.hashSync('1234', config.bcryptRounds), role]
+    );
+    return {
+      id: insertId,
+      token: signToken({ id: insertId, phone_number: phone, full_name: fullName, role }, '1h')
+    };
+  }
+
+  /** صفّ تقييم صاحب القسم — مصدر الحقيقة في تأكيدات الحالة والإقرار. */
+  async function storedReview() {
+    return db.queryOne(
+      `SELECT id, rating, body, status, phone_confirmed_at
+         FROM provider_reviews WHERE provider_id = ? AND user_id = ?`,
+      [revProviderId, revUserId]
+    );
+  }
+
+  await test('Setup (#186): سوبر أدمن حيّ وفئة ومزوّد معتمد وأربعة مستخدمين وأدمن خارج النطاق', async () => {
+    const superAdmin = await createReviewUser(revSuperAdminPhone, 'سوبر أدمن قسم التقييمات', 'super_admin');
+    revSuperAdminId = superAdmin.id;
+    revSuperAdminToken = superAdmin.token;
+
+    // مرساة موجبة قبل أي تأكيد تالٍ: التوكن يفتح مسار إدارة فعلاً.
+    const me = await api('GET', '/api/admin/me', { token: revSuperAdminToken });
+    assert.strictEqual(me.status, 200, me.body && me.body.message);
+    assert.strictEqual(me.body.role, 'super_admin');
+
+    const category = await api('POST', '/api/admin/service-categories', {
+      token: revSuperAdminToken,
+      body: { name: `فئة التقييمات ${Date.now()}`, icon: '⭐', color: '#B8860B' }
+    });
+    assert.strictEqual(category.status, 201, category.body && category.body.message);
+    revCategoryId = category.body.category.id;
+
+    const provider = await api('POST', '/api/admin/service-providers', {
+      token: revSuperAdminToken,
+      body: { category_id: revCategoryId, name: 'مزوّد تقييمات الاختبار', towns: [scopedTown] }
+    });
+    assert.strictEqual(provider.status, 201, provider.body && provider.body.message);
+    revProviderId = provider.body.providerId;
+
+    const first = await createReviewUser(revUserPhone, 'صاحب التقييم');
+    revUserId = first.id;
+    revUserToken = first.token;
+
+    const second = await createReviewUser(revSecondPhone, 'مبلّغ أول');
+    revSecondId = second.id;
+    revSecondToken = second.token;
+
+    const third = await createReviewUser(revThirdPhone, 'مبلّغ ثانٍ');
+    revThirdId = third.id;
+    revThirdToken = third.token;
+
+    const fourth = await createReviewUser(revFourthPhone, 'مبلّغ ثالث');
+    revFourthId = fourth.id;
+    revFourthToken = fourth.token;
+
+    // أدمن بلدة أخرى — نطاقه لا يشمل بلدة المزوّد، فيُردّ 404 لا 403.
+    const admin = await createReviewUser(revAdminPhone, 'أدمن خارج نطاق التقييمات', 'admin');
+    revAdminId = admin.id;
+    revAdminToken = admin.token;
+    const assigned = await api('PUT', `/api/admin/admins/${revAdminId}/towns`, {
+      token: revSuperAdminToken,
+      body: { towns: [outOfScopeTown] }
+    });
+    assert.strictEqual(assigned.status, 200, assigned.body && assigned.body.message);
+  });
+
+  await test('بلا confirm_phone: true يُردّ 400 عربية — والنصّ "true" ليس إقراراً', async () => {
+    const missing = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+      token: revUserToken,
+      body: { rating: 5, body: 'ممتاز' }
+    });
+    assert.strictEqual(missing.status, 400, 'الإقرار شرطُ نشر');
+    assert.ok(
+      typeof missing.body.message === 'string' && missing.body.message.includes('رقمك الشخصي'),
+      missing.body.message
+    );
+
+    const stringTrue = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+      token: revUserToken,
+      body: { rating: 5, confirm_phone: 'true' }
+    });
+    assert.strictEqual(stringTrue.status, 400, '`"true"` نصّاً لا يُقبل — منطقي حصراً');
+
+    const rows = await db.query('SELECT id FROM provider_reviews WHERE provider_id = ?', [revProviderId]);
+    assert.deepStrictEqual(rows, [], 'لا صفّ كُتب قبل تحقّق الشروط');
+  });
+
+  await test('rating خارج 1..5 يُرفض 400 — صفر وستة وغير الصحيح', async () => {
+    for (const rating of [0, 6, 4.5]) {
+      const rejected = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+        token: revUserToken,
+        body: { rating, confirm_phone: true }
+      });
+      assert.strictEqual(rejected.status, 400, `rating=${rating} مرفوض`);
+      assert.ok(
+        typeof rejected.body.message === 'string' && rejected.body.message.includes('عدداً صحيحاً'),
+        rejected.body.message
+      );
+    }
+
+    const rows = await db.query('SELECT id FROM provider_reviews WHERE provider_id = ?', [revProviderId]);
+    assert.deepStrictEqual(rows, [], 'ولا صفّ كُتب من محاولات الرفض');
+  });
+
+  await test('أول تقييم يُنشر فوراً visible مع phone_confirmed_at، ويظهر في المتوسط والعدد والتوزيع', async () => {
+    const created = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+      token: revUserToken,
+      body: { rating: 5, body: 'خدمة ممتازة', confirm_phone: true }
+    });
+    assert.strictEqual(created.status, 200, created.body && created.body.message);
+    assert.strictEqual(created.body.review.rating, 5);
+    assert.strictEqual(created.body.review.body, 'خدمة ممتازة');
+    assert.strictEqual(created.body.review.user_name, 'صاحب التقييم', 'الاسم من الحساب لا من الجسم');
+    assert.strictEqual(created.body.review.can_delete, true);
+    assert.strictEqual(created.body.rating_avg, 5);
+    assert.strictEqual(created.body.rating_count, 1);
+    revReviewId = created.body.review.id;
+
+    const row = await storedReview();
+    assert.ok(row, 'الصفّ في القاعدة');
+    assert.strictEqual(row.status, 'visible', 'النشر فوري بلا طابور مراجعة مسبق');
+    // العمود NOT NULL، فاختبار «ليس null» لا يسقط أبداً؛ العمر هو ما يثبت أن
+    // الخادم ختمه لحظة الكتابة لا أن قيمةً قديمة مرّت.
+    const freshness = await db.queryOne(
+      `SELECT TIMESTAMPDIFF(SECOND, phone_confirmed_at, NOW()) AS age
+         FROM provider_reviews WHERE provider_id = ? AND user_id = ?`,
+      [revProviderId, revUserId]
+    );
+    assert.ok(
+      Number(freshness.age) >= 0 && Number(freshness.age) < 120,
+      `phone_confirmed_at خُتم لحظة النشر لا تاريخاً قديماً، عمره ${freshness.age} ثانية`
+    );
+
+    const detail = await api('GET', `/api/services/providers/${revProviderId}`);
+    assert.strictEqual(detail.body.provider.rating_avg, 5, 'المتوسط في الصفحة');
+    assert.strictEqual(detail.body.provider.rating_count, 1);
+    assert.strictEqual(detail.body.provider.rating_distribution['5'], 1, 'التوزيع يحمل النجمة الخامسة');
+    assert.strictEqual(detail.body.provider.rating_distribution['1'], 0, 'وبقية النجوم أصفار لا مفاتيح غائبة');
+    assert.strictEqual(detail.body.provider.my_review, null, 'الزائر لا يرى تقييم أحد');
+
+    const cards = await api('GET', `/api/services/providers?category_id=${revCategoryId}&limit=100`);
+    const card = cards.body.providers.find(candidate => candidate.id === revProviderId);
+    assert.ok(card, 'البطاقة في القائمة كي يسقط التأكيد لو غاب الحقل');
+    assert.strictEqual(card.rating_avg, 5, 'وبطاقة القائمة تحمل المتوسط الظاهر');
+    assert.strictEqual(card.rating_count, 1, 'وعدده');
+
+    const mineDetail = await api('GET', `/api/services/providers/${revProviderId}`, { token: revUserToken });
+    assert.strictEqual(mineDetail.body.provider.my_review.id, revReviewId, 'وصاحبه يرى تقييمه وحده');
+  });
+
+  await test('التقييم الثاني يحدّث الصفّ نفسه ولا يضيف ثانياً، والمتوسط يتبعه', async () => {
+    const updated = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+      token: revUserToken,
+      body: { rating: 3, body: 'تعديل رأيي', confirm_phone: true }
+    });
+    assert.strictEqual(updated.status, 200, updated.body && updated.body.message);
+    assert.strictEqual(updated.body.review.id, revReviewId, 'الصفّ نفسه لا تقييم جديد');
+    assert.strictEqual(updated.body.rating_count, 1, 'العدد لم يزد');
+    assert.strictEqual(updated.body.rating_avg, 3, 'والمتوسط تبع التعديل');
+
+    const rows = await db.query(
+      'SELECT rating, body FROM provider_reviews WHERE provider_id = ? AND user_id = ?',
+      [revProviderId, revUserId]
+    );
+    assert.strictEqual(rows.length, 1, 'صفّ واحد لكل (مزوّد، مستخدم)');
+    assert.strictEqual(Number(rows[0].rating), 3);
+    assert.strictEqual(rows[0].body, 'تعديل رأيي');
+  });
+
+  await test('GET reviews عامّ ومرقّم: visible وحدها والاسم من الحساب وis_mine لصاحبه وحده', async () => {
+    const list = await api('GET', `/api/services/providers/${revProviderId}/reviews?limit=1`);
+    assert.strictEqual(list.status, 200);
+    assert.strictEqual(list.body.reviews.length, 1);
+    assert.strictEqual(list.body.reviews[0].user_name, 'صاحب التقييم', 'الاسم من users.full_name');
+    assert.strictEqual(list.body.reviews[0].is_mine, false, 'الزائر يستلم false لا مفتاحاً غائباً');
+    assert.ok(!('phone' in list.body.reviews[0]), 'لا رقم هاتف في التعليق');
+    assert.strictEqual(list.body.pagination.total, 1);
+
+    const mine = await api('GET', `/api/services/providers/${revProviderId}/reviews`, { token: revUserToken });
+    assert.strictEqual(mine.body.reviews[0].is_mine, true, 'صاحبه يعرفه');
+    assert.strictEqual(mine.body.reviews[0].can_delete, true);
+
+    const stranger = await api('GET', `/api/services/providers/${revProviderId}/reviews`, { token: revSecondToken });
+    assert.strictEqual(stranger.body.reviews[0].is_mine, false);
+    assert.strictEqual(stranger.body.reviews[0].can_delete, false);
+  });
+
+  await test('أدمن خارج نطاق بلدات المزوّد يُردّ 404 على حذف التقييم، والصفّ يبقى', async () => {
+    const denied = await api('DELETE', `/api/admin/provider-reviews/${revReviewId}`, { token: revAdminToken });
+    assert.strictEqual(denied.status, 404, '404 لا 403 كي لا يتأكّد وجود ما لا يراه');
+
+    const rows = await db.query('SELECT id FROM provider_reviews WHERE id = ?', [revReviewId]);
+    assert.strictEqual(rows.length, 1, 'لا شيء حُذف خارج النطاق');
+  });
+
+  await test('بلاغ واحد لكل مستخدم: التكرار لا يرفع العدّاد، والثالث يُخفي ويُخرجه من المتوسط', async () => {
+    const first = await api('POST', `/api/services/providers/${revProviderId}/reviews/${revReviewId}/report`, {
+      token: revSecondToken
+    });
+    assert.strictEqual(first.status, 200, first.body && first.body.message);
+    assert.strictEqual(first.body.reports_count, 1);
+    assert.strictEqual(first.body.status, 'visible', 'بلاغ واحد لا يخفي');
+
+    const repeat = await api('POST', `/api/services/providers/${revProviderId}/reviews/${revReviewId}/report`, {
+      token: revSecondToken
+    });
+    assert.strictEqual(repeat.status, 200, 'الإبلاغ المتكرّر لا خطأ');
+    assert.strictEqual(repeat.body.reports_count, 1, 'المبلِّغ نفسه لا يرفع العدّاد');
+
+    const second = await api('POST', `/api/services/providers/${revProviderId}/reviews/${revReviewId}/report`, {
+      token: revThirdToken
+    });
+    assert.strictEqual(second.body.reports_count, 2);
+    assert.strictEqual(second.body.status, 'visible', 'دون العتبة يبقى ظاهراً');
+
+    const third = await api('POST', `/api/services/providers/${revProviderId}/reviews/${revReviewId}/report`, {
+      token: revFourthToken
+    });
+    assert.strictEqual(third.body.reports_count, 3);
+    assert.strictEqual(third.body.status, 'hidden', 'العتبة (3) تُخفيه');
+
+    const row = await storedReview();
+    assert.strictEqual(row.status, 'hidden');
+
+    const list = await api('GET', `/api/services/providers/${revProviderId}/reviews`);
+    assert.strictEqual(list.body.pagination.total, 0, 'المخفي لا يخرج في القائمة');
+
+    const detail = await api('GET', `/api/services/providers/${revProviderId}`);
+    assert.strictEqual(detail.body.provider.rating_avg, null, 'ولا يدخل المتوسط — بلا تقييمات صار null');
+    assert.strictEqual(detail.body.provider.rating_count, 0, 'ولا العدد');
+
+    const mineDetail = await api('GET', `/api/services/providers/${revProviderId}`, { token: revUserToken });
+    assert.strictEqual(
+      mineDetail.body.provider.my_review.status,
+      'hidden',
+      'صاحبه يرى أن تقييمه أُخفي بعد البلاغات ولم يُحذف'
+    );
+
+    const cards = await api('GET', `/api/services/providers?category_id=${revCategoryId}&limit=100`);
+    const card = cards.body.providers.find(candidate => candidate.id === revProviderId);
+    assert.ok(card, 'البطاقة في القائمة كي يسقط التأكيد لو غاب الحقل');
+    assert.strictEqual(card.rating_avg, null, 'وبطاقة القائمة كذلك');
+    assert.strictEqual(card.rating_count, 0);
+  });
+
+  await test('حذف الأدمن داخل النطاق يعمل — السوبر أدمن يحذف التقييم المخفي فيختفي صفّه', async () => {
+    const deleted = await api('DELETE', `/api/admin/provider-reviews/${revReviewId}`, { token: revSuperAdminToken });
+    assert.strictEqual(deleted.status, 200, deleted.body && deleted.body.message);
+
+    const rows = await db.query('SELECT id FROM provider_reviews WHERE id = ?', [revReviewId]);
+    assert.strictEqual(rows.length, 0, 'الصفّ حُذف فعلاً');
+
+    const again = await api('DELETE', `/api/admin/provider-reviews/${revReviewId}`, { token: revSuperAdminToken });
+    assert.strictEqual(again.status, 404, 'حذف المفقود 404 لا 200');
+  });
+
+  await test('حذف تقييمي: صاحبه وحده، idempotent — وغيره لا يمسّه', async () => {
+    const created = await api('PUT', `/api/services/providers/${revProviderId}/review`, {
+      token: revSecondToken,
+      body: { rating: 2, body: 'تقييم المبلّغ', confirm_phone: true }
+    });
+    assert.strictEqual(created.status, 200, created.body && created.body.message);
+    assert.strictEqual(created.body.rating_count, 1, 'تقييم واحد ظاهر بعد حذف الأول');
+
+    const stranger = await api('DELETE', `/api/services/providers/${revProviderId}/review`, { token: revUserToken });
+    assert.strictEqual(stranger.status, 200);
+    assert.strictEqual(stranger.body.deleted, false, 'لمن لا تقييم لا يُحذف شيء');
+    const still = await db.query(
+      'SELECT id FROM provider_reviews WHERE provider_id = ? AND user_id = ?',
+      [revProviderId, revSecondId]
+    );
+    assert.strictEqual(still.length, 1, 'وتقييم غيره لم يُمَس');
+
+    const owner = await api('DELETE', `/api/services/providers/${revProviderId}/review`, { token: revSecondToken });
+    assert.strictEqual(owner.status, 200, owner.body && owner.body.message);
+    assert.strictEqual(owner.body.deleted, true);
+    assert.strictEqual(owner.body.rating_count, 0, 'والملخّص بلا تقييمات بعده');
+    assert.strictEqual(owner.body.rating_avg, null);
+
+    const gone = await db.query(
+      'SELECT id FROM provider_reviews WHERE provider_id = ? AND user_id = ?',
+      [revProviderId, revSecondId]
+    );
+    assert.strictEqual(gone.length, 0, 'الصفّ حُذف فعلاً');
+
+    const again = await api('DELETE', `/api/services/providers/${revProviderId}/review`, { token: revSecondToken });
+    assert.strictEqual(again.status, 200);
+    assert.strictEqual(again.body.deleted, false, 'الحذف المتكرّر بلا خطأ');
+  });
+
+  // ---- تنظيف قسم #186 ----------------------------------------------
+  await api('DELETE', `/api/admin/service-providers/${revProviderId}`, { token: revSuperAdminToken });
+  await api('DELETE', `/api/admin/service-categories/${revCategoryId}`, { token: revSuperAdminToken });
+  for (const id of [revUserId, revSecondId, revThirdId, revFourthId, revAdminId, revSuperAdminId]) {
+    await db.execute('DELETE FROM users WHERE id = ?', [id]);
+  }
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

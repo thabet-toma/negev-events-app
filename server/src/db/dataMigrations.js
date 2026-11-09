@@ -2760,6 +2760,59 @@ const steps = [
         logger.info('[migrations] add-provider-views-favorites-2026-11: provider_favorites table created.');
       }
     }
+  },
+  {
+    // تقييمات المزوّدين (تذكرة #186): جدولان جديدان بالتعريف نفسه الذي في
+    // `schema.sql` حرفياً — نسختان لتعريف واحد لا تعريفان، و`schema.sql` يطبّق
+    // `CREATE TABLE IF NOT EXISTS` وحده فمنصَّبة سابقاً لا تراه إلا من هنا.
+    // الخطوة آمنة التكرار بذاتها: كل جدول داخل `tableExists`.
+    name: 'add-provider-reviews-2026-11',
+    async run(connection) {
+      if (!(await tableExists(connection, 'provider_reviews'))) {
+        await connection.query(`
+          CREATE TABLE provider_reviews (
+            id                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id        INT UNSIGNED NOT NULL,
+            user_id            INT UNSIGNED NOT NULL,
+            rating             TINYINT UNSIGNED NOT NULL,
+            body               VARCHAR(1000) DEFAULT NULL,
+            phone_confirmed_at DATETIME     NOT NULL,
+            status             ENUM('visible', 'hidden') NOT NULL DEFAULT 'visible',
+            reply_body         VARCHAR(1000) DEFAULT NULL,
+            reply_at           DATETIME     DEFAULT NULL,
+            created_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_provider_reviews (provider_id, user_id),
+            KEY idx_provider_reviews_status (provider_id, status),
+            CONSTRAINT fk_spr_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE,
+            CONSTRAINT fk_spr_user FOREIGN KEY (user_id)
+              REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-reviews-2026-11: provider_reviews table created.');
+      }
+
+      if (!(await tableExists(connection, 'provider_review_reports'))) {
+        await connection.query(`
+          CREATE TABLE provider_review_reports (
+            id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            review_id  INT UNSIGNED NOT NULL,
+            user_id    INT UNSIGNED NOT NULL,
+            created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_provider_review_reports (review_id, user_id),
+            KEY idx_provider_review_reports_review (review_id),
+            CONSTRAINT fk_sprr_review FOREIGN KEY (review_id)
+              REFERENCES provider_reviews(id) ON DELETE CASCADE,
+            CONSTRAINT fk_sprr_user FOREIGN KEY (user_id)
+              REFERENCES users(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-reviews-2026-11: provider_review_reports table created.');
+      }
+    }
   }
 ];
 

@@ -6628,6 +6628,15 @@ function resumePendingIntent() {
     // «احفظ المزوّد» ضُغط قبل الدخول (تذكرة #185): تُفتح نافذة المزوّد نفسها
     // بعد الدخول، فيكمل المستخدم الفعل الذي أراده بزرّه هو — لا حفظ صامت.
     openProviderModal(intent.providerId);
+  } else if (intent.type === 'provider_review') {
+    // «اكتب تقييمك» ضُغط قبل الدخول (تذكرة #186): تُفتح نافذة المزوّد ثم ورقة
+    // الكتابة فوقها بعد جهوز بياناتها — الفعل نفسه يُستأنف لا عرضُ نافذة فقط.
+    Promise.resolve(openProviderModal(intent.providerId)).then(() => openProviderReviewForm());
+  } else if (intent.type === 'provider_review_report') {
+    // «بلّغ» ضُغط قبل الدخول: يُستأنف البلاغ نفسه على التقييم ذاته بعد الدخول،
+    // لا ورقة الكتابة — الفعل الذي أراده المستخدم هو ما يعود إليه.
+    Promise.resolve(openProviderModal(intent.providerId))
+      .then(() => reportProviderReview(intent.reviewId));
   } else if (intent.type === 'rsvp') {
     // زرّ «جاي»/«مش جاي» ضُغط قبل الدخول — يُنفَّذ الجواب نفسه الآن بما اختاره
     // المستخدم من عدد (المنتقي ما زال في الصفحة تحت نافذة الدخول).
@@ -8489,8 +8498,26 @@ function providerVisitorId() {
   }
 }
 
-/** عدّادا البطاقة (تذكرة #185): 👁 المشاهدات و♥ المفضّلة — الصفر يُعرض أيضاً. */
+/**
+ * عدّادات البطاقة: 👁 المشاهدات و♥ المفضّلة (تذكرة #185) — الصفر يُعرض أيضاً —
+ * و★ «المتوسط (العدد)» (تذكرة #186). **نجمة بلا تقييمات لا تُعرض**: صفرٌ أو
+ * شرطة سوداء تقول «مزوّد سيّئ» عن مزوّد لم يقيّمه أحد بعد، خلافاً لعدّادٍ
+ * حقيقيّ قيمته صفر. ومزوّد له تقييمات بلا `rating_avg` (خادم أقدم) يُعامل
+ * كغير المقيَّم بدل عرض `NaN`.
+ */
 function providerStatsHtml(p) {
+  const ratingCount = Number(p && p.rating_count) || 0;
+  const ratingAvg = p && p.rating_avg !== null && p.rating_avg !== undefined && Number.isFinite(Number(p.rating_avg))
+    ? Number(p.rating_avg)
+    : null;
+  const ratingHtml = ratingCount > 0 && ratingAvg !== null
+    ? `<span class="provider-stat provider-stat-rating" data-stat="rating" title="متوسط التقييمات">
+      <span class="provider-stat-icon" aria-hidden="true">★</span>
+      <span class="provider-stat-num">${ratingAvg.toFixed(1)}</span>
+      <span class="provider-stat-count">(${ratingCount})</span>
+    </span>`
+    : '';
+
   return `
     <span class="provider-stat" data-stat="views" title="عدد المشاهدات">
       <span class="provider-stat-icon" aria-hidden="true">👁</span>
@@ -8499,7 +8526,7 @@ function providerStatsHtml(p) {
     <span class="provider-stat" data-stat="favorites" title="عدد من حفظوه">
       <span class="provider-stat-icon" aria-hidden="true">♥</span>
       <span class="provider-stat-num">${Number(p && p.favorites_count) || 0}</span>
-    </span>`;
+    </span>${ratingHtml}`;
 }
 
 /**
@@ -9021,6 +9048,378 @@ function providerSimilarHtml(similar) {
   `).join('');
 }
 
+// ======================================================================
+// تقييمات المزوّد (تذكرة #186)
+// ======================================================================
+// المتوسط والعدد من صفحة المزوّد وحدها (وهي على `visible`)، والتعليقات من
+// مسارها المرقّم. الكتابة والإبلاغ والحذف تمرّ عبر `apiFetch` بـ`auth: true`،
+// والقراءة تحمل الرمز أيضاً إن وُجد كي تعرف `is_mine`/`can_delete` — ولا يغيّر
+// ذلك ما هو عام في الردّ.
+
+const PROVIDER_REVIEWS_LIMIT = 5;
+const providerReviewsState = { providerId: null, page: 0, totalPages: 0, reviews: [] };
+
+/** تاريخ التقييم كما يراه المستخدم — تاريخ غير صالح لا يكسر الصفّ. */
+function formatProviderReviewDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return date.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (e) {
+    return '';
+  }
+}
+
+/** نجوم التقييم نصّاً — الممتلئ ★ والناقص ☆، فلا لون وحده يحمل المعنى. */
+function providerReviewStarsHtml(rating) {
+  const value = Math.max(0, Math.min(5, Number(rating) || 0));
+  return '★'.repeat(value) + '☆'.repeat(5 - value);
+}
+
+/**
+ * «★ 4.5 (12 تقييماً)» — ومزوّد بلا تقييمات يقول ذلك صراحةً ولا يعرض صفراً
+ * مضلّلاً (نفس سبب إخفاء النجمة في بطاقة القائمة).
+ */
+function providerRatingSummaryHtml(p) {
+  const count = Number(p && p.rating_count) || 0;
+  if (!count) {
+    return '<p class="provider-rating-empty">لا تقييمات بعد — كن أول من يقيّم هذا المزوّد.</p>';
+  }
+  const avg = Number(p && p.rating_avg);
+  return `
+    <div class="provider-rating-hero">
+      <span class="provider-rating-hero-star" aria-hidden="true">★</span>
+      <span class="provider-rating-hero-avg">${Number.isFinite(avg) ? avg.toFixed(1) : '—'}</span>
+      <span class="provider-rating-hero-count">(${count} تقييماً)</span>
+    </div>`;
+}
+
+/**
+ * توزيع النجوم خمسة أعمدة: ارتفاع كل عمود نسبةً إلى أكثر النجوم تكراراً (لا
+ * إلى المجموع) كي يبقى الرسم مقروءاً حين تتجمّع التقييمات في نجوم واحدة.
+ * والعدد مكتوب فوق كل عمود، فالشكل لا يحمل المعنى وحده.
+ */
+function providerRatingDistributionHtml(distribution, ratingCount) {
+  const total = Number(ratingCount) || 0;
+  if (!total) return '';
+  const counts = [5, 4, 3, 2, 1].map(stars => Number(distribution && distribution[stars]) || 0);
+  const max = Math.max(...counts, 1);
+  return `<div class="provider-rating-dist">${[5, 4, 3, 2, 1].map((stars, index) => {
+    const count = counts[index];
+    const height = Math.round((count / max) * 100);
+    return `
+      <div class="provider-rating-dist-col" data-stars="${stars}" title="${stars} نجوم: ${count}">
+        <span class="provider-rating-dist-count">${count}</span>
+        <span class="provider-rating-dist-track"><span class="provider-rating-dist-bar" style="height:${height}%"></span></span>
+        <span class="provider-rating-dist-label">${stars}★</span>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+/** صفّ تعليق واحد: الاسم من الخادم، والنجوم، والنصّ، وحذف صاحبه أو بلاغ غيره. */
+function providerReviewHtml(review) {
+  const body = review.body ? `<p class="provider-review-body">${escapeHtml(review.body)}</p>` : '';
+  const date = formatProviderReviewDate(review.created_at);
+  const deleteBtn = review.can_delete
+    ? `<button type="button" class="provider-review-action provider-review-delete" onclick="deleteProviderReview()">حذف تقييمي</button>`
+    : '';
+  const reportBtn = !review.is_mine
+    ? `<button type="button" class="provider-review-action provider-review-report" onclick="reportProviderReview(${Number(review.id)})">بلّغ</button>`
+    : '';
+  return `
+    <article class="provider-review" data-review-id="${Number(review.id)}">
+      <div class="provider-review-head">
+        <span class="provider-review-author">${escapeHtml(review.user_name || 'مستخدم')}</span>
+        <span class="provider-review-stars-text" aria-label="${Number(review.rating)} من 5" dir="ltr">${providerReviewStarsHtml(review.rating)}</span>
+      </div>
+      ${body}
+      <div class="provider-review-foot">
+        ${date ? `<span class="provider-review-date">${escapeHtml(date)}</span>` : '<span></span>'}
+        <span class="provider-review-actions">${deleteBtn}${reportBtn}</span>
+      </div>
+    </article>`;
+}
+
+/** يعيد رسم المتوسط والتوزيع من كائن المزوّد المخزَّن (بعد أي كتابة). */
+function renderProviderRatingSummary(provider) {
+  const p = provider || providerDetailsCache[currentProviderId];
+  const summary = document.getElementById('providerRatingSummary');
+  const distribution = document.getElementById('providerRatingDistribution');
+  if (!summary || !distribution) return;
+  summary.innerHTML = p ? providerRatingSummaryHtml(p) : '';
+  distribution.innerHTML = p ? providerRatingDistributionHtml(p.rating_distribution, p.rating_count) : '';
+}
+
+/**
+ * زرّا صاحبه: «اكتب/عدّل تقييمك» و«حذف تقييمي» وملاحظة الإخفاء — كلها من
+ * `my_review` في صفحة المزوّد، لا من قائمة التعليقات: تقييم مخفي أو في صفحة
+ * لاحقة لا صفّ له هنا، وصاحبه ما زال يملك تعديله وحذفه.
+ */
+function renderProviderMyReviewState() {
+  const provider = providerDetailsCache[currentProviderId];
+  const myReview = provider && provider.my_review ? provider.my_review : null;
+
+  const writeBtn = document.getElementById('providerReviewWriteBtn');
+  if (writeBtn) {
+    writeBtn.innerHTML = myReview
+      ? '<i class="fa-solid fa-pen"></i> عدّل تقييمك'
+      : '<i class="fa-solid fa-pen"></i> اكتب تقييمك';
+  }
+
+  const deleteBtn = document.getElementById('providerReviewDeleteMineBtn');
+  if (deleteBtn) {
+    const listedMine = providerReviewsState.reviews.some(review => review.is_mine);
+    deleteBtn.hidden = !myReview || listedMine;
+  }
+
+  const hiddenNote = document.getElementById('providerReviewHiddenNote');
+  if (hiddenNote) hiddenNote.hidden = !(myReview && myReview.status === 'hidden');
+}
+
+/** يبدّل رسالة فشل التعليقات وزرّ إعادة المحاولة — الفشل لا يُترك صامتاً. */
+function setProviderReviewsError(failed) {
+  const error = document.getElementById('providerReviewsError');
+  const retry = document.getElementById('providerReviewsRetryBtn');
+  const empty = document.getElementById('providerReviewsEmpty');
+  if (error) error.hidden = !failed;
+  if (retry) retry.hidden = !failed;
+  if (failed && empty) empty.hidden = true;
+}
+
+/** يعيد رسم التعليقات من الحالة المحلية، ويبدّل زرّ «المزيد» بحسب الصفحات. */
+function renderProviderReviews() {
+  const list = document.getElementById('providerReviewsList');
+  const empty = document.getElementById('providerReviewsEmpty');
+  const moreWrap = document.getElementById('providerReviewsMoreWrap');
+  if (!list) return;
+  list.innerHTML = providerReviewsState.reviews.map(providerReviewHtml).join('');
+  if (empty) empty.hidden = providerReviewsState.reviews.length > 0;
+  if (moreWrap) moreWrap.hidden = providerReviewsState.page >= providerReviewsState.totalPages;
+  renderProviderMyReviewState();
+}
+
+/**
+ * صفحة تعليقات — `page` جديد أو إضافة إلى ما ظهر. الحارس على
+ * `currentProviderId` يمنع ردّ مزوّد سابق من الرسم فوق واحد مفتوح بعده.
+ */
+async function loadProviderReviews(providerId, { page = 1, append = false } = {}) {
+  const targetId = Number(providerId);
+  if (!targetId) return;
+  setProviderReviewsError(false);
+  try {
+    const res = await apiFetch(
+      `/api/services/providers/${targetId}/reviews?page=${page}&limit=${PROVIDER_REVIEWS_LIMIT}`,
+      { auth: true }
+    );
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      if (Number(currentProviderId) === targetId) setProviderReviewsError(true);
+      return;
+    }
+    if (Number(currentProviderId) !== targetId) return;
+
+    const incoming = Array.isArray(data.reviews) ? data.reviews : [];
+    providerReviewsState.providerId = targetId;
+    providerReviewsState.page = Number(data.pagination && data.pagination.page) || page;
+    providerReviewsState.totalPages = Number(data.pagination && data.pagination.totalPages) || 0;
+    providerReviewsState.reviews = append
+      ? providerReviewsState.reviews.concat(incoming)
+      : incoming;
+    renderProviderReviews();
+  } catch (e) {
+    console.error('Provider reviews fetch error:', e);
+    if (Number(currentProviderId) === targetId) setProviderReviewsError(true);
+  }
+}
+
+/** «المزيد من التعليقات» — صفحة تالية تُضاف، لا تُستبدل. */
+function loadMoreProviderReviews() {
+  loadProviderReviews(currentProviderId, {
+    page: providerReviewsState.page + 1,
+    append: true
+  });
+}
+
+/**
+ * ورقة «اكتب تقييمك»: تُعبَّأ من تقييم صاحبه إن وُجد (تعديل لا تقييم ثانٍ)،
+ * والزائر يُحوَّل إلى الدخول بنيّة محفوظة تعيده إلى النافذة والورقة معاً.
+ */
+function openProviderReviewForm() {
+  const providerId = Number(currentProviderId);
+  if (!providerId || !providerDetailsCache[providerId]) return;
+  if (!requireAuth({ type: 'provider_review', providerId })) return;
+
+  const form = document.getElementById('providerReviewForm');
+  const modal = document.getElementById('providerReviewModal');
+  if (!form || !modal) return;
+
+  // `my_review` أوّلاً: هو المرجع ولو كان التقييم مخفياً أو في صفحة لاحقة.
+  const provider = providerDetailsCache[providerId];
+  const mine = (provider && provider.my_review)
+    || providerReviewsState.reviews.find(review => review.is_mine)
+    || null;
+  form.reset();
+  setProviderReviewStars(mine ? Number(mine.rating) : 0);
+  document.getElementById('providerReviewBody').value = mine && mine.body ? mine.body : '';
+  modal.dataset.providerId = String(providerId);
+  modal.style.display = 'flex';
+  const bodyInput = document.getElementById('providerReviewBody');
+  if (bodyInput) bodyInput.focus();
+}
+
+function closeProviderReviewModal() {
+  const modal = document.getElementById('providerReviewModal');
+  if (modal) modal.style.display = 'none';
+}
+
+/** نجوم 1..5 كأزرار: القيمة في حقل مخفي واحد، والحالة على الأزرار نفسها. */
+function setProviderReviewStars(rating) {
+  const value = Math.max(0, Math.min(5, Number(rating) || 0));
+  const hidden = document.getElementById('providerReviewRating');
+  if (hidden) hidden.value = String(value);
+  const stars = document.querySelectorAll('#providerReviewStars .provider-review-star');
+  stars.forEach(button => {
+    const star = Number(button.dataset.star) || 0;
+    button.classList.toggle('is-on', star <= value);
+    button.setAttribute('aria-pressed', star === value ? 'true' : 'false');
+  });
+}
+
+/**
+ * نشر التقييم — الـupsert في الخادم يجعل النداء نفسه كتابةً أولى أو تعديلاً.
+ * `confirm_phone` منطقي حصراً، وإقرار الرقم شرطٌ يُمنع الإرسال دونه (والخادم
+ * يرفضه 400 على أي حال — هذا حارس تجربة لا بديل عن حارس الخادم).
+ */
+async function submitProviderReview(event) {
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+
+  const reviewModal = document.getElementById('providerReviewModal');
+  const providerId = Number(currentProviderId)
+    || Number(reviewModal && reviewModal.dataset.providerId)
+    || 0;
+  const rating = Number(document.getElementById('providerReviewRating').value) || 0;
+  const body = document.getElementById('providerReviewBody').value.trim();
+  const confirmPhone = document.getElementById('providerReviewConfirmPhone').checked === true;
+
+  if (!providerId) return;
+  if (rating < 1 || rating > 5) {
+    showToast('اختر من نجمة إلى خمس نجوم أولاً');
+    return;
+  }
+  if (!confirmPhone) {
+    showToast('أكّد أن رقمك شخصي قبل نشر التقييم');
+    return;
+  }
+
+  const submitBtn = document.getElementById('providerReviewSubmitBtn');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/review`, {
+      method: 'PUT',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating, body, confirm_phone: confirmPhone })
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      alert((data && data.message) || 'تعذّر نشر التقييم — حاول مرة أخرى');
+      return;
+    }
+
+    const cached = providerDetailsCache[providerId];
+    if (cached) cached.my_review = data.review || null;
+    applyProviderRatingSummary(providerId, data);
+    // قبل انتظار إعادة قراءة التعليقات: زرّا صاحبه يتبعان `my_review` لا
+    // نجاح القراءة، فلا يبقى «عدّل تقييمك» أو الحذف على تقييم غير موجود.
+    renderProviderMyReviewState();
+    closeProviderReviewModal();
+    await loadProviderReviews(providerId);
+    showToast('نُشر تقييمك — شكراً لك');
+  } catch (e) {
+    alert('تعذّر نشر التقييم — تحقّق من الاتصال');
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+/** حذف تقييم صاحبه وحده — الخادم يعرف صاحبه من الرمز لا من رقم في الطلب. */
+async function deleteProviderReview() {
+  const providerId = Number(currentProviderId);
+  if (!providerId) return;
+  if (!window.confirm('هل تحذف تقييمك؟')) return;
+
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/review`, {
+      method: 'DELETE',
+      auth: true
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      alert((data && data.message) || 'تعذّر حذف التقييم — حاول مرة أخرى');
+      return;
+    }
+    // `deleted: false` تعني «لا تقييم لك» لا فشلاً — لا تُطبَّق أرقام على
+    // مزوّد لم يُحذف منه شيء ولا يُمسح تقييم صاحبه من الكاش.
+    if (data.deleted) {
+      const cached = providerDetailsCache[providerId];
+      if (cached) cached.my_review = null;
+      applyProviderRatingSummary(providerId, data);
+      renderProviderMyReviewState();
+    }
+    await loadProviderReviews(providerId);
+    showToast((data && data.message) || 'حُذف تقييمك');
+  } catch (e) {
+    alert('تعذّر حذف التقييم — تحقّق من الاتصال');
+  }
+}
+
+/** بلاغ عن تقييم غيره — صفّ واحد لكل مستخدم، والثالث يُخفيه فيُعاد الرسم. */
+async function reportProviderReview(reviewId) {
+  const providerId = Number(currentProviderId);
+  if (!providerId || !reviewId) return;
+  if (!requireAuth({ type: 'provider_review_report', providerId, reviewId })) return;
+  if (!window.confirm('هل تبلّغ الإدارة عن هذا التقييم؟')) return;
+
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/reviews/${reviewId}/report`, {
+      method: 'POST',
+      auth: true
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.success) {
+      alert((data && data.message) || 'تعذّر إرسال البلاغ — حاول مرة أخرى');
+      return;
+    }
+    if (data.status === 'hidden') {
+      // أخفاه البلاغ: تُقرأ الصفحة من جديد كي يخرج من القائمة ومن المتوسط.
+      await openProviderModal(providerId);
+      showToast('أُخفي التقييم بعد البلاغات');
+    } else {
+      showToast('تم إبلاغ الإدارة عن التقييم');
+    }
+  } catch (e) {
+    alert('تعذّر إرسال البلاغ — تحقّق من الاتصال');
+  }
+}
+
+/** يطبّق متوسطاً وعدّاً وتوزيعاً وصلت من ردّ كتابة على الكاش والبطاقة والنافذة. */
+function applyProviderRatingSummary(providerId, summary) {
+  const provider = providerDetailsCache[providerId];
+  if (provider) {
+    provider.rating_avg = summary.rating_avg ?? null;
+    provider.rating_count = Number(summary.rating_count) || 0;
+    if (summary.rating_distribution) provider.rating_distribution = summary.rating_distribution;
+  }
+  const card = serviceProvidersCache.find(item => Number(item.id) === Number(providerId));
+  if (card) {
+    card.rating_avg = summary.rating_avg ?? null;
+    card.rating_count = Number(summary.rating_count) || 0;
+  }
+  updateProviderStatsDom(providerId);
+  renderProviderRatingSummary(provider);
+}
+
 /**
  * يملأ قسماً من نافذة المزوّد ويخفيه إن كان فارغاً — قاعدة واحدة للأقسام
  * الأربعة (تذكرة #184)، فلا يظهر عنوان لقسم لا محتوى تحته.
@@ -9051,10 +9450,17 @@ function renderProviderSection(sectionId, listId, items, renderHtml) {
  * الساعات الأسبوعي، ومعرض الأعمال، والعروض السارية، والمنتجات، ثم «مزوّدون
  * مشابهون» يفتح كلٌّ منهم نافذته. **كل قسم فارغ يُخفى** — لا عنوان لقسم بلا
  * محتوى — والرقم لا يتغيّر سلوكه.
+ *
+ * **والتقييمات (تذكرة #186):** المتوسط والعدد من الصفحة نفسها، والتوزيع
+ * والتعليقات المرقّمة من `…/reviews`، وورقة الكتابة/الحذف فوقها. القسم يبقى
+ * ظاهراً حتى بلا تقييمات — هو موضع زرّ «اكتب تقييمك» ودعوة أول مقيِّم.
  */
 async function openProviderModal(providerId, { revealContact = false } = {}) {
   try {
-    const res = await apiFetch(`/api/services/providers/${providerId}`);
+    // بالرمز إن وُجد (`optionalAuthenticate` على الخادم): `my_review` يقول
+    // ألصاحب الطلب تقييم — ولو كان مخفياً أو في صفحة تعليقات لاحقة — فلا تفتح
+    // الورقة فارغة على صاحب تقييم قائم، و`is_favorite` تصحّ في النافذة.
+    const res = await apiFetch(`/api/services/providers/${providerId}`, { auth: true });
     const data = await res.json();
     if (!data.success) return;
 
@@ -9192,11 +9598,27 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
       </button>`)
       : noProviderPhoneHtml();
 
+    // التقييمات (تذكرة #186): المتوسط والتوزيع من كائن المزوّد نفسه، والتعليقات
+    // من مسارها المرقّم — تبدأ من الصفحة الأولى مع كل فتح، فلا بقايا مزوّد سابق.
+    providerReviewsState.providerId = Number(providerId);
+    providerReviewsState.page = 0;
+    providerReviewsState.totalPages = 0;
+    providerReviewsState.reviews = [];
+    renderProviderRatingSummary(p);
+    renderProviderReviews();
+    const reviewsSection = document.getElementById('providerReviewsSection');
+    if (reviewsSection) reviewsSection.hidden = false;
+    const reviewsLoaded = loadProviderReviews(providerId);
+
     document.getElementById('providerModal').style.display = 'flex';
 
     // مشاهدة واحدة لهذا المزوّد في هذا التحميل (تذكرة #185): تُسجَّل عند فتح
     // النافذة لا عند كل رسم للبطاقة، والحارس في recordProviderView يمنع التكرار.
     recordProviderView(providerId);
+
+    // النافذة ظهرت أصلاً؛ الانتظار هنا فقط ليكتمل `openProviderModal` بعد أول
+    // صفحة تعليقات، فيستأنف `provider_review` بعد الدخول بورقة معبّأة لا فارغة.
+    await reviewsLoaded;
   } catch (e) {
     console.error('Provider fetch error:', e);
   }
@@ -9211,6 +9633,8 @@ function revealProviderPhone() {
 
 function closeProviderModal() {
   document.getElementById('providerModal').style.display = 'none';
+  // ورقة التقييم ابنة النافذة في التسلسل: إغلاق الأصل لا يترك ورقة معلّقة.
+  closeProviderReviewModal();
   currentProviderId = null;
   currentProviderPhone = '';
 }

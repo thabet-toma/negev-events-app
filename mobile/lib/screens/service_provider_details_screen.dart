@@ -25,14 +25,18 @@ const List<String> _providerDayNames = [
 
 /// صفحة مزوّد خدمة واحد — الوصف والصورة ظاهران فوراً، **والرقم لا يظهر نصّاً
 /// إطلاقاً**؛ يُكشف فقط عبر فعل تواصل صريح (زرّ «اتصال» يفتح تطبيق الهاتف
-/// مباشرة)، نفس نمط اتصال المضيف في `event_details_screen.dart`. لا نجوم
-/// ولا تقييمات — غياب مقصود (#25).
+/// مباشرة)، نفس نمط اتصال المضيف في `event_details_screen.dart`.
 ///
 /// **وصارت غنية (#184):** الغلاف والشعار، وشارتا «موثّق»/«مميّز»، وجدول ساعات
 /// أسبوعي، ومعرض أعمال، وعروض سارية، ومنتجات، ومزوّدون مشابهون يفتح كلٌّ
 /// منهم صفحته. **كل قسم فارغ يُخفى**، وزرّ واتساب يستدعي
 /// `GET /api/services/providers/:id/whatsapp` ويفتح الرابط الذي يبنيه الخادم
 /// — لا يبني الشاشة رابطاً ولا تعرف صيغة الرقم الدولي.
+///
+/// **والتقييمات (#186):** ★ «المتوسط (العدد)» مع عدّادي 👁/♥، وتوزيع النجوم
+/// خمسة أعمدة، وقائمة التعليقات المرقّمة، وورقة كتابة تقييم بنجوم وإقرار الرقم،
+/// وحذف تقييم صاحبه. المتوسط والعدد والتوزيع من `visible` وحدها في الخادم،
+/// و`my_review` في التفصيل يقول ألصاحب الطلب تقييم أم لا.
 class ServiceProviderDetailsScreen extends StatefulWidget {
   const ServiceProviderDetailsScreen({
     super.key,
@@ -186,6 +190,34 @@ class _ProviderBodyState extends State<_ProviderBody> {
   late int _favoritesCount = provider.favoritesCount;
   bool _savingFavorite = false;
 
+  // تقييمات المزوّد (تذكرة #186): المتوسط والعدد والتوزيع وتقييم صاحب
+  // الطلب — كلها من الخادم وحده، وتتحدّث بردّ كل كتابة أو حذف.
+  late double? _ratingAvg = provider.ratingAvg;
+  late int _ratingCount = provider.ratingCount;
+  late Map<int, int> _ratingDistribution = provider.ratingDistribution;
+  late ProviderReview? _myReview = provider.myReview;
+
+  final List<ProviderReview> _reviews = [];
+  int _reviewsPage = 0;
+  int _reviewsTotalPages = 0;
+  bool _reviewsRequested = false;
+  bool _loadingReviews = false;
+  bool _reviewsFailed = false;
+  /// طلب إعادة قراءة وصل أثناء قراءة جارية (بعد كتابة أو حذف): يُنفَّذ فور
+  /// انتهائها بدل إسقاطه، وإلا عاد الردّ القديم فأحيا تقييماً حُذف للتوّ.
+  bool _reloadReviewsAfterCurrent = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // التعليقات تُقرأ مرة عند أول بناء — لا في كل `build`، ولا في `initState`
+    // حيث لا يصحّ الوصول إلى `AppServices.of(context)`.
+    if (!_reviewsRequested) {
+      _reviewsRequested = true;
+      unawaited(_loadReviews());
+    }
+  }
+
   @override
   void didUpdateWidget(covariant _ProviderBody oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -194,6 +226,16 @@ class _ProviderBodyState extends State<_ProviderBody> {
     if (oldWidget.provider.id != widget.provider.id) {
       _isFavorite = widget.provider.isFavorite;
       _favoritesCount = widget.provider.favoritesCount;
+      _ratingAvg = widget.provider.ratingAvg;
+      _ratingCount = widget.provider.ratingCount;
+      _ratingDistribution = widget.provider.ratingDistribution;
+      _myReview = widget.provider.myReview;
+      _reviews.clear();
+      _reviewsPage = 0;
+      _reviewsTotalPages = 0;
+      _reviewsFailed = false;
+      _reloadReviewsAfterCurrent = false;
+      unawaited(_loadReviews());
     }
   }
 
@@ -229,6 +271,319 @@ class _ProviderBodyState extends State<_ProviderBody> {
     } finally {
       if (mounted) setState(() => _savingFavorite = false);
     }
+  }
+
+  /// صفحة تعليقات — `append` يضيف الصفحة التالية، وإلا فمن الأولى من جديد.
+  /// فشلها صامت: التعليقات قسمٌ لا يجوز أن يكسر صفحة المزوّد.
+  Future<void> _loadReviews({bool append = false}) async {
+    if (_loadingReviews) {
+      if (!append) _reloadReviewsAfterCurrent = true;
+      return;
+    }
+    _loadingReviews = true;
+    _reviewsFailed = false;
+    final providerId = provider.id;
+    try {
+      final page = append ? _reviewsPage + 1 : 1;
+      final result = await AppServices.of(context).api.providerReviews(
+            providerId,
+            page: page,
+          );
+      // ردّ مزوّد سابق لا يُرسم فوق مزوّد فُتح بعده في الموضع نفسه.
+      if (!mounted || provider.id != providerId) return;
+      setState(() {
+        if (!append) _reviews.clear();
+        _reviews.addAll(result.reviews);
+        _reviewsPage = result.pagination.page;
+        _reviewsTotalPages = result.pagination.totalPages;
+      });
+    } catch (_) {
+      // المتوسط والتوزيع من التفصيل، لكن فشل القراءة لا يُترك صامتاً أبدياً:
+      // زرّ إعادة المحاولة يظهر مكان القائمة الفارغة.
+      if (mounted) setState(() => _reviewsFailed = true);
+    } finally {
+      _loadingReviews = false;
+      if (_reloadReviewsAfterCurrent && mounted) {
+        _reloadReviewsAfterCurrent = false;
+        unawaited(_loadReviews());
+      }
+    }
+  }
+
+  /// «اكتب تقييمك»: الزائر يُحوَّل إلى بوابة الدخول، والورقة تُعبَّأ من تقييم
+  /// صاحبه إن وُجد فالتعديل يستبدل ولا يضيف ثانياً.
+  Future<void> _openReviewSheet() async {
+    final services = AppServices.of(context);
+    if (!services.auth.isSignedIn) {
+      openSignInGate(context, 'سجّل الدخول لتقييم المزوّد');
+      return;
+    }
+
+    // قد يكون المستخدم سجّل الدخول بعد تحميل الصفحة، فـ`my_review` المحمَّل
+    // قديم (null). تُقرأ الصفحة مرة أخرى قبل فتح الورقة كي لا يفقد صاحب
+    // التقييم زرّ الحذف ويقرأ «بلّغ» على تقييمه هو.
+    if (_myReview == null) {
+      try {
+        final detail = await services.api.serviceProviderDetails(provider.id);
+        if (!mounted) return;
+        setState(() {
+          _myReview = detail.myReview;
+          _ratingAvg = detail.ratingAvg;
+          _ratingCount = detail.ratingCount;
+          _ratingDistribution = detail.ratingDistribution;
+        });
+      } catch (_) {
+        // فشل التحديث لا يمنع الكتابة — الـupsert في الخادم يحسم التكرار.
+      }
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _ReviewSheet(
+        initialReview: _myReview,
+        onSubmit: _saveReview,
+        onDelete: _myReview == null ? null : _deleteMyReview,
+      ),
+    );
+  }
+
+  Future<void> _saveReview(int rating, String body, bool confirmPhone) async {
+    final result = await AppServices.of(context).api.submitProviderReview(
+          provider.id,
+          rating: rating,
+          body: body,
+          confirmPhone: confirmPhone,
+        );
+    if (!mounted) return;
+    setState(() {
+      _myReview = result.review;
+      _ratingAvg = result.summary.ratingAvg;
+      _ratingCount = result.summary.ratingCount;
+      _ratingDistribution = result.summary.ratingDistribution;
+    });
+    await _loadReviews();
+    if (mounted) showMessage(context, 'نُشر تقييمك — شكراً لك');
+  }
+
+  /// حذف تقييمي من بطاقة التعليق نفسها — بتأكيد، كي لا تمسح ضغطةٌ خاطئة
+  /// كلام المرء. الورقة لها تأكيدها قبل `_deleteMyReview`.
+  Future<void> _confirmDeleteMyReview() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف تقييمي'),
+        content: const Text('هل تحذف تقييمك عن هذا المزوّد؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('احذف'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _deleteMyReview();
+  }
+
+  Future<void> _deleteMyReview() async {
+    try {
+      final summary =
+          await AppServices.of(context).api.deleteProviderReview(provider.id);
+      if (!mounted) return;
+      if (summary != null) {
+        setState(() {
+          _myReview = null;
+          _ratingAvg = summary.ratingAvg;
+          _ratingCount = summary.ratingCount;
+          _ratingDistribution = summary.ratingDistribution;
+        });
+      }
+      await _loadReviews();
+      if (mounted) {
+        showMessage(
+          context,
+          summary == null ? 'لا تقييم لك على هذا المزوّد' : 'حُذف تقييمك',
+        );
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  /// بلاغ عن تقييم غيره — عند العتبة يخفيه الخادم، فتُقرأ الأرقام من جديد.
+  Future<void> _reportReview(ProviderReview review) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('بلاغ عن تقييم'),
+        content: const Text('هل تبلّغ الإدارة عن هذا التقييم؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('بلّغ'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final result = await AppServices.of(context)
+          .api
+          .reportProviderReview(provider.id, review.id);
+      if (!mounted) return;
+      if (result.status == 'hidden') {
+        final detail =
+            await AppServices.of(context).api.serviceProviderDetails(provider.id);
+        if (!mounted) return;
+        setState(() {
+          _ratingAvg = detail.ratingAvg;
+          _ratingCount = detail.ratingCount;
+          _ratingDistribution = detail.ratingDistribution;
+        });
+        await _loadReviews();
+        if (mounted) showMessage(context, 'أُخفي التقييم بعد البلاغات');
+      } else {
+        showMessage(context, 'تم إبلاغ الإدارة عن التقييم');
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    }
+  }
+
+  /// تاريخ التعليق كما يراه المستخدم — تاريخ غير صالح لا يكسر الصفّ.
+  String _reviewDateLabel(String? raw) {
+    final date = raw == null ? null : DateTime.tryParse(raw);
+    if (date == null) return '';
+    final local = date.toLocal();
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    return '${local.year}/$month/$day';
+  }
+
+  /// عمود نجوم واحد من التوزيع: العدد فوق العمود وارتفاعه نسبةٌ إلى أكثر
+  /// النجوم تكراراً (لا إلى المجموع) كي يبقى الرسم مقروءاً.
+  Widget _distributionColumn(int stars) {
+    final count = _ratingDistribution[stars] ?? 0;
+    final maxCount = _ratingDistribution.values.fold<int>(
+      0,
+      (max, value) => value > max ? value : max,
+    );
+    final ratio = maxCount == 0 ? 0.0 : count / maxCount;
+    final barHeight = count == 0 ? 2.0 : (ratio * 64).clamp(6.0, 64.0);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$count',
+          key: Key('provider_rating_dist_count_$stars'),
+          style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+        ),
+        const SizedBox(height: 3),
+        SizedBox(
+          height: 64,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Container(
+              width: 18,
+              height: barHeight,
+              decoration: BoxDecoration(
+                color: count == 0 ? context.c.line : context.c.gold,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          '$stars★',
+          style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+        ),
+      ],
+    );
+  }
+
+  /// تعليق واحد: الاسم من الخادم، والنجوم، والنصّ، ثم حذف صاحبه أو بلاغ غيره.
+  Widget _reviewTile(ProviderReview review) {
+    final mine = review.isMine ||
+        review.canDelete ||
+        (_myReview != null && _myReview!.id == review.id);
+    return Container(
+      key: Key('provider_review_${review.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        border: Border.all(color: context.c.line),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  review.userName.isEmpty ? 'مستخدم' : review.userName,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: context.c.ink,
+                  ),
+                ),
+              ),
+              Text(
+                '★' * review.rating + '☆' * (5 - review.rating),
+                key: Key('provider_review_stars_${review.id}'),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: context.c.gold,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ],
+          ),
+          if (review.body != null) ...[
+            const SizedBox(height: 5),
+            Text(
+              review.body!,
+              style: TextStyle(fontSize: 12.5, color: context.c.inkSoft, height: 1.5),
+            ),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _reviewDateLabel(review.createdAt),
+                  style: TextStyle(fontSize: 10.5, color: context.c.inkFaint),
+                ),
+              ),
+              if (mine)
+                TextButton(
+                  key: Key('provider_review_delete_${review.id}'),
+                  onPressed: _confirmDeleteMyReview,
+                  child: const Text('حذف تقييمي'),
+                )
+              else
+                TextButton(
+                  key: Key('provider_review_report_${review.id}'),
+                  onPressed: () => _reportReview(review),
+                  child: const Text('بلّغ'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   String _priceBadgeText() {
@@ -364,6 +719,19 @@ class _ProviderBodyState extends State<_ProviderBody> {
                     value: '$_favoritesCount',
                     label: 'من حفظوه',
                   ),
+                  // ★ المتوسط (العدد) — تذكرة #186. مزوّد بلا تقييمات لا نجمته:
+                  // «0.0» تقول «سيّئ» عن مزوّد لم يقيّمه أحد.
+                  if (_ratingCount > 0) ...[
+                    const SizedBox(width: 14),
+                    _stat(
+                      valueKey: const Key('provider_rating_stat_value'),
+                      icon: '★',
+                      value: _ratingAvg == null
+                          ? '—'
+                          : _ratingAvg!.toStringAsFixed(1),
+                      label: '($_ratingCount تقييم)',
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 10),
@@ -746,6 +1114,102 @@ class _ProviderBodyState extends State<_ProviderBody> {
                 ),
               ],
 
+              // تقييمات المزوّد (تذكرة #186): المتوسط والعدد، وتوزيع النجوم
+              // خمسة أعمدة، ثم التعليقات المرقّمة. القسم يبقى ظاهراً بلا
+              // تقييمات — هو موضع «اكتب تقييمك» ودعوة أول مقيِّم.
+              const SizedBox(height: 20),
+              Row(
+                key: const Key('provider_reviews_section'),
+                children: [
+                  Expanded(
+                    child: _SectionTitle(
+                      title: 'التقييمات',
+                      icon: Icons.star_outline,
+                    ),
+                  ),
+                  TextButton.icon(
+                    key: const Key('provider_write_review_btn'),
+                    onPressed: _openReviewSheet,
+                    icon: const Icon(Icons.rate_review_outlined, size: 18),
+                    label: Text(_myReview == null ? 'اكتب تقييمك' : 'عدّل تقييمك'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              if (_ratingCount > 0) ...[
+                Row(
+                  key: const Key('provider_rating_summary'),
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text('★', style: TextStyle(fontSize: 18, color: context.c.gold)),
+                    const SizedBox(width: 5),
+                    Text(
+                      _ratingAvg == null ? '—' : _ratingAvg!.toStringAsFixed(1),
+                      key: const Key('provider_rating_avg'),
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                        color: context.c.ink,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '($_ratingCount تقييماً)',
+                      key: const Key('provider_rating_count'),
+                      style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  key: const Key('provider_rating_distribution'),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: context.c.surfaceSunk,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: context.c.line),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      for (var stars = 5; stars >= 1; stars -= 1)
+                        Expanded(child: _distributionColumn(stars)),
+                    ],
+                  ),
+                ),
+              ] else
+                Text(
+                  'لا تقييمات بعد — كن أول من يقيّم هذا المزوّد.',
+                  key: const Key('provider_reviews_empty'),
+                  style: TextStyle(fontSize: 12.5, color: context.c.inkFaint),
+                ),
+              // تقييم صاحبه أخفَته البلاغات: يبقى قابلاً للتعديل والحذف، ويُقال
+              // له ذلك صراحةً بدل أن يظنّ أنه حُذف.
+              if (_myReview != null && _myReview!.status == 'hidden')
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'تقييمك مخفي بعد البلاغات — يمكنك تعديله أو حذفه.',
+                    key: const Key('provider_review_hidden_note'),
+                    style: TextStyle(fontSize: 12, color: context.c.gold),
+                  ),
+                ),
+              const SizedBox(height: 10),
+              for (final review in _reviews) _reviewTile(review),
+              if (_reviewsFailed && _reviews.isEmpty)
+                TextButton(
+                  key: const Key('provider_reviews_retry'),
+                  onPressed: _loadReviews,
+                  child: const Text('تعذّر تحميل التعليقات — إعادة المحاولة'),
+                ),
+              if (_reviewsPage < _reviewsTotalPages)
+                TextButton(
+                  key: const Key('provider_reviews_more'),
+                  onPressed: _loadingReviews ? null : () => _loadReviews(append: true),
+                  child: const Text('المزيد من التعليقات'),
+                ),
+
               // Flexible Capacity Notice
               const SizedBox(height: 16),
               // نفس سبب `ClipRRect` أعلاه: حدود بألوان مختلفة مع زوايا مستديرة.
@@ -1083,6 +1547,176 @@ class _ProviderBadges extends StatelessWidget {
             style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: color),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// ورقة كتابة التقييم (تذكرة #186): نجوم 1..5، وتعليق اختياري، وإقرار أن
+/// الرقم شخصي — يُرسل `confirm_phone: true`، ولا يُرسل التقييم دونه.
+/// تُعبَّأ من تقييم صاحبه إن وُجد، فالتعديل يستبدل ولا يضيف تقييماً ثانياً.
+class _ReviewSheet extends StatefulWidget {
+  const _ReviewSheet({
+    required this.initialReview,
+    required this.onSubmit,
+    this.onDelete,
+  });
+
+  final ProviderReview? initialReview;
+  final Future<void> Function(int rating, String body, bool confirmPhone) onSubmit;
+  final Future<void> Function()? onDelete;
+
+  @override
+  State<_ReviewSheet> createState() => _ReviewSheetState();
+}
+
+class _ReviewSheetState extends State<_ReviewSheet> {
+  late int _rating = widget.initialReview?.rating ?? 0;
+  late final TextEditingController _bodyController =
+      TextEditingController(text: widget.initialReview?.body ?? '');
+  bool _confirmPhone = false;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_rating < 1 || _rating > 5) {
+      showMessage(context, 'اختر من نجمة إلى خمس نجوم أولاً', isError: true);
+      return;
+    }
+    if (!_confirmPhone) {
+      showMessage(context, 'أكّد أن رقمك شخصي قبل نشر التقييم', isError: true);
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await widget.onSubmit(_rating, _bodyController.text.trim(), _confirmPhone);
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    final onDelete = widget.onDelete;
+    if (onDelete == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف تقييمي'),
+        content: const Text('هل تحذف تقييمك عن هذا المزوّد؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('احذف'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await onDelete();
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 8,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              widget.initialReview == null ? 'اكتب تقييمك' : 'عدّل تقييمك',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: context.c.ink,
+              ),
+            ),
+            if (widget.initialReview?.status == 'hidden') ...[
+              const SizedBox(height: 4),
+              Text(
+                'تقييمك مخفي بعد البلاغات — تعديله لا يعيد نشره.',
+                style: TextStyle(fontSize: 11.5, color: context.c.gold),
+              ),
+            ],
+            const SizedBox(height: 6),
+            Row(
+              key: const Key('provider_review_stars'),
+              children: [
+                for (var star = 1; star <= 5; star += 1)
+                  IconButton(
+                    key: Key('provider_review_star_$star'),
+                    onPressed: _busy ? null : () => setState(() => _rating = star),
+                    icon: Icon(star <= _rating ? Icons.star : Icons.star_border),
+                    color: context.c.gold,
+                    iconSize: 34,
+                    tooltip: '$star',
+                  ),
+              ],
+            ),
+            TextField(
+              key: const Key('provider_review_body'),
+              controller: _bodyController,
+              maxLines: 4,
+              maxLength: 1000,
+              decoration: const InputDecoration(
+                hintText: 'كيف كانت تجربتك مع المزوّد؟ (اختياري)',
+              ),
+            ),
+            CheckboxListTile(
+              key: const Key('provider_review_confirm_phone'),
+              value: _confirmPhone,
+              onChanged: _busy
+                  ? null
+                  : (value) => setState(() => _confirmPhone = value == true),
+              title: const Text('أؤكّد أن رقمي شخصي'),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 6),
+            ElevatedButton(
+              key: const Key('provider_review_submit'),
+              onPressed: _busy ? null : _submit,
+              child: const Text('نشر التقييم'),
+            ),
+            if (widget.onDelete != null) ...[
+              const SizedBox(height: 4),
+              TextButton(
+                key: const Key('provider_review_delete'),
+                onPressed: _busy ? null : _delete,
+                child: const Text('حذف تقييمي'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

@@ -17,6 +17,25 @@ String? _nullableString(dynamic value) {
   return text.isEmpty ? null : text;
 }
 
+/// متوسط تقييم قد يصل نصّاً من DECIMAL في MySQL — والغياب `null` لا صفراً،
+/// كي يفرّق العميل بين «لا تقييمات» و«تقييم صفري» (وهذا لا وجود له).
+double? _nullableDouble(dynamic value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse('${value ?? ''}');
+}
+
+/// توزيع النجوم `{1: n, …, 5: n}` — مفاتيح JSON نصّية، والعميل يقرؤها أرقاماً
+/// وبكل النجوم الخمسة حاضرة ولو بصفر.
+Map<int, int> _parseRatingDistribution(dynamic raw) {
+  final distribution = <int, int>{for (var star = 1; star <= 5; star += 1) star: 0};
+  if (raw is Map) {
+    for (var star = 1; star <= 5; star += 1) {
+      distribution[star] = _toInt(raw['$star']);
+    }
+  }
+  return distribution;
+}
+
 /// فئة خدمة — من GET /api/services/categories، بيانات وقت تشغيل لا قائمة ثابتة.
 class ServiceCategory {
   final int id;
@@ -116,6 +135,12 @@ class ServiceProvider {
   final bool hasPhone;
   final int viewsCount;
   final int favoritesCount;
+
+  /// ★ «المتوسط (العدد)» (تذكرة #186) — `ratingAvg` غيابها يعني «لا تقييمات»،
+  /// فالواجهة تُخفي النجمة بدل عرض صفر مضلّل. وكلاهما محسوب في الخادم على
+  /// `visible` وحدها.
+  final double? ratingAvg;
+  final int ratingCount;
   final bool isFavorite;
 
   const ServiceProvider({
@@ -135,6 +160,8 @@ class ServiceProvider {
     this.hasPhone = true,
     this.viewsCount = 0,
     this.favoritesCount = 0,
+    this.ratingAvg,
+    this.ratingCount = 0,
     this.isFavorite = false,
   });
 
@@ -176,6 +203,8 @@ class ServiceProvider {
       hasPhone: json['has_phone'] != false,
       viewsCount: _toInt(json['views_count']),
       favoritesCount: _toInt(json['favorites_count']),
+      ratingAvg: _nullableDouble(json['rating_avg']),
+      ratingCount: _toInt(json['rating_count']),
       isFavorite: json['is_favorite'] == true,
     );
   }
@@ -353,6 +382,14 @@ class ServiceProviderDetail {
   final int favoritesCount;
   final bool isFavorite;
 
+  /// تقييمات المزوّد (تذكرة #186): المتوسط والعدد والتوزيع، وتقييم صاحب
+  /// الطلب وحده في [myReview] — منه تعرف الشاشة أتعرض «حذف تقييمي» أم
+  /// «اكتب تقييمك»، والقائمة العامة لا تحمل هوية كاتب أي تقييم.
+  final double? ratingAvg;
+  final int ratingCount;
+  final Map<int, int> ratingDistribution;
+  final ProviderReview? myReview;
+
   const ServiceProviderDetail({
     required this.id,
     required this.name,
@@ -382,6 +419,10 @@ class ServiceProviderDetail {
     this.viewsCount = 0,
     this.favoritesCount = 0,
     this.isFavorite = false,
+    this.ratingAvg,
+    this.ratingCount = 0,
+    this.ratingDistribution = const {1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+    this.myReview,
   });
 
   /// الرقم اختياري: مزوّد بلا رقم يعيد الخادم `phone: null` فيصير هنا ''.
@@ -395,6 +436,7 @@ class ServiceProviderDetail {
     final rawOffers = json['offers'];
     final rawProducts = json['products'];
     final rawSimilar = json['similar'];
+    final rawMyReview = json['my_review'];
     return ServiceProviderDetail(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
@@ -449,8 +491,82 @@ class ServiceProviderDetail {
       viewsCount: _toInt(json['views_count']),
       favoritesCount: _toInt(json['favorites_count']),
       isFavorite: json['is_favorite'] == true,
+      ratingAvg: _nullableDouble(json['rating_avg']),
+      ratingCount: _toInt(json['rating_count']),
+      ratingDistribution: _parseRatingDistribution(json['rating_distribution']),
+      myReview: rawMyReview is Map<String, dynamic>
+          ? ProviderReview.fromJson(rawMyReview)
+          : null,
     );
   }
+}
+
+/// تقييم مزوّد واحد (تذكرة #186) — من `reviews` في المسار المرقّم أو من
+/// `my_review` في صفحة المزوّد. الاسم من `users.full_name` في الخادم، **ولا
+/// رقم هاتف ولا `user_id`** في أي شكل: التمييز «تقييمي» في `isMine`.
+class ProviderReview {
+  final int id;
+  final int rating;
+  final String? body;
+  final String userName;
+  final String? createdAt;
+  final bool isMine;
+  final bool canDelete;
+
+  /// `visible` أو `hidden` — الثانية تصل في `my_review` وحده: صاحبه يعرف أن
+  /// تقييمه أُخفي بعد بلاغات ولم يُحذف.
+  final String status;
+
+  const ProviderReview({
+    required this.id,
+    required this.rating,
+    this.body,
+    this.userName = '',
+    this.createdAt,
+    this.isMine = false,
+    this.canDelete = false,
+    this.status = 'visible',
+  });
+
+  factory ProviderReview.fromJson(Map<String, dynamic> json) => ProviderReview(
+        id: _toInt(json['id']),
+        rating: _toInt(json['rating']),
+        body: _nullableString(json['body']),
+        userName: '${json['user_name'] ?? ''}',
+        createdAt: _nullableString(json['created_at']),
+        isMine: json['is_mine'] == true,
+        canDelete: json['can_delete'] == true,
+        status: '${json['status'] ?? 'visible'}',
+      );
+}
+
+/// صفحة تقييمات مرقّمة — من `GET /api/services/providers/:id/reviews`.
+class ProviderReviewsPage {
+  final List<ProviderReview> reviews;
+  final ServiceProvidersPagination pagination;
+
+  const ProviderReviewsPage({required this.reviews, required this.pagination});
+}
+
+/// ملخّص التقييم الذي يعود مع كل كتابة أو حذف — المتوسط والعدد والتوزيع من
+/// الخادم وحده، فلا يعدّها العميل بنفسه.
+class ProviderReviewSummary {
+  final double? ratingAvg;
+  final int ratingCount;
+  final Map<int, int> ratingDistribution;
+
+  const ProviderReviewSummary({
+    this.ratingAvg,
+    this.ratingCount = 0,
+    this.ratingDistribution = const {1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+  });
+
+  factory ProviderReviewSummary.fromJson(Map<String, dynamic> json) =>
+      ProviderReviewSummary(
+        ratingAvg: _nullableDouble(json['rating_avg']),
+        ratingCount: _toInt(json['rating_count']),
+        ratingDistribution: _parseRatingDistribution(json['rating_distribution']),
+      );
 }
 
 /// ردّ PUT/DELETE `/api/services/providers/:id/favorite` — الحالة والعدّاد من

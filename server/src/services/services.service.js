@@ -5,6 +5,7 @@ const ApiError = require('../utils/ApiError');
 const adminScope = require('./adminScope.service');
 const townsService = require('./towns.service');
 const { absoluteMediaUrl, withAbsoluteMedia } = require('../utils/mediaUrl');
+const { PROVIDER_REVIEW_REPORT_THRESHOLD } = require('../constants');
 
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
@@ -248,13 +249,72 @@ async function favoriteProviderIds(userId, providerIds) {
 }
 
 /**
+ * متوسط التقييم وعدده لصفوف صفحة كاملة — **استعلام واحد لكل قائمة لا استعلام
+ * لكل بطاقة**، على نمط `favoriteProviderIds` نفسه (تذكرة #186). على `visible`
+ * وحدها: المقيَّد بحالة `hidden` بعد البلاغات لا يدخل المتوسط ولا العدد، لا
+ * يُحسب ثم يُطرح. و`ROUND` في SQL كي يصل الرقم الذي تعرضه الواجهات من مصدر
+ * واحد (4.5 لا 4.4999).
+ */
+async function providerRatings(providerIds) {
+  if (!providerIds.length) return new Map();
+  const placeholders = providerIds.map(() => '?').join(', ');
+  const rows = await db.query(
+    `SELECT provider_id, ROUND(AVG(rating), 1) AS rating_avg, COUNT(*) AS rating_count
+       FROM provider_reviews
+      WHERE status = 'visible' AND provider_id IN (${placeholders})
+      GROUP BY provider_id`,
+    providerIds
+  );
+  return new Map(rows.map(row => [row.provider_id, {
+    rating_avg: row.rating_avg === null ? null : Number(row.rating_avg),
+    rating_count: Number(row.rating_count) || 0
+  }]));
+}
+
+/** متوسط تقييم مزوّد واحد وعدده — يُستدعى بعد كل كتابة كي يعود الرقم الجديد. */
+async function providerRatingSummary(providerId) {
+  const row = await db.queryOne(
+    `SELECT ROUND(AVG(rating), 1) AS rating_avg, COUNT(*) AS rating_count
+       FROM provider_reviews
+      WHERE provider_id = ? AND status = 'visible'`,
+    [providerId]
+  );
+  return {
+    rating_avg: row.rating_avg === null ? null : Number(row.rating_avg),
+    rating_count: Number(row.rating_count) || 0
+  };
+}
+
+/**
+ * توزيع النجوم لمزوّد واحد: `{ 1: n, 2: n, 3: n, 4: n, 5: n }` بكل المفاتيح
+ * حاضرة — الصفر يعني «لا تقييم بهذه النجوم»، لا مفتاحاً غائباً. (في JSON
+ * تخرج المفاتيح نصّية، والعميلان يقرآنها بالأرقام نفسها.)
+ */
+async function providerRatingDistribution(providerId) {
+  const rows = await db.query(
+    `SELECT rating, COUNT(*) AS total
+       FROM provider_reviews
+      WHERE provider_id = ? AND status = 'visible'
+      GROUP BY rating`,
+    [providerId]
+  );
+  const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const row of rows) distribution[Number(row.rating)] = Number(row.total) || 0;
+  return distribution;
+}
+
+/**
  * صفّ بطاقة عامّة واحد: نفس مفاتيحه من القائمة ومن `similar` (تذكرة #184).
  * وعدّادا المشاهدة والمفضّلة (تذكرة #185) جزء من البطاقة نفسها: `views_count`
  * من عمود المزوّد، و`favorites_count` محسوب من `provider_favorites` في
  * الاستعلام — لا عمود مرآة. `is_favorite` تعني «هذا المستخدم حفظه»؛ وهي
  * `false` للزائر ولكل مزوّد لم يُحفظ، فلا مفتاح يغيب معناه.
+ *
+ * و`rating_avg`/`rating_count` (تذكرة #186) يصلان من `providerRatings` —
+ * استعلام واحد لكل صفحة — على `visible` وحدها. مزوّد بلا تقييمات: `null` و`0`
+ * صراحةً، لا `undefined` ولا مفتاح غائب.
  */
-function shapeProviderCard(row, towns, { isFavorite = false } = {}) {
+function shapeProviderCard(row, towns, { isFavorite = false, rating = null } = {}) {
   return withAbsoluteMedia({
     id: row.id,
     name: row.name,
@@ -272,6 +332,8 @@ function shapeProviderCard(row, towns, { isFavorite = false } = {}) {
     is_featured: Boolean(row.is_featured),
     views_count: Number(row.views_count) || 0,
     favorites_count: Number(row.favorites_count) || 0,
+    rating_avg: rating && rating.rating_avg !== null ? Number(rating.rating_avg) : null,
+    rating_count: rating ? Number(rating.rating_count) || 0 : 0,
     is_favorite: Boolean(isFavorite),
     towns: towns || []
   });
@@ -365,10 +427,15 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
     [...params, limitVal, offset]
   );
 
-  const townsMap = await townsForProviders(rows.map(row => row.id));
-  const favoriteIds = await favoriteProviderIds(userId, rows.map(row => row.id));
+  const providerIds = rows.map(row => row.id);
+  const [townsMap, favoriteIds, ratings] = await Promise.all([
+    townsForProviders(providerIds),
+    favoriteProviderIds(userId, providerIds),
+    providerRatings(providerIds)
+  ]);
   const providers = rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], {
-    isFavorite: favoriteIds.has(row.id)
+    isFavorite: favoriteIds.has(row.id),
+    rating: ratings.get(row.id) || null
   }));
 
   return {
@@ -455,8 +522,10 @@ async function providerProducts(providerId) {
 /**
  * حتى ستة «مزوّدون مشابهون» (تذكرة #184): نفس الفئة، ونفس محافظة المزوّد عبر
  * بلداته في `service_provider_towns` ← `towns.region_id`، معتمدون ونشِطون،
- * وليس المزوّد نفسه. الترتيب «مميّز» ثم الأحدث ثم الأكبر معرّفاً — ولا تقييمات
- * بعد، فالمميّز يحلّ محلّها. الشكل شكل بطاقة القائمة نفسها وبلا رقم فيها.
+ * وليس المزوّد نفسه. الترتيب «مميّز» ثم `rating_avg` ثم الأحدث ثم الأكبر
+ * معرّفاً (تذكرة #186): المميّز أولاً، وقبله لا شيء، وبعد المميّز يرجّح
+ * التقييم — وبلا تقييمات يُعامل صفراً فيترتّب بالأحدث. الشكل شكل بطاقة
+ * القائمة نفسها وبلا رقم فيها.
  */
 async function similarProviders(row, { userId = null } = {}) {
   const towns = (await townsForProviders([row.id]))[row.id] || [];
@@ -475,6 +544,12 @@ async function similarProviders(row, { userId = null } = {}) {
     `SELECT ${PROVIDER_CARD_SELECT}
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
+       LEFT JOIN (
+         SELECT provider_id, AVG(rating) AS rating_avg
+           FROM provider_reviews
+          WHERE status = 'visible'
+          GROUP BY provider_id
+       ) rv ON rv.provider_id = sp.id
       WHERE sp.id <> ?
         AND sp.category_id = ?
         AND sp.is_active = 1
@@ -482,15 +557,20 @@ async function similarProviders(row, { userId = null } = {}) {
         AND EXISTS (SELECT 1 FROM service_provider_towns spt
                       JOIN towns t ON t.name = spt.town
                      WHERE spt.provider_id = sp.id AND t.region_id IN (${regionPlaceholders}))
-      ORDER BY sp.is_featured DESC, sp.created_at DESC, sp.id DESC
+      ORDER BY sp.is_featured DESC, COALESCE(rv.rating_avg, 0) DESC, sp.created_at DESC, sp.id DESC
       LIMIT 6`,
     [row.id, row.category_id, ...regionIds]
   );
 
-  const townsMap = await townsForProviders(rows.map(candidate => candidate.id));
-  const favoriteIds = await favoriteProviderIds(userId, rows.map(candidate => candidate.id));
+  const providerIds = rows.map(candidate => candidate.id);
+  const [townsMap, favoriteIds, ratings] = await Promise.all([
+    townsForProviders(providerIds),
+    favoriteProviderIds(userId, providerIds),
+    providerRatings(providerIds)
+  ]);
   return rows.map(candidate => shapeProviderCard(candidate, townsMap[candidate.id] || [], {
-    isFavorite: favoriteIds.has(candidate.id)
+    isFavorite: favoriteIds.has(candidate.id),
+    rating: ratings.get(candidate.id) || null
   }));
 }
 
@@ -548,12 +628,15 @@ async function getPublicProviderById(id, { userId = null } = {}) {
   );
   if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
 
-  const [townsMap, gallery, offers, products, similar] = await Promise.all([
+  const [townsMap, gallery, offers, products, similar, rating, ratingDistribution, myReview] = await Promise.all([
     townsForProviders([id]),
     providerPhotos(id),
     providerOffers(id, { publicOnly: true }),
     providerProducts(id),
-    similarProviders(row, { userId })
+    similarProviders(row, { userId }),
+    providerRatingSummary(id),
+    providerRatingDistribution(id),
+    myProviderReview(id, userId)
   ]);
 
   // «هل حفظه هذا المستخدم؟» تُقرأ من الجدول لا من عمودٍ في الصفّ، و`userId`
@@ -578,6 +661,14 @@ async function getPublicProviderById(id, { userId = null } = {}) {
     is_featured: Boolean(row.is_featured),
     views_count: Number(row.views_count) || 0,
     favorites_count: Number(row.favorites_count) || 0,
+    // المتوسط والعدد والتوزيع (تذكرة #186) — على `visible` وحدها، والزائر
+    // يستلمها كما يستلم المسجَّل: التقييمات عامة بطبيعتها.
+    rating_avg: rating.rating_avg,
+    rating_count: rating.rating_count,
+    rating_distribution: ratingDistribution,
+    // تقييم صاحب الطلب وحده (لا تقييمات الآخرين): يصل من `optionalAuthenticate`
+    // كي تعرف الواجهة أتعرض «حذف تقييمي» أم «اكتب تقييمك»، والزائر يستلم null.
+    my_review: myReview,
     is_favorite: favoriteIds.has(id),
     price: row.price ?? null,
     price_type: row.price_type || 'estimated',
@@ -709,8 +800,233 @@ async function listFavoriteProviders(userId) {
     [userId]
   );
 
-  const townsMap = await townsForProviders(rows.map(row => row.id));
-  return rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], { isFavorite: true }));
+  const providerIds = rows.map(row => row.id);
+  const [townsMap, ratings] = await Promise.all([
+    townsForProviders(providerIds),
+    providerRatings(providerIds)
+  ]);
+  return rows.map(row => shapeProviderCard(row, townsMap[row.id] || [], {
+    isFavorite: true,
+    rating: ratings.get(row.id) || null
+  }));
+}
+
+// ======================================================================
+// تقييمات المزوّد (تذكرة #186)
+// ======================================================================
+// كل SQL هنا وحده. `rating` يُتحقَّق منه في الخدمة لا في المسار (المسار ينقل
+// الرقم كما وصل)، و`confirm_phone` إقرار صاحبه أنه رقم شخصي (ADR-0014) —
+// يُنشَر التقييم فوراً بلا طابور مراجعة مسبق، والإبلاغ وحده يخفيه بعد العتبة.
+
+const REVIEW_BODY_MAX = 1000;
+
+/**
+ * شكل تقييم واحد كما يخرج للعميل: الاسم من `users.full_name` لا من نصّ يرسله
+ * العميل، **ولا رقم هاتف ولا `user_id`** — التمييز الوحيد «تقييمي/غير تقييمي»
+ * في `is_mine`/`can_delete`. والزائر يستلم `false` لا مفتاحاً غائباً.
+ */
+function shapeReviewRow(row, userId) {
+  const isMine = userId != null && Number(row.user_id) === Number(userId);
+  return {
+    id: row.id,
+    rating: Number(row.rating),
+    body: row.body ?? null,
+    user_name: row.user_name,
+    // `status` يخرج أيضاً في القائمة (`visible` وحدها هناك)، والأهم في ردّ
+    // الكتابة: صاحب تقييم أخفَته البلاغات يرى أن تعديله لم يُعِد نشره.
+    status: row.status || 'visible',
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? null,
+    is_mine: isMine,
+    can_delete: isMine
+  };
+}
+
+/**
+ * تقييم صاحب الطلب وحده للمزوّد — يُلحق بصفحة المزوّد العامة (المسار
+ * `optionalAuthenticate`)، فيعرف المسجَّل أيعرض «حذف تقييمي» أم «اكتب تقييمك».
+ * التقييم المخفي بعد بلاغات يصل بحالته أيضاً: صاحبه يعرف أنه لم يُحذف.
+ */
+async function myProviderReview(providerId, userId) {
+  if (!userId) return null;
+  const row = await db.queryOne(
+    `SELECT id, rating, body, status, created_at, updated_at
+       FROM provider_reviews
+      WHERE provider_id = ? AND user_id = ?`,
+    [providerId, userId]
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    rating: Number(row.rating),
+    body: row.body ?? null,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? null
+  };
+}
+
+/**
+ * نشر تقييم أو تعديله — **upsert على `(provider_id, user_id)`**: المفتاح الفريد
+ * هو ما يجعل التقييم الثاني يعدّل الأول ولا يضيف صفّاً ثانياً. ولا `status` في
+ * جملة التحديث عمداً: تعديل صاحبه لتقييم أخفَته البلاغات لا يُحييه من جديد،
+ * وإلا صار التعديل باباً خلفياً على قرار الإخفاء.
+ *
+ * والبوّابة ثلاثة شروط بالترتيب: مزوّد عام معتمد نشِط (وإلا 404)، و`rating`
+ * عدد صحيح 1..5 (وإلا 400)، و`confirmPhone === true` حصراً (وإلا 400) —
+ * و`phone_confirmed_at` يكتبه الخادم `NOW()` ولا يقبل تاريخاً من العميل.
+ */
+async function upsertProviderReview(userId, providerId, { rating, body, confirmPhone } = {}) {
+  await assertPublicProvider(providerId);
+
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw ApiError.badRequest('التقييم يجب أن يكون عدداً صحيحاً من نجمة إلى خمس نجوم');
+  }
+  if (confirmPhone !== true) {
+    throw ApiError.badRequest('أكّد أن رقمك الشخصي صحيح قبل نشر التقييم');
+  }
+
+  const text = typeof body === 'string' && body.trim() ? body.trim().slice(0, REVIEW_BODY_MAX) : null;
+
+  await db.execute(
+    `INSERT INTO provider_reviews (provider_id, user_id, rating, body, phone_confirmed_at)
+     VALUES (?, ?, ?, ?, NOW())
+     ON DUPLICATE KEY UPDATE rating = VALUES(rating), body = VALUES(body),
+       phone_confirmed_at = VALUES(phone_confirmed_at), updated_at = NOW()`,
+    [providerId, userId, rating, text]
+  );
+
+  const row = await db.queryOne(
+    `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
+            u.full_name AS user_name
+       FROM provider_reviews r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.provider_id = ? AND r.user_id = ?`,
+    [providerId, userId]
+  );
+  return {
+    review: shapeReviewRow(row, userId),
+    ...(await providerRatingSummary(providerId)),
+    rating_distribution: await providerRatingDistribution(providerId)
+  };
+}
+
+/**
+ * حذف تقييم صاحبه وحده (`WHERE provider_id = ? AND user_id = ?`) — والحذف
+ * المتكرّر بلا خطأ (idempotent)، فلا نافذة خطأ على من ضغط مرتين.
+ *
+ * **وبلا بوّابة `assertPublicProvider` عمداً:** سحب المرء كلامه حقٌّ لا يسقط
+ * لأن المزوّد عُطِّل أو أُعيد إلى الطابور؛ البوّابة هنا كانت تُبقي تقييماً
+ * يحمل `full_name` صاحبه بلا طريق لحذفه. وحذف مزوّد غير معروف يعيد
+ * `deleted: false` لا 404 — الوجه الآخر لكون العملية idempotent.
+ */
+async function deleteProviderReview(userId, providerId) {
+  const { affectedRows } = await db.execute(
+    'DELETE FROM provider_reviews WHERE provider_id = ? AND user_id = ?',
+    [providerId, userId]
+  );
+  // لا ملخّص حين لا صفّ حُذف: كان الملخّص يُحسب لأي معرّف مزوّد ولو كان معلّقاً
+  // أو غير موجود، فيصير الردّ نافذة على متوسّطات ما لا يعرضه أي مسار عام.
+  if (!affectedRows) return { deleted: false };
+  return {
+    deleted: true,
+    ...(await providerRatingSummary(providerId)),
+    rating_distribution: await providerRatingDistribution(providerId)
+  };
+}
+
+/**
+ * صفحة تقييمات المزوّد: `visible` وحدها، الأحدث أولاً، والاسم من الحساب.
+ * الترقيم بـ`safePage`/`safeLimit` القائمتين — لا سقف يكتبه العميل.
+ */
+async function listProviderReviews(providerId, { page = 1, limit = DEFAULT_PAGE_SIZE, userId = null } = {}) {
+  await assertPublicProvider(providerId);
+  const pageVal = safePage(page);
+  const limitVal = safeLimit(limit);
+
+  const { total } = await db.queryOne(
+    "SELECT COUNT(*) AS total FROM provider_reviews WHERE provider_id = ? AND status = 'visible'",
+    [providerId]
+  );
+  const rows = await db.query(
+    `SELECT r.id, r.user_id, r.rating, r.body, r.status, r.created_at, r.updated_at,
+            u.full_name AS user_name
+       FROM provider_reviews r
+       JOIN users u ON u.id = r.user_id
+      WHERE r.provider_id = ? AND r.status = 'visible'
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT ? OFFSET ?`,
+    [providerId, limitVal, (pageVal - 1) * limitVal]
+  );
+
+  return {
+    reviews: rows.map(row => shapeReviewRow(row, userId)),
+    pagination: {
+      page: pageVal,
+      limit: limitVal,
+      total: Number(total),
+      totalPages: Math.ceil(Number(total) / limitVal)
+    }
+  };
+}
+
+/**
+ * بلاغ واحد لكل مستخدم: المفتاح الفريد في `provider_review_reports` هو ما
+ * يمنع مبلِّغاً واحداً من رفع العدّاد وحده (`INSERT IGNORE` لا خطأ على التكرار).
+ * والعدّ يُقرأ من الجدول نفسه لا من عمود مرآة — على نمط تبريكات #20 وبلاغات
+ * صور ADR-0009، لكن **بالعدد الكامل** لا بشرط `status = 'open'`: لا عمود حالة
+ * في هذا الجدول، والحذف المتكرّر للصفّ نفسه لا يحدث.
+ * عند `PROVIDER_REVIEW_REPORT_THRESHOLD` يصير `status = 'hidden'` فيخرج من
+ * القائمة ومن المتوسط والعدد معاً.
+ */
+async function reportProviderReview(userId, providerId, reviewId) {
+  await assertPublicProvider(providerId);
+
+  return db.transaction(async connection => {
+    const [rows] = await connection.execute(
+      'SELECT id, status FROM provider_reviews WHERE id = ? AND provider_id = ?',
+      [reviewId, providerId]
+    );
+    if (!rows.length || rows[0].status !== 'visible') throw ApiError.notFound('التقييم غير موجود');
+
+    await connection.execute(
+      'INSERT IGNORE INTO provider_review_reports (review_id, user_id) VALUES (?, ?)',
+      [reviewId, userId]
+    );
+
+    const [[countRow]] = await connection.execute(
+      'SELECT COUNT(*) AS total FROM provider_review_reports WHERE review_id = ?',
+      [reviewId]
+    );
+    const reportsCount = Number(countRow.total) || 0;
+
+    let status = rows[0].status;
+    if (reportsCount >= PROVIDER_REVIEW_REPORT_THRESHOLD) {
+      await connection.execute("UPDATE provider_reviews SET status = 'hidden' WHERE id = ?", [reviewId]);
+      status = 'hidden';
+    }
+
+    return { reports_count: reportsCount, status };
+  });
+}
+
+/**
+ * حذف تقييم إدارياً — **النطاق داخل الاستعلام** عبر `providerScopeClause`
+ * القائمة (بلدات المزوّد)، وخارج النطاق أو غير الموجود ← 404 لا 403، فلا
+ * يتأكّد وجود تقييم لأدمن لا يراه.
+ */
+async function deleteProviderReviewAsAdmin(user, reviewId) {
+  const { clause: scopeClause, params: scopeParams } = await providerScopeClause(user);
+  // الحذف نفسه هو المحصور — لا قراءة ثم حذف بمعرّف مجرَّد: بين الجملتين قد
+  // تتغيّر بلدات المزوّد أو نطاق الأدمن، فيُحذف صفّ لم يعد يراه.
+  const { affectedRows } = await db.execute(
+    `DELETE r
+       FROM provider_reviews r
+       JOIN service_providers sp ON sp.id = r.provider_id
+      WHERE r.id = ?${scopeClause}`,
+    [reviewId, ...scopeParams]
+  );
+  if (!affectedRows) throw ApiError.notFound('التقييم غير موجود');
 }
 
 // ======================================================================
@@ -1164,6 +1480,12 @@ module.exports = {
   addProviderFavorite,
   removeProviderFavorite,
   listFavoriteProviders,
+
+  upsertProviderReview,
+  deleteProviderReview,
+  listProviderReviews,
+  reportProviderReview,
+  deleteProviderReviewAsAdmin,
 
   assertTownsWithinScope,
   assertProviderFlagsAllowed,

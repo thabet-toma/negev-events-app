@@ -288,6 +288,16 @@ const PHOTO_REPORT_REASONS = ['privacy', 'inappropriate', 'wrong_event', 'other'
 const PHOTO_REPORT_HIDE_THRESHOLD = 3;
 
 /**
+ * Distinct reporters a provider review needs before it hides itself — same
+ * shape and same reasoning as CONGRATULATION_REPORT_THRESHOLD and
+ * PHOTO_REPORT_HIDE_THRESHOLD: low enough that a small town's genuine reaction
+ * to a real abuse clears it fast, high enough that one annoyed person cannot
+ * silence someone else's review alone. A hidden review leaves the average and
+ * the count as well as the list.
+ */
+const PROVIDER_REVIEW_REPORT_THRESHOLD = 3;
+
+/**
  * The link platforms the story studio recognises. `website` is the fallback
  * for any other valid http(s) link; a value outside this list is rejected by
  * stories.routes.js, never stored.
@@ -403,6 +413,7 @@ module.exports = {
   PHOTO_IMPORT_HOSTS,
   PHOTO_REPORT_REASONS,
   PHOTO_REPORT_HIDE_THRESHOLD,
+  PROVIDER_REVIEW_REPORT_THRESHOLD,
   STORY_LINK_PLATFORMS,
   STORY_THUMB_HOSTS,
   STORY_PLACEMENTS,
