@@ -19814,6 +19814,532 @@ async function run() {
   }
   await db.execute('DELETE FROM users WHERE id = ?', [guestRsvpOwner.id]);
 
+  console.log('\nصفحة المزوّد الغنية (#184): العروض والمعرض والمنتجات والمشابهون وواتساب والشارتان');
+
+  // ---- إعداد القسم -------------------------------------------------
+  // فئتان ومحافظة ثانية: كل تأكيد يحتاج بديلاً يمكن أن يظهر لو غاب شرطُه —
+  // مزوّد آخر الفئة، وآخر المحافظة، ومعلّق، ومزوّد في بلدة خارج نطاق أدمن
+  // البلدات — فلا يمرّ تأكيد «لا يظهر» لغياب contenders أصلاً.
+  let pageCategoryId = 0;
+  let pageOtherCategoryId = 0;
+  let pageCategoryName = '';
+  let pageOtherRegionId = 0;
+  const pageOtherRegionTown = `بلدة صفحة المزوّد ${Date.now()}`;
+  const pageTargetPhone = '0501234567';
+
+  const createPageProvider = async (name, extra = {}) => {
+    const created = await api('POST', '/api/admin/service-providers', {
+      token: superAdminToken,
+      body: { category_id: pageCategoryId, name, towns: [scopedTown], ...extra }
+    });
+    assert.strictEqual(created.status, 201, created.body && created.body.message);
+    return created.body.providerId;
+  };
+
+  let pageTargetId = 0;
+  let pageFeaturedId = 0;
+  let pageOldId = 0;
+  let pagePendingId = 0;
+  let pageExtraIds = [];
+
+  await test('Setup (#184): فئتان ومحافظة ثانية، ومزوّدون في الفئة نفسها ومعتمدون في بلدة الأدمن', async () => {
+    pageCategoryName = `فئة صفحة المزوّد ${Date.now()}`;
+    const category = await api('POST', '/api/admin/service-categories', {
+      token: superAdminToken,
+      body: { name: pageCategoryName, icon: '🎪', color: '#8a6109' }
+    });
+    assert.strictEqual(category.status, 201, category.body && category.body.message);
+    pageCategoryId = category.body.category.id;
+
+    const otherCategory = await api('POST', '/api/admin/service-categories', {
+      token: superAdminToken,
+      body: { name: `فئة صفحة المزوّد الثانية ${Date.now()}`, icon: '🍽️', color: '#0F766E' }
+    });
+    assert.strictEqual(otherCategory.status, 201);
+    pageOtherCategoryId = otherCategory.body.category.id;
+
+    const region = await api('POST', '/api/admin/regions', {
+      token: superAdminToken,
+      body: { name: `محافظة صفحة المزوّد ${Date.now()}`, latitude: 32.1, longitude: 35.1 }
+    });
+    assert.strictEqual(region.status, 201, region.body && region.body.message);
+    pageOtherRegionId = region.body.region.id;
+
+    const town = await api('POST', '/api/admin/towns', {
+      token: superAdminToken,
+      body: { region_id: pageOtherRegionId, name: pageOtherRegionTown, latitude: 32.1, longitude: 35.1 }
+    });
+    assert.strictEqual(town.status, 201, town.body && town.body.message);
+
+    // الترتيب مقصود: الأقدم أولاً ثم المميّز ثم الهدف — فلا يفسّر ترتيبُ
+    // الإنشاء ترتيبَ `similar` بدل شرطِه.
+    pageOldId = await createPageProvider('مزوّد مشابه قديم');
+    pageFeaturedId = await createPageProvider('مزوّد مشابه مميّز');
+    pageTargetId = await createPageProvider('مزوّد صفحة الاختبار', { phone: pageTargetPhone });
+    pagePendingId = await createPageProvider('مزوّد مشابه معلّق');
+
+    const pending = await api('PATCH', `/api/admin/service-providers/${pagePendingId}/status`, {
+      token: superAdminToken,
+      body: { status: 'pending' }
+    });
+    assert.strictEqual(pending.status, 200);
+
+    const featured = await api('PATCH', `/api/admin/service-providers/${pageFeaturedId}`, {
+      token: superAdminToken,
+      body: { is_featured: true }
+    });
+    assert.strictEqual(featured.status, 200);
+    assert.strictEqual(featured.body.provider.is_featured, true, 'الشارة تُكتب من السوبر أدمن');
+  });
+
+  let pageNoPhoneId = 0;
+  let pageFarProviderId = 0;
+  let pageOtherRegionProviderId = 0;
+
+  // أدمن بلدات **حيّ** لهذا القسم: `scopedAdminToken` (‏سطر 7143) يخصّ مستخدماً
+  // يحذفه السويت نفسه في «Shareable event page» (`DELETE FROM users` قرب سطر
+  // 8230)، فـ`admin_towns` الخاصة به تسقط بـ`ON DELETE CASCADE` ويصبح نطاقه
+  // فارغاً قبل هذا القسم بآلاف الحالات: `providerScopeClause` تعطي `AND 1 = 0`
+  // فيردّ كل مسار إداري 404 — لا 403 للأعلام. (والمستخدم 2574 الذي يبدو حيّاً
+  // في القاعدة صفّ قديم من تشغيلة سابقة، لا أدمن هذه التشغيلة.) فالقسم ينشئ
+  // أدمنه: بلدة واحدة، «رهط»، فالتأكيدان يحرسان ما يسمّيانه.
+  let pageScopedAdminId = 0;
+  let pageScopedAdminToken = '';
+
+  await test('Setup (#184): أدمن بلدات حيّ على «رهط» — نطاق حقيقي لتأكيدَي 403 و404', async () => {
+    const phone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, clan_town, role) VALUES (?, ?, ?, ?, 'admin')`,
+      [phone, 'أدمن بلدات صفحة المزوّد', bcrypt.hashSync('1234', config.bcryptRounds), scopedTown]
+    );
+    pageScopedAdminId = insertId;
+    pageScopedAdminToken = signToken(
+      { id: insertId, phone_number: phone, full_name: 'أدمن بلدات صفحة المزوّد', role: 'admin' },
+      '1h'
+    );
+
+    const assigned = await api('PUT', `/api/admin/admins/${insertId}/towns`, {
+      token: superAdminToken,
+      body: { towns: [scopedTown] }
+    });
+    assert.strictEqual(assigned.status, 200, assigned.body && assigned.body.message);
+
+    const rows = await db.query('SELECT town FROM admin_towns WHERE user_id = ?', [insertId]);
+    assert.deepStrictEqual(rows.map(row => row.town), [scopedTown], 'نطاقه بلدة واحدة: رهط');
+  });
+
+  await test('Setup (#184): مزوّد بلا رقم، ومزوّد في بلدة خارج نطاق أدمن البلدات، ومزوّد في محافظة أخرى', async () => {
+    pageNoPhoneId = await createPageProvider('مزوّد بلا رقم للصفحة', { category_id: pageOtherCategoryId });
+    pageFarProviderId = await createPageProvider('مزوّد خارج بلدات الأدمن', {
+      category_id: pageOtherCategoryId,
+      towns: [outOfScopeTown]
+    });
+    pageOtherRegionProviderId = await createPageProvider('مزوّد محافظة أخرى', { towns: [pageOtherRegionTown] });
+  });
+
+  // ---- القراءة العامة ----------------------------------------------
+
+  await test('similar: بلا المزوّد نفسه، وبلا غير المعتمد، وبلا فئة أخرى وبلا محافظة أخرى، وبالترتيب «مميّز ثم الأحدث» وحتى ستة', async () => {
+    for (let index = 1; index <= 6; index += 1) {
+      pageExtraIds.push(await createPageProvider(`مزوّد مشابه إضافي ${index}`));
+    }
+
+    const { status, body } = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.strictEqual(status, 200, body && body.message);
+    const similar = body.provider.similar || [];
+    const ids = similar.map(row => row.id);
+
+    assert.strictEqual(ids.length, 6, `«مزوّدون مشابهون» حتى ستة، وصل: ${ids.length}`);
+    assert.ok(!ids.includes(pageTargetId), 'المزوّد نفسه لا يظهر في مشابهيه');
+    assert.ok(!ids.includes(pagePendingId), 'المزوّد غير المعتمد لا يظهر');
+    assert.ok(!ids.includes(pageNoPhoneId), 'مزوّد فئة أخرى لا يظهر');
+    assert.ok(!ids.includes(pageOtherRegionProviderId), 'مزوّد محافظة أخرى لا يظهر — ولا حتى في البلدات نفسها');
+    assert.strictEqual(ids[0], pageFeaturedId, '«مميّز» أولاً حتى لو كان الأقدم');
+
+    // كل ما بعد المميّز مرتَّب بالأحدث إنشاءً ثم الأكبر معرّفاً — والأقدم
+    // (`pageOldId`) يسقط بسقف الستة، وإلا لظهرت الحادثة نفسها فخّاً.
+    const expected = [pageFeaturedId, ...[...pageExtraIds].reverse()].slice(0, 6);
+    assert.deepStrictEqual(ids, expected, `ترتيب غير متوقَّع: ${ids.join('، ')}`);
+
+    for (const row of similar) {
+      assert.ok(!('phone' in row), 'بطاقة «مشابه» لا تحمل مفتاح رقم');
+      assert.strictEqual(typeof row.has_phone, 'boolean', 'وتحمل has_phone كما في بطاقة القائمة');
+      assert.ok('is_verified' in row && 'is_featured' in row, 'وتحمل الشارتين');
+    }
+  });
+
+  await test('القائمة: «مميّز» أولاً داخل الفئة، والشارتان تخرجان في كل صفّ، ولا رقم في أي صفّ', async () => {
+    const { status, body } = await api('GET', `/api/services/providers?category_id=${pageCategoryId}&limit=100`);
+    assert.strictEqual(status, 200);
+    const rows = body.providers || [];
+    assert.ok(rows.length >= 3, `متوقَّع صفوف الفئة، وصل: ${rows.length}`);
+
+    const featuredIndex = rows.findIndex(row => row.id === pageFeaturedId);
+    const targetIndex = rows.findIndex(row => row.id === pageTargetId);
+    assert.ok(featuredIndex === 0, `«مميّز» يتصدّر الفئة، موضعه: ${featuredIndex}`);
+    assert.ok(targetIndex > featuredIndex, 'وغير المميّز بعده');
+    assert.ok(!rows.some(row => row.id === pagePendingId), 'المعلّق لا يدخل القائمة العامة');
+
+    for (const row of rows) {
+      assert.ok(!('phone' in row), 'لا مفتاح رقم في أي صفّ من القائمة');
+      assert.strictEqual(typeof row.has_phone, 'boolean', 'وhas_phone وحده يعرف بوجوده');
+      assert.ok('is_verified' in row && 'is_featured' in row, 'الشارتان في كل صفّ');
+    }
+    assert.strictEqual(rows.find(row => row.id === pageTargetId).has_phone, true);
+    assert.strictEqual(rows.find(row => row.id === pageFeaturedId).has_phone, false);
+  });
+
+  // ---- واتساب -------------------------------------------------------
+
+  await test('واتساب: رابط wa.me ينبني في الخادم برقم دولي ورسالة عربية تذكر «أعراسنا» والفئة، والاستجابة بلا رقم', async () => {
+    const { status, body } = await api('GET', `/api/services/providers/${pageTargetId}/whatsapp`);
+    assert.strictEqual(status, 200, body && body.message);
+    assert.deepStrictEqual(Object.keys(body).sort(), ['success', 'url'], 'لا مفتاح آخر مع الرابط — لا رقم منفصل');
+    assert.ok(body.url.startsWith('https://wa.me/972501234567'), `الرقم بصيغته الدولية، وصل: ${body.url}`);
+
+    // `searchParams.get` يفكّ الترميز بنفسه — لا فكّ ثانٍ على نصّ عربي.
+    const message = new URL(body.url).searchParams.get('text') || '';
+    assert.ok(message.includes('أعراسنا'), `الرسالة تذكر «أعراسنا»، وصلت: ${message}`);
+    assert.ok(message.includes(pageCategoryName), `الرسالة تسمّي الفئة، وصلت: ${message}`);
+    assert.ok(message.includes('مزوّد صفحة الاختبار'), 'وتسمّي المزوّد');
+  });
+
+  await test('واتساب: مزوّد بلا رقم ⇒ 404، ومزوّد غير معتمد ⇒ 404، وغير الموجود ⇒ 404', async () => {
+    const withoutPhone = await api('GET', `/api/services/providers/${pageNoPhoneId}/whatsapp`);
+    assert.strictEqual(withoutPhone.status, 404);
+    assert.ok(String(withoutPhone.body.message || '').includes('رقم'), 'رسالة عربية تشرح السبب');
+
+    const pending = await api('GET', `/api/services/providers/${pagePendingId}/whatsapp`);
+    assert.strictEqual(pending.status, 404, 'غير المعتمد لا يُعطى رابط تواصل');
+
+    const missing = await api('GET', '/api/services/providers/99999999/whatsapp');
+    assert.strictEqual(missing.status, 404);
+  });
+
+  // ---- الساعات ------------------------------------------------------
+
+  await test('الساعات: مصفوفة 0..6 تُخزَّن كما أُرسلت وتعود في التفصيل العام، وأي شكل آخر 400 عربي', async () => {
+    const wrongFormat = await api('PATCH', `/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      body: { hours: [{ day: 0, from: '9:00', to: '18:00' }] }
+    });
+    assert.strictEqual(wrongFormat.status, 400);
+    assert.ok(String(wrongFormat.body.message).includes('HH:MM'), `رسالة صيغة الوقت، وصلت: ${wrongFormat.body.message}`);
+
+    const wrongDay = await api('PATCH', `/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      body: { hours: [{ day: 9, closed: true }] }
+    });
+    assert.strictEqual(wrongDay.status, 400, 'يوم خارج 0..6 مرفوض');
+
+    const duplicatedDay = await api('PATCH', `/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      body: { hours: [{ day: 1, closed: true }, { day: 1, closed: true }] }
+    });
+    assert.strictEqual(duplicatedDay.status, 400, 'اليوم المكرّر مرفوض');
+
+    const saved = await api('PATCH', `/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      body: {
+        hours: [
+          { day: 0, closed: false, from: '09:00', to: '18:00' },
+          { day: 1, closed: true }
+        ]
+      }
+    });
+    assert.strictEqual(saved.status, 200, saved.body && saved.body.message);
+    assert.deepStrictEqual(
+      saved.body.provider.hours,
+      [{ day: 0, closed: false, from: '09:00', to: '18:00' }, { day: 1, closed: true }],
+      'الشكل المخزَّن هو نفسه المرسل، بلا تخمين'
+    );
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.deepStrictEqual(detail.body.provider.hours, saved.body.provider.hours, 'والتفصيل العام يقرأه كما هو');
+  });
+
+  // ---- العروض -------------------------------------------------------
+
+  let pageExpiredOfferId = 0;
+  let pageInactiveOfferId = 0;
+  let pageNearOfferId = 0;
+  let pageFarOfferId = 0;
+  let pageOpenOfferId = 0;
+
+  await test('العروض: المنتهي والمطفأ لا يخرجان في التفصيل العام، والسارية تخرج الأقرب انتهاءً أولاً ثم بلا نهاية', async () => {
+    const createOffer = async body => {
+      const created = await api('POST', `/api/admin/service-providers/${pageTargetId}/offers`, {
+        token: superAdminToken,
+        body
+      });
+      assert.strictEqual(created.status, 201, created.body && created.body.message);
+      return created.body.offerId;
+    };
+
+    pageExpiredOfferId = await createOffer({ title: 'عرض منتهٍ', ends_at: '2020-01-01 10:00' });
+    pageInactiveOfferId = await createOffer({ title: 'عرض مطفأ', is_active: false });
+    pageFarOfferId = await createOffer({ title: 'عرض بعيد', ends_at: '2027-12-31 23:00' });
+    pageNearOfferId = await createOffer({ title: 'عرض قريب', ends_at: '2027-06-30 20:00', price: 350 });
+    pageOpenOfferId = await createOffer({ title: 'عرض بلا تاريخ' });
+
+    const { body } = await api('GET', `/api/services/providers/${pageTargetId}`);
+    const offers = body.provider.offers || [];
+    const ids = offers.map(offer => offer.id);
+
+    assert.deepStrictEqual(
+      ids,
+      [pageNearOfferId, pageFarOfferId, pageOpenOfferId],
+      `السارية وحدها بالأقرب انتهاءً أولاً، وصلت: ${ids.join('، ')}`
+    );
+    assert.ok(!ids.includes(pageExpiredOfferId), 'العرض المنتهي لا يخرج');
+    assert.ok(!ids.includes(pageInactiveOfferId), 'العرض المطفأ لا يخرج');
+    assert.strictEqual(offers[0].price, 350, 'السعر رقم لا نصّ');
+    assert.strictEqual(offers[0].ends_at, '2027-06-30 20:00', 'تاريخ الانتهاء بصيغته المخزَّنة');
+
+    const adminView = await api('GET', `/api/admin/service-providers/${pageTargetId}`, { token: superAdminToken });
+    assert.strictEqual(adminView.status, 200);
+    const adminOfferIds = adminView.body.provider.offers.map(offer => offer.id);
+    assert.ok(adminOfferIds.includes(pageExpiredOfferId), 'اللوحة ترى المنتهي لتُديره');
+    assert.ok(adminOfferIds.includes(pageInactiveOfferId), 'واللوحة ترى المطفأ');
+    assert.ok(Array.isArray(adminView.body.provider.gallery), 'وتعود المجموعات الثلاث مع التفصيل الإداري');
+    assert.ok(Array.isArray(adminView.body.provider.products), 'والمنتجات');
+  });
+
+  await test('العروض إدارةً: PATCH يطفئ عرضاً فيسقط من العام، وDELETE يحذفه من اللوحة', async () => {
+    const hidden = await api('PATCH', `/api/admin/service-providers/${pageTargetId}/offers/${pageFarOfferId}`, {
+      token: superAdminToken,
+      body: { is_active: false }
+    });
+    assert.strictEqual(hidden.status, 200, hidden.body && hidden.body.message);
+    assert.ok(!hidden.body.provider.offers.some(offer => offer.id === pageFarOfferId && offer.is_active), 'العرض صار مطفأً');
+
+    const publicView = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.ok(
+      !publicView.body.provider.offers.some(offer => offer.id === pageFarOfferId),
+      'المطفأ يسقط من القراءة العامة فوراً'
+    );
+
+    const removed = await api('DELETE', `/api/admin/service-providers/${pageTargetId}/offers/${pageOpenOfferId}`, {
+      token: superAdminToken
+    });
+    assert.strictEqual(removed.status, 200);
+    const adminView = await api('GET', `/api/admin/service-providers/${pageTargetId}`, { token: superAdminToken });
+    assert.ok(!adminView.body.provider.offers.some(offer => offer.id === pageOpenOfferId), 'المحذوف لم يبقَ');
+
+    const missing = await api('PATCH', `/api/admin/service-providers/${pageTargetId}/offers/99999999`, {
+      token: superAdminToken,
+      body: { title: 'عرض غير موجود' }
+    });
+    assert.strictEqual(missing.status, 404, 'عرض لا يخصّ هذا المزوّد لا يُعدّل');
+  });
+
+  // ---- المعرض والشعار والغلاف --------------------------------------
+
+  const pageUploadFiles = [];
+  let pagePhotoId = 0;
+
+  await test('المعرض: رفع صورة من اللوحة يظهر في المعرض العام برابط مطلق، والحذف يزيلها من الصفّ', async () => {
+    const uploaded = await apiUpload(`/api/admin/service-providers/${pageTargetId}/photos`, {
+      token: superAdminToken,
+      fields: { caption: 'صورة قاعة' },
+      files: [{ field: 'photo', name: 'gallery.png', type: 'image/png', buffer: TINY_PNG }]
+    });
+    assert.strictEqual(uploaded.status, 201, uploaded.body && uploaded.body.message);
+    pagePhotoId = uploaded.body.photo.id;
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    const photo = (detail.body.provider.gallery || []).find(row => row.id === pagePhotoId);
+    assert.ok(photo, 'الصورة في المعرض العام');
+    assert.strictEqual(photo.caption, 'صورة قاعة');
+    assert.ok(/^https?:\/\//.test(photo.image_url), `الوسيط يخرج مطلقاً (ADR-0002)، وصل: ${photo.image_url}`);
+    if (photo.image_url.includes('/uploads/')) {
+      pageUploadFiles.push(path.join(config.uploads.dir, path.basename(photo.image_url)));
+    }
+
+    const removed = await api('DELETE', `/api/admin/service-providers/${pageTargetId}/photos/${pagePhotoId}`, {
+      token: superAdminToken
+    });
+    assert.strictEqual(removed.status, 200, removed.body && removed.body.message);
+
+    const after = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.ok(!(after.body.provider.gallery || []).some(row => row.id === pagePhotoId), 'المحذوفة لم تبقَ في المعرض');
+  });
+
+  await test('المعرض: صورة بلا ملف ⇒ 400 عربي، وصورة لا تخصّ المزوّد ⇒ 404', async () => {
+    const withoutFile = await apiUpload(`/api/admin/service-providers/${pageTargetId}/photos`, {
+      token: superAdminToken,
+      fields: { caption: 'بلا صورة' }
+    });
+    assert.strictEqual(withoutFile.status, 400, 'الرفع يحتاج ملفاً');
+    assert.ok(String(withoutFile.body.message || '').includes('صورة'), 'رسالة عربية تطلب صورة');
+
+    const stranger = await api('DELETE', `/api/admin/service-providers/${pageTargetId}/photos/99999999`, {
+      token: superAdminToken
+    });
+    assert.strictEqual(stranger.status, 404);
+  });
+
+  await test('الشعار والغلاف: ملفّان في PATCH واحد يعيدان رابطين مطلقين، وتعذّر Cloudinary لا يُسقط الطلب', async () => {
+    const uploaded = await apiUpload(`/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      method: 'PATCH',
+      fields: { description: 'مزوّد له شعار وغلاف' },
+      files: [
+        { field: 'logo', name: 'logo.png', type: 'image/png', buffer: TINY_PNG },
+        { field: 'cover', name: 'cover.png', type: 'image/png', buffer: TINY_PNG }
+      ]
+    });
+    assert.strictEqual(uploaded.status, 200, uploaded.body && uploaded.body.message);
+    assert.ok(/^https?:\/\//.test(uploaded.body.provider.logo_url), `الشعار مطلق، وصل: ${uploaded.body.provider.logo_url}`);
+    assert.ok(/^https?:\/\//.test(uploaded.body.provider.cover_url), `الغلاف مطلق، وصل: ${uploaded.body.provider.cover_url}`);
+    for (const url of [uploaded.body.provider.logo_url, uploaded.body.provider.cover_url]) {
+      if (url.includes('/uploads/')) pageUploadFiles.push(path.join(config.uploads.dir, path.basename(url)));
+    }
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.strictEqual(detail.body.provider.logo_url, uploaded.body.provider.logo_url, 'والتفصيل العام يحملهما');
+    assert.strictEqual(detail.body.provider.cover_url, uploaded.body.provider.cover_url);
+  });
+
+  // ---- المنتجات ----------------------------------------------------
+
+  let pageProductId = 0;
+
+  await test('المنتجات إدارةً: إضافة بسعر «تبدأ من» ثم تعديل السعر ثم حذف، واللوحة تعيدها في المجموعات', async () => {
+    const created = await api('POST', `/api/admin/service-providers/${pageTargetId}/products`, {
+      token: superAdminToken,
+      body: { name: 'طقم كراسي فاخر', description: 'طقم كامل', price: 250 }
+    });
+    assert.strictEqual(created.status, 201, created.body && created.body.message);
+    pageProductId = created.body.productId;
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    const product = (detail.body.provider.products || []).find(row => row.id === pageProductId);
+    assert.ok(product, 'المنتج في التفصيل العام');
+    assert.strictEqual(product.price, 250, 'السعر رقم');
+    assert.strictEqual(product.description, 'طقم كامل');
+
+    const updated = await api('PATCH', `/api/admin/service-providers/${pageTargetId}/products/${pageProductId}`, {
+      token: superAdminToken,
+      body: { price: 300 }
+    });
+    assert.strictEqual(updated.status, 200, updated.body && updated.body.message);
+    assert.strictEqual(
+      updated.body.provider.products.find(row => row.id === pageProductId).price,
+      300,
+      'السعر الجديد من ردّ الخادم'
+    );
+
+    const removed = await api('DELETE', `/api/admin/service-providers/${pageTargetId}/products/${pageProductId}`, {
+      token: superAdminToken
+    });
+    assert.strictEqual(removed.status, 200);
+    const after = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.ok(!(after.body.provider.products || []).some(row => row.id === pageProductId), 'المحذوف لم يبقَ');
+  });
+
+  // ---- الشارتان والصلاحية ------------------------------------------
+
+  await test('الشارتان: السوبر أدمن يضعهما ويقرأهما في التفصيل، وأدمن البلدات يُردّ 403 على كلٍّ منهما', async () => {
+    const granted = await api('PATCH', `/api/admin/service-providers/${pageTargetId}`, {
+      token: superAdminToken,
+      body: { is_verified: true, is_featured: true }
+    });
+    assert.strictEqual(granted.status, 200, granted.body && granted.body.message);
+    assert.strictEqual(granted.body.provider.is_verified, true);
+    assert.strictEqual(granted.body.provider.is_featured, true);
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.strictEqual(detail.body.provider.is_verified, true, 'الشارة تصل القراءة العامة');
+    assert.strictEqual(detail.body.provider.is_featured, true);
+
+    for (const flag of ['is_verified', 'is_featured']) {
+      const denied = await api('PATCH', `/api/admin/service-providers/${pageFeaturedId}`, {
+        token: pageScopedAdminToken,
+        body: { [flag]: false }
+      });
+      assert.strictEqual(denied.status, 403, `أدمن البلدات لا يضع ${flag}`);
+      assert.ok(
+        String(denied.body.message || '').includes('السوبر أدمن وحده'),
+        `رسالة عربية تسمّي الصلاحية، وصلت: ${denied.body.message}`
+      );
+    }
+
+    // نفس الأدمن يعدّل ما ليس شارة في مزوّد بلدته — الرفض للأعلام وحدها،
+    // ونجاح هذا الطلب يثبت أن 403 السابقة من قاعدة الصلاحية لا من فقدان النطاق.
+    const ordinary = await api('PATCH', `/api/admin/service-providers/${pageFeaturedId}`, {
+      token: pageScopedAdminToken,
+      body: { description: 'تعديل من أدمن بلدته' }
+    });
+    assert.strictEqual(ordinary.status, 200, ordinary.body && ordinary.body.message);
+  });
+
+  await test('أدمن خارج بلدات المزوّد يُردّ 404 على كل مسار إداري جديد، ولا يترك ملف رفع وراءه', async () => {
+    const filesBefore = new Set(await fsp.readdir(config.uploads.dir));
+    const notMine = `/api/admin/service-providers/${pageFarProviderId}`;
+
+    // المزوّد موجود فعلاً ويراه السوبر أدمن — فسقوط الطلبات التالية بـ404 سببه
+    // النطاق وحده، لا غياب الصفّ.
+    const visibleToSuper = await api('GET', notMine, { token: superAdminToken });
+    assert.strictEqual(visibleToSuper.status, 200, 'السوبر أدمن يرى مزوّد حورة');
+
+    const attempts = [
+      ['PATCH', notMine, { description: 'خارج النطاق' }],
+      ['POST', `${notMine}/offers`, { title: 'خارج النطاق' }],
+      ['PATCH', `${notMine}/offers/1`, { title: 'خارج النطاق' }],
+      ['DELETE', `${notMine}/offers/1`],
+      ['POST', `${notMine}/products`, { name: 'خارج النطاق' }],
+      ['PATCH', `${notMine}/products/1`, { name: 'خارج النطاق' }],
+      ['DELETE', `${notMine}/products/1`],
+      ['DELETE', `${notMine}/photos/1`]
+    ];
+    for (const [method, target, body] of attempts) {
+      const response = await api(method, target, { token: pageScopedAdminToken, body });
+      assert.strictEqual(response.status, 404, `${method} ${target} خارج النطاق يردّ 404 لا 403`);
+    }
+
+    const photo = await apiUpload(`${notMine}/photos`, {
+      token: pageScopedAdminToken,
+      files: [{ field: 'photo', name: 'outsider.png', type: 'image/png', buffer: TINY_PNG }]
+    });
+    assert.strictEqual(photo.status, 404, 'رفع صورة خارج النطاق 404');
+
+    // «try/finally» في المسار: كل ملف كتبه multer إما صار رابط صفّ أو حُذف.
+    const filesAfter = new Set(await fsp.readdir(config.uploads.dir));
+    const leaked = [...filesAfter].filter(name => !filesBefore.has(name) && !pageUploadFiles.some(file => path.basename(file) === name));
+    assert.deepStrictEqual(leaked, [], `ملفات رفع يتيمة بعد طلبات مرفوضة: ${leaked.join('، ')}`);
+  });
+
+  // ---- القراءة العامة بلا رقم --------------------------------------
+
+  await test('القراءة العامة بلا رقم: القائمة وبطاقات المشابهين لا تحمل مفتاح phone — الرقم في صفحة المزوّد المفردة وحدها (ADR-0016)', async () => {
+    const list = await api('GET', `/api/services/providers?category_id=${pageCategoryId}&limit=100`);
+    assert.ok(list.body.providers.length > 0, 'قائمة غير فارغة كي يسقط التأكيد لو ظهر الرقم');
+    for (const row of list.body.providers) {
+      assert.ok(!('phone' in row), 'القائمة لا تحمل الرقم');
+    }
+
+    const detail = await api('GET', `/api/services/providers/${pageTargetId}`);
+    assert.strictEqual(detail.body.provider.phone, pageTargetPhone, 'الرقم يخرج في صفحة المزوّد المفردة وحدها');
+    for (const row of detail.body.provider.similar) {
+      assert.ok(!('phone' in row), 'وبطاقات «مشابه» لا تحمله ولو كان المزوّد نفسه له رقم');
+    }
+  });
+
+  // ---- تنظيف القسم --------------------------------------------------
+
+  for (const file of pageUploadFiles) await fsp.unlink(file).catch(() => {});
+  for (const id of [pageTargetId, pageFeaturedId, pageOldId, pagePendingId, pageNoPhoneId, pageFarProviderId, pageOtherRegionProviderId, ...pageExtraIds]) {
+    await api('DELETE', `/api/admin/service-providers/${id}`, { token: superAdminToken });
+  }
+  await api('DELETE', `/api/admin/service-categories/${pageCategoryId}`, { token: superAdminToken });
+  await api('DELETE', `/api/admin/service-categories/${pageOtherCategoryId}`, { token: superAdminToken });
+  // البلدة والمحافظة التجريبيتان لا تظهران في أي قائمة بعد سقوط مزوّديهما.
+  await db.execute('DELETE FROM towns WHERE name = ?', [pageOtherRegionTown]);
+  await db.execute('DELETE FROM regions WHERE id = ?', [pageOtherRegionId]);
+  // أدمن القسم الحيّ: `admin_towns` تسقط معه بـON DELETE CASCADE.
+  await db.execute('DELETE FROM users WHERE id = ?', [pageScopedAdminId]);
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

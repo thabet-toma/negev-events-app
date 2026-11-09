@@ -86,6 +86,9 @@ let serviceProvidersCache = [];
 let servicesPage = 1;
 let servicesPagination = null;
 let currentProviderPhone = ''; // لا يظهر إلا بعد فعل تواصل صريح (#25)
+// معرّف المزوّد المعروض في النافذة الآن — الكشف الصريح للرقم يعيد بناء روابط
+// التواصل من الكائن المخزَّن نفسه لا من رقم منفصل (تذكرة #184).
+let currentProviderId = null;
 // شكل عرض مزوّدي الدليل (`providers_display`، تذكرة #158): الخادم يحسم الغياب
 // والقيمة غير المعروفة، والعميل يقرأ ما يصل ويقبل `cards` وحدها؛ وما عداها —
 // ومنها الحالة قبل وصول الإعداد — صفوف مختصرة. لا تخطيط ثالث هنا ولا إعادة حسم
@@ -8040,6 +8043,22 @@ function providerPriceBadgeText(p) {
 }
 
 /**
+ * شارتا المزوّد (تذكرة #184): «موثّق» و«مميّز» يضعهما السوبر أدمن وحدهما من
+ * اللوحة، وتصلان مع كل صفّ في القائمة (`is_verified`/`is_featured`). لا شارة
+ * لغيابهما — لا شارة رمادية تقول «غير موثّق»، فالغياب هو الحالة الافتراضية.
+ */
+function providerBadgesHtml(p) {
+  const badges = [];
+  if (p.is_verified) {
+    badges.push('<span class="provider-badge provider-badge-verified"><i class="fa-solid fa-circle-check"></i> موثّق</span>');
+  }
+  if (p.is_featured) {
+    badges.push('<span class="provider-badge provider-badge-featured"><i class="fa-solid fa-star"></i> مميّز</span>');
+  }
+  return badges.length ? badges.join('') : '';
+}
+
+/**
  * الصفّ المختصر (تذكرة #158): صورة مربّعة 88px، والاسم عريض 17، وسطر الفئة
  * والبلدة، وشارة سعر صغيرة، وزرّا «اتصال» (حين يوجد رقم) و«تفاصيل».
  * «تفاصيل» يفتح نافذة المزوّد القائمة `openProviderModal`، وهي تقرأ
@@ -8068,12 +8087,15 @@ function renderCompactServiceRowHtml(p) {
         : p.towns.join('، '))
     : 'مناطق الخدمة غير محدَّدة';
 
+  const badgesHtml = providerBadgesHtml(p);
+
   return `
     <div class="service-row" id="serviceRow-${p.id}" style="--tone:${toneColor}">
       <div class="service-row-summary">
         ${mediaHtml}
         <div class="service-row-body">
           <h3 class="service-row-name">${escapeHtml(p.name)}</h3>
+          ${badgesHtml ? `<div class="service-row-badges">${badgesHtml}</div>` : ''}
           <div class="service-row-meta">
             <span class="service-row-category">${p.category_icon ? escapeHtml(p.category_icon) + ' ' : ''}${escapeHtml(p.category_name || 'خدمة')}</span>
             <span class="service-row-town"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(townsText)}</span>
@@ -8173,6 +8195,7 @@ function renderSingleServiceCardHtml(p) {
           <!-- جسم الكرت والوصف العام والباكيج -->
           <div class="service-card-caption">
             <h2 class="service-card-title" onclick="toggleServiceDetails(${p.id})" style="cursor:pointer;">${escapeHtml(p.name)}</h2>
+            ${providerBadgesHtml(p) ? `<div class="provider-badges">${providerBadgesHtml(p)}</div>` : ''}
             <div class="service-card-price-hero">
               <span class="price-hero-label">${priceBadgeText}:</span>
               <span class="price-hero-num">${p.price != null ? `<strong>${Number(p.price).toLocaleString('ar-EG')}</strong> <span class="price-currency">₪</span>` : '<strong>حسب الطلب</strong>'}</span>
@@ -8272,36 +8295,45 @@ function toggleServiceDetails(providerId, btnEl) {
 }
 
 /**
- * الروابط التي يُبنى منها التواصل — بناء واحد يستخدمه الصفّ المختصر ولوح
- * الكرت معاً، فلا تتكرّر صيغة الرقم الدولي في مكانين. يُستدعى بعد فعل تواصل
- * صريح وحده: لا رقم يُعرض قبل ذلك.
+ * رابط الاتصال الهاتفي — يُستدعى بعد فعل تواصل صريح وحده: لا رقم يُعرض قبل
+ * ذلك. **ورابط واتساب لم يبقَ هنا** (تذكرة #184): صار يبنيه الخادم وحده في
+ * `GET /api/services/providers/:id/whatsapp`، فالعميل لا يكوّن `wa.me` ولا
+ * يعرف صيغة الرقم الدولي أصلاً.
  */
 function providerContactUrls(p) {
   const phone = p.phone || '';
-
-  // تنظيف رقم الهاتف للواتساب الدولي (05... -> 9725...)
-  let intlPhone = phone.replace(/[^\d+]/g, '');
-  if (intlPhone.startsWith('05')) intlPhone = '972' + intlPhone.substring(1);
-  else if (intlPhone.startsWith('+')) intlPhone = intlPhone.substring(1);
-
-  const whatsappMsg = encodeURIComponent(`مرحباً ${p.name}، استفسار بخصوص خدمتك (${p.category_name || ''}) عبر منصة أعراسنا:`);
-  return {
-    phone,
-    whatsappUrl: `https://wa.me/${intlPhone}?text=${whatsappMsg}`,
-    telUrl: `tel:${phone}`
-  };
+  return { phone, telUrl: `tel:${phone}` };
 }
 
-/** رابطا واتساب والاتصال لمزوّد جُلِب كاملاً (وفيه `phone`) — من البناء الواحد أعلاه. */
+/**
+ * رابط واتساب المزوّد (تذكرة #184): الرسالة العربية تُبنى في الخادم، والعميل
+ * يفتح `url` كما وصل — لا `wa.me` في العميل ولا رسالة يركّبها بنفسه.
+ */
+async function openProviderWhatsapp(providerId) {
+  try {
+    const res = await apiFetch(`/api/services/providers/${providerId}/whatsapp`);
+    const data = await res.json();
+    if (!data.success || !data.url) {
+      alert((data && data.message) || 'لا يوجد رقم واتساب مسجَّل لهذا المزوّد');
+      return;
+    }
+    window.open(data.url, '_blank');
+  } catch (e) {
+    console.error('Provider WhatsApp error:', e);
+    alert('تعذّر فتح واتساب — تحقّق من الاتصال وحاول مرة أخرى');
+  }
+}
+
+/** زرّ واتساب (رابط الخادم) ورابط الاتصال الهاتفي لمزوّد جُلِب كاملاً. */
 function providerContactLinksHtml(p) {
-  const { phone, whatsappUrl, telUrl } = providerContactUrls(p);
+  const { phone, telUrl } = providerContactUrls(p);
 
   return `
     <div class="service-contact-row">
-      <a class="service-btn-whatsapp" href="${whatsappUrl}" target="_blank" rel="noopener">
+      <button type="button" class="service-btn-whatsapp" onclick="openProviderWhatsapp(${Number(p.id)})">
         <i class="fa-brands fa-whatsapp"></i> واتساب مباشر
-      </a>
-      <a class="service-btn-call" href="${telUrl}">
+      </button>
+      <a class="service-btn-call" href="${escapeHtml(telUrl)}">
         <i class="fa-solid fa-phone"></i> اتصال (${escapeHtml(phone)})
       </a>
     </div>
@@ -8326,11 +8358,11 @@ async function revealServiceContact(providerId, preferredAction = null) {
       return;
     }
 
-    const { whatsappUrl, telUrl } = providerContactUrls(p);
+    const { telUrl } = providerContactUrls(p);
 
     // إذا طلب إجراء مباشر
     if (preferredAction === 'whatsapp') {
-      window.open(whatsappUrl, '_blank');
+      await openProviderWhatsapp(providerId);
       return;
     } else if (preferredAction === 'call') {
       window.location.href = telUrl;
@@ -8354,12 +8386,106 @@ async function revealServiceContact(providerId, preferredAction = null) {
   }
 }
 
+/** أسماء الأيام السبعة بمفاتيح `hours` (0 = الأحد). */
+const PROVIDER_DAY_NAMES = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+/** صفوف جدول الساعات الأسبوعي — المفتوح بوقتيه، والمغلق بكلمة واحدة. */
+function providerHoursRowsHtml(hours) {
+  return [...hours]
+    .sort((left, right) => Number(left.day) - Number(right.day))
+    .map(row => {
+      const dayName = PROVIDER_DAY_NAMES[Number(row.day)] || '';
+      const value = row.closed
+        ? '<span class="provider-hours-closed">مغلق</span>'
+        : `<span class="provider-hours-times">${escapeHtml(row.from || '')} — ${escapeHtml(row.to || '')}</span>`;
+      return `<tr><td class="provider-hours-day">${escapeHtml(dayName)}</td><td class="provider-hours-value">${value}</td></tr>`;
+    })
+    .join('');
+}
+
+/** شبكة صور المعرض — الصورة وتعليقها إن وُجد. */
+function providerGalleryHtml(gallery) {
+  return gallery.map(photo => `
+    <figure class="provider-gallery-item">
+      <img src="${escapeHtml(photo.image_url)}" alt="${escapeHtml(photo.caption || 'صورة من أعمال المزوّد')}" loading="lazy">
+      ${photo.caption ? `<figcaption>${escapeHtml(photo.caption)}</figcaption>` : ''}
+    </figure>
+  `).join('');
+}
+
+/** العروض السارية: عنوان ووصف وسعر وينتهي — ولا قسم إن لم يوجد عرض واحد. */
+function providerOffersHtml(offers) {
+  return offers.map(offer => `
+    <div class="provider-offer">
+      <div class="provider-offer-title">${escapeHtml(offer.title)}</div>
+      ${offer.description ? `<div class="provider-offer-desc">${escapeHtml(offer.description)}</div>` : ''}
+      <div class="provider-offer-meta">
+        ${offer.price != null ? `<span class="provider-offer-price"><i class="fa-solid fa-tag"></i> ${Number(offer.price).toLocaleString('ar-EG')} ₪</span>` : ''}
+        ${offer.ends_at ? `<span class="provider-offer-ends"><i class="fa-regular fa-clock"></i> ينتهي ${escapeHtml(offer.ends_at)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+/** المنتجات بسعر «تبدأ من». */
+function providerProductsHtml(products) {
+  return products.map(product => `
+    <div class="provider-product">
+      ${product.image_url
+        ? `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}" class="provider-product-img" loading="lazy">`
+        : '<span class="provider-product-img provider-product-img-placeholder"><i class="fa-solid fa-box-open"></i></span>'}
+      <div class="provider-product-body">
+        <div class="provider-product-name">${escapeHtml(product.name)}</div>
+        ${product.description ? `<div class="provider-product-desc">${escapeHtml(product.description)}</div>` : ''}
+        ${product.price != null ? `<div class="provider-product-price">تبدأ من ${Number(product.price).toLocaleString('ar-EG')} ₪</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+/** «مزوّدون مشابهون» — كل بطاقة تفتح نافذة المزوّد الآخر نفسها. */
+function providerSimilarHtml(similar) {
+  return similar.map(candidate => `
+    <button type="button" class="provider-similar-card" onclick="openProviderModal(${Number(candidate.id)})">
+      ${candidate.image_url
+        ? `<img src="${escapeHtml(candidate.image_url)}" alt="${escapeHtml(candidate.name)}" class="provider-similar-img" loading="lazy">`
+        : `<span class="provider-similar-img provider-similar-img-placeholder">${candidate.category_icon ? escapeHtml(candidate.category_icon) : '🛠️'}</span>`}
+      <span class="provider-similar-name">${escapeHtml(candidate.name)}</span>
+      <span class="provider-similar-town">${escapeHtml((candidate.towns || []).slice(0, 2).join('، ') || 'مناطق الخدمة غير محدَّدة')}</span>
+    </button>
+  `).join('');
+}
+
+/**
+ * يملأ قسماً من نافذة المزوّد ويخفيه إن كان فارغاً — قاعدة واحدة للأقسام
+ * الأربعة (تذكرة #184)، فلا يظهر عنوان لقسم لا محتوى تحته.
+ */
+function renderProviderSection(sectionId, listId, items, renderHtml) {
+  const section = document.getElementById(sectionId);
+  const list = document.getElementById(listId);
+  if (!section || !list) return;
+
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) {
+    list.innerHTML = '';
+    section.hidden = true;
+    return;
+  }
+  list.innerHTML = renderHtml(rows);
+  section.hidden = false;
+}
+
 /**
  * نافذة المزوّد المنفصلة — تقرأ `GET /api/services/providers/:id` فتحمل حزمة
  * السعر والمواصفات والوصف، والرقم لا يُعرض فيها إلا بفعل صريح.
  * «تفاصيل» في الصفّ المختصر تفتحها وحدها، و«اتصال» (تذكرة #158) تفتحها مع
- * `revealContact: true` فتُعرض رابطا واتساب والاتصال مباشرةً — الفعل صريح
- * أصلاً، والرقم يصل مع النافذة نفسها لا من القائمة.
+ * `revealContact: true` فتُعرض روابط التواصل مباشرةً — الفعل صريح أصلاً،
+ * والرقم يصل مع النافذة نفسها لا من القائمة.
+ *
+ * **وصارت غنية (تذكرة #184):** الغلاف والشعار، وشارتا «موثّق»/«مميّز»، وجدول
+ * الساعات الأسبوعي، ومعرض الأعمال، والعروض السارية، والمنتجات، ثم «مزوّدون
+ * مشابهون» يفتح كلٌّ منهم نافذته. **كل قسم فارغ يُخفى** — لا عنوان لقسم بلا
+ * محتوى — والرقم لا يتغيّر سلوكه.
  */
 async function openProviderModal(providerId, { revealContact = false } = {}) {
   try {
@@ -8370,18 +8496,78 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
     const p = data.provider;
     providerDetailsCache[providerId] = p;
     currentProviderPhone = p.phone || '';
+    currentProviderId = providerId;
 
     document.getElementById('providerModalName').textContent = p.name;
     document.getElementById('providerModalCategory').textContent = p.category_name || '';
 
+    // الغلاف يحلّ محلّ صورة المزوّد في الترويسة حين يوجد، والشعار شارة دائرية
+    // بجانبه. وغياب الاثنين يترك الصورة القديمة كما كانت.
+    const coverWrap = document.getElementById('providerModalCoverWrap');
+    const coverImg = document.getElementById('providerModalCover');
+    if (coverWrap && coverImg) {
+      if (p.cover_url) {
+        coverImg.src = p.cover_url;
+        coverImg.alt = p.name;
+        coverWrap.hidden = false;
+      } else {
+        coverImg.removeAttribute('src');
+        coverWrap.hidden = true;
+      }
+    }
+
+    const logoImg = document.getElementById('providerModalLogo');
+    if (logoImg) {
+      if (p.logo_url) {
+        logoImg.src = p.logo_url;
+        logoImg.alt = `شعار ${p.name}`;
+        logoImg.hidden = false;
+        // يتداخل الشعار مع الغلاف وحده؛ بلا غلاف يجلس على هوامشه كي لا يغطّي
+        // ما فوقه من نصّ.
+        logoImg.classList.toggle('is-overlap', Boolean(p.cover_url));
+      } else {
+        logoImg.removeAttribute('src');
+        logoImg.hidden = true;
+        logoImg.classList.remove('is-overlap');
+      }
+    }
+
+    const badgesEl = document.getElementById('providerModalBadges');
+    if (badgesEl) {
+      const badges = providerBadgesHtml(p);
+      badgesEl.innerHTML = badges;
+      badgesEl.hidden = !badges;
+    }
+
     const img = document.getElementById('providerModalImage');
-    if (p.image_url) {
+    if (p.cover_url || !p.image_url) {
+      img.hidden = true;
+    } else {
       img.src = p.image_url;
       img.alt = p.name;
       img.hidden = false;
-    } else {
-      img.hidden = true;
     }
+
+    // الساعات: مصفوفة 0..6 كما يخزّنها الأدمن — جدول أسبوعي، ويُخفى كاملاً
+    // إن لم يسجّل المزوّد ساعات بعد.
+    const hoursSection = document.getElementById('providerHoursSection');
+    const hoursBody = document.getElementById('providerHoursRows');
+    if (hoursSection && hoursBody) {
+      const hours = Array.isArray(p.hours) ? [...p.hours] : [];
+      if (hours.length) {
+        hoursBody.innerHTML = providerHoursRowsHtml(hours);
+        hoursSection.hidden = false;
+      } else {
+        hoursBody.innerHTML = '';
+        hoursSection.hidden = true;
+      }
+    }
+
+    // المعرض والعروض والمنتجات والمشابهون: أربعة أقسام تُخفى فارغةً.
+    renderProviderSection('providerGallerySection', 'providerGalleryGrid', p.gallery, providerGalleryHtml);
+    renderProviderSection('providerOffersSection', 'providerOffersList', p.offers, providerOffersHtml);
+    renderProviderSection('providerProductsSection', 'providerProductsList', p.products, providerProductsHtml);
+    renderProviderSection('providerSimilarSection', 'providerSimilarGrid', p.similar, providerSimilarHtml);
 
     const pkgEl = document.getElementById('providerModalPackage');
     if (pkgEl) {
@@ -8425,7 +8611,7 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
 
     document.getElementById('providerContactArea').innerHTML = currentProviderPhone
       ? (revealContact
-        // «اتصال» في الصفّ المختصر فعلٌ صريح أصلاً: يظهر الرقمان مباشرةً.
+        // «اتصال» في الصفّ المختصر فعلٌ صريح أصلاً: تظهر روابط التواصل مباشرةً.
         ? providerContactLinksHtml(p)
         : `<button type="button" class="submit-btn" onclick="revealProviderPhone()">
         <i class="fa-solid fa-phone"></i> إظهار رقم التواصل
@@ -8438,17 +8624,17 @@ async function openProviderModal(providerId, { revealContact = false } = {}) {
   }
 }
 
-/** الفعل الصريح الذي يكشف الرقم في النافذة المنفصلة */
+/** الفعل الصريح الذي يكشف الرقم في النافذة المنفصلة — ورابط واتساب معه. */
 function revealProviderPhone() {
-  if (!currentProviderPhone) return;
-  document.getElementById('providerContactArea').innerHTML = `
-    <a class="submit-btn" href="tel:${escapeHtml(currentProviderPhone)}" style="text-decoration:none; display:flex; align-items:center; justify-content:center; gap:8px;">
-      <i class="fa-solid fa-phone"></i> ${escapeHtml(currentProviderPhone)}
-    </a>`;
+  const provider = providerDetailsCache[currentProviderId];
+  if (!currentProviderPhone || !provider) return;
+  document.getElementById('providerContactArea').innerHTML = providerContactLinksHtml(provider);
 }
 
 function closeProviderModal() {
   document.getElementById('providerModal').style.display = 'none';
+  currentProviderId = null;
+  currentProviderPhone = '';
 }
 
 // --- Public Service Offer Submission -----------------------------

@@ -4,7 +4,7 @@ const db = require('../db/pool');
 const ApiError = require('../utils/ApiError');
 const adminScope = require('./adminScope.service');
 const townsService = require('./towns.service');
-const { absoluteMediaUrl } = require('../utils/mediaUrl');
+const { absoluteMediaUrl, withAbsoluteMedia } = require('../utils/mediaUrl');
 
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
@@ -220,6 +220,57 @@ async function townsForProviders(providerIds) {
 }
 
 /**
+ * أعمدة بطاقة المزوّد العامة — واحدة للقائمة و«المزوّدين المشابهين» (تذكرة
+ * #184)، فلا شكلان لبطاقة واحدة. **ولا `phone` بينها**: الرقم لا يدخل استعلام
+ * قائمة أصلاً، و`has_phone` وحده محسوباً في SQL.
+ */
+const PROVIDER_CARD_SELECT = `sp.id, sp.name, sp.category_id, sc.name AS category_name,
+        sc.icon AS category_icon, sc.color AS category_color, sp.image_url, sp.price, sp.price_type,
+        sp.price_estimate_desc, sp.attributes, sp.is_verified, sp.is_featured,
+        (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone`;
+
+/** صفّ بطاقة عامّة واحد: نفس مفاتيحه من القائمة ومن `similar` (تذكرة #184). */
+function shapeProviderCard(row, towns) {
+  return withAbsoluteMedia({
+    id: row.id,
+    name: row.name,
+    category_id: row.category_id,
+    category_name: row.category_name,
+    category_icon: row.category_icon,
+    category_color: row.category_color,
+    has_phone: Boolean(row.has_phone),
+    image_url: row.image_url,
+    price: row.price ?? null,
+    price_type: row.price_type || 'estimated',
+    price_estimate_desc: row.price_estimate_desc ?? null,
+    attributes: parseAttributes(row.attributes),
+    is_verified: Boolean(row.is_verified),
+    is_featured: Boolean(row.is_featured),
+    towns: towns || []
+  });
+}
+
+/**
+ * `hours` كما يخزّنه الأدمن: مصفوفة 0..6 من `{ day, closed?, from?, to? }`.
+ * MySQL يعيد عمود `JSON` محلَّلاً، وقاعدة قائمة قد تحمل نصّاً — والحالتان
+ * تُقرآن شكلاً واحداً. ولا تخمين هنا: ما ليس مصفوفة يُعاد `null`، والتحقّق
+ * الصارم في طبقة المسار (تذكرة #184).
+ */
+function parseHours(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const OFFER_PUBLIC_ORDER = `ORDER BY (ends_at IS NULL) ASC, ends_at ASC, created_at DESC, id DESC`;
+
+
+/**
  * A page of active providers. Deliberately does NOT select `phone` — this is
  * enforcement rule 6: the number must never reach a list response, not even
  * as a hidden field, so it cannot leak by a client rendering it by mistake.
@@ -275,33 +326,17 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
 
   const offset = (pageVal - 1) * limitVal;
   const rows = await db.query(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
-            sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
-            (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone
+    `SELECT ${PROVIDER_CARD_SELECT}
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE ${whereClause}
-      ORDER BY sp.name ASC
+      ORDER BY sp.is_featured DESC, sp.name ASC
       LIMIT ? OFFSET ?`,
     [...params, limitVal, offset]
   );
 
   const townsMap = await townsForProviders(rows.map(row => row.id));
-  const providers = rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    category_id: row.category_id,
-    category_name: row.category_name,
-    category_icon: row.category_icon,
-    category_color: row.category_color,
-    has_phone: Boolean(row.has_phone),
-    image_url: absoluteMediaUrl(row.image_url),
-    price: row.price ?? null,
-    price_type: row.price_type || 'estimated',
-    price_estimate_desc: row.price_estimate_desc ?? null,
-    attributes: parseAttributes(row.attributes),
-    towns: townsMap[row.id] || []
-  }));
+  const providers = rows.map(row => shapeProviderCard(row, townsMap[row.id] || []));
 
   return {
     providers,
@@ -314,11 +349,132 @@ async function listPublicProviders({ categoryId, town, search, page = 1, limit =
   };
 }
 
-/** One active provider, including `phone` — only reached by opening the provider explicitly (story 17). */
-async function getPublicProviderById(id) {
+// ======================================================================
+// صفحة المزوّد الغنية (تذكرة #184): المعرض والعروض والمنتجات والمشابهون
+// ======================================================================
+
+/** معرض المزوّد بترتيب الموضع ثم المعرّف — للعامة وللّوحة من نفس الاستعلام. */
+async function providerPhotos(providerId) {
+  const rows = await db.query(
+    `SELECT id, image_url, caption, position, created_at
+       FROM service_provider_photos
+      WHERE provider_id = ?
+      ORDER BY position ASC, id ASC`,
+    [providerId]
+  );
+  return rows.map(row => withAbsoluteMedia({
+    id: row.id,
+    image_url: row.image_url,
+    caption: row.caption ?? null,
+    position: Number(row.position)
+  }));
+}
+
+/**
+ * عروض المزوّد. **العام** يرى النشِط غير المنتهي وحده (`is_active = 1 AND
+ * (ends_at IS NULL OR ends_at >= NOW())`)، الأقرب انتهاءً أولاً ثم الأحدث —
+ * والمنتهي والمطفأ لا يخرجان أصلاً لا أنهما يُخفيان في العميل. واللوحة ترى
+ * الكلّ لتُديرها.
+ */
+async function providerOffers(providerId, { publicOnly = false } = {}) {
+  const conditions = ['provider_id = ?'];
+  if (publicOnly) conditions.push('is_active = 1', '(ends_at IS NULL OR ends_at >= NOW())');
+  const order = publicOnly ? OFFER_PUBLIC_ORDER : 'ORDER BY is_active DESC, created_at DESC, id DESC';
+
+  const rows = await db.query(
+    `SELECT id, title, description, price,
+            DATE_FORMAT(ends_at, '%Y-%m-%d %H:%i') AS ends_at,
+            is_active, created_at
+       FROM service_provider_offers
+      WHERE ${conditions.join(' AND ')}
+      ${order}`,
+    [providerId]
+  );
+  return rows.map(row => ({
+    id: row.id,
+    title: row.title,
+    description: row.description ?? null,
+    price: row.price === null || row.price === undefined ? null : Number(row.price),
+    ends_at: row.ends_at ?? null,
+    is_active: Boolean(row.is_active)
+  }));
+}
+
+/** منتجات المزوّد بترتيب الموضع ثم المعرّف. */
+async function providerProducts(providerId) {
+  const rows = await db.query(
+    `SELECT id, name, description, price, image_url, position
+       FROM service_provider_products
+      WHERE provider_id = ?
+      ORDER BY position ASC, id ASC`,
+    [providerId]
+  );
+  return rows.map(row => withAbsoluteMedia({
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    price: row.price === null || row.price === undefined ? null : Number(row.price),
+    image_url: row.image_url,
+    position: Number(row.position)
+  }));
+}
+
+/**
+ * حتى ستة «مزوّدون مشابهون» (تذكرة #184): نفس الفئة، ونفس محافظة المزوّد عبر
+ * بلداته في `service_provider_towns` ← `towns.region_id`، معتمدون ونشِطون،
+ * وليس المزوّد نفسه. الترتيب «مميّز» ثم الأحدث ثم الأكبر معرّفاً — ولا تقييمات
+ * بعد، فالمميّز يحلّ محلّها. الشكل شكل بطاقة القائمة نفسها وبلا رقم فيها.
+ */
+async function similarProviders(row) {
+  const towns = (await townsForProviders([row.id]))[row.id] || [];
+  if (!towns.length) return [];
+
+  const placeholders = towns.map(() => '?').join(', ');
+  const regions = await db.query(
+    `SELECT DISTINCT region_id FROM towns WHERE name IN (${placeholders}) AND region_id IS NOT NULL`,
+    towns
+  );
+  const regionIds = regions.map(region => region.region_id);
+  if (!regionIds.length) return [];
+
+  const regionPlaceholders = regionIds.map(() => '?').join(', ');
+  const rows = await db.query(
+    `SELECT ${PROVIDER_CARD_SELECT}
+       FROM service_providers sp
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE sp.id <> ?
+        AND sp.category_id = ?
+        AND sp.is_active = 1
+        AND sp.status = 'approved'
+        AND EXISTS (SELECT 1 FROM service_provider_towns spt
+                      JOIN towns t ON t.name = spt.town
+                     WHERE spt.provider_id = sp.id AND t.region_id IN (${regionPlaceholders}))
+      ORDER BY sp.is_featured DESC, sp.created_at DESC, sp.id DESC
+      LIMIT 6`,
+    [row.id, row.category_id, ...regionIds]
+  );
+
+  const townsMap = await townsForProviders(rows.map(candidate => candidate.id));
+  return rows.map(candidate => shapeProviderCard(candidate, townsMap[candidate.id] || []));
+}
+
+/** رقم دولي لرابط واتساب: أرقام وحدها، `0…` ⇒ `972…`، و`972…` كما هو، وغيرهما `null`. */
+function normaliseWhatsappNumber(raw) {
+  const digits = String(raw ?? '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('0')) return `972${digits.slice(1)}`;
+  if (digits.startsWith('972')) return digits;
+  return null;
+}
+
+/**
+ * رابط واتساب لمزوّد معتمد — **الرقم يخرج داخل هذا الرابط وحده ولا يُعاد
+ * منفصلاً في أي مفتاح**. الرسالة تُبنى هنا في الخادم (تذكر «أعراسنا» وتسمّي
+ * الفئة)، فلا يبنيها عميل ولا يجمعها بنفسه. لا رقم أو رقم لا يصلح ← 404.
+ */
+async function publicProviderWhatsapp(id) {
   const row = await db.queryOne(
-    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
-            sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes
+    `SELECT sp.id, sp.name, sp.phone, sc.name AS category_name
        FROM service_providers sp
        JOIN service_categories sc ON sc.id = sp.category_id
       WHERE sp.id = ? AND sp.is_active = 1 AND sp.status = 'approved'`,
@@ -326,8 +482,44 @@ async function getPublicProviderById(id) {
   );
   if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
 
-  const townsMap = await townsForProviders([id]);
-  return {
+  const number = normaliseWhatsappNumber(row.phone);
+  if (!number) throw ApiError.notFound('لا يوجد رقم تواصل مسجَّل لهذا المزوّد');
+
+  const message = `مرحباً ${row.name}، وجدتكم في منصة «أعراسنا» وأرغب بالاستفسار عن خدمات ${row.category_name} لمناسبتي.`;
+  return `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * One active provider, including `phone` — only reached by opening the provider
+ * explicitly (story 17).
+ *
+ * **أين يظهر الرقم وأين لا (تذكرة #184):** لا يدخل استعلام القائمة ولا بطاقات
+ * `similar` (`has_phone` وحدهما)، ولا يُعاد منفصلاً مع رابط واتساب — الرقم هناك
+ * داخل `url` وحده. ويبقى في صفحة المزوّد المفردة، كما قرّر ADR-0016، لأن
+ * `consent_at`/`consent_channel` هما حارسه ولا معنى لهما بلا هذا الموضع.
+ */
+async function getPublicProviderById(id) {
+  const row = await db.queryOne(
+    `SELECT sp.id, sp.name, sp.category_id, sc.name AS category_name, sc.icon AS category_icon, sc.color AS category_color,
+            sp.phone, sp.description, sp.image_url, sp.price, sp.price_type, sp.price_estimate_desc, sp.attributes,
+            sp.logo_url, sp.cover_url, sp.hours, sp.is_verified, sp.is_featured,
+            (sp.phone IS NOT NULL AND sp.phone <> '') AS has_phone
+       FROM service_providers sp
+       JOIN service_categories sc ON sc.id = sp.category_id
+      WHERE sp.id = ? AND sp.is_active = 1 AND sp.status = 'approved'`,
+    [id]
+  );
+  if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
+
+  const [townsMap, gallery, offers, products, similar] = await Promise.all([
+    townsForProviders([id]),
+    providerPhotos(id),
+    providerOffers(id, { publicOnly: true }),
+    providerProducts(id),
+    similarProviders(row)
+  ]);
+
+  return withAbsoluteMedia({
     id: row.id,
     name: row.name,
     category_id: row.category_id,
@@ -335,14 +527,24 @@ async function getPublicProviderById(id) {
     category_icon: row.category_icon,
     category_color: row.category_color,
     phone: row.phone ?? null,
+    has_phone: Boolean(row.has_phone),
     description: row.description,
-    image_url: absoluteMediaUrl(row.image_url),
+    image_url: row.image_url,
+    logo_url: row.logo_url,
+    cover_url: row.cover_url,
+    hours: parseHours(row.hours),
+    is_verified: Boolean(row.is_verified),
+    is_featured: Boolean(row.is_featured),
     price: row.price ?? null,
     price_type: row.price_type || 'estimated',
     price_estimate_desc: row.price_estimate_desc ?? null,
     attributes: parseAttributes(row.attributes),
-    towns: townsMap[id] || []
-  };
+    towns: townsMap[id] || [],
+    gallery,
+    offers,
+    products,
+    similar
+  });
 }
 
 // ======================================================================
@@ -390,15 +592,22 @@ async function providerScopeClause(user) {
   };
 }
 
+/**
+ * شكل صفّ المزوّد في اللوحة: الأعلام منطقية، و`hours` مصفوفة، وكل وسيط مطلق —
+ * والمجموعات الثلاث تُلحق في التفصيل وحده (`getProviderForAdmin`)، لا في قائمة
+ * الصفحة (تذكرة #184).
+ */
 async function shapeAdminProvider(row) {
   const townsMap = await townsForProviders([row.id]);
-  return {
+  return withAbsoluteMedia({
     ...row,
     is_active: Boolean(row.is_active),
-    image_url: absoluteMediaUrl(row.image_url),
+    is_verified: Boolean(row.is_verified),
+    is_featured: Boolean(row.is_featured),
+    hours: parseHours(row.hours),
     attributes: parseAttributes(row.attributes),
     towns: townsMap[row.id] || []
-  };
+  });
 }
 
 /** Providers serving at least one of `user`'s towns — fail-closed for a scopeless admin. */
@@ -438,10 +647,12 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
   );
 
   const townsMap = await townsForProviders(rows.map(row => row.id));
-  const providers = rows.map(row => ({
+  const providers = rows.map(row => withAbsoluteMedia({
     ...row,
     is_active: Boolean(row.is_active),
-    image_url: absoluteMediaUrl(row.image_url),
+    is_verified: Boolean(row.is_verified),
+    is_featured: Boolean(row.is_featured),
+    hours: parseHours(row.hours),
     attributes: parseAttributes(row.attributes),
     towns: townsMap[row.id] || []
   }));
@@ -457,7 +668,14 @@ async function listProvidersForAdmin(user, { categoryId, status, page = 1, limit
   };
 }
 
-/** Scoped single-provider lookup. 404 (not 403) when it exists but is out of scope — a 403 would confirm it exists. */
+/**
+ * Scoped single-provider lookup. 404 (not 403) when it exists but is out of
+ * scope — a 403 would confirm it exists.
+ *
+ * ويحمل المجموعات الثلاث كي يملأ نموذج اللوحة معرضَ المزوّد وعروضه ومنتجاته
+ * بلا ثلاثة نداءات إضافية (تذكرة #184)، وكلها هنا — بما فيها العروض المطفأة
+ * والمنتهية — لأن اللوحة تُديرها لا تعرضها.
+ */
 async function getProviderForAdmin(user, id) {
   const { clause: scopeClause, params: scopeParams } = await providerScopeClause(user);
   const row = await db.queryOne(
@@ -468,7 +686,14 @@ async function getProviderForAdmin(user, id) {
     [id, ...scopeParams]
   );
   if (!row) throw ApiError.notFound('مزوّد الخدمة غير موجود');
-  return shapeAdminProvider(row);
+
+  const [provider, gallery, offers, products] = await Promise.all([
+    shapeAdminProvider(row),
+    providerPhotos(id),
+    providerOffers(id),
+    providerProducts(id)
+  ]);
+  return { ...provider, gallery, offers, products };
 }
 
 /**
@@ -522,18 +747,35 @@ async function createProvider(data) {
 }
 
 /**
+ * «موثّق» و«مميّز» صلاحية لا نطاق (تذكرة #184): إرسال أيٍّ منهما من أدمن غير
+ * سوبر أدمن يُرفض 403. الحكم هنا في الخدمة وحدها، ويستدعيه المسار قبل رفع
+ * الملفات أيضاً كي لا يُرفع صورة لطلبٍ محكوم عليه بالرفض، ويستدعيه
+ * `updateProvider` مرة أخرى فلا يمرّ الحكم عبر بابٍ واحد يُنسى لاحقاً.
+ */
+function assertProviderFlagsAllowed(user, data) {
+  if (data.is_verified === undefined && data.is_featured === undefined) return;
+  if (!user || user.role !== 'super_admin') {
+    throw ApiError.forbidden('شارتا «موثّق» و«مميّز» يضعهما السوبر أدمن وحده');
+  }
+}
+
+/**
  * Partial update. Only columns present in `data` are written; `data.towns`,
  * when present, fully replaces the existing rows (already validated by the
  * route layer — same rule as `createProvider`). `consent_at`/`consent_by`/
  * `consent_channel` are deliberately not editable here: they are the
  * audit trail of the original recorded permission, not a form field.
  */
-async function updateProvider(id, data) {
+async function updateProvider(id, data, user) {
+  assertProviderFlagsAllowed(user, data);
+
   const columns = [
     'category_id', 'name', 'phone', 'description', 'image_url',
     'price', 'price_type', 'price_estimate_desc', 'attributes',
-    'status', 'rejection_reason', 'is_active'
+    'status', 'rejection_reason', 'is_active',
+    'logo_url', 'cover_url', 'hours', 'is_verified', 'is_featured'
   ];
+  const booleanColumns = ['is_active', 'is_verified', 'is_featured'];
 
   await db.transaction(async connection => {
     const assignments = [];
@@ -541,9 +783,9 @@ async function updateProvider(id, data) {
     for (const column of columns) {
       if (data[column] === undefined) continue;
       assignments.push(`${column} = ?`);
-      if (column === 'is_active') {
+      if (booleanColumns.includes(column)) {
         params.push(data[column] ? 1 : 0);
-      } else if (column === 'attributes') {
+      } else if (column === 'attributes' || column === 'hours') {
         params.push(data[column] ? JSON.stringify(data[column]) : null);
       } else {
         params.push(data[column] ?? null);
@@ -565,6 +807,137 @@ async function updateProvider(id, data) {
       }
     }
   });
+}
+
+// --- معرض المزوّد وعروضه ومنتجاته (تذكرة #184) -----------------------
+// كل دالّة هنا تفترض أن نطاق البلدات تحقّق في المسار عبر
+// `getProviderForAdmin` (404 لا 403 خارج النطاق)، وأن المدخلات تحقّقت هي
+// أيضاً؛ ولا SQL خارج هذا الملف.
+
+async function addProviderPhoto(providerId, { image_url, caption, position }) {
+  const { total } = await db.queryOne(
+    'SELECT COUNT(*) AS total FROM service_provider_photos WHERE provider_id = ?',
+    [providerId]
+  );
+  const positionValue = Number.isInteger(position) ? position : Number(total);
+  const { insertId } = await db.execute(
+    `INSERT INTO service_provider_photos (provider_id, image_url, caption, position)
+     VALUES (?, ?, ?, ?)`,
+    [providerId, image_url, caption ?? null, positionValue]
+  );
+  return { id: insertId, image_url, caption: caption ?? null, position: positionValue };
+}
+
+/** يحذف صورة من المعرض ويعيد صفّها — كي يحرّر المسار صورتها من Cloudinary. */
+async function deleteProviderPhoto(providerId, photoId) {
+  const row = await db.queryOne(
+    'SELECT id, image_url FROM service_provider_photos WHERE id = ? AND provider_id = ?',
+    [photoId, providerId]
+  );
+  if (!row) throw ApiError.notFound('صورة المعرض غير موجودة');
+  await db.execute('DELETE FROM service_provider_photos WHERE id = ? AND provider_id = ?', [photoId, providerId]);
+  return row;
+}
+
+async function findOfferForProvider(providerId, offerId) {
+  const row = await db.queryOne(
+    'SELECT id FROM service_provider_offers WHERE id = ? AND provider_id = ?',
+    [offerId, providerId]
+  );
+  if (!row) throw ApiError.notFound('العرض غير موجود');
+  return row;
+}
+
+async function createProviderOffer(providerId, data) {
+  const { insertId } = await db.execute(
+    `INSERT INTO service_provider_offers (provider_id, title, description, price, ends_at, is_active)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      providerId, data.title, data.description ?? null,
+      data.price ?? null, data.ends_at ?? null,
+      data.is_active === false ? 0 : 1
+    ]
+  );
+  return insertId;
+}
+
+async function updateProviderOffer(providerId, offerId, data) {
+  await findOfferForProvider(providerId, offerId);
+  const columns = ['title', 'description', 'price', 'ends_at', 'is_active'];
+  const assignments = [];
+  const params = [];
+  for (const column of columns) {
+    if (data[column] === undefined) continue;
+    assignments.push(`${column} = ?`);
+    params.push(column === 'is_active' ? (data[column] ? 1 : 0) : (data[column] ?? null));
+  }
+  if (assignments.length) {
+    params.push(offerId, providerId);
+    await db.execute(
+      `UPDATE service_provider_offers SET ${assignments.join(', ')} WHERE id = ? AND provider_id = ?`,
+      params
+    );
+  }
+}
+
+async function deleteProviderOffer(providerId, offerId) {
+  await findOfferForProvider(providerId, offerId);
+  await db.execute('DELETE FROM service_provider_offers WHERE id = ? AND provider_id = ?', [offerId, providerId]);
+}
+
+async function findProductForProvider(providerId, productId) {
+  const row = await db.queryOne(
+    'SELECT id FROM service_provider_products WHERE id = ? AND provider_id = ?',
+    [productId, providerId]
+  );
+  if (!row) throw ApiError.notFound('المنتج غير موجود');
+  return row;
+}
+
+async function createProviderProduct(providerId, data) {
+  const { total } = await db.queryOne(
+    'SELECT COUNT(*) AS total FROM service_provider_products WHERE provider_id = ?',
+    [providerId]
+  );
+  const positionValue = Number.isInteger(data.position) ? data.position : Number(total);
+  const { insertId } = await db.execute(
+    `INSERT INTO service_provider_products (provider_id, name, description, price, image_url, position)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      providerId, data.name, data.description ?? null,
+      data.price ?? null, data.image_url ?? null, positionValue
+    ]
+  );
+  return insertId;
+}
+
+async function updateProviderProduct(providerId, productId, data) {
+  await findProductForProvider(providerId, productId);
+  const columns = ['name', 'description', 'price', 'image_url', 'position'];
+  const assignments = [];
+  const params = [];
+  for (const column of columns) {
+    if (data[column] === undefined) continue;
+    assignments.push(`${column} = ?`);
+    params.push(data[column] ?? null);
+  }
+  if (assignments.length) {
+    params.push(productId, providerId);
+    await db.execute(
+      `UPDATE service_provider_products SET ${assignments.join(', ')} WHERE id = ? AND provider_id = ?`,
+      params
+    );
+  }
+}
+
+async function deleteProviderProduct(providerId, productId) {
+  await findProductForProvider(providerId, productId);
+  const row = await db.queryOne(
+    'SELECT image_url FROM service_provider_products WHERE id = ? AND provider_id = ?',
+    [productId, providerId]
+  );
+  await db.execute('DELETE FROM service_provider_products WHERE id = ? AND provider_id = ?', [productId, providerId]);
+  return row;
 }
 
 async function updateProviderStatus(id, { status, rejectionReason }) {
@@ -619,13 +992,24 @@ module.exports = {
 
   listPublicProviders,
   getPublicProviderById,
+  publicProviderWhatsapp,
   listMyServices,
 
   assertTownsWithinScope,
+  assertProviderFlagsAllowed,
   listProvidersForAdmin,
   getProviderForAdmin,
   createProvider,
   updateProvider,
   updateProviderStatus,
-  deleteProvider
+  deleteProvider,
+
+  addProviderPhoto,
+  deleteProviderPhoto,
+  createProviderOffer,
+  updateProviderOffer,
+  deleteProviderOffer,
+  createProviderProduct,
+  updateProviderProduct,
+  deleteProviderProduct
 };

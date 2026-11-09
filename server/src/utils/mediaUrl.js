@@ -17,12 +17,15 @@ function absoluteMediaUrl(value) {
   return config.publicUrl + value;
 }
 
-// `image_url` (event_cards, service_providers) and `photo_url` (event_cards,
-// تذكرة #180) are stored exactly as storage returned them — Cloudinary
-// absolute, or `/uploads/…` — and every one of them leaves the server absolute
-// for the same reason as `poster_url` (ADR-0002). A row that carries no such
-// column is untouched: the loop only converts keys that exist.
-const MEDIA_FIELDS = ['poster_url', 'audio_url', 'image', 'sticker_url', 'artist_image_url', 'image_url', 'photo_url'];
+// `image_url` (event_cards, service_providers) و`photo_url` (event_cards,
+// تذكرة #180) و`logo_url`/`cover_url` (صفحة المزوّد، تذكرة #184) تُخزَّن كما
+// أعادها التخزين — Cloudinary مطلقاً أو `/uploads/…` — وكلها تخرج من الخادم
+// مطلقة للسبب نفسه: ADR-0002. والصفّ الذي لا يحمل العمود لا يُمسّ: الحلقة
+// تحوّل المفاتيح الموجودة وحدها.
+const MEDIA_FIELDS = [
+  'poster_url', 'audio_url', 'image', 'sticker_url', 'artist_image_url',
+  'image_url', 'photo_url', 'logo_url', 'cover_url'
+];
 
 /** Returns a copy of the row with its media columns made absolute. */
 function withAbsoluteMedia(row) {

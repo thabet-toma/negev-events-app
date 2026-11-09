@@ -2623,6 +2623,87 @@ const steps = [
         logger.info('[migrations] add-event-invites-2026-11: fk_event_rsvps_invite added.');
       }
     }
+  },
+  {
+    // صفحة المزوّد الغنية (تذكرة #184): خمسة أعمدة على `service_providers`
+    // وثلاثة جداول ابن. `schema.sql` يطبّق `CREATE TABLE IF NOT EXISTS` وحده،
+    // فالأعمدة الجديدة على جدول قائم لا تصل إلى قاعدة منصَّبة من قبل إلا من
+    // هنا. والخطوة آمنة التكرار: كل عمود محروس بـ`columnExists`، وكل جدول
+    // بـ`tableExists`، ويعيدان تعريفهما في `schema.sql` حرفياً — نسختان
+    // لتعريف واحد لا تعريفان.
+    name: 'add-provider-pages-2026-11',
+    async run(connection) {
+      const columns = [
+        ['logo_url', 'VARCHAR(500) DEFAULT NULL'],
+        ['cover_url', 'VARCHAR(500) DEFAULT NULL'],
+        ['hours', 'JSON DEFAULT NULL'],
+        ['is_verified', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['is_featured', 'TINYINT(1) NOT NULL DEFAULT 0']
+      ];
+      for (const [name, definition] of columns) {
+        if (await columnExists(connection, 'service_providers', name)) continue;
+        await connection.query(`ALTER TABLE service_providers ADD COLUMN ${name} ${definition}`);
+        logger.info(`[migrations] add-provider-pages-2026-11: service_providers.${name} added.`);
+      }
+
+      if (!(await tableExists(connection, 'service_provider_photos'))) {
+        await connection.query(`
+          CREATE TABLE service_provider_photos (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            image_url   VARCHAR(500) NOT NULL,
+            caption     VARCHAR(200) DEFAULT NULL,
+            position    INT          NOT NULL DEFAULT 0,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_service_provider_photos_provider (provider_id),
+            CONSTRAINT fk_spp_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-pages-2026-11: service_provider_photos table created.');
+      }
+
+      if (!(await tableExists(connection, 'service_provider_offers'))) {
+        await connection.query(`
+          CREATE TABLE service_provider_offers (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            title       VARCHAR(160) NOT NULL,
+            description VARCHAR(500) DEFAULT NULL,
+            price       DECIMAL(10,2) DEFAULT NULL,
+            ends_at     DATETIME     DEFAULT NULL,
+            is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_service_provider_offers_provider (provider_id),
+            CONSTRAINT fk_spo_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-pages-2026-11: service_provider_offers table created.');
+      }
+
+      if (!(await tableExists(connection, 'service_provider_products'))) {
+        await connection.query(`
+          CREATE TABLE service_provider_products (
+            id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id INT UNSIGNED NOT NULL,
+            name        VARCHAR(160) NOT NULL,
+            description VARCHAR(500) DEFAULT NULL,
+            price       DECIMAL(10,2) DEFAULT NULL,
+            image_url   VARCHAR(500) DEFAULT NULL,
+            position    INT          NOT NULL DEFAULT 0,
+            created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_service_provider_products_provider (provider_id),
+            CONSTRAINT fk_sppr_provider FOREIGN KEY (provider_id)
+              REFERENCES service_providers(id) ON DELETE CASCADE
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        logger.info('[migrations] add-provider-pages-2026-11: service_provider_products table created.');
+      }
+    }
   }
 ];
 

@@ -2890,6 +2890,58 @@ body {
 .provider-modal-desc { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.75; margin-bottom: 10px; }
 .provider-modal-towns { color: var(--ink-faint); font-size: 0.82rem; margin-bottom: 16px; }
 
+/* ===== صفحة المزوّد الغنية (#184) =====
+   الأقسام كلها تُخفى بـ`hidden` من app.js. لذلك لا تُكتب `display` على العنصر
+   الذي يُخفى نفسه إلا بـ`:not([hidden])` — وإلا غلب المحدِّدُ قاعدةَ
+   `[hidden]` الافتراضية فبقي القسم الفارغ ظاهراً. */
+.provider-cover-wrap { margin-bottom: 12px; }
+.provider-cover-wrap:not([hidden]) { display: block; }
+.provider-cover-img { width: 100%; max-height: 200px; object-fit: cover; border-radius: var(--radius-md); }
+.provider-modal-logo { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; border: 3px solid var(--surface); box-shadow: var(--shadow); margin: 0 0 8px; position: relative; z-index: 1; }
+/* يتداخل الشعار مع الغلاف حين يوجد وحده — وبلا غلاف يبقى على هوامشه. */
+.provider-modal-logo.is-overlap { margin-top: -34px; }
+.provider-modal-logo:not([hidden]) { display: block; }
+.provider-badges { flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.provider-badges:not([hidden]) { display: flex; }
+.provider-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 0.76rem; font-weight: 800; }
+.provider-badge-verified { background: rgba(22, 163, 74, 0.14); color: #166534; }
+.provider-badge-featured { background: rgba(184, 134, 11, 0.18); color: #8a6109; }
+.service-row-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+/* 15px هو حدّ نصّ الصفّ المختصر نفسه (تذكرة #158): الشارة نصّ يقرأه المستخدم،
+   فلا تصغر عن بقية الصفّ (اختبار web-dom يمنع ما دون ذلك). */
+.service-row-badges .provider-badge { font-size: 15px; padding: 2px 9px; }
+.provider-section { margin: 18px 0; }
+.provider-section-title { font-size: 0.95rem; font-weight: 800; color: var(--ink); margin-bottom: 10px; display: flex; align-items: center; gap: 7px; }
+.provider-hours-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.provider-hours-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.provider-hours-day { color: var(--ink-soft); font-weight: 700; width: 40%; }
+.provider-hours-value { color: var(--ink); }
+.provider-hours-closed { color: var(--ink-faint); }
+.provider-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.provider-gallery-item { margin: 0; border-radius: 10px; overflow: hidden; background: var(--surface-sunk); }
+.provider-gallery-item img { width: 100%; height: 110px; object-fit: cover; display: block; }
+.provider-gallery-item figcaption { font-size: 0.74rem; color: var(--ink-faint); padding: 4px 6px; }
+.provider-offers { display: flex; flex-direction: column; gap: 8px; }
+.provider-offer { background: var(--surface-sunk); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.provider-offer-title { font-weight: 800; color: var(--ink); font-size: 0.9rem; }
+.provider-offer-desc { color: var(--ink-soft); font-size: 0.82rem; margin-top: 4px; line-height: 1.6; }
+.provider-offer-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 0.8rem; color: var(--ink-faint); }
+.provider-offer-price { color: var(--tone, #b8860b); font-weight: 800; }
+.provider-products { display: flex; flex-direction: column; gap: 10px; }
+.provider-product { display: flex; gap: 10px; align-items: flex-start; }
+.provider-product-img { width: 62px; height: 62px; border-radius: 8px; object-fit: cover; flex: none; }
+.provider-product-img-placeholder { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-sunk); color: var(--ink-faint); }
+.provider-product-body { min-width: 0; }
+.provider-product-name { font-weight: 800; color: var(--ink); font-size: 0.88rem; }
+.provider-product-desc { color: var(--ink-soft); font-size: 0.8rem; line-height: 1.55; margin-top: 2px; }
+.provider-product-price { color: var(--tone, #b8860b); font-weight: 800; font-size: 0.82rem; margin-top: 4px; }
+.provider-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.provider-similar-card { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 0 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; text-align: center; }
+.provider-similar-img { width: 100%; height: 84px; object-fit: cover; border-radius: 9px 9px 0 0; }
+.provider-similar-img-placeholder { display: inline-flex; align-items: center; justify-content: center; font-size: 1.6rem; background: var(--surface-sunk); color: var(--ink-faint); }
+.provider-similar-name { font-weight: 800; font-size: 0.84rem; color: var(--ink); padding: 0 6px; }
+.provider-similar-town { font-size: 0.74rem; color: var(--ink-faint); padding: 0 6px; }
+
 /* ===== إرشاد التثبيت على iOS (#55) =====
    ورقة سفلية لا نافذة معترِضة: مستخدم الآيفون جاء ليرى مناسبة، لا ليُطالَب
    بتثبيت. تُصرَف بضغطة وتُحفظ مصروفة. */

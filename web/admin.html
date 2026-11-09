@@ -735,6 +735,43 @@
               <span class="hint-text">القائمة مقصورة على بلداتك أنت فقط — الخادم يرفض الطلب كاملاً إن حوى بلدة خارجها</span>
             </div>
 
+            <!-- صفحة المزوّد الغنية (#184): الشعار والغلاف والساعات.
+                 هذه الحقول تُفتح لمزوّد محفوظ — المعرض والعروض والمنتجات تحتاج
+                 معرّف صفٍّ قائماً، فلا نصفّ صوراً لصفٍّ لم يُكتب بعد. -->
+            <div class="form-group">
+              <label><i class="fa-solid fa-wand-magic-sparkles"></i> صفحة المزوّد الغنية</label>
+              <span class="hint-text" id="provPageFieldsHint">احفظ المزوّد أولاً ثم افتحه للتعديل لإضافة الشعار والغلاف والساعات والمعرض والعروض والمنتجات.</span>
+
+              <div class="form-row" id="provPageMediaRow" style="margin-top:10px;">
+                <div class="form-group half">
+                  <label>شعار المزوّد</label>
+                  <input type="file" id="provLogoFile" accept="image/*" onchange="previewProviderLogo(this)">
+                  <div id="provLogoPreviewWrapper" style="margin-top:8px; display:none;">
+                    <img id="provLogoPreview" src="" alt="معاينة الشعار" style="max-height:64px; max-width:120px; border-radius:50%; border:1px solid var(--admin-card-border); object-fit:cover;">
+                  </div>
+                </div>
+                <div class="form-group half">
+                  <label>غلاف المزوّد</label>
+                  <input type="file" id="provCoverFile" accept="image/*" onchange="previewProviderCover(this)">
+                  <div id="provCoverPreviewWrapper" style="margin-top:8px; display:none;">
+                    <img id="provCoverPreview" src="" alt="معاينة الغلاف" style="max-height:80px; max-width:100%; border-radius:6px; border:1px solid var(--admin-card-border); object-fit:cover;">
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-top:10px;">
+                <label>ساعات العمل — سبعة أيام</label>
+                <div id="provHoursRows" class="prov-hours-rows"></div>
+                <span class="hint-text">اترك اليوم مغلقاً إن لم يعمل فيه المزوّد. الوقت بصيغة 24 ساعة (مثال 09:00 — 18:00).</span>
+              </div>
+
+              <!-- «موثّق» و«مميّز» للسوبر أدمن وحده — أدمن البلدات لا يرى المربّعين -->
+              <div class="form-row" id="provFlagsWrapper" style="display:none; margin-top:10px;">
+                <label class="ot-check"><input type="checkbox" id="provIsVerified"> موثّق</label>
+                <label class="ot-check"><input type="checkbox" id="provIsFeatured"> مميّز</label>
+              </div>
+            </div>
+
             <label class="ot-check"><input type="checkbox" id="provIsActive" checked> نشِط (يظهر في الدليل العام)</label>
 
             <div class="form-row" style="margin-top:18px;">
@@ -744,6 +781,60 @@
               <button type="button" class="btn-reject" onclick="closeProviderForm()">إلغاء</button>
             </div>
           </form>
+
+          <!-- معرض المزوّد وعروضه ومنتجاته (#184): لوحة مستقلة عن النموذج،
+               لكل بطاقة أزرارها — لا `submit` يرسل المزوّد بلا قصد. -->
+          <div id="providerCollectionsPanel" style="display:none; margin-top:22px;">
+            <div class="pane-header">
+              <h3><i class="fa-regular fa-images"></i> المعرض والعروض والمنتجات</h3>
+              <p>كل ما يضاف هنا يظهر في صفحة المزوّد العامة — والعروض المنتهية أو المطفأة لا تظهر للزوّار</p>
+            </div>
+
+            <div class="form-group">
+              <label>إضافة صورة إلى المعرض</label>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <input type="file" id="provGalleryFile" accept="image/*" style="flex:1; min-width:160px;">
+                <input type="text" id="provGalleryCaption" placeholder="تعليق اختياري" maxlength="200" style="flex:1; min-width:140px;">
+                <button type="button" class="admin-btn-primary" onclick="addProviderGalleryPhoto()"><i class="fa-solid fa-plus"></i> إضافة</button>
+              </div>
+              <div id="provGalleryGrid" class="prov-gallery-grid"></div>
+            </div>
+
+            <div class="form-group">
+              <label>العروض</label>
+              <input type="hidden" id="provOfferId">
+              <div class="form-row">
+                <div class="form-group half"><input type="text" id="provOfferTitle" placeholder="عنوان العرض *" maxlength="160"></div>
+                <div class="form-group half"><input type="number" id="provOfferPrice" placeholder="السعر (₪)" step="any" min="0"></div>
+              </div>
+              <div class="form-row">
+                <div class="form-group half"><input type="datetime-local" id="provOfferEndsAt" title="ينتهي في"></div>
+                <div class="form-group half"><label class="ot-check"><input type="checkbox" id="provOfferActive" checked> عرض نشِط</label></div>
+              </div>
+              <input type="text" id="provOfferDesc" placeholder="وصف قصير (اختياري)" maxlength="500" style="width:100%;">
+              <div style="margin-top:8px; display:flex; gap:8px;">
+                <button type="button" class="admin-btn-primary" onclick="saveProviderOffer()"><i class="fa-solid fa-check"></i> حفظ العرض</button>
+                <button type="button" class="btn-reject" onclick="resetProviderOfferForm()">مسح الحقول</button>
+              </div>
+              <div id="provOffersList" class="prov-offers-list"></div>
+            </div>
+
+            <div class="form-group">
+              <label>المنتجات (بسعر «تبدأ من»)</label>
+              <input type="hidden" id="provProductId">
+              <div class="form-row">
+                <div class="form-group half"><input type="text" id="provProductName" placeholder="اسم المنتج *" maxlength="160"></div>
+                <div class="form-group half"><input type="number" id="provProductPrice" placeholder="السعر (₪)" step="any" min="0"></div>
+              </div>
+              <input type="url" id="provProductImage" placeholder="رابط صورة المنتج (اختياري)" style="width:100%;">
+              <input type="text" id="provProductDesc" placeholder="وصف قصير (اختياري)" maxlength="500" style="width:100%; margin-top:6px;">
+              <div style="margin-top:8px; display:flex; gap:8px;">
+                <button type="button" class="admin-btn-primary" onclick="saveProviderProduct()"><i class="fa-solid fa-check"></i> حفظ المنتج</button>
+                <button type="button" class="btn-reject" onclick="resetProviderProductForm()">مسح الحقول</button>
+              </div>
+              <div id="provProductsList" class="prov-products-list"></div>
+            </div>
+          </div>
         </div>
       </section>
 

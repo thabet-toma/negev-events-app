@@ -55,7 +55,15 @@ const upload = multer({
 });
 
 /** What each event field is actually allowed to hold, whatever the client claims. */
-const FIELD_KIND = { poster: 'image', artist_image: 'image', audio: 'audio', image: 'image', photo: 'image' };
+const FIELD_KIND = {
+  poster: 'image',
+  artist_image: 'image',
+  audio: 'audio',
+  image: 'image',
+  photo: 'image',
+  logo: 'image',
+  cover: 'image'
+};
 
 /**
  * The real type, read from the file's own leading bytes. Returns null for
@@ -131,10 +139,17 @@ const eventMedia = [
   verifyMedia
 ];
 
-/** Accepts an optional service offer image. */
+/**
+ * خدمة المزوّد (تذكرة #184): صورة الحزمة قديماً (`image`)، وشعار المزوّد
+ * وغلافه، وصورة واحدة في المعرض (`photo`). ملفات الطلب ثلاثة على الأكثر —
+ * الشعار والغلاف معاً على `PATCH` واحد اثنان، والمعرض صورة في الطلب.
+ */
 const serviceMedia = [
   upload.fields([
-    { name: 'image', maxCount: 1 }
+    { name: 'image', maxCount: 1 },
+    { name: 'logo', maxCount: 1 },
+    { name: 'cover', maxCount: 1 },
+    { name: 'photo', maxCount: 1 }
   ]),
   verifyMedia
 ];

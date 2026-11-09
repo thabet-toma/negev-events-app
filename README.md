@@ -176,8 +176,9 @@ npm run db:import-legacy
    الزوج يعمل الخادم بشكل طبيعي، والاشتراك وحده يُرفض برسالة عربية واضحة.
 7. لصور Cloudinary (ADR-0008): ضع `CLOUDINARY_CLOUD_NAME` و
    `CLOUDINARY_API_KEY` و `CLOUDINARY_API_SECRET` (من لوحة Cloudinary ← API Keys) في `.env`.
-   بها تذهب كل صورة جديدة إلى Cloudinary: الملصق وصورة الفنان وصورة مزوّد الخدمة (يحوّلها الخادم
-   بعد استلامها)، وصور الألبومات وصور مشاركة الحلقات (رفع مباشر من المتصفّح). الصوت
+   بها تذهب كل صورة جديدة إلى Cloudinary: الملصق وصورة الفنان وصورة مزوّد الخدمة وشعاره وغلافه
+   وصور معرضه (يحوّلها الخادم بعد استلامها)، وصور الألبومات وصور مشاركة الحلقات (رفع مباشر من
+   المتصفّح). الصوت
    يبقى على القرص. بلاها، أو إن فشل Cloudinary لحظة الرفع، تُحفظ الصورة على القرص كما كانت ولا
    يفشل النشر، وزرّا الرفع المباشر يردّان برسالة عربية. ولصفحات الحلقات (`/live/e/:id`)
    وصفحات الصور المستقلة (`/p/:id`) وصفحات الألبومات (`/a/:id`) وصفحات الأشخاص
@@ -693,8 +694,9 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | الطريقة | المسار | الوصف |
 |---|---|---|
 | `GET` | `/api/services/categories` | فئات الخدمات النشِطة مع خصائصها ومواصفاتها النموذجية |
-| `GET` | `/api/services/providers` | قائمة مزوّدي الخدمات النشِطين (`?category_id=` `?town=` `?search=` `?page=` `?limit=`) مع المواصفات ونوع وسعر الحزمة التقديرية — **رقم الهاتف محجوب كلياً عن استجابة القائمة**؛ الرقم اختياري فيحمل كل صف علَماً `has_phone` (منطقي، دون الرقم نفسه) كي تعرف الواجهة أتعرض زر التواصل |
-| `GET` | `/api/services/providers/:id` | تفاصيل المزوّد الكاملة تشمل رقم الهاتف (`null` إن لم يُسجَّل) والمواصفات الكاملة |
+| `GET` | `/api/services/providers` | قائمة مزوّدي الخدمات النشِطين (`?category_id=` `?town=` `?search=` `?page=` `?limit=`) مع المواصفات ونوع وسعر الحزمة التقديرية وشارتَي `is_verified`/`is_featured` — و«مميّز» يتصدّر داخل الفئة ثم يُرتَّب الباقي بالاسم (تذكرة #184) — **رقم الهاتف محجوب كلياً عن استجابة القائمة**؛ الرقم اختياري فيحمل كل صف علَماً `has_phone` (منطقي، دون الرقم نفسه) كي تعرف الواجهة أتعرض زر التواصل |
+| `GET` | `/api/services/providers/:id` | تفاصيل المزوّد الكاملة — صفحة المزوّد الغنية (تذكرة #184): رقم الهاتف (`null` إن لم يُسجَّل) و`has_phone`، والمواصفات، و`logo_url`/`cover_url` (مطلقان عبر `withAbsoluteMedia`)، و`hours`، و`is_verified`/`is_featured`، و`gallery` (‏`[{ id, image_url, caption, position }]` بترتيب `position, id`)، و`offers` (**النشِطة غير المنتهية وحدها**: `is_active = 1 AND (ends_at IS NULL OR ends_at >= NOW())`، الأقرب انتهاءً أولاً ثم الأحدث، `ends_at` نصّ `YYYY-MM-DD HH:MM`)، و`products` (بترتيب `position, id`)، و`similar` (حتى ٦ من الفئة نفسها ومحافظة المزوّد عبر بلداته ← `towns.region_id`، معتمدون ونشِطون وليس المزوّد نفسه، بترتيب `is_featured DESC, created_at DESC, id DESC`، بشكل بطاقة القائمة نفسه وبلا رقم) |
+| `GET` | `/api/services/providers/:id/whatsapp` | رابط واتساب المزوّد (تذكرة #184): `{ success: true, url }` حيث `url` = `https://wa.me/<دولي>?text=<رسالة عربية>` تذكر «أعراسنا» وتسمّي فئته — **الرسالة تُبنى في الخادم وحده، والرقم لا يخرج في أي مفتاح منفصل**. التطبيع: أرقام فقط، `0…` ← `972…`، و`972…` كما هو. بلا رقم أو برقم لا يصلح أو لمزوّد غير معتمد/غير موجود ← 404 |
 | `POST` | `/api/services/providers` | طلب انضمام مزوّد خدمة جديد 🔒 — رقم الهاتف اختياري، وإن أُرسل يُتحقَّق منه |
 | `GET` | `/api/services/my-services` | الخدمات التي نشرها المستخدم الحالي 🔒 |
 | `GET` | `/api/admin/service-categories` | كل فئات الخدمات مع خصائصها وإحصاءاتها 🛡️ |
@@ -702,9 +704,23 @@ docker compose exec mysql mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" negev_event
 | `PATCH` | `/api/admin/service-categories/:id` | تعديل فئة خدمة وخصائصها 🛡️ |
 | `DELETE` | `/api/admin/service-categories/:id` | حذف أو تعطيل فئة خدمة 🛡️ |
 | `GET` | `/api/admin/service-providers` | قائمة المزوّدين للإدارة حسب نطاق البلدات 👑 |
+| `GET` | `/api/admin/service-providers/:id` | مزوّد واحد ضمن النطاق مع `gallery` و`offers` (**الكل، بما فيه المطفأ والمنتهي**) و`products`، و`hours` و`is_verified`/`is_featured` — يملأ نموذج اللوحة بلا ثلاثة نداءات أخرى؛ وخارج النطاق 404 👑 |
 | `POST` | `/api/admin/service-providers` | إضافة مزوّد خدمة مع إذن النشر الإلزامي والمواصفات والحزمة التقديرية؛ رقم الهاتف اختياري (غيابه أو فراغه يُخزَّن `NULL`) 👑 |
-| `PATCH` | `/api/admin/service-providers/:id` | تعديل بيانات المزوّد — `phone: ''` يمسح الرقم، وغياب المفتاح لا يلمسه 👑 |
+| `PATCH` | `/api/admin/service-providers/:id` | تعديل بيانات المزوّد — `phone: ''` يمسح الرقم، وغياب المفتاح لا يلمسه. ويقبل `logo`/`cover` ملفَّين (عبر `upload.js` ثم `cloudinary.storeUploadedImage`، و`logo_url`/`cover_url` نصّاً)، و`hours` (مصفوفة 0..6 من `{ day, closed?, from?, to? }`، ووقت `HH:MM` صارم؛ `''` يمسحها، وأي شكل آخر 400)، و`is_verified`/`is_featured` — **الشارتان للسوبر أدمن وحده، وإرسالهما من أدمن بلدات 403 عربية**. الملف المؤقّت يُحذف عند أي رفض، وتعذّر Cloudinary يعيد `/uploads/` ولا يُسقط الطلب 👑 |
 | `DELETE` | `/api/admin/service-providers/:id` | حذف مزوّد خدمة 👑 |
+| `POST` | `/api/admin/service-providers/:id/photos` | صورة واحدة في الطلب (حقل `photo`) مع `caption` اختياري (≤200) إلى معرض المزوّد؛ الرفع عبر `upload.js` ثم Cloudinary، والرابط يخرج مطلقاً. وخارج نطاق الأدمن 404 👑 |
+| `DELETE` | `/api/admin/service-providers/:id/photos/:photoId` | حذف صورة من المعرض (وتحرير صورتها من Cloudinary عبر `releaseReplacedImage`) 👑 |
+| `POST` | `/api/admin/service-providers/:id/offers` | عرض جديد: `title` (≤160) إلزامي، و`description` (≤500)، و`price`، و`ends_at` (`YYYY-MM-DD` أو `YYYY-MM-DD HH:MM`؛ تاريخ بلا وقت = نهاية يومه)، و`is_active` 👑 |
+| `PATCH` | `/api/admin/service-providers/:id/offers/:offerId` | تعديل عرض — يمسّ ما أُرسل وحده؛ وعرض لا يخصّ هذا المزوّد 404 👑 |
+| `DELETE` | `/api/admin/service-providers/:id/offers/:offerId` | حذف عرض 👑 |
+| `POST` | `/api/admin/service-providers/:id/products` | منتج جديد: `name` (≤160) إلزامي، و`description` (≤500)، و`price` (سعر «تبدأ من»)، و`image_url`، و`position` 👑 |
+| `PATCH` | `/api/admin/service-providers/:id/products/:productId` | تعديل منتج — يمسّ ما أُرسل وحده 👑 |
+| `DELETE` | `/api/admin/service-providers/:id/products/:productId` | حذف منتج 👑 |
+
+**`hours`** — الشكل الوحيد المخزَّن، شكلاً واحداً للأدمن وللعميل: مصفوفة **0..6** فيها عنصر لكل يوم عمل بـ`day` (0 = الأحد … 6 = السبت)، و`closed: true` لليوم المغلق، أو `from`/`to` نصّاً `HH:MM` لليوم المفتوح. التحقّق الصارم في طبقة المسار وحدها (400 عربية)، والخدمة تقرأ كما خُزِّن بلا تخمين. والواجهات تعرضه جدولاً أسبوعياً وتُخفي القسم إن لم يسجّل المزوّد ساعات.
+
+**الرقم وواتساب** — الرقم **لا يخرج في القائمة** (`has_phone` وحده) ويظهر في صفحة المزوّد المفردة وحدها (ADR-0016). وأي رابط واتساب لمزوّد يبنيه الخادم في `GET /api/services/providers/:id/whatsapp` برسالته العربية — ولا يبنيه عميل، ولا يعيد الخادم الرقم منفصلاً معه.
+
 
 
 ### الإدارة 👑

@@ -10167,10 +10167,14 @@ async function run() {
 
     const callLink = document.getElementById('providerContactArea').querySelector('a.service-btn-call');
     assert.strictEqual(callLink.getAttribute('href'), 'tel:0501234567', 'the call link dials the fetched number');
-    const whatsappLink = document.getElementById('providerContactArea').querySelector('a.service-btn-whatsapp');
-    assert.ok(
-      whatsappLink.getAttribute('href').startsWith('https://wa.me/972501234567'),
-      `the WhatsApp link uses the international form, got: ${whatsappLink.getAttribute('href')}`
+    // منذ #184 رابط واتساب يبنيه الخادم وحده: هنا زرّ بلا `href`، ويقرأ
+    // المسار عند الضغط. البناء في العميل نفسه اختُبر في قسم الصفحة الغنية.
+    const whatsappButton = document.getElementById('providerContactArea').querySelector('button.service-btn-whatsapp');
+    assert.ok(whatsappButton, 'زرّ واتساب في منطقة التواصل');
+    assert.strictEqual(
+      whatsappButton.getAttribute('href'),
+      null,
+      'the client builds no wa.me link of its own — the server owns the URL and the message'
     );
   });
 
@@ -10247,6 +10251,340 @@ async function run() {
     const heights = buttonRules.flatMap(rule => [...rule.body.matchAll(/min-height\s*:\s*([\d.]+)px/g)].map(m => Number(m[1])));
     assert.ok(heights.length, 'the compact row buttons must declare a minimum height');
     assert.ok(heights.every(height => height >= 44), `every compact row button needs ≥44px, got: ${heights.join('، ')}`);
+  });
+
+  console.log('\nصفحة المزوّد الغنية (تذكرة #184): الأقسام والشارتان وواتساب الخادم');
+
+  /**
+   * مزوّد كامل كما يعيده `GET /api/services/providers/:id` بعد #184. كل حقل
+   * موجود هنا له قسم في النافذة، فحين يظهر كل القسم نعرف أن الرسم يقرأه —
+   * وحين يُحذف منه شيء يجب أن يختفي قسمه (التأكيد التالي).
+   */
+  const RICH_PROVIDER_FIXTURE = {
+    id: 701,
+    name: 'مزوّد الصفحة الغنية',
+    category_id: 9,
+    category_name: 'صالات أفراح',
+    category_icon: '🏛️',
+    category_color: '#8a6109',
+    phone: '0501234567',
+    has_phone: true,
+    description: 'قاعة واسعة تتّسع لألف ضيف',
+    image_url: null,
+    logo_url: 'https://cdn.example.test/logo.png',
+    cover_url: 'https://cdn.example.test/cover.png',
+    hours: [
+      { day: 0, closed: false, from: '09:00', to: '18:00' },
+      { day: 1, closed: true }
+    ],
+    is_verified: true,
+    is_featured: true,
+    price: 4500,
+    price_type: 'starting_at',
+    price_estimate_desc: null,
+    attributes: {},
+    towns: ['رهط'],
+    gallery: [
+      { id: 11, image_url: 'https://cdn.example.test/g1.jpg', caption: 'قاعة النساء', position: 0 }
+    ],
+    offers: [
+      { id: 21, title: 'خصم الصيف', description: '١٠٪ على الحجز المبكر', price: 1200, ends_at: '2027-06-30 20:00', is_active: true }
+    ],
+    products: [
+      { id: 31, name: 'كرسي ملكي', description: 'كرسي مزخرف', price: 25, image_url: null, position: 0 }
+    ],
+    similar: [
+      {
+        id: 702,
+        name: 'مزوّد مشابه',
+        category_id: 9,
+        category_name: 'صالات أفراح',
+        category_icon: '🏛️',
+        category_color: '#8a6109',
+        has_phone: false,
+        image_url: null,
+        price: null,
+        price_type: 'contact',
+        price_estimate_desc: null,
+        attributes: {},
+        is_verified: false,
+        is_featured: false,
+        towns: ['حورة']
+      }
+    ]
+  };
+
+  /** عميل وهمي: تفصيل المزوّد (أو مسار واتسابه) وحده، وكل ما عداه ردّ فاشل. */
+  function instrumentRichProvider(win, provider, { whatsappUrl = null } = {}) {
+    const calls = [];
+    win.fetch = async (url, options = {}) => {
+      const requestPath = String(url).split('?')[0];
+      calls.push({ path: requestPath, method: options.method || 'GET' });
+      if (requestPath === `/api/services/providers/${provider.id}`) {
+        return jsonResponse({ success: true, provider });
+      }
+      if (requestPath === `/api/services/providers/${provider.id}/whatsapp`) {
+        if (!whatsappUrl) return jsonResponse({ success: false, message: 'لا يوجد رقم' }, { status: 404 });
+        return jsonResponse({ success: true, url: whatsappUrl });
+      }
+      return jsonResponse({ success: false });
+    };
+    return calls;
+  }
+
+  await test('نافذة المزوّد تعرض كل الأقسام: الغلاف والشعار والشارتين والساعات والمعرض والعروض والمنتجات والمشابهين (#184)', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const calls = instrumentRichProvider(win, RICH_PROVIDER_FIXTURE);
+
+    await win.openProviderModal(701);
+
+    // الغلاف والشعار
+    assert.strictEqual(document.getElementById('providerModalCoverWrap').hidden, false, 'الغلاف ظاهر');
+    assert.ok(
+      document.getElementById('providerModalCover').src.endsWith('/cover.png'),
+      'الغلاف من الحقل الذي أرسله الخادم'
+    );
+    assert.strictEqual(document.getElementById('providerModalLogo').hidden, false, 'الشعار ظاهر');
+    assert.ok(document.getElementById('providerModalLogo').src.endsWith('/logo.png'));
+
+    // الشارتان
+    const badges = document.getElementById('providerModalBadges');
+    assert.strictEqual(badges.hidden, false);
+    assert.ok(badges.textContent.includes('موثّق'), 'شارة «موثّق»');
+    assert.ok(badges.textContent.includes('مميّز'), 'شارة «مميّز»');
+
+    // الساعات: جدول أسبوعي، والمغلق يظهر بكلمة واحدة
+    const hoursSection = document.getElementById('providerHoursSection');
+    assert.strictEqual(hoursSection.hidden, false, 'قسم الساعات ظاهر');
+    const hoursRows = document.querySelectorAll('#providerHoursRows tr');
+    assert.strictEqual(hoursRows.length, 2, 'صفّ لكل يوم مسجَّل');
+    assert.ok(hoursRows[0].textContent.includes('الأحد'), 'اسم اليوم من الفهرس المخزَّن');
+    assert.ok(hoursRows[0].textContent.includes('09:00 — 18:00'), 'وقتا اليوم المفتوح');
+    assert.ok(hoursRows[1].textContent.includes('مغلق'), 'اليوم المغلق بكلمة واحدة');
+
+    // المعرض
+    const gallerySection = document.getElementById('providerGallerySection');
+    assert.strictEqual(gallerySection.hidden, false, 'قسم المعرض ظاهر');
+    assert.strictEqual(document.querySelectorAll('#providerGalleryGrid img').length, 1);
+    assert.ok(document.getElementById('providerGalleryGrid').textContent.includes('قاعة النساء'), 'تعليق الصورة');
+
+    // العروض
+    const offersSection = document.getElementById('providerOffersSection');
+    assert.strictEqual(offersSection.hidden, false, 'قسم العروض ظاهر');
+    const offersText = document.getElementById('providerOffersList').textContent;
+    assert.ok(offersText.includes('خصم الصيف'), 'عنوان العرض');
+    assert.ok(offersText.includes('ينتهي 2027-06-30 20:00'), 'تاريخ الانتهاء كما وصل');
+
+    // المنتجات
+    const productsSection = document.getElementById('providerProductsSection');
+    assert.strictEqual(productsSection.hidden, false, 'قسم المنتجات ظاهر');
+    const productsText = document.getElementById('providerProductsList').textContent;
+    assert.ok(productsText.includes('كرسي ملكي'), 'اسم المنتج');
+    assert.ok(productsText.includes('تبدأ من'), 'سعر «تبدأ من»');
+
+    // المشابهون: النقر يفتح مزوّداً آخر من المسار نفسه
+    const similarSection = document.getElementById('providerSimilarSection');
+    assert.strictEqual(similarSection.hidden, false, 'قسم المشابهين ظاهر');
+    const similarCard = document.querySelector('#providerSimilarGrid .provider-similar-card');
+    assert.ok(similarCard, 'بطاقة مشابه واحدة');
+    assert.ok(similarCard.textContent.includes('مزوّد مشابه'));
+
+    similarCard.click();
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/702'));
+  });
+
+  await test('نافذة المزوّد تُخفي كل قسم فارغ: لا ساعات ولا معرض ولا عروض ولا منتجات ولا مشابهين ولا شارات (#184)', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    instrumentRichProvider(win, {
+      ...RICH_PROVIDER_FIXTURE,
+      id: 703,
+      logo_url: null,
+      cover_url: null,
+      hours: [],
+      gallery: [],
+      offers: [],
+      products: [],
+      similar: [],
+      is_verified: false,
+      is_featured: false
+    });
+
+    await win.openProviderModal(703);
+
+    for (const id of [
+      'providerHoursSection',
+      'providerGallerySection',
+      'providerOffersSection',
+      'providerProductsSection',
+      'providerSimilarSection',
+      'providerModalBadges',
+      'providerModalLogo',
+      'providerModalCoverWrap'
+    ]) {
+      assert.strictEqual(document.getElementById(id).hidden, true, `القسم الفارغ ${id} مخفي — لا عنوان ولا حاوية`);
+    }
+  });
+
+  await test('زرّ واتساب يقرأ الرابط من GET .../whatsapp ويفتحه كما وصل — لا wa.me يبنيه العميل (#184)', async () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const { document } = win;
+    const whatsappUrl = 'https://wa.me/972501234567?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7';
+    const calls = instrumentRichProvider(win, { ...RICH_PROVIDER_FIXTURE, id: 704 }, { whatsappUrl });
+    const opened = [];
+    win.open = url => { opened.push(url); return null; };
+
+    await win.openProviderModal(704, { revealContact: true });
+
+    const button = document.querySelector('#providerContactArea button.service-btn-whatsapp');
+    assert.ok(button, 'زرّ واتساب في منطقة التواصل');
+    assert.strictEqual(button.getAttribute('href'), null, 'لا href يبنيه العميل — الرابط من الخادم');
+
+    button.click();
+    await waitFor(() => calls.some(call => call.path === '/api/services/providers/704/whatsapp'));
+    await waitFor(() => opened.length > 0);
+
+    assert.deepStrictEqual(opened, [whatsappUrl], 'يفتح الرابط نفسه الذي أعاده الخادم حرفياً');
+    assert.strictEqual(
+      document.getElementById('providerContactArea').querySelector('a.service-btn-call').getAttribute('href'),
+      'tel:0501234567',
+      'والاتصال الهاتفي باقٍ كما كان'
+    );
+  });
+
+  await test('شارتا «موثّق» و«مميّز» على بطاقة القائمة في الشكلين، ولا شارة لمن لا يحملها (#184)', () => {
+    const dom = buildEnv();
+    const win = dom.window;
+    const base = {
+      id: 711,
+      name: 'مزوّد بشارتين',
+      category_id: 9,
+      category_name: 'صالات أفراح',
+      category_icon: '🏛️',
+      category_color: '#8a6109',
+      has_phone: true,
+      image_url: null,
+      price: 100,
+      price_type: 'fixed',
+      price_estimate_desc: null,
+      attributes: {},
+      towns: ['رهط']
+    };
+
+    const verifiedRow = win.renderCompactServiceRowHtml({ ...base, is_verified: true, is_featured: false });
+    assert.ok(verifiedRow.includes('provider-badge-verified'), 'شارة «موثّق» في الصفّ المختصر');
+    assert.ok(verifiedRow.includes('موثّق'), 'ونصّها العربي');
+    assert.ok(!verifiedRow.includes('provider-badge-featured'), 'ولا شارة «مميّز» لهذا المزوّد');
+
+    const plainRow = win.renderCompactServiceRowHtml({ ...base, id: 712, is_verified: false, is_featured: false });
+    assert.ok(!plainRow.includes('provider-badge'), 'مزوّد بلا شارات لا يحمل حاوية شارات');
+
+    const featuredCard = win.renderSingleServiceCardHtml({ ...base, id: 713, is_verified: false, is_featured: true });
+    assert.ok(featuredCard.includes('provider-badge-featured'), 'شارة «مميّز» في الكرت الكبير');
+    assert.ok(!featuredCard.includes('provider-badge-verified'), 'ولا «موثّق» لمن ليس موثّقاً');
+  });
+
+  await test('اللوحة: مربّعا «موثّق»/«مميّز» يظهران للسوبر أدمن وحدهما، ومحرّر الساعات والمعرض يظهران لمزوّد محفوظ (#184)', async () => {
+    const ADMIN_PROVIDER = {
+      id: 701,
+      name: 'مزوّد اللوحة',
+      category_id: 3,
+      category_name: 'صالات',
+      is_active: true,
+      is_verified: false,
+      is_featured: false,
+      price: null,
+      price_type: 'estimated',
+      price_estimate_desc: null,
+      attributes: {},
+      towns: ['رهط'],
+      status: 'approved',
+      phone: '0501234567',
+      hours: [{ day: 2, closed: false, from: '08:00', to: '15:00' }],
+      logo_url: null,
+      cover_url: null
+    };
+
+    for (const [role, flagsVisible] of [['super_admin', 'flex'], ['admin', 'none']]) {
+      const dom = buildAdminEnv({ loggedIn: true, role, towns: ['رهط'] });
+      const { window } = dom;
+      window.fetch = async (url, options = {}) => {
+        const requestPath = String(url).split('?')[0];
+        if (requestPath === '/api/admin/me') {
+          return jsonResponse({ success: true, user: { id: 1, role }, towns: role === 'super_admin' ? [] : ['رهط'] });
+        }
+        if (requestPath === '/api/services/categories') {
+          return jsonResponse({ success: true, categories: [] });
+        }
+        if (requestPath === '/api/admin/service-providers') {
+          return jsonResponse({
+            success: true,
+            providers: [ADMIN_PROVIDER],
+            pagination: { page: 1, limit: 100, total: 1, totalPages: 1 }
+          });
+        }
+        if (requestPath === '/api/admin/service-providers/701') {
+          return jsonResponse({
+            success: true,
+            provider: { ...ADMIN_PROVIDER, gallery: [], offers: [], products: [] }
+          });
+        }
+        return jsonResponse({ success: false });
+      };
+
+      await window.fetchAdminIdentity();
+      await window.fetchAdminServiceProviders();
+      window.openProviderForm(701);
+      await delay(20);
+
+      const { document } = window;
+      assert.strictEqual(
+        document.getElementById('provFlagsWrapper').style.display,
+        flagsVisible,
+        `مربّعا الشارتين لدور ${role}`
+      );
+      assert.strictEqual(
+        document.getElementById('providerCollectionsPanel').style.display,
+        'block',
+        `لوحة المعرض والعروض والمنتجات لمزوّد محفوظ (دور ${role})`
+      );
+      assert.strictEqual(
+        document.querySelectorAll('#provHoursRows .prov-hours-row').length,
+        7,
+        'محرّر الساعات سبعة صفوف دائماً'
+      );
+      assert.ok(
+        document.getElementById('provHoursRows').textContent.includes('الأربعاء'),
+        'وأسماء الأيام تُرسم من الفهرس نفسه'
+      );
+    }
+  });
+
+  await test('اللوحة: نموذج مزوّد جديد لا يفتح الشعار والغلاف والمعرض قبل الحفظ (#184)', async () => {
+    const dom = buildAdminEnv({ loggedIn: true, role: 'super_admin' });
+    const { window } = dom;
+    window.fetch = async (url) => {
+      const requestPath = String(url).split('?')[0];
+      if (requestPath === '/api/admin/me') {
+        return jsonResponse({ success: true, user: { id: 1, role: 'super_admin' }, towns: [] });
+      }
+      if (requestPath === '/api/services/categories') {
+        return jsonResponse({ success: true, categories: [] });
+      }
+      return jsonResponse({ success: true, providers: [], pagination: { page: 1, limit: 100, total: 0, totalPages: 1 } });
+    };
+    await window.fetchAdminIdentity();
+
+    window.openProviderForm();
+    const { document } = window;
+    assert.strictEqual(document.getElementById('provLogoFile').disabled, true, 'رفع الشعار يحتاج مزوّداً محفوظاً');
+    assert.strictEqual(document.getElementById('provCoverFile').disabled, true, 'وكذلك الغلاف');
+    assert.strictEqual(document.getElementById('providerCollectionsPanel').style.display, 'none', 'ولا معرض قبل الحفظ');
+    assert.notStrictEqual(document.getElementById('provPageFieldsHint').style.display, 'none', 'وتلميح يشرح السبب');
   });
 
   console.log('\nSession expiry, the «حسابي» button, «قريتي غير موجودة», and the default event audio');

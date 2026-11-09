@@ -206,9 +206,114 @@ class ServiceProvidersPagination {
       );
 }
 
+/// ساعات يوم واحد من `hours` — `{ day, closed?, from?, to? }` كما يخزّنها
+/// الأدمن. `day` من 0 (الأحد) إلى 6 (السبت)، والوقت نصّ `HH:MM`. لا تفسير ولا
+/// تحويل هنا: الشاشة تعرض ما وصل، والشكل نفسه محقَّق على الخادم.
+class ServiceProviderHours {
+  final int day;
+  final bool closed;
+  final String from;
+  final String to;
+
+  const ServiceProviderHours({
+    required this.day,
+    this.closed = false,
+    this.from = '',
+    this.to = '',
+  });
+
+  factory ServiceProviderHours.fromJson(Map<String, dynamic> json) =>
+      ServiceProviderHours(
+        day: _toInt(json['day']),
+        closed: json['closed'] == true,
+        from: '${json['from'] ?? ''}',
+        to: '${json['to'] ?? ''}',
+      );
+}
+
+/// صورة من معرض المزوّد — `caption` اختياري، والترتيب يصل من الخادم.
+class ServiceProviderPhoto {
+  final int id;
+  final String imageUrl;
+  final String? caption;
+
+  const ServiceProviderPhoto({
+    required this.id,
+    required this.imageUrl,
+    this.caption,
+  });
+
+  factory ServiceProviderPhoto.fromJson(Map<String, dynamic> json) =>
+      ServiceProviderPhoto(
+        id: _toInt(json['id']),
+        imageUrl: '${json['image_url'] ?? ''}',
+        caption: _nullableString(json['caption']),
+      );
+}
+
+/// عرض ساري — الخادم لا يرسل للعامة إلا النشِط غير المنتهي (تذكرة #184).
+class ServiceProviderOffer {
+  final int id;
+  final String title;
+  final String? description;
+  final num? price;
+  final String? endsAt;
+
+  const ServiceProviderOffer({
+    required this.id,
+    required this.title,
+    this.description,
+    this.price,
+    this.endsAt,
+  });
+
+  factory ServiceProviderOffer.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['price'];
+    return ServiceProviderOffer(
+      id: _toInt(json['id']),
+      title: '${json['title'] ?? ''}',
+      description: _nullableString(json['description']),
+      price: rawPrice is num ? rawPrice : num.tryParse('$rawPrice'),
+      endsAt: _nullableString(json['ends_at']),
+    );
+  }
+}
+
+/// منتج بسعر «تبدأ من».
+class ServiceProviderProduct {
+  final int id;
+  final String name;
+  final String? description;
+  final num? price;
+  final String? imageUrl;
+
+  const ServiceProviderProduct({
+    required this.id,
+    required this.name,
+    this.description,
+    this.price,
+    this.imageUrl,
+  });
+
+  factory ServiceProviderProduct.fromJson(Map<String, dynamic> json) {
+    final rawPrice = json['price'];
+    return ServiceProviderProduct(
+      id: _toInt(json['id']),
+      name: '${json['name'] ?? ''}',
+      description: _nullableString(json['description']),
+      price: rawPrice is num ? rawPrice : num.tryParse('$rawPrice'),
+      imageUrl: _nullableString(json['image_url']),
+    );
+  }
+}
+
 /// مزوّد خدمة كامل — من GET /api/services/providers/:id، الموضع الوحيد الذي
 /// يحمل `phone`. لا يُعرض الرقم في الواجهة إلا خلف فعل تواصل صريح — القرار
 /// هنا في العميل يحترم قرار الخادم بعدم إرساله في القائمة، لا يكرّره فقط.
+///
+/// **وصفحته غنية منذ #184:** الشعار والغلاف، وشارتا «موثّق»/«مميّز»، وساعات
+/// العمل، والمعرض، والعروض السارية، والمنتجات، ومزوّدون مشابهون. كل حقل يصل
+/// بشكله من الخادم ولا يُخمَّن في الشاشة، وكل قسم فارغ يُخفى.
 class ServiceProviderDetail {
   final int id;
   final String name;
@@ -219,6 +324,15 @@ class ServiceProviderDetail {
   final String phone;
   final String? description;
   final String? imageUrl;
+  final String? logoUrl;
+  final String? coverUrl;
+  final bool isVerified;
+  final bool isFeatured;
+  final List<ServiceProviderHours> hours;
+  final List<ServiceProviderPhoto> gallery;
+  final List<ServiceProviderOffer> offers;
+  final List<ServiceProviderProduct> products;
+  final List<ServiceProvider> similar;
   final num? price;
   final String priceType;
   final String? priceEstimateDesc;
@@ -237,6 +351,15 @@ class ServiceProviderDetail {
     required this.phone,
     this.description,
     this.imageUrl,
+    this.logoUrl,
+    this.coverUrl,
+    this.isVerified = false,
+    this.isFeatured = false,
+    this.hours = const [],
+    this.gallery = const [],
+    this.offers = const [],
+    this.products = const [],
+    this.similar = const [],
     this.price,
     this.priceType = 'estimated',
     this.priceEstimateDesc,
@@ -252,6 +375,11 @@ class ServiceProviderDetail {
   factory ServiceProviderDetail.fromJson(Map<String, dynamic> json) {
     final rawTowns = json['towns'];
     final rawPrice = json['price'];
+    final rawHours = json['hours'];
+    final rawGallery = json['gallery'];
+    final rawOffers = json['offers'];
+    final rawProducts = json['products'];
+    final rawSimilar = json['similar'];
     return ServiceProviderDetail(
       id: _toInt(json['id']),
       name: '${json['name'] ?? ''}',
@@ -262,6 +390,40 @@ class ServiceProviderDetail {
       phone: '${json['phone'] ?? ''}',
       description: _nullableString(json['description']),
       imageUrl: _nullableString(json['image_url']),
+      logoUrl: _nullableString(json['logo_url']),
+      coverUrl: _nullableString(json['cover_url']),
+      isVerified: json['is_verified'] == true,
+      isFeatured: json['is_featured'] == true,
+      hours: rawHours is List
+          ? rawHours
+              .whereType<Map<String, dynamic>>()
+              .map(ServiceProviderHours.fromJson)
+              .toList()
+          : const [],
+      gallery: rawGallery is List
+          ? rawGallery
+              .whereType<Map<String, dynamic>>()
+              .map(ServiceProviderPhoto.fromJson)
+              .toList()
+          : const [],
+      offers: rawOffers is List
+          ? rawOffers
+              .whereType<Map<String, dynamic>>()
+              .map(ServiceProviderOffer.fromJson)
+              .toList()
+          : const [],
+      products: rawProducts is List
+          ? rawProducts
+              .whereType<Map<String, dynamic>>()
+              .map(ServiceProviderProduct.fromJson)
+              .toList()
+          : const [],
+      similar: rawSimilar is List
+          ? rawSimilar
+              .whereType<Map<String, dynamic>>()
+              .map(ServiceProvider.fromJson)
+              .toList()
+          : const [],
       price: rawPrice is num ? rawPrice : (num.tryParse('$rawPrice')),
       priceType: '${json['price_type'] ?? 'estimated'}',
       priceEstimateDesc: _nullableString(json['price_estimate_desc']),
