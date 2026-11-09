@@ -783,4 +783,249 @@ void main() {
       );
     });
   });
+
+  group('ردّ المزوّد المربوط (#187)', () {
+    /// مزوّد مربوط بحساب — `is_linked_provider` تعني «هذا الحساب صاحبه».
+    Map<String, dynamic> linkedProvider() => {
+          'id': 701,
+          'name': 'مزوّد الردّ',
+          'category_id': 9,
+          'category_name': 'صالات أفراح',
+          'category_icon': '🏛️',
+          'category_color': '#8a6109',
+          'phone': '0501234567',
+          'has_phone': true,
+          'description': 'قاعة واسعة',
+          'image_url': null,
+          'logo_url': null,
+          'cover_url': null,
+          'hours': <dynamic>[],
+          'gallery': <dynamic>[],
+          'offers': <dynamic>[],
+          'products': <dynamic>[],
+          'similar': <dynamic>[],
+          'price': 100,
+          'price_type': 'fixed',
+          'price_estimate_desc': null,
+          'attributes': <String, dynamic>{},
+          'status': 'approved',
+          'towns': <dynamic>['رهط'],
+          'views_count': 3,
+          'favorites_count': 0,
+          'is_favorite': false,
+          'rating_avg': 4.5,
+          'rating_count': 2,
+          'rating_distribution': {'1': 0, '2': 0, '3': 1, '4': 0, '5': 1},
+          'my_review': null,
+          'is_linked_provider': true,
+        };
+
+    /// ثلاثة تعليقات: بردّ قائم، وبلا ردّ (`can_reply`)، ولغير المربوط.
+    List<Map<String, dynamic>> replyReviews() => [
+          {
+            'id': 601,
+            'rating': 5,
+            'body': 'خدمة ممتازة',
+            'user_name': 'مريم',
+            'created_at': '2026-11-01T10:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+            'can_reply': true,
+            'reply_body': 'شكراً لك على ثقتك',
+            'reply_at': '2026-11-02T09:00:00.000Z',
+          },
+          {
+            'id': 602,
+            'rating': 4,
+            'body': 'تجربة جميلة',
+            'user_name': 'سالم',
+            'created_at': '2026-11-01T11:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+            'can_reply': true,
+          },
+          {
+            'id': 603,
+            'rating': 3,
+            'body': 'جيد',
+            'user_name': 'هند',
+            'created_at': '2026-11-01T12:00:00.000Z',
+            'is_mine': false,
+            'can_delete': false,
+            'can_reply': false,
+          },
+        ];
+
+    /// عميل وهمي: `/reviews` مرقّمة، و`PUT /api/services/reviews/:rid/reply`
+    /// يكتب الردّ في المجموعة نفسها ويعيد الصفّ كما يفعل الخادم — فلا حساب
+    /// محلي في الشاشة ولا في الاختبار.
+    NegevApi replyApi(Map<String, dynamic> provider, List<http.Request> requests) {
+      final list = replyReviews();
+
+      http.Response jsonResponse(Map<String, dynamic> body) => http.Response(
+            jsonEncode(body),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        final method = request.method;
+
+        if (path.endsWith('/api/auth/login')) {
+          return jsonResponse({
+            'success': true,
+            'token': 'test-token',
+            'user': {
+              'id': 1,
+              'phone_number': '0500000000',
+              'full_name': 'مستخدم اختبار',
+              'role': 'user',
+            },
+          });
+        }
+        if (path.endsWith('/view')) {
+          return jsonResponse({'success': true, 'counted': true, 'views_count': 4});
+        }
+        if (path.endsWith('/reviews') && method == 'GET') {
+          final page = int.tryParse(request.url.queryParameters['page'] ?? '1') ?? 1;
+          final limit = int.tryParse(request.url.queryParameters['limit'] ?? '5') ?? 5;
+          return jsonResponse({
+            'success': true,
+            'reviews': list.skip((page - 1) * limit).take(limit).toList(),
+            'pagination': {
+              'page': page,
+              'limit': limit,
+              'total': list.length,
+              'totalPages': (list.length / limit).ceil(),
+            },
+          });
+        }
+
+        final replyMatch = RegExp(r'/api/services/reviews/(\d+)/reply$').firstMatch(path);
+        if (replyMatch != null && method == 'PUT') {
+          final id = int.parse(replyMatch.group(1)!);
+          final row = list.firstWhere((review) => review['id'] == id);
+          if (row['can_reply'] != true) {
+            return http.Response(
+              jsonEncode({'success': false, 'message': 'التقييم غير موجود'}),
+              404,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          row['reply_body'] = body['reply_body'];
+          row['reply_at'] = '2026-11-03T11:30:00.000Z';
+          return jsonResponse({'success': true, 'review': {...row}});
+        }
+
+        if (path == '/api/services/providers/701') {
+          return jsonResponse({'success': true, 'provider': provider});
+        }
+        return jsonResponse({'success': true});
+      });
+
+      return NegevApi(ApiClient(client: client));
+    }
+
+    testWidgets('الردّ اقتباس تحت التقييم، وزرّه للحساب المربوط وحده', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, replyApi(linkedProvider(), requests), signedIn: true);
+
+      expect(
+        find.byKey(const Key('provider_review_reply_601')),
+        findsOneWidget,
+        reason: 'الردّ يظهر تحت التقييم',
+      );
+      expect(find.text('ردّ المزوّد'), findsOneWidget, reason: 'وبتسمية صريحة أنه ردّ المزوّد');
+      expect(find.text('شكراً لك على ثقتك'), findsOneWidget, reason: 'وبنصّه');
+      expect(
+        find.byKey(const Key('provider_review_reply_btn_601')),
+        findsOneWidget,
+        reason: 'وللحساب المربوط زرّه',
+      );
+      expect(find.text('عدّل الردّ'), findsWidgets, reason: 'ونصّه تعديل لأن هناك ردّاً');
+
+      expect(
+        find.byKey(const Key('provider_review_reply_602')),
+        findsNothing,
+        reason: 'لا اقتباس تحت تقييم بلا ردّ',
+      );
+      expect(
+        find.byKey(const Key('provider_review_reply_btn_602')),
+        findsOneWidget,
+        reason: 'لكن زرّ الردّ متاح للحساب المربوط',
+      );
+      expect(
+        find.byKey(const Key('provider_review_reply_btn_603')),
+        findsNothing,
+        reason: 'وتقييم مزوّد آخر لا زرّ ردّ لهذا الحساب',
+      );
+    });
+
+    testWidgets('ورقة الردّ تُعبَّأ من الردّ القائم وتُرسل بـPUT إلى مسار التقييم', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, replyApi(linkedProvider(), requests), signedIn: true);
+
+      await tester.tap(find.byKey(const Key('provider_review_reply_btn_601')));
+      await settleFrames(tester);
+
+      expect(find.byKey(const Key('provider_reply_body')), findsOneWidget, reason: 'الورقة فُتحت');
+      final field = tester.widget<TextField>(find.byKey(const Key('provider_reply_body')));
+      expect(
+        field.controller?.text,
+        'شكراً لك على ثقتك',
+        reason: 'التعديل يبدأ من النصّ القائم لا من فراغ',
+      );
+
+      const updated = 'شكراً لك، ونعتذر عن أي تأخير';
+      await tester.enterText(find.byKey(const Key('provider_reply_body')), updated);
+      await tester.tap(find.byKey(const Key('provider_reply_submit')));
+      await settleFrames(tester);
+
+      final sent = requests.where((request) =>
+          request.method == 'PUT' &&
+          request.url.path.endsWith('/api/services/reviews/601/reply'));
+      expect(sent, hasLength(1), reason: 'ردّ واحد على التقييم نفسه');
+      expect(
+        (jsonDecode(sent.first.body) as Map<String, dynamic>)['reply_body'],
+        updated,
+        reason: 'والنصّ كما كُتب',
+      );
+      expect(find.byKey(const Key('provider_reply_body')), findsNothing, reason: 'الورقة أُغلقت');
+      // النصّ وحده لا يفرّق بين صفٍّ جاء من ردّ الخادم وصفٍّ عُدِّل محلياً؛
+      // وتاريخ الردّ لا يوجد إلا في الصفّ العائد من `PUT`، فحضوره يثبت المصدر.
+      final replyDate = find.byKey(const Key('provider_review_reply_date_601'));
+      expect(replyDate, findsOneWidget, reason: 'التاريخ من ردّ الخادم لا من حساب محلي');
+      expect(
+        tester.widget<Text>(replyDate).data,
+        isNotEmpty,
+        reason: 'وللردّ تاريخ منسوب إليه',
+      );
+      expect(find.text(updated), findsOneWidget, reason: 'والاقتباس يُرسم من ردّ الخادم');
+    });
+
+    testWidgets('الورقة لا تُرسل ردّاً فارغاً', (tester) async {
+      final requests = <http.Request>[];
+      await pumpProviderPage(tester, replyApi(linkedProvider(), requests), signedIn: true);
+
+      await tester.tap(find.byKey(const Key('provider_review_reply_btn_602')));
+      await settleFrames(tester);
+      await tester.tap(find.byKey(const Key('provider_reply_submit')));
+      await settleFrames(tester);
+
+      expect(
+        requests.where((request) =>
+            request.method == 'PUT' && request.url.path.contains('/reply')),
+        isEmpty,
+        reason: 'النصّ الفارغ لا يصل الخادم',
+      );
+      expect(
+        find.byKey(const Key('provider_reply_body')),
+        findsOneWidget,
+        reason: 'والورقة تبقى مفتوحة ليكتب',
+      );
+    });
+  });
 }

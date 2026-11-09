@@ -21239,6 +21239,462 @@ async function run() {
     await db.execute('DELETE FROM users WHERE id = ?', [id]);
   }
 
+  // ==================================================================
+  // ربط المزوّد بحساب وردّه على التقييمات (تذكرة #187، ADR-0016)
+  // ==================================================================
+  console.log('\nربط المزوّد بحساب وردّه على التقييمات (#187): السوبر أدمن وحده، و404 لغيره');
+
+  let lnkCategoryId = 0;
+  let lnkProviderId = 0;
+  let lnkOtherProviderId = 0;
+  let lnkReviewId = 0;
+  let lnkSuperAdminId = 0;
+  let lnkSuperAdminToken = '';
+  let lnkAdminId = 0;
+  let lnkAdminToken = '';
+  let lnkUserId = 0;
+  let lnkUserToken = '';
+  let lnkSecondId = 0;
+  let lnkSecondToken = '';
+  let lnkThirdId = 0;
+  let lnkThirdToken = '';
+  const lnkSuperAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const lnkAdminPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const lnkUserPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const lnkSecondPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const lnkThirdPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+
+  /**
+   * حساب حيّ لهذا القسم — يُكتب في القاعدة مباشرةً بتوكن موقَّع، لا عبر
+   * `POST /api/auth/register`: حساب الربط مفتاح أجنبي إلى `users(id)`، وشريحة
+   * `authLimiter` استُنفدت في السويت الطويل. وسوبر أدمن جديد يعني شريحة
+   * `rateLimit` جديدة، كما في قسمَي #185/#186 — لا تخفيف للحدّ ولا تعطيل.
+   */
+  async function createLinkUser(phoneValue, fullName, role = 'user') {
+    const { insertId } = await db.execute(
+      `INSERT INTO users (phone_number, full_name, pin_code, role) VALUES (?, ?, ?, ?)`,
+      [phoneValue, fullName, bcrypt.hashSync('1234', config.bcryptRounds), role]
+    );
+    return {
+      id: insertId,
+      token: signToken({ id: insertId, phone_number: phoneValue, full_name: fullName, role }, '1h')
+    };
+  }
+
+  /** عمود الربط كما هو في القاعدة — مصدر الحقيقة، لا شكل الاستجابة. */
+  async function storedLinkedUserId(providerId) {
+    const row = await db.queryOne(
+      'SELECT linked_user_id FROM service_providers WHERE id = ?',
+      [providerId]
+    );
+    return row ? row.linked_user_id : undefined;
+  }
+
+  /** آخر سطر سجلّ لهذا الفعل — يُقرأ من القاعدة لا من ردّ الطلب. */
+  async function latestActivity(action) {
+    return db.queryOne(
+      `SELECT actor_user_id, action, details FROM activity_log
+        WHERE action = ? ORDER BY id DESC LIMIT 1`,
+      [action]
+    );
+  }
+
+  await test('Setup (#187): سوبر أدمن حيّ، وأدمن خارج النطاق، وثلاثة مستخدمين، وفئة ومزوّدان', async () => {
+    const superAdmin = await createLinkUser(lnkSuperAdminPhone, 'سوبر أدمن قسم الربط', 'super_admin');
+    lnkSuperAdminId = superAdmin.id;
+    lnkSuperAdminToken = superAdmin.token;
+
+    // مرساة موجبة قبل أي تأكيد تالٍ: التوكن يفتح مسار إدارة فعلاً.
+    const me = await api('GET', '/api/admin/me', { token: lnkSuperAdminToken });
+    assert.strictEqual(me.status, 200, me.body && me.body.message);
+    assert.strictEqual(me.body.role, 'super_admin');
+
+    const admin = await createLinkUser(lnkAdminPhone, 'أدمن خارج نطاق الربط', 'admin');
+    lnkAdminId = admin.id;
+    lnkAdminToken = admin.token;
+    const assigned = await api('PUT', `/api/admin/admins/${lnkAdminId}/towns`, {
+      token: lnkSuperAdminToken,
+      body: { towns: [outOfScopeTown] }
+    });
+    assert.strictEqual(assigned.status, 200, assigned.body && assigned.body.message);
+
+    const first = await createLinkUser(lnkUserPhone, 'صاحب مزوّد الربط');
+    lnkUserId = first.id;
+    lnkUserToken = first.token;
+
+    const second = await createLinkUser(lnkSecondPhone, 'كاتب التقييم');
+    lnkSecondId = second.id;
+    lnkSecondToken = second.token;
+
+    const third = await createLinkUser(lnkThirdPhone, 'حساب يُحذف');
+    lnkThirdId = third.id;
+    lnkThirdToken = third.token;
+
+    const category = await api('POST', '/api/admin/service-categories', {
+      token: lnkSuperAdminToken,
+      body: { name: `فئة الربط ${Date.now()}`, icon: '🔗', color: '#B8860B' }
+    });
+    assert.strictEqual(category.status, 201, category.body && category.body.message);
+    lnkCategoryId = category.body.category.id;
+
+    const provider = await api('POST', '/api/admin/service-providers', {
+      token: lnkSuperAdminToken,
+      body: { category_id: lnkCategoryId, name: 'مزوّد الربط الأول', towns: [scopedTown] }
+    });
+    assert.strictEqual(provider.status, 201, provider.body && provider.body.message);
+    lnkProviderId = provider.body.providerId;
+
+    const other = await api('POST', '/api/admin/service-providers', {
+      token: lnkSuperAdminToken,
+      body: { category_id: lnkCategoryId, name: 'مزوّد الربط الثاني', towns: [scopedTown] }
+    });
+    assert.strictEqual(other.status, 201, other.body && other.body.message);
+    lnkOtherProviderId = other.body.providerId;
+
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), null, 'مزوّد جديد بلا حساب مربوط');
+  });
+
+  await test('أدمن البلدة يُردّ 404 على الربط والفكّ ولا يُكتب شيء', async () => {
+    const denied = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkAdminToken,
+      body: { user_id: lnkUserId }
+    });
+    assert.strictEqual(denied.status, 404, '404 لا 403 كي لا يتأكّد وجود المزوّد لمن لا يملك الربط');
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), null, 'ولا صفّ تغيّر');
+
+    const deniedUnlink = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkAdminToken,
+      body: { user_id: null }
+    });
+    assert.strictEqual(deniedUnlink.status, 404, 'والفكّ كذلك');
+
+    const logged = await db.query(
+      `SELECT id FROM activity_log
+        WHERE action IN ('provider_account_linked', 'provider_account_unlinked') AND details LIKE ?`,
+      [`%"provider_id":${lnkProviderId}%`]
+    );
+    assert.deepStrictEqual(logged, [], 'ولا حدث يُسجَّل عن محاولة مرفوضة');
+  });
+
+  await test('حساب إدارة أو حساب غير موجود ← 400 عربية، ولا ربط', async () => {
+    const adminAccount = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: lnkAdminId }
+    });
+    assert.strictEqual(adminAccount.status, 400, 'ADR يمنع دوراً رابعاً: المربوط حساب user');
+    assert.ok(
+      typeof adminAccount.body.message === 'string' && adminAccount.body.message.includes('حساب مستخدم عاديّ'),
+      adminAccount.body.message
+    );
+
+    const missing = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: 999999999 }
+    });
+    assert.strictEqual(missing.status, 400, 'وحساب غير موجود لا يُربط');
+
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), null, 'ولا صفّ كُتب من محاولات الرفض');
+  });
+
+  await test('السوبر أدمن يربط: 200، والعمود يُكتب، والحدث في activity_log', async () => {
+    const linked = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: lnkUserId }
+    });
+    assert.strictEqual(linked.status, 200, linked.body && linked.body.message);
+    assert.strictEqual(linked.body.provider.linked_account.id, lnkUserId, 'الردّ يعرض الحساب المربوط');
+    assert.strictEqual(
+      linked.body.provider.linked_account.full_name,
+      'صاحب مزوّد الربط',
+      'وباسمه كي تعرضه اللوحة بوضوح'
+    );
+    assert.ok(
+      !('linked_user_id' in linked.body.provider),
+      'والعمود الخام لا يخرج في الاستجابة الإدارية'
+    );
+
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), lnkUserId, 'والعمود مكتوب في القاعدة');
+
+    const row = await latestActivity('provider_account_linked');
+    assert.ok(row, 'الحدث سُجّل');
+    assert.strictEqual(Number(row.actor_user_id), lnkSuperAdminId, 'والفاعل هو السوبر أدمن');
+    const details = JSON.parse(row.details);
+    assert.strictEqual(Number(details.provider_id), lnkProviderId, 'والحدث يسمّي المزوّد');
+    assert.strictEqual(Number(details.user_id), lnkUserId, 'والحساب المربوط');
+  });
+
+  await test('الربط لا يغيّر users.role — ولا قيمة provider في القاعدة', async () => {
+    const user = await db.queryOne('SELECT role FROM users WHERE id = ?', [lnkUserId]);
+    assert.strictEqual(user.role, 'user', 'الحساب المربوط حساب مستخدم عاديّ');
+
+    const column = await db.queryOne(
+      `SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'role'`
+    );
+    assert.strictEqual(
+      column.type,
+      "enum('user','admin','super_admin')",
+      'وثلاث قيم لا رابعة — ADR-0016 §2'
+    );
+
+    const providerOnly = await db.query("SELECT id FROM users WHERE role = 'provider'");
+    assert.deepStrictEqual(providerOnly, [], 'ولا حساب بدور مزوّد');
+  });
+
+  await test('«مزوّدي»: بطاقة صاحب الربط وحده، وبلا رقم، ولا linked_user_id في أي استجابة', async () => {
+    const mine = await api('GET', '/api/services/my-providers', { token: lnkUserToken });
+    assert.strictEqual(mine.status, 200, mine.body && mine.body.message);
+    assert.strictEqual(mine.body.providers.length, 1, 'مزوّد واحد مربوط');
+    assert.strictEqual(mine.body.providers[0].id, lnkProviderId);
+    assert.ok(!('phone' in mine.body.providers[0]), 'ولا رقم في البطاقة');
+    assert.ok(!('linked_user_id' in mine.body.providers[0]), 'ولا العمود الخام');
+
+    const stranger = await api('GET', '/api/services/my-providers', { token: lnkSecondToken });
+    assert.strictEqual(stranger.status, 200);
+    assert.deepStrictEqual(stranger.body.providers, [], 'وحساب بلا ربط يستلم قائمة فارغة لا 404');
+
+    const anonymous = await api('GET', '/api/services/my-providers');
+    assert.strictEqual(anonymous.status, 401, 'والمسار مشدود بـauthenticate');
+
+    const detail = await api('GET', `/api/services/providers/${lnkProviderId}`, { token: lnkUserToken });
+    assert.strictEqual(detail.body.provider.is_linked_provider, true, 'صفحة المزوّد تقول للحساب المربوط ذلك');
+    assert.ok(!('linked_user_id' in detail.body.provider), 'ولا العمود الخام في الصفحة العامة');
+
+    const strangerDetail = await api('GET', `/api/services/providers/${lnkProviderId}`, { token: lnkSecondToken });
+    assert.strictEqual(strangerDetail.body.provider.is_linked_provider, false, 'وغيره false لا مفتاحاً غائباً');
+
+    const cards = await api('GET', `/api/services/providers?category_id=${lnkCategoryId}&limit=100`);
+    const card = cards.body.providers.find(candidate => candidate.id === lnkProviderId);
+    assert.ok(card, 'البطاقة في القائمة كي يسقط التأكيد لو خرج العمود');
+    assert.ok(!('linked_user_id' in card), 'وبطاقة القائمة لا تحمله');
+  });
+
+  await test('لا ردّ قبل الكتابة، والحساب المربوط يردّ فيظهر في القراءة العامة', async () => {
+    const created = await api('PUT', `/api/services/providers/${lnkProviderId}/review`, {
+      token: lnkSecondToken,
+      body: { rating: 4, body: 'خدمة جيدة', confirm_phone: true }
+    });
+    assert.strictEqual(created.status, 200, created.body && created.body.message);
+    lnkReviewId = created.body.review.id;
+
+    const before = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`);
+    assert.strictEqual(before.body.reviews[0].reply_body, null, 'لا ردّ قبل الكتابة');
+    assert.strictEqual(before.body.reviews[0].reply_at, null, 'ولا وقت');
+    assert.strictEqual(before.body.reviews[0].can_reply, false, 'والزائر لا يملك الردّ');
+
+    const strangerCan = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`, {
+      token: lnkSecondToken
+    });
+    assert.strictEqual(strangerCan.body.reviews[0].can_reply, false, 'ولا كاتب التقييم نفسه');
+
+    const replied = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: { reply_body: 'شكراً لك — يسعدنا أن تجربتك كانت جيدة' }
+    });
+    assert.strictEqual(replied.status, 200, replied.body && replied.body.message);
+    assert.strictEqual(replied.body.review.reply_body, 'شكراً لك — يسعدنا أن تجربتك كانت جيدة');
+    assert.ok(replied.body.review.reply_at, 'والوقت مكتوب من الخادم');
+    assert.strictEqual(replied.body.review.can_reply, true, 'وصاحب الربط يرى زرّه');
+
+    const after = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`);
+    assert.strictEqual(
+      after.body.reviews[0].reply_body,
+      'شكراً لك — يسعدنا أن تجربتك كانت جيدة',
+      'والردّ يخرج لكل قارئ بعد الكتابة'
+    );
+    assert.strictEqual(after.body.reviews[0].can_reply, false, 'لكن زرّه لمن يملكه وحده');
+
+    const linkedCan = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`, {
+      token: lnkUserToken
+    });
+    assert.strictEqual(linkedCan.body.reviews[0].can_reply, true, 'والحساب المربوط يملكه');
+    assert.ok(!('linked_user_id' in linkedCan.body.reviews[0]), 'ولا العمود الخام في صفّ التقييم');
+  });
+
+  await test('ردّ واحد لكل تقييم: التعديل يستبدل ويكتب وقتاً جديداً', async () => {
+    // الوقت يُثبَّت على تاريخ قديم قبل التعديل: `reply_at` بعدها يجب أن يكون
+    // «الآن» لا ذلك التاريخ. مقارنة `>=` بين كتابتين متتاليتين تمرّ ولو لم
+    // يُجدَّد العمود أصلاً، فلا تُثبت شيئاً — وهذا التأكيد يسقط لو توقّف
+    // التحديث عن تجديد `reply_at`.
+    await db.execute(
+      "UPDATE provider_reviews SET reply_at = '2020-01-01 00:00:00' WHERE id = ?",
+      [lnkReviewId]
+    );
+
+    const updated = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: { reply_body: 'شكراً لك، ونعتذر عن أي تأخير' }
+    });
+    assert.strictEqual(updated.status, 200, updated.body && updated.body.message);
+    assert.strictEqual(updated.body.review.id, lnkReviewId, 'الصفّ نفسه لا ردّ ثانٍ');
+
+    const rows = await db.query(
+      'SELECT reply_body, reply_at FROM provider_reviews WHERE id = ?',
+      [lnkReviewId]
+    );
+    assert.strictEqual(rows.length, 1, 'تقييم واحد بردّ واحد');
+    assert.strictEqual(rows[0].reply_body, 'شكراً لك، ونعتذر عن أي تأخير', 'والنصّ استُبدل');
+
+    const freshness = await db.queryOne(
+      `SELECT TIMESTAMPDIFF(SECOND, reply_at, NOW()) AS age
+         FROM provider_reviews WHERE id = ?`,
+      [lnkReviewId]
+    );
+    assert.ok(
+      Number(freshness.age) >= 0 && Number(freshness.age) < 120,
+      `reply_at تجدّد لحظة التعديل لا تاريخاً قديماً، عمره ${freshness.age} ثانية`
+    );
+
+    const list = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`);
+    assert.strictEqual(list.body.reviews[0].reply_body, 'شكراً لك، ونعتذر عن أي تأخير', 'والقارئ يرى الأخير');
+  });
+
+  await test('حساب آخر يُردّ 404 — ولو كان كاتب التقييم أو مربوطاً بمزوّد آخر', async () => {
+    const author = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkSecondToken,
+      body: { reply_body: 'أنا صاحب التقييم' }
+    });
+    assert.strictEqual(author.status, 404, 'صاحب التقييم لا يردّ على تقييمه');
+
+    const otherLinked = await api('PATCH', `/api/admin/service-providers/${lnkOtherProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: lnkSecondId }
+    });
+    assert.strictEqual(otherLinked.status, 200, otherLinked.body && otherLinked.body.message);
+
+    const wrongProvider = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkSecondToken,
+      body: { reply_body: 'ردّ على مزوّد ليس لي' }
+    });
+    assert.strictEqual(wrongProvider.status, 404, 'الربط بمزوّد آخر لا يفتح تقييمات غيره');
+
+    const stillMine = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`);
+    assert.strictEqual(
+      stillMine.body.reviews[0].reply_body,
+      'شكراً لك، ونعتذر عن أي تأخير',
+      'ولا شيء تغيّر في الردّ القائم'
+    );
+
+    const unlinkOther = await api('PATCH', `/api/admin/service-providers/${lnkOtherProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: null }
+    });
+    assert.strictEqual(unlinkOther.status, 200, unlinkOther.body && unlinkOther.body.message);
+  });
+
+  await test('نصّ الردّ إلزامي غير فارغ وبسقف 1000 — وإلا 400', async () => {
+    for (const replyBody of ['', '   ', 'x'.repeat(1001)]) {
+      const rejected = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+        token: lnkUserToken,
+        body: { reply_body: replyBody }
+      });
+      assert.strictEqual(rejected.status, 400, `ردّ بطول ${replyBody.length} مرفوض`);
+      assert.ok(
+        typeof rejected.body.message === 'string' && /[\u0600-\u06FF]/.test(rejected.body.message),
+        'برسالة عربية'
+      );
+    }
+
+    const missing = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: {}
+    });
+    assert.strictEqual(missing.status, 400, 'وبلا حقل الردّ أيضاً');
+
+    const stored = await db.queryOne(
+      'SELECT reply_body FROM provider_reviews WHERE id = ?',
+      [lnkReviewId]
+    );
+    assert.strictEqual(stored.reply_body, 'شكراً لك، ونعتذر عن أي تأخير', 'ولا مساس بالردّ القائم');
+
+    // الحدّ نفسه مقبول: 1000 حرفاً بالضبط تمرّ ولا تُقصّ.
+    const exactMax = 'ي'.repeat(1000);
+    const accepted = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: { reply_body: exactMax }
+    });
+    assert.strictEqual(accepted.status, 200, accepted.body && accepted.body.message);
+    const maxRow = await db.queryOne(
+      'SELECT reply_body FROM provider_reviews WHERE id = ?',
+      [lnkReviewId]
+    );
+    assert.strictEqual(maxRow.reply_body.length, 1000, 'والسقف لا يقصّ المقبول');
+
+    // وإعادة النصّ المرجعي كي تقرأه تأكيدات ما بعده كما هو.
+    const restored = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: { reply_body: 'شكراً لك، ونعتذر عن أي تأخير' }
+    });
+    assert.strictEqual(restored.status, 200, restored.body && restored.body.message);
+  });
+
+  await test('فكّ الربط: يُسجَّل، ويفقد الحساب الردّ و«مزوّدي»، ويبقى الردّ المنشور', async () => {
+    const unlinked = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: null }
+    });
+    assert.strictEqual(unlinked.status, 200, unlinked.body && unlinked.body.message);
+    assert.strictEqual(unlinked.body.provider.linked_account, null, 'والردّ يقول «بلا حساب»');
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), null, 'والعمود صار فراغاً');
+
+    const row = await latestActivity('provider_account_unlinked');
+    assert.ok(row, 'والفكّ يُسجَّل أيضاً');
+    assert.strictEqual(Number(row.actor_user_id), lnkSuperAdminId);
+    const details = JSON.parse(row.details);
+    assert.strictEqual(Number(details.provider_id), lnkProviderId);
+    assert.strictEqual(Number(details.user_id), lnkUserId, 'ويسجّل الحساب الذي فُكّ');
+
+    const mine = await api('GET', '/api/services/my-providers', { token: lnkUserToken });
+    assert.deepStrictEqual(mine.body.providers, [], '«مزوّدي» فارغ بعد الفكّ');
+
+    const denied = await api('PUT', `/api/services/reviews/${lnkReviewId}/reply`, {
+      token: lnkUserToken,
+      body: { reply_body: 'بعد الفكّ' }
+    });
+    assert.strictEqual(denied.status, 404, 'والردّ يُرفض 404 بعد الفكّ');
+
+    const list = await api('GET', `/api/services/providers/${lnkProviderId}/reviews`);
+    assert.strictEqual(
+      list.body.reviews[0].reply_body,
+      'شكراً لك، ونعتذر عن أي تأخير',
+      'والردّ المنشور يبقى — الفكّ يمنع الكتابة لا يمحو الكلام'
+    );
+    assert.strictEqual(list.body.reviews[0].can_reply, false, 'وحساب لم يعد صاحب المزوّد لا يملكه');
+  });
+
+  await test('حذف الحساب يفكّ الربط ولا يحذف المزوّد', async () => {
+    const relinked = await api('PATCH', `/api/admin/service-providers/${lnkProviderId}/link`, {
+      token: lnkSuperAdminToken,
+      body: { user_id: lnkThirdId }
+    });
+    assert.strictEqual(relinked.status, 200, relinked.body && relinked.body.message);
+    assert.strictEqual(await storedLinkedUserId(lnkProviderId), lnkThirdId);
+
+    const deleted = await api('DELETE', `/api/admin/users/${lnkThirdId}`, { token: lnkSuperAdminToken });
+    assert.strictEqual(deleted.status, 200, deleted.body && deleted.body.message);
+
+    const provider = await db.queryOne(
+      'SELECT id, linked_user_id FROM service_providers WHERE id = ?',
+      [lnkProviderId]
+    );
+    assert.ok(provider, 'المزوّد باقٍ — الحذف لا يحذفه');
+    assert.strictEqual(provider.linked_user_id, null, 'والربط فُكّ بـON DELETE SET NULL');
+
+    // `authenticate` يتحقّق من التوكن وحده بلا قراءة صفّ الحساب، فتوكن الحساب
+    // المحذوف يمرّ — والمهم أن الربط نفسه سقط: لا مزوّد له الآن.
+    const goneProviders = await api('GET', '/api/services/my-providers', { token: lnkThirdToken });
+    assert.deepStrictEqual(goneProviders.body.providers, [], 'ولا مزوّد يبقى مربوطاً بحساب محذوف');
+  });
+
+  // ---- تنظيف قسم #187 ----------------------------------------------
+  for (const id of [lnkProviderId, lnkOtherProviderId]) {
+    await api('DELETE', `/api/admin/service-providers/${id}`, { token: lnkSuperAdminToken });
+  }
+  await api('DELETE', `/api/admin/service-categories/${lnkCategoryId}`, { token: lnkSuperAdminToken });
+  for (const id of [lnkUserId, lnkSecondId, lnkAdminId, lnkSuperAdminId]) {
+    await db.execute('DELETE FROM users WHERE id = ?', [id]);
+  }
+
   // Clean up the throwaway accounts.
   await db.execute('DELETE FROM users WHERE phone_number = ?', [phone]);
   await db.execute('DELETE FROM users WHERE phone_number = ?', [plainAdminPhone]);

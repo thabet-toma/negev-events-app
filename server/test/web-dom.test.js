@@ -19907,6 +19907,335 @@ async function run() {
     assert.ok(saveStatus.textContent.includes('حاول بعد قليل'), `رسالة حدّ الحفظ: ${saveStatus.textContent}`);
   });
 
+  // ==================================================================
+  // ردّ المزوّد المربوط و«مزوّدي» (تذكرة #187، ADR-0016)
+  // ==================================================================
+  console.log('\nردّ المزوّد المربوط و«مزوّدي» (#187): الاقتباس تحت التقييم، والزرّ لصاحبه وحده');
+
+  /** مزوّد بحساب مربوط — شكله من `GET /api/services/providers/:id` بعد #187. */
+  function replyProviderFixture(overrides = {}) {
+    return {
+      id: 911,
+      name: 'مزوّد الردّ',
+      category_id: 9,
+      category_name: 'صالات أفراح',
+      category_icon: '🏛️',
+      category_color: '#8a6109',
+      has_phone: true,
+      phone: '0501234567',
+      image_url: null,
+      description: 'قاعة واسعة',
+      hours: null,
+      price: 100,
+      price_type: 'fixed',
+      price_estimate_desc: null,
+      attributes: {},
+      is_verified: false,
+      is_featured: false,
+      towns: ['رهط'],
+      views_count: 7,
+      favorites_count: 2,
+      rating_avg: 4,
+      rating_count: 3,
+      rating_distribution: { 1: 0, 2: 0, 3: 1, 4: 1, 5: 1 },
+      is_favorite: false,
+      is_linked_provider: true,
+      my_review: null,
+      gallery: [],
+      offers: [],
+      products: [],
+      similar: [],
+      ...overrides
+    };
+  }
+
+  /** تقييم واحد بردّه — `can_reply` يحملها الخادم للحساب المربوط وحده. */
+  function replyReviewFixture(overrides = {}) {
+    return {
+      id: 2101,
+      rating: 5,
+      body: 'خدمة ممتازة',
+      user_name: 'مريم',
+      created_at: '2026-11-01T10:00:00.000Z',
+      updated_at: '2026-11-01T10:00:00.000Z',
+      is_mine: false,
+      can_delete: false,
+      can_reply: false,
+      reply_body: null,
+      reply_at: null,
+      ...overrides
+    };
+  }
+
+  /**
+   * عميل وهمي للردّ: ثلاث تعليقات — واحدة بردّ قائم، وواحدة بلا ردّ
+   * (`can_reply`)، وواحدة لا `can_reply` لها (مزوّد آخر). و`PUT …/reply`
+   * يستبدل الردّ في المجموعة نفسها كي تسقط التأكيدات على ما بعد الكتابة لا
+   * على نصّ محلي. و`GET /api/services/my-providers` يخدم قسم «مزوّدي» من
+   * القائمة المعطاة.
+   */
+  function instrumentProviderReplies(win, { myProviders = [] } = {}) {
+    const calls = [];
+    const reviews = [
+      replyReviewFixture({
+        id: 2101,
+        rating: 5,
+        body: 'خدمة ممتازة',
+        user_name: 'مريم',
+        reply_body: 'شكراً لك على ثقتك',
+        reply_at: '2026-11-02T09:00:00.000Z',
+        can_reply: true
+      }),
+      replyReviewFixture({ id: 2102, rating: 4, body: 'تجربة جميلة', user_name: 'سالم', can_reply: true }),
+      // تقييم مزوّد آخر: لا `can_reply` لهذا الحساب مهما كان مربوطاً بغيره.
+      replyReviewFixture({ id: 2103, rating: 3, body: 'جيد', user_name: 'هند', can_reply: false })
+    ];
+
+    const providerBody = () => replyProviderFixture();
+
+    win.fetch = async (url, options = {}) => {
+      const raw = String(url);
+      const requestPath = raw.split('?')[0];
+      const query = raw.includes('?') ? raw.slice(raw.indexOf('?')) : '';
+      const method = options.method || 'GET';
+      let sentBody = null;
+      try {
+        sentBody = options.body ? JSON.parse(options.body) : null;
+      } catch (e) {
+        sentBody = null;
+      }
+      calls.push({ path: requestPath, method, headers: options.headers || {}, body: sentBody, query });
+
+      if (requestPath === '/api/settings/public') {
+        return jsonResponse({
+          success: true,
+          settings: { support_whatsapp_number: null, default_event_audio_url: null, providers_display: 'compact' }
+        });
+      }
+      if (requestPath === '/api/services/categories') return jsonResponse({ success: true, categories: [] });
+      if (requestPath === '/api/my-events') return jsonResponse({ success: true, events: [] });
+      if (requestPath === '/api/services/providers/911' && method === 'GET') {
+        return jsonResponse({ success: true, provider: providerBody() });
+      }
+      if (requestPath === '/api/services/providers/911/view' && method === 'POST') {
+        return jsonResponse({ success: true, counted: false, views_count: 7 });
+      }
+      if (requestPath === '/api/services/providers/911/reviews' && method === 'GET') {
+        const page = Number(new URLSearchParams(query).get('page') || '1');
+        const limit = 5;
+        return jsonResponse({
+          success: true,
+          reviews: reviews.slice((page - 1) * limit, page * limit),
+          pagination: {
+            page,
+            limit,
+            total: reviews.length,
+            totalPages: Math.ceil(reviews.length / limit)
+          }
+        });
+      }
+      if (requestPath === '/api/services/my-providers' && method === 'GET') {
+        return jsonResponse({ success: true, providers: myProviders });
+      }
+      const replyMatch = requestPath.match(/^\/api\/services\/reviews\/(\d+)\/reply$/);
+      if (replyMatch && method === 'PUT') {
+        const id = Number(replyMatch[1]);
+        const row = reviews.find(review => review.id === id);
+        if (!row || !row.can_reply) return jsonResponse({ success: false, message: 'التقييم غير موجود' }, { status: 404 });
+        row.reply_body = sentBody && sentBody.reply_body ? sentBody.reply_body : null;
+        row.reply_at = '2026-11-03T11:30:00.000Z';
+        return jsonResponse({ success: true, review: { ...row }, message: 'تم حفظ ردّك على التقييم' });
+      }
+      return jsonResponse({ success: false });
+    };
+
+    return { calls, reviews };
+  }
+
+  await test('نافذة المزوّد: الردّ اقتباس تحت التقييم، وزرّه للحساب المربوط وحده', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReplies(win);
+
+    await win.openProviderModal(911);
+    // الانتظار على حالة مرسومة، لا على `calls`: مُقلِّد `fetch` يسجّل النداء
+    // متزامناً في أول سطره، فيصير شرط «النداء موجود» صحيحاً قبل أن تُحلّ
+    // `await apiFetch(...)`/`await res.json()` — فيُفحص DOM قبل وصول الردّ.
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length === 3);
+    assert.ok(
+      calls.some(call => call.path === '/api/services/providers/911/reviews'),
+      'القراءة طلبت التعليقات من الخادم'
+    );
+
+    const quoted = document.querySelector(
+      '#providerReviewsList .provider-review[data-review-id="2101"] .provider-review-reply'
+    );
+    assert.ok(quoted, 'الردّ يظهر تحت التقييم');
+    assert.ok(quoted.textContent.includes('شكراً لك على ثقتك'), 'بنصّه');
+    assert.ok(quoted.textContent.includes('ردّ المزوّد'), 'وبتسمية صريحة أنه ردّ المزوّد لا تعليق زائر');
+    assert.ok(
+      quoted.querySelector('.provider-review-reply-date').textContent.trim().length > 0,
+      'ومعه تاريخه'
+    );
+
+    const editBtn = document.querySelector(
+      '#providerReviewsList .provider-review[data-review-id="2101"] .provider-review-reply-btn'
+    );
+    assert.ok(editBtn, 'والحساب المربوط يرى زرّه على التقييم الذي ردّ عليه');
+    assert.ok(editBtn.textContent.includes('عدّل الردّ'), 'ونصّه تعديل لأن هناك ردّاً');
+
+    const noReply = document.querySelector('#providerReviewsList .provider-review[data-review-id="2102"]');
+    assert.strictEqual(
+      noReply.querySelector('.provider-review-reply'),
+      null,
+      'تقييم بلا ردّ لا اقتباس تحته'
+    );
+    assert.ok(
+      noReply.querySelector('.provider-review-reply-btn').textContent.includes('ردّ على التقييم'),
+      'وزرّه يقول ردّ لا تعديل'
+    );
+
+    const foreign = document.querySelector('#providerReviewsList .provider-review[data-review-id="2103"]');
+    assert.strictEqual(
+      foreign.querySelector('.provider-review-reply-btn'),
+      null,
+      'وتقييم مزوّد آخر لا زرّ ردّ لهذا الحساب'
+    );
+  });
+
+  await test('الردّ يُكتب بـPUT على مسار التقييم نفسه، ويظهر اقتباساً بعد الإعادة', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    const { calls } = instrumentProviderReplies(win);
+
+    await win.openProviderModal(911);
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length === 3);
+
+    const btn = document.querySelector(
+      '#providerReviewsList .provider-review[data-review-id="2102"] .provider-review-reply-btn'
+    );
+    assert.ok(btn, 'الزرّ موجود للحساب المربوط');
+    btn.click();
+
+    assert.strictEqual(
+      document.getElementById('providerReplyModal').style.display,
+      'flex',
+      'الورقة الصغيرة فُتحت'
+    );
+    assert.strictEqual(
+      document.getElementById('providerReplyBody').value,
+      '',
+      'وفارغة لتقييم بلا ردّ سابق'
+    );
+
+    const sentText = 'شكراً سالم — ننتظرك في المرة القادمة';
+    document.getElementById('providerReplyBody').value = sentText;
+    document.getElementById('providerReplyForm').dispatchEvent(
+      new win.Event('submit', { bubbles: true, cancelable: true })
+    );
+
+    await waitFor(() =>
+      calls.some(call => call.method === 'PUT' && call.path === '/api/services/reviews/2102/reply')
+    );
+    const sent = calls.find(
+      call => call.method === 'PUT' && call.path === '/api/services/reviews/2102/reply'
+    );
+    assert.strictEqual(sent.body.reply_body, sentText, 'النصّ كما كُتب');
+    assert.ok(!('provider_id' in sent.body), 'والمسار على التقييم وحده — لا رقم مزوّد في الجسم');
+
+    await waitFor(() => document.getElementById('providerReplyModal').style.display === 'none');
+    await waitFor(() => {
+      const row = document.querySelector('#providerReviewsList .provider-review[data-review-id="2102"]');
+      return row && row.querySelector('.provider-review-reply');
+    });
+    const newQuote = document.querySelector(
+      '#providerReviewsList .provider-review[data-review-id="2102"] .provider-review-reply'
+    );
+    assert.ok(newQuote.textContent.includes(sentText), 'والاقتباس يُرسم من ردّ الخادم بعد الإعادة');
+  });
+
+  await test('«عدّل الردّ» يفتح الورقة على النصّ القائم — تعديل لا كتابة من الصفر', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    instrumentProviderReplies(win);
+
+    await win.openProviderModal(911);
+    await waitFor(() => document.querySelectorAll('#providerReviewsList .provider-review').length === 3);
+
+    document
+      .querySelector('#providerReviewsList .provider-review[data-review-id="2101"] .provider-review-reply-btn')
+      .click();
+
+    assert.strictEqual(
+      document.getElementById('providerReplyBody').value,
+      'شكراً لك على ثقتك',
+      'الحقل يحمل الردّ القائم'
+    );
+    assert.strictEqual(
+      document.getElementById('providerReplyReviewId').value,
+      '2101',
+      'ومعرّف التقييم مضبوط في الورقة'
+    );
+  });
+
+  await test('«حسابي»: قسم «مزوّدي» من الخادم، وبطاقته تفتح نافذة المزوّد', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+
+    const { calls } = instrumentProviderReplies(win, { myProviders: [replyProviderFixture()] });
+    win.loadAccountView();
+
+    // على الحالة المرسومة، لا على `calls` — النداء يُسجَّل قبل حلّ ردّ الشبكة.
+    await waitFor(() => document.getElementById('accountMyProvidersSection').hidden === false);
+    assert.ok(
+      calls.some(call => call.path === '/api/services/my-providers'),
+      'القسم قرأ «مزوّدي» من الخادم'
+    );
+
+    const card = document.getElementById('accountProviderRow-911');
+    assert.ok(card, 'بطاقة المزوّد المربوط في «مزوّدي»');
+    assert.ok(card.textContent.includes('مزوّد الردّ'), 'باسمه');
+
+    const detailsBtn = card.querySelector('.service-row-details');
+    assert.ok(detailsBtn, 'ولها زرّ التفاصيل');
+    detailsBtn.click();
+    // النافذة تُضبط `display: flex` في نهاية `openProviderModal` بعد النداءين،
+    // فالانتظار على `display` هو ما يثبت الرسم؛ والنداء بعده دليل أن النقر
+    // طلب المزوّد فعلاً لا أن الانتظار مرّ على حالة قديمة.
+    await waitFor(() => document.getElementById('providerModal').style.display === 'flex');
+    assert.ok(
+      calls.some(call => call.path === '/api/services/providers/911'),
+      'والبطاقة طلبت المزوّد نفسه من الخادم'
+    );
+  });
+
+  await test('«حسابي»: القسم يختفي كاملاً حين لا مزوّد مربوط — ويُفرَّغ لا يُترك قديماً', async () => {
+    const dom = buildEnv({ loggedIn: true });
+    const win = dom.window;
+    const { document } = win;
+    await flushBoot();
+
+    instrumentProviderReplies(win, { myProviders: [replyProviderFixture()] });
+    win.loadAccountView();
+    await waitFor(() => document.getElementById('accountMyProvidersSection').hidden === false);
+    assert.ok(document.getElementById('accountProviderRow-911'), 'القسم ظاهر بمزوّده المرتبط');
+
+    // الفكّ من اللوحة ثم «تحديث»: لا مزوّد، فيختفي القسم كله ولا تبقى بطاقة قديمة.
+    instrumentProviderReplies(win, { myProviders: [] });
+    win.loadMyProviders();
+    await waitFor(() => document.getElementById('accountMyProvidersSection').hidden === true);
+    assert.strictEqual(
+      document.getElementById('accountMyProvidersList').children.length,
+      0,
+      'ولا بطاقة تبقى من الفتح السابق'
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed ? 1 : 0);
 }

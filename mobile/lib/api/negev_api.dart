@@ -417,6 +417,19 @@ class NegevApi {
         .toList();
   }
 
+  /// «مزوّدي» في «حسابي» (تذكرة #187): مزوّدات هذا الحساب المربوط وحده، بشكل
+  /// بطاقة الدليل نفسه وبلا رقم. حساب بلا ربط يستلم قائمة فارغة لا خطأ —
+  /// والقسم يختفي كاملاً حينها.
+  Future<List<ServiceProvider>> myProviders() async {
+    final data = await _client.get('/api/services/my-providers', auth: true);
+    final list = data['providers'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(ServiceProvider.fromJson)
+        .toList();
+  }
+
   // --- تقييمات المزوّد (تذكرة #186) -----------------------------------
 
   /// صفحة تقييمات مزوّد — **عامة بلا `auth: true`**: القراءة لا تتطلّب حساباً،
@@ -470,6 +483,28 @@ class NegevApi {
       review: ProviderReview.fromJson(raw),
       summary: ProviderReviewSummary.fromJson(data),
     );
+  }
+
+  /// ردّ الحساب المربوط على تقييم (تذكرة #187) — `PUT /api/services/reviews/:rid/reply`.
+  ///
+  /// المسار على التقييم وحده: المزوّد يُشتقّ من الصفّ في الخادم، والصلاحية
+  /// شرطٌ داخل استعلامه، فأي حساب آخر يعود 404 لا 403. والحفظ يستبدل الردّ
+  /// القائم (ردّ واحد لكل تقييم). يعيد التقييم بعد الكتابة كي يُرسم الردّ من
+  /// ردّ الخادم لا من نصّ محلي.
+  Future<ProviderReview> replyToProviderReview(
+    int reviewId, {
+    required String replyBody,
+  }) async {
+    final data = await _client.put(
+      '/api/services/reviews/$reviewId/reply',
+      auth: true,
+      body: {'reply_body': replyBody.trim()},
+    );
+    final raw = data['review'];
+    if (raw is! Map<String, dynamic>) {
+      throw const ApiException('تعذّر قراءة الردّ بعد الحفظ');
+    }
+    return ProviderReview.fromJson(raw);
   }
 
   /// حذف تقييم صاحبه — idempotent في الخادم. يعيد `null` حين لا صفّ حُذف

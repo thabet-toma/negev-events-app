@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 83 | 28869 |
-| `web` | 8 | 22095 |
-| `mobile/lib` | 69 | 34563 |
+| `server/src` | 83 | 29168 |
+| `web` | 8 | 22338 |
+| `mobile/lib` | 69 | 34925 |
 
 ### توزيع `server/src`
 
@@ -23,22 +23,22 @@
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 156 |
 | `constants.js` | 1 | 388 |
-| `db/` | 4 | 3036 |
+| `db/` | 4 | 3071 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 814 |
 | `privacyNotice.js` | 1 | 125 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 6969 |
-| `services/` | 29 | 15928 |
+| `routes/` | 25 | 7039 |
+| `services/` | 29 | 16122 |
 | `utils/` | 12 | 881 |
 
 ### ملفات `web/*.js`
 
 | الملف | الأسطر |
 |---|---|
-| `admin.js` | 8492 |
+| `admin.js` | 8596 |
 | `api.js` | 137 |
-| `app.js` | 12597 |
+| `app.js` | 12736 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2497 |
+| `api/` | 2 | 2530 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
-| `models/` | 12 | 3012 |
-| `screens/` | 21 | 22930 |
+| `models/` | 12 | 3032 |
+| `screens/` | 21 | 23239 |
 | `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -65,7 +65,7 @@
 | المهمة | ابدأ من |
 |---|---|
 | إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:81` — والخدمة `server/src/services/events.service.js` |
-| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2769` |
+| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2828` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:167` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 236
+## ٣. نقاط API — 239
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -147,27 +147,28 @@
 | POST | `/api/admin/photos/:id/tags` | `requireAdmin` | `server/src/routes/albums.routes.js:389` |
 | GET | `/api/admin/privacy-requests` | `requireSuperAdmin` | `server/src/routes/privacy.routes.js:113` |
 | PATCH | `/api/admin/privacy-requests/:id` | `requireSuperAdmin` | `server/src/routes/privacy.routes.js:118` |
-| DELETE | `/api/admin/provider-reviews/:rid` | `requireAdmin` | `server/src/routes/services.routes.js:745` |
+| DELETE | `/api/admin/provider-reviews/:rid` | `requireAdmin` | `server/src/routes/services.routes.js:823` |
 | POST | `/api/admin/regions` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:105` |
 | PATCH | `/api/admin/regions/:id` | `requireSuperAdmin` | `server/src/routes/towns.routes.js:119` |
-| GET | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:755` |
-| POST | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:759` |
-| DELETE | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:790` |
-| PATCH | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:774` |
-| GET | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:441` |
-| POST | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:455` |
-| DELETE | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:610` |
-| GET | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:450` |
-| PATCH | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:512` |
-| POST | `/api/admin/service-providers/:id/offers` | `requireAdmin` | `server/src/routes/services.routes.js:661` |
-| DELETE | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:691` |
-| PATCH | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:676` |
-| POST | `/api/admin/service-providers/:id/photos` | `requireAdmin` | `server/src/routes/services.routes.js:623` |
-| DELETE | `/api/admin/service-providers/:id/photos/:photoId` | `requireAdmin` | `server/src/routes/services.routes.js:651` |
-| POST | `/api/admin/service-providers/:id/products` | `requireAdmin` | `server/src/routes/services.routes.js:700` |
-| DELETE | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:730` |
-| PATCH | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:715` |
-| PATCH | `/api/admin/service-providers/:id/status` | `requireAdmin` | `server/src/routes/services.routes.js:599` |
+| GET | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:833` |
+| POST | `/api/admin/service-categories` | `requireSuperAdmin` | `server/src/routes/services.routes.js:837` |
+| DELETE | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:868` |
+| PATCH | `/api/admin/service-categories/:id` | `requireSuperAdmin` | `server/src/routes/services.routes.js:852` |
+| GET | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:473` |
+| POST | `/api/admin/service-providers` | `requireAdmin` | `server/src/routes/services.routes.js:487` |
+| DELETE | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:642` |
+| GET | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:482` |
+| PATCH | `/api/admin/service-providers/:id` | `requireAdmin` | `server/src/routes/services.routes.js:544` |
+| PATCH | `/api/admin/service-providers/:id/link` | `requireAdmin` | `server/src/routes/services.routes.js:662` |
+| POST | `/api/admin/service-providers/:id/offers` | `requireAdmin` | `server/src/routes/services.routes.js:739` |
+| DELETE | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:769` |
+| PATCH | `/api/admin/service-providers/:id/offers/:offerId` | `requireAdmin` | `server/src/routes/services.routes.js:754` |
+| POST | `/api/admin/service-providers/:id/photos` | `requireAdmin` | `server/src/routes/services.routes.js:701` |
+| DELETE | `/api/admin/service-providers/:id/photos/:photoId` | `requireAdmin` | `server/src/routes/services.routes.js:729` |
+| POST | `/api/admin/service-providers/:id/products` | `requireAdmin` | `server/src/routes/services.routes.js:778` |
+| DELETE | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:808` |
+| PATCH | `/api/admin/service-providers/:id/products/:productId` | `requireAdmin` | `server/src/routes/services.routes.js:793` |
+| PATCH | `/api/admin/service-providers/:id/status` | `requireAdmin` | `server/src/routes/services.routes.js:631` |
 | GET | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:187` |
 | PUT | `/api/admin/settings` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:191` |
 | DELETE | `/api/admin/settings/default-audio` | `requireSuperAdmin` | `server/src/routes/settings.routes.js:262` |
@@ -275,20 +276,22 @@
 | POST | `/api/privacy/requests` | `authenticate` | `server/src/routes/privacy.routes.js:60` |
 | GET | `/api/reminders/schedule` | `authenticate` | `server/src/routes/notifications.routes.js:55` |
 | GET | `/api/search` | `optionalAuthenticate` | `server/src/routes/albums.routes.js:124` |
-| GET | `/api/services/categories` | — | `server/src/routes/services.routes.js:217` |
-| GET | `/api/services/favorites` | `authenticate` | `server/src/routes/services.routes.js:265` |
-| GET | `/api/services/my-services` | `authenticate` | `server/src/routes/services.routes.js:426` |
-| GET | `/api/services/providers` | `optionalAuthenticate` | `server/src/routes/services.routes.js:230` |
-| POST | `/api/services/providers` | `authenticate` | `server/src/routes/services.routes.js:374` |
-| GET | `/api/services/providers/:id` | `optionalAuthenticate` | `server/src/routes/services.routes.js:283` |
-| DELETE | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:277` |
-| PUT | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:270` |
-| DELETE | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:333` |
-| PUT | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:306` |
-| GET | `/api/services/providers/:id/reviews` | `optionalAuthenticate` | `server/src/routes/services.routes.js:348` |
-| POST | `/api/services/providers/:id/reviews/:rid/report` | `authenticate` | `server/src/routes/services.routes.js:359` |
-| POST | `/api/services/providers/:id/view` | `optionalAuthenticate` | `server/src/routes/services.routes.js:250` |
-| GET | `/api/services/providers/:id/whatsapp` | — | `server/src/routes/services.routes.js:296` |
+| GET | `/api/services/categories` | — | `server/src/routes/services.routes.js:218` |
+| GET | `/api/services/favorites` | `authenticate` | `server/src/routes/services.routes.js:266` |
+| GET | `/api/services/my-providers` | `authenticate` | `server/src/routes/services.routes.js:459` |
+| GET | `/api/services/my-services` | `authenticate` | `server/src/routes/services.routes.js:448` |
+| GET | `/api/services/providers` | `optionalAuthenticate` | `server/src/routes/services.routes.js:231` |
+| POST | `/api/services/providers` | `authenticate` | `server/src/routes/services.routes.js:396` |
+| GET | `/api/services/providers/:id` | `optionalAuthenticate` | `server/src/routes/services.routes.js:284` |
+| DELETE | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:278` |
+| PUT | `/api/services/providers/:id/favorite` | `authenticate` | `server/src/routes/services.routes.js:271` |
+| DELETE | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:334` |
+| PUT | `/api/services/providers/:id/review` | `authenticate` | `server/src/routes/services.routes.js:307` |
+| GET | `/api/services/providers/:id/reviews` | `optionalAuthenticate` | `server/src/routes/services.routes.js:349` |
+| POST | `/api/services/providers/:id/reviews/:rid/report` | `authenticate` | `server/src/routes/services.routes.js:360` |
+| POST | `/api/services/providers/:id/view` | `optionalAuthenticate` | `server/src/routes/services.routes.js:251` |
+| GET | `/api/services/providers/:id/whatsapp` | — | `server/src/routes/services.routes.js:297` |
+| PUT | `/api/services/reviews/:rid/reply` | `authenticate` | `server/src/routes/services.routes.js:382` |
 | GET | `/api/settings/public` | — | `server/src/routes/settings.routes.js:268` |
 | GET | `/api/stats/ticker` | — | `server/src/routes/stats.routes.js:34` |
 | GET | `/api/stories` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:48` |
@@ -325,7 +328,7 @@
 
 | الجدول | خدمات تذكره |
 |---|---|
-| `activity_log` | `activity.service.js`, `towns.service.js` |
+| `activity_log` | `activity.service.js`, `services.service.js`, `towns.service.js` |
 | `admin_towns` | `admin.service.js`, `adminScope.service.js`, `towns.service.js` |
 | `analytics_daily_counters` | `analytics.service.js` |
 | `analytics_events` | `activity.service.js`, `analytics.service.js`, `auth.service.js`, `privacy.service.js` |

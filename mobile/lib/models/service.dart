@@ -390,6 +390,11 @@ class ServiceProviderDetail {
   final Map<int, int> ratingDistribution;
   final ProviderReview? myReview;
 
+  /// هل هذا الحساب هو المزوّد المربوط لهذا الصفّ؟ (تذكرة #187) — منه تعرف
+  /// الشاشة أتعرض زرّ «ردّ على التقييم» أسفل التعليقات. **و`linked_user_id`
+  /// لا يصل العميل أبداً**؛ منطقيّ واحد يكفي.
+  final bool isLinkedProvider;
+
   const ServiceProviderDetail({
     required this.id,
     required this.name,
@@ -423,6 +428,7 @@ class ServiceProviderDetail {
     this.ratingCount = 0,
     this.ratingDistribution = const {1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
     this.myReview,
+    this.isLinkedProvider = false,
   });
 
   /// الرقم اختياري: مزوّد بلا رقم يعيد الخادم `phone: null` فيصير هنا ''.
@@ -497,6 +503,7 @@ class ServiceProviderDetail {
       myReview: rawMyReview is Map<String, dynamic>
           ? ProviderReview.fromJson(rawMyReview)
           : null,
+      isLinkedProvider: json['is_linked_provider'] == true,
     );
   }
 }
@@ -504,6 +511,11 @@ class ServiceProviderDetail {
 /// تقييم مزوّد واحد (تذكرة #186) — من `reviews` في المسار المرقّم أو من
 /// `my_review` في صفحة المزوّد. الاسم من `users.full_name` في الخادم، **ولا
 /// رقم هاتف ولا `user_id`** في أي شكل: التمييز «تقييمي» في `isMine`.
+///
+/// **وردّ المزوّد المربوط (تذكرة #187):** [replyBody] و[replyAt] لكل قارئ —
+/// الردّ جزء من التقييم العام — و[canReply] تعني «هذا الحساب هو المزوّد
+/// المربوط لهذا التقييم»، فيظهر زرّ الردّ له وحده. والخادم يحكم ثانيةً داخل
+/// الاستعلام، فالزرّ تجربة لا صلاحية.
 class ProviderReview {
   final int id;
   final int rating;
@@ -517,6 +529,10 @@ class ProviderReview {
   /// تقييمه أُخفي بعد بلاغات ولم يُحذف.
   final String status;
 
+  final String? replyBody;
+  final String? replyAt;
+  final bool canReply;
+
   const ProviderReview({
     required this.id,
     required this.rating,
@@ -526,6 +542,9 @@ class ProviderReview {
     this.isMine = false,
     this.canDelete = false,
     this.status = 'visible',
+    this.replyBody,
+    this.replyAt,
+    this.canReply = false,
   });
 
   factory ProviderReview.fromJson(Map<String, dynamic> json) => ProviderReview(
@@ -537,6 +556,9 @@ class ProviderReview {
         isMine: json['is_mine'] == true,
         canDelete: json['can_delete'] == true,
         status: '${json['status'] ?? 'visible'}',
+        replyBody: _nullableString(json['reply_body']),
+        replyAt: _nullableString(json['reply_at']),
+        canReply: json['can_reply'] == true,
       );
 }
 

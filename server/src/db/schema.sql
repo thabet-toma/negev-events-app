@@ -839,17 +839,26 @@ CREATE TABLE IF NOT EXISTS service_providers (
   consent_at       TIMESTAMP    NOT NULL,
   consent_by       INT UNSIGNED DEFAULT NULL,
   consent_channel  VARCHAR(20)  NOT NULL,
+  -- الربط بحساب مستخدم (ADR-0016، تذكرة #187): «المزوّد المربوط» حسابُ مستخدمٍ
+  -- عاديّ (`users.role = 'user'`) يردّ على تقييمات مزوّديه من داخل التطبيق.
+  -- عمودٌ واحد قابل للفراغ، ويربطه السوبر أدمن وحده ويفكّه. **ولا دور رابع
+  -- في `users.role`**: الصلاحية تُشتقّ من هذا العمود داخل الاستعلام نفسه،
+  -- ولا يمنح الربط تحرير ملف المزوّد. وحذف الحساب يفكّ الربط ولا يحذف المزوّد.
+  linked_user_id      INT UNSIGNED DEFAULT NULL,
   created_by       INT UNSIGNED DEFAULT NULL,
   created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_service_providers_category (category_id),
   KEY idx_service_providers_status (status),
+  KEY idx_service_providers_linked_user (linked_user_id),
   CONSTRAINT fk_service_providers_category FOREIGN KEY (category_id)
     REFERENCES service_categories(id) ON DELETE RESTRICT,
   CONSTRAINT fk_service_providers_consent_by FOREIGN KEY (consent_by)
     REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_service_providers_creator FOREIGN KEY (created_by)
+    REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_service_providers_linked_user FOREIGN KEY (linked_user_id)
     REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -949,9 +958,10 @@ CREATE TABLE IF NOT EXISTS provider_favorites (
 -- `phone_confirmed_at` إقرار صاحبه أن الرقم شخصي (ADR-0014) يكتبه الخادم
 -- بـ`NOW()` ولا يأتي من العميل. و`status = 'visible'` هو النشر الفوري: لا
 -- طابور مراجعة مسبق، والإبلاغ وحده يخفي بعد العتبة.
--- **`reply_body`/`reply_at` عمودان من المواصفة (#156) لردّ المزوّد المربوط
--- (تذكرة الردّ اللاحقة): يُنشآن الآن ولا يقرأهما ولا يكتبهما هذا العمل — ليسا
--- كوداً ميتاً بل موضع العقد التالي.**
+-- **`reply_body`/`reply_at` ردّ الحساب المربوط بمزوّد التقييم (تذكرة #187،
+-- ADR-0016): عمودان يملأهما `replyToProviderReview` وحده ولا يقبلهما أي نموذج
+-- تقييم — ردّ واحد لكل تقييم، والتعديل يستبدل النصّ ويجدّد `reply_at` ولا
+-- يضيف صفّاً ثانياً.**
 CREATE TABLE IF NOT EXISTS provider_reviews (
   id                 INT UNSIGNED NOT NULL AUTO_INCREMENT,
   provider_id        INT UNSIGNED NOT NULL,

@@ -2813,6 +2813,43 @@ const steps = [
         logger.info('[migrations] add-provider-reviews-2026-11: provider_review_reports table created.');
       }
     }
+  },
+  {
+    // ربط المزوّد بحساب مستخدم (تذكرة #187، ADR-0016): عمود واحد وفهرسه وقيده
+    // الأجنبي — لا جدول جديد ولا دور رابع في `users.role`. `schema.sql` يطبّق
+    // `CREATE TABLE IF NOT EXISTS` وحده، فعمودٌ جديد على جدول قائم لا يصل إلى
+    // قاعدة منصَّبة من قبل إلا من هنا.
+    //
+    // **والخطوة آمنة التكرار بثلاثة حرّاس لا واحد:** العمود داخل `columnExists`،
+    // والفهرس داخل `indexExists`، والقيد داخل `constraintExists` —
+    // `ADD CONSTRAINT` بلا حارس يسقط في التشغيل الثاني (`ER_FK_DUP_NAME`)، وهذه
+    // الخطوة تمرّ في كل إقلاع لا مرة واحدة. والثلاثة بتعريف `schema.sql` نفسه
+    // حرفياً وبنفس الأسماء: نسختان لتعريف واحد لا تعريفان.
+    name: 'add-provider-linked-account-2026-11',
+    async run(connection) {
+      if (!(await columnExists(connection, 'service_providers', 'linked_user_id'))) {
+        await connection.query(
+          'ALTER TABLE service_providers ADD COLUMN linked_user_id INT UNSIGNED DEFAULT NULL AFTER consent_channel'
+        );
+        logger.info('[migrations] add-provider-linked-account-2026-11: service_providers.linked_user_id added.');
+      }
+
+      if (!(await indexExists(connection, 'service_providers', 'idx_service_providers_linked_user'))) {
+        await connection.query(
+          'ALTER TABLE service_providers ADD KEY idx_service_providers_linked_user (linked_user_id)'
+        );
+        logger.info('[migrations] add-provider-linked-account-2026-11: idx_service_providers_linked_user created.');
+      }
+
+      if (!(await constraintExists(connection, 'service_providers', 'fk_service_providers_linked_user'))) {
+        await connection.query(
+          `ALTER TABLE service_providers
+             ADD CONSTRAINT fk_service_providers_linked_user FOREIGN KEY (linked_user_id)
+               REFERENCES users(id) ON DELETE SET NULL`
+        );
+        logger.info('[migrations] add-provider-linked-account-2026-11: fk_service_providers_linked_user created.');
+      }
+    }
   }
 ];
 
