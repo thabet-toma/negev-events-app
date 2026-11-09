@@ -97,7 +97,14 @@ const config = {
     // Tighter than the global API budget above: this is a fire-and-forget
     // beacon endpoint (POST /api/analytics/events) with no login required,
     // so it is the cheapest route in the API to spam.
-    analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 60)
+    analyticsMax: toInt(process.env.RATE_LIMIT_ANALYTICS_MAX, 60),
+    // ستوديو بطاقة الدعوة (#180) — دلوان **منفصلان** فوق الحدّ العام، كما في
+    // `albums.routes.js`: المعاينة ترسم PNG على الخادم لكل ضغطة زرّ فهي الأشدّ،
+    // والكتابة تُرفع صورتها إلى التخزين فهي الأخفّ. المفتاح لكل مستخدم (لا لكل
+    // IP) بالهوية نفسها التي تقرؤها `authenticate` في الراوتر.
+    cardPreviewMax: toInt(process.env.CARD_PREVIEW_RATE_MAX, 20),
+    cardWriteMax: toInt(process.env.CARD_WRITE_RATE_MAX, 40),
+    cardWindowMs: toInt(process.env.CARD_RATE_WINDOW_MS, 15 * 60 * 1000)
   },
 
   bcryptRounds: toInt(process.env.BCRYPT_ROUNDS, 10),

@@ -26,6 +26,7 @@ const albumsRoutes = require('./albums.routes');
 const archivePhotosRoutes = require('./archivePhotos.routes');
 const peopleRoutes = require('./people.routes');
 const newsRoutes = require('./news.routes');
+const cardsRoutes = require('./cards.routes');
 
 const router = express.Router();
 
@@ -75,5 +76,10 @@ router.use(albumsRoutes);
 router.use(archivePhotosRoutes);
 router.use(peopleRoutes);
 router.use(newsRoutes);
+// ستوديو بطاقة الدعوة (#180): `GET /card-templates` عام، والبقية
+// `GET/POST/PATCH/DELETE /events/:id/cards…` بعد `authenticate` وحراسة الملكية
+// داخل الراوتر نفسه. يُركَّب بعد `eventRoutes` ولا يتعارض معه: مساراته كلها
+// أعمق من `/events/:id` بجزء واحد على الأقل.
+router.use(cardsRoutes);
 
 module.exports = router;

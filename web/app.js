@@ -3592,6 +3592,19 @@ function renderEventPage(evt) {
       </a>` : '';
 
   const label = congratulationsLabel(evt);
+  // بطاقة الدعوة (#180) — لصاحب المناسبة وحده: زرّ التصميم، وبجانبه رفع
+  // البطاقة الجاهزة (رفع الملصق القائم نفسه). `myEventsCache` يعرف مناسبات
+  // الحساب، فلا يُرسم الزرّ لزائر أو لصاحب مناسبة أخرى.
+  const ownsEvent = myEventsCache.some(own => own.id === evt.id);
+  const cardStudioHtml = ownsEvent ? `
+      <div class="event-page-btn-row">
+        <button type="button" class="event-page-btn" onclick="openCardStudio(${evt.id})">
+          <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> صمّم بطاقة
+        </button>
+        <button type="button" class="event-page-btn" onclick="triggerReadyCardUpload(${evt.id})">
+          <i class="fa-solid fa-upload" aria-hidden="true"></i> ارفع بطاقتك الجاهزة
+        </button>
+      </div>` : '';
   const congrats = Array.isArray(evt.congratulations) ? evt.congratulations : null;
   let congratsListHtml;
   if (!congrats) {
@@ -3638,6 +3651,7 @@ function renderEventPage(evt) {
       <button type="button" class="event-page-btn event-page-share-btn" onclick="shareEvent(eventPageEvent)">
         <i class="fa-solid fa-share-nodes" aria-hidden="true"></i> ${escapeHtml(shareButtonLabel(evt))}
       </button>
+      ${cardStudioHtml}
       <div class="event-page-btn-row">
         ${!evt.status || evt.status === 'approved' ? renderReminderButtonHtml(evt) : ''}
         <button type="button" class="record-nokoot-btn card-action-btn" onclick="recordNokootFromEventPage()">
@@ -9250,6 +9264,10 @@ async function fetchMyEvents() {
     }
     myEventsCache = data.events;
     renderMyEvents(myEventsCache);
+    // زرّا ستوديو البطاقة في صفحة المناسبة يُبنيان من `myEventsCache`؛ صفحةٌ
+    // فُتحت قبل وصول القائمة (فتح مباشر من إشعار أو رابط) كانت تظهر بلا زرّين.
+    // إعادة رسم واحدة عند الوصول تكفي — نفس ما يفعله `refreshEventPage`.
+    if (eventPageEvent && isEventPageOpen()) renderEventPage(eventPageEvent);
   } catch (e) {
     console.error('My events error:', e);
     container.innerHTML = '<div class="empty-state"><p>تعذر جلب مناسباتك</p></div>';
@@ -9301,11 +9319,475 @@ function renderMyEvents(events) {
         <button class="record-nokoot-btn" style="width:100%; margin-top:8px;" onclick="openRsvpListModal(${evt.id})">
           <i class="fa-solid fa-user-check"></i> مين جاي
         </button>` : ''}
+        <!-- بطاقة الدعوة (#180): زرّان جنباً إلى جنب — تصميم من قالب، أو رفع
+             البطاقة الجاهزة (وهو رفع الملصق القائم نفسه، بلا مسار جديد). -->
+        <div class="event-page-btn-row my-event-card-row">
+          <button type="button" class="event-page-btn" onclick="openCardStudio(${evt.id})">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> صمّم بطاقة
+          </button>
+          <button type="button" class="event-page-btn" onclick="triggerReadyCardUpload(${evt.id})">
+            <i class="fa-solid fa-upload"></i> ارفع بطاقتك الجاهزة
+          </button>
+        </div>
       </div>
     </div>
   `).join('');
 
   containers.forEach(c => { c.innerHTML = html; });
+}
+
+// 14ب. ستوديو بطاقة الدعوة (#180)
+/**
+ * صاحب المناسبة يصمّم «بطاقة الدعوة» من قالب: يختار القالب والخط واللون
+ * والمقاس والصورة، يعاينها حقيقةً من الخادم (`POST …/cards/preview` — PNG
+ * مصغّر يُعرض blob لا data-URL)، ثم يحفظها فتصير الأساسية فتظهر `og:image`
+ * على رابط `/e/:id`.
+ *
+ * كل نداء عبر apiFetch، والكتالوج (`GET /api/card-templates`) عام ويُجلب مرة
+ * واحدة لكل جلسة صفحة. **النبرة تحكم المعروض هنا أيضاً لا الخادم وحده:**
+ * مناسبة العزاء لا تُعرض لها إلا القوالب الهادئة، والخادم يردّ 400 لو خولف —
+ * فلا العميل يعرض خياراً مرفوضاً ولا يُعتمد على العميل.
+ *
+ * الحالات الثلاث المطلوبة كلها مرئية: تحميل (نصّ في المعاينة/القائمة)، فشل
+ * شبكة (رسالة عربية عامة)، و429 («حاول بعد قليل») — والمناسبة بلا صورة تعمل
+ * بخيار «بلا صورة» بلا خطأ.
+ */
+let cardStudioCatalog = null; // { templates, sizes, fonts } — من الخادم مرة واحدة
+let cardStudioState = null;   // { eventId, tone, templateKey, sizeKey, fontKey, color, photoSource, photoFile }
+let cardStudioPreviewUrl = null; // ObjectURL يُحرَّر عند كل معاينة وعند الإغلاق
+let readyCardUploadEventId = null;
+
+function cardStudioEvent() {
+  return myEventsCache.find(evt => evt.id === cardStudioState.eventId) || null;
+}
+
+function cardStudioSolemn() {
+  const evt = cardStudioEvent();
+  return Boolean(evt && evt.occasion_type && evt.occasion_type.tone === 'solemn');
+}
+
+function cardStudioTemplatesForTone() {
+  const tone = cardStudioSolemn() ? 'solemn' : 'festive';
+  return cardStudioCatalog.templates.filter(template => template.tone === tone);
+}
+
+function cardStudioTemplate(key) {
+  return cardStudioCatalog.templates.find(template => template.key === key) || null;
+}
+
+function cardStudioSize(key) {
+  return cardStudioCatalog.sizes.find(size => size.key === key) || null;
+}
+
+function cardStudioFont(key) {
+  return cardStudioCatalog.fonts.find(font => font.key === key) || null;
+}
+
+/** أول قالب متاح لنبرة المناسبة، ثم أول خط ولون مسموحين به — قيمة ابتدائية صالحة دائماً. */
+function pickCardStudioDefaults() {
+  const templates = cardStudioTemplatesForTone();
+  const template = templates[0] || null;
+  cardStudioState.templateKey = template ? template.key : null;
+  cardStudioState.sizeKey = 'story';
+  cardStudioState.fontKey = template ? template.default_font : null;
+  const color = template ? template.colors[0] : null;
+  cardStudioState.color = color ? color.value : null;
+  cardStudioState.photoSource = 'event';
+  cardStudioState.photoFile = null;
+}
+
+function cardStudioTemplateSwatch(template) {
+  const first = (template.colors[0] && template.colors[0].value) || 'var(--surface-sunk)';
+  const second = (template.colors[1] && template.colors[1].value) || first;
+  // معاينة مصغّرة للقالب: أرضية من لونيه المميّزين — بلا صورة من الخادم ولا
+  // طلب إضافي، لكنها تقول «القالب» بصرياً قبل ضغط «معاينة».
+  return `background:linear-gradient(135deg, ${escapeHtml(first)} 0%, ${escapeHtml(first)} 46%, ${escapeHtml(second)} 46%, ${escapeHtml(second)} 100%);`;
+}
+
+function renderCardStudioControls() {
+  const templatesBox = document.getElementById('cardStudioTemplates');
+  const sizesBox = document.getElementById('cardStudioSizes');
+  const colorsBox = document.getElementById('cardStudioColors');
+  const fontSelect = document.getElementById('cardStudioFont');
+  if (!templatesBox || !sizesBox || !colorsBox || !fontSelect) return;
+
+  const templates = cardStudioTemplatesForTone();
+  templatesBox.innerHTML = templates.map(template => `
+    <button type="button" class="card-studio-template${template.key === cardStudioState.templateKey ? ' is-selected' : ''}"
+            role="radio" aria-checked="${template.key === cardStudioState.templateKey ? 'true' : 'false'}"
+            data-template="${escapeHtml(template.key)}" onclick="selectCardStudioTemplate(this.dataset.template)">
+      <span class="card-studio-swatch" style="${cardStudioTemplateSwatch(template)}" aria-hidden="true"></span>
+      <span class="card-studio-template-name">${escapeHtml(template.name)}</span>
+      <span class="card-studio-template-note">${escapeHtml(template.tagline || '')}</span>
+    </button>`).join('');
+
+  sizesBox.innerHTML = cardStudioCatalog.sizes.map(size => `
+    <button type="button" class="card-studio-chip${size.key === cardStudioState.sizeKey ? ' is-selected' : ''}"
+            role="radio" aria-checked="${size.key === cardStudioState.sizeKey ? 'true' : 'false'}"
+            data-size="${escapeHtml(size.key)}" onclick="selectCardStudioSize(this.dataset.size)">
+      <span>${escapeHtml(size.name)}</span>
+      <span class="card-studio-chip-note">${size.width}×${size.height}</span>
+    </button>`).join('');
+
+  const template = cardStudioTemplate(cardStudioState.templateKey);
+  const colors = template ? template.colors : [];
+  colorsBox.innerHTML = colors.map(color => `
+    <button type="button" class="card-studio-colour${color.value === cardStudioState.color ? ' is-selected' : ''}"
+            role="radio" aria-checked="${color.value === cardStudioState.color ? 'true' : 'false'}"
+            aria-label="${escapeHtml(color.name)}" title="${escapeHtml(color.name)}"
+            data-colour="${escapeHtml(color.value)}"
+            style="background:${escapeHtml(color.value)}" onclick="selectCardStudioColour(this.dataset.colour)"></button>`).join('');
+
+  const allowedFonts = template ? template.fonts : [];
+  fontSelect.innerHTML = allowedFonts.map(key => {
+    const font = cardStudioFont(key);
+    if (!font) return '';
+    return `<option value="${escapeHtml(font.key)}"${font.key === cardStudioState.fontKey ? ' selected' : ''}>${escapeHtml(font.name)}</option>`;
+  }).join('');
+  if (!allowedFonts.includes(cardStudioState.fontKey) && allowedFonts.length) {
+    cardStudioState.fontKey = allowedFonts[0];
+    fontSelect.value = allowedFonts[0];
+  }
+
+  const photoSelect = document.getElementById('cardStudioPhoto');
+  if (photoSelect) photoSelect.value = cardStudioState.photoSource;
+  const photoNote = document.getElementById('cardStudioPhotoNote');
+  const evt = cardStudioEvent();
+  if (photoNote) {
+    photoNote.textContent = evt && evt.poster_url
+      ? 'ستُستخدم صورة المناسبة المنشورة.'
+      : 'هذه المناسبة بلا صورة — البطاقة ستُرسم نصّية، أو ارفع صورة من جهازك.';
+  }
+}
+
+function selectCardStudioTemplate(key) {
+  const template = cardStudioTemplate(key);
+  if (!template) return;
+  if (!cardStudioTemplatesForTone().some(candidate => candidate.key === key)) return;
+  cardStudioState.templateKey = key;
+  cardStudioState.fontKey = template.default_font;
+  cardStudioState.color = template.colors[0].value;
+  renderCardStudioControls();
+}
+
+function selectCardStudioSize(key) {
+  if (!cardStudioSize(key)) return;
+  cardStudioState.sizeKey = key;
+  renderCardStudioControls();
+}
+
+function selectCardStudioColour(value) {
+  const template = cardStudioTemplate(cardStudioState.templateKey);
+  if (!template || !template.colors.some(color => color.value === value)) return;
+  cardStudioState.color = value;
+  renderCardStudioControls();
+}
+
+function handleCardStudioPhotoChange() {
+  const select = document.getElementById('cardStudioPhoto');
+  if (!select) return;
+  cardStudioState.photoSource = select.value;
+  const fileInput = document.getElementById('cardStudioPhotoFile');
+  if (cardStudioState.photoSource === 'upload' && fileInput) fileInput.click();
+  else cardStudioState.photoFile = null;
+}
+
+function handleCardStudioPhotoFile(input) {
+  const file = input && input.files && input.files[0];
+  cardStudioState.photoFile = file || null;
+  const note = document.getElementById('cardStudioPhotoNote');
+  if (note && file) note.textContent = `الصورة المختارة: ${file.name}`;
+}
+
+/** جسم POST المعاينة/الحفظ — نفس الحقول حرفياً في النداءين. */
+function cardStudioFormData() {
+  const form = new FormData();
+  form.append('template_key', cardStudioState.templateKey || '');
+  form.append('size', cardStudioState.sizeKey || '');
+  form.append('font_key', cardStudioState.fontKey || '');
+  form.append('color', cardStudioState.color || '');
+  // «أرفع صورة» بلا ملف (أُلغيت نافذة الاختيار) تعود إلى صورة المناسبة بدل
+  // إرسال مصدرٍ بلا صورة، فيردّ الخادم 400 لطلبٍ لم يقصده أحد.
+  const chosenSource = cardStudioState.photoSource === 'upload' && !cardStudioState.photoFile
+    ? 'event'
+    : cardStudioState.photoSource;
+  form.append('photo_source', cardStudioState.photoFile ? 'upload' : chosenSource);
+  if (cardStudioState.photoFile) form.append('photo', cardStudioState.photoFile);
+  return form;
+}
+
+function setCardStudioStatus(elementId, message, { error = false } = {}) {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+  if (!message) {
+    element.hidden = true;
+    element.textContent = '';
+    element.classList.remove('is-error');
+    return;
+  }
+  element.hidden = false;
+  element.textContent = message;
+  element.classList.toggle('is-error', Boolean(error));
+}
+
+/** رسالة الفشل: 429 لها نصّها المطلوب، وغيرها رسالة الخادم العربية أو عامة. */
+async function cardStudioErrorMessage(res, fallback) {
+  if (res && res.status === 429) return 'طلبات كثيرة في وقت قصير — حاول بعد قليل';
+  let message = fallback;
+  try {
+    const data = await res.json();
+    if (data && data.message) message = data.message;
+  } catch (e) { /* جسم غير JSON — تبقى الرسالة العامة */ }
+  return message;
+}
+
+function setCardStudioBusy(busy, which) {
+  const previewBtn = document.getElementById('cardStudioPreviewBtn');
+  const saveBtn = document.getElementById('cardStudioSaveBtn');
+  if (previewBtn) previewBtn.disabled = busy && which === 'preview';
+  if (saveBtn) saveBtn.disabled = busy && which === 'save';
+}
+
+async function previewCardStudio() {
+  if (!cardStudioState || !cardStudioState.templateKey) return;
+  const empty = document.getElementById('cardStudioPreviewEmpty');
+  const img = document.getElementById('cardStudioPreviewImg');
+  setCardStudioStatus('cardStudioPreviewStatus', 'جارٍ رسم البطاقة…');
+  setCardStudioBusy(true, 'preview');
+
+  try {
+    const res = await apiFetch(`/api/events/${cardStudioState.eventId}/cards/preview`, {
+      method: 'POST',
+      auth: true,
+      body: cardStudioFormData()
+    });
+    if (!res.ok) {
+      setCardStudioStatus('cardStudioPreviewStatus', await cardStudioErrorMessage(res, 'تعذّرت معاينة البطاقة — حاول مرة أخرى'), { error: true });
+      return;
+    }
+    const blob = await res.blob();
+    if (cardStudioPreviewUrl) URL.revokeObjectURL(cardStudioPreviewUrl);
+    cardStudioPreviewUrl = URL.createObjectURL(blob);
+    if (img) {
+      img.src = cardStudioPreviewUrl;
+      img.hidden = false;
+    }
+    if (empty) empty.hidden = true;
+    setCardStudioStatus('cardStudioPreviewStatus', '');
+  } catch (err) {
+    setCardStudioStatus('cardStudioPreviewStatus', 'تعذّر الاتصال بالخادم — تحقّق من الشبكة وحاول مرة أخرى', { error: true });
+  } finally {
+    setCardStudioBusy(false, 'preview');
+  }
+}
+
+async function saveCardStudio() {
+  if (!cardStudioState || !cardStudioState.templateKey) return;
+  setCardStudioStatus('cardStudioResult', 'جارٍ حفظ البطاقة…');
+  setCardStudioBusy(true, 'save');
+
+  try {
+    const res = await apiFetch(`/api/events/${cardStudioState.eventId}/cards`, {
+      method: 'POST',
+      auth: true,
+      body: cardStudioFormData()
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || !data.success) {
+      const message = res.status === 429
+        ? 'طلبات كثيرة في وقت قصير — حاول بعد قليل'
+        : ((data && data.message) || 'تعذّر حفظ البطاقة — حاول مرة أخرى');
+      setCardStudioStatus('cardStudioResult', message, { error: true });
+      return;
+    }
+    const link = data.card && data.card.image_url
+      ? `<a href="${escapeHtml(data.card.image_url)}" target="_blank" rel="noopener">افتح البطاقة بالمقاس الكامل</a>`
+      : '';
+    const result = document.getElementById('cardStudioResult');
+    if (result) {
+      result.hidden = false;
+      result.classList.remove('is-error');
+      result.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${escapeHtml(data.message || 'حُفظت البطاقة')} ${link}`;
+    }
+    await loadEventCards({ quiet: true });
+  } catch (err) {
+    setCardStudioStatus('cardStudioResult', 'تعذّر الاتصال بالخادم — لم تُحفظ البطاقة، حاول مرة أخرى', { error: true });
+  } finally {
+    setCardStudioBusy(false, 'save');
+  }
+}
+
+function cardStudioCardLabel(card) {
+  const template = cardStudioTemplate(card.template_key);
+  const size = cardStudioSize(card.size);
+  const font = cardStudioFont(card.font_key);
+  return [template ? template.name : card.template_key, size ? size.name : card.size, font ? font.name : '']
+    .filter(Boolean).join(' · ');
+}
+
+function renderEventCards(cards) {
+  const list = document.getElementById('cardStudioCardsList');
+  if (!list) return;
+  if (!cards || !cards.length) {
+    list.innerHTML = '<p class="card-studio-empty">لا بطاقات محفوظة لهذه المناسبة بعد.</p>';
+    return;
+  }
+  list.innerHTML = cards.map(card => `
+    <div class="card-studio-card-row${card.is_primary ? ' is-primary' : ''}" data-card-id="${card.id}">
+      <img class="card-studio-card-thumb" src="${escapeHtml(card.image_url)}" alt="${escapeHtml(cardStudioCardLabel(card))}" loading="lazy">
+      <div class="card-studio-card-meta">
+        <strong>${escapeHtml(cardStudioCardLabel(card))}</strong>
+        ${card.is_primary ? '<span class="card-studio-primary">أساسية — تظهر في معاينة الرابط</span>' : ''}
+        <a href="${escapeHtml(card.image_url)}" target="_blank" rel="noopener" class="card-studio-link">الرابط الكامل</a>
+      </div>
+      <div class="card-studio-card-actions">
+        ${card.is_primary ? '' : `<button type="button" class="event-page-btn" onclick="setPrimaryCard(${card.id})">اجعلها أساسية</button>`}
+        <button type="button" class="event-page-btn card-studio-delete" onclick="deleteEventCard(${card.id})">حذف</button>
+      </div>
+    </div>`).join('');
+}
+
+async function loadEventCards({ quiet = false } = {}) {
+  const list = document.getElementById('cardStudioCardsList');
+  if (!cardStudioState) return;
+  if (list && !quiet) list.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+  try {
+    const res = await apiFetch(`/api/events/${cardStudioState.eventId}/cards`, { auth: true });
+    if (res.status === 429) {
+      if (list) list.innerHTML = '<p class="card-studio-empty is-error">طلبات كثيرة في وقت قصير — حاول بعد قليل</p>';
+      return;
+    }
+    const data = await res.json().catch(() => null);
+    if (!data || !data.success) {
+      if (list) list.innerHTML = '<p class="card-studio-empty is-error">تعذّر جلب بطاقات المناسبة</p>';
+      return;
+    }
+    renderEventCards(data.cards);
+  } catch (err) {
+    if (list) list.innerHTML = '<p class="card-studio-empty is-error">تعذّر الاتصال بالخادم</p>';
+  }
+}
+
+async function setPrimaryCard(cardId) {
+  if (!cardStudioState) return;
+  try {
+    const res = await apiFetch(`/api/events/${cardStudioState.eventId}/cards/${cardId}`, { method: 'PATCH', auth: true });
+    const data = await res.json().catch(() => null);
+    if (res.status === 429) { setCardStudioStatus('cardStudioResult', 'طلبات كثيرة في وقت قصير — حاول بعد قليل', { error: true }); return; }
+    if (!data || !data.success) {
+      setCardStudioStatus('cardStudioResult', (data && data.message) || 'تعذّر تعيين البطاقة الأساسية', { error: true });
+      return;
+    }
+    setCardStudioStatus('cardStudioResult', data.message || 'صارت هذه البطاقة الأساسية');
+    await loadEventCards({ quiet: true });
+  } catch (err) {
+    setCardStudioStatus('cardStudioResult', 'تعذّر الاتصال بالخادم', { error: true });
+  }
+}
+
+async function deleteEventCard(cardId) {
+  if (!cardStudioState) return;
+  if (!confirm('حذف هذه البطاقة؟ سيعود رابط المشاركة إلى البطاقة التي يولّدها الموقع إن كانت هي الأساسية.')) return;
+  try {
+    const res = await apiFetch(`/api/events/${cardStudioState.eventId}/cards/${cardId}`, { method: 'DELETE', auth: true });
+    const data = await res.json().catch(() => null);
+    if (res.status === 429) { setCardStudioStatus('cardStudioResult', 'طلبات كثيرة في وقت قصير — حاول بعد قليل', { error: true }); return; }
+    if (!data || !data.success) {
+      setCardStudioStatus('cardStudioResult', (data && data.message) || 'تعذّر حذف البطاقة', { error: true });
+      return;
+    }
+    setCardStudioStatus('cardStudioResult', data.message || 'حُذفت البطاقة');
+    await loadEventCards({ quiet: true });
+  } catch (err) {
+    setCardStudioStatus('cardStudioResult', 'تعذّر الاتصال بالخادم', { error: true });
+  }
+}
+
+/** يفتح الستوديو لمناسبة يملكها الحساب، ويجلب الكتالوج مرة واحدة. */
+async function openCardStudio(eventId) {
+  const modal = document.getElementById('cardStudioModal');
+  if (!modal) return;
+  const evt = myEventsCache.find(item => item.id === eventId);
+  if (!evt) return;
+
+  cardStudioState = { eventId, photoSource: 'event', photoFile: null };
+  const subtitle = document.getElementById('cardStudioSubtitle');
+  if (subtitle) subtitle.textContent = evt.title || evt.groom_name || '';
+  document.getElementById('cardStudioPhotoFile').value = '';
+  setCardStudioStatus('cardStudioPreviewStatus', '');
+  setCardStudioStatus('cardStudioResult', '');
+  const img = document.getElementById('cardStudioPreviewImg');
+  const empty = document.getElementById('cardStudioPreviewEmpty');
+  if (img) { img.hidden = true; img.removeAttribute('src'); }
+  if (empty) empty.hidden = false;
+  modal.style.display = 'flex';
+
+  if (!cardStudioCatalog) {
+    const list = document.getElementById('cardStudioTemplates');
+    if (list) list.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+    try {
+      const res = await apiFetch('/api/card-templates');
+      const data = await res.json().catch(() => null);
+      if (!data || !data.success) {
+        if (list) list.innerHTML = '<p class="card-studio-empty is-error">تعذّر جلب القوالب — تحقّق من الاتصال ثم أعد المحاولة</p>';
+        return;
+      }
+      cardStudioCatalog = { templates: data.templates, sizes: data.sizes, fonts: data.fonts };
+    } catch (err) {
+      if (list) list.innerHTML = '<p class="card-studio-empty is-error">تعذّر الاتصال بالخادم — تعذّر جلب القوالب</p>';
+      return;
+    }
+  }
+
+  pickCardStudioDefaults();
+  renderCardStudioControls();
+  loadEventCards();
+}
+
+function closeCardStudio() {
+  const modal = document.getElementById('cardStudioModal');
+  if (modal) modal.style.display = 'none';
+  if (cardStudioPreviewUrl) {
+    URL.revokeObjectURL(cardStudioPreviewUrl);
+    cardStudioPreviewUrl = null;
+  }
+  cardStudioState = null;
+}
+
+/**
+ * «ارفع بطاقتك الجاهزة»: ملصق جاهز من تصميم صاحب المناسبة — نفس رفع الملصق
+ * القائم (`PATCH /api/events/:id` بحقل `poster`)، فلا مسار خادم جديد ولا
+ * عمود جديد. والباقي إن كان أساسياً يعود للملصق المرفوع، وصفّ `event_cards`
+ * لا يُكتب هنا إطلاقاً.
+ */
+function triggerReadyCardUpload(eventId) {
+  readyCardUploadEventId = eventId;
+  const input = document.getElementById('readyCardUploadInput');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+async function handleReadyCardUpload(input) {
+  const file = input && input.files && input.files[0];
+  const eventId = readyCardUploadEventId;
+  readyCardUploadEventId = null;
+  if (!file || !eventId) return;
+
+  const form = new FormData();
+  form.append('poster', file);
+
+  try {
+    const res = await apiFetch(`/api/events/${eventId}`, { method: 'PATCH', auth: true, body: form });
+    const data = await res.json().catch(() => null);
+    if (res.status === 429) { alert('طلبات كثيرة في وقت قصير — حاول بعد قليل'); return; }
+    if (!data || !data.success) { alert((data && data.message) || 'تعذّر رفع البطاقة — حاول مرة أخرى'); return; }
+    alert('تم رفع بطاقتك الجاهزة وستظهر كصورة المناسبة.');
+    fetchMyEvents();
+    if (eventPageEvent && eventPageEvent.id === eventId) refreshEventPage();
+  } catch (err) {
+    alert('تعذّر رفع البطاقة — تحقّق من الاتصال بالخادم');
+  }
 }
 
 // 14أ. «مين جاي» — قائمة أجوبة الحضور لصاحب المناسبة (تذكرة #168).

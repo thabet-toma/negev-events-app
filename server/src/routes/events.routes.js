@@ -1192,3 +1192,11 @@ router.post('/events/:id/congratulations/:cid/report', authenticate, asyncHandle
 }));
 
 module.exports = router;
+
+// `assertCanManageEvent` is attached to the exported router rather than moved
+// to its own module (تذكرة #180): the card studio's routes
+// (`cards.routes.js`) must apply the *same* ownership rule, not a copy of it,
+// and both modules already live in the routes layer. A property on the router
+// function keeps every existing import of this file (`require('./events.routes')`
+// → the router itself) working unchanged.
+module.exports.assertCanManageEvent = assertCanManageEvent;
