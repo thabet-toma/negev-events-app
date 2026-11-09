@@ -479,12 +479,15 @@ class EventRsvp {
 
 /// سطر واحد في «مين جاي» — اسم صاحب الجواب كما أعاده الخادم
 /// (`users.full_name` للحساب، `guest_name` للضيف) مع الجواب والعدد والمصدر.
+/// و`invite` (تذكرة #183): الدعوة الشخصية التي جاء منها الجواب، أو `null` لجواب
+/// عادي — «مين جاي» تكتب منها «دعوة: فلان — فُتحت/لم تُفتح».
 class EventRsvpEntry {
   final int id;
   final String name;
   final String response;
   final int partySize;
   final String source;
+  final EventInvite? invite;
 
   const EventRsvpEntry({
     required this.id,
@@ -492,6 +495,7 @@ class EventRsvpEntry {
     required this.response,
     required this.partySize,
     required this.source,
+    this.invite,
   });
 
   bool get isGoing => response == 'yes';
@@ -502,6 +506,9 @@ class EventRsvpEntry {
         response: '${json['response'] ?? ''}',
         partySize: _toInt(json['party_size']),
         source: '${json['source'] ?? 'account'}',
+        invite: json['invite'] is Map<String, dynamic>
+            ? EventInvite.fromJson(json['invite'] as Map<String, dynamic>)
+            : null,
       );
 }
 
@@ -549,6 +556,85 @@ class EventRsvpList {
       totals: EventRsvpTotals.fromJson(
         rawTotals is Map<String, dynamic> ? rawTotals : const {},
       ),
+    );
+  }
+}
+
+/// جواب دعوةٍ شخصية كما يعيده `GET /api/events/:id/invites` — `response` و
+/// `party_size` وحدهما: اسم الدعوة في صفّ الدعوة نفسه، والهاتف لا يرسله الخادم
+/// في أي استجابة (ADR-0015 §2).
+class EventInviteAnswer {
+  final String response;
+  final int partySize;
+
+  const EventInviteAnswer({required this.response, required this.partySize});
+
+  bool get isGoing => response == 'yes';
+
+  factory EventInviteAnswer.fromJson(Map<String, dynamic> json) =>
+      EventInviteAnswer(
+        response: '${json['response'] ?? ''}',
+        partySize: _toInt(json['party_size']),
+      );
+}
+
+/// دعوة شخصية واحدة (تذكرة #183): اسم الضيف الذي كتبه صاحب المناسبة، وتوكِنه
+/// (٣٢ حرفاً hex)، ورابطها المطلق كما بناه الخادم (`/e/:id/i/<token>`)، و
+/// `openedAt` أول فتح، وجوابها إن وُجد.
+///
+/// الصفّ القادم من «مين جاي» (`EventRsvpEntry.invite`) يحمل `id` و`name` و
+/// `openedAt` وحدها — `token` و`url` تُقرآن فارغتين هناك ولا تُعرضان، فلا يُبنى
+/// رابط في العميل أبداً.
+class EventInvite {
+  final int id;
+  final String name;
+  final String token;
+  final String url;
+  final String? openedAt;
+  final EventInviteAnswer? rsvp;
+
+  const EventInvite({
+    required this.id,
+    required this.name,
+    this.token = '',
+    this.url = '',
+    this.openedAt,
+    this.rsvp,
+  });
+
+  /// «فُتحت» — أي أنّ صاحب المناسبة يعرف أن الدعوة وصلت صاحبها.
+  bool get isOpened => openedAt != null;
+
+  factory EventInvite.fromJson(Map<String, dynamic> json) {
+    final rawRsvp = json['rsvp'];
+    return EventInvite(
+      id: _toInt(json['id']),
+      name: '${json['name'] ?? ''}',
+      token: _nullableString(json['token']) ?? '',
+      url: _nullableString(json['url']) ?? '',
+      openedAt: _nullableString(json['opened_at']),
+      rsvp: rawRsvp is Map<String, dynamic>
+          ? EventInviteAnswer.fromJson(rawRsvp)
+          : null,
+    );
+  }
+}
+
+/// ردّ `GET /api/events/:id/invites` كاملاً — لصاحب المناسبة أو أدمن في نطاقه.
+class EventInviteList {
+  final List<EventInvite> invites;
+
+  const EventInviteList({required this.invites});
+
+  factory EventInviteList.fromJson(Map<String, dynamic> json) {
+    final raw = json['invites'];
+    return EventInviteList(
+      invites: raw is List
+          ? raw
+              .whereType<Map<String, dynamic>>()
+              .map(EventInvite.fromJson)
+              .toList()
+          : <EventInvite>[],
     );
   }
 }

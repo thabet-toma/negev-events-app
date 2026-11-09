@@ -4,6 +4,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
+const config = require('../config');
 const events = require('../services/events.service');
 const occasionTypes = require('../services/occasionTypes.service');
 const villages = require('../services/villages.service');
@@ -24,7 +25,7 @@ const {
   parseEventDays, parseCsvList, parseFlag, parseEventVisibility, parsePartySize,
   parsePublishAt, samePublishMinute, MAX_HONOREES
 } = require('../middleware/validate');
-const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS } = require('../constants');
+const { VILLAGES_TOWN, REACTION_TYPES, MAX_EVENT_DAYS, OCCASION_FIELD_KEYS, INVITE_BATCH_MAX } = require('../constants');
 
 const router = express.Router();
 
@@ -1002,6 +1003,80 @@ router.delete('/events/:id/rsvp', authenticate, asyncHandler(async (req, res) =>
 router.get('/events/:id/rsvps', authenticate, asyncHandler(async (req, res) => {
   const eventId = parseId(req.params.id, 'معرّف المناسبة');
   res.json({ success: true, ...await events.listEventRsvps(eventId, req.user) });
+}));
+
+// --- الدعوات الشخصية: «أهلاً فلان» (تذكرة #183) ---------------------
+//
+// صاحب المناسبة ينشئ لكل ضيف دعوةً برابط `/e/:id/i/<token>`، والضيف يفتحها
+// ويجيب بلا حساب. **الحكم في الخدمة** لا هنا: `req.user` يُمرَّر مع المعرّف،
+// و`createEventInvites`/`listEventInvites`/`deleteEventInvite` تبني شرط النطاق
+// (`adminScope.ownerOrTownScopeClause`) في استعلامها وترمي 404 لغيره — لا 403،
+// فلا يُؤكَّد وجود مناسبة لمن لا يملكها. وهذه الطبقة تُتحقّق من الشكل وتَبني
+// الروابط وحدها، والهاتف لا يظهر في أي استجابة (لا استعلام هنا ولا هناك).
+
+/**
+ * أسماء الدعوات: مصفوفة نصوص غير فارغة، 1..`INVITE_BATCH_MAX`، وكل اسم بعد
+ * `cleanString` (‏١٢٠ حرفاً = عرض العمود) غير فارغ. والقصّ وحده لا يكفي: اسم
+ * أطول من ١٢٠ يُرفض 400 صريحة بدل أن يُقصّ صامتاً إلى اسم آخر — الاسم هو ما
+ * يقوله الضيف لنفسه على صفحة الدعوة.
+ */
+function parseInviteNames(raw) {
+  if (!Array.isArray(raw)) throw ApiError.badRequest('أرسل قائمة أسماء الدعوات');
+  if (!raw.length) throw ApiError.badRequest('أضف اسماً واحداً على الأقل');
+  if (raw.length > INVITE_BATCH_MAX) {
+    throw ApiError.badRequest(`لا يمكن إنشاء أكثر من ${INVITE_BATCH_MAX} دعوة في الطلب الواحد`);
+  }
+
+  return raw.map(item => {
+    if (typeof item !== 'string') throw ApiError.badRequest('كل دعوة تحتاج اسماً نصّياً');
+    const name = cleanString(item, 120);
+    if (!name) throw ApiError.badRequest('اسم الدعوة مطلوب — لا تُقبل أسماء فارغة');
+    if (item.trim().length > 120) throw ApiError.badRequest('اسم الدعوة يتجاوز 120 حرفاً');
+    return name;
+  });
+}
+
+/** رابط الدعوة المطلق — يُبنى هنا لا في الخدمة: `publicUrl` شأن طبقة النشر. */
+function invitePageUrl(eventId, token) {
+  return `${config.publicUrl}/e/${eventId}/i/${token}`;
+}
+
+/** الصفّ كما يخرج للعميل: صفّ الخدمة + رابطه. الرابط واحد في الإنشاء والقائمة. */
+function withInviteUrl(eventId, invite) {
+  return { ...invite, url: invitePageUrl(eventId, invite.token) };
+}
+
+/** إنشاء دعوة لكل اسم — معاملة واحدة في الخدمة، والردّ 201 برابط كل دعوة. */
+router.post('/events/:id/invites', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const names = parseInviteNames(req.body && req.body.names);
+
+  const created = await events.createEventInvites(eventId, names, req.user);
+  res.status(201).json({
+    success: true,
+    message: created.length === 1 ? 'تم إنشاء الدعوة' : `تم إنشاء ${created.length} دعوات`,
+    invites: created.map(invite => withInviteUrl(eventId, invite))
+  });
+}));
+
+/** دعوات المناسبة بترتيب إنشائها، لكل واحدة حالتها (`opened_at`) وجوابها. */
+router.get('/events/:id/invites', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+
+  const invites = await events.listEventInvites(eventId, req.user);
+  res.json({ success: true, invites: invites.map(invite => withInviteUrl(eventId, invite)) });
+}));
+
+/**
+ * حذف دعوة — والجواب الذي جمعته يبقى: القيد `ON DELETE SET NULL` يفكّ الإشارة
+ * وحدها (تذكرة #183). دعوة مناسبة أخرى 404، ولا حذف.
+ */
+router.delete('/events/:id/invites/:inviteId', authenticate, asyncHandler(async (req, res) => {
+  const eventId = parseId(req.params.id, 'معرّف المناسبة');
+  const inviteId = parseId(req.params.inviteId, 'معرّف الدعوة');
+
+  await events.deleteEventInvite(eventId, inviteId, req.user);
+  res.json({ success: true, message: 'تم حذف الدعوة' });
 }));
 
 /**

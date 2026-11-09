@@ -12,9 +12,9 @@
 
 | الوحدة | الملفات | الأسطر |
 |---|---|---|
-| `server/src` | 82 | 26747 |
-| `web` | 8 | 20475 |
-| `mobile/lib` | 67 | 31463 |
+| `server/src` | 82 | 27161 |
+| `web` | 8 | 20636 |
+| `mobile/lib` | 67 | 31831 |
 
 ### توزيع `server/src`
 
@@ -22,14 +22,14 @@
 |---|---|---|
 | `app.js` | 1 | 136 |
 | `config/` | 1 | 143 |
-| `constants.js` | 1 | 369 |
-| `db/` | 4 | 2800 |
+| `constants.js` | 1 | 378 |
+| `db/` | 4 | 2852 |
 | `jobs/` | 1 | 351 |
 | `middleware/` | 6 | 799 |
 | `privacyNotice.js` | 1 | 115 |
 | `realtime/` | 2 | 85 |
-| `routes/` | 25 | 6366 |
-| `services/` | 28 | 14713 |
+| `routes/` | 25 | 6549 |
+| `services/` | 28 | 14883 |
 | `utils/` | 12 | 870 |
 
 ### ملفات `web/*.js`
@@ -38,7 +38,7 @@
 |---|---|
 | `admin.js` | 8122 |
 | `api.js` | 137 |
-| `app.js` | 11347 |
+| `app.js` | 11508 |
 | `config.js` | 32 |
 | `occasionForm.js` | 361 |
 | `serve.js` | 149 |
@@ -51,11 +51,11 @@
 
 | المجلد/الملف | الملفات | الأسطر |
 |---|---|---|
-| `api/` | 2 | 2297 |
+| `api/` | 2 | 2330 |
 | `config.dart` | 1 | 69 |
 | `main.dart` | 1 | 273 |
-| `models/` | 11 | 2528 |
-| `screens/` | 20 | 20514 |
+| `models/` | 11 | 2603 |
+| `screens/` | 20 | 20774 |
 | `state/` | 18 | 1859 |
 | `theme.dart` | 1 | 296 |
 | `widgets/` | 13 | 3627 |
@@ -64,8 +64,8 @@
 
 | المهمة | ابدأ من |
 |---|---|
-| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:80` — والخدمة `server/src/services/events.service.js` |
-| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2563` |
+| إضافة نقطة API | `server/src/routes/index.js:57` للتركيب، ثم `server/src/routes/<المجال>.routes.js` — مثل `server/src/routes/events.routes.js:81` — والخدمة `server/src/services/events.service.js` |
+| تغيير حقل أو جدول | `server/src/db/schema.sql` (للتنصيبات الجديدة) + خطوة جديدة في `server/src/db/dataMigrations.js` — آخر خطوة اليوم `server/src/db/dataMigrations.js:2588` |
 | رفع صورة أو وسيط | `server/src/middleware/upload.js:152` · `server/src/services/cloudinary.service.js:194` |
 | الصلاحيات والمصادقة | `server/src/middleware/auth.js:47` · `server/src/routes/admin.routes.js:25` |
 | بثّ لحظي (Socket.IO) | `server/src/realtime/index.js:27` · `server/src/routes/admin.routes.js:128` |
@@ -74,7 +74,7 @@
 
 قاعدة الطبقات: المسار يتحقق والخدمة تستعلم — لا SQL خارج `server/src/services/`، ولا `req`/`res` داخلها.
 
-## ٣. نقاط API — 213
+## ٣. نقاط API — 217
 
 المسار الكامل = جذر التركيب في `server/src/app.js` + تركيب الراوتر في `server/src/routes/index.js` + المسار داخل الملف.
 راوترات `share.routes.js` تُركَّب على الجذور `/e` `/p` `/a` `/person` `/live` `/v` مباشرةً في `server/src/app.js`، لا تحت `/api`.
@@ -82,7 +82,7 @@
 
 | METHOD | path | guards | file:line |
 |---|---|---|---|
-| GET | `/a/:id` | — | `server/src/routes/share.routes.js:1938` |
+| GET | `/a/:id` | — | `server/src/routes/share.routes.js:2066` |
 | DELETE | `/api/account` | `authenticate` | `server/src/routes/auth.routes.js:209` |
 | GET | `/api/admin/admins` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:380` |
 | PUT | `/api/admin/admins/:id/towns` | `requireAdmin`, `requireSuperAdmin` | `server/src/routes/admin.routes.js:384` |
@@ -200,40 +200,43 @@
 | PATCH | `/api/broadcasts/:id/dismiss` | `authenticate` | `server/src/routes/broadcasts.routes.js:32` |
 | GET | `/api/broadcasts/live` | `optionalAuthenticate` | `server/src/routes/broadcasts.routes.js:28` |
 | GET | `/api/card-templates` | — | `server/src/routes/cards.routes.js:168` |
-| POST | `/api/check-collision` | — | `server/src/routes/events.routes.js:1034` |
-| GET | `/api/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:80` |
-| POST | `/api/events` | `authenticate` | `server/src/routes/events.routes.js:307` |
-| GET | `/api/events/:id` | `optionalAuthenticate` | `server/src/routes/events.routes.js:245` |
-| PATCH | `/api/events/:id` | `authenticate` | `server/src/routes/events.routes.js:570` |
-| GET | `/api/events/:id/amendments` | `authenticate` | `server/src/routes/events.routes.js:1024` |
-| GET | `/api/events/:id/calendar.ics` | — | `server/src/routes/events.routes.js:268` |
+| POST | `/api/check-collision` | — | `server/src/routes/events.routes.js:1109` |
+| GET | `/api/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:81` |
+| POST | `/api/events` | `authenticate` | `server/src/routes/events.routes.js:308` |
+| GET | `/api/events/:id` | `optionalAuthenticate` | `server/src/routes/events.routes.js:246` |
+| PATCH | `/api/events/:id` | `authenticate` | `server/src/routes/events.routes.js:571` |
+| GET | `/api/events/:id/amendments` | `authenticate` | `server/src/routes/events.routes.js:1099` |
+| GET | `/api/events/:id/calendar.ics` | — | `server/src/routes/events.routes.js:269` |
 | GET | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:176` |
 | POST | `/api/events/:id/cards` | `authenticate` | `server/src/routes/cards.routes.js:239` |
 | DELETE | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:328` |
 | PATCH | `/api/events/:id/cards/:cardId` | `authenticate` | `server/src/routes/cards.routes.js:312` |
 | POST | `/api/events/:id/cards/preview` | `authenticate` | `server/src/routes/cards.routes.js:194` |
-| POST | `/api/events/:id/congratulate` | `authenticate` | `server/src/routes/events.routes.js:1089` |
-| GET | `/api/events/:id/congratulations` | `authenticate` | `server/src/routes/events.routes.js:1117` |
-| DELETE | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1175` |
-| PATCH | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1131` |
-| POST | `/api/events/:id/congratulations/:cid/report` | `authenticate` | `server/src/routes/events.routes.js:1186` |
-| POST | `/api/events/:id/react` | — | `server/src/routes/events.routes.js:1054` |
-| DELETE | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:943` |
-| PATCH | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:934` |
-| POST | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:922` |
-| DELETE | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:990` |
-| PUT | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:973` |
-| GET | `/api/events/:id/rsvps` | `authenticate` | `server/src/routes/events.routes.js:1002` |
-| GET | `/api/events/calendar` | — | `server/src/routes/events.routes.js:232` |
-| GET | `/api/events/trending` | `optionalAuthenticate` | `server/src/routes/events.routes.js:204` |
+| POST | `/api/events/:id/congratulate` | `authenticate` | `server/src/routes/events.routes.js:1164` |
+| GET | `/api/events/:id/congratulations` | `authenticate` | `server/src/routes/events.routes.js:1192` |
+| DELETE | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1250` |
+| PATCH | `/api/events/:id/congratulations/:cid` | `authenticate` | `server/src/routes/events.routes.js:1206` |
+| POST | `/api/events/:id/congratulations/:cid/report` | `authenticate` | `server/src/routes/events.routes.js:1261` |
+| GET | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1063` |
+| POST | `/api/events/:id/invites` | `authenticate` | `server/src/routes/events.routes.js:1050` |
+| DELETE | `/api/events/:id/invites/:inviteId` | `authenticate` | `server/src/routes/events.routes.js:1074` |
+| POST | `/api/events/:id/react` | — | `server/src/routes/events.routes.js:1129` |
+| DELETE | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:944` |
+| PATCH | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:935` |
+| POST | `/api/events/:id/remind` | `authenticate` | `server/src/routes/events.routes.js:923` |
+| DELETE | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:991` |
+| PUT | `/api/events/:id/rsvp` | `authenticate` | `server/src/routes/events.routes.js:974` |
+| GET | `/api/events/:id/rsvps` | `authenticate` | `server/src/routes/events.routes.js:1003` |
+| GET | `/api/events/calendar` | — | `server/src/routes/events.routes.js:233` |
+| GET | `/api/events/trending` | `optionalAuthenticate` | `server/src/routes/events.routes.js:205` |
 | GET | `/api/live` | — | `server/src/routes/settings.routes.js:276` |
 | POST | `/api/live/episodes/:id/vote` | `authenticate` | `server/src/routes/live.routes.js:93` |
 | GET | `/api/live/hub` | `optionalAuthenticate` | `server/src/routes/live.routes.js:77` |
-| GET | `/api/map/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:119` |
-| GET | `/api/my-events` | `authenticate` | `server/src/routes/events.routes.js:916` |
+| GET | `/api/map/events` | `optionalAuthenticate` | `server/src/routes/events.routes.js:120` |
+| GET | `/api/my-events` | `authenticate` | `server/src/routes/events.routes.js:917` |
 | GET | `/api/my-photos` | `authenticate` | `server/src/routes/albums.routes.js:136` |
-| DELETE | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:1013` |
-| GET | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:953` |
+| DELETE | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:1088` |
+| GET | `/api/my-reminders` | `authenticate` | `server/src/routes/events.routes.js:954` |
 | GET | `/api/news` | `optionalAuthenticate` | `server/src/routes/news.routes.js:43` |
 | GET | `/api/news/:id` | — | `server/src/routes/news.routes.js:63` |
 | GET | `/api/nokoot` | `authenticate` | `server/src/routes/nokoot.routes.js:16` |
@@ -274,29 +277,30 @@
 | POST | `/api/stories/:id/report` | `authenticate` | `server/src/routes/stories.routes.js:96` |
 | POST | `/api/stories/:id/view` | `optionalAuthenticate` | `server/src/routes/stories.routes.js:74` |
 | GET | `/api/stories/entry-card` | — | `server/src/routes/stories.routes.js:64` |
-| GET | `/api/towns` | — | `server/src/routes/events.routes.js:146` |
+| GET | `/api/towns` | — | `server/src/routes/events.routes.js:147` |
 | GET | `/api/videos/:id` | — | `server/src/routes/albums.routes.js:97` |
-| GET | `/e/:id` | — | `server/src/routes/share.routes.js:990` |
-| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1252` |
-| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1344` |
-| GET | `/e/:id/download.png` | — | `server/src/routes/share.routes.js:1308` |
-| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1209` |
-| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:959` |
-| GET | `/live` | — | `server/src/routes/share.routes.js:1593` |
-| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1657` |
-| GET | `/live/download` | — | `server/src/routes/share.routes.js:1715` |
-| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1848` |
-| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1875` |
-| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:1909` |
-| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:1900` |
-| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1738` |
-| GET | `/live/go` | — | `server/src/routes/share.routes.js:1696` |
-| GET | `/p/:id` | — | `server/src/routes/share.routes.js:1914` |
-| GET | `/person/:id` | — | `server/src/routes/share.routes.js:1969` |
-| GET | `/v/:id` | — | `server/src/routes/share.routes.js:2031` |
-| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:2058` |
+| GET | `/e/:id` | — | `server/src/routes/share.routes.js:1041` |
+| GET | `/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:1380` |
+| GET | `/e/:id/download` | — | `server/src/routes/share.routes.js:1472` |
+| GET | `/e/:id/download.png` | — | `server/src/routes/share.routes.js:1436` |
+| GET | `/e/:id/i/:token` | — | `server/src/routes/share.routes.js:1154` |
+| POST | `/e/:id/rsvp` | — | `server/src/routes/share.routes.js:1317` |
+| GET | `/e/assets/:file` | — | `server/src/routes/share.routes.js:1010` |
+| GET | `/live` | — | `server/src/routes/share.routes.js:1721` |
+| GET | `/live/card.jpg` | — | `server/src/routes/share.routes.js:1785` |
+| GET | `/live/download` | — | `server/src/routes/share.routes.js:1843` |
+| GET | `/live/e/:id` | — | `server/src/routes/share.routes.js:1976` |
+| GET | `/live/e/:id/card.jpg` | — | `server/src/routes/share.routes.js:2003` |
+| GET | `/live/e/:id/embed` | — | `server/src/routes/share.routes.js:2037` |
+| GET | `/live/e/:id/go` | — | `server/src/routes/share.routes.js:2028` |
+| GET | `/live/embed` | — | `server/src/routes/share.routes.js:1866` |
+| GET | `/live/go` | — | `server/src/routes/share.routes.js:1824` |
+| GET | `/p/:id` | — | `server/src/routes/share.routes.js:2042` |
+| GET | `/person/:id` | — | `server/src/routes/share.routes.js:2097` |
+| GET | `/v/:id` | — | `server/src/routes/share.routes.js:2159` |
+| GET | `/v/:id/card.jpg` | — | `server/src/routes/share.routes.js:2186` |
 
-## ٤. جدول قاعدة البيانات ← الخدمة — 47 جدولاً
+## ٤. جدول قاعدة البيانات ← الخدمة — 48 جدولاً
 
 الجدول من `server/src/db/schema.sql`، والخدمات التي يظهر اسمها في كودها (بحث لفظي بحدود الكلمة).
 
@@ -317,6 +321,7 @@
 | `event_cards` | `cardStudio.service.js`, `eventCards.service.js`, `events.service.js` |
 | `event_days` | `events.service.js` |
 | `event_honorees` | `albums.service.js`, `events.service.js`, `facebook.service.js`, `people.service.js` |
+| `event_invites` | `events.service.js` |
 | `event_photos` | `adminScope.service.js`, `albums.service.js` |
 | `event_reminders` | `admin.service.js`, `events.service.js`, `notifications.service.js`, `stories.service.js` |
 | `event_rsvps` | `events.service.js` |
@@ -364,11 +369,11 @@
 | `new_event_created` | `server/src/routes/admin.routes.js:128` |
 | `system_broadcast` | `server/src/routes/admin.routes.js:345` |
 | `town_broadcast` | `server/src/routes/admin.routes.js:358` |
-| `admin_new_pending_event` | `server/src/routes/events.routes.js:491` |
-| `new_event_created` | `server/src/routes/events.routes.js:514` |
-| `event_reaction_${eventId}` | `server/src/routes/events.routes.js:1063` |
-| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1108` |
-| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1168` |
+| `admin_new_pending_event` | `server/src/routes/events.routes.js:492` |
+| `new_event_created` | `server/src/routes/events.routes.js:515` |
+| `event_reaction_${eventId}` | `server/src/routes/events.routes.js:1138` |
+| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1183` |
+| `new_congratulation_${eventId}` | `server/src/routes/events.routes.js:1243` |
 | `live_poll_${episodeId}` | `server/src/routes/live.routes.js:100` |
 | `live_status` | `server/src/routes/settings.routes.js:215` |
 

@@ -131,9 +131,10 @@ location ^~ /live/    { proxy_pass http://127.0.0.1:3100; }
 ## النتائج
 
 - كل صفحات المشاركة التي يولّدها `server/src/routes/share.routes.js` تُخرج HTML
-  وحدها — `/e/:id` و`/p/:id` و`/a/:id` و`/person/:id` و`/v/:id` و`/live`
+  وحدها — `/e/:id` ودعوتها الشخصية `/e/:id/i/:token` (تذكرة #183) و`/p/:id`
+  و`/a/:id` و`/person/:id` و`/v/:id` و`/live`
   (وحلقتها `/live/e/:id`) وغلاف مشغّل يوتيوب `/live/embed` — بقوالب مضمَّنة
-  ونفس دالة التهريب، وكلها بالـCSP أدناه، و`/e/:id` وحدها تزيد عليها
+  ونفس دالة التهريب، وكلها بالـCSP أدناه، وصفحتا `/e/` وحدهما تزيدان عليها
   `form-action 'self'` (أدناه)، و`/live/embed` بـCSP خاصة:
   `default-src 'none'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'unsafe-inline'`،
   مع `Referrer-Policy: strict-origin-when-cross-origin` (بدل `no-referrer` الافتراضية
@@ -151,11 +152,20 @@ location ^~ /live/    { proxy_pass http://127.0.0.1:3100; }
   الظهور هي `events.getShareEvent` نفسها، فغير المعتمدة والمفقودة والمعرّف غير
   الرقمي تعطي الـ404 الموحّدة نفسها. لا قرار جديد في الصفحة، ولا HTML خارج
   `share.routes.js`.
+- **الدعوة الشخصية (تذكرة #183):** صفحة `/e/:id/i/<token>` تقول «أهلاً <الاسم>»
+  وتحمل نموذج #169 نفسه باسمه مسبقاً وحقلَه المخفي `invite_token` — والباب
+  المجهول يبقى `POST /e/:id/rsvp` نفسه، ولا مسار كتابة ثانٍ. حدودها كما هي:
+  بلا `<script>`، و`noindex` دائماً (وسماً وترويسةً: رابطٌ يحمل اسم ضيفٍ لا
+  يُفهرَس)، وبـ`EVENT_PAGE_CSP` نفسها، و`Cache-Control: no-store` لأنها تكتب
+  `opened_at` عند أول فتح. والتوكِن ٣٢ حرفاً عشوائياً من `crypto`، والرمز
+  الخاطئ يعطي الـ404 الموحّدة بلا تفريق — ولا شيء من
+  [[0015-guest-rsvp-on-the-share-page]] يُنقض هنا.
 - أي وسم `<script>` ممنوع على هذه الصفحة، وسياسة
   `Content-Security-Policy: default-src 'none'; img-src *; style-src 'unsafe-inline'; font-src 'self'`
   مضبوطة عليها صراحة — CSP الخاص بـ`helmet` معطَّل عالمياً في `app.js` أصلاً
   (الواجهة تحمّل موارد من عدة CDN)، فهذا المسار وحده يحتاج ضبطاً خاصاً.
-  **وتُزاد عليها `form-action 'self'` في `/e/:id` وحدها** لنموذج جواب الضيف؛
+  **وتُزاد عليها `form-action 'self'` في `/e/:id` و`/e/:id/i/<token>` وحدهما**
+  لنموذج جواب الضيف؛
   بقية الصفحات والـ404 المشتركة بلا هذه الزيادة، فلا فتح باب لم يحتجه أحد على
   صفحةٍ لا نموذج فيها.
   `font-src 'self'` توسيع لاحق ومتعمَّد: الصفحة كانت تعرض النص العربي بخط

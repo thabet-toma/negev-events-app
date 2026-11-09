@@ -856,6 +856,42 @@ class NegevApi {
     return EventRsvpList.fromJson(data);
   }
 
+  /// دعوات المناسبة الشخصية (تذكرة #183) — الاسم والتوكِن والرابط المطلق
+  /// وحالة الفتح والجواب، لصاحب المناسبة أو أدمن في نطاقه؛ 404 لغيرهما.
+  /// والهاتف لا يصل هنا أصلاً.
+  Future<EventInviteList> eventInvites(int eventId) async {
+    final data = await _client.get('/api/events/$eventId/invites', auth: true);
+    return EventInviteList.fromJson(data);
+  }
+
+  /// إنشاء دعوة لكل اسم في [names] — الخادم يعيد صفوفها مع روابطها الجاهزة.
+  /// والسقف والتحقّق من كل اسم على الخادم وحده (رسالته عربية)، فلا رقم مكرَّر
+  /// هنا يفترق عنه يوماً.
+  Future<List<EventInvite>> createEventInvites(
+    int eventId,
+    List<String> names,
+  ) async {
+    final data = await _client.post(
+      '/api/events/$eventId/invites',
+      auth: true,
+      body: {'names': names},
+    );
+    final raw = data['invites'];
+    if (raw is! List) return const <EventInvite>[];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(EventInvite.fromJson)
+        .toList();
+  }
+
+  /// حذف دعوة — والجواب الذي جمعته يبقى على الخادم (`ON DELETE SET NULL`).
+  Future<void> deleteEventInvite(int eventId, int inviteId) async {
+    await _client.delete(
+      '/api/events/$eventId/invites/$inviteId',
+      auth: true,
+    );
+  }
+
   /// «قائمتي» — كل مناسبة معتمدة يتابعها المستخدم: القادم أولاً ثم المنتهي
   /// حديثاً، بترتيب الخادم النهائي. `bucket` و`span_*` و`days_until_start`
   /// تُقرأ كما وصلت — لا إعادة ترتيب ولا إعادة اشتقاق على الجهاز.

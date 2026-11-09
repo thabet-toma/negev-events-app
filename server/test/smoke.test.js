@@ -32,7 +32,7 @@ const seed = require('../src/db/seed');
 const createApp = require('../src/app');
 const { signToken } = require('../src/middleware/auth');
 const { authenticatedUserId } = require('../src/utils/rateLimitIdentity');
-const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TRENDING_WINDOW_DAYS, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS, STATS_TICKER_CACHE_SECONDS } = require('../src/constants');
+const { OCCASION_FIELD_KEYS, CONGRATULATION_REPORT_THRESHOLD, TRENDING_WINDOW_DAYS, SEED_TOWNS, SEED_REGION, ANALYTICS_EVENT_KEYS, ANALYTICS_EVENTS, STATS_TICKER_CACHE_SECONDS, INVITE_BATCH_MAX } = require('../src/constants');
 
 // The eight towns (and their centres) exactly as they stood as constants
 // before towns moved into the `towns` table — what the seeded table must
@@ -18246,6 +18246,403 @@ async function run() {
     assert.ok(adr.includes('0015-guest-rsvp-on-the-share-page'), 'قسم «النتائج» في ADR-0006 يجب أن يشير إلى ADR-0015');
     assert.ok(adr.includes("form-action 'self'"), 'and must record the one CSP directive this page gained');
   });
+
+  console.log('\nالدعوات الشخصية — «أهلاً فلان» ورابط /e/:id/i/<token> (تذكرة #183)');
+
+  /**
+   * قسم #183: ثلاثة أحداث يملكها حساب واحد — عرس معتمد قادم (البوابة مفتوحة)،
+   * وعرس معتمد انتهى، وعزاء معتمد — لأن صفحة الدعوة تُغلق بالزمن وبالنوع معاً،
+   * ولكل واحد دعوة برمزها الصحيح كي يكون الـ404 من البوابة لا من غياب الدعوة.
+   *
+   * وحكم النطاق يُقاس بأدمنين في بلدتين (‏`createScopedAdminForRsvp` نفسها التي
+   * بنت حكم #168): المناسبة في حورة، فحورة داخله ورهط خارجه.
+   */
+  const inviteOwner = await createDirectUser('مالك مناسبات الدعوات');
+  const inviteStranger = await createDirectUser('غريب عن دعوات المناسبة');
+  const inviteAdminInTown = await createScopedAdminForRsvp('أدمن حورة لدعوات المناسبة', 'حورة');
+  const inviteAdminOutOfTown = await createScopedAdminForRsvp('أدمن رهط لدعوات المناسبة', 'رهط');
+  const INVITE_DAY = addDaysToDate(schedulerToday, 50);
+  const INVITE_GUEST_NAME = 'سالم أبو أحمد';
+  const INVITE_SECOND_NAME = 'مريم الاختبار';
+  const INVITE_THIRD_NAME = 'ضيف ثالث للدعوة';
+  // أرقام عشوائية كي لا تطابق صفّاً على قاعدة التطوير الدائمة (‏#169 نفسها).
+  const INVITE_GUEST_PHONE = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const INVITE_PLAIN_PHONE = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+  const inviteEventIds = [];
+  let inviteEventId = 0;
+  let inviteExpiredId = 0;
+  let inviteFuneralId = 0;
+
+  await test('Set up: عرس معتمد قادم، وعرس معتمد انتهى، وعزاء معتمد — كلها لحساب واحد', async () => {
+    const publish = async (body) => {
+      const created = await api('POST', '/api/events', { token: inviteOwner.token, body });
+      assert.strictEqual(created.status, 201, created.body.message);
+      inviteEventIds.push(created.body.eventId);
+      const approved = await api('PATCH', `/api/admin/events/${created.body.eventId}/status`, {
+        token: adminToken, body: { status: 'approved' }
+      });
+      assert.strictEqual(approved.status, 200, approved.body.message);
+      return created.body.eventId;
+    };
+
+    inviteEventId = await publish(weddingEventBody({
+      honorees: [{ name: 'عريس الدعوات' }], town: 'حورة', event_date: INVITE_DAY
+    }));
+    inviteExpiredId = await publish(weddingEventBody({
+      honorees: [{ name: 'عريس دعوات انتهى' }], town: 'حورة', event_date: '2020-01-01'
+    }));
+    inviteFuneralId = await publish({
+      occasion_type_id: funeralType.id,
+      honorees: [{ name: 'متوفَّى الدعوات' }],
+      town: 'حورة',
+      location_name: 'ديوان الاختبار',
+      event_date: INVITE_DAY,
+      // «عزا» يوسم `event_end_date` إجبارياً (قسم #168 نفسه).
+      event_end_date: INVITE_DAY
+    });
+  });
+
+  // الدعوات الثلاث الأولى تُنشأ هنا ويُعاد استعمالها في بقية القسم.
+  let inviteCount = 0;
+  let firstInvite = null;
+
+  await test('إنشاء ثلاثة أسماء يعيد ثلاثة روابط مختلفة، توكين كلٍّ منها ٣٢ حرفاً hex', async () => {
+    const res = await api('POST', `/api/events/${inviteEventId}/invites`, {
+      token: inviteOwner.token,
+      body: { names: [INVITE_GUEST_NAME, INVITE_SECOND_NAME, INVITE_THIRD_NAME] }
+    });
+    assert.strictEqual(res.status, 201, res.body.message);
+    assert.strictEqual(res.body.invites.length, 3, 'one invite per name, no more and no less');
+
+    const tokens = res.body.invites.map(invite => invite.token);
+    for (const invite of res.body.invites) {
+      assert.match(invite.token, /^[0-9a-f]{32}$/, 'the token is 32 lowercase hex characters from crypto');
+      assert.strictEqual(
+        invite.url, `${config.publicUrl}/e/${inviteEventId}/i/${invite.token}`,
+        'the absolute link is built by the route from PUBLIC_URL and the token'
+      );
+    }
+    assert.strictEqual(new Set(tokens).size, 3, 'three names give three different tokens');
+    assert.strictEqual(new Set(res.body.invites.map(invite => invite.url)).size, 3, 'and three different links');
+    assert.deepStrictEqual(
+      res.body.invites.map(invite => invite.name),
+      [INVITE_GUEST_NAME, INVITE_SECOND_NAME, INVITE_THIRD_NAME],
+      'names come back in the order they were typed'
+    );
+
+    firstInvite = res.body.invites[0];
+    inviteCount = 3;
+
+    // دعتان للحدثين المغلقين (بالزمن وبالنوع) — برمز صحيح، فسقوط صفحتهما
+    // 404 يُقاس على البوابة لا على غياب الدعوة.
+    for (const eventId of [inviteExpiredId, inviteFuneralId]) {
+      const closed = await api('POST', `/api/events/${eventId}/invites`, {
+        token: inviteOwner.token, body: { names: ['ضيف على مناسبة مغلقة'] }
+      });
+      assert.strictEqual(closed.status, 201, closed.body.message);
+      assert.strictEqual(closed.body.invites.length, 1);
+    }
+  });
+
+  await test('غير المالك وأدمن خارج البلدة: 404 للمسارات الثلاثة — وأدمن البلدة يقرأ', async () => {
+    const forEvent = `/api/events/${inviteEventId}/invites`;
+
+    for (const [label, token] of [
+      ['غريب', inviteStranger.token],
+      ['أدمن خارج البلدة', inviteAdminOutOfTown.token]
+    ]) {
+      const read = await api('GET', forEvent, { token });
+      assert.strictEqual(read.status, 404, `${label}: قراءة الدعوات 404 لا 403 — وجود المناسبة لا يُؤكَّد`);
+
+      const create = await api('POST', forEvent, { token, body: { names: ['دعوة غير مسموحة'] } });
+      assert.strictEqual(create.status, 404, `${label}: الإنشاء 404`);
+
+      const remove = await api('DELETE', `${forEvent}/${firstInvite.id}`, { token });
+      assert.strictEqual(remove.status, 404, `${label}: الحذف 404`);
+    }
+
+    // الشاهد: الدعوات الثلاث ما زالت هناك، فلم يحذف الغريب شيئاً.
+    const still = await api('GET', forEvent, { token: inviteOwner.token });
+    assert.strictEqual(still.status, 200, still.body.message);
+    assert.strictEqual(still.body.invites.length, inviteCount, 'no refused request deleted anything');
+
+    // والشاهد الموجب على النطاق: أدمن بلدة المناسبة يقرؤها.
+    const inScope = await api('GET', forEvent, { token: inviteAdminInTown.token });
+    assert.strictEqual(inScope.status, 200, inScope.body.message);
+    assert.strictEqual(inScope.body.invites.length, inviteCount);
+
+    // ومناسبة غير موجودة: 404 نفسها لا استثناء.
+    const missing = await api('GET', '/api/events/999999999/invites', { token: inviteOwner.token });
+    assert.strictEqual(missing.status, 404);
+  });
+
+  await test('صفحة الدعوة 200: «أهلاً <الاسم>» والاسم مسبقاً والتوكِن مخفيّ، noindex، بلا <script>', async () => {
+    const before = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    assert.strictEqual(
+      before.body.invites.find(invite => invite.id === firstInvite.id).opened_at, null,
+      'set up: the invite has not been opened yet'
+    );
+
+    const page = await rawGet(`/e/${inviteEventId}/i/${firstInvite.token}`);
+    assert.strictEqual(page.status, 200);
+    assert.ok(page.text.includes(`أهلاً ${INVITE_GUEST_NAME}`), 'the greeting must name the guest the owner typed');
+    assert.ok(
+      page.text.includes(`name="guest_name" maxlength="120" autocomplete="name" value="${INVITE_GUEST_NAME}"`),
+      'the guest answer form arrives with the invite name already in it'
+    );
+    assert.ok(
+      page.text.includes(`<input type="hidden" name="invite_token" value="${firstInvite.token}">`),
+      'the hidden token is what ties the answer to its invite'
+    );
+    for (const field of ['party_size', 'guest_phone', 'response']) {
+      assert.ok(page.text.includes(`name="${field}"`), `the same #169 form, field by field (${field})`);
+    }
+    assert.ok(page.text.includes('value="yes"') && page.text.includes('value="no"'), 'and its two answer buttons');
+    assert.strictEqual(
+      (page.text.match(/<meta name="robots" content="noindex, nofollow">/g) || []).length, 1,
+      'a link that carries a guest name is never indexed'
+    );
+    assert.strictEqual(page.headers.get('x-robots-tag'), 'noindex, nofollow', 'the header says it too — a crawler may read one or the other');
+    assert.strictEqual(page.headers.get('cache-control'), 'no-store', 'the page writes opened_at on open');
+    assert.ok(!/<script/i.test(page.text), 'the invite page must never emit a script tag (ADR-0006)');
+    assert.ok(
+      (page.headers.get('content-security-policy') || '').includes("form-action 'self'"),
+      'the form needs form-action self, exactly like /e/:id'
+    );
+  });
+
+  await test('الفتح الأول يكتب opened_at، والثاني لا يغيّره', async () => {
+    const afterFirstOpen = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    const firstOpen = afterFirstOpen.body.invites.find(invite => invite.id === firstInvite.id);
+    assert.ok(firstOpen.opened_at, 'the first open stamps opened_at');
+
+    // تاريخ قديم ثابت يُكتب في الصفّ مباشرةً: الفتحان يقعان في الثانية نفسها،
+    // فـ`NOW()` تعطي القيمة نفسها تقريباً ومقارنةُ فتحٍ بفتحٍ تمرّ ولو غاب شرط
+    // `opened_at IS NULL`. القيمة المزروعة تجعل «لم يتحرّك» تأكيداً يسقط فعلاً
+    // لو كتب الفتح الثاني تاريخاً جديداً.
+    await db.execute(
+      "UPDATE event_invites SET opened_at = '2020-01-01 00:00:00' WHERE id = ?",
+      [firstInvite.id]
+    );
+    const seededList = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    const seededOpen = seededList.body.invites.find(invite => invite.id === firstInvite.id);
+    assert.ok(
+      String(seededOpen.opened_at).startsWith('2020-01-01'),
+      `set up: the stored stamp must be the seeded one, not NOW() — got: ${seededOpen.opened_at}`
+    );
+
+    const again = await rawGet(`/e/${inviteEventId}/i/${firstInvite.token}`);
+    assert.strictEqual(again.status, 200, 'a second open still serves the page');
+
+    const afterSecondOpen = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    const secondOpen = afterSecondOpen.body.invites.find(invite => invite.id === firstInvite.id);
+    assert.strictEqual(
+      secondOpen.opened_at, seededOpen.opened_at,
+      'opened_at is written once — the second open must not move the seeded stamp'
+    );
+    assert.ok(
+      String(secondOpen.opened_at).startsWith('2020-01-01'),
+      `the value must still be the seeded one, not a fresh NOW() — got: ${secondOpen.opened_at}`
+    );
+  });
+
+  await test('الجواب من الدعوة يكتب invite_id ويعود إلى صفحة الدعوة، ويظهر في «مين جاي»', async () => {
+    const res = await postGuestRsvp(`/e/${inviteEventId}/rsvp`, {
+      guest_name: INVITE_GUEST_NAME,
+      party_size: '3',
+      guest_phone: INVITE_GUEST_PHONE,
+      response: 'yes',
+      invite_token: firstInvite.token
+    });
+    assert.ok(res.redirected, 'the invite form answers through the same PRG hop as #169');
+    assert.ok(
+      res.url.endsWith(`/e/${inviteEventId}/i/${firstInvite.token}?rsvp=ok`),
+      `the answer came from an invite, so it lands back on that invite — got: ${res.url}`
+    );
+    assert.ok(res.text.includes('وصلنا جوابك'), 'and the badge is the closed list\'s own');
+
+    const row = await db.queryOne(
+      'SELECT invite_id, source, response, party_size FROM event_rsvps WHERE event_id = ? AND guest_phone = ?',
+      [inviteEventId, INVITE_GUEST_PHONE]
+    );
+    assert.ok(row, 'one guest answer, one row');
+    assert.strictEqual(row.invite_id, firstInvite.id, 'the row carries the invite it came from');
+    assert.strictEqual(row.source, 'share_page');
+    assert.strictEqual(row.response, 'yes');
+
+    // «مين جاي»: الصفّ نفسه مع سطر دعوته، والهاتف لا يخرج ولو كان مخزَّناً.
+    const list = await api('GET', `/api/events/${inviteEventId}/rsvps`, { token: inviteOwner.token });
+    assert.strictEqual(list.status, 200, list.body.message);
+    const entry = list.body.rsvps.find(rsvp => rsvp.name === INVITE_GUEST_NAME);
+    assert.ok(entry, 'the answer appears in «مين جاي» by its name');
+    assert.ok(entry.invite, 'and it names the invite it came from');
+    assert.strictEqual(entry.invite.id, firstInvite.id);
+    assert.strictEqual(entry.invite.name, INVITE_GUEST_NAME);
+    assert.ok(entry.invite.opened_at, 'with its first-open stamp — «فُتحت»');
+    assert.ok(!JSON.stringify(list.body).includes(INVITE_GUEST_PHONE), 'the phone never leaves the server (ADR-0015 §2)');
+
+    // وقائمة الدعوات تحمل الجواب أيضاً.
+    const invites = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    const answered = invites.body.invites.find(invite => invite.id === firstInvite.id);
+    assert.deepStrictEqual(
+      answered.rsvp, { response: 'yes', party_size: 3 },
+      'the invite list reports the answer and its party size'
+    );
+    const unanswered = invites.body.invites.find(invite => invite.name === INVITE_SECOND_NAME);
+    assert.strictEqual(unanswered.rsvp, null, 'an invite nobody answered from stays null');
+    assert.strictEqual(unanswered.opened_at, null, 'and is still «لم تُفتح»');
+  });
+
+  await test('جواب عادي بلا دعوة يبقى invite_id = NULL ويبقى على صفحة المناسبة', async () => {
+    const res = await postGuestRsvp(`/e/${inviteEventId}/rsvp`, {
+      guest_name: 'ضيف الصفحة العامة',
+      party_size: '2',
+      guest_phone: INVITE_PLAIN_PHONE,
+      response: 'no'
+    });
+    assert.ok(res.redirected);
+    assert.ok(
+      res.url.endsWith(`/e/${inviteEventId}?rsvp=ok`),
+      `a plain answer lands on the event page, not on an invite — got: ${res.url}`
+    );
+
+    const row = await db.queryOne(
+      'SELECT invite_id FROM event_rsvps WHERE event_id = ? AND guest_phone = ?',
+      [inviteEventId, INVITE_PLAIN_PHONE]
+    );
+    assert.ok(row, 'the plain answer is written');
+    assert.strictEqual(row.invite_id, null, 'with no invite attached — the column stays NULL');
+  });
+
+  await test('رمز خاطئ أو غير موجود أو لا يخصّ المناسبة: 404 الموحّدة بلا كتابة', async () => {
+    const notFound = await rawGet('/e/999999999');
+    const unknownToken = '0'.repeat(32);
+    const uppercaseToken = 'ABCDEF0123456789ABCDEF0123456789';
+    // توكِن دعوة حدثٍ آخر: شكله صحيح لكنه لا يخصّ هذه المناسبة.
+    const foreignInvites = await api('GET', `/api/events/${inviteExpiredId}/invites`, { token: inviteOwner.token });
+    const foreignToken = foreignInvites.body.invites[0].token;
+
+    for (const [label, path] of [
+      ['رمز بشكل صحيح لكنه غير موجود', `/e/${inviteEventId}/i/${unknownToken}`],
+      ['رمز بحروف كبيرة — الشكل الوحيد هو hex صغير', `/e/${inviteEventId}/i/${uppercaseToken}`],
+      ['رمز أقصر من ٣٢', `/e/${inviteEventId}/i/abc123`],
+      ['معرّف مناسبة غير رقمي', `/e/not-an-id/i/${firstInvite.token}`],
+      ['توكِن مناسبة أخرى', `/e/${inviteEventId}/i/${foreignToken}`]
+    ]) {
+      const page = await rawGet(path);
+      assert.strictEqual(page.status, 404, `${label}: 404`);
+      assert.strictEqual(page.text, notFound.text, `${label}: the unified not-found body, no distinction`);
+    }
+
+    const badPhone = `05${Math.floor(10000000 + Math.random() * 89999999)}`;
+    const post = await postGuestRsvp(`/e/${inviteEventId}/rsvp`, {
+      guest_name: 'ضيف رمز خاطئ',
+      party_size: '2',
+      guest_phone: badPhone,
+      response: 'yes',
+      invite_token: unknownToken
+    });
+    assert.strictEqual(post.status, 404, 'a POST carrying a wrong token answers the same 404');
+    assert.ok(!post.redirected, 'and does not hop to a badge page');
+    assert.strictEqual(post.text, notFound.text, 'with the same body — no hint that the token was merely unknown');
+
+    const written = await db.query('SELECT id FROM event_rsvps WHERE event_id = ? AND guest_phone = ?', [inviteEventId, badPhone]);
+    assert.strictEqual(written.length, 0, 'a wrong token writes nothing at all');
+  });
+
+  await test('مناسبة انتهت أو نوع مطفأ: صفحة الدعوة 404 ولو كان رمزها صحيحاً', async () => {
+    const notFound = await rawGet('/e/999999999');
+
+    for (const [label, eventId] of [
+      ['مناسبة معتمدة انتهى مداها', inviteExpiredId],
+      ['نوع العزاء rsvp_enabled مطفأ', inviteFuneralId]
+    ]) {
+      const invites = await api('GET', `/api/events/${eventId}/invites`, { token: inviteOwner.token });
+      assert.strictEqual(invites.body.invites.length, 1, `set up: the invite exists — ${label}`);
+
+      const page = await rawGet(`/e/${eventId}/i/${invites.body.invites[0].token}`);
+      assert.strictEqual(page.status, 404, `a closed door answers 404 whatever the token is — ${label}`);
+      assert.strictEqual(page.text, notFound.text, `and the same body as a missing event — ${label}`);
+    }
+  });
+
+  await test('حذف الدعوة لا يحذف الجواب: invite_id يصير NULL والصفّ يبقى في «مين جاي»', async () => {
+    const before = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    assert.strictEqual(before.body.invites.length, inviteCount, 'set up: the three invites are still there');
+
+    const removed = await api('DELETE', `/api/events/${inviteEventId}/invites/${firstInvite.id}`, {
+      token: inviteOwner.token
+    });
+    assert.strictEqual(removed.status, 200, removed.body.message);
+    assert.ok(String(removed.body.message).includes('حذف'), 'the success message is Arabic, like every other one');
+
+    const after = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    assert.strictEqual(after.body.invites.length, inviteCount - 1, 'the invite itself is gone');
+    assert.ok(
+      !after.body.invites.some(invite => invite.id === firstInvite.id),
+      'and it is that one that went'
+    );
+
+    const row = await db.queryOne(
+      'SELECT invite_id, guest_name, response FROM event_rsvps WHERE event_id = ? AND guest_phone = ?',
+      [inviteEventId, INVITE_GUEST_PHONE]
+    );
+    assert.ok(row, 'the answer it collected survives the delete');
+    assert.strictEqual(row.invite_id, null, 'ON DELETE SET NULL detaches it — no cascade to the answer');
+    assert.strictEqual(row.guest_name, INVITE_GUEST_NAME, 'with its name intact');
+    assert.strictEqual(row.response, 'yes', 'and its answer intact');
+
+    const list = await api('GET', `/api/events/${inviteEventId}/rsvps`, { token: inviteOwner.token });
+    const entry = list.body.rsvps.find(rsvp => rsvp.name === INVITE_GUEST_NAME);
+    assert.ok(entry, '«مين جاي» still lists it');
+    assert.strictEqual(entry.invite, null, 'as a plain answer — the invite it came from no longer exists');
+
+    // والحذف الثاني للدعوة نفسها 404، لا حذف صامت.
+    const twice = await api('DELETE', `/api/events/${inviteEventId}/invites/${firstInvite.id}`, {
+      token: inviteOwner.token
+    });
+    assert.strictEqual(twice.status, 404);
+  });
+
+  await test('قائمة أسماء فارغة أو زائدة أو اسم فارغ: 400 عربية بلا صفّ جديد', async () => {
+    const before = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+
+    for (const [label, names] of [
+      ['قائمة فارغة', []],
+      ['أسماء فارغة بعد القصّ', ['   ', '']],
+      ['أكثر من السقف', Array.from({ length: INVITE_BATCH_MAX + 1 }, (_, index) => `ضيف ${index}`)],
+      ['أطول من 120 حرفاً', ['ا'.repeat(121)]]
+    ]) {
+      const res = await api('POST', `/api/events/${inviteEventId}/invites`, {
+        token: inviteOwner.token, body: { names }
+      });
+      assert.strictEqual(res.status, 400, `${label}: 400`);
+      assert.ok(
+        /[\u0600-\u06FF]/.test(String(res.body.message || '')),
+        `${label}: an Arabic message, not an English one — got: ${res.body.message}`
+      );
+    }
+
+    // الجسم بلا `names` أصلاً: نفس الرفض لا استثناء.
+    const shapeless = await api('POST', `/api/events/${inviteEventId}/invites`, {
+      token: inviteOwner.token, body: { names: 'سالم' }
+    });
+    assert.strictEqual(shapeless.status, 400, 'a string instead of an array is a malformed request');
+
+    const after = await api('GET', `/api/events/${inviteEventId}/invites`, { token: inviteOwner.token });
+    assert.strictEqual(after.body.invites.length, before.body.invites.length, 'no refused request wrote a row');
+  });
+
+  // تنظيف القسم: المناسبات تسقط ومَعها دعواتها وأجوبتها بـON DELETE CASCADE،
+  // والمستخدمون (وأدمن البلدتين معهم بـCASCADE على admin_towns).
+  for (const id of inviteEventIds) {
+    await db.execute('DELETE FROM notifications WHERE event_id = ?', [id]);
+    await db.execute('DELETE FROM events WHERE id = ?', [id]);
+  }
+  await db.execute(
+    'DELETE FROM users WHERE id IN (?, ?, ?, ?)',
+    [inviteOwner.id, inviteStranger.id, inviteAdminInTown.id, inviteAdminOutOfTown.id]
+  );
 
   console.log('\n«مناسبة كبرى» — الإبراز حتى تاريخ، وسقف المحافظة، وترتيب التغذية (#171)');
 

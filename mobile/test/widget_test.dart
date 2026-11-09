@@ -4170,6 +4170,211 @@ void main() {
     });
   });
 
+  group('الدعوات الشخصية — «أهلاً فلان» (تذكرة #183)', () {
+    /// نوع «عرس» مفتوح لتأكيد الحضور — الشرط نفسه الذي يرسم زرّي «مين جاي»
+    /// و«الدعوات» في «مناسباتي»، فلا يصير للصورة نسخة ثانية في هذا الملف.
+    Map<String, dynamic> invitesTypeJson() => {
+          'id': 1,
+          'name': 'عرس',
+          'icon': '💍',
+          'color': '#0369a1',
+          'position': 1,
+          'is_active': true,
+          'creates_collision': false,
+          'warns_others': false,
+          'premoderate_messages': false,
+          'show_congratulations_count': false,
+          'show_followers_count': false,
+          'show_views_count': false,
+          'rsvp_enabled': true,
+          'show_rsvp_count': true,
+          'congratulations_label': 'تبريكات',
+          'default_badge_title': null,
+          'default_poster_url': null,
+          'legacy_client_supported': true,
+          'tone': 'festive',
+          'fields': <Map<String, dynamic>>[],
+          'reactions': <String>[],
+        };
+
+    testWidgets('«الدعوات»: إنشاء الأسماء، ثم الرابط وحالة الفتح، ثم الحذف', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final requests = <http.Request>[];
+      // خادم وهمي صغير: الدعوات تُحفظ في القائمة نفسها، فإعادة القراءة بعد
+      // الإنشاء والحذف — وهي ما تفعله الشاشة — ترى الحالة الجديدة لا القديمة.
+      final invites = <Map<String, dynamic>>[];
+      // توكِن ٣٢ حرفاً hex كما يولّده الخادم، والرابط يُعاد جاهزاً منه.
+      const inviteToken = '0123456789abcdef0123456789abcdef';
+      final client = MockClient((request) async {
+        requests.add(request);
+        final path = request.url.path;
+        Map<String, dynamic> body;
+        if (path == '/api/auth/login') {
+          body = {
+            'success': true,
+            'token': 'test-token',
+            'user': {
+              'id': 7,
+              'phone_number': '0500000000',
+              'full_name': 'مالك المناسبة',
+              'role': 'user',
+            },
+          };
+        } else if (path.endsWith('/invites') && request.method == 'POST') {
+          final sent = jsonDecode(request.body) as Map<String, dynamic>;
+          final names = (sent['names'] as List).cast<String>();
+          for (var index = 0; index < names.length; index++) {
+            invites.add({
+              'id': 900 + index,
+              'name': names[index],
+              'token': inviteToken,
+              'url': 'https://web.test/e/183/i/$inviteToken',
+              // الأولى فُتحت وأجابت، والثانية لم تُفتح بعد — الحالتان معاً.
+              'opened_at': index == 0 ? '2026-11-05T10:00:00.000Z' : null,
+              'rsvp': index == 0 ? {'response': 'yes', 'party_size': 2} : null,
+            });
+          }
+          body = {
+            'success': true,
+            'message': 'تم إنشاء ${names.length} دعوات',
+            'invites': invites,
+          };
+        } else if (path.endsWith('/invites') && request.method == 'GET') {
+          body = {'success': true, 'invites': invites};
+        } else if (request.method == 'DELETE' && path.contains('/invites/')) {
+          final id = int.parse(path.split('/').last);
+          invites.removeWhere((invite) => invite['id'] == id);
+          body = {'success': true, 'message': 'تم حذف الدعوة'};
+        } else {
+          body = {
+            'success': true,
+            'events': [
+              {
+                'id': 183,
+                'status': 'approved',
+                'groom_name': 'سالم',
+                'family_clan': 'آل الاختبار',
+                'town': 'رهط',
+                'location_name': 'ديوان الاختبار',
+                'event_date': '2026-12-31',
+                'occasion_type': invitesTypeJson(),
+                'honorees': [
+                  {'name': 'سالم', 'role': null, 'position': 1},
+                ],
+              },
+            ],
+          };
+        }
+        return http.Response(
+          jsonEncode(body),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+
+      final api = NegevApi(ApiClient(client: client));
+      final auth = AuthStore(api);
+      await auth.signIn('0500000000', '1234');
+
+      await tester.pumpWidget(
+        AppServices(
+          api: api,
+          auth: auth,
+          realtime: RealtimeService(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: MyEventsScreen(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // زرّ «الدعوات» بجانب «مين جاي» وبنفس الشرط.
+      expect(find.text('الدعوات'), findsOneWidget);
+      await tester.ensureVisible(find.text('الدعوات'));
+      await tester.pump();
+      await tester.tap(find.text('الدعوات'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final listCalls = requests.where((r) => r.method == 'GET' && r.url.path.endsWith('/invites')).toList();
+      expect(listCalls, hasLength(1), reason: 'فتح النافذة يقرأ دعوات المناسبة');
+      expect(listCalls.single.headers['Authorization'], 'Bearer test-token');
+      expect(find.textContaining('لا دعوات بعد'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'سالم أبو الاختبار\nمريم الاختبار');
+      await tester.pump();
+      await tester.tap(find.text('أنشئ الدعوات'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      final createCall = requests.where((r) => r.method == 'POST' && r.url.path.endsWith('/invites')).toList();
+      expect(createCall, hasLength(1));
+      expect(createCall.single.headers['Authorization'], 'Bearer test-token');
+      expect(
+        (jsonDecode(createCall.single.body) as Map<String, dynamic>)['names'],
+        ['سالم أبو الاختبار', 'مريم الاختبار'],
+        reason: 'اسم في كل سطر — والسطور الفارغة لا تُرسل',
+      );
+
+      // الروابط تُعرض كما بناها الخادم (لا يركّبها العميل)، وحالة الفتح من
+      // `opened_at`، والجواب من `rsvp`.
+      expect(find.textContaining('https://web.test/e/183/i/$inviteToken'), findsNWidgets(2));
+      expect(find.text('فُتحت'), findsOneWidget);
+      expect(find.text('لم تُفتح'), findsOneWidget);
+      expect(find.textContaining('الجواب: جاي'), findsOneWidget);
+
+      // الحذف: المسار نفسه بـDELETE والرمز مُرفق، والقائمة تُعاد قراءتها.
+      //
+      // النقرة تُطلق سلسلة غير متزامنة (DELETE ثم GET للقائمة ثم إعادة رسم)،
+      // فعددٌ ثابت من النبضات لا يكفي: التأكيد كان يُرفع قبل وصول إعادة القراءة
+      // فيبقى الصفّان على الشجرة. الانتظار هنا على الطلبات نفسها (ظهر DELETE،
+      // ثم ظهر GET جديد بعده) — وهو ما يجعل الاختبار حتمياً بلا إضعاف التأكيد.
+      int inviteReads() => requests
+          .where((r) => r.method == 'GET' && r.url.path.endsWith('/invites'))
+          .length;
+      Future<void> pumpUntil(bool Function() done, String reason) async {
+        for (var attempt = 0; attempt < 50 && !done(); attempt += 1) {
+          await tester.pump(const Duration(milliseconds: 10));
+        }
+        expect(done(), isTrue, reason: reason);
+      }
+
+      await tester.ensureVisible(find.text('حذف').first);
+      await tester.pump();
+
+      final readsBeforeDelete = inviteReads();
+      await tester.tap(find.text('حذف').first);
+      await pumpUntil(
+        () => requests.any(
+            (r) => r.method == 'DELETE' && r.url.path == '/api/events/183/invites/900'),
+        'نقرة «حذف» ترسل DELETE على دعوة الصفّ نفسه',
+      );
+
+      final deleteCall = requests.where((r) => r.method == 'DELETE').toList();
+      expect(deleteCall, hasLength(1), reason: 'صفٌّ واحد يُحذف بطلب واحد');
+      expect(deleteCall.single.url.path, '/api/events/183/invites/900');
+      expect(deleteCall.single.headers['Authorization'], 'Bearer test-token');
+
+      // ثم قراءة جديدة للقائمة بعد الحذف — هي ما يعيد رسم الصفوف.
+      await pumpUntil(
+        () => inviteReads() == readsBeforeDelete + 1,
+        'الحذف يعقبه GET واحد جديد للدعوات',
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.textContaining('https://web.test/e/183/i/$inviteToken'), findsOneWidget,
+          reason: 'صفّ واحد بقي بعد الحذف — والثاني اختفى');
+      expect(find.text('مريم الاختبار'), findsOneWidget, reason: 'الدعوة الأخرى باقية');
+      expect(find.text('سالم أبو الاختبار'), findsNothing, reason: 'اسم الدعوة المحذوفة اختفى');
+    });
+  });
+
   group('صفحة المناسبة: برنامج المناسبة والتقويم والملاحة (تذكرة #176)', () {
     /// نوع عرس يُظهر `extra_days` — هو ما يجعل قسم البرنامج يُرسم أصلاً.
     Map<String, dynamic> programTypeJson() => {

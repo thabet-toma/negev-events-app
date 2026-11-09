@@ -174,6 +174,15 @@ const OCCASION_MESSAGE_BODY_MAX = 300;
 const RSVP_GUEST_RATE_LIMIT = { windowMs: 60 * 60 * 1000, max: 10 };
 
 /**
+ * سقف أسماء الدعوات الشخصية في الطلب الواحد (تذكرة #183):
+ * `POST /api/events/:id/invites` يقبل 1..هذا الرقم اسماً، وما خارجه 400 عربية.
+ * **ليس سقفاً على عدد دعوات المناسبة** — صاحب المناسبة ينشئ ما يشاء على دفعات،
+ * كما في صور الألبوم (`ALBUM_UPLOAD_BATCH_MAX`): الرقم يحمي الطلب الواحد من
+ * مصفوفة آلاف الأسماء، لا الميزة. وخمسون تغطّي عائلة كبيرة في دفعة واحدة.
+ */
+const INVITE_BATCH_MAX = 50;
+
+/**
  * Closed list of analytics event names (issue #44). The governing rule is:
  * we record what a person DID in the app, never what they READ in it — a row
  * saying "this named person opened this particular عزاء" reads as
@@ -381,6 +390,7 @@ module.exports = {
   RSVP_PARTY_SIZE_MAX,
   OCCASION_MESSAGE_BODY_MAX,
   RSVP_GUEST_RATE_LIMIT,
+  INVITE_BATCH_MAX,
   OCCASION_TONES,
   SHARE_FALLBACK_POSTERS,
   ANALYTICS_EVENTS,

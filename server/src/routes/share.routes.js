@@ -76,7 +76,8 @@ const SHARE_CSP = "default-src 'none'; img-src *; style-src 'unsafe-inline'; fon
 // thing it opens is a frame onto YouTube's two player origins.
 const EMBED_CSP = "default-src 'none'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'unsafe-inline'";
 
-// صفحة المناسبة وحدها (`GET /e/:id`): `form-action 'self'` لنموذج جواب الضيف
+// صفحتا `/e/` وحدهما (`GET /e/:id` ودعوتها الشخصية `GET /e/:id/i/:token`،
+// تذكرة #183): `form-action 'self'` لنموذج جواب الضيف
 // (تذكرة #169، ADR-0015 §1) — لا `<script>` ولا أصل جديد، والقيمة المسموح لها
 // بالإرسال هي هذه الصفحة نفسها. **ولا تُضاف إلى SHARE_CSP**: تلك تُستعمل في
 // `/live` و`/p` و`/a` و`/person` و`/v` وفي الـ404 المشتركة، ولا نموذج في أيٍّ
@@ -314,19 +315,29 @@ function guestRsvpNotice(raw) {
 /**
  * نموذج جواب الضيف — HTML عادي بلا `<script>` (ADR-0015 §1): زرّا الإرسال
  * يحملان الاسم نفسه `response` بقيمتين، فيصل الجواب المضغوط في الجسم بلا
- * حاجة إلى JavaScript، وكل النصوص والسمات ثابتة هنا (لا قيمة من المستخدم في
- * هذا القالب أصلاً). و`min`/`max` للعدد من `RSVP_PARTY_SIZE_MAX` نفسها التي
+ * حاجة إلى JavaScript، والنصوص كلها ثابتة هنا — والقيمتان الوحيدتان من خارج
+ * الملف هما اسم الدعوة وتوكِنها، وكلتاهما تمرّ بـ`escapeHtml` كحال كل قيمة في
+ * هذا الملف. و`min`/`max` للعدد من `RSVP_PARTY_SIZE_MAX` نفسها التي
  * يتحقّق بها الخادم، فلا رقمان يفترقان.
+ *
+ * **`invite` (تذكرة #183):** صفحة الدعوة الشخصية تمرّر صفّها هنا فيصير الاسم
+ * مسبقاً بقيمة الدعوة ويُضاف حقل مخفي `invite_token` — والنموذج يُرسَل إلى
+ * `/e/:id/rsvp` القائم نفسه، فلا مسار كتابة ثانٍ ولا تحقّق ثانٍ. النموذج العام
+ * (`invite = null`) لا يحمل الحقل إطلاقاً، فجواب `/e/:id` يبقى بلا `invite_id`.
  */
-function renderGuestRsvpForm(eventId, notice) {
+function renderGuestRsvpForm(eventId, notice, invite = null) {
   const noticeHtml = notice
     ? `<p class="rsvp-notice rsvp-notice-${notice.tone}">${escapeHtml(notice.text)}</p>`
+    : '';
+  const nameValue = invite ? ` value="${escapeHtml(invite.name)}"` : '';
+  const inviteField = invite
+    ? `<input type="hidden" name="invite_token" value="${escapeHtml(invite.token)}">\n`
     : '';
   return `<form class="rsvp" method="post" action="${escapeHtml(`/e/${eventId}/rsvp`)}">
 ${noticeHtml}
 <h2 class="rsvp-title">جاي على المناسبة؟</h2>
 <p class="rsvp-hint">اكتب اسمك وعددكم ورقم هاتفك — بلا حساب.</p>
-<label class="rsvp-field"><span>اسمك</span><input class="rsvp-input" type="text" name="guest_name" maxlength="120" autocomplete="name" required></label>
+${inviteField}<label class="rsvp-field"><span>اسمك</span><input class="rsvp-input" type="text" name="guest_name" maxlength="120" autocomplete="name"${nameValue} required></label>
 <label class="rsvp-field"><span>عددكم</span><input class="rsvp-input" type="number" name="party_size" min="1" max="${RSVP_PARTY_SIZE_MAX}" step="1" value="1" inputmode="numeric" required></label>
 <label class="rsvp-field"><span>رقم الهاتف</span><input class="rsvp-input" type="tel" name="guest_phone" maxlength="20" inputmode="tel" autocomplete="tel" required></label>
 <div class="rsvp-actions">
@@ -335,6 +346,46 @@ ${noticeHtml}
 </div>
 <p class="rsvp-note">الهاتف لا يظهر لأحد، ولا يراه صاحب المناسبة — يرى اسمك وعددك وجوابك فقط.</p>
 </form>`;
+}
+
+/**
+ * صفحة الدعوة الشخصية `GET /e/:id/i/<token>` (تذكرة #183): «أهلاً <الاسم>»
+ * ونموذج جواب الضيف نفسه من #169 باسمه مسبقاً — قالبٌ ثانٍ للصفحة لا للنموذج،
+ * بنفس `pageStyle`/`PALETTES`/`inlineMarkSvg`، وبلا صنف CSS جديد.
+ *
+ * **قيدان لا يُنقضان:** بلا `<script>` إطلاقاً، و`noindex` دائماً (ADR-0006) —
+ * رابط يحمل اسم ضيفٍ لا يُفهرَس. والرابط نفسه لا يُشارَك علناً: الصفحة تُرسَل
+ * بـ`Cache-Control: no-store` (المسار) لأنها تكتب `opened_at` عند الفتح.
+ * والهاتف لا يظهر فيها: النموذج يجمعه ولا يعرضه.
+ */
+function renderInvitePage(event, invite, notice) {
+  const palette = PALETTES[toneOf(event)];
+  const whereParts = [buildHeadline(event), event.town].filter(Boolean);
+  const whereLine = whereParts.length
+    ? `<p class="where">${whereParts.map(escapeHtml).join(' · ')}</p>`
+    : '';
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>أهلاً ${escapeHtml(invite.name)} — ${palette.wordmark}</title>
+<style>${pageStyle(palette)}</style>
+</head>
+<body>
+<main class="card">
+<div class="top-mark">${inlineMarkSvg(palette)}</div>
+<div class="body">
+<h1 class="names">أهلاً ${escapeHtml(invite.name)}</h1>
+${whereLine}
+<hr class="rule">
+${renderGuestRsvpForm(event.id, notice, invite)}
+<p class="mark">${palette.wordmark}</p>
+</div>
+</main>
+</body>
+</html>`;
 }
 
 /**
@@ -1085,6 +1136,56 @@ eventRouter.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * `GET /e/:id/i/<token>` — صفحة الدعوة الشخصية (تذكرة #183): «أهلاً <الاسم>»
+ * ونموذج الحضور نفسه من #169 باسمه مسبقاً، بلا حساب.
+ *
+ * **خمسة أبواب، ودخولها كلها الـ404 الموحّدة نفسها** (`sendNotFound`، بجسم
+ * صفحة الـ404 المشتركة حرفياً): معرّف غير رقمي، أو مناسبة ليست ظاهرة
+ * (`getShareEvent`: غير موجودة أو غير معتمدة)، أو بوابة الجواب مغلقة
+ * (`guestRsvpOpen` نفسها التي تحكم `/e/:id`: نوع مطفأ أو مناسبة منتهية)، أو رمز
+ * ليس 32 حرفاً hex صغيراً، أو رمز بهذا الشكل لا يخصّ هذه المناسبة
+ * (`resolveInvite` أعاد `null`). لا تمييز بين الأخيرين — التوكين الصحيح هو
+ * الإذن الوحيد، والخطأ لا يقول «الرمز موجود لكنه خاطئ».
+ *
+ * **`opened_at` يُكتب هنا مرة واحدة** (`markInviteOpened` تشترط `opened_at IS
+ * NULL`)، وفشل الكتابة لا يُسقط الصفحة: سجلّ الفتح لا يستحق أن يحرم الضيف من
+ * دعوته. و`no-store` لأن هذه الصفحة تكتب عند كل أول فتح.
+ */
+eventRouter.get('/:id/i/:token', asyncHandler(async (req, res) => {
+  const eventId = shareIdOrNull(req.params.id);
+  if (!eventId || !events.isInviteToken(req.params.token)) {
+    sendNotFound(res);
+    return;
+  }
+
+  const event = await events.getShareEvent(eventId);
+  if (!event || !events.guestRsvpOpen(event)) {
+    sendNotFound(res);
+    return;
+  }
+
+  const invite = await events.resolveInvite(eventId, req.params.token);
+  if (!invite) {
+    sendNotFound(res);
+    return;
+  }
+
+  try {
+    await events.markInviteOpened(invite.id);
+  } catch (err) {
+    logger.error(`[share] invite open not recorded for invite ${invite.id}: ${err.message}`);
+  }
+
+  res
+    .status(200)
+    .set('Content-Security-Policy', EVENT_PAGE_CSP)
+    .set('X-Robots-Tag', 'noindex, nofollow')
+    .set('Cache-Control', 'no-store')
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .send(renderInvitePage(event, invite, guestRsvpNotice(req.query.rsvp)));
+}));
+
+/**
  * صفحة الـ429 (تذكرة #169): نفس غلاف صفحة الـ404 — بطاقة، علامة، ونمط الصفحة
  * نفسها — بنصّ عربي يقول ما حدث وما لم يحدث: **الجواب لم يُحفظ**. والرابط يعود
  * إلى صفحة المناسبة إن كان المعرّف رقماً، وإلا إلى الموقع: الحدّ يعمل قبل أن
@@ -1205,6 +1306,13 @@ function readGuestAnswer(body) {
  * **الأهلية قبل التحقّق عمداً:** نوع مطفأ أو مناسبة منتهية أو غير معتمدة تردّ
  * الـ404 الموحّدة للصفحة نفسها ولو كان الجسم فارغاً — وإلا صار المسار مسباراً
  * يفرّق بين مناسبة مفتوحة ومغلقة بما يردّه عن حقل ناقص.
+ *
+ * **الدعوة الشخصية (تذكرة #183):** نموذج `/e/:id/i/<token>` يحمل حقلاً مخفياً
+ * `invite_token` ويُرسَل إلى هذا المسار نفسه — لا مسار كتابة ثانٍ، ولا محدِّد
+ * معدّل آخر. فالرمز يُتحقّق هنا (٣٢ حرفاً hex ثم `resolveInvite` في نطاق هذه
+ * المناسبة) ورمزٌ لا يصلح يعطي الـ404 الموحّدة **قبل أي كتابة**. وبعد النجاح أو
+ * الرفض يعود الزائر إلى الصفحة التي جاء منها النموذج: الدعوة إن كانت دعوة،
+ * وصفحة المناسبة إن لم تكن — فلا يهبط جوابُ ضيفٍ جاء بدعوته على صفحة عامة.
  */
 eventRouter.post('/:id/rsvp', limitAnonymousGuestRsvp, guestRsvpLimiter, asyncHandler(async (req, res) => {
   const eventId = shareIdOrNull(req.params.id);
@@ -1218,9 +1326,29 @@ eventRouter.post('/:id/rsvp', limitAnonymousGuestRsvp, guestRsvpLimiter, asyncHa
     return;
   }
 
-  const read = readGuestAnswer(req.body);
+  const body = req.body || {};
+
+  // الحقل يحضر مع نموذج الدعوة وحده. الغياب بأشكاله الثلاثة (المفتاح غير
+  // موجود، `null`، نصّ فارغ) يعني «جواب عادي» — وهو ما يرسله كل متصفّح فتح
+  // `/e/:id` — وقيمةٌ حاضرة لا تصلح رمزاً 404 بلا كتابة، لا جواباً عادياً.
+  const inviteToken = body.invite_token;
+  const hasInvite = inviteToken !== undefined && inviteToken !== null && inviteToken !== '';
+  if (hasInvite && !events.isInviteToken(inviteToken)) {
+    sendNotFound(res);
+    return;
+  }
+  const invite = hasInvite ? await events.resolveInvite(eventId, inviteToken) : null;
+  if (hasInvite && !invite) {
+    sendNotFound(res);
+    return;
+  }
+
+  /** الصفحة التي جاء منها النموذج — وجهة العودة في النجاح والرفض معاً. */
+  const backPath = invite ? `/e/${eventId}/i/${invite.token}` : `/e/${eventId}`;
+
+  const read = readGuestAnswer(body);
   if (read.error) {
-    res.redirect(303, `/e/${eventId}?rsvp=${read.error}`);
+    res.redirect(303, `${backPath}?rsvp=${read.error}`);
     return;
   }
 
@@ -1228,7 +1356,7 @@ eventRouter.post('/:id/rsvp', limitAnonymousGuestRsvp, guestRsvpLimiter, asyncHa
   // فقد تُغلق المناسبة بين الفحصين، وحينها الـ404 الموحّدة لا JSON من معالِج
   // الأخطاء. (الفرق زمني صرف: تعديل نوع إلى مطفأ بين طلبين.)
   try {
-    await events.setGuestRsvp(eventId, read.answer);
+    await events.setGuestRsvp(eventId, { ...read.answer, inviteId: invite ? invite.id : null });
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       sendNotFound(res);
@@ -1237,7 +1365,7 @@ eventRouter.post('/:id/rsvp', limitAnonymousGuestRsvp, guestRsvpLimiter, asyncHa
     throw err;
   }
 
-  res.redirect(303, `/e/${eventId}?rsvp=ok`);
+  res.redirect(303, `${backPath}?rsvp=ok`);
 }));
 
 /**

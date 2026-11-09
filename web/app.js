@@ -9319,9 +9319,14 @@ function renderMyEvents(events) {
           </button>
         </div>
         ${evt.occasion_type && evt.occasion_type.rsvp_enabled === true && evt.occasion_type.tone !== 'solemn' ? `
-        <button class="record-nokoot-btn" style="width:100%; margin-top:8px;" onclick="openRsvpListModal(${evt.id})">
-          <i class="fa-solid fa-user-check"></i> مين جاي
-        </button>` : ''}
+        <div class="event-page-btn-row my-event-card-row">
+          <button type="button" class="record-nokoot-btn" onclick="openRsvpListModal(${evt.id})">
+            <i class="fa-solid fa-user-check"></i> مين جاي
+          </button>
+          <button type="button" class="record-nokoot-btn" onclick="openEventInvitesModal(${evt.id})">
+            <i class="fa-solid fa-envelope-open-text"></i> الدعوات
+          </button>
+        </div>` : ''}
         <!-- بطاقة الدعوة (#180): زرّان جنباً إلى جنب — تصميم من قالب، أو رفع
              البطاقة الجاهزة (وهو رفع الملصق القائم نفسه، بلا مسار جديد). -->
         <div class="event-page-btn-row my-event-card-row">
@@ -9846,6 +9851,7 @@ function renderRsvpList({ rsvps = [], totals = {} }) {
         <span class="sender-badge">${Number(rsvp.party_size) || 1}</span>
       </div>
       <div class="chat-msg-text">${escapeHtml(RSVP_SOURCE_LABELS[rsvp.source] || rsvp.source || '')}</div>
+      ${rsvp.invite ? `<div class="chat-msg-text">دعوة: ${escapeHtml(rsvp.invite.name || '')} — ${rsvp.invite.opened_at ? 'فُتحت' : 'لم تُفتح'}</div>` : ''}
     </div>
   `).join('');
 }
@@ -9853,6 +9859,180 @@ function renderRsvpList({ rsvps = [], totals = {} }) {
 function closeRsvpListModal() {
   const modal = document.getElementById('rsvpListModal');
   if (modal) modal.style.display = 'none';
+}
+
+// الدعوات الشخصية (تذكرة #183) — صاحب المناسبة ينشئ لكل ضيف دعوةً برابط
+// `/e/:id/i/<token>` يقول «أهلاً <الاسم>» وفيه نموذج الحضور نفسه باسمه مسبقاً.
+// الإنشاء POST والقراءة GET والحذف DELETE على `/api/events/:id/invites`، والرابط
+// المطلق يصل جاهزاً من الخادم (لا يُركَّب هنا). والهاتف لا يصل في أي استجابة.
+/** المناسبة التي تخصّها النافذة المفتوحة، ودعواتها كما وصلت آخر مرة. */
+let eventInvitesState = null;
+
+async function openEventInvitesModal(eventId) {
+  const modal = document.getElementById('eventInvitesModal');
+  const body = document.getElementById('eventInvitesBody');
+  const subtitle = document.getElementById('eventInvitesSubtitle');
+  const names = document.getElementById('eventInvitesNames');
+  if (!modal || !body) return;
+
+  const evt = myEventsCache.find(e => e.id === eventId);
+  if (subtitle) subtitle.textContent = evt ? (evt.title || evt.groom_name || '') : '';
+  if (names) names.value = '';
+  eventInvitesState = { eventId, invites: [] };
+  modal.style.display = 'flex';
+  body.innerHTML = '<div class="loading-spinner"><div class="spinner"></div></div>';
+  await loadEventInvites();
+}
+
+/** قراءة الدعوات وإعادة رسم القائمة — بعد الإنشاء والحذف أيضاً. */
+async function loadEventInvites() {
+  const body = document.getElementById('eventInvitesBody');
+  if (!eventInvitesState || !body) return;
+
+  try {
+    const res = await apiFetch(`/api/events/${eventInvitesState.eventId}/invites`, { auth: true });
+    const data = await res.json().catch(() => null);
+    if (!data || !data.success) {
+      eventInvitesState.invites = [];
+      body.innerHTML = `<div class="empty-state" style="padding:20px;"><p>${escapeHtml((data && data.message) || 'تعذر جلب الدعوات')}</p></div>`;
+      return;
+    }
+    eventInvitesState.invites = data.invites || [];
+    renderEventInvites();
+  } catch (e) {
+    body.innerHTML = '<div class="empty-state" style="padding:20px;"><p>تعذر جلب الدعوات</p></div>';
+  }
+}
+
+function renderEventInvites() {
+  const body = document.getElementById('eventInvitesBody');
+  if (!body || !eventInvitesState) return;
+
+  const invites = eventInvitesState.invites;
+  if (!invites.length) {
+    body.innerHTML = '<div class="empty-state" style="padding:20px;"><p>لا دعوات بعد — اكتب الأسماء أعلاه ثم اضغط «أنشئ الدعوات»</p></div>';
+    return;
+  }
+
+  body.innerHTML = invites.map(invite => {
+    const answer = invite.rsvp
+      ? `${invite.rsvp.response === 'yes' ? 'جاي' : 'مش جاي'} — ${Number(invite.rsvp.party_size) || 1}`
+      : 'لا جواب بعد';
+    return `
+    <div class="chat-bubble">
+      <div class="chat-bubble-header">
+        <span class="sender-name">${escapeHtml(invite.name || '')}</span>
+        <span class="sender-badge">${invite.opened_at ? 'فُتحت' : 'لم تُفتح'}</span>
+      </div>
+      <div class="chat-msg-text">${escapeHtml(answer)}</div>
+      <div class="chat-msg-text" style="word-break:break-all;">${escapeHtml(invite.url || '')}</div>
+      <div class="event-page-btn-row" style="margin-top:8px;">
+        <button type="button" class="record-nokoot-btn" onclick="copyEventInviteLink(${invite.id})">
+          <i class="fa-regular fa-copy"></i> نسخ الرابط
+        </button>
+        <button type="button" class="record-nokoot-btn" onclick="deleteEventInvite(${invite.id})">
+          <i class="fa-solid fa-trash"></i> حذف
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/**
+ * إنشاء دعوة لكل اسم في الصندوق — اسم في كل سطر، والسطور الفارغة تُسقَط.
+ * والسقف (`INVITE_BATCH_MAX` = ٥٠) والتحقّق من الاسم في الخادم وحده: رسالته
+ * عربية، ورقمٌ مكرَّر هنا يعني رقمين يفترقان يوماً.
+ */
+async function createEventInvites() {
+  const input = document.getElementById('eventInvitesNames');
+  if (!eventInvitesState || !input) return;
+
+  const names = input.value.split('\n').map(line => line.trim()).filter(Boolean);
+  if (!names.length) {
+    alert('اكتب اسماً واحداً على الأقل — اسم في كل سطر');
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`/api/events/${eventInvitesState.eventId}/invites`, {
+      method: 'POST',
+      auth: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names })
+    });
+    const data = await res.json().catch(() => null);
+    if (res.status === 429) { alert('طلبات كثيرة في وقت قصير — حاول بعد قليل'); return; }
+    if (!data || !data.success) {
+      alert((data && data.message) || 'تعذّر إنشاء الدعوات — حاول مرة أخرى');
+      return;
+    }
+
+    input.value = '';
+    await loadEventInvites();
+    showToast(data.message || 'تم إنشاء الدعوات');
+  } catch (err) {
+    alert('تعذّر إنشاء الدعوات — تحقّق من الاتصال بالخادم');
+  }
+}
+
+/** حذف دعوة — والجواب الذي جمعته يبقى (الخادم يفكّ الإشارة وحدها). */
+async function deleteEventInvite(inviteId) {
+  if (!eventInvitesState) return;
+  if (!confirm('حذف هذه الدعوة؟ يبقى جواب الحضور الذي جمعته.')) return;
+
+  try {
+    const res = await apiFetch(`/api/events/${eventInvitesState.eventId}/invites/${inviteId}`, {
+      method: 'DELETE',
+      auth: true
+    });
+    const data = await res.json().catch(() => null);
+    if (!data || !data.success) {
+      alert((data && data.message) || 'تعذّر حذف الدعوة');
+      return;
+    }
+
+    await loadEventInvites();
+    showToast(data.message || 'تم حذف الدعوة');
+  } catch (err) {
+    alert('تعذّر حذف الدعوة — تحقّق من الاتصال بالخادم');
+  }
+}
+
+/**
+ * نسخ رابط الدعوة — `navigator.clipboard` ثم البديل القديم (`execCommand`)
+ * حين يغيب (سياق غير آمن مثلاً)، كما يفعل نسخ رابط المشاركة في هذا الملف.
+ */
+async function copyEventInviteLink(inviteId) {
+  const invite = eventInvitesState && eventInvitesState.invites.find(item => item.id === inviteId);
+  if (!invite || !invite.url) return;
+
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(invite.url);
+    copied = true;
+  } catch (e) {
+    try {
+      const temp = document.createElement('textarea');
+      temp.value = invite.url;
+      temp.setAttribute('readonly', '');
+      temp.style.position = 'fixed';
+      temp.style.opacity = '0';
+      document.body.appendChild(temp);
+      temp.select();
+      copied = document.execCommand('copy');
+      document.body.removeChild(temp);
+    } catch (err) {
+      copied = false;
+    }
+  }
+
+  showToast(copied ? 'تم نسخ رابط الدعوة' : 'تعذّر النسخ — حدّد الرابط وانسخه بيدك');
+}
+
+function closeEventInvitesModal() {
+  const modal = document.getElementById('eventInvitesModal');
+  if (modal) modal.style.display = 'none';
+  eventInvitesState = null;
 }
 
 // 14b. مراجعة التبريكات/التعازي — طابور مناسبة يملكها المستخدم الحالي (#20 step 10).
